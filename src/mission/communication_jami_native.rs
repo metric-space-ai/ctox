@@ -373,10 +373,8 @@ fn execute_sync(options: &JamiOptions) -> Result<Value> {
     ensure_dirs(&options)?;
     let resolved = resolve_jami_account(&mut options, true)?;
     // Populate own username so the self-echo filter in normalize_jami_git_commit works.
-    if options.username.is_empty() {
-        if let Some(account) = resolved.as_ref() {
-            options.username = account.username.clone();
-        }
+    if options.username.is_empty() && !resolved.username.is_empty() {
+        options.username = resolved.username.clone();
     }
     let account_key = account_key_from_jami(&options.account_id);
     let mut conn = open_channel_db(&options.db_path)?;
