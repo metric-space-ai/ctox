@@ -1647,17 +1647,24 @@ pub(crate) fn ensure_routing_rows_for_inbound(conn: &Connection) -> Result<()> {
             CASE
                 WHEN m.direction = 'outbound' THEN 'handled'
                 WHEN m.trust_level = 'system_probe' THEN 'handled'
+                WHEN m.direction = 'inbound'
+                     AND a.created_at IS NOT NULL
+                     AND m.external_created_at <= a.created_at THEN 'handled'
                 ELSE 'pending'
             END,
             NULL,
             NULL,
             CASE
                 WHEN m.direction = 'outbound' OR m.trust_level = 'system_probe' THEN m.observed_at
+                WHEN m.direction = 'inbound'
+                     AND a.created_at IS NOT NULL
+                     AND m.external_created_at <= a.created_at THEN m.observed_at
                 ELSE NULL
             END,
             NULL,
             m.observed_at
         FROM communication_messages m
+        LEFT JOIN communication_accounts a ON a.account_key = m.account_key
         LEFT JOIN communication_routing_state r ON r.message_key = m.message_key
         WHERE r.message_key IS NULL
         "#,
