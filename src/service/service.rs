@@ -2392,9 +2392,8 @@ fn route_assigned_ticket_self_work(root: &Path, state: &Arc<Mutex<SharedState>>)
         if item.assigned_to.as_deref() != Some("self") {
             continue;
         }
-        if item.kind == "system-onboarding" {
-            continue;
-        }
+        // system-onboarding self-work items are now routed normally
+        // so the model can execute onboarding steps autonomously.
         let thread_key = format!("ticket-self-work:{}", item.work_id);
         if runnable_thread_task_exists(root, &thread_key)? {
             continue;
