@@ -1622,7 +1622,12 @@ fn normalize_jami_git_commit(
         return Ok(None);
     }
     // Skip messages authored by our own account to avoid self-echo.
-    if !options.username.is_empty() && author == options.username {
+    // The author field may be the account username hash, the device hash,
+    // or the display name depending on how the commit was created.
+    let is_own_message = (!options.username.is_empty() && author == options.username)
+        || (!options.profile_name.is_empty()
+            && author.eq_ignore_ascii_case(&options.profile_name));
+    if is_own_message {
         return Ok(None);
     }
     let has_voice_payload =
