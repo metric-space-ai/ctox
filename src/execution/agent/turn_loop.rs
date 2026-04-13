@@ -522,6 +522,12 @@ fn refresh_continuity_documents(
                 continue;
             }
         };
+        eprintln!(
+            "ctox continuity refresh {kind_label} diff len={} empty={} preview={}",
+            repaired_diff.len(),
+            repaired_diff.trim().is_empty(),
+            summarize_continuity_diff_for_log(&repaired_diff)
+        );
         if !repaired_diff.trim().is_empty() {
             emit(&format!("continuity-{kind_label}-apply"));
             if let Err(err) =
