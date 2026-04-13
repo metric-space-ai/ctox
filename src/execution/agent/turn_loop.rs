@@ -1769,7 +1769,6 @@ fn extract_codex_error_response(stdout: &str) -> Option<String> {
 fn prompt_requires_tool_verification(prompt: &str) -> bool {
     let lower = prompt.to_ascii_lowercase();
     if lower.contains("you are updating the ctox continuity document")
-        && lower.contains("output only a strict section-based diff")
         && lower.contains("<current_document>")
     {
         return false;
