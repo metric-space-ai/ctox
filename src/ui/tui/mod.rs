@@ -4282,7 +4282,7 @@ fn runtime_health_state(root: &Path, telemetry: Option<&RuntimeTelemetry>) -> Ru
     // treat it as healthy so the TUI does not show a misleading "degraded".
     let chat_source_is_api = runtime_kernel::InferenceRuntimeKernel::resolve(root)
         .ok()
-        .map(|k| k.source.eq_ignore_ascii_case("api"))
+        .map(|k| k.state.source.eq_ignore_ascii_case("api"))
         .unwrap_or(false);
     let proxy_ready = if chat_source_is_api && !supervisor::boundary_proxy_is_managed(root) {
         true
