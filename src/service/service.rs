@@ -2709,11 +2709,23 @@ fn enrich_inbound_prompt(
             prepend_workspace_contract(prompt_body, message.workspace_root.as_deref())
         );
     }
-    if message.channel == "jami"
-        && matches!(message.preferred_reply_modality.as_deref(), Some("voice"))
-    {
+    if message.channel == "jami" {
+        let voice_hint = if matches!(message.preferred_reply_modality.as_deref(), Some("voice")) {
+            " --send-voice"
+        } else {
+            ""
+        };
+        let voice_note = if voice_hint.is_empty() {
+            String::new()
+        } else {
+            " Diese Nachricht kam als Sprachnachricht herein und wurde fuer CTOX transkribiert. Persistiert wird weiterhin nur Text, kein Audio.".to_string()
+        };
+        let sender = display_inbound_sender(message);
         return format!(
-            "[Jami-Hinweis: Diese Nachricht kam als Sprachnachricht herein und wurde fuer CTOX transkribiert. Wenn du auf diesem Thread ueber Jami antwortest, bevorzuge `ctox channel send --channel jami ... --send-voice`. Persistiert wird weiterhin nur Text, kein Audio.]\n\n{}",
+            "[Jami-Nachricht eingegangen]\nSender: {sender}\nThread: {}\nWenn du antwortest, nutze `ctox channel send --channel jami --account-key {} --thread-key '{}' --body \"<deine Antwort>\"{voice_hint}`.{voice_note}\n\n{}",
+            message.thread_key,
+            message.account_key,
+            message.thread_key,
             prepend_workspace_contract(prompt_body, message.workspace_root.as_deref())
         );
     }
