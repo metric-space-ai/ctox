@@ -1,0 +1,3 @@
+interface:
+  display_name: "Discovery Graph"
+  short_description: "Inventory hosts, services, and dependencies"

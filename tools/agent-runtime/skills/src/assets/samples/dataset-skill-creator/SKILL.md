@@ -1,0 +1,102 @@
+---
+name: dataset-skill-creator
+description: Create a reusable custom skill from a concrete dataset or from dataset-derived analysis artifacts. Use when CTOX should turn a data source into an operational Codex skill with SKILL.md, references, optional scripts/assets, and validation instead of leaving the result as raw knowledge bundles, RAG files, or one-off summaries.
+---
+
+# Dataset Skill Creator
+
+Use this skill when the real output should be a new skill, not just extracted knowledge.
+
+This is a meta-skill.
+It helps CTOX turn a concrete data source and its recurring patterns into a reusable Codex skill for later work.
+
+The generated skill must be shaped around the operating goal of the dataset, not around the extraction process.
+
+Read these first:
+
+- [references/archetypes.md](references/archetypes.md)
+- [references/method.md](references/method.md)
+- [references/tool-contracts.md](references/tool-contracts.md)
+- [references/validation.md](references/validation.md)
+
+## Output Contract
+
+The run is only acceptable if it produces a new skill folder with:
+
+- `SKILL.md`
+- `agents/openai.yaml`
+- `references/`
+- optional `scripts/`
+- optional `assets/`
+
+The generated skill must tell CTOX:
+
+- when to use the skill
+- what operating goal the skill serves
+- which reference artifacts matter
+- which tool/script entrypoints to use
+- what counts as success
+
+## Workflow
+
+1. Identify the dataset goal.
+   Decide whether the resulting skill should be:
+   - `operating-model`
+   - `lookup-reference`
+   - `workflow`
+   - `policy-gate`
+
+2. Ensure evidence exists.
+   If the dataset still needs analysis, first produce a durable analysis bundle.
+   Do not generate a skill from vague summaries alone.
+
+3. Promote only the right artifacts.
+   Move stable, reusable artifacts into the generated skill:
+   - references for context
+   - scripts for deterministic operations
+   - assets for templates or seed material
+
+4. Write the generated skill around the operator problem.
+   Do not write the generated skill around parsing, SQLite, extraction, or tooling internals.
+
+5. Validate the generated skill.
+   Run the validator and inspect whether the generated skill would actually help another CTOX instance perform the job.
+
+## Scripts
+
+Generate a new dataset-backed skill from an analysis bundle:
+
+```bash
+python3 skills/system/dataset-skill-creator/scripts/create_dataset_skill.py \
+  --skill-name <skill-name> \
+  --skill-path <output-root> \
+  --archetype <operating-model|lookup-reference|workflow|policy-gate> \
+  --dataset-label "<human dataset label>" \
+  --goal "<what the generated skill should help CTOX do>" \
+  --analysis-dir <path> \
+  --query-command "<optional query or helper command>"
+```
+
+Run the full raw-dataset pipeline when CTOX should first analyze the dataset and then synthesize the skill:
+
+```bash
+python3 skills/system/dataset-skill-creator/scripts/bootstrap_dataset_skill.py \
+  --input <dataset.xlsx|csv|json> \
+  --source-kind <ticket-history> \
+  --skill-name <skill-name> \
+  --skill-path <output-root> \
+  --archetype <operating-model|lookup-reference|workflow|policy-gate> \
+  --dataset-label "<human dataset label>" \
+  --goal "<what the generated skill should help CTOX do>" \
+  --analysis-dir <path>
+```
+
+For operating-model ticket datasets, `--openai-model gpt-5.4-nano` may be added to refine the strongest family playbooks before promotion.
+
+## Guardrails
+
+- Do not stop at dataset profiling or clustering; the output must be a usable skill.
+- Do not copy extraction prose into the generated skill.
+- Do not leak SQLite, parser, CLI, or internal kernel details into user-facing skill instructions.
+- Do not generate a skill without a clear operating goal.
+- Do not promote weak evidence as a handling norm.

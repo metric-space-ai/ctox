@@ -1,0 +1,4 @@
+interface:
+  display_name: "Dataset Skill Creator"
+  short_description: "Create a custom skill from a dataset"
+  default_prompt: "Build a custom skill from this dataset and its working patterns."

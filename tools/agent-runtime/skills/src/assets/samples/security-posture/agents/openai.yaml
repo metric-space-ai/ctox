@@ -1,0 +1,3 @@
+interface:
+  display_name: "Security Posture"
+  short_description: "Audit exposure, access, and cert drift"

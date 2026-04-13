@@ -1,0 +1,3 @@
+interface:
+  display_name: "Ops Insight"
+  short_description: "Summarize operational risk and priorities"

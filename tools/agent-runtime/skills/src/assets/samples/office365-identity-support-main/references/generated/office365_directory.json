@@ -1,0 +1,39 @@
+{
+  "tenant": "contoso.test",
+  "temporary_password": "TempPass!2026",
+  "users": [
+    {
+      "upn": "lena.weber@contoso.test",
+      "display_name": "Lena Weber",
+      "locked": false,
+      "licenses": [
+        "M365_E3"
+      ],
+      "mailbox": true,
+      "must_change_password": false,
+      "temporary_password": null
+    },
+    {
+      "upn": "mario.schulz@contoso.test",
+      "display_name": "Mario Schulz",
+      "locked": false,
+      "licenses": [
+        "M365_E3"
+      ],
+      "mailbox": true,
+      "must_change_password": false,
+      "temporary_password": null
+    },
+    {
+      "upn": "sara.koenig@contoso.test",
+      "display_name": "Sara König",
+      "locked": false,
+      "licenses": [
+        "M365_E3"
+      ],
+      "mailbox": true,
+      "must_change_password": true,
+      "temporary_password": "TempPass!2026"
+    }
+  ]
+}

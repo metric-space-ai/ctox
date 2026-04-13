@@ -1,0 +1,38 @@
+{
+  "main_skill_id": "office365.identity.main.v1",
+  "title": "Office365 identity support main skill",
+  "primary_channel": "ticket",
+  "entry_action": "resolve_runbook_item",
+  "resolver_contract": {
+    "mode": "runbook-item",
+    "retrieval_unit": "runbook_item",
+    "decision_rule": "Load exactly one best item when confidence is clear, otherwise mark needs_review."
+  },
+  "execution_contract": {
+    "target": "ticket_internal_note",
+    "output_mode_order": ["suggestion", "execute"],
+    "required_output_fields": [
+      "matched_label",
+      "target_identity",
+      "execution_summary",
+      "verification_result",
+      "ticket_update"
+    ]
+  },
+  "resolve_flow": [
+    "Summarize the inbound ticket as an Office365 identity problem.",
+    "Retrieve the best matching runbook item.",
+    "Load parent runbook and skillbook.",
+    "Run the bounded simulation action when the target identity is clear."
+  ],
+  "writeback_flow": [
+    "Verify the execution result.",
+    "Write back the internal note only after the simulation result is explicit."
+  ],
+  "linked_skillbooks": [
+    "office365.identity.skillbook.v1"
+  ],
+  "linked_runbooks": [
+    "office365.identity.runbook.v1"
+  ]
+}

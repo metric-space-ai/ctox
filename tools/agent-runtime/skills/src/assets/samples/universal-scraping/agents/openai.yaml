@@ -1,0 +1,3 @@
+interface:
+  display_name: "Universal Scraping"
+  short_description: "Build and run reusable scraping workflows"

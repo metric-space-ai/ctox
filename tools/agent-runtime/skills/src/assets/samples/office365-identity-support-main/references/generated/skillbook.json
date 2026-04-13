@@ -1,0 +1,29 @@
+{
+  "skillbook_id": "office365.identity.skillbook.v1",
+  "title": "Office365 identity desk skillbook",
+  "version": "v1",
+  "mission": "Bearbeite wiederkehrende Office365-Identity-Fälle sauber, knapp und mit klarer Trennung zwischen Desk-Kommunikation und tatsächlicher Ausführung.",
+  "non_negotiable_rules": [
+    "Führe nur die durch das Runbook erlaubte Aktion aus.",
+    "Schreibe nur das als erledigt ins Ticket, was im Simulationssystem wirklich verifiziert wurde.",
+    "Wenn Zielidentität oder Problemtyp unklar sind, stoppe auf Desk-Ebene statt zu raten.",
+    "Nutze interne Ticketupdates für technische Detailstände und keine frei erfundenen Erklärungen."
+  ],
+  "runtime_policy": "Resolve first, execute only when the label and target identity are clear, then write one concise internal note with action and verification.",
+  "answer_contract": "Produce a concise internal ticket update grounded in the execution result.",
+  "workflow_backbone": [
+    "identify the office365 problem family",
+    "extract the target identity",
+    "execute the bounded action",
+    "verify the result",
+    "write the internal note"
+  ],
+  "routing_taxonomy": [
+    "O365-ACC-01",
+    "O365-LIC-01",
+    "O365-PWD-01"
+  ],
+  "linked_runbooks": [
+    "office365.identity.runbook.v1"
+  ]
+}

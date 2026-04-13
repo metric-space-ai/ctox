@@ -1,0 +1,3 @@
+interface:
+  display_name: "Change Lifecycle"
+  short_description: "Plan safe patches, changes, and rollback"

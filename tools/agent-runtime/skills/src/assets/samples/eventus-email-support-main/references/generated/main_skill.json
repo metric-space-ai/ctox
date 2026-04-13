@@ -1,0 +1,49 @@
+{
+  "main_skill_id": "eventus.email.support.main.v1",
+  "title": "Eventus inbound support email main skill",
+  "primary_channel": "email",
+  "entry_action": "read_inbound_email",
+  "resolver_contract": {
+    "script": "scripts/resolve_runbook_item.py",
+    "retrieval_unit": "runbook_item",
+    "search_fields": [
+      "label",
+      "title",
+      "trigger_phrases",
+      "chunk_text"
+    ],
+    "decision_rule": "Load exactly one best item when confidence is clear, otherwise mark needs_review."
+  },
+  "execution_contract": {
+    "script": "scripts/compose_support_reply.py",
+    "target": "email_reply",
+    "output_mode_order": [
+      "suggestion",
+      "draft",
+      "send"
+    ],
+    "required_output_fields": [
+      "decision",
+      "matched_label",
+      "reply_subject",
+      "reply_body",
+      "manual_reference"
+    ]
+  },
+  "resolve_flow": [
+    "Summarize the user problem as an ideal runbook item query.",
+    "Retrieve the closest runbook item by embedding search.",
+    "Load the parent skillbook for behavior and answer contract.",
+    "Draft the reply or mark needs_review if the item boundary is not enough."
+  ],
+  "writeback_flow": [
+    "Prefer suggestion or draft over send.",
+    "Send only in clearly documented low-risk cases."
+  ],
+  "linked_skillbooks": [
+    "eventus.email.support.skillbook.v1"
+  ],
+  "linked_runbooks": [
+    "eventus.support.email.runbook.v2"
+  ]
+}

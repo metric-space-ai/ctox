@@ -1,0 +1,3 @@
+interface:
+  display_name: "Owner Communication"
+  short_description: "Route owner communication across TUI, email, and Jami"

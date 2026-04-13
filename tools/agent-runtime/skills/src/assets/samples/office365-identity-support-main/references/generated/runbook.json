@@ -1,0 +1,13 @@
+{
+  "runbook_id": "office365.identity.runbook.v1",
+  "skillbook_id": "office365.identity.skillbook.v1",
+  "title": "Office365 identity simulation cases",
+  "version": "v1",
+  "status": "active",
+  "problem_domain": "office365.identity",
+  "item_labels": [
+    "O365-ACC-01",
+    "O365-LIC-01",
+    "O365-PWD-01"
+  ]
+}

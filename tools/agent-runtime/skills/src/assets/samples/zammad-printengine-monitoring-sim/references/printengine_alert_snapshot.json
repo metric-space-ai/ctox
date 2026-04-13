@@ -1,0 +1,12 @@
+{
+  "source": "zammad-printengine-monitoring-sim",
+  "checked_at": "2026-04-12T06:00:00Z",
+  "host": "133IG",
+  "service": "prestige_printengine",
+  "alert_name": "Prestige Printengine",
+  "state": "critical",
+  "severity": "critical",
+  "recovered": false,
+  "recovered_at": null,
+  "summary": "Printengine alert remains critical on Filialserver 133IG."
+}
