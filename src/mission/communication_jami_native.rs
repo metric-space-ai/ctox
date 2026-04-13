@@ -641,6 +641,7 @@ fn base_options_from_runtime(
             .get("CTO_JAMI_ACCOUNT_ID")
             .map(|value| value.trim().to_string())
             .unwrap_or_default(),
+        username: String::new(),
         profile_name: runtime
             .get("CTO_JAMI_PROFILE_NAME")
             .map(|value| value.trim().to_string())
