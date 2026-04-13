@@ -942,18 +942,42 @@ ensure_cuda_build_prereqs() {
   can_sudo || return 0
   [[ "$ENGINE_FEATURES" == *cuda* ]] || return 0
 
-  local packages="" pkg pattern
-  for pattern in \
-    '^cuda-driver-dev-[0-9]+-[0-9]+$' \
-    '^cuda-cudart-dev-[0-9]+-[0-9]+$' \
-    '^cuda-nvcc-[0-9]+-[0-9]+$' \
-    '^cuda-nvrtc-dev-[0-9]+-[0-9]+$' \
-    '^libcublas-dev-[0-9]+-[0-9]+$' \
-    '^libcurand-dev-[0-9]+-[0-9]+$'
-  do
-    pkg="$(latest_apt_package_matching "$pattern" || true)"
-    [[ -n "$pkg" ]] && packages="$packages $pkg"
-  done
+  # Determine the CUDA version suffix from CUDA_HOME (e.g. "12-6" from /usr/local/cuda-12.6)
+  local cuda_ver_suffix=""
+  if [[ -n "${CUDA_HOME_RESOLVED:-}" ]]; then
+    local ver; ver="$(basename "$CUDA_HOME_RESOLVED" | sed 's/^cuda-//' | tr '.' '-')"
+    # Only use if it looks like a version (e.g. "12-6", not "cuda" or "usr")
+    [[ "$ver" =~ ^[0-9]+-[0-9]+$ ]] && cuda_ver_suffix="$ver"
+  fi
+
+  local packages="" pkg
+  if [[ -n "$cuda_ver_suffix" ]]; then
+    # Install dev packages matching the detected CUDA version
+    for pkg in \
+      "cuda-driver-dev-${cuda_ver_suffix}" \
+      "cuda-cudart-dev-${cuda_ver_suffix}" \
+      "cuda-nvcc-${cuda_ver_suffix}" \
+      "cuda-nvrtc-dev-${cuda_ver_suffix}" \
+      "libcublas-dev-${cuda_ver_suffix}" \
+      "libcurand-dev-${cuda_ver_suffix}"
+    do
+      apt-cache policy "$pkg" 2>/dev/null | grep -q 'Candidate:' && packages="$packages $pkg"
+    done
+  else
+    # Fallback: find latest 12.x packages (never 13.x — cudarc doesn't support it)
+    local pattern
+    for pattern in \
+      '^cuda-driver-dev-12-[0-9]+$' \
+      '^cuda-cudart-dev-12-[0-9]+$' \
+      '^cuda-nvcc-12-[0-9]+$' \
+      '^cuda-nvrtc-dev-12-[0-9]+$' \
+      '^libcublas-dev-12-[0-9]+$' \
+      '^libcurand-dev-12-[0-9]+$'
+    do
+      pkg="$(latest_apt_package_matching "$pattern" || true)"
+      [[ -n "$pkg" ]] && packages="$packages $pkg"
+    done
+  fi
 
   if [[ -n "$packages" ]]; then
     run_sudo apt-get update -qq
