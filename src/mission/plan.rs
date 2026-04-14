@@ -722,15 +722,17 @@ fn render_step_prompt(
     lines.push("Current step instruction:".to_string());
     lines.push(step.instruction.clone());
     lines.push(String::new());
-    lines.push("Deliverables for this step — persist real CTOX artifacts, not prose:".to_string());
-    lines.push("- Findings, decisions, policies, architecture notes → `ctox ticket knowledge-put --system <system> --domain <domain> --title <title> --body <body>`".to_string());
-    lines.push("- Concrete implementation work you or a future slice should pick up → `ctox ticket self-work-put --system <system> --kind change --title <title> --body <body>`".to_string());
-    lines.push("- Owner approval needed before a high-impact move → `ctox ticket self-work-put --system <system> --kind approval-gate --title <title> --body <body>`".to_string());
-    lines.push("- Credentials, API keys, or accounts you cannot obtain yourself → `ctox ticket access-request-put --system <system> --title <title> --body <body> --required-scopes <csv>`".to_string());
-    lines.push("- A workstream that needs its own multi-step plan → `ctox plan ingest --title <title> --prompt <text>`".to_string());
+    lines.push("Do the step. When the step is concrete work (code change, data migration, running a script, producing a measurement), actually perform it — do not write a document describing how it could be done. When the step is genuinely investigative or decision-shaped (architecture choice, policy, requirements analysis, source/filter review), the findings or decision are the real output and persisting them as knowledge is legitimate execution, not planning.".to_string());
+    lines.push(String::new());
+    lines.push("Deliverables — persist real CTOX artifacts, not prose:".to_string());
+    lines.push("- Findings, decisions, architecture notes, policies, measured results → `ctox ticket knowledge-put --system <system> --domain <domain> --title <title> --body <body>`. Knowledge should capture a conclusion or verified fact, not a description of work you have not done yet.".to_string());
+    lines.push("- Concrete implementation work that genuinely belongs to a later slice (because it depends on something outside this step) → `ctox ticket self-work-put --system <system> --kind change --title <title> --body <body>`. If the code change fits inside this step, just make the change now instead of deferring it.".to_string());
+    lines.push("- Owner approval needed before a genuinely high-impact irreversible move (production cutover, destructive migration, public communication) → `ctox ticket self-work-put --system <system> --kind approval-gate --title <title> --body <body>`. Most steps do not need an approval gate; use this only when the next action would really be irreversible without sign-off.".to_string());
+    lines.push("- Credentials, API keys, or accounts you cannot obtain yourself → `ctox ticket access-request-put --system <system> --title <title> --body <body> --required-scopes <csv>`.".to_string());
+    lines.push("- A workstream that genuinely needs its own multi-step plan → `ctox plan ingest --title <title> --prompt <text>`. Do not spawn a sub-plan just to avoid working on this step.".to_string());
     lines.push(String::new());
     lines.push(
-        "Reply briefly with what you persisted and what blockers remain. A reply without any persisted artifact is not a completed step unless the step was purely a summary/decision step and the decision itself is stored as knowledge.".to_string(),
+        "Reply briefly with what you persisted and what blockers remain. A reply without any persisted artifact is not a completed step unless the step was purely a summary/decision step and the decision itself is stored as knowledge. At the same time: writing another plan, another approval gate, or another scope document about work you could have done now is not completion either — it is the same step restated.".to_string(),
     );
     lines.join("\n")
 }
