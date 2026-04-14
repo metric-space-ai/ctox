@@ -131,18 +131,15 @@ fn add_offset_rfc3339(base_iso: &str, offset_seconds: i64) -> String {
     target.to_rfc3339()
 }
 
-/// Escalation cadence: (attempt_index -> seconds-from-first-seen, channel
-/// preference). These are *reminders*, not alerts — the cadence is tuned
-/// for an owner who reads email a few times during the workday, not for
-/// minute-by-minute response. Attempt 0 is the first send; once attempts
-/// exceed the table length, nagging stops and the nag state is marked
-/// complete. The gate itself stays open either way.
-const NAG_SCHEDULE: &[(i64, &str)] = &[
-    (2 * 60 * 60, "email"),         // T+2h  — first ping; fits inside a normal workday
-    (24 * 60 * 60, "email"),        // T+1 day — next-day reminder if still untouched
-    (2 * 24 * 60 * 60, "jami"),     // T+2 days — switch channel as gentle escalation
-    (4 * 24 * 60 * 60, "email"),    // T+4 days — final email nudge
-];
+/// Active escalation cadence for the current autonomy level, read
+/// fresh on each use so the TUI can change it mid-run. Reminders only,
+/// never alerts — the cadence is tuned for an owner who reads email a
+/// few times per workday, not for minute-by-minute response. Empty
+/// schedule means no nagging (progressive level auto-closes gates
+/// instead).
+fn nag_schedule() -> &'static [(i64, &'static str)] {
+    crate::autonomy::AutonomyLevel::from_env().nag_cadence_seconds()
+}
 
 fn schedule_new_gates(root: &Path) -> Result<usize> {
     let conn = open_db(root)?;
@@ -164,7 +161,11 @@ fn schedule_new_gates(root: &Path) -> Result<usize> {
             continue;
         }
         let now = now_rfc3339();
-        let next = add_offset_rfc3339(&now, NAG_SCHEDULE[0].0);
+        let Some(first) = nag_schedule().first() else {
+            // Progressive autonomy has no nag schedule — nothing to do.
+            continue;
+        };
+        let next = add_offset_rfc3339(&now, first.0);
         conn.execute(
             r#"
             INSERT INTO ticket_approval_nag_state
@@ -323,7 +324,7 @@ fn send_due_nags(root: &Path) -> Result<usize> {
             Ok(()) => {
                 sent += 1;
                 let next_attempt = attempt + 1;
-                let next_iso = if next_attempt >= NAG_SCHEDULE.len() {
+                let next_iso = if next_attempt >= nag_schedule().len() {
                     // Stop nagging. Mark as completed so we stop re-sending.
                     let _ = conn.execute(
                         "UPDATE ticket_approval_nag_state SET completed_at = ?1, attempt_count = ?2, last_nag_at = ?1, last_channel = ?3 WHERE work_id = ?4",
@@ -331,7 +332,7 @@ fn send_due_nags(root: &Path) -> Result<usize> {
                     );
                     continue;
                 } else {
-                    add_offset_rfc3339(&first_seen, NAG_SCHEDULE[next_attempt].0)
+                    add_offset_rfc3339(&first_seen, nag_schedule()[next_attempt].0)
                 };
                 conn.execute(
                     r#"
@@ -367,7 +368,7 @@ fn compose_nag(
     item: &tickets::TicketSelfWorkItemView,
     attempt: usize,
 ) -> (String, String, String) {
-    let channel = NAG_SCHEDULE
+    let channel = nag_schedule()
         .get(attempt)
         .map(|(_, c)| c.to_string())
         .unwrap_or_else(|| "email".to_string());

@@ -1,6 +1,7 @@
 use anyhow::Context;
 use std::path::{Path, PathBuf};
 
+mod autonomy;
 mod capabilities;
 mod context;
 mod doc_stack;
@@ -175,15 +176,21 @@ fn main() -> anyhow::Result<()> {
         Some("service") => {
             let flags: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
             let foreground = flags.contains(&"--foreground");
-            let auto_approve = flags.contains(&"--auto-approve-gates");
             if !foreground {
                 anyhow::bail!(
-                    "usage: ctox service --foreground [--auto-approve-gates]"
+                    "usage: ctox service --foreground \
+                     [--autonomy progressive|balanced|defensive] \
+                     [--auto-approve-gates (deprecated alias for --autonomy progressive)]"
                 );
             }
-            if auto_approve {
-                // Propagate to downstream processes (codex-exec, child turns).
-                std::env::set_var("CTOX_AUTO_APPROVE_GATES", "1");
+            if let Some(level_str) = find_flag_value(&args[1..], "--autonomy") {
+                let level = autonomy::AutonomyLevel::from_str_lossy(level_str);
+                std::env::set_var("CTOX_AUTONOMY_LEVEL", level.as_str());
+            } else if flags.contains(&"--auto-approve-gates") {
+                eprintln!(
+                    "warning: --auto-approve-gates is deprecated; use --autonomy progressive"
+                );
+                std::env::set_var("CTOX_AUTONOMY_LEVEL", "progressive");
             }
             service::run_foreground(&root)
         }
@@ -752,8 +759,21 @@ fn main() -> anyhow::Result<()> {
 fn handle_run_once(root: &Path, args: &[String]) -> anyhow::Result<()> {
     let brief = find_flag_value(args, "--brief").context(
         "usage: ctox run-once --brief <text> [--model <id>] [--quality|--performance] \
-         [--workspace <path>] [--atif-out <path>] [--thread-key <key>] [--max-turns <n>]",
+         [--workspace <path>] [--atif-out <path>] [--thread-key <key>] [--max-turns <n>] \
+         [--autonomy progressive|balanced|defensive] \
+         [--auto-approve-gates (deprecated alias for --autonomy progressive)]",
     )?;
+    // Autonomy level: benchmark harnesses (Terminal-Bench) set
+    // `--autonomy progressive` to skip the owner-approval handshake.
+    // Default is whatever the TUI left in CTOX_AUTONOMY_LEVEL (via
+    // engine.env), falling back to balanced.
+    if let Some(level_str) = find_flag_value(args, "--autonomy") {
+        let level = autonomy::AutonomyLevel::from_str_lossy(level_str);
+        std::env::set_var("CTOX_AUTONOMY_LEVEL", level.as_str());
+    } else if args.iter().any(|arg| arg == "--auto-approve-gates") {
+        eprintln!("warning: --auto-approve-gates is deprecated; use --autonomy progressive");
+        std::env::set_var("CTOX_AUTONOMY_LEVEL", "progressive");
+    }
     let model = find_flag_value(args, "--model");
     let preset = if args.iter().any(|arg| arg == "--quality") {
         Some("quality")

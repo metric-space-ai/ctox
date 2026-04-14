@@ -391,6 +391,8 @@ pub(crate) fn render_chat_prompt(
         String::new(),
         governance::render_prompt_block(governance_snapshot),
         String::new(),
+        render_autonomy_policy_block(),
+        String::new(),
         context_health::render_prompt_block(health),
         String::new(),
         "Conversation:".to_string(),
@@ -408,6 +410,20 @@ pub(crate) fn render_chat_prompt(
         lines.push(notice);
     }
     lines.join("\n")
+}
+
+/// Runtime block injected into every chat turn to tell the model how
+/// eagerly it should escalate decisions via approval-gate self-work
+/// items. The text varies with `CTOX_AUTONOMY_LEVEL` (progressive /
+/// balanced / defensive); the service propagates that variable from
+/// `engine.env` at boot.
+fn render_autonomy_policy_block() -> String {
+    let level = crate::autonomy::AutonomyLevel::from_env();
+    format!(
+        "Autonomy policy:\nlevel: {}\npolicy: {}",
+        level,
+        level.runtime_policy_block()
+    )
 }
 
 fn render_skill_dispatch_block(suggested_skill: Option<&str>) -> Option<String> {

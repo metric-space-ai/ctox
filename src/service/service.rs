@@ -320,18 +320,25 @@ pub fn run_foreground(root: &Path) -> Result<()> {
         std::process::id(),
         root.display()
     );
-    // Auto-approval is strictly a benchmark feature. It is NOT read
-    // from engine.env so it cannot accidentally become a long-lived
-    // operator setting. The only ways to enable it are the explicit
-    // CLI flags on `ctox service --foreground --auto-approve-gates`
-    // and `ctox run-once --auto-approve-gates`; both set the env var
-    // in the CLI handler before calling into the service, so by now
-    // std::env::var() already reflects the operator's intent.
-    if auto_approve_gates_enabled() {
-        eprintln!(
-            "ctox service auto-approval enabled (benchmark mode, --auto-approve-gates)"
-        );
+    // Propagate CTOX_AUTONOMY_LEVEL from engine.env into the process
+    // environment so downstream readers (plan step-prompt rendering,
+    // runtime-context block assembly, nag cadence, child codex-exec
+    // turns) see the current operator preference without re-reading
+    // the settings file. The level is a legitimate persistent
+    // operator setting exposed in the TUI — unlike the old benchmark
+    // flag, it IS meant to survive restarts. Legacy
+    // `CTOX_AUTO_APPROVE_GATES=1` is honoured by autonomy::from_env
+    // as a deprecated alias for `progressive`.
+    if let Ok(settings) = runtime_env::effective_operator_env_map(root) {
+        if let Some(value) = settings.get("CTOX_AUTONOMY_LEVEL") {
+            let trimmed = value.trim();
+            if matches!(trimmed, "progressive" | "balanced" | "defensive") {
+                std::env::set_var("CTOX_AUTONOMY_LEVEL", trimmed);
+            }
+        }
     }
+    let active_level = crate::autonomy::AutonomyLevel::from_env();
+    eprintln!("ctox service autonomy level: {active_level}");
     channels::ensure_store(root)?;
     governance::ensure_governance(root)?;
     let db_path = root.join("runtime/ctox_lcm.db");
@@ -2216,27 +2223,28 @@ fn start_mission_watcher(root: std::path::PathBuf, state: Arc<Mutex<SharedState>
         if let Err(err) = plan::emit_due_steps(&root) {
             push_event(&state, format!("Plan emitter failed: {err}"));
         }
-        // When auto-approval is enabled (benchmark / non-interactive runs),
-        // drain any open approval-gate self-work items so plans that would
-        // otherwise park on "awaiting owner approval" keep moving.
-        if auto_approve_gates_enabled() {
+        // Autonomy-level dispatch:
+        //   progressive -> drain any open approval-gate so plans keep
+        //                  moving without human sign-off;
+        //   balanced / defensive -> run the reminder sweep that pings
+        //                  the owner through the configured channels
+        //                  and closes gates on structured email replies.
+        let level = crate::autonomy::AutonomyLevel::from_env();
+        if level.auto_closes_gates() {
             match auto_close_pending_approval_gates(&root) {
                 Ok(count) if count > 0 => push_event(
                     &state,
                     format!(
-                        "Auto-approval: closed {count} pending approval-gate self-work item(s)"
+                        "Autonomy progressive: closed {count} pending approval-gate self-work item(s)"
                     ),
                 ),
                 Err(err) => push_event(
                     &state,
-                    format!("Auto-approval sweep failed: {err}"),
+                    format!("Autonomy progressive sweep failed: {err}"),
                 ),
                 _ => {}
             }
         } else {
-            // Normal interactive mode: proactively nag the owner about
-            // open approval-gate items over the configured channels, and
-            // close gates when a structured email reply arrives.
             match crate::mission::approval_nag::sweep(&root) {
                 Ok(summary) => {
                     if summary.sent > 0
@@ -2269,18 +2277,9 @@ fn start_mission_watcher(root: std::path::PathBuf, state: Arc<Mutex<SharedState>
     });
 }
 
-/// Returns true when `CTOX_AUTO_APPROVE_GATES` is set to a truthy value.
-/// Used by the mission watcher to drain pending owner-approval gates so
-/// benchmark / non-interactive runs do not deadlock on human sign-off.
-fn auto_approve_gates_enabled() -> bool {
-    std::env::var("CTOX_AUTO_APPROVE_GATES")
-        .map(|value| matches!(value.trim(), "1" | "true" | "yes" | "on"))
-        .unwrap_or(false)
-}
-
-/// Close every open `approval-gate` self-work item with a machine-readable
-/// reason. Runs only when auto-approval is enabled. Returns the count of
-/// items closed so callers can log it.
+/// Close every open `approval-gate` self-work item. Runs only when the
+/// active autonomy level is `progressive` (benchmark / non-interactive
+/// runs). Returns the count of items closed so callers can log it.
 fn auto_close_pending_approval_gates(root: &Path) -> Result<usize> {
     // Limit is generous; the sweep runs every mission-watcher tick so a
     // slow backlog still drains over a few iterations.

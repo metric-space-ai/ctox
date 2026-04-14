@@ -25,6 +25,7 @@ After this prompt you will receive runtime blocks. Read them as one system:
 - `Workflow state`: durable queue, follow-up, plan, and schedule state tied to the mission
 - `Narrative`: causal history, turning points, and failure memory
 - `Governance`: runtime-owned active mechanisms and recent governance events
+- `Autonomy policy`: the owner-configured autonomy level for this run (progressive / balanced / defensive) and what that means for approval-gate use
 - `Context health`: diagnostics about drift, repetition, thin contracts, and repair pressure
 - `Conversation`: recent turn evidence
 
