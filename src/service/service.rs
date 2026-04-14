@@ -320,17 +320,17 @@ pub fn run_foreground(root: &Path) -> Result<()> {
         std::process::id(),
         root.display()
     );
-    // Propagate the auto-approve flag from engine.env into the process
-    // environment so downstream readers (step-prompt rendering, child
-    // codex-exec inherits) see it without requiring an explicit
-    // `--auto-approve-gates` CLI flag or shell export.
-    if let Ok(settings) = runtime_env::effective_operator_env_map(root) {
-        if let Some(value) = settings.get("CTOX_AUTO_APPROVE_GATES") {
-            if matches!(value.trim(), "1" | "true" | "yes" | "on") {
-                std::env::set_var("CTOX_AUTO_APPROVE_GATES", "1");
-                eprintln!("ctox service auto-approval enabled via engine.env");
-            }
-        }
+    // Auto-approval is strictly a benchmark feature. It is NOT read
+    // from engine.env so it cannot accidentally become a long-lived
+    // operator setting. The only ways to enable it are the explicit
+    // CLI flags on `ctox service --foreground --auto-approve-gates`
+    // and `ctox run-once --auto-approve-gates`; both set the env var
+    // in the CLI handler before calling into the service, so by now
+    // std::env::var() already reflects the operator's intent.
+    if auto_approve_gates_enabled() {
+        eprintln!(
+            "ctox service auto-approval enabled (benchmark mode, --auto-approve-gates)"
+        );
     }
     channels::ensure_store(root)?;
     governance::ensure_governance(root)?;
