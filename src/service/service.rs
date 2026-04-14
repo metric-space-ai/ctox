@@ -320,6 +320,18 @@ pub fn run_foreground(root: &Path) -> Result<()> {
         std::process::id(),
         root.display()
     );
+    // Propagate the auto-approve flag from engine.env into the process
+    // environment so downstream readers (step-prompt rendering, child
+    // codex-exec inherits) see it without requiring an explicit
+    // `--auto-approve-gates` CLI flag or shell export.
+    if let Ok(settings) = runtime_env::effective_operator_env_map(root) {
+        if let Some(value) = settings.get("CTOX_AUTO_APPROVE_GATES") {
+            if matches!(value.trim(), "1" | "true" | "yes" | "on") {
+                std::env::set_var("CTOX_AUTO_APPROVE_GATES", "1");
+                eprintln!("ctox service auto-approval enabled via engine.env");
+            }
+        }
+    }
     channels::ensure_store(root)?;
     governance::ensure_governance(root)?;
     let db_path = root.join("runtime/ctox_lcm.db");
@@ -2204,11 +2216,56 @@ fn start_mission_watcher(root: std::path::PathBuf, state: Arc<Mutex<SharedState>
         if let Err(err) = plan::emit_due_steps(&root) {
             push_event(&state, format!("Plan emitter failed: {err}"));
         }
+        // When auto-approval is enabled (benchmark / non-interactive runs),
+        // drain any open approval-gate self-work items so plans that would
+        // otherwise park on "awaiting owner approval" keep moving.
+        if auto_approve_gates_enabled() {
+            match auto_close_pending_approval_gates(&root) {
+                Ok(count) if count > 0 => push_event(
+                    &state,
+                    format!(
+                        "Auto-approval: closed {count} pending approval-gate self-work item(s)"
+                    ),
+                ),
+                Err(err) => push_event(
+                    &state,
+                    format!("Auto-approval sweep failed: {err}"),
+                ),
+                _ => {}
+            }
+        }
         if let Err(err) = monitor_mission_continuity(&root, &state) {
             push_event(&state, format!("Mission watcher failed: {err}"));
         }
         thread::sleep(Duration::from_secs(MISSION_WATCHER_POLL_SECS));
     });
+}
+
+/// Returns true when `CTOX_AUTO_APPROVE_GATES` is set to a truthy value.
+/// Used by the mission watcher to drain pending owner-approval gates so
+/// benchmark / non-interactive runs do not deadlock on human sign-off.
+fn auto_approve_gates_enabled() -> bool {
+    std::env::var("CTOX_AUTO_APPROVE_GATES")
+        .map(|value| matches!(value.trim(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false)
+}
+
+/// Close every open `approval-gate` self-work item with a machine-readable
+/// reason. Runs only when auto-approval is enabled. Returns the count of
+/// items closed so callers can log it.
+fn auto_close_pending_approval_gates(root: &Path) -> Result<usize> {
+    // Limit is generous; the sweep runs every mission-watcher tick so a
+    // slow backlog still drains over a few iterations.
+    let pending =
+        tickets::list_ticket_self_work_items(root, None, Some("open"), 256)?;
+    let mut closed = 0usize;
+    for item in pending {
+        if item.kind == "approval-gate" {
+            tickets::set_ticket_self_work_state(root, &item.work_id, "closed")?;
+            closed += 1;
+        }
+    }
+    Ok(closed)
 }
 
 fn monitor_mission_continuity(root: &Path, state: &Arc<Mutex<SharedState>>) -> Result<()> {

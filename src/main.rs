@@ -172,11 +172,19 @@ fn main() -> anyhow::Result<()> {
             ),
         },
         Some("service") => {
-            if args.get(1).map(String::as_str) == Some("--foreground") {
-                service::run_foreground(&root)
-            } else {
-                anyhow::bail!("usage: ctox service --foreground")
+            let flags: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
+            let foreground = flags.contains(&"--foreground");
+            let auto_approve = flags.contains(&"--auto-approve-gates");
+            if !foreground {
+                anyhow::bail!(
+                    "usage: ctox service --foreground [--auto-approve-gates]"
+                );
             }
+            if auto_approve {
+                // Propagate to downstream processes (codex-exec, child turns).
+                std::env::set_var("CTOX_AUTO_APPROVE_GATES", "1");
+            }
+            service::run_foreground(&root)
         }
         Some("version") => {
             let version = version_info(&root)?;
@@ -217,6 +225,7 @@ fn main() -> anyhow::Result<()> {
         Some("follow-up") => follow_up::handle_follow_up_command(&args[1..]),
         Some("governance") => governance::handle_governance_command(&root, &args[1..]),
         Some("jami-daemon") => mission::communication_jami_native::handle_daemon_command(&root, &args[1..]),
+        Some("meeting") => mission::communication_meeting_native::handle_meeting_command(&root, &args[1..]),
         Some("plan") => plan::handle_plan_command(&root, &args[1..]),
         Some("queue") => queue::handle_queue_command(&root, &args[1..]),
         Some("scrape") => scrape::handle_scrape_command(&root, &args[1..]),

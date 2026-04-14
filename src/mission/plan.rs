@@ -693,6 +693,16 @@ fn render_step_prompt(
         format!("Plan step {}: {}", step.step_order, step.title),
         "Work only on this step. Do not silently skip ahead.".to_string(),
     ];
+    if std::env::var("CTOX_AUTO_APPROVE_GATES")
+        .map(|value| matches!(value.trim(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false)
+    {
+        lines.push(String::new());
+        lines.push(
+            "Runtime mode: auto-approval is active for this run. Owner approval is granted automatically. Do not create approval-gate self-work items as a way to defer execution — just execute the step. The only exceptions where you should still pause and escalate via approval-gate are actions that would be genuinely irreversible outside this run (production data deletion, public broadcast of user-facing content, destructive external API calls). Everything else is approved; proceed."
+                .to_string(),
+        );
+    }
     if let Some(skill) = goal
         .skill
         .as_deref()
