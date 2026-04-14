@@ -1211,7 +1211,10 @@ fn parse_ingest_request(args: &[String]) -> Result<PlanCreateRequest> {
             .to_string(),
         thread_key: find_flag_value(args, "--thread-key").map(ToOwned::to_owned),
         skill: find_flag_value(args, "--skill").map(ToOwned::to_owned),
-        auto_advance: args.iter().any(|arg| arg == "--auto-advance"),
+        // Default to auto-advance so plans keep moving without a human trigger
+        // between steps. Opt-out with --no-auto-advance for plans that need
+        // explicit approval between every step.
+        auto_advance: !args.iter().any(|arg| arg == "--no-auto-advance"),
         emit_now: args.iter().any(|arg| arg == "--emit-now"),
     })
 }
