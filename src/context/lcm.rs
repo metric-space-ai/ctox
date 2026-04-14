@@ -2328,7 +2328,10 @@ impl LcmEngine {
             .context("message not found")
     }
 
-    fn messages_for_conversation(&self, conversation_id: i64) -> Result<Vec<MessageRecord>> {
+    pub(crate) fn messages_for_conversation(
+        &self,
+        conversation_id: i64,
+    ) -> Result<Vec<MessageRecord>> {
         let mut stmt = self.conn.prepare(
             "SELECT message_id, conversation_id, seq, role, content, token_count, created_at
              FROM messages WHERE conversation_id = ?1 ORDER BY seq ASC",

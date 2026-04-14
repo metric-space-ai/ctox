@@ -5,6 +5,7 @@ mod capabilities;
 mod context;
 mod doc_stack;
 mod execution;
+mod export;
 mod install;
 mod mission;
 mod secrets;
@@ -721,13 +722,131 @@ fn main() -> anyhow::Result<()> {
             println!("{}", serde_json::to_string_pretty(&result)?);
             Ok(())
         }
+        Some("run-once") => handle_run_once(&root, &args[1..]),
         _ => {
             let clean_room_families = model_registry::supported_clean_room_family_selectors().join("|");
             anyhow::bail!(
-                "usage:\n  ctox\n  ctox version\n  ctox start\n  ctox stop\n  ctox status\n  ctox service --foreground\n  ctox governance <subcommand> ...\n  ctox state-invariants [--conversation-id <id>]\n  ctox update status\n  ctox update check\n  ctox update channel show\n  ctox update channel set-github --repo <owner/repo> [--api-base <url>] [--token-env <env-var>]\n  ctox update channel clear\n  ctox update adopt [--install-root <path>] [--state-root <path>] [--release <name>] [--skip-build] [--force]\n  ctox update apply --source <path> [--release <name>] [--force] [--keep-failed-release]\n  ctox update apply --latest [--force] [--keep-failed-release]\n  ctox update apply --version <tag> [--force] [--keep-failed-release]\n  ctox update rollback\n  ctox source-status\n  ctox clean-room-baseline-plan <{}> [prompt]\n  ctox clean-room-rewrite-responses <json-path>\n  ctox runtime switch <model> <quality|performance>\n  ctox serve-responses-proxy\n  ctox serve-litert-bridge --config <json-path>\n  ctox boost status\n  ctox boost start [--minutes <n>] [--model <id>] [--reason <text>]\n  ctox boost stop\n  ctox tui\n  ctox channel <subcommand> ...\n  ctox follow-up <subcommand> ...\n  ctox plan <subcommand> ...\n  ctox schedule <subcommand> ...\n  ctox secret <subcommand> ...\n  ctox ticket <subcommand> ...\n  ctox lcm-init <db-path>\n  ctox lcm-add-message <db-path> <conversation-id> <role> <content>\n  ctox lcm-compact <db-path> <conversation-id> [token-budget] [--force]\n  ctox lcm-grep <db-path> <conversation-id|all> <scope> <mode> <query> [limit]\n  ctox lcm-describe <db-path> <summary-id>\n  ctox lcm-expand <db-path> <summary-id> [depth] [--messages] [token-cap]\n  ctox lcm-dump <db-path> <conversation-id>\n  ctox lcm-refresh-continuity <db-path> <conversation-id>\n  ctox lcm-show-continuity <db-path> <conversation-id>\n  ctox lcm-run-fixture <db-path> <fixture-path>\n  ctox continuity-init <db-path> <conversation-id>\n  ctox continuity-show <db-path> <conversation-id> [narrative|anchors|focus]\n  ctox continuity-apply <db-path> <conversation-id> <narrative|anchors|focus> <diff-path>\n  ctox continuity-log <db-path> <conversation-id> [narrative|anchors|focus]\n  ctox continuity-rebuild <db-path> <conversation-id> <narrative|anchors|focus>\n  ctox continuity-forgotten <db-path> <conversation-id> [narrative|anchors|focus] [query]\n  ctox continuity-build-prompt <db-path> <conversation-id> <narrative|anchors|focus>\n  ctox context-health <db-path> <conversation-id> [latest-user-prompt] [token-budget]\n  ctox chat-prompt-export [--db <path>] [--conversation-id <id>] [--output <path>]\n  ctox context-stress <db-path> [conversation-id] [iterations] [token-budget]\n  ctox context-retrieve [--db <path>] [--conversation-id <id>] --mode <current|continuity|forgotten|search|describe|expand> [--kind <narrative|anchors|focus>] [--query <text>] [--summary-id <id>] [--limit <n>] [--depth <n>] [--messages] [--token-cap <n>]",
+                "usage:\n  ctox\n  ctox version\n  ctox start\n  ctox stop\n  ctox status\n  ctox service --foreground\n  ctox run-once --brief <text> [--model <id>] [--quality|--performance] [--workspace <path>] [--atif-out <path>] [--thread-key <key>]\n  ctox governance <subcommand> ...\n  ctox state-invariants [--conversation-id <id>]\n  ctox update status\n  ctox update check\n  ctox update channel show\n  ctox update channel set-github --repo <owner/repo> [--api-base <url>] [--token-env <env-var>]\n  ctox update channel clear\n  ctox update adopt [--install-root <path>] [--state-root <path>] [--release <name>] [--skip-build] [--force]\n  ctox update apply --source <path> [--release <name>] [--force] [--keep-failed-release]\n  ctox update apply --latest [--force] [--keep-failed-release]\n  ctox update apply --version <tag> [--force] [--keep-failed-release]\n  ctox update rollback\n  ctox source-status\n  ctox clean-room-baseline-plan <{}> [prompt]\n  ctox clean-room-rewrite-responses <json-path>\n  ctox runtime switch <model> <quality|performance>\n  ctox serve-responses-proxy\n  ctox serve-litert-bridge --config <json-path>\n  ctox boost status\n  ctox boost start [--minutes <n>] [--model <id>] [--reason <text>]\n  ctox boost stop\n  ctox tui\n  ctox channel <subcommand> ...\n  ctox follow-up <subcommand> ...\n  ctox plan <subcommand> ...\n  ctox schedule <subcommand> ...\n  ctox secret <subcommand> ...\n  ctox ticket <subcommand> ...\n  ctox lcm-init <db-path>\n  ctox lcm-add-message <db-path> <conversation-id> <role> <content>\n  ctox lcm-compact <db-path> <conversation-id> [token-budget] [--force]\n  ctox lcm-grep <db-path> <conversation-id|all> <scope> <mode> <query> [limit]\n  ctox lcm-describe <db-path> <summary-id>\n  ctox lcm-expand <db-path> <summary-id> [depth] [--messages] [token-cap]\n  ctox lcm-dump <db-path> <conversation-id>\n  ctox lcm-refresh-continuity <db-path> <conversation-id>\n  ctox lcm-show-continuity <db-path> <conversation-id>\n  ctox lcm-run-fixture <db-path> <fixture-path>\n  ctox continuity-init <db-path> <conversation-id>\n  ctox continuity-show <db-path> <conversation-id> [narrative|anchors|focus]\n  ctox continuity-apply <db-path> <conversation-id> <narrative|anchors|focus> <diff-path>\n  ctox continuity-log <db-path> <conversation-id> [narrative|anchors|focus]\n  ctox continuity-rebuild <db-path> <conversation-id> <narrative|anchors|focus>\n  ctox continuity-forgotten <db-path> <conversation-id> [narrative|anchors|focus] [query]\n  ctox continuity-build-prompt <db-path> <conversation-id> <narrative|anchors|focus>\n  ctox context-health <db-path> <conversation-id> [latest-user-prompt] [token-budget]\n  ctox chat-prompt-export [--db <path>] [--conversation-id <id>] [--output <path>]\n  ctox context-stress <db-path> [conversation-id] [iterations] [token-budget]\n  ctox context-retrieve [--db <path>] [--conversation-id <id>] --mode <current|continuity|forgotten|search|describe|expand> [--kind <narrative|anchors|focus>] [--query <text>] [--summary-id <id>] [--limit <n>] [--depth <n>] [--messages] [--token-cap <n>]",
                 clean_room_families
             )
         }
+    }
+}
+
+/// `ctox run-once` — execute a single mission headlessly against a fresh
+/// conversation, block until the turn completes, emit a trajectory, and exit
+/// with a status code that Harbor-style harnesses can consume directly:
+///
+///   exit 0  — mission handled (success)
+///   exit !0 — mission failed (turn error propagates)
+///
+/// This path deliberately bypasses the service daemon, the queue dispatcher,
+/// and the watcher thread: a benchmark task is a one-shot mission, so we call
+/// the turn loop directly on the current conversation. All CTOX plumbing that
+/// the turn loop itself depends on (LCM, continuity, compaction, governance,
+/// skills) is exercised in the process.
+fn handle_run_once(root: &Path, args: &[String]) -> anyhow::Result<()> {
+    let brief = find_flag_value(args, "--brief").context(
+        "usage: ctox run-once --brief <text> [--model <id>] [--quality|--performance] \
+         [--workspace <path>] [--atif-out <path>] [--thread-key <key>]",
+    )?;
+    let model = find_flag_value(args, "--model");
+    let preset = if args.iter().any(|arg| arg == "--quality") {
+        Some("quality")
+    } else if args.iter().any(|arg| arg == "--performance") {
+        Some("performance")
+    } else {
+        None
+    };
+    let workspace_opt = find_flag_value(args, "--workspace").map(PathBuf::from);
+    let atif_out = find_flag_value(args, "--atif-out").map(PathBuf::from);
+    let thread_key = find_flag_value(args, "--thread-key")
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("run-once-{}", chrono::Utc::now().timestamp_millis()));
+
+    if let Some(model_id) = model {
+        let outcome = runtime_control::execute_runtime_switch(root, model_id, preset)?;
+        eprintln!(
+            "ctox run-once: model switch requested={} active_model={} phase={:?}",
+            model_id, outcome.active_model, outcome.phase
+        );
+    } else if preset.is_some() {
+        anyhow::bail!("--quality/--performance requires --model <id>");
+    }
+
+    let db_path = root.join("runtime/ctox_lcm.db");
+    if let Some(parent) = db_path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+
+    let conversation_id =
+        inference::turn_loop::conversation_id_for_thread_key(Some(thread_key.as_str()));
+
+    eprintln!(
+        "ctox run-once: thread_key={} conversation_id={} brief_chars={}",
+        thread_key,
+        conversation_id,
+        brief.chars().count()
+    );
+
+    let workspace_ref = workspace_opt.as_deref();
+    let turn_result = inference::turn_loop::run_chat_turn_with_events_extended(
+        root,
+        &db_path,
+        brief,
+        workspace_ref,
+        conversation_id,
+        None,
+        false,
+        |event| eprintln!("[ctox run-once] {event}"),
+    );
+
+    let err_text = turn_result.as_ref().err().map(|err| err.to_string());
+    let mission_status = if turn_result.is_ok() {
+        "handled"
+    } else {
+        "failed"
+    };
+
+    if let Some(out_path) = atif_out.as_deref() {
+        let settings = runtime_env::effective_runtime_env_map(root).unwrap_or_default();
+        let model_name = runtime_env::effective_chat_model_from_map(&settings)
+            .unwrap_or_else(|| "unknown".to_string());
+        let notes = err_text
+            .as_ref()
+            .map(|msg| format!("run-once terminated with error: {msg}"));
+        let trajectory = export::atif::build_trajectory(
+            &db_path,
+            conversation_id,
+            &thread_key,
+            "ctox",
+            env!("CARGO_PKG_VERSION"),
+            &model_name,
+            notes,
+        )?;
+        export::atif::write_trajectory(&trajectory, out_path)
+            .with_context(|| format!("failed to write ATIF trajectory to {}", out_path.display()))?;
+        eprintln!(
+            "ctox run-once: wrote ATIF trajectory to {}",
+            out_path.display()
+        );
+    }
+
+    match turn_result {
+        Ok(reply) => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "status": mission_status,
+                    "conversation_id": conversation_id,
+                    "thread_key": thread_key,
+                    "reply_chars": reply.chars().count(),
+                }))?
+            );
+            Ok(())
+        }
+        Err(err) => Err(err),
     }
 }
 
