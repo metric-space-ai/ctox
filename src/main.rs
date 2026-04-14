@@ -902,11 +902,51 @@ fn handle_run_once(root: &Path, args: &[String]) -> anyhow::Result<()> {
                 }
             }
             Err(err) => {
-                last_error = Some(err.to_string());
-                eprintln!("ctox run-once: turn {turns_run} failed: {err}");
+                let err_text = err.to_string();
+                last_error = Some(err_text.clone());
+                eprintln!("ctox run-once: turn {turns_run} failed: {err_text}");
                 let _ = channels::ack_leased_messages(root, &leased_keys, "failed");
-                mission_status = "failed";
-                break;
+
+                // Service-daemon parity: a turn that hit the runtime time
+                // budget is recoverable. CTOX' production behaviour is to
+                // enqueue a high-priority continuation slice with a "pick
+                // up where you left off" prompt and let the next turn
+                // resume from the LCM-persisted state. Without this,
+                // run-once misrepresents CTOX in benchmarks — weak models
+                // that legitimately need more wall time would get scored
+                // as full failures instead of as multi-slice missions.
+                if is_turn_timeout_blocker(&err_text) && turns_run < max_turns {
+                    match enqueue_timeout_continuation(
+                        root,
+                        &thread_key,
+                        workspace_opt
+                            .as_ref()
+                            .map(|p| p.to_string_lossy().into_owned())
+                            .as_deref(),
+                        brief,
+                        &err_text,
+                        leased_keys.first().map(String::as_str),
+                    ) {
+                        Ok(title) => {
+                            eprintln!(
+                                "ctox run-once: enqueued timeout continuation: {title}"
+                            );
+                            // Fall through: sync mission state, then lease
+                            // the freshly enqueued continuation in the
+                            // next iteration.
+                        }
+                        Err(enq_err) => {
+                            eprintln!(
+                                "ctox run-once: failed to enqueue continuation: {enq_err}"
+                            );
+                            mission_status = "failed";
+                            break;
+                        }
+                    }
+                } else {
+                    mission_status = "failed";
+                    break;
+                }
             }
         }
 
@@ -1010,6 +1050,62 @@ fn handle_run_once(root: &Path, args: &[String]) -> anyhow::Result<()> {
         "cap" => std::process::exit(4),
         _ => std::process::exit(5),
     }
+}
+
+/// Detect whether an error from `run_chat_turn_with_events_extended` was
+/// caused by hitting the per-turn time budget. Mirrors the heuristic used
+/// by `service::is_turn_timeout_blocker` so run-once and the service stay
+/// in agreement on what counts as a recoverable timeout.
+fn is_turn_timeout_blocker(value: &str) -> bool {
+    let lowered = value.to_ascii_lowercase();
+    lowered.contains("timed out after") || lowered.contains("time budget")
+}
+
+/// Mirrors the recovery path that `service::maybe_enqueue_timeout_continuation`
+/// runs inside the daemon: enqueue a high-priority follow-up slice with a
+/// "continue from the latest saved state" prompt. The next mission-loop
+/// iteration leases this continuation and resumes the mission with the
+/// existing LCM context intact.
+///
+/// We deliberately keep this thin (no governance event recording) since
+/// run-once is single-mission and doesn't need the cross-mission audit
+/// trail the service produces.
+fn enqueue_timeout_continuation(
+    root: &Path,
+    thread_key: &str,
+    workspace_root: Option<&str>,
+    original_brief: &str,
+    blocker: &str,
+    parent_message_key: Option<&str>,
+) -> anyhow::Result<String> {
+    let goal_clip: String = original_brief.chars().take(60).collect();
+    let title = format!("Continue after timeout: {goal_clip}");
+    let blocker_clip: String = blocker.trim().chars().take(220).collect();
+    let prompt = format!(
+        "Continue the interrupted task from the latest saved state.\n\n\
+         Current task:\n{}\n\n\
+         Runtime stop:\n{}\n\n\
+         Required actions:\n\
+         - re-check repo, runtime, queue, progress artifacts, and continuity\n\
+         - preserve any work that already landed\n\
+         - continue with the next smallest concrete step\n\
+         - if more than one turn is still needed, leave exactly one open CTOX plan or queue item before the turn ends\n\
+         - a sentence in the reply does not count as open work",
+        original_brief, blocker_clip
+    );
+    let view = channels::create_queue_task(
+        root,
+        channels::QueueTaskCreateRequest {
+            title,
+            prompt,
+            thread_key: thread_key.to_string(),
+            workspace_root: workspace_root.map(str::to_owned),
+            priority: "high".to_string(),
+            suggested_skill: None,
+            parent_message_key: parent_message_key.map(str::to_owned),
+        },
+    )?;
+    Ok(view.title)
 }
 
 /// Lease at most one pending queue message whose thread matches our mission.
