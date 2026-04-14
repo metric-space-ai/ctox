@@ -1364,6 +1364,7 @@ impl App {
                     | "CTOX_CHAT_MODEL_FAMILY"
                     | "CTOX_CHAT_LOCAL_PRESET"
                     | "CTOX_CHAT_SKILL_PRESET"
+                    | "CTOX_REFRESH_OUTPUT_BUDGET_PCT"
                     | "CTOX_CHAT_MODEL"
                     | "CTOX_CHAT_MODEL_BOOST"
                     | "CTOX_BOOST_DEFAULT_MINUTES"
@@ -1443,6 +1444,7 @@ impl App {
             "CTOX_CHAT_MODEL" => true,
             "CTOX_CHAT_LOCAL_PRESET" => !local_runtime || local_runtime_is_candle,
             "CTOX_CHAT_SKILL_PRESET" => true,
+            "CTOX_REFRESH_OUTPUT_BUDGET_PCT" => true,
             "CTO_EMAIL_ADDRESS" | "CTO_EMAIL_PASSWORD" | "CTO_EMAIL_PROVIDER" => self
                 .value_for_setting("CTOX_OWNER_PREFERRED_CHANNEL")
                 .unwrap_or(DEFAULT_COMMUNICATION_PATH)
@@ -3218,6 +3220,22 @@ fn load_settings_items(root: &Path) -> Vec<SettingItem> {
             secret: false,
             choices: CHAT_SKILL_PRESET_CHOICES.to_vec(),
             help: "Choose the agent behavior preset. Standard keeps the full CTOX agent contract; Simple switches to a lighter small-step mode for weaker models.",
+            kind: SettingKind::Env,
+        },
+        SettingItem {
+            key: "CTOX_REFRESH_OUTPUT_BUDGET_PCT",
+            label: "Refresh Budget",
+            value: env_map
+                .get("CTOX_REFRESH_OUTPUT_BUDGET_PCT")
+                .cloned()
+                .unwrap_or_else(|| "15".to_string()),
+            saved_value: env_map
+                .get("CTOX_REFRESH_OUTPUT_BUDGET_PCT")
+                .cloned()
+                .unwrap_or_else(|| "15".to_string()),
+            secret: false,
+            choices: vec!["5", "10", "15", "20", "25"],
+            help: "Maximum assistant output tokens between continuity refreshes, as a percent of the model context window. Higher values let the model run longer multi-turn without refresh (KV-cache-friendly); lower values guard against self-feeding drift on long generations. State-transition boundaries always refresh regardless of this setting.",
             kind: SettingKind::Env,
         },
         SettingItem {
@@ -5500,6 +5518,7 @@ mod tests {
                 "CTOX_CHAT_MODEL",
                 "CTOX_CHAT_LOCAL_PRESET",
                 "CTOX_CHAT_SKILL_PRESET",
+                "CTOX_REFRESH_OUTPUT_BUDGET_PCT",
                 "CTOX_CHAT_MODEL_BOOST",
                 "CTOX_BOOST_DEFAULT_MINUTES",
                 "CTOX_EMBEDDING_MODEL",
@@ -5536,6 +5555,7 @@ mod tests {
                 "CTOX_CHAT_MODEL",
                 "CTOX_CHAT_LOCAL_PRESET",
                 "CTOX_CHAT_SKILL_PRESET",
+                "CTOX_REFRESH_OUTPUT_BUDGET_PCT",
                 "CTOX_CHAT_MODEL_BOOST",
                 "CTOX_BOOST_DEFAULT_MINUTES",
                 "CTOX_EMBEDDING_MODEL",
@@ -5564,6 +5584,7 @@ mod tests {
                 "OPENAI_API_KEY",
                 "CTOX_CHAT_MODEL",
                 "CTOX_CHAT_SKILL_PRESET",
+                "CTOX_REFRESH_OUTPUT_BUDGET_PCT",
                 "CTOX_CHAT_MODEL_BOOST",
                 "CTOX_BOOST_DEFAULT_MINUTES",
                 "CTOX_EMBEDDING_MODEL",

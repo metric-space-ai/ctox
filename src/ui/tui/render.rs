@@ -2259,6 +2259,7 @@ fn context_window_line(app: &App, width: usize) -> Line<'static> {
 }
 
 fn context_label_line(app: &App, width: usize) -> Line<'static> {
+    let budget_suffix = refresh_budget_suffix(app);
     let text = if let Some(health) = app.context_health.as_ref() {
         let status = health.status.as_str();
         let hint = context_health_hint(app);
@@ -2268,17 +2269,39 @@ fn context_label_line(app: &App, width: usize) -> Line<'static> {
             format!("  {} warning(s)", health.warnings.len())
         };
         format!(
-            "context {status} {}  {hint}{warning_suffix}",
+            "context {status} {}  {hint}{warning_suffix}{budget_suffix}",
             health.overall_score
         )
     } else {
         format!(
-            "context pending  {}k used of {}k live",
+            "context pending  {}k used of {}k live{budget_suffix}",
             app.header.current_tokens / 1024,
             app.header.max_context / 1024
         )
     };
     Line::from(truncate_line(&text, width))
+}
+
+/// Compact suffix for the context status line showing how much of the
+/// output-refresh budget is currently used. Returns an empty string when
+/// there is nothing to show (fresh conversation, budget disabled).
+fn refresh_budget_suffix(app: &App) -> String {
+    let pct = app
+        .value_for_setting("CTOX_REFRESH_OUTPUT_BUDGET_PCT")
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .unwrap_or(15);
+    if pct == 0 {
+        return String::new();
+    }
+    let snapshot = crate::execution::agent::turn_loop::refresh_budget_snapshot(
+        crate::execution::agent::turn_loop::CHAT_CONVERSATION_ID,
+        app.header.max_context as u64,
+        pct,
+    );
+    if snapshot.output_chars_since_refresh == 0 {
+        return String::new();
+    }
+    format!("  • refresh {}%/{}%", snapshot.used_pct.min(999), pct)
 }
 
 fn context_health_hint(app: &App) -> String {

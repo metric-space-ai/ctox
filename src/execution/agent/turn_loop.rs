@@ -18,44 +18,203 @@ use std::time::Duration;
 use std::time::Instant;
 use std::time::SystemTime;
 
-/// Per-conversation count of turns since the last continuity refresh.
+/// Per-conversation refresh accounting since the last continuity refresh.
 /// Lives in process memory so that restarts do not preserve it — that is
-/// fine: a restart always forces a refresh on the first turn anyway.
-fn turn_counters() -> &'static Mutex<HashMap<i64, u64>> {
-    static COUNTERS: OnceLock<Mutex<HashMap<i64, u64>>> = OnceLock::new();
+/// fine: a restart always starts a fresh budget window.
+#[derive(Default, Clone, Copy)]
+struct RefreshState {
+    /// Cumulative assistant reply characters since the last refresh.
+    /// Approximates output tokens at ~4 chars/token for the budget check.
+    output_chars_since_refresh: u64,
+    /// Turns since the last refresh (used only by the optional legacy
+    /// interval trigger when the operator explicitly sets one).
+    turns_since_refresh: u64,
+}
+
+fn turn_counters() -> &'static Mutex<HashMap<i64, RefreshState>> {
+    static COUNTERS: OnceLock<Mutex<HashMap<i64, RefreshState>>> = OnceLock::new();
     COUNTERS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 /// Decide whether the current turn should run a continuity refresh.
-/// Refreshes always run on a task boundary (e.g. a plan step closed) and
-/// when the configured interval `every_n` (default 1 = every turn) has
-/// elapsed. With `every_n` > 1, intermediate turns skip the refresh and
-/// just bump the counter, which avoids the 3 LLM calls per turn cost.
+///
+/// New adaptive model — two passive triggers plus one hard safety net:
+///
+/// 1. `force_task_boundary` — durable state transition (plan step closed,
+///    self-work closed, focus replace). Refreshes immediately and resets
+///    all counters. This is the state-transition trigger.
+///
+/// 2. Output-budget trigger — cumulative assistant output (approximated as
+///    `chars/4`) since the last refresh ≥ `output_budget_pct` of the model
+///    context window. Guards against self-feeding / hallucination drift
+///    on long multi-turn generations without external input.
+///
+/// 3. Legacy interval trigger (`legacy_every_n_turns`) — optional,
+///    disabled by default (0). Preserves backward compatibility for
+///    operators who explicitly set `CTOX_CONTINUITY_REFRESH_EVERY_N_TURNS`.
+///
+/// When none of the triggers fire, the turn runs without a continuity
+/// refresh. The hard 100k compaction net in `build_turn_plan` remains
+/// independent of this decision.
 fn should_refresh_continuity(
     conversation_id: i64,
-    every_n: u64,
+    reply_output_chars: u64,
+    max_context_tokens: u64,
+    output_budget_pct: u64,
+    legacy_every_n_turns: u64,
     force_task_boundary: bool,
 ) -> bool {
-    if force_task_boundary {
-        // reset counter so the next free interval starts cleanly
-        let mut counters = turn_counters().lock().expect("turn_counters poisoned");
-        counters.insert(conversation_id, 0);
-        return true;
-    }
-    let interval = every_n.max(1);
-    if interval == 1 {
-        return true;
-    }
     let mut counters = turn_counters().lock().expect("turn_counters poisoned");
-    let counter = counters.entry(conversation_id).or_insert(0);
-    *counter += 1;
-    if *counter >= interval {
-        *counter = 0;
+    let state = counters.entry(conversation_id).or_insert(RefreshState::default());
+    state.output_chars_since_refresh = state
+        .output_chars_since_refresh
+        .saturating_add(reply_output_chars);
+    state.turns_since_refresh = state.turns_since_refresh.saturating_add(1);
+
+    let should_refresh = if force_task_boundary {
         true
     } else {
-        false
+        let pct = output_budget_pct.min(100);
+        let budget_tokens = max_context_tokens.saturating_mul(pct) / 100;
+        let approx_output_tokens = state.output_chars_since_refresh / 4;
+        let budget_exceeded = pct > 0 && approx_output_tokens >= budget_tokens;
+        let interval_hit =
+            legacy_every_n_turns > 0 && state.turns_since_refresh >= legacy_every_n_turns;
+        budget_exceeded || interval_hit
+    };
+
+    if should_refresh {
+        state.output_chars_since_refresh = 0;
+        state.turns_since_refresh = 0;
+    }
+    should_refresh
+}
+
+/// Current wall-clock time as an RFC3339 string, matching the format used
+/// by `now_iso_string()` in the ticket / plan / continuity subsystems.
+/// Used to bracket a turn so we can detect state writes that happened
+/// during it.
+fn current_rfc3339_timestamp() -> String {
+    chrono::Utc::now().to_rfc3339()
+}
+
+/// Snapshot of refresh-budget accounting for display in the TUI.
+#[derive(Debug, Clone, Copy)]
+pub struct RefreshBudgetSnapshot {
+    pub output_chars_since_refresh: u64,
+    pub turns_since_refresh: u64,
+    /// Approximate output tokens since last refresh (chars / 4).
+    pub approx_output_tokens: u64,
+    /// Budget ceiling in tokens for the configured context window and pct.
+    pub budget_tokens: u64,
+    /// Fraction of the budget consumed, 0–100+. May exceed 100 briefly
+    /// between the turn that trips the trigger and the refresh itself.
+    pub used_pct: u64,
+}
+
+/// Read-only accessor so the TUI can surface live budget telemetry without
+/// mutating the per-conversation counters.
+pub fn refresh_budget_snapshot(
+    conversation_id: i64,
+    max_context_tokens: u64,
+    output_budget_pct: u64,
+) -> RefreshBudgetSnapshot {
+    let counters = turn_counters().lock().expect("turn_counters poisoned");
+    let state = counters
+        .get(&conversation_id)
+        .copied()
+        .unwrap_or_default();
+    let pct = output_budget_pct.min(100);
+    let budget_tokens = max_context_tokens.saturating_mul(pct) / 100;
+    let approx_output_tokens = state.output_chars_since_refresh / 4;
+    let used_pct = if budget_tokens == 0 {
+        0
+    } else {
+        (approx_output_tokens.saturating_mul(100)) / budget_tokens
+    };
+    RefreshBudgetSnapshot {
+        output_chars_since_refresh: state.output_chars_since_refresh,
+        turns_since_refresh: state.turns_since_refresh,
+        approx_output_tokens,
+        budget_tokens,
+        used_pct,
     }
 }
+
+/// Query the mission and LCM databases for durable state changes written
+/// between `turn_start_ts` and now. Returns `true` if any of the following
+/// happened during the turn:
+///
+/// - a self-work item transitioned to `state = 'closed'`
+/// - a new ticket-knowledge entry was inserted
+/// - a focus continuity commit was written
+///
+/// Any error (missing DB, missing table on a fresh install) is swallowed
+/// as `Ok(false)` by the caller — the output-budget trigger still guards
+/// us in that case, so a silent miss degrades gracefully.
+fn detect_durable_state_transition(
+    root: &Path,
+    lcm_db_path: &Path,
+    conversation_id: i64,
+    turn_start_ts: &str,
+) -> Result<bool> {
+    use rusqlite::Connection;
+
+    // Mission-side tables live in cto_agent.db.
+    let mission_db = root.join("runtime/cto_agent.db");
+    if mission_db.exists() {
+        let conn = Connection::open_with_flags(
+            &mission_db,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+        )?;
+        let self_work_closed: i64 = conn
+            .query_row(
+                "SELECT COUNT(1) FROM ticket_self_work_items \
+                 WHERE state = 'closed' AND updated_at > ?1",
+                rusqlite::params![turn_start_ts],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        if self_work_closed > 0 {
+            return Ok(true);
+        }
+        let knowledge_added: i64 = conn
+            .query_row(
+                "SELECT COUNT(1) FROM ticket_knowledge_entries WHERE created_at > ?1",
+                rusqlite::params![turn_start_ts],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        if knowledge_added > 0 {
+            return Ok(true);
+        }
+    }
+
+    // Focus-document commits live in the LCM database alongside Narrative
+    // and Anchors. A focus replacement during the turn is a boundary.
+    if lcm_db_path.exists() {
+        let conn = Connection::open_with_flags(
+            lcm_db_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+        )?;
+        let focus_commits: i64 = conn
+            .query_row(
+                "SELECT COUNT(1) FROM continuity_commits c \
+                 JOIN continuity_documents d ON c.document_id = d.id \
+                 WHERE d.conversation_id = ?1 AND d.kind = 'Focus' \
+                 AND c.created_at > ?2",
+                rusqlite::params![conversation_id, turn_start_ts],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        if focus_commits > 0 {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
 use std::time::UNIX_EPOCH;
 
 use crate::channels;
@@ -466,6 +625,7 @@ where
         "context-selection rendered={} omitted={}",
         rendered_prompt.rendered_context_items, rendered_prompt.omitted_context_items
     ));
+    let turn_start_ts = current_rfc3339_timestamp();
     emit("invoke-model");
     let reply = invoke_codex_exec_with_timeout(
         root,
@@ -476,18 +636,53 @@ where
     )?;
     emit("persist-assistant-turn");
     lcm::run_add_message(db_path, conversation_id, "assistant", &reply)?;
+    // Detect durable state transitions triggered by the agent's tool calls
+    // during this turn (self-work closed, knowledge entry added, focus
+    // document replaced). These count as task boundaries and force a
+    // continuity refresh even if the output budget has not yet been hit.
+    let state_transition_detected = detect_durable_state_transition(
+        root,
+        db_path,
+        conversation_id,
+        &turn_start_ts,
+    )
+    .unwrap_or(false);
+    let effective_force_refresh = force_continuity_refresh || state_transition_detected;
     let engine = lcm::LcmEngine::open(db_path, lcm::LcmConfig::default())?;
+    // New adaptive model: refresh only on durable state transition
+    // (force_continuity_refresh) or when cumulative output tokens exceed
+    // the configured percentage of the context window. Legacy interval
+    // knob defaults to 0 (disabled); operators can re-enable it explicitly.
     let refresh_every_n = read_usize_setting(
         &operator_settings,
         "CTOX_CONTINUITY_REFRESH_EVERY_N_TURNS",
-        1,
+        0,
     ) as u64;
-    let continuity_stats = if should_refresh_continuity(
+    let output_budget_pct = read_usize_setting(
+        &operator_settings,
+        "CTOX_REFRESH_OUTPUT_BUDGET_PCT",
+        15,
+    ) as u64;
+    let reply_chars = reply.chars().count() as u64;
+    let refresh_now = should_refresh_continuity(
         conversation_id,
+        reply_chars,
+        config.max_context_tokens as u64,
+        output_budget_pct,
         refresh_every_n,
-        force_continuity_refresh,
-    ) {
-        emit("continuity-refresh");
+        effective_force_refresh,
+    );
+    let continuity_stats = if refresh_now {
+        let reason = if force_continuity_refresh {
+            "state-transition-plan"
+        } else if state_transition_detected {
+            "state-transition-tickets"
+        } else if refresh_every_n > 0 {
+            "output-budget-or-interval"
+        } else {
+            "output-budget"
+        };
+        emit(&format!("continuity-refresh reason={}", reason));
         refresh_continuity_documents(
             root,
             &operator_settings,
@@ -497,9 +692,21 @@ where
             &mut emit,
         )?
     } else {
-        emit("continuity-refresh-skipped-by-interval");
+        emit("continuity-refresh-skipped");
         Default::default()
     };
+    let budget_snapshot = refresh_budget_snapshot(
+        conversation_id,
+        config.max_context_tokens as u64,
+        output_budget_pct,
+    );
+    emit(&format!(
+        "refresh-budget used_pct={} approx_tokens={} budget_tokens={} turns_since_refresh={}",
+        budget_snapshot.used_pct,
+        budget_snapshot.approx_output_tokens,
+        budget_snapshot.budget_tokens,
+        budget_snapshot.turns_since_refresh
+    ));
     let outcome = turn_engine::ChatTurnOutcome {
         stage: turn_engine::TurnStage::Complete,
         health_status: health.status,
