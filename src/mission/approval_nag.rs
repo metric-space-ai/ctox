@@ -197,9 +197,96 @@ fn mark_closed_gates_completed(root: &Path) -> Result<usize> {
     Ok(changed)
 }
 
+/// Business-hours window — reminders are only sent Mon–Fri 08:00–20:00
+/// in the host's local time. Weekend and out-of-hours ticks defer their
+/// due nags to the next window start instead of pinging the owner at
+/// 03:00.
+fn is_within_business_hours(now: &chrono::DateTime<chrono::Local>) -> bool {
+    use chrono::{Datelike, Timelike, Weekday};
+    let is_weekday = !matches!(now.weekday(), Weekday::Sat | Weekday::Sun);
+    let hour = now.hour();
+    is_weekday && (8..20).contains(&hour)
+}
+
+/// Next business-hour window start in local time (Mon–Fri 08:00). Used
+/// to reschedule due-but-out-of-hours nags so the owner's inbox stays
+/// clean overnight and at weekends.
+fn next_business_window_start(
+    after: &chrono::DateTime<chrono::Local>,
+) -> chrono::DateTime<chrono::Local> {
+    use chrono::{Datelike, Duration, Timelike, Weekday};
+    let mut probe = *after;
+    for _ in 0..14 {
+        let weekday = probe.weekday();
+        let hour = probe.hour();
+        if matches!(weekday, Weekday::Sat | Weekday::Sun) {
+            let days_to_monday = if weekday == Weekday::Sat { 2 } else { 1 };
+            let next = (probe + Duration::days(days_to_monday))
+                .with_hour(8)
+                .and_then(|dt| dt.with_minute(0))
+                .and_then(|dt| dt.with_second(0));
+            if let Some(dt) = next {
+                probe = dt;
+                continue;
+            }
+            break;
+        }
+        if hour < 8 {
+            if let Some(dt) = probe
+                .with_hour(8)
+                .and_then(|dt| dt.with_minute(0))
+                .and_then(|dt| dt.with_second(0))
+            {
+                probe = dt;
+                continue;
+            }
+            break;
+        }
+        if hour >= 20 {
+            let next = (probe + Duration::days(1))
+                .with_hour(8)
+                .and_then(|dt| dt.with_minute(0))
+                .and_then(|dt| dt.with_second(0));
+            if let Some(dt) = next {
+                probe = dt;
+                continue;
+            }
+            break;
+        }
+        return probe;
+    }
+    *after + Duration::hours(12)
+}
+
 fn send_due_nags(root: &Path) -> Result<usize> {
     let conn = open_db(root)?;
     let now = now_rfc3339();
+
+    // Skip sending outside business hours (Mon–Fri 08:00–20:00 local)
+    // and defer the due nags to the next window start so the owner's
+    // inbox stays quiet overnight and on weekends. Operators can opt
+    // out by exporting `CTOX_APPROVAL_NAG_24_7=1` (useful for on-call
+    // setups or tests).
+    let ignore_hours = std::env::var("CTOX_APPROVAL_NAG_24_7")
+        .map(|value| matches!(value.trim(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false);
+    let now_local = chrono::Local::now();
+    if !ignore_hours && !is_within_business_hours(&now_local) {
+        let next_local = next_business_window_start(&now_local);
+        let next_iso = next_local.with_timezone(&chrono::Utc).to_rfc3339();
+        // Push any currently-due nag to the next business-window start,
+        // but never backwards.
+        let _ = conn.execute(
+            r#"
+            UPDATE ticket_approval_nag_state
+            SET next_nag_at = ?1
+            WHERE completed_at IS NULL AND next_nag_at <= ?2 AND next_nag_at < ?1
+            "#,
+            params![&next_iso, &now],
+        );
+        return Ok(0);
+    }
+
     let mut statement = conn.prepare(
         r#"
         SELECT work_id, attempt_count, first_seen_at
