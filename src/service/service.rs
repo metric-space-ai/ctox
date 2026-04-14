@@ -2020,6 +2020,16 @@ fn start_prompt_worker(
                                 &job.leased_message_keys,
                                 "handled",
                             );
+                            // Auto-complete plan steps whose emit message was
+                            // just handled by this turn so the plan advances
+                            // without the model needing to call complete-step.
+                            for key in &job.leased_message_keys {
+                                if key.starts_with("plan:system::") {
+                                    let _ = plan::complete_step_by_message_key(
+                                        &root, key, &reply,
+                                    );
+                                }
+                            }
                         }
                         if !job.leased_ticket_event_keys.is_empty() {
                             let _ = tickets::ack_leased_ticket_events(

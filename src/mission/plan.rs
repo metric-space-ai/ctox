@@ -270,6 +270,43 @@ pub fn complete_goal(root: &Path, goal_id: &str, result_text: &str) -> Result<us
     Ok(updated)
 }
 
+/// Mark a plan step as completed based on the `last_message_key` set when it
+/// was emitted. Returns the number of rows updated (0 if the key does not map
+/// to a queued step). Used by the service loop to auto-complete plan steps
+/// whose emitted queue message was just handled successfully.
+pub fn complete_step_by_message_key(
+    root: &Path,
+    message_key: &str,
+    result_text: &str,
+) -> Result<usize> {
+    let conn = open_plan_db(root)?;
+    let tx = conn.unchecked_transaction()?;
+    let step_id: Option<String> = tx
+        .query_row(
+            r#"
+            SELECT step_id
+            FROM planned_steps
+            WHERE last_message_key = ?1
+              AND status != ?2
+            ORDER BY updated_at DESC
+            LIMIT 1
+            "#,
+            params![message_key, STEP_STATUS_COMPLETED],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(step_id) = step_id else {
+        tx.commit()?;
+        return Ok(0);
+    };
+    let updated = mark_step_completed_tx(&tx, &step_id, result_text)?;
+    if let Some(goal_id) = load_goal_id_for_step_tx(&tx, &step_id)? {
+        refresh_goal_status_tx(&tx, &goal_id)?;
+    }
+    tx.commit()?;
+    Ok(updated)
+}
+
 pub fn emit_due_steps(root: &Path) -> Result<EmitDuePlansSummary> {
     let conn = open_plan_db(root)?;
     let goals = list_goal_ids_with_due_work(&conn)?;
