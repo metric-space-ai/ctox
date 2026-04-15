@@ -1167,7 +1167,92 @@ fn is_turn_timeout_blocker(value: &str) -> bool {
 /// handled by the Mission Control Contract in the system prompt; this
 /// heuristic only catches the hard truncation case.
 fn reply_looks_mid_work(reply: &str) -> bool {
-    reply.contains("<think>") && !reply.contains("</think>")
+    // Signal 1: unclosed `<think>` — the hard-truncation case. The
+    // reasoning stream was cut before the model got to act.
+    if reply.contains("<think>") && !reply.contains("</think>") {
+        return true;
+    }
+    // Signals 2 + 3 look at the visible tail outside any closed
+    // `<think>...</think>` block. Both require absence of a completion
+    // keyword so legitimate short finals ("Done.", "Answer written to
+    // /app/answer.txt.") stay accepted.
+    let visible = strip_closed_think_block(reply);
+    let trimmed = visible.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let lowered = trimmed.to_ascii_lowercase();
+    const COMPLETION_KEYWORDS: &[&str] = &[
+        "done",
+        "complete",
+        "completed",
+        "finished",
+        "verified",
+        "wrote",
+        "saved",
+        "answer",
+        "result",
+        "passed",
+        "ready",
+        "in place",
+        "successfully",
+    ];
+    let has_completion_signal =
+        COMPLETION_KEYWORDS.iter().any(|kw| lowered.contains(kw));
+    if has_completion_signal {
+        return false;
+    }
+    // Signal 2: last sentence starts with "Now " / "Then " / "Next " —
+    // an implicit imperative continuation the model announced but did
+    // not carry out. Observed repeatedly with M2.7 on bench tasks.
+    let last_sentence = trimmed
+        .rsplit(|c: char| c == '.' || c == '!' || c == '\n')
+        .find(|s| !s.trim().is_empty())
+        .unwrap_or(trimmed)
+        .trim()
+        .to_ascii_lowercase();
+    if last_sentence.starts_with("now ")
+        || last_sentence.starts_with("then ")
+        || last_sentence.starts_with("next ")
+    {
+        return true;
+    }
+    // Signal 3: a very short reply with no completion signal is almost
+    // always a partial intent the model didn't follow through on.
+    if trimmed.chars().count() < 100 {
+        return true;
+    }
+    false
+}
+
+fn strip_closed_think_block(reply: &str) -> String {
+    let mut out = String::with_capacity(reply.len());
+    let mut rest = reply;
+    loop {
+        match rest.find("<think>") {
+            None => {
+                out.push_str(rest);
+                break;
+            }
+            Some(start) => {
+                out.push_str(&rest[..start]);
+                let after = &rest[start + "<think>".len()..];
+                match after.find("</think>") {
+                    None => {
+                        // Unclosed — Signal 1 already handled this.
+                        // Preserve the opening tag so downstream text
+                        // isn't silently dropped.
+                        out.push_str(&rest[start..]);
+                        break;
+                    }
+                    Some(end) => {
+                        rest = &after[end + "</think>".len()..];
+                    }
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Mid-work parallel to `enqueue_timeout_continuation`. Queues a follow-up
@@ -1222,16 +1307,33 @@ mod run_once_tests {
     }
 
     #[test]
-    fn mid_work_accepts_closed_think_with_any_tail() {
-        // Narrowed heuristic: a properly closed <think> block is NOT
-        // mid-work regardless of what follows. The system-prompt
-        // Mission Control Contract handles the intent-without-action
-        // case cooperatively now.
-        assert!(!reply_looks_mid_work(
-            "<think>done</think>\n\nLet me create a modular implementation:"
+    fn mid_work_detects_now_imperative_after_closed_think() {
+        // Regression: bench smoke run smk-cnt-m2-1776261892. M2.7 closed
+        // its <think> block and then said "Now let me load the metadata
+        // subset..." — that is mid-work, not a final answer. Without
+        // this signal the mission terminated after turn 1 with zero
+        // tool activity.
+        assert!(reply_looks_mid_work(
+            "<think>yes</think>\n\nNow let me load the metadata subset and inspect the full structure."
         ));
+    }
+
+    #[test]
+    fn mid_work_detects_short_reply_without_completion_keyword() {
+        // Regression: bench smoke run smk-git-m2-1776261892. M2.7 reply
+        // "<think>yes</think>\n\nConfig is valid. Now let me start nginx."
+        // — short, imperative-only, no completion signal.
+        assert!(reply_looks_mid_work(
+            "<think>yes</think>\n\nConfig is valid. Now let me start nginx."
+        ));
+    }
+
+    #[test]
+    fn mid_work_accepts_closed_think_with_completion_keyword_in_tail() {
+        // Long final answer with a completion keyword stays accepted
+        // even if it mentions "now" elsewhere.
         assert!(!reply_looks_mid_work(
-            "<think>yes</think>\n\nNow I'll set up the web server."
+            "<think>counting</think>\n\nDone. The tokenizer run is complete and the answer 79586 is written to /app/answer.txt."
         ));
     }
 
@@ -1251,10 +1353,17 @@ mod run_once_tests {
 
     #[test]
     fn mid_work_accepts_reply_without_think() {
-        // A reply without any <think> block cannot be in an unclosed
-        // reasoning state.
-        assert!(!reply_looks_mid_work("Short reply."));
+        // Empty reply: no signals to trip.
         assert!(!reply_looks_mid_work(""));
+        // Long reply without think, no imperative prefix, no completion
+        // keyword — still not flagged (we don't infer mid-work from
+        // length alone above the 100-char threshold).
+        assert!(!reply_looks_mid_work(
+            "The request was unambiguous and I have carried it out exactly as specified, though I will not repeat the full description here."
+        ));
+        // Short reply WITH completion keyword stays accepted.
+        assert!(!reply_looks_mid_work("Done."));
+        assert!(!reply_looks_mid_work("Answer saved."));
     }
 }
 
