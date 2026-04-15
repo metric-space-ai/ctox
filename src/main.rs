@@ -987,15 +987,59 @@ fn handle_run_once(root: &Path, args: &[String]) -> anyhow::Result<()> {
             }
         }
 
+        // Detect whether the turn ended with the model mid-work rather
+        // than actually completing. Typical mid-work patterns from
+        // reasoning-first models (M2.7, Claude Extended Thinking, etc.):
+        //   - reply is only `<think>...</think>` with nothing substantive
+        //     after the close tag
+        //   - reply ends with an intent statement ("I'll do X", "Let me
+        //     Y", "Now I'll Z:") and no tool-call or terminal answer
+        // If the reply looks mid-work we auto-enqueue a continuation
+        // slice so the mission-loop keeps going — a bench/service run
+        // must not declare a mission done just because one turn
+        // returned.
+        let last_reply_is_mid_work = turn_result
+            .as_ref()
+            .ok()
+            .map(|r| reply_looks_mid_work(r))
+            .unwrap_or(false);
+        if last_reply_is_mid_work && turns_run < max_turns {
+            match enqueue_midwork_continuation(
+                root,
+                &thread_key,
+                workspace_opt
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .as_deref(),
+                brief,
+                leased_keys.first().map(String::as_str),
+            ) {
+                Ok(title) => {
+                    eprintln!(
+                        "ctox run-once: turn {} ended mid-work — enqueued continuation: {title}",
+                        turns_run
+                    );
+                }
+                Err(err) => {
+                    eprintln!(
+                        "ctox run-once: failed to enqueue mid-work continuation: {err}"
+                    );
+                }
+            }
+        }
+
         // Done-gate: mission_state_from_continuity tells us whether the
-        // mission has declared itself closed.
+        // mission has declared itself closed. We only trust a `false`
+        // reading if the turn ALSO looks completed — otherwise we loop
+        // and pick up any queued work (continuations, plan steps, model-
+        // emitted follow-ups).
         let mission_open = match lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default())
             .and_then(|engine| engine.sync_mission_state_from_continuity(conversation_id))
         {
             Ok(state) => {
                 eprintln!(
-                    "ctox run-once: after t{} is_open={} mode={}",
-                    turns_run, state.is_open, state.continuation_mode
+                    "ctox run-once: after t{} is_open={} mode={} mid_work={}",
+                    turns_run, state.is_open, state.continuation_mode, last_reply_is_mid_work
                 );
                 state.is_open
             }
@@ -1006,11 +1050,6 @@ fn handle_run_once(root: &Path, args: &[String]) -> anyhow::Result<()> {
                 true
             }
         };
-
-        if !mission_open {
-            mission_status = "handled";
-            break;
-        }
 
         if turns_run >= max_turns {
             mission_status = "cap";
@@ -1026,7 +1065,21 @@ fn handle_run_once(root: &Path, args: &[String]) -> anyhow::Result<()> {
 
         current = lease_next_for_thread(root, &thread_key, lease_owner)?;
         if current.is_none() {
-            mission_status = "blocked";
+            // Only declare the mission done/blocked if we also have no
+            // reason to believe the model was mid-work. If it was mid-
+            // work, our midwork continuation should have been enqueued
+            // above; if we still can't lease it (e.g. upstream queue
+            // hiccup), surface it as blocked so the caller can see.
+            if last_reply_is_mid_work {
+                mission_status = "blocked";
+                eprintln!(
+                    "ctox run-once: mid-work reply but no pending lease after continuation enqueue — surfacing as blocked"
+                );
+            } else if !mission_open {
+                mission_status = "handled";
+            } else {
+                mission_status = "blocked";
+            }
             break;
         }
     }
@@ -1096,6 +1149,184 @@ fn handle_run_once(root: &Path, args: &[String]) -> anyhow::Result<()> {
 fn is_turn_timeout_blocker(value: &str) -> bool {
     let lowered = value.to_ascii_lowercase();
     lowered.contains("timed out after") || lowered.contains("time budget")
+}
+
+/// Strip `<think>...</think>` blocks from a reply. Returns the substantive
+/// text only. An unclosed `<think>` at the end is treated as the reply
+/// having been cut off inside a reasoning block (the function drops
+/// everything from the opening `<think>` onward).
+fn strip_think_blocks(reply: &str) -> String {
+    let mut out = String::with_capacity(reply.len());
+    let mut rest = reply;
+    loop {
+        match rest.find("<think>") {
+            Some(open) => {
+                out.push_str(&rest[..open]);
+                let after_open = &rest[open + 7..];
+                match after_open.find("</think>") {
+                    Some(close) => {
+                        rest = &after_open[close + 8..];
+                    }
+                    None => {
+                        // unclosed think — drop remainder
+                        break;
+                    }
+                }
+            }
+            None => {
+                out.push_str(rest);
+                break;
+            }
+        }
+    }
+    out
+}
+
+/// Heuristically detect whether a turn's final reply looks like the model
+/// was still mid-work (announcing an intent without carrying it out, or
+/// falling silent right after a reasoning block). A bench/service run that
+/// treats such a reply as "mission done" would be unfair to the model —
+/// the orchestrator ended the work, not the model.
+///
+/// Positives:
+///   - reply is empty after stripping `<think>...</think>`
+///   - trailing text ends with a colon (typical "Let me do X:" setup)
+///   - the last sentence starts with an intent marker
+///     ("I'll ", "Let me ", "Now I'll ", "I'm going to ", …)
+///   - reply contains an unclosed `<think>` (mid-reasoning cutoff)
+///
+/// False positives are acceptable: the cost is one extra continuation
+/// turn, capped by `--max-turns`.
+fn reply_looks_mid_work(reply: &str) -> bool {
+    // Unclosed <think> → truncated inside the reasoning block.
+    if reply.contains("<think>") && !reply.contains("</think>") {
+        return true;
+    }
+    let stripped = strip_think_blocks(reply);
+    let trimmed = stripped.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+    let last_char = trimmed.chars().last();
+    if matches!(last_char, Some(':') | Some(',')) {
+        return true;
+    }
+    // Split into sentences on `.`, `!`, `?`. Take the LAST non-empty
+    // sentence — a reply ending in "Now I'll X." has an empty trailing
+    // fragment but the actual final sentence is the "Now I'll X" part.
+    let last_sentence = trimmed
+        .split(['.', '!', '?'])
+        .rev()
+        .map(str::trim)
+        .find(|seg| !seg.is_empty())
+        .unwrap_or(trimmed)
+        .to_ascii_lowercase();
+    const INTENT_PREFIXES: &[&str] = &[
+        "i'll ",
+        "i will ",
+        "let me ",
+        "now i'll ",
+        "now i will ",
+        "next, i'll ",
+        "next i'll ",
+        "i'm going to ",
+        "going to ",
+        "i am going to ",
+        "i need to ",
+        "we need to ",
+    ];
+    if INTENT_PREFIXES
+        .iter()
+        .any(|marker| last_sentence.starts_with(marker))
+    {
+        return true;
+    }
+    false
+}
+
+/// Mid-work parallel to `enqueue_timeout_continuation`. Queues a follow-up
+/// slice asking the model to carry out the action it just announced but
+/// didn't yet execute.
+fn enqueue_midwork_continuation(
+    root: &Path,
+    thread_key: &str,
+    workspace_root: Option<&str>,
+    original_brief: &str,
+    parent_message_key: Option<&str>,
+) -> anyhow::Result<String> {
+    let goal_clip: String = original_brief.chars().take(60).collect();
+    let title = format!("Continue mid-work: {goal_clip}");
+    let prompt = format!(
+        "Your previous turn ended after announcing an intent (\"I'll ...\", \
+         \"Let me ...\", etc.) without carrying it out. The mission is not \
+         complete. Continue from where you left off:\n\n\
+         Current task:\n{}\n\n\
+         Required actions:\n\
+         - carry out the action you just announced\n\
+         - make concrete tool calls (file edits, shell commands, tests) — \
+         do not merely describe what you plan to do\n\
+         - the mission only ends when the required files or state are in \
+         place and verified\n\
+         - if more than one turn is still needed, leave exactly one open \
+         CTOX plan or queue item before the turn ends",
+        original_brief
+    );
+    let view = channels::create_queue_task(
+        root,
+        channels::QueueTaskCreateRequest {
+            title,
+            prompt,
+            thread_key: thread_key.to_string(),
+            workspace_root: workspace_root.map(str::to_owned),
+            priority: "high".to_string(),
+            suggested_skill: None,
+            parent_message_key: parent_message_key.map(str::to_owned),
+        },
+    )?;
+    Ok(view.title)
+}
+
+#[cfg(test)]
+mod run_once_tests {
+    use super::*;
+
+    #[test]
+    fn mid_work_detects_unclosed_think() {
+        assert!(reply_looks_mid_work("<think>I'm analyzing"));
+    }
+
+    #[test]
+    fn mid_work_detects_intent_only() {
+        assert!(reply_looks_mid_work(
+            "<think>yes</think>\n\nNow I'll set up the web server as a systemd service."
+        ));
+    }
+
+    #[test]
+    fn mid_work_detects_trailing_colon() {
+        assert!(reply_looks_mid_work(
+            "<think>done</think>\n\nLet me create a modular implementation:"
+        ));
+    }
+
+    #[test]
+    fn mid_work_detects_empty_after_think() {
+        assert!(reply_looks_mid_work("<think>thinking</think>\n   \n"));
+    }
+
+    #[test]
+    fn mid_work_accepts_real_completion() {
+        assert!(!reply_looks_mid_work(
+            "<think>counted</think>\n\nThere are 79586 deepseek tokens. The answer has been written to /app/answer.txt."
+        ));
+    }
+
+    #[test]
+    fn mid_work_accepts_plain_final_answer() {
+        assert!(!reply_looks_mid_work(
+            "The required file /app/vm.js is in place and verified against the reference frame. Done."
+        ));
+    }
 }
 
 /// Mirrors the recovery path that `service::maybe_enqueue_timeout_continuation`

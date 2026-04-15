@@ -3083,6 +3083,7 @@ mod tests {
                 name: "cto-openrouter",
                 base_url: "https://openrouter.ai/api/v1".to_string(),
                 env_key: "OPENROUTER_API_KEY",
+                wire_api: "responses",
             }
         );
     }
@@ -3098,6 +3099,7 @@ mod tests {
                 name: "cto-openrouter",
                 base_url: "https://openrouter.ai/api/v1".to_string(),
                 env_key: "OPENROUTER_API_KEY",
+                wire_api: "responses",
             })
         ));
     }
@@ -3121,6 +3123,7 @@ mod tests {
                 name: "cto-openrouter",
                 base_url: "https://openrouter.ai/api/v1".to_string(),
                 env_key: "OPENROUTER_API_KEY",
+                wire_api: "responses",
             }),
             extra_cli_overrides: Vec::new(),
         }
