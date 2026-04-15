@@ -1166,116 +1166,17 @@ fn is_turn_timeout_blocker(value: &str) -> bool {
 /// then tripped the tool-activity gate). The cooperative path is now
 /// handled by the Mission Control Contract in the system prompt; this
 /// heuristic only catches the hard truncation case.
+/// Detect the only unambiguous, language-neutral mid-work signal:
+/// an unclosed `<think>` block. Any text-pattern matching on natural-
+/// language phrases (intent prefixes, completion keywords, imperative
+/// tails) was tried and discarded — it never generalized beyond a
+/// single model family and never produced a net score improvement in
+/// Terminal-Bench-2 runs. See benches/README for the measurement
+/// rationale. Cooperative mid-work signalling is now the Mission
+/// Control Contract in the system prompt; structural completion is
+/// handled by the run-once termination rule.
 fn reply_looks_mid_work(reply: &str) -> bool {
-    // Signal 1: unclosed `<think>` — the hard-truncation case. The
-    // reasoning stream was cut before the model got to act.
-    if reply.contains("<think>") && !reply.contains("</think>") {
-        return true;
-    }
-    // Signals 2-4 look at the visible tail outside any closed
-    // `<think>...</think>` block. Signal 2 (empty tail) fires on its
-    // own; signals 3 + 4 require absence of a completion keyword so
-    // legitimate short finals ("Done.", "Answer saved.") stay accepted.
-    let visible = strip_closed_think_block(reply);
-    let trimmed = visible.trim();
-    // Signal 2: the reply is ONLY a closed `<think>...</think>` with
-    // no visible content after it. That is pure reasoning with zero
-    // action delivered to the user — always mid-work. Observed with
-    // M2.7 on configure-git-webserver turn 2. An empty ORIGINAL reply
-    // (no `<think>` ever present) is a transport issue, not mid-work,
-    // and is handled by the caller.
-    if trimmed.is_empty() {
-        return reply.contains("<think>");
-    }
-    let lowered = trimmed.to_ascii_lowercase();
-    const COMPLETION_KEYWORDS: &[&str] = &[
-        "done",
-        "complete",
-        "completed",
-        "finished",
-        "verified",
-        "wrote",
-        "saved",
-        "answer",
-        "result",
-        "passed",
-        "ready",
-        "in place",
-        "successfully",
-    ];
-    let has_completion_signal =
-        COMPLETION_KEYWORDS.iter().any(|kw| lowered.contains(kw));
-    if has_completion_signal {
-        return false;
-    }
-    // Signal 3: last sentence is an explicit or implicit intent
-    // announcement — the model said what it was about to do but did
-    // not carry it out. Observed repeatedly with M2.7 on bench tasks.
-    let last_sentence = trimmed
-        .rsplit(|c: char| c == '.' || c == '!' || c == '\n')
-        .find(|s| !s.trim().is_empty())
-        .unwrap_or(trimmed)
-        .trim()
-        .to_ascii_lowercase();
-    const INTENT_PREFIXES: &[&str] = &[
-        "now ",
-        "then ",
-        "next ",
-        "i'll ",
-        "i will ",
-        "let me ",
-        "let's ",
-        "i'm going to ",
-        "i am going to ",
-        "going to ",
-        "i need to ",
-        "we need to ",
-        "now i'll ",
-        "now let me ",
-        "now i will ",
-    ];
-    if INTENT_PREFIXES
-        .iter()
-        .any(|marker| last_sentence.starts_with(marker))
-    {
-        return true;
-    }
-    // Signal 4: a very short reply with no completion signal is almost
-    // always a partial intent the model didn't follow through on.
-    if trimmed.chars().count() < 100 {
-        return true;
-    }
-    false
-}
-
-fn strip_closed_think_block(reply: &str) -> String {
-    let mut out = String::with_capacity(reply.len());
-    let mut rest = reply;
-    loop {
-        match rest.find("<think>") {
-            None => {
-                out.push_str(rest);
-                break;
-            }
-            Some(start) => {
-                out.push_str(&rest[..start]);
-                let after = &rest[start + "<think>".len()..];
-                match after.find("</think>") {
-                    None => {
-                        // Unclosed — Signal 1 already handled this.
-                        // Preserve the opening tag so downstream text
-                        // isn't silently dropped.
-                        out.push_str(&rest[start..]);
-                        break;
-                    }
-                    Some(end) => {
-                        rest = &after[end + "</think>".len()..];
-                    }
-                }
-            }
-        }
-    }
-    out
+    reply.contains("<think>") && !reply.contains("</think>")
 }
 
 /// Mid-work parallel to `enqueue_timeout_continuation`. Queues a follow-up
@@ -1327,91 +1228,32 @@ mod run_once_tests {
     #[test]
     fn mid_work_detects_unclosed_think() {
         assert!(reply_looks_mid_work("<think>I'm still analyzing the problem"));
+        assert!(reply_looks_mid_work("<think>no close tag at all"));
     }
 
     #[test]
-    fn mid_work_detects_now_imperative_after_closed_think() {
-        // Regression: bench smoke run smk-cnt-m2-1776261892. M2.7 closed
-        // its <think> block and then said "Now let me load the metadata
-        // subset..." — that is mid-work, not a final answer. Without
-        // this signal the mission terminated after turn 1 with zero
-        // tool activity.
-        assert!(reply_looks_mid_work(
-            "<think>yes</think>\n\nNow let me load the metadata subset and inspect the full structure."
-        ));
-    }
-
-    #[test]
-    fn mid_work_detects_closed_think_only_no_visible_content() {
-        // Regression: bench smoke v2 run smk-git-m2-1776267002 turn 2.
-        // M2.7 emitted ONLY a closed <think>...</think> block with no
-        // visible tail. That is pure reasoning with zero action — the
-        // mission must not be allowed to close on this reply.
-        assert!(reply_looks_mid_work(
-            "<think>\nLet me create the git user, bare repository, and post-receive hook.\n</think>"
-        ));
-        assert!(reply_looks_mid_work("<think>just thinking</think>"));
-        assert!(reply_looks_mid_work("<think>thinking</think>\n\n   "));
-    }
-
-    #[test]
-    fn mid_work_detects_i_need_to_intent_prefix() {
-        // Regression: bench smoke v2 run smk-cnt-m2-1776267002 turn 2.
-        // M2.7 closed its <think> and then said "... I need to match
-        // them by problem text:" — a 163-char visible tail, so the
-        // short-reply signal did not fire. The intent-prefix signal
-        // must catch "I need to ...".
-        assert!(reply_looks_mid_work(
-            "<think>analysis</think>\n\nThe subsets aren't aligned by index — they were shuffled independently. I need to match them by problem text:"
-        ));
-    }
-
-    #[test]
-    fn mid_work_detects_short_reply_without_completion_keyword() {
-        // Regression: bench smoke run smk-git-m2-1776261892. M2.7 reply
-        // "<think>yes</think>\n\nConfig is valid. Now let me start nginx."
-        // — short, imperative-only, no completion signal.
-        assert!(reply_looks_mid_work(
-            "<think>yes</think>\n\nConfig is valid. Now let me start nginx."
-        ));
-    }
-
-    #[test]
-    fn mid_work_accepts_closed_think_with_completion_keyword_in_tail() {
-        // Long final answer with a completion keyword stays accepted
-        // even if it mentions "now" elsewhere.
+    fn mid_work_accepts_closed_think_regardless_of_tail() {
+        // A properly closed <think> block is not mid-work at the
+        // structural level. The heuristic no longer parses natural-
+        // language phrases in the tail: cooperative mid-work signalling
+        // lives in the system-prompt Mission Control Contract, and
+        // post-turn termination is the run-once rule's responsibility.
         assert!(!reply_looks_mid_work(
-            "<think>counting</think>\n\nDone. The tokenizer run is complete and the answer 79586 is written to /app/answer.txt."
+            "<think>done</think>\n\nAnswer written to /app/answer.txt."
         ));
-    }
-
-    #[test]
-    fn mid_work_accepts_real_completion() {
         assert!(!reply_looks_mid_work(
-            "<think>counted</think>\n\nThere are 79586 deepseek tokens. The answer has been written to /app/answer.txt."
+            "<think>just thinking</think>\n\nNow let me start nginx."
         ));
-    }
-
-    #[test]
-    fn mid_work_accepts_plain_final_answer() {
-        assert!(!reply_looks_mid_work(
-            "The required file /app/vm.js is in place and verified against the reference frame. Done."
-        ));
+        assert!(!reply_looks_mid_work("<think>yes</think>"));
     }
 
     #[test]
     fn mid_work_accepts_reply_without_think() {
-        // Empty reply: no signals to trip.
         assert!(!reply_looks_mid_work(""));
-        // Long reply without think, no imperative prefix, no completion
-        // keyword — still not flagged (we don't infer mid-work from
-        // length alone above the 100-char threshold).
-        assert!(!reply_looks_mid_work(
-            "The request was unambiguous and I have carried it out exactly as specified, though I will not repeat the full description here."
-        ));
-        // Short reply WITH completion keyword stays accepted.
         assert!(!reply_looks_mid_work("Done."));
-        assert!(!reply_looks_mid_work("Answer saved."));
+        assert!(!reply_looks_mid_work(
+            "Any reply without a think tag is not structurally mid-work."
+        ));
     }
 }
 
