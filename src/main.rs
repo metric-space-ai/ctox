@@ -1172,14 +1172,20 @@ fn reply_looks_mid_work(reply: &str) -> bool {
     if reply.contains("<think>") && !reply.contains("</think>") {
         return true;
     }
-    // Signals 2 + 3 look at the visible tail outside any closed
-    // `<think>...</think>` block. Both require absence of a completion
-    // keyword so legitimate short finals ("Done.", "Answer written to
-    // /app/answer.txt.") stay accepted.
+    // Signals 2-4 look at the visible tail outside any closed
+    // `<think>...</think>` block. Signal 2 (empty tail) fires on its
+    // own; signals 3 + 4 require absence of a completion keyword so
+    // legitimate short finals ("Done.", "Answer saved.") stay accepted.
     let visible = strip_closed_think_block(reply);
     let trimmed = visible.trim();
+    // Signal 2: the reply is ONLY a closed `<think>...</think>` with
+    // no visible content after it. That is pure reasoning with zero
+    // action delivered to the user — always mid-work. Observed with
+    // M2.7 on configure-git-webserver turn 2. An empty ORIGINAL reply
+    // (no `<think>` ever present) is a transport issue, not mid-work,
+    // and is handled by the caller.
     if trimmed.is_empty() {
-        return false;
+        return reply.contains("<think>");
     }
     let lowered = trimmed.to_ascii_lowercase();
     const COMPLETION_KEYWORDS: &[&str] = &[
@@ -1202,22 +1208,39 @@ fn reply_looks_mid_work(reply: &str) -> bool {
     if has_completion_signal {
         return false;
     }
-    // Signal 2: last sentence starts with "Now " / "Then " / "Next " —
-    // an implicit imperative continuation the model announced but did
-    // not carry out. Observed repeatedly with M2.7 on bench tasks.
+    // Signal 3: last sentence is an explicit or implicit intent
+    // announcement — the model said what it was about to do but did
+    // not carry it out. Observed repeatedly with M2.7 on bench tasks.
     let last_sentence = trimmed
         .rsplit(|c: char| c == '.' || c == '!' || c == '\n')
         .find(|s| !s.trim().is_empty())
         .unwrap_or(trimmed)
         .trim()
         .to_ascii_lowercase();
-    if last_sentence.starts_with("now ")
-        || last_sentence.starts_with("then ")
-        || last_sentence.starts_with("next ")
+    const INTENT_PREFIXES: &[&str] = &[
+        "now ",
+        "then ",
+        "next ",
+        "i'll ",
+        "i will ",
+        "let me ",
+        "let's ",
+        "i'm going to ",
+        "i am going to ",
+        "going to ",
+        "i need to ",
+        "we need to ",
+        "now i'll ",
+        "now let me ",
+        "now i will ",
+    ];
+    if INTENT_PREFIXES
+        .iter()
+        .any(|marker| last_sentence.starts_with(marker))
     {
         return true;
     }
-    // Signal 3: a very short reply with no completion signal is almost
+    // Signal 4: a very short reply with no completion signal is almost
     // always a partial intent the model didn't follow through on.
     if trimmed.chars().count() < 100 {
         return true;
@@ -1315,6 +1338,31 @@ mod run_once_tests {
         // tool activity.
         assert!(reply_looks_mid_work(
             "<think>yes</think>\n\nNow let me load the metadata subset and inspect the full structure."
+        ));
+    }
+
+    #[test]
+    fn mid_work_detects_closed_think_only_no_visible_content() {
+        // Regression: bench smoke v2 run smk-git-m2-1776267002 turn 2.
+        // M2.7 emitted ONLY a closed <think>...</think> block with no
+        // visible tail. That is pure reasoning with zero action — the
+        // mission must not be allowed to close on this reply.
+        assert!(reply_looks_mid_work(
+            "<think>\nLet me create the git user, bare repository, and post-receive hook.\n</think>"
+        ));
+        assert!(reply_looks_mid_work("<think>just thinking</think>"));
+        assert!(reply_looks_mid_work("<think>thinking</think>\n\n   "));
+    }
+
+    #[test]
+    fn mid_work_detects_i_need_to_intent_prefix() {
+        // Regression: bench smoke v2 run smk-cnt-m2-1776267002 turn 2.
+        // M2.7 closed its <think> and then said "... I need to match
+        // them by problem text:" — a 163-char visible tail, so the
+        // short-reply signal did not fire. The intent-prefix signal
+        // must catch "I need to ...".
+        assert!(reply_looks_mid_work(
+            "<think>analysis</think>\n\nThe subsets aren't aligned by index — they were shuffled independently. I need to match them by problem text:"
         ));
     }
 
