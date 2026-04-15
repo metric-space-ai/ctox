@@ -1241,6 +1241,31 @@ fn reply_looks_mid_work(reply: &str) -> bool {
     {
         return true;
     }
+    // Catch implicit imperatives — "Now install X", "Now setup Y" — that
+    // don't start with an explicit "I'll" / "Let me" but are still pure
+    // intent (the model is announcing the next action, not reporting
+    // completion). Constrained to short replies with no completion
+    // signal, to avoid false positives on legitimate short answers like
+    // "The answer is 42." or "Done — vm.js is in place."
+    let lowered_full = trimmed.to_ascii_lowercase();
+    const COMPLETION_KEYWORDS: &[&str] = &[
+        "done", "complete", "completed", "verified", "wrote", "saved",
+        "answer", "result", "passed", "ready", "finished", "in place",
+        "successfully",
+    ];
+    let has_completion_signal = COMPLETION_KEYWORDS
+        .iter()
+        .any(|kw| lowered_full.contains(kw));
+    if !has_completion_signal {
+        if last_sentence.starts_with("now ") || last_sentence.starts_with("then ") {
+            return true;
+        }
+        // A very short reply with no completion signal is almost always
+        // a partial intent the model didn't follow through on.
+        if trimmed.chars().count() < 100 {
+            return true;
+        }
+    }
     false
 }
 
@@ -1326,6 +1351,30 @@ mod run_once_tests {
         assert!(!reply_looks_mid_work(
             "The required file /app/vm.js is in place and verified against the reference frame. Done."
         ));
+    }
+
+    #[test]
+    fn mid_work_detects_now_imperative_no_completion() {
+        // Real-world M2.7 reply that previously slipped through the
+        // intent-prefix list — "Now install git and Python." is an
+        // imperative continuation, not a completion.
+        assert!(reply_looks_mid_work(
+            "<think>\nGood, apt-get update succeeded. Now let me install git and python3.\n\n</think>\n\nGood. Now install git and Python."
+        ));
+    }
+
+    #[test]
+    fn mid_work_accepts_short_completion_with_keyword() {
+        // Short reply with completion keyword should NOT trigger mid-work.
+        assert!(!reply_looks_mid_work(
+            "<think>did it</think>\n\nDone. Saved to /app/result.txt."
+        ));
+    }
+
+    #[test]
+    fn mid_work_detects_short_no_completion() {
+        // Very short reply without any completion signal is mid-work.
+        assert!(reply_looks_mid_work("<think>thinking</think>\n\nLooks good."));
     }
 }
 
