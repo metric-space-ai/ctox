@@ -1480,31 +1480,52 @@ fn resolve_api_model_provider_spec(
             "openrouter",
             "responses",
         ),
-        // MiniMax's OpenAI-compatible surface is at /v1/chat/completions —
-        // it does NOT implement the OpenAI Responses API, so codex-exec
-        // must speak the chat-completions wire protocol or every call
-        // 404s on /v1/responses.
+        // MiniMax's OpenAI-compatible surface is /v1/chat/completions only —
+        // it does NOT implement OpenAI's /v1/responses. codex-exec only
+        // speaks `wire_api = "responses"`. Bridge: route codex-exec at the
+        // CTOX gateway running on localhost; the gateway sees the model has
+        // a chat-family adapter (model_adapters/minimax.rs), translates the
+        // /v1/responses body to /v1/chat/completions, and forwards to
+        // api.minimax.io with MINIMAX_API_KEY. This is the same machinery
+        // CTOX uses for local-engine models, just with a remote upstream.
+        // Caller (run-once / service) must ensure the gateway is running.
         "minimax" => (
             "cto_minimax",
             "cto-minimax",
             "MINIMAX_API_KEY",
             "minimax",
-            "chat",
+            "responses",
         ),
         _ => return None,
     };
-    let base_url = resolved_runtime
-        .map(|runtime| runtime.internal_responses_base_url())
-        .or_else(|| {
-            settings
-                .get("CTOX_UPSTREAM_BASE_URL")
-                .map(|value| responses_api_base_url(value))
-        })
-        .unwrap_or_else(|| {
-            responses_api_base_url(runtime_state::default_api_upstream_base_url_for_provider(
-                default_provider,
-            ))
-        });
+    // For minimax we deliberately point at the local CTOX gateway, not the
+    // remote upstream — the gateway does the wire-protocol translation via
+    // its registered chat-family adapter before forwarding upstream.
+    let base_url = if normalized == "minimax" {
+        resolved_runtime
+            .map(|runtime| {
+                let host = if runtime.proxy.listen_host == "0.0.0.0" {
+                    "127.0.0.1"
+                } else {
+                    runtime.proxy.listen_host.as_str()
+                };
+                format!("http://{host}:{}/v1", runtime.proxy.listen_port)
+            })
+            .unwrap_or_else(|| "http://127.0.0.1:12434/v1".to_string())
+    } else {
+        resolved_runtime
+            .map(|runtime| runtime.internal_responses_base_url())
+            .or_else(|| {
+                settings
+                    .get("CTOX_UPSTREAM_BASE_URL")
+                    .map(|value| responses_api_base_url(value))
+            })
+            .unwrap_or_else(|| {
+                responses_api_base_url(runtime_state::default_api_upstream_base_url_for_provider(
+                    default_provider,
+                ))
+            })
+    };
     Some(ApiModelProviderSpec {
         provider_id,
         name,

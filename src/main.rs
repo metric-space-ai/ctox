@@ -803,6 +803,43 @@ fn handle_run_once(root: &Path, args: &[String]) -> anyhow::Result<()> {
         anyhow::bail!("--quality/--performance requires --model <id>");
     }
 
+    // If the selected model needs the CTOX gateway proxy for wire-protocol
+    // translation (e.g. MiniMax: codex-exec speaks /v1/responses, MiniMax
+    // direct only has /v1/chat/completions), spawn the gateway in a
+    // background thread so codex-exec has somewhere to talk.
+    if let Some(model_id) = model {
+        if engine::default_api_provider_for_model(model_id) == "minimax" {
+            let root_for_proxy = root.to_path_buf();
+            std::thread::Builder::new()
+                .name("ctox-run-once-proxy".to_string())
+                .spawn(move || {
+                    let config = gateway::ProxyConfig::resolve_with_root(&root_for_proxy);
+                    eprintln!(
+                        "ctox run-once: spawning gateway on {} → upstream={}",
+                        config.listen_addr(),
+                        config.upstream_base_url
+                    );
+                    if let Err(err) = gateway::serve_proxy(config) {
+                        eprintln!("ctox run-once: gateway exited with error: {err}");
+                    }
+                })
+                .context("failed to spawn gateway thread")?;
+            // Wait briefly for the gateway to bind its port.
+            let listen_port = runtime_state::load_or_resolve_runtime_state(root)
+                .ok()
+                .and_then(|state| Some(state.proxy_port))
+                .unwrap_or(12434);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while std::time::Instant::now() < deadline {
+                if std::net::TcpStream::connect(("127.0.0.1", listen_port)).is_ok() {
+                    eprintln!("ctox run-once: gateway up on 127.0.0.1:{listen_port}");
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(150));
+            }
+        }
+    }
+
     let db_path = root.join("runtime/ctox_lcm.db");
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent)
