@@ -1699,6 +1699,7 @@ mod tests {
             embedding: runtime_state::AuxiliaryRuntimeState::default(),
             transcription: runtime_state::AuxiliaryRuntimeState::default(),
             speech: runtime_state::AuxiliaryRuntimeState::default(),
+            vision: runtime_state::AuxiliaryRuntimeState::default(),
         }
     }
 
@@ -2906,6 +2907,7 @@ mod tests {
             embedding: runtime_state::AuxiliaryRuntimeState::default(),
             transcription: runtime_state::AuxiliaryRuntimeState::default(),
             speech: runtime_state::AuxiliaryRuntimeState::default(),
+            vision: runtime_state::AuxiliaryRuntimeState::default(),
         };
 
         assert!(runtime_state_is_healthy(&root, &state));
@@ -2984,6 +2986,7 @@ mod tests {
             embedding: runtime_state::AuxiliaryRuntimeState::default(),
             transcription: runtime_state::AuxiliaryRuntimeState::default(),
             speech: runtime_state::AuxiliaryRuntimeState::default(),
+            vision: runtime_state::AuxiliaryRuntimeState::default(),
         };
 
         let phase = commit_runtime_switch_if_ready(&root, &state).unwrap();

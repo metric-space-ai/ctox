@@ -3967,6 +3967,7 @@ mod tests {
                 embedding: runtime_state::AuxiliaryRuntimeState::default(),
                 transcription: runtime_state::AuxiliaryRuntimeState::default(),
                 speech: runtime_state::AuxiliaryRuntimeState::default(),
+                vision: runtime_state::AuxiliaryRuntimeState::default(),
             },
         )
         .unwrap();
@@ -4136,6 +4137,7 @@ mod tests {
                 embedding: runtime_state::AuxiliaryRuntimeState::default(),
                 transcription: runtime_state::AuxiliaryRuntimeState::default(),
                 speech: runtime_state::AuxiliaryRuntimeState::default(),
+                vision: runtime_state::AuxiliaryRuntimeState::default(),
             },
         )
         .unwrap();

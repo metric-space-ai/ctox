@@ -1718,6 +1718,105 @@ mod boundary_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn model_supports_vision_recognises_local_vision_families() {
+        // Qwen 3.5 chat family is marked vision-capable in the registry.
+        assert!(model_supports_vision("Qwen/Qwen3.5-27B"));
+        // Gemma 4 variant likewise.
+        assert!(model_supports_vision("google/gemma-4-31B-it"));
+        // Qwen3-VL-2B auxiliary itself is vision-capable.
+        assert!(model_supports_vision("Qwen/Qwen3-VL-2B-Instruct"));
+    }
+
+    #[test]
+    fn model_supports_vision_rejects_text_only_primaries() {
+        assert!(!model_supports_vision("openai/gpt-oss-20b"));
+        assert!(!model_supports_vision("nvidia/Nemotron-Cascade-2-30B-A3B"));
+        assert!(!model_supports_vision("zai-org/GLM-4.7-Flash"));
+        assert!(!model_supports_vision("moonshotai/kimi-k2.5"));
+        assert!(!model_supports_vision(""));
+    }
+
+    #[test]
+    fn model_supports_vision_recognises_known_api_models() {
+        assert!(model_supports_vision("anthropic/claude-sonnet-4.6"));
+        assert!(model_supports_vision("gpt-5.4"));
+        assert!(model_supports_vision("gpt-5.4-mini"));
+        assert!(model_supports_vision("MiniMax-M2.7"));
+        // Nano is excluded intentionally.
+        assert!(!model_supports_vision("gpt-5.4-nano"));
+    }
+
+    #[test]
+    fn extract_message_content_blocks_handles_plain_string() {
+        let content = json!("hello world");
+        let blocks = extract_message_content_blocks(Some(&content));
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0]["type"], "text");
+        assert_eq!(blocks[0]["text"], "hello world");
+    }
+
+    #[test]
+    fn extract_message_content_blocks_keeps_input_image_as_image_url() {
+        let content = json!([
+            {"type": "input_text", "text": "look"},
+            {"type": "input_image", "image_url": "https://example.com/x.png"},
+        ]);
+        let blocks = extract_message_content_blocks(Some(&content));
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0]["type"], "text");
+        assert_eq!(blocks[1]["type"], "image_url");
+        assert_eq!(blocks[1]["image_url"]["url"], "https://example.com/x.png");
+    }
+
+    #[test]
+    fn extract_message_content_blocks_converts_image_data_to_data_uri() {
+        let content = json!([
+            {"type": "input_image", "image_data": "AAAA", "mime_type": "image/jpeg"},
+        ]);
+        let blocks = extract_message_content_blocks(Some(&content));
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0]["type"], "image_url");
+        assert_eq!(
+            blocks[0]["image_url"]["url"],
+            "data:image/jpeg;base64,AAAA"
+        );
+    }
+
+    #[test]
+    fn extract_message_content_blocks_passthrough_openai_image_url() {
+        let content = json!([
+            {"type": "image_url", "image_url": {"url": "https://example.com/a.webp", "detail": "high"}},
+        ]);
+        let blocks = extract_message_content_blocks(Some(&content));
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0]["type"], "image_url");
+        assert_eq!(blocks[0]["image_url"]["url"], "https://example.com/a.webp");
+        assert_eq!(blocks[0]["image_url"]["detail"], "high");
+    }
+
+    #[test]
+    fn message_blocks_contain_image_detects_both_variants() {
+        let with_input_image = vec![json!({"type": "input_image", "image_url": "x"})];
+        assert!(message_blocks_contain_image(&with_input_image));
+        let with_image_url = vec![json!({"type": "image_url", "image_url": {"url": "x"}})];
+        assert!(message_blocks_contain_image(&with_image_url));
+        let only_text = vec![json!({"type": "text", "text": "x"})];
+        assert!(!message_blocks_contain_image(&only_text));
+    }
+
+    #[test]
+    fn vision_aux_selection_maps_to_qwen3_vl_instruct() {
+        let selection =
+            auxiliary_model_selection(AuxiliaryRole::Vision, None);
+        assert_eq!(selection.role, AuxiliaryRole::Vision);
+        assert_eq!(selection.default_port, 1240);
+        assert_eq!(selection.compute_target, ComputeTarget::Gpu);
+        // gpu_reserve_mb returns the family-specific reservation.
+        assert_eq!(selection.gpu_reserve_mb(), 3500);
+    }
 
     #[test]
     fn gpt_oss_runtime_uses_engine_gpt_oss_startup() {

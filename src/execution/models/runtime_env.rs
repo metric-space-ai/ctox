@@ -535,6 +535,7 @@ mod tests {
             embedding: runtime_state::AuxiliaryRuntimeState::default(),
             transcription: runtime_state::AuxiliaryRuntimeState::default(),
             speech: runtime_state::AuxiliaryRuntimeState::default(),
+            vision: runtime_state::AuxiliaryRuntimeState::default(),
         };
 
         save_runtime_state_projection(&root, &state, &env_map).unwrap();

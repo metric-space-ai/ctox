@@ -1094,6 +1094,7 @@ mod tests {
                 base_url: Some("http://127.0.0.1:2238".to_string()),
             },
             speech: AuxiliaryRuntimeState::default(),
+            vision: AuxiliaryRuntimeState::default(),
         };
         let mut env_map = BTreeMap::new();
         env_map.insert("CTOX_ENGINE_MODEL".to_string(), "stale".to_string());
@@ -1184,6 +1185,7 @@ mod tests {
             embedding: AuxiliaryRuntimeState::default(),
             transcription: AuxiliaryRuntimeState::default(),
             speech: AuxiliaryRuntimeState::default(),
+            vision: AuxiliaryRuntimeState::default(),
         };
 
         assert_eq!(state.base_or_selected_model(), Some("openai/gpt-oss-20b"));
