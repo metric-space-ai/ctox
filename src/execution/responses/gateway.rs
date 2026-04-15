@@ -53,6 +53,9 @@ fn uses_remote_api_upstream(upstream_base_url: &str) -> bool {
         || upstream_base_url.starts_with(runtime_state::default_api_upstream_base_url_for_provider(
             "openrouter",
         ))
+        || upstream_base_url.starts_with(runtime_state::default_api_upstream_base_url_for_provider(
+            "minimax",
+        ))
 }
 const DEFAULT_BOOST_MINUTES: u64 = 20;
 
