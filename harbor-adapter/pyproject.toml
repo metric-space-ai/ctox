@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ctox-harbor"
+version = "0.1.0"
+description = "CTOX as a Harbor BaseInstalledAgent for Terminal-Bench 2.0"
+requires-python = ">=3.10"
+authors = [{ name = "CTOX" }]
+dependencies = []
+
+[tool.setuptools.packages.find]
+include = ["ctox_harbor*"]
