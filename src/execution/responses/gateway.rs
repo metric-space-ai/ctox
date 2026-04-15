@@ -808,15 +808,15 @@ fn handle_request(
         }
         upstream = upstream.set(field, header.value.as_str());
     }
-    if uses_remote_api_upstream(&config.upstream_base_url)
-        && request.headers().iter().all(|header| {
-            !header
-                .field
-                .as_str()
-                .as_str()
-                .eq_ignore_ascii_case("authorization")
-        })
-    {
+    // For remote API upstreams (OpenAI/Anthropic/OpenRouter/MiniMax/etc.)
+    // we always re-derive Authorization from the configured env key.
+    // Whether the incoming codex-exec request had its own `authorization`
+    // header is irrelevant: for non-OpenAI upstreams the header-forwarding
+    // loop above only preserves `content-type`, so the client header was
+    // dropped on the wire anyway. Without this unconditional set, MiniMax
+    // (and any other non-OpenAI upstream) gets the request without auth
+    // and returns 401.
+    if uses_remote_api_upstream(&config.upstream_base_url) {
         let api_key_env =
             runtime_state::api_key_env_var_for_upstream_base_url(&config.upstream_base_url);
         if let Some(api_key) = runtime_env::env_or_config(&config.root, api_key_env) {
