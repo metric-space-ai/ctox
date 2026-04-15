@@ -506,6 +506,7 @@ fn main() -> anyhow::Result<()> {
             println!("{}", serde_json::to_string_pretty(&result)?);
             Ok(())
         }
+        Some("continuity-update") => handle_continuity_update(&args[1..]),
         Some("continuity-log") => {
             let db_path = args.get(1).context(
                 "usage: ctox continuity-log <db-path> <conversation-id> [narrative|anchors|focus]",
@@ -756,6 +757,82 @@ fn main() -> anyhow::Result<()> {
 ///   1   — a turn failed (error propagated via `anyhow`).
 ///   2   — mission blocked (no more pending work but mission still open).
 ///   4   — turn-cap reached (`--max-turns`, default 30).
+/// `ctox continuity-update` — tool-based continuity refresh primitive.
+///
+/// The continuity refresh used to require the model to emit a textual
+/// `+`/`-` diff in a strict format. Measurement across Terminal-Bench-2
+/// showed that format was model-bound: MiniMax-M2.7 produced 0 parseable
+/// diffs across 21 refresh attempts, and gpt-5.4 produced diffs that
+/// always needed a canonicalization fix-up. Switching to structured tool
+/// calls removes the parse layer entirely: the model picks one of three
+/// modes depending on the size of the change.
+///
+/// Usage:
+///   ctox continuity-update --db <path> --conversation-id <id> --kind <narrative|anchors|focus> --mode full
+///       -- the new document body is read from stdin
+///   ctox continuity-update --db <path> --conversation-id <id> --kind <kind> --mode replace --find <text> --replace <text>
+///   ctox continuity-update --db <path> --conversation-id <id> --kind <kind> --mode diff
+///       -- the `+`/`-` diff is read from stdin (legacy path)
+fn handle_continuity_update(args: &[String]) -> anyhow::Result<()> {
+    // Default to the conventional runtime DB if --db is not supplied. Codex-
+    // exec children inherit CTOX_ROOT so this usually just works.
+    let ctox_root_env = std::env::var("CTOX_ROOT").ok();
+    let default_db = ctox_root_env
+        .as_deref()
+        .map(|r| format!("{}/runtime/ctox_lcm.db", r.trim_end_matches('/')));
+    let db_path = find_flag_value(args, "--db")
+        .map(str::to_string)
+        .or(default_db)
+        .context("usage: ctox continuity-update --kind <narrative|anchors|focus> --mode <full|replace|diff> [--conversation-id <id>] [--db <path>] [--find <text>] [--replace <text>]")?;
+    // conversation_id is optional: defaults to the constant CTOX chat
+    // conversation id used by run-once and the service daemon. Codex-exec
+    // children never need to know it explicitly.
+    let conversation_id: i64 = match find_flag_value(args, "--conversation-id") {
+        Some(v) => v.parse().context("failed to parse --conversation-id")?,
+        None => inference::turn_loop::CHAT_CONVERSATION_ID,
+    };
+    let kind = find_flag_value(args, "--kind")
+        .context("missing --kind (narrative|anchors|focus)")?;
+    let mode = find_flag_value(args, "--mode")
+        .context("missing --mode (full|replace|diff)")?;
+    let db = Path::new(&db_path);
+    let result = match mode {
+        "full" => {
+            let mut content = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut content)
+                .context("failed to read continuity document body from stdin")?;
+            context::lcm::run_continuity_full_replace(db, conversation_id, kind, &content)?
+        }
+        "replace" => {
+            let find = find_flag_value(args, "--find")
+                .context("--mode replace requires --find <text>")?;
+            let replace = find_flag_value(args, "--replace").unwrap_or("");
+            context::lcm::run_continuity_string_replace(
+                db,
+                conversation_id,
+                kind,
+                find,
+                replace,
+            )?
+        }
+        "diff" => {
+            let mut diff = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut diff)
+                .context("failed to read continuity diff from stdin")?;
+            let engine =
+                context::lcm::LcmEngine::open(db, context::lcm::LcmConfig::default())?;
+            engine.continuity_apply_diff(
+                conversation_id,
+                context::lcm::ContinuityKind::parse(kind)?,
+                &diff,
+            )?
+        }
+        other => anyhow::bail!("unknown continuity-update mode: {other}"),
+    };
+    println!("{}", serde_json::to_string_pretty(&result)?);
+    Ok(())
+}
+
 fn handle_run_once(root: &Path, args: &[String]) -> anyhow::Result<()> {
     let brief = find_flag_value(args, "--brief").context(
         "usage: ctox run-once --brief <text> [--model <id>] [--quality|--performance] \

@@ -232,7 +232,7 @@ impl ContinuityKind {
         }
     }
 
-    fn parse(value: &str) -> Result<Self> {
+    pub fn parse(value: &str) -> Result<Self> {
         match value {
             "narrative" => Ok(Self::Narrative),
             "anchors" => Ok(Self::Anchors),
@@ -1243,6 +1243,147 @@ impl LcmEngine {
         )?;
         tx.commit()
             .context("failed to commit continuity apply transaction")?;
+        Ok(document)
+    }
+
+    /// Replace the entire body of a continuity document. The previous
+    /// content is discarded; `new_content` becomes the new `rendered_text`.
+    /// Used by the tool-based refresh path where the model decides the full
+    /// new document rather than emitting a diff. The `diff_text` audit trail
+    /// is a sentinel so we can distinguish tool-written commits from
+    /// diff-merge commits when debugging.
+    pub fn continuity_full_replace_document(
+        &self,
+        conversation_id: i64,
+        kind: ContinuityKind,
+        new_content: &str,
+    ) -> Result<ContinuityDocumentState> {
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .context("failed to begin continuity full-replace transaction")?;
+        let document = ensure_continuity_document_with(&tx, conversation_id, kind)?;
+        let rendered = new_content.trim().to_string();
+        if rendered.is_empty() {
+            anyhow::bail!("continuity_full_replace_document: empty content");
+        }
+        let created_at = iso_now();
+        let diff_audit = format!("<tool:full_replace len={}>", rendered.len());
+        let commit_id = continuity_commit_id(
+            conversation_id,
+            kind,
+            &diff_audit,
+            &rendered,
+            &created_at,
+        );
+        let document_id = continuity_document_id(conversation_id, kind);
+        tx.execute(
+            "INSERT INTO continuity_commits (commit_id, document_id, parent_commit_id, diff_text, rendered_text, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                commit_id,
+                document_id,
+                document.head_commit_id,
+                diff_audit,
+                rendered,
+                created_at
+            ],
+        )?;
+        tx.execute(
+            "UPDATE continuity_documents SET head_commit_id = ?1, updated_at = ?2 WHERE document_id = ?3",
+            params![commit_id, created_at, document_id],
+        )?;
+        let document = fetch_continuity_document_with(&tx, conversation_id, kind)?
+            .context("continuity document missing after full-replace apply")?;
+        let continuity = load_or_init_continuity_show_all(&tx, conversation_id)?;
+        let previous = load_mission_state_with(&tx, conversation_id)?;
+        persist_mission_state_with(
+            &tx,
+            &derive_mission_state_from_continuity(&continuity, previous.as_ref()),
+        )?;
+        tx.commit()
+            .context("failed to commit continuity full-replace transaction")?;
+        Ok(document)
+    }
+
+    /// Apply a single literal string replacement to a continuity document.
+    /// `find` must occur exactly once in the current content; otherwise the
+    /// call errors (fail-loud rather than silently applying the wrong edit).
+    /// Used by the tool-based refresh path for small targeted updates like
+    /// "Mission state: open" -> "Mission state: done".
+    pub fn continuity_string_replace_document(
+        &self,
+        conversation_id: i64,
+        kind: ContinuityKind,
+        find: &str,
+        replace: &str,
+    ) -> Result<ContinuityDocumentState> {
+        if find.is_empty() {
+            anyhow::bail!("continuity_string_replace_document: find is empty");
+        }
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .context("failed to begin continuity string-replace transaction")?;
+        let document = ensure_continuity_document_with(&tx, conversation_id, kind)?;
+        let before = document.content.clone();
+        let matches: usize = before.matches(find).count();
+        if matches == 0 {
+            anyhow::bail!(
+                "continuity_string_replace_document: find string not present in {} document",
+                kind.as_str()
+            );
+        }
+        if matches > 1 {
+            anyhow::bail!(
+                "continuity_string_replace_document: find string matches {matches} times in {} document; refusing ambiguous replace",
+                kind.as_str()
+            );
+        }
+        let rendered = before.replacen(find, replace, 1);
+        if rendered == before {
+            anyhow::bail!("continuity_string_replace_document: replace produced no change");
+        }
+        let created_at = iso_now();
+        let diff_audit = format!(
+            "<tool:string_replace find_len={} replace_len={}>",
+            find.len(),
+            replace.len()
+        );
+        let commit_id = continuity_commit_id(
+            conversation_id,
+            kind,
+            &diff_audit,
+            &rendered,
+            &created_at,
+        );
+        let document_id = continuity_document_id(conversation_id, kind);
+        tx.execute(
+            "INSERT INTO continuity_commits (commit_id, document_id, parent_commit_id, diff_text, rendered_text, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                commit_id,
+                document_id,
+                document.head_commit_id,
+                diff_audit,
+                rendered,
+                created_at
+            ],
+        )?;
+        tx.execute(
+            "UPDATE continuity_documents SET head_commit_id = ?1, updated_at = ?2 WHERE document_id = ?3",
+            params![commit_id, created_at, document_id],
+        )?;
+        let document = fetch_continuity_document_with(&tx, conversation_id, kind)?
+            .context("continuity document missing after string-replace apply")?;
+        let continuity = load_or_init_continuity_show_all(&tx, conversation_id)?;
+        let previous = load_mission_state_with(&tx, conversation_id)?;
+        persist_mission_state_with(
+            &tx,
+            &derive_mission_state_from_continuity(&continuity, previous.as_ref()),
+        )?;
+        tx.commit()
+            .context("failed to commit continuity string-replace transaction")?;
         Ok(document)
     }
 
@@ -3079,6 +3220,36 @@ pub fn run_continuity_apply(
     engine.continuity_apply_diff(conversation_id, ContinuityKind::parse(kind)?, &diff_text)
 }
 
+pub fn run_continuity_full_replace(
+    db_path: &Path,
+    conversation_id: i64,
+    kind: &str,
+    content: &str,
+) -> Result<ContinuityDocumentState> {
+    let engine = LcmEngine::open(db_path, LcmConfig::default())?;
+    engine.continuity_full_replace_document(
+        conversation_id,
+        ContinuityKind::parse(kind)?,
+        content,
+    )
+}
+
+pub fn run_continuity_string_replace(
+    db_path: &Path,
+    conversation_id: i64,
+    kind: &str,
+    find: &str,
+    replace: &str,
+) -> Result<ContinuityDocumentState> {
+    let engine = LcmEngine::open(db_path, LcmConfig::default())?;
+    engine.continuity_string_replace_document(
+        conversation_id,
+        ContinuityKind::parse(kind)?,
+        find,
+        replace,
+    )
+}
+
 pub fn run_continuity_log(
     db_path: &Path,
     conversation_id: i64,
@@ -4536,50 +4707,61 @@ fn build_continuity_prompt_text(
             "Keep one short focus record that says what the mission is, whether it is still open, what is blocked, what to do next, when it is really finished, and when a retry would make sense. If recent messages show live runtime work or a reopened mission, replace stale closed values instead of keeping them."
         }
     };
+    let kind_str = kind.as_str();
     let mut prompt = vec![
         format!(
             "You are updating the CTOX continuity document for conversation {}.",
             conversation_id
         ),
-        format!("Document: {}.", kind.as_str()),
-        "Reply with only a diff that uses the existing sections.".to_string(),
+        format!("Document: {kind_str}."),
         kind_expectations.to_string(),
-        "Rules:".to_string(),
-        "1. Use only the `##` section names that already exist in the current document.".to_string(),
-        "2. Inside each section, write only lines that start with `+` or `-`.".to_string(),
-        "3. `+` keeps or adds a line. `-` removes a line that is no longer true or useful.".to_string(),
-        "4. Do not rewrite unchanged lines. Do not add explanations, markdown fences, or free prose.".to_string(),
-        "5. Keep the diff as small as possible. If nothing changes, return an empty string.".to_string(),
-        "6. Do not invent facts that are not supported by recent messages or summaries.".to_string(),
-        "7. If recent work failed or repeated, keep the failed tactic, blocker, or retry condition in the right existing fields instead of dropping it.".to_string(),
-        "8. Keep the same structure. Fill the named fields. Do not invent new headings.".to_string(),
-        "9. The first non-empty diff line must be a `## ...` section header. Do not start with `+` or `-`.".to_string(),
+        String::new(),
+        "You MUST apply the update by invoking the `ctox continuity-update` CLI via your shell tool. \
+         Do NOT emit a diff as text in your reply. Reply text is ignored; only the CLI call counts.".to_string(),
+        String::new(),
+        "Three modes are available. Pick the smallest one that fits your change.".to_string(),
+        String::new(),
+        "MODE A — full replacement (write the new document body to stdin):".to_string(),
+        format!(
+            "    printf '%s' \"<FULL NEW DOCUMENT BODY>\" | ctox continuity-update --kind {kind_str} --mode full"
+        ),
+        "  Use this when the current document is empty or its structure has to change substantially. \
+         Keep section headers the same (`## Status`, `## Blocker`, ...). Write each field on its own line as `- field: value` or `field: value`.".to_string(),
+        String::new(),
+        "MODE B — single targeted string replacement (best for one-field updates):".to_string(),
+        format!(
+            "    ctox continuity-update --kind {kind_str} --mode replace --find '<OLD EXACT TEXT>' --replace '<NEW EXACT TEXT>'"
+        ),
+        "  `--find` must match exactly once in the document. A match of zero or >1 fails loudly. \
+         Best for edits like changing `Mission state: open` to `Mission state: done`.".to_string(),
+        String::new(),
+        "MODE C — structured +/- diff (advanced; read from stdin):".to_string(),
+        format!(
+            "    printf '## Section\\n- old line\\n+ new line\\n' | ctox continuity-update --kind {kind_str} --mode diff"
+        ),
+        "  Use only when you have several coordinated changes across the same document.".to_string(),
+        String::new(),
+        "Content rules (apply to all three modes):".to_string(),
+        "- Keep the existing `##` section names. Do not invent new headings.".to_string(),
+        "- Do not invent facts not supported by recent messages or summaries.".to_string(),
+        "- If recent work failed or repeated, keep the failed tactic / blocker / retry condition.".to_string(),
     ];
     if kind == ContinuityKind::Anchors {
         prompt.push(
-            "10. Keep explicit anchor literals exactly as written when they are still active. Do not paraphrase or drop identifiers such as `ANCHOR_*` or `BENCH_*`.".to_string(),
+            "- Keep explicit anchor literals exactly as written (identifiers like `ANCHOR_*` or `BENCH_*`).".to_string(),
         );
     } else if kind == ContinuityKind::Focus {
         prompt.push(
-            "10. If recent messages show live runtime work, an open continuation, or a reopened mission, update both `## Status` and `## Contract`/`## State` so the focus clearly stays open.".to_string(),
+            "- If recent messages show live runtime work or a reopened mission, keep `mission_state: active` / `continuation_mode: continuous`.".to_string(),
         );
         prompt.push(
-            "11. Do not keep stale closed fields such as `Mission state: done`, `Continuation mode: closed`, `Next slice: none`, or `Closure confidence: complete` when recent messages show the mission is still open.".to_string(),
+            "- Do not keep stale closed fields (`Mission state: done`, `Continuation mode: closed`) when the mission is still open.".to_string(),
         );
     }
-    prompt.push("Example valid diff:".to_string());
-    prompt.push("## Status".to_string());
-    prompt.push("+ Mission: Keep the same main mission active.".to_string());
-    prompt.push("- Mission state: stale".to_string());
-    if kind == ContinuityKind::Focus {
-        prompt.push("+ Mission state: active".to_string());
-        prompt.push("- Continuation mode: closed".to_string());
-        prompt.push("+ Continuation mode: continuous".to_string());
-        prompt.push("## Contract".to_string());
-        prompt.push("+ mission: canonical mission from live runtime evidence".to_string());
-        prompt.push("+ mission_state: active".to_string());
-        prompt.push("+ continuation_mode: continuous".to_string());
-    }
+    prompt.push(String::new());
+    prompt.push(
+        "If no update is needed, make no CLI call and reply with the single word `noop`.".to_string(),
+    );
     prompt.push(String::new());
     prompt.push(format!("<DOCUMENT_KIND>\n{}\n</DOCUMENT_KIND>", kind_label));
     prompt.push(String::new());
@@ -4636,7 +4818,8 @@ fn build_continuity_prompt_text(
     ));
     prompt.push(String::new());
     prompt.push(
-        "<OUTPUT_FORMAT_EXAMPLE>\n## State\n- blocker: old blocker\n+ blocker: updated blocker\n</OUTPUT_FORMAT_EXAMPLE>"
+        "Reminder: apply the update by calling `ctox continuity-update` via your shell tool. \
+         Reply text alone does not update the document."
             .to_string(),
     );
     prompt.join("\n")

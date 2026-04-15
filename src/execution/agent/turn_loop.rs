@@ -742,6 +742,15 @@ where
 #[path = "turn_loop_boundary_tests.rs"]
 mod boundary_tests;
 
+/// Tool-based continuity refresh. Sends the model a prompt describing the
+/// `ctox continuity-update` CLI (three modes: full / replace / diff) and
+/// expects the model to invoke it via its shell tool. We then detect
+/// whether the doc actually changed by comparing head commit ids before
+/// and after the invocation — no more parsing of the model's reply text.
+///
+/// A fault-injection override still exists for tests: when present, the
+/// injected diff is applied directly via `continuity_apply_diff` without
+/// calling the model.
 fn refresh_continuity_documents(
     root: &Path,
     settings: &BTreeMap<String, String>,
@@ -772,83 +781,84 @@ fn refresh_continuity_documents(
                 continue;
             }
         };
-        emit(&format!("continuity-{kind_label}-invoke"));
-        let diff = match take_continuity_refresh_fault(root, settings, kind_label) {
-            Ok(Some(diff)) => {
+        let head_before = engine
+            .continuity_show(conversation_id, kind)
+            .map(|doc| doc.head_commit_id)
+            .unwrap_or_default();
+
+        // Fault-injection override: bypass the model entirely, still apply
+        // via the legacy diff path so existing tests keep working.
+        match take_continuity_refresh_fault(root, settings, kind_label) {
+            Ok(Some(injected_diff)) => {
                 emit(&format!("continuity-{kind_label}-fault-injected"));
                 eprintln!(
                     "ctox continuity refresh injected {kind_label} fault preview: {}",
-                    summarize_continuity_diff_for_log(&diff)
+                    summarize_continuity_diff_for_log(&injected_diff)
                 );
-                diff
-            }
-            Ok(None) => match invoke_codex_exec_with_timeout(
-                root,
-                settings,
-                &payload.prompt,
-                workspace_root,
-                Some(Duration::from_secs(refresh_timeout_secs)),
-                conversation_id,
-            ) {
-                Ok(diff) => diff,
-                Err(err) => {
-                    stats.skipped_invoke += 1;
-                    eprintln!("ctox continuity refresh skipped {kind_label} invocation: {err}");
-                    continue;
+                if !injected_diff.trim().is_empty() {
+                    if let Err(err) = engine.continuity_apply_diff(
+                        conversation_id,
+                        kind,
+                        injected_diff.trim(),
+                    ) {
+                        stats.skipped_apply += 1;
+                        eprintln!("ctox continuity refresh skipped invalid injected {kind_label} diff: {err}");
+                    } else {
+                        stats.updated += 1;
+                    }
                 }
-            },
+                if kind == lcm::ContinuityKind::Anchors {
+                    let _ = engine.continuity_preserve_recent_anchor_literals(conversation_id);
+                }
+                continue;
+            }
+            Ok(None) => {}
             Err(err) => {
                 stats.skipped_invoke += 1;
                 eprintln!("ctox continuity refresh skipped {kind_label} fault injection: {err}");
                 continue;
             }
-        };
-        let repaired_diff = match repair_continuity_refresh_output(&diff) {
-            ContinuityRefreshRepair::Apply {
-                diff: repaired,
-                repair_reason,
-            } => {
-                if let Some(reason) = repair_reason {
-                    eprintln!(
-                        "ctox continuity refresh repaired {kind_label} response before apply: {reason}"
-                    );
-                }
-                repaired
-            }
-            ContinuityRefreshRepair::Noop { reason } => {
-                eprintln!(
-                    "ctox continuity refresh treated {kind_label} response as no-op: {reason}"
-                );
+        }
+
+        emit(&format!("continuity-{kind_label}-invoke"));
+        let reply = match invoke_codex_exec_with_timeout(
+            root,
+            settings,
+            &payload.prompt,
+            workspace_root,
+            Some(Duration::from_secs(refresh_timeout_secs)),
+            conversation_id,
+        ) {
+            Ok(reply) => reply,
+            Err(err) => {
+                stats.skipped_invoke += 1;
+                eprintln!("ctox continuity refresh skipped {kind_label} invocation: {err}");
                 continue;
             }
         };
-        eprintln!(
-            "ctox continuity refresh {kind_label} diff len={} empty={} preview={}",
-            repaired_diff.len(),
-            repaired_diff.trim().is_empty(),
-            summarize_continuity_diff_for_log(&repaired_diff)
-        );
-        if !repaired_diff.trim().is_empty() {
+
+        // The model applies the change via the `ctox continuity-update`
+        // CLI. We verify by re-reading the head commit id from the DB
+        // rather than parsing `reply` — tool calls either wrote a new
+        // commit or they didn't.
+        let head_after = engine
+            .continuity_show(conversation_id, kind)
+            .map(|doc| doc.head_commit_id)
+            .unwrap_or_default();
+        if head_after != head_before && !head_after.is_empty() {
             emit(&format!("continuity-{kind_label}-apply"));
-            if let Err(err) =
-                engine.continuity_apply_diff(conversation_id, kind, repaired_diff.trim())
-            {
-                stats.skipped_apply += 1;
-                eprintln!("ctox continuity refresh skipped invalid {kind_label} diff: {err}");
-                eprintln!(
-                    "ctox continuity refresh invalid {kind_label} diff preview: {}",
-                    summarize_continuity_diff_for_log(&repaired_diff)
-                );
-                if repaired_diff.trim() != diff.trim() {
-                    eprintln!(
-                        "ctox continuity refresh invalid {kind_label} raw response preview: {}",
-                        summarize_continuity_diff_for_log(&diff)
-                    );
-                }
-            } else {
-                stats.updated += 1;
-            }
+            eprintln!(
+                "ctox continuity refresh {kind_label}: head advanced {} -> {} (tool-applied)",
+                head_before, head_after
+            );
+            stats.updated += 1;
+        } else {
+            eprintln!(
+                "ctox continuity refresh {kind_label}: no tool-driven change (reply preview: {})",
+                summarize_continuity_diff_for_log(&reply)
+            );
         }
+
         if kind == lcm::ContinuityKind::Anchors {
             emit("continuity-anchors-preserve-literals");
             match engine.continuity_preserve_recent_anchor_literals(conversation_id) {
