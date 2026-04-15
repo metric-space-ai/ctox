@@ -1207,11 +1207,17 @@ fn invoke_codex_exec_with_timeout_and_instructions_inner(
     } else {
         "disabled"
     };
+    // CTOX standardises every chat model on a 131_072-token context
+    // window (matching gpt-5.4 / Claude Sonnet / MiniMax M2.x). Without
+    // this hint, codex-exec falls back to its built-in per-model default,
+    // which is often much smaller (4k for unknown models) and aggressively
+    // truncates before either tool-calls or chain-of-thought can finish.
+    let model_context_window: Option<usize> = Some(131_072);
     let mut config = CodexExecConfigSpec {
         model_instructions_file: instructions_file.path().to_path_buf(),
         project_doc_max_bytes: (skill_preset == runtime_state::ChatSkillPreset::Simple)
             .then_some(0),
-        model_context_window: None,
+        model_context_window,
         model_auto_compact_token_limit: None,
         model_reasoning_effort: configured_reasoning_effort,
         web_search_mode,

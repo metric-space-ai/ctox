@@ -95,8 +95,32 @@ pub fn rewrite_request(raw: &[u8]) -> anyhow::Result<Vec<u8>> {
             } else {
                 key
             };
+            // MiniMax accepts temperature in (0.0, 1.0]; OpenAI clients
+            // routinely send 1.2+ which the API rejects. Clamp.
+            if mapped_key == "temperature" {
+                if let Some(temp) = value.as_f64() {
+                    let clamped = temp.clamp(0.001, 1.0);
+                    request.insert(
+                        mapped_key.to_string(),
+                        serde_json::json!(clamped),
+                    );
+                    continue;
+                }
+            }
             request.insert(mapped_key.to_string(), value.clone());
         }
+    }
+    // M2.7's chain-of-thought needs significant headroom (model card says
+    // up to 128k CoT tokens). Default codex-exec request usually has no
+    // max_tokens set or sets a small cap, which cuts the model off mid-
+    // <think> and produces empty agent replies. Floor at the CTOX standard
+    // 131_072 unless the request explicitly asked for more.
+    let current_max = request
+        .get("max_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    if current_max < 131_072 {
+        request.insert("max_tokens".to_string(), serde_json::json!(131_072u64));
     }
     request.insert("stream".to_string(), Value::Bool(false));
     if payload.get("parallel_tool_calls") == Some(&Value::Bool(false)) {
