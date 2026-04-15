@@ -1237,7 +1237,17 @@ fn apply_selection_runtime_projection(
     match next_state.source {
         runtime_state::InferenceSource::Api => {
             runtime_plan::clear_chat_plan_env(env_map);
-            let api_provider = runtime_state::infer_api_provider_from_env_map(env_map);
+            // Derive the API provider from the freshly-selected model first;
+            // env_map at this point may still hold a stale CTOX_CHAT_MODEL
+            // from a previous selection or no model at all (clean install),
+            // and infer_api_provider_from_env_map would then fall back to
+            // OpenAI even if the new model is e.g. MiniMax-M2.7.
+            let api_provider = next_state
+                .active_model
+                .as_deref()
+                .filter(|model| engine::is_api_chat_model(model))
+                .map(|model| engine::default_api_provider_for_model(model).to_string())
+                .unwrap_or_else(|| runtime_state::infer_api_provider_from_env_map(env_map));
             next_state.upstream_base_url = env_map
                 .get("CTOX_UPSTREAM_BASE_URL")
                 .map(String::as_str)
