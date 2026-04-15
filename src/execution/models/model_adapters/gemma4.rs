@@ -252,8 +252,8 @@ fn build_chat_messages(items: &[Value], instructions: Option<&str>) -> Vec<Value
                     "developer" => "system",
                     other => other,
                 };
-                let text = engine::extract_message_content_text(object.get("content"));
                 if mapped_role == "assistant" {
+                    let text = engine::extract_message_content_text(object.get("content"));
                     flush_pending_assistant(&mut pending_assistant, &mut messages);
                     let mut assistant = serde_json::Map::new();
                     assistant.insert("role".to_string(), Value::String("assistant".to_string()));
@@ -271,11 +271,24 @@ fn build_chat_messages(items: &[Value], instructions: Option<&str>) -> Vec<Value
                     }
                     pending_assistant = Some(assistant);
                 } else {
+                    // Gemma 4 Vision accepts OpenAI chat-compat image_url
+                    // content blocks; forward the full block array when the
+                    // user message contains images. Falls back to flat-text
+                    // for plain text messages.
                     flush_pending_assistant(&mut pending_assistant, &mut messages);
-                    messages.push(json!({
-                        "role": mapped_role,
-                        "content": text,
-                    }));
+                    let blocks = engine::extract_message_content_blocks(object.get("content"));
+                    if engine::message_blocks_contain_image(&blocks) {
+                        messages.push(json!({
+                            "role": mapped_role,
+                            "content": blocks,
+                        }));
+                    } else {
+                        let text = engine::extract_message_content_text(object.get("content"));
+                        messages.push(json!({
+                            "role": mapped_role,
+                            "content": text,
+                        }));
+                    }
                 }
             }
             "function_call" => {

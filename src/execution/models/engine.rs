@@ -1038,6 +1038,112 @@ pub(crate) fn extract_message_content_text(content: Option<&Value>) -> String {
     String::new()
 }
 
+/// Normalise a message's `content` field into an OpenAI chat-compat block
+/// array, preserving both text and image blocks. String inputs are lifted
+/// to `[{type:"text",text:"..."}]`. Array inputs keep their items but are
+/// normalised:
+///
+/// - `{type:"input_text"|"text", text:"..."}` → `{type:"text", text:"..."}`
+/// - `{type:"input_image", image_url:"...", image_data?, mime_type?}` →
+///   `{type:"image_url", image_url:{url:"..."}}` (base64 payloads are
+///   converted to data-URIs).
+/// - `{type:"image_url", image_url:{url:"..."}}` → kept as-is.
+/// - Other types are dropped.
+///
+/// Used by adapters for vision-capable model families (Qwen 3.5, Gemma 4,
+/// Mistral) so image content reaches the ctox-engine unchanged. Text-only
+/// adapters continue to call `extract_message_content_text` which strips
+/// images (they can't consume them anyway; the vision preprocessor will
+/// have substituted image blocks with text upstream if the primary isn't
+/// vision-capable).
+pub(crate) fn extract_message_content_blocks(content: Option<&Value>) -> Vec<Value> {
+    let Some(content) = content else {
+        return Vec::new();
+    };
+    if let Some(text) = content.as_str() {
+        if text.trim().is_empty() {
+            return Vec::new();
+        }
+        return vec![serde_json::json!({"type":"text","text":text})];
+    }
+    let Some(entries) = content.as_array() else {
+        return Vec::new();
+    };
+    let mut out = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let Some(object) = entry.as_object() else {
+            continue;
+        };
+        let ty = object.get("type").and_then(Value::as_str).unwrap_or("");
+        match ty {
+            "text" | "input_text" | "output_text" => {
+                if let Some(text) = object.get("text").and_then(Value::as_str) {
+                    if !text.trim().is_empty() {
+                        out.push(serde_json::json!({"type":"text","text":text}));
+                    }
+                }
+            }
+            "input_image" => {
+                if let Some(url) = object.get("image_url").and_then(Value::as_str) {
+                    if !url.trim().is_empty() {
+                        out.push(serde_json::json!({
+                            "type": "image_url",
+                            "image_url": {"url": url},
+                        }));
+                        continue;
+                    }
+                }
+                if let Some(data) = object.get("image_data").and_then(Value::as_str) {
+                    if !data.trim().is_empty() {
+                        let mime = object
+                            .get("mime_type")
+                            .and_then(Value::as_str)
+                            .unwrap_or("image/png");
+                        out.push(serde_json::json!({
+                            "type": "image_url",
+                            "image_url": {"url": format!("data:{mime};base64,{data}")},
+                        }));
+                    }
+                }
+            }
+            "image_url" => {
+                // Already OpenAI chat-compat shape — pass through as-is.
+                // Supports both {url:".."} object and plain string for robustness.
+                if let Some(inner) = object.get("image_url") {
+                    if inner.is_object() {
+                        out.push(serde_json::json!({
+                            "type": "image_url",
+                            "image_url": inner.clone(),
+                        }));
+                    } else if let Some(url) = inner.as_str() {
+                        if !url.trim().is_empty() {
+                            out.push(serde_json::json!({
+                                "type": "image_url",
+                                "image_url": {"url": url},
+                            }));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// True when a block array contains at least one image entry. Adapters use
+/// this to decide whether to forward the full block array (vision path) or
+/// fall back to flat-text extraction (legacy path).
+pub(crate) fn message_blocks_contain_image(blocks: &[Value]) -> bool {
+    blocks.iter().any(|block| {
+        block
+            .get("type")
+            .and_then(Value::as_str)
+            .map(|ty| ty == "image_url" || ty == "input_image")
+            .unwrap_or(false)
+    })
+}
+
 pub(crate) fn extract_function_call_output_text(output: Option<&Value>) -> String {
     fn render(value: &Value) -> Option<String> {
         match value {
