@@ -71,12 +71,24 @@ use crate::inference::runtime_state;
 #[path = "model_catalog_boundary_tests.rs"]
 mod model_catalog_boundary_tests;
 
+fn top_level_usage(clean_room_families: &str) -> String {
+    format!(
+        "usage:\n  ctox\n  ctox --help\n  ctox version\n  ctox start\n  ctox stop\n  ctox status\n  ctox service --foreground\n  ctox run-once --brief <text> [--model <id>] [--quality|--performance] [--workspace <path>] [--atif-out <path>] [--thread-key <key>]\n  ctox runtime switch <model> <quality|performance>\n  ctox serve-responses-proxy\n  ctox serve-litert-bridge --config <json-path>\n  ctox boost status\n  ctox boost start [--minutes <n>] [--model <id>] [--reason <text>]\n  ctox boost stop\n  ctox source-status\n  ctox clean-room-baseline-plan <{}> [prompt]\n  ctox clean-room-rewrite-responses <json-path>\n  ctox tui\n  ctox tui-smoke [chat|skills|settings] [width] [height]\n  ctox browser <subcommand> ...\n  ctox channel <subcommand> ...\n  ctox doc <subcommand> ...\n  ctox follow-up <subcommand> ...\n  ctox governance <subcommand> ...\n  ctox jami-daemon --foreground\n  ctox meeting <subcommand> ...\n  ctox plan <subcommand> ...\n  ctox queue <subcommand> ...\n  ctox schedule <subcommand> ...\n  ctox scrape <subcommand> ...\n  ctox secret <subcommand> ...\n  ctox ticket <subcommand> ...\n  ctox verification <subcommand> ...\n  ctox web <subcommand> ...\n  ctox state-invariants [--conversation-id <id>]\n  ctox update status\n  ctox update check\n  ctox update channel show\n  ctox update channel set-github --repo <owner/repo> [--api-base <url>] [--token-env <env-var>]\n  ctox update channel clear\n  ctox update adopt [--install-root <path>] [--state-root <path>] [--release <name>] [--skip-build] [--force]\n  ctox update apply --source <path> [--release <name>] [--force] [--keep-failed-release]\n  ctox update apply --latest [--force] [--keep-failed-release]\n  ctox update apply --version <tag> [--force] [--keep-failed-release]\n  ctox update rollback\n  ctox lcm-init <db-path>\n  ctox lcm-add-message <db-path> <conversation-id> <role> <content>\n  ctox lcm-compact <db-path> <conversation-id> [token-budget] [--force]\n  ctox lcm-grep <db-path> <conversation-id|all> <scope> <mode> <query> [limit]\n  ctox lcm-describe <db-path> <summary-id>\n  ctox lcm-expand <db-path> <summary-id> [depth] [--messages] [token-cap]\n  ctox lcm-dump <db-path> <conversation-id>\n  ctox lcm-refresh-continuity <db-path> <conversation-id>\n  ctox lcm-show-continuity <db-path> <conversation-id>\n  ctox lcm-run-fixture <db-path> <fixture-path>\n  ctox continuity-init <db-path> <conversation-id>\n  ctox continuity-show <db-path> <conversation-id> [narrative|anchors|focus]\n  ctox continuity-apply <db-path> <conversation-id> <narrative|anchors|focus> <diff-path>\n  ctox continuity-log <db-path> <conversation-id> [narrative|anchors|focus]\n  ctox continuity-rebuild <db-path> <conversation-id> <narrative|anchors|focus>\n  ctox continuity-forgotten <db-path> <conversation-id> [narrative|anchors|focus] [query]\n  ctox continuity-build-prompt <db-path> <conversation-id> <narrative|anchors|focus>\n  ctox continuity-update --kind <narrative|anchors|focus> --mode <full|replace|diff> [--conversation-id <id>] [--db <path>] [--find <text>] [--replace <text>]\n  ctox context-health <db-path> <conversation-id> [latest-user-prompt] [token-budget]\n  ctox chat-prompt-export [--db <path>] [--conversation-id <id>] [--output <path>]\n  ctox context-stress <db-path> [conversation-id] [iterations] [token-budget]\n  ctox context-retrieve [--db <path>] [--conversation-id <id>] --mode <current|continuity|forgotten|search|describe|expand> [--kind <narrative|anchors|focus>] [--query <text>] [--summary-id <id>] [--limit <n>] [--depth <n>] [--messages] [--token-cap <n>]",
+        clean_room_families
+    )
+}
+
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let root = resolve_workspace_root()?;
+    let clean_room_families = model_registry::supported_clean_room_family_selectors().join("|");
 
     match args.first().map(String::as_str) {
         None => tui::run_tui(&root),
+        Some("--help") | Some("-h") | Some("help") => {
+            println!("{}", top_level_usage(&clean_room_families));
+            Ok(())
+        }
         Some("source-status") => {
             let outcome = engine::source_layout_status(&root)?;
             println!("{}", serde_json::to_string_pretty(&outcome)?);
@@ -506,6 +518,7 @@ fn main() -> anyhow::Result<()> {
             println!("{}", serde_json::to_string_pretty(&result)?);
             Ok(())
         }
+        Some("continuity-update") => handle_continuity_update(&args[1..]),
         Some("continuity-log") => {
             let db_path = args.get(1).context(
                 "usage: ctox continuity-log <db-path> <conversation-id> [narrative|anchors|focus]",
@@ -731,11 +744,7 @@ fn main() -> anyhow::Result<()> {
         }
         Some("run-once") => handle_run_once(&root, &args[1..]),
         _ => {
-            let clean_room_families = model_registry::supported_clean_room_family_selectors().join("|");
-            anyhow::bail!(
-                "usage:\n  ctox\n  ctox version\n  ctox start\n  ctox stop\n  ctox status\n  ctox service --foreground\n  ctox run-once --brief <text> [--model <id>] [--quality|--performance] [--workspace <path>] [--atif-out <path>] [--thread-key <key>]\n  ctox governance <subcommand> ...\n  ctox state-invariants [--conversation-id <id>]\n  ctox update status\n  ctox update check\n  ctox update channel show\n  ctox update channel set-github --repo <owner/repo> [--api-base <url>] [--token-env <env-var>]\n  ctox update channel clear\n  ctox update adopt [--install-root <path>] [--state-root <path>] [--release <name>] [--skip-build] [--force]\n  ctox update apply --source <path> [--release <name>] [--force] [--keep-failed-release]\n  ctox update apply --latest [--force] [--keep-failed-release]\n  ctox update apply --version <tag> [--force] [--keep-failed-release]\n  ctox update rollback\n  ctox source-status\n  ctox clean-room-baseline-plan <{}> [prompt]\n  ctox clean-room-rewrite-responses <json-path>\n  ctox runtime switch <model> <quality|performance>\n  ctox serve-responses-proxy\n  ctox serve-litert-bridge --config <json-path>\n  ctox boost status\n  ctox boost start [--minutes <n>] [--model <id>] [--reason <text>]\n  ctox boost stop\n  ctox tui\n  ctox channel <subcommand> ...\n  ctox follow-up <subcommand> ...\n  ctox plan <subcommand> ...\n  ctox schedule <subcommand> ...\n  ctox secret <subcommand> ...\n  ctox ticket <subcommand> ...\n  ctox lcm-init <db-path>\n  ctox lcm-add-message <db-path> <conversation-id> <role> <content>\n  ctox lcm-compact <db-path> <conversation-id> [token-budget] [--force]\n  ctox lcm-grep <db-path> <conversation-id|all> <scope> <mode> <query> [limit]\n  ctox lcm-describe <db-path> <summary-id>\n  ctox lcm-expand <db-path> <summary-id> [depth] [--messages] [token-cap]\n  ctox lcm-dump <db-path> <conversation-id>\n  ctox lcm-refresh-continuity <db-path> <conversation-id>\n  ctox lcm-show-continuity <db-path> <conversation-id>\n  ctox lcm-run-fixture <db-path> <fixture-path>\n  ctox continuity-init <db-path> <conversation-id>\n  ctox continuity-show <db-path> <conversation-id> [narrative|anchors|focus]\n  ctox continuity-apply <db-path> <conversation-id> <narrative|anchors|focus> <diff-path>\n  ctox continuity-log <db-path> <conversation-id> [narrative|anchors|focus]\n  ctox continuity-rebuild <db-path> <conversation-id> <narrative|anchors|focus>\n  ctox continuity-forgotten <db-path> <conversation-id> [narrative|anchors|focus] [query]\n  ctox continuity-build-prompt <db-path> <conversation-id> <narrative|anchors|focus>\n  ctox context-health <db-path> <conversation-id> [latest-user-prompt] [token-budget]\n  ctox chat-prompt-export [--db <path>] [--conversation-id <id>] [--output <path>]\n  ctox context-stress <db-path> [conversation-id] [iterations] [token-budget]\n  ctox context-retrieve [--db <path>] [--conversation-id <id>] --mode <current|continuity|forgotten|search|describe|expand> [--kind <narrative|anchors|focus>] [--query <text>] [--summary-id <id>] [--limit <n>] [--depth <n>] [--messages] [--token-cap <n>]",
-                clean_room_families
-            )
+            anyhow::bail!("{}", top_level_usage(&clean_room_families))
         }
     }
 }
@@ -756,6 +765,74 @@ fn main() -> anyhow::Result<()> {
 ///   1   — a turn failed (error propagated via `anyhow`).
 ///   2   — mission blocked (no more pending work but mission still open).
 ///   4   — turn-cap reached (`--max-turns`, default 30).
+/// `ctox continuity-update` — tool-based continuity refresh primitive.
+///
+/// The continuity refresh used to require the model to emit a textual
+/// `+`/`-` diff in a strict format. Measurement across Terminal-Bench-2
+/// showed that format was model-bound: MiniMax-M2.7 produced 0 parseable
+/// diffs across 21 refresh attempts, and gpt-5.4 produced diffs that
+/// always needed a canonicalization fix-up. Switching to structured tool
+/// calls removes the parse layer entirely: the model picks one of three
+/// modes depending on the size of the change.
+///
+/// Usage:
+///   ctox continuity-update --db <path> --conversation-id <id> --kind <narrative|anchors|focus> --mode full
+///       -- the new document body is read from stdin
+///   ctox continuity-update --db <path> --conversation-id <id> --kind <kind> --mode replace --find <text> --replace <text>
+///   ctox continuity-update --db <path> --conversation-id <id> --kind <kind> --mode diff
+///       -- the `+`/`-` diff is read from stdin (legacy path)
+fn handle_continuity_update(args: &[String]) -> anyhow::Result<()> {
+    // Default to the conventional runtime DB if --db is not supplied. Codex-
+    // exec children inherit CTOX_ROOT so this usually just works.
+    let ctox_root_env = std::env::var("CTOX_ROOT").ok();
+    let default_db = ctox_root_env
+        .as_deref()
+        .map(|r| format!("{}/runtime/ctox_lcm.db", r.trim_end_matches('/')));
+    let db_path = find_flag_value(args, "--db")
+        .map(str::to_string)
+        .or(default_db)
+        .context("usage: ctox continuity-update --kind <narrative|anchors|focus> --mode <full|replace|diff> [--conversation-id <id>] [--db <path>] [--find <text>] [--replace <text>]")?;
+    // conversation_id is optional: defaults to the constant CTOX chat
+    // conversation id used by run-once and the service daemon. Codex-exec
+    // children never need to know it explicitly.
+    let conversation_id: i64 = match find_flag_value(args, "--conversation-id") {
+        Some(v) => v.parse().context("failed to parse --conversation-id")?,
+        None => inference::turn_loop::CHAT_CONVERSATION_ID,
+    };
+    let kind =
+        find_flag_value(args, "--kind").context("missing --kind (narrative|anchors|focus)")?;
+    let mode = find_flag_value(args, "--mode").context("missing --mode (full|replace|diff)")?;
+    let db = Path::new(&db_path);
+    let result = match mode {
+        "full" => {
+            let mut content = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut content)
+                .context("failed to read continuity document body from stdin")?;
+            context::lcm::run_continuity_full_replace(db, conversation_id, kind, &content)?
+        }
+        "replace" => {
+            let find =
+                find_flag_value(args, "--find").context("--mode replace requires --find <text>")?;
+            let replace = find_flag_value(args, "--replace").unwrap_or("");
+            context::lcm::run_continuity_string_replace(db, conversation_id, kind, find, replace)?
+        }
+        "diff" => {
+            let mut diff = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut diff)
+                .context("failed to read continuity diff from stdin")?;
+            let engine = context::lcm::LcmEngine::open(db, context::lcm::LcmConfig::default())?;
+            engine.continuity_apply_diff(
+                conversation_id,
+                context::lcm::ContinuityKind::parse(kind)?,
+                &diff,
+            )?
+        }
+        other => anyhow::bail!("unknown continuity-update mode: {other}"),
+    };
+    println!("{}", serde_json::to_string_pretty(&result)?);
+    Ok(())
+}
+
 fn handle_run_once(root: &Path, args: &[String]) -> anyhow::Result<()> {
     let brief = find_flag_value(args, "--brief").context(
         "usage: ctox run-once --brief <text> [--model <id>] [--quality|--performance] \
@@ -891,10 +968,29 @@ fn handle_run_once(root: &Path, args: &[String]) -> anyhow::Result<()> {
 
     let mut current = lease_next_for_thread(root, &thread_key, lease_owner)?;
     if current.is_none() {
-        anyhow::bail!(
-            "failed to lease newly-created queue task for thread {thread_key}"
-        );
+        anyhow::bail!("failed to lease newly-created queue task for thread {thread_key}");
     }
+
+    // Create a single PersistentSession for the entire run-once loop.
+    // Context accumulates across turns inside codex-core's thread state,
+    // so CompactPolicy can observe real growth and fire when needed.
+    let operator_settings =
+        inference::runtime_env::effective_operator_env_map(root).unwrap_or_default();
+    let mut persistent_session = match inference::turn_loop::PersistentSession::start(
+        root,
+        &operator_settings,
+    ) {
+        Ok(session) => {
+            eprintln!(
+                "ctox run-once: persistent session created (context accumulates across turns)"
+            );
+            Some(session)
+        }
+        Err(err) => {
+            eprintln!("ctox run-once: failed to create persistent session: {err:#} — falling back to per-turn clients");
+            None
+        }
+    };
 
     while let Some((prompt_text, leased_keys, ws_override)) = current.take() {
         turns_run += 1;
@@ -919,6 +1015,7 @@ fn handle_run_once(root: &Path, args: &[String]) -> anyhow::Result<()> {
             conversation_id,
             None,
             force_continuity_refresh,
+            persistent_session.as_mut(),
             |event| eprintln!("[ctox run-once t{turns_run}] {event}"),
         );
 
@@ -965,17 +1062,13 @@ fn handle_run_once(root: &Path, args: &[String]) -> anyhow::Result<()> {
                         leased_keys.first().map(String::as_str),
                     ) {
                         Ok(title) => {
-                            eprintln!(
-                                "ctox run-once: enqueued timeout continuation: {title}"
-                            );
+                            eprintln!("ctox run-once: enqueued timeout continuation: {title}");
                             // Fall through: sync mission state, then lease
                             // the freshly enqueued continuation in the
                             // next iteration.
                         }
                         Err(enq_err) => {
-                            eprintln!(
-                                "ctox run-once: failed to enqueue continuation: {enq_err}"
-                            );
+                            eprintln!("ctox run-once: failed to enqueue continuation: {enq_err}");
                             mission_status = "failed";
                             break;
                         }
@@ -987,17 +1080,14 @@ fn handle_run_once(root: &Path, args: &[String]) -> anyhow::Result<()> {
             }
         }
 
-        // Detect whether the turn ended with the model mid-work rather
-        // than actually completing. Typical mid-work patterns from
-        // reasoning-first models (M2.7, Claude Extended Thinking, etc.):
-        //   - reply is only `<think>...</think>` with nothing substantive
-        //     after the close tag
-        //   - reply ends with an intent statement ("I'll do X", "Let me
-        //     Y", "Now I'll Z:") and no tool-call or terminal answer
-        // If the reply looks mid-work we auto-enqueue a continuation
-        // slice so the mission-loop keeps going — a bench/service run
-        // must not declare a mission done just because one turn
-        // returned.
+        // Narrow mid-work detection: only the unambiguous case. An
+        // unclosed `<think>` means the reasoning was cut off mid-
+        // stream and the model never got to act. Text-pattern matches
+        // on intent prefixes ("I'll ...", "Now ...") were too brittle
+        // across languages and model phrasings and created downstream
+        // false-positives in the tool-activity gate. The system-
+        // prompt Mission Control Contract now handles the cooperative
+        // case; the heuristic only catches the hard truncation case.
         let last_reply_is_mid_work = turn_result
             .as_ref()
             .ok()
@@ -1016,40 +1106,49 @@ fn handle_run_once(root: &Path, args: &[String]) -> anyhow::Result<()> {
             ) {
                 Ok(title) => {
                     eprintln!(
-                        "ctox run-once: turn {} ended mid-work — enqueued continuation: {title}",
+                        "ctox run-once: turn {} ended mid-think — enqueued continuation: {title}",
                         turns_run
                     );
                 }
                 Err(err) => {
-                    eprintln!(
-                        "ctox run-once: failed to enqueue mid-work continuation: {err}"
-                    );
+                    eprintln!("ctox run-once: failed to enqueue mid-work continuation: {err}");
                 }
             }
         }
 
-        // Done-gate: mission_state_from_continuity tells us whether the
-        // mission has declared itself closed. We only trust a `false`
-        // reading if the turn ALSO looks completed — otherwise we loop
-        // and pick up any queued work (continuations, plan steps, model-
-        // emitted follow-ups).
-        let mission_open = match lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default())
+        // Explicit closure check — only trust `mission_status == "done"`
+        // or `continuation_mode in {closed, dormant}`. Do NOT use
+        // `is_open=false` on its own: for a fresh mission the Focus
+        // document is still empty, which the derivation function
+        // reports as `is_open=false` even though the mission just
+        // started. The service daemon (service.rs:2320) already treats
+        // `is_open` as an idle-detection signal, not a termination
+        // signal; run-once now matches.
+        let explicitly_closed = match lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default())
             .and_then(|engine| engine.sync_mission_state_from_continuity(conversation_id))
         {
             Ok(state) => {
+                let status = state.mission_status.to_ascii_lowercase();
+                let mode = state.continuation_mode.to_ascii_lowercase();
+                let closed = status == "done" || mode == "closed" || mode == "dormant";
                 eprintln!(
-                    "ctox run-once: after t{} is_open={} mode={} mid_work={}",
-                    turns_run, state.is_open, state.continuation_mode, last_reply_is_mid_work
+                    "ctox run-once: after t{} status={} mode={} explicit_closed={} mid_work={}",
+                    turns_run, status, mode, closed, last_reply_is_mid_work
                 );
-                state.is_open
+                closed
             }
             Err(err) => {
                 eprintln!(
-                    "ctox run-once: sync_mission_state_from_continuity failed: {err}; assuming still open"
-                );
-                true
+                        "ctox run-once: sync_mission_state_from_continuity failed: {err}; treating mission as still open"
+                    );
+                false
             }
         };
+
+        if explicitly_closed {
+            mission_status = "handled";
+            break;
+        }
 
         if turns_run >= max_turns {
             mission_status = "cap";
@@ -1065,23 +1164,20 @@ fn handle_run_once(root: &Path, args: &[String]) -> anyhow::Result<()> {
 
         current = lease_next_for_thread(root, &thread_key, lease_owner)?;
         if current.is_none() {
-            // Only declare the mission done/blocked if we also have no
-            // reason to believe the model was mid-work. If it was mid-
-            // work, our midwork continuation should have been enqueued
-            // above; if we still can't lease it (e.g. upstream queue
-            // hiccup), surface it as blocked so the caller can see.
-            if last_reply_is_mid_work {
-                mission_status = "blocked";
-                eprintln!(
-                    "ctox run-once: mid-work reply but no pending lease after continuation enqueue — surfacing as blocked"
-                );
-            } else if !mission_open {
-                mission_status = "handled";
-            } else {
-                mission_status = "blocked";
-            }
+            // No pending queue work AND mission wasn't explicitly
+            // closed. This is the "natural end" case — model
+            // completed the task, didn't queue follow-ups. We treat
+            // it as handled; if the verifier disagrees, that's a
+            // model-side fail per the bench rules.
+            mission_status = "handled";
             break;
         }
+    }
+
+    // Shut down the persistent session cleanly.
+    if let Some(mut session) = persistent_session.take() {
+        eprintln!("ctox run-once: shutting down persistent session");
+        session.shutdown();
     }
 
     if let Some(out_path) = atif_out.as_deref() {
@@ -1111,8 +1207,9 @@ fn handle_run_once(root: &Path, args: &[String]) -> anyhow::Result<()> {
             &model_name,
             notes,
         )?;
-        export::atif::write_trajectory(&trajectory, out_path)
-            .with_context(|| format!("failed to write ATIF trajectory to {}", out_path.display()))?;
+        export::atif::write_trajectory(&trajectory, out_path).with_context(|| {
+            format!("failed to write ATIF trajectory to {}", out_path.display())
+        })?;
         eprintln!(
             "ctox run-once: wrote ATIF trajectory to {}",
             out_path.display()
@@ -1151,122 +1248,31 @@ fn is_turn_timeout_blocker(value: &str) -> bool {
     lowered.contains("timed out after") || lowered.contains("time budget")
 }
 
-/// Strip `<think>...</think>` blocks from a reply. Returns the substantive
-/// text only. An unclosed `<think>` at the end is treated as the reply
-/// having been cut off inside a reasoning block (the function drops
-/// everything from the opening `<think>` onward).
-fn strip_think_blocks(reply: &str) -> String {
-    let mut out = String::with_capacity(reply.len());
-    let mut rest = reply;
-    loop {
-        match rest.find("<think>") {
-            Some(open) => {
-                out.push_str(&rest[..open]);
-                let after_open = &rest[open + 7..];
-                match after_open.find("</think>") {
-                    Some(close) => {
-                        rest = &after_open[close + 8..];
-                    }
-                    None => {
-                        // unclosed think — drop remainder
-                        break;
-                    }
-                }
-            }
-            None => {
-                out.push_str(rest);
-                break;
-            }
-        }
-    }
-    out
-}
-
-/// Heuristically detect whether a turn's final reply looks like the model
-/// was still mid-work (announcing an intent without carrying it out, or
-/// falling silent right after a reasoning block). A bench/service run that
-/// treats such a reply as "mission done" would be unfair to the model —
-/// the orchestrator ended the work, not the model.
+/// Detect the one unambiguous mid-work signal: a reply that contains an
+/// opening `<think>` tag but no matching close tag. This means the
+/// reasoning block was cut off mid-stream (upstream truncation, token
+/// cap, connection drop inside the stream, …) and the model never got
+/// to act on its thinking.
 ///
-/// Positives:
-///   - reply is empty after stripping `<think>...</think>`
-///   - trailing text ends with a colon (typical "Let me do X:" setup)
-///   - the last sentence starts with an intent marker
-///     ("I'll ", "Let me ", "Now I'll ", "I'm going to ", …)
-///   - reply contains an unclosed `<think>` (mid-reasoning cutoff)
-///
-/// False positives are acceptable: the cost is one extra continuation
-/// turn, capped by `--max-turns`.
+/// Earlier versions of this heuristic also pattern-matched intent
+/// prefixes ("I'll ...", "Now ...", etc.) and very short replies
+/// without completion keywords. Those were too brittle across model
+/// phrasings / languages and produced downstream false-positives
+/// (e.g. queuing a continuation after the work was already done, which
+/// then tripped the tool-activity gate). The cooperative path is now
+/// handled by the Mission Control Contract in the system prompt; this
+/// heuristic only catches the hard truncation case.
+/// Detect the only unambiguous, language-neutral mid-work signal:
+/// an unclosed `<think>` block. Any text-pattern matching on natural-
+/// language phrases (intent prefixes, completion keywords, imperative
+/// tails) was tried and discarded — it never generalized beyond a
+/// single model family and never produced a net score improvement in
+/// Terminal-Bench-2 runs. See benches/README for the measurement
+/// rationale. Cooperative mid-work signalling is now the Mission
+/// Control Contract in the system prompt; structural completion is
+/// handled by the run-once termination rule.
 fn reply_looks_mid_work(reply: &str) -> bool {
-    // Unclosed <think> → truncated inside the reasoning block.
-    if reply.contains("<think>") && !reply.contains("</think>") {
-        return true;
-    }
-    let stripped = strip_think_blocks(reply);
-    let trimmed = stripped.trim();
-    if trimmed.is_empty() {
-        return true;
-    }
-    let last_char = trimmed.chars().last();
-    if matches!(last_char, Some(':') | Some(',')) {
-        return true;
-    }
-    // Split into sentences on `.`, `!`, `?`. Take the LAST non-empty
-    // sentence — a reply ending in "Now I'll X." has an empty trailing
-    // fragment but the actual final sentence is the "Now I'll X" part.
-    let last_sentence = trimmed
-        .split(['.', '!', '?'])
-        .rev()
-        .map(str::trim)
-        .find(|seg| !seg.is_empty())
-        .unwrap_or(trimmed)
-        .to_ascii_lowercase();
-    const INTENT_PREFIXES: &[&str] = &[
-        "i'll ",
-        "i will ",
-        "let me ",
-        "now i'll ",
-        "now i will ",
-        "next, i'll ",
-        "next i'll ",
-        "i'm going to ",
-        "going to ",
-        "i am going to ",
-        "i need to ",
-        "we need to ",
-    ];
-    if INTENT_PREFIXES
-        .iter()
-        .any(|marker| last_sentence.starts_with(marker))
-    {
-        return true;
-    }
-    // Catch implicit imperatives — "Now install X", "Now setup Y" — that
-    // don't start with an explicit "I'll" / "Let me" but are still pure
-    // intent (the model is announcing the next action, not reporting
-    // completion). Constrained to short replies with no completion
-    // signal, to avoid false positives on legitimate short answers like
-    // "The answer is 42." or "Done — vm.js is in place."
-    let lowered_full = trimmed.to_ascii_lowercase();
-    const COMPLETION_KEYWORDS: &[&str] = &[
-        "done", "complete", "completed", "verified", "wrote", "saved",
-        "answer", "result", "passed", "ready", "finished", "in place",
-        "successfully",
-    ];
-    let has_completion_signal = COMPLETION_KEYWORDS
-        .iter()
-        .any(|kw| lowered_full.contains(kw));
-    if !has_completion_signal {
-        if last_sentence.starts_with("now ") || last_sentence.starts_with("then ") {
-            return true;
-        }
-        // A very short reply with no completion signal is almost always
-        // a partial intent the model didn't follow through on.
-        if trimmed.chars().count() < 100 {
-            return true;
-        }
-    }
-    false
+    reply.contains("<think>") && !reply.contains("</think>")
 }
 
 /// Mid-work parallel to `enqueue_timeout_continuation`. Queues a follow-up
@@ -1317,64 +1323,35 @@ mod run_once_tests {
 
     #[test]
     fn mid_work_detects_unclosed_think() {
-        assert!(reply_looks_mid_work("<think>I'm analyzing"));
-    }
-
-    #[test]
-    fn mid_work_detects_intent_only() {
         assert!(reply_looks_mid_work(
-            "<think>yes</think>\n\nNow I'll set up the web server as a systemd service."
+            "<think>I'm still analyzing the problem"
         ));
+        assert!(reply_looks_mid_work("<think>no close tag at all"));
     }
 
     #[test]
-    fn mid_work_detects_trailing_colon() {
-        assert!(reply_looks_mid_work(
-            "<think>done</think>\n\nLet me create a modular implementation:"
-        ));
-    }
-
-    #[test]
-    fn mid_work_detects_empty_after_think() {
-        assert!(reply_looks_mid_work("<think>thinking</think>\n   \n"));
-    }
-
-    #[test]
-    fn mid_work_accepts_real_completion() {
+    fn mid_work_accepts_closed_think_regardless_of_tail() {
+        // A properly closed <think> block is not mid-work at the
+        // structural level. The heuristic no longer parses natural-
+        // language phrases in the tail: cooperative mid-work signalling
+        // lives in the system-prompt Mission Control Contract, and
+        // post-turn termination is the run-once rule's responsibility.
         assert!(!reply_looks_mid_work(
-            "<think>counted</think>\n\nThere are 79586 deepseek tokens. The answer has been written to /app/answer.txt."
+            "<think>done</think>\n\nAnswer written to /app/answer.txt."
         ));
-    }
-
-    #[test]
-    fn mid_work_accepts_plain_final_answer() {
         assert!(!reply_looks_mid_work(
-            "The required file /app/vm.js is in place and verified against the reference frame. Done."
+            "<think>just thinking</think>\n\nNow let me start nginx."
         ));
+        assert!(!reply_looks_mid_work("<think>yes</think>"));
     }
 
     #[test]
-    fn mid_work_detects_now_imperative_no_completion() {
-        // Real-world M2.7 reply that previously slipped through the
-        // intent-prefix list — "Now install git and Python." is an
-        // imperative continuation, not a completion.
-        assert!(reply_looks_mid_work(
-            "<think>\nGood, apt-get update succeeded. Now let me install git and python3.\n\n</think>\n\nGood. Now install git and Python."
-        ));
-    }
-
-    #[test]
-    fn mid_work_accepts_short_completion_with_keyword() {
-        // Short reply with completion keyword should NOT trigger mid-work.
+    fn mid_work_accepts_reply_without_think() {
+        assert!(!reply_looks_mid_work(""));
+        assert!(!reply_looks_mid_work("Done."));
         assert!(!reply_looks_mid_work(
-            "<think>did it</think>\n\nDone. Saved to /app/result.txt."
+            "Any reply without a think tag is not structurally mid-work."
         ));
-    }
-
-    #[test]
-    fn mid_work_detects_short_no_completion() {
-        // Very short reply without any completion signal is mid-work.
-        assert!(reply_looks_mid_work("<think>thinking</think>\n\nLooks good."));
     }
 }
 

@@ -11,7 +11,7 @@ libc = "0.2"
 mailparse = "0.16"
 regex = "1"
 roxmltree = "0.21"
-rusqlite = { version = "0.31", features = ["bundled"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
 scraper = "0.24"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

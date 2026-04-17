@@ -538,6 +538,109 @@ fn print_json(value: &Value) -> Result<()> {
     Ok(())
 }
 
+// ── Credential helpers for runtime_env integration ──────────────────────
+//
+// These functions provide a thin API for storing and retrieving API keys
+// and other credentials in the encrypted SQLite secret store instead of
+// plaintext engine.env.  Scope is always "credentials".
+
+const CREDENTIAL_SCOPE: &str = "credentials";
+
+/// Keys that must be stored encrypted (never in plaintext engine.env).
+const SECRET_KEYS: &[&str] = &[
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "OPENROUTER_API_KEY",
+    "MINIMAX_API_KEY",
+    "CTO_EMAIL_PASSWORD",
+    "CTOX_WEBRTC_PASSWORD",
+    "HF_TOKEN",
+    "HUGGINGFACE_HUB_TOKEN",
+];
+
+/// Returns true if `key` is a credential that must be stored encrypted.
+pub fn is_secret_key(key: &str) -> bool {
+    SECRET_KEYS.contains(&key)
+}
+
+/// Store a credential value in the encrypted secret store.
+pub fn set_credential(root: &Path, key: &str, value: &str) -> Result<()> {
+    put_secret(
+        root,
+        CREDENTIAL_SCOPE,
+        key,
+        value,
+        Some(format!("{key} (auto-managed)")),
+        json!({"source": "runtime_env"}),
+    )?;
+    Ok(())
+}
+
+/// Retrieve a credential value from the encrypted secret store.
+/// Returns None if the key does not exist or on any error (fail-open for
+/// migration: caller falls back to engine.env / process env).
+pub fn get_credential(root: &Path, key: &str) -> Option<String> {
+    get_secret_value(root, CREDENTIAL_SCOPE, key).ok()
+}
+
+/// Delete a credential from the encrypted secret store.
+pub fn delete_credential(root: &Path, key: &str) -> Result<()> {
+    delete_secret(root, CREDENTIAL_SCOPE, key)
+}
+
+/// Migrate secrets from a plaintext env map into the encrypted store.
+/// Returns the number of keys migrated.
+pub fn migrate_secrets_from_env_map(
+    root: &Path,
+    env_map: &mut std::collections::BTreeMap<String, String>,
+) -> usize {
+    let mut migrated = 0;
+    let secret_entries: Vec<(String, String)> = env_map
+        .iter()
+        .filter(|(k, v)| is_secret_key(k) && !v.trim().is_empty())
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    for (key, value) in &secret_entries {
+        // Only migrate if not already in the encrypted store.
+        if get_credential(root, key).is_some() {
+            // Already encrypted — just remove from plaintext map.
+            env_map.remove(key.as_str());
+            migrated += 1;
+            continue;
+        }
+        match set_credential(root, key, value) {
+            Ok(()) => {
+                env_map.remove(key.as_str());
+                migrated += 1;
+                eprintln!("[secrets] migrated {key} from engine.env to encrypted store");
+            }
+            Err(e) => {
+                eprintln!("[secrets] failed to migrate {key}: {e:#} — keeping in engine.env");
+            }
+        }
+    }
+    migrated
+}
+
+/// Merge encrypted credentials back into an env map so callers see a
+/// unified view.  Existing entries in the map are NOT overwritten (process
+/// env or engine.env take precedence when already present).
+pub fn merge_credentials_into_env_map(
+    root: &Path,
+    env_map: &mut std::collections::BTreeMap<String, String>,
+) {
+    for &key in SECRET_KEYS {
+        if env_map.contains_key(key) {
+            continue; // already populated (process env or engine.env residual)
+        }
+        if let Some(value) = get_credential(root, key) {
+            if !value.trim().is_empty() {
+                env_map.insert(key.to_string(), value);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

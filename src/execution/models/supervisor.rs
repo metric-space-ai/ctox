@@ -393,7 +393,7 @@ fn managed_spec_from_binding(
 pub fn start_backend_supervisor(root: PathBuf) {
     thread::spawn(move || loop {
         if let Err(err) = ensure_persistent_backends(&root) {
-            eprintln!("ctox backend supervisor error: {err}");
+            eprintln!("ctox backend supervisor error: {err:#}");
         }
         thread::sleep(Duration::from_secs(SUPERVISOR_POLL_SECS));
     });
@@ -410,7 +410,7 @@ pub fn ensure_persistent_backends(root: &Path) -> Result<()> {
         if let Err(err) = ensure_backend_process(root, role, false) {
             if role.is_auxiliary() {
                 eprintln!(
-                    "ctox auxiliary backend {} unavailable; continuing without it: {err}",
+                    "ctox auxiliary backend {} unavailable; continuing without it: {err:#}",
                     role.as_env_value()
                 );
                 continue;
@@ -449,7 +449,7 @@ pub fn ensure_auxiliary_backends_best_effort(root: PathBuf) {
             }
             if let Err(err) = ensure_backend_process(&root, role, false) {
                 eprintln!(
-                    "ctox auxiliary backend {} unavailable after switch; continuing without it: {err}",
+                    "ctox auxiliary backend {} unavailable after switch; continuing without it: {err:#}",
                     role.as_env_value()
                 );
             }
@@ -1879,7 +1879,8 @@ fn resolve_managed_engine_binary(
         .unwrap_or_else(|| engine::discover_source_layout_paths(root).model_runtime_binary);
     if !binary.is_file() {
         anyhow::bail!(
-            "ctox-engine binary missing for managed backend launch: {}",
+            "ctox-engine binary missing at {}. Build it with: \
+             `cd tools/model-runtime && cargo build --release --bin ctox-engine`",
             binary.display()
         );
     }
