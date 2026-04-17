@@ -1,17 +1,14 @@
 use crate::inference::engine;
+use crate::inference::local_transport::LocalStream;
+use crate::inference::local_transport::LocalTransport;
 use crate::inference::model_adapters;
 use anyhow::Context;
 use serde::Deserialize;
 use serde_json::json;
 use serde_json::Value;
-use std::fs;
 use std::io::BufRead;
 use std::io::BufReader;
 use std::io::Write;
-#[cfg(unix)]
-use std::os::unix::net::UnixListener;
-#[cfg(unix)]
-use std::os::unix::net::UnixStream;
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
@@ -74,9 +71,8 @@ enum LiteRtPromptStyle {
     Qwen35,
 }
 
-#[cfg(unix)]
 pub fn serve_from_config_path(_root: &Path, config_path: &Path) -> anyhow::Result<()> {
-    let raw = fs::read(config_path).with_context(|| {
+    let raw = std::fs::read(config_path).with_context(|| {
         format!(
             "failed to read LiteRT bridge config {}",
             config_path.display()
@@ -87,12 +83,6 @@ pub fn serve_from_config_path(_root: &Path, config_path: &Path) -> anyhow::Resul
     serve(config)
 }
 
-#[cfg(not(unix))]
-pub fn serve_from_config_path(_root: &Path, _config_path: &Path) -> anyhow::Result<()> {
-    anyhow::bail!("LiteRT bridge requires unix domain sockets")
-}
-
-#[cfg(unix)]
 fn serve(config: LiteRtBridgeConfig) -> anyhow::Result<()> {
     if let Some(validated_context_tokens) = config.validated_context_tokens {
         if config.context_tokens > validated_context_tokens {
@@ -110,25 +100,31 @@ fn serve(config: LiteRtBridgeConfig) -> anyhow::Result<()> {
         .map(PathBuf::from)
         .context("LiteRT bridge config missing socket_path")?;
     let _ = resolve_model_path(&config)?;
-    if let Some(parent) = socket_path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create socket dir {}", parent.display()))?;
-    }
-    let _ = fs::remove_file(&socket_path);
-    let listener = UnixListener::bind(&socket_path)
-        .with_context(|| format!("failed to bind LiteRT socket {}", socket_path.display()))?;
+    // LiteRT currently only speaks to the CTOX engine over the same transport
+    // CTOX uses for primary generation. That is Unix sockets on macOS/Linux;
+    // Windows support requires the engine to also speak TCP over the config
+    // `tcp_port` field (Phase 4).
+    let transport = LocalTransport::UnixSocket {
+        path: socket_path.clone(),
+    };
+    let listener = transport.bind().with_context(|| {
+        format!(
+            "failed to bind LiteRT transport {}",
+            transport.display_label()
+        )
+    })?;
+    let label = listener.display_label().to_string();
     loop {
-        let (stream, _) = listener
+        let stream = listener
             .accept()
-            .with_context(|| format!("failed to accept on {}", socket_path.display()))?;
+            .with_context(|| format!("failed to accept on {label}"))?;
         if let Err(err) = handle_stream(&config, stream) {
             eprintln!("ctox litert bridge request failed: {err:#}");
         }
     }
 }
 
-#[cfg(unix)]
-fn handle_stream(config: &LiteRtBridgeConfig, mut stream: UnixStream) -> anyhow::Result<()> {
+fn handle_stream(config: &LiteRtBridgeConfig, mut stream: LocalStream) -> anyhow::Result<()> {
     stream
         .set_read_timeout(Some(Duration::from_secs(300)))
         .context("failed to set LiteRT bridge read timeout")?;

@@ -32,14 +32,18 @@
 //! The returned [`LocalStream`] implements `Read + Write`, so `BufReader`,
 //! `write_all`, and other `std::io` consumers work unchanged.
 
+use std::fs;
 use std::io;
 use std::io::Read;
 use std::io::Write;
+use std::net::TcpListener;
 use std::net::TcpStream;
 use std::net::ToSocketAddrs;
 use std::path::PathBuf;
 use std::time::Duration;
 
+#[cfg(unix)]
+use std::os::unix::net::UnixListener;
 #[cfg(unix)]
 use std::os::unix::net::UnixStream;
 
@@ -171,6 +175,64 @@ impl LocalTransport {
         }
     }
 
+    /// Bind a listener on this transport. Creates parent directories and
+    /// replaces stale Unix-socket inodes for the `UnixSocket` variant.
+    pub fn bind(&self) -> io::Result<LocalListener> {
+        match self {
+            Self::UnixSocket { path } => {
+                #[cfg(unix)]
+                {
+                    if let Some(parent) = path.parent() {
+                        fs::create_dir_all(parent)?;
+                    }
+                    // Best-effort cleanup of a stale socket inode from a
+                    // previous run. Ignore NotFound; propagate anything else.
+                    if let Err(err) = fs::remove_file(path) {
+                        if err.kind() != io::ErrorKind::NotFound {
+                            return Err(err);
+                        }
+                    }
+                    let listener = UnixListener::bind(path)?;
+                    Ok(LocalListener {
+                        inner: ListenerInner::Unix(listener),
+                        label: self.display_label(),
+                    })
+                }
+                #[cfg(not(unix))]
+                {
+                    let _ = path;
+                    Err(io::Error::new(
+                        io::ErrorKind::Unsupported,
+                        "UnixSocket transport requires a Unix platform",
+                    ))
+                }
+            }
+            Self::NamedPipe { name } => {
+                let _ = name;
+                Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "NamedPipe transport is not implemented yet; use TcpLoopback on Windows",
+                ))
+            }
+            Self::TcpLoopback { host, port } => {
+                let addr = (host.as_str(), *port)
+                    .to_socket_addrs()?
+                    .next()
+                    .ok_or_else(|| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            format!("no socket address resolved for {host}:{port}"),
+                        )
+                    })?;
+                let listener = TcpListener::bind(addr)?;
+                Ok(LocalListener {
+                    inner: ListenerInner::Tcp(listener),
+                    label: self.display_label(),
+                })
+            }
+        }
+    }
+
     /// Lightweight liveness probe. Returns `true` if a connection attempt
     /// succeeds within a bounded timeout.
     pub fn probe(&self) -> bool {
@@ -198,7 +260,8 @@ impl LocalTransport {
     }
 }
 
-/// Opaque blocking stream handle returned by [`LocalTransport::connect_blocking`].
+/// Opaque blocking stream handle returned by [`LocalTransport::connect_blocking`]
+/// or [`LocalListener::accept`].
 ///
 /// Implements `Read + Write`, so `BufReader`, `write_all`, `flush`, etc. work
 /// transparently regardless of the underlying transport.
@@ -210,6 +273,35 @@ enum StreamInner {
     #[cfg(unix)]
     Unix(UnixStream),
     Tcp(TcpStream),
+}
+
+impl LocalStream {
+    /// Duplicate the stream handle so reader and writer halves can be used
+    /// independently.
+    pub fn try_clone(&self) -> io::Result<LocalStream> {
+        let inner = match &self.inner {
+            #[cfg(unix)]
+            StreamInner::Unix(stream) => StreamInner::Unix(stream.try_clone()?),
+            StreamInner::Tcp(stream) => StreamInner::Tcp(stream.try_clone()?),
+        };
+        Ok(LocalStream { inner })
+    }
+
+    pub fn set_read_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
+        match &self.inner {
+            #[cfg(unix)]
+            StreamInner::Unix(stream) => stream.set_read_timeout(timeout),
+            StreamInner::Tcp(stream) => stream.set_read_timeout(timeout),
+        }
+    }
+
+    pub fn set_write_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
+        match &self.inner {
+            #[cfg(unix)]
+            StreamInner::Unix(stream) => stream.set_write_timeout(timeout),
+            StreamInner::Tcp(stream) => stream.set_write_timeout(timeout),
+        }
+    }
 }
 
 impl Read for LocalStream {
@@ -237,6 +329,46 @@ impl Write for LocalStream {
             StreamInner::Unix(stream) => stream.flush(),
             StreamInner::Tcp(stream) => stream.flush(),
         }
+    }
+}
+
+/// Blocking listener returned by [`LocalTransport::bind`].
+pub struct LocalListener {
+    inner: ListenerInner,
+    label: String,
+}
+
+enum ListenerInner {
+    #[cfg(unix)]
+    Unix(UnixListener),
+    Tcp(TcpListener),
+}
+
+impl LocalListener {
+    /// Block until the next connection arrives; returns a `LocalStream` for
+    /// the accepted peer.
+    pub fn accept(&self) -> io::Result<LocalStream> {
+        match &self.inner {
+            #[cfg(unix)]
+            ListenerInner::Unix(listener) => {
+                let (stream, _) = listener.accept()?;
+                Ok(LocalStream {
+                    inner: StreamInner::Unix(stream),
+                })
+            }
+            ListenerInner::Tcp(listener) => {
+                let (stream, _) = listener.accept()?;
+                Ok(LocalStream {
+                    inner: StreamInner::Tcp(stream),
+                })
+            }
+        }
+    }
+
+    /// Human-readable label of the bound endpoint (matches the originating
+    /// `LocalTransport::display_label` at bind time).
+    pub fn display_label(&self) -> &str {
+        &self.label
     }
 }
 
@@ -323,7 +455,11 @@ mod tests {
         let transport = LocalTransport::NamedPipe {
             name: "ctox-x".to_string(),
         };
-        let err = transport.connect_blocking(Duration::from_millis(10)).unwrap_err();
+        let result = transport.connect_blocking(Duration::from_millis(10));
+        let err = match result {
+            Ok(_) => panic!("named-pipe connect should return Unsupported, not succeed"),
+            Err(err) => err,
+        };
         assert_eq!(err.kind(), io::ErrorKind::Unsupported);
     }
 
@@ -333,7 +469,11 @@ mod tests {
         let transport = LocalTransport::UnixSocket {
             path: PathBuf::from(r"C:\\tmp\\fake.sock"),
         };
-        let err = transport.connect_blocking(Duration::from_millis(10)).unwrap_err();
+        let result = transport.connect_blocking(Duration::from_millis(10));
+        let err = match result {
+            Ok(_) => panic!("unix-socket connect on non-unix should return Unsupported"),
+            Err(err) => err,
+        };
         assert_eq!(err.kind(), io::ErrorKind::Unsupported);
     }
 
@@ -344,5 +484,84 @@ mod tests {
             port: 65000,
         };
         assert!(!transport.probe());
+    }
+
+    fn run_roundtrip(
+        bind_transport: LocalTransport,
+        client_factory: impl FnOnce(&LocalListener) -> LocalTransport + Send + 'static,
+    ) {
+        let listener = bind_transport.bind().expect("bind should succeed");
+        let client_transport = client_factory(&listener);
+
+        let server = std::thread::spawn(move || {
+            let write_stream = listener.accept().expect("accept");
+            let read_stream = write_stream.try_clone().expect("server clone");
+            let mut reader = std::io::BufReader::new(read_stream);
+            let mut writer = write_stream;
+            let mut line = String::new();
+            std::io::BufRead::read_line(&mut reader, &mut line).expect("server read");
+            assert_eq!(line.trim(), r#"{"ping":1}"#);
+            writer.write_all(b"{\"pong\":1}\n").expect("server write");
+            writer.flush().expect("server flush");
+        });
+
+        let write_stream = client_transport
+            .connect_blocking(Duration::from_secs(2))
+            .expect("connect");
+        let read_stream = write_stream.try_clone().expect("client clone");
+        let mut writer = write_stream;
+        writer.write_all(b"{\"ping\":1}\n").expect("client write");
+        writer.flush().expect("client flush");
+        let mut reader = std::io::BufReader::new(read_stream);
+        let mut response = String::new();
+        std::io::BufRead::read_line(&mut reader, &mut response).expect("client read");
+        assert_eq!(response.trim(), r#"{"pong":1}"#);
+
+        server.join().expect("server thread");
+    }
+
+    #[test]
+    fn tcp_loopback_listener_accepts_and_streams_newline_json() {
+        // End-to-end roundtrip over TcpLoopback — the transport Windows uses
+        // when Unix sockets are unavailable.
+        run_roundtrip(
+            LocalTransport::TcpLoopback {
+                host: "127.0.0.1".to_string(),
+                port: 0, // OS-assigned
+            },
+            |listener| {
+                let bound = match &listener.inner {
+                    ListenerInner::Tcp(tcp) => tcp.local_addr().expect("local_addr"),
+                    #[cfg(unix)]
+                    _ => unreachable!("expected Tcp listener"),
+                };
+                LocalTransport::TcpLoopback {
+                    host: bound.ip().to_string(),
+                    port: bound.port(),
+                }
+            },
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_socket_listener_accepts_and_streams_newline_json() {
+        let dir = std::env::temp_dir().join(format!(
+            "ctox-lt-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("roundtrip.sock");
+        let path_for_client = path.clone();
+        run_roundtrip(
+            LocalTransport::UnixSocket { path: path.clone() },
+            move |_| LocalTransport::UnixSocket {
+                path: path_for_client,
+            },
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

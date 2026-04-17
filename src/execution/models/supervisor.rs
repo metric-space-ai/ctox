@@ -4805,6 +4805,7 @@ mod tests {
             embedding: None,
             transcription: None,
             speech: None,
+            vision: None,
         };
         runtime_plan::store_persisted_chat_runtime_plan(&root, Some(&plan)).unwrap();
         runtime_plan::store_persisted_runtime_fleet_plan(&root, Some(&fleet_plan)).unwrap();

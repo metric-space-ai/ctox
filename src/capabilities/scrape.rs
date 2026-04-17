@@ -4669,8 +4669,11 @@ mod tests {
             Ok(())
         });
         let inputs = vec!["alpha".to_string(), "beta".to_string()];
+        let transport = LocalTransport::UnixSocket {
+            path: socket_path.clone(),
+        };
         let vectors =
-            embed_texts_via_local_socket(&socket_path, &inputs, "Qwen/Qwen3-Embedding-0.6B")
+            embed_texts_via_local_socket(&transport, &inputs, "Qwen/Qwen3-Embedding-0.6B")
                 .unwrap();
         assert_eq!(vectors, vec![vec![1.0_f64, 2.5_f64], vec![3.0_f64]]);
         server.join().unwrap().unwrap();
@@ -4704,8 +4707,11 @@ mod tests {
             std::io::Write::flush(reader.get_mut())?;
             Ok(())
         });
+        let transport = LocalTransport::UnixSocket {
+            path: socket_path.clone(),
+        };
         let text =
-            invoke_responses_text_via_local_socket(&socket_path, "gpt-oss-20b", "Say hello", 5)
+            invoke_responses_text_via_local_socket(&transport, "gpt-oss-20b", "Say hello", 5)
                 .unwrap();
         assert_eq!(text, "Hello world");
         server.join().unwrap().unwrap();

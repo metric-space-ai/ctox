@@ -526,6 +526,7 @@ mod tests {
                     port: Some(2239),
                     base_url: Some("http://127.0.0.1:2239".to_string()),
                 },
+                vision: runtime_state::AuxiliaryRuntimeState::default(),
             },
         )
         .unwrap();
