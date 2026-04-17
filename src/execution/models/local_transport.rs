@@ -11,8 +11,8 @@
 //!
 //! Variants:
 //! - [`LocalTransport::UnixSocket`] — Unix domain socket (macOS, Linux).
-//! - [`LocalTransport::NamedPipe`] — Windows named pipe (placeholder; a full
-//!   implementation arrives with the Windows port).
+//! - [`LocalTransport::NamedPipe`] — Windows named pipe (real impl on Windows
+//!   via the `windows-sys` crate; returns `Unsupported` elsewhere).
 //! - [`LocalTransport::TcpLoopback`] — TCP on loopback; universal fallback.
 //!
 //! # Migration notes for callers
@@ -32,6 +32,7 @@
 //! The returned [`LocalStream`] implements `Read + Write`, so `BufReader`,
 //! `write_all`, and other `std::io` consumers work unchanged.
 
+#[cfg(unix)]
 use std::fs;
 use std::io;
 use std::io::Read;
@@ -46,6 +47,157 @@ use std::time::Duration;
 use std::os::unix::net::UnixListener;
 #[cfg(unix)]
 use std::os::unix::net::UnixStream;
+
+#[cfg(windows)]
+mod named_pipe {
+    //! Blocking named-pipe client + single-instance server for Windows.
+    //!
+    //! Timeouts on read/write are best-effort no-ops: stdlib's `File` on a
+    //! named-pipe HANDLE does not expose `SetCommTimeouts`, so the
+    //! `set_read_timeout`/`set_write_timeout` calls in [`LocalStream`] are
+    //! silently ignored for this transport. Callers that need hard timeouts
+    //! on Windows should prefer `TcpLoopback`.
+    use std::ffi::c_void;
+    use std::fs::File;
+    use std::io;
+    use std::os::windows::io::FromRawHandle;
+    use std::os::windows::io::OwnedHandle;
+    use std::time::Instant;
+    use std::time::Duration;
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, ERROR_FILE_NOT_FOUND, ERROR_PIPE_BUSY, GENERIC_READ, GENERIC_WRITE,
+        INVALID_HANDLE_VALUE,
+    };
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateFileW, OPEN_EXISTING, PIPE_ACCESS_DUPLEX,
+    };
+    use windows_sys::Win32::System::Pipes::{
+        ConnectNamedPipe, CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_TYPE_BYTE,
+        PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
+    };
+
+    const BUFFER_SIZE: u32 = 64 * 1024;
+
+    fn pipe_path(name: &str) -> Vec<u16> {
+        let full = format!(r"\\.\pipe\{name}");
+        full.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    fn last_os_error() -> io::Error {
+        io::Error::last_os_error()
+    }
+
+    /// Open a connection to an existing named pipe. Retries briefly if all
+    /// pipe instances are busy — this matches the `WaitNamedPipe` retry loop
+    /// callers would otherwise have to write.
+    pub fn connect(name: &str, timeout: Duration) -> io::Result<File> {
+        let path = pipe_path(name);
+        let deadline = Instant::now() + timeout;
+        loop {
+            let handle = unsafe {
+                CreateFileW(
+                    path.as_ptr(),
+                    GENERIC_READ | GENERIC_WRITE,
+                    0,
+                    std::ptr::null(),
+                    OPEN_EXISTING,
+                    0,
+                    std::ptr::null_mut::<c_void>() as _,
+                )
+            };
+            if handle != INVALID_HANDLE_VALUE {
+                // SAFETY: handle came from a successful CreateFileW and is
+                // not used elsewhere. OwnedHandle owns + closes it on drop.
+                let owned = unsafe { OwnedHandle::from_raw_handle(handle as _) };
+                return Ok(File::from(owned));
+            }
+            let err = last_os_error();
+            let raw = err.raw_os_error().unwrap_or(0) as u32;
+            if raw == ERROR_FILE_NOT_FOUND || Instant::now() >= deadline {
+                return Err(err);
+            }
+            if raw == ERROR_PIPE_BUSY {
+                std::thread::sleep(Duration::from_millis(25));
+                continue;
+            }
+            return Err(err);
+        }
+    }
+
+    /// A single named-pipe server instance. `accept` blocks on
+    /// `ConnectNamedPipe`; on success the current instance is handed to the
+    /// caller and a fresh instance is pre-created for the next accept.
+    pub struct Server {
+        name: String,
+        pending_handle: isize,
+    }
+
+    impl Server {
+        pub fn bind(name: &str) -> io::Result<Self> {
+            let pending_handle = create_instance(name)?;
+            Ok(Self {
+                name: name.to_string(),
+                pending_handle,
+            })
+        }
+
+        pub fn accept(&mut self) -> io::Result<File> {
+            let current = self.pending_handle;
+            let ok = unsafe { ConnectNamedPipe(current as _, std::ptr::null_mut()) };
+            // ConnectNamedPipe returns 0 on failure. ERROR_PIPE_CONNECTED
+            // (535) means a client raced us and is already connected; both
+            // outcomes yield a usable handle.
+            if ok == 0 {
+                let err = last_os_error();
+                let raw = err.raw_os_error().unwrap_or(0);
+                if raw != 535 {
+                    // Close the failed handle; replace pending so the next
+                    // accept can retry without leaking.
+                    unsafe { CloseHandle(current as _) };
+                    self.pending_handle = create_instance(&self.name)?;
+                    return Err(err);
+                }
+            }
+            // Pre-create the next instance before handing this one off.
+            self.pending_handle = create_instance(&self.name)?;
+            let owned = unsafe { OwnedHandle::from_raw_handle(current as _) };
+            Ok(File::from(owned))
+        }
+    }
+
+    impl Drop for Server {
+        fn drop(&mut self) {
+            if self.pending_handle != 0 && self.pending_handle != INVALID_HANDLE_VALUE as isize {
+                unsafe { CloseHandle(self.pending_handle as _) };
+            }
+        }
+    }
+
+    fn create_instance(name: &str) -> io::Result<isize> {
+        let path = pipe_path(name);
+        let handle = unsafe {
+            CreateNamedPipeW(
+                path.as_ptr(),
+                PIPE_ACCESS_DUPLEX,
+                PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+                PIPE_UNLIMITED_INSTANCES,
+                BUFFER_SIZE,
+                BUFFER_SIZE,
+                0,
+                std::ptr::null_mut::<c_void>() as _,
+            )
+        };
+        if handle == INVALID_HANDLE_VALUE {
+            return Err(last_os_error());
+        }
+        Ok(handle as isize)
+    }
+
+    /// Lightweight probe: open + close. Cheaper than a real I/O exchange.
+    pub fn probe(name: &str) -> bool {
+        connect(name, Duration::from_millis(100)).is_ok()
+    }
+}
 
 const PROBE_TIMEOUT: Duration = Duration::from_secs(1);
 
@@ -149,11 +301,21 @@ impl LocalTransport {
                 }
             }
             Self::NamedPipe { name } => {
-                let _ = (name, timeout);
-                Err(io::Error::new(
-                    io::ErrorKind::Unsupported,
-                    "NamedPipe transport is not implemented yet; use TcpLoopback on Windows",
-                ))
+                #[cfg(windows)]
+                {
+                    let file = named_pipe::connect(name, timeout)?;
+                    Ok(LocalStream {
+                        inner: StreamInner::NamedPipe(file),
+                    })
+                }
+                #[cfg(not(windows))]
+                {
+                    let _ = (name, timeout);
+                    Err(io::Error::new(
+                        io::ErrorKind::Unsupported,
+                        "NamedPipe transport is only available on Windows",
+                    ))
+                }
             }
             Self::TcpLoopback { host, port } => {
                 let addr = (host.as_str(), *port)
@@ -208,11 +370,22 @@ impl LocalTransport {
                 }
             }
             Self::NamedPipe { name } => {
-                let _ = name;
-                Err(io::Error::new(
-                    io::ErrorKind::Unsupported,
-                    "NamedPipe transport is not implemented yet; use TcpLoopback on Windows",
-                ))
+                #[cfg(windows)]
+                {
+                    let server = named_pipe::Server::bind(name)?;
+                    Ok(LocalListener {
+                        inner: ListenerInner::NamedPipe(server),
+                        label: self.display_label(),
+                    })
+                }
+                #[cfg(not(windows))]
+                {
+                    let _ = name;
+                    Err(io::Error::new(
+                        io::ErrorKind::Unsupported,
+                        "NamedPipe transport is only available on Windows",
+                    ))
+                }
             }
             Self::TcpLoopback { host, port } => {
                 let addr = (host.as_str(), *port)
@@ -248,7 +421,17 @@ impl LocalTransport {
                     false
                 }
             }
-            Self::NamedPipe { .. } => false,
+            Self::NamedPipe { name } => {
+                #[cfg(windows)]
+                {
+                    named_pipe::probe(name)
+                }
+                #[cfg(not(windows))]
+                {
+                    let _ = name;
+                    false
+                }
+            }
             Self::TcpLoopback { host, port } => {
                 let Some(addr) = (host.as_str(), *port).to_socket_addrs().ok().and_then(|mut iter| iter.next())
                 else {
@@ -273,6 +456,8 @@ enum StreamInner {
     #[cfg(unix)]
     Unix(UnixStream),
     Tcp(TcpStream),
+    #[cfg(windows)]
+    NamedPipe(std::fs::File),
 }
 
 impl LocalStream {
@@ -283,23 +468,41 @@ impl LocalStream {
             #[cfg(unix)]
             StreamInner::Unix(stream) => StreamInner::Unix(stream.try_clone()?),
             StreamInner::Tcp(stream) => StreamInner::Tcp(stream.try_clone()?),
+            #[cfg(windows)]
+            StreamInner::NamedPipe(file) => StreamInner::NamedPipe(file.try_clone()?),
         };
         Ok(LocalStream { inner })
     }
 
+    /// Sets the read timeout for the underlying transport.
+    ///
+    /// On Windows named-pipe streams this is a best-effort no-op because the
+    /// stdlib `File` wrapper does not expose the underlying `SetCommTimeouts`.
+    /// Callers that need hard timeouts on Windows should use `TcpLoopback`.
     pub fn set_read_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
         match &self.inner {
             #[cfg(unix)]
             StreamInner::Unix(stream) => stream.set_read_timeout(timeout),
             StreamInner::Tcp(stream) => stream.set_read_timeout(timeout),
+            #[cfg(windows)]
+            StreamInner::NamedPipe(_) => {
+                let _ = timeout;
+                Ok(())
+            }
         }
     }
 
+    /// See [`set_read_timeout`](Self::set_read_timeout) for Windows caveat.
     pub fn set_write_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
         match &self.inner {
             #[cfg(unix)]
             StreamInner::Unix(stream) => stream.set_write_timeout(timeout),
             StreamInner::Tcp(stream) => stream.set_write_timeout(timeout),
+            #[cfg(windows)]
+            StreamInner::NamedPipe(_) => {
+                let _ = timeout;
+                Ok(())
+            }
         }
     }
 }
@@ -310,6 +513,8 @@ impl Read for LocalStream {
             #[cfg(unix)]
             StreamInner::Unix(stream) => stream.read(buf),
             StreamInner::Tcp(stream) => stream.read(buf),
+            #[cfg(windows)]
+            StreamInner::NamedPipe(file) => file.read(buf),
         }
     }
 }
@@ -320,6 +525,8 @@ impl Write for LocalStream {
             #[cfg(unix)]
             StreamInner::Unix(stream) => stream.write(buf),
             StreamInner::Tcp(stream) => stream.write(buf),
+            #[cfg(windows)]
+            StreamInner::NamedPipe(file) => file.write(buf),
         }
     }
 
@@ -328,6 +535,8 @@ impl Write for LocalStream {
             #[cfg(unix)]
             StreamInner::Unix(stream) => stream.flush(),
             StreamInner::Tcp(stream) => stream.flush(),
+            #[cfg(windows)]
+            StreamInner::NamedPipe(file) => file.flush(),
         }
     }
 }
@@ -342,13 +551,16 @@ enum ListenerInner {
     #[cfg(unix)]
     Unix(UnixListener),
     Tcp(TcpListener),
+    #[cfg(windows)]
+    NamedPipe(named_pipe::Server),
 }
 
 impl LocalListener {
     /// Block until the next connection arrives; returns a `LocalStream` for
-    /// the accepted peer.
-    pub fn accept(&self) -> io::Result<LocalStream> {
-        match &self.inner {
+    /// the accepted peer. Takes `&mut` because the Windows named-pipe backend
+    /// rotates its pending pipe instance after every connect.
+    pub fn accept(&mut self) -> io::Result<LocalStream> {
+        match &mut self.inner {
             #[cfg(unix)]
             ListenerInner::Unix(listener) => {
                 let (stream, _) = listener.accept()?;
@@ -360,6 +572,13 @@ impl LocalListener {
                 let (stream, _) = listener.accept()?;
                 Ok(LocalStream {
                     inner: StreamInner::Tcp(stream),
+                })
+            }
+            #[cfg(windows)]
+            ListenerInner::NamedPipe(server) => {
+                let file = server.accept()?;
+                Ok(LocalStream {
+                    inner: StreamInner::NamedPipe(file),
                 })
             }
         }
@@ -490,7 +709,7 @@ mod tests {
         bind_transport: LocalTransport,
         client_factory: impl FnOnce(&LocalListener) -> LocalTransport + Send + 'static,
     ) {
-        let listener = bind_transport.bind().expect("bind should succeed");
+        let mut listener = bind_transport.bind().expect("bind should succeed");
         let client_transport = client_factory(&listener);
 
         let server = std::thread::spawn(move || {

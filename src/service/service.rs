@@ -1717,6 +1717,7 @@ fn send_service_ipc_request(root: &Path, request: ServiceIpcRequest) -> Result<S
     Ok(response)
 }
 
+#[cfg(unix)]
 fn service_ipc_timeout(request: &ServiceIpcRequest) -> Duration {
     match request {
         ServiceIpcRequest::Status => Duration::from_secs(5),

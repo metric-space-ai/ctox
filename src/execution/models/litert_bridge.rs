@@ -34,8 +34,16 @@ pub struct LiteRtBridgeConfig {
     pub context_tokens: u32,
     #[serde(default)]
     pub validated_context_tokens: Option<u32>,
+    /// Unix-domain socket path. Used on macOS / Linux. Ignored on Windows
+    /// unless `tcp_port` is also unset (in which case bind fails with a clear
+    /// Unsupported error).
     #[serde(default)]
     pub socket_path: Option<String>,
+    /// TCP loopback port. Required on Windows; optional on Unix where it
+    /// takes precedence over `socket_path` when both are set. Enables the
+    /// bridge to run behind `LocalTransport::TcpLoopback`.
+    #[serde(default)]
+    pub tcp_port: Option<u16>,
     #[serde(default)]
     pub speculative_decoding: Option<String>,
     #[serde(default)]
@@ -94,20 +102,21 @@ fn serve(config: LiteRtBridgeConfig) -> anyhow::Result<()> {
             );
         }
     }
-    let socket_path = config
-        .socket_path
-        .as_deref()
-        .map(PathBuf::from)
-        .context("LiteRT bridge config missing socket_path")?;
     let _ = resolve_model_path(&config)?;
-    // LiteRT currently only speaks to the CTOX engine over the same transport
-    // CTOX uses for primary generation. That is Unix sockets on macOS/Linux;
-    // Windows support requires the engine to also speak TCP over the config
-    // `tcp_port` field (Phase 4).
-    let transport = LocalTransport::UnixSocket {
-        path: socket_path.clone(),
+    let transport = if let Some(port) = config.tcp_port {
+        LocalTransport::TcpLoopback {
+            host: "127.0.0.1".to_string(),
+            port,
+        }
+    } else {
+        let socket_path = config
+            .socket_path
+            .as_deref()
+            .map(PathBuf::from)
+            .context("LiteRT bridge config requires socket_path or tcp_port")?;
+        LocalTransport::UnixSocket { path: socket_path }
     };
-    let listener = transport.bind().with_context(|| {
+    let mut listener = transport.bind().with_context(|| {
         format!(
             "failed to bind LiteRT transport {}",
             transport.display_label()

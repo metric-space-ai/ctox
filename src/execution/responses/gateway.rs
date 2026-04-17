@@ -7,8 +7,6 @@ use std::io::BufRead;
 use std::io::BufReader;
 use std::io::Read;
 use std::io::Write;
-#[cfg(unix)]
-use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -24,6 +22,7 @@ use tiny_http::Server;
 use tiny_http::StatusCode;
 
 use crate::inference::engine;
+use crate::inference::local_transport::LocalTransport;
 use crate::inference::model_adapters::ResolvedResponsesAdapterRoute;
 use crate::inference::model_adapters::ResponsesAdapterResponsePlan;
 use crate::inference::model_adapters::ResponsesTransportKind;
@@ -174,6 +173,19 @@ impl ProxyConfig {
 
     pub fn listen_addr(&self) -> String {
         format!("{}:{}", self.listen_host, self.listen_port)
+    }
+
+    /// Construct the `LocalTransport` that addresses the primary-generation
+    /// upstream when the backend is running as a local IPC endpoint.
+    /// Returns `None` for HTTP-only upstreams (remote APIs) — callers fall
+    /// back to `upstream_base_url` in that case.
+    pub fn upstream_transport(&self) -> Option<LocalTransport> {
+        self.upstream_socket_path
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .map(|path| LocalTransport::UnixSocket {
+                path: std::path::PathBuf::from(path),
+            })
     }
 
     pub fn join_url(&self, request_url: &str) -> String {
@@ -1453,29 +1465,12 @@ fn relay_local_socket_response(
     request_path: &str,
     started: Instant,
 ) -> anyhow::Result<()> {
-    #[cfg(not(unix))]
     {
-        let _ = (
-            config,
-            telemetry,
-            response_state,
-            request,
-            materialized_request,
-            request_body,
-            web_search_augmentation,
-            request_path,
-            started,
-        );
-        anyhow::bail!("local socket responses require unix support");
-    }
-    #[cfg(unix)]
-    {
-        let socket_path = config
-            .upstream_socket_path
-            .as_deref()
-            .context("missing local socket path for proxy runtime")?;
+        let transport = config
+            .upstream_transport()
+            .context("missing local transport for proxy runtime")?;
         let stream_requested = engine::responses_request_streams(&request_body).unwrap_or(false);
-        let terminal = match complete_local_socket_roundtrip(socket_path, &request_body) {
+        let terminal = match complete_local_socket_roundtrip(&transport, &request_body) {
             Ok(terminal) => terminal,
             Err(err) => {
                 let message = err.to_string();
@@ -1581,32 +1576,29 @@ fn relay_local_socket_response(
     }
 }
 
-#[cfg(unix)]
 enum LocalSocketTerminal {
     Completed(Value),
     Failed(Value),
 }
 
-#[cfg(unix)]
 fn complete_local_socket_roundtrip(
-    socket_path: &str,
+    transport: &LocalTransport,
     request_body: &[u8],
 ) -> anyhow::Result<LocalSocketTerminal> {
-    let socket = std::path::Path::new(socket_path);
-    let mut stream = UnixStream::connect(socket)
-        .with_context(|| format!("failed to connect to socket {}", socket.display()))?;
     let timeout = Duration::from_secs(300);
-    stream.set_read_timeout(Some(timeout))?;
-    stream.set_write_timeout(Some(timeout))?;
+    let label = transport.display_label();
+    let mut stream = transport
+        .connect_blocking(timeout)
+        .with_context(|| format!("failed to connect via {label}"))?;
     stream
         .write_all(request_body)
-        .with_context(|| format!("failed to write socket request {}", socket.display()))?;
+        .with_context(|| format!("failed to write request via {label}"))?;
     stream
         .write_all(b"\n")
-        .with_context(|| format!("failed to terminate socket request {}", socket.display()))?;
+        .with_context(|| format!("failed to terminate request via {label}"))?;
     stream
         .flush()
-        .with_context(|| format!("failed to flush socket request {}", socket.display()))?;
+        .with_context(|| format!("failed to flush request via {label}"))?;
 
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
@@ -1614,7 +1606,7 @@ fn complete_local_socket_roundtrip(
         line.clear();
         let bytes_read = reader
             .read_line(&mut line)
-            .with_context(|| format!("failed to read socket response {}", socket.display()))?;
+            .with_context(|| format!("failed to read response via {label}"))?;
         if bytes_read == 0 {
             anyhow::bail!("responses socket closed before terminal event");
         }
@@ -1861,9 +1853,8 @@ fn probe_upstream_health(config: &ProxyConfig) -> bool {
         .map(|value| !value.trim().is_empty())
         .unwrap_or(false);
     }
-    #[cfg(unix)]
-    if let Some(socket_path) = config.upstream_socket_path.as_deref() {
-        return UnixStream::connect(socket_path).is_ok();
+    if let Some(transport) = config.upstream_transport() {
+        return transport.probe();
     }
     probe_backend_health_url(&config.join_url("/health"))
 }

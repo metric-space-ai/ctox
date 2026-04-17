@@ -1,5 +1,7 @@
 use anyhow::Result;
+#[cfg(unix)]
 use sha2::Digest;
+#[cfg(unix)]
 use sha2::Sha256;
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
