@@ -372,8 +372,16 @@ platform_summary() {
 
 # ── GPU / CUDA detection ────────────────────────────────────────────────────
 nvidia_gpu_present() {
+  # Use command substitution + bash pattern match instead of `lspci | grep -q`
+  # because `set -o pipefail` (active globally in this script) plus grep -q's
+  # early exit causes lspci to die with SIGPIPE, which pipefail then reports
+  # as a failed pipeline — hiding the GPU even when it is physically present.
   if command -v lspci >/dev/null 2>&1; then
-    lspci 2>/dev/null | grep -qi 'NVIDIA Corporation' && return 0
+    local lspci_out
+    lspci_out="$(lspci 2>/dev/null || true)"
+    case "$lspci_out" in
+      *"NVIDIA Corporation"*|*"NVIDIA CORPORATION"*|*"nvidia corporation"*) return 0 ;;
+    esac
   fi
   if command -v nvidia-smi >/dev/null 2>&1; then
     nvidia-smi -L >/dev/null 2>&1 && return 0
