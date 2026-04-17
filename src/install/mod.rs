@@ -21,6 +21,7 @@ const DEFAULT_STATE_ROOT_RELATIVE_PATH: &str = ".local/state/ctox";
 const DEFAULT_CACHE_ROOT_RELATIVE_PATH: &str = ".cache/ctox";
 const DEFAULT_GITHUB_API_BASE: &str = "https://api.github.com";
 const DEFAULT_GITHUB_TOKEN_ENV: &str = "CTOX_UPDATE_GITHUB_TOKEN";
+const DEFAULT_RELEASE_REPO: &str = "metric-space-ai/ctox";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct VersionInfo {
@@ -241,7 +242,125 @@ pub fn version_info(root: &Path) -> Result<VersionInfo> {
     })
 }
 
+pub fn handle_engine_command(root: &Path, args: &[String]) -> Result<()> {
+    match args.first().map(String::as_str) {
+        Some("rebuild") | Some("reinstall") | None => {
+            let layout = InstallLayout::resolve(root)?;
+            let release_root = layout.active_root.clone();
+            if let Some(features) = find_flag_value(args, "--features") {
+                std::env::set_var("CTOX_ENGINE_FEATURES", features);
+            }
+            run_release_installer(&release_root, &layout.state_root)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json!({
+                    "rebuilt": true,
+                    "release_root": release_root,
+                    "state_root": layout.state_root,
+                }))?
+            );
+            Ok(())
+        }
+        Some("status") => {
+            let layout = InstallLayout::resolve(root)?;
+            let stamp_path = layout
+                .active_root
+                .join("tools/model-runtime/target/release/ctox-engine.features");
+            let binary_path = layout
+                .active_root
+                .join("tools/model-runtime/target/release/ctox-engine");
+            let stamp = fs::read_to_string(&stamp_path).ok();
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json!({
+                    "engine_binary": binary_path,
+                    "engine_present": binary_path.is_file(),
+                    "feature_stamp_path": stamp_path,
+                    "feature_stamp": stamp,
+                }))?
+            );
+            Ok(())
+        }
+        _ => anyhow::bail!(
+            "usage: ctox engine rebuild [--features=\"cuda flash-attn nccl\"] | ctox engine status"
+        ),
+    }
+}
+
+/// Lightweight health check: prints current versions, engine presence, and a
+/// concrete next-step hint when things look off.
+pub fn handle_doctor_command(root: &Path) -> Result<()> {
+    let layout = InstallLayout::resolve(root)?;
+    let manifest = load_install_manifest(&layout.install_manifest_path())?;
+    let engine_binary = layout
+        .active_root
+        .join("tools/model-runtime/target/release/ctox-engine");
+    let engine_stamp = layout
+        .active_root
+        .join("tools/model-runtime/target/release/ctox-engine.features");
+    let stamp = fs::read_to_string(&engine_stamp).ok();
+    let mut hints: Vec<String> = Vec::new();
+    if !engine_binary.is_file() {
+        hints.push(format!(
+            "ctox-engine binary missing at {} — run `ctox engine rebuild`",
+            engine_binary.display()
+        ));
+    } else if stamp.is_none() {
+        hints.push(
+            "engine feature stamp missing — run `ctox engine rebuild` to refresh it".to_string(),
+        );
+    }
+    if manifest.is_none() {
+        hints.push(
+            "managed install manifest missing — run `ctox update adopt` to migrate".to_string(),
+        );
+    }
+    let remote = check_remote_update(root).ok();
+    let update_available = remote
+        .as_ref()
+        .map(|entry| entry.update_available)
+        .unwrap_or(false);
+    if update_available {
+        let tag = remote
+            .as_ref()
+            .and_then(|entry| entry.latest_release.clone())
+            .unwrap_or_default();
+        hints.push(format!(
+            "update available{}: run `ctox upgrade`",
+            if tag.is_empty() {
+                String::new()
+            } else {
+                format!(" ({tag})")
+            }
+        ));
+    }
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "cli_version": env!("CARGO_PKG_VERSION"),
+            "managed_install": layout.managed(),
+            "active_root": layout.active_root,
+            "engine_binary": engine_binary,
+            "engine_present": engine_binary.is_file(),
+            "engine_feature_stamp": stamp,
+            "update_channel": remote.as_ref().and_then(|entry| entry.channel.clone()),
+            "latest_release": remote.as_ref().and_then(|entry| entry.latest_release.clone()),
+            "current_release": manifest.as_ref().and_then(|entry| entry.current_release.clone()),
+            "hints": hints,
+        }))?
+    );
+    Ok(())
+}
+
 pub fn handle_update_command(root: &Path, args: &[String]) -> Result<()> {
+    // `ctox update` / `ctox upgrade` with no further args is the one-shot
+    // path: fetch the latest release, apply it (binary by default).
+    if args.is_empty() {
+        let result =
+            apply_remote_update(root, RemoteReleaseRequest::Latest, false, false, false)?;
+        println!("{}", serde_json::to_string_pretty(&result)?);
+        return Ok(());
+    }
     match args.first().map(String::as_str) {
         Some("status") => {
             let layout = InstallLayout::resolve(root)?;
@@ -867,12 +986,20 @@ fn resolve_release_channel(
             source: "environment",
         });
     }
-    manifest
-        .and_then(|entry| entry.release_channel.clone())
-        .map(|config| ResolvedReleaseChannel {
+    if let Some(config) = manifest.and_then(|entry| entry.release_channel.clone()) {
+        return Some(ResolvedReleaseChannel {
             config,
             source: "install_manifest",
-        })
+        });
+    }
+    Some(ResolvedReleaseChannel {
+        config: ReleaseChannelConfig::GitHub {
+            repo: DEFAULT_RELEASE_REPO.to_string(),
+            api_base: default_github_api_base_string(),
+            token_env: None,
+        },
+        source: "built_in_default",
+    })
 }
 
 fn install_manifest_template(layout: &InstallLayout) -> InstallManifest {

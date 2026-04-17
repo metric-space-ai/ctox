@@ -347,12 +347,21 @@ fn render_settings_update(frame: &mut Frame, app: &App, area: ratatui::layout::R
         .split(area);
 
     let header = Paragraph::new(Line::from(vec![
-        Span::styled(" ctox update ", Style::default().fg(Color::LightCyan).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            " ctox update ",
+            Style::default().fg(Color::LightCyan).add_modifier(Modifier::BOLD),
+        ),
         Span::raw("  "),
         Span::styled("[c]", Style::default().fg(Color::LightGreen).add_modifier(Modifier::BOLD)),
-        Span::raw(" check   "),
+        Span::raw(" check  "),
+        Span::styled("[u]", Style::default().fg(Color::LightGreen).add_modifier(Modifier::BOLD)),
+        Span::raw(" upgrade  "),
+        Span::styled("[e]", Style::default().fg(Color::LightGreen).add_modifier(Modifier::BOLD)),
+        Span::raw(" engine rebuild  "),
+        Span::styled("[d]", Style::default().fg(Color::LightGreen).add_modifier(Modifier::BOLD)),
+        Span::raw(" doctor  "),
         Span::styled("[r]", Style::default().fg(Color::LightGreen).add_modifier(Modifier::BOLD)),
-        Span::raw(" refresh status"),
+        Span::raw(" refresh"),
     ]));
     frame.render_widget(header, split[0]);
 
@@ -372,7 +381,8 @@ fn render_settings_update(frame: &mut Frame, app: &App, area: ratatui::layout::R
     );
 
     let check_body = if app.update_view.check_json.is_empty() {
-        "Remote release check has not run yet.\n\nPress [c] to query the configured release channel.\n\nTo apply an update, run in a terminal:\n  ctox update apply --latest                (binary bundle, default)\n  ctox update apply --latest --from-source  (rebuild from source)\n  ctox update rollback                      (revert to previous release)\n\nConfigure channel once with:\n  ctox update channel set-github --repo <owner/repo>".to_string()
+        "No remote check / action run yet in this session.\n\nHotkeys:\n  [c] run `ctox update check`\n  [u] run `ctox upgrade`         (binary update, service restart)\n  [e] run `ctox engine rebuild`  (GPU/CUDA/metal engine, minutes)\n  [d] run `ctox doctor`          (health + update-available hints)\n  [r] refresh the install/version pane\n\nDefault release channel: metric-space-ai/ctox\nFor a fork, override once with:\n  ctox update channel set-github --repo <owner/repo>"
+            .to_string()
     } else {
         app.update_view.check_json.clone()
     };

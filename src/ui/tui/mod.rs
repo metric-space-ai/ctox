@@ -375,11 +375,18 @@ enum SettingsView {
     Update,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PendingUpdateAction {
+    Upgrade,
+    EngineRebuild,
+}
+
 #[derive(Debug, Clone, Default)]
 pub(crate) struct UpdateViewState {
     pub info_json: String,
     pub check_json: String,
     pub last_action_line: String,
+    pub pending: Option<PendingUpdateAction>,
 }
 
 #[derive(Debug, Clone)]
@@ -1863,6 +1870,57 @@ impl App {
     }
 
     fn handle_update_view_key(&mut self, key_event: KeyEvent) -> Result<()> {
+        if let Some(pending) = self.update_view.pending {
+            match key_event.code {
+                KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
+                    self.update_view.pending = None;
+                    match pending {
+                        PendingUpdateAction::Upgrade => {
+                            self.update_view.last_action_line =
+                                "running `ctox upgrade` — service will restart…".to_string();
+                            match self.run_update_subprocess(&["upgrade"]) {
+                                Ok(output) => {
+                                    self.update_view.check_json = output;
+                                    self.refresh_update_view_info();
+                                    self.update_view.last_action_line = format!(
+                                        "upgrade completed at {}",
+                                        chrono::Local::now().format("%H:%M:%S")
+                                    );
+                                }
+                                Err(err) => {
+                                    self.update_view.last_action_line =
+                                        format!("upgrade failed: {err}");
+                                }
+                            }
+                        }
+                        PendingUpdateAction::EngineRebuild => {
+                            self.update_view.last_action_line =
+                                "running `ctox engine rebuild` — this can take several minutes…"
+                                    .to_string();
+                            match self.run_update_subprocess(&["engine", "rebuild"]) {
+                                Ok(output) => {
+                                    self.update_view.check_json = output;
+                                    self.update_view.last_action_line = format!(
+                                        "engine rebuild completed at {}",
+                                        chrono::Local::now().format("%H:%M:%S")
+                                    );
+                                }
+                                Err(err) => {
+                                    self.update_view.last_action_line =
+                                        format!("engine rebuild failed: {err}");
+                                }
+                            }
+                        }
+                    }
+                }
+                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                    self.update_view.pending = None;
+                    self.update_view.last_action_line = "cancelled".to_string();
+                }
+                _ => {}
+            }
+            return Ok(());
+        }
         match key_event.code {
             KeyCode::Char('c') | KeyCode::Char('C') => {
                 self.update_view.last_action_line =
@@ -1880,11 +1938,32 @@ impl App {
                     }
                 }
             }
+            KeyCode::Char('u') | KeyCode::Char('U') => {
+                self.update_view.pending = Some(PendingUpdateAction::Upgrade);
+                self.update_view.last_action_line =
+                    "press [y] to confirm upgrade (service will restart) or [n] to cancel"
+                        .to_string();
+            }
+            KeyCode::Char('e') | KeyCode::Char('E') => {
+                self.update_view.pending = Some(PendingUpdateAction::EngineRebuild);
+                self.update_view.last_action_line =
+                    "press [y] to confirm engine rebuild (minutes long) or [n] to cancel"
+                        .to_string();
+            }
+            KeyCode::Char('d') | KeyCode::Char('D') => {
+                match self.run_update_subprocess(&["doctor"]) {
+                    Ok(output) => {
+                        self.update_view.check_json = output;
+                        self.update_view.last_action_line = "doctor report ready".to_string();
+                    }
+                    Err(err) => {
+                        self.update_view.last_action_line = format!("doctor failed: {err}");
+                    }
+                }
+            }
             KeyCode::Char('r') | KeyCode::Char('R') => {
                 self.refresh_update_view_info();
-                self.update_view.last_action_line =
-                    "status refreshed (use `ctox update apply --latest` in terminal to update)"
-                        .to_string();
+                self.update_view.last_action_line = "status refreshed".to_string();
             }
             _ => {}
         }
