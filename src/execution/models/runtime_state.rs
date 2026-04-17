@@ -251,10 +251,8 @@ pub fn infer_local_runtime_kind_from_env_map(
     }
 }
 
-pub fn preferred_local_runtime_kind_for_model(model: &str) -> Option<LocalRuntimeKind> {
-    match model.trim() {
-        _ => None,
-    }
+pub fn preferred_local_runtime_kind_for_model(_model: &str) -> Option<LocalRuntimeKind> {
+    None
 }
 
 pub fn validated_litert_context_cap_for_model(model: &str) -> Option<u32> {

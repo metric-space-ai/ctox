@@ -2,12 +2,11 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
-#[cfg(unix)]
-use std::os::unix::net::UnixStream;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
 use crate::inference::engine;
+use crate::inference::local_transport::LocalTransport;
 use crate::inference::model_registry;
 use crate::inference::runtime_kernel;
 use crate::inference::supervisor;
@@ -50,31 +49,19 @@ impl ctox_doc_stack::EmbeddingExecutor for CtoxDocEmbeddingExecutor {
         if let Some(binding) =
             resolved_runtime.binding_for_auxiliary_role(engine::AuxiliaryRole::Embedding)
         {
-            let socket_path = binding
-                .socket_path
-                .as_deref()
-                .filter(|value| !value.trim().is_empty())
-                .map(PathBuf::from)
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "CTOX managed embedding runtime requires socket transport for local documents"
-                    )
-                })?;
-            #[cfg(unix)]
-            {
-                return embed_texts_via_local_socket(&socket_path, inputs, model).with_context(
-                    || {
-                        format!(
-                            "failed to reach embedding socket for local documents at {}",
-                            socket_path.display()
-                        )
-                    },
-                );
-            }
-            #[cfg(not(unix))]
-            {
-                let _ = socket_path;
-                anyhow::bail!("CTOX managed embedding runtime requires unix socket transport");
+            match &binding.transport {
+                LocalTransport::UnixSocket { .. } | LocalTransport::NamedPipe { .. } => {
+                    return embed_texts_via_local_socket(&binding.transport, inputs, model)
+                        .with_context(|| {
+                            format!(
+                                "failed to reach embedding transport for local documents at {}",
+                                binding.transport.display_label()
+                            )
+                        });
+                }
+                LocalTransport::TcpLoopback { .. } => {
+                    // fall through to HTTP path using binding.base_url
+                }
             }
         }
 
@@ -124,7 +111,6 @@ impl ctox_doc_stack::EmbeddingExecutor for CtoxDocEmbeddingExecutor {
     }
 }
 
-#[cfg(unix)]
 #[derive(Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum LocalEmbeddingSocketRequest<'a> {
@@ -135,7 +121,6 @@ enum LocalEmbeddingSocketRequest<'a> {
     },
 }
 
-#[cfg(unix)]
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum LocalEmbeddingSocketResponse {
@@ -153,17 +138,16 @@ enum LocalEmbeddingSocketResponse {
     },
 }
 
-#[cfg(unix)]
 fn embed_texts_via_local_socket(
-    socket_path: &Path,
+    transport: &LocalTransport,
     inputs: &[String],
     model: &str,
 ) -> Result<Vec<Vec<f64>>> {
     let timeout_secs = embedding_request_timeout_secs(inputs);
-    let mut stream = UnixStream::connect(socket_path)
-        .with_context(|| format!("failed to connect to socket {}", socket_path.display()))?;
-    stream.set_read_timeout(Some(Duration::from_secs(timeout_secs)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(timeout_secs)))?;
+    let label = transport.display_label();
+    let mut stream = transport
+        .connect_blocking(Duration::from_secs(timeout_secs))
+        .with_context(|| format!("failed to connect via {label}"))?;
 
     let request = LocalEmbeddingSocketRequest::EmbeddingsCreate {
         model,
@@ -175,16 +159,16 @@ fn embed_texts_via_local_socket(
     payload.push(b'\n');
     stream
         .write_all(&payload)
-        .with_context(|| format!("failed to write socket request {}", socket_path.display()))?;
+        .with_context(|| format!("failed to write request via {label}"))?;
     stream
         .flush()
-        .with_context(|| format!("failed to flush socket request {}", socket_path.display()))?;
+        .with_context(|| format!("failed to flush request via {label}"))?;
 
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
     reader
         .read_line(&mut line)
-        .with_context(|| format!("failed to read socket response {}", socket_path.display()))?;
+        .with_context(|| format!("failed to read response via {label}"))?;
     if line.trim().is_empty() {
         anyhow::bail!("embedding socket returned an empty response");
     }

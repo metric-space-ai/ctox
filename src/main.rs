@@ -41,6 +41,7 @@ pub mod inference {
     pub use crate::execution::agent::turn_loop;
     pub use crate::execution::models::engine;
     pub use crate::execution::models::litert_bridge;
+    pub use crate::execution::models::local_transport;
     pub use crate::execution::models::model_adapters;
     pub use crate::execution::models::model_manifest;
     pub use crate::execution::models::model_registry;

@@ -18,8 +18,6 @@ use std::io::BufRead;
 use std::io::BufReader;
 use std::io::Read;
 use std::io::Write;
-#[cfg(unix)]
-use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::id as process_id;
@@ -32,6 +30,7 @@ use std::time::SystemTime;
 
 use crate::channels;
 use crate::inference::engine;
+use crate::inference::local_transport::LocalTransport;
 use crate::inference::model_registry;
 use crate::inference::runtime_kernel;
 use crate::inference::runtime_state;
@@ -3109,33 +3108,22 @@ fn invoke_responses_text(
     let resolved_runtime = runtime_kernel::InferenceRuntimeKernel::resolve(root)
         .context("failed to resolve runtime kernel for scrape enrichment")?;
     if resolved_runtime.state.source.is_local() {
-        let socket_path = resolved_runtime
-            .primary_generation
-            .as_ref()
-            .and_then(|binding| binding.socket_path.as_deref())
-            .filter(|value| !value.trim().is_empty())
-            .map(PathBuf::from)
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "CTOX local runtime requires a primary-generation socket for scrape enrichment"
-                )
-            })?;
-        #[cfg(unix)]
-        {
-            return invoke_responses_text_via_local_socket(
-                &socket_path,
-                model,
-                prompt,
-                timeout_seconds,
-            )
-            .with_context(|| {
-                format!("failed to reach responses socket {}", socket_path.display())
-            });
-        }
-        #[cfg(not(unix))]
-        {
-            let _ = socket_path;
-            anyhow::bail!("CTOX local runtime scrape enrichment requires unix socket transport");
+        if let Some(binding) = resolved_runtime.primary_generation.as_ref() {
+            match &binding.transport {
+                LocalTransport::UnixSocket { .. } | LocalTransport::NamedPipe { .. } => {
+                    let label = binding.transport.display_label();
+                    return invoke_responses_text_via_local_socket(
+                        &binding.transport,
+                        model,
+                        prompt,
+                        timeout_seconds,
+                    )
+                    .with_context(|| format!("failed to reach responses transport {label}"));
+                }
+                LocalTransport::TcpLoopback { .. } => {
+                    // fall through to HTTP path using internal_responses_base_url
+                }
+            }
         }
     }
     let base_url = resolved_runtime.internal_responses_base_url();
@@ -3155,7 +3143,6 @@ fn invoke_responses_text(
     extract_response_output_text(&payload).context("enrichment response missing output_text")
 }
 
-#[cfg(unix)]
 #[derive(Serialize)]
 struct LocalResponsesSocketRequest<'a> {
     model: &'a str,
@@ -3163,18 +3150,17 @@ struct LocalResponsesSocketRequest<'a> {
     stream: bool,
 }
 
-#[cfg(unix)]
 fn invoke_responses_text_via_local_socket(
-    socket_path: &Path,
+    transport: &LocalTransport,
     model: &str,
     prompt: &str,
     timeout_seconds: u64,
 ) -> Result<String> {
-    let mut stream = UnixStream::connect(socket_path)
-        .with_context(|| format!("failed to connect to socket {}", socket_path.display()))?;
     let timeout = Duration::from_secs(timeout_seconds.max(5));
-    stream.set_read_timeout(Some(timeout))?;
-    stream.set_write_timeout(Some(timeout))?;
+    let label = transport.display_label();
+    let mut stream = transport
+        .connect_blocking(timeout)
+        .with_context(|| format!("failed to connect via {label}"))?;
 
     let request = LocalResponsesSocketRequest {
         model,
@@ -3186,10 +3172,10 @@ fn invoke_responses_text_via_local_socket(
     payload.push(b'\n');
     stream
         .write_all(&payload)
-        .with_context(|| format!("failed to write socket request {}", socket_path.display()))?;
+        .with_context(|| format!("failed to write request via {label}"))?;
     stream
         .flush()
-        .with_context(|| format!("failed to flush socket request {}", socket_path.display()))?;
+        .with_context(|| format!("failed to flush request via {label}"))?;
 
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
@@ -3199,7 +3185,7 @@ fn invoke_responses_text_via_local_socket(
         line.clear();
         let bytes_read = reader
             .read_line(&mut line)
-            .with_context(|| format!("failed to read socket response {}", socket_path.display()))?;
+            .with_context(|| format!("failed to read response via {label}"))?;
         if bytes_read == 0 {
             break;
         }
@@ -3959,26 +3945,15 @@ fn embed_texts(root: &Path, inputs: &[String], model: &str) -> Result<Vec<Vec<f6
     if let Some(binding) = resolved_runtime
         .binding_for_auxiliary_role(crate::inference::engine::AuxiliaryRole::Embedding)
     {
-        let socket_path = binding
-            .socket_path
-            .as_deref()
-            .filter(|value| !value.trim().is_empty())
-            .map(PathBuf::from)
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "CTOX managed embedding runtime requires socket transport for scrape embeddings"
-                )
-            })?;
-        #[cfg(unix)]
-        {
-            return embed_texts_via_local_socket(&socket_path, inputs, model).with_context(|| {
-                format!("failed to reach embedding socket {}", socket_path.display())
-            });
-        }
-        #[cfg(not(unix))]
-        {
-            let _ = socket_path;
-            anyhow::bail!("CTOX managed embedding runtime requires unix socket transport");
+        match &binding.transport {
+            LocalTransport::UnixSocket { .. } | LocalTransport::NamedPipe { .. } => {
+                let label = binding.transport.display_label();
+                return embed_texts_via_local_socket(&binding.transport, inputs, model)
+                    .with_context(|| format!("failed to reach embedding transport {label}"));
+            }
+            LocalTransport::TcpLoopback { .. } => {
+                // fall through to HTTP path using binding.base_url
+            }
         }
     }
     let base_url = resolved_runtime
@@ -4025,7 +4000,6 @@ fn embed_texts(root: &Path, inputs: &[String], model: &str) -> Result<Vec<Vec<f6
     Ok(vectors)
 }
 
-#[cfg(unix)]
 #[derive(Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum LocalEmbeddingSocketRequest<'a> {
@@ -4036,7 +4010,6 @@ enum LocalEmbeddingSocketRequest<'a> {
     },
 }
 
-#[cfg(unix)]
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum LocalEmbeddingSocketResponse {
@@ -4054,16 +4027,16 @@ enum LocalEmbeddingSocketResponse {
     },
 }
 
-#[cfg(unix)]
 fn embed_texts_via_local_socket(
-    socket_path: &Path,
+    transport: &LocalTransport,
     inputs: &[String],
     model: &str,
 ) -> Result<Vec<Vec<f64>>> {
-    let mut stream = UnixStream::connect(socket_path)
-        .with_context(|| format!("failed to connect to socket {}", socket_path.display()))?;
-    stream.set_read_timeout(Some(Duration::from_secs(12)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(12)))?;
+    let timeout = Duration::from_secs(12);
+    let label = transport.display_label();
+    let mut stream = transport
+        .connect_blocking(timeout)
+        .with_context(|| format!("failed to connect via {label}"))?;
 
     let request = LocalEmbeddingSocketRequest::EmbeddingsCreate {
         model,
@@ -4075,16 +4048,16 @@ fn embed_texts_via_local_socket(
     payload.push(b'\n');
     stream
         .write_all(&payload)
-        .with_context(|| format!("failed to write socket request {}", socket_path.display()))?;
+        .with_context(|| format!("failed to write request via {label}"))?;
     stream
         .flush()
-        .with_context(|| format!("failed to flush socket request {}", socket_path.display()))?;
+        .with_context(|| format!("failed to flush request via {label}"))?;
 
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
     reader
         .read_line(&mut line)
-        .with_context(|| format!("failed to read socket response {}", socket_path.display()))?;
+        .with_context(|| format!("failed to read response via {label}"))?;
     if line.trim().is_empty() {
         anyhow::bail!("embedding socket returned an empty response");
     }

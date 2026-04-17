@@ -7,6 +7,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use crate::inference::engine;
+use crate::inference::local_transport::LocalTransport;
 use crate::inference::runtime_contract;
 use crate::inference::runtime_env;
 use crate::inference::runtime_plan;
@@ -45,6 +46,7 @@ pub struct ResolvedRuntimeBinding {
     pub port: u16,
     pub base_url: String,
     pub socket_path: Option<String>,
+    pub transport: LocalTransport,
     pub health_path: &'static str,
     pub launcher_kind: RuntimeLauncherKind,
     pub compute_target: Option<engine::ComputeTarget>,
@@ -251,27 +253,31 @@ fn resolve_primary_generation(
         runtime_state::LocalRuntimeKind::Candle => RuntimeLauncherKind::Engine,
         runtime_state::LocalRuntimeKind::LiteRt => RuntimeLauncherKind::LiteRt,
     };
-    let visible_devices = if state.local_runtime.is_candle() {
-        runtime_plan::load_persisted_chat_runtime_plan(root)
-            .ok()
-            .flatten()
-            .map(|plan| plan.cuda_visible_devices)
-            .filter(|value| !value.trim().is_empty())
-            .or_else(|| runtime_env::env_or_config(root, "CTOX_ENGINE_CUDA_VISIBLE_DEVICES"))
-    } else {
-        None
+    let visible_devices = match state.local_runtime {
+        runtime_state::LocalRuntimeKind::Candle | runtime_state::LocalRuntimeKind::LiteRt => {
+            runtime_plan::load_persisted_chat_runtime_plan(root)
+                .ok()
+                .flatten()
+                .map(|plan| plan.cuda_visible_devices)
+                .filter(|value| !value.trim().is_empty())
+                .or_else(|| runtime_env::env_or_config(root, "CTOX_ENGINE_CUDA_VISIBLE_DEVICES"))
+        }
     };
+    let socket_path_buf =
+        managed_runtime_socket_path(root, InferenceWorkloadRole::PrimaryGeneration);
+    let transport = LocalTransport::default_for_host(Some(socket_path_buf), "127.0.0.1", port);
+    let socket_path = transport
+        .unix_socket_path()
+        .map(|path| path.display().to_string());
+    let base_url = transport.http_base_url().unwrap_or_default();
     Some(ResolvedRuntimeBinding {
         workload: InferenceWorkloadRole::PrimaryGeneration,
         display_model: request_model.clone(),
         request_model,
         port,
-        base_url: String::new(),
-        socket_path: Some(
-            managed_runtime_socket_path(root, InferenceWorkloadRole::PrimaryGeneration)
-                .display()
-                .to_string(),
-        ),
+        base_url,
+        socket_path,
+        transport,
         health_path: "/health",
         launcher_kind,
         compute_target: None,
@@ -294,10 +300,6 @@ fn resolve_auxiliary(
         auxiliary_state.configured_model.as_deref(),
     );
     let port = auxiliary_state.port.unwrap_or(selection.default_port);
-    let base_url = auxiliary_state
-        .base_url
-        .clone()
-        .unwrap_or_else(|| format!("http://127.0.0.1:{port}"));
     let visible_devices = if selection.compute_target == engine::ComputeTarget::Gpu {
         runtime_plan::resolve_auxiliary_visible_devices(root, role, selection.request_model)
             .ok()
@@ -305,28 +307,29 @@ fn resolve_auxiliary(
     } else {
         None
     };
+    let workload = match role {
+        engine::AuxiliaryRole::Embedding => InferenceWorkloadRole::Embedding,
+        engine::AuxiliaryRole::Stt => InferenceWorkloadRole::Transcription,
+        engine::AuxiliaryRole::Tts => InferenceWorkloadRole::Speech,
+    };
+    let socket_path_buf = managed_runtime_socket_path(root, workload);
+    let transport = LocalTransport::default_for_host(Some(socket_path_buf), "127.0.0.1", port);
+    let socket_path = transport
+        .unix_socket_path()
+        .map(|path| path.display().to_string());
+    let base_url = auxiliary_state.base_url.clone().unwrap_or_else(|| {
+        transport
+            .http_base_url()
+            .unwrap_or_else(|| format!("http://127.0.0.1:{port}"))
+    });
     Some(ResolvedRuntimeBinding {
-        workload: match role {
-            engine::AuxiliaryRole::Embedding => InferenceWorkloadRole::Embedding,
-            engine::AuxiliaryRole::Stt => InferenceWorkloadRole::Transcription,
-            engine::AuxiliaryRole::Tts => InferenceWorkloadRole::Speech,
-        },
+        workload,
         display_model: selection.choice.to_string(),
         request_model: selection.request_model.to_string(),
         port,
         base_url,
-        socket_path: Some(
-            managed_runtime_socket_path(
-                root,
-                match role {
-                    engine::AuxiliaryRole::Embedding => InferenceWorkloadRole::Embedding,
-                    engine::AuxiliaryRole::Stt => InferenceWorkloadRole::Transcription,
-                    engine::AuxiliaryRole::Tts => InferenceWorkloadRole::Speech,
-                },
-            )
-            .display()
-            .to_string(),
-        ),
+        socket_path,
+        transport,
         health_path: "/health",
         launcher_kind: RuntimeLauncherKind::Engine,
         compute_target: Some(selection.compute_target),
