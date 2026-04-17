@@ -31,7 +31,7 @@ use crate::inference::runtime_env;
 use crate::inference::runtime_kernel;
 use crate::inference::runtime_state;
 use crate::inference::supervisor;
-use crate::inference::vision_preprocessor;
+use crate::execution::models::vision_preprocessor;
 use crate::inference::web_search;
 
 const HOP_BY_HOP_HEADERS: &[&str] = &[

@@ -35,7 +35,7 @@ use crate::channels;
 use crate::context_health;
 use crate::governance;
 use crate::inference::engine;
-use crate::inference::vision_preprocessor;
+use crate::execution::models::vision_preprocessor;
 use crate::inference::gateway::LoadObservation;
 use crate::inference::gateway::RuntimeTelemetry;
 use crate::inference::model_registry;
