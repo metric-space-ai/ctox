@@ -8,7 +8,15 @@ set -euo pipefail
 
 # ── Configurable defaults ────────────────────────────────────────────────────
 CTOX_REPO="${CTOX_REPO:-https://github.com/metric-space-ai/ctox.git}"
-CTOX_BRANCH="${CTOX_BRANCH:-main}"
+# If CTOX_BRANCH is unset, we later resolve the latest release tag and check it
+# out. Explicit `--branch=...` or `CTOX_BRANCH=...` always wins and disables the
+# resolve step. `--dev` is an alias for "use main, no tag resolving".
+if [[ -n "${CTOX_BRANCH:-}" ]]; then
+  CTOX_BRANCH_EXPLICIT=1
+else
+  CTOX_BRANCH_EXPLICIT=0
+  CTOX_BRANCH="main"
+fi
 INSTALL_ROOT="${CTOX_INSTALL_ROOT:-$HOME/.local/lib/ctox}"
 STATE_ROOT="${CTOX_STATE_ROOT:-$HOME/.local/state/ctox}"
 CACHE_ROOT="${CTOX_CACHE_ROOT:-$HOME/.cache/ctox}"
@@ -17,6 +25,7 @@ BIN_DIR="${CTOX_BIN_DIR:-$HOME/.local/bin}"
 # CLI flags
 BACKEND_FLAG="${CTOX_BACKEND:-}"
 MODEL_FLAG="${CTOX_MODEL:-}"
+BINARY_INSTALL="${CTOX_BINARY_INSTALL:-1}"  # 1 = download pre-built CTOX CLI binary; 0 = cargo build from source
 
 # Default model — Gemma4-4B runs on CPU as minimal fallback
 DEFAULT_MODEL="google/gemma-4-E4B-it"
@@ -1043,13 +1052,135 @@ CUDASRC
   [[ "$ok" -eq 1 ]]
 }
 
+# ── Resolve the latest GitHub release tag for CTOX_REPO (prints tag to stdout).
+# Returns non-zero if no tag could be determined; caller should fall back.
+resolve_latest_release_tag() {
+  local repo_slug="${CTOX_REPO#https://github.com/}"
+  repo_slug="${repo_slug%.git}"
+  repo_slug="${repo_slug%/}"
+  [[ -z "$repo_slug" || "$repo_slug" == "$CTOX_REPO" ]] && return 1
+  local api_host="${CTOX_RELEASE_API:-https://api.github.com}"
+  local api_url="${api_host%/}/repos/${repo_slug}/releases/latest"
+  local auth_header=()
+  [[ -n "${GITHUB_TOKEN:-}" ]] && auth_header=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
+  local body
+  body="$(curl -fsSL "${auth_header[@]}" -H 'Accept: application/vnd.github+json' "$api_url" 2>/dev/null)" || return 1
+  local tag
+  tag="$(printf '%s' "$body" | grep -E '"tag_name"\s*:' | head -n1 | sed -E 's/.*"tag_name"\s*:\s*"([^"]+)".*/\1/')"
+  [[ -n "$tag" ]] || return 1
+  printf '%s' "$tag"
+}
+
+# ── Binary asset naming (aligned with .github/workflows/release.yml) ────────
+ctox_bundle_asset_name() {
+  case "$PLATFORM:$ARCH" in
+    linux:x86_64)  printf 'ctox-linux-x64.tar.gz' ;;
+    linux:aarch64) printf 'ctox-linux-arm64.tar.gz' ;;
+    macos:x86_64)  printf 'ctox-macos-x64.tar.gz' ;;
+    macos:aarch64) printf 'ctox-macos-arm64.tar.gz' ;;
+    *)             printf '' ;;
+  esac
+}
+
+# Try to place a pre-built CTOX CLI binary into $source_root/target/release/ctox.
+# Returns 0 on success, 1 on any failure (caller should fall back to source build).
+download_ctox_binary() {
+  local source_root="$1"
+  local asset; asset="$(ctox_bundle_asset_name)"
+  [[ -z "$asset" ]] && return 1
+
+  local repo_slug="${CTOX_REPO#https://github.com/}"
+  repo_slug="${repo_slug%.git}"
+  repo_slug="${repo_slug%/}"
+  [[ -z "$repo_slug" || "$repo_slug" == "$CTOX_REPO" ]] && return 1
+
+  local api_host="${CTOX_RELEASE_API:-https://api.github.com}"
+  local api_url="${api_host%/}/repos/${repo_slug}/releases/latest"
+  local download_url sha_url tmp_dir
+  tmp_dir="$(mktemp -d)" || return 1
+
+  local auth_header=()
+  [[ -n "${GITHUB_TOKEN:-}" ]] && auth_header=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
+
+  local meta_file="$tmp_dir/release.json"
+  if ! curl -fsSL "${auth_header[@]}" -H 'Accept: application/vnd.github+json' \
+         "$api_url" -o "$meta_file"; then
+    rm -rf "$tmp_dir"
+    return 1
+  fi
+
+  # Extract browser_download_url for the matching asset (no jq dependency).
+  download_url="$(grep -E '"browser_download_url"\s*:' "$meta_file" \
+    | grep "$asset\"" \
+    | head -n1 \
+    | sed -E 's/.*"browser_download_url"\s*:\s*"([^"]+)".*/\1/')"
+  sha_url="$(grep -E '"browser_download_url"\s*:' "$meta_file" \
+    | grep "${asset}.sha256\"" \
+    | head -n1 \
+    | sed -E 's/.*"browser_download_url"\s*:\s*"([^"]+)".*/\1/')"
+  if [[ -z "$download_url" ]]; then
+    rm -rf "$tmp_dir"
+    return 1
+  fi
+
+  local archive="$tmp_dir/$asset"
+  if ! curl -fsSL "${auth_header[@]}" "$download_url" -o "$archive"; then
+    rm -rf "$tmp_dir"
+    return 1
+  fi
+
+  if [[ -n "$sha_url" ]]; then
+    local sha_file="$tmp_dir/${asset}.sha256"
+    if curl -fsSL "${auth_header[@]}" "$sha_url" -o "$sha_file"; then
+      local expected actual
+      expected="$(awk '{print $1}' "$sha_file")"
+      if command -v sha256sum >/dev/null 2>&1; then
+        actual="$(sha256sum "$archive" | awk '{print $1}')"
+      elif command -v shasum >/dev/null 2>&1; then
+        actual="$(shasum -a 256 "$archive" | awk '{print $1}')"
+      else
+        actual=""
+      fi
+      if [[ -n "$actual" && "$actual" != "$expected" ]]; then
+        rm -rf "$tmp_dir"
+        return 1
+      fi
+    fi
+  fi
+
+  mkdir -p "$source_root/target/release"
+  if ! tar -xzf "$archive" -C "$tmp_dir"; then
+    rm -rf "$tmp_dir"
+    return 1
+  fi
+  if [[ ! -f "$tmp_dir/target/release/ctox" ]]; then
+    rm -rf "$tmp_dir"
+    return 1
+  fi
+  cp "$tmp_dir/target/release/ctox" "$source_root/target/release/ctox"
+  chmod +x "$source_root/target/release/ctox"
+  rm -rf "$tmp_dir"
+  return 0
+}
+
 # ── Build ────────────────────────────────────────────────────────────────────
 build_ctox() {
   local source_root="$1"
   local cargo; cargo="$(resolve_cargo)"
 
-  # 1. Build main CTOX binary
-  (cd "$source_root" && "$cargo" build --release --bin ctox) 2>&1 | tail -5
+  # 1. Obtain main CTOX binary — try pre-built bundle first, fall back to source.
+  local built_from_binary=0
+  if [[ "$BINARY_INSTALL" == "1" ]]; then
+    if download_ctox_binary "$source_root"; then
+      built_from_binary=1
+      printf '  %bDownloaded pre-built ctox binary%b\n' "$C_GREEN" "$C_RESET"
+    else
+      printf '  %bNo pre-built binary available — falling back to source build%b\n' "$C_YELLOW" "$C_RESET"
+    fi
+  fi
+  if [[ "$built_from_binary" -eq 0 ]]; then
+    (cd "$source_root" && "$cargo" build --release --bin ctox) 2>&1 | tail -5
+  fi
 
   # 2. If CUDA features requested, prepare build environment
   if [[ "$ENGINE_FEATURES" == *cuda* ]]; then
@@ -1306,6 +1437,10 @@ run_rebuild() {
   root="$(cd "$root" && pwd)"  # absolute path
   detect_platform
 
+  # --rebuild is invoked by `ctox update apply --source` (source-mode updates),
+  # which always wants a fresh cargo build rather than re-downloading a binary.
+  BINARY_INSTALL=0
+
   if [[ -z "${CTOX_ENGINE_FEATURES:-}" && -f "${CTOX_STATE_ROOT:-$root/runtime}/engine_features" ]]; then
     ENGINE_FEATURES="$(cat "${CTOX_STATE_ROOT:-$root/runtime}/engine_features")"
   else
@@ -1382,6 +1517,23 @@ parse_args() {
       --features=*)
         export CTOX_ENGINE_FEATURES="${1#*=}"
         ;;
+      --from-source)
+        BINARY_INSTALL=0
+        ;;
+      --binary)
+        BINARY_INSTALL=1
+        ;;
+      --dev)
+        # "Follow main" mode: skip latest-release-tag resolution, use the default
+        # branch. Equivalent to --branch=main but without marking CTOX_BRANCH as
+        # user-explicit.
+        CTOX_BRANCH_EXPLICIT=1
+        CTOX_BRANCH="main"
+        ;;
+      --stable)
+        # Force latest-release-tag resolution even when CTOX_BRANCH was set.
+        CTOX_BRANCH_EXPLICIT=0
+        ;;
       --model=*)
         MODEL_FLAG="${1#*=}"
         ;;
@@ -1402,6 +1554,10 @@ parse_args() {
         printf '  --cache-root=<path>         Cache directory (default: ~/.cache/ctox)\n'
         printf '  --bin-dir=<path>            Binary symlink directory (default: ~/.local/bin)\n'
         printf '  --rebuild                   Rebuild in-place (used by ctox update)\n'
+        printf '  --binary                    Download pre-built CTOX CLI binary (default)\n'
+        printf '  --from-source               Build CTOX CLI from source instead of downloading\n'
+        printf '  --stable                    Install the latest release tag (default)\n'
+        printf '  --dev                       Install from the main branch (development)\n'
         printf '  --help                      Show this help\n\n'
         printf 'Environment:\n'
         printf '  CTOX_BACKEND                Same as --backend\n'
@@ -1574,9 +1730,18 @@ main() {
   tui_start_step 6
   local source_root
   if [[ "$IS_ONLINE_INSTALL" -eq 1 ]]; then
+    # Resolve latest release tag unless the user explicitly pinned a branch
+    # (--branch=... or --dev) or a pre-release is requested via CTOX_BRANCH.
+    if [[ "$CTOX_BRANCH_EXPLICIT" -eq 0 ]]; then
+      local resolved_tag
+      resolved_tag="$(resolve_latest_release_tag || true)"
+      if [[ -n "$resolved_tag" ]]; then
+        CTOX_BRANCH="$resolved_tag"
+      fi
+    fi
     source_root="$CACHE_ROOT/src"
     if [[ -d "$source_root/.git" ]]; then
-      (cd "$source_root" && git fetch origin "$CTOX_BRANCH" && git checkout "origin/$CTOX_BRANCH") >/dev/null 2>&1
+      (cd "$source_root" && git fetch --tags origin "$CTOX_BRANCH" && git checkout "$CTOX_BRANCH") >/dev/null 2>&1
       tui_complete_step 6 "aktualisiert von $CTOX_BRANCH"
     else
       rm -rf "$source_root"

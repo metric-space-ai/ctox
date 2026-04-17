@@ -45,6 +45,9 @@ pub struct RemoteAccessSettings {
     pub install_root: String,
     #[serde(default)]
     pub host_prepared: bool,
+    /// Which install.sh invocation to use when provisioning a new remote host.
+    #[serde(default)]
+    pub install_channel: InstallChannel,
 }
 
 impl Default for RemoteAccessSettings {
@@ -63,6 +66,7 @@ impl Default for RemoteAccessSettings {
             ssh_password: String::new(),
             install_root: default_install_root(),
             host_prepared: false,
+            install_channel: InstallChannel::Stable,
         }
     }
 }
@@ -85,6 +89,20 @@ pub enum RemoteInstanceSource {
     InstallNew,
 }
 
+/// How a fresh remote install should be fetched. Maps to `install.sh` flags.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum InstallChannel {
+    /// Latest release binary (default). `curl … | bash`
+    #[default]
+    Stable,
+    /// `main` branch, source build. `curl … | bash -s -- --dev`
+    Dev,
+    /// Upload the locally-checked-out sources via SSH and build there (the
+    /// legacy flow; keep for air-gap / patched-branch scenarios).
+    LocalCheckout,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Installation {
     pub id: String,
@@ -99,6 +117,13 @@ pub struct Installation {
     pub env: BTreeMap<String, String>,
     #[serde(default)]
     pub remote: RemoteAccessSettings,
+    /// Last observed `ctox version` output for this installation. Cached so the
+    /// UI can show the version label without re-polling on every frame.
+    #[serde(default)]
+    pub cached_version: Option<String>,
+    /// Last successful version-probe time (Unix seconds).
+    #[serde(default)]
+    pub cached_version_at: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -170,6 +195,8 @@ impl InstallationRegistry {
             preferred_binary: None,
             env: BTreeMap::new(),
             remote: RemoteAccessSettings::default(),
+            cached_version: None,
+            cached_version_at: None,
         };
         self.installations.push(installation.clone());
         self.installations
@@ -186,6 +213,8 @@ impl InstallationRegistry {
             preferred_binary: None,
             env: BTreeMap::new(),
             remote: RemoteAccessSettings::default(),
+            cached_version: None,
+            cached_version_at: None,
         };
         self.installations.push(installation.clone());
         self.installations

@@ -9,5 +9,6 @@ pub mod signaling;
 pub mod terminal_backend;
 pub mod terminal_emulator;
 pub mod terminal_protocol;
+pub mod version_check;
 pub mod views;
 pub mod webrtc_terminal;

@@ -8,7 +8,10 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 
-use crate::installations::{RemoteAccessSettings, RemoteHostTarget, RemoteInstanceSource};
+use crate::installations::{InstallChannel, RemoteAccessSettings, RemoteHostTarget, RemoteInstanceSource};
+
+const REMOTE_INSTALL_URL: &str =
+    "https://raw.githubusercontent.com/metric-space-ai/ctox/main/install.sh";
 
 #[derive(Debug)]
 pub enum ProvisionEvent {
@@ -95,6 +98,19 @@ fn provision_ssh(request: &ProvisionRequest, tx: &Sender<ProvisionEvent>) -> Res
         bail!("SSH password is required");
     }
     let ssh_port = request.remote.ssh_port;
+    // Fast path: binary-first `curl | bash` on the remote. Only fall through
+    // to the heavy source-upload flow when the user explicitly picks
+    // `InstallChannel::LocalCheckout`.
+    if request.remote.install_channel != InstallChannel::LocalCheckout {
+        return provision_ssh_remote_installer(
+            request,
+            tx,
+            &ssh_user,
+            &ssh_host,
+            ssh_port,
+            ssh_password,
+        );
+    }
     let remote_target = format!("{ssh_user}@{ssh_host}");
     let remote_root = request.remote.install_root.trim();
     if remote_root.is_empty() {
@@ -461,3 +477,60 @@ fn normalize_host_token(value: &str) -> Result<String> {
 fn status(tx: &Sender<ProvisionEvent>, message: &str) {
     let _ = tx.send(ProvisionEvent::Status(message.to_owned()));
 }
+
+/// Binary-first remote install: run `curl … | bash [flags]` on the remote via
+/// SSH, streaming output back to the provisioning UI.
+fn provision_ssh_remote_installer(
+    request: &ProvisionRequest,
+    tx: &Sender<ProvisionEvent>,
+    ssh_user: &str,
+    ssh_host: &str,
+    ssh_port: u16,
+    ssh_password: &str,
+) -> Result<String> {
+    let remote_target = format!("{ssh_user}@{ssh_host}");
+    let installer_flags = match request.remote.install_channel {
+        InstallChannel::Stable => "",
+        InstallChannel::Dev => "-s -- --dev",
+        InstallChannel::LocalCheckout => unreachable!("handled by caller"),
+    };
+    let label = match request.remote.install_channel {
+        InstallChannel::Stable => "stable release",
+        InstallChannel::Dev => "main branch (dev)",
+        InstallChannel::LocalCheckout => unreachable!(),
+    };
+
+    status(tx, &format!("[1/3] Preparing remote install ({label})…"));
+
+    // We pipe the installer to bash non-interactively. install.sh auto-
+    // detects the backend; set CTOX_BACKEND in the remote shell profile if
+    // you need to override.
+    let remote_cmd = format!(
+        "set -e; \
+         curl -fsSL {url} | bash {flags}; \
+         echo CTOX_INSTALL_SUCCESS",
+        url = REMOTE_INSTALL_URL,
+        flags = installer_flags,
+    );
+
+    status(
+        tx,
+        &format!("[2/3] Running installer on {remote_target} (may take several minutes)…"),
+    );
+    run_ssh_cmd(
+        ssh_password,
+        &remote_target,
+        ssh_port,
+        &remote_cmd,
+        tx,
+        "[2/3] Remote installer",
+    )?;
+
+    status(tx, "[3/3] Remote install finished.");
+    Ok(format!(
+        "Remote host {remote_target} is ready. CTOX was installed via {label}.\n\
+         Next: configure the WebRTC signaling + credentials in the Instance \
+         settings, then start `ctox-desktop-host --signal … --token … --password … --room …` on the host."
+    ))
+}
+

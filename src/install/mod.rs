@@ -21,6 +21,7 @@ const DEFAULT_STATE_ROOT_RELATIVE_PATH: &str = ".local/state/ctox";
 const DEFAULT_CACHE_ROOT_RELATIVE_PATH: &str = ".cache/ctox";
 const DEFAULT_GITHUB_API_BASE: &str = "https://api.github.com";
 const DEFAULT_GITHUB_TOKEN_ENV: &str = "CTOX_UPDATE_GITHUB_TOKEN";
+const DEFAULT_RELEASE_REPO: &str = "metric-space-ai/ctox";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct VersionInfo {
@@ -191,12 +192,28 @@ struct GitHubReleaseResponse {
     html_url: Option<String>,
     #[serde(default)]
     published_at: Option<String>,
+    #[serde(default)]
+    assets: Vec<GitHubReleaseAsset>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct GitHubReleaseAsset {
+    name: String,
+    browser_download_url: String,
+    #[serde(default)]
+    size: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
 struct DownloadedReleaseSource {
     release: GitHubReleaseResponse,
     extracted_root: PathBuf,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UpdateSourceKind {
+    Source,
+    Binary,
 }
 
 pub fn version_info(root: &Path) -> Result<VersionInfo> {
@@ -225,7 +242,134 @@ pub fn version_info(root: &Path) -> Result<VersionInfo> {
     })
 }
 
+pub fn handle_engine_command(root: &Path, args: &[String]) -> Result<()> {
+    match args.first().map(String::as_str) {
+        Some("rebuild") | Some("reinstall") | None => {
+            let layout = InstallLayout::resolve(root)?;
+            let release_root = layout.active_root.clone();
+            if let Some(features) = find_flag_value(args, "--features") {
+                std::env::set_var("CTOX_ENGINE_FEATURES", features);
+            }
+            run_release_installer(&release_root, &layout.state_root)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json!({
+                    "rebuilt": true,
+                    "release_root": release_root,
+                    "state_root": layout.state_root,
+                }))?
+            );
+            Ok(())
+        }
+        Some("status") => {
+            let layout = InstallLayout::resolve(root)?;
+            let stamp_path = layout
+                .active_root
+                .join("tools/model-runtime/target/release/ctox-engine.features");
+            let binary_path = layout
+                .active_root
+                .join("tools/model-runtime/target/release/ctox-engine");
+            let stamp = fs::read_to_string(&stamp_path).ok();
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json!({
+                    "engine_binary": binary_path,
+                    "engine_present": binary_path.is_file(),
+                    "feature_stamp_path": stamp_path,
+                    "feature_stamp": stamp,
+                }))?
+            );
+            Ok(())
+        }
+        _ => anyhow::bail!(
+            "usage: ctox engine rebuild [--features=\"cuda flash-attn nccl\"] | ctox engine status"
+        ),
+    }
+}
+
+/// Lightweight health check: prints current versions, engine presence, and a
+/// concrete next-step hint when things look off.
+pub fn handle_doctor_command(root: &Path) -> Result<()> {
+    let layout = InstallLayout::resolve(root)?;
+    let manifest = load_install_manifest(&layout.install_manifest_path())?;
+    let engine_binary = layout
+        .active_root
+        .join("tools/model-runtime/target/release/ctox-engine");
+    let engine_stamp = layout
+        .active_root
+        .join("tools/model-runtime/target/release/ctox-engine.features");
+    let stamp = fs::read_to_string(&engine_stamp).ok();
+    let mut hints: Vec<String> = Vec::new();
+    if !engine_binary.is_file() {
+        hints.push(format!(
+            "ctox-engine binary missing at {} — run `ctox engine rebuild`",
+            engine_binary.display()
+        ));
+    } else if stamp.is_none() {
+        hints.push(
+            "engine feature stamp missing — run `ctox engine rebuild` to refresh it".to_string(),
+        );
+    }
+    if manifest.is_none() {
+        hints.push(
+            "managed install manifest missing — run `ctox update adopt` to migrate".to_string(),
+        );
+    }
+    let remote = check_remote_update(root).ok();
+    let update_available = remote
+        .as_ref()
+        .map(|entry| entry.update_available)
+        .unwrap_or(false);
+    if update_available {
+        let tag = remote
+            .as_ref()
+            .and_then(|entry| entry.latest_release.clone())
+            .unwrap_or_default();
+        hints.push(format!(
+            "update available{}: run `ctox upgrade`",
+            if tag.is_empty() {
+                String::new()
+            } else {
+                format!(" ({tag})")
+            }
+        ));
+    }
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "cli_version": env!("CARGO_PKG_VERSION"),
+            "managed_install": layout.managed(),
+            "active_root": layout.active_root,
+            "engine_binary": engine_binary,
+            "engine_present": engine_binary.is_file(),
+            "engine_feature_stamp": stamp,
+            "update_channel": remote.as_ref().and_then(|entry| entry.channel.clone()),
+            "latest_release": remote.as_ref().and_then(|entry| entry.latest_release.clone()),
+            "current_release": manifest.as_ref().and_then(|entry| entry.current_release.clone()),
+            "hints": hints,
+        }))?
+    );
+    Ok(())
+}
+
 pub fn handle_update_command(root: &Path, args: &[String]) -> Result<()> {
+    // `ctox update` / `ctox upgrade` one-shot path. Accepts --stable (default)
+    // or --dev (track the main branch, source build) as the only args.
+    let top_flags_only = !args.is_empty()
+        && args
+            .iter()
+            .all(|arg| matches!(arg.as_str(), "--stable" | "--dev"));
+    if args.is_empty() || top_flags_only {
+        let use_dev = args.iter().any(|arg| arg == "--dev");
+        let request = if use_dev {
+            RemoteReleaseRequest::Branch("main".to_string())
+        } else {
+            RemoteReleaseRequest::Latest
+        };
+        let result = apply_remote_update(root, request, false, false, false)?;
+        println!("{}", serde_json::to_string_pretty(&result)?);
+        return Ok(());
+    }
     match args.first().map(String::as_str) {
         Some("status") => {
             let layout = InstallLayout::resolve(root)?;
@@ -279,13 +423,23 @@ pub fn handle_update_command(root: &Path, args: &[String]) -> Result<()> {
             let use_latest = has_flag(args, "--latest");
             let force = has_flag(args, "--force");
             let keep_failed_release = has_flag(args, "--keep-failed-release");
+            let from_source = has_flag(args, "--from-source");
             let result = if let Some(source) = source {
+                // Local --source always means a source-tree rebuild; binary-mode only
+                // applies to remote releases that ship a pre-built bundle.
                 let release = requested_release
                     .or_else(|| requested_version)
                     .unwrap_or_else(|| {
                         release_name_for_source(&source).unwrap_or_else(default_release_name)
                     });
-                apply_update(root, &source, &release, force, keep_failed_release)?
+                apply_update(
+                    root,
+                    &source,
+                    &release,
+                    force,
+                    keep_failed_release,
+                    UpdateSourceKind::Source,
+                )?
             } else {
                 let request = if use_latest {
                     RemoteReleaseRequest::Latest
@@ -293,10 +447,10 @@ pub fn handle_update_command(root: &Path, args: &[String]) -> Result<()> {
                     RemoteReleaseRequest::Tag(version)
                 } else {
                     anyhow::bail!(
-                        "usage: ctox update apply --source <path> [--release <name>] [--force] [--keep-failed-release] | ctox update apply --latest [--force] [--keep-failed-release] | ctox update apply --version <tag> [--force] [--keep-failed-release]"
+                        "usage: ctox update apply --source <path> [--release <name>] [--force] [--keep-failed-release] | ctox update apply --latest [--force] [--keep-failed-release] [--from-source] | ctox update apply --version <tag> [--force] [--keep-failed-release] [--from-source]"
                     );
                 };
-                apply_remote_update(root, request, force, keep_failed_release)?
+                apply_remote_update(root, request, force, keep_failed_release, from_source)?
             };
             println!("{}", serde_json::to_string_pretty(&result)?);
             Ok(())
@@ -307,7 +461,7 @@ pub fn handle_update_command(root: &Path, args: &[String]) -> Result<()> {
             Ok(())
         }
         _ => anyhow::bail!(
-            "usage: ctox update status | ctox update check | ctox update channel <show|set-github|clear> ... | ctox update adopt [--install-root <path>] [--state-root <path>] [--release <name>] [--skip-build] [--force] | ctox update apply --source <path> [--release <name>] [--force] [--keep-failed-release] | ctox update apply --latest [--force] [--keep-failed-release] | ctox update apply --version <tag> [--force] [--keep-failed-release] | ctox update rollback"
+            "usage: ctox update status | ctox update check | ctox update channel <show|set-github|clear> ... | ctox update adopt [--install-root <path>] [--state-root <path>] [--release <name>] [--skip-build] [--force] | ctox update apply --source <path> [--release <name>] [--force] [--keep-failed-release] | ctox update apply --latest [--force] [--keep-failed-release] [--from-source] | ctox update apply --version <tag> [--force] [--keep-failed-release] [--from-source] | ctox update rollback"
         ),
     }
 }
@@ -316,6 +470,9 @@ pub fn handle_update_command(root: &Path, args: &[String]) -> Result<()> {
 enum RemoteReleaseRequest {
     Latest,
     Tag(String),
+    /// Follow the tip of a branch (always source-mode — no release asset exists
+    /// for arbitrary branches). Used by `ctox upgrade --dev`.
+    Branch(String),
 }
 
 fn handle_update_channel_command(root: &Path, args: &[String]) -> Result<()> {
@@ -427,18 +584,36 @@ fn apply_remote_update(
     request: RemoteReleaseRequest,
     force: bool,
     keep_failed_release: bool,
+    from_source: bool,
 ) -> Result<ApplyResult> {
     let layout = InstallLayout::resolve(root)?;
     let manifest = load_install_manifest(&layout.install_manifest_path())?;
     let channel = resolve_release_channel(&layout, manifest.as_ref())
         .context("release channel is not configured; use `ctox update channel set-github --repo <owner/repo>` first")?;
-    let downloaded = download_release_source(&layout, &channel.config, request, force)?;
+    // Branch requests only have a source tarball — no binary assets for arbitrary branches.
+    let is_branch = matches!(request, RemoteReleaseRequest::Branch(_));
+    let from_source = is_branch || from_source;
+    // Branch HEADs move; always bypass the on-disk cache so `ctox upgrade --dev`
+    // genuinely picks up the latest commit.
+    let force = force || is_branch;
+    let (downloaded, kind) = if from_source {
+        (
+            download_release_source(&layout, &channel.config, request, force)?,
+            UpdateSourceKind::Source,
+        )
+    } else {
+        (
+            download_release_binary_bundle(&layout, &channel.config, request, force)?,
+            UpdateSourceKind::Binary,
+        )
+    };
     apply_update(
         root,
         &downloaded.extracted_root,
         &downloaded.release.tag_name,
         force,
         keep_failed_release,
+        kind,
     )
 }
 
@@ -458,7 +633,7 @@ fn adopt_installation(
     ensure_dir(install_root)?;
     ensure_dir(&install_root.join("releases"))?;
     migrate_legacy_state(root, state_root, force)?;
-    copy_workspace(root, &release_root)?;
+    copy_workspace(root, &release_root, UpdateSourceKind::Source)?;
     ensure_runtime_symlink(&release_root, state_root)?;
     if !skip_build {
         run_release_installer(&release_root, state_root)?;
@@ -512,8 +687,12 @@ fn apply_update(
     release: &str,
     force: bool,
     keep_failed_release: bool,
+    kind: UpdateSourceKind,
 ) -> Result<ApplyResult> {
-    validate_release_source(source_root)?;
+    match kind {
+        UpdateSourceKind::Source => validate_release_source(source_root)?,
+        UpdateSourceKind::Binary => validate_binary_bundle(source_root)?,
+    }
     let layout = InstallLayout::resolve(root)?;
     let install_root = layout
         .install_root
@@ -554,19 +733,26 @@ fn apply_update(
             last_error: None,
         },
     )?;
-    copy_workspace(source_root, &release_root)?;
+    copy_workspace(source_root, &release_root, kind)?;
+    if kind == UpdateSourceKind::Binary {
+        if let Some(prev) = previous_release_root.as_deref() {
+            carry_over_engine_from_previous(prev, &release_root)?;
+        }
+    }
     ensure_runtime_symlink(&release_root, &layout.state_root)?;
     persist_update_phase(&layout.update_state_path(), "building", None)?;
-    if let Err(err) = run_release_installer(&release_root, &layout.state_root) {
-        persist_update_phase(
-            &layout.update_state_path(),
-            "failed",
-            Some(err.to_string().as_str()),
-        )?;
-        if !keep_failed_release {
-            let _ = fs::remove_dir_all(&release_root);
+    if kind == UpdateSourceKind::Source {
+        if let Err(err) = run_release_installer(&release_root, &layout.state_root) {
+            persist_update_phase(
+                &layout.update_state_path(),
+                "failed",
+                Some(err.to_string().as_str()),
+            )?;
+            if !keep_failed_release {
+                let _ = fs::remove_dir_all(&release_root);
+            }
+            return Err(err);
         }
-        return Err(err);
     }
     let pre_switch_status = service::service_status_snapshot(&layout.active_root).ok();
     let should_restart = pre_switch_status
@@ -818,12 +1004,20 @@ fn resolve_release_channel(
             source: "environment",
         });
     }
-    manifest
-        .and_then(|entry| entry.release_channel.clone())
-        .map(|config| ResolvedReleaseChannel {
+    if let Some(config) = manifest.and_then(|entry| entry.release_channel.clone()) {
+        return Some(ResolvedReleaseChannel {
             config,
             source: "install_manifest",
-        })
+        });
+    }
+    Some(ResolvedReleaseChannel {
+        config: ReleaseChannelConfig::GitHub {
+            repo: DEFAULT_RELEASE_REPO.to_string(),
+            api_base: default_github_api_base_string(),
+            token_env: None,
+        },
+        source: "built_in_default",
+    })
 }
 
 fn install_manifest_template(layout: &InstallLayout) -> InstallManifest {
@@ -848,7 +1042,24 @@ fn fetch_remote_release(
 ) -> Result<GitHubReleaseResponse> {
     match channel {
         ReleaseChannelConfig::GitHub { repo, api_base, .. } => {
-            let endpoint = match request {
+            if let RemoteReleaseRequest::Branch(branch) = &request {
+                // Synthesize a GitHubReleaseResponse that points at the branch
+                // tarball. GitHub doesn't publish a "release" for a branch, so
+                // we can't list release assets here — callers must use the
+                // source-mode path for Branch requests.
+                let tarball_url = format!(
+                    "https://codeload.github.com/{repo}/tar.gz/refs/heads/{branch}"
+                );
+                return Ok(GitHubReleaseResponse {
+                    tag_name: format!("branch-{branch}"),
+                    name: Some(format!("{branch} (development snapshot)")),
+                    tarball_url,
+                    html_url: None,
+                    published_at: None,
+                    assets: Vec::new(),
+                });
+            }
+            let endpoint = match &request {
                 RemoteReleaseRequest::Latest => {
                     format!(
                         "{}/repos/{repo}/releases/latest",
@@ -860,6 +1071,7 @@ fn fetch_remote_release(
                     api_base.trim_end_matches('/'),
                     tag
                 ),
+                RemoteReleaseRequest::Branch(_) => unreachable!("handled above"),
             };
             let body = github_api_get_json(channel, &endpoint)?;
             let release: GitHubReleaseResponse =
@@ -869,6 +1081,123 @@ fn fetch_remote_release(
             Ok(release)
         }
     }
+}
+
+fn target_bundle_asset_name() -> Option<&'static str> {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("linux", "x86_64") => Some("ctox-linux-x64.tar.gz"),
+        ("linux", "aarch64") => Some("ctox-linux-arm64.tar.gz"),
+        ("macos", "x86_64") => Some("ctox-macos-x64.tar.gz"),
+        ("macos", "aarch64") => Some("ctox-macos-arm64.tar.gz"),
+        _ => None,
+    }
+}
+
+fn download_release_binary_bundle(
+    layout: &InstallLayout,
+    channel: &ReleaseChannelConfig,
+    request: RemoteReleaseRequest,
+    force: bool,
+) -> Result<DownloadedReleaseSource> {
+    let release = fetch_remote_release(channel, request)?;
+    let asset_name = target_bundle_asset_name().with_context(|| {
+        format!(
+            "no pre-built binary bundle published for {}/{}; retry with `--from-source` to build from source",
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+        )
+    })?;
+    let asset = release
+        .assets
+        .iter()
+        .find(|a| a.name == asset_name)
+        .cloned()
+        .with_context(|| {
+            format!(
+                "release {} has no asset `{}`; retry with `--from-source` to build from source",
+                release.tag_name, asset_name
+            )
+        })?;
+    let repo_key = match channel {
+        ReleaseChannelConfig::GitHub { repo, .. } => repo.replace('/', "--"),
+    };
+    let downloads_dir = layout.cache_root.join("downloads").join(&repo_key);
+    let bundles_dir = layout.cache_root.join("bundles").join(&repo_key);
+    ensure_dir(&downloads_dir)?;
+    ensure_dir(&bundles_dir)?;
+    let archive_path = downloads_dir.join(format!("{}-{asset_name}", release.tag_name));
+    let extracted_root = bundles_dir.join(&release.tag_name);
+    if force {
+        let _ = fs::remove_file(&archive_path);
+        let _ = fs::remove_dir_all(&extracted_root);
+    }
+    if !archive_path.exists() {
+        download_remote_archive(channel, &asset.browser_download_url, &archive_path)?;
+    }
+    verify_sha256_asset(channel, &release, asset_name, &archive_path)?;
+    if !extracted_root.exists() {
+        extract_bundle_to_root(&archive_path, &extracted_root)?;
+    }
+    Ok(DownloadedReleaseSource {
+        release,
+        extracted_root,
+    })
+}
+
+fn verify_sha256_asset(
+    channel: &ReleaseChannelConfig,
+    release: &GitHubReleaseResponse,
+    asset_name: &str,
+    archive_path: &Path,
+) -> Result<()> {
+    let sha_asset_name = format!("{asset_name}.sha256");
+    let Some(sha_asset) = release.assets.iter().find(|a| a.name == sha_asset_name) else {
+        return Ok(());
+    };
+    let response = github_request(channel, &sha_asset.browser_download_url)?
+        .call()
+        .with_context(|| {
+            format!("failed to download {sha_asset_name} from {}", sha_asset.browser_download_url)
+        })?;
+    let expected_line = response
+        .into_string()
+        .context("failed to read sha256 checksum body")?;
+    let expected = expected_line
+        .split_whitespace()
+        .next()
+        .context("sha256 asset is empty")?
+        .to_ascii_lowercase();
+    let bytes = fs::read(archive_path)
+        .with_context(|| format!("failed to read {}", archive_path.display()))?;
+    use sha2::Digest;
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(&bytes);
+    let actual = format!("{:x}", hasher.finalize());
+    if actual != expected {
+        anyhow::bail!(
+            "sha256 mismatch for {}: expected {}, got {}",
+            archive_path.display(),
+            expected,
+            actual
+        );
+    }
+    Ok(())
+}
+
+fn extract_bundle_to_root(archive_path: &Path, destination_root: &Path) -> Result<()> {
+    ensure_release_slot(destination_root, true)?;
+    ensure_dir(destination_root)?;
+    let status = Command::new("tar")
+        .arg("-xzf")
+        .arg(archive_path)
+        .arg("-C")
+        .arg(destination_root)
+        .status()
+        .with_context(|| format!("failed to extract {}", archive_path.display()))?;
+    if !status.success() {
+        anyhow::bail!("failed to extract {}", archive_path.display());
+    }
+    Ok(())
 }
 
 fn download_release_source(
@@ -1109,7 +1438,11 @@ fn validate_release_source(source_root: &Path) -> Result<()> {
     );
 }
 
-fn copy_workspace(source_root: &Path, release_root: &Path) -> Result<()> {
+fn copy_workspace(
+    source_root: &Path,
+    release_root: &Path,
+    kind: UpdateSourceKind,
+) -> Result<()> {
     ensure_dir(release_root)?;
     copy_filtered(source_root, release_root, &|path, is_dir| {
         let Some(name) = path.file_name().and_then(OsStr::to_str) else {
@@ -1119,11 +1452,34 @@ fn copy_workspace(source_root: &Path, release_root: &Path) -> Result<()> {
         let top_level_runtime = relative
             .map(|entry| entry.components().count() == 1 && name == "runtime")
             .unwrap_or(false);
-        matches!(name, ".git" | "target")
+        let skip_target = kind == UpdateSourceKind::Source && name == "target";
+        name == ".git"
+            || skip_target
             || top_level_runtime
             || (is_dir && matches!(name, ".DS_Store"))
             || (!is_dir && name == ".DS_Store")
     })
+}
+
+fn validate_binary_bundle(source_root: &Path) -> Result<()> {
+    let binary = source_root.join("target/release/ctox");
+    if !binary.exists() {
+        anyhow::bail!(
+            "binary bundle is missing the ctox executable at {}",
+            binary.display()
+        );
+    }
+    Ok(())
+}
+
+fn carry_over_engine_from_previous(previous_root: &Path, release_root: &Path) -> Result<()> {
+    let previous_engine = previous_root.join("tools/model-runtime/target/release");
+    if !previous_engine.is_dir() {
+        return Ok(());
+    }
+    let destination = release_root.join("tools/model-runtime/target/release");
+    ensure_dir(&destination)?;
+    copy_filtered(&previous_engine, &destination, &|_path, _is_dir| false)
 }
 
 fn copy_filtered<F>(source_root: &Path, destination_root: &Path, skip: &F) -> Result<()>

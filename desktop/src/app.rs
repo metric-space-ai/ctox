@@ -25,11 +25,13 @@ use crate::{
     command_catalog::{COMMANDS, CommandEntry, CommandGroup, is_allowed_ctox_args},
     connector::{InstanceConnector, LocalProcessConnector, SessionKind, SessionSpec, repo_root_from_manifest_dir},
     installations::{
-        Installation, InstallationMode, InstallationRegistry, RemoteHostTarget, RemoteInstanceSource,
+        InstallChannel, Installation, InstallationMode, InstallationRegistry, RemoteHostTarget,
+        RemoteInstanceSource,
     },
     provision::{ProvisionEvent, ProvisionRequest},
     terminal_backend::TerminalSession,
     terminal_emulator::{TERMINAL_DEFAULT_BG, TerminalSnapshot},
+    version_check,
     views::{self, DataView, DataViewState},
 };
 
@@ -74,6 +76,24 @@ pub struct CtoxDesktopApp {
     provision_status: Option<String>,
     provision_log: Vec<String>,
     provision_running: bool,
+    version_probe_rx: Option<Receiver<VersionProbeResult>>,
+    latest_release_rx: Option<Receiver<Result<version_check::LatestRelease, String>>>,
+    latest_release: Option<version_check::LatestRelease>,
+    latest_release_error: Option<String>,
+    upgrade_rx: Option<Receiver<UpgradeEvent>>,
+    upgrading_installation_id: Option<String>,
+    upgrade_log: Vec<String>,
+    upgrade_running: bool,
+}
+
+struct VersionProbeResult {
+    installation_id: String,
+    version: Result<String, String>,
+}
+
+enum UpgradeEvent {
+    Status(String),
+    Finished(Result<String, String>),
 }
 
 struct DesktopTab {
@@ -101,6 +121,18 @@ struct CommandResult {
 struct InstallationRuntimeStatus {
     label: String,
     color: Color32,
+}
+
+#[derive(Clone)]
+struct InstallationCardData {
+    installation_id: String,
+    title: String,
+    subtitle: String,
+    is_remote: bool,
+    is_selected: bool,
+    runtime_status: InstallationRuntimeStatus,
+    version_label: Option<String>,
+    update_available: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -153,7 +185,7 @@ impl CtoxDesktopApp {
         }
 
         let selected_installation_id = registry.installations.first().map(|entry| entry.id.clone());
-        Ok(Self {
+        let mut app = Self {
             registry,
             connector: LocalProcessConnector,
             selected_installation_id,
@@ -183,7 +215,169 @@ impl CtoxDesktopApp {
             provision_status: None,
             provision_log: Vec::new(),
             provision_running: false,
-        })
+            version_probe_rx: None,
+            latest_release_rx: None,
+            latest_release: None,
+            latest_release_error: None,
+            upgrade_rx: None,
+            upgrading_installation_id: None,
+            upgrade_log: Vec::new(),
+            upgrade_running: false,
+        };
+        app.spawn_latest_release_probe();
+        app.spawn_version_probes_for_all();
+        Ok(app)
+    }
+
+    /// Kick off a background thread that fetches the latest release from
+    /// GitHub and delivers the result via `latest_release_rx`. Overwrites any
+    /// in-flight probe.
+    fn spawn_latest_release_probe(&mut self) {
+        let (tx, rx) = mpsc::channel();
+        self.latest_release_rx = Some(rx);
+        std::thread::spawn(move || {
+            let result = version_check::fetch_latest_release().map_err(|e| e.to_string());
+            let _ = tx.send(result);
+        });
+    }
+
+    /// Spawn a probe for every installation and deliver (id, version) tuples
+    /// over `version_probe_rx`.
+    fn spawn_version_probes_for_all(&mut self) {
+        let (tx, rx) = mpsc::channel();
+        self.version_probe_rx = Some(rx);
+        for installation in &self.registry.installations {
+            let tx = tx.clone();
+            let id = installation.id.clone();
+            let kind = installation_probe_kind(installation);
+            if let Some(kind) = kind {
+                std::thread::spawn(move || {
+                    let version = match kind {
+                        VersionProbeKind::Local { binary } => {
+                            version_check::probe_local_version(&binary)
+                                .map_err(|e| e.to_string())
+                        }
+                        VersionProbeKind::Ssh {
+                            user,
+                            host,
+                            port,
+                            password,
+                        } => version_check::probe_remote_version(&user, &host, port, &password)
+                            .map_err(|e| e.to_string()),
+                    };
+                    let _ = tx.send(VersionProbeResult {
+                        installation_id: id,
+                        version,
+                    });
+                });
+            }
+        }
+    }
+
+    /// Pull any pending version-probe and latest-release updates from their
+    /// channels and fold them into app state. Safe to call every frame.
+    fn drain_version_signals(&mut self) {
+        if let Some(rx) = self.version_probe_rx.as_ref() {
+            while let Ok(result) = rx.try_recv() {
+                let VersionProbeResult {
+                    installation_id,
+                    version,
+                } = result;
+                if let Some(inst) = self
+                    .registry
+                    .installations
+                    .iter_mut()
+                    .find(|entry| entry.id == installation_id)
+                {
+                    match version {
+                        Ok(raw) => {
+                            inst.cached_version = Some(raw);
+                            inst.cached_version_at = Some(unix_now());
+                        }
+                        Err(_) => {
+                            // Keep the last known good version on failure.
+                        }
+                    }
+                }
+            }
+            let _ = self.registry.save();
+        }
+        if let Some(rx) = self.latest_release_rx.as_ref() {
+            if let Ok(result) = rx.try_recv() {
+                match result {
+                    Ok(release) => {
+                        self.latest_release = Some(release);
+                        self.latest_release_error = None;
+                    }
+                    Err(err) => {
+                        self.latest_release_error = Some(err);
+                    }
+                }
+                self.latest_release_rx = None;
+            }
+        }
+        if let Some(rx) = self.upgrade_rx.as_ref() {
+            while let Ok(event) = rx.try_recv() {
+                match event {
+                    UpgradeEvent::Status(line) => self.upgrade_log.push(line),
+                    UpgradeEvent::Finished(Ok(summary)) => {
+                        self.upgrade_log.push(summary);
+                        self.upgrade_running = false;
+                    }
+                    UpgradeEvent::Finished(Err(err)) => {
+                        self.upgrade_log.push(format!("ERROR: {err}"));
+                        self.upgrade_running = false;
+                    }
+                }
+            }
+            if !self.upgrade_running {
+                // Re-probe version once the upgrade run settles so the UI
+                // reflects the new version number.
+                self.spawn_version_probes_for_all();
+            }
+        }
+    }
+
+    /// Returns true if the cached version for this installation differs from
+    /// the resolved latest release tag.
+    fn installation_update_available(&self, installation: &Installation) -> bool {
+        let Some(latest) = self.latest_release.as_ref() else {
+            return false;
+        };
+        let Some(installed) = installation.cached_version.as_deref() else {
+            return false;
+        };
+        version_check::update_available(installed, &latest.tag_name)
+    }
+
+    /// Start an upgrade run against the given installation. Local: spawn
+    /// `<binary> upgrade`. Remote SSH: `ssh … ctox upgrade`. Both stream
+    /// output lines through `upgrade_rx`.
+    fn start_upgrade(&mut self, installation_id: &str) {
+        if self.upgrade_running {
+            return;
+        }
+        let Some(installation) = self
+            .registry
+            .installations
+            .iter()
+            .find(|entry| entry.id == installation_id)
+            .cloned()
+        else {
+            self.notice = Some("installation not found".to_owned());
+            return;
+        };
+        let kind = installation_probe_kind(&installation);
+        let Some(kind) = kind else {
+            self.notice = Some("this installation mode has no upgrade action".to_owned());
+            return;
+        };
+        let (tx, rx) = mpsc::channel();
+        self.upgrade_rx = Some(rx);
+        self.upgrading_installation_id = Some(installation.id.clone());
+        self.upgrade_log.clear();
+        self.upgrade_running = true;
+        std::thread::spawn(move || run_upgrade(kind, tx));
     }
 
     fn selected_installation(&self) -> Option<&Installation> {
@@ -812,25 +1006,37 @@ impl CtoxDesktopApp {
                 }
 
                 ScrollArea::vertical().show(ui, |ui| {
-                    let cards: Vec<(String, String, String, bool, bool, InstallationRuntimeStatus)> = self
+                    let cards: Vec<InstallationCardData> = self
                         .registry
                         .installations
                         .iter()
-                        .map(|installation| {
-                            (
-                                installation.id.clone(),
-                                installation.display_name(),
-                                installation.display_path(),
-                                installation.is_remote(),
-                                self.selected_installation_id.as_deref() == Some(installation.id.as_str()),
-                                self.installation_runtime_status(&installation.id),
-                            )
+                        .map(|installation| InstallationCardData {
+                            installation_id: installation.id.clone(),
+                            title: installation.display_name(),
+                            subtitle: installation.display_path(),
+                            is_remote: installation.is_remote(),
+                            is_selected: self.selected_installation_id.as_deref()
+                                == Some(installation.id.as_str()),
+                            runtime_status: self.installation_runtime_status(&installation.id),
+                            version_label: installation.cached_version.clone(),
+                            update_available: self.installation_update_available(installation),
                         })
                         .collect();
 
                     let mut clicked_installation = None;
                     let mut toggled_installation = None;
-                    for (installation_id, title, subtitle, is_remote, is_selected, runtime_status) in cards.iter().cloned() {
+                    let mut upgrade_installation = None;
+                    for card in cards.iter().cloned() {
+                        let InstallationCardData {
+                            installation_id,
+                            title,
+                            subtitle,
+                            is_remote,
+                            is_selected,
+                            runtime_status,
+                            version_label,
+                            update_available,
+                        } = card;
                         let fill = if is_selected {
                             Color32::from_rgb(34, 38, 43)
                         } else {
@@ -872,11 +1078,43 @@ impl CtoxDesktopApp {
                                             clicked_installation = Some(installation_id.clone());
                                         }
                                         ui.add_space(4.0);
-                                        ui.label(
-                                            RichText::new(runtime_status.label)
-                                                .size(12.1)
-                                                .color(runtime_status.color),
-                                        );
+                                        ui.horizontal(|ui| {
+                                            ui.label(
+                                                RichText::new(runtime_status.label.clone())
+                                                    .size(12.1)
+                                                    .color(runtime_status.color),
+                                            );
+                                            if let Some(version) = version_label.as_deref() {
+                                                ui.label(
+                                                    RichText::new(format!("· {version}"))
+                                                        .size(11.5)
+                                                        .color(Color32::from_gray(130)),
+                                                );
+                                            }
+                                            if update_available {
+                                                ui.label(
+                                                    RichText::new("⬆ update")
+                                                        .size(11.5)
+                                                        .color(Color32::from_rgb(230, 170, 70)),
+                                                );
+                                            }
+                                        });
+                                        if update_available {
+                                            if ui
+                                                .add(
+                                                    Button::new(
+                                                        RichText::new("Upgrade now")
+                                                            .size(11.5)
+                                                            .color(Color32::from_rgb(30, 30, 30)),
+                                                    )
+                                                    .fill(Color32::from_rgb(230, 170, 70))
+                                                    .min_size(egui::vec2(98.0, 18.0)),
+                                                )
+                                                .clicked()
+                                            {
+                                                upgrade_installation = Some(installation_id.clone());
+                                            }
+                                        }
                                     });
                                     ui.with_layout(Layout::right_to_left(Align::TOP), |ui| {
                                         let expanded = self.expanded_installation_id.as_deref()
@@ -920,9 +1158,36 @@ impl CtoxDesktopApp {
                     if let Some(installation_id) = clicked_installation {
                         self.select_installation_and_focus(installation_id);
                     }
+                    if let Some(installation_id) = upgrade_installation {
+                        self.start_upgrade(&installation_id);
+                    }
                     if let Some(notice) = &self.notice {
                         ui.add_space(10.0);
                         ui.label(notice);
+                    }
+                    if self.upgrade_running || !self.upgrade_log.is_empty() {
+                        ui.add_space(10.0);
+                        ui.label(
+                            RichText::new(if self.upgrade_running {
+                                "upgrade running…"
+                            } else {
+                                "upgrade log"
+                            })
+                            .size(12.0)
+                            .color(Color32::from_rgb(220, 180, 90)),
+                        );
+                        ScrollArea::vertical()
+                            .max_height(120.0)
+                            .stick_to_bottom(true)
+                            .show(ui, |ui| {
+                                for line in self.upgrade_log.iter().rev().take(40).collect::<Vec<_>>().into_iter().rev() {
+                                    ui.label(
+                                        RichText::new(line)
+                                            .size(11.5)
+                                            .color(Color32::from_gray(180)),
+                                    );
+                                }
+                            });
                     }
                 });
             });
@@ -1149,6 +1414,51 @@ impl CtoxDesktopApp {
                                     }
                                 }
                                 RemoteInstanceSource::InstallNew => {
+                                    ui.label(
+                                        RichText::new("Install source")
+                                            .size(12.4)
+                                            .color(Color32::from_gray(135)),
+                                    );
+                                    ui.horizontal_wrapped(|ui| {
+                                        let stable_selected = installation.remote.install_channel
+                                            == InstallChannel::Stable;
+                                        if ui
+                                            .selectable_label(
+                                                stable_selected,
+                                                "Stable (latest release, binary)",
+                                            )
+                                            .clicked()
+                                        {
+                                            installation.remote.install_channel =
+                                                InstallChannel::Stable;
+                                            persist_registry = true;
+                                        }
+                                        let dev_selected = installation.remote.install_channel
+                                            == InstallChannel::Dev;
+                                        if ui
+                                            .selectable_label(dev_selected, "Dev (main, source)")
+                                            .clicked()
+                                        {
+                                            installation.remote.install_channel =
+                                                InstallChannel::Dev;
+                                            persist_registry = true;
+                                        }
+                                        let local_checkout_selected =
+                                            installation.remote.install_channel
+                                                == InstallChannel::LocalCheckout;
+                                        if ui
+                                            .selectable_label(
+                                                local_checkout_selected,
+                                                "Local checkout (advanced)",
+                                            )
+                                            .clicked()
+                                        {
+                                            installation.remote.install_channel =
+                                                InstallChannel::LocalCheckout;
+                                            persist_registry = true;
+                                        }
+                                    });
+                                    ui.add_space(8.0);
                                     ui.horizontal_wrapped(|ui| {
                                         let local_selected =
                                             installation.remote.host_target == RemoteHostTarget::Localhost;
@@ -1707,6 +2017,7 @@ impl CtoxDesktopApp {
 impl eframe::App for CtoxDesktopApp {
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
         self.poll_background_events();
+        self.drain_version_signals();
         self.refresh_installation_statuses();
         self.handle_terminal_input(ctx);
 
@@ -2523,4 +2834,131 @@ fn remote_installation_runtime_status(
 
 fn parse_extra_args(value: &str) -> Vec<String> {
     value.split_whitespace().map(ToOwned::to_owned).collect()
+}
+
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+enum VersionProbeKind {
+    Local {
+        binary: PathBuf,
+    },
+    Ssh {
+        user: String,
+        host: String,
+        port: u16,
+        password: String,
+    },
+}
+
+fn installation_probe_kind(installation: &Installation) -> Option<VersionProbeKind> {
+    match installation.mode {
+        InstallationMode::Local => {
+            let binary = installation
+                .preferred_binary
+                .clone()
+                .or_else(|| {
+                    installation
+                        .root_path
+                        .as_ref()
+                        .map(|root| root.join("target/release/ctox"))
+                })?;
+            Some(VersionProbeKind::Local { binary })
+        }
+        InstallationMode::RemoteWebRtc => {
+            let remote = &installation.remote;
+            if remote.ssh_host.trim().is_empty()
+                || remote.ssh_user.trim().is_empty()
+                || remote.ssh_password.trim().is_empty()
+            {
+                return None;
+            }
+            Some(VersionProbeKind::Ssh {
+                user: remote.ssh_user.clone(),
+                host: remote.ssh_host.clone(),
+                port: remote.ssh_port,
+                password: remote.ssh_password.clone(),
+            })
+        }
+    }
+}
+
+fn run_upgrade(kind: VersionProbeKind, tx: std::sync::mpsc::Sender<UpgradeEvent>) {
+    use std::io::{BufRead, BufReader};
+    let mut command = match &kind {
+        VersionProbeKind::Local { binary } => {
+            let _ = tx.send(UpgradeEvent::Status(format!(
+                "running `{} upgrade`",
+                binary.display()
+            )));
+            let mut cmd = std::process::Command::new(binary);
+            cmd.arg("upgrade");
+            cmd
+        }
+        VersionProbeKind::Ssh {
+            user,
+            host,
+            port,
+            password,
+        } => {
+            let _ = tx.send(UpgradeEvent::Status(format!(
+                "running `ctox upgrade` on {user}@{host}"
+            )));
+            let mut cmd = std::process::Command::new("sshpass");
+            cmd.arg("-p")
+                .arg(password)
+                .arg("ssh")
+                .arg("-o")
+                .arg("StrictHostKeyChecking=no")
+                .arg("-p")
+                .arg(port.to_string())
+                .arg(format!("{user}@{host}"))
+                .arg("PATH=\"$HOME/.local/bin:$PATH\" ctox upgrade 2>&1");
+            cmd
+        }
+    };
+    let child = command
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn();
+    let mut child = match child {
+        Ok(c) => c,
+        Err(err) => {
+            let _ = tx.send(UpgradeEvent::Finished(Err(err.to_string())));
+            return;
+        }
+    };
+    if let Some(stdout) = child.stdout.take() {
+        let tx_line = tx.clone();
+        std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                let _ = tx_line.send(UpgradeEvent::Status(line));
+            }
+        });
+    }
+    if let Some(stderr) = child.stderr.take() {
+        let tx_line = tx.clone();
+        std::thread::spawn(move || {
+            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                let _ = tx_line.send(UpgradeEvent::Status(line));
+            }
+        });
+    }
+    match child.wait() {
+        Ok(status) if status.success() => {
+            let _ = tx.send(UpgradeEvent::Finished(Ok("upgrade completed".to_owned())));
+        }
+        Ok(status) => {
+            let _ = tx.send(UpgradeEvent::Finished(Err(format!(
+                "upgrade exited with {status}"
+            ))));
+        }
+        Err(err) => {
+            let _ = tx.send(UpgradeEvent::Finished(Err(err.to_string())));
+        }
+    }
 }

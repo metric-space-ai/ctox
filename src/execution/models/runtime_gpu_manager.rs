@@ -198,6 +198,11 @@ fn desired_visible_devices(
             engine::AuxiliaryRole::Tts,
             request_model,
         ),
+        runtime_contract::BackendRole::Vision => runtime_plan::resolve_auxiliary_visible_devices(
+            root,
+            engine::AuxiliaryRole::Vision,
+            request_model,
+        ),
     }
 }
 
@@ -228,7 +233,8 @@ fn reserved_mb_by_gpu(
         }
         runtime_contract::BackendRole::Embedding
         | runtime_contract::BackendRole::Stt
-        | runtime_contract::BackendRole::Tts => {
+        | runtime_contract::BackendRole::Tts
+        | runtime_contract::BackendRole::Vision => {
             let devices = visible_devices
                 .map(parse_visible_devices)
                 .unwrap_or_default();
@@ -278,6 +284,7 @@ fn resolved_binding_for_role<'a>(
         runtime_contract::BackendRole::Embedding => resolved.embedding.as_ref(),
         runtime_contract::BackendRole::Stt => resolved.transcription.as_ref(),
         runtime_contract::BackendRole::Tts => resolved.speech.as_ref(),
+        runtime_contract::BackendRole::Vision => resolved.vision.as_ref(),
     }
 }
 
@@ -294,6 +301,9 @@ fn auxiliary_selection(
         }
         runtime_contract::BackendRole::Tts => {
             engine::auxiliary_model_selection(engine::AuxiliaryRole::Tts, Some(request_model))
+        }
+        runtime_contract::BackendRole::Vision => {
+            engine::auxiliary_model_selection(engine::AuxiliaryRole::Vision, Some(request_model))
         }
         runtime_contract::BackendRole::Chat => unreachable!(),
     }
