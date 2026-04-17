@@ -1991,6 +1991,7 @@ fn start_prompt_worker(
                 conversation_id,
                 job.suggested_skill.as_deref(),
                 force_continuity_refresh,
+                None, // TUI service: per-turn clients (persistent session TODO)
                 |event| {
                     push_event(&event_state, format!("phase {} {}", event_source, event));
                 },
@@ -2052,9 +2053,7 @@ fn start_prompt_worker(
                             // without the model needing to call complete-step.
                             for key in &job.leased_message_keys {
                                 if key.starts_with("plan:system::") {
-                                    let _ = plan::complete_step_by_message_key(
-                                        &root, key, &reply,
-                                    );
+                                    let _ = plan::complete_step_by_message_key(&root, key, &reply);
                                 }
                             }
                         }
@@ -2264,10 +2263,7 @@ fn start_mission_watcher(root: std::path::PathBuf, state: Arc<Mutex<SharedState>
                         );
                     }
                 }
-                Err(err) => push_event(
-                    &state,
-                    format!("Approval nag sweep failed: {err}"),
-                ),
+                Err(err) => push_event(&state, format!("Approval nag sweep failed: {err}")),
             }
         }
         if let Err(err) = monitor_mission_continuity(&root, &state) {
@@ -2283,8 +2279,7 @@ fn start_mission_watcher(root: std::path::PathBuf, state: Arc<Mutex<SharedState>
 fn auto_close_pending_approval_gates(root: &Path) -> Result<usize> {
     // Limit is generous; the sweep runs every mission-watcher tick so a
     // slow backlog still drains over a few iterations.
-    let pending =
-        tickets::list_ticket_self_work_items(root, None, Some("open"), 256)?;
+    let pending = tickets::list_ticket_self_work_items(root, None, Some("open"), 256)?;
     let mut closed = 0usize;
     for item in pending {
         if item.kind == "approval-gate" {
@@ -2892,7 +2887,8 @@ fn enrich_inbound_prompt(
             .get("provider")
             .and_then(serde_json::Value::as_str)
             .unwrap_or("unknown");
-        let is_mention = crate::mission::communication_meeting_native::MeetingSession::is_mention(prompt_body);
+        let is_mention =
+            crate::mission::communication_meeting_native::MeetingSession::is_mention(prompt_body);
         let mention_hint = if is_mention {
             format!(
                 " Du wurdest per @CTOX erwaehnt — antworte im Meeting-Chat.\n\
@@ -4519,10 +4515,7 @@ mod tests {
             .pending_prompts
             .front()
             .expect("queued prompt missing");
-        assert_eq!(
-            prompt.suggested_skill.as_deref(),
-            Some("system-onboarding")
-        );
+        assert_eq!(prompt.suggested_skill.as_deref(), Some("system-onboarding"));
         assert_eq!(prompt.source_label, "queue");
         assert!(shared
             .recent_events
@@ -4593,14 +4586,14 @@ mod tests {
         let next = maybe_start_next_queued_prompt_locked(&mut shared)
             .expect("queued prompt should be started");
 
-        assert_eq!(
-            next.suggested_skill.as_deref(),
-            Some("system-onboarding")
-        );
+        assert_eq!(next.suggested_skill.as_deref(), Some("system-onboarding"));
         assert!(shared.busy);
         assert_eq!(shared.active_source_label.as_deref(), Some("ticket:zammad"));
-        assert!(shared.recent_events.iter().any(|event| event
-            .contains("Started queued ticket:zammad prompt [skill system-onboarding]")));
+        assert!(shared
+            .recent_events
+            .iter()
+            .any(|event| event
+                .contains("Started queued ticket:zammad prompt [skill system-onboarding]")));
     }
 
     #[test]
@@ -4677,10 +4670,7 @@ mod tests {
             .front()
             .expect("queued prompt missing");
         assert_eq!(prompt.source_label, "ticket:local");
-        assert_eq!(
-            prompt.suggested_skill.as_deref(),
-            Some("system-onboarding")
-        );
+        assert_eq!(prompt.suggested_skill.as_deref(), Some("system-onboarding"));
         assert!(shared
             .recent_events
             .iter()
@@ -4738,10 +4728,7 @@ mod tests {
             .front()
             .expect("queued prompt missing");
         assert_eq!(prompt.source_label, "ticket:local");
-        assert_eq!(
-            prompt.suggested_skill.as_deref(),
-            Some("system-onboarding")
-        );
+        assert_eq!(prompt.suggested_skill.as_deref(), Some("system-onboarding"));
         assert!(shared
             .recent_events
             .iter()
@@ -4784,10 +4771,7 @@ mod tests {
             .pending_prompts
             .front()
             .expect("queued prompt missing");
-        assert_eq!(
-            prompt.suggested_skill.as_deref(),
-            Some("system-onboarding")
-        );
+        assert_eq!(prompt.suggested_skill.as_deref(), Some("system-onboarding"));
         let expected_thread_key = format!("ticket-self-work:{}", item.work_id);
         assert_eq!(
             prompt.thread_key.as_deref(),

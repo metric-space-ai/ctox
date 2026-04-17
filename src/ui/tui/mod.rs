@@ -1656,6 +1656,11 @@ impl App {
                     | "CTOX_EMBEDDING_MODEL"
                     | "CTOX_STT_MODEL"
                     | "CTOX_TTS_MODEL"
+                    | "CTOX_USE_DIRECT_SESSION"
+                    | "CTOX_COMPACT_TRIGGER"
+                    | "CTOX_COMPACT_MODE"
+                    | "CTOX_COMPACT_FIXED_INTERVAL"
+                    | "CTOX_COMPACT_ADAPTIVE_THRESHOLD"
             ),
             SettingsView::Communication => matches!(
                 item.key,
@@ -1710,6 +1715,11 @@ impl App {
             | "CTOX_EMBEDDING_MODEL"
             | "CTOX_STT_MODEL"
             | "CTOX_TTS_MODEL"
+            | "CTOX_USE_DIRECT_SESSION"
+            | "CTOX_COMPACT_TRIGGER"
+            | "CTOX_COMPACT_MODE"
+            | "CTOX_COMPACT_FIXED_INTERVAL"
+            | "CTOX_COMPACT_ADAPTIVE_THRESHOLD"
             | "CTOX_OWNER_NAME"
             | "CTOX_OWNER_EMAIL_ADDRESS"
             | "CTOX_ALLOWED_EMAIL_DOMAIN"
@@ -4006,6 +4016,57 @@ fn load_settings_items(root: &Path) -> Vec<SettingItem> {
             secret: false,
             choices: Vec::new(),
             help: "Channel ID within the team to monitor (optional).",
+            kind: SettingKind::Env,
+        },
+        // --- Phase 5: compact policy knobs ---------------------------------
+        SettingItem {
+            key: "CTOX_USE_DIRECT_SESSION",
+            label: "Direct Session",
+            value: env_map.get("CTOX_USE_DIRECT_SESSION").cloned().unwrap_or_else(|| "false".to_string()),
+            saved_value: env_map.get("CTOX_USE_DIRECT_SESSION").cloned().unwrap_or_else(|| "false".to_string()),
+            secret: false,
+            choices: vec!["false", "true"],
+            help: "Experimental: run inference via in-process codex-core library (skips the codex-exec subprocess).",
+            kind: SettingKind::Env,
+        },
+        SettingItem {
+            key: "CTOX_COMPACT_TRIGGER",
+            label: "Compact Trigger",
+            value: env_map.get("CTOX_COMPACT_TRIGGER").cloned().unwrap_or_else(|| "off".to_string()),
+            saved_value: env_map.get("CTOX_COMPACT_TRIGGER").cloned().unwrap_or_else(|| "off".to_string()),
+            secret: false,
+            choices: vec!["off", "adaptive", "fixed"],
+            help: "When to compact: off / adaptive (token-usage threshold) / fixed (every N turns). Requires Direct Session.",
+            kind: SettingKind::Env,
+        },
+        SettingItem {
+            key: "CTOX_COMPACT_MODE",
+            label: "Compact Mode",
+            value: env_map.get("CTOX_COMPACT_MODE").cloned().unwrap_or_else(|| "mid-task".to_string()),
+            saved_value: env_map.get("CTOX_COMPACT_MODE").cloned().unwrap_or_else(|| "mid-task".to_string()),
+            secret: false,
+            choices: vec!["mid-task", "forced-followup"],
+            help: "How to compact: mid-task (ThreadCompactStart, same thread) / forced-followup (unsubscribe + enqueue follow-up slice).",
+            kind: SettingKind::Env,
+        },
+        SettingItem {
+            key: "CTOX_COMPACT_FIXED_INTERVAL",
+            label: "Compact Fixed N",
+            value: env_map.get("CTOX_COMPACT_FIXED_INTERVAL").cloned().unwrap_or_default(),
+            saved_value: env_map.get("CTOX_COMPACT_FIXED_INTERVAL").cloned().unwrap_or_default(),
+            secret: false,
+            choices: Vec::new(),
+            help: "For fixed trigger: compact every N completed turns.",
+            kind: SettingKind::Env,
+        },
+        SettingItem {
+            key: "CTOX_COMPACT_ADAPTIVE_THRESHOLD",
+            label: "Compact Threshold",
+            value: env_map.get("CTOX_COMPACT_ADAPTIVE_THRESHOLD").cloned().unwrap_or_default(),
+            saved_value: env_map.get("CTOX_COMPACT_ADAPTIVE_THRESHOLD").cloned().unwrap_or_default(),
+            secret: false,
+            choices: Vec::new(),
+            help: "For adaptive trigger: token-usage ratio (0.0-1.0) that fires a compact. Default 0.70.",
             kind: SettingKind::Env,
         },
     ]

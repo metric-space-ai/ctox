@@ -219,17 +219,11 @@ pub struct LocalModelProfile {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct CodexExecInvocation {
-    pub prompt: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
 pub struct CleanRoomBaselinePlan {
     pub source_layout: SourceLayoutPaths,
     pub runtime: EngineRuntimeConfig,
     pub family_profile: EngineFamilyProfile,
     pub engine_command: Vec<String>,
-    pub codex_exec_command: Option<Vec<String>>,
     pub bridge_mode: String,
 }
 
@@ -578,63 +572,15 @@ pub fn build_engine_command(
     command
 }
 
-pub fn build_codex_exec_command(
-    source_layout: &SourceLayoutPaths,
-    runtime: &EngineRuntimeConfig,
-    invocation: &CodexExecInvocation,
-) -> Option<Vec<String>> {
-    if runtime.family != LocalModelFamily::GptOss {
-        return None;
-    }
-
-    let socket_path = escape_toml_inline_string(
-        &runtime_kernel::managed_runtime_socket_path(
-            source_layout
-                .tools_root
-                .parent()
-                .unwrap_or_else(|| Path::new(".")),
-            runtime_kernel::InferenceWorkloadRole::PrimaryGeneration,
-        )
-        .display()
-        .to_string(),
-    );
-    Some(vec![
-        source_layout.codex_exec_binary.display().to_string(),
-        "-m".to_string(),
-        runtime.model.clone(),
-        "--skip-git-repo-check".to_string(),
-        "--json".to_string(),
-        "-c".to_string(),
-        "model_provider=\"cto_local\"".to_string(),
-        "-c".to_string(),
-        "model_providers.cto_local.name=\"cto-local\"".to_string(),
-        "-c".to_string(),
-        "model_providers.cto_local.socket_transport_required=true".to_string(),
-        "-c".to_string(),
-        format!("model_providers.cto_local.socket_path=\"{socket_path}\""),
-        "-c".to_string(),
-        "model_providers.cto_local.wire_api=\"responses\"".to_string(),
-        "-c".to_string(),
-        "model_providers.cto_local.requires_openai_auth=false".to_string(),
-        "-c".to_string(),
-        "features.apply_patch_freeform=true".to_string(),
-        "-c".to_string(),
-        "web_search=\"disabled\"".to_string(),
-        invocation.prompt.clone(),
-    ])
-}
-
 pub fn build_clean_room_baseline_plan(
     root: &Path,
     family: LocalModelFamily,
-    prompt: String,
+    _prompt: String,
 ) -> CleanRoomBaselinePlan {
     let source_layout = discover_source_layout_paths(root);
     let runtime = default_runtime_config(family);
     let family_profile = default_family_profile(family);
     let engine_command = build_engine_command(&source_layout, &runtime);
-    let codex_exec_command =
-        build_codex_exec_command(&source_layout, &runtime, &CodexExecInvocation { prompt });
     let bridge_mode = model_registry::bridge_mode_for_family(family)
         .expect("local family registry must cover every LocalModelFamily")
         .to_string();
@@ -643,7 +589,6 @@ pub fn build_clean_room_baseline_plan(
         runtime,
         family_profile,
         engine_command,
-        codex_exec_command,
         bridge_mode,
     }
 }
@@ -2123,27 +2068,6 @@ mod tests {
     }
 
     #[test]
-    fn gpt_oss_codex_exec_plan_uses_direct_responses_runtime() {
-        let deps = discover_source_layout_paths(Path::new("/tmp/ctox"));
-        let runtime = default_runtime_config(LocalModelFamily::GptOss);
-        let invocation = CodexExecInvocation {
-            prompt: "Reply with OK".to_string(),
-        };
-        let command = build_codex_exec_command(&deps, &runtime, &invocation).unwrap();
-        assert!(command
-            .iter()
-            .any(|part| part.contains("wire_api=\"responses\"")));
-        assert!(command
-            .iter()
-            .any(|part| part.contains("socket_transport_required=true")));
-        assert!(!command.iter().any(|part| part.contains("base_url=")));
-        assert!(command
-            .iter()
-            .any(|part| part == "features.apply_patch_freeform=true"));
-        assert!(command.iter().any(|part| part == "web_search=\"disabled\""));
-    }
-
-    #[test]
     fn harmony_prompt_inlines_function_tool_namespace() {
         let prompt = build_gpt_oss_harmony_prompt(
             "Be precise.",
@@ -2165,16 +2089,6 @@ mod tests {
         ));
         assert!(prompt.contains("namespace functions"));
         assert!(prompt.contains("type exec_command = (_: {"));
-    }
-
-    #[test]
-    fn qwen_plan_has_no_direct_codex_exec_baseline() {
-        let deps = discover_source_layout_paths(Path::new("/tmp/ctox"));
-        let runtime = default_runtime_config(LocalModelFamily::Qwen35Vision);
-        let invocation = CodexExecInvocation {
-            prompt: "ignored".to_string(),
-        };
-        assert!(build_codex_exec_command(&deps, &runtime, &invocation).is_none());
     }
 
     #[test]

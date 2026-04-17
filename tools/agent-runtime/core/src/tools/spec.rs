@@ -1375,108 +1375,6 @@ fn create_meeting_get_transcript_tool() -> ToolSpec {
     })
 }
 
-fn create_meeting_join_tool() -> ToolSpec {
-    let properties = BTreeMap::from([
-        (
-            "url".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "The meeting URL to join. Supported providers: Google Meet \
-                     (meet.google.com), Microsoft Teams (teams.microsoft.com / \
-                     teams.live.com), and Zoom (zoom.us). The URL must be a full \
-                     join link, not just a meeting ID."
-                        .to_string(),
-                ),
-            },
-        ),
-        (
-            "name".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Optional display name for the CTOX bot participant. Defaults \
-                     to \"CTOX Notetaker\" when omitted."
-                        .to_string(),
-                ),
-            },
-        ),
-    ]);
-
-    ToolSpec::Function(ResponsesApiTool {
-        name: "meeting_join".to_string(),
-        description:
-            "Join a video meeting now. CTOX spawns a Playwright-driven browser that \
-             joins the meeting, captures audio for STT transcription, and participates \
-             in the chat when @-mentioned. Only call this when the user has explicitly \
-             asked CTOX to join a specific meeting. Returns when the join attempt is \
-             complete; use meeting_status / meeting_get_transcript afterwards to \
-             monitor the session."
-                .to_string(),
-        strict: false,
-        defer_loading: None,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["url".to_string()]),
-            additional_properties: Some(false.into()),
-        },
-        output_schema: None,
-    })
-}
-
-fn create_meeting_schedule_tool() -> ToolSpec {
-    let properties = BTreeMap::from([
-        (
-            "url".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "The meeting URL to join at the scheduled time. Same provider \
-                     rules as meeting_join."
-                        .to_string(),
-                ),
-            },
-        ),
-        (
-            "time".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "ISO-8601 timestamp for when CTOX should join the meeting \
-                     (e.g. \"2025-11-17T14:30:00+01:00\"). A local cron entry is \
-                     installed; missing timezone offsets are interpreted as local \
-                     time."
-                        .to_string(),
-                ),
-            },
-        ),
-        (
-            "name".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Optional display name for the CTOX bot participant. Defaults \
-                     to \"CTOX Notetaker\"."
-                        .to_string(),
-                ),
-            },
-        ),
-    ]);
-
-    ToolSpec::Function(ResponsesApiTool {
-        name: "meeting_schedule".to_string(),
-        description:
-            "Schedule CTOX to join a meeting at a future time. Use this when the \
-             user forwards a calendar invite or asks CTOX to attend something later. \
-             A cron entry fires meeting_join at the scheduled moment. Returns the \
-             schedule entry name which the user can later cancel via the CLI."
-                .to_string(),
-        strict: false,
-        defer_loading: None,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["url".to_string(), "time".to_string()]),
-            additional_properties: Some(false.into()),
-        },
-        output_schema: None,
-    })
-}
-
 fn create_channel_sync_tool() -> ToolSpec {
     let mut properties = BTreeMap::new();
     properties.insert(
@@ -3796,9 +3694,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
         builder.register_handler("ctox_doc_read", ctox_doc_handler);
     }
 
-    // Meeting tools — always registered so the agent can respond to meeting @mentions.
-    // Five tools: status/get_transcript read, send_chat mutates in-session,
-    // join/schedule mutate host state (spawn browser + cron entry).
+    // Meeting tools — always registered so the agent can respond to meeting @mentions
     {
         let meeting_handler = Arc::new(MeetingHandler);
         push_tool_spec(
@@ -3819,23 +3715,9 @@ pub(crate) fn build_specs_with_discoverable_tools(
             /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
         );
-        push_tool_spec(
-            &mut builder,
-            create_meeting_join_tool(),
-            /*supports_parallel_tool_calls*/ false,
-            config.code_mode_enabled,
-        );
-        push_tool_spec(
-            &mut builder,
-            create_meeting_schedule_tool(),
-            /*supports_parallel_tool_calls*/ false,
-            config.code_mode_enabled,
-        );
         builder.register_handler("meeting_status", meeting_handler.clone());
         builder.register_handler("meeting_send_chat", meeting_handler.clone());
-        builder.register_handler("meeting_get_transcript", meeting_handler.clone());
-        builder.register_handler("meeting_join", meeting_handler.clone());
-        builder.register_handler("meeting_schedule", meeting_handler);
+        builder.register_handler("meeting_get_transcript", meeting_handler);
     }
 
     push_tool_spec(

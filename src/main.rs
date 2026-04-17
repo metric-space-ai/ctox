@@ -55,7 +55,6 @@ pub mod inference {
     pub use crate::execution::models::runtime_state;
     pub use crate::execution::models::supervisor;
     pub use crate::execution::models::turn_contract;
-    pub use crate::execution::models::vision_preprocessor;
     pub use crate::execution::responses::gateway;
     pub use crate::execution::responses::web_search;
 }
@@ -72,12 +71,24 @@ use crate::inference::runtime_state;
 #[path = "model_catalog_boundary_tests.rs"]
 mod model_catalog_boundary_tests;
 
+fn top_level_usage(clean_room_families: &str) -> String {
+    format!(
+        "usage:\n  ctox\n  ctox --help\n  ctox version\n  ctox start\n  ctox stop\n  ctox status\n  ctox service --foreground\n  ctox run-once --brief <text> [--model <id>] [--quality|--performance] [--workspace <path>] [--atif-out <path>] [--thread-key <key>]\n  ctox runtime switch <model> <quality|performance>\n  ctox serve-responses-proxy\n  ctox serve-litert-bridge --config <json-path>\n  ctox boost status\n  ctox boost start [--minutes <n>] [--model <id>] [--reason <text>]\n  ctox boost stop\n  ctox source-status\n  ctox clean-room-baseline-plan <{}> [prompt]\n  ctox clean-room-rewrite-responses <json-path>\n  ctox tui\n  ctox tui-smoke [chat|skills|settings] [width] [height]\n  ctox browser <subcommand> ...\n  ctox channel <subcommand> ...\n  ctox doc <subcommand> ...\n  ctox follow-up <subcommand> ...\n  ctox governance <subcommand> ...\n  ctox jami-daemon --foreground\n  ctox meeting <subcommand> ...\n  ctox plan <subcommand> ...\n  ctox queue <subcommand> ...\n  ctox schedule <subcommand> ...\n  ctox scrape <subcommand> ...\n  ctox secret <subcommand> ...\n  ctox ticket <subcommand> ...\n  ctox verification <subcommand> ...\n  ctox web <subcommand> ...\n  ctox state-invariants [--conversation-id <id>]\n  ctox update status\n  ctox update check\n  ctox update channel show\n  ctox update channel set-github --repo <owner/repo> [--api-base <url>] [--token-env <env-var>]\n  ctox update channel clear\n  ctox update adopt [--install-root <path>] [--state-root <path>] [--release <name>] [--skip-build] [--force]\n  ctox update apply --source <path> [--release <name>] [--force] [--keep-failed-release]\n  ctox update apply --latest [--force] [--keep-failed-release]\n  ctox update apply --version <tag> [--force] [--keep-failed-release]\n  ctox update rollback\n  ctox lcm-init <db-path>\n  ctox lcm-add-message <db-path> <conversation-id> <role> <content>\n  ctox lcm-compact <db-path> <conversation-id> [token-budget] [--force]\n  ctox lcm-grep <db-path> <conversation-id|all> <scope> <mode> <query> [limit]\n  ctox lcm-describe <db-path> <summary-id>\n  ctox lcm-expand <db-path> <summary-id> [depth] [--messages] [token-cap]\n  ctox lcm-dump <db-path> <conversation-id>\n  ctox lcm-refresh-continuity <db-path> <conversation-id>\n  ctox lcm-show-continuity <db-path> <conversation-id>\n  ctox lcm-run-fixture <db-path> <fixture-path>\n  ctox continuity-init <db-path> <conversation-id>\n  ctox continuity-show <db-path> <conversation-id> [narrative|anchors|focus]\n  ctox continuity-apply <db-path> <conversation-id> <narrative|anchors|focus> <diff-path>\n  ctox continuity-log <db-path> <conversation-id> [narrative|anchors|focus]\n  ctox continuity-rebuild <db-path> <conversation-id> <narrative|anchors|focus>\n  ctox continuity-forgotten <db-path> <conversation-id> [narrative|anchors|focus] [query]\n  ctox continuity-build-prompt <db-path> <conversation-id> <narrative|anchors|focus>\n  ctox continuity-update --kind <narrative|anchors|focus> --mode <full|replace|diff> [--conversation-id <id>] [--db <path>] [--find <text>] [--replace <text>]\n  ctox context-health <db-path> <conversation-id> [latest-user-prompt] [token-budget]\n  ctox chat-prompt-export [--db <path>] [--conversation-id <id>] [--output <path>]\n  ctox context-stress <db-path> [conversation-id] [iterations] [token-budget]\n  ctox context-retrieve [--db <path>] [--conversation-id <id>] --mode <current|continuity|forgotten|search|describe|expand> [--kind <narrative|anchors|focus>] [--query <text>] [--summary-id <id>] [--limit <n>] [--depth <n>] [--messages] [--token-cap <n>]",
+        clean_room_families
+    )
+}
+
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let root = resolve_workspace_root()?;
+    let clean_room_families = model_registry::supported_clean_room_family_selectors().join("|");
 
     match args.first().map(String::as_str) {
         None => tui::run_tui(&root),
+        Some("--help") | Some("-h") | Some("help") => {
+            println!("{}", top_level_usage(&clean_room_families));
+            Ok(())
+        }
         Some("source-status") => {
             let outcome = engine::source_layout_status(&root)?;
             println!("{}", serde_json::to_string_pretty(&outcome)?);
@@ -733,11 +744,7 @@ fn main() -> anyhow::Result<()> {
         }
         Some("run-once") => handle_run_once(&root, &args[1..]),
         _ => {
-            let clean_room_families = model_registry::supported_clean_room_family_selectors().join("|");
-            anyhow::bail!(
-                "usage:\n  ctox\n  ctox version\n  ctox start\n  ctox stop\n  ctox status\n  ctox service --foreground\n  ctox run-once --brief <text> [--model <id>] [--quality|--performance] [--workspace <path>] [--atif-out <path>] [--thread-key <key>]\n  ctox governance <subcommand> ...\n  ctox state-invariants [--conversation-id <id>]\n  ctox update status\n  ctox update check\n  ctox update channel show\n  ctox update channel set-github --repo <owner/repo> [--api-base <url>] [--token-env <env-var>]\n  ctox update channel clear\n  ctox update adopt [--install-root <path>] [--state-root <path>] [--release <name>] [--skip-build] [--force]\n  ctox update apply --source <path> [--release <name>] [--force] [--keep-failed-release]\n  ctox update apply --latest [--force] [--keep-failed-release]\n  ctox update apply --version <tag> [--force] [--keep-failed-release]\n  ctox update rollback\n  ctox source-status\n  ctox clean-room-baseline-plan <{}> [prompt]\n  ctox clean-room-rewrite-responses <json-path>\n  ctox runtime switch <model> <quality|performance>\n  ctox serve-responses-proxy\n  ctox serve-litert-bridge --config <json-path>\n  ctox boost status\n  ctox boost start [--minutes <n>] [--model <id>] [--reason <text>]\n  ctox boost stop\n  ctox tui\n  ctox channel <subcommand> ...\n  ctox follow-up <subcommand> ...\n  ctox plan <subcommand> ...\n  ctox schedule <subcommand> ...\n  ctox secret <subcommand> ...\n  ctox ticket <subcommand> ...\n  ctox lcm-init <db-path>\n  ctox lcm-add-message <db-path> <conversation-id> <role> <content>\n  ctox lcm-compact <db-path> <conversation-id> [token-budget] [--force]\n  ctox lcm-grep <db-path> <conversation-id|all> <scope> <mode> <query> [limit]\n  ctox lcm-describe <db-path> <summary-id>\n  ctox lcm-expand <db-path> <summary-id> [depth] [--messages] [token-cap]\n  ctox lcm-dump <db-path> <conversation-id>\n  ctox lcm-refresh-continuity <db-path> <conversation-id>\n  ctox lcm-show-continuity <db-path> <conversation-id>\n  ctox lcm-run-fixture <db-path> <fixture-path>\n  ctox continuity-init <db-path> <conversation-id>\n  ctox continuity-show <db-path> <conversation-id> [narrative|anchors|focus]\n  ctox continuity-apply <db-path> <conversation-id> <narrative|anchors|focus> <diff-path>\n  ctox continuity-log <db-path> <conversation-id> [narrative|anchors|focus]\n  ctox continuity-rebuild <db-path> <conversation-id> <narrative|anchors|focus>\n  ctox continuity-forgotten <db-path> <conversation-id> [narrative|anchors|focus] [query]\n  ctox continuity-build-prompt <db-path> <conversation-id> <narrative|anchors|focus>\n  ctox context-health <db-path> <conversation-id> [latest-user-prompt] [token-budget]\n  ctox chat-prompt-export [--db <path>] [--conversation-id <id>] [--output <path>]\n  ctox context-stress <db-path> [conversation-id] [iterations] [token-budget]\n  ctox context-retrieve [--db <path>] [--conversation-id <id>] --mode <current|continuity|forgotten|search|describe|expand> [--kind <narrative|anchors|focus>] [--query <text>] [--summary-id <id>] [--limit <n>] [--depth <n>] [--messages] [--token-cap <n>]",
-                clean_room_families
-            )
+            anyhow::bail!("{}", top_level_usage(&clean_room_families))
         }
     }
 }
@@ -792,10 +799,9 @@ fn handle_continuity_update(args: &[String]) -> anyhow::Result<()> {
         Some(v) => v.parse().context("failed to parse --conversation-id")?,
         None => inference::turn_loop::CHAT_CONVERSATION_ID,
     };
-    let kind = find_flag_value(args, "--kind")
-        .context("missing --kind (narrative|anchors|focus)")?;
-    let mode = find_flag_value(args, "--mode")
-        .context("missing --mode (full|replace|diff)")?;
+    let kind =
+        find_flag_value(args, "--kind").context("missing --kind (narrative|anchors|focus)")?;
+    let mode = find_flag_value(args, "--mode").context("missing --mode (full|replace|diff)")?;
     let db = Path::new(&db_path);
     let result = match mode {
         "full" => {
@@ -805,23 +811,16 @@ fn handle_continuity_update(args: &[String]) -> anyhow::Result<()> {
             context::lcm::run_continuity_full_replace(db, conversation_id, kind, &content)?
         }
         "replace" => {
-            let find = find_flag_value(args, "--find")
-                .context("--mode replace requires --find <text>")?;
+            let find =
+                find_flag_value(args, "--find").context("--mode replace requires --find <text>")?;
             let replace = find_flag_value(args, "--replace").unwrap_or("");
-            context::lcm::run_continuity_string_replace(
-                db,
-                conversation_id,
-                kind,
-                find,
-                replace,
-            )?
+            context::lcm::run_continuity_string_replace(db, conversation_id, kind, find, replace)?
         }
         "diff" => {
             let mut diff = String::new();
             std::io::Read::read_to_string(&mut std::io::stdin(), &mut diff)
                 .context("failed to read continuity diff from stdin")?;
-            let engine =
-                context::lcm::LcmEngine::open(db, context::lcm::LcmConfig::default())?;
+            let engine = context::lcm::LcmEngine::open(db, context::lcm::LcmConfig::default())?;
             engine.continuity_apply_diff(
                 conversation_id,
                 context::lcm::ContinuityKind::parse(kind)?,
@@ -969,10 +968,29 @@ fn handle_run_once(root: &Path, args: &[String]) -> anyhow::Result<()> {
 
     let mut current = lease_next_for_thread(root, &thread_key, lease_owner)?;
     if current.is_none() {
-        anyhow::bail!(
-            "failed to lease newly-created queue task for thread {thread_key}"
-        );
+        anyhow::bail!("failed to lease newly-created queue task for thread {thread_key}");
     }
+
+    // Create a single PersistentSession for the entire run-once loop.
+    // Context accumulates across turns inside codex-core's thread state,
+    // so CompactPolicy can observe real growth and fire when needed.
+    let operator_settings =
+        inference::runtime_env::effective_operator_env_map(root).unwrap_or_default();
+    let mut persistent_session = match inference::turn_loop::PersistentSession::start(
+        root,
+        &operator_settings,
+    ) {
+        Ok(session) => {
+            eprintln!(
+                "ctox run-once: persistent session created (context accumulates across turns)"
+            );
+            Some(session)
+        }
+        Err(err) => {
+            eprintln!("ctox run-once: failed to create persistent session: {err:#} — falling back to per-turn clients");
+            None
+        }
+    };
 
     while let Some((prompt_text, leased_keys, ws_override)) = current.take() {
         turns_run += 1;
@@ -997,6 +1015,7 @@ fn handle_run_once(root: &Path, args: &[String]) -> anyhow::Result<()> {
             conversation_id,
             None,
             force_continuity_refresh,
+            persistent_session.as_mut(),
             |event| eprintln!("[ctox run-once t{turns_run}] {event}"),
         );
 
@@ -1043,17 +1062,13 @@ fn handle_run_once(root: &Path, args: &[String]) -> anyhow::Result<()> {
                         leased_keys.first().map(String::as_str),
                     ) {
                         Ok(title) => {
-                            eprintln!(
-                                "ctox run-once: enqueued timeout continuation: {title}"
-                            );
+                            eprintln!("ctox run-once: enqueued timeout continuation: {title}");
                             // Fall through: sync mission state, then lease
                             // the freshly enqueued continuation in the
                             // next iteration.
                         }
                         Err(enq_err) => {
-                            eprintln!(
-                                "ctox run-once: failed to enqueue continuation: {enq_err}"
-                            );
+                            eprintln!("ctox run-once: failed to enqueue continuation: {enq_err}");
                             mission_status = "failed";
                             break;
                         }
@@ -1096,9 +1111,7 @@ fn handle_run_once(root: &Path, args: &[String]) -> anyhow::Result<()> {
                     );
                 }
                 Err(err) => {
-                    eprintln!(
-                        "ctox run-once: failed to enqueue mid-work continuation: {err}"
-                    );
+                    eprintln!("ctox run-once: failed to enqueue mid-work continuation: {err}");
                 }
             }
         }
@@ -1111,28 +1124,26 @@ fn handle_run_once(root: &Path, args: &[String]) -> anyhow::Result<()> {
         // started. The service daemon (service.rs:2320) already treats
         // `is_open` as an idle-detection signal, not a termination
         // signal; run-once now matches.
-        let explicitly_closed =
-            match lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default())
-                .and_then(|engine| engine.sync_mission_state_from_continuity(conversation_id))
-            {
-                Ok(state) => {
-                    let status = state.mission_status.to_ascii_lowercase();
-                    let mode = state.continuation_mode.to_ascii_lowercase();
-                    let closed =
-                        status == "done" || mode == "closed" || mode == "dormant";
-                    eprintln!(
-                        "ctox run-once: after t{} status={} mode={} explicit_closed={} mid_work={}",
-                        turns_run, status, mode, closed, last_reply_is_mid_work
-                    );
-                    closed
-                }
-                Err(err) => {
-                    eprintln!(
+        let explicitly_closed = match lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default())
+            .and_then(|engine| engine.sync_mission_state_from_continuity(conversation_id))
+        {
+            Ok(state) => {
+                let status = state.mission_status.to_ascii_lowercase();
+                let mode = state.continuation_mode.to_ascii_lowercase();
+                let closed = status == "done" || mode == "closed" || mode == "dormant";
+                eprintln!(
+                    "ctox run-once: after t{} status={} mode={} explicit_closed={} mid_work={}",
+                    turns_run, status, mode, closed, last_reply_is_mid_work
+                );
+                closed
+            }
+            Err(err) => {
+                eprintln!(
                         "ctox run-once: sync_mission_state_from_continuity failed: {err}; treating mission as still open"
                     );
-                    false
-                }
-            };
+                false
+            }
+        };
 
         if explicitly_closed {
             mission_status = "handled";
@@ -1163,6 +1174,12 @@ fn handle_run_once(root: &Path, args: &[String]) -> anyhow::Result<()> {
         }
     }
 
+    // Shut down the persistent session cleanly.
+    if let Some(mut session) = persistent_session.take() {
+        eprintln!("ctox run-once: shutting down persistent session");
+        session.shutdown();
+    }
+
     if let Some(out_path) = atif_out.as_deref() {
         let settings = runtime_env::effective_runtime_env_map(root).unwrap_or_default();
         let model_name = runtime_env::effective_chat_model_from_map(&settings)
@@ -1190,8 +1207,9 @@ fn handle_run_once(root: &Path, args: &[String]) -> anyhow::Result<()> {
             &model_name,
             notes,
         )?;
-        export::atif::write_trajectory(&trajectory, out_path)
-            .with_context(|| format!("failed to write ATIF trajectory to {}", out_path.display()))?;
+        export::atif::write_trajectory(&trajectory, out_path).with_context(|| {
+            format!("failed to write ATIF trajectory to {}", out_path.display())
+        })?;
         eprintln!(
             "ctox run-once: wrote ATIF trajectory to {}",
             out_path.display()
@@ -1305,7 +1323,9 @@ mod run_once_tests {
 
     #[test]
     fn mid_work_detects_unclosed_think() {
-        assert!(reply_looks_mid_work("<think>I'm still analyzing the problem"));
+        assert!(reply_looks_mid_work(
+            "<think>I'm still analyzing the problem"
+        ));
         assert!(reply_looks_mid_work("<think>no close tag at all"));
     }
 

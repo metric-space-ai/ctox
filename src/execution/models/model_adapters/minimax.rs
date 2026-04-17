@@ -49,11 +49,21 @@ pub fn runtime_tuning(
 pub fn rewrite_request(raw: &[u8]) -> anyhow::Result<Vec<u8>> {
     let payload: Value =
         serde_json::from_slice(raw).context("failed to parse responses request")?;
-    let model = payload
+    // Always use the canonical MiniMax model name, regardless of what codex-core
+    // puts in the request body. codex-core's Models-Manager may remap unknown
+    // model names to its internal defaults (e.g. "gpt-5.3-codex"), which the
+    // MiniMax API rejects. The gateway already routed to this adapter based on
+    // CTOX's active_model, so the correct model is always MiniMax-M2.7.
+    let incoming_model = payload
         .get("model")
         .and_then(Value::as_str)
-        .unwrap_or("minimax/minimax-m2.7")
-        .to_string();
+        .unwrap_or("");
+    let model = if incoming_model.to_ascii_lowercase().contains("minimax") {
+        incoming_model.to_string()
+    } else {
+        // Not a recognized MiniMax model name — use the canonical one.
+        "MiniMax-M2.7".to_string()
+    };
     let instructions = payload
         .get("instructions")
         .and_then(Value::as_str)

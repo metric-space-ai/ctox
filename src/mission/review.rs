@@ -4,7 +4,6 @@ use std::path::Path;
 use std::time::Duration;
 
 use crate::inference::runtime_env;
-use crate::inference::turn_loop;
 
 const REVIEW_TIMEOUT_SECS: u64 = 90;
 
@@ -101,15 +100,17 @@ pub fn review_completion_if_needed(
 
     let settings = runtime_env::effective_runtime_env_map(root).unwrap_or_default();
     let review_prompt = build_review_prompt(request, result_text, &reasons);
-    match turn_loop::invoke_codex_exec_with_timeout_and_instructions(
-        root,
-        &settings,
-        &review_prompt,
-        None,
-        Some(Duration::from_secs(REVIEW_TIMEOUT_SECS)),
-        Some(REVIEW_SYSTEM_PROMPT),
-        Some(false),
-        0,
+    match crate::execution::agent::direct_session::run_direct_session(
+        crate::execution::agent::direct_session::DirectSessionRequest {
+            root,
+            settings: &settings,
+            prompt: &review_prompt,
+            workspace_root: None,
+            timeout: Some(Duration::from_secs(REVIEW_TIMEOUT_SECS)),
+            base_instructions: Some(REVIEW_SYSTEM_PROMPT),
+            include_apply_patch_tool: Some(false),
+            conversation_id: 0,
+        },
     ) {
         Ok(report) => parse_review_report(score, reasons, &report),
         Err(err) => ReviewOutcome {

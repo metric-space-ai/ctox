@@ -5,6 +5,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use crate::inference::runtime_state;
+use crate::secrets;
 
 const DEFAULT_RUNTIME_CONFIG_RELATIVE_PATH: &str = "runtime/engine.env";
 
@@ -14,6 +15,9 @@ pub fn runtime_config_path(root: &Path) -> PathBuf {
 
 pub fn load_runtime_env_map(root: &Path) -> Result<BTreeMap<String, String>> {
     let mut env_map = load_persisted_runtime_env_map(root)?;
+    // Merge credentials from the encrypted secret store so callers see a
+    // unified map regardless of where the value lives.
+    secrets::merge_credentials_into_env_map(root, &mut env_map);
     if let Ok(state) = runtime_state::load_or_resolve_runtime_state(root) {
         runtime_state::apply_runtime_state_to_env_map(&mut env_map, &state);
     }
@@ -44,8 +48,19 @@ pub fn effective_operator_env_map(root: &Path) -> Result<BTreeMap<String, String
 }
 
 pub fn save_runtime_env_map(root: &Path, env_map: &BTreeMap<String, String>) -> Result<()> {
-    let state = runtime_state::derive_runtime_state_from_env_map(root, env_map)?;
-    save_runtime_state_projection(root, &state, env_map)
+    // Route secret keys into the encrypted store before persisting.
+    let mut clean_map = env_map.clone();
+    for (key, value) in env_map {
+        if secrets::is_secret_key(key) && !value.trim().is_empty() {
+            if let Err(e) = secrets::set_credential(root, key, value) {
+                eprintln!("[secrets] failed to encrypt {key}: {e:#} — keeping in engine.env");
+                continue;
+            }
+            clean_map.remove(key);
+        }
+    }
+    let state = runtime_state::derive_runtime_state_from_env_map(root, &clean_map)?;
+    save_runtime_state_projection(root, &state, &clean_map)
 }
 
 pub fn save_runtime_state_projection(
@@ -66,6 +81,14 @@ pub fn env_or_config(root: &Path, key: &str) -> Option<String> {
             if let Some(value) = runtime_state::owned_runtime_env_value(&state, key)
                 .filter(|value| !value.trim().is_empty())
             {
+                return Some(value);
+            }
+        }
+    }
+    // For secret keys, check encrypted store first, then process env.
+    if secrets::is_secret_key(key) {
+        if let Some(value) = secrets::get_credential(root, key) {
+            if !value.trim().is_empty() {
                 return Some(value);
             }
         }
@@ -199,7 +222,18 @@ fn load_persisted_runtime_env_map(root: &Path) -> Result<BTreeMap<String, String
     }
     let raw = std::fs::read_to_string(&path)
         .with_context(|| format!("failed to read runtime config {}", path.display()))?;
-    Ok(parse_env_map(&raw))
+    let mut env_map = parse_env_map(&raw);
+
+    // One-time migration: move any plaintext secret keys from engine.env
+    // into the encrypted store and rewrite engine.env without them.
+    let migrated = secrets::migrate_secrets_from_env_map(root, &mut env_map);
+    if migrated > 0 {
+        // Rewrite engine.env without the migrated secret keys.
+        if let Err(e) = write_runtime_env_map(root, &env_map) {
+            eprintln!("[secrets] failed to rewrite engine.env after migration: {e:#}");
+        }
+    }
+    Ok(env_map)
 }
 
 fn write_runtime_env_map(root: &Path, env_map: &BTreeMap<String, String>) -> Result<()> {
@@ -262,6 +296,13 @@ fn process_env_override_allowed(key: &str) -> bool {
             | "CTOX_CUDA_BIN_PATH"
             | "CTOX_RESOURCE_SNAPSHOT_JSON"
             | "CTOX_TEST_GPU_TOTALS_MB"
+            // Phase 1/2 refactor: direct-session gate + compact policy knobs.
+            | "CTOX_USE_DIRECT_SESSION"
+            | "CTOX_DEBUG_DIRECT_SESSION"
+            | "CTOX_COMPACT_TRIGGER"
+            | "CTOX_COMPACT_MODE"
+            | "CTOX_COMPACT_FIXED_INTERVAL"
+            | "CTOX_COMPACT_ADAPTIVE_THRESHOLD"
     )
 }
 
