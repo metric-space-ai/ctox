@@ -266,6 +266,10 @@ fn render_settings(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         .constraints([Constraint::Length(1), Constraint::Min(8)])
         .split(area);
     render_settings_view_tabs(frame, app, outer[0]);
+    if app.settings_view == SettingsView::Update {
+        render_settings_update(frame, app, outer[1]);
+        return;
+    }
     let body = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(58), Constraint::Percentage(42)])
@@ -329,6 +333,71 @@ fn render_settings(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     .style(sidebar_style)
     .wrap(Wrap { trim: false });
     frame.render_widget(help_widget, body[1]);
+}
+
+fn render_settings_update(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
+    let split = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Percentage(50),
+            Constraint::Min(6),
+            Constraint::Length(1),
+        ])
+        .split(area);
+
+    let header = Paragraph::new(Line::from(vec![
+        Span::styled(" ctox update ", Style::default().fg(Color::LightCyan).add_modifier(Modifier::BOLD)),
+        Span::raw("  "),
+        Span::styled("[c]", Style::default().fg(Color::LightGreen).add_modifier(Modifier::BOLD)),
+        Span::raw(" check   "),
+        Span::styled("[r]", Style::default().fg(Color::LightGreen).add_modifier(Modifier::BOLD)),
+        Span::raw(" refresh status"),
+    ]));
+    frame.render_widget(header, split[0]);
+
+    let info = if app.update_view.info_json.is_empty() {
+        "(press [r] to load status)".to_string()
+    } else {
+        app.update_view.info_json.clone()
+    };
+    frame.render_widget(
+        Paragraph::new(info)
+            .block(pane_block().borders(Borders::TOP).title(Span::styled(
+                " install / version ",
+                Style::default().fg(Color::LightBlue).add_modifier(Modifier::BOLD),
+            )))
+            .wrap(Wrap { trim: false }),
+        split[1],
+    );
+
+    let check_body = if app.update_view.check_json.is_empty() {
+        "Remote release check has not run yet.\n\nPress [c] to query the configured release channel.\n\nTo apply an update, run in a terminal:\n  ctox update apply --latest                (binary bundle, default)\n  ctox update apply --latest --from-source  (rebuild from source)\n  ctox update rollback                      (revert to previous release)\n\nConfigure channel once with:\n  ctox update channel set-github --repo <owner/repo>".to_string()
+    } else {
+        app.update_view.check_json.clone()
+    };
+    frame.render_widget(
+        Paragraph::new(check_body)
+            .block(pane_block().borders(Borders::TOP).title(Span::styled(
+                " remote check ",
+                Style::default().fg(Color::LightBlue).add_modifier(Modifier::BOLD),
+            )))
+            .wrap(Wrap { trim: false }),
+        split[2],
+    );
+
+    let footer = if app.update_view.last_action_line.is_empty() {
+        "ready".to_string()
+    } else {
+        app.update_view.last_action_line.clone()
+    };
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            footer,
+            Style::default().fg(Color::DarkGray),
+        )),
+        split[3],
+    );
 }
 
 fn render_skills_narrow(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
@@ -2020,8 +2089,9 @@ fn render_settings_view_tabs(frame: &mut Frame, app: &App, area: ratatui::layout
     let selected = match app.settings_view {
         SettingsView::Model => 0,
         SettingsView::Communication => 1,
+        SettingsView::Update => 2,
     };
-    let titles = ["Model", "Communication"]
+    let titles = ["Model", "Communication", "Update"]
         .into_iter()
         .map(Line::from)
         .collect::<Vec<_>>();

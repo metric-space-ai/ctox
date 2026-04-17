@@ -372,6 +372,14 @@ enum Page {
 enum SettingsView {
     Model,
     Communication,
+    Update,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct UpdateViewState {
+    pub info_json: String,
+    pub check_json: String,
+    pub last_action_line: String,
 }
 
 #[derive(Debug, Clone)]
@@ -682,6 +690,7 @@ struct App {
     settings_items: Vec<SettingItem>,
     settings_selected: usize,
     settings_view: SettingsView,
+    update_view: UpdateViewState,
     settings_menu_open: bool,
     settings_menu_index: usize,
     jami_qr_lines: Vec<String>,
@@ -958,6 +967,7 @@ impl App {
             settings_items: load_settings_items(&root),
             settings_selected: 0,
             settings_view: SettingsView::Model,
+            update_view: UpdateViewState::default(),
             settings_menu_open: false,
             settings_menu_index: 0,
             jami_qr_lines: Vec::new(),
@@ -1168,6 +1178,9 @@ impl App {
                             self.switch_settings_view(SettingsView::Communication);
                         }
                         SettingsView::Communication => {
+                            self.switch_settings_view(SettingsView::Update);
+                        }
+                        SettingsView::Update => {
                             self.page = Page::Chat;
                             self.switch_settings_view(SettingsView::Model);
                         }
@@ -1180,10 +1193,13 @@ impl App {
                 match self.page {
                     Page::Chat => {
                         self.page = Page::Settings;
-                        self.switch_settings_view(SettingsView::Communication);
+                        self.switch_settings_view(SettingsView::Update);
                     }
                     Page::Skills => self.page = Page::Chat,
                     Page::Settings => match self.settings_view {
+                        SettingsView::Update => {
+                            self.switch_settings_view(SettingsView::Communication);
+                        }
                         SettingsView::Communication => {
                             self.switch_settings_view(SettingsView::Model);
                         }
@@ -1219,6 +1235,9 @@ impl App {
     }
 
     fn handle_settings_key(&mut self, key_event: KeyEvent) -> Result<()> {
+        if self.settings_view == SettingsView::Update {
+            return self.handle_update_view_key(key_event);
+        }
         if self.settings_menu_open {
             match key_event.code {
                 KeyCode::Up => self.move_settings_menu(-1),
@@ -1688,6 +1707,7 @@ impl App {
                     | "CTO_TEAMS_TEAM_ID"
                     | "CTO_TEAMS_CHANNEL_ID"
             ),
+            SettingsView::Update => false,
         }
     }
 
@@ -1824,6 +1844,67 @@ impl App {
         self.settings_view = view;
         if let Some(first) = self.visible_setting_indices().first().copied() {
             self.settings_selected = first;
+        }
+        if view == SettingsView::Update {
+            self.refresh_update_view_info();
+        }
+    }
+
+    fn refresh_update_view_info(&mut self) {
+        match crate::install::version_info(&self.root) {
+            Ok(info) => {
+                self.update_view.info_json =
+                    serde_json::to_string_pretty(&info).unwrap_or_default();
+            }
+            Err(err) => {
+                self.update_view.info_json = format!("error: {err}");
+            }
+        }
+    }
+
+    fn handle_update_view_key(&mut self, key_event: KeyEvent) -> Result<()> {
+        match key_event.code {
+            KeyCode::Char('c') | KeyCode::Char('C') => {
+                self.update_view.last_action_line =
+                    "Running `ctox update check`…".to_string();
+                match self.run_update_subprocess(&["update", "check"]) {
+                    Ok(output) => {
+                        self.update_view.check_json = output;
+                        self.update_view.last_action_line = format!(
+                            "check completed at {}",
+                            chrono::Local::now().format("%H:%M:%S")
+                        );
+                    }
+                    Err(err) => {
+                        self.update_view.last_action_line = format!("check failed: {err}");
+                    }
+                }
+            }
+            KeyCode::Char('r') | KeyCode::Char('R') => {
+                self.refresh_update_view_info();
+                self.update_view.last_action_line =
+                    "status refreshed (use `ctox update apply --latest` in terminal to update)"
+                        .to_string();
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn run_update_subprocess(&self, args: &[&str]) -> Result<String> {
+        let exe = std::env::current_exe()
+            .context("failed to resolve current ctox executable")?;
+        let output = std::process::Command::new(exe)
+            .args(args)
+            .env("CTOX_ROOT", &self.root)
+            .output()
+            .context("failed to spawn ctox subprocess")?;
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        if output.status.success() {
+            Ok(stdout)
+        } else {
+            anyhow::bail!("{}{}", stdout, stderr.trim())
         }
     }
 
@@ -5185,15 +5266,17 @@ fn overlay_load_observation_gpu_cards(
 
 fn previous_settings_view(view: SettingsView) -> SettingsView {
     match view {
-        SettingsView::Model => SettingsView::Communication,
+        SettingsView::Model => SettingsView::Update,
         SettingsView::Communication => SettingsView::Model,
+        SettingsView::Update => SettingsView::Communication,
     }
 }
 
 fn next_settings_view(view: SettingsView) -> SettingsView {
     match view {
         SettingsView::Model => SettingsView::Communication,
-        SettingsView::Communication => SettingsView::Model,
+        SettingsView::Communication => SettingsView::Update,
+        SettingsView::Update => SettingsView::Model,
     }
 }
 

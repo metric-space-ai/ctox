@@ -209,8 +209,25 @@ jobs:
           path: ctox-desktop-windows-x64.msi
 
   build-ctox:
-    runs-on: ubuntu-22.04
-    name: CTOX CLI — linux-x64
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            artifact: ctox-linux-x64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            artifact: ctox-linux-arm64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: ctox-macos-arm64
+          - os: macos-13
+            target: x86_64-apple-darwin
+            artifact: ctox-macos-x64
+
+    runs-on: ${{ matrix.os }}
+    name: CTOX CLI — ${{ matrix.artifact }}
 
     steps:
       - uses: actions/checkout@v4
@@ -219,6 +236,7 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.93.0"
+          targets: ${{ matrix.target }}
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -227,29 +245,36 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: x86_64-unknown-linux-gnu-cargo-ctox-${{ hashFiles('Cargo.lock') }}
-          restore-keys: x86_64-unknown-linux-gnu-cargo-ctox-
+          key: ${{ matrix.target }}-cargo-ctox-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ matrix.target }}-cargo-ctox-
 
       - name: Install Linux dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             libssl-dev libfontconfig1-dev pkg-config libdbus-1-dev
 
       - name: Build CTOX
-        run: cargo build --release
+        run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Package binary
+      - name: Package runtime bundle
         run: |
-          mkdir -p dist
-          cp target/release/ctox dist/
-          cd dist && tar czf ../ctox-linux-x64.tar.gz ctox
+          mkdir -p bundle/target/release
+          cp target/${{ matrix.target }}/release/ctox bundle/target/release/
+          cp -r skills bundle/
+          cp install.sh bundle/
+          cp LICENSE NOTICE bundle/
+          cd bundle && tar czf ../${{ matrix.artifact }}.tar.gz .
+          cd .. && shasum -a 256 ${{ matrix.artifact }}.tar.gz > ${{ matrix.artifact }}.tar.gz.sha256
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ctox-linux-x64
-          path: ctox-linux-x64.tar.gz
+          name: ${{ matrix.artifact }}
+          path: |
+            ${{ matrix.artifact }}.tar.gz
+            ${{ matrix.artifact }}.tar.gz.sha256
 
   release:
     needs: [build-desktop-macos, build-desktop-linux, build-desktop-windows, build-ctox]

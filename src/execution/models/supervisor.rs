@@ -362,6 +362,41 @@ impl ManagedBackendRole {
                     compute_target: Some(selection.compute_target),
                 }
             }
+            Self::Vision => {
+                let runtime_state = runtime_state::load_or_resolve_runtime_state(root).ok();
+                let auxiliary_state = runtime_state.as_ref().map(|state| {
+                    runtime_state::auxiliary_runtime_state_for_role(
+                        state,
+                        engine::AuxiliaryRole::Vision,
+                    )
+                });
+                let configured_model =
+                    auxiliary_state.and_then(|state| state.configured_model.clone());
+                let selection = runtime_kernel::preferred_auxiliary_selection_for_host(
+                    root,
+                    engine::AuxiliaryRole::Vision,
+                    configured_model.as_deref(),
+                );
+                let port = auxiliary_state
+                    .and_then(|state| state.port)
+                    .unwrap_or(selection.default_port);
+                ManagedBackendSpec {
+                    display_model: selection.choice.to_string(),
+                    request_model: selection.request_model.to_string(),
+                    port,
+                    socket_path: Some(
+                        runtime_kernel::managed_runtime_socket_path(
+                            root,
+                            runtime_kernel::InferenceWorkloadRole::Vision,
+                        )
+                        .display()
+                        .to_string(),
+                    ),
+                    health_path: "/health",
+                    launcher_kind: ManagedLauncherKind::Engine,
+                    compute_target: Some(selection.compute_target),
+                }
+            }
         }
     }
 }
