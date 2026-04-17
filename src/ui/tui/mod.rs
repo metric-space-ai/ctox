@@ -35,6 +35,7 @@ use crate::channels;
 use crate::context_health;
 use crate::governance;
 use crate::inference::engine;
+use crate::inference::vision_preprocessor;
 use crate::inference::gateway::LoadObservation;
 use crate::inference::gateway::RuntimeTelemetry;
 use crate::inference::model_registry;
@@ -561,6 +562,108 @@ enum SettingKind {
     ServiceToggle,
 }
 
+/// A single image the user has queued up for the next chat submission.
+/// Stored as an absolute path; byte size is captured for display only.
+#[derive(Debug, Clone)]
+struct PendingImage {
+    path: PathBuf,
+    size_bytes: u64,
+}
+
+const IMAGE_EXTENSIONS: &[&str] = &[
+    "png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff", "heic", "heif",
+];
+const MAX_IMAGE_ATTACHMENT_BYTES: u64 = 20 * 1024 * 1024;
+
+/// Capture the current system clipboard as a PNG file and return the path
+/// on success. Uses platform-native CLIs so we don't take a dependency on
+/// `arboard` / objc-crate chains — this keeps the CTOX build portable and
+/// avoids another hard-failure surface for macOS sandboxing.
+///
+/// - macOS: `pbpaste -Prefer png` writes raw PNG bytes to stdout.
+/// - Linux/Wayland: `wl-paste --type image/png`.
+/// - Linux/X11: `xclip -selection clipboard -t image/png -o`.
+///
+/// Returns None if no image is on the clipboard or the platform CLI is
+/// missing / returned empty output.
+fn capture_clipboard_image_to_tempfile() -> Option<PathBuf> {
+    use std::process::Command;
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
+    let tempfile = std::env::temp_dir().join(format!("ctox-clipboard-{timestamp}.png"));
+
+    #[cfg(target_os = "macos")]
+    let output = Command::new("pbpaste").args(["-Prefer", "png"]).output();
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let output = {
+        // Prefer Wayland if available, else fall back to xclip.
+        let wl = Command::new("wl-paste")
+            .args(["--type", "image/png"])
+            .output();
+        match wl {
+            Ok(result) if result.status.success() && !result.stdout.is_empty() => Ok(result),
+            _ => Command::new("xclip")
+                .args(["-selection", "clipboard", "-t", "image/png", "-o"])
+                .output(),
+        }
+    };
+
+    #[cfg(not(unix))]
+    let output: std::io::Result<std::process::Output> = Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "clipboard image paste is only supported on macOS/Linux in this build",
+    ));
+
+    let data = match output {
+        Ok(result) if result.status.success() && !result.stdout.is_empty() => result.stdout,
+        _ => return None,
+    };
+    // Sanity-check: PNG signature.
+    if data.len() < 8 || &data[..8] != b"\x89PNG\r\n\x1a\n" {
+        return None;
+    }
+    std::fs::write(&tempfile, &data).ok()?;
+    Some(tempfile)
+}
+
+/// Parse a pasted-string or slash-command argument into a candidate image
+/// attachment. Returns Some only if the string points to an existing,
+/// readable file with an image extension within the size limit.
+fn try_resolve_image_attachment(input: &str, cwd: &Path) -> Option<PendingImage> {
+    let trimmed = input.trim().trim_matches(|c| c == '"' || c == '\'');
+    if trimmed.is_empty() {
+        return None;
+    }
+    let raw = PathBuf::from(trimmed);
+    let candidate = if raw.is_absolute() {
+        raw
+    } else {
+        cwd.join(raw)
+    };
+    let canonical = std::fs::canonicalize(&candidate).ok()?;
+    let metadata = std::fs::metadata(&canonical).ok()?;
+    if !metadata.is_file() {
+        return None;
+    }
+    let extension = canonical
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(str::to_ascii_lowercase)?;
+    if !IMAGE_EXTENSIONS.iter().any(|ext| *ext == extension) {
+        return None;
+    }
+    if metadata.len() > MAX_IMAGE_ATTACHMENT_BYTES {
+        return None;
+    }
+    Some(PendingImage {
+        path: canonical,
+        size_bytes: metadata.len(),
+    })
+}
+
 struct App {
     root: PathBuf,
     db_path: PathBuf,
@@ -605,6 +708,13 @@ struct App {
     last_chat_refresh_at: Option<Instant>,
     last_communication_refresh_at: Option<Instant>,
     last_skill_catalog_refresh_at: Option<Instant>,
+    /// Images the user has attached to the next chat submission. Populated
+    /// by the `/image <path>` slash-command and by file-path drag-and-drop
+    /// pastes. On submit, each pending image becomes a
+    /// `[[ctox:image:/absolute/path]]` marker prefixed to the prompt
+    /// text — the gateway-side vision preprocessor expands these markers
+    /// into real `input_image` content blocks.
+    pending_images: Vec<PendingImage>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -874,6 +984,7 @@ impl App {
             last_chat_refresh_at: None,
             last_communication_refresh_at: None,
             last_skill_catalog_refresh_at: None,
+            pending_images: Vec::new(),
         };
         if let Some(first) = app.visible_setting_indices().first().copied() {
             app.settings_selected = first;
@@ -883,7 +994,40 @@ impl App {
 
     fn handle_paste(&mut self, text: &str) {
         match self.page {
-            Page::Chat => self.chat_input.push_str(text),
+            Page::Chat => {
+                // Terminals forward drag-and-drop as a paste whose payload
+                // is the absolute path of the file being dropped. If that
+                // path points to an existing image file, attach it as a
+                // pending image instead of splatting the path into the
+                // chat input. Multi-file drops arrive space-separated on
+                // most terminals; we resolve each candidate independently.
+                let candidates: Vec<&str> = if text.contains('\n') {
+                    text.split('\n').collect()
+                } else {
+                    text.split_ascii_whitespace().collect()
+                };
+                let mut attached_any = false;
+                if candidates.len() >= 1 {
+                    for candidate in &candidates {
+                        if let Some(image) = try_resolve_image_attachment(candidate, &self.root) {
+                            self.pending_images.push(image);
+                            attached_any = true;
+                        }
+                    }
+                }
+                if attached_any {
+                    self.status_line = format!(
+                        "📎 attached {} image(s) — total pending {}",
+                        candidates
+                            .iter()
+                            .filter(|c| try_resolve_image_attachment(c, &self.root).is_some())
+                            .count(),
+                        self.pending_images.len()
+                    );
+                } else {
+                    self.chat_input.push_str(text);
+                }
+            }
             Page::Skills => {}
             Page::Settings => {
                 if let Some(item) = self.settings_items.get_mut(self.settings_selected) {
@@ -893,6 +1037,58 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Handle a `/image <path>` slash-command: validate the path and
+    /// attach to the pending-images queue. Returns true if the input was
+    /// recognised as an image command (the caller should then skip normal
+    /// submission).
+    fn handle_image_command(&mut self, input: &str) -> bool {
+        let trimmed = input.trim();
+        let rest = if let Some(rest) = trimmed.strip_prefix("/image") {
+            rest.trim()
+        } else if let Some(rest) = trimmed.strip_prefix("/img") {
+            rest.trim()
+        } else {
+            return false;
+        };
+        if rest.is_empty() {
+            if self.pending_images.is_empty() {
+                self.status_line =
+                    "Usage: /image <absolute-or-relative-path-to-image-file>".to_string();
+            } else {
+                self.status_line = format!(
+                    "{} image(s) pending. Usage: /image <path> to attach more, Ctrl-X to clear.",
+                    self.pending_images.len()
+                );
+            }
+            return true;
+        }
+        if rest == "clear" {
+            let cleared = self.pending_images.len();
+            self.pending_images.clear();
+            self.status_line = format!("Cleared {cleared} pending image(s).");
+            return true;
+        }
+        match try_resolve_image_attachment(rest, &self.root) {
+            Some(image) => {
+                let display_path = image.path.display().to_string();
+                let kib = image.size_bytes / 1024;
+                self.pending_images.push(image);
+                self.status_line = format!(
+                    "📎 attached image {display_path} ({kib} KiB) — {} pending",
+                    self.pending_images.len()
+                );
+            }
+            None => {
+                self.status_line = format!(
+                    "Could not attach `{rest}` — needs to be an existing image file \
+                    (png/jpg/jpeg/gif/webp/bmp/tiff/heic) under {} MB.",
+                    MAX_IMAGE_ATTACHMENT_BYTES / (1024 * 1024)
+                );
+            }
+        }
+        true
     }
 
     fn handle_key_event(&mut self, key_event: KeyEvent) -> Result<bool> {
@@ -905,6 +1101,56 @@ impl App {
             && matches!(key_event.code, KeyCode::Char('s'))
         {
             self.save_settings()?;
+            return Ok(false);
+        }
+        // Ctrl-X on the Chat page clears any pending image attachments.
+        // Non-destructive to typed text — only drops queued images.
+        if self.page == Page::Chat
+            && key_event.modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(key_event.code, KeyCode::Char('x'))
+            && !self.pending_images.is_empty()
+        {
+            let cleared = self.pending_images.len();
+            self.pending_images.clear();
+            self.status_line = format!("Cleared {cleared} pending image attachment(s).");
+            return Ok(false);
+        }
+        // Ctrl-I on the Chat page: try to paste an image from the system
+        // clipboard. Uses pbpaste / wl-paste / xclip under the hood so we
+        // don't pull in arboard. On terminals that already deliver image
+        // content via bracketed paste, handle_paste handles the file-path
+        // case; Ctrl-I handles the raw-image case (e.g. macOS screenshot
+        // clipboard, Cmd+Ctrl+Shift+4, Snipping Tool equivalents).
+        if self.page == Page::Chat
+            && key_event.modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(key_event.code, KeyCode::Char('i'))
+        {
+            match capture_clipboard_image_to_tempfile() {
+                Some(path) => {
+                    let resolved = try_resolve_image_attachment(
+                        path.to_str().unwrap_or_default(),
+                        &self.root,
+                    );
+                    match resolved {
+                        Some(image) => {
+                            let display = image.path.display().to_string();
+                            let kib = image.size_bytes / 1024;
+                            self.pending_images.push(image);
+                            self.status_line = format!(
+                                "📎 pasted clipboard image → {display} ({kib} KiB) — {} pending",
+                                self.pending_images.len()
+                            );
+                        }
+                        None => {
+                            self.status_line =
+                                "Clipboard image captured but validation failed.".to_string();
+                        }
+                    }
+                }
+                None => {
+                    self.status_line = "No PNG image on the clipboard (or platform paste tool missing). Use /image <path> or drag-and-drop.".to_string();
+                }
+            }
             return Ok(false);
         }
 
@@ -1105,8 +1351,19 @@ impl App {
     }
 
     fn submit_chat_request(&mut self) -> Result<()> {
-        let prompt = self.chat_input.trim().to_string();
-        if prompt.is_empty() {
+        let raw = self.chat_input.trim().to_string();
+
+        // Slash-command for attaching images: intercepted before any
+        // submission. Leaves chat_input intact so the user can continue
+        // typing their actual prompt after attaching.
+        if raw.starts_with("/image") || raw.starts_with("/img") {
+            if self.handle_image_command(&raw) {
+                self.chat_input.clear();
+                return Ok(());
+            }
+        }
+
+        if raw.is_empty() && self.pending_images.is_empty() {
             self.status_line = "Chat input is empty.".to_string();
             return Ok(());
         }
@@ -1115,9 +1372,29 @@ impl App {
                 "CTOX loop is not running. Start it in Settings or with `ctox start`.".to_string();
             return Ok(());
         }
+
+        // Compose the outgoing prompt: for each pending image emit the
+        // canonical ctox:image marker on its own line, then the user's
+        // text. The gateway-side vision preprocessor expands each marker
+        // into a real input_image block before dispatch.
+        let mut prompt = String::new();
+        for image in &self.pending_images {
+            prompt.push_str(&vision_preprocessor::encode_image_marker(&image.path));
+            prompt.push('\n');
+        }
+        if raw.is_empty() {
+            // Attachments without narrative — give the model a sensible default.
+            prompt.push_str("Please describe the attached image(s).");
+        } else {
+            prompt.push_str(&raw);
+        }
+
+        let attachment_count = self.pending_images.len();
+
         if self.request_in_flight {
             self.draft_queue.push_back(prompt.clone());
             self.chat_input.clear();
+            self.pending_images.clear();
             self.status_line = format!(
                 "Prompt queued locally. {} draft(s) waiting.",
                 self.draft_queue.len()
@@ -1129,8 +1406,15 @@ impl App {
             return Ok(());
         }
         self.chat_input.clear();
+        self.pending_images.clear();
         service::submit_chat_prompt(&self.root, &prompt)?;
-        self.status_line = "CTOX loop accepted the request.".to_string();
+        self.status_line = if attachment_count > 0 {
+            format!(
+                "CTOX loop accepted the request (with {attachment_count} image attachment(s))."
+            )
+        } else {
+            "CTOX loop accepted the request.".to_string()
+        };
         self.push_local_activity(format!(
             "Submitted prompt: {}",
             summarize_inline(&prompt, 72)
@@ -4704,6 +4988,7 @@ fn auxiliary_visible_devices_for_role(
         engine::AuxiliaryRole::Embedding => "CTOX_EMBEDDING_CUDA_VISIBLE_DEVICES",
         engine::AuxiliaryRole::Stt => "CTOX_STT_CUDA_VISIBLE_DEVICES",
         engine::AuxiliaryRole::Tts => "CTOX_TTS_CUDA_VISIBLE_DEVICES",
+        engine::AuxiliaryRole::Vision => "CTOX_VISION_CUDA_VISIBLE_DEVICES",
     };
     let explicit = parse_csv_gpu_indices(env_map.get(role_specific_key));
     if !explicit.is_empty() {
@@ -4949,6 +5234,7 @@ fn auxiliary_role_label(role: engine::AuxiliaryRole) -> &'static str {
         engine::AuxiliaryRole::Embedding => "embed",
         engine::AuxiliaryRole::Stt => "stt",
         engine::AuxiliaryRole::Tts => "tts",
+        engine::AuxiliaryRole::Vision => "vision",
     }
 }
 
@@ -5357,6 +5643,102 @@ mod tests {
         let with_anthropic = supported_chat_model_choices_with_gpu(&root, &anthropic_api, false);
         assert!(with_anthropic.contains(&"anthropic/claude-sonnet-4.6"));
         assert!(!with_anthropic.contains(&"gpt-5.4"));
+    }
+
+    #[test]
+    fn chat_composer_title_carries_image_badge_when_pending() {
+        use ratatui::backend::TestBackend;
+
+        let root = temp_root("composer-badge");
+        let db_path = root.join("runtime/ctox_lcm.db");
+        let _ = lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default()).unwrap();
+
+        let mut app = App::new(root.clone(), db_path);
+        app.page = Page::Chat;
+
+        // Baseline: no pending images → no 📎 in the composer title.
+        let backend = TestBackend::new(140, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| render::draw(frame, &app)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+        let mut baseline_text = String::new();
+        for y in 0..40u16 {
+            for x in 0..140u16 {
+                baseline_text.push_str(buf[(x, y)].symbol());
+            }
+            baseline_text.push('\n');
+        }
+        assert!(
+            !baseline_text.contains("📎"),
+            "composer should not show paperclip without attachments"
+        );
+
+        // With a pending image the composer title must show the badge.
+        app.pending_images.push(PendingImage {
+            path: PathBuf::from("/tmp/fake.png"),
+            size_bytes: 1024,
+        });
+        let backend = TestBackend::new(140, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| render::draw(frame, &app)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+        let mut badge_text = String::new();
+        for y in 0..40u16 {
+            for x in 0..140u16 {
+                badge_text.push_str(buf[(x, y)].symbol());
+            }
+            badge_text.push('\n');
+        }
+        assert!(
+            badge_text.contains("📎"),
+            "composer must carry the 📎 badge when pending_images is non-empty"
+        );
+        assert!(
+            badge_text.contains("1 image"),
+            "badge should include the pending count"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn image_slash_command_resolves_existing_file_and_rejects_non_image() {
+        let root = temp_root("image-slash");
+        let db_path = root.join("runtime/ctox_lcm.db");
+        let _ = lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default()).unwrap();
+        let mut app = App::new(root.clone(), db_path);
+
+        // Minimal PNG written to a tempfile that lives under the workspace
+        // root so try_resolve_image_attachment's relative-path handling
+        // can resolve it.
+        let png_path = root.join("snippet.png");
+        let png_bytes: [u8; 67] = [
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00,
+            0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, 0x78,
+            0x9C, 0x62, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00,
+            0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+        ];
+        fs::write(&png_path, png_bytes).unwrap();
+
+        // Absolute path attaches.
+        let handled = app.handle_image_command(&format!("/image {}", png_path.display()));
+        assert!(handled);
+        assert_eq!(app.pending_images.len(), 1);
+
+        // Non-image file → rejected, count unchanged.
+        let txt_path = root.join("note.txt");
+        fs::write(&txt_path, b"hello").unwrap();
+        let handled = app.handle_image_command(&format!("/image {}", txt_path.display()));
+        assert!(handled);
+        assert_eq!(app.pending_images.len(), 1);
+
+        // /image clear flushes the queue.
+        let handled = app.handle_image_command("/image clear");
+        assert!(handled);
+        assert_eq!(app.pending_images.len(), 0);
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

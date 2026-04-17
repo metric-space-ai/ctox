@@ -237,6 +237,7 @@ pub struct RuntimeFleetPlan {
     pub embedding: Option<AuxiliaryRuntimePlan>,
     pub transcription: Option<AuxiliaryRuntimePlan>,
     pub speech: Option<AuxiliaryRuntimePlan>,
+    pub vision: Option<AuxiliaryRuntimePlan>,
 }
 
 impl RuntimeFleetPlan {
@@ -245,6 +246,7 @@ impl RuntimeFleetPlan {
             engine::AuxiliaryRole::Embedding => self.embedding.as_ref(),
             engine::AuxiliaryRole::Stt => self.transcription.as_ref(),
             engine::AuxiliaryRole::Tts => self.speech.as_ref(),
+            engine::AuxiliaryRole::Vision => self.vision.as_ref(),
         }
     }
 }
@@ -1204,6 +1206,7 @@ pub(crate) fn resolve_auxiliary_visible_devices(
         engine::AuxiliaryRole::Embedding => "CTOX_EMBEDDING_CUDA_VISIBLE_DEVICES",
         engine::AuxiliaryRole::Stt => "CTOX_STT_CUDA_VISIBLE_DEVICES",
         engine::AuxiliaryRole::Tts => "CTOX_TTS_CUDA_VISIBLE_DEVICES",
+        engine::AuxiliaryRole::Vision => "CTOX_VISION_CUDA_VISIBLE_DEVICES",
     };
     let explicit = parse_csv_indices(env_map.get(role_key));
     let shared = parse_csv_indices(env_map.get("CTOX_AUXILIARY_CUDA_VISIBLE_DEVICES"));
@@ -1250,6 +1253,7 @@ pub fn resolve_runtime_fleet_plan(
             embedding: None,
             transcription: None,
             speech: None,
+            vision: None,
         });
     };
     let hardware = hardware_profile_from_chat_plan(chat_plan);
@@ -1274,6 +1278,7 @@ pub fn resolve_runtime_fleet_plan(
         embedding: auxiliary_for(engine::AuxiliaryRole::Embedding),
         transcription: auxiliary_for(engine::AuxiliaryRole::Stt),
         speech: auxiliary_for(engine::AuxiliaryRole::Tts),
+        vision: auxiliary_for(engine::AuxiliaryRole::Vision),
     })
 }
 
@@ -3557,6 +3562,7 @@ fn planned_auxiliary_runtime_for_role(
         engine::AuxiliaryRole::Embedding => "EMBEDDING",
         engine::AuxiliaryRole::Stt => "STT",
         engine::AuxiliaryRole::Tts => "TTS",
+        engine::AuxiliaryRole::Vision => "VISION",
     };
     if config_flag_from_env_map(env_map, &format!("CTOX_DISABLE_{role_prefix}_BACKEND")) {
         return None;
@@ -3608,6 +3614,7 @@ fn planned_auxiliary_selection_is_supported(selection: &engine::AuxiliaryModelSe
         engine::AuxiliaryRole::Embedding => true,
         engine::AuxiliaryRole::Stt => selection.compute_target == engine::ComputeTarget::Gpu,
         engine::AuxiliaryRole::Tts => selection.compute_target == engine::ComputeTarget::Gpu,
+        engine::AuxiliaryRole::Vision => selection.compute_target == engine::ComputeTarget::Gpu,
     }
 }
 
@@ -3616,7 +3623,9 @@ fn cpu_fallback_auxiliary_selection(
 ) -> Option<engine::AuxiliaryModelSelection> {
     let alias = match role {
         engine::AuxiliaryRole::Embedding => "Qwen/Qwen3-Embedding-0.6B [CPU]",
-        engine::AuxiliaryRole::Stt | engine::AuxiliaryRole::Tts => return None,
+        engine::AuxiliaryRole::Stt
+        | engine::AuxiliaryRole::Tts
+        | engine::AuxiliaryRole::Vision => return None,
     };
     Some(engine::auxiliary_model_selection(role, Some(alias)))
 }
@@ -5526,6 +5535,7 @@ fn default_auxiliary_manifest_for_model(
         engine::LocalModelFamily::Qwen3Speech | engine::LocalModelFamily::VoxtralSpeech => {
             ("tts", 1_400)
         }
+        engine::LocalModelFamily::Qwen3VisionAuxiliary => ("vision", 3_500),
         _ => return None,
     };
     Some(model_manifest::AuxiliaryModelManifest {

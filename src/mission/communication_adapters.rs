@@ -8,6 +8,7 @@ use crate::mission::communication_gateway;
 use crate::mission::communication_gateway::CommunicationAdapterBackend;
 use crate::mission::communication_gateway::CommunicationAdapterKind;
 use crate::mission::communication_jami_native;
+use crate::mission::communication_meeting_native;
 use crate::mission::communication_teams_native;
 
 // External communication transports enter CTOX only through this module.
@@ -28,6 +29,7 @@ pub(crate) trait CommunicationTransportAdapter {
         match self.kind() {
             CommunicationAdapterKind::Email => "email",
             CommunicationAdapterKind::Jami => "jami",
+            CommunicationAdapterKind::Meeting => "meeting",
             CommunicationAdapterKind::Teams => "teams",
         }
     }
@@ -40,12 +42,16 @@ pub(crate) struct EmailAdapter;
 pub(crate) struct JamiAdapter;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct MeetingAdapter;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct TeamsAdapter;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ExternalCommunicationAdapter {
     Email(EmailAdapter),
     Jami(JamiAdapter),
+    Meeting(MeetingAdapter),
     Teams(TeamsAdapter),
 }
 
@@ -99,6 +105,12 @@ pub(crate) struct JamiResolveAccountCommandRequest<'a> {
     pub profile_name: Option<&'a str>,
 }
 
+pub(crate) struct MeetingSendCommandRequest<'a> {
+    pub db_path: &'a Path,
+    pub session_id: &'a str,
+    pub body: &'a str,
+}
+
 pub(crate) struct TeamsSendCommandRequest<'a> {
     pub db_path: &'a Path,
     pub tenant_id: &'a str,
@@ -123,6 +135,10 @@ pub(crate) fn jami() -> JamiAdapter {
     JamiAdapter
 }
 
+pub(crate) fn meeting() -> MeetingAdapter {
+    MeetingAdapter
+}
+
 pub(crate) fn teams() -> TeamsAdapter {
     TeamsAdapter
 }
@@ -131,6 +147,7 @@ pub(crate) fn external_adapter_for_channel(channel: &str) -> Option<ExternalComm
     match channel {
         "email" => Some(ExternalCommunicationAdapter::Email(email())),
         "jami" => Some(ExternalCommunicationAdapter::Jami(jami())),
+        "meeting" => Some(ExternalCommunicationAdapter::Meeting(meeting())),
         "teams" => Some(ExternalCommunicationAdapter::Teams(teams())),
         _ => None,
     }
@@ -145,6 +162,12 @@ impl CommunicationTransportAdapter for EmailAdapter {
 impl CommunicationTransportAdapter for JamiAdapter {
     fn kind(&self) -> CommunicationAdapterKind {
         CommunicationAdapterKind::Jami
+    }
+}
+
+impl CommunicationTransportAdapter for MeetingAdapter {
+    fn kind(&self) -> CommunicationAdapterKind {
+        CommunicationAdapterKind::Meeting
     }
 }
 
@@ -237,6 +260,34 @@ impl JamiAdapter {
     }
 }
 
+impl MeetingAdapter {
+    pub(crate) fn sync_cli(
+        self,
+        root: &Path,
+        request: &AdapterSyncCommandRequest<'_>,
+    ) -> Result<Value> {
+        let runtime = communication_gateway::runtime_settings_from_root(root, self.kind());
+        communication_meeting_native::sync(root, &runtime, request)
+    }
+
+    pub(crate) fn send_cli(
+        self,
+        root: &Path,
+        request: &MeetingSendCommandRequest<'_>,
+    ) -> Result<Value> {
+        let runtime = communication_gateway::runtime_settings_from_root(root, self.kind());
+        communication_meeting_native::send(root, &runtime, request)
+    }
+
+    pub(crate) fn service_sync(
+        self,
+        root: &Path,
+        settings: &BTreeMap<String, String>,
+    ) -> Result<Option<Value>> {
+        communication_meeting_native::service_sync(root, settings)
+    }
+}
+
 impl TeamsAdapter {
     pub(crate) fn sync_cli(
         self,
@@ -279,6 +330,7 @@ mod tests {
     use super::email;
     use super::external_adapter_for_channel;
     use super::jami;
+    use super::meeting;
     use super::teams;
     use super::CommunicationTransportAdapter;
     use super::ExternalCommunicationAdapter;
@@ -296,6 +348,10 @@ mod tests {
             Some(ExternalCommunicationAdapter::Jami(jami()))
         );
         assert_eq!(
+            external_adapter_for_channel("meeting"),
+            Some(ExternalCommunicationAdapter::Meeting(meeting()))
+        );
+        assert_eq!(
             external_adapter_for_channel("teams"),
             Some(ExternalCommunicationAdapter::Teams(teams()))
         );
@@ -306,6 +362,7 @@ mod tests {
     fn adapters_report_native_backends() {
         assert_eq!(email().backend(), CommunicationAdapterBackend::NativeRust);
         assert_eq!(jami().backend(), CommunicationAdapterBackend::NativeRust);
+        assert_eq!(meeting().backend(), CommunicationAdapterBackend::NativeRust);
         assert_eq!(teams().backend(), CommunicationAdapterBackend::NativeRust);
     }
 

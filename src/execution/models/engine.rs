@@ -35,6 +35,11 @@ pub enum LocalModelFamily {
     PiperSpeech,
     Qwen3Speech,
     VoxtralSpeech,
+    /// Qwen3-VL auxiliary vision model used by the vision preprocessor to
+    /// describe images for primary LLMs that cannot natively accept image
+    /// input. Loaded via the ctox-engine (Candle) vision loader
+    /// (`Qwen3VLForConditionalGeneration`).
+    Qwen3VisionAuxiliary,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -56,6 +61,11 @@ pub enum AuxiliaryRole {
     Embedding,
     Stt,
     Tts,
+    /// Vision-describing auxiliary model. Used by the vision preprocessor to
+    /// turn image content blocks into textual descriptions when the primary
+    /// LLM is not natively vision-capable. Tools must be able to evaluate
+    /// images regardless of which primary model is loaded.
+    Vision,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -100,6 +110,9 @@ impl AuxiliaryModelSelection {
             AuxiliaryRole::Embedding => 1100,
             AuxiliaryRole::Stt => 4200,
             AuxiliaryRole::Tts => 1400,
+            // Qwen3-VL-2B with Q4K quant: ~1.2 GB weights + ~2 GB KV cache
+            // + vision encoder headroom. Conservative reserve of 3.5 GB.
+            AuxiliaryRole::Vision => 3500,
         }
     }
 }
@@ -256,6 +269,14 @@ pub fn parse_chat_model_family(value: &str) -> Option<ChatModelFamily> {
 
 pub fn chat_model_family_for_model(model: &str) -> Option<ChatModelFamily> {
     model_registry::chat_model_family_for_model(model)
+}
+
+/// True when the model can natively accept image content blocks. Consulted
+/// by the vision preprocessor to decide whether images must be described
+/// via the Vision aux before reaching the primary model. See
+/// [`model_registry::model_supports_vision`] for resolution details.
+pub fn model_supports_vision(model: &str) -> bool {
+    model_registry::model_supports_vision(model)
 }
 
 pub fn auxiliary_model_selection(
@@ -488,7 +509,9 @@ pub fn build_engine_command(
                 command.extend(["--max-seq-len".to_string(), max_seq_len.to_string()]);
             }
         }
-        LocalModelFamily::Qwen35Vision | LocalModelFamily::Gemma4Vision => {
+        LocalModelFamily::Qwen35Vision
+        | LocalModelFamily::Gemma4Vision
+        | LocalModelFamily::Qwen3VisionAuxiliary => {
             command.extend([
                 "serve".to_string(),
                 "-p".to_string(),
@@ -1013,6 +1036,112 @@ pub(crate) fn extract_message_content_text(content: Option<&Value>) -> String {
         return parts.join("\n");
     }
     String::new()
+}
+
+/// Normalise a message's `content` field into an OpenAI chat-compat block
+/// array, preserving both text and image blocks. String inputs are lifted
+/// to `[{type:"text",text:"..."}]`. Array inputs keep their items but are
+/// normalised:
+///
+/// - `{type:"input_text"|"text", text:"..."}` → `{type:"text", text:"..."}`
+/// - `{type:"input_image", image_url:"...", image_data?, mime_type?}` →
+///   `{type:"image_url", image_url:{url:"..."}}` (base64 payloads are
+///   converted to data-URIs).
+/// - `{type:"image_url", image_url:{url:"..."}}` → kept as-is.
+/// - Other types are dropped.
+///
+/// Used by adapters for vision-capable model families (Qwen 3.5, Gemma 4,
+/// Mistral) so image content reaches the ctox-engine unchanged. Text-only
+/// adapters continue to call `extract_message_content_text` which strips
+/// images (they can't consume them anyway; the vision preprocessor will
+/// have substituted image blocks with text upstream if the primary isn't
+/// vision-capable).
+pub(crate) fn extract_message_content_blocks(content: Option<&Value>) -> Vec<Value> {
+    let Some(content) = content else {
+        return Vec::new();
+    };
+    if let Some(text) = content.as_str() {
+        if text.trim().is_empty() {
+            return Vec::new();
+        }
+        return vec![serde_json::json!({"type":"text","text":text})];
+    }
+    let Some(entries) = content.as_array() else {
+        return Vec::new();
+    };
+    let mut out = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let Some(object) = entry.as_object() else {
+            continue;
+        };
+        let ty = object.get("type").and_then(Value::as_str).unwrap_or("");
+        match ty {
+            "text" | "input_text" | "output_text" => {
+                if let Some(text) = object.get("text").and_then(Value::as_str) {
+                    if !text.trim().is_empty() {
+                        out.push(serde_json::json!({"type":"text","text":text}));
+                    }
+                }
+            }
+            "input_image" => {
+                if let Some(url) = object.get("image_url").and_then(Value::as_str) {
+                    if !url.trim().is_empty() {
+                        out.push(serde_json::json!({
+                            "type": "image_url",
+                            "image_url": {"url": url},
+                        }));
+                        continue;
+                    }
+                }
+                if let Some(data) = object.get("image_data").and_then(Value::as_str) {
+                    if !data.trim().is_empty() {
+                        let mime = object
+                            .get("mime_type")
+                            .and_then(Value::as_str)
+                            .unwrap_or("image/png");
+                        out.push(serde_json::json!({
+                            "type": "image_url",
+                            "image_url": {"url": format!("data:{mime};base64,{data}")},
+                        }));
+                    }
+                }
+            }
+            "image_url" => {
+                // Already OpenAI chat-compat shape — pass through as-is.
+                // Supports both {url:".."} object and plain string for robustness.
+                if let Some(inner) = object.get("image_url") {
+                    if inner.is_object() {
+                        out.push(serde_json::json!({
+                            "type": "image_url",
+                            "image_url": inner.clone(),
+                        }));
+                    } else if let Some(url) = inner.as_str() {
+                        if !url.trim().is_empty() {
+                            out.push(serde_json::json!({
+                                "type": "image_url",
+                                "image_url": {"url": url},
+                            }));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// True when a block array contains at least one image entry. Adapters use
+/// this to decide whether to forward the full block array (vision path) or
+/// fall back to flat-text extraction (legacy path).
+pub(crate) fn message_blocks_contain_image(blocks: &[Value]) -> bool {
+    blocks.iter().any(|block| {
+        block
+            .get("type")
+            .and_then(Value::as_str)
+            .map(|ty| ty == "image_url" || ty == "input_image")
+            .unwrap_or(false)
+    })
 }
 
 pub(crate) fn extract_function_call_output_text(output: Option<&Value>) -> String {
@@ -1589,6 +1718,105 @@ mod boundary_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn model_supports_vision_recognises_local_vision_families() {
+        // Qwen 3.5 chat family is marked vision-capable in the registry.
+        assert!(model_supports_vision("Qwen/Qwen3.5-27B"));
+        // Gemma 4 variant likewise.
+        assert!(model_supports_vision("google/gemma-4-31B-it"));
+        // Qwen3-VL-2B auxiliary itself is vision-capable.
+        assert!(model_supports_vision("Qwen/Qwen3-VL-2B-Instruct"));
+    }
+
+    #[test]
+    fn model_supports_vision_rejects_text_only_primaries() {
+        assert!(!model_supports_vision("openai/gpt-oss-20b"));
+        assert!(!model_supports_vision("nvidia/Nemotron-Cascade-2-30B-A3B"));
+        assert!(!model_supports_vision("zai-org/GLM-4.7-Flash"));
+        assert!(!model_supports_vision("moonshotai/kimi-k2.5"));
+        assert!(!model_supports_vision(""));
+    }
+
+    #[test]
+    fn model_supports_vision_recognises_known_api_models() {
+        assert!(model_supports_vision("anthropic/claude-sonnet-4.6"));
+        assert!(model_supports_vision("gpt-5.4"));
+        assert!(model_supports_vision("gpt-5.4-mini"));
+        assert!(model_supports_vision("MiniMax-M2.7"));
+        // Nano is excluded intentionally.
+        assert!(!model_supports_vision("gpt-5.4-nano"));
+    }
+
+    #[test]
+    fn extract_message_content_blocks_handles_plain_string() {
+        let content = json!("hello world");
+        let blocks = extract_message_content_blocks(Some(&content));
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0]["type"], "text");
+        assert_eq!(blocks[0]["text"], "hello world");
+    }
+
+    #[test]
+    fn extract_message_content_blocks_keeps_input_image_as_image_url() {
+        let content = json!([
+            {"type": "input_text", "text": "look"},
+            {"type": "input_image", "image_url": "https://example.com/x.png"},
+        ]);
+        let blocks = extract_message_content_blocks(Some(&content));
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0]["type"], "text");
+        assert_eq!(blocks[1]["type"], "image_url");
+        assert_eq!(blocks[1]["image_url"]["url"], "https://example.com/x.png");
+    }
+
+    #[test]
+    fn extract_message_content_blocks_converts_image_data_to_data_uri() {
+        let content = json!([
+            {"type": "input_image", "image_data": "AAAA", "mime_type": "image/jpeg"},
+        ]);
+        let blocks = extract_message_content_blocks(Some(&content));
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0]["type"], "image_url");
+        assert_eq!(
+            blocks[0]["image_url"]["url"],
+            "data:image/jpeg;base64,AAAA"
+        );
+    }
+
+    #[test]
+    fn extract_message_content_blocks_passthrough_openai_image_url() {
+        let content = json!([
+            {"type": "image_url", "image_url": {"url": "https://example.com/a.webp", "detail": "high"}},
+        ]);
+        let blocks = extract_message_content_blocks(Some(&content));
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0]["type"], "image_url");
+        assert_eq!(blocks[0]["image_url"]["url"], "https://example.com/a.webp");
+        assert_eq!(blocks[0]["image_url"]["detail"], "high");
+    }
+
+    #[test]
+    fn message_blocks_contain_image_detects_both_variants() {
+        let with_input_image = vec![json!({"type": "input_image", "image_url": "x"})];
+        assert!(message_blocks_contain_image(&with_input_image));
+        let with_image_url = vec![json!({"type": "image_url", "image_url": {"url": "x"}})];
+        assert!(message_blocks_contain_image(&with_image_url));
+        let only_text = vec![json!({"type": "text", "text": "x"})];
+        assert!(!message_blocks_contain_image(&only_text));
+    }
+
+    #[test]
+    fn vision_aux_selection_maps_to_qwen3_vl_instruct() {
+        let selection =
+            auxiliary_model_selection(AuxiliaryRole::Vision, None);
+        assert_eq!(selection.role, AuxiliaryRole::Vision);
+        assert_eq!(selection.default_port, 1240);
+        assert_eq!(selection.compute_target, ComputeTarget::Gpu);
+        // gpu_reserve_mb returns the family-specific reservation.
+        assert_eq!(selection.gpu_reserve_mb(), 3500);
+    }
 
     #[test]
     fn gpt_oss_runtime_uses_engine_gpt_oss_startup() {

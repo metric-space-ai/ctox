@@ -164,13 +164,15 @@ enum ManagedBackendRole {
     Embedding,
     Stt,
     Tts,
+    Vision,
 }
 
-const MANAGED_BACKEND_ROLES: [ManagedBackendRole; 4] = [
+const MANAGED_BACKEND_ROLES: [ManagedBackendRole; 5] = [
     ManagedBackendRole::Chat,
     ManagedBackendRole::Embedding,
     ManagedBackendRole::Stt,
     ManagedBackendRole::Tts,
+    ManagedBackendRole::Vision,
 ];
 
 impl ManagedBackendRole {
@@ -180,6 +182,7 @@ impl ManagedBackendRole {
             Self::Embedding => "embedding",
             Self::Stt => "stt",
             Self::Tts => "tts",
+            Self::Vision => "vision",
         }
     }
 
@@ -189,6 +192,7 @@ impl ManagedBackendRole {
             Self::Embedding => "ctox_embedding_backend.pid",
             Self::Stt => "ctox_stt_backend.pid",
             Self::Tts => "ctox_tts_backend.pid",
+            Self::Vision => "ctox_vision_backend.pid",
         }
     }
 
@@ -198,6 +202,7 @@ impl ManagedBackendRole {
             Self::Embedding => "ctox_embedding_backend.log",
             Self::Stt => "ctox_stt_backend.log",
             Self::Tts => "ctox_tts_backend.log",
+            Self::Vision => "ctox_vision_backend.log",
         }
     }
 
@@ -370,6 +375,7 @@ fn resolved_binding_for_role<'a>(
         ManagedBackendRole::Embedding => resolved.embedding.as_ref(),
         ManagedBackendRole::Stt => resolved.transcription.as_ref(),
         ManagedBackendRole::Tts => resolved.speech.as_ref(),
+        ManagedBackendRole::Vision => resolved.vision.as_ref(),
     }
 }
 
@@ -393,7 +399,7 @@ fn managed_spec_from_binding(
 pub fn start_backend_supervisor(root: PathBuf) {
     thread::spawn(move || loop {
         if let Err(err) = ensure_persistent_backends(&root) {
-            eprintln!("ctox backend supervisor error: {err}");
+            eprintln!("ctox backend supervisor error: {err:#}");
         }
         thread::sleep(Duration::from_secs(SUPERVISOR_POLL_SECS));
     });
@@ -410,7 +416,7 @@ pub fn ensure_persistent_backends(root: &Path) -> Result<()> {
         if let Err(err) = ensure_backend_process(root, role, false) {
             if role.is_auxiliary() {
                 eprintln!(
-                    "ctox auxiliary backend {} unavailable; continuing without it: {err}",
+                    "ctox auxiliary backend {} unavailable; continuing without it: {err:#}",
                     role.as_env_value()
                 );
                 continue;
@@ -442,6 +448,7 @@ pub fn ensure_auxiliary_backends_best_effort(root: PathBuf) {
             ManagedBackendRole::Embedding,
             ManagedBackendRole::Stt,
             ManagedBackendRole::Tts,
+            ManagedBackendRole::Vision,
         ] {
             if !managed_backend_enabled(&root, role) {
                 release_backend_runtime_ownership(&root, role);
@@ -449,7 +456,7 @@ pub fn ensure_auxiliary_backends_best_effort(root: PathBuf) {
             }
             if let Err(err) = ensure_backend_process(&root, role, false) {
                 eprintln!(
-                    "ctox auxiliary backend {} unavailable after switch; continuing without it: {err}",
+                    "ctox auxiliary backend {} unavailable after switch; continuing without it: {err:#}",
                     role.as_env_value()
                 );
             }
@@ -505,6 +512,7 @@ pub fn ensure_auxiliary_backend_ready(
         engine::AuxiliaryRole::Embedding => ManagedBackendRole::Embedding,
         engine::AuxiliaryRole::Stt => ManagedBackendRole::Stt,
         engine::AuxiliaryRole::Tts => ManagedBackendRole::Tts,
+        engine::AuxiliaryRole::Vision => ManagedBackendRole::Vision,
     };
     ensure_backend_process(root, role, force_restart)
 }
@@ -533,6 +541,7 @@ pub fn ensure_auxiliary_backend_launchable(root: &Path, role: engine::AuxiliaryR
         engine::AuxiliaryRole::Embedding => "embedding",
         engine::AuxiliaryRole::Stt => "stt",
         engine::AuxiliaryRole::Tts => "tts",
+        engine::AuxiliaryRole::Vision => "vision",
     };
     anyhow::bail!(
         "{role_label} backend requires ctox-engine at {}. Run the explicit engine rebuild workflow first or configure an external {role_label} runtime.",
@@ -547,6 +556,7 @@ fn managed_backend_enabled(root: &Path, role: ManagedBackendRole) -> bool {
             ManagedBackendRole::Embedding => resolved.embedding.is_some(),
             ManagedBackendRole::Stt => resolved.transcription.is_some(),
             ManagedBackendRole::Tts => resolved.speech.is_some(),
+            ManagedBackendRole::Vision => resolved.vision.is_some(),
         };
     }
     match role {
@@ -566,6 +576,9 @@ fn managed_backend_enabled(root: &Path, role: ManagedBackendRole) -> bool {
         ManagedBackendRole::Tts => runtime_state::load_or_resolve_runtime_state(root)
             .map(|state| state.speech.enabled)
             .unwrap_or_else(|_| runtime_env::auxiliary_backend_enabled(root, "TTS")),
+        ManagedBackendRole::Vision => runtime_state::load_or_resolve_runtime_state(root)
+            .map(|state| state.vision.enabled)
+            .unwrap_or_else(|_| runtime_env::auxiliary_backend_enabled(root, "VISION")),
     }
 }
 
@@ -575,6 +588,7 @@ fn backend_contract_role(role: ManagedBackendRole) -> runtime_contract::BackendR
         ManagedBackendRole::Embedding => runtime_contract::BackendRole::Embedding,
         ManagedBackendRole::Stt => runtime_contract::BackendRole::Stt,
         ManagedBackendRole::Tts => runtime_contract::BackendRole::Tts,
+        ManagedBackendRole::Vision => runtime_contract::BackendRole::Vision,
     }
 }
 
@@ -1417,7 +1431,12 @@ fn managed_engine_model_kind(
     match role {
         "embedding" => "embedding",
         "tts" => "speech",
+        // The ctox-engine exposes a single "vision" bucket for every
+        // non-text input modality — Whisper/Voxtral STT feed through the
+        // same vision pipeline kind as Qwen3-VL / Gemma4 image input.
+        // That's not a misnomer but an engine-side design choice.
         "stt" => "vision",
+        "vision" => "vision",
         "chat" if language_model_only => "text",
         _ => engine::model_profile_for_model(request_model)
             .ok()
@@ -1879,7 +1898,8 @@ fn resolve_managed_engine_binary(
         .unwrap_or_else(|| engine::discover_source_layout_paths(root).model_runtime_binary);
     if !binary.is_file() {
         anyhow::bail!(
-            "ctox-engine binary missing for managed backend launch: {}",
+            "ctox-engine binary missing at {}. Build it with: \
+             `cd tools/model-runtime && cargo build --release --bin ctox-engine`",
             binary.display()
         );
     }
@@ -3155,6 +3175,9 @@ fn collect_managed_backend_env(
         ManagedBackendRole::Tts => {
             apply_auxiliary_launch_overrides(root, &mut env_map, "TTS");
         }
+        ManagedBackendRole::Vision => {
+            apply_auxiliary_launch_overrides(root, &mut env_map, "VISION");
+        }
     }
     env_map.insert("CTOX_ENGINE_MODEL".to_string(), spec.request_model.clone());
     env_map.insert("CTOX_ENGINE_PORT".to_string(), spec.port.to_string());
@@ -3955,6 +3978,7 @@ mod tests {
                 embedding: runtime_state::AuxiliaryRuntimeState::default(),
                 transcription: runtime_state::AuxiliaryRuntimeState::default(),
                 speech: runtime_state::AuxiliaryRuntimeState::default(),
+                vision: runtime_state::AuxiliaryRuntimeState::default(),
             },
         )
         .unwrap();
@@ -4124,6 +4148,7 @@ mod tests {
                 embedding: runtime_state::AuxiliaryRuntimeState::default(),
                 transcription: runtime_state::AuxiliaryRuntimeState::default(),
                 speech: runtime_state::AuxiliaryRuntimeState::default(),
+                vision: runtime_state::AuxiliaryRuntimeState::default(),
             },
         )
         .unwrap();

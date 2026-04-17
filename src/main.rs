@@ -56,6 +56,7 @@ pub mod inference {
     pub use crate::execution::models::runtime_state;
     pub use crate::execution::models::supervisor;
     pub use crate::execution::models::turn_contract;
+    pub use crate::execution::models::vision_preprocessor;
     pub use crate::execution::responses::gateway;
     pub use crate::execution::responses::web_search;
 }

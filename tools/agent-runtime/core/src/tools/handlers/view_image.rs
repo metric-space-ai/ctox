@@ -44,11 +44,27 @@ impl ToolHandler for ViewImageHandler {
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
-        if !invocation
-            .turn
-            .model_info
-            .input_modalities
-            .contains(&InputModality::Image)
+        // CTOX vision preprocessor note:
+        // CTOX sits between this runtime and the primary LLM and will
+        // intercept any InputImage content block before adapter dispatch.
+        // If the primary model cannot natively see images, CTOX describes
+        // the image via its Vision aux (Qwen3-VL-2B) and replaces the
+        // image block with text. The tool can therefore produce InputImage
+        // items regardless of the primary model's modality capability —
+        // the previous `input_modalities.contains(InputModality::Image)`
+        // gate is honored via an env override but otherwise relaxed.
+        let strict = std::env::var("CODEX_STRICT_VIEW_IMAGE_GATE")
+            .map(|value| {
+                let trimmed = value.trim();
+                matches!(trimmed, "1" | "true" | "TRUE" | "yes" | "on")
+            })
+            .unwrap_or(false);
+        if strict
+            && !invocation
+                .turn
+                .model_info
+                .input_modalities
+                .contains(&InputModality::Image)
         {
             return Err(FunctionCallError::RespondToModel(
                 VIEW_IMAGE_UNSUPPORTED_MESSAGE.to_string(),

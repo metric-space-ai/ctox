@@ -25,6 +25,9 @@ pub enum InferenceWorkloadRole {
     Embedding,
     Transcription,
     Speech,
+    /// Vision-describing auxiliary workload. Used by the vision preprocessor
+    /// to describe images for non-vision primary LLMs.
+    Vision,
 }
 
 impl InferenceWorkloadRole {
@@ -34,6 +37,7 @@ impl InferenceWorkloadRole {
             Self::Embedding => "embedding",
             Self::Transcription => "stt",
             Self::Speech => "tts",
+            Self::Vision => "vision",
         }
     }
 }
@@ -65,6 +69,8 @@ pub struct ResolvedProxyRuntime {
     pub transcription_model: Option<String>,
     pub speech_base_url: String,
     pub speech_model: Option<String>,
+    pub vision_base_url: String,
+    pub vision_model: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -76,6 +82,7 @@ pub struct InferenceRuntimeKernel {
     pub embedding: Option<ResolvedRuntimeBinding>,
     pub transcription: Option<ResolvedRuntimeBinding>,
     pub speech: Option<ResolvedRuntimeBinding>,
+    pub vision: Option<ResolvedRuntimeBinding>,
 }
 
 pub fn managed_runtime_socket_path(root: &Path, workload: InferenceWorkloadRole) -> PathBuf {
@@ -84,6 +91,7 @@ pub fn managed_runtime_socket_path(root: &Path, workload: InferenceWorkloadRole)
         InferenceWorkloadRole::Embedding => "embedding.sock",
         InferenceWorkloadRole::Transcription => "transcription.sock",
         InferenceWorkloadRole::Speech => "speech.sock",
+        InferenceWorkloadRole::Vision => "vision.sock",
     };
     let preferred = root.join("runtime/sockets").join(socket_name);
     #[cfg(unix)]
@@ -141,6 +149,7 @@ impl InferenceRuntimeKernel {
         let embedding = resolve_auxiliary(root, engine::AuxiliaryRole::Embedding, &state);
         let transcription = resolve_auxiliary(root, engine::AuxiliaryRole::Stt, &state);
         let speech = resolve_auxiliary(root, engine::AuxiliaryRole::Tts, &state);
+        let vision = resolve_auxiliary(root, engine::AuxiliaryRole::Vision, &state);
 
         let upstream_base_url = primary_generation
             .as_ref()
@@ -170,6 +179,11 @@ impl InferenceRuntimeKernel {
                 .map(|binding| binding.base_url.clone())
                 .unwrap_or_default(),
             speech_model: speech.as_ref().map(|binding| binding.request_model.clone()),
+            vision_base_url: vision
+                .as_ref()
+                .map(|binding| binding.base_url.clone())
+                .unwrap_or_default(),
+            vision_model: vision.as_ref().map(|binding| binding.request_model.clone()),
         };
 
         Ok(Self {
@@ -180,6 +194,7 @@ impl InferenceRuntimeKernel {
             embedding,
             transcription,
             speech,
+            vision,
         })
     }
 
@@ -221,6 +236,7 @@ impl InferenceRuntimeKernel {
             engine::AuxiliaryRole::Embedding => self.embedding.as_ref(),
             engine::AuxiliaryRole::Stt => self.transcription.as_ref(),
             engine::AuxiliaryRole::Tts => self.speech.as_ref(),
+            engine::AuxiliaryRole::Vision => self.vision.as_ref(),
         }
     }
 }
@@ -311,6 +327,7 @@ fn resolve_auxiliary(
         engine::AuxiliaryRole::Embedding => InferenceWorkloadRole::Embedding,
         engine::AuxiliaryRole::Stt => InferenceWorkloadRole::Transcription,
         engine::AuxiliaryRole::Tts => InferenceWorkloadRole::Speech,
+        engine::AuxiliaryRole::Vision => InferenceWorkloadRole::Vision,
     };
     let socket_path_buf = managed_runtime_socket_path(root, workload);
     let transport = LocalTransport::default_for_host(Some(socket_path_buf), "127.0.0.1", port);
@@ -381,6 +398,7 @@ mod tests {
                 embedding: runtime_state::AuxiliaryRuntimeState::default(),
                 transcription: runtime_state::AuxiliaryRuntimeState::default(),
                 speech: runtime_state::AuxiliaryRuntimeState::default(),
+                vision: runtime_state::AuxiliaryRuntimeState::default(),
             },
         )
         .unwrap();
@@ -447,6 +465,7 @@ mod tests {
                 embedding: runtime_state::AuxiliaryRuntimeState::default(),
                 transcription: runtime_state::AuxiliaryRuntimeState::default(),
                 speech: runtime_state::AuxiliaryRuntimeState::default(),
+                vision: runtime_state::AuxiliaryRuntimeState::default(),
             },
         )
         .unwrap();

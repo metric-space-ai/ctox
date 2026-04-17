@@ -1477,7 +1477,10 @@ fn parse_send_request(args: &[String]) -> Result<ChannelSendRequest> {
         .map(ToOwned::to_owned)
         .unwrap_or_default();
     let to = collect_flag_values(args, "--to");
-    if channel != "tui" && to.is_empty() {
+    // "tui" and "meeting" don't have addressable recipients — tui is a local
+    // interface, meeting broadcasts to all participants via the Playwright
+    // stdin pipe. All other channels require at least one --to.
+    if channel != "tui" && channel != "meeting" && to.is_empty() {
         anyhow::bail!("channel send for {channel} requires at least one --to value");
     }
     Ok(ChannelSendRequest {

@@ -32,6 +32,7 @@ use crate::inference::runtime_env;
 use crate::inference::runtime_kernel;
 use crate::inference::runtime_state;
 use crate::inference::supervisor;
+use crate::inference::vision_preprocessor;
 use crate::inference::web_search;
 
 const HOP_BY_HOP_HEADERS: &[&str] = &[
@@ -613,6 +614,33 @@ fn handle_request(
             if web_search_augmentation.is_some() {
                 effective_body = serde_json::to_vec(&payload)
                     .context("failed to encode web-search-augmented request")?;
+                materialized_request = Some(payload);
+            }
+        }
+    }
+
+    // Vision preprocessor: if any input item carries an `input_image` /
+    // `image_url` content block and the primary model isn't vision-capable,
+    // describe the image via the Qwen3-VL-2B aux and replace the image
+    // block with a text block. This guarantees tools (view_image etc.) can
+    // always evaluate images regardless of the primary model's capability.
+    if matches!(request.method(), Method::Post)
+        && url == "/v1/responses"
+        && !effective_body.is_empty()
+    {
+        if let Ok(mut payload) = serde_json::from_slice::<Value>(&effective_body) {
+            let mutated = vision_preprocessor::preprocess_responses_payload(
+                &config.root,
+                config.active_model.as_deref(),
+                &mut payload,
+            )
+            .unwrap_or_else(|err| {
+                eprintln!("ctox vision preprocessor failed: {err:#}");
+                false
+            });
+            if mutated {
+                effective_body = serde_json::to_vec(&payload)
+                    .context("failed to encode vision-preprocessed request")?;
                 materialized_request = Some(payload);
             }
         }

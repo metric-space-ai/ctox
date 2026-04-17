@@ -65,6 +65,7 @@ fn production_surfaces_keep_model_catalog_data_in_registry() {
         "engineai/Voxtral-4B-TTS-2603",
         "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
         "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice",
+        "Qwen/Qwen3-VL-2B-Instruct",
     ];
 
     for (name, source) in files {

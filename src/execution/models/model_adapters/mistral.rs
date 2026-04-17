@@ -244,11 +244,22 @@ fn build_chat_messages(items: &[Value], instructions: Option<&str>) -> Vec<Value
                     "developer" => "system",
                     other => other,
                 };
-                let text = engine::extract_message_content_text(object.get("content"));
-                messages.push(json!({
-                    "role": mapped_role,
-                    "content": text,
-                }));
+                // Mistral Small 2603 / Pixtral accepts OpenAI chat-compat
+                // image_url content blocks; forward block array when user
+                // message carries images, fall back to flat text otherwise.
+                let blocks = engine::extract_message_content_blocks(object.get("content"));
+                if mapped_role != "assistant" && engine::message_blocks_contain_image(&blocks) {
+                    messages.push(json!({
+                        "role": mapped_role,
+                        "content": blocks,
+                    }));
+                } else {
+                    let text = engine::extract_message_content_text(object.get("content"));
+                    messages.push(json!({
+                        "role": mapped_role,
+                        "content": text,
+                    }));
+                }
             }
             "function_call" => {
                 let name = object

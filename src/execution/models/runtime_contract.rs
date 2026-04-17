@@ -24,6 +24,7 @@ pub enum BackendRole {
     Embedding,
     Stt,
     Tts,
+    Vision,
 }
 
 impl BackendRole {
@@ -33,6 +34,7 @@ impl BackendRole {
             Self::Embedding => "embedding",
             Self::Stt => "stt",
             Self::Tts => "tts",
+            Self::Vision => "vision",
         }
     }
 
@@ -42,6 +44,7 @@ impl BackendRole {
             Self::Embedding => "ctox_embedding_backend.pid",
             Self::Stt => "ctox_stt_backend.pid",
             Self::Tts => "ctox_tts_backend.pid",
+            Self::Vision => "ctox_vision_backend.pid",
         }
     }
 }

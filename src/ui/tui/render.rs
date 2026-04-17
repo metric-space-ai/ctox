@@ -172,6 +172,20 @@ fn render_chat(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     } else {
         app.chat_input.clone()
     };
+    let composer_title_base = if app.request_in_flight {
+        " queued draft "
+    } else {
+        " compose "
+    };
+    let composer_title = if app.pending_images.is_empty() {
+        composer_title_base.to_string()
+    } else {
+        format!(
+            " {} 📎 {} image(s) ",
+            composer_title_base.trim(),
+            app.pending_images.len()
+        )
+    };
     let composer = Paragraph::new(composer_text)
         .alignment(Alignment::Left)
         .block(
@@ -179,11 +193,7 @@ fn render_chat(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
                 .title(Span::styled(
-                    if app.request_in_flight {
-                        " queued draft "
-                    } else {
-                        " compose "
-                    },
+                    composer_title,
                     Style::default()
                         .fg(Color::Black)
                         .bg(Color::Green)
@@ -435,6 +445,20 @@ fn render_chat_narrow(frame: &mut Frame, app: &App, area: ratatui::layout::Rect)
     } else {
         app.chat_input.as_str()
     };
+    let narrow_composer_title_base = if app.request_in_flight {
+        " queued draft "
+    } else {
+        " compose "
+    };
+    let narrow_composer_title = if app.pending_images.is_empty() {
+        narrow_composer_title_base.to_string()
+    } else {
+        format!(
+            " {} 📎 {} ",
+            narrow_composer_title_base.trim(),
+            app.pending_images.len()
+        )
+    };
     let composer = Paragraph::new(composer_text)
         .alignment(Alignment::Left)
         .block(
@@ -442,11 +466,7 @@ fn render_chat_narrow(frame: &mut Frame, app: &App, area: ratatui::layout::Rect)
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
                 .title(Span::styled(
-                    if app.request_in_flight {
-                        " queued draft "
-                    } else {
-                        " compose "
-                    },
+                    narrow_composer_title,
                     Style::default()
                         .fg(Color::Black)
                         .bg(Color::Green)

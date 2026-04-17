@@ -3059,6 +3059,7 @@ mod tests {
                 embedding: runtime_state::AuxiliaryRuntimeState::default(),
                 transcription: runtime_state::AuxiliaryRuntimeState::default(),
                 speech: runtime_state::AuxiliaryRuntimeState::default(),
+                vision: runtime_state::AuxiliaryRuntimeState::default(),
             },
             ownership: Default::default(),
             proxy: runtime_kernel::ResolvedProxyRuntime {
