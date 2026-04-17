@@ -1286,6 +1286,95 @@ JS_SOURCE: /(?:\s*)(?:[^\s{\"`]|`[^`]|``[^`])[\s\S]*/
     })
 }
 
+fn create_meeting_status_tool() -> ToolSpec {
+    ToolSpec::Function(ResponsesApiTool {
+        name: "meeting_status".to_string(),
+        description:
+            "List all active, scheduled, and recently ended meeting sessions. Returns session IDs, \
+             providers (Google Meet / Microsoft Teams / Zoom), participant counts, and transcript \
+             progress. Use this to check what meetings CTOX is participating in."
+                .to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::Object {
+            properties: BTreeMap::new(),
+            required: None,
+            additional_properties: Some(false.into()),
+        },
+        output_schema: None,
+    })
+}
+
+fn create_meeting_send_chat_tool() -> ToolSpec {
+    let properties = BTreeMap::from([
+        (
+            "session_id".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "The meeting session ID to send the message to (from meeting_status)."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "text".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "The text message to send in the meeting chat. Keep it concise and professional. \
+                     The message will appear as coming from CTOX Notetaker."
+                        .to_string(),
+                ),
+            },
+        ),
+    ]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "meeting_send_chat".to_string(),
+        description:
+            "Send a chat message in an active meeting session. Use this to respond to @CTOX mentions \
+             or to proactively share information when the meeting context warrants it. Messages should \
+             be brief, relevant, and actionable."
+                .to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["session_id".to_string(), "text".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+        output_schema: None,
+    })
+}
+
+fn create_meeting_get_transcript_tool() -> ToolSpec {
+    let properties = BTreeMap::from([(
+        "session_id".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "The meeting session ID to get the transcript for (from meeting_status)."
+                    .to_string(),
+            ),
+        },
+    )]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "meeting_get_transcript".to_string(),
+        description:
+            "Retrieve the current transcript and chat log from an active or recently ended meeting. \
+             Returns the full STT transcript and all chat messages. Use this to understand what was \
+             discussed before responding to a mention or processing meeting output."
+                .to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["session_id".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+        output_schema: None,
+    })
+}
+
 fn create_channel_sync_tool() -> ToolSpec {
     let mut properties = BTreeMap::new();
     properties.insert(
@@ -3166,6 +3255,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::ListDirHandler;
     use crate::tools::handlers::McpHandler;
     use crate::tools::handlers::McpResourceHandler;
+    use crate::tools::handlers::MeetingHandler;
     use crate::tools::handlers::PlanHandler;
     use crate::tools::handlers::ReadFileHandler;
     use crate::tools::handlers::RequestPermissionsHandler;
@@ -3602,6 +3692,32 @@ pub(crate) fn build_specs_with_discoverable_tools(
         );
         builder.register_handler("ctox_doc_search", ctox_doc_handler.clone());
         builder.register_handler("ctox_doc_read", ctox_doc_handler);
+    }
+
+    // Meeting tools — always registered so the agent can respond to meeting @mentions
+    {
+        let meeting_handler = Arc::new(MeetingHandler);
+        push_tool_spec(
+            &mut builder,
+            create_meeting_status_tool(),
+            /*supports_parallel_tool_calls*/ false,
+            config.code_mode_enabled,
+        );
+        push_tool_spec(
+            &mut builder,
+            create_meeting_send_chat_tool(),
+            /*supports_parallel_tool_calls*/ false,
+            config.code_mode_enabled,
+        );
+        push_tool_spec(
+            &mut builder,
+            create_meeting_get_transcript_tool(),
+            /*supports_parallel_tool_calls*/ false,
+            config.code_mode_enabled,
+        );
+        builder.register_handler("meeting_status", meeting_handler.clone());
+        builder.register_handler("meeting_send_chat", meeting_handler.clone());
+        builder.register_handler("meeting_get_transcript", meeting_handler);
     }
 
     push_tool_spec(

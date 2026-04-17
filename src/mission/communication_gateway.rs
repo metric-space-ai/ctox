@@ -14,6 +14,7 @@ pub(crate) enum CommunicationAdapterBackend {
 pub(crate) enum CommunicationAdapterKind {
     Email,
     Jami,
+    Meeting,
     Teams,
 }
 
@@ -62,6 +63,15 @@ const TEAMS_RUNTIME_ENV_KEYS: &[&str] = &[
     "CTO_TEAMS_CHAT_ID",
 ];
 
+const MEETING_RUNTIME_ENV_KEYS: &[&str] = &[
+    "CTO_MEETING_BOT_NAME",
+    "CTO_MEETING_MAX_DURATION_MINUTES",
+    "CTO_MEETING_AUDIO_CHUNK_SECONDS",
+    "CTOX_PROXY_HOST",
+    "CTOX_PROXY_PORT",
+    "CTOX_STT_MODEL",
+];
+
 const JAMI_RUNTIME_ENV_KEYS: &[&str] = &[
     "CTOX_PROXY_HOST",
     "CTOX_PROXY_PORT",
@@ -89,6 +99,11 @@ impl CommunicationAdapterKind {
                 kind: self,
                 backend: CommunicationAdapterBackend::NativeRust,
                 runtime_env_keys: JAMI_RUNTIME_ENV_KEYS,
+            },
+            Self::Meeting => CommunicationAdapterSpec {
+                kind: self,
+                backend: CommunicationAdapterBackend::NativeRust,
+                runtime_env_keys: MEETING_RUNTIME_ENV_KEYS,
             },
             Self::Teams => CommunicationAdapterSpec {
                 kind: self,
@@ -125,7 +140,10 @@ fn apply_kernel_runtime_settings(
     root: &Path,
     settings: &mut BTreeMap<String, String>,
 ) {
-    if !matches!(kind, CommunicationAdapterKind::Jami) {
+    if !matches!(
+        kind,
+        CommunicationAdapterKind::Jami | CommunicationAdapterKind::Meeting
+    ) {
         return;
     }
     let Ok(resolved) = runtime_kernel::InferenceRuntimeKernel::resolve(root) else {
@@ -172,6 +190,10 @@ mod tests {
         );
         assert_eq!(
             CommunicationAdapterKind::Jami.spec().backend,
+            CommunicationAdapterBackend::NativeRust
+        );
+        assert_eq!(
+            CommunicationAdapterKind::Meeting.spec().backend,
             CommunicationAdapterBackend::NativeRust
         );
         assert_eq!(

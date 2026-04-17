@@ -39,7 +39,9 @@ from harbor.agents.installed.base import BaseInstalledAgent
 
 CTOX_HOST_TARBALL_ENV = "CTOX_HOST_TARBALL"
 DEFAULT_CONTAINER_ROOT = "/opt/ctox"
+DEFAULT_CODEX_HOME = "/root/.codex"
 DEFAULT_ATIF_CONTAINER_PATH = "/logs/agent/trajectory.json"
+DEFAULT_CONTEXT_LOG_CONTAINER_PATH = f"{DEFAULT_CONTAINER_ROOT}/runtime/context-log.jsonl"
 DEFAULT_RUN_TIMEOUT_SEC = 1800
 
 
@@ -67,36 +69,54 @@ class CtoxAgent(BaseInstalledAgent):
         await environment.upload_file(str(tarball_path), "/tmp/ctox-bundle.tgz")
 
         turn_timeout = os.environ.get("CTOX_CHAT_TURN_TIMEOUT_SECS", "1200")
-        extract_cmd = (
-            f"mkdir -p {DEFAULT_CONTAINER_ROOT} && "
-            f"tar -xzf /tmp/ctox-bundle.tgz -C {DEFAULT_CONTAINER_ROOT} --strip-components=1 && "
-            f"chmod +x {DEFAULT_CONTAINER_ROOT}/target/release/ctox && "
-            f"chmod +x {DEFAULT_CONTAINER_ROOT}/tools/agent-runtime/target/release/codex-exec && "
-            f"ln -sf {DEFAULT_CONTAINER_ROOT}/target/release/ctox /usr/local/bin/ctox && "
-            # Ensure runtime/ exists (may be empty if the bundle excluded it).
-            f"mkdir -p {DEFAULT_CONTAINER_ROOT}/runtime && "
-            # Wipe USER STATE that may have travelled in the bundle so each
-            # bench trial starts virgin: the LCM conversation DB, the queue
-            # DB, continuity+plan state files, backend logs. The other
-            # runtime/ subdirs (benchmarks, browser, codex_exec scaffolding,
-            # communication, documents, generated-skills) are static support
-            # and must survive — `runtime_switch` otherwise fails with
-            # `failed to inspect managed runtime processes`.
-            f"rm -f {DEFAULT_CONTAINER_ROOT}/runtime/*.db "
-            f"{DEFAULT_CONTAINER_ROOT}/runtime/*.db-shm "
-            f"{DEFAULT_CONTAINER_ROOT}/runtime/*.db-wal "
-            f"{DEFAULT_CONTAINER_ROOT}/runtime/*.log "
-            f"{DEFAULT_CONTAINER_ROOT}/runtime/chat_plan.json "
-            f"{DEFAULT_CONTAINER_ROOT}/runtime/runtime_state.json "
-            f"{DEFAULT_CONTAINER_ROOT}/runtime/continuity.json "
-            f"{DEFAULT_CONTAINER_ROOT}/runtime/cto-agent.lock && "
-            # Operator settings live in engine.env. The turn timeout here
-            # must be large enough to cover real agent work; the in-CTOX
-            # default of 180s will kill most bench tasks before the first
-            # tool call.
-            f"printf 'CTOX_CHAT_TURN_TIMEOUT_SECS={turn_timeout}\\n' > {DEFAULT_CONTAINER_ROOT}/runtime/engine.env && "
-            f"rm -f /tmp/ctox-bundle.tgz"
-        )
+        extract_cmd = f"""
+set -e
+mkdir -p {DEFAULT_CONTAINER_ROOT}
+tar -xzf /tmp/ctox-bundle.tgz -C {DEFAULT_CONTAINER_ROOT} --strip-components=1
+chmod +x {DEFAULT_CONTAINER_ROOT}/target/release/ctox
+chmod +x {DEFAULT_CONTAINER_ROOT}/tools/agent-runtime/target/release/codex-exec
+chmod +x {DEFAULT_CONTAINER_ROOT}/tools/model-runtime/target/release/ctox-engine
+
+loader="{DEFAULT_CONTAINER_ROOT}/lib/ld-linux-x86-64.so.2"
+libpath="{DEFAULT_CONTAINER_ROOT}/lib"
+
+wrap_binary() {{
+  target="$1"
+  if [ ! -f "$target" ]; then
+    return 0
+  fi
+  name="$(basename "$target")"
+  if [ ! -f "$target.real" ]; then
+    mv "$target" "$target.real"
+  fi
+  cat > "$target" <<EOF
+#!/bin/sh
+exec "$loader" --argv0 "$name" --library-path "$libpath" "$target.real" "\\$@"
+EOF
+  chmod +x "$target"
+}}
+
+wrap_binary "{DEFAULT_CONTAINER_ROOT}/target/release/ctox"
+wrap_binary "{DEFAULT_CONTAINER_ROOT}/tools/agent-runtime/target/release/codex-exec"
+wrap_binary "{DEFAULT_CONTAINER_ROOT}/tools/model-runtime/target/release/ctox-engine"
+
+mkdir -p {DEFAULT_CONTAINER_ROOT}/src {DEFAULT_CONTAINER_ROOT}/tools/agent-runtime
+[ -f {DEFAULT_CONTAINER_ROOT}/src/main.rs ] || printf '%s\n' 'fn main() {{}}' > {DEFAULT_CONTAINER_ROOT}/src/main.rs
+[ -f {DEFAULT_CONTAINER_ROOT}/tools/agent-runtime/Cargo.toml ] || printf '%s\n' '[package]' 'name = "codex-exec"' > {DEFAULT_CONTAINER_ROOT}/tools/agent-runtime/Cargo.toml
+
+ln -sf {DEFAULT_CONTAINER_ROOT}/target/release/ctox /usr/local/bin/ctox
+mkdir -p {DEFAULT_CONTAINER_ROOT}/runtime
+rm -f {DEFAULT_CONTAINER_ROOT}/runtime/*.db \
+  {DEFAULT_CONTAINER_ROOT}/runtime/*.db-shm \
+  {DEFAULT_CONTAINER_ROOT}/runtime/*.db-wal \
+  {DEFAULT_CONTAINER_ROOT}/runtime/*.log \
+  {DEFAULT_CONTAINER_ROOT}/runtime/chat_plan.json \
+  {DEFAULT_CONTAINER_ROOT}/runtime/runtime_state.json \
+  {DEFAULT_CONTAINER_ROOT}/runtime/continuity.json \
+  {DEFAULT_CONTAINER_ROOT}/runtime/cto-agent.lock
+printf 'CTOX_CHAT_TURN_TIMEOUT_SECS={turn_timeout}\\n' > {DEFAULT_CONTAINER_ROOT}/runtime/engine.env
+rm -f /tmp/ctox-bundle.tgz
+"""
         await self.exec_as_root(environment, command=extract_cmd)
 
         # Smoke-check — if the binary doesn't run, fail install loudly.
@@ -149,6 +169,18 @@ class CtoxAgent(BaseInstalledAgent):
                 "CTOX_CHAT_TURN_TIMEOUT_SECS", "1200"
             ),
         }
+        for key in (
+            "CTOX_CHAT_MODEL_REALIZED_CONTEXT",
+            "CTOX_CHAT_MODEL_MAX_CONTEXT",
+            "CTOX_CHAT_COMPACTION_THRESHOLD_PERCENT",
+            "CTOX_CHAT_COMPACTION_MIN_TOKENS",
+            "CTOX_REFRESH_OUTPUT_BUDGET_PCT",
+            "CTOX_CONTINUITY_REFRESH_EVERY_N_TURNS",
+            "CTOX_DISABLE_AUXILIARY_BACKENDS",
+        ):
+            value = os.environ.get(key)
+            if value:
+                env[key] = value
         for key, value in provider_keys.items():
             if value:
                 env[key] = value
@@ -159,14 +191,44 @@ class CtoxAgent(BaseInstalledAgent):
         # agent tree), otherwise the agent writes relative files into the
         # wrong directory and the verifier can't find them.
         workspace = "/app"
+        bench_instruction = self._render_benchmark_instruction(
+            instruction=instruction,
+            workspace=workspace,
+        )
         bench_model = os.environ.get("CTOX_BENCH_MODEL", "gpt-5.4")
         bench_preset = os.environ.get("CTOX_BENCH_PRESET", "quality")
         preset_flag = f"--{bench_preset}" if bench_preset in ("quality", "performance") else ""
+        inline_exports = " ".join(
+            f"{key}={shlex.quote(value)}"
+            for key, value in (
+                ("CTOX_ROOT", DEFAULT_CONTAINER_ROOT),
+                ("CODEX_HOME", DEFAULT_CODEX_HOME),
+                ("HOME", DEFAULT_CODEX_HOME),
+                (
+                    "PATH",
+                    f"/usr/local/bin:{DEFAULT_CONTAINER_ROOT}/target/release:/usr/bin:/bin",
+                ),
+            )
+        )
+        for key in (
+            "CTOX_CHAT_MODEL_REALIZED_CONTEXT",
+            "CTOX_CHAT_MODEL_MAX_CONTEXT",
+            "CTOX_CHAT_COMPACTION_THRESHOLD_PERCENT",
+            "CTOX_CHAT_COMPACTION_MIN_TOKENS",
+            "CTOX_REFRESH_OUTPUT_BUDGET_PCT",
+            "CTOX_CONTINUITY_REFRESH_EVERY_N_TURNS",
+            "CTOX_DISABLE_AUXILIARY_BACKENDS",
+        ):
+            value = env.get(key)
+            if value:
+                inline_exports += f" {key}={shlex.quote(value)}"
         cmd = (
             f"cd {shlex.quote(workspace)} && "
+            f"export {inline_exports} && "
             f"/usr/local/bin/ctox run-once "
-            f"--brief {shlex.quote(instruction)} "
+            f"--brief {shlex.quote(bench_instruction)} "
             f"--model {shlex.quote(bench_model)} "
+            f"--autonomy progressive "
             f"{preset_flag} "
             f"--workspace {shlex.quote(workspace)} "
             f"--atif-out {DEFAULT_ATIF_CONTAINER_PATH} "
@@ -204,6 +266,21 @@ class CtoxAgent(BaseInstalledAgent):
 
         if run_exc is not None:
             raise run_exc
+
+    @staticmethod
+    def _render_benchmark_instruction(instruction: str, workspace: str) -> str:
+        cleaned = instruction.strip()
+        if cleaned.startswith("Work only inside this workspace:"):
+            return cleaned
+        return (
+            f"Work only inside this workspace:\n{workspace}\n\n"
+            "This is a non-interactive benchmark harness. No human will answer "
+            "follow-up questions. Do not ask for clarification. Inspect the "
+            "workspace, repository state, tests, and local artifacts, infer the "
+            "most likely intended fix from the available evidence, apply the "
+            "change directly, and verify it before replying.\n\n"
+            f"{cleaned}"
+        )
 
     def populate_context_post_run(self, context: Any) -> None:  # type: ignore[override]
         trajectory_path = Path(self.logs_dir) / "trajectory.json"
