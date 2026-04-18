@@ -3184,7 +3184,7 @@ mod tests {
             conversation_id: 1,
             seq: 1,
             role: "user".to_string(),
-            content: "Review the blocked owner-visible task without losing continuity.\n\nGoal:\nInstall Redis cleanly\n\nThe latest attempt failed or stalled with this blocker:\ncodex-exec timed out after 180s\n".to_string(),
+            content: "Review the blocked owner-visible task without losing continuity.\n\nGoal:\nInstall Redis cleanly\n\nThe latest attempt failed or stalled with this blocker:\nexecution timed out after 180s\n".to_string(),
             created_at: "2026-03-26T10:00:00Z".to_string(),
             token_count: 40,
         });
@@ -3196,7 +3196,7 @@ mod tests {
         assert!(text.contains("system follow-up"), "{text}");
         assert!(text.contains("goal Install Redis cleanly"), "{text}");
         assert!(
-            text.contains("blocker codex-exec timed out after 180s"),
+            text.contains("blocker execution timed out after 180s"),
             "{text}"
         );
     }

@@ -853,7 +853,7 @@ fn handle_request(
     }
     // For remote API upstreams (OpenAI/Anthropic/OpenRouter/MiniMax/etc.)
     // we always re-derive Authorization from the configured env key.
-    // Whether the incoming codex-exec request had its own `authorization`
+    // Whether the incoming agent-runtime request had its own `authorization`
     // header is irrelevant: for non-OpenAI upstreams the header-forwarding
     // loop above only preserves `content-type`, so the client header was
     // dropped on the wire anyway. Without this unconditional set, MiniMax

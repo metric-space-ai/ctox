@@ -322,7 +322,7 @@ pub fn run_foreground(root: &Path) -> Result<()> {
     );
     // Propagate CTOX_AUTONOMY_LEVEL from engine.env into the process
     // environment so downstream readers (plan step-prompt rendering,
-    // runtime-context block assembly, nag cadence, child codex-exec
+    // runtime-context block assembly, nag cadence, child session execution
     // turns) see the current operator preference without re-reading
     // the settings file. The level is a legitimate persistent
     // operator setting exposed in the TUI — unlike the old benchmark
@@ -5112,15 +5112,15 @@ mod tests {
     #[test]
     fn timeout_continuation_prompt_summarizes_nested_goal() {
         let prompt = render_timeout_continue_prompt(
-            "Continue the interrupted task from the latest durable state instead of treating it as externally blocked.\n\nGoal:\nMission continuity watchdog detected an open mission that went idle for 45 seconds.\n\nThe previous slice stopped because it hit the turn time budget:\ncodex-exec timed out after 900s",
-            "codex-exec timed out after 900s",
+            "Continue the interrupted task from the latest durable state instead of treating it as externally blocked.\n\nGoal:\nMission continuity watchdog detected an open mission that went idle for 45 seconds.\n\nThe previous slice stopped because it hit the turn time budget:\nexecution timed out after 900s",
+            "execution timed out after 900s",
             None,
         );
         assert!(
             prompt.contains("Slice goal:\nMission continuity watchdog detected an open mission")
         );
-        assert!(prompt.contains("Runtime stop:\ncodex-exec timed out after 900s"));
-        assert!(!prompt.contains("The previous slice stopped because it hit the turn time budget:\ncodex-exec timed out after 900s\n\nThe previous slice stopped"));
+        assert!(prompt.contains("Runtime stop:\nexecution timed out after 900s"));
+        assert!(!prompt.contains("The previous slice stopped because it hit the turn time budget:\nexecution timed out after 900s\n\nThe previous slice stopped"));
     }
 
     #[test]
@@ -5135,7 +5135,7 @@ mod tests {
 
         let timeout_prompt = render_timeout_continue_prompt(
             "Ship the next implementation slice.",
-            "codex-exec timed out after 180s",
+            "execution timed out after 180s",
             Some("/tmp/ctox-workspace-contract"),
         );
         assert!(timeout_prompt
@@ -5335,7 +5335,7 @@ mod tests {
         };
 
         let created =
-            maybe_enqueue_timeout_continuation(&root, &job, "codex-exec timed out after 180s")
+            maybe_enqueue_timeout_continuation(&root, &job, "execution timed out after 180s")
                 .expect("timeout continuation should succeed");
 
         assert_eq!(
@@ -5386,7 +5386,7 @@ mod tests {
         };
 
         let created =
-            maybe_enqueue_timeout_continuation(&root, &job, "codex-exec timed out after 180s")
+            maybe_enqueue_timeout_continuation(&root, &job, "execution timed out after 180s")
                 .expect("timeout continuation should succeed");
 
         assert_eq!(
@@ -5425,7 +5425,7 @@ mod tests {
         };
 
         let created =
-            maybe_enqueue_timeout_continuation(&root, &job, "codex-exec timed out after 180s")
+            maybe_enqueue_timeout_continuation(&root, &job, "execution timed out after 180s")
                 .expect("timeout continuation should succeed");
 
         assert!(created.is_some());

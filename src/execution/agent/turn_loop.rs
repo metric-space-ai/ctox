@@ -321,7 +321,7 @@ pub(crate) struct ApiModelProviderSpec {
     pub(crate) name: &'static str,
     pub(crate) base_url: String,
     pub(crate) env_key: &'static str,
-    /// codex-exec wire protocol. "responses" for OpenAI-style responses API,
+    /// agent-runtime wire protocol. "responses" for OpenAI-style responses API,
     /// "chat" for /v1/chat/completions providers (e.g. MiniMax direct).
     pub(crate) wire_api: &'static str,
 }
@@ -977,10 +977,10 @@ pub(crate) fn resolve_api_model_provider_spec(
     if !engine::api_provider_supports_model(&provider, model) {
         return None;
     }
-    // OpenAI is the codex-exec built-in default provider — emitting an
+    // OpenAI is the agent-runtime built-in default provider — emitting an
     // override would be redundant. Anthropic is also handled natively by
-    // codex-exec via its own model-name matching. The remaining providers
-    // need an explicit `-c model_providers.X.base_url=...` so codex-exec
+    // the agent runtime via its own model-name matching. The remaining providers
+    // need an explicit `-c model_providers.X.base_url=...` so the agent runtime
     // points its HTTP client at the correct upstream.
     let normalized = provider.to_ascii_lowercase();
     // (provider_id, name, env_key, default_provider_for_url, wire_api)
@@ -993,8 +993,8 @@ pub(crate) fn resolve_api_model_provider_spec(
             "responses",
         ),
         // MiniMax's OpenAI-compatible surface is /v1/chat/completions only —
-        // it does NOT implement OpenAI's /v1/responses. codex-exec only
-        // speaks `wire_api = "responses"`. Bridge: route codex-exec at the
+        // it does NOT implement OpenAI's /v1/responses. The agent runtime only
+        // speaks `wire_api = "responses"`. Bridge: route the agent runtime at the
         // CTOX gateway running on localhost; the gateway sees the model has
         // a chat-family adapter (model_adapters/minimax.rs), translates the
         // /v1/responses body to /v1/chat/completions, and forwards to

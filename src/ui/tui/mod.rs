@@ -4263,7 +4263,7 @@ fn load_settings_items(root: &Path) -> Vec<SettingItem> {
                 .unwrap_or_else(|| "false".to_string()),
             secret: false,
             choices: vec!["false", "true"],
-            help: "Experimental: run inference via in-process codex-core library (skips the codex-exec subprocess).",
+            help: "Run inference via the in-process ctox-core library.",
             kind: SettingKind::Env,
         },
         SettingItem {

@@ -121,7 +121,7 @@ pub fn rewrite_request(raw: &[u8]) -> anyhow::Result<Vec<u8>> {
         }
     }
     // M2.7's chain-of-thought needs significant headroom (model card says
-    // up to 128k CoT tokens). Default codex-exec request usually has no
+    // up to 128k CoT tokens). Default agent-runtime request usually has no
     // max_tokens set or sets a small cap, which cuts the model off mid-
     // <think> and produces empty agent replies. Floor at the CTOX standard
     // 131_072 unless the request explicitly asked for more.

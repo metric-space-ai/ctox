@@ -1483,7 +1483,7 @@ const REMOTE_CHAT_FAMILY_REGISTRY: &[RemoteChatFamilyEntry] = &[
         // Direct API alias (capitalised name as published on
         // platform.minimax.io). Goes via api.minimax.io/v1 with
         // MINIMAX_API_KEY. Both aliases share the same MiniMax adapter
-        // which translates codex-exec's /v1/responses requests into
+        // which translates the agent runtime's /v1/responses requests into
         // MiniMax's /v1/chat/completions surface.
         model: "MiniMax-M2.7",
         chat_family: engine::ChatModelFamily::MiniMax,
