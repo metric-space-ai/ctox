@@ -9,6 +9,8 @@ use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::inference::runtime_env;
+
 const NVIDIA_SMI_TIMEOUT_SECS: u64 = 10;
 const ENGINE_DOCTOR_TIMEOUT_SECS: u64 = 20;
 
@@ -131,14 +133,14 @@ fn parse_host_acceleration_override(raw: &str) -> Option<HostAccelerationRequire
     }
 }
 
-fn detect_host_acceleration_requirement() -> HostAccelerationRequirement {
+fn detect_host_acceleration_requirement(root: &Path) -> HostAccelerationRequirement {
     if let Ok(raw) = std::env::var("CTOX_TEST_ENGINE_HOST_ACCELERATION") {
         if let Some(requirement) = parse_host_acceleration_override(&raw) {
             return requirement;
         }
     }
 
-    if nvidia_gpu_present() {
+    if nvidia_gpu_present(root) {
         return HostAccelerationRequirement::NvidiaCuda;
     }
     if cfg!(target_os = "macos") {
@@ -147,8 +149,8 @@ fn detect_host_acceleration_requirement() -> HostAccelerationRequirement {
     HostAccelerationRequirement::CpuOnly
 }
 
-fn nvidia_gpu_present() -> bool {
-    if let Ok(spec) = std::env::var("CTOX_TEST_GPU_TOTALS_MB") {
+fn nvidia_gpu_present(root: &Path) -> bool {
+    if let Some(spec) = runtime_env::env_or_config(root, "CTOX_TEST_GPU_TOTALS_MB") {
         if !spec.trim().is_empty() {
             return true;
         }
@@ -239,7 +241,7 @@ pub fn ensure_engine_binary_matches_host(
     binary: &Path,
     allow_cpu_fallback: bool,
 ) -> Result<()> {
-    let requirement = detect_host_acceleration_requirement();
+    let requirement = detect_host_acceleration_requirement(root);
     if requirement == HostAccelerationRequirement::CpuOnly {
         return Ok(());
     }

@@ -295,7 +295,9 @@ fn process_env_override_allowed(key: &str) -> bool {
             | "CTOX_CUDA_ROOT"
             | "CTOX_CUDA_BIN_PATH"
             | "CTOX_RESOURCE_SNAPSHOT_JSON"
-            | "CTOX_TEST_GPU_TOTALS_MB"
+            // CTOX_TEST_GPU_TOTALS_MB intentionally NOT allowlisted — tests
+            // must inject fake GPU totals via the test-root's engine.env so
+            // parallel tests stay isolated from each other's process state.
             // Phase 1/2 refactor: direct-session gate + compact policy knobs.
             | "CTOX_USE_DIRECT_SESSION"
             | "CTOX_DEBUG_DIRECT_SESSION"

@@ -681,7 +681,7 @@ pub fn local_model_satisfies_context_policy(
     model: &str,
     env_map: &BTreeMap<String, String>,
 ) -> bool {
-    let hardware = inspect_hardware_profile().ok();
+    let hardware = inspect_hardware_profile(root).ok();
     local_model_satisfies_context_policy_with_hardware(root, model, env_map, hardware.as_ref())
 }
 
@@ -690,7 +690,7 @@ pub fn local_models_satisfying_context_policy<'a>(
     models: impl IntoIterator<Item = &'a &'static str>,
     env_map: &BTreeMap<String, String>,
 ) -> Vec<&'static str> {
-    let hardware = inspect_hardware_profile().ok();
+    let hardware = inspect_hardware_profile(root).ok();
     models
         .into_iter()
         .copied()
@@ -991,7 +991,7 @@ pub fn local_chat_family_choices(
     root: &Path,
     env_map: &BTreeMap<String, String>,
 ) -> Vec<&'static str> {
-    let hardware = inspect_hardware_profile().ok();
+    let hardware = inspect_hardware_profile(root).ok();
     engine::SUPPORTED_LOCAL_CHAT_FAMILIES
         .iter()
         .copied()
@@ -1026,7 +1026,7 @@ pub fn resolve_local_chat_model_from_settings(
         return Ok(Some(model));
     }
     if let Some(family) = explicit_local_chat_family(env_map) {
-        let hardware = inspect_hardware_profile().ok();
+        let hardware = inspect_hardware_profile(root).ok();
         if let Some(bundle) =
             best_bundle_for_family(root, family, preset, hardware.as_ref(), env_map)?
         {
@@ -1086,7 +1086,7 @@ pub fn preview_chat_preset_bundle(
     if infer_chat_source(env_map).eq_ignore_ascii_case("api") {
         return Ok(None);
     }
-    let hardware = match inspect_hardware_profile() {
+    let hardware = match inspect_hardware_profile(root) {
         Ok(profile) if !profile.gpus.is_empty() => profile,
         _ => return Ok(None),
     };
@@ -1211,7 +1211,7 @@ pub(crate) fn resolve_auxiliary_visible_devices(
     let explicit = parse_csv_indices(env_map.get(role_key));
     let shared = parse_csv_indices(env_map.get("CTOX_AUXILIARY_CUDA_VISIBLE_DEVICES"));
     let hardware = hardware_profile_from_persisted_chat_plan(root)
-        .or_else(|| inspect_hardware_profile().ok())
+        .or_else(|| inspect_hardware_profile(root).ok())
         .context("failed to resolve hardware profile for auxiliary planner")?;
     let chat_gpu_indices = persisted_chat_gpu_indices(root);
     let chat_preset = active_chat_preset(root);
@@ -1439,7 +1439,7 @@ fn reusable_persisted_chat_runtime_plan(
     if explicit_max_seqs_cap.is_some_and(|cap| plan.max_seqs > cap) {
         return Ok(None);
     }
-    let fresh_bundle = match inspect_hardware_profile() {
+    let fresh_bundle = match inspect_hardware_profile(root) {
         Ok(hardware) if !hardware.gpus.is_empty() => {
             if let Some(requested_model) = requested_model.clone() {
                 build_bundle_for_model(root, &requested_model, requested_preset, &hardware, env_map)
@@ -3623,9 +3623,9 @@ fn cpu_fallback_auxiliary_selection(
 ) -> Option<engine::AuxiliaryModelSelection> {
     let alias = match role {
         engine::AuxiliaryRole::Embedding => "Qwen/Qwen3-Embedding-0.6B [CPU]",
-        engine::AuxiliaryRole::Stt
-        | engine::AuxiliaryRole::Tts
-        | engine::AuxiliaryRole::Vision => return None,
+        engine::AuxiliaryRole::Stt | engine::AuxiliaryRole::Tts | engine::AuxiliaryRole::Vision => {
+            return None;
+        }
     };
     Some(engine::auxiliary_model_selection(role, Some(alias)))
 }
@@ -4093,7 +4093,7 @@ fn parse_csv_indices(raw: Option<&String>) -> Vec<usize> {
     .unwrap_or_default()
 }
 
-fn inspect_hardware_profile() -> Result<HardwareProfile> {
+fn inspect_hardware_profile(root: &Path) -> Result<HardwareProfile> {
     let empty_profile = || {
         let gpu0_reserve = gpu0_desktop_reserve_mb();
         HardwareProfile {
@@ -4103,7 +4103,7 @@ fn inspect_hardware_profile() -> Result<HardwareProfile> {
         }
     };
 
-    if let Ok(spec) = std::env::var("CTOX_TEST_GPU_TOTALS_MB") {
+    if let Some(spec) = runtime_env::env_or_config(root, "CTOX_TEST_GPU_TOTALS_MB") {
         let gpus = spec
             .split(';')
             .filter_map(|chunk| {
@@ -5760,6 +5760,23 @@ mod tests {
         root
     }
 
+    /// Inject a fake GPU totals spec for `inspect_hardware_profile` by
+    /// appending `CTOX_TEST_GPU_TOTALS_MB=<spec>` to `<root>/runtime/engine.env`.
+    /// The key is not allowlisted for process-env overrides, so writing to the
+    /// test-root's engine.env gives each test its own isolated fake hardware
+    /// without mutating process state.
+    fn write_test_gpu_totals(root: &Path, spec: &str) {
+        let runtime_dir = root.join("runtime");
+        std::fs::create_dir_all(&runtime_dir).unwrap();
+        let env_path = runtime_dir.join("engine.env");
+        let mut existing = std::fs::read_to_string(&env_path).unwrap_or_default();
+        if !existing.is_empty() && !existing.ends_with('\n') {
+            existing.push('\n');
+        }
+        existing.push_str(&format!("CTOX_TEST_GPU_TOTALS_MB={spec}\n"));
+        std::fs::write(&env_path, existing).unwrap();
+    }
+
     fn write_platform_contract(root: &Path, gpu_count: usize, total_mb: u64, nccl_available: bool) {
         let payload = json!({
             "generated_at": "2026-04-05T00:00:00Z",
@@ -5798,9 +5815,6 @@ mod tests {
 
     #[test]
     fn apply_chat_runtime_plan_reuses_matching_persisted_plan() {
-        let _guard = TEST_ENV_LOCK.lock().unwrap();
-        std::env::remove_var("CTOX_TEST_GPU_TOTALS_MB");
-
         let unique = temp_root("reuse-persisted-plan");
         let env_map = chat_only_env_map();
         let bundle = build_bundle_for_model(
@@ -6156,9 +6170,6 @@ mod tests {
 
     #[test]
     fn resolve_auxiliary_visible_devices_uses_persisted_chat_plan_hardware() {
-        let _guard = TEST_ENV_LOCK.lock().unwrap();
-        std::env::remove_var("CTOX_TEST_GPU_TOTALS_MB");
-
         let unique = temp_root("aux-visible-devices-persisted-plan");
         let env_map = chat_only_env_map();
         runtime_env::save_runtime_env_map(&unique, &env_map).unwrap();
@@ -6178,10 +6189,12 @@ mod tests {
             "Qwen/Qwen3-Embedding-0.6B",
         )
         .unwrap();
-        assert!(visible_devices
-            .as_deref()
-            .map(str::trim)
-            .is_none_or(|value| !value.is_empty()));
+        assert!(
+            visible_devices
+                .as_deref()
+                .map(str::trim)
+                .is_none_or(|value| !value.is_empty())
+        );
     }
 
     #[test]
@@ -6598,16 +6611,10 @@ mod tests {
             "openai/gpt-oss-20b".to_string(),
         );
 
-        let previous = std::env::var("CTOX_TEST_GPU_TOTALS_MB").ok();
-        std::env::set_var("CTOX_TEST_GPU_TOTALS_MB", "0:24576;1:24576;2:24576");
+        write_test_gpu_totals(&unique, "0:24576;1:24576;2:24576");
         let _plan = apply_chat_runtime_plan(&unique, &mut env_map)
             .unwrap()
             .expect("expected runtime plan");
-        if let Some(old) = previous {
-            std::env::set_var("CTOX_TEST_GPU_TOTALS_MB", old);
-        } else {
-            std::env::remove_var("CTOX_TEST_GPU_TOTALS_MB");
-        }
 
         assert!(!env_map.contains_key("CTOX_LOCAL_ADAPTER_REASONING_CAP"));
         assert!(!env_map.contains_key("CTOX_LOCAL_ADAPTER_MAX_OUTPUT_TOKENS_CAP"));
@@ -6643,16 +6650,10 @@ mod tests {
             ChatPreset::Performance.label().to_string(),
         );
 
-        let previous = std::env::var("CTOX_TEST_GPU_TOTALS_MB").ok();
-        std::env::set_var("CTOX_TEST_GPU_TOTALS_MB", "0:24576;1:24576;2:24576");
+        write_test_gpu_totals(&unique, "0:24576;1:24576;2:24576");
         let _plan = apply_chat_runtime_plan(&unique, &mut env_map)
             .unwrap()
             .expect("expected runtime plan");
-        if let Some(old) = previous {
-            std::env::set_var("CTOX_TEST_GPU_TOTALS_MB", old);
-        } else {
-            std::env::remove_var("CTOX_TEST_GPU_TOTALS_MB");
-        }
 
         assert!(!env_map.contains_key("CTOX_LOCAL_ADAPTER_REASONING_CAP"));
         assert!(!env_map.contains_key("CTOX_LOCAL_ADAPTER_MAX_OUTPUT_TOKENS_CAP"));
@@ -6686,16 +6687,10 @@ mod tests {
         );
         env_map.insert("CTOX_CHAT_MODEL".to_string(), "Qwen/Qwen3.5-4B".to_string());
 
-        let previous = std::env::var("CTOX_TEST_GPU_TOTALS_MB").ok();
-        std::env::set_var("CTOX_TEST_GPU_TOTALS_MB", "0:20470;1:20470;2:20470");
+        write_test_gpu_totals(&unique, "0:20470;1:20470;2:20470");
         let plan = apply_chat_runtime_plan(&unique, &mut env_map)
             .unwrap()
             .expect("expected runtime plan");
-        if let Some(old) = previous {
-            std::env::set_var("CTOX_TEST_GPU_TOTALS_MB", old);
-        } else {
-            std::env::remove_var("CTOX_TEST_GPU_TOTALS_MB");
-        }
 
         assert_eq!(plan.model, "Qwen/Qwen3.5-4B");
         assert_eq!(
@@ -6753,16 +6748,10 @@ mod tests {
             "openai/gpt-oss-20b".to_string(),
         );
 
-        let previous = std::env::var("CTOX_TEST_GPU_TOTALS_MB").ok();
-        std::env::set_var("CTOX_TEST_GPU_TOTALS_MB", "0:24576;1:24576;2:24576");
+        write_test_gpu_totals(&unique, "0:24576;1:24576;2:24576");
         let plan = apply_chat_runtime_plan(&unique, &mut env_map)
             .unwrap()
             .expect("expected runtime plan");
-        if let Some(old) = previous {
-            std::env::set_var("CTOX_TEST_GPU_TOTALS_MB", old);
-        } else {
-            std::env::remove_var("CTOX_TEST_GPU_TOTALS_MB");
-        }
 
         assert!(plan.max_seq_len > 9_216, "{plan:?}");
         assert_eq!(
@@ -7319,16 +7308,11 @@ mod tests {
 
     #[test]
     fn local_chat_family_choices_follow_dynamic_feasibility() {
-        let _guard = TEST_ENV_LOCK.lock().unwrap();
-        let previous = std::env::var("CTOX_TEST_GPU_TOTALS_MB").ok();
-        std::env::set_var("CTOX_TEST_GPU_TOTALS_MB", "0:24576");
+        let root = temp_root("family-choices-dynamic");
+        write_test_gpu_totals(&root, "0:24576");
         let env_map = BTreeMap::new();
-        let families = local_chat_family_choices(Path::new(env!("CARGO_MANIFEST_DIR")), &env_map);
-        if let Some(previous) = previous {
-            std::env::set_var("CTOX_TEST_GPU_TOTALS_MB", previous);
-        } else {
-            std::env::remove_var("CTOX_TEST_GPU_TOTALS_MB");
-        }
+        let families = local_chat_family_choices(&root, &env_map);
+        let _ = std::fs::remove_dir_all(&root);
 
         assert!(families.contains(&"Qwen 3.5"));
         assert!(families.contains(&"GPT-OSS"));
@@ -7339,16 +7323,11 @@ mod tests {
 
     #[test]
     fn local_chat_family_choices_allow_single_gpu_profiles_on_larger_hosts() {
-        let _guard = TEST_ENV_LOCK.lock().unwrap();
-        let previous = std::env::var("CTOX_TEST_GPU_TOTALS_MB").ok();
-        std::env::set_var("CTOX_TEST_GPU_TOTALS_MB", "0:24576,1:24576,2:24576,3:24576");
+        let root = temp_root("family-choices-single-gpu");
+        write_test_gpu_totals(&root, "0:24576,1:24576,2:24576,3:24576");
         let env_map = BTreeMap::new();
-        let families = local_chat_family_choices(Path::new(env!("CARGO_MANIFEST_DIR")), &env_map);
-        if let Some(previous) = previous {
-            std::env::set_var("CTOX_TEST_GPU_TOTALS_MB", previous);
-        } else {
-            std::env::remove_var("CTOX_TEST_GPU_TOTALS_MB");
-        }
+        let families = local_chat_family_choices(&root, &env_map);
+        let _ = std::fs::remove_dir_all(&root);
 
         assert!(families.contains(&"GPT-OSS"));
         assert!(families.contains(&"Qwen 3.5"));
@@ -7366,8 +7345,7 @@ mod tests {
                 .as_nanos()
         ));
         std::fs::create_dir_all(unique.join("runtime")).unwrap();
-        let previous = std::env::var("CTOX_TEST_GPU_TOTALS_MB").ok();
-        std::env::set_var("CTOX_TEST_GPU_TOTALS_MB", "0:20470;1:20470;2:20470");
+        write_test_gpu_totals(&unique, "0:20470;1:20470;2:20470");
         let mut env_map = BTreeMap::new();
         env_map.insert("CTOX_CHAT_SOURCE".to_string(), "local".to_string());
         env_map.insert(
@@ -7390,11 +7368,6 @@ mod tests {
         let result = apply_chat_runtime_plan(&unique, &mut env_map)
             .unwrap()
             .expect("expected runtime plan");
-        if let Some(previous) = previous {
-            std::env::set_var("CTOX_TEST_GPU_TOTALS_MB", previous);
-        } else {
-            std::env::remove_var("CTOX_TEST_GPU_TOTALS_MB");
-        }
         let _ = std::fs::remove_dir_all(&unique);
 
         assert_eq!(result.model, "openai/gpt-oss-20b");
@@ -7414,8 +7387,7 @@ mod tests {
                 .as_nanos()
         ));
         std::fs::create_dir_all(unique.join("runtime")).unwrap();
-        let previous = std::env::var("CTOX_TEST_GPU_TOTALS_MB").ok();
-        std::env::set_var("CTOX_TEST_GPU_TOTALS_MB", "0:20470;1:20470;2:20470");
+        write_test_gpu_totals(&unique, "0:20470;1:20470;2:20470");
         let mut env_map = BTreeMap::new();
         env_map.insert("CTOX_CHAT_SOURCE".to_string(), "local".to_string());
         env_map.insert(
@@ -7438,11 +7410,6 @@ mod tests {
         let result = apply_chat_runtime_plan(&unique, &mut env_map)
             .unwrap()
             .expect("expected runtime plan");
-        if let Some(previous) = previous {
-            std::env::set_var("CTOX_TEST_GPU_TOTALS_MB", previous);
-        } else {
-            std::env::remove_var("CTOX_TEST_GPU_TOTALS_MB");
-        }
         let _ = std::fs::remove_dir_all(&unique);
 
         assert_eq!(result.model, "google/gemma-4-26B-A4B-it");
@@ -7464,8 +7431,7 @@ mod tests {
                 .as_nanos()
         ));
         std::fs::create_dir_all(unique.join("runtime")).unwrap();
-        let previous = std::env::var("CTOX_TEST_GPU_TOTALS_MB").ok();
-        std::env::set_var("CTOX_TEST_GPU_TOTALS_MB", "0:20470;1:20470;2:20470");
+        write_test_gpu_totals(&unique, "0:20470;1:20470;2:20470");
         let mut env_map = BTreeMap::new();
         env_map.insert("CTOX_CHAT_SOURCE".to_string(), "local".to_string());
         env_map.insert(
@@ -7492,11 +7458,6 @@ mod tests {
         let result = apply_chat_runtime_plan(&unique, &mut env_map)
             .unwrap()
             .expect("expected runtime plan");
-        if let Some(previous) = previous {
-            std::env::set_var("CTOX_TEST_GPU_TOTALS_MB", previous);
-        } else {
-            std::env::remove_var("CTOX_TEST_GPU_TOTALS_MB");
-        }
         let _ = std::fs::remove_dir_all(&unique);
 
         assert_eq!(result.model, "google/gemma-4-31B-it");
@@ -7514,8 +7475,7 @@ mod tests {
                 .as_nanos()
         ));
         std::fs::create_dir_all(unique.join("runtime")).unwrap();
-        let previous = std::env::var("CTOX_TEST_GPU_TOTALS_MB").ok();
-        std::env::set_var("CTOX_TEST_GPU_TOTALS_MB", "0:20470;1:20470;2:20470;3:20470");
+        write_test_gpu_totals(&unique, "0:20470;1:20470;2:20470;3:20470");
         let mut env_map = BTreeMap::new();
         env_map.insert("CTOX_CHAT_SOURCE".to_string(), "local".to_string());
         env_map.insert(
@@ -7539,11 +7499,6 @@ mod tests {
         let result = apply_chat_runtime_plan(&unique, &mut env_map)
             .unwrap()
             .expect("expected runtime plan");
-        if let Some(previous) = previous {
-            std::env::set_var("CTOX_TEST_GPU_TOTALS_MB", previous);
-        } else {
-            std::env::remove_var("CTOX_TEST_GPU_TOTALS_MB");
-        }
         let _ = std::fs::remove_dir_all(&unique);
 
         assert_eq!(result.model, "Qwen/Qwen3.5-4B");
@@ -7592,9 +7547,8 @@ mod tests {
                 .as_nanos()
         ));
         std::fs::create_dir_all(unique.join("runtime")).unwrap();
-        let previous_totals = std::env::var("CTOX_TEST_GPU_TOTALS_MB").ok();
+        write_test_gpu_totals(&unique, "0:24576;1:24576;2:24576");
         let previous_snapshot = std::env::var("CTOX_RESOURCE_SNAPSHOT_JSON").ok();
-        std::env::set_var("CTOX_TEST_GPU_TOTALS_MB", "0:24576;1:24576;2:24576");
         std::env::set_var(
             "CTOX_RESOURCE_SNAPSHOT_JSON",
             r#"{"source":"test-live-free","gpus":[{"index":0,"uuid":null,"name":"GPU0","total_mb":24576,"used_mb":22528,"free_mb":2048},{"index":1,"uuid":null,"name":"GPU1","total_mb":24576,"used_mb":0,"free_mb":24576},{"index":2,"uuid":null,"name":"GPU2","total_mb":24576,"used_mb":0,"free_mb":24576}]}"#,
@@ -7621,11 +7575,6 @@ mod tests {
         let plan = apply_chat_runtime_plan(&unique, &mut env_map)
             .expect("chat runtime plan should resolve from host capacity")
             .expect("chat runtime plan should be present");
-        if let Some(previous) = previous_totals {
-            std::env::set_var("CTOX_TEST_GPU_TOTALS_MB", previous);
-        } else {
-            std::env::remove_var("CTOX_TEST_GPU_TOTALS_MB");
-        }
         if let Some(previous) = previous_snapshot {
             std::env::set_var("CTOX_RESOURCE_SNAPSHOT_JSON", previous);
         } else {
@@ -7684,8 +7633,7 @@ mod tests {
                 .as_nanos()
         ));
         std::fs::create_dir_all(unique.join("runtime")).unwrap();
-        let previous_totals = std::env::var("CTOX_TEST_GPU_TOTALS_MB").ok();
-        std::env::set_var("CTOX_TEST_GPU_TOTALS_MB", "0:20470;1:20470;2:20470");
+        write_test_gpu_totals(&unique, "0:20470;1:20470;2:20470");
 
         let mut env_map = BTreeMap::new();
         env_map.insert("CTOX_CHAT_SOURCE".to_string(), "local".to_string());
@@ -7710,11 +7658,6 @@ mod tests {
             .expect("chat runtime plan should resolve on a 3xA4500 host")
             .expect("chat runtime plan should be present");
 
-        if let Some(previous) = previous_totals {
-            std::env::set_var("CTOX_TEST_GPU_TOTALS_MB", previous);
-        } else {
-            std::env::remove_var("CTOX_TEST_GPU_TOTALS_MB");
-        }
         let _ = std::fs::remove_dir_all(&unique);
 
         assert!(plan_satisfies_context_policy(&plan), "{plan:#?}");
@@ -7884,10 +7827,8 @@ mod tests {
 
     #[test]
     fn direct_model_runtime_apply_allows_explicit_nemotron_on_4x20gb() {
-        let _guard = TEST_ENV_LOCK.lock().unwrap();
         let unique = temp_root("explicit-nemotron-4x20");
-        let previous = std::env::var("CTOX_TEST_GPU_TOTALS_MB").ok();
-        std::env::set_var("CTOX_TEST_GPU_TOTALS_MB", "0:20470;1:20470;2:20470;3:20470");
+        write_test_gpu_totals(&unique, "0:20470;1:20470;2:20470;3:20470");
         let mut env_map = BTreeMap::new();
         env_map.insert("CTOX_CHAT_SOURCE".to_string(), "local".to_string());
         env_map.insert(
@@ -7910,11 +7851,6 @@ mod tests {
         let result = apply_chat_runtime_plan(&unique, &mut env_map)
             .unwrap()
             .expect("expected runtime plan");
-        if let Some(previous) = previous {
-            std::env::set_var("CTOX_TEST_GPU_TOTALS_MB", previous);
-        } else {
-            std::env::remove_var("CTOX_TEST_GPU_TOTALS_MB");
-        }
         let _ = std::fs::remove_dir_all(&unique);
 
         assert_eq!(result.model, "nvidia/Nemotron-Cascade-2-30B-A3B");
@@ -7923,10 +7859,8 @@ mod tests {
 
     #[test]
     fn apply_chat_runtime_plan_does_not_reuse_stale_nemotron_plan_when_manifest_changes() {
-        let _guard = TEST_ENV_LOCK.lock().unwrap();
         let unique = temp_root("stale-nemotron-plan");
-        let previous = std::env::var("CTOX_TEST_GPU_TOTALS_MB").ok();
-        std::env::set_var("CTOX_TEST_GPU_TOTALS_MB", "0:20470;1:20470;2:20470;3:20470");
+        write_test_gpu_totals(&unique, "0:20470;1:20470;2:20470;3:20470");
 
         let stale_plan = ChatRuntimePlan {
             model: "nvidia/Nemotron-Cascade-2-30B-A3B".to_string(),
@@ -8003,11 +7937,6 @@ mod tests {
         let result = apply_chat_runtime_plan(&unique, &mut env_map)
             .unwrap()
             .expect("expected runtime plan");
-        if let Some(previous) = previous {
-            std::env::set_var("CTOX_TEST_GPU_TOTALS_MB", previous);
-        } else {
-            std::env::remove_var("CTOX_TEST_GPU_TOTALS_MB");
-        }
         let _ = std::fs::remove_dir_all(&unique);
 
         assert_eq!(result.model, "nvidia/Nemotron-Cascade-2-30B-A3B");
@@ -8017,10 +7946,8 @@ mod tests {
 
     #[test]
     fn direct_model_runtime_apply_allows_explicit_glm_on_4x20gb() {
-        let _guard = TEST_ENV_LOCK.lock().unwrap();
         let unique = temp_root("explicit-glm-4x20");
-        let previous = std::env::var("CTOX_TEST_GPU_TOTALS_MB").ok();
-        std::env::set_var("CTOX_TEST_GPU_TOTALS_MB", "0:20470;1:20470;2:20470;3:20470");
+        write_test_gpu_totals(&unique, "0:20470;1:20470;2:20470;3:20470");
         let mut env_map = BTreeMap::new();
         env_map.insert("CTOX_CHAT_SOURCE".to_string(), "local".to_string());
         env_map.insert(
@@ -8043,11 +7970,6 @@ mod tests {
         let result = apply_chat_runtime_plan(&unique, &mut env_map)
             .unwrap()
             .expect("expected runtime plan");
-        if let Some(previous) = previous {
-            std::env::set_var("CTOX_TEST_GPU_TOTALS_MB", previous);
-        } else {
-            std::env::remove_var("CTOX_TEST_GPU_TOTALS_MB");
-        }
         let _ = std::fs::remove_dir_all(&unique);
 
         assert_eq!(result.model, "zai-org/GLM-4.7-Flash");

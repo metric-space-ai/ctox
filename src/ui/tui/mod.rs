@@ -11,10 +11,10 @@ use crossterm::terminal;
 use crossterm::terminal::ClearType;
 use crossterm::terminal::EnterAlternateScreen;
 use crossterm::terminal::LeaveAlternateScreen;
-use qrcode::types::Color as QrColor;
 use qrcode::QrCode;
-use ratatui::backend::CrosstermBackend;
+use qrcode::types::Color as QrColor;
 use ratatui::Terminal;
+use ratatui::backend::CrosstermBackend;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -35,7 +35,6 @@ use crate::channels;
 use crate::context_health;
 use crate::governance;
 use crate::inference::engine;
-use crate::inference::vision_preprocessor;
 use crate::inference::gateway::LoadObservation;
 use crate::inference::gateway::RuntimeTelemetry;
 use crate::inference::model_registry;
@@ -46,6 +45,7 @@ use crate::inference::runtime_plan;
 use crate::inference::runtime_state;
 use crate::inference::supervisor;
 use crate::inference::turn_loop;
+use crate::execution::models::vision_preprocessor;
 use crate::lcm;
 use crate::live_context;
 use crate::mission::communication_adapters;
@@ -63,10 +63,8 @@ const CHAT_PRESET_CHOICES: &[&str] = &["Quality", "Performance"];
 const CHAT_SKILL_PRESET_CHOICES: &[&str] = &["Standard", "Simple"];
 const API_PROVIDER_CHOICES: &[&str] = &["local", "openai", "anthropic", "openrouter", "minimax"];
 const LOCAL_RUNTIME_CHOICES: &[&str] = &["candle", "litert"];
-const LITERT_LOCAL_CHAT_MODEL_CHOICES: &[&str] = &[
-    "google/gemma-4-E4B-it",
-    "google/gemma-4-E2B-it",
-];
+const LITERT_LOCAL_CHAT_MODEL_CHOICES: &[&str] =
+    &["google/gemma-4-E4B-it", "google/gemma-4-E2B-it"];
 const LITERT_LOCAL_CHAT_FAMILY_CHOICES: &[&str] = &["Gemma 4"];
 const NO_GPU_LOCAL_CHAT_MODEL_CHOICES: &[&str] = &[
     "Qwen/Qwen3.5-4B",
@@ -113,8 +111,8 @@ fn refresh_due(last_refresh_at: &mut Option<Instant>, interval: Duration) -> boo
     }
 }
 
-fn local_gpu_available() -> bool {
-    if let Ok(spec) = std::env::var("CTOX_TEST_GPU_TOTALS_MB") {
+fn local_gpu_available(root: &Path) -> bool {
+    if let Some(spec) = runtime_env::env_or_config(root, "CTOX_TEST_GPU_TOTALS_MB") {
         return spec
             .split(';')
             .filter_map(|chunk| chunk.split_once(':'))
@@ -158,7 +156,7 @@ fn supported_local_chat_model_choices(
     root: &Path,
     env_map: &BTreeMap<String, String>,
 ) -> Vec<&'static str> {
-    supported_local_chat_model_choices_with_gpu(root, env_map, local_gpu_available())
+    supported_local_chat_model_choices_with_gpu(root, env_map, local_gpu_available(root))
 }
 
 fn supported_local_chat_family_choices_with_gpu(
@@ -184,7 +182,7 @@ fn supported_local_chat_family_choices(
     root: &Path,
     env_map: &BTreeMap<String, String>,
 ) -> Vec<&'static str> {
-    supported_local_chat_family_choices_with_gpu(root, env_map, local_gpu_available())
+    supported_local_chat_family_choices_with_gpu(root, env_map, local_gpu_available(root))
 }
 
 fn selected_local_chat_family(env_map: &BTreeMap<String, String>) -> Option<String> {
@@ -275,7 +273,7 @@ fn supported_chat_model_choices(
     root: &Path,
     env_map: &BTreeMap<String, String>,
 ) -> Vec<&'static str> {
-    supported_chat_model_choices_with_gpu(root, env_map, local_gpu_available())
+    supported_chat_model_choices_with_gpu(root, env_map, local_gpu_available(root))
 }
 
 fn supported_chat_model_choices_with_gpu(
@@ -1144,10 +1142,8 @@ impl App {
         {
             match capture_clipboard_image_to_tempfile() {
                 Some(path) => {
-                    let resolved = try_resolve_image_attachment(
-                        path.to_str().unwrap_or_default(),
-                        &self.root,
-                    );
+                    let resolved =
+                        try_resolve_image_attachment(path.to_str().unwrap_or_default(), &self.root);
                     match resolved {
                         Some(image) => {
                             let display = image.path.display().to_string();
@@ -1435,9 +1431,7 @@ impl App {
         self.pending_images.clear();
         service::submit_chat_prompt(&self.root, &prompt)?;
         self.status_line = if attachment_count > 0 {
-            format!(
-                "CTOX loop accepted the request (with {attachment_count} image attachment(s))."
-            )
+            format!("CTOX loop accepted the request (with {attachment_count} image attachment(s)).")
         } else {
             "CTOX loop accepted the request.".to_string()
         };
@@ -1933,8 +1927,7 @@ impl App {
         }
         match key_event.code {
             KeyCode::Char('c') | KeyCode::Char('C') => {
-                self.update_view.last_action_line =
-                    "Running `ctox update check`…".to_string();
+                self.update_view.last_action_line = "Running `ctox update check`…".to_string();
                 match self.run_update_subprocess(&["update", "check"]) {
                     Ok(output) => {
                         self.update_view.check_json = output;
@@ -1981,8 +1974,7 @@ impl App {
     }
 
     fn run_update_subprocess(&self, args: &[&str]) -> Result<String> {
-        let exe = std::env::current_exe()
-            .context("failed to resolve current ctox executable")?;
+        let exe = std::env::current_exe().context("failed to resolve current ctox executable")?;
         let output = std::process::Command::new(exe)
             .args(args)
             .env("CTOX_ROOT", &self.root)
@@ -3572,8 +3564,14 @@ fn load_settings_items(root: &Path) -> Vec<SettingItem> {
         SettingItem {
             key: "ANTHROPIC_API_KEY",
             label: "Anthropic Token",
-            value: env_map.get("ANTHROPIC_API_KEY").cloned().unwrap_or_default(),
-            saved_value: env_map.get("ANTHROPIC_API_KEY").cloned().unwrap_or_default(),
+            value: env_map
+                .get("ANTHROPIC_API_KEY")
+                .cloned()
+                .unwrap_or_default(),
+            saved_value: env_map
+                .get("ANTHROPIC_API_KEY")
+                .cloned()
+                .unwrap_or_default(),
             secret: true,
             choices: Vec::new(),
             help: "Anthropic API token. When present, Claude models become available where supported.",
@@ -3582,7 +3580,10 @@ fn load_settings_items(root: &Path) -> Vec<SettingItem> {
         SettingItem {
             key: "OPENROUTER_API_KEY",
             label: "OpenRouter Token",
-            value: env_map.get("OPENROUTER_API_KEY").cloned().unwrap_or_default(),
+            value: env_map
+                .get("OPENROUTER_API_KEY")
+                .cloned()
+                .unwrap_or_default(),
             saved_value: env_map
                 .get("OPENROUTER_API_KEY")
                 .cloned()
@@ -3605,7 +3606,11 @@ fn load_settings_items(root: &Path) -> Vec<SettingItem> {
                         .map(|family| family.label().to_string())
                 })
                 .filter(|value| choice_contains(&chat_family_choices, value))
-                .or_else(|| chat_family_choices.first().map(|value| (*value).to_string()))
+                .or_else(|| {
+                    chat_family_choices
+                        .first()
+                        .map(|value| (*value).to_string())
+                })
                 .unwrap_or_else(|| default_local_chat_family_label().to_string()),
             secret: false,
             choices: chat_family_choices,
@@ -3917,14 +3922,8 @@ fn load_settings_items(root: &Path) -> Vec<SettingItem> {
         SettingItem {
             key: "CTOX_WEBRTC_ROOM",
             label: "Remote Room",
-            value: env_map
-                .get("CTOX_WEBRTC_ROOM")
-                .cloned()
-                .unwrap_or_default(),
-            saved_value: env_map
-                .get("CTOX_WEBRTC_ROOM")
-                .cloned()
-                .unwrap_or_default(),
+            value: env_map.get("CTOX_WEBRTC_ROOM").cloned().unwrap_or_default(),
+            saved_value: env_map.get("CTOX_WEBRTC_ROOM").cloned().unwrap_or_default(),
             secret: false,
             choices: Vec::new(),
             help: "Room name that the CTOX desktop app joins for this installation.",
@@ -3965,8 +3964,14 @@ fn load_settings_items(root: &Path) -> Vec<SettingItem> {
         SettingItem {
             key: "CTO_EMAIL_ADDRESS",
             label: "E-Mail Address",
-            value: env_map.get("CTO_EMAIL_ADDRESS").cloned().unwrap_or_default(),
-            saved_value: env_map.get("CTO_EMAIL_ADDRESS").cloned().unwrap_or_default(),
+            value: env_map
+                .get("CTO_EMAIL_ADDRESS")
+                .cloned()
+                .unwrap_or_default(),
+            saved_value: env_map
+                .get("CTO_EMAIL_ADDRESS")
+                .cloned()
+                .unwrap_or_default(),
             secret: false,
             choices: Vec::new(),
             help: "Mailbox address for e-mail communication.",
@@ -3975,8 +3980,14 @@ fn load_settings_items(root: &Path) -> Vec<SettingItem> {
         SettingItem {
             key: "CTO_EMAIL_PASSWORD",
             label: "E-Mail Password",
-            value: env_map.get("CTO_EMAIL_PASSWORD").cloned().unwrap_or_default(),
-            saved_value: env_map.get("CTO_EMAIL_PASSWORD").cloned().unwrap_or_default(),
+            value: env_map
+                .get("CTO_EMAIL_PASSWORD")
+                .cloned()
+                .unwrap_or_default(),
+            saved_value: env_map
+                .get("CTO_EMAIL_PASSWORD")
+                .cloned()
+                .unwrap_or_default(),
             secret: true,
             choices: Vec::new(),
             help: "Mailbox password for IMAP/SMTP communication.",
@@ -4001,8 +4012,14 @@ fn load_settings_items(root: &Path) -> Vec<SettingItem> {
         SettingItem {
             key: "CTO_EMAIL_IMAP_HOST",
             label: "IMAP Host",
-            value: env_map.get("CTO_EMAIL_IMAP_HOST").cloned().unwrap_or_default(),
-            saved_value: env_map.get("CTO_EMAIL_IMAP_HOST").cloned().unwrap_or_default(),
+            value: env_map
+                .get("CTO_EMAIL_IMAP_HOST")
+                .cloned()
+                .unwrap_or_default(),
+            saved_value: env_map
+                .get("CTO_EMAIL_IMAP_HOST")
+                .cloned()
+                .unwrap_or_default(),
             secret: false,
             choices: Vec::new(),
             help: "IMAP hostname for mailbox sync.",
@@ -4027,8 +4044,14 @@ fn load_settings_items(root: &Path) -> Vec<SettingItem> {
         SettingItem {
             key: "CTO_EMAIL_SMTP_HOST",
             label: "SMTP Host",
-            value: env_map.get("CTO_EMAIL_SMTP_HOST").cloned().unwrap_or_default(),
-            saved_value: env_map.get("CTO_EMAIL_SMTP_HOST").cloned().unwrap_or_default(),
+            value: env_map
+                .get("CTO_EMAIL_SMTP_HOST")
+                .cloned()
+                .unwrap_or_default(),
+            saved_value: env_map
+                .get("CTO_EMAIL_SMTP_HOST")
+                .cloned()
+                .unwrap_or_default(),
             secret: false,
             choices: Vec::new(),
             help: "SMTP hostname for outgoing mail.",
@@ -4053,8 +4076,14 @@ fn load_settings_items(root: &Path) -> Vec<SettingItem> {
         SettingItem {
             key: "CTO_EMAIL_GRAPH_USER",
             label: "Graph User",
-            value: env_map.get("CTO_EMAIL_GRAPH_USER").cloned().unwrap_or_default(),
-            saved_value: env_map.get("CTO_EMAIL_GRAPH_USER").cloned().unwrap_or_default(),
+            value: env_map
+                .get("CTO_EMAIL_GRAPH_USER")
+                .cloned()
+                .unwrap_or_default(),
+            saved_value: env_map
+                .get("CTO_EMAIL_GRAPH_USER")
+                .cloned()
+                .unwrap_or_default(),
             secret: false,
             choices: Vec::new(),
             help: "Microsoft Graph mailbox user or principal.",
@@ -4063,8 +4092,14 @@ fn load_settings_items(root: &Path) -> Vec<SettingItem> {
         SettingItem {
             key: "CTO_EMAIL_EWS_URL",
             label: "EWS URL",
-            value: env_map.get("CTO_EMAIL_EWS_URL").cloned().unwrap_or_default(),
-            saved_value: env_map.get("CTO_EMAIL_EWS_URL").cloned().unwrap_or_default(),
+            value: env_map
+                .get("CTO_EMAIL_EWS_URL")
+                .cloned()
+                .unwrap_or_default(),
+            saved_value: env_map
+                .get("CTO_EMAIL_EWS_URL")
+                .cloned()
+                .unwrap_or_default(),
             secret: false,
             choices: Vec::new(),
             help: "Exchange Web Services endpoint.",
@@ -4121,8 +4156,14 @@ fn load_settings_items(root: &Path) -> Vec<SettingItem> {
         SettingItem {
             key: "CTO_JAMI_ACCOUNT_ID",
             label: "Jami Account",
-            value: env_map.get("CTO_JAMI_ACCOUNT_ID").cloned().unwrap_or_default(),
-            saved_value: env_map.get("CTO_JAMI_ACCOUNT_ID").cloned().unwrap_or_default(),
+            value: env_map
+                .get("CTO_JAMI_ACCOUNT_ID")
+                .cloned()
+                .unwrap_or_default(),
+            saved_value: env_map
+                .get("CTO_JAMI_ACCOUNT_ID")
+                .cloned()
+                .unwrap_or_default(),
             secret: false,
             choices: Vec::new(),
             help: "Jami account id or share URI.",
@@ -4131,8 +4172,14 @@ fn load_settings_items(root: &Path) -> Vec<SettingItem> {
         SettingItem {
             key: "CTO_TEAMS_USERNAME",
             label: "Teams User",
-            value: env_map.get("CTO_TEAMS_USERNAME").cloned().unwrap_or_default(),
-            saved_value: env_map.get("CTO_TEAMS_USERNAME").cloned().unwrap_or_default(),
+            value: env_map
+                .get("CTO_TEAMS_USERNAME")
+                .cloned()
+                .unwrap_or_default(),
+            saved_value: env_map
+                .get("CTO_TEAMS_USERNAME")
+                .cloned()
+                .unwrap_or_default(),
             secret: false,
             choices: Vec::new(),
             help: "Microsoft 365 email (e.g. user@company.com).",
@@ -4141,8 +4188,14 @@ fn load_settings_items(root: &Path) -> Vec<SettingItem> {
         SettingItem {
             key: "CTO_TEAMS_PASSWORD",
             label: "Teams Pass",
-            value: env_map.get("CTO_TEAMS_PASSWORD").cloned().unwrap_or_default(),
-            saved_value: env_map.get("CTO_TEAMS_PASSWORD").cloned().unwrap_or_default(),
+            value: env_map
+                .get("CTO_TEAMS_PASSWORD")
+                .cloned()
+                .unwrap_or_default(),
+            saved_value: env_map
+                .get("CTO_TEAMS_PASSWORD")
+                .cloned()
+                .unwrap_or_default(),
             secret: true,
             choices: Vec::new(),
             help: "Microsoft 365 password.",
@@ -4151,8 +4204,14 @@ fn load_settings_items(root: &Path) -> Vec<SettingItem> {
         SettingItem {
             key: "CTO_TEAMS_TENANT_ID",
             label: "Tenant (opt.)",
-            value: env_map.get("CTO_TEAMS_TENANT_ID").cloned().unwrap_or_default(),
-            saved_value: env_map.get("CTO_TEAMS_TENANT_ID").cloned().unwrap_or_default(),
+            value: env_map
+                .get("CTO_TEAMS_TENANT_ID")
+                .cloned()
+                .unwrap_or_default(),
+            saved_value: env_map
+                .get("CTO_TEAMS_TENANT_ID")
+                .cloned()
+                .unwrap_or_default(),
             secret: false,
             choices: Vec::new(),
             help: "Azure AD tenant ID (optional, auto-detected from email domain).",
@@ -4161,8 +4220,14 @@ fn load_settings_items(root: &Path) -> Vec<SettingItem> {
         SettingItem {
             key: "CTO_TEAMS_TEAM_ID",
             label: "Team ID (opt.)",
-            value: env_map.get("CTO_TEAMS_TEAM_ID").cloned().unwrap_or_default(),
-            saved_value: env_map.get("CTO_TEAMS_TEAM_ID").cloned().unwrap_or_default(),
+            value: env_map
+                .get("CTO_TEAMS_TEAM_ID")
+                .cloned()
+                .unwrap_or_default(),
+            saved_value: env_map
+                .get("CTO_TEAMS_TEAM_ID")
+                .cloned()
+                .unwrap_or_default(),
             secret: false,
             choices: Vec::new(),
             help: "Team ID to sync channel messages from (optional).",
@@ -4171,8 +4236,14 @@ fn load_settings_items(root: &Path) -> Vec<SettingItem> {
         SettingItem {
             key: "CTO_TEAMS_CHANNEL_ID",
             label: "Channel (opt.)",
-            value: env_map.get("CTO_TEAMS_CHANNEL_ID").cloned().unwrap_or_default(),
-            saved_value: env_map.get("CTO_TEAMS_CHANNEL_ID").cloned().unwrap_or_default(),
+            value: env_map
+                .get("CTO_TEAMS_CHANNEL_ID")
+                .cloned()
+                .unwrap_or_default(),
+            saved_value: env_map
+                .get("CTO_TEAMS_CHANNEL_ID")
+                .cloned()
+                .unwrap_or_default(),
             secret: false,
             choices: Vec::new(),
             help: "Channel ID within the team to monitor (optional).",
@@ -4182,8 +4253,14 @@ fn load_settings_items(root: &Path) -> Vec<SettingItem> {
         SettingItem {
             key: "CTOX_USE_DIRECT_SESSION",
             label: "Direct Session",
-            value: env_map.get("CTOX_USE_DIRECT_SESSION").cloned().unwrap_or_else(|| "false".to_string()),
-            saved_value: env_map.get("CTOX_USE_DIRECT_SESSION").cloned().unwrap_or_else(|| "false".to_string()),
+            value: env_map
+                .get("CTOX_USE_DIRECT_SESSION")
+                .cloned()
+                .unwrap_or_else(|| "false".to_string()),
+            saved_value: env_map
+                .get("CTOX_USE_DIRECT_SESSION")
+                .cloned()
+                .unwrap_or_else(|| "false".to_string()),
             secret: false,
             choices: vec!["false", "true"],
             help: "Experimental: run inference via in-process codex-core library (skips the codex-exec subprocess).",
@@ -4192,8 +4269,14 @@ fn load_settings_items(root: &Path) -> Vec<SettingItem> {
         SettingItem {
             key: "CTOX_COMPACT_TRIGGER",
             label: "Compact Trigger",
-            value: env_map.get("CTOX_COMPACT_TRIGGER").cloned().unwrap_or_else(|| "off".to_string()),
-            saved_value: env_map.get("CTOX_COMPACT_TRIGGER").cloned().unwrap_or_else(|| "off".to_string()),
+            value: env_map
+                .get("CTOX_COMPACT_TRIGGER")
+                .cloned()
+                .unwrap_or_else(|| "off".to_string()),
+            saved_value: env_map
+                .get("CTOX_COMPACT_TRIGGER")
+                .cloned()
+                .unwrap_or_else(|| "off".to_string()),
             secret: false,
             choices: vec!["off", "adaptive", "fixed"],
             help: "When to compact: off / adaptive (token-usage threshold) / fixed (every N turns). Requires Direct Session.",
@@ -4202,8 +4285,14 @@ fn load_settings_items(root: &Path) -> Vec<SettingItem> {
         SettingItem {
             key: "CTOX_COMPACT_MODE",
             label: "Compact Mode",
-            value: env_map.get("CTOX_COMPACT_MODE").cloned().unwrap_or_else(|| "mid-task".to_string()),
-            saved_value: env_map.get("CTOX_COMPACT_MODE").cloned().unwrap_or_else(|| "mid-task".to_string()),
+            value: env_map
+                .get("CTOX_COMPACT_MODE")
+                .cloned()
+                .unwrap_or_else(|| "mid-task".to_string()),
+            saved_value: env_map
+                .get("CTOX_COMPACT_MODE")
+                .cloned()
+                .unwrap_or_else(|| "mid-task".to_string()),
             secret: false,
             choices: vec!["mid-task", "forced-followup"],
             help: "How to compact: mid-task (ThreadCompactStart, same thread) / forced-followup (unsubscribe + enqueue follow-up slice).",
@@ -4212,8 +4301,14 @@ fn load_settings_items(root: &Path) -> Vec<SettingItem> {
         SettingItem {
             key: "CTOX_COMPACT_FIXED_INTERVAL",
             label: "Compact Fixed N",
-            value: env_map.get("CTOX_COMPACT_FIXED_INTERVAL").cloned().unwrap_or_default(),
-            saved_value: env_map.get("CTOX_COMPACT_FIXED_INTERVAL").cloned().unwrap_or_default(),
+            value: env_map
+                .get("CTOX_COMPACT_FIXED_INTERVAL")
+                .cloned()
+                .unwrap_or_default(),
+            saved_value: env_map
+                .get("CTOX_COMPACT_FIXED_INTERVAL")
+                .cloned()
+                .unwrap_or_default(),
             secret: false,
             choices: Vec::new(),
             help: "For fixed trigger: compact every N completed turns.",
@@ -4222,8 +4317,14 @@ fn load_settings_items(root: &Path) -> Vec<SettingItem> {
         SettingItem {
             key: "CTOX_COMPACT_ADAPTIVE_THRESHOLD",
             label: "Compact Threshold",
-            value: env_map.get("CTOX_COMPACT_ADAPTIVE_THRESHOLD").cloned().unwrap_or_default(),
-            saved_value: env_map.get("CTOX_COMPACT_ADAPTIVE_THRESHOLD").cloned().unwrap_or_default(),
+            value: env_map
+                .get("CTOX_COMPACT_ADAPTIVE_THRESHOLD")
+                .cloned()
+                .unwrap_or_default(),
+            saved_value: env_map
+                .get("CTOX_COMPACT_ADAPTIVE_THRESHOLD")
+                .cloned()
+                .unwrap_or_default(),
             secret: false,
             choices: Vec::new(),
             help: "For adaptive trigger: token-usage ratio (0.0-1.0) that fires a compact. Default 0.70.",
@@ -4823,7 +4924,12 @@ fn runtime_health_state(root: &Path, telemetry: Option<&RuntimeTelemetry>) -> Ru
     // treat it as healthy so the TUI does not show a misleading "degraded".
     let chat_source_is_api = runtime_kernel::InferenceRuntimeKernel::resolve(root)
         .ok()
-        .map(|k| matches!(k.state.source, crate::execution::models::runtime_state::InferenceSource::Api))
+        .map(|k| {
+            matches!(
+                k.state.source,
+                crate::execution::models::runtime_state::InferenceSource::Api
+            )
+        })
         .unwrap_or(false);
     let proxy_ready = if chat_source_is_api && !supervisor::boundary_proxy_is_managed(root) {
         true
@@ -6318,9 +6424,11 @@ mod tests {
         let models = configured_runtime_models(&env_map);
 
         assert!(!models.iter().any(|model| model == "gpt-5.4-mini"));
-        assert!(models
-            .iter()
-            .any(|model| model == "Qwen/Qwen3-Embedding-0.6B"));
+        assert!(
+            models
+                .iter()
+                .any(|model| model == "Qwen/Qwen3-Embedding-0.6B")
+        );
     }
 
     #[test]
@@ -6417,10 +6525,11 @@ mod tests {
         assert!(app.header.estimate_mode);
         assert_eq!(app.header.chat_source, "api");
         assert_eq!(app.header.model, "gpt-5.4-mini");
-        assert!(app.header.gpu_target_cards.iter().all(|card| card
-            .allocations
-            .iter()
-            .all(|alloc| alloc.model != "openai/gpt-oss-20b")));
+        assert!(app.header.gpu_target_cards.iter().all(|card| {
+            card.allocations
+                .iter()
+                .all(|alloc| alloc.model != "openai/gpt-oss-20b")
+        }));
         let allocations = app
             .header
             .gpu_target_cards
@@ -6479,10 +6588,11 @@ mod tests {
         };
 
         let cards = healthy_backend_deployed_cards(&live_cards, &env_map, &runtime_health);
-        assert!(cards.iter().any(|card| card
-            .allocations
-            .iter()
-            .any(|alloc| alloc.model == "Qwen/Qwen3-TTS-12Hz-0.6B-Base")));
+        assert!(cards.iter().any(|card| {
+            card.allocations
+                .iter()
+                .any(|alloc| alloc.model == "Qwen/Qwen3-TTS-12Hz-0.6B-Base")
+        }));
     }
 
     #[test]
@@ -6603,10 +6713,12 @@ mod tests {
         assert_eq!(entry.class, SkillClass::CtoxCore);
         assert_eq!(entry.state, SkillState::Stable);
         assert!(entry.helper_tools.iter().any(|tool| tool == "demo_tool.py"));
-        assert!(entry
-            .resources
-            .iter()
-            .any(|resource| resource.contains("references:")));
+        assert!(
+            entry
+                .resources
+                .iter()
+                .any(|resource| resource.contains("references:"))
+        );
     }
 
     #[test]
