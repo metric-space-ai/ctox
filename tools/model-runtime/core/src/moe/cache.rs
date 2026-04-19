@@ -1045,6 +1045,82 @@ mod tests {
     }
 
     #[test]
+    fn concurrent_ensure_resident_is_safe() {
+        // Stress the RwLock + AtomicU32 path from multiple threads. We spin
+        // up N threads, each hammering ensure_resident on a mix of indices
+        // that force evictions; we then verify (a) no thread panicked,
+        // (b) stats counts match the total number of calls, and (c) every
+        // final materialization produces bit-identical weights.
+        use std::thread;
+
+        let num_experts = 6;
+        let capacity = 2;
+        let originals: Vec<_> = (0..num_experts)
+            .map(|i| real_expert_triple(i as f32 * 0.1))
+            .collect();
+        let expected: Vec<_> = originals
+            .iter()
+            .map(|t| t.gate.dequantize_w().unwrap())
+            .collect();
+
+        let cache = Arc::new(
+            MoEExpertCache::new(
+                originals,
+                CacheConfig {
+                    capacity,
+                    topology: Topology::Unified,
+                    device: Device::Cpu,
+                    warm_tier_budget_bytes: None,
+                    cold_tier_path: None,
+                    cold_tier_min_mbps: 0,
+                },
+                dummy_comm(),
+            )
+            .unwrap(),
+        );
+
+        let calls_per_thread = 50usize;
+        let n_threads = 4usize;
+        let mut handles = vec![];
+        for tid in 0..n_threads {
+            let cache = cache.clone();
+            handles.push(thread::spawn(move || {
+                for i in 0..calls_per_thread {
+                    let idx = ((tid + i) * 7) % num_experts;
+                    let _ = cache.ensure_resident(idx).unwrap();
+                }
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        let stats = cache.stats();
+        let total = (n_threads * calls_per_thread) as u64;
+        assert_eq!(
+            stats.hits + stats.misses,
+            total,
+            "hit+miss total mismatch: hits={} misses={} total={}",
+            stats.hits,
+            stats.misses,
+            total
+        );
+
+        // After the barrage, every expert's weights must still round-trip
+        // correctly through the cache.
+        for (i, expected_w) in expected.iter().enumerate() {
+            let triple = cache.ensure_resident(i).unwrap();
+            let actual = triple.gate.dequantize_w().unwrap();
+            let diff = (expected_w - &actual).unwrap().abs().unwrap().sum_all().unwrap();
+            assert!(
+                diff.to_scalar::<f32>().unwrap() < 1e-6,
+                "expert {} corrupted after concurrent stress",
+                i
+            );
+        }
+    }
+
+    #[test]
     fn prefetch_many_on_ssd_backing_runs_without_error() {
         // SSD backing: exercise the madvise code path. We can't directly
         // observe page-cache warmup in a unit test (that would need a
