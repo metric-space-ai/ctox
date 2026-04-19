@@ -1238,6 +1238,7 @@ dependencies = [
  "libc",
  "llguidance",
  "lrtable",
+ "memmap2",
  "minijinja",
  "minijinja-contrib",
  "num-traits",
