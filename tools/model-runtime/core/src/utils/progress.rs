@@ -220,27 +220,38 @@ where
     ///
     /// - `is_parallel`: If true, uses Rayon parallel iteration; otherwise uses sequential iteration.
     /// - `f`: A closure to apply to each item.
-    pub fn run<F, U>(self, _is_parallel: bool, f: F) -> candle_core::Result<Vec<U>>
+    pub fn run<F, U>(self, is_parallel: bool, f: F) -> candle_core::Result<Vec<U>>
     where
         F: Fn(<T as IntoParallelIterator>::Item) -> candle_core::Result<U> + Sync + Send,
         U: Send,
     {
-        // if is_parallel {
-        //     self.into_par_iter().map(f).collect()
-        // } else {
-        //     self.into_iter().map(f).collect()
-        // }
-        self.into_iter().map(f).collect()
+        // Restored parallel path. A prior refactor had commented this out,
+        // making `run` unconditionally serial — which silently forced the
+        // caller's layer-load loop to single-thread on a single core
+        // regardless of hints. For a 40-layer MoE model that meant >1 h of
+        // cold-start on a 20-core host.
+        if is_parallel {
+            self.into_par_iter().map(f).collect()
+        } else {
+            self.into_iter().map(f).collect()
+        }
     }
 
     /// Applies the given closure over the items, optionally in parallel, and collects the results.
     ///
-    /// - `f`: A closure to apply to each item.
+    /// Parallel iteration is a win whenever the per-item work is both
+    /// independent and CPU-heavy. Layer loading on a MoE model fits both
+    /// criteria regardless of whether the weights arrive via ISQ (BF16 ->
+    /// Q4K on the fly) or via `from_uqff` (deserialization of pre-quantized
+    /// bytes is still per-block CPU work that saturates one core per
+    /// layer). We therefore always go parallel here — the previous
+    /// narrower `get_immediate_isq()` guard was only right for the pre-UQFF
+    /// era where ISQ was the only CPU-heavy load path.
     pub fn par_iter_if_isq<F, U>(self, f: F) -> candle_core::Result<Vec<U>>
     where
         F: Fn(<T as IntoParallelIterator>::Item) -> candle_core::Result<U> + Sync + Send,
         U: Send,
     {
-        self.run(get_immediate_isq().is_some_and(|x| x.ty.is_some()), f)
+        self.run(true, f)
     }
 }
