@@ -689,20 +689,26 @@ impl MoEExpertCache {
         // the victim be Resident and not `idx`.
         let victim = self.pick_victim(&inner.slots, idx)?;
 
-        // Demote victim into its pool slot (single memcpy per layer).
-        // Resident slots are pre-staged at construction, but on re-eviction
-        // the serialized bytes may have changed if the resident ran through
-        // apply_isq etc.; we always re-serialize to be safe.
-        {
-            let victim_triple = match &inner.slots[victim] {
-                SlotState::Resident(t) => t.clone(),
-                _ => candle_core::bail!("victim slot {} not resident", victim),
-            };
-            let gate = victim_triple.gate.serialize()?;
-            let up = victim_triple.up.serialize()?;
-            let down = victim_triple.down.serialize()?;
-            inner.pool.write_slot(victim, &gate, &up, &down)?;
+        // Demote victim — just drop its on-device `Arc`s and mark the slot
+        // `InPool`. We do NOT re-serialize the weights: the pool's slot was
+        // pre-staged at construction with the canonical bytes, and the cache
+        // contract forbids mutating the `Arc<dyn QuantMethod>` post-load
+        // (`get_isq_layers` returns empty for the cached backend for exactly
+        // this reason). So the pool already holds bit-identical bytes.
+        //
+        // Skipping serialize+memcpy here saves the full expert size (tens to
+        // hundreds of MiB per eviction) of CPU and memory bandwidth on every
+        // miss — the single biggest hot-path win after the static-pool
+        // refactor itself.
+        match &inner.slots[victim] {
+            SlotState::Resident(_) => {}
+            _ => candle_core::bail!("victim slot {} not resident", victim),
         }
+        debug_assert!(
+            inner.pool.metadata[victim].staged,
+            "invariant violated: victim slot {} not staged in pool",
+            victim
+        );
         inner.slots[victim] = SlotState::InPool;
         self.stats.evictions.fetch_add(1, Ordering::Relaxed);
 
