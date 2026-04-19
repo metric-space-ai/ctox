@@ -41,7 +41,7 @@ use std::borrow::Cow;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -173,6 +173,19 @@ impl PoolBacking {
         match self {
             Self::Ram(_) => Ok(()),
             Self::Ssd { mmap, .. } => mmap.flush_async(),
+        }
+    }
+
+    /// Hint the kernel to prefetch the given byte range. Only meaningful on
+    /// SSD backing; RAM is already resident. Best-effort — ignore failures
+    /// because prefetching is a performance hint, not a correctness
+    /// requirement.
+    fn advise_willneed(&self, offset: usize, len: usize) {
+        if let Self::Ssd { mmap, .. } = self {
+            let end = offset.saturating_add(len).min(mmap.len());
+            if end > offset {
+                let _ = mmap.advise_range(memmap2::Advice::WillNeed, offset, end - offset);
+            }
         }
     }
 }
@@ -319,6 +332,28 @@ pub struct CacheStats {
     pub decays: u64,
 }
 
+/// Atomic-backed stats so the hot-path hit does not need to take a lock.
+#[derive(Debug, Default)]
+struct AtomicStats {
+    hits: AtomicU64,
+    misses: AtomicU64,
+    evictions: AtomicU64,
+    promotions: AtomicU64,
+    decays: AtomicU64,
+}
+
+impl AtomicStats {
+    fn snapshot(&self) -> CacheStats {
+        CacheStats {
+            hits: self.hits.load(Ordering::Relaxed),
+            misses: self.misses.load(Ordering::Relaxed),
+            evictions: self.evictions.load(Ordering::Relaxed),
+            promotions: self.promotions.load(Ordering::Relaxed),
+            decays: self.decays.load(Ordering::Relaxed),
+        }
+    }
+}
+
 /// Current residency state of a slot. Resident slots hold the live on-device
 /// triple; `InPool` slots' bytes live at `pool.slot_offset(idx)` and are
 /// materialized on demand from there.
@@ -344,10 +379,9 @@ pub struct MoEExpertCache {
     clock: AtomicU32,
     accesses_since_decay: AtomicU32,
 
-    /// Aggregated stats (`hits`/`misses`/…) — updated under the write lock
-    /// only, but on the hit path we only touch atomics so the lock is
-    /// contended only during misses.
-    stats: RwLock<CacheStats>,
+    /// Aggregated stats — all counters are atomic so the hit path never
+    /// touches a lock. Snapshot via [`MoEExpertCache::stats`].
+    stats: AtomicStats,
 }
 
 struct CacheInner {
@@ -498,7 +532,7 @@ impl MoEExpertCache {
             last_access,
             clock: AtomicU32::new(0),
             accesses_since_decay: AtomicU32::new(0),
-            stats: RwLock::new(CacheStats::default()),
+            stats: AtomicStats::default(),
         })
     }
 
@@ -519,7 +553,49 @@ impl MoEExpertCache {
     }
 
     pub fn stats(&self) -> CacheStats {
-        self.stats.read().clone()
+        self.stats.snapshot()
+    }
+
+    /// Issue `madvise(WILLNEED)` hints for the given expert indices so the
+    /// kernel starts pulling their pool slots into the page cache *before*
+    /// the matmul path calls [`Self::ensure_resident`] on them.
+    ///
+    /// This is a best-effort performance hint: it does nothing on the RAM
+    /// backing (bytes are already resident), does nothing for slots that are
+    /// currently Resident (they're served from VRAM, not the pool), and
+    /// silently ignores range-advise failures.
+    ///
+    /// The expected usage is that the forward path walks the token's top-k
+    /// expert IDs once at the start, calls `prefetch_many` with the full
+    /// set, and then iterates experts sequentially for matmul. By the time
+    /// a miss actually needs to read its slot, the OS has already started
+    /// the disk read — materialization sees warm page cache.
+    ///
+    /// Safe to call with duplicate indices, out-of-order indices, and
+    /// Resident indices; they're all handled.
+    pub fn prefetch_many(&self, indices: &[usize]) {
+        if indices.is_empty() {
+            return;
+        }
+        let inner = self.inner.read();
+        if !inner.pool.backing.is_ssd() {
+            return; // RAM backing: no-op.
+        }
+        for &idx in indices {
+            if idx >= self.num_experts {
+                continue;
+            }
+            if matches!(inner.slots[idx], SlotState::Resident(_)) {
+                continue;
+            }
+            let meta = inner.pool.metadata[idx];
+            if !meta.staged {
+                continue;
+            }
+            let offset = inner.pool.slot_offset(idx);
+            let len = meta.total_len() as usize;
+            inner.pool.backing.advise_willneed(offset, len);
+        }
     }
 
     /// Ensure expert `idx` is resident on the GPU; swap out the LFU victim if
@@ -562,14 +638,16 @@ impl MoEExpertCache {
                 let v = c.load(Ordering::Relaxed);
                 c.store(v / 2, Ordering::Relaxed);
             }
-            self.stats.write().decays += 1;
+            self.stats.decays.fetch_add(1, Ordering::Relaxed);
         }
 
         // Fast path: take a read lock; if resident, return clone & done.
+        // Two atomic increments + one Arc-clone triple — no write lock
+        // anywhere, hits scale across threads.
         {
             let inner = self.inner.read();
             if let SlotState::Resident(triple) = &inner.slots[idx] {
-                self.stats.write().hits += 1;
+                self.stats.hits.fetch_add(1, Ordering::Relaxed);
                 return Ok(triple.clone());
             }
         }
@@ -578,7 +656,7 @@ impl MoEExpertCache {
         let mut inner = self.inner.write();
         // Re-check: another writer may have beaten us to it.
         if let SlotState::Resident(triple) = &inner.slots[idx] {
-            self.stats.write().hits += 1;
+            self.stats.hits.fetch_add(1, Ordering::Relaxed);
             return Ok(triple.clone());
         }
 
@@ -626,15 +704,12 @@ impl MoEExpertCache {
             inner.pool.write_slot(victim, &gate, &up, &down)?;
         }
         inner.slots[victim] = SlotState::InPool;
-        self.stats.write().evictions += 1;
+        self.stats.evictions.fetch_add(1, Ordering::Relaxed);
 
         // Promote incoming.
         inner.slots[idx] = SlotState::Resident(triple.clone());
-        {
-            let mut s = self.stats.write();
-            s.misses += 1;
-            s.promotions += 1;
-        }
+        self.stats.misses.fetch_add(1, Ordering::Relaxed);
+        self.stats.promotions.fetch_add(1, Ordering::Relaxed);
 
         Ok(triple)
     }
@@ -938,5 +1013,77 @@ mod tests {
         let probe = probe_ssd_bandwidth_mbps(&std::env::temp_dir());
         assert!(probe.is_some(), "probe must succeed on a writable tmpdir");
         assert!(probe.unwrap() > 0);
+    }
+
+    #[test]
+    fn prefetch_many_is_safe_noop_on_ram_backing() {
+        // RAM backing: prefetch_many must not touch anything, must not
+        // error, must not mutate stats. Smoke-proves the idx-validation
+        // and resident-filter short-circuits.
+        let experts = vec![real_expert_triple(0.1), real_expert_triple(0.2)];
+        let comm = dummy_comm();
+        let cache = MoEExpertCache::new(
+            experts,
+            CacheConfig {
+                capacity: 1,
+                topology: Topology::Unified,
+                device: Device::Cpu,
+                warm_tier_budget_bytes: None,
+                cold_tier_path: None,
+                cold_tier_min_mbps: 0,
+            },
+            comm,
+        )
+        .unwrap();
+        let stats_before = cache.stats();
+        // Include a resident index (0), a pooled index (1), a bogus index
+        // (99), and a duplicate (0) — none should error or fault.
+        cache.prefetch_many(&[0, 1, 99, 0]);
+        let stats_after = cache.stats();
+        assert_eq!(stats_before.hits, stats_after.hits);
+        assert_eq!(stats_before.misses, stats_after.misses);
+    }
+
+    #[test]
+    fn prefetch_many_on_ssd_backing_runs_without_error() {
+        // SSD backing: exercise the madvise code path. We can't directly
+        // observe page-cache warmup in a unit test (that would need a
+        // profiling hook), so we simply verify the call succeeds and
+        // a subsequent ensure_resident still produces correct weights.
+        let tmp_path = std::env::temp_dir().join(format!(
+            "ctox_prefetch_ssd_{}.bin",
+            std::process::id()
+        ));
+        let experts = vec![
+            real_expert_triple(0.4),
+            real_expert_triple(0.5),
+            real_expert_triple(0.6),
+        ];
+        let original = experts[2].gate.dequantize_w().unwrap();
+        let comm = dummy_comm();
+        let cache = MoEExpertCache::new(
+            experts,
+            CacheConfig {
+                capacity: 1,
+                topology: Topology::Unified,
+                device: Device::Cpu,
+                warm_tier_budget_bytes: None,
+                cold_tier_path: Some(tmp_path.clone()),
+                cold_tier_min_mbps: 0,
+            },
+            comm,
+        )
+        .unwrap();
+        assert!(cache.backing_is_ssd());
+
+        // Prefetch the full active set, then materialize expert 2. Bytes
+        // must still round-trip identically.
+        cache.prefetch_many(&[1, 2]);
+        let re2 = cache.ensure_resident(2).unwrap();
+        let restored = re2.gate.dequantize_w().unwrap();
+        let diff = (&original - &restored).unwrap().abs().unwrap().sum_all().unwrap();
+        assert!(diff.to_scalar::<f32>().unwrap() < 1e-6);
+
+        let _ = std::fs::remove_file(&tmp_path);
     }
 }

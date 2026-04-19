@@ -1009,6 +1009,20 @@ impl MoEExperts {
             }
         }
 
+        // Kick off SSD prefetch for every active expert in one pass *before*
+        // we start the sequential matmul loop. Each `madvise(WILLNEED)` tells
+        // the kernel to start pulling the slot's pool bytes into the page
+        // cache; by the time a miss hits the materialize path below, the
+        // read is already in flight (or done). No-op on RAM backing and for
+        // already-resident experts — `prefetch_many` filters both.
+        let active: Vec<usize> = top_x
+            .iter()
+            .enumerate()
+            .filter(|(_, v)| !v.is_empty())
+            .map(|(i, _)| i)
+            .collect();
+        weights.cache.prefetch_many(&active);
+
         let mut ys = xs.zeros_like()?;
         for expert_idx in 0..num_experts {
             let top_x_expert = &top_x[expert_idx];
