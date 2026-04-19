@@ -130,6 +130,13 @@ struct ManagedEngineLaunchConfig {
     isq_singlethread: bool,
     isq_cpu_threads: Option<u32>,
     parallel_immediate_isq: bool,
+    /// Pre-computed `(ENGINE_MOE_CACHE_*, value)` pairs to set on the engine
+    /// command environment. Built from `CTOX_MOE_CACHE_*` keys in the runtime
+    /// env by `build_managed_engine_launch_config`; empty when the cache is
+    /// disabled. See `configure_managed_engine_runtime_env` for the
+    /// engine-side consumer and `PlannedMoECacheAllocation::to_engine_env_pairs`
+    /// in runtime_plan.rs for the planner-side producer.
+    moe_cache_env: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -1601,6 +1608,31 @@ fn build_managed_engine_launch_config(
                     "1" | "true" | "yes" | "on"
                 )
             }),
+        moe_cache_env: {
+            // Map CTOX_MOE_CACHE_* runtime-env keys → ENGINE_MOE_CACHE_*
+            // command-env pairs. Values flow through unparsed: the engine
+            // validates them in `RuntimeLoadPolicy::from_env`. Empty Vec
+            // means "cache disabled"; the engine's `cache_capacity: None`
+            // default keeps the legacy `Fused`/`Fast`/`Slow` backends.
+            const MAPPINGS: &[(&str, &str)] = &[
+                ("CTOX_MOE_CACHE_CAPACITY", "ENGINE_MOE_CACHE_CAPACITY"),
+                ("CTOX_MOE_CACHE_WARM_MB", "ENGINE_MOE_CACHE_WARM_MB"),
+                ("CTOX_MOE_CACHE_COLD_PATH", "ENGINE_MOE_CACHE_COLD_PATH"),
+                (
+                    "CTOX_MOE_CACHE_COLD_MIN_MBPS",
+                    "ENGINE_MOE_CACHE_COLD_MIN_MBPS",
+                ),
+            ];
+            let mut pairs = Vec::new();
+            for (ctox_key, engine_key) in MAPPINGS {
+                if let Some(value) = env_map.get(*ctox_key) {
+                    if !value.is_empty() {
+                        pairs.push(((*engine_key).to_string(), value.clone()));
+                    }
+                }
+            }
+            pairs
+        },
     })
 }
 
@@ -1829,6 +1861,15 @@ fn configure_managed_engine_runtime_env(
     }
     if let Some(max_seq_len) = launch_spec.engine_config.max_seq_len {
         command.env("ENGINE_MAX_SEQ_LEN_OVERRIDE", max_seq_len.to_string());
+    }
+    // MoE expert-cache plumbing: the build step (see
+    // `build_managed_engine_launch_config`) maps `CTOX_MOE_CACHE_*` keys
+    // from the runtime env onto `ENGINE_MOE_CACHE_*` pairs here, so the
+    // engine's `RuntimeLoadPolicy::from_env` (in
+    // `tools/model-runtime/core/src/utils/normal.rs`) sees them. Keep this
+    // in lockstep with `PlannedMoECacheAllocation::to_engine_env_pairs`.
+    for (key, value) in &launch_spec.engine_config.moe_cache_env {
+        command.env(key, value);
     }
     command.env("ENGINE_SKIP_DUMMY_RUN", "1");
 }
