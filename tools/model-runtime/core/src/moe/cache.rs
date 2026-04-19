@@ -34,8 +34,10 @@
 //!   small models when no cold path is configured).
 //! * [`Topology::Discrete`] — NVIDIA / AMD with dedicated VRAM. The pool
 //!   prefers CPU RAM (fast) when it fits the model, else falls back to SSD.
-//! * [`Topology::CpuOnly`] — no GPU. Cache is a pass-through; capacity is
-//!   forced to `num_experts`.
+//! * [`Topology::CpuOnly`] — no GPU backend compiled in. Cache still works:
+//!   experts materialize on `Device::Cpu`, swap goes through the cold tier
+//!   (SSD) or stays RAM-resident. Useful on memory-constrained hosts where
+//!   even the full-resident model wouldn't fit.
 
 use std::borrow::Cow;
 use std::fs::{File, OpenOptions};
@@ -454,11 +456,14 @@ impl MoEExpertCache {
         if cfg.capacity == 0 {
             candle_core::bail!("MoEExpertCache: capacity must be > 0");
         }
-        if matches!(cfg.topology, Topology::CpuOnly) && cfg.capacity < experts.len() {
-            candle_core::bail!(
-                "MoEExpertCache: CpuOnly topology requires capacity >= num_experts"
-            );
-        }
+        // Previously: CpuOnly forced `capacity >= num_experts` (no swap
+        // allowed on CPU). Removed — RAM-pressure on the host can force
+        // swap-to-SSD even without a GPU, especially for a 35B-param MoE
+        // on a consumer laptop. The cold tier (mmap'd SSD file) is still
+        // fully functional on CPU-only topology. If no cold_tier_path is
+        // configured and capacity < num_experts, the CpuOnly branch below
+        // keeps the surplus experts as in-memory `ColdTier::InMemory` —
+        // which doesn't save RAM but preserves correctness.
 
         let num_experts = experts.len();
         let capacity = cfg.capacity.min(num_experts);
@@ -929,6 +934,64 @@ mod tests {
         assert_eq!(u, &[30, 40, 50]);
         assert_eq!(d, &[60]);
         let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn cache_swap_works_on_cpu_only_topology() {
+        // Regression guard: `Topology::CpuOnly` no longer forces
+        // `capacity >= num_experts`. A memory-constrained CPU-only host
+        // (e.g. engine built without Metal feature on an M5) must still
+        // be able to swap experts to the cold tier — it's a fallback, not
+        // a pass-through.
+        let tmp_path = std::env::temp_dir().join(format!(
+            "ctox_moe_cache_cpu_only_{}.bin",
+            std::process::id()
+        ));
+
+        let experts = vec![
+            real_expert_triple(0.1),
+            real_expert_triple(0.2),
+            real_expert_triple(0.3),
+            real_expert_triple(0.4),
+        ];
+        let original_3 = experts[3].down.dequantize_w().unwrap();
+        let comm = dummy_comm();
+
+        let cache = MoEExpertCache::new(
+            experts,
+            CacheConfig {
+                capacity: 1,
+                topology: Topology::CpuOnly,
+                device: Device::Cpu,
+                warm_tier_budget_bytes: None,
+                cold_tier_path: Some(tmp_path.clone()),
+                cold_tier_min_mbps: 0,
+            },
+            comm,
+        )
+        .expect("CpuOnly with capacity<num_experts and cold_tier_path must succeed");
+
+        // Force swap cycle through all four experts; expert 3 should return
+        // to bit-identical weights after re-materialization.
+        let _ = cache.ensure_resident(1).unwrap();
+        let _ = cache.ensure_resident(2).unwrap();
+        let _ = cache.ensure_resident(0).unwrap();
+        let re3 = cache.ensure_resident(3).unwrap();
+        let restored = re3.down.dequantize_w().unwrap();
+        let diff = (&original_3 - &restored).unwrap().abs().unwrap().sum_all().unwrap();
+        assert!(
+            diff.to_scalar::<f32>().unwrap() < 1e-6,
+            "CpuOnly SSD-swap round-trip corrupted weights"
+        );
+
+        let stats = cache.stats();
+        assert!(stats.evictions >= 1);
+        assert!(stats.misses >= 1);
+
+        // Cleanup: the cold-tier file is expert_*.bin children inside a
+        // specific directory OR the single pool file; both cases handled.
+        let _ = std::fs::remove_file(&tmp_path);
+        let _ = std::fs::remove_dir_all(&tmp_path);
     }
 
     #[test]
