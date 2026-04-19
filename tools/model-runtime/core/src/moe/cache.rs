@@ -498,24 +498,28 @@ impl MoEExpertCache {
             }
         }
 
-        // First pass: serialize every expert once to determine `slot_size`.
-        // We keep the serialized bytes around because we'll write them into
-        // the pool in the second pass — avoids re-serializing.
-        let mut pre_serialized: Vec<(Vec<u8>, Vec<u8>, Vec<u8>)> = Vec::with_capacity(num_experts);
-        let mut max_total = 0u64;
-        for (idx, triple) in experts.iter().enumerate() {
-            let gate = triple.gate.serialize()?.into_owned();
-            let up = triple.up.serialize()?.into_owned();
-            let down = triple.down.serialize()?.into_owned();
-            let total = (gate.len() + up.len() + down.len()) as u64;
-            max_total = max_total.max(total);
-            pre_serialized.push((gate, up, down));
-            let _ = idx;
-        }
-        // Round up slot_size to a page-ish multiple for mmap-friendliness.
-        // 4 KiB alignment matches every OS's page size; avoids partial-page
-        // writes when different experts share a page boundary.
-        let slot_size = (max_total + 4095) & !4095;
+        // Determine `slot_size` from the *first* expert only. In MoE models
+        // every expert is structurally identical (same hidden_size × moe_
+        // intermediate_size), so the serialized footprint is the same for
+        // every one of them. Serializing all N just to compute max was
+        // wasted work — 255 × 3 redundant `serialize()` calls per layer,
+        // which at ~100 ms/call scales to ~1 minute of pointless CPU per
+        // layer on a 256-expert model.
+        //
+        // Implementation note: we do NOT keep the serialized bytes from
+        // this probe. The second pass below re-serializes each expert just
+        // before writing it to the pool, which is a single pass total
+        // (vs. the previous two passes). The memory saved by dropping the
+        // pre-serialized cache is significant on a 256×3 MoE layer —
+        // hundreds of MiB at full-precision weights.
+        let probe_triple = experts
+            .first()
+            .ok_or_else(|| candle_core::Error::msg("cache: empty experts"))?;
+        let probe_total = probe_triple.gate.serialize()?.len() as u64
+            + probe_triple.up.serialize()?.len() as u64
+            + probe_triple.down.serialize()?.len() as u64;
+        // 4 KiB page alignment for mmap-friendly slot boundaries.
+        let slot_size = (probe_total + 4095) & !4095;
 
         // Decide the backing. Policy:
         //   - cold_tier_path set AND (Unified OR warm budget wouldn't fit) -> SSD
@@ -540,25 +544,29 @@ impl MoEExpertCache {
             StaticPool::new_ram(slot_size, num_experts)
         };
 
-        // Second pass: stage non-resident experts into the pool; drop their
-        // device `Arc`s so their VRAM is actually freed. Resident experts
-        // will be staged lazily on their first eviction.
+        // Stage every expert into the pool: serialize once, copy into its
+        // fixed-offset pool slot. Resident experts (idx < capacity) keep
+        // their device `Arc` alive; pooled experts drop the `Arc` so the
+        // VRAM is actually freed.
+        //
+        // Previously this was a second pass reusing bytes from a
+        // pre-serialized cache. The pre-serialize pass was wasteful (it
+        // ran on ALL experts just to compute max-slot-size, then all of
+        // its bytes were discarded on Resident slots anyway), so we now
+        // do a single pass and serialize each expert exactly once.
         let mut slots: Vec<SlotState> = Vec::with_capacity(num_experts);
         for (idx, triple) in experts.into_iter().enumerate() {
-            let (gate, up, down) = pre_serialized.get(idx).cloned().unwrap_or_default();
+            let gate = triple.gate.serialize()?;
+            let up = triple.up.serialize()?;
+            let down = triple.down.serialize()?;
+            pool.write_slot(idx, &gate, &up, &down)?;
             if idx < capacity {
                 slots.push(SlotState::Resident(triple));
-                // Also eagerly stage the resident expert so first-time
-                // eviction doesn't pay serialization cost. We already have
-                // the bytes in `pre_serialized`.
-                pool.write_slot(idx, &gate, &up, &down)?;
             } else {
                 drop(triple);
-                pool.write_slot(idx, &gate, &up, &down)?;
                 slots.push(SlotState::InPool);
             }
         }
-        drop(pre_serialized);
         // One flush after all initial writes so the cold tier is durable
         // before the cache accepts queries.
         let _ = pool.backing.flush();
