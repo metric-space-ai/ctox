@@ -476,6 +476,78 @@ impl QuantMethod for UnquantLinear {
                         n_quantized,
                         guard
                     )
+                } else if weight_for_isq.rank() == 3 {
+                    // MoE-expert fast path: the weight is a
+                    // [num_experts, out, in] stack. The standard
+                    // `generate_isq!` invocation calls
+                    // `QTensor::quantize(&weight, dtype)` which
+                    // internally runs `src.to_dtype(F32)` on the
+                    // *entire* stack — a peak of BF16+F32 over the
+                    // whole [num_experts, out, in] slab on CPU.
+                    // For Qwen3.6-35B-A3B that's ~1.5 GB per
+                    // projection per layer; with Rayon loading 40
+                    // layers × 3 projections concurrently the
+                    // transient anon-rss reaches the 60-GiB OOM
+                    // threshold on a 62-GiB host.
+                    //
+                    // Stream per-expert: narrow out one [out, in]
+                    // slice, quantize it (F32 transient only ~4 MB
+                    // for Qwen3.6 geometry), extend a pre-sized
+                    // Q4K byte buffer. Q4K super-blocks never cross
+                    // expert boundaries for MoE geometries (out*in
+                    // is always a multiple of 256) so the byte-
+                    // concat is layout-identical to quantising the
+                    // full stack. Peak CPU per call falls from
+                    // ~1.5 GB to ~150 MB, comfortably fitting even
+                    // dozens of parallel workers.
+                    use candle_core::quantized::{QStorage, QTensor};
+                    use std::borrow::Cow;
+
+                    let num_experts = weight_for_isq.dim(0)?;
+                    let out_dim = weight_for_isq.dim(1)?;
+                    let in_dim = weight_for_isq.dim(2)?;
+                    let block_size = dtype.block_size();
+                    let elem_per_expert = out_dim * in_dim;
+                    if !elem_per_expert.is_multiple_of(block_size) {
+                        candle_core::bail!(
+                            "3D ISQ streaming: per-expert elem_count {elem_per_expert} is not \
+                             a multiple of block size {block_size}; byte-concat would split a \
+                             super-block. Falling back to 2D would require a different layout."
+                        );
+                    }
+                    let type_size = dtype.type_size();
+                    let bytes_per_expert = elem_per_expert / block_size * type_size;
+                    let mut q_buf: Vec<u8> =
+                        Vec::with_capacity(bytes_per_expert * num_experts);
+
+                    for i in 0..num_experts {
+                        let expert = weight_for_isq.narrow(0, i, 1)?.squeeze(0)?;
+                        let expert = if expert.is_contiguous() {
+                            expert
+                        } else {
+                            expert.contiguous()?
+                        };
+                        let qt = QTensor::quantize(&expert, dtype)?;
+                        drop(expert);
+                        let bytes = qt.data()?;
+                        if bytes.len() != bytes_per_expert {
+                            candle_core::bail!(
+                                "3D ISQ streaming: expert[{i}] produced {} bytes, expected {}",
+                                bytes.len(),
+                                bytes_per_expert,
+                            );
+                        }
+                        q_buf.extend_from_slice(&bytes);
+                        drop(bytes);
+                        drop(qt);
+                    }
+
+                    let _acquired_quantize_guard = guard.acquire(&device);
+                    let storage =
+                        QStorage::from_data(Cow::Owned(q_buf), &device, dtype)?;
+                    let shape = weight_for_isq.shape().clone();
+                    n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    Arc::new(QTensor::new(storage, shape)?)
                 } else {
                     generate_isq!(weight_for_isq, device, dtype, n_quantized, guard)
                 };
