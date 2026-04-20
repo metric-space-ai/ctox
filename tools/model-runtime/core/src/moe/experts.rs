@@ -627,13 +627,60 @@ impl MoEExperts {
             );
         }
 
-        let triples: Vec<ExpertTriple> = packed
+        let mut triples: Vec<ExpertTriple> = packed
             .gate_proj
             .into_iter()
             .zip(packed.up_proj)
             .zip(packed.down_proj)
             .map(|((gate, up), down)| ExpertTriple { gate, up, down })
             .collect();
+
+        // Apply ISQ to every cached expert right here, on CPU, before the
+        // cache sees them. Historically `get_isq_layers()` for the Cached
+        // backend returned an empty Vec and the framework-wide ISQ pass
+        // skipped expert weights entirely — the pool then stored 60 GiB of
+        // BF16 bytes for a 40-layer, 256-expert Qwen3.6 load and the host
+        // OOM-killed the engine. Applying ISQ here shrinks the pool to the
+        // serialized-Q4K footprint (~15 GiB for the same model) and matches
+        // what the non-cached backends do. We use CPU as the target device:
+        // every slot except the first `capacity` per layer will be
+        // serialized straight to the pool and never touched on CUDA, and the
+        // resident slots are promoted to CUDA via `deserialize(bytes, cuda)`
+        // inside `MoEExpertCache::new` anyway.
+        if let Some(params) = engine_quant::get_immediate_isq() {
+            if let Some(isq_ty) = params.ty {
+                let guard = engine_quant::QuantizeOntoGuard::new();
+                let counter = std::sync::atomic::AtomicUsize::new(0);
+                for t in triples.iter_mut() {
+                    t.gate = t.gate.clone().apply_isq(
+                        Some(isq_ty),
+                        Device::Cpu,
+                        &counter,
+                        None,
+                        guard.clone(),
+                    )?;
+                    t.up = t.up.clone().apply_isq(
+                        Some(isq_ty),
+                        Device::Cpu,
+                        &counter,
+                        None,
+                        guard.clone(),
+                    )?;
+                    t.down = t.down.clone().apply_isq(
+                        Some(isq_ty),
+                        Device::Cpu,
+                        &counter,
+                        None,
+                        guard.clone(),
+                    )?;
+                }
+                tracing::info!(
+                    "Cached MoE: applied ISQ {:?} to {} experts on CPU before cache staging",
+                    isq_ty,
+                    triples.len()
+                );
+            }
+        }
 
         let topology = Topology::detect(&layer_device);
         // Engine-internal env vars (not a CTOX user-facing toggle — CTOX
@@ -1148,12 +1195,13 @@ impl MoEExperts {
                 }
                 layers
             }
-            // Cache-backed experts expose no ISQ surface: only a subset of
-            // experts is resident at any moment, and the rest live as
-            // serialized bytes behind a `Mutex`. Post-hoc ISQ on cached
-            // experts would require a re-materialize-then-requantize-then-
-            // reserialize round-trip for every expert, which belongs with
-            // Phase 2 async prefetch, not here.
+            // Cache-backed experts are ISQ'd in-place inside `load_cached`
+            // (on CPU, before the cache pool stages them) so that the pool
+            // stores Q-format bytes — not BF16 — and cache miss/promote
+            // just deserializes those Q-format bytes onto the target
+            // device. The framework-wide ISQ pass therefore has nothing
+            // left to do for cached experts: we intentionally expose an
+            // empty surface here.
             MoEExpertsBackendImpl::Cached(_) => vec![],
         }
     }
