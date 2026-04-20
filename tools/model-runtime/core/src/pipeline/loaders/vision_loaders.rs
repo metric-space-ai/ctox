@@ -7319,8 +7319,34 @@ impl VisionModelLoader for Gemma4Loader {
         ))
     }
 
-    fn supports_paged_attention(&self, _config: &str) -> bool {
-        true
+    fn supports_paged_attention(&self, config: &str) -> bool {
+        // Gemma 4's hybrid attention uses head_dim=256 for sliding layers and
+        // head_dim=512 for full-attention layers. The CUDA PagedAttention /
+        // flash-attn kernels only accept head_size ∈ {64, 80, 96, 112, 128,
+        // 192, 256}, so a full-attention layer with head_dim=512 makes
+        // PagedAttention fail at the first forward step with
+        // `head_size must be one of ...`.
+        //
+        // Parse the config and refuse PagedAttention whenever any layer's
+        // head_dim isn't in the supported set; the pipeline will then fall
+        // back to the eager SDPA path, which handles 512 fine.
+        const PAGED_SUPPORTED_HEAD_SIZES: &[usize] = &[64, 80, 96, 112, 128, 192, 256];
+        let Ok(cfg) = serde_json::from_str::<Gemma4Config>(config) else {
+            return true;
+        };
+        let text = &cfg.text_config;
+        let has_unsupported = text
+            .layer_types
+            .iter()
+            .map(|ty| {
+                if ty == "sliding_attention" {
+                    text.head_dim
+                } else {
+                    text.global_head_dim
+                }
+            })
+            .any(|hd| !PAGED_SUPPORTED_HEAD_SIZES.contains(&hd));
+        !has_unsupported
     }
 
     fn supports_prefix_cacher(&self, _config: &str) -> bool {

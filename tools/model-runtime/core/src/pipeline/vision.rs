@@ -311,6 +311,13 @@ impl Loader for VisionLoader {
         let config = std::fs::read_to_string(paths.get_config_filename())?;
 
         if !self.inner.supports_paged_attention(&config) {
+            if paged_attn_config.is_some() {
+                info!(
+                    "PagedAttention disabled for this model: the loader reports an incompatible \
+                     attention geometry (e.g. head_dim outside {{64, 80, 96, 112, 128, 192, 256}}). \
+                     Falling back to eager SDPA."
+                );
+            }
             paged_attn_config = None;
         }
 
