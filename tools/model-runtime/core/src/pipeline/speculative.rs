@@ -764,7 +764,7 @@ impl Pipeline for SpeculativePipeline {
                             no_kv_cache,
                             Some((n_replay, initial_draft_cache_len)),
                             false,
-                            None,
+                            self.get_input_processor_config(),
                             paged_attn_metadata.clone(),
                             get_mut_arcmutex!(self.draft).device_mapper(),
                         )
