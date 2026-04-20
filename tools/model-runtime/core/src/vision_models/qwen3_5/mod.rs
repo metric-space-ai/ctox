@@ -43,6 +43,16 @@ pub struct Qwen3_5Model {
 }
 
 impl Qwen3_5Model {
+    /// Borrow the underlying text model. Used by the DFlash
+    /// speculative pipeline to reach `forward_with_dflash_capture`
+    /// without going through the generic `Pipeline::forward_inputs`
+    /// surface.
+    pub fn text_model(&self) -> &Qwen3_5TextModel {
+        &self.text
+    }
+}
+
+impl Qwen3_5Model {
     pub fn new(
         cfg: &Config,
         vb: ShardedVarBuilder,
