@@ -270,6 +270,16 @@ pub struct MistralRsForServerBuilder {
     /// `gamma` tokens per step into the target's verify pass. Tokenizer
     /// vocabulary must match between target and draft.
     speculative_draft: Option<(ModelSelected, usize)>,
+
+    /// Optional DFlash block-diffusion draft. Mutually exclusive with
+    /// `speculative_draft`. When set, the target loader is wrapped in a
+    /// `DFlashLoader` producing a `DFlashPipeline` — the DFlash draft
+    /// is loaded directly from a safetensors path + config path (no
+    /// HF-hub `ModelSelected` dispatch: the block-diffusion draft is
+    /// not a standard Qwen3 and has no matching `NormalLoaderType`).
+    ///
+    /// Pair: `(safetensors_path, config_json_path)`.
+    dflash_draft: Option<(std::path::PathBuf, std::path::PathBuf)>,
 }
 
 impl Default for MistralRsForServerBuilder {
@@ -303,6 +313,7 @@ impl Default for MistralRsForServerBuilder {
             mcp_client_config: None,
             paged_cache_type: defaults::PAGED_CACHE_TYPE,
             speculative_draft: None,
+            dflash_draft: None,
         }
     }
 }
@@ -378,6 +389,32 @@ impl MistralRsForServerBuilder {
     ) -> Self {
         if let Some((draft, gamma)) = draft_and_gamma {
             self = self.with_speculative_draft(draft, gamma);
+        }
+        self
+    }
+
+    /// Enable DFlash block-diffusion speculative decoding. `draft_safetensors`
+    /// is the path to the safetensors checkpoint of the block-diffusion
+    /// draft (e.g. `z-lab/Qwen3.5-27B-DFlash/model.safetensors`);
+    /// `draft_config` is the matching `config.json` parsed into a
+    /// `DFlashDraftConfig` by the core loader. Mutually exclusive with
+    /// `with_speculative_draft`.
+    pub fn with_dflash_draft(
+        mut self,
+        draft_safetensors: std::path::PathBuf,
+        draft_config: std::path::PathBuf,
+    ) -> Self {
+        self.dflash_draft = Some((draft_safetensors, draft_config));
+        self
+    }
+
+    /// Optional-wrapper helper for config-file wiring.
+    pub fn with_dflash_draft_optional(
+        mut self,
+        draft_paths: Option<(std::path::PathBuf, std::path::PathBuf)>,
+    ) -> Self {
+        if let Some((safetensors, cfg)) = draft_paths {
+            self = self.with_dflash_draft(safetensors, cfg);
         }
         self
     }
@@ -708,6 +745,12 @@ impl MistralRsForServerBuilder {
         // loaded via a second LoaderBuilder and both are threaded into
         // `engine_core::SpeculativeLoader`, which at `load_model_from_hf`
         // time produces a `SpeculativePipeline` with the configured gamma.
+        if self.speculative_draft.is_some() && self.dflash_draft.is_some() {
+            anyhow::bail!(
+                "Only one of `speculative` and `dflash` can be set — pick a single \
+                 decode pipeline per model."
+            );
+        }
         let loader: Box<dyn Loader> = if let Some((draft_model, gamma)) =
             self.speculative_draft.clone()
         {
@@ -717,13 +760,23 @@ impl MistralRsForServerBuilder {
             );
             let draft_loader: Box<dyn Loader> = LoaderBuilder::new(draft_model)
                 .with_no_kv_cache(self.no_kv_cache)
-                .with_chat_template(self.chat_template)
-                .with_jinja_explicit(self.jinja_explicit)
+                .with_chat_template(self.chat_template.clone())
+                .with_jinja_explicit(self.jinja_explicit.clone())
                 .build()?;
             Box::new(engine_core::SpeculativeLoader {
                 target: target_loader,
                 draft: draft_loader,
                 config: engine_core::SpeculativeConfig { gamma },
+            })
+        } else if let Some((draft_safetensors, draft_config)) = self.dflash_draft.clone() {
+            info!(
+                "Wrapping target loader in DFlashLoader — block-diffusion draft at {}",
+                draft_safetensors.display()
+            );
+            Box::new(engine_core::DFlashLoader {
+                target: target_loader,
+                draft_safetensors,
+                draft_config,
             })
         } else {
             target_loader
@@ -836,6 +889,12 @@ impl MistralRsForServerBuilder {
         // Same speculative-decoding wrap as the single-model path (build()).
         // Multi-model mode applies the draft to the *first* model, which is
         // the target by convention.
+        if self.speculative_draft.is_some() && self.dflash_draft.is_some() {
+            anyhow::bail!(
+                "Only one of `speculative` and `dflash` can be set — pick a single \
+                 decode pipeline per model."
+            );
+        }
         let loader: Box<dyn Loader> = if let Some((draft_model, gamma)) =
             self.speculative_draft.clone()
         {
@@ -852,6 +911,17 @@ impl MistralRsForServerBuilder {
                 target: target_loader,
                 draft: draft_loader,
                 config: engine_core::SpeculativeConfig { gamma },
+            })
+        } else if let Some((draft_safetensors, draft_config)) = self.dflash_draft.clone() {
+            info!(
+                "Wrapping first model's loader in DFlashLoader — \
+                 block-diffusion draft at {} (multi-model mode).",
+                draft_safetensors.display()
+            );
+            Box::new(engine_core::DFlashLoader {
+                target: target_loader,
+                draft_safetensors,
+                draft_config,
             })
         } else {
             target_loader

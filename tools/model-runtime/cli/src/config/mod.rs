@@ -40,6 +40,12 @@ pub struct ServeConfig {
     /// pipeline and wrapped via `SpeculativePipeline`. Tokenizers must match.
     #[serde(default)]
     pub speculative: Option<SpeculativeSpec>,
+    /// Optional DFlash (block-diffusion) speculative spec. Mutually
+    /// exclusive with `speculative` — a model has exactly one decode
+    /// pipeline. When set, the first entry in `models` is the target
+    /// and the DFlash draft is loaded directly from `dflash.*` paths.
+    #[serde(default)]
+    pub dflash: Option<DFlashSpec>,
 }
 
 #[derive(Deserialize, Default)]
@@ -57,6 +63,9 @@ pub struct RunConfig {
     /// See [`ServeConfig::speculative`].
     #[serde(default)]
     pub speculative: Option<SpeculativeSpec>,
+    /// See [`ServeConfig::dflash`].
+    #[serde(default)]
+    pub dflash: Option<DFlashSpec>,
 }
 
 /// Draft-model spec for speculative decoding. Picks up where
@@ -69,6 +78,37 @@ pub struct SpeculativeSpec {
     /// Draft model entry (same schema as an entry in `models`). Its
     /// tokenizer vocabulary must match the target model exactly.
     pub draft: ModelEntry,
+}
+
+/// DFlash block-diffusion speculative-decoding spec. Parallel to
+/// `SpeculativeSpec`, with a different shape: the draft here is a
+/// hand-loaded safetensors checkpoint rather than another `ModelEntry`
+/// that goes through the normal loader. That's because the DFlash
+/// draft (`z-lab/Qwen3.5-27B-DFlash`) is not a standard Qwen3 — it's
+/// a 5-layer conditioned block-diffusion model that has no embed /
+/// lm_head of its own (it shares the target's) and doesn't fit the
+/// `NormalLoaderType` enum.
+///
+/// Example TOML:
+/// ```toml
+/// [dflash]
+/// draft_safetensors = "/models/dflash/model.safetensors"
+/// draft_config      = "/models/dflash/config.json"
+/// ```
+///
+/// `engine_core::DFlashPipeline` performs the actual wiring; this
+/// struct only feeds it through the CLI.
+#[derive(Deserialize, Clone)]
+pub struct DFlashSpec {
+    /// Path to the DFlash draft safetensors. Must contain the
+    /// 58-tensor layout the `DFlashDraftModel` loader expects
+    /// (`fc.weight`, `hidden_norm.weight`, `layers.<N>.…`, `norm.weight`).
+    pub draft_safetensors: PathBuf,
+
+    /// Path to the DFlash draft `config.json`. Parsed via
+    /// `DFlashDraftConfig`. Typically sits next to the safetensors in
+    /// the HF snapshot directory.
+    pub draft_config: PathBuf,
 }
 
 #[derive(Deserialize, Default, Clone)]

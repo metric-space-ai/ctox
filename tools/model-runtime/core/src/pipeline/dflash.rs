@@ -22,10 +22,12 @@
 
 use std::{
     any::Any,
+    path::PathBuf,
     sync::{Arc, Mutex},
     time::Duration,
 };
 
+use anyhow::Result as anyhowResult;
 use candle_core::{Device, Result, Tensor};
 use engine_quant::IsqType;
 use rand_isaac::Isaac64Rng;
@@ -41,7 +43,8 @@ use crate::{
     },
     prefix_cacher::PrefixCacheManagerV2,
     sequence::Sequence,
-    Pipeline,
+    DeviceMapSetting, Loader, ModelKind, ModelPaths, PagedAttentionConfig, Pipeline, TokenSource,
+    TryIntoDType,
 };
 
 use super::{
@@ -326,3 +329,138 @@ impl Pipeline for DFlashPipeline {
 }
 
 impl AnyMoePipelineMixin for DFlashPipeline {}
+
+/// Loader for a DFlash pipeline.
+///
+/// Wraps an existing target `Box<dyn Loader>` with the draft
+/// safetensors + config paths. At `load_model_from_hf` time:
+///   1. delegates to the target loader to produce the `Pipeline`
+///      for the Qwen3.5 target,
+///   2. parses `draft_config.json` into a [`DFlashDraftConfig`],
+///   3. mmap-loads the draft safetensors into a
+///      [`DFlashDraftModel`] on the target's device,
+///   4. wraps both in a `DFlashPipeline` and returns it as an
+///      `Arc<Mutex<dyn Pipeline>>`.
+///
+/// Parallel shape to [`super::speculative::SpeculativeLoader`], but
+/// the draft is loaded directly from a path instead of delegating to
+/// a second `Box<dyn Loader>` — the DFlash draft isn't a standard
+/// Qwen3 checkpoint and has no matching `NormalLoaderType`.
+pub struct DFlashLoader {
+    pub target: Box<dyn Loader>,
+    pub draft_safetensors: PathBuf,
+    pub draft_config: PathBuf,
+}
+
+impl DFlashLoader {
+    fn load_draft(&self, device: &Device) -> anyhowResult<Arc<DFlashDraftModel>> {
+        use candle_nn::VarBuilder;
+
+        // Parse the DFlash draft config.
+        let cfg_text = std::fs::read_to_string(&self.draft_config).map_err(|e| {
+            anyhow::anyhow!(
+                "DFlashLoader: cannot read draft config at {}: {e}",
+                self.draft_config.display()
+            )
+        })?;
+        let cfg: DFlashDraftConfig = serde_json::from_str(&cfg_text).map_err(|e| {
+            anyhow::anyhow!(
+                "DFlashLoader: parse draft config {}: {e}",
+                self.draft_config.display()
+            )
+        })?;
+
+        // mmap-load the safetensors. The draft is 3.46 GB BF16 on
+        // Qwen3.5-27B-DFlash; mmap means we don't pay the eager-copy
+        // tax — only the pages the draft touches during forward are
+        // resident.
+        let vb = unsafe {
+            VarBuilder::from_mmaped_safetensors(
+                &[self.draft_safetensors.clone()],
+                candle_core::DType::BF16,
+                device,
+            )
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "DFlashLoader: mmap draft safetensors {}: {e}",
+                    self.draft_safetensors.display()
+                )
+            })?
+        };
+
+        let draft = DFlashDraftModel::load(vb, cfg).map_err(|e| {
+            anyhow::anyhow!("DFlashLoader: build DFlashDraftModel: {e}")
+        })?;
+        Ok(Arc::new(draft))
+    }
+}
+
+impl Loader for DFlashLoader {
+    #[allow(clippy::type_complexity, clippy::too_many_arguments)]
+    fn load_model_from_hf(
+        &self,
+        revision: Option<String>,
+        token_source: TokenSource,
+        dtype: &dyn TryIntoDType,
+        device: &Device,
+        silent: bool,
+        mapper: DeviceMapSetting,
+        in_situ_quant: Option<IsqType>,
+        paged_attn_config: Option<PagedAttentionConfig>,
+    ) -> anyhowResult<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
+        let target = self.target.load_model_from_hf(
+            revision,
+            token_source,
+            dtype,
+            device,
+            silent,
+            mapper,
+            in_situ_quant,
+            paged_attn_config,
+        )?;
+        let draft = self.load_draft(device)?;
+        let pipeline = DFlashPipeline::new(target, draft)?;
+        Ok(Arc::new(tokio::sync::Mutex::new(pipeline)))
+    }
+
+    #[allow(clippy::type_complexity, clippy::too_many_arguments, clippy::borrowed_box)]
+    fn load_model_from_path(
+        &self,
+        paths: &Box<dyn ModelPaths>,
+        dtype: &dyn TryIntoDType,
+        device: &Device,
+        silent: bool,
+        mapper: DeviceMapSetting,
+        in_situ_quant: Option<IsqType>,
+        paged_attn_config: Option<PagedAttentionConfig>,
+    ) -> anyhowResult<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
+        let target = self.target.load_model_from_path(
+            paths,
+            dtype,
+            device,
+            silent,
+            mapper,
+            in_situ_quant,
+            paged_attn_config,
+        )?;
+        let draft = self.load_draft(device)?;
+        let pipeline = DFlashPipeline::new(target, draft)?;
+        Ok(Arc::new(tokio::sync::Mutex::new(pipeline)))
+    }
+
+    fn get_id(&self) -> String {
+        format!(
+            "DFlash: tgt = `{}`, draft = `{}`",
+            self.target.get_id(),
+            self.draft_safetensors.display()
+        )
+    }
+
+    fn get_kind(&self) -> ModelKind {
+        // DFlash isn't enumerated in ModelKind yet — report the
+        // target's kind so downstream diagnostics (logging, engine-
+        // info) still produce sensible output. If/when a dedicated
+        // `ModelKind::DFlash` variant is added this flips over.
+        self.target.get_kind()
+    }
+}

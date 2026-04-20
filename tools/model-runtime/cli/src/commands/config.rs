@@ -37,18 +37,26 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
         models,
         default_model_id,
         speculative,
+        dflash,
     } = cfg;
 
     tracing::info!(
-        "run_serve_config: models={} speculative={}",
+        "run_serve_config: models={} speculative={} dflash={}",
         models.len(),
         speculative.is_some(),
+        dflash.is_some(),
     );
 
-    // Single-model fast path doesn't yet know about spec decoding, so bail
-    // out of it when the config demands a draft — we go through the
+    if speculative.is_some() && dflash.is_some() {
+        anyhow::bail!(
+            "Config sets both `speculative` and `dflash`; pick exactly one decode pipeline."
+        );
+    }
+
+    // Single-model fast path doesn't yet know about spec / dflash decoding,
+    // so bail out of it when the config demands a draft — we go through the
     // multi-model/builder path below which does support it.
-    if speculative.is_none() {
+    if speculative.is_none() && dflash.is_none() {
         if let Some((model_type, runtime)) = resolve_single_model_runtime(
             models.as_slice(),
             default_model_id.as_deref(),
@@ -141,6 +149,25 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
         builder = builder.with_speculative_draft(draft_selected, spec.gamma);
     }
 
+    // DFlash (block-diffusion) speculative decoding — mutually
+    // exclusive with the chain-speculative spec above. Validated at
+    // build time; here we just thread the paths through.
+    if let Some(dflash_spec) = &dflash {
+        info!(
+            "DFlash decoding enabled: target='{}' draft_safetensors='{}' draft_config='{}'",
+            models
+                .first()
+                .map(|m| m.model_id.as_str())
+                .unwrap_or("<unknown>"),
+            dflash_spec.draft_safetensors.display(),
+            dflash_spec.draft_config.display(),
+        );
+        builder = builder.with_dflash_draft(
+            dflash_spec.draft_safetensors.clone(),
+            dflash_spec.draft_config.clone(),
+        );
+    }
+
     let engine = builder.build().await?;
     #[cfg(unix)]
     let engine_for_local_ipc = engine.clone();
@@ -182,9 +209,16 @@ async fn run_run_config(cfg: crate::config::RunConfig) -> Result<()> {
         models,
         enable_thinking,
         speculative,
+        dflash,
     } = cfg;
 
-    if speculative.is_none() {
+    if speculative.is_some() && dflash.is_some() {
+        anyhow::bail!(
+            "Config sets both `speculative` and `dflash`; pick exactly one decode pipeline."
+        );
+    }
+
+    if speculative.is_none() && dflash.is_none() {
         if let Some((model_type, runtime)) = resolve_single_model_runtime(
             models.as_slice(),
             None,
@@ -267,6 +301,16 @@ async fn run_run_config(cfg: crate::config::RunConfig) -> Result<()> {
             spec.draft.model_id, spec.gamma,
         );
         builder = builder.with_speculative_draft(draft_selected, spec.gamma);
+    }
+
+    if let Some(dflash_spec) = dflash {
+        info!(
+            "DFlash decoding enabled (interactive): draft_safetensors='{}' draft_config='{}'",
+            dflash_spec.draft_safetensors.display(),
+            dflash_spec.draft_config.display(),
+        );
+        builder = builder
+            .with_dflash_draft(dflash_spec.draft_safetensors, dflash_spec.draft_config);
     }
 
     let engine = builder.build().await?;
