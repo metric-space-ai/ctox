@@ -1059,6 +1059,28 @@ impl Qwen3_5MoeTextModel {
 
         let attention_mask = DeviceMappedMask::new(attention_mask.cloned(), &*self.mapper)?;
 
+        // Precompute the hybrid-cache state index vector ONCE per forward
+        // pass. Inside the per-layer loop each LinearAttention layer
+        // would otherwise call `indices.to_vec1()` which forces a D->H
+        // sync — on Qwen3.6-35B-A3B with 30 LinearAttention layers,
+        // that's 30 stream-wait stalls per decode token (~3 ms wasted).
+        // The indices tensor is constant across the whole forward, so
+        // hoist the sync out of the loop and reuse the host Vec.
+        let hoisted_state_indices: Option<Vec<u32>> = match state_indices.as_ref() {
+            Some(indices) => {
+                let v: Vec<u32> = indices.to_vec1()?;
+                if v.is_empty() && self
+                    .layer_types
+                    .iter()
+                    .any(|lt| matches!(lt, LayerType::LinearAttention))
+                {
+                    candle_core::bail!("Hybrid recurrent state indices are empty.");
+                }
+                Some(v)
+            }
+            None => None,
+        };
+
         // Precompute deepstack index tensors once to avoid repeated CPU-GPU syncs
         let deepstack_indices = if let Some(visual_pos_masks) = visual_pos_masks {
             let mask_flat: Vec<f32> = visual_pos_masks
@@ -1108,10 +1130,11 @@ impl Qwen3_5MoeTextModel {
                         let indices = state_indices.as_ref().expect(
                             "checked above: linear-attention layers require recurrent indices",
                         );
-                        let indices_vec: Vec<u32> = indices.to_vec1()?;
-                        if indices_vec.is_empty() {
-                            candle_core::bail!("Hybrid recurrent state indices are empty.");
-                        }
+                        // Hoisted at the top of `forward`: same value across
+                        // every LinearAttention layer in this call.
+                        let indices_vec: &[u32] = hoisted_state_indices
+                            .as_deref()
+                            .expect("hoisted indices populated above when state_indices exists");
 
                         let first_offset = pool.get_seqlen_offset(indices_vec[0] as usize);
                         if indices_vec
@@ -1138,7 +1161,7 @@ impl Qwen3_5MoeTextModel {
                         pool.scatter_recurrent_state(indices, &gdn_cache.recurrent_state)?;
 
                         let delta = gdn_cache.seqlen_offset.saturating_sub(first_offset);
-                        for &idx in &indices_vec {
+                        for &idx in indices_vec {
                             let updated = pool.get_seqlen_offset(idx as usize) + delta;
                             pool.set_seqlen_offset(idx as usize, updated);
                         }
