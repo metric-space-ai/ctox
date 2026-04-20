@@ -22,8 +22,6 @@
 //!      `DFlashChainStepper::step` against the concrete target.
 //!      Returns `StepOutcome { accepted, draft_accepted }`.
 
-use std::sync::Arc;
-
 use candle_core::{DType, IndexOp, Result, Tensor};
 
 use super::capture::FeatureCapture;
@@ -73,7 +71,7 @@ pub fn prefill(
 /// [`DFlashChainStepper::step`] with the concrete Qwen3.5 target
 /// resolved to its trait impl.
 pub fn decode_step(
-    target_text: Arc<Qwen3_5TextModel>,
+    target_text: &Qwen3_5TextModel,
     draft: &DFlashDraftModel,
     stepper: &DFlashChainStepper,
     last_committed_token: u32,
@@ -106,7 +104,7 @@ pub struct GreedyRunOutcome {
 /// smoke-bench binary can call one function and get end-to-end
 /// numbers without reimplementing prefill + decode-loop plumbing.
 pub fn run_greedy(
-    target_text: Arc<Qwen3_5TextModel>,
+    target_text: &Qwen3_5TextModel,
     draft: &DFlashDraftModel,
     stepper: &DFlashChainStepper,
     prompt_ids: &Tensor,
@@ -118,7 +116,7 @@ pub fn run_greedy(
     // stepper owns the ring behind a Mutex; lock for the append.
     let (first_tok, mut past_kv_len) = {
         let mut ring = stepper.ring().lock().unwrap();
-        prefill(&target_text, &mut ring, stepper.config(), prompt_ids)?
+        prefill(target_text, &mut ring, stepper.config(), prompt_ids)?
     };
     let mut generated: Vec<u32> = Vec::with_capacity(max_new_tokens);
     generated.push(first_tok);
@@ -133,7 +131,7 @@ pub fn run_greedy(
 
     while generated.len() < max_new_tokens {
         let outcome = decode_step(
-            Arc::clone(&target_text),
+            target_text,
             draft,
             stepper,
             last_tok,

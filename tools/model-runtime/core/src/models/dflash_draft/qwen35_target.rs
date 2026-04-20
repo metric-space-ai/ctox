@@ -20,8 +20,6 @@
 //! a new field or the rotary embedding changes, the DFlash helper
 //! sits right there and is easy to keep in sync.
 
-use std::sync::Arc;
-
 use candle_core::{Result, Tensor};
 use candle_nn::Embedding;
 
@@ -29,28 +27,29 @@ use super::capture::FeatureCapture;
 use super::target::DFlashTargetForward;
 use crate::vision_models::qwen3_5::Qwen3_5TextModel;
 
-/// Owns a shared handle to the Qwen3.5 text model. Created alongside
-/// the target pipeline so target and stepper see exactly the same
-/// weights and KV cache.
+/// Borrowed handle to the Qwen3.5 text model.
 ///
-/// `Arc<Qwen3_5TextModel>` keeps the struct cheap to clone when the
-/// async pipeline needs the stepper on one thread and the scheduler
-/// on another.
-pub struct Qwen35DFlashTarget {
-    text: Arc<Qwen3_5TextModel>,
+/// Lifetime `'a` ties the target to the lifetime of the borrow of
+/// `Qwen3_5TextModel` the caller supplies — typically the duration of
+/// one `DFlashPipeline::step` invocation, during which the caller
+/// holds the target pipeline's mutex lock. No Arc-sharing because the
+/// text model sits inside `VisionPipeline::model: Box<dyn VisionModel>`
+/// and isn't Arc-wrapped there.
+pub struct Qwen35DFlashTarget<'a> {
+    text: &'a Qwen3_5TextModel,
 }
 
-impl Qwen35DFlashTarget {
-    pub fn new(text: Arc<Qwen3_5TextModel>) -> Self {
+impl<'a> Qwen35DFlashTarget<'a> {
+    pub fn new(text: &'a Qwen3_5TextModel) -> Self {
         Self { text }
     }
 
     pub fn text(&self) -> &Qwen3_5TextModel {
-        &self.text
+        self.text
     }
 }
 
-impl DFlashTargetForward for Qwen35DFlashTarget {
+impl<'a> DFlashTargetForward for Qwen35DFlashTarget<'a> {
     fn forward_with_capture(
         &self,
         input_ids: &Tensor,

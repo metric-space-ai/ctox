@@ -914,6 +914,20 @@ pub trait Pipeline:
     fn encoder_cache_counters(&self) -> Option<(Arc<AtomicUsize>, Arc<AtomicUsize>)> {
         None
     }
+
+    /// DFlash speculative-decoding hook: return a borrow of the
+    /// underlying hybrid-Qwen3.5 text model so
+    /// `DFlashPipeline::step` can call
+    /// `forward_with_dflash_capture` directly on the concrete type.
+    /// Default returns `None` (not a DFlash-compatible target). The
+    /// borrow's lifetime is tied to `&self`, i.e. valid as long as
+    /// the caller holds the Pipeline's mutex lock — which is
+    /// exactly the span `DFlashPipeline::step` operates in.
+    fn dflash_text_model(
+        &self,
+    ) -> Option<&crate::vision_models::qwen3_5::Qwen3_5TextModel> {
+        None
+    }
 }
 
 pub(crate) fn extract_logits(

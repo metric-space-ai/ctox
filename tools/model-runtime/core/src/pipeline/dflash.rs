@@ -38,8 +38,8 @@ use crate::{
     get_mut_arcmutex,
     kv_cache::{CacheManager, HybridCacheManager, NormalCacheManager},
     models::dflash_draft::{
-        DFlashChainStepper, DFlashDraftConfig, DFlashDraftModel, Qwen35DFlashTarget,
-        TargetFeatureRing, DEFAULT_RING_CAP,
+        DFlashChainStepper, DFlashDraftConfig, DFlashDraftModel, TargetFeatureRing,
+        DEFAULT_RING_CAP,
     },
     prefix_cacher::PrefixCacheManagerV2,
     sequence::Sequence,
@@ -133,22 +133,6 @@ impl DFlashPipeline {
         })
     }
 
-    /// Attempt to wrap the inner target pipeline as a
-    /// [`Qwen35DFlashTarget`]. Fails if the target is not a hybrid
-    /// Qwen3.5 (the only architecture the reference DFlash draft
-    /// was trained for). Called at the top of `step` so the error
-    /// fires early and clearly.
-    fn wrap_target(&self) -> Result<Qwen35DFlashTarget> {
-        // Future-proof: once we support multiple target architectures
-        // (e.g., the Qwen3.6 MoE variant) this will dispatch on
-        // `target.get_metadata().model_id()` or similar. For now just
-        // a TODO marker — the scheduler wiring that actually reaches
-        // a live target lands in the next commit.
-        candle_core::bail!(
-            "DFlashPipeline::wrap_target is not yet wired — the next commit plumbs \
-             the concrete Qwen3.5 text model through from the loader."
-        )
-    }
 }
 
 impl PreProcessingMixin for DFlashPipeline {
@@ -276,16 +260,18 @@ impl Pipeline for DFlashPipeline {
     async fn step(
         &mut self,
         input_seqs: &mut [&mut Sequence],
-        _is_prompt: bool,
+        is_prompt: bool,
         _return_raw_logits: bool,
         _prefix_cacher: &mut PrefixCacheManagerV2,
         _disable_eos_stop: bool,
         _rng: Arc<Mutex<Isaac64Rng>>,
         backend_metadata: CacheBackendMetadata,
     ) -> Result<Duration> {
+        use crate::models::dflash_draft::{decode_step, prefill, StepperOpts};
+
         // Pre-op cache handling — mirror the SpeculativePipeline
-        // behaviour so the engine scheduler's pre/post hooks still
-        // match up with our delegation above.
+        // behaviour so the engine scheduler's pre/post hooks stay
+        // consistent.
         let _post_op = match backend_metadata {
             CacheBackendMetadata::DefaultInstructions { pre_op, post_op } => {
                 match pre_op {
@@ -310,17 +296,117 @@ impl Pipeline for DFlashPipeline {
             }
         };
 
-        // Actual chain-verify step is landed in the next commit —
-        // lands a ~300-line `step` body that orchestrates the ring
-        // seed, draft forward, target verify, and accept loop.
-        let _stepper = Arc::clone(&self.stepper);
-        let _draft = Arc::clone(&self.draft);
-        let _target = self.wrap_target()?;
-        candle_core::bail!(
-            "DFlashPipeline::step body is wired for commit 11 — the loader / CLI / \
-             scheduler plumbing that actually reaches this path lands first so the \
-             step implementation can run against a live target."
-        )
+        // Single-sequence only in this first port (`max_seqs = 1` is
+        // also what the dflash reference benchmarks). Batching
+        // across concurrent requests would need one feature ring +
+        // last-token slot per seq; add when the first single-seq
+        // results are in.
+        if input_seqs.len() != 1 {
+            candle_core::bail!(
+                "DFlashPipeline::step: batch size {} > 1 is not supported yet",
+                input_seqs.len()
+            );
+        }
+
+        let t_start = std::time::Instant::now();
+
+        // Reach the concrete Qwen3.5 text model behind the target
+        // pipeline. The Pipeline trait's `dflash_text_model` hook
+        // returns `Some(&Qwen3_5TextModel)` only when the inner
+        // model is the hybrid Qwen3.5 the DFlash draft was trained
+        // for; everything else errors out clearly.
+        let target_guard = self.target.lock().await;
+        let target_text = target_guard.dflash_text_model().ok_or_else(|| {
+            candle_core::Error::msg(
+                "DFlashPipeline::step: target is not a Qwen3.5 vision pipeline. \
+                 DFlash requires the hybrid-Qwen3.5 target the reference draft \
+                 was trained for (e.g. Qwen/Qwen3.5-27B).",
+            )
+        })?;
+        let draft = self.draft.as_ref();
+        let stepper = self.stepper.as_ref();
+        let seq = &mut input_seqs[0];
+        let opts = StepperOpts::default();
+
+        if is_prompt {
+            // Prefill path: the sequence carries the prompt tokens;
+            // feed them through the target with capture, seed the
+            // ring, greedy-sample the first new token, commit it to
+            // the sequence. We also record this as the
+            // `last_committed` token for subsequent decode steps.
+            let prompt_toks: Vec<u32> = seq.get_toks().to_vec();
+            let prompt_len = prompt_toks.len();
+            if prompt_len == 0 {
+                candle_core::bail!("DFlashPipeline::step: is_prompt=true but seq has no tokens");
+            }
+            let device = target_text.device().clone();
+            let input_ids = Tensor::from_vec(prompt_toks, (1, prompt_len), &device)?;
+
+            let (first_tok, _past_kv_len) = {
+                let mut ring = stepper.ring().lock().unwrap();
+                prefill(target_text, &mut ring, stepper.config(), &input_ids)?
+            };
+            self.last_committed
+                .lock()
+                .unwrap()
+                .insert(*seq.id(), Some(first_tok));
+            return Ok(t_start.elapsed());
+        }
+
+        // Decode path: one chain-verify round. Pull the last
+        // committed token we stashed at prefill time.
+        let last_committed_token = {
+            let map = self.last_committed.lock().unwrap();
+            match map.get(seq.id()).copied().flatten() {
+                Some(t) => t,
+                None => candle_core::bail!(
+                    "DFlashPipeline::step: decode without prior prefill for seq {}",
+                    seq.id()
+                ),
+            }
+        };
+        // Current KV length of the target's hybrid cache == how many
+        // tokens have been committed so far minus one (the last
+        // committed token is re-fed as the first element of the
+        // verify block, not yet absorbed into the cache). This
+        // matches the behaviour of speculative.rs where the target
+        // verify forward starts at `past = current_seq_len`.
+        let past_kv_len = seq.get_toks().len().saturating_sub(1);
+
+        let outcome = decode_step(
+            target_text,
+            draft,
+            stepper,
+            last_committed_token,
+            past_kv_len,
+            &opts,
+        )?;
+
+        let mut new_last = last_committed_token;
+        for tok in outcome.accepted.iter().copied() {
+            // Append without running the full scheduler-level token
+            // post-processing (finish-on-EOS etc.) — the outer
+            // scheduler does its own EOS check on `seq.get_toks()`.
+            // For a first port this matches
+            // `speculative.rs::finish_or_add_toks_to_seq` call sites
+            // where the logit-probs + chat-template completion
+            // machinery wrap the low-level token append.
+            seq.add_tmp_tok(tok);
+            new_last = tok;
+        }
+        // Flip add_tmp_tok's `is_tmp` so the token count reflected
+        // by seq.len() stays consistent with the scheduler's
+        // expectations. `add_tmp_tok` + `remove_tmp_tok` is the
+        // speculative-decoding idiom for batched commits; here we
+        // commit for real, not tentatively.
+        seq.remove_tmp_tok(0);
+
+        self.last_committed
+            .lock()
+            .unwrap()
+            .insert(*seq.id(), Some(new_last));
+
+        Ok(t_start.elapsed())
     }
 
     fn category(&self) -> ModelCategory {

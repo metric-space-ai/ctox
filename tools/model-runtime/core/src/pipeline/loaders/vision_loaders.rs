@@ -108,6 +108,16 @@ pub trait VisionModel: IsqModel + AnyMoeBaseModelMixin {
     /// Reset model-specific state (e.g. cached audio embeddings) between requests.
     /// Called when the pipeline's non-granular state is reset.
     fn reset_model_specific_state(&self) {}
+
+    /// DFlash hook. `VisionPipeline` delegates to this so the
+    /// `Pipeline::dflash_text_model` accessor can reach the concrete
+    /// Qwen3.5 text model without boxing or Arc-sharing. Default
+    /// `None` — only `Qwen3_5Model` returns `Some`.
+    fn dflash_text_model(
+        &self,
+    ) -> Option<&crate::vision_models::qwen3_5::Qwen3_5TextModel> {
+        None
+    }
 }
 
 pub trait VisionModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoader {

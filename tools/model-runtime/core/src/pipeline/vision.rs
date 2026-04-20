@@ -1211,6 +1211,12 @@ impl Pipeline for VisionPipeline {
     )> {
         self.model.encoder_cache_counters()
     }
+
+    fn dflash_text_model(
+        &self,
+    ) -> Option<&crate::vision_models::qwen3_5::Qwen3_5TextModel> {
+        self.model.dflash_text_model()
+    }
 }
 
 impl AnyMoePipelineMixin for VisionPipeline {

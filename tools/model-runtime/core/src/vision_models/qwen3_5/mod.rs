@@ -556,6 +556,10 @@ impl VisionModel for Qwen3_5Model {
                 .counters(),
         )
     }
+
+    fn dflash_text_model(&self) -> Option<&Qwen3_5TextModel> {
+        Some(&self.text)
+    }
 }
 
 impl IsqModel for Qwen3_5Model {
