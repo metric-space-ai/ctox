@@ -561,7 +561,7 @@ impl Loader for VisionLoader {
             && self.config.calibration_file.is_none()
             && in_situ_quant.is_some();
 
-        let runtime_policy = crate::utils::normal::RuntimeLoadPolicy::from_env();
+        let mut runtime_policy = crate::utils::normal::RuntimeLoadPolicy::from_env();
 
         let mut immediate_ty = None;
         let mut immediate_predicates = Vec::new();
@@ -603,6 +603,14 @@ impl Loader for VisionLoader {
                 );
             }
         }
+
+        // The Cached MoE backend needs the target IsqType at load time (it
+        // quantizes experts on CPU before staging them into the pool), but
+        // the framework-wide immediate-ISQ state lives in a thread_local
+        // that rayon layer-load workers can't see. Copy it onto the policy
+        // explicitly so load_cached can pick it up regardless of which
+        // thread runs it.
+        runtime_policy.moe.cache_requested_isq = immediate_ty.or(in_situ_quant);
 
         // Logic for ISQ here: if no calibration (i.e imatrix), then allow immediate ISQ. Otherwise, back to normal.
         let mut loading_isq = if use_immediate {

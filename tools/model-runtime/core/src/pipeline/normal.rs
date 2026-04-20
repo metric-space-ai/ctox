@@ -552,7 +552,7 @@ impl Loader for NormalLoader {
             && self.config.calibration_file.is_none()
             && in_situ_quant.is_some();
 
-        let runtime_policy = crate::utils::normal::RuntimeLoadPolicy::from_env();
+        let mut runtime_policy = crate::utils::normal::RuntimeLoadPolicy::from_env();
 
         let mut immediate_ty = None;
         let mut immediate_predicates = Vec::new();
@@ -569,6 +569,11 @@ impl Loader for NormalLoader {
                 warn!("No predicates for this model and ISQ setting detected. ISQ will not be applied to any weights!");
             }
         }
+        // Expose the resolved ISQ type on the MoE policy so the Cached
+        // backend can quantize experts before staging them into its pool
+        // (the framework-wide immediate-ISQ state is thread-local and
+        // invisible to rayon layer-load workers).
+        runtime_policy.moe.cache_requested_isq = immediate_ty.or(in_situ_quant);
 
         let use_immediate = allow_immediate_cli || has_override_isq;
         if use_immediate {

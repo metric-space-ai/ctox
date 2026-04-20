@@ -247,6 +247,10 @@ impl RuntimeLoadPolicy {
                     .and_then(|s| s.trim().parse::<usize>().ok())
                     .filter(|&mb| mb > 0)
                     .map(|mb| mb * 1024 * 1024),
+                // Populated by the pipeline after it computes immediate_ty
+                // from the ISQ config; we can't read it here because that
+                // state is per-pipeline, not env-driven.
+                cache_requested_isq: None,
             },
         }
     }

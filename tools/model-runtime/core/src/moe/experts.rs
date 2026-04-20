@@ -54,6 +54,12 @@ pub struct MoEExecutionPolicy {
     /// fails if the warm tier would exceed this budget. Ignored on unified
     /// memory and CPU-only topologies.
     pub cache_warm_tier_budget_bytes: Option<usize>,
+    /// Target ISQ type for cached experts. The framework-wide immediate-ISQ
+    /// state lives in a `thread_local!` that only the main load thread sets,
+    /// so rayon-parallel layer constructors can't read it — without this
+    /// explicit copy the Cached backend would silently stage BF16 weights
+    /// into the pool (~4x the intended RAM / SSD footprint).
+    pub cache_requested_isq: Option<engine_quant::IsqType>,
 }
 
 /// Backend selection for MoE experts
@@ -417,6 +423,7 @@ impl MoEExperts {
                     layer_device.clone(),
                     capacity,
                     policy.cache_warm_tier_budget_bytes,
+                    policy.cache_requested_isq,
                 )?)
             }
         };
@@ -603,6 +610,7 @@ impl MoEExperts {
         layer_device: Device,
         capacity: usize,
         warm_tier_budget_bytes: Option<usize>,
+        requested_isq: Option<engine_quant::IsqType>,
     ) -> Result<CachedExpertsWeights> {
         let packed = PackedExperts::new(
             cfg.num_experts,
@@ -647,8 +655,17 @@ impl MoEExperts {
         // serialized straight to the pool and never touched on CUDA, and the
         // resident slots are promoted to CUDA via `deserialize(bytes, cuda)`
         // inside `MoEExpertCache::new` anyway.
-        if let Some(params) = engine_quant::get_immediate_isq() {
-            if let Some(isq_ty) = params.ty {
+        //
+        // IsqType is threaded in via `MoEExecutionPolicy::cache_requested_isq`
+        // and falls back to `get_immediate_isq()` for code paths that haven't
+        // been updated to pass the policy yet. Thread-local lookup only works
+        // on the main load thread — rayon-parallel layer loading makes the
+        // thread-local invisible to workers.
+        let isq_ty_opt = requested_isq.or_else(|| {
+            engine_quant::get_immediate_isq().and_then(|p| p.ty)
+        });
+        if let Some(isq_ty) = isq_ty_opt {
+            {
                 let guard = engine_quant::QuantizeOntoGuard::new();
                 let counter = std::sync::atomic::AtomicUsize::new(0);
                 for t in triples.iter_mut() {
