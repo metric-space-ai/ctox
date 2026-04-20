@@ -765,7 +765,22 @@ impl MoEExperts {
         // Only meaningful on CUDA with a Q-dtype the MoE kernel supports
         // (Q4K/Q5K/Q6K/Q8_0). On other backends the stacked build is
         // skipped and the forward falls through to the per-expert loop.
-        let fused = if capacity >= cfg.num_experts
+        // Fused grouped-GEMM path is gated off by default: byte-concat
+        // stacking of per-expert Q4K QTensors hit a libcuda segfault
+        // (address 0x...020, offset +f82000 in libcuda.so.580.105.08)
+        // during load on our A6000 — almost certainly Q4K block
+        // alignment vs. Vec<u8>'s 1-byte alignment. The safe default is
+        // the no-pool Cached path below, which already saves the 15 GiB
+        // of host RAM that the pool would hold at all-resident; the
+        // decode-tps ceiling from the Slow-loop dispatch remains a
+        // follow-up. Opt back in via `ENGINE_MOE_FUSED_ALL_RESIDENT=1`
+        // after stacking is hardened (see [`stack_gguf_experts`] in
+        // engine_quant).
+        let fused_opt_in = std::env::var("ENGINE_MOE_FUSED_ALL_RESIDENT")
+            .map(|v| matches!(v.as_str(), "1" | "true" | "yes"))
+            .unwrap_or(false);
+        let fused = if fused_opt_in
+            && capacity >= cfg.num_experts
             && layer_device.is_cuda()
             && triples.first().map(|t| t.gate.name() == "gguf").unwrap_or(false)
         {

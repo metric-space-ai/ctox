@@ -472,11 +472,24 @@ impl Engine {
                 .eos_tok
                 .clone();
 
+            let _cat = get_mut_arcmutex!(self.pipeline).category();
+            let _dpc = get_mut_arcmutex!(self.pipeline).do_preallocated_cache();
+            let _uniform = {
+                let metadata = get_mut_arcmutex!(self.pipeline).get_metadata();
+                metadata
+                    .model_metadata
+                    .as_ref()
+                    .map(|m| m.has_uniform_kv_geometry())
+                    .unwrap_or(true)
+            };
+            eprintln!(
+                "[gemma4-trace] add_request: category={:?} do_preallocated={} uniform={}",
+                _cat, _dpc, _uniform
+            );
             let seq_preallocated_cache = if matches!(
-                get_mut_arcmutex!(self.pipeline).category(),
+                _cat,
                 ModelCategory::Text | ModelCategory::Vision { .. }
-            ) && get_mut_arcmutex!(self.pipeline)
-                .do_preallocated_cache()
+            ) && _dpc
                 && {
                     // Skip preallocation when the model's decoder layers have
                     // heterogeneous KV geometry (e.g. Gemma 4 hybrid attention
@@ -484,12 +497,7 @@ impl Engine {
                     // single preallocated `(1, num_kv_heads, seq, head_dim)`
                     // shape cannot represent mixed-geometry layers without a
                     // shape mismatch on `KvCache::append`.
-                    let metadata = get_mut_arcmutex!(self.pipeline).get_metadata();
-                    metadata
-                        .model_metadata
-                        .as_ref()
-                        .map(|m| m.has_uniform_kv_geometry())
-                        .unwrap_or(true)
+                    _uniform
                 }
             {
                 let metadata = get_mut_arcmutex!(self.pipeline).get_metadata();
