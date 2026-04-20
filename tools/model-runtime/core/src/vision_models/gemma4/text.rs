@@ -528,8 +528,15 @@ impl Attention {
                 // Eager attention path, use normal kv_caches.
                 let (k, v) = if let Some(donor_idx) = self.kv_shared_layer_index {
                     let donor_cache = &kv_caches[donor_idx];
-                    let dk = donor_cache.k()?.unwrap().to_device(q.device())?;
-                    let dv = donor_cache.v()?.unwrap().to_device(q.device())?;
+                    // Donor cache already lives on the right device — skipping
+                    // the `.to_device()` avoids 2 extra tensor-id registrations
+                    // per shared-KV layer per decode step. On Gemma 4 E4B
+                    // that's 18 × 2 = 36 allocations per token we were paying
+                    // for no reason.
+                    let dk = donor_cache.k()?.unwrap();
+                    let dv = donor_cache.v()?.unwrap();
+                    debug_assert!(dk.device().same_device(q.device()));
+                    debug_assert!(dv.device().same_device(q.device()));
                     (dk, dv)
                 } else {
                     kv_caches[self.layer_idx].append(&k, &v)?
