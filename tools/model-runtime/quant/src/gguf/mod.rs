@@ -686,8 +686,7 @@ pub fn stack_gguf_experts(
         let bytes = e.serialize().map_err(|err| {
             candle_core::Error::msg(format!("stack_gguf_experts: serialize[{i}] failed: {err}"))
         })?;
-        let bytes_slice: &[u8] = &bytes;
-        let mut cur = std::io::Cursor::new(bytes_slice);
+        let mut cur = std::io::Cursor::new(bytes.as_ref());
         // version (u32) + type (u8) + w_len (u32) + has_bias (u8)
         // + dtype (u32) + shape_len (u32) + dims (u32 each) + w bytes
         let _version = cur.read_u32::<LittleEndian>()?;
@@ -734,7 +733,7 @@ pub fn stack_gguf_experts(
         }
         // Now cursor is at the start of the raw W bytes.
         let offset = cur.position() as usize;
-        let w_slice = &bytes_slice[offset..offset + w_len];
+        let w_slice = &bytes[offset..offset + w_len];
         if let Some(fs) = &first_shape {
             if fs != &shape {
                 candle_core::bail!(
