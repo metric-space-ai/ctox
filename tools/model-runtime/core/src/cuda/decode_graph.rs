@@ -106,6 +106,18 @@ pub struct DecodeGraph {
     min_warmups: u32,
 }
 
+// SAFETY: `CudaGraph` contains raw `*mut CUgraph_st` / `*mut CUgraphExec_st`
+// pointers which cudarc marks !Send. In practice the CUDA graph objects
+// are thread-safe as long as API calls on the same graph are serialized
+// externally — cudarc's own docs state this. In CTOX every `DecodeGraph`
+// lives inside `Qwen3_5MoeTextModel`, which itself is wrapped in a
+// `std::sync::Mutex<Option<DecodeGraph>>` *and* the enclosing pipeline
+// is behind `Arc<tokio::sync::Mutex<dyn Pipeline>>`. So access is
+// serialized at two levels; the marker here just documents what the
+// runtime guarantees.
+unsafe impl Send for DecodeGraph {}
+unsafe impl Sync for DecodeGraph {}
+
 impl DecodeGraph {
     /// Construct a new `DecodeGraph` bound to the given CUDA device's
     /// stream. The graph isn't captured yet; the first `run` call runs
