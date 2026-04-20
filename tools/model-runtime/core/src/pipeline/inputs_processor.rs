@@ -671,6 +671,27 @@ pub mod text_models_inputs_processor {
                 let raw_blocks = table.len();
                 let max_needed = context_len.div_ceil(block_size);
                 let num_blocks = raw_blocks.min(max_needed);
+                if raw_blocks > max_needed {
+                    // Firing here indicates a caller bug: the caller over-
+                    // reserved blocks relative to the token count. Known
+                    // case: speculative decoding's draft loop between
+                    // `seq.add_tmp_tok` and KV commit. The cap below keeps
+                    // the paged-attn kernel consistent with `context_len`
+                    // but the KV state may still diverge across the
+                    // accept/reject boundary, producing degenerate output
+                    // (e.g. token repetition). Log once per process so the
+                    // root-cause fix is visible.
+                    static WARNED_ONCE: std::sync::Once = std::sync::Once::new();
+                    WARNED_ONCE.call_once(|| {
+                        tracing::warn!(
+                            "paged-kv: capping over-reserved block table \
+                             (raw={} max_needed={} context_len={} block_size={}). \
+                             Downstream output may be incorrect — see \
+                             SPEC_DECODING_BUGS.md for the KV-sync root cause.",
+                            raw_blocks, max_needed, context_len, block_size
+                        );
+                    });
+                }
                 nnz_pages += num_blocks as i32;
                 paged_kv_indptr.push(nnz_pages);
                 paged_kv_indices.extend(table.iter().take(num_blocks).map(|x| *x as i32));
