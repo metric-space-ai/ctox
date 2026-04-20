@@ -283,13 +283,15 @@ struct SlowExpertsWeights {
 /// kernel (one kernel launch per projection per layer) instead of the
 /// per-expert loop — same performance as the native `Fast` backend, but
 /// loaded via the Cached backend's per-expert ISQ path so we don't peak
-/// at 60 GiB of BF16 weights during load.
+/// at 60 GiB of BF16 weights during load. In that mode `cache` is `None`
+/// because no tiering is needed and keeping the per-expert Arcs around
+/// would double the per-layer VRAM footprint.
 struct CachedExpertsWeights {
-    cache: Arc<MoEExpertCache>,
-    /// All-resident grouped-GEMM fast path. `Some(_)` iff the cache holds
-    /// every expert resident and the per-expert QuantMethods were stackable
-    /// into a single rank-3 `(num_experts, out, in)` QTensor.
+    cache: Option<Arc<MoEExpertCache>>,
+    /// All-resident grouped-GEMM fast path. `Some(_)` iff stacking
+    /// succeeded; implies `cache` is `None`.
     fused: Option<FastExpertsWeights>,
+    num_experts: usize,
 }
 
 /// MoE experts layer without gate
@@ -765,10 +767,11 @@ impl MoEExperts {
         // Only meaningful on CUDA with a Q-dtype the MoE kernel supports
         // (Q4K/Q5K/Q6K/Q8_0). On other backends the stacked build is
         // skipped and the forward falls through to the per-expert loop.
-        let fused = if capacity >= cfg.num_experts
+        let want_fuse = capacity >= cfg.num_experts
             && layer_device.is_cuda()
-            && triples.first().map(|t| t.gate.name() == "gguf").unwrap_or(false)
-        {
+            && triples.first().map(|t| t.gate.name() == "gguf").unwrap_or(false);
+
+        if want_fuse {
             let t_fuse = std::time::Instant::now();
             let gate_arcs: Vec<_> = triples.iter().map(|t| t.gate.clone()).collect();
             let up_arcs: Vec<_> = triples.iter().map(|t| t.up.clone()).collect();
@@ -781,27 +784,37 @@ impl MoEExperts {
                 (Ok(g), Ok(u), Ok(d)) => {
                     tracing::info!(
                         "Cached MoE: built fused grouped-GEMM tensors for {} experts in {}ms \
-                         — forward will dispatch via single gather kernel",
+                         — forward dispatches via single gather kernel, cache skipped",
                         triples.len(),
                         t_fuse.elapsed().as_millis(),
                     );
-                    Some(FastExpertsWeights {
-                        fused_gate_proj: g,
-                        fused_up_proj: u,
-                        fused_down_proj: d,
-                    })
+                    // Drop per-expert arcs: the stacked tensors already
+                    // hold bit-identical bytes on the device. Keeping both
+                    // would double the per-layer VRAM footprint.
+                    let num_experts = triples.len();
+                    drop(triples);
+                    drop(gate_arcs);
+                    drop(up_arcs);
+                    drop(down_arcs);
+                    return Ok(CachedExpertsWeights {
+                        cache: None,
+                        fused: Some(FastExpertsWeights {
+                            fused_gate_proj: g,
+                            fused_up_proj: u,
+                            fused_down_proj: d,
+                        }),
+                        num_experts,
+                    });
                 }
                 _ => {
                     tracing::warn!(
                         "Cached MoE: grouped-GEMM stacking failed — falling back to per-expert loop"
                     );
-                    None
                 }
             }
-        } else {
-            None
-        };
+        }
 
+        let num_experts = triples.len();
         let cache = MoEExpertCache::new(
             triples,
             CacheConfig {
@@ -816,8 +829,9 @@ impl MoEExperts {
         )?;
 
         Ok(CachedExpertsWeights {
-            cache: Arc::new(cache),
-            fused,
+            cache: Some(Arc::new(cache)),
+            fused: None,
+            num_experts,
         })
     }
 
@@ -1205,7 +1219,12 @@ impl MoEExperts {
 
         let routing_weights = topk_weights.to_dtype(DType::F32)?.to_vec2::<f32>()?;
         let experts_per_tok = topk_ids.to_vec2::<u32>()?;
-        let num_experts = weights.cache.num_experts();
+        let cache = weights.cache.as_ref().ok_or_else(|| {
+            candle_core::Error::msg(
+                "forward_cached: cache missing and fused path wasn't taken — invariant broken",
+            )
+        })?;
+        let num_experts = weights.num_experts;
 
         let mut top_x = vec![vec![]; num_experts];
         let mut selected_experts = vec![vec![]; num_experts];
@@ -1234,7 +1253,7 @@ impl MoEExperts {
             .filter(|(_, v)| !v.is_empty())
             .map(|(i, _)| i)
             .collect();
-        weights.cache.prefetch_many(&active);
+        cache.prefetch_many(&active);
 
         let mut ys = xs.zeros_like()?;
         for expert_idx in 0..num_experts {
@@ -1246,7 +1265,7 @@ impl MoEExperts {
             // Pull this expert into VRAM (may evict LFU victim + materialize
             // from warm/cold tier). `triple` holds cheap Arc clones that
             // survive even if the slot is later demoted again.
-            let triple = weights.cache.ensure_resident(expert_idx)?;
+            let triple = cache.ensure_resident(expert_idx)?;
 
             let top_x_tensor = Tensor::new(top_x_expert.as_slice(), xs.device())?;
             let selected_experts_tensor =

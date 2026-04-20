@@ -532,6 +532,18 @@ impl Attention {
                     let dv = donor_cache.v()?.unwrap().to_device(q.device())?;
                     (dk, dv)
                 } else {
+                    if std::env::var_os("ENGINE_GEMMA4_APPEND_TRACE").is_some() {
+                        let existing_k =
+                            kv_caches[self.layer_idx].k()?.map(|t| t.dims().to_vec());
+                        eprintln!(
+                            "[gemma4-trace] layer={} sliding={} append k.shape={:?} v.shape={:?} existing_k={:?}",
+                            self.layer_idx,
+                            self.is_sliding,
+                            k.dims(),
+                            v.dims(),
+                            existing_k,
+                        );
+                    }
                     kv_caches[self.layer_idx].append(&k, &v)?
                 };
 
@@ -1106,7 +1118,14 @@ impl ModelConfigLike for Gemma4ModelConfigLike {
             .per_layer_num_kv_heads
             .iter()
             .all(|d| Some(*d) == first_kv);
-        k_uniform && v_uniform && kv_uniform
+        let result = k_uniform && v_uniform && kv_uniform;
+        eprintln!(
+            "[gemma4-trace] has_uniform_kv_geometry: k={k_uniform} v={v_uniform} kv={kv_uniform} -> {result} (k_dims={:?} v_dims={:?} kv_heads={:?})",
+            self.per_layer_k_head_dim,
+            self.per_layer_v_head_dim,
+            self.per_layer_num_kv_heads,
+        );
+        result
     }
 }
 
