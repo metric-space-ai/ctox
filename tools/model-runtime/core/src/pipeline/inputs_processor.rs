@@ -654,21 +654,35 @@ pub mod text_models_inputs_processor {
             let mut nnz_pages = 0i32;
             let block_size = paged_attn_input.block_size;
             for (table, context_len) in block_tables.iter().zip(paged_attn_context_lens.iter()) {
-                let num_blocks = table.len();
+                // Defensively cap the block count to ceil(context_len /
+                // block_size). Speculative decoding's draft loop can
+                // present a block table that's been reserved for more
+                // tokens than `seq.len()` currently reports (the spec
+                // path calls `seq.add_tmp_tok` without committing the
+                // new token to the KV manager until the verify pass
+                // accepts or rejects). Without the cap the `last_page_len`
+                // math underflows and we panic — with it the paged-attn
+                // kernel just sees exactly the blocks that back the
+                // current `context_len` and ignores the reserved tail.
+                //
+                // This is safe for non-spec callers because they keep
+                // `table.len() == ceil(context_len / block_size)` as an
+                // invariant, so the cap is a no-op there.
+                let raw_blocks = table.len();
+                let max_needed = context_len.div_ceil(block_size);
+                let num_blocks = raw_blocks.min(max_needed);
                 nnz_pages += num_blocks as i32;
                 paged_kv_indptr.push(nnz_pages);
-                paged_kv_indices.extend(table.iter().map(|x| *x as i32));
+                paged_kv_indices.extend(table.iter().take(num_blocks).map(|x| *x as i32));
                 let last_page_len = if num_blocks == 0 {
                     0usize
                 } else {
                     let consumed = (num_blocks - 1) * block_size;
-                    if *context_len < consumed {
-                        panic!(
-                            "paged kv context len underflow: context_len={} consumed={}",
-                            context_len, consumed
-                        );
-                    }
-                    *context_len - consumed
+                    // After the cap above, `context_len >= consumed` always
+                    // holds: `num_blocks <= ceil(context_len/block_size)`
+                    // implies `(num_blocks - 1) * block_size < context_len`.
+                    debug_assert!(*context_len >= consumed);
+                    context_len.saturating_sub(consumed)
                 };
                 paged_kv_last_page_len.push(last_page_len as i32);
             }
