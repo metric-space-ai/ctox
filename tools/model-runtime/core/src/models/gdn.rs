@@ -258,9 +258,20 @@ pub enum GdnWeightMode {
 }
 
 impl GatedDeltaNet {
+    /// Default to the custom CUDA recurrence kernel on CUDA devices — the
+    /// pure-candle fallback does ~10 tensor ops per seq step in Rust,
+    /// which on a Qwen3.6-35B-A3B (30 of 40 layers are GatedDeltaNet)
+    /// adds ~300 kernel launches per decode token and dominates the
+    /// tok/s budget. The custom kernel keeps the entire recurrence on
+    /// the device inside one launch. Set
+    /// `ENGINE_DISABLE_GDN_CUDA_KERNEL=1` to force the fallback for
+    /// debugging (e.g. if a new model breaks the kernel's shape
+    /// assumptions).
     #[cfg(feature = "cuda")]
     fn use_custom_cuda_recurrence() -> bool {
-        std::env::var_os("ENGINE_FORCE_GDN_CUDA_KERNEL").is_some()
+        !std::env::var("ENGINE_DISABLE_GDN_CUDA_KERNEL")
+            .map(|v| matches!(v.as_str(), "1" | "true" | "yes"))
+            .unwrap_or(false)
     }
 
     pub fn load(
