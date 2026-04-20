@@ -251,16 +251,30 @@ impl StaticPool {
     }
 
     fn new_ssd(slot_size: u64, num_experts: usize, path: PathBuf) -> Result<Self> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(candle_core::Error::wrap)?;
-        }
+        // `path` from the caller is the user-facing cold-tier *directory*
+        // (e.g. `/tmp/moe_cache_ssd`). Each `MoEExpertCache` needs its own
+        // file inside it so 40+ concurrent layer-load constructions don't
+        // collide on one pool file. If the path isn't a directory yet, treat
+        // it as the target file and use its parent for probing.
+        let (backing_dir, file_path): (PathBuf, PathBuf) = if path.is_dir() || !path.exists() {
+            std::fs::create_dir_all(&path).map_err(candle_core::Error::wrap)?;
+            use std::sync::atomic::{AtomicUsize, Ordering};
+            static POOL_COUNTER: AtomicUsize = AtomicUsize::new(0);
+            let idx = POOL_COUNTER.fetch_add(1, Ordering::Relaxed);
+            let fname = format!("pool-{}-{idx:03}.bin", std::process::id());
+            (path.clone(), path.join(fname))
+        } else {
+            let parent = path.parent().map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
+            (parent, path.clone())
+        };
+        std::fs::create_dir_all(&backing_dir).map_err(candle_core::Error::wrap)?;
         let total_len = slot_size.saturating_mul(num_experts as u64);
         let file = OpenOptions::new()
             .create(true)
             .truncate(true)
             .read(true)
             .write(true)
-            .open(&path)
+            .open(&file_path)
             .map_err(candle_core::Error::wrap)?;
         file.set_len(total_len).map_err(candle_core::Error::wrap)?;
 
@@ -289,7 +303,7 @@ impl StaticPool {
             backing: PoolBacking::Ssd {
                 file,
                 mmap,
-                path: path.clone(),
+                path: file_path,
             },
         })
     }
@@ -578,27 +592,17 @@ impl MoEExpertCache {
             let down_bytes = triple.down.serialize()?;
             pool.write_slot(idx, &gate_bytes, &up_bytes, &down_bytes)?;
             if idx < capacity {
-                // Drop the (possibly-on-CPU) triple; reconstitute on target device.
+                // `serialize()` returns a `Cow<[u8]>` that may borrow from the
+                // triple's internal tensors, so detach before dropping the
+                // source triple, then reconstitute on the target device.
+                let gate_owned: Cow<'static, [u8]> = Cow::Owned(gate_bytes.into_owned());
+                let up_owned: Cow<'static, [u8]> = Cow::Owned(up_bytes.into_owned());
+                let down_owned: Cow<'static, [u8]> = Cow::Owned(down_bytes.into_owned());
                 drop(triple);
                 let resident = ExpertTriple {
-                    gate: ReplicatedLayer::deserialize(
-                        Cow::Owned(gate_bytes),
-                        &device,
-                        &comm,
-                        guard.clone(),
-                    )?,
-                    up: ReplicatedLayer::deserialize(
-                        Cow::Owned(up_bytes),
-                        &device,
-                        &comm,
-                        guard.clone(),
-                    )?,
-                    down: ReplicatedLayer::deserialize(
-                        Cow::Owned(down_bytes),
-                        &device,
-                        &comm,
-                        guard.clone(),
-                    )?,
+                    gate: ReplicatedLayer::deserialize(gate_owned, &device, &comm, guard.clone())?,
+                    up: ReplicatedLayer::deserialize(up_owned, &device, &comm, guard.clone())?,
+                    down: ReplicatedLayer::deserialize(down_owned, &device, &comm, guard.clone())?,
                 };
                 slots.push(SlotState::Resident(resident));
             } else {
