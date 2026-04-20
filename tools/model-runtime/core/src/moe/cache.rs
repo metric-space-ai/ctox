@@ -829,15 +829,49 @@ impl MoEExpertCache {
     }
 }
 
+/// Process-wide cache of the SSD probe result. Parallel layer-loads on
+/// Qwen3.6-scale MoE models run 40+ `MoEExpertCache::new` calls at once;
+/// each one calling `probe_ssd_bandwidth_mbps` would hit the same tmp
+/// file concurrently and race. We probe once per process per path and
+/// reuse the result — the answer doesn't change within a process
+/// lifetime anyway.
+static PROBE_RESULTS: std::sync::OnceLock<parking_lot::Mutex<hashbrown::HashMap<PathBuf, Option<u32>>>> =
+    std::sync::OnceLock::new();
+
 /// Measure sustained sequential-read throughput from a candidate SSD path.
 ///
-/// Writes a 64 MiB probe file, flushes the OS cache as best we can by
-/// re-opening, and times a read-to-completion. Returns `None` if the probe
-/// could not run. Callers should treat `None` as "cold tier unusable".
+/// Writes a 64 MiB probe file to a PID+thread-unique filename to avoid
+/// races when multiple MoE layers construct their caches in parallel,
+/// then flushes and times a read-to-completion. Caches the result per
+/// directory so repeated calls from sibling cache constructions don't
+/// re-run the probe.
+///
+/// Returns `None` if the probe could not run — callers treat that as
+/// "cold tier unusable" and fail the cache construction.
 pub fn probe_ssd_bandwidth_mbps(dir: &Path) -> Option<u32> {
+    let cache = PROBE_RESULTS.get_or_init(|| parking_lot::Mutex::new(hashbrown::HashMap::new()));
+    {
+        let guard = cache.lock();
+        if let Some(cached) = guard.get(dir) {
+            return *cached;
+        }
+    }
+
+    let result = probe_ssd_bandwidth_mbps_inner(dir);
+    cache.lock().insert(dir.to_path_buf(), result);
+    result
+}
+
+fn probe_ssd_bandwidth_mbps_inner(dir: &Path) -> Option<u32> {
     const PROBE_BYTES: usize = 64 * 1024 * 1024;
     std::fs::create_dir_all(dir).ok()?;
-    let probe = dir.join(".ctox_moe_cache_probe");
+    // Unique-per-process-and-thread probe filename so overlapping probe
+    // calls from parallel rayon workers don't truncate each other's file.
+    let probe = dir.join(format!(
+        ".ctox_moe_cache_probe-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id(),
+    ));
     let payload = vec![0u8; PROBE_BYTES];
     {
         let mut f = OpenOptions::new()
