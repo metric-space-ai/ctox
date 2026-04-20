@@ -706,6 +706,13 @@ impl Qwen3_5TextModel {
         self.embed_tokens.forward(input_ids)
     }
 
+    /// Public accessor for the device the text model resides on.
+    /// Used by the DFlash driver to allocate per-step input tensors
+    /// on the same device as the model weights.
+    pub fn device(&self) -> &Device {
+        &self.device
+    }
+
     /// Return a borrow of the raw `Embedding` layer.
     ///
     /// Used by the DFlash draft (see
