@@ -156,7 +156,20 @@ pub struct SpeculativePipeline {
     gamma: usize,
     metadata: Arc<GeneralMetadata>,
     category: ModelCategory,
+    // Rolling accept-rate counters. Accumulated across steps, logged
+    // every `ACCEPT_LOG_INTERVAL` steps so operators can see at a
+    // glance whether the draft is actually saving work. Tracks two
+    // quantities: how many draft tokens the target approved
+    // (`accepted_total`), and the number of step() invocations they
+    // span (`step_total`). Divide for mean accepted-per-step.
+    accept_stats: std::sync::atomic::AtomicU64,
 }
+
+/// Packed (step_count << 32) | accepted_total for lock-free rolling
+/// update. 32 bits is enough for ~4B samples each.
+const ACCEPT_STATS_STEP_SHIFT: u32 = 32;
+const ACCEPT_STATS_COUNT_MASK: u64 = 0xffff_ffff;
+const ACCEPT_LOG_INTERVAL: u64 = 32;
 
 #[derive(Copy, Clone)]
 /// Metadata for a speculative pipeline
@@ -269,7 +282,29 @@ impl SpeculativePipeline {
             gamma: config.gamma,
             metadata,
             category,
+            accept_stats: std::sync::atomic::AtomicU64::new(0),
         })
+    }
+
+    /// Record a batch of `accepted` draft tokens produced by this step
+    /// and, every `ACCEPT_LOG_INTERVAL` steps, emit a rolling-mean
+    /// accept-rate log line. Operator-visible signal that speculative
+    /// decoding is actually amortising work — if the mean is near 0
+    /// the draft is dragging the target down instead of speeding it up.
+    fn record_accepted(&self, accepted: usize, gamma: usize) {
+        use std::sync::atomic::Ordering;
+
+        let delta = ((1u64) << ACCEPT_STATS_STEP_SHIFT) | (accepted as u64);
+        let prev = self.accept_stats.fetch_add(delta, Ordering::Relaxed);
+        let next = prev.wrapping_add(delta);
+        let steps = next >> ACCEPT_STATS_STEP_SHIFT;
+        if steps % ACCEPT_LOG_INTERVAL == 0 && steps > 0 {
+            let accepted_total = next & ACCEPT_STATS_COUNT_MASK;
+            let mean = (accepted_total as f64) / (steps as f64);
+            tracing::info!(
+                "spec accept-rate: mean={:.2}/{gamma} over last {steps} steps ({accepted_total} accepted)"
+            );
+        }
     }
 }
 
@@ -957,6 +992,11 @@ impl Pipeline for SpeculativePipeline {
             let mut kv_mgr = get_mut_arcmutex!(metadata.kv_cache_manager);
             kv_mgr.trim_request_to_num_tokens(seq_id, seq.get_toks().len());
         }
+
+        // Accept-rate telemetry. Use the gamma computed at step start
+        // (post any paged-slot-reservation trim, so the denominator
+        // matches what the step actually attempted).
+        self.record_accepted(gamma - n_not_accepted, gamma);
 
         // Trick to improve lower bounds. Sample last token in multinomial
         /*
