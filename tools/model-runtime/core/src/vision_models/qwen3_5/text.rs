@@ -709,6 +709,44 @@ impl Qwen3_5TextModel {
     #[allow(clippy::too_many_arguments)]
     pub fn forward_embeds(
         &self,
+        xs: Tensor,
+        attention_mask: Option<&Tensor>,
+        position_ids: &Tensor,
+        seqlen_offsets: &[usize],
+        context_lens: Vec<(usize, usize)>,
+        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
+        visual_pos_masks: Option<&Tensor>,
+        deepstack_visual_embeds: Option<&[Tensor]>,
+    ) -> Result<Tensor> {
+        self.forward_embeds_with_capture(
+            xs,
+            attention_mask,
+            position_ids,
+            seqlen_offsets,
+            context_lens,
+            metadata,
+            flash_params,
+            visual_pos_masks,
+            deepstack_visual_embeds,
+            None,
+        )
+    }
+
+    /// `forward_embeds` + optional target-feature capture hook used by
+    /// the DFlash speculative pipeline (see
+    /// `models::dflash_draft::capture::FeatureCapture`).
+    ///
+    /// When `capture` is `Some`, the post-layer hidden state is
+    /// cloned into `capture.captured` for every layer index listed in
+    /// `capture.layer_ids`. The capture is reset at the start of the
+    /// call so consecutive forwards don't pile up stale snapshots.
+    ///
+    /// For non-DFlash callers this is a thin wrapper; the shared hot
+    /// path is identical to the previous implementation.
+    #[allow(clippy::too_many_arguments)]
+    pub fn forward_embeds_with_capture(
+        &self,
         mut xs: Tensor,
         attention_mask: Option<&Tensor>,
         position_ids: &Tensor,
@@ -718,7 +756,14 @@ impl Qwen3_5TextModel {
         flash_params: &FlashParams,
         visual_pos_masks: Option<&Tensor>,
         deepstack_visual_embeds: Option<&[Tensor]>,
+        mut capture: Option<&mut crate::models::dflash_draft::FeatureCapture>,
     ) -> Result<Tensor> {
+        // Reset any stale snapshots from a previous invocation so the
+        // caller's `capture.captured` is in 1:1 correspondence with
+        // the layer_ids they requested at the end of this call.
+        if let Some(cap) = capture.as_deref_mut() {
+            cap.reset();
+        }
         let mut hybrid_cache = self.cache.hybrid();
         let state_indices = hybrid_cache.state_indices().cloned();
         if self
@@ -846,6 +891,17 @@ impl Qwen3_5TextModel {
             {
                 if i < deepstack.len() {
                     xs = self.deepstack_process(xs, idx, idx_expanded, &deepstack[i])?;
+                }
+            }
+
+            // DFlash target-feature capture: snapshot the post-layer
+            // hidden state verbatim (same tensor the next layer sees)
+            // when the caller asked for layer i. No allocation beyond
+            // the tensor handle clone; the underlying storage is
+            // shared until xs is re-assigned on the next iteration.
+            if let Some(cap) = capture.as_deref_mut() {
+                if cap.should_capture(i) {
+                    cap.captured.push(xs.clone());
                 }
             }
         }

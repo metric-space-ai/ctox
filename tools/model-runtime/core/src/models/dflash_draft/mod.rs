@@ -41,8 +41,10 @@
 //!   - Commit 4 adds DDTree tree-structured verify.
 //!   - Commit 5 ports the three tree CUDA kernels from the ggml fork.
 
+pub mod capture;
 pub mod config;
 pub mod model;
 
+pub use capture::FeatureCapture;
 pub use config::DFlashDraftConfig;
 pub use model::DFlashDraftModel;
