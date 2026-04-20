@@ -725,13 +725,17 @@ sync_skills_to_codex_home() {
   # service start by install_system_skills() in src/inference/core/. We do
   # not copy them here — the Rust path is the source of truth.
 
+  # Packs in the repo are organized into category subfolders (deploy/,
+  # development/, content/, etc.) for clarity; in CODEX_HOME they remain
+  # flat (one folder per skill). Walk the tree, find every SKILL.md, copy
+  # the containing dir flat to $CODEX_HOME/skills/<skill>/.
   if [[ -d "$src_packs" ]]; then
-    for d in "$src_packs"/*; do
-      [[ -d "$d" ]] || continue
-      local name; name="$(basename "$d")"
+    while IFS= read -r -d '' skill_md; do
+      local skill_dir; skill_dir="$(dirname "$skill_md")"
+      local name; name="$(basename "$skill_dir")"
       rm -rf "$target/$name"
-      cp -R "$d" "$target/$name"
-    done
+      cp -R "$skill_dir" "$target/$name"
+    done < <(find "$src_packs" -name SKILL.md -type f -print0)
   fi
 }
 
