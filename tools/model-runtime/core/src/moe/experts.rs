@@ -901,7 +901,68 @@ impl MoEExperts {
             dtype: candle_core::quantized::GgmlDType,
             target_device: &Device,
         ) -> Result<Arc<dyn QuantMethod>> {
-            let mut ws: Vec<Tensor> = Vec::with_capacity(triples.len());
+            use candle_core::quantized::QStorage;
+            use std::borrow::Cow;
+
+            if triples.is_empty() {
+                candle_core::bail!(
+                    "stack_and_quant({role}): empty triples slice — nothing to quantize"
+                );
+            }
+            // Per-expert streaming quantize on CPU.
+            //
+            // The old implementation built a `Tensor::stack(num_experts × out × in)`
+            // BF16 slab, then called `QTensor::quantize_onto(&stack, Q4K, cuda)`. The
+            // slab is ~18 GB for Qwen3.6-35B gate/up and the `quantize_onto` helper
+            // internally materialises an F32 copy (`src.to_dtype(F32)`) of the *whole*
+            // slab — a second ~36 GB allocation that lived on CPU until quantization
+            // returned. Three projections × 40 layers, potentially in parallel, is
+            // how the 63 GiB anon-rss OOM was reached on a 62 GiB host.
+            //
+            // The correct pipeline: each expert's [out, in] weight is quantized
+            // individually on the CPU (so the transient F32 copy is only ~150 MB per
+            // expert), its Q4K bytes are appended to a pre-sized Vec, and the final
+            // [num_experts, out, in] QTensor is materialised from that byte buffer
+            // directly onto the target device. Q4K super-blocks (256 elements →
+            // 144 B) never cross expert boundaries — `out * in` is always a multiple
+            // of 256 for the MoE geometries we support — so byte-concat along the
+            // expert axis is layout-identical to quantising the full stack.
+            //
+            // Peak anon-rss per call:
+            //   - one BF16 expert view  (mmap-backed, minimal rss): ~75 MB
+            //   - one F32 expert copy   (inside QTensor::quantize): ~150 MB
+            //   - accumulated Q4K bytes (grows to final size):      ~6 GB for gate/up
+            // vs. ~54 GB with the old stack+F32 approach.
+            //
+            // After the Vec is moved into device memory via QStorage::from_data the
+            // CPU side is released, so the GPU-resident 3D QTensor is the only
+            // lasting allocation.
+            let first_w = extract_weight(
+                match role {
+                    "gate" => &triples[0].gate,
+                    "up" => &triples[0].up,
+                    "down" => &triples[0].down,
+                    _ => unreachable!(),
+                },
+                role,
+                0,
+            )?;
+            let expert_dims = first_w.dims().to_vec();
+            drop(first_w);
+
+            let block_size = dtype.block_size();
+            let elem_per_expert: usize = expert_dims.iter().product();
+            if !elem_per_expert.is_multiple_of(block_size) {
+                candle_core::bail!(
+                    "stack_and_quant({role}): expert elem_count {elem_per_expert} is not a \
+                     multiple of block size {block_size}; byte-concat would split a super-block",
+                );
+            }
+
+            let type_size = dtype.type_size();
+            let bytes_per_expert = elem_per_expert / block_size * type_size;
+            let mut q_buf: Vec<u8> = Vec::with_capacity(bytes_per_expert * triples.len());
+
             for (i, t) in triples.iter().enumerate() {
                 let arc = match role {
                     "gate" => &t.gate,
@@ -909,19 +970,36 @@ impl MoEExperts {
                     "down" => &t.down,
                     _ => unreachable!(),
                 };
-                ws.push(extract_weight(arc, role, i)?);
+                let w = extract_weight(arc, role, i)?;
+                if w.dims() != expert_dims.as_slice() {
+                    candle_core::bail!(
+                        "stack_and_quant({role}): expert[{i}] dims {:?} != expert[0] dims {:?}",
+                        w.dims(),
+                        expert_dims,
+                    );
+                }
+                let qt = QTensor::quantize(&w, dtype)?;
+                drop(w);
+                let bytes = qt.data()?;
+                if bytes.len() != bytes_per_expert {
+                    candle_core::bail!(
+                        "stack_and_quant({role}): expert[{i}] produced {} Q4K bytes, expected {}",
+                        bytes.len(),
+                        bytes_per_expert,
+                    );
+                }
+                q_buf.extend_from_slice(&bytes);
+                drop(bytes);
+                drop(qt);
             }
-            // CPU stack: the UnquantLinear weights are on CPU (the Cached
-            // backend forced experts_vb to Device::Cpu at the top of
-            // new_with_backend), so this is a pure host-RAM allocation of
-            // num_experts × out × in BF16 bytes.
-            let stacked = Tensor::stack(&ws, 0)?;
-            drop(ws);
-            // Re-quantize onto the target CUDA device. The raw BF16 stack
-            // is consumed by quantize_onto (it flattens and pipes through
-            // candle's own block quantizer), so we can drop it immediately.
-            let qt = QTensor::quantize_onto(&stacked, dtype, target_device)?;
-            drop(stacked);
+
+            let stacked_shape: Vec<usize> = std::iter::once(triples.len())
+                .chain(expert_dims.iter().copied())
+                .collect();
+
+            let storage = QStorage::from_data(Cow::Owned(q_buf), target_device, dtype)?;
+            let qt = QTensor::new(storage, stacked_shape)?;
+
             Ok(Arc::new(engine_quant::GgufMatMul::new(
                 engine_quant::QuantMethodConfig::Gguf {
                     q_weight: Arc::new(qt),
