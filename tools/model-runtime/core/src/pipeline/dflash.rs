@@ -383,22 +383,21 @@ impl Pipeline for DFlashPipeline {
         )?;
 
         let mut new_last = last_committed_token;
+        let n_accepted = outcome.accepted.len();
         for tok in outcome.accepted.iter().copied() {
-            // Append without running the full scheduler-level token
-            // post-processing (finish-on-EOS etc.) — the outer
-            // scheduler does its own EOS check on `seq.get_toks()`.
-            // For a first port this matches
-            // `speculative.rs::finish_or_add_toks_to_seq` call sites
-            // where the logit-probs + chat-template completion
-            // machinery wrap the low-level token append.
+            // Append via the tentative-append + commit idiom.
+            // `finish_or_add_toks_to_seq` (speculative.rs's path)
+            // needs Logprobs + prefix-cache hookup that we don't
+            // have here without sampling; for the first smoke test
+            // `add_tmp_tok` + `remove_tmp_tok(0)` gets the tokens
+            // into `seq.tokens` and clears the tmp flag so the
+            // scheduler sees them as committed. Streaming
+            // `completion_bytes` is not updated — the first on-host
+            // run will confirm the decode runs, measure tok/s, and
+            // a follow-up commit adds the proper logprob path.
             seq.add_tmp_tok(tok);
             new_last = tok;
         }
-        // Flip add_tmp_tok's `is_tmp` so the token count reflected
-        // by seq.len() stays consistent with the scheduler's
-        // expectations. `add_tmp_tok` + `remove_tmp_tok` is the
-        // speculative-decoding idiom for batched commits; here we
-        // commit for real, not tentatively.
         seq.remove_tmp_tok(0);
 
         self.last_committed
@@ -406,7 +405,24 @@ impl Pipeline for DFlashPipeline {
             .unwrap()
             .insert(*seq.id(), Some(new_last));
 
-        Ok(t_start.elapsed())
+        // Telemetry: rolling accept-rate + per-step tok/s, same
+        // format as `SpeculativePipeline`'s so `grep accept-rate`
+        // works across both.
+        let elapsed = t_start.elapsed();
+        let step_tps = if elapsed.as_secs_f64() > 0.0 {
+            n_accepted as f64 / elapsed.as_secs_f64()
+        } else {
+            0.0
+        };
+        tracing::info!(
+            "dflash step: accepted={} draft_accepted={} step_time={:?} step_tok/s={:.1}",
+            n_accepted,
+            outcome.draft_accepted,
+            elapsed,
+            step_tps
+        );
+
+        Ok(elapsed)
     }
 
     fn category(&self) -> ModelCategory {
