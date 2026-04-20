@@ -347,30 +347,6 @@ impl MoEExperts {
         quantization_config: &Option<QuantizedConfig>,
         act: Activation,
     ) -> Result<Self> {
-        // When the configured cache `capacity` is >= `num_experts` every
-        // expert would live resident on the device anyway — the LFU tiering,
-        // the RAM/SSD pool, the per-miss `deserialize`+`memcpy`, and the
-        // `RwLock<CacheInner>` on the hot path are all pure overhead in that
-        // regime. Redirect to the Fast backend so the forward pass goes
-        // through the native grouped-GEMM kernels instead of the Cached loop.
-        //
-        // Load-time is also faster: Fast lets the framework-wide immediate
-        // ISQ pass quantize 3 stacked tensors per layer (vs. 256*3 per-expert
-        // tensors for Cached) so cold-start gains back the ~60 seconds the
-        // Cached backend's serial ISQ loop costs.
-        let backend = if backend == MoEExpertsBackend::Cached
-            && policy.cache_capacity.unwrap_or(0) >= cfg.num_experts
-        {
-            tracing::info!(
-                "MoE experts: capacity={:?} >= num_experts={} — redirecting \
-                 Cached -> Fast (zero caching overhead when all-resident).",
-                policy.cache_capacity,
-                cfg.num_experts,
-            );
-            MoEExpertsBackend::Fast
-        } else {
-            backend
-        };
         if !MoEExpertsBackend::backend_allowed_on_device(layer_device.is_cuda(), backend, policy) {
             candle_core::bail!(
                 "refusing slow MoE backend on CUDA without explicit slow-backend allowance"
