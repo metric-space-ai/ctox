@@ -280,6 +280,18 @@ impl PreProcessingMixin for SpeculativePipeline {
     fn get_input_processor_config(&self) -> Option<Arc<dyn Any>> {
         get_mut_arcmutex!(self.target).get_input_processor_config()
     }
+    /// Delegate to the target pipeline's processor so that inputs produced
+    /// here match what both target and draft's `forward_inputs` expect to
+    /// downcast to (e.g. `ModelInputs` for vision models). The default
+    /// `Pipeline::get_processor` returns a text-only `BasicProcessor`,
+    /// which causes a `Downcast failed` panic in
+    /// `VisionPipeline::forward_inputs` when the target is a vision
+    /// model. Draft and target must share the same input shape for spec
+    /// decoding to work anyway — matching on the target side is the
+    /// right choice here.
+    fn get_processor(&self) -> Arc<dyn super::Processor> {
+        get_mut_arcmutex!(self.target).get_processor()
+    }
 }
 
 impl IsqPipelineMixin for SpeculativePipeline {
