@@ -44,6 +44,7 @@
 pub mod capture;
 pub mod config;
 pub mod model;
+pub mod qwen35_target;
 pub mod ring;
 pub mod runner;
 pub mod stepper;
@@ -52,6 +53,7 @@ pub mod target;
 pub use capture::FeatureCapture;
 pub use config::DFlashDraftConfig;
 pub use model::DFlashDraftModel;
+pub use qwen35_target::Qwen35DFlashTarget;
 pub use ring::{TargetFeatureRing, DEFAULT_RING_CAP};
 pub use runner::{DFlashDraftRunner, DraftStepOpts, DraftStepOutput};
 pub use stepper::{DFlashChainStepper, StepOutcome, StepperOpts};

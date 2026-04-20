@@ -706,6 +706,39 @@ impl Qwen3_5TextModel {
         self.embed_tokens.forward(input_ids)
     }
 
+    /// Return a borrow of the raw `Embedding` layer.
+    ///
+    /// Used by the DFlash draft (see
+    /// [`crate::models::dflash_draft::DFlashDraftRunner`]) which shares
+    /// the target's token embedding instead of carrying its own —
+    /// saves ~2.5 GB of VRAM on Qwen3.5-27B (vocab=248320 × hidden=5120
+    /// × 2 bytes BF16) and guarantees the draft's logits live in the
+    /// target's exact vocabulary.
+    pub fn embed_tokens_layer(&self) -> &Embedding {
+        &self.embed_tokens
+    }
+
+    /// Apply the target's (possibly-quantised) `lm_head` to `hidden`.
+    ///
+    /// Input shape `[..., hidden_size]`, output `[..., vocab_size]`.
+    /// Replicates the dtype/device handling the main
+    /// [`Self::forward_embeds`] does at the tail of the forward pass,
+    /// so calls from the DFlash draft match the target's behaviour
+    /// bit-for-bit — same `quantized_act_type` cast, same device
+    /// relocation if the lm_head lives on a different GPU than the
+    /// hidden states.
+    pub fn apply_lm_head(&self, hidden: &Tensor) -> Result<Tensor> {
+        let mut xs = hidden.clone();
+        if let Some(t) = self.lm_head.quantized_act_type() {
+            xs = xs.to_dtype(t)?;
+        }
+        let (_, lm_head_device) = self.lm_head.dtype_and_device();
+        if !xs.device().same_device(&lm_head_device) {
+            xs = xs.to_device(&lm_head_device)?;
+        }
+        engine_quant::MatMul.qmethod_matmul(&xs, &*self.lm_head)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn forward_embeds(
         &self,
