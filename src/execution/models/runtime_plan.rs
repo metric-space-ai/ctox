@@ -3281,11 +3281,40 @@ fn build_candidate_for_gpu_indices(
         harness.runtime.paged_attn,
         pa_cache_type.as_deref(),
     );
+    // Platform-aware ISQ auto-upgrade.
+    //
+    // candle's Q4K CUDA kernel does not use tensor cores; it runs the
+    // dequant + matmul on the plain CUDA core path, and turns out to be
+    // 2-4x slower than Q8_0 on the same hardware. Measured on RTX A6000
+    // for Gemma 4:
+    //   * E2B decode Q4K 236 T/s → Q8_0 530 T/s  (2.2x)
+    //   * E4B decode Q4K  55 T/s → Q8_0 205 T/s  (3.7x)
+    // Q8_0 on CUDA gets tensor-core utilisation via cuBLAS and still
+    // stays well inside budget (E4B Q8_0 ~= 4.5 GB on disk). On Metal
+    // the story inverts (Q4K is the optimised kernel), so only upgrade
+    // on CUDA hosts. Manifest-driven overrides (e.g. Q6K entries) are
+    // left alone.
+    let runtime_isq = quant.runtime_isq.map(str::to_string).map(|isq| {
+        let is_gemma4_e_variant = matches!(
+            harness.model,
+            "google/gemma-4-E2B-it" | "google/gemma-4-E4B-it"
+        );
+        if is_gemma4_e_variant && platform.cuda_available && isq.eq_ignore_ascii_case("Q4K") {
+            rationale.push(
+                "auto-upgraded Q4K → Q8_0 on CUDA: candle's Q4K kernel is \
+                 tensor-core-less and measurably slower than Q8_0 for Gemma 4"
+                    .to_string(),
+            );
+            "Q8_0".to_string()
+        } else {
+            isq
+        }
+    });
     let plan = ChatRuntimePlan {
         model: harness.model.to_string(),
         preset,
         quantization: quant.label.to_string(),
-        runtime_isq: quant.runtime_isq.map(str::to_string),
+        runtime_isq,
         max_seq_len: plan_context,
         compaction_threshold_percent: compaction_policy.threshold_percent,
         compaction_min_tokens: compaction_policy.min_tokens,
