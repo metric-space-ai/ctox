@@ -120,15 +120,18 @@ impl DFlashChainStepper {
         past_kv_len: usize,
         opts: &StepperOpts,
     ) -> Result<StepOutcome> {
-        // ── 1. Ask the draft for candidates.
+        // ── 1. Ask the draft for candidates. `apply_lm_head` is a
+        //    closure over the target's `apply_lm_head` method so the
+        //    runner doesn't need to know whether the projection is a
+        //    plain Linear, a QuantMethod, or some future tiled variant.
         let draft_out = {
             let ring = self.ring.lock().unwrap();
-            let runner = DFlashDraftRunner::new(draft, target.embed_tokens(), target.lm_head());
+            let runner = DFlashDraftRunner::new(draft, target.embed_tokens());
             let ropts = DraftStepOpts {
                 top_k: opts.draft_top_k.max(1),
                 ctx_len: opts.ctx_len,
             };
-            runner.step(last_committed_token, &ring, &ropts)?
+            runner.step(last_committed_token, &ring, &ropts, |h| target.apply_lm_head(h))?
         };
 
         // ── 2. Build target input: [last_tok, cand_0, cand_1, ..., cand_{B-1}]

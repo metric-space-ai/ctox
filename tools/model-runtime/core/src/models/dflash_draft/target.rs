@@ -19,7 +19,7 @@
 //! this one growing an extra 300 lines of plumbing.
 
 use candle_core::{Result, Tensor};
-use candle_nn::{Embedding, Linear};
+use candle_nn::Embedding;
 
 use super::capture::FeatureCapture;
 
@@ -56,7 +56,12 @@ pub trait DFlashTargetForward: Send + Sync {
     /// embedding of its own).
     fn embed_tokens(&self) -> &Embedding;
 
-    /// Return a reference to the target's `lm_head` layer.
-    /// Shared with the draft for logit projection.
-    fn lm_head(&self) -> &Linear;
+    /// Project `hidden` through the target's `lm_head`.
+    ///
+    /// Modelled as a method instead of an accessor because the target's
+    /// live lm_head is typically an `Arc<dyn QuantMethod>` (Q4_K_M after
+    /// ISQ), not a plain `Linear` — there's no uniform way to hand out
+    /// a borrow that works for both. Input shape `[..., hidden_size]`,
+    /// output `[..., vocab_size]`.
+    fn apply_lm_head(&self, hidden: &Tensor) -> Result<Tensor>;
 }

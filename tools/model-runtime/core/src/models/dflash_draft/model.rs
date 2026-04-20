@@ -350,23 +350,34 @@ impl DFlashDraftModel {
 
     /// Convenience wrapper: build the input embeddings from `input_ids`
     /// using the provided target `embed_tokens`, run [`forward_hidden`],
-    /// then project through the provided target `lm_head`.
+    /// then project through the provided target `lm_head` closure.
     ///
     /// The draft has no embedding / lm-head of its own — this is the
-    /// whole point of the "shared lm_head" design. The two layers are
-    /// passed in rather than held internally so the caller is free to
-    /// share the target's live tensors (cheap) instead of cloning them
-    /// into the draft (3+ GB extra VRAM).
-    pub fn forward_with_lm_head(
+    /// whole point of the "shared lm_head" design. The two are passed
+    /// in rather than held internally so the caller can share the
+    /// target's live tensors (cheap) instead of cloning them into the
+    /// draft (3+ GB extra VRAM).
+    ///
+    /// `lm_head` is a closure rather than a `&Linear` because the
+    /// target's live lm_head is typically an `Arc<dyn QuantMethod>`
+    /// after ISQ (Q4_K_M in the DFlash reference). The closure
+    /// abstracts over "apply a fp32/bf16 `Linear`", "apply a
+    /// `QuantMethod::qmethod_matmul`", or any future tiled lm_head
+    /// variant — the draft doesn't care as long as the output is
+    /// `[..., vocab_size]`.
+    pub fn forward_with_lm_head<F>(
         &self,
         input_ids: &Tensor,
         target_hidden_cat: &Tensor,
         target_embed: &Embedding,
-        target_lm_head: &Linear,
-    ) -> Result<Tensor> {
+        lm_head: F,
+    ) -> Result<Tensor>
+    where
+        F: FnOnce(&Tensor) -> Result<Tensor>,
+    {
         let noise_embeds = target_embed.forward(input_ids)?;
         let h = self.forward_hidden(&noise_embeds, target_hidden_cat)?;
-        h.apply(target_lm_head)
+        lm_head(&h)
     }
 
     pub fn config(&self) -> &DFlashDraftConfig {

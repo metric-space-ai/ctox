@@ -22,7 +22,7 @@
 //! commit.
 
 use candle_core::{DType, IndexOp, Result, Tensor, D};
-use candle_nn::{Embedding, Linear};
+use candle_nn::Embedding;
 
 use super::config::DFlashDraftConfig;
 use super::model::DFlashDraftModel;
@@ -71,22 +71,22 @@ impl Default for DraftStepOpts {
 /// Pure draft runner. Holds nothing beyond references — lightweight,
 /// fully reusable, no interior mutability. One instance per loaded
 /// draft+target pair, shared across pipeline instances.
+///
+/// The `lm_head` projection is represented as a closure passed into
+/// [`Self::step`] so the runner doesn't need to know whether the
+/// target's lm_head is a plain `Linear` (prefill path) or a
+/// `QuantMethod` (post-ISQ path). The caller wraps the right op as a
+/// `Fn(&Tensor) -> Result<Tensor>`.
 pub struct DFlashDraftRunner<'a> {
     draft: &'a DFlashDraftModel,
     target_embed: &'a Embedding,
-    target_lm_head: &'a Linear,
 }
 
 impl<'a> DFlashDraftRunner<'a> {
-    pub fn new(
-        draft: &'a DFlashDraftModel,
-        target_embed: &'a Embedding,
-        target_lm_head: &'a Linear,
-    ) -> Self {
+    pub fn new(draft: &'a DFlashDraftModel, target_embed: &'a Embedding) -> Self {
         Self {
             draft,
             target_embed,
-            target_lm_head,
         }
     }
 
@@ -98,15 +98,21 @@ impl<'a> DFlashDraftRunner<'a> {
     /// - `ring`: the current target-feature history. The runner
     ///   borrows `ctx_len` rows starting from the tail.
     /// - `opts`: per-call knobs — see [`DraftStepOpts`].
+    /// - `apply_lm_head`: projection onto the vocabulary; see
+    ///   [`crate::models::dflash_draft::DFlashTargetForward::apply_lm_head`].
     ///
     /// Returns the `block_size` candidate tokens plus their per-
     /// position top-K distributions.
-    pub fn step(
+    pub fn step<F>(
         &self,
         last_committed_token: u32,
         ring: &TargetFeatureRing,
         opts: &DraftStepOpts,
-    ) -> Result<DraftStepOutput> {
+        apply_lm_head: F,
+    ) -> Result<DraftStepOutput>
+    where
+        F: FnOnce(&Tensor) -> Result<Tensor>,
+    {
         let cfg: &DFlashDraftConfig = self.draft.config();
         if ring.is_empty() {
             candle_core::bail!(
@@ -150,7 +156,7 @@ impl<'a> DFlashDraftRunner<'a> {
             &input_ids,
             &ctx,
             self.target_embed,
-            self.target_lm_head,
+            apply_lm_head,
         )?;
 
         // ── Extract top-K per block position.
