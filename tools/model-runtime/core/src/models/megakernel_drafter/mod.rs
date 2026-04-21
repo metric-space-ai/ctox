@@ -34,8 +34,10 @@
 pub mod buffers;
 pub mod constants;
 pub mod driver;
+pub mod loader;
 pub mod weights;
 
 pub use buffers::MegakernelBuffers;
 pub use driver::MegakernelDrafter;
+pub use loader::load_megakernel_weights;
 pub use weights::{MegakernelWeights, QWEN35_0_8B_LAYER_PATTERN};
