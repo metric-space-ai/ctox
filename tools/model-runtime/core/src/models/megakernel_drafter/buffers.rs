@@ -175,9 +175,12 @@ impl MegakernelBuffers {
         let barrier_counter = Tensor::zeros((1,), DType::U32, device)?;
         let barrier_generation = Tensor::zeros((1,), DType::U32, device)?;
         let block_max_vals = Tensor::zeros((1024,), DType::F32, device)?;
-        let block_max_idxs = Tensor::zeros((1024,), DType::I64, device)?;
+        // Kernel writes int[1024] here — dtype MUST be I32 (4-byte
+        // elements). I64 would stride-mismatch by 2×.
+        let block_max_idxs = Tensor::zeros((1024,), DType::I32, device)?;
         let lm_sync_counter = Tensor::zeros((1,), DType::U32, device)?;
-        let out_token = Tensor::zeros((1,), DType::I64, device)?;
+        // Kernel writes a single int (4 bytes) into out_token.
+        let out_token = Tensor::zeros((1,), DType::I32, device)?;
 
         // ── Prefill scratch: per-prompt-token (S-dependent), sized
         //    for `max_prefill_seq`. These are separate allocations
@@ -200,7 +203,8 @@ impl MegakernelBuffers {
         let pf_final_normed = Tensor::zeros((HIDDEN_SIZE,), DType::BF16, device)?;
         let pf_hidden_bf16_out = Tensor::zeros((HIDDEN_SIZE,), DType::BF16, device)?;
         let pf_lm_bmv = Tensor::zeros((1024,), DType::F32, device)?;
-        let pf_lm_bmi = Tensor::zeros((1024,), DType::I64, device)?;
+        // Matches the prefill kernel's `int *lm_bmi` — 4-byte indices.
+        let pf_lm_bmi = Tensor::zeros((1024,), DType::I32, device)?;
 
         Ok(Self {
             device: device.clone(),

@@ -109,8 +109,8 @@ impl MegakernelDrafter {
         // taking `Vec<i32>` which candle widens to I64 by default.
         // The kernel reads 32-bit ints; on little-endian x86_64 the
         // low 32 bits of each I64 element = the original i32 value.
-        let token_addr = addr_i64(&token_tensor)?;
-        let out_addr = addr_i64(&self.buffers.out_token)?;
+        let token_addr = addr_i32(&token_tensor)?;
+        let out_addr = addr_i32(&self.buffers.out_token)?;
         let fa_k = addr_bf16(&self.buffers.fa_k_cache)?;
         let fa_v = addr_bf16(&self.buffers.fa_v_cache)?;
         let dn_states = addr_f32(&self.buffers.dn_states)?;
@@ -128,7 +128,7 @@ impl MegakernelDrafter {
         let pf_final_normed = addr_bf16(&self.buffers.pf_final_normed)?;
         let pf_hidden_out = addr_bf16(&self.buffers.pf_hidden_bf16_out)?;
         let pf_lm_bmv = addr_f32(&self.buffers.pf_lm_bmv)?;
-        let pf_lm_bmi = addr_i64(&self.buffers.pf_lm_bmi)?;
+        let pf_lm_bmi = addr_i32(&self.buffers.pf_lm_bmi)?;
 
         unsafe {
             launch_prefill_bf16(
@@ -182,7 +182,7 @@ impl MegakernelDrafter {
             .packed_ptr()
             .ok_or_else(|| candle_core::Error::msg("MegakernelDrafter: weights not packed"))?;
 
-        let out_addr = addr_i64(&self.buffers.out_token)?;
+        let out_addr = addr_i32(&self.buffers.out_token)?;
         let fa_k = addr_bf16(&self.buffers.fa_k_cache)?;
         let fa_v = addr_bf16(&self.buffers.fa_v_cache)?;
         let dn_states = addr_f32(&self.buffers.dn_states)?;
@@ -201,7 +201,7 @@ impl MegakernelDrafter {
         let bar_c = addr_u32(&self.buffers.barrier_counter)?;
         let bar_g = addr_u32(&self.buffers.barrier_generation)?;
         let bmv = addr_f32(&self.buffers.block_max_vals)?;
-        let bmi = addr_i64(&self.buffers.block_max_idxs)?;
+        let bmi = addr_i32(&self.buffers.block_max_idxs)?;
         let lm_sync = addr_u32(&self.buffers.lm_sync_counter)?;
 
         unsafe {
@@ -302,18 +302,18 @@ fn addr_f32(t: &Tensor) -> Result<u64> {
     }
 }
 
-fn addr_i64(t: &Tensor) -> Result<u64> {
-    // I64-allocated scratch tensor reinterpreted as i32 on the kernel
-    // side (little-endian only; the kernel only reads element 0
-    // anyway for `out_token` / `lm_bmi`).
+fn addr_i32(t: &Tensor) -> Result<u64> {
+    // Kernel-side `int*` pointers — must be a 4-byte-element tensor.
+    // The kernel reads/writes `int[…]`, so stride mismatch is a
+    // silent corruption if a wider dtype sneaks through.
     use candle_core::cuda_backend::cudarc::driver::DevicePtr;
-    if t.dtype() != candle_core::DType::I64 {
-        candle_core::bail!("expected I64 tensor, got {:?}", t.dtype());
+    if t.dtype() != candle_core::DType::I32 {
+        candle_core::bail!("expected I32 tensor, got {:?}", t.dtype());
     }
     let (storage, layout) = t.storage_and_layout();
     match &*storage {
         candle_core::Storage::Cuda(c) => {
-            let s = c.as_cuda_slice::<i64>()?;
+            let s = c.as_cuda_slice::<i32>()?;
             let slice = s.slice(layout.start_offset()..);
             let (addr, _g) = slice.device_ptr(s.stream());
             Ok(addr)
@@ -340,9 +340,8 @@ fn addr_u32(t: &Tensor) -> Result<u64> {
 }
 
 fn read_out_token(out: &Tensor) -> Result<i32> {
-    // `out_token` was allocated as I64 (single element). Copy to host
-    // and take the low 32 bits — consistent with the kernel writing a
-    // 32-bit `int` into the first element.
-    let v: Vec<i64> = out.to_dtype(candle_core::DType::I64)?.to_vec1()?;
-    Ok(v.first().copied().unwrap_or(0) as i32)
+    // `out_token` is a single-element I32 tensor the kernel writes
+    // the sampled argmax into.
+    let v: Vec<i32> = out.to_dtype(candle_core::DType::I32)?.to_vec1()?;
+    Ok(v.first().copied().unwrap_or(0))
 }
