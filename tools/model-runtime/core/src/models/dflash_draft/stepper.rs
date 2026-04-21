@@ -220,16 +220,22 @@ impl DFlashChainStepper {
         //    rows to the ring.
         //
         //    feed = [last_tok, cand_0, ..., cand_{B-1}] = B+1 tokens,
-        //    so capture[layer][0..=B] holds one hidden state per fed
-        //    position. But feed[0] is `last_tok`, which was already
-        //    committed BEFORE this step — its feature was already
-        //    written to the ring in the previous step. So we only
-        //    push rows [1 .. 1 + accepted.len()] of the capture into
-        //    the ring (one row per truly-new committed token this
-        //    step).
+        //    so capture[layer][0..=B] holds B+1 hidden rows. Row 0 is
+        //    `last_tok`, already ringed in the previous step — skip.
+        //    Rows 1..=B correspond to the B candidates; at most B
+        //    fresh ring entries come from this step.
+        //
+        //    Edge case: if the WHOLE draft block verified and the
+        //    bonus token was committed, accepted.len() == B+1 but
+        //    the target never forwarded at the position *after* the
+        //    bonus — the bonus's feature row will land in the NEXT
+        //    step when that token is re-fed as the new last_tok.
+        //    Clamp accordingly.
         let n_accepted = accepted.len();
-        let captured = fuse_captured_features(&capture, 1, n_accepted)?;
-        {
+        let ring_rows_available = feed_len.saturating_sub(1); // = block_size for chain verify
+        let n_ring_rows = n_accepted.min(ring_rows_available);
+        if n_ring_rows > 0 {
+            let captured = fuse_captured_features(&capture, 1, n_ring_rows)?;
             let mut ring = self.ring.lock().unwrap();
             ring.append(&captured)?;
         }
