@@ -720,8 +720,20 @@ impl GatedDeltaNet {
             .reshape((batch_size * num_heads, k_head, v_head))?
             .contiguous()?;
 
-        const CHUNK_THRESHOLD: usize = 64;
-        let out_bh = if seq_len >= CHUNK_THRESHOLD {
+        // Dispatch to the chunked parallel kernel for any multi-token
+        // forward (verify/prefill). The chunked kernel's partial-chunk
+        // handling (`chunk_len = min(BT, seq_len - chunk_start)`) is
+        // correct for seq_len < BT — it degenerates to a single chunk
+        // with BT=64, which is still parallel across the chunk's
+        // tokens inside shared memory. Using it for seq_len=17 (the
+        // DFlash chain-verify feed length) replaces 17 sequential
+        // per-token iterations with a single parallel dispatch, which
+        // is the same reformulation the reference's
+        // `dflash/src/delta_net_chunked.cpp` uses (matmul/tri/cumsum
+        // instead of per-token recurrence). The sequential tiled
+        // kernel is only retained for seq_len=1 pure-decode where
+        // there's nothing to parallelise within the sequence dim.
+        let out_bh = if seq_len > 1 {
             crate::cuda::gdn::chunked_gated_delta_rule_recurrence_cuda(
                 &q_bh,
                 &k_bh,

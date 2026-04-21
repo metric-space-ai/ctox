@@ -13,8 +13,8 @@ Do **not** rely on grep/memory/assumptions about what a given subsystem is suppo
 
 ## Operator Guardrails (hard rules)
 
-- **Local builds are allowed.** `cargo build`, `cargo test`, `cargo check`, `cargo clippy`, `cargo run`, and `cargo fmt` may be run on the operator machine for verification. Releases still go through the GitHub Actions pipeline (`.github/workflows/ci.yml`, `.github/workflows/release.yml`); trigger a release by pushing a tag `vX.Y.Z` on `main`. Inspect runs with `gh run list` / `gh run view`.
-- **No unsolicited branches or worktrees.** Work directly on `main` in the origin checkout. Do not create `claude/*` branches or `.claude/worktrees/*` directories without an explicit request. The existing intended workflow is commit-to-main + push; branches are only for explicitly-requested PRs.
+- **Local builds and tests are allowed on this machine.** `cargo build`, `cargo test`, `cargo check`, `cargo clippy`, `cargo run`, and `cargo fmt` may be run directly on the operator machine for verification, including on the `tools/model-runtime/` workspace (Metal on macOS, ask the remote GPU host for CUDA verification). Releases still go through the GitHub Actions pipeline (`.github/workflows/ci.yml`, `.github/workflows/release.yml`); trigger a release by pushing a tag `vX.Y.Z` on `main`. Inspect runs with `gh run list` / `gh run view`.
+- **Work directly on main. Branches and worktrees only when explicitly asked.** The existing intended workflow is commit-to-main + push; branches and `.claude/worktrees/*` directories are reserved for explicitly-requested PRs — don't spin one up on your own judgement.
 - **No global env-var controls for runtime state.** Runtime configuration belongs in typed `AppConfig` and CTOX's persisted SQLite runtime store via `runtime_env::env_or_config(root, ...)`. Do not add new process-environment toggles for production behavior. Tests that need host-state overrides must write to the test root's SQLite runtime config, not `std::env::set_var`.
 
 ## What CTOX Is (one-paragraph orientation)
