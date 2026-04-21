@@ -1,0 +1,34 @@
+# Append to dflash/CMakeLists.txt — builds libdflash_run_lib.so that the
+# ctox-dflash-ffi crate dlopens at runtime. Mirrors the test_dflash CMake
+# target but produces a shared library with the dflash_ctx_* symbols
+# (and the legacy dflash_run_main_c entry) exported as extern "C".
+#
+# Build:
+#   cd dflash/build
+#   cmake --build . --target dflash_run_lib -- -j
+#
+# Artifact: dflash/build/libdflash_run_lib.so (link against libggml*.so
+# via LD_LIBRARY_PATH at runtime; see dflash-ref-inproc-bench for an
+# example).
+
+# ─── dflash_run_lib: expose test_dflash main body as extern "C" library ──
+#
+# Shared library variant of test_dflash that exports dflash_run_main_c,
+# dflash_ctx_init, dflash_ctx_generate, and dflash_ctx_free — the full
+# spec-decode pipeline callable from Rust FFI. Keeps test_dflash
+# standalone binary intact.
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test/test_dflash_lib.cpp")
+    add_library(dflash_run_lib SHARED test/test_dflash_lib.cpp)
+    set_target_properties(dflash_run_lib PROPERTIES
+        POSITION_INDEPENDENT_CODE ON
+        CUDA_ARCHITECTURES "86")
+    target_include_directories(dflash_run_lib PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(dflash_run_lib PRIVATE dflash27b ggml ggml-cuda)
+    find_package(CUDAToolkit REQUIRED)
+    target_link_libraries(dflash_run_lib PRIVATE CUDA::cudart)
+    find_package(OpenMP)
+    if(OpenMP_CXX_FOUND)
+        target_link_libraries(dflash_run_lib PRIVATE OpenMP::OpenMP_CXX)
+    endif()
+endif()
