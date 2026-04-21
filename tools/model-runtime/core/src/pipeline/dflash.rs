@@ -203,12 +203,17 @@ impl CacheManagerMixin for DFlashPipeline {
         if reset_non_granular {
             self.reset_non_granular_state();
         }
-        // Drop per-seq DFlash bookkeeping for finished sequences so
-        // the hashmap doesn't grow unboundedly across long-running
-        // engines. Conservative: clear every tracked seq on reset,
-        // because the DFlash feature ring does not survive a cache
-        // reset anyway.
+        // Drop all per-seq DFlash bookkeeping AND reset the shared
+        // feature ring. Otherwise the next request's prefill would
+        // find the ring tail full of the previous generation's
+        // features and the draft's cross-attention would produce
+        // biased candidates — in practice each new prompt comes out
+        // as a continuation of the previous topic.
         self.last_committed.lock().unwrap().clear();
+        self.past_kv_len.lock().unwrap().clear();
+        if let Ok(mut ring) = self.stepper.ring().lock() {
+            ring.reset();
+        }
     }
     fn cache(&self) -> &EitherCache {
         &self.target_cache
@@ -364,6 +369,27 @@ impl Pipeline for DFlashPipeline {
                 // it up through `last_committed` and re-feed it as the
                 // leading token of the B+1 chain-verify batch. The
                 // engine scheduler drives prompt→decode transitions.
+                //
+                // Defensive reset: the scheduler's pre-op cache
+                // instruction doesn't always flow through as a
+                // `Reset`, but a `is_prompt=true` step is by
+                // definition the start of a fresh request. Wipe
+                //   * the DFlash feature ring,
+                //   * the per-seq last_committed / past_kv_len maps,
+                //   * the target's hybrid KV cache (attention +
+                //     recurrent) — so Gated-DeltaNet state from a
+                //     previous request doesn't carry over and bias
+                //     the new prompt toward the previous topic.
+                //     Observed without this: three unrelated prompts
+                //     all returning Fibonacci continuations of the
+                //     first request.
+                {
+                    let mut ring = stepper.ring().lock().unwrap();
+                    ring.reset();
+                }
+                self.last_committed.lock().unwrap().clear();
+                self.past_kv_len.lock().unwrap().clear();
+                target_text.dflash_reset_cache();
                 let prompt_toks: Vec<u32> = seq.get_toks().to_vec();
                 let prompt_len = prompt_toks.len();
                 if prompt_len == 0 {

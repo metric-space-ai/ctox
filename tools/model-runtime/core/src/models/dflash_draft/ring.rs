@@ -224,6 +224,18 @@ impl TargetFeatureRing {
     pub fn rewind(&mut self, n: usize) {
         self.commit_pos = self.commit_pos.saturating_sub(n);
     }
+
+    /// Reset the ring to empty. Used by the DFlash pipeline between
+    /// requests: without it, each new prefill's prompt features land
+    /// on top of the previous request's generation features, and the
+    /// draft's cross-attention attends to stale context from the old
+    /// conversation — which in practice biases the next response to
+    /// continue the previous topic. Cheap: only moves the write head;
+    /// the storage tensor is overwritten in place by subsequent
+    /// appends.
+    pub fn reset(&mut self) {
+        self.commit_pos = 0;
+    }
 }
 
 #[cfg(test)]

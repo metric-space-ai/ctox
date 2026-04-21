@@ -797,6 +797,18 @@ impl Qwen3_5TextModel {
         self.cache.hybrid().truncate_attention_to(len)
     }
 
+    /// Wipe the target's hybrid cache between requests: clear every
+    /// attention layer's KV and reset every recurrent layer's state
+    /// to zero. The DFlash pipeline calls this at the start of each
+    /// new prefill so the Gated-DeltaNet state from the previous
+    /// request doesn't bleed into the next one (which otherwise
+    /// manifests as the new prompt getting a continuation of the
+    /// previous response — observed on the A6000 smoke with three
+    /// unrelated prompts all returning Fibonacci code).
+    pub fn dflash_reset_cache(&self) {
+        self.cache.hybrid().reset();
+    }
+
     /// Standalone forward for DFlash speculative decoding.
     ///
     /// Wraps [`Self::forward_embeds_with_capture`] with all the
