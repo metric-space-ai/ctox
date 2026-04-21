@@ -159,24 +159,52 @@ impl<'a> DFlashDraftRunner<'a> {
             apply_lm_head,
         )?;
 
-        // ── Extract top-K per block position.
-        //    Work in F32 for numerical stability of log_softmax.
-        let logits_f32 = logits.to_dtype(DType::F32)?;
-        let log_probs = candle_nn::ops::log_softmax(&logits_f32, D::Minus1)?;
-        // log_probs: [1, block_size, vocab]
-
+        // ── Extract candidates (argmax per position).
+        //
+        //    Fast path for chain verify (top_k == 1): batched GPU
+        //    argmax + single D→H of `block` indices. The previous
+        //    implementation pulled the full vocab log-prob row per
+        //    position (16× ~248K floats = ~16 MB of D→H traffic per
+        //    step), which pinned draft-side step time around ~100ms
+        //    on A6000. Batched argmax drops that to a single
+        //    ~64-byte transfer.
+        //
+        //    Slow path (top_k > 1, DDTree): still needed for the
+        //    tree-verify top-K distributions. We'll revisit when
+        //    DDTree lands; for now it preserves the original
+        //    semantics so existing tests stay green.
         let top_k = opts.top_k.max(1);
-        let mut candidates = Vec::with_capacity(block);
-        let mut top_k_ids = Vec::with_capacity(block);
-        let mut top_k_lp = Vec::with_capacity(block);
-
-        for i in 0..block {
-            let row = log_probs.i((0, i))?; // [vocab]
-            let (ids, lp) = top_k_from_row(&row, top_k)?;
-            candidates.push(ids[0]);
-            top_k_ids.push(ids);
-            top_k_lp.push(lp);
-        }
+        let (candidates, top_k_ids, top_k_lp) = if top_k == 1 {
+            let argmax_ids: Vec<u32> = {
+                let am = logits.i(0)?.argmax(D::Minus1)?;
+                match am.dtype() {
+                    DType::U32 => am.to_vec1()?,
+                    _ => am.to_dtype(DType::U32)?.to_vec1::<u32>()?,
+                }
+            };
+            let candidates = argmax_ids.clone();
+            let top_k_ids: Vec<Vec<u32>> =
+                argmax_ids.iter().map(|&id| vec![id]).collect();
+            // log-prob of the argmax is not consumed by chain verify;
+            // emit 0.0 as a placeholder so the struct invariant
+            // (top_k_ids.len() == top_k_logprobs.len()) holds.
+            let top_k_lp: Vec<Vec<f32>> = (0..block).map(|_| vec![0.0]).collect();
+            (candidates, top_k_ids, top_k_lp)
+        } else {
+            let logits_f32 = logits.to_dtype(DType::F32)?;
+            let log_probs = candle_nn::ops::log_softmax(&logits_f32, D::Minus1)?;
+            let mut candidates = Vec::with_capacity(block);
+            let mut top_k_ids = Vec::with_capacity(block);
+            let mut top_k_lp = Vec::with_capacity(block);
+            for i in 0..block {
+                let row = log_probs.i((0, i))?;
+                let (ids, lp) = top_k_from_row(&row, top_k)?;
+                candidates.push(ids[0]);
+                top_k_ids.push(ids);
+                top_k_lp.push(lp);
+            }
+            (candidates, top_k_ids, top_k_lp)
+        };
 
         Ok(DraftStepOutput {
             candidates,

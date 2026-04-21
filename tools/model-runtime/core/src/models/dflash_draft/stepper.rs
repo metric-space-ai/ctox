@@ -127,10 +127,16 @@ impl DFlashChainStepper {
         let draft_out = {
             let ring = self.ring.lock().unwrap();
             let runner = DFlashDraftRunner::new(draft, target.embed_tokens());
+            // Chain verify reads only `candidates`; forcing top_k=1
+            // here hits the batched-argmax fast path in the runner
+            // (one D→H of `block_size` u32 indices vs 16 per-row
+            // full-vocab log-prob transfers). DDTree stepper will
+            // need opts.draft_top_k honoured; that's a separate path.
             let ropts = DraftStepOpts {
-                top_k: opts.draft_top_k.max(1),
+                top_k: 1,
                 ctx_len: opts.ctx_len,
             };
+            let _ = opts.draft_top_k; // preserved for the DDTree stepper
             runner.step(last_committed_token, &ring, &ropts, |h| target.apply_lm_head(h))?
         };
 
@@ -176,15 +182,21 @@ impl DFlashChainStepper {
         //    token committed to the output is always the target's
         //    argmax at the first mismatching position (or the last
         //    position if all draft tokens match).
-        let logits_f32 = logits.to_dtype(DType::F32)?;
-        let seq_len = logits_f32.dim(1)?;
+        //
+        //    Batched argmax: a single GPU kernel + one 17-element
+        //    D→H copy instead of 17 per-row syncs — the per-row
+        //    path cost ~200ms/step on A6000 because each
+        //    `to_vec1` stalls on device→host transfer.
+        let seq_len = logits.dim(1)?;
         let target_choices: Vec<u32> = {
-            let mut out = Vec::with_capacity(seq_len);
-            for i in 0..seq_len {
-                let id = argmax_last_dim(&logits_f32.i((0, i))?)?;
-                out.push(id);
-            }
-            out
+            let row_argmax = logits.i(0)?.argmax(D::Minus1)?;
+            let ids: Vec<u32> = match row_argmax.dtype() {
+                DType::U32 => row_argmax.to_vec1()?,
+                _ => row_argmax
+                    .to_dtype(DType::U32)?
+                    .to_vec1::<u32>()?,
+            };
+            ids
         };
 
         if target_choices.is_empty() {
@@ -298,8 +310,11 @@ pub fn fuse_captured_features(
 }
 
 /// Pure helper: argmax over the last dim of a 1-D tensor (vocab row).
-/// Goes host-side for a single `.to_vec1` + O(V) scan; this is called
-/// per-position (≤16 times per step) so the sync is bounded.
+/// Historically called once per verify position; the hot path now
+/// batches argmax on GPU (one kernel + one D→H copy for the whole
+/// row block), so this stays only for tests that need a scalar
+/// argmax without a trip through candle's kernel dispatch.
+#[cfg(test)]
 fn argmax_last_dim(row: &Tensor) -> Result<u32> {
     let host: Vec<f32> = row.to_dtype(DType::F32)?.to_vec1()?;
     let mut best_i = 0usize;
