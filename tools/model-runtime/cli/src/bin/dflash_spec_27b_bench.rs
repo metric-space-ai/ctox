@@ -172,7 +172,12 @@ async fn main() -> Result<()> {
     let text_model = pipeline_guard
         .dflash_text_model()
         .ok_or_else(|| anyhow!("target is not a Qwen3.5 vision pipeline"))?;
-    // Seed the hybrid cache's state indices (scheduler bypass).
+    // Wipe any state the loader / warmup may have left in the
+    // hybrid cache (GDN recurrences are non-invertible so a stale
+    // prefix poisons every subsequent draft prediction), then seed
+    // the recurrent-state slot index so the linear-attention layers
+    // know which pool slot to read/write.
+    text_model.dflash_reset_cache();
     text_model
         .dflash_set_state_indices(&[0])
         .context("dflash_set_state_indices")?;
