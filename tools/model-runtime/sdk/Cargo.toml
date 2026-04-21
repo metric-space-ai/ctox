@@ -42,14 +42,20 @@ tracing-subscriber.workspace = true
 all-features = true
 
 [features]
-# NVIDIA CUDA GPU support
-cuda = ["engine-core/cuda"]
+# NVIDIA CUDA GPU support. Auto-enables flash-attn: the engine treats
+# FlashAttention as part of the baseline NVIDIA configuration — skipping it
+# regresses decode by ~2–3× on Ampere+. Pre-Ampere GPUs (compute cap < sm_80)
+# must set ENGINE_DISABLE_FLASH_ATTN=1 at runtime; they cannot compile out of
+# it without dropping the whole cuda feature.
+cuda = ["engine-core/cuda", "flash-attn"]
 # cuDNN acceleration (requires cuda)
 cudnn = ["engine-core/cudnn"]
 # Apple Metal GPU support (macOS/iOS)
 metal = ["engine-core/metal"]
 # Flash Attention 2 kernels (requires cuda)
-flash-attn = ["cuda", "engine-core/flash-attn"]
+flash-attn = ["engine-core/cuda", "engine-core/flash-attn"]
+# Flash Attention 3 kernels (Hopper / sm_90+, requires cuda)
+flash-attn-v3 = ["engine-core/cuda", "engine-core/flash-attn-v3"]
 # Apple Accelerate framework for BLAS operations
 accelerate = ["engine-core/accelerate"]
 # Intel MKL acceleration for BLAS operations

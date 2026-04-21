@@ -53,11 +53,22 @@ walkdir = { workspace = true }
 
 [features]
 default = []
-cuda = ["engine-core/cuda", "engine-server-core/cuda"]
+# NOTE: enabling `cuda` automatically enables `flash-attn`. On NVIDIA hardware
+# the engine should always go through FlashAttention — without it the decode
+# hot path falls back to the reference softmax+matmul kernels and loses ~2–3×
+# throughput. The installer (install.sh) already pairs the two features when
+# it detects CUDA; this mutual dependency makes `cargo build --features cuda`
+# do the same thing by default so dev builds don't silently regress.
+#
+# Pre-Ampere GPUs (compute cap < sm_80) cannot run FlashAttention v2 kernels.
+# Users on V100/T4/RTX-20xx should disable it at runtime with
+# `ENGINE_DISABLE_FLASH_ATTN=1` — the engine falls back to the reference
+# attention path (see `using_flash_attn()` in engine-core/src/utils/mod.rs).
+cuda = ["engine-core/cuda", "engine-server-core/cuda", "flash-attn"]
 nccl = ["engine-core/nccl", "engine-server-core/nccl"]
 cudnn = ["engine-core/cudnn", "engine-server-core/cudnn"]
-flash-attn = ["cuda", "engine-core/flash-attn", "engine-server-core/flash-attn"]
-flash-attn-v3 = ["cuda", "engine-core/flash-attn-v3", "engine-server-core/flash-attn-v3"]
+flash-attn = ["engine-core/cuda", "engine-server-core/cuda", "engine-core/flash-attn", "engine-server-core/flash-attn"]
+flash-attn-v3 = ["engine-core/cuda", "engine-server-core/cuda", "engine-core/flash-attn-v3", "engine-server-core/flash-attn-v3"]
 accelerate = ["engine-core/accelerate", "engine-server-core/accelerate"]
 metal = ["engine-core/metal", "engine-server-core/metal"]
 mkl = ["engine-core/mkl", "engine-server-core/mkl"]

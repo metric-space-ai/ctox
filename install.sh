@@ -247,7 +247,16 @@ tui_select_backend() {
 
   case "$selected" in
     cuda)
-      local features="cuda flash-attn"
+      local features="cuda"
+      local fa; fa="$(pick_flash_attn_feature || true)"
+      if [[ -n "$fa" ]]; then
+        features="$features $fa"
+      else
+        printf '  %b%bFlashAttention deaktiviert — GPU compute cap < sm_80 oder manuell abgeschaltet.%b\n' \
+          "$C_BOLD" "$C_YELLOW" "$C_RESET"
+        printf '  %bDecode-Pfad fällt auf Referenz-Attention zurück (~2–3× langsamer).%b\n' \
+          "$C_GREY" "$C_RESET"
+      fi
       if command -v ldconfig >/dev/null 2>&1; then
         ldconfig -p 2>/dev/null | grep -q 'libnccl' && features="$features nccl"
         ldconfig -p 2>/dev/null | grep -q 'libcudnn' && features="$features cudnn"
@@ -487,6 +496,36 @@ configure_cuda_env() {
   [[ -n "$cv" ]] && export CUDARC_CUDA_VERSION="$cv"
   local cc; cc="$(detect_cuda_compute_cap || true)"
   [[ -n "$cc" ]] && export CUDA_COMPUTE_CAP="$cc"
+}
+
+# ── Flash-Attention feature picker ──────────────────────────────────────────
+# Decide which FlashAttention variant fits the detected GPU:
+#   * sm_90+  (H100/H200/Hopper)        → flash-attn-v3  (fastest)
+#   * sm_80–89 (A100/A6000/RTX 30xx+)   → flash-attn     (v2)
+#   * sm_75 and below (V100/T4/RTX 20xx)→ <none>         (kernels won't build)
+# The caller decides whether to warn the user when we fall back to "none".
+# Honours CTOX_FLASH_ATTN if explicitly set ("v3", "v2", "off") to let power
+# users override the heuristic — e.g. forcing v2 on H100 during debugging.
+pick_flash_attn_feature() {
+  case "${CTOX_FLASH_ATTN:-auto}" in
+    v3) printf 'flash-attn-v3\n'; return ;;
+    v2) printf 'flash-attn\n';    return ;;
+    off|none|disabled) return ;;
+    auto) ;;
+    *) ;;
+  esac
+  local cc; cc="$(detect_cuda_compute_cap || true)"
+  # Empty compute cap = no nvidia-smi / no GPU visible at install time. Pick v2
+  # as the safe modern default; Ampere+ (sm_80+) is the expected CTOX baseline.
+  [[ -z "$cc" ]] && { printf 'flash-attn\n'; return; }
+  if [[ "$cc" =~ ^[0-9]+$ ]]; then
+    if [[ "$cc" -ge 90 ]]; then
+      printf 'flash-attn-v3\n'
+    elif [[ "$cc" -ge 80 ]]; then
+      printf 'flash-attn\n'
+    fi
+    # else: pre-Ampere, omit — candle-flash-attn won't compile kernels for it.
+  fi
 }
 
 # ── CUDA auto-install (Linux apt) ───────────────────────────────────────────
@@ -903,7 +942,11 @@ write_platform_capabilities() {
   fi
 
   local cuda_avail="false" nccl_avail="false" flash_avail="false"
-  [[ "$ENGINE_FEATURES" == *cuda* ]] && cuda_avail="true" && flash_avail="true"
+  [[ "$ENGINE_FEATURES" == *cuda* ]] && cuda_avail="true"
+  # Report flash_attn_available from the actual feature string, not from the
+  # presence of "cuda" — pre-Ampere GPUs get cuda without flash-attn (see
+  # pick_flash_attn_feature).
+  [[ "$ENGINE_FEATURES" == *flash-attn* ]] && flash_avail="true"
   [[ "$ENGINE_FEATURES" == *nccl* ]] && nccl_avail="true"
 
   cat > "$cap_path" <<CAPEOF
@@ -1466,7 +1509,9 @@ detect_engine_features_auto() {
   [[ -n "${CTOX_ENGINE_FEATURES:-}" ]] && { printf '%s\n' "$CTOX_ENGINE_FEATURES"; return; }
   if [[ "$PLATFORM" == "macos" ]]; then printf '%s\n' "metal accelerate"; return; fi
   if ! cuda_toolchain_ready; then printf '%s\n' ""; return; fi
-  local f="cuda flash-attn"
+  local f="cuda"
+  local fa; fa="$(pick_flash_attn_feature || true)"
+  [[ -n "$fa" ]] && f="$f $fa"
   if command -v ldconfig >/dev/null 2>&1; then
     ldconfig -p 2>/dev/null | grep -q 'libnccl' && f="$f nccl"
     ldconfig -p 2>/dev/null | grep -q 'libcudnn' && f="$f cudnn"
@@ -1642,7 +1687,14 @@ main() {
             tui_fatal "CUDA-Toolkit konnte nicht installiert werden."
           fi
         fi
-        ENGINE_FEATURES="cuda flash-attn"
+        ENGINE_FEATURES="cuda"
+        local fa; fa="$(pick_flash_attn_feature || true)"
+        if [[ -n "$fa" ]]; then
+          ENGINE_FEATURES="$ENGINE_FEATURES $fa"
+        else
+          printf '  %b%bFlashAttention deaktiviert — GPU compute cap < sm_80 oder manuell abgeschaltet.%b\n' \
+            "$C_BOLD" "$C_YELLOW" "$C_RESET"
+        fi
         if command -v ldconfig >/dev/null 2>&1; then
           ldconfig -p 2>/dev/null | grep -q 'libnccl' && ENGINE_FEATURES="$ENGINE_FEATURES nccl"
           ldconfig -p 2>/dev/null | grep -q 'libcudnn' && ENGINE_FEATURES="$ENGINE_FEATURES cudnn"

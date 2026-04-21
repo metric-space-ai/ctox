@@ -49,11 +49,15 @@ intel-mkl-src = { workspace = true, optional = true }
 [features]
 default = ["swagger-ui"]
 swagger-ui = ["dep:utoipa-swagger-ui"]
-cuda = ["engine-core/cuda"]
+# `cuda` auto-enables `flash-attn` — see the rationale in
+# ctox-engine-cli/Cargo.toml. FlashAttention is part of the baseline NVIDIA
+# configuration; skipping it is a runtime override via
+# ENGINE_DISABLE_FLASH_ATTN, not a build-time default.
+cuda = ["engine-core/cuda", "flash-attn"]
 cudnn = ["engine-core/cudnn"]
 metal = ["engine-core/metal"]
-flash-attn = ["cuda", "engine-core/flash-attn"]
-flash-attn-v3 = ["cuda", "engine-core/flash-attn-v3"]
+flash-attn = ["engine-core/cuda", "engine-core/flash-attn"]
+flash-attn-v3 = ["engine-core/cuda", "engine-core/flash-attn-v3"]
 accelerate = ["engine-core/accelerate"]
 mkl = ["engine-core/mkl"]
 nccl = ["engine-core/nccl"]
