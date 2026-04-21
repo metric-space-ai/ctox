@@ -72,6 +72,19 @@ pub const LAYER_PATTERN: [c_int; 24] = [
 // integration.
 pub type CudaStreamPtr = *mut c_void;
 
+/// Layout-compatible mirror of the C `PFLayerWeights` struct expected
+/// by `launch_prefill_bf16`. Same packing as `LayerWeights` (the
+/// kernel's decode-side struct), since both point at the same
+/// weight tensors — 14 BF16 device pointers per layer, interpreted
+/// as DeltaNet or FullAttention based on `layer_type`. The prefill
+/// kernel doesn't carry an explicit `layer_type` field: it reads
+/// the layer-type flag from the `__constant__ LAYER_TYPE[NUM_LAYERS]`
+/// baked into the `.cu` TU, same as the decode kernel. To keep the
+/// Rust side symmetric and easy to reason about, we reuse
+/// `LayerWeights` for both entry points — the `_pad` slot is tolerated
+/// by the prefill kernel.
+pub type PrefillLayerWeights = LayerWeights;
+
 extern "C" {
     /// Single-token autoregressive decode of the DFlash drafter
     /// (Qwen3.5-0.8B). Reads the current KV / DeltaNet state, runs all
@@ -128,6 +141,51 @@ extern "C" {
         lm_sync_counter: *mut c_uint,
         position: c_int,
         max_seq_len: c_int,
+        stream: CudaStreamPtr,
+    );
+
+    /// Prefill path for the DFlash drafter. Runs all `seq_len` prompt
+    /// tokens through the 24 hybrid layers using cuBLAS BF16 GEMMs +
+    /// a standalone DeltaNet recurrence kernel, populates the per-
+    /// layer KV caches / DN states / conv sliding windows the decode
+    /// kernel depends on, and writes the argmax of the final-position
+    /// LM head into `output_token` — the first generated token.
+    ///
+    /// Caller owns all pointer buffers; contracts match
+    /// `launch_decode` for the shared tensors (`embed_weight`,
+    /// `layer_weights`, `final_norm_w`, `lm_head_w`, `fa_k_cache`,
+    /// `fa_v_cache`, `dn_states`, `conv_bufs`). The scratch tensors
+    /// (`hidden`, `residual`, `normalized`, two `proj_buf`s, `attn_buf`,
+    /// `mlp_buf`, `dn_out_buf`, `beta_buf`, `alpha_buf`, `final_normed`,
+    /// `hidden_bf16_out`, `lm_bmv`, `lm_bmi`) are sized per the
+    /// constants baked into `dflash_megakernel_prefill.cu` and are
+    /// prefill-specific (separate buffers from the decode scratch).
+    pub fn launch_prefill_bf16(
+        token_ids: *const c_int,
+        seq_len: c_int,
+        output_token: *mut c_int,
+        embed_weight: *const c_void,
+        layers: *const PrefillLayerWeights,
+        final_norm_w: *const c_void,
+        lm_head_w: *const c_void,
+        fa_k_cache: *mut c_void,
+        fa_v_cache: *mut c_void,
+        dn_states: *mut f32,
+        conv_bufs: *mut f32,
+        hidden: *mut c_void,
+        residual: *mut c_void,
+        normalized: *mut c_void,
+        proj_buf: *mut c_void,
+        proj_buf2: *mut c_void,
+        attn_buf: *mut c_void,
+        mlp_buf: *mut c_void,
+        dn_out_buf: *mut c_void,
+        beta_buf: *mut f32,
+        alpha_buf: *mut f32,
+        final_normed: *mut c_void,
+        hidden_bf16_out: *mut c_void,
+        lm_bmv: *mut f32,
+        lm_bmi: *mut c_int,
         stream: CudaStreamPtr,
     );
 }

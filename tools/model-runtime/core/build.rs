@@ -56,6 +56,11 @@ fn main() {
         println!("cargo:rustc-link-search={}", build_dir.display());
         println!("cargo:rustc-link-lib=enginecuda");
         println!("cargo:rustc-link-lib=dylib=cudart");
+        // cuBLAS is needed by the DFlash megakernel prefill source
+        // (`dflash_megakernel_prefill.cu`). Every CUDA install ships
+        // libcublas next to libcudart, and any other .cu file that
+        // wants cuBLAS will benefit from having it already linked.
+        println!("cargo:rustc-link-lib=dylib=cublas");
 
         if target.contains("msvc") {
             // nothing to link to
