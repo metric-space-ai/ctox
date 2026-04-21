@@ -2,35 +2,31 @@
 //!
 //! Intentionally NOT an op-bearing type. Operations are kernel
 //! launches that accept `&CudaTensor` inputs and an `&mut CudaTensor`
-//! output. This keeps the model-forward code explicit about what
-//! happens (no hidden `to_dtype` casts, no lazy graphs, no overload
-//! dispatch) which is the whole reason we're leaving candle.
+//! output.
 //!
-//! Only row-major (C-order) storage is supported. If we ever need
-//! column-major views, add a `layout: Layout` field — don't overload
-//! `stride` to fake it.
+//! Only row-major (C-order) storage is supported.
 
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use anyhow::{anyhow, Context, Result};
-use cudarc::driver::{CudaSlice, DeviceRepr};
+use anyhow::{anyhow, Result};
+use cudarc::driver::{CudaSlice, DeviceRepr, ValidAsZeroBits};
 
 use crate::device::DeviceContext;
 use crate::dtype::{DType, DTypeTrait};
 
-/// Shape = N-dimensional row-major extents. Stored as a small Vec so
-/// we don't hard-cap rank; in practice everything the engine uses is
-/// rank-1 to rank-4.
 pub type Shape = Vec<usize>;
-
-/// Stride = element-level stride per axis (not byte stride). For
-/// a non-transposed tensor, stride[i] = product of shape[i+1..].
 pub type Stride = Vec<usize>;
 
-/// Owned CUDA tensor. `T` is the element scalar type (binds at the
-/// type level to a runtime `DType` via `DTypeTrait`).
-pub struct CudaTensor<T: DTypeTrait + DeviceRepr> {
+/// Trait bundle for element types stored in a `CudaTensor`:
+///   * `DTypeTrait`           — our runtime dtype tag
+///   * `DeviceRepr`           — cudarc's "safe to memcpy to device"
+///   * `ValidAsZeroBits`      — so `zeros()` is sound
+pub trait TensorElem: DTypeTrait + DeviceRepr + ValidAsZeroBits + Unpin {}
+
+impl<T: DTypeTrait + DeviceRepr + ValidAsZeroBits + Unpin> TensorElem for T {}
+
+pub struct CudaTensor<T: TensorElem> {
     buf: CudaSlice<T>,
     shape: Shape,
     stride: Stride,
@@ -38,14 +34,19 @@ pub struct CudaTensor<T: DTypeTrait + DeviceRepr> {
     _marker: PhantomData<T>,
 }
 
-impl<T: DTypeTrait + DeviceRepr> CudaTensor<T> {
+impl<T: TensorElem> CudaTensor<T> {
     /// Allocate zeroed storage for `shape`.
     pub fn zeros(device: Arc<DeviceContext>, shape: Shape) -> Result<Self> {
         let n_elems = shape.iter().product::<usize>();
         let stream = device.raw().default_stream();
-        let buf = stream
-            .alloc_zeros::<T>(n_elems)
-            .with_context(|| format!("alloc_zeros({} elems) on device {}", n_elems, device.ordinal()))?;
+        let buf = stream.alloc_zeros::<T>(n_elems).map_err(|e| {
+            anyhow!(
+                "alloc_zeros({} elems) on device {}: {:?}",
+                n_elems,
+                device.ordinal(),
+                e
+            )
+        })?;
         let stride = default_stride(&shape);
         Ok(Self {
             buf,
@@ -74,7 +75,7 @@ impl<T: DTypeTrait + DeviceRepr> CudaTensor<T> {
         let stream = device.raw().default_stream();
         let buf = stream
             .memcpy_stod(host)
-            .with_context(|| format!("memcpy_stod {} elems → device", n_elems))?;
+            .map_err(|e| anyhow!("memcpy_stod {} elems: {:?}", n_elems, e))?;
         let stride = default_stride(&shape);
         Ok(Self {
             buf,
@@ -85,56 +86,46 @@ impl<T: DTypeTrait + DeviceRepr> CudaTensor<T> {
         })
     }
 
-    /// Number of logical elements (product of shape).
     pub fn numel(&self) -> usize {
         self.shape.iter().product()
     }
 
-    /// Runtime dtype tag.
     pub fn dtype(&self) -> DType {
         T::DTYPE
     }
 
-    /// Shape accessor.
     pub fn shape(&self) -> &[usize] {
         &self.shape
     }
 
-    /// Stride accessor.
     pub fn stride(&self) -> &[usize] {
         &self.stride
     }
 
-    /// Device handle.
     pub fn device(&self) -> &Arc<DeviceContext> {
         &self.device
     }
 
-    /// Raw device buffer — for kernel launches. Do not store this
-    /// outside of a single kernel dispatch; the `CudaSlice` is
-    /// tied to this tensor's lifetime.
     pub fn buf(&self) -> &CudaSlice<T> {
         &self.buf
     }
 
-    /// Mutable raw buffer for writing kernel output.
     pub fn buf_mut(&mut self) -> &mut CudaSlice<T> {
         &mut self.buf
     }
 
     /// Download to host. Used by bench tooling, diff checkers, and
-    /// logits readout at the end of forward. NOT a hot-path call —
-    /// implies a stream sync.
+    /// logits readout. NOT a hot-path call — implies a stream sync.
     pub fn to_host(&self) -> Result<Vec<T>> {
         let stream = self.device.raw().default_stream();
         let v = stream
             .memcpy_dtov(&self.buf)
-            .with_context(|| format!("memcpy_dtov {} elems", self.numel()))?;
+            .map_err(|e| anyhow!("memcpy_dtov {} elems: {:?}", self.numel(), e))?;
         Ok(v)
     }
 }
 
-impl<T: DTypeTrait + DeviceRepr> std::fmt::Debug for CudaTensor<T> {
+impl<T: TensorElem> std::fmt::Debug for CudaTensor<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CudaTensor")
             .field("dtype", &T::DTYPE)
