@@ -203,12 +203,3 @@ debug = true
 [profile.dev]
 debug = true
 opt-level = 3
-
-[patch."https://github.com/huggingface/candle.git"]
-candle-core = { path = "../../../../candle-fork-ctox/candle-core" }
-candle-nn = { path = "../../../../candle-fork-ctox/candle-nn" }
-candle-transformers = { path = "../../../../candle-fork-ctox/candle-transformers" }
-candle-flash-attn = { path = "../../../../candle-fork-ctox/candle-flash-attn" }
-candle-flash-attn-v3 = { path = "../../../../candle-fork-ctox/candle-flash-attn-v3" }
-candle-metal-kernels = { path = "../../../../candle-fork-ctox/candle-metal-kernels" }
-candle-kernels = { path = "../../../../candle-fork-ctox/candle-kernels" }
