@@ -261,3 +261,49 @@ impl MegakernelBuffers {
         Ok(())
     }
 }
+
+/// Snapshot of the stateful buffers at a specific decode position.
+/// Owned — not a reference — so callers can safely drop the
+/// [`MegakernelBuffers`] while holding a snapshot for replay.
+///
+/// Memory footprint equals the stateful subset of `MegakernelBuffers`:
+/// ~18 MB F32 for `dn_states` + 1.7 MB F32 for `conv_bufs`. The FA
+/// KV cache is NOT snapshotted — rolling back the position counter
+/// is enough because the kernel will overwrite ring slots on the
+/// next write, and the tree/chain mask only reads `[0..position)`
+/// entries. (This is the same shortcut the reference DFlash chain-
+/// stepper takes for the FA KV — see commit log for qwen35_target.)
+///
+/// DN state + conv sliding window MUST be snapshotted because their
+/// recurrences (exp-decay gating + conv window) are non-invertible.
+pub struct MegakernelStateSnapshot {
+    pub position: i32,
+    pub dn_states: Tensor,
+    pub conv_bufs: Tensor,
+}
+
+impl MegakernelBuffers {
+    /// Capture the current stateful buffers into a snapshot. The
+    /// snapshot is a device-to-device copy; caller can `restore`
+    /// it later to roll back drafter state on a verify reject.
+    pub fn snapshot_state(&self, position: i32) -> Result<MegakernelStateSnapshot> {
+        Ok(MegakernelStateSnapshot {
+            position,
+            dn_states: self.dn_states.copy()?,
+            conv_bufs: self.conv_bufs.copy()?,
+        })
+    }
+
+    /// Restore DN state + conv sliding window from a snapshot. The
+    /// FA KV cache is deliberately NOT restored — the caller's
+    /// position counter tells the kernel where to write next, and
+    /// stale ring entries past that position are overwritten on
+    /// next step. Caller must also reset barrier_counter /
+    /// barrier_generation / lm_sync_counter; those are persistent-
+    /// kernel sync state, not decode state.
+    pub fn restore_state(&mut self, snap: &MegakernelStateSnapshot) -> Result<()> {
+        self.dn_states = snap.dn_states.copy()?;
+        self.conv_bufs = snap.conv_bufs.copy()?;
+        Ok(())
+    }
+}

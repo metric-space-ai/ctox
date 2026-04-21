@@ -19,7 +19,7 @@
 use candle_core::{Device, Result, Tensor};
 use std::ffi::{c_int, c_uint, c_void};
 
-use super::buffers::MegakernelBuffers;
+use super::buffers::{MegakernelBuffers, MegakernelStateSnapshot};
 use super::constants::*;
 use super::weights::MegakernelWeights;
 use crate::cuda::dflash_megakernel::{launch_decode, launch_prefill_bf16, CudaStreamPtr};
@@ -67,6 +67,25 @@ impl MegakernelDrafter {
     pub fn reset(&mut self) -> Result<()> {
         self.buffers.reset()?;
         self.position = 0;
+        Ok(())
+    }
+
+    /// Capture the current drafter state — position + DN/conv
+    /// recurrences — into a snapshot. Used by the spec-decode loop
+    /// to roll back after a target verify rejects tokens: snapshot
+    /// before the K drafter steps, then on reject restore the
+    /// snapshot and re-step() only the accepted prefix to re-seed
+    /// the recurrence from a clean known state.
+    pub fn snapshot_state(&self) -> Result<MegakernelStateSnapshot> {
+        self.buffers.snapshot_state(self.position)
+    }
+
+    /// Roll back to a previously-captured snapshot. Restores DN /
+    /// conv buffers bit-exactly; the FA KV cache's stale tail will
+    /// be overwritten by subsequent steps past `position`.
+    pub fn restore_state(&mut self, snap: &MegakernelStateSnapshot) -> Result<()> {
+        self.buffers.restore_state(snap)?;
+        self.position = snap.position;
         Ok(())
     }
 
