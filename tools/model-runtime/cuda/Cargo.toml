@@ -27,6 +27,7 @@ bytemuck = { workspace = true }
 # launch and memcpy is explicit.
 cudarc = { version = "0.17", default-features = false, features = [
     "cuda-12060",
+    "dynamic-linking",
     "driver",
     "cublas",
     "nvrtc",
