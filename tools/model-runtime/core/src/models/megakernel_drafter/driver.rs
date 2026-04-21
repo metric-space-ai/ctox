@@ -277,7 +277,8 @@ fn addr_bf16(t: &Tensor) -> Result<u64> {
     match &*storage {
         candle_core::Storage::Cuda(c) => {
             let s = c.as_cuda_slice::<half::bf16>()?;
-            let (addr, _g) = s.slice(layout.start_offset()..).device_ptr(s.stream());
+            let slice = s.slice(layout.start_offset()..);
+            let (addr, _g) = slice.device_ptr(s.stream());
             Ok(addr)
         }
         _ => candle_core::bail!("non-CUDA tensor"),
@@ -293,7 +294,8 @@ fn addr_f32(t: &Tensor) -> Result<u64> {
     match &*storage {
         candle_core::Storage::Cuda(c) => {
             let s = c.as_cuda_slice::<f32>()?;
-            let (addr, _g) = s.slice(layout.start_offset()..).device_ptr(s.stream());
+            let slice = s.slice(layout.start_offset()..);
+            let (addr, _g) = slice.device_ptr(s.stream());
             Ok(addr)
         }
         _ => candle_core::bail!("non-CUDA tensor"),
@@ -312,7 +314,8 @@ fn addr_i64(t: &Tensor) -> Result<u64> {
     match &*storage {
         candle_core::Storage::Cuda(c) => {
             let s = c.as_cuda_slice::<i64>()?;
-            let (addr, _g) = s.slice(layout.start_offset()..).device_ptr(s.stream());
+            let slice = s.slice(layout.start_offset()..);
+            let (addr, _g) = slice.device_ptr(s.stream());
             Ok(addr)
         }
         _ => candle_core::bail!("non-CUDA tensor"),
@@ -328,7 +331,8 @@ fn addr_u32(t: &Tensor) -> Result<u64> {
     match &*storage {
         candle_core::Storage::Cuda(c) => {
             let s = c.as_cuda_slice::<u32>()?;
-            let (addr, _g) = s.slice(layout.start_offset()..).device_ptr(s.stream());
+            let slice = s.slice(layout.start_offset()..);
+            let (addr, _g) = slice.device_ptr(s.stream());
             Ok(addr)
         }
         _ => candle_core::bail!("non-CUDA tensor"),

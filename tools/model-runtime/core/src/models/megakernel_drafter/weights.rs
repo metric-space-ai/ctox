@@ -270,7 +270,8 @@ fn device_ptr(t: &Tensor) -> Result<u64> {
     match &*storage {
         candle_core::Storage::Cuda(c) => {
             let s = c.as_cuda_slice::<half::bf16>()?;
-            let (addr, _g) = s.slice(layout.start_offset()..).device_ptr(s.stream());
+            let slice = s.slice(layout.start_offset()..);
+            let (addr, _g) = slice.device_ptr(s.stream());
             Ok(addr)
         }
         _ => candle_core::bail!("MegakernelWeights: tensor must live on CUDA"),
@@ -287,7 +288,8 @@ fn raw_u8_addr(t: &Tensor) -> u64 {
     match &*storage {
         candle_core::Storage::Cuda(c) => {
             let s = c.as_cuda_slice::<u8>().expect("u8 CudaSlice");
-            let (addr, _g) = s.slice(layout.start_offset()..).device_ptr(s.stream());
+            let slice = s.slice(layout.start_offset()..);
+            let (addr, _g) = slice.device_ptr(s.stream());
             addr
         }
         _ => panic!("raw_u8_addr: non-CUDA tensor"),
