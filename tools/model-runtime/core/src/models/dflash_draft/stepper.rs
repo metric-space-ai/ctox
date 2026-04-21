@@ -26,6 +26,7 @@ use candle_core::{DType, IndexOp, Result, Tensor, D};
 
 use super::capture::FeatureCapture;
 use super::config::DFlashDraftConfig;
+use super::ddtree::{build_ddtree, build_tree_mask, follow_verified_tree, DDTree};
 use super::model::DFlashDraftModel;
 use super::ring::TargetFeatureRing;
 use super::runner::{DFlashDraftRunner, DraftStepOpts};
@@ -79,6 +80,39 @@ pub struct StepOutcome {
     /// `accepted.len()` when the draft ran out of candidates to
     /// propose (i.e. full block accepted).
     pub draft_accepted: usize,
+}
+
+/// Extra options for the DDTree tree-verify stepper path.
+#[derive(Debug, Clone)]
+pub struct TreeStepperOpts {
+    /// Maximum number of non-root nodes in the tree. Reference peak
+    /// config for Qwen3.5-27B Q4_K_M is 22.
+    pub budget: usize,
+    /// Top-K per draft position fed into the tree builder. Must be ≥ 2
+    /// for the tree to be able to branch at all.
+    pub top_k: usize,
+    /// Softmax temperature for top-K extraction (<1 sharpens; see
+    /// reference note: Q4_K_M flattens the draft distribution and
+    /// temperature < 1 compensates).
+    pub temperature: f32,
+    /// Pre-seed the full top-1 chain before best-first expansion —
+    /// guarantees AL never regresses below chain mode.
+    pub chain_seed: bool,
+    /// Shared with chain stepper: how many ring rows to feed the
+    /// draft as cross-attention context.
+    pub ctx_len: usize,
+}
+
+impl Default for TreeStepperOpts {
+    fn default() -> Self {
+        Self {
+            budget: super::ddtree::DEFAULT_DDTREE_BUDGET,
+            top_k: 8,
+            temperature: 1.0,
+            chain_seed: true,
+            ctx_len: 64,
+        }
+    }
 }
 
 /// Chain-verify stepper. Owns the ring (mutably, behind a mutex so
@@ -318,6 +352,240 @@ impl DFlashChainStepper {
         }
 
         let _ = n_accepted; // retained for readability of the accept block above
+
+        Ok((
+            StepOutcome {
+                accepted,
+                draft_accepted,
+            },
+            StepTimings {
+                verify_ms,
+                commit_ms,
+            },
+        ))
+    }
+
+    /// Run one DDTree tree-verify step. Returns the committed token(s).
+    ///
+    /// Functional mirror of [`Self::step`] — same inputs, same outputs —
+    /// but the verify stage runs the target over a DFS-flattened
+    /// tree of speculated tokens with an ancestor-only attention mask
+    /// instead of a causal sequence. Acceptance is walking the tree
+    /// greedily following the target's per-node argmax (see
+    /// [`follow_verified_tree`]). On Qwen3.5-27B Q4_K_M + budget=22
+    /// the reference reports AL ≈ 8.3 vs ~3 for chain, which is the
+    /// headline speedup DFlash+DDTree reports (~3.5× over AR baseline).
+    ///
+    /// V1 limitation — RoPE position_ids for the tree nodes are built
+    /// linearly (`past_kv_len + i` for slot i) rather than by tree
+    /// depth (`past_kv_len + tree.depths[i - 1]`). That is numerically
+    /// incorrect relative to the reference (the target sees the depth
+    /// as the position, not the DFS index), and a follow-up commit
+    /// switches to depth-based positions once the target-forward
+    /// helper grows a `position_ids: Option<&Tensor>` override. The
+    /// chain-seed path still produces non-garbage output because the
+    /// spine of the tree (ranks=0 at every depth) matches the linear
+    /// order; branches will look drunk until the RoPE fix lands.
+    pub fn step_tree<T: DFlashTargetForward>(
+        &self,
+        target: &T,
+        draft: &DFlashDraftModel,
+        last_committed_token: u32,
+        past_kv_len: usize,
+        opts: &TreeStepperOpts,
+    ) -> Result<(StepOutcome, StepTimings)> {
+        if opts.budget == 0 {
+            candle_core::bail!("DFlashChainStepper::step_tree: budget must be > 0");
+        }
+        if opts.top_k < 2 {
+            candle_core::bail!(
+                "DFlashChainStepper::step_tree: top_k must be >= 2 (got {})",
+                opts.top_k
+            );
+        }
+
+        // ── 1. Draft forward → per-position top-K (log-probs + ids).
+        let draft_out = {
+            let ring = self.ring.lock().unwrap();
+            let runner = DFlashDraftRunner::new(draft, target.embed_tokens());
+            let ropts = DraftStepOpts {
+                top_k: opts.top_k,
+                ctx_len: opts.ctx_len,
+            };
+            runner.step(last_committed_token, &ring, &ropts, |h| target.apply_lm_head(h))?
+        };
+
+        // ── 2. Flatten per-position top-K into [L, K] arrays for the
+        //       tree builder. L = block_size - 1 (skip position 0
+        //       which just re-predicts `last_committed_token`; see
+        //       the reference's `extract_draft_topk(.. +vocab, L=q_len-1, ..)`
+        //       in `test_dflash.cpp`).
+        let block = self.cfg.block_size;
+        if block < 2 {
+            candle_core::bail!(
+                "step_tree: block_size must be >= 2 (got {block}) for a tree to exist"
+            );
+        }
+        let l_max = block - 1;
+        let k = opts.top_k;
+        let mut top_log_probs = Vec::with_capacity(l_max * k);
+        let mut top_token_ids = Vec::with_capacity(l_max * k);
+        for pos in 1..block {
+            let ids = &draft_out.top_k_ids[pos];
+            let lps = &draft_out.top_k_logprobs[pos];
+            if ids.len() < k || lps.len() < k {
+                candle_core::bail!(
+                    "step_tree: draft top-K[{pos}] len={} / {} < k={}",
+                    ids.len(),
+                    lps.len(),
+                    k
+                );
+            }
+            for r in 0..k {
+                top_log_probs.push(lps[r]);
+                top_token_ids.push(ids[r] as i32);
+            }
+        }
+
+        // ── 3. Build the DDTree.
+        let tree: DDTree = build_ddtree(
+            &top_log_probs,
+            &top_token_ids,
+            l_max,
+            k,
+            opts.budget,
+            opts.chain_seed,
+        );
+        let n = tree.side_len(); // 1 + n_nodes — verify feed length
+        if tree.n_nodes == 0 {
+            // Degenerate: no children to verify. Fall back to
+            // AR-style one-token commit via chain stepper. Rare — only
+            // happens if budget=0 or l_max=0, both gated above.
+            candle_core::bail!(
+                "step_tree: tree has 0 nodes (budget={}, l_max={})",
+                opts.budget,
+                l_max
+            );
+        }
+
+        // ── 4. Assemble verify feed = [last_tok, tree.token_ids...]
+        let device = target.embed_tokens().embeddings().device();
+        let mut feed = Vec::with_capacity(n);
+        feed.push(last_committed_token);
+        for &tid in &tree.token_ids {
+            feed.push(tid as u32);
+        }
+        let verify_ids = Tensor::from_vec(feed.clone(), (1, n), device)?;
+
+        // ── 5. Build tree attention mask → [1, 1, n, past_kv_len + n]
+        //       in the target's dtype. `build_tree_mask` emits f16;
+        //       we cast to the target's dtype via `to_dtype` on the
+        //       resulting tensor (BF16 on CUDA, F32 on CPU).
+        let (mask_f16, q_len, kv_len) = build_tree_mask(&tree, past_kv_len);
+        debug_assert_eq!(q_len, n);
+        debug_assert_eq!(kv_len, past_kv_len + n);
+        // Build the mask on the target device as F32 first — candle's
+        // `Tensor::from_vec` lacks a homogeneous `half::f16` path
+        // across all backends — then cast to the target's dtype
+        // (BF16/F16/F32 depending on load config) to match the
+        // attention kernel's expected operand type.
+        let mask_f32: Vec<f32> = mask_f16.iter().map(|h| h.to_f32()).collect();
+        let model_dtype = target.embed_tokens().embeddings().dtype();
+        let mask = Tensor::from_vec(mask_f32, (1, 1, q_len, kv_len), device)?
+            .to_dtype(model_dtype)?;
+
+        // ── 6. Snapshot recurrent state + verify forward (masked).
+        let t_verify_start = std::time::Instant::now();
+        let recurrent_snapshot = target.snapshot_recurrent_state()?;
+        let mut verify_capture =
+            FeatureCapture::new(self.cfg.dflash.target_layer_ids.clone());
+        let verify_logits = target.forward_with_capture_masked(
+            &verify_ids,
+            past_kv_len,
+            &mask,
+            &mut verify_capture,
+        )?;
+        verify_capture.validate().map_err(candle_core::Error::msg)?;
+
+        // ── 7. Posterior = argmax per slot.
+        let posterior_u32: Vec<u32> = {
+            let am = verify_logits.i(0)?.argmax(D::Minus1)?;
+            match am.dtype() {
+                DType::U32 => am.to_vec1()?,
+                _ => am.to_dtype(DType::U32)?.to_vec1::<u32>()?,
+            }
+        };
+        let posterior: Vec<i32> = posterior_u32.iter().map(|&v| v as i32).collect();
+        let verify_ms = t_verify_start.elapsed().as_secs_f64() * 1000.0;
+
+        // ── 8. Walk tree → accepted flat indices + bonus token.
+        let (accepted_flat, bonus_i32) = follow_verified_tree(&tree, &posterior);
+        // accepted_flat[0] is always 0 (root); we commit slots [1..].
+        let draft_accepted = accepted_flat.len().saturating_sub(1);
+        let mut accepted: Vec<u32> = Vec::with_capacity(draft_accepted + 1);
+        for &slot_i in &accepted_flat[1..] {
+            // slot_i in 1..=n_nodes maps to tree.token_ids[slot_i - 1]
+            accepted.push(tree.token_ids[(slot_i as usize) - 1] as u32);
+        }
+        accepted.push(bonus_i32 as u32);
+
+        // ── 9. Rollback + commit replay. Same pattern as chain — only
+        //       the commit-feed ids differ (tree-accepted chain instead
+        //       of draft-accepted chain).
+        let t_commit_start = std::time::Instant::now();
+        let full_accept = draft_accepted == tree.n_nodes;
+        let (commit_capture, commit_ms) = if full_accept {
+            // V1 caveat: when `full_accept`, the verify forward's KV +
+            // recurrent state is correct ONLY if the accepted path
+            // matches the linear spine (ranks=0 at every depth). When
+            // the walk took a sibling branch mid-tree the verify KV
+            // holds the DFS-prefix state, not the accepted-path
+            // state. The RoPE fix follow-up commit will make this
+            // always-safe; for now we conservatively fall through to
+            // the rollback path whenever the accepted slot indices
+            // aren't the linear spine [0, 1, 2, …, draft_accepted].
+            let linear_spine: bool = accepted_flat
+                .iter()
+                .enumerate()
+                .all(|(pos, &slot)| slot == pos as i32);
+            if linear_spine {
+                (verify_capture, 0.0)
+            } else {
+                target.truncate_attention_to(past_kv_len)?;
+                target.restore_recurrent_state(&recurrent_snapshot)?;
+                let mut commit_ids = Vec::with_capacity(draft_accepted + 1);
+                commit_ids.push(last_committed_token);
+                for i in 0..draft_accepted {
+                    commit_ids.push(accepted[i]);
+                }
+                let commit_input = Tensor::from_vec(commit_ids, (1, draft_accepted + 1), device)?;
+                let mut cap = FeatureCapture::new(self.cfg.dflash.target_layer_ids.clone());
+                let _ = target.forward_with_capture(&commit_input, past_kv_len, &mut cap)?;
+                cap.validate().map_err(candle_core::Error::msg)?;
+                (cap, t_commit_start.elapsed().as_secs_f64() * 1000.0)
+            }
+        } else {
+            target.truncate_attention_to(past_kv_len)?;
+            target.restore_recurrent_state(&recurrent_snapshot)?;
+            let mut commit_ids = Vec::with_capacity(draft_accepted + 1);
+            commit_ids.push(last_committed_token);
+            for i in 0..draft_accepted {
+                commit_ids.push(accepted[i]);
+            }
+            let commit_input = Tensor::from_vec(commit_ids, (1, draft_accepted + 1), device)?;
+            let mut cap = FeatureCapture::new(self.cfg.dflash.target_layer_ids.clone());
+            let _ = target.forward_with_capture(&commit_input, past_kv_len, &mut cap)?;
+            cap.validate().map_err(candle_core::Error::msg)?;
+            (cap, t_commit_start.elapsed().as_secs_f64() * 1000.0)
+        };
+
+        // ── 10. Ring append — rows 0..=draft_accepted of commit_capture.
+        let n_ring_rows = draft_accepted + 1;
+        if n_ring_rows > 0 {
+            let captured = fuse_captured_features(&commit_capture, 0, n_ring_rows)?;
+            let mut ring = self.ring.lock().unwrap();
+            ring.append(&captured)?;
+        }
 
         Ok((
             StepOutcome {
