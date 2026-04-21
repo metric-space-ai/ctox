@@ -105,33 +105,58 @@ impl MegakernelDrafter {
             .packed_ptr()
             .ok_or_else(|| candle_core::Error::msg("MegakernelDrafter: weights not packed"))?;
 
+        // NB: `token_tensor` was built as I64 via `Tensor::from_vec`
+        // taking `Vec<i32>` which candle widens to I64 by default.
+        // The kernel reads 32-bit ints; on little-endian x86_64 the
+        // low 32 bits of each I64 element = the original i32 value.
+        let token_addr = addr_i64(&token_tensor)?;
+        let out_addr = addr_i64(&self.buffers.out_token)?;
+        let fa_k = addr_bf16(&self.buffers.fa_k_cache)?;
+        let fa_v = addr_bf16(&self.buffers.fa_v_cache)?;
+        let dn_states = addr_f32(&self.buffers.dn_states)?;
+        let conv_bufs = addr_f32(&self.buffers.conv_bufs)?;
+        let pf_hidden = addr_bf16(&self.buffers.pf_hidden)?;
+        let pf_residual = addr_bf16(&self.buffers.pf_residual)?;
+        let pf_normalized = addr_bf16(&self.buffers.pf_normalized)?;
+        let pf_proj = addr_bf16(&self.buffers.pf_proj_buf)?;
+        let pf_proj2 = addr_bf16(&self.buffers.pf_proj_buf2)?;
+        let pf_attn = addr_bf16(&self.buffers.pf_attn_buf)?;
+        let pf_mlp = addr_bf16(&self.buffers.pf_mlp_buf)?;
+        let pf_dn_out = addr_bf16(&self.buffers.pf_dn_out_buf)?;
+        let pf_beta = addr_f32(&self.buffers.pf_beta_buf)?;
+        let pf_alpha = addr_f32(&self.buffers.pf_alpha_buf)?;
+        let pf_final_normed = addr_bf16(&self.buffers.pf_final_normed)?;
+        let pf_hidden_out = addr_bf16(&self.buffers.pf_hidden_bf16_out)?;
+        let pf_lm_bmv = addr_f32(&self.buffers.pf_lm_bmv)?;
+        let pf_lm_bmi = addr_i64(&self.buffers.pf_lm_bmi)?;
+
         unsafe {
             launch_prefill_bf16(
-                device_ptr_i32(&token_tensor)? as *const c_int,
+                token_addr as *const c_int,
                 seq_len as c_int,
-                device_ptr_i32(&self.buffers.out_token)? as *mut c_int,
+                out_addr as *mut c_int,
                 self.weights.embed_ptr(),
                 packed as *const _,
                 self.weights.final_norm_ptr(),
                 self.weights.lm_head_ptr(),
-                device_ptr_bf16(&self.buffers.fa_k_cache)? as *mut c_void,
-                device_ptr_bf16(&self.buffers.fa_v_cache)? as *mut c_void,
-                device_ptr_f32(&self.buffers.dn_states)? as *mut f32,
-                device_ptr_f32(&self.buffers.conv_bufs)? as *mut f32,
-                device_ptr_bf16(&self.buffers.pf_hidden)? as *mut c_void,
-                device_ptr_bf16(&self.buffers.pf_residual)? as *mut c_void,
-                device_ptr_bf16(&self.buffers.pf_normalized)? as *mut c_void,
-                device_ptr_bf16(&self.buffers.pf_proj_buf)? as *mut c_void,
-                device_ptr_bf16(&self.buffers.pf_proj_buf2)? as *mut c_void,
-                device_ptr_bf16(&self.buffers.pf_attn_buf)? as *mut c_void,
-                device_ptr_bf16(&self.buffers.pf_mlp_buf)? as *mut c_void,
-                device_ptr_bf16(&self.buffers.pf_dn_out_buf)? as *mut c_void,
-                device_ptr_f32(&self.buffers.pf_beta_buf)? as *mut f32,
-                device_ptr_f32(&self.buffers.pf_alpha_buf)? as *mut f32,
-                device_ptr_bf16(&self.buffers.pf_final_normed)? as *mut c_void,
-                device_ptr_bf16(&self.buffers.pf_hidden_bf16_out)? as *mut c_void,
-                device_ptr_f32(&self.buffers.pf_lm_bmv)? as *mut f32,
-                device_ptr_i32(&self.buffers.pf_lm_bmi)? as *mut c_int,
+                fa_k as *mut c_void,
+                fa_v as *mut c_void,
+                dn_states as *mut f32,
+                conv_bufs as *mut f32,
+                pf_hidden as *mut c_void,
+                pf_residual as *mut c_void,
+                pf_normalized as *mut c_void,
+                pf_proj as *mut c_void,
+                pf_proj2 as *mut c_void,
+                pf_attn as *mut c_void,
+                pf_mlp as *mut c_void,
+                pf_dn_out as *mut c_void,
+                pf_beta as *mut f32,
+                pf_alpha as *mut f32,
+                pf_final_normed as *mut c_void,
+                pf_hidden_out as *mut c_void,
+                pf_lm_bmv as *mut f32,
+                pf_lm_bmi as *mut c_int,
                 stream,
             );
         }
@@ -157,34 +182,56 @@ impl MegakernelDrafter {
             .packed_ptr()
             .ok_or_else(|| candle_core::Error::msg("MegakernelDrafter: weights not packed"))?;
 
+        let out_addr = addr_i64(&self.buffers.out_token)?;
+        let fa_k = addr_bf16(&self.buffers.fa_k_cache)?;
+        let fa_v = addr_bf16(&self.buffers.fa_v_cache)?;
+        let dn_states = addr_f32(&self.buffers.dn_states)?;
+        let conv_bufs = addr_f32(&self.buffers.conv_bufs)?;
+        let hidden = addr_bf16(&self.buffers.hidden_buffer)?;
+        let activations = addr_f32(&self.buffers.g_activations)?;
+        let residual = addr_bf16(&self.buffers.g_residual)?;
+        let qkv = addr_f32(&self.buffers.g_qkv_scratch)?;
+        let kv_sc = addr_f32(&self.buffers.g_kv_scratch)?;
+        let attn_out = addr_f32(&self.buffers.g_attn_out)?;
+        let mlp = addr_f32(&self.buffers.g_mlp_inter)?;
+        let z_sc = addr_f32(&self.buffers.g_z_scratch)?;
+        let beta_sc = addr_f32(&self.buffers.g_beta_scratch)?;
+        let alpha_sc = addr_f32(&self.buffers.g_alpha_scratch)?;
+        let normalized = addr_f32(&self.buffers.g_normalized)?;
+        let bar_c = addr_u32(&self.buffers.barrier_counter)?;
+        let bar_g = addr_u32(&self.buffers.barrier_generation)?;
+        let bmv = addr_f32(&self.buffers.block_max_vals)?;
+        let bmi = addr_i64(&self.buffers.block_max_idxs)?;
+        let lm_sync = addr_u32(&self.buffers.lm_sync_counter)?;
+
         unsafe {
             launch_decode(
                 input_token as c_int,
-                device_ptr_i32(&self.buffers.out_token)? as *mut c_int,
+                out_addr as *mut c_int,
                 self.weights.embed_ptr(),
                 packed as *const _,
                 self.weights.final_norm_ptr(),
                 self.weights.lm_head_ptr(),
-                device_ptr_bf16(&self.buffers.fa_k_cache)? as *mut c_void,
-                device_ptr_bf16(&self.buffers.fa_v_cache)? as *mut c_void,
-                device_ptr_f32(&self.buffers.dn_states)? as *mut c_void,
-                device_ptr_f32(&self.buffers.conv_bufs)? as *mut c_void,
-                device_ptr_bf16(&self.buffers.hidden_buffer)? as *mut c_void,
-                device_ptr_f32(&self.buffers.g_activations)? as *mut c_void,
-                device_ptr_bf16(&self.buffers.g_residual)? as *mut c_void,
-                device_ptr_f32(&self.buffers.g_qkv_scratch)? as *mut c_void,
-                device_ptr_f32(&self.buffers.g_kv_scratch)? as *mut c_void,
-                device_ptr_f32(&self.buffers.g_attn_out)? as *mut c_void,
-                device_ptr_f32(&self.buffers.g_mlp_inter)? as *mut c_void,
-                device_ptr_f32(&self.buffers.g_z_scratch)? as *mut c_void,
-                device_ptr_f32(&self.buffers.g_beta_scratch)? as *mut c_void,
-                device_ptr_f32(&self.buffers.g_alpha_scratch)? as *mut c_void,
-                device_ptr_f32(&self.buffers.g_normalized)? as *mut c_void,
-                device_ptr_u32(&self.buffers.barrier_counter)? as *mut c_uint,
-                device_ptr_u32(&self.buffers.barrier_generation)? as *mut c_uint,
-                device_ptr_f32(&self.buffers.block_max_vals)? as *mut f32,
-                device_ptr_i32(&self.buffers.block_max_idxs)? as *mut c_int,
-                device_ptr_u32(&self.buffers.lm_sync_counter)? as *mut c_uint,
+                fa_k as *mut c_void,
+                fa_v as *mut c_void,
+                dn_states as *mut c_void,
+                conv_bufs as *mut c_void,
+                hidden as *mut c_void,
+                activations as *mut c_void,
+                residual as *mut c_void,
+                qkv as *mut c_void,
+                kv_sc as *mut c_void,
+                attn_out as *mut c_void,
+                mlp as *mut c_void,
+                z_sc as *mut c_void,
+                beta_sc as *mut c_void,
+                alpha_sc as *mut c_void,
+                normalized as *mut c_void,
+                bar_c as *mut c_uint,
+                bar_g as *mut c_uint,
+                bmv as *mut f32,
+                bmi as *mut c_int,
+                lm_sync as *mut c_uint,
                 self.position,
                 MAX_SEQ_LEN as c_int,
                 stream,
@@ -211,84 +258,81 @@ fn cuda_stream(device: &Device) -> Result<CudaStreamPtr> {
     Ok(stream.cu_stream() as CudaStreamPtr)
 }
 
-fn device_ptr_bf16(t: &Tensor) -> Result<*mut half::bf16> {
+// All device-pointer helpers return a bare `u64` — the raw CUDA
+// device address of the tensor's first live element. The caller
+// casts to `*mut T` at the call site. This structure keeps the
+// lifetime narrow: the `MutexGuard` protecting `Storage` is held
+// only inside the helper, released on return, and the returned
+// `u64` has no borrow attached. The underlying device allocation
+// remains valid for as long as the source `Tensor` is alive, so
+// the pointer is stable for the duration of a kernel launch that
+// references the tensor.
+
+fn addr_bf16(t: &Tensor) -> Result<u64> {
     use candle_core::cuda_backend::cudarc::driver::DevicePtr;
     if t.dtype() != candle_core::DType::BF16 {
         candle_core::bail!("expected BF16 tensor, got {:?}", t.dtype());
     }
     let (storage, layout) = t.storage_and_layout();
-    let s = match &*storage {
-        candle_core::Storage::Cuda(c) => c.as_cuda_slice::<half::bf16>()?,
+    match &*storage {
+        candle_core::Storage::Cuda(c) => {
+            let s = c.as_cuda_slice::<half::bf16>()?;
+            let (addr, _g) = s.slice(layout.start_offset()..).device_ptr(s.stream());
+            Ok(addr)
+        }
         _ => candle_core::bail!("non-CUDA tensor"),
-    };
-    Ok(s.slice(layout.start_offset()..).device_ptr(s.stream()).0 as *mut half::bf16)
+    }
 }
 
-fn device_ptr_f32(t: &Tensor) -> Result<*mut f32> {
+fn addr_f32(t: &Tensor) -> Result<u64> {
     use candle_core::cuda_backend::cudarc::driver::DevicePtr;
     if t.dtype() != candle_core::DType::F32 {
         candle_core::bail!("expected F32 tensor, got {:?}", t.dtype());
     }
     let (storage, layout) = t.storage_and_layout();
-    let s = match &*storage {
-        candle_core::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
-        _ => candle_core::bail!("non-CUDA tensor"),
-    };
-    Ok(s.slice(layout.start_offset()..).device_ptr(s.stream()).0 as *mut f32)
-}
-
-fn device_ptr_i32(t: &Tensor) -> Result<*mut i32> {
-    // Candle's scheduler maps "i32" via the closest canonical; most
-    // model tensors use I64 for indices. For our megakernel inputs we
-    // allocate with DType::I64 and reinterpret the low 32 bits. The
-    // kernel expects packed i32, so the caller must have sized the
-    // tensor correctly (NOT using I64 host-side — that would double
-    // the stride). Currently all `*_i32` buffers are allocated via
-    // `Tensor::zeros(.., DType::I64, ..)` above; we accept both i32
-    // and i64 dtypes here — when i64 we assume the consumer only
-    // reads the low bytes, which matches the kernel's `int*` cast
-    // on nvcc's little-endian linux/windows platforms. A dedicated
-    // I32 dtype is tracked upstream in candle but not yet landed.
-    use candle_core::cuda_backend::cudarc::driver::DevicePtr;
-    let (storage, layout) = t.storage_and_layout();
     match &*storage {
-        candle_core::Storage::Cuda(c) => match t.dtype() {
-            candle_core::DType::I64 => {
-                let s = c.as_cuda_slice::<i64>()?;
-                Ok(
-                    s.slice(layout.start_offset()..).device_ptr(s.stream()).0
-                        as *mut i32,
-                )
-            }
-            candle_core::DType::U32 => {
-                let s = c.as_cuda_slice::<u32>()?;
-                Ok(
-                    s.slice(layout.start_offset()..).device_ptr(s.stream()).0
-                        as *mut i32,
-                )
-            }
-            other => {
-                candle_core::bail!(
-                    "expected I64 or U32 tensor for i32 pointer, got {:?}",
-                    other
-                )
-            }
-        },
+        candle_core::Storage::Cuda(c) => {
+            let s = c.as_cuda_slice::<f32>()?;
+            let (addr, _g) = s.slice(layout.start_offset()..).device_ptr(s.stream());
+            Ok(addr)
+        }
         _ => candle_core::bail!("non-CUDA tensor"),
     }
 }
 
-fn device_ptr_u32(t: &Tensor) -> Result<*mut u32> {
+fn addr_i64(t: &Tensor) -> Result<u64> {
+    // I64-allocated scratch tensor reinterpreted as i32 on the kernel
+    // side (little-endian only; the kernel only reads element 0
+    // anyway for `out_token` / `lm_bmi`).
+    use candle_core::cuda_backend::cudarc::driver::DevicePtr;
+    if t.dtype() != candle_core::DType::I64 {
+        candle_core::bail!("expected I64 tensor, got {:?}", t.dtype());
+    }
+    let (storage, layout) = t.storage_and_layout();
+    match &*storage {
+        candle_core::Storage::Cuda(c) => {
+            let s = c.as_cuda_slice::<i64>()?;
+            let (addr, _g) = s.slice(layout.start_offset()..).device_ptr(s.stream());
+            Ok(addr)
+        }
+        _ => candle_core::bail!("non-CUDA tensor"),
+    }
+}
+
+fn addr_u32(t: &Tensor) -> Result<u64> {
     use candle_core::cuda_backend::cudarc::driver::DevicePtr;
     if t.dtype() != candle_core::DType::U32 {
         candle_core::bail!("expected U32 tensor, got {:?}", t.dtype());
     }
     let (storage, layout) = t.storage_and_layout();
-    let s = match &*storage {
-        candle_core::Storage::Cuda(c) => c.as_cuda_slice::<u32>()?,
+    match &*storage {
+        candle_core::Storage::Cuda(c) => {
+            let s = c.as_cuda_slice::<u32>()?;
+            let (addr, _g) = s.slice(layout.start_offset()..).device_ptr(s.stream());
+            Ok(addr)
+        }
         _ => candle_core::bail!("non-CUDA tensor"),
-    };
-    Ok(s.slice(layout.start_offset()..).device_ptr(s.stream()).0 as *mut u32)
+    }
 }
 
 fn read_out_token(out: &Tensor) -> Result<i32> {

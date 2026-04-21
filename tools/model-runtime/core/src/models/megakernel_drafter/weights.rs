@@ -193,18 +193,18 @@ impl MegakernelWeights {
     pub fn packed_ptr(&self) -> Option<*const LayerWeights> {
         self.packed
             .as_ref()
-            .map(|t| unsafe { raw_device_ptr_u8(t) as *const LayerWeights })
+            .map(|t| raw_u8_addr(t) as *const LayerWeights)
     }
 
     /// Device pointer for the embed table (BF16).
     pub fn embed_ptr(&self) -> *const std::ffi::c_void {
-        unsafe { raw_device_ptr_bf16(&self.embed) as *const _ }
+        raw_bf16_addr(&self.embed) as *const _
     }
     pub fn final_norm_ptr(&self) -> *const std::ffi::c_void {
-        unsafe { raw_device_ptr_bf16(&self.final_norm) as *const _ }
+        raw_bf16_addr(&self.final_norm) as *const _
     }
     pub fn lm_head_ptr(&self) -> *const std::ffi::c_void {
-        unsafe { raw_device_ptr_bf16(&self.lm_head) as *const _ }
+        raw_bf16_addr(&self.lm_head) as *const _
     }
 }
 
@@ -267,33 +267,29 @@ fn device_ptr(t: &Tensor) -> Result<u64> {
         );
     }
     let (storage, layout) = t.storage_and_layout();
-    let offset_elements = layout.start_offset();
-    let s = match &*storage {
-        candle_core::Storage::Cuda(c) => c.as_cuda_slice::<half::bf16>()?,
+    match &*storage {
+        candle_core::Storage::Cuda(c) => {
+            let s = c.as_cuda_slice::<half::bf16>()?;
+            let (addr, _g) = s.slice(layout.start_offset()..).device_ptr(s.stream());
+            Ok(addr)
+        }
         _ => candle_core::bail!("MegakernelWeights: tensor must live on CUDA"),
-    };
-    // Raw u64 byte address of the tensor's first element.
-    let slice = s.slice(offset_elements..);
-    let ptr = slice.device_ptr(s.stream()).0;
-    Ok(ptr)
+    }
 }
 
-unsafe fn raw_device_ptr_bf16(t: &Tensor) -> *const half::bf16 {
-    use candle_core::cuda_backend::cudarc::driver::DevicePtr;
-    let (storage, layout) = t.storage_and_layout();
-    let s = match &*storage {
-        candle_core::Storage::Cuda(c) => c.as_cuda_slice::<half::bf16>().unwrap(),
-        _ => panic!("raw_device_ptr_bf16: non-CUDA tensor"),
-    };
-    s.slice(layout.start_offset()..).device_ptr(s.stream()).0 as *const half::bf16
+fn raw_bf16_addr(t: &Tensor) -> u64 {
+    device_ptr(t).expect("raw_bf16_addr: extract device ptr")
 }
 
-unsafe fn raw_device_ptr_u8(t: &Tensor) -> *const u8 {
+fn raw_u8_addr(t: &Tensor) -> u64 {
     use candle_core::cuda_backend::cudarc::driver::DevicePtr;
     let (storage, layout) = t.storage_and_layout();
-    let s = match &*storage {
-        candle_core::Storage::Cuda(c) => c.as_cuda_slice::<u8>().unwrap(),
-        _ => panic!("raw_device_ptr_u8: non-CUDA tensor"),
-    };
-    s.slice(layout.start_offset()..).device_ptr(s.stream()).0 as *const u8
+    match &*storage {
+        candle_core::Storage::Cuda(c) => {
+            let s = c.as_cuda_slice::<u8>().expect("u8 CudaSlice");
+            let (addr, _g) = s.slice(layout.start_offset()..).device_ptr(s.stream());
+            addr
+        }
+        _ => panic!("raw_u8_addr: non-CUDA tensor"),
+    }
 }
