@@ -107,6 +107,49 @@ pub struct DFlashPipeline {
 }
 
 impl DFlashPipeline {
+    /// Run ONE megakernel-drafter speculative-decode round against
+    /// this pipeline's target. Parallel to the DFlash block-diffusion
+    /// chain path (`DFlashChainStepper::step`) but using the
+    /// Qwen3.5-0.8B megakernel drafter for autoregressive drafting.
+    ///
+    /// Locks the target pipeline's mutex for the duration of the
+    /// target forward. Callers own the drafter mutably and the
+    /// committed-token bookkeeping — this method is a primitive that
+    /// a dedicated `MegakernelSpecDriver` consumes; the full
+    /// generation loop (prompt prefill → repeated `run_megakernel_spec_round`
+    /// → EOS check) lives one layer up in the bench / pipeline
+    /// driver that wires the drafter prefill and position tracking.
+    ///
+    /// Returns on-device timings so a bench can attribute wall time
+    /// to drafter vs target vs rollback replay.
+    ///
+    /// Requires the target to be a Qwen3.5 hybrid (gets rejected
+    /// otherwise) — that's the architecture the megakernel assumes.
+    #[cfg(feature = "cuda")]
+    pub async fn run_megakernel_spec_round(
+        &self,
+        drafter: &mut crate::models::megakernel_drafter::MegakernelDrafter,
+        last_committed_token: u32,
+        past_kv_len: usize,
+        opts: &crate::models::megakernel_drafter::MegakernelSpecOpts,
+    ) -> Result<(
+        crate::models::megakernel_drafter::SpecOutcome,
+        crate::models::megakernel_drafter::SpecTimings,
+    )> {
+        use crate::models::dflash_draft::Qwen35DFlashTarget;
+        use crate::models::megakernel_drafter::spec_round;
+        let target_guard = self.target.lock().await;
+        let text_model = target_guard.dflash_text_model().ok_or_else(|| {
+            candle_core::Error::msg(
+                "DFlashPipeline::run_megakernel_spec_round: target is not a \
+                 Qwen3.5 vision pipeline; megakernel drafter only pairs with \
+                 the Qwen3.5 hybrid family.",
+            )
+        })?;
+        let target = Qwen35DFlashTarget::new(text_model);
+        spec_round(&target, drafter, last_committed_token, past_kv_len, opts)
+    }
+
     pub fn new(
         target: Arc<tokio::sync::Mutex<dyn Pipeline>>,
         draft: Arc<DFlashDraftModel>,
