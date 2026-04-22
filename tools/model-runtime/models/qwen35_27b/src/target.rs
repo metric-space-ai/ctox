@@ -843,6 +843,14 @@ fn load_bf16_matrix(
 /// tracing warning + zero placeholder. Used by the per-layer
 /// constructors since we want the loader to survive any single
 /// missing weight.
+///
+/// Post-Agent-C: the per-layer projection wiring now goes through
+/// [`load_packed_weight`] which produces [`PackedWeight`] carriers
+/// directly; this helper is retained so ad-hoc bf16-only callers (and
+/// the load_packed_bf16_halves FA-Q splitter above) don't churn, but
+/// no hot path uses it anymore. Tagged `allow(dead_code)` to suppress
+/// warnings until a future cleanup folds it into load_packed_weight.
+#[allow(dead_code)]
 fn load_bf16_placeholder(
     device: &Arc<DeviceContext>,
     tensors: &HashMap<String, GgufTensor>,
@@ -866,18 +874,35 @@ fn load_bf16_placeholder(
 
 /// Load a `[k, n]` projection weight as a [`PackedWeight`].
 ///
-/// Pre-Agent-C behavior:
-///   * BF16 in GGUF → `PackedWeight::Bf16` (carries the bf16 tensor)
-///   * any packed variant, missing key, or shape mismatch →
-///     `PackedWeight::Zero` with the logical `[k, n]` shape so
-///     forward() still validates and zero-fills its output
-///     (behaviorally identical to the pre-refactor
-///     `load_bf16_placeholder` path).
+/// Dispatches on the GGUF dtype:
 ///
-/// Agent C replaces the `Err` branch with a full GgufBuf→PackedWeight
-/// dispatch (one arm per packed dtype). The call-site signature is
-/// chosen so the per-layer constructors below won't need to change
-/// when that lands.
+///   * `GgufBuf::Bf16` — re-materialize the bf16 tensor (detaches
+///     ownership from the loader map) and wrap in `PackedWeight::Bf16`.
+///   * `GgufBuf::F16` / `GgufBuf::F32` — cast on host to bf16 and wrap
+///     the same way. Neither arm fires for the production 27B
+///     projection tensors (all quantized), but they keep the loader
+///     lenient for hand-authored tests / checkpoint variants.
+///   * `GgufBuf::Q4K` / `Q5K` / `Q6K` / `Q8_0` / `IQ4XS` — keep the
+///     packed byte buffer on device and wrap in the matching
+///     [`PackedWeight`] variant. Dispatch at forward time hits the
+///     right `launch_mmvq_*_f32` kernel.
+///   * Missing key, wrong element count, or any other GGUF dtype we
+///     don't recognise — warn and return `PackedWeight::Zero`. The
+///     forward path still runs; output for that projection is all
+///     zeros. This matches the pre-Agent-C lenient behavior.
+///
+/// # Shape validation
+///
+/// The per-layer constructors pass `(k, n)` matching the logical
+/// projection shape (`[in_features, out_features]`). llama.cpp stores
+/// linear weights on-disk in `[in, out]` ggml order (ne[0]=in fast,
+/// ne[1]=out slow); the loader reverses that to row-major, so quantized
+/// tensors arrive with `shape = [out, in] = [n, k]`, while the rare
+/// dense variants (bf16 test fixtures, etc.) arrive with `shape =
+/// [k, n]`. We accept either orientation as long as `numel == k * n`.
+/// Shape metadata is advisory for packed variants — the mmvq kernels
+/// consume the byte buffer plus the explicit `(k, n)` scalars and
+/// don't re-read the GgufTensor shape.
 fn load_packed_weight(
     device: &Arc<DeviceContext>,
     tensors: &HashMap<String, GgufTensor>,
@@ -885,23 +910,182 @@ fn load_packed_weight(
     k: usize,
     n: usize,
 ) -> PackedWeight {
-    match load_bf16_matrix(tensors, key, &[k, n]) {
-        Ok(t) => PackedWeight::Bf16 { t, k, n },
-        Err(reason) => {
+    let Some(t) = tensors.get(key) else {
+        tracing::warn!(
+            key,
+            k,
+            n,
+            "qwen35_target: projection weight not present; PackedWeight::Zero placeholder"
+        );
+        let _ = device;
+        return PackedWeight::Zero { k, n };
+    };
+
+    // numel check — accept either `[k, n]` or `[n, k]` on-disk
+    // orientation. Anything else is a real shape mismatch.
+    let numel: usize = t.shape.iter().product();
+    if numel != k * n {
+        tracing::warn!(
+            key,
+            actual_shape = ?t.shape,
+            expected_numel = k * n,
+            "qwen35_target: projection weight numel mismatch; PackedWeight::Zero placeholder"
+        );
+        let _ = device;
+        return PackedWeight::Zero { k, n };
+    }
+
+    match &t.buf {
+        GgufBuf::Bf16(src) => match rematerialize_bf16(src, k, n) {
+            Ok(t_new) => PackedWeight::Bf16 { t: t_new, k, n },
+            Err(reason) => {
+                tracing::warn!(
+                    key, k, n, %reason,
+                    "qwen35_target: bf16 rematerialize failed; PackedWeight::Zero"
+                );
+                PackedWeight::Zero { k, n }
+            }
+        },
+        GgufBuf::F16(src) => match cast_f16_to_bf16_packed(src, k, n) {
+            Ok(t_new) => PackedWeight::Bf16 { t: t_new, k, n },
+            Err(reason) => {
+                tracing::warn!(
+                    key, k, n, %reason,
+                    "qwen35_target: f16→bf16 cast failed; PackedWeight::Zero"
+                );
+                PackedWeight::Zero { k, n }
+            }
+        },
+        GgufBuf::F32(src) => match cast_f32_to_bf16_packed(src, k, n) {
+            Ok(t_new) => PackedWeight::Bf16 { t: t_new, k, n },
+            Err(reason) => {
+                tracing::warn!(
+                    key, k, n, %reason,
+                    "qwen35_target: f32→bf16 cast failed; PackedWeight::Zero"
+                );
+                PackedWeight::Zero { k, n }
+            }
+        },
+        GgufBuf::Q4K(src) => match clone_i8_bytes(src) {
+            Ok(t_new) => PackedWeight::Q4K { t: t_new, k, n },
+            Err(reason) => {
+                tracing::warn!(
+                    key, k, n, %reason,
+                    "qwen35_target: Q4K byte clone failed; PackedWeight::Zero"
+                );
+                PackedWeight::Zero { k, n }
+            }
+        },
+        GgufBuf::Q5K(src) => match clone_i8_bytes(src) {
+            Ok(t_new) => PackedWeight::Q5K { t: t_new, k, n },
+            Err(reason) => {
+                tracing::warn!(
+                    key, k, n, %reason,
+                    "qwen35_target: Q5K byte clone failed; PackedWeight::Zero"
+                );
+                PackedWeight::Zero { k, n }
+            }
+        },
+        GgufBuf::Q6K(src) => match clone_i8_bytes(src) {
+            Ok(t_new) => PackedWeight::Q6K { t: t_new, k, n },
+            Err(reason) => {
+                tracing::warn!(
+                    key, k, n, %reason,
+                    "qwen35_target: Q6K byte clone failed; PackedWeight::Zero"
+                );
+                PackedWeight::Zero { k, n }
+            }
+        },
+        GgufBuf::Q8_0(src) => match clone_i8_bytes(src) {
+            Ok(t_new) => PackedWeight::Q8_0 { t: t_new, k, n },
+            Err(reason) => {
+                tracing::warn!(
+                    key, k, n, %reason,
+                    "qwen35_target: Q8_0 byte clone failed; PackedWeight::Zero"
+                );
+                PackedWeight::Zero { k, n }
+            }
+        },
+        GgufBuf::IQ4XS(src) => match clone_i8_bytes(src) {
+            Ok(t_new) => PackedWeight::IQ4XS { t: t_new, k, n },
+            Err(reason) => {
+                tracing::warn!(
+                    key, k, n, %reason,
+                    "qwen35_target: IQ4XS byte clone failed; PackedWeight::Zero"
+                );
+                PackedWeight::Zero { k, n }
+            }
+        },
+        other => {
             tracing::warn!(
                 key,
                 k,
                 n,
-                %reason,
-                "qwen35_target: projection weight unavailable; PackedWeight::Zero placeholder"
+                dtype = ?std::mem::discriminant(other),
+                "qwen35_target: projection weight has unsupported GgufBuf variant; \
+                 PackedWeight::Zero placeholder"
             );
-            // Keep `device` in the signature for when Agent C's full
-            // dispatch needs to allocate packed-byte carriers; the
-            // Zero arm doesn't need it.
             let _ = device;
             PackedWeight::Zero { k, n }
         }
     }
+}
+
+/// Materialize a fresh `[k, n]` bf16 tensor from the GGUF-loaded
+/// carrier. The fresh allocation detaches ownership from the loader
+/// map so the returned tensor can live past the load call.
+fn rematerialize_bf16(
+    src: &CudaTensor<bf16>,
+    k: usize,
+    n: usize,
+) -> std::result::Result<CudaTensor<bf16>, String> {
+    let host = src.to_host().map_err(|e| format!("download: {:?}", e))?;
+    if host.len() != k * n {
+        return Err(format!("host.len {} != k*n {}", host.len(), k * n));
+    }
+    CudaTensor::<bf16>::from_host(src.device().clone(), vec![k, n], &host)
+        .map_err(|e| format!("upload bf16 [k,n]: {:?}", e))
+}
+
+/// Cast an `[_]` f16 GGUF tensor to a fresh `[k, n]` bf16 tensor via a
+/// host round-trip. Loader-time only; not a hot path.
+fn cast_f16_to_bf16_packed(
+    src: &CudaTensor<f16>,
+    k: usize,
+    n: usize,
+) -> std::result::Result<CudaTensor<bf16>, String> {
+    let host = src.to_host().map_err(|e| format!("download: {:?}", e))?;
+    if host.len() != k * n {
+        return Err(format!("host.len {} != k*n {}", host.len(), k * n));
+    }
+    let host_bf16: Vec<bf16> = host.iter().map(|v| bf16::from_f32(v.to_f32())).collect();
+    CudaTensor::<bf16>::from_host(src.device().clone(), vec![k, n], &host_bf16)
+        .map_err(|e| format!("upload bf16 [k,n]: {:?}", e))
+}
+
+/// Same as [`cast_f16_to_bf16_packed`] but for f32 inputs.
+fn cast_f32_to_bf16_packed(
+    src: &CudaTensor<f32>,
+    k: usize,
+    n: usize,
+) -> std::result::Result<CudaTensor<bf16>, String> {
+    let host = src.to_host().map_err(|e| format!("download: {:?}", e))?;
+    if host.len() != k * n {
+        return Err(format!("host.len {} != k*n {}", host.len(), k * n));
+    }
+    let host_bf16: Vec<bf16> = host.iter().map(|v| bf16::from_f32(*v)).collect();
+    CudaTensor::<bf16>::from_host(src.device().clone(), vec![k, n], &host_bf16)
+        .map_err(|e| format!("upload bf16 [k,n]: {:?}", e))
+}
+
+/// Copy the i8 packed-byte carrier into a fresh 1-D `CudaTensor<i8>`.
+/// Detaches from the loader map; shape is `[byte_len]` since the mmvq
+/// kernels consume `(k, n)` scalars and a flat byte buffer.
+fn clone_i8_bytes(src: &CudaTensor<i8>) -> std::result::Result<CudaTensor<i8>, String> {
+    let host = src.to_host().map_err(|e| format!("download: {:?}", e))?;
+    let byte_len = host.len();
+    CudaTensor::<i8>::from_host(src.device().clone(), vec![byte_len], &host)
+        .map_err(|e| format!("upload i8 bytes: {:?}", e))
 }
 
 /// Scan tensor names of the form `blk.N.*` and return `max(N) + 1`.
