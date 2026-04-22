@@ -1502,6 +1502,7 @@ SQL
 # ── Rebuild mode (called by `ctox update apply`) ────────────────────────────
 run_rebuild() {
   local root="$1"
+  mkdir -p "$root"
   root="$(cd "$root" && pwd)"  # absolute path
   detect_platform
 
