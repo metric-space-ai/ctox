@@ -28,12 +28,25 @@
 //!
 //! Any other ggml dtype returns an `unsupported ggml dtype` error.
 //!
-//! The Q5_K / Q6_K / Q8_0 / IQ4_XS paths dequantize on the CPU into a
-//! `Vec<bf16>` before upload. That's slower than a native mmvq kernel
-//! but correct first — ~15 GB of weights and a tens-of-seconds startup
-//! penalty is acceptable for bring-up. The original ggml format is
-//! preserved in the `GgufTensor.dtype` tag so callers can still print a
-//! per-format tensor breakdown.
+//! The Q5_K / Q6_K / Q8_0 / IQ4_XS paths have two modes, selected via
+//! [`LoaderConfig::keep_packed`]:
+//!
+//!   * `keep_packed = false` (default, Phase-5 behavior): each block is
+//!     CPU-dequantized into a `Vec<bf16>` and uploaded as
+//!     [`GgufBuf::Bf16`]. Roughly doubles on-device memory for these
+//!     tensors vs. the on-disk packed size, but lets any bf16-consumer
+//!     forward kernel read them without a packed-mmvq path.
+//!
+//!   * `keep_packed = true` (Phase-6+): each tensor is uploaded as a
+//!     1-D `CudaTensor<i8>` of the raw packed block bytes (same protocol
+//!     Q4_K already uses) and surfaces as the matching
+//!     [`GgufBuf::Q5K`] / `Q6K` / `Q8_0` / `IQ4XS` variant. On-device
+//!     size matches the GGUF-on-disk size; the consumer is expected to
+//!     dispatch a packed-aware mmvq kernel.
+//!
+//! In either mode the original ggml format is preserved in the
+//! `GgufTensor.dtype` tag so callers can still print a per-format tensor
+//! breakdown.
 //!
 //! Performance note: the data region for a 27B Q4_K_M model is ~15 GB,
 //! so we mmap the file rather than slurping it into a `Vec<u8>`. Each
@@ -78,14 +91,51 @@ pub struct GgufTensor {
 /// Q4_K (and any other sub-byte packed format we add later) lives in
 /// an `i8` tensor whose length equals the block-byte count — the
 /// unpacking kernels know how to read it.
+///
+/// Q5K/Q6K/Q8_0/IQ4XS appear as `i8` byte buffers when the loader is
+/// run with [`LoaderConfig::keep_packed`] set (cuts the 27B resident-
+/// weight footprint roughly in half); otherwise they arrive as
+/// CPU-dequantized [`GgufBuf::Bf16`] tensors with the dtype tag carrying
+/// the original ggml format for logging.
 pub enum GgufBuf {
     F32(CudaTensor<f32>),
     F16(CudaTensor<f16>),
     Bf16(CudaTensor<bf16>),
     /// Byte-packed Q4_K_M blocks: 144 B per 256-element block.
     Q4K(CudaTensor<i8>),
+    /// Byte-packed Q5_K blocks: 176 B per 256-element block
+    /// (`keep_packed = true` only).
+    Q5K(CudaTensor<i8>),
+    /// Byte-packed Q6_K blocks: 210 B per 256-element block
+    /// (`keep_packed = true` only).
+    Q6K(CudaTensor<i8>),
+    /// Byte-packed Q8_0 blocks: 34 B per 32-element block
+    /// (`keep_packed = true` only).
+    Q8_0(CudaTensor<i8>),
+    /// Byte-packed IQ4_XS blocks: 136 B per 256-element block
+    /// (`keep_packed = true` only).
+    IQ4XS(CudaTensor<i8>),
     I32(CudaTensor<i32>),
     I8(CudaTensor<i8>),
+}
+
+/// Knobs for [`load_gguf_with_config`] / [`load_gguf_lenient_with_config`].
+///
+/// Default (`keep_packed = false`) preserves the Phase-5 behavior: all
+/// supported quant types are CPU-dequantized to bf16 at load time and
+/// arrive as [`GgufBuf::Bf16`] tensors. Set `keep_packed = true` to
+/// upload Q5K/Q6K/Q8_0/IQ4_XS tensors as raw block bytes
+/// (matching what Q4K already does) — on-device memory then matches
+/// the GGUF-on-disk size, removing the Phase-5 VRAM doubling. The
+/// consumer side (model layer structs / forward kernels) must handle
+/// the new packed variants or it will still see zero placeholders
+/// downstream.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LoaderConfig {
+    /// If true, keep Q5K/Q6K/Q8_0/IQ4_XS tensors as packed
+    /// `CudaTensor<i8>` byte buffers; if false, CPU-dequant to bf16
+    /// at load time (Phase-5 behavior).
+    pub keep_packed: bool,
 }
 
 /// GGML tensor type codes (subset — only the ones we parse or reject).
@@ -380,7 +430,17 @@ pub fn load_gguf<P: AsRef<Path>>(
     device: &Arc<DeviceContext>,
     path: P,
 ) -> Result<HashMap<String, GgufTensor>> {
-    let load = load_gguf_impl(device, path.as_ref(), true)?;
+    load_gguf_with_config(device, path, LoaderConfig::default())
+}
+
+/// [`load_gguf`] with explicit loader config. See [`LoaderConfig`] for
+/// the `keep_packed` switch.
+pub fn load_gguf_with_config<P: AsRef<Path>>(
+    device: &Arc<DeviceContext>,
+    path: P,
+    cfg: LoaderConfig,
+) -> Result<HashMap<String, GgufTensor>> {
+    let load = load_gguf_impl(device, path.as_ref(), true, cfg)?;
     Ok(load.tensors)
 }
 
@@ -390,10 +450,24 @@ pub fn load_gguf<P: AsRef<Path>>(
 /// tensors are still uploaded; parse errors (bad header, truncated
 /// file) still hard-fail.
 pub fn load_gguf_lenient<P: AsRef<Path>>(device: &Arc<DeviceContext>, path: P) -> Result<GgufLoad> {
-    load_gguf_impl(device, path.as_ref(), false)
+    load_gguf_lenient_with_config(device, path, LoaderConfig::default())
 }
 
-fn load_gguf_impl(device: &Arc<DeviceContext>, path: &Path, strict: bool) -> Result<GgufLoad> {
+/// [`load_gguf_lenient`] with explicit loader config.
+pub fn load_gguf_lenient_with_config<P: AsRef<Path>>(
+    device: &Arc<DeviceContext>,
+    path: P,
+    cfg: LoaderConfig,
+) -> Result<GgufLoad> {
+    load_gguf_impl(device, path.as_ref(), false, cfg)
+}
+
+fn load_gguf_impl(
+    device: &Arc<DeviceContext>,
+    path: &Path,
+    strict: bool,
+    cfg: LoaderConfig,
+) -> Result<GgufLoad> {
     let file = File::open(path).with_context(|| format!("open gguf file {}", path.display()))?;
     // SAFETY: we mmap read-only; caller must not truncate the file
     // underneath us. The cudarc H2D copy reads from this mapping
@@ -593,56 +667,112 @@ fn load_gguf_impl(device: &Arc<DeviceContext>, path: &Path, strict: bool) -> Res
                 }
             }
             GgmlType::Q5K => {
-                load_dequant_tensor(
-                    device,
-                    data_region,
-                    offset,
-                    &name,
-                    &shape_row_major,
-                    n_elems,
-                    DType::Q5K,
-                    256,
-                    dequant_q5_k_to_bf16,
-                )?
+                if cfg.keep_packed {
+                    load_packed_tensor(
+                        device,
+                        data_region,
+                        offset,
+                        &name,
+                        &shape_row_major,
+                        n_elems,
+                        DType::Q5K,
+                        256,
+                        GgufBuf::Q5K,
+                    )?
+                } else {
+                    load_dequant_tensor(
+                        device,
+                        data_region,
+                        offset,
+                        &name,
+                        &shape_row_major,
+                        n_elems,
+                        DType::Q5K,
+                        256,
+                        dequant_q5_k_to_bf16,
+                    )?
+                }
             }
             GgmlType::Q6K => {
-                load_dequant_tensor(
-                    device,
-                    data_region,
-                    offset,
-                    &name,
-                    &shape_row_major,
-                    n_elems,
-                    DType::Q6K,
-                    256,
-                    dequant_q6_k_to_bf16,
-                )?
+                if cfg.keep_packed {
+                    load_packed_tensor(
+                        device,
+                        data_region,
+                        offset,
+                        &name,
+                        &shape_row_major,
+                        n_elems,
+                        DType::Q6K,
+                        256,
+                        GgufBuf::Q6K,
+                    )?
+                } else {
+                    load_dequant_tensor(
+                        device,
+                        data_region,
+                        offset,
+                        &name,
+                        &shape_row_major,
+                        n_elems,
+                        DType::Q6K,
+                        256,
+                        dequant_q6_k_to_bf16,
+                    )?
+                }
             }
             GgmlType::Q8_0 => {
-                load_dequant_tensor(
-                    device,
-                    data_region,
-                    offset,
-                    &name,
-                    &shape_row_major,
-                    n_elems,
-                    DType::Q8_0,
-                    32,
-                    dequant_q8_0_to_bf16,
-                )?
+                if cfg.keep_packed {
+                    load_packed_tensor(
+                        device,
+                        data_region,
+                        offset,
+                        &name,
+                        &shape_row_major,
+                        n_elems,
+                        DType::Q8_0,
+                        32,
+                        GgufBuf::Q8_0,
+                    )?
+                } else {
+                    load_dequant_tensor(
+                        device,
+                        data_region,
+                        offset,
+                        &name,
+                        &shape_row_major,
+                        n_elems,
+                        DType::Q8_0,
+                        32,
+                        dequant_q8_0_to_bf16,
+                    )?
+                }
             }
             GgmlType::IQ4XS => {
-                load_dequant_tensor(
-                    device,
-                    data_region,
-                    offset,
-                    &name,
-                    &shape_row_major,
-                    n_elems,
-                    DType::IQ4XS,
-                    256,
-                    dequant_iq4_xs_to_bf16,
-                )?
+                if cfg.keep_packed {
+                    load_packed_tensor(
+                        device,
+                        data_region,
+                        offset,
+                        &name,
+                        &shape_row_major,
+                        n_elems,
+                        DType::IQ4XS,
+                        256,
+                        GgufBuf::IQ4XS,
+                    )?
+                } else {
+                    load_dequant_tensor(
+                        device,
+                        data_region,
+                        offset,
+                        &name,
+                        &shape_row_major,
+                        n_elems,
+                        DType::IQ4XS,
+                        256,
+                        dequant_iq4_xs_to_bf16,
+                    )?
+                }
             }
             unsupported_ty => {
                 if strict {
@@ -730,6 +860,51 @@ fn byte_slice_as_i8(data: &[u8], offset: usize, byte_len: usize) -> Result<&[i8]
     // Transmuting &[u8] -> &[i8] is safe: same size, same alignment,
     // and every bit pattern is a valid i8. bytemuck covers this.
     Ok(bytemuck::cast_slice::<u8, i8>(&data[offset..end]))
+}
+
+/// Shared plumbing for the four packed-on-device load paths (Q5_K,
+/// Q6_K, Q8_0, IQ4_XS — same protocol as Q4_K's native packed path).
+/// Slices the raw block bytes out of the mmap'd data region and
+/// uploads them as a 1-D [byte_len] i8 `CudaTensor`; no CPU dequant.
+///
+/// The shape at the `GgufTensor` level stays as the logical element
+/// shape; callers that consume packed bytes read the byte-count via
+/// the dtype tag's [`DType::block_bytes_for_elements`].
+#[allow(clippy::too_many_arguments)]
+fn load_packed_tensor(
+    device: &Arc<DeviceContext>,
+    data_region: &[u8],
+    offset: usize,
+    name: &str,
+    shape_row_major: &[usize],
+    n_elems: usize,
+    dtype_tag: DType,
+    ggml_block_size: usize,
+    wrap: fn(CudaTensor<i8>) -> GgufBuf,
+) -> Result<GgufTensor> {
+    let last = *shape_row_major
+        .last()
+        .ok_or_else(|| anyhow!("{:?} tensor {} has zero dimensions", dtype_tag, name))?;
+    if last % ggml_block_size != 0 {
+        return Err(anyhow!(
+            "{:?} tensor {} last-dim {} not a multiple of {}",
+            dtype_tag,
+            name,
+            last,
+            ggml_block_size
+        ));
+    }
+    let byte_len = dtype_tag.block_bytes_for_elements(n_elems);
+    let slice = byte_slice_as_i8(data_region, offset, byte_len)
+        .with_context(|| format!("slice {:?} bytes for {}", dtype_tag, name))?;
+    let t = CudaTensor::from_host(device.clone(), vec![byte_len], slice)
+        .with_context(|| format!("upload packed {:?} tensor {}", dtype_tag, name))?;
+    Ok(GgufTensor {
+        name: name.to_string(),
+        dtype: dtype_tag,
+        shape: shape_row_major.to_vec(),
+        buf: wrap(t),
+    })
 }
 
 /// Shared plumbing for the four CPU-dequant load paths (Q5_K, Q6_K,
@@ -1673,5 +1848,147 @@ mod tests {
             }
             _ => panic!("{} marked Q8_0 but buf variant is not Bf16", q8_name),
         }
+    }
+
+    /// Phase-6 bring-up: load the 27B Q4_K_M with `keep_packed = true`
+    /// and assert that (a) all tensors land without OOM on a 48 GB
+    /// A6000, (b) the Q5K/Q6K/Q8_0 tensors surface as the new packed
+    /// [`GgufBuf`] variants (not dequanted to bf16), and (c) their byte
+    /// sizes match the on-disk block-byte calculation.
+    ///
+    /// This test proves the VRAM-doubling regression from Phase 5 is
+    /// gone: with the bf16-dequant path, this load was ~30 GB of
+    /// resident weights and OOMed on a 48 GB A6000 under the smoke
+    /// test's extra KV/GDN-state allocations. With `keep_packed`, the
+    /// resident weights match the GGUF-on-disk size (~15 GB for 27B
+    /// Q4_K_M), leaving ~30 GB of headroom.
+    ///
+    /// Ignored by default — requires the file to exist and a working
+    /// CUDA device.
+    ///
+    /// Run with:
+    ///   cargo test -p ctox-engine-cuda --features cuda --release -- \
+    ///     --ignored --nocapture load_gguf_27b_packed_no_oom
+    #[test]
+    #[ignore]
+    fn load_gguf_27b_packed_no_oom() {
+        let path = "/home/metricspace/dflash-ref/dflash/models/Qwen3.5-27B-Q4_K_M.gguf";
+        let device = Arc::new(DeviceContext::new(0).expect("init CUDA device 0"));
+        let cfg = LoaderConfig { keep_packed: true };
+        let load = load_gguf_lenient_with_config(&device, path, cfg).expect("load gguf packed");
+
+        eprintln!(
+            "packed load: parsed {} total descriptors, uploaded {} tensors, skipped {} unsupported",
+            load.total_descriptors,
+            load.tensors.len(),
+            load.unsupported.len()
+        );
+        for (name, ty) in &load.unsupported {
+            eprintln!("  unsupported: {} ({})", name, ty);
+        }
+        assert_eq!(
+            load.total_descriptors, 851,
+            "expected 851 tensor descriptors in 27B Q4_K_M"
+        );
+        assert_eq!(
+            load.unsupported.len(),
+            0,
+            "expected 0 unsupported tensors with packed loader"
+        );
+        assert_eq!(
+            load.tensors.len(),
+            851,
+            "expected all 851 tensors to be loaded"
+        );
+
+        // Per-variant counts. Packed variants should replace the
+        // bf16-dequant path for Q5K/Q6K/Q8_0/IQ4_XS.
+        let mut n_q4k = 0usize;
+        let mut n_q5k_packed = 0usize;
+        let mut n_q6k_packed = 0usize;
+        let mut n_q80_packed = 0usize;
+        let mut n_iq4xs_packed = 0usize;
+        let mut n_bf16 = 0usize;
+        let mut n_f32 = 0usize;
+        let mut n_f16 = 0usize;
+        let mut n_i32 = 0usize;
+        let mut n_i8 = 0usize;
+        for t in load.tensors.values() {
+            match &t.buf {
+                GgufBuf::Q4K(_) => n_q4k += 1,
+                GgufBuf::Q5K(_) => n_q5k_packed += 1,
+                GgufBuf::Q6K(_) => n_q6k_packed += 1,
+                GgufBuf::Q8_0(_) => n_q80_packed += 1,
+                GgufBuf::IQ4XS(_) => n_iq4xs_packed += 1,
+                GgufBuf::Bf16(_) => n_bf16 += 1,
+                GgufBuf::F32(_) => n_f32 += 1,
+                GgufBuf::F16(_) => n_f16 += 1,
+                GgufBuf::I32(_) => n_i32 += 1,
+                GgufBuf::I8(_) => n_i8 += 1,
+            }
+        }
+        eprintln!(
+            "packed variant counts: Q4K={} Q5K={} Q6K={} Q8_0={} IQ4XS={} \
+             Bf16={} F32={} F16={} I32={} I8={}",
+            n_q4k,
+            n_q5k_packed,
+            n_q6k_packed,
+            n_q80_packed,
+            n_iq4xs_packed,
+            n_bf16,
+            n_f32,
+            n_f16,
+            n_i32,
+            n_i8,
+        );
+
+        // The 27B Q4_K_M mixture contains Q4K/Q5K/Q6K/Q8_0 tensors;
+        // IQ4_XS isn't in this file (see the Phase-5 smoke for the same
+        // assertion). With `keep_packed = true` the Q5K/Q6K/Q8_0
+        // buffers must land as the packed variants, not as bf16.
+        assert!(n_q4k > 0, "expected at least one Q4K tensor");
+        assert!(
+            n_q5k_packed > 0,
+            "expected Q5K tensors to land as GgufBuf::Q5K with keep_packed=true, got 0"
+        );
+        assert!(
+            n_q6k_packed > 0,
+            "expected Q6K tensors to land as GgufBuf::Q6K with keep_packed=true, got 0"
+        );
+        assert!(
+            n_q80_packed > 0,
+            "expected Q8_0 tensors to land as GgufBuf::Q8_0 with keep_packed=true, got 0"
+        );
+
+        // Sample a packed Q5K tensor and confirm its on-device byte
+        // length matches the expected block-bytes-for-elements value.
+        let (sample_name, sample_t) = load
+            .tensors
+            .iter()
+            .find(|(_, t)| matches!(t.buf, GgufBuf::Q5K(_)))
+            .expect("at least one Q5K tensor");
+        let n_elems: usize = sample_t.shape.iter().product();
+        let expected_bytes = DType::Q5K.block_bytes_for_elements(n_elems);
+        if let GgufBuf::Q5K(bytes) = &sample_t.buf {
+            eprintln!(
+                "spot-check Q5K {}: shape={:?} n_elems={} packed_bytes={} (expected {})",
+                sample_name,
+                sample_t.shape,
+                n_elems,
+                bytes.numel(),
+                expected_bytes,
+            );
+            assert_eq!(
+                bytes.numel(),
+                expected_bytes,
+                "Q5K packed byte count for {} mismatch",
+                sample_name
+            );
+        }
+
+        // Device sync — if any upload silently overcommitted, the
+        // previous calls already would have returned an error. A
+        // successful return here is the "no OOM" assertion.
+        device.synchronize().expect("synchronize after packed load");
     }
 }

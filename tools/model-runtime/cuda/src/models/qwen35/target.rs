@@ -99,7 +99,7 @@ use anyhow::{anyhow, Context, Result};
 use half::{bf16, f16};
 
 use crate::device::DeviceContext;
-use crate::gguf::{load_gguf_lenient, GgufBuf, GgufTensor};
+use crate::gguf::{load_gguf_lenient_with_config, GgufBuf, GgufTensor, LoaderConfig};
 use crate::kernels::{
     launch_cast_bf16_to_f32, launch_cast_f32_to_bf16, launch_embedding_bf16, launch_embedding_f16,
     launch_embedding_f32, launch_matmul_bf16_f32, launch_rmsnorm_f32,
@@ -165,14 +165,34 @@ impl Qwen35Target {
         config: Qwen35Config,
         gguf_path: P,
     ) -> Result<Self> {
+        Self::load_from_gguf_with_config(device, config, gguf_path, LoaderConfig::default())
+    }
+
+    /// [`Self::load_from_gguf`] with an explicit GGUF loader config.
+    ///
+    /// With `LoaderConfig::keep_packed = true`, Q5K/Q6K/Q8_0/IQ4_XS
+    /// tensors land on device as packed byte buffers (matching
+    /// GGUF-on-disk size) instead of CPU-dequanted bf16. Phase-6 layer
+    /// wiring doesn't yet consume packed bytes in the forward, so those
+    /// weights still degrade to zero placeholders — but the resident
+    /// weight footprint drops from ~30 GB to ~15 GB for 27B Q4_K_M,
+    /// which is what keeps this fitting on a 48 GB A6000.
+    pub fn load_from_gguf_with_config<P: AsRef<Path>>(
+        device: Arc<DeviceContext>,
+        config: Qwen35Config,
+        gguf_path: P,
+        loader_cfg: LoaderConfig,
+    ) -> Result<Self> {
         let gguf_path = gguf_path.as_ref();
         tracing::info!(
             path = %gguf_path.display(),
             hidden_dim = config.hidden_dim,
+            keep_packed = loader_cfg.keep_packed,
             "qwen35_target: loading gguf"
         );
-        let load = load_gguf_lenient(&device, gguf_path)
-            .with_context(|| format!("load_gguf_lenient({})", gguf_path.display()))?;
+        let load = load_gguf_lenient_with_config(&device, gguf_path, loader_cfg).with_context(
+            || format!("load_gguf_lenient_with_config({})", gguf_path.display()),
+        )?;
         let tensors = load.tensors;
         let unsupported = load.unsupported;
         tracing::info!(
@@ -548,8 +568,9 @@ fn load_packed_bf16_halves(
     }
     let GgufBuf::Bf16(src) = &t.buf else {
         return Err(format!(
-            "{}: dtype is not BF16 (packed-halves loader only handles BF16 inputs)",
-            key
+            "{}: packed-halves loader only handles BF16 inputs, got {:?} \
+             (packed tensor available but forward doesn't consume packed bytes yet)",
+            key, t.dtype
         ));
     };
     let host = src
@@ -769,6 +790,21 @@ fn load_bf16_matrix(
             CudaTensor::<bf16>::from_host(src.device().clone(), expected_shape.to_vec(), &host)
                 .map_err(|e| format!("{}: upload: {:?}", key, e))
         }
+        // Packed-on-device variants (loader ran with `keep_packed =
+        // true`). The Phase-6 layer structs still expect bf16, and the
+        // native packed-mmvq wiring is Phase 7; until then, fall
+        // through with an error so the caller emits a zero
+        // placeholder. The error string calls out "packed tensor
+        // available" so operators can tell the weight exists but the
+        // forward path doesn't consume it yet.
+        GgufBuf::Q5K(_)
+        | GgufBuf::Q6K(_)
+        | GgufBuf::Q8_0(_)
+        | GgufBuf::IQ4XS(_)
+        | GgufBuf::Q4K(_) => Err(format!(
+            "{}: packed {:?} tensor available but layer forward doesn't yet consume packed bytes",
+            key, t.dtype
+        )),
         _ => Err(format!("{}: dtype is not BF16", key)),
     }
 }
@@ -1054,9 +1090,26 @@ mod tests {
         assert_eq!(cfg.head_dim, 256);
 
         // 3. Load the full target using the metadata-derived config.
-        eprintln!("qwen35_target_gguf_smoke_v2: loading {}", QWEN35_27B_GGUF);
-        let target = Qwen35Target::load_from_gguf(dev.clone(), cfg, QWEN35_27B_GGUF)
-            .expect("load_from_gguf");
+        //    Phase 6: `keep_packed = true` keeps Q5K/Q6K/Q8_0/IQ4_XS
+        //    tensors as raw block bytes on device. That cuts the 27B
+        //    resident-weight footprint from ~30 GB (Phase-5 bf16-
+        //    dequant) to ~15 GB (GGUF-on-disk size), so the smoke test
+        //    now fits on a 48 GB A6000 alongside KV-cache + GDN-state
+        //    allocations. The per-layer `load_bf16_*` helpers don't yet
+        //    consume packed bytes, so those weights still become zero
+        //    placeholders in the forward — shape + finiteness are what
+        //    this test asserts.
+        eprintln!(
+            "qwen35_target_gguf_smoke_v2: loading {} (keep_packed=true)",
+            QWEN35_27B_GGUF
+        );
+        let target = Qwen35Target::load_from_gguf_with_config(
+            dev.clone(),
+            cfg,
+            QWEN35_27B_GGUF,
+            crate::gguf::LoaderConfig { keep_packed: true },
+        )
+        .expect("load_from_gguf_with_config");
         eprintln!(
             "loaded: vocab={} n_full_attn={} n_gdn={} layers={}",
             target.vocab_size,
