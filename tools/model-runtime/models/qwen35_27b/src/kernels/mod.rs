@@ -25,6 +25,7 @@ pub mod flash_attn;
 pub mod gated_delta_net;
 pub mod l2_norm;
 pub mod matmul_bf16;
+pub mod mmq_iq4_xs;
 pub mod mmq_q4k;
 pub mod mmq_q5k;
 pub mod mmq_q6k;
@@ -49,6 +50,10 @@ pub use gated_delta_net::{
 };
 pub use l2_norm::launch_l2_norm_bf16;
 pub use matmul_bf16::{launch_matmul_bf16_bf16, launch_matmul_bf16_f32};
+pub use mmq_iq4_xs::{
+    launch_mmvq_iq4_xs_f16, launch_mmvq_iq4_xs_f32, launch_mmvq_iq4_xs_q8_1_f16,
+    launch_mmvq_iq4_xs_q8_1_f32,
+};
 pub use mmq_q4k::{
     launch_mmvq_q4k_f16, launch_mmvq_q4k_f32, launch_mmvq_q4k_q8_1_f16, launch_mmvq_q4k_q8_1_f32,
 };
