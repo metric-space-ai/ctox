@@ -21,6 +21,8 @@ use libc::SIG_IGN;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
+use rusqlite::params;
+use rusqlite::Connection;
 use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
@@ -51,6 +53,7 @@ use std::sync::Mutex;
 use std::sync::Once;
 use std::thread;
 use std::time::Duration;
+use std::time::SystemTime;
 #[cfg(not(unix))]
 use tiny_http::Header;
 #[cfg(not(unix))]
@@ -91,12 +94,15 @@ const SERVICE_SOCKET_RELATIVE_PATH: &str = "runtime/ctox_service.sock";
 const SYSTEMD_USER_UNIT_NAME: &str = "ctox.service";
 const CHANNEL_ROUTER_POLL_SECS: u64 = 8;
 const MISSION_WATCHER_POLL_SECS: u64 = 15;
+const CTO_OPERATING_WATCHER_POLL_SECS: u64 = 60;
 const CHANNEL_ROUTER_LEASE_OWNER: &str = "ctox-service";
 const QUEUE_PRESSURE_GUARD_THRESHOLD: usize = 20;
 const QUEUE_GUARD_SOURCE_LABEL: &str = "queue-guard";
 const SERVICE_SHUTDOWN_TIMEOUT_SECS: u64 = 15;
 const SERVICE_SHUTDOWN_POLL_MILLIS: u64 = 150;
 const SYSTEMCTL_USER_TIMEOUT_SECS: u64 = 5;
+const CTO_DRIFT_THREAD_KEY: &str = "ctox-cto-operating";
+const CTO_DRIFT_KIND: &str = "cto-drift-correction";
 
 static SERVICE_PANIC_HOOK: Once = Once::new();
 
@@ -275,6 +281,37 @@ struct SharedState {
     last_progress_epoch_secs: u64,
 }
 
+#[derive(Debug, Clone, Default)]
+struct OperatingHealthSnapshot {
+    snapshot_id: String,
+    created_at: String,
+    mission_open_count: i64,
+    active_goal_count: i64,
+    pending_plan_step_count: i64,
+    ticket_items: i64,
+    ticket_cases: i64,
+    ticket_sync_runs: i64,
+    ticket_dry_runs: i64,
+    ticket_knowledge_loads: i64,
+    ticket_self_work_items: i64,
+    ticket_self_work_active: i64,
+    review_rework_active: i64,
+    ticket_knowledge_entries: i64,
+    knowledge_main_skills: i64,
+    knowledge_skillbooks: i64,
+    knowledge_runbooks: i64,
+    knowledge_runbook_items: i64,
+    knowledge_embeddings: i64,
+    verification_runs: i64,
+    local_tickets: i64,
+    local_ticket_events: i64,
+    active_source_label: String,
+    current_goal_preview: String,
+    drift_score: i64,
+    drift_reasons: Vec<String>,
+    intervention_recommended: bool,
+}
+
 impl Default for SharedState {
     fn default() -> Self {
         Self {
@@ -363,6 +400,7 @@ pub fn run_foreground(root: &Path) -> Result<()> {
     start_channel_router(root.to_path_buf(), state.clone());
     start_channel_syncer(root.to_path_buf());
     start_mission_watcher(root.to_path_buf(), state.clone());
+    start_cto_operating_watcher(root.to_path_buf(), state.clone());
     // The service control plane must come up independently of backend warmup.
     supervisor::start_backend_supervisor(root.to_path_buf());
     #[cfg(unix)]
@@ -2591,6 +2629,428 @@ fn start_mission_watcher(root: std::path::PathBuf, state: Arc<Mutex<SharedState>
             thread::sleep(Duration::from_secs(MISSION_WATCHER_POLL_SECS));
         }
     });
+}
+
+fn start_cto_operating_watcher(root: std::path::PathBuf, state: Arc<Mutex<SharedState>>) {
+    thread::spawn(move || loop {
+        match capture_operating_health_snapshot(&root, &state) {
+            Ok(snapshot) => {
+                if snapshot.intervention_recommended {
+                    match maybe_enqueue_cto_drift_intervention(&root, &state, &snapshot) {
+                        Ok(true) => push_event(
+                            &state,
+                            format!(
+                                "CTO operating drift intervention enqueued from snapshot {} (score={})",
+                                snapshot.snapshot_id, snapshot.drift_score
+                            ),
+                        ),
+                        Ok(false) => {}
+                        Err(err) => push_event(
+                            &state,
+                            format!(
+                                "CTO operating drift intervention failed for {}: {}",
+                                snapshot.snapshot_id, err
+                            ),
+                        ),
+                    }
+                }
+            }
+            Err(err) => push_event(&state, format!("CTO operating watcher failed: {err}")),
+        }
+        thread::sleep(Duration::from_secs(CTO_OPERATING_WATCHER_POLL_SECS));
+    });
+}
+
+fn capture_operating_health_snapshot(
+    root: &Path,
+    state: &Arc<Mutex<SharedState>>,
+) -> Result<OperatingHealthSnapshot> {
+    let db_path = root.join("runtime/ctox.sqlite3");
+    let conn = Connection::open(&db_path)
+        .with_context(|| format!("failed to open runtime db {}", db_path.display()))?;
+    ensure_operating_health_schema(&conn)?;
+
+    let (active_source_label, current_goal_preview) = {
+        let shared = lock_shared_state(state);
+        (
+            shared.active_source_label.clone().unwrap_or_default(),
+            shared.current_goal_preview.clone().unwrap_or_default(),
+        )
+    };
+
+    let mut snapshot = OperatingHealthSnapshot {
+        snapshot_id: format!("opsnap-{}", current_epoch_millis()),
+        created_at: now_iso_string(),
+        mission_open_count: query_count(&conn, "SELECT COUNT(*) FROM mission_states WHERE is_open = 1")?,
+        active_goal_count: query_count(&conn, "SELECT COUNT(*) FROM planned_goals WHERE status = 'active'")?,
+        pending_plan_step_count: query_count(
+            &conn,
+            "SELECT COUNT(*) FROM planned_steps WHERE status IN ('pending','queued')",
+        )?,
+        ticket_items: query_count(&conn, "SELECT COUNT(*) FROM ticket_items")?,
+        ticket_cases: query_count(&conn, "SELECT COUNT(*) FROM ticket_cases")?,
+        ticket_sync_runs: query_count(&conn, "SELECT COUNT(*) FROM ticket_sync_runs")?,
+        ticket_dry_runs: query_count(&conn, "SELECT COUNT(*) FROM ticket_dry_runs")?,
+        ticket_knowledge_loads: query_count(&conn, "SELECT COUNT(*) FROM ticket_knowledge_loads")?,
+        ticket_self_work_items: query_count(&conn, "SELECT COUNT(*) FROM ticket_self_work_items")?,
+        ticket_self_work_active: query_count(
+            &conn,
+            "SELECT COUNT(*) FROM ticket_self_work_items WHERE state IN ('open','queued','blocked')",
+        )?,
+        review_rework_active: query_count(
+            &conn,
+            "SELECT COUNT(*) FROM ticket_self_work_items WHERE kind = 'review-rework' AND state IN ('open','queued','blocked')",
+        )?,
+        ticket_knowledge_entries: query_count(&conn, "SELECT COUNT(*) FROM ticket_knowledge_entries")?,
+        knowledge_main_skills: query_count(&conn, "SELECT COUNT(*) FROM knowledge_main_skills")?,
+        knowledge_skillbooks: query_count(&conn, "SELECT COUNT(*) FROM knowledge_skillbooks")?,
+        knowledge_runbooks: query_count(&conn, "SELECT COUNT(*) FROM knowledge_runbooks")?,
+        knowledge_runbook_items: query_count(&conn, "SELECT COUNT(*) FROM knowledge_runbook_items")?,
+        knowledge_embeddings: query_count(&conn, "SELECT COUNT(*) FROM knowledge_embeddings")?,
+        verification_runs: query_count(&conn, "SELECT COUNT(*) FROM verification_runs")?,
+        local_tickets: query_count(&conn, "SELECT COUNT(*) FROM local_tickets")?,
+        local_ticket_events: query_count(&conn, "SELECT COUNT(*) FROM local_ticket_events")?,
+        active_source_label,
+        current_goal_preview,
+        ..OperatingHealthSnapshot::default()
+    };
+    let (score, reasons) = evaluate_operating_drift(&snapshot);
+    snapshot.drift_score = score;
+    snapshot.drift_reasons = reasons;
+    snapshot.intervention_recommended = score >= 7
+        && (snapshot.mission_open_count > 0
+            || snapshot.active_goal_count > 0
+            || snapshot.pending_plan_step_count > 0);
+    persist_operating_health_snapshot(&conn, &snapshot)?;
+    Ok(snapshot)
+}
+
+fn ensure_operating_health_schema(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS operating_health_snapshots (
+            snapshot_id TEXT PRIMARY KEY,
+            created_at TEXT NOT NULL,
+            mission_open_count INTEGER NOT NULL,
+            active_goal_count INTEGER NOT NULL,
+            pending_plan_step_count INTEGER NOT NULL,
+            ticket_items INTEGER NOT NULL,
+            ticket_cases INTEGER NOT NULL,
+            ticket_sync_runs INTEGER NOT NULL,
+            ticket_dry_runs INTEGER NOT NULL,
+            ticket_knowledge_loads INTEGER NOT NULL,
+            ticket_self_work_items INTEGER NOT NULL,
+            ticket_self_work_active INTEGER NOT NULL,
+            review_rework_active INTEGER NOT NULL,
+            ticket_knowledge_entries INTEGER NOT NULL,
+            knowledge_main_skills INTEGER NOT NULL,
+            knowledge_skillbooks INTEGER NOT NULL,
+            knowledge_runbooks INTEGER NOT NULL,
+            knowledge_runbook_items INTEGER NOT NULL,
+            knowledge_embeddings INTEGER NOT NULL,
+            verification_runs INTEGER NOT NULL,
+            local_tickets INTEGER NOT NULL,
+            local_ticket_events INTEGER NOT NULL,
+            active_source_label TEXT NOT NULL,
+            current_goal_preview TEXT NOT NULL,
+            drift_score INTEGER NOT NULL,
+            drift_reasons_json TEXT NOT NULL,
+            intervention_recommended INTEGER NOT NULL,
+            intervention_enqueued INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_operating_health_snapshots_created
+            ON operating_health_snapshots(created_at DESC);
+        "#,
+    )?;
+    Ok(())
+}
+
+fn query_count(conn: &Connection, sql: &str) -> Result<i64> {
+    Ok(conn.query_row(sql, [], |row| row.get(0))?)
+}
+
+fn evaluate_operating_drift(snapshot: &OperatingHealthSnapshot) -> (i64, Vec<String>) {
+    let mut score = 0i64;
+    let mut reasons = Vec::new();
+    let goal_preview = snapshot.current_goal_preview.to_ascii_lowercase();
+    let active_source = snapshot.active_source_label.to_ascii_lowercase();
+
+    if snapshot.ticket_items == 0 && snapshot.local_tickets > 0 {
+        score += 3;
+        reasons.push("canonical ticket mirror inactive while local tickets exist".to_string());
+    }
+    if snapshot.ticket_sync_runs == 0 && snapshot.local_tickets > 0 {
+        score += 2;
+        reasons.push("ticket sync never ran for an active local ticket source".to_string());
+    }
+    if snapshot.ticket_self_work_items >= 10 && snapshot.ticket_items == 0 {
+        score += 2;
+        reasons.push("self-work dominates while canonical tickets remain empty".to_string());
+    }
+    if snapshot.review_rework_active >= 3 {
+        score += 3;
+        reasons.push("review-rework backlog is crowding the active mission".to_string());
+    }
+    if snapshot.ticket_knowledge_entries > 0 && snapshot.ticket_knowledge_loads == 0 {
+        score += 2;
+        reasons.push("knowledge entries exist without ticket knowledge loads".to_string());
+    }
+    if snapshot.knowledge_main_skills == 0
+        && snapshot.knowledge_skillbooks == 0
+        && snapshot.knowledge_runbooks == 0
+    {
+        score += 2;
+        reasons.push("ticket knowledge hierarchy is still uninitialized".to_string());
+    }
+    if snapshot.verification_runs >= 25 && snapshot.review_rework_active > 0 {
+        score += 1;
+        reasons.push("verification activity is high while delivery remains blocked".to_string());
+    }
+    if active_source == "queue"
+        && (goal_preview.contains("review rework")
+            || goal_preview.contains("monitor ")
+            || goal_preview.contains("approval"))
+    {
+        score += 2;
+        reasons.push("active work is still centered on review/monitoring loops".to_string());
+    }
+
+    (score, reasons)
+}
+
+fn persist_operating_health_snapshot(
+    conn: &Connection,
+    snapshot: &OperatingHealthSnapshot,
+) -> Result<()> {
+    conn.execute(
+        r#"
+        INSERT INTO operating_health_snapshots (
+            snapshot_id,
+            created_at,
+            mission_open_count,
+            active_goal_count,
+            pending_plan_step_count,
+            ticket_items,
+            ticket_cases,
+            ticket_sync_runs,
+            ticket_dry_runs,
+            ticket_knowledge_loads,
+            ticket_self_work_items,
+            ticket_self_work_active,
+            review_rework_active,
+            ticket_knowledge_entries,
+            knowledge_main_skills,
+            knowledge_skillbooks,
+            knowledge_runbooks,
+            knowledge_runbook_items,
+            knowledge_embeddings,
+            verification_runs,
+            local_tickets,
+            local_ticket_events,
+            active_source_label,
+            current_goal_preview,
+            drift_score,
+            drift_reasons_json,
+            intervention_recommended
+        ) VALUES (
+            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
+            ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20,
+            ?21, ?22, ?23, ?24, ?25, ?26, ?27
+        )
+        "#,
+        params![
+            snapshot.snapshot_id,
+            snapshot.created_at,
+            snapshot.mission_open_count,
+            snapshot.active_goal_count,
+            snapshot.pending_plan_step_count,
+            snapshot.ticket_items,
+            snapshot.ticket_cases,
+            snapshot.ticket_sync_runs,
+            snapshot.ticket_dry_runs,
+            snapshot.ticket_knowledge_loads,
+            snapshot.ticket_self_work_items,
+            snapshot.ticket_self_work_active,
+            snapshot.review_rework_active,
+            snapshot.ticket_knowledge_entries,
+            snapshot.knowledge_main_skills,
+            snapshot.knowledge_skillbooks,
+            snapshot.knowledge_runbooks,
+            snapshot.knowledge_runbook_items,
+            snapshot.knowledge_embeddings,
+            snapshot.verification_runs,
+            snapshot.local_tickets,
+            snapshot.local_ticket_events,
+            snapshot.active_source_label,
+            snapshot.current_goal_preview,
+            snapshot.drift_score,
+            serde_json::to_string(&snapshot.drift_reasons)?,
+            if snapshot.intervention_recommended { 1 } else { 0 },
+        ],
+    )?;
+    Ok(())
+}
+
+fn maybe_enqueue_cto_drift_intervention(
+    root: &Path,
+    state: &Arc<Mutex<SharedState>>,
+    snapshot: &OperatingHealthSnapshot,
+) -> Result<bool> {
+    let shared = lock_shared_state(state);
+    let current_goal = shared.current_goal_preview.clone().unwrap_or_default();
+    let active_source = shared.active_source_label.clone().unwrap_or_default();
+    let busy = shared.busy;
+    drop(shared);
+
+    if active_source == "queue"
+        && current_goal.to_ascii_lowercase().contains("cto operating drift detected")
+    {
+        return Ok(false);
+    }
+
+    let existing = tickets::list_ticket_self_work_items(root, Some("local"), None, 256)?;
+    if existing.iter().any(|item| {
+        item.kind == CTO_DRIFT_KIND && matches!(item.state.as_str(), "open" | "queued" | "blocked")
+    }) {
+        return Ok(false);
+    }
+
+    if busy && active_source == "queue" && !current_goal.to_ascii_lowercase().contains("review rework")
+    {
+        return Ok(false);
+    }
+
+    let prompt = format!(
+        "CTO operating drift detected from runtime telemetry snapshot {}.\n\n\
+Observed SQLite metrics:\n\
+- mission_open_count = {}\n\
+- active_goal_count = {}\n\
+- pending_plan_step_count = {}\n\
+- ticket_items = {}\n\
+- ticket_cases = {}\n\
+- ticket_sync_runs = {}\n\
+- ticket_dry_runs = {}\n\
+- ticket_knowledge_loads = {}\n\
+- ticket_self_work_items = {}\n\
+- ticket_self_work_active = {}\n\
+- review_rework_active = {}\n\
+- ticket_knowledge_entries = {}\n\
+- knowledge_main_skills = {}\n\
+- knowledge_skillbooks = {}\n\
+- knowledge_runbooks = {}\n\
+- knowledge_runbook_items = {}\n\
+- knowledge_embeddings = {}\n\
+- verification_runs = {}\n\
+- local_tickets = {}\n\
+- local_ticket_events = {}\n\
+- active_source_label = {}\n\
+- current_goal_preview = {}\n\
+\n\
+Drift assessment:\n\
+{}\n\
+\n\
+Required actions in this slice:\n\
+1. Inspect the snapshot row in `operating_health_snapshots` for `{}`.\n\
+2. Explain the mission-health problem using these stats rather than generic prose.\n\
+3. Persist any new CTO knowledge only in SQLite-backed stores. Valid targets are continuity commits, ticket_knowledge_entries, planned_goals/planned_steps, local_tickets, or other runtime DB records. A markdown file in the workspace does not count as knowledge.\n\
+4. If a strategic insight is important, write it into the runtime system rather than a standalone artifact file.\n\
+5. Name which currently active loops are low-leverage and should be deprioritized.\n\
+6. Create or update exactly one highest-leverage, ticket-backed next slice for the mission.\n\
+\n\
+Do not spend this slice on generic queue janitor work. Do not repeat stale approval monitoring unless there is fresh evidence that approval is the real blocker.",
+        snapshot.snapshot_id,
+        snapshot.mission_open_count,
+        snapshot.active_goal_count,
+        snapshot.pending_plan_step_count,
+        snapshot.ticket_items,
+        snapshot.ticket_cases,
+        snapshot.ticket_sync_runs,
+        snapshot.ticket_dry_runs,
+        snapshot.ticket_knowledge_loads,
+        snapshot.ticket_self_work_items,
+        snapshot.ticket_self_work_active,
+        snapshot.review_rework_active,
+        snapshot.ticket_knowledge_entries,
+        snapshot.knowledge_main_skills,
+        snapshot.knowledge_skillbooks,
+        snapshot.knowledge_runbooks,
+        snapshot.knowledge_runbook_items,
+        snapshot.knowledge_embeddings,
+        snapshot.verification_runs,
+        snapshot.local_tickets,
+        snapshot.local_ticket_events,
+        if snapshot.active_source_label.is_empty() {
+            "(none)"
+        } else {
+            snapshot.active_source_label.as_str()
+        },
+        if snapshot.current_goal_preview.is_empty() {
+            "(none)"
+        } else {
+            snapshot.current_goal_preview.as_str()
+        },
+        if snapshot.drift_reasons.is_empty() {
+            "- no explicit reasons recorded".to_string()
+        } else {
+            snapshot
+                .drift_reasons
+                .iter()
+                .map(|reason| format!("- {reason}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        },
+        snapshot.snapshot_id,
+    );
+
+    let created = create_self_work_backed_queue_task(
+        root,
+        DurableSelfWorkQueueRequest {
+            kind: CTO_DRIFT_KIND.to_string(),
+            title: "CTO operating drift correction".to_string(),
+            prompt,
+            thread_key: CTO_DRIFT_THREAD_KEY.to_string(),
+            workspace_root: None,
+            priority: "urgent".to_string(),
+            suggested_skill: Some("follow-up-orchestrator".to_string()),
+            parent_message_key: None,
+            metadata: serde_json::json!({
+                "snapshot_id": snapshot.snapshot_id,
+                "dedupe_key": format!("cto-drift:{}", snapshot.snapshot_id),
+                "drift_score": snapshot.drift_score,
+            }),
+        },
+    )?;
+    let conn = Connection::open(root.join("runtime/ctox.sqlite3"))?;
+    let _ = conn.execute(
+        "UPDATE operating_health_snapshots SET intervention_enqueued = 1 WHERE snapshot_id = ?1",
+        params![snapshot.snapshot_id],
+    );
+    let _ = governance::record_event(
+        root,
+        governance::GovernanceEventRequest {
+            mechanism_id: "cto_operating_watchdog",
+            conversation_id: None,
+            severity: "warning",
+            reason: "operating telemetry indicates mission drift into low-leverage loops",
+            action_taken: "queued an urgent CTO operating drift correction slice",
+            details: serde_json::json!({
+                "snapshot_id": snapshot.snapshot_id,
+                "drift_score": snapshot.drift_score,
+                "thread_key": created.thread_key,
+                "title": created.title,
+                "reasons": snapshot.drift_reasons,
+            }),
+            idempotence_key: Some(&format!("cto-drift:{}", snapshot.snapshot_id)),
+        },
+    );
+    Ok(true)
+}
+
+fn current_epoch_millis() -> u128 {
+    SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
 }
 
 /// Close every open `approval-gate` self-work item. Runs only when the
