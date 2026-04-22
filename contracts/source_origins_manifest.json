@@ -6,15 +6,15 @@
       "name": "agent-runtime",
       "sourceOriginUrl": "https://github.com/metric-space-ai/ctox",
       "integrationMode": "hard_fork",
-      "requiredPaths": ["tools/agent-runtime/Cargo.toml"],
-      "targetDir": "tools/agent-runtime",
+      "requiredPaths": ["src/inference/Cargo.toml"],
+      "targetDir": "src/inference",
       "purpose": "Codex execution engine for bounded agent turns"
     },
     {
       "name": "model-runtime",
       "sourceOriginUrl": "https://github.com/metric-space-ai/ctox",
       "integrationMode": "hard_fork",
-      "requiredPaths": ["tools/model-runtime/core/Cargo.toml"],
+      "requiredPaths": ["tools/model-runtime/Cargo.toml"],
       "targetDir": "tools/model-runtime",
       "purpose": "Candle-based local inference runtime"
     }
