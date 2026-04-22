@@ -18,7 +18,12 @@ use ctox_cuda_primitives::device::DeviceContext;
 use ctox_cuda_primitives::tensor::CudaTensor;
 
 // PTX blob comes from the parent module's auto-generated registry.
-use super::SSM_CONV1D_PTX;
+// The .cu file is now `ssm_conv.cu` — a shim that `#include`s the
+// vendored upstream ggml-cuda/ssm-conv.cu (for `ggml_cuda_op_silu_single`
+// and the f32 kernel family) and adds the two bf16 entry-point kernels
+// the GDN block uses. build.rs names the blob after the .cu stem, so
+// it's `SSM_CONV_PTX`.
+use super::SSM_CONV_PTX;
 
 /// Threads per block along the channel axis. 256 matches the other
 /// memory-bound elementwise kernels (`silu_mul`, `residual`) so the
@@ -39,13 +44,13 @@ fn load_fn(
     if let Some(f) = cache.get() {
         return Ok(f.clone());
     }
-    let ptx_src = std::str::from_utf8(SSM_CONV1D_PTX)
-        .map_err(|e| anyhow!("ssm_conv1d.ptx not UTF-8: {}", e))?
+    let ptx_src = std::str::from_utf8(SSM_CONV_PTX)
+        .map_err(|e| anyhow!("ssm_conv.ptx not UTF-8: {}", e))?
         .to_string();
     let module = device
         .raw()
         .load_module(Ptx::from_src(ptx_src))
-        .map_err(|e| anyhow!("load_module ssm_conv1d.ptx: {:?}", e))?;
+        .map_err(|e| anyhow!("load_module ssm_conv.ptx: {:?}", e))?;
     let f = module
         .load_function(entry)
         .map_err(|e| anyhow!("load_function {}: {:?}", entry, e))?;

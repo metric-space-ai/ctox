@@ -38,8 +38,13 @@ static __global__ void k_get_rows(
     }
 }
 
+// CTOX MODIFICATION: `static` stripped from `k_get_rows_float` so the
+// template specializations we instantiate in kernels/sm_86/getrows.cu
+// get externally-linkable PTX symbols (cudarc driver API can only look
+// up symbols with non-internal linkage). All other code is byte-
+// identical to upstream at the commit pinned in ../llama-cpp.version.
 template<typename src0_t, typename dst_t>
-static __global__ void k_get_rows_float(
+__global__ void k_get_rows_float(
         const src0_t * __restrict__ src0, const int32_t * __restrict__ src1, dst_t * __restrict__ dst,
         const int64_t ne00, /*const int64_t ne01, const int64_t ne02, const int64_t ne03,*/
         /*const int64_t ne10,*/ const int64_t ne11, const int64_t ne12, /*const int64_t ne13,*/

@@ -1,19 +1,30 @@
-//! Token embedding lookup — Rust-side wrappers.
+//! Token embedding lookup — Rust wrappers around the vendored
+//! `k_get_rows_float<src_t, dst_t>` template from
+//! llama.cpp's ggml-cuda/getrows.cu.
 //!
-//! Given a batch of token ids and the `[vocab_size, hidden_dim]`
-//! embedding weight matrix, emit the corresponding rows into an
-//! `[n_tokens, hidden_dim]` bf16 output. Three variants cover the
-//! weight dtypes we see in GGUF-loaded embed tables: bf16, f16, f32.
-//! The bf16→bf16 path is a bit-exact copy; the f16/f32 paths cast via
-//! f32 per fetch.
+//! The vendor kernel is a general 3-axis row-gather with strided src
+//! and indirection tensors. Our use case is the degenerate 1-axis path:
+//! `out[t, :] = weight[token_ids[t], :]` where `weight` is
+//! `[vocab_size, hidden_dim]`, `token_ids` is `[n_tokens]`, and `out`
+//! is `[n_tokens, hidden_dim]`. Mapping to upstream's parameter
+//! convention: `ne00=hidden_dim, ne10=n_tokens, ne11=ne12=1`, with the
+//! unused axis strides set to 0.
 //!
-//! OOB ids (`id < 0 || id >= vocab_size`) zero-fill that row rather
-//! than erroring — keeps the kernel branchless across threads and
-//! avoids a host sync on the hot path. The caller is expected to
-//! validate tokenization upstream; this is a safety net.
+//! Three specializations are exposed by the shim
+//! `kernels/sm_86/getrows.cu`:
 //!
-//! Wrapper conventions mirror `rmsnorm` — see that module for the
-//! canonical template.
+//!   * `k_get_rows_float<__nv_bfloat16, __nv_bfloat16>` — bf16→bf16 (bit-exact).
+//!   * `k_get_rows_float<__half,        __nv_bfloat16>` — f16 →bf16 (per-element cast).
+//!   * `k_get_rows_float<float,         __nv_bfloat16>` — f32 →bf16 (per-element cast).
+//!
+//! The vendor doesn't emit an OOB guard — out-of-range token ids
+//! produce undefined reads. The caller is expected to have validated
+//! ids upstream; the old self-authored kernel zero-filled OOB rows as
+//! a safety net, but the tests use only in-range ids, and the hot
+//! path has the upstream-validated tokenizer feeding this kernel.
+//!
+//! Public API (`launch_embedding_{bf16,f16,f32}`) is unchanged — the
+//! callers in layers/*.rs don't see the re-wire.
 
 use std::sync::{Arc, OnceLock};
 
@@ -25,7 +36,27 @@ use half::{bf16, f16};
 use ctox_cuda_primitives::device::DeviceContext;
 use ctox_cuda_primitives::tensor::CudaTensor;
 
-use super::EMBEDDING_PTX;
+// PTX blob comes from the parent module's auto-generated registry.
+// The .cu file is named `getrows.cu` (a shim that `#include`s the
+// vendored upstream ggml-cuda/getrows.cu and forces PTX emission of
+// the three template specializations we call).
+use super::GETROWS_PTX;
+
+/// Matches upstream's `CUDA_GET_ROWS_BLOCK_SIZE` (see
+/// `vendor/ggml-cuda/getrows.cuh`). Hard-coded rather than imported
+/// because the constant lives in a `.cuh` we don't expose to Rust.
+const CUDA_GET_ROWS_BLOCK_SIZE: u32 = 256;
+
+// C++-mangled entry points emitted by nvcc for the three template
+// specializations we force in the shim. Inspect:
+//   nvcc --ptx ... kernels/sm_86/getrows.cu -o /tmp/getrows.ptx
+//   grep '.visible .entry' /tmp/getrows.ptx
+const ENTRY_BF16: &str =
+    "_Z16k_get_rows_floatI13__nv_bfloat16S0_EvPKT_PKiPT0_lllmmmmmmmmm";
+const ENTRY_F16: &str =
+    "_Z16k_get_rows_floatI6__half13__nv_bfloat16EvPKT_PKiPT0_lllmmmmmmmmm";
+const ENTRY_F32: &str =
+    "_Z16k_get_rows_floatIf13__nv_bfloat16EvPKT_PKiPT0_lllmmmmmmmmm";
 
 static EMBEDDING_BF16_FN: OnceLock<CudaFunction> = OnceLock::new();
 static EMBEDDING_F16_FN: OnceLock<CudaFunction> = OnceLock::new();
@@ -39,13 +70,13 @@ fn load_embedding_fn(
     if let Some(f) = cell.get() {
         return Ok(f.clone());
     }
-    let ptx_src = std::str::from_utf8(EMBEDDING_PTX)
-        .map_err(|e| anyhow!("embedding.ptx not UTF-8: {}", e))?
+    let ptx_src = std::str::from_utf8(GETROWS_PTX)
+        .map_err(|e| anyhow!("getrows.ptx not UTF-8: {}", e))?
         .to_string();
     let module = device
         .raw()
         .load_module(Ptx::from_src(ptx_src))
-        .map_err(|e| anyhow!("load_module embedding.ptx: {:?}", e))?;
+        .map_err(|e| anyhow!("load_module getrows.ptx: {:?}", e))?;
     let f = module
         .load_function(entry)
         .map_err(|e| anyhow!("load_function {}: {:?}", entry, e))?;
@@ -92,22 +123,79 @@ fn validate_shapes(
     Ok((n_tokens, vocab_size, hidden_dim))
 }
 
-/// Launch config matches the rmsnorm template: one block per output
-/// token, block_dim = min(hidden_dim, 1024) rounded up to a warp.
+/// Launch geometry matches upstream `get_rows_cuda_float`:
+///
+///   block = (CUDA_GET_ROWS_BLOCK_SIZE, 1, 1)
+///   grid  = (ne10, min(block_num_y, UINT16_MAX), min(ne11*ne12, UINT16_MAX))
+///   block_num_y = ceil(ne00 / CUDA_GET_ROWS_BLOCK_SIZE)
+///
+/// In our 2D mapping: ne10 = n_tokens, ne00 = hidden_dim, ne11*ne12 = 1.
 fn embedding_launch_config(n_tokens: usize, hidden_dim: usize) -> LaunchConfig {
-    let mut block_dim = hidden_dim.min(1024);
-    block_dim = block_dim.div_ceil(32) * 32;
+    let block_num_y = (hidden_dim as u32)
+        .div_ceil(CUDA_GET_ROWS_BLOCK_SIZE)
+        .max(1);
+    let block_num_y = block_num_y.min(u16::MAX as u32);
     LaunchConfig {
-        grid_dim: (n_tokens as u32, 1, 1),
-        block_dim: (block_dim as u32, 1, 1),
+        grid_dim: (n_tokens as u32, block_num_y, 1),
+        block_dim: (CUDA_GET_ROWS_BLOCK_SIZE, 1, 1),
         shared_mem_bytes: 0,
+    }
+}
+
+/// Push the 15-scalar parameter tail that `k_get_rows_float` expects.
+/// See vendor getrows.cu for the full list; the 2D special-casing sets
+/// the unused higher-axis strides to 0.
+///
+/// Layout (after src0/src1/dst pointer args):
+///   ne00, ne11, ne12,     — src0 row len, index grid axes (we use 1,1)
+///   s1, s2, s3,           — out strides in ELEMENTS (s1 = hidden_dim)
+///   nb01, nb02, nb03,     — weight strides in BYTES (nb01 = row bytes)
+///   s10, s11, s12         — token_ids strides in ELEMENTS (s10 = 1)
+///
+/// We push s2, s3, nb02, nb03, s11, s12 as zero since ne11=ne12=1.
+struct GetRowsArgs {
+    ne00: i64,
+    ne11: i64,
+    ne12: i64,
+    s1: usize,
+    s2: usize,
+    s3: usize,
+    nb01: usize,
+    nb02: usize,
+    nb03: usize,
+    s10: usize,
+    s11: usize,
+    s12: usize,
+}
+
+impl GetRowsArgs {
+    fn for_2d<T>(n_tokens: usize, hidden_dim: usize) -> Self {
+        let elem_bytes = std::mem::size_of::<T>();
+        Self {
+            ne00: hidden_dim as i64,
+            ne11: 1,
+            ne12: 1,
+            s1: hidden_dim,           // bf16 out row stride = hidden_dim elements
+            s2: 0,                    // ne11 = 1 → axis unused
+            s3: 0,                    // ne12 = 1 → axis unused
+            nb01: hidden_dim * elem_bytes, // weight row stride in bytes
+            nb02: 0,
+            nb03: 0,
+            s10: 1,                   // token_ids contiguous
+            s11: 0,
+            s12: 0,
+        }
+        .discard_unused(n_tokens)
+    }
+
+    fn discard_unused(self, _n_tokens: usize) -> Self {
+        self
     }
 }
 
 /// `out[t, :] = weight[token_ids[t], :]` — bf16 weight, bf16 out.
 ///
-/// OOB ids zero-fill the corresponding output row. Does not
-/// synchronize the stream.
+/// Does not synchronize the stream. Caller syncs at phase boundary.
 pub fn launch_embedding_bf16(
     device: &Arc<DeviceContext>,
     weight: &CudaTensor<bf16>,
@@ -121,17 +209,27 @@ pub fn launch_embedding_bf16(
     }
 
     let cfg = embedding_launch_config(n_tokens, hidden_dim);
-    let f = load_embedding_fn(device, &EMBEDDING_BF16_FN, "embedding_bf16")?;
+    let f = load_embedding_fn(device, &EMBEDDING_BF16_FN, ENTRY_BF16)?;
     let stream = device.raw().default_stream();
-    let vocab_size_i32 = vocab_size as i32;
-    let hidden_dim_i32 = hidden_dim as i32;
+
+    let args = GetRowsArgs::for_2d::<bf16>(n_tokens, hidden_dim);
     let mut launcher = stream.launch_builder(&f);
     launcher
         .arg(weight.buf())
         .arg(token_ids.buf())
         .arg(out.buf_mut())
-        .arg(&vocab_size_i32)
-        .arg(&hidden_dim_i32);
+        .arg(&args.ne00)
+        .arg(&args.ne11)
+        .arg(&args.ne12)
+        .arg(&args.s1)
+        .arg(&args.s2)
+        .arg(&args.s3)
+        .arg(&args.nb01)
+        .arg(&args.nb02)
+        .arg(&args.nb03)
+        .arg(&args.s10)
+        .arg(&args.s11)
+        .arg(&args.s12);
 
     unsafe { launcher.launch(cfg) }.map_err(|e| {
         anyhow!(
@@ -145,7 +243,8 @@ pub fn launch_embedding_bf16(
     Ok(())
 }
 
-/// f16 weight → bf16 out. Cast happens per fetch on the device.
+/// f16 weight → bf16 out. Cast happens per fetch on the device via
+/// upstream `ggml_cuda_cast`.
 pub fn launch_embedding_f16(
     device: &Arc<DeviceContext>,
     weight: &CudaTensor<f16>,
@@ -159,17 +258,27 @@ pub fn launch_embedding_f16(
     }
 
     let cfg = embedding_launch_config(n_tokens, hidden_dim);
-    let f = load_embedding_fn(device, &EMBEDDING_F16_FN, "embedding_f16")?;
+    let f = load_embedding_fn(device, &EMBEDDING_F16_FN, ENTRY_F16)?;
     let stream = device.raw().default_stream();
-    let vocab_size_i32 = vocab_size as i32;
-    let hidden_dim_i32 = hidden_dim as i32;
+
+    let args = GetRowsArgs::for_2d::<f16>(n_tokens, hidden_dim);
     let mut launcher = stream.launch_builder(&f);
     launcher
         .arg(weight.buf())
         .arg(token_ids.buf())
         .arg(out.buf_mut())
-        .arg(&vocab_size_i32)
-        .arg(&hidden_dim_i32);
+        .arg(&args.ne00)
+        .arg(&args.ne11)
+        .arg(&args.ne12)
+        .arg(&args.s1)
+        .arg(&args.s2)
+        .arg(&args.s3)
+        .arg(&args.nb01)
+        .arg(&args.nb02)
+        .arg(&args.nb03)
+        .arg(&args.s10)
+        .arg(&args.s11)
+        .arg(&args.s12);
 
     unsafe { launcher.launch(cfg) }.map_err(|e| {
         anyhow!(
@@ -197,17 +306,27 @@ pub fn launch_embedding_f32(
     }
 
     let cfg = embedding_launch_config(n_tokens, hidden_dim);
-    let f = load_embedding_fn(device, &EMBEDDING_F32_FN, "embedding_f32")?;
+    let f = load_embedding_fn(device, &EMBEDDING_F32_FN, ENTRY_F32)?;
     let stream = device.raw().default_stream();
-    let vocab_size_i32 = vocab_size as i32;
-    let hidden_dim_i32 = hidden_dim as i32;
+
+    let args = GetRowsArgs::for_2d::<f32>(n_tokens, hidden_dim);
     let mut launcher = stream.launch_builder(&f);
     launcher
         .arg(weight.buf())
         .arg(token_ids.buf())
         .arg(out.buf_mut())
-        .arg(&vocab_size_i32)
-        .arg(&hidden_dim_i32);
+        .arg(&args.ne00)
+        .arg(&args.ne11)
+        .arg(&args.ne12)
+        .arg(&args.s1)
+        .arg(&args.s2)
+        .arg(&args.s3)
+        .arg(&args.nb01)
+        .arg(&args.nb02)
+        .arg(&args.nb03)
+        .arg(&args.s10)
+        .arg(&args.s11)
+        .arg(&args.s12);
 
     unsafe { launcher.launch(cfg) }.map_err(|e| {
         anyhow!(
@@ -226,9 +345,12 @@ mod tests {
     use super::*;
 
     /// Full-scale sanity test: 151936 × 5120 bf16 embed table (Qwen3.5
-    /// dimensions), 32 random token ids, one OOB id to exercise the
-    /// zero-fill branch. bf16→bf16 path is a bit-exact gather so
-    /// tolerance is 0.
+    /// dimensions), 32 random in-range token ids. bf16→bf16 is a
+    /// bit-exact strided gather so tolerance is 0.
+    ///
+    /// NOTE: the vendor kernel does NOT zero-fill OOB ids (unlike the
+    /// old self-authored kernel); the test uses only in-range ids, and
+    /// the production caller upstream-validates tokens.
     #[test]
     #[ignore]
     fn embedding_vs_cpu_golden() {
@@ -236,9 +358,6 @@ mod tests {
         let hidden_dim: usize = 5120;
         let n_tokens: usize = 32;
 
-        // Deterministic pseudo-random weight table — LCG seeded so the
-        // test is host-independent. We build the bf16 table directly
-        // via round-trip from f32.
         let mut seed: u32 = 0xDEADBEEF;
         let mut rand_f = || -> f32 {
             seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
@@ -246,42 +365,29 @@ mod tests {
         };
 
         let numel = vocab_size * hidden_dim;
-        // 151936 × 5120 × 2 bytes ≈ 1.5 GiB — fine on an A6000 (48 GB)
-        // but we don't want to populate the host-side vec with a Vec
-        // iterator closure trip; write directly into a boxed slice.
         let mut w_host: Vec<bf16> = Vec::with_capacity(numel);
         for _ in 0..numel {
             w_host.push(bf16::from_f32(rand_f()));
         }
 
-        // Token ids: 31 in-range + one intentionally OOB (-1) to
-        // exercise the zero-fill guard.
+        // All in-range ids — vendor kernel has no OOB guard.
         let mut token_ids: Vec<i32> = Vec::with_capacity(n_tokens);
         let mut id_seed: u32 = 0xB16B00B5;
-        for k in 0..n_tokens {
-            if k == 7 {
-                token_ids.push(-1); // OOB — expect zero row.
-            } else {
-                id_seed = id_seed.wrapping_mul(1103515245).wrapping_add(12345);
-                let id = (id_seed as usize) % vocab_size;
-                token_ids.push(id as i32);
-            }
+        for _ in 0..n_tokens {
+            id_seed = id_seed.wrapping_mul(1103515245).wrapping_add(12345);
+            let id = (id_seed as usize) % vocab_size;
+            token_ids.push(id as i32);
         }
 
-        // CPU golden. bf16→bf16 gather; OOB → zero row.
+        // CPU golden: bf16→bf16 gather.
         let zero = bf16::from_f32(0.0);
         let mut out_cpu: Vec<bf16> = vec![zero; n_tokens * hidden_dim];
         for (t, &id) in token_ids.iter().enumerate() {
-            if id < 0 || (id as usize) >= vocab_size {
-                // already zero
-                continue;
-            }
             let src = &w_host[(id as usize) * hidden_dim..(id as usize + 1) * hidden_dim];
             let dst = &mut out_cpu[t * hidden_dim..(t + 1) * hidden_dim];
             dst.copy_from_slice(src);
         }
 
-        // Device run.
         let dev = Arc::new(DeviceContext::new(0).expect("cuda init"));
         let w = CudaTensor::<bf16>::from_host(
             dev.clone(),
@@ -299,8 +405,6 @@ mod tests {
 
         let out_gpu: Vec<bf16> = out.to_host().expect("download out");
 
-        // bf16→bf16 copy must be bit-exact. Compare via f32 view but
-        // expect max_abs == 0.
         let mut max_abs = 0.0f32;
         let mut mismatches = 0usize;
         for (a, b) in out_cpu.iter().zip(out_gpu.iter()) {

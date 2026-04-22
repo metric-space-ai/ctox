@@ -1,8 +1,13 @@
 #include "ssm-conv.cuh"
 #include "unary.cuh"
 
+// CTOX MODIFICATION: `static` stripped from `ssm_conv_f32` and
+// `ssm_conv_long_token_f32` so the template specializations the shim
+// in kernels/sm_86/ssm_conv.cu instantiates get externally-linkable
+// PTX symbols. All other code is byte-identical to upstream at the
+// commit pinned in ../llama-cpp.version.
 template <bool apply_silu, size_t split_d_inner, size_t d_conv>
-static __global__ void ssm_conv_f32(const float * __restrict__ src0, const float * __restrict__ src1,
+__global__ void ssm_conv_f32(const float * __restrict__ src0, const float * __restrict__ src1,
                                     const int src0_nb0, const int src0_nb1, const int src0_nb2, const int src1_nb1,
                                     float * __restrict__ dst, const int dst_nb0, const int dst_nb1, const int dst_nb2,
                                     const int64_t n_t) {
@@ -47,7 +52,7 @@ static __global__ void ssm_conv_f32(const float * __restrict__ src0, const float
 }
 
 template <bool apply_silu, size_t split_d_inner, size_t d_conv, int64_t split_n_t>
-static __global__ void ssm_conv_long_token_f32(const float * __restrict__ src0, const float * __restrict__ src1,
+__global__ void ssm_conv_long_token_f32(const float * __restrict__ src0, const float * __restrict__ src1,
                                                const int src0_nb0, const int src0_nb1, const int src0_nb2,
                                                const int src1_nb1, float * __restrict__ dst, const int dst_nb0,
                                                const int dst_nb1, const int dst_nb2, const int64_t n_t) {
