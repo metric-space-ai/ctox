@@ -19,6 +19,8 @@
 // PTX_BLOBS: &[PtxBlob]. One entry per kernels/*.cu compiled.
 include!(concat!(env!("OUT_DIR"), "/ptx_registry.rs"));
 
+pub mod mmq_q4k;
 pub mod rmsnorm;
 
+pub use mmq_q4k::{launch_mmvq_q4k_f16, launch_mmvq_q4k_f32};
 pub use rmsnorm::launch_rmsnorm_f32;
