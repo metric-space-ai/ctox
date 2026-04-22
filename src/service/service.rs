@@ -356,6 +356,12 @@ struct DurableSelfWorkQueueRequest {
     metadata: Value,
 }
 
+#[derive(Debug, Clone)]
+enum CompletionReviewDisposition {
+    None,
+    RequeueSelfWork { work_id: String, summary: String },
+}
+
 struct ServiceExitGuard {
     pid: u32,
 }
@@ -2218,7 +2224,7 @@ fn start_prompt_worker(
             // history). The reviewer either ratifies the result (PASS) or
             // CTOX enqueues a rework slice with the reviewer's report as
             // input. Errors / timeouts skip the review (no slice to judge).
-            if let Ok(reply_text) = result.as_ref() {
+            let review_disposition = if let Ok(reply_text) = result.as_ref() {
                 run_completion_review(
                     &root,
                     &state,
@@ -2226,8 +2232,11 @@ fn start_prompt_worker(
                     reply_text,
                     conversation_id,
                     mission_sync_outcome.as_ref(),
-                );
-            }
+                )
+            } else {
+                CompletionReviewDisposition::None
+            };
+            let mut review_requeue: Option<(String, String)> = None;
             let mut next_prompt = None;
             {
                 let mut shared = lock_shared_state(&state);
@@ -2268,11 +2277,29 @@ fn start_prompt_worker(
                         shared.last_error = None;
                         shared.last_reply_chars = Some(reply.chars().count());
                         if let Some(work_id) = job.ticket_self_work_id.as_deref() {
-                            let note = format!(
-                                "Execution slice completed successfully. Reply summary: {}",
-                                clip_text(&reply, 220)
-                            );
-                            close_ticket_self_work_item(&root, work_id, &note);
+                            match &review_disposition {
+                                CompletionReviewDisposition::RequeueSelfWork {
+                                    work_id: target_work_id,
+                                    summary,
+                                } => {
+                                    review_requeue =
+                                        Some((target_work_id.clone(), summary.clone()));
+                                    push_event_locked(
+                                        &mut shared,
+                                        format!(
+                                            "Review rejected the slice; preserving durable self-work {} instead of closing it",
+                                            target_work_id
+                                        ),
+                                    );
+                                }
+                                CompletionReviewDisposition::None => {
+                                    let note = format!(
+                                        "Execution slice completed successfully. Reply summary: {}",
+                                        clip_text(&reply, 220)
+                                    );
+                                    close_ticket_self_work_item(&root, work_id, &note);
+                                }
+                            }
                         }
                         push_event_locked(
                             &mut shared,
@@ -2361,6 +2388,31 @@ fn start_prompt_worker(
                     next_prompt = maybe_start_next_queued_prompt_locked(&mut shared);
                 }
             }
+            if let Some((work_id, summary)) = review_requeue {
+                match requeue_review_rejected_self_work(&root, &work_id, &summary) {
+                    Ok(Some(task)) => push_event(
+                        &state,
+                        format!(
+                            "Review rejected the slice; re-queued durable self-work {} as {}",
+                            work_id, task.title
+                        ),
+                    ),
+                    Ok(None) => push_event(
+                        &state,
+                        format!(
+                            "Review rejected the slice; durable self-work {} was kept queued without creating a duplicate runnable task",
+                            work_id
+                        ),
+                    ),
+                    Err(err) => push_event(
+                        &state,
+                        format!(
+                            "Failed to re-queue durable self-work {} after review rejection: {}",
+                            work_id, err
+                        ),
+                    ),
+                }
+            }
             if let Some(queued) = next_prompt {
                 start_prompt_worker(root.clone(), state.clone(), queued);
             }
@@ -2444,7 +2496,7 @@ fn run_completion_review(
     reply_text: &str,
     conversation_id: i64,
     _mission_state: Option<&lcm::MissionStateRecord>,
-) {
+) -> CompletionReviewDisposition {
     let owner_visible = derive_owner_visible_for_review(&job.source_label);
     let db_path = root.join("runtime/ctox.sqlite3");
     let review_skill_path = root
@@ -2464,7 +2516,7 @@ fn run_completion_review(
     let outcome = review::review_completion_if_needed(root, &review_request, reply_text);
     if !outcome.required {
         // Heuristic decided this slice does not need review — stay quiet.
-        return;
+        return CompletionReviewDisposition::None;
     }
     let verification_request = verification::SliceVerificationRequest {
         conversation_id,
@@ -2511,6 +2563,19 @@ fn run_completion_review(
         false
     };
     if actionable_rejection {
+        if let Some(work_id) = resolve_review_rejection_target_self_work_id(root, job) {
+            push_event(
+                state,
+                format!(
+                    "Review fail for {} will resume durable self-work {} instead of nesting review-rework",
+                    job.source_label, work_id
+                ),
+            );
+            return CompletionReviewDisposition::RequeueSelfWork {
+                work_id,
+                summary: outcome.summary.clone(),
+            };
+        }
         if active_plan_has_work {
             push_event(
                 state,
@@ -2534,6 +2599,7 @@ fn run_completion_review(
             }
         }
     }
+    CompletionReviewDisposition::None
 }
 
 /// Background-driven slices (watchdog, timeout continuation, queue-pressure
@@ -3751,6 +3817,22 @@ fn ticket_self_work_parent_message_key(item: &tickets::TicketSelfWorkItemView) -
     metadata_string(&item.metadata, "parent_message_key")
 }
 
+fn resolve_review_rejection_target_self_work_id(root: &Path, job: &QueuedPrompt) -> Option<String> {
+    let current_work_id = job.ticket_self_work_id.as_deref()?;
+    let item = tickets::load_ticket_self_work_item(root, current_work_id)
+        .ok()
+        .flatten()?;
+    if item.kind != "review-rework" {
+        return Some(current_work_id.to_string());
+    }
+    let parent_key = ticket_self_work_parent_message_key(&item)?;
+    let parent_task = channels::load_queue_task(root, &parent_key).ok().flatten()?;
+    parent_task
+        .ticket_self_work_id
+        .filter(|work_id| work_id != current_work_id)
+        .or_else(|| Some(current_work_id.to_string()))
+}
+
 fn merge_metadata_value(target: &mut Value, extra: Value) {
     let Some(target_map) = target.as_object_mut() else {
         return;
@@ -3996,6 +4078,26 @@ fn queue_ticket_self_work_item(
         "internal",
     );
     Ok(Some(queue_task))
+}
+
+fn requeue_review_rejected_self_work(
+    root: &Path,
+    work_id: &str,
+    summary: &str,
+) -> Result<Option<channels::QueueTaskView>> {
+    let note = format!(
+        "External review rejected the last slice. Summary: {}. Resume this existing work item, consult the persisted review verdict/evidence, and address the failed gates before closing it.",
+        clip_text(summary, 220)
+    );
+    let item = tickets::transition_ticket_self_work_item(
+        root,
+        work_id,
+        "queued",
+        "ctox-review",
+        Some(&note),
+        "internal",
+    )?;
+    queue_ticket_self_work_item(root, &item)
 }
 
 fn create_self_work_backed_queue_task(
@@ -7051,6 +7153,125 @@ mod tests {
         let self_work = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
             .expect("failed to list self-work");
         assert!(self_work.is_empty());
+    }
+
+    #[test]
+    fn review_rejection_resolves_parent_self_work_for_nested_review_rework() {
+        let root = temp_root("ctox-review-parent-self-work");
+        let parent = tickets::put_ticket_self_work_item(
+            &root,
+            tickets::TicketSelfWorkUpsertInput {
+                source_system: "local".to_string(),
+                kind: "mission-follow-up".to_string(),
+                title: "Continue mission Deliver the Kunstmen homepage reset".to_string(),
+                body_text: "Deliver the Kunstmen homepage reset so kunstmen.com reads like a platform for hiring AI employees.".to_string(),
+                state: "open".to_string(),
+                metadata: serde_json::json!({
+                    "thread_key": "queue/mission-1",
+                    "priority": "high",
+                    "skill": "follow-up-orchestrator",
+                    "dedupe_key": "mission-follow-up:kunstmen-homepage-reset",
+                }),
+            },
+            false,
+        )
+        .expect("failed to create parent self-work");
+        let parent_task = queue_ticket_self_work_item(&root, &parent)
+            .expect("failed to queue parent self-work")
+            .expect("parent queue task missing");
+
+        let review_item = tickets::put_ticket_self_work_item(
+            &root,
+            tickets::TicketSelfWorkUpsertInput {
+                source_system: "local".to_string(),
+                kind: "review-rework".to_string(),
+                title: "Review rework: Continue mission Deliver the Kunstmen homepage reset (fail)"
+                    .to_string(),
+                body_text: "External review rejected the last slice.".to_string(),
+                state: "queued".to_string(),
+                metadata: serde_json::json!({
+                    "thread_key": "queue/mission-1",
+                    "priority": "high",
+                    "skill": "follow-up-orchestrator",
+                    "parent_message_key": parent_task.message_key,
+                    "dedupe_key": "review-rework:queue/mission-1:fail:test",
+                }),
+            },
+            false,
+        )
+        .expect("failed to create review self-work");
+
+        let job = QueuedPrompt {
+            prompt: "External review rejected the last slice.".to_string(),
+            goal: "Repair the Kunstmen homepage".to_string(),
+            preview: "Review rework".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: Some("follow-up-orchestrator".to_string()),
+            leased_message_keys: vec![parent_task.message_key.clone()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("queue/mission-1".to_string()),
+            workspace_root: None,
+            ticket_self_work_id: Some(review_item.work_id.clone()),
+        };
+
+        let target = resolve_review_rejection_target_self_work_id(&root, &job);
+        assert_eq!(target.as_deref(), Some(parent.work_id.as_str()));
+    }
+
+    #[test]
+    fn review_rejected_self_work_is_requeued_without_creating_nested_work() {
+        let root = temp_root("ctox-review-self-work-requeue");
+        let parent = tickets::put_ticket_self_work_item(
+            &root,
+            tickets::TicketSelfWorkUpsertInput {
+                source_system: "local".to_string(),
+                kind: "mission-follow-up".to_string(),
+                title: "Continue mission Deliver the Kunstmen homepage reset".to_string(),
+                body_text: "Deliver the Kunstmen homepage reset so kunstmen.com reads like a platform for hiring AI employees.".to_string(),
+                state: "open".to_string(),
+                metadata: serde_json::json!({
+                    "thread_key": "queue/mission-1",
+                    "priority": "high",
+                    "skill": "follow-up-orchestrator",
+                    "dedupe_key": "mission-follow-up:kunstmen-homepage-reset",
+                }),
+            },
+            false,
+        )
+        .expect("failed to create parent self-work");
+        let parent_task = queue_ticket_self_work_item(&root, &parent)
+            .expect("failed to queue parent self-work")
+            .expect("parent queue task missing");
+        channels::update_queue_task(
+            &root,
+            channels::QueueTaskUpdateRequest {
+                message_key: parent_task.message_key.clone(),
+                route_status: Some("handled".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("failed to mark parent queue task handled");
+
+        let queued = requeue_review_rejected_self_work(
+            &root,
+            &parent.work_id,
+            "The homepage still does not read like an AI hiring platform.",
+        )
+        .expect("failed to requeue parent self-work")
+        .expect("expected a new queue task");
+
+        let reloaded = tickets::load_ticket_self_work_item(&root, &parent.work_id)
+            .expect("failed to reload self-work")
+            .expect("missing self-work");
+        assert_eq!(reloaded.state, "queued");
+        assert_eq!(queued.thread_key, "queue/mission-1");
+        assert!(queued
+            .title
+            .contains("Continue mission Deliver the Kunstmen homepage reset"));
+
+        let items = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
+            .expect("failed to list self-work");
+        assert_eq!(items.len(), 1);
     }
 
     #[test]

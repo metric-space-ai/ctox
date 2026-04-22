@@ -38,6 +38,7 @@ pub struct QueueTaskView {
     pub title: String,
     pub prompt: String,
     pub workspace_root: Option<String>,
+    pub ticket_self_work_id: Option<String>,
     pub priority: String,
     pub suggested_skill: Option<String>,
     pub parent_message_key: Option<String>,
@@ -2732,6 +2733,11 @@ fn queue_task_from_message(message: ChannelMessageView) -> Result<QueueTaskView>
         title: message.subject,
         prompt,
         workspace_root,
+        ticket_self_work_id: message
+            .metadata
+            .get("ticket_self_work_id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
         priority,
         suggested_skill: message
             .metadata
