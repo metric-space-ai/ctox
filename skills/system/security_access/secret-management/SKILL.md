@@ -6,6 +6,8 @@ cluster: security_access
 
 # Secret Management
 
+Only the encrypted SQLite-backed secret store and related runtime records count as durable secret knowledge. Workspace notes, flat files, or copied secret prose do not count as durable knowledge by themselves.
+
 Use this skill when the job requires credentials, tokens, passwords, or endpoint references.
 
 Do not use it as the full deployment skill. Pair it with `service-deployment` or another sibling skill when the broader job is service rollout.

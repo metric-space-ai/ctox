@@ -8,6 +8,8 @@ cluster: skill_meta
 
 # Skill Lifecycle
 
+Skill lifecycle changes are not durable mission knowledge by themselves. The lasting operational state must still be visible in SQLite-backed runtime state, bindings, knowledge records, or verification records.
+
 Use this skill whenever CTOX creates, adopts, promotes, deprecates, or materially rewrites a skill.
 
 This skill exists so that skill growth does not become "some folder changed on disk". Every meaningful skill mutation should have a visible lifecycle state and a reason.

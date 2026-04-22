@@ -6,6 +6,8 @@ cluster: skill_meta
 
 # Canonical Delivery Template
 
+Any generated delivery guidance for CTOX mission work must assume that only SQLite-backed runtime state counts as durable knowledge. Workspace artifacts alone do not count as durable knowledge.
+
 Use this skill when you are defining or changing the CTOX delivery-skill family.
 
 Current delivery family:

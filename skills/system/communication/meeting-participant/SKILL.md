@@ -8,6 +8,8 @@ cluster: communication
 
 # Meeting Participant
 
+For CTOX mission work, meeting outcomes only count as durable knowledge when the relevant decisions, blockers, or commitments are reflected in SQLite-backed runtime state. Standalone notes or recap files do not count as durable knowledge by themselves.
+
 CTOX joins video meetings (Google Meet, Microsoft Teams, Zoom) as a silent notetaker.
 It captures audio for transcription, monitors the meeting chat, and responds when
 participants mention @CTOX. After the meeting, it processes the transcript into

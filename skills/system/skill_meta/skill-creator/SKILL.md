@@ -8,6 +8,8 @@ cluster: skill_meta
 
 # Skill Creator
 
+For CTOX mission work, generated skill files are not durable knowledge by themselves. The operational learning only becomes durable when it is reflected into SQLite-backed runtime state, knowledge records, or bindings.
+
 This skill provides guidance for creating effective skills.
 
 ## About Skills

@@ -8,6 +8,8 @@ cluster: security_access
 
 # Secret Hygiene
 
+Only the encrypted SQLite-backed secret store and related runtime records count as durable secret knowledge. Workspace notes or copied values do not count as durable knowledge by themselves.
+
 Use this skill whenever a raw secret appears in active CTOX context.
 
 This skill does not decide by kernel heuristic that some string is a secret. The skill makes that judgment from context, then uses explicit kernel primitives to protect the value.

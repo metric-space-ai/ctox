@@ -6,6 +6,8 @@ cluster: skill_meta
 
 # Dataset Skill Creator
 
+Generated datasets, reports, and skill files are build artifacts. For CTOX mission work, the resulting knowledge only counts as durable when it is reflected into SQLite-backed runtime state, bindings, or knowledge records.
+
 Use this skill when the real output should be a new skill, not just extracted knowledge.
 
 This is a meta-skill.

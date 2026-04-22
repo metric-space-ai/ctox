@@ -11,6 +11,8 @@ Use this skill for a standalone review run.
 Treat the review assignment as target metadata only.
 Gather everything else yourself.
 
+Only SQLite-backed runtime state, live surfaces, repo state, and direct read-only verification count as durable evidence. Standalone markdown artifacts or workspace notes do not count as knowledge unless their facts are also reflected in SQLite-backed runtime state or directly verified live.
+
 ## Core Contract
 
 The review run:
@@ -44,6 +46,7 @@ The review run:
 6. Inspect the live surface and critical routes.
 7. Inspect the relevant files/runtime/logs needed to settle the claims.
 8. Decide PASS / FAIL / PARTIAL from evidence.
+9. If the ticket+knowledge subsystem is not operationalized end-to-end, treat that as part of the mission-state finding rather than assuming missing knowledge does not matter.
 
 ## Canonical Read-Only Commands
 

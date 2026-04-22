@@ -10,6 +10,8 @@ cluster: knowledge_bootstrap
 
 Use this skill when CTOX has a large ticket export, workbook, CSV, JSON list, or API record dump and needs to turn it into a reusable knowledge base.
 
+This work is only durable when the resulting source profile, taxonomies, glossary, and projections are imported or reflected into SQLite-backed ticket/discovery knowledge. Generated files alone do not count as completed knowledge.
+
 This is not normal ticket handling.
 This is a dataset-to-knowledge bootstrap skill.
 

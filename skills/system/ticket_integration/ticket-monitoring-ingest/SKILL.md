@@ -14,6 +14,8 @@ Use this skill when monitoring systems such as Prometheus, Grafana, uptime check
 
 Monitoring data is not ticket prose. Ingest it into the SQLite-backed knowledge plane so later ticket work can load it through the normal knowledge path.
 
+Monitoring snapshots alone do not mean the full ticket+knowledge pipeline is healthy. They are one SQLite-backed knowledge domain, not proof that mirrored tickets, source bindings, runbooks, or desk skills exist.
+
 ## Command
 
 ```sh
@@ -36,6 +38,7 @@ ctox ticket monitoring-ingest --system "<system>" --snapshot-json '<json>' [--ke
 1. Pull the monitoring facts you actually need.
 2. Ingest them into `monitoring_landscape`.
 3. Re-run the normal ticket knowledge load before classifying or executing ticket work.
+4. If monitoring is the only populated domain, say so explicitly. Do not let monitoring snapshots masquerade as a complete ticket knowledge plane.
 
 ## Important Boundaries
 

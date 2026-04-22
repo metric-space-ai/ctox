@@ -6,6 +6,8 @@ cluster: mission_orchestration
 
 # Automation Engineering
 
+Automation design and operating assumptions count as durable knowledge only when they are reflected in SQLite-backed runtime state. Workspace plans or notes do not count as durable knowledge by themselves.
+
 Use this skill when repeated operational work should become a repo script, queued slice, or scheduled CTOX task.
 
 Do not use it for live incident handling or one-off system changes:

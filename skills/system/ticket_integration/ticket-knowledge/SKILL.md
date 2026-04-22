@@ -16,6 +16,8 @@ No ticket should be handled operationally without loading the relevant ticket kn
 
 The ticket system is only the communication surface. SQLite in CTOX is the source of truth.
 
+Only SQLite-backed ticket knowledge counts as durable knowledge. Workspace markdown files, copied ticket notes, or ad hoc analysis documents do not count as knowledge unless the same facts are present in the runtime store.
+
 ## Commands
 
 ### Refresh observed knowledge from mirrored ticket data
@@ -52,6 +54,12 @@ ctox ticket self-work-list [--system "<system>"] [--state "<state>"] [--limit "<
 5. If domains are missing, stop operational handling, inspect existing self-work, and if needed create or continue a justified onboarding or maintenance work item instead of proceeding blindly.
 6. If you continue an existing self-work item, assign it to CTOX if needed and leave a plain internal note about what knowledge gap you are resolving.
 7. Only continue into dry run or execution once the knowledge load is ready.
+8. Verify that the source is actually operationalized when that matters:
+   - `ctox ticket sources`
+   - `ctox ticket source-skills`
+   - `ctox ticket list --system "<system>"`
+   - `ctox ticket knowledge-list --system "<system>" --limit 20`
+   If the source is only running in local fallback or partial monitoring mode, say so explicitly and handle the work as knowledge/onboarding correction, not mature ticket execution.
 
 ## Important Boundaries
 
@@ -60,3 +68,4 @@ ctox ticket self-work-list [--system "<system>"] [--state "<state>"] [--limit "<
 - Do not skip knowledge load just because the ticket looks familiar.
 - Do not leak raw secrets into ticket knowledge or ticket self-work metadata.
 - Do not write internal storage or tool mechanics into remote ticket notes.
+- Do not call a markdown file or workspace artifact "knowledge". If it is not in SQLite, it is not durable ticket knowledge.

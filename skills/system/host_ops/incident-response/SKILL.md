@@ -6,6 +6,8 @@ cluster: host_ops
 
 # Incident Response
 
+Only SQLite-backed runtime state, ticket state, communication records, verification state, and direct live evidence count as durable incident knowledge. Ad hoc notes or markdown files do not count as durable knowledge by themselves.
+
 Use this skill when there is a live user-visible or operator-visible failure that needs explicit stabilization work.
 
 Do not use it for broad scope discovery or routine health review:

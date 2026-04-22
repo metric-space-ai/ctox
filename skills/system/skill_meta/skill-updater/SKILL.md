@@ -8,6 +8,8 @@ cluster: skill_meta
 
 # Skill Updater
 
+Updated skill files are not durable mission knowledge by themselves. The lasting operational state must still be reflected in SQLite-backed runtime state, bindings, knowledge records, or verification records.
+
 Use this skill when the task is to change an already installed skill rather than creating a new one.
 
 ## Scope

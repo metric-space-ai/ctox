@@ -18,6 +18,8 @@ Do not use it for:
 
 Treat this skill as a layered proof, not a shallow smoke test.
 
+For CTOX mission work, only SQLite-backed runtime state and direct live verification count as durable acceptance evidence. Verification runs, continuity, communication state, ticket state, and other runtime DB records count. Workspace markdown files or ad hoc notes do not count as durable proof by themselves.
+
 Preferred helper under `scripts/`:
 
 - `verify_contract.py`

@@ -10,6 +10,8 @@ cluster: knowledge_bootstrap
 
 Use this skill when CTOX should learn how a specific helpdesk works from a historical ticket export.
 
+The operating model is only durable when the learned behavior is reflected into SQLite-backed knowledge, source-skill bindings, or other runtime state. Standalone output files do not count as completed knowledge by themselves.
+
 This skill is not about generic clustering.
 It is about deriving an operating model that CTOX can reuse while working future tickets in the same desk.
 

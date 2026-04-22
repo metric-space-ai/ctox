@@ -16,6 +16,8 @@ The queue is explicit shared state. If you want future work to survive beyond th
 
 Do not assume an external wrapper will decide the next task for you.
 
+Queue state is not the full knowledge plane. Durable knowledge lives in SQLite-backed continuity, ticket state, verification state, communication records, and ticket knowledge. Standalone markdown files or workspace notes do not become durable knowledge just because a queue item references them.
+
 ## Commands
 
 ### Inspect Queue State
@@ -63,6 +65,8 @@ ctox queue cancel --message-key "<message_key>" [--reason "<why>"]
 3. If a task should be decomposed first, use `ctox plan draft` and then enqueue only the concrete slices that should really execute.
 4. Prefer one coherent queue task per execution slice.
 5. Use `--parent-message-key` when a follow-up task clearly descends from an earlier queue item.
+6. When queueing ticket-bearing or owner-visible work, first inspect whether the ticket and knowledge subsystems are actually populated. If `ticket_items`, `ticket_cases`, source skills, or knowledge domains are still absent, phrase the queue task as onboarding / correction work rather than normal mature execution.
+7. Do not use queue text as a substitute for durable knowledge persistence. If the mission understanding needs to survive, ensure it also lands in SQLite-backed continuity or ticket knowledge.
 
 ## Important Boundaries
 

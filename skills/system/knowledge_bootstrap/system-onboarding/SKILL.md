@@ -12,6 +12,8 @@ Use this skill when CTOX is assigned to a new system of any kind — a codebase,
 
 The kernel provides storage, references, self-work CRUD, publishing, and audit. This skill owns the onboarding behavior.
 
+SQLite-backed runtime state is the only durable knowledge plane. Ticket knowledge entries, continuity commits, ticket/source bindings, skillbooks, runbooks, verifications, communication records, and other runtime DB state count. Markdown files or workspace artifacts do not count as knowledge by themselves.
+
 Read the phase guide in [references/onboarding-phases.md](references/onboarding-phases.md).
 Read the deterministic stage plan in [references/onboarding-plan.md](references/onboarding-plan.md).
 
@@ -192,6 +194,7 @@ Manual building blocks remain available when the operator asks for an adjustment
 9. Ingest monitoring observations into the knowledge plane instead of leaving them as free-form ticket prose.
 10. Once the source has enough history, build a desk-specific operating skill and bind it to the source with `ctox ticket source-skill-set`.
 11. Re-run the onboarding guide step after new evidence appears. The guide should loosen as active source skills, confirmed runbooks, and real assigned work accumulate.
+12. Do not treat a workspace analysis document as onboarding completion. Onboarding is incomplete until the relevant source controls, mirrored tickets, knowledge entries, bindings, and higher knowledge hierarchy are visible in SQLite.
 
 ## Skill Activation Check
 

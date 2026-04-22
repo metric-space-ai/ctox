@@ -6,6 +6,8 @@ cluster: host_ops
 
 # Reliability Ops
 
+For CTOX mission work, reliability findings become durable knowledge only when they are recorded in SQLite-backed runtime state such as ticket knowledge, verification state, continuity, or communication records. Standalone notes do not count as durable knowledge by themselves.
+
 Use this skill to turn a known or mostly-known technical scope into a concrete health assessment, anomaly list, and next safe action.
 
 Use `discovery_graph` first when the technical scope is still unclear. Use `reliability_ops` when the scope is already known enough that the question is health, saturation, degradation, or failure.

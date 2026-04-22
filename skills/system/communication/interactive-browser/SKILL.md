@@ -8,6 +8,8 @@ cluster: communication
 
 # Interactive Browser
 
+For CTOX mission work, browser findings become durable knowledge only when they are reflected in SQLite-backed runtime state such as communication records, verification state, ticket knowledge, continuity, or other runtime store records. Screenshots and notes alone do not count as durable knowledge.
+
 Use this skill when the task requires a real browser session:
 
 - click, type, scroll, or navigate through a real page

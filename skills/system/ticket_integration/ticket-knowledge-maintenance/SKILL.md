@@ -22,6 +22,8 @@ The knowledge plane stays local in CTOX.
 
 The remote ticket system is only the visible collaboration surface.
 
+Only SQLite-backed ticket knowledge, source bindings, ticket state, verifications, and related runtime records count as durable knowledge. Workspace markdown files or copied summaries do not count as completed knowledge on their own.
+
 When work needs to be visible to operators, create durable internal CTOX work, assign it to CTOX, and maintain a human note trail until the work is done or blocked.
 
 Do not bypass the generic ticket primitives with direct remote API calls. If work should exist in the ticket system, create it through `ctox ticket self-work-put`, `self-work-publish`, `self-work-assign`, `self-work-note`, and `self-work-transition`.

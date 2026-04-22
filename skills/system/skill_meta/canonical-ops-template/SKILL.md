@@ -6,6 +6,8 @@ cluster: skill_meta
 
 # Canonical Ops Template
 
+Any generated operational guidance for CTOX mission work must assume that only SQLite-backed runtime state counts as durable knowledge. Workspace artifacts alone do not count as durable knowledge.
+
 Use this skill when you are defining or changing a CTOX ops skill in the shared family:
 
 - `discovery_graph`

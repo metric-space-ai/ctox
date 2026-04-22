@@ -16,6 +16,10 @@ SQLite in CTOX may hold encrypted secret values through the dedicated secret sto
 
 Ticket work and ticket knowledge may only hold references, scopes, channels, and rationale. They must never hold raw secret values.
 
+The secret store and related runtime records are the durable source of truth. Workspace notes or copied credential instructions do not count as durable access knowledge by themselves.
+
+Use the SQLite-backed secret store and runtime store as the only durable authority for access state.
+
 ## Commands
 
 Inspect available secret metadata:

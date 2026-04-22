@@ -24,6 +24,8 @@ Do not improvise your own hidden todo list when the task should first be decompo
 Planning must not dump internal reasoning into the durable conversation context.
 Use `ctox plan draft` first when you need a temporary plan artifact. Only persist with `ctox plan ingest` when you intentionally want explicit plan state beyond the current turn.
 
+Plan text is not a knowledge plane by itself. Durable mission knowledge must end up in SQLite-backed continuity, ticket state, verification state, communication state, or ticket knowledge. Standalone markdown plans do not count as durable knowledge.
+
 ## Commands
 
 ### Create A Temporary Plan Artifact
@@ -96,6 +98,7 @@ ctox plan unblock-step --step-id "<step_id>" [--defer-minutes "<n>"]
 6. Put the full owner intent into `--prompt`; let CTOX decompose it.
 7. If a specific CTOX skill should steer later work, pass it via `--skill`.
 8. If the work belongs to an existing durable thread, pass `--thread-key`.
+9. If the plan assumes ticket history, desk skills, runbooks, or monitoring knowledge, verify those SQLite-backed prerequisites first. If they are missing, make the plan explicitly include onboarding / knowledge build steps rather than assuming a mature system.
 
 ## Do Not
 

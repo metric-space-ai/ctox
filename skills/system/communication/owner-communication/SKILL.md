@@ -10,6 +10,8 @@ cluster: communication
 
 Use this skill whenever CTOX needs to interpret, continue, or initiate communication with the owner.
 
+For CTOX mission work, only SQLite-backed runtime communication state counts as durable communication knowledge. Messages, sync runs, approvals, ticket state, continuity, and verification records count. Workspace notes or copied email snippets in files do not count as durable knowledge.
+
 ## Scope
 
 - Channels are limited to `tui`, `email`, and `jami`.
@@ -94,6 +96,7 @@ Use this skill whenever CTOX needs to interpret, continue, or initiate communica
 - Treat email `accepted` as weaker than email `confirmed`.
 - Treat Jami `queued` as not yet delivered.
 - Do not leak secrets, passwords, root auth material, or BIOS-protected state into outbound channels unless the owner explicitly requests it and the channel choice is justified.
+- If a blocker, approval, or commitment is only present in a workspace artifact or free-form note, treat the communication state as incomplete until it is visible in the SQLite-backed communication or ticket state.
 
 ## Communication Shapes
 

@@ -8,6 +8,8 @@ cluster: skill_meta
 
 # Skill Installer
 
+Installed skill files are not durable mission knowledge by themselves. For CTOX mission work, the relevant operational understanding must still live in SQLite-backed runtime state and linked knowledge/binding records.
+
 Helps install skills. By default these are from https://github.com/openai/skills/tree/main/skills/.curated, but users can also provide other locations.
 
 Use the helper scripts based on the task:

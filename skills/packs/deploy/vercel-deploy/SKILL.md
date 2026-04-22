@@ -10,6 +10,8 @@ Deploy any project to Vercel instantly. **Always deploy as preview** (not produc
 
 For CTOX mission work, a Vercel deployment is not complete when HTML loads. Public deploys that depend on APIs, server-side handlers, or interactive buyer flows must be verified as a working public surface, not only as a successful upload.
 
+For CTOX mission work, durable deployment knowledge must be visible in SQLite-backed runtime state. Ticket state, communication records, verification runs, continuity, and ticket knowledge count. Workspace markdown files do not count as durable knowledge on their own.
+
 ## Prerequisites
 
 - Check whether the Vercel CLI is installed **without** escalated permissions (for example, `command -v vercel`).
@@ -74,6 +76,7 @@ When CTOX is deploying a real product surface, follow this order:
    - one critical API route
    - one critical user-path action if feasible
 4. Treat a static shell plus broken API routes as a failed deploy, even if Vercel says `Ready`.
+5. Before treating a deployment blocker or approval path as durable mission knowledge, inspect the ticket and communication state that CTOX already has. Do not rely on ad hoc workspace notes for owner-visible approval tracking.
 
 ### Custom Node Server Pitfall
 
@@ -123,6 +126,7 @@ If Vercel requires a browser approval, device login confirmation, or claim/acces
    - what approval is needed
    - what will happen immediately after approval
 4. do not keep spinning on blind retries while waiting for approval
+5. persist the approval state through SQLite-backed communication / ticket state, not a standalone file note
 
 If the owner approves and the login/access is confirmed, return immediately to deploy/verify work.
 
@@ -131,6 +135,8 @@ If the owner approves and the login/access is confirmed, return immediately to d
 Show the user the deployment URL. For fallback deployments, also show the claim URL.
 
 Do not report a public deploy as complete until live verification passed.
+
+If the deployment reasoning produced only markdown notes or ad hoc files, the knowledge work is still incomplete until the relevant blocker, verification, or communication state is persisted in SQLite-backed runtime stores.
 
 ## Troubleshooting
 

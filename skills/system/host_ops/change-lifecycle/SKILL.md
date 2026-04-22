@@ -6,6 +6,8 @@ cluster: host_ops
 
 # Change Lifecycle
 
+Only SQLite-backed runtime state and direct live verification count as durable operational knowledge. Workspace notes, temporary files, or prose-only summaries do not count as durable knowledge by themselves.
+
 Use this skill when the job is a deliberate state change or a dry-run change plan.
 
 Do not use it as the first choice for scope discovery or generic health review:

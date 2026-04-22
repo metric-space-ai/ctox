@@ -6,6 +6,8 @@ cluster: host_ops
 
 # Ops Insight
 
+For CTOX mission work, operational insight becomes durable only when it is reflected in SQLite-backed runtime state. Free-form files or copied shell output do not count as durable knowledge by themselves.
+
 Use this skill when the job is to turn existing CTOX and host state into a compact decision surface or report.
 
 Do not use it to gather domain evidence that belongs to another skill:

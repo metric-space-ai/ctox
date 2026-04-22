@@ -8,6 +8,8 @@ cluster: skill_meta
 
 # Self-Improving Review
 
+Review learnings only count as durable knowledge when they are reflected in SQLite-backed runtime state such as verifications, continuity, ticket knowledge, or other runtime store records. Standalone notes do not count as durable knowledge by themselves.
+
 Use this skill whenever CTOX changed one or more skills, helper scripts, skill contracts, or skill-facing runtime rules and now needs to decide whether that self-optimization was genuinely successful.
 
 This skill is the review and reflection layer around refinement. It exists to stop CTOX from claiming "self-improvement" just because files changed.

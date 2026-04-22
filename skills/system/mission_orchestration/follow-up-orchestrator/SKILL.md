@@ -14,6 +14,8 @@ Use this skill near the end of a non-trivial turn when you need an explicit comp
 
 Do not silently abandon unfinished work. If the current turn materially advanced the task but did not close it, use the follow-up tool to return a compact structured judgment.
 
+Durable mission understanding lives in the CTOX runtime store. SQLite-backed continuity, ticket state, plan state, communication records, verification runs, and ticket knowledge count as durable knowledge. Standalone markdown notes or workspace files do not count as knowledge by themselves.
+
 ## Command
 
 ```sh
@@ -44,6 +46,13 @@ ctox follow-up evaluate --goal "<goal>" --result "<latest result>" [--step-title
 10. If the blocker depends on owner input, enumerate the exact missing values, credentials, approvals, or decisions in the owner-facing status. Do not send vague blocker summaries.
 11. For owner-visible blocked work, prefer a durable review schedule over waiting in the active turn.
 12. Do not create repeat owner-facing blocker communication unless there is a material delta since the last owner update. If nothing changed, keep the next review internal and durable.
+13. Before creating follow-up for ticket-bearing or knowledge-bearing work, inspect whether the ticket system and knowledge plane are actually operational:
+   - `ctox ticket sources`
+   - `ctox ticket source-skills`
+   - `ctox ticket knowledge-list --system "<system>" --limit 20`
+   - `ctox ticket self-work-list --system "<system>" --limit 20`
+   If the full ticket+knowledge pipeline is not active, state that plainly in the follow-up instead of pretending durable knowledge already exists.
+14. If the only persisted artifact is a workspace note or markdown file, treat the knowledge task as still open. Persist the mission understanding into SQLite-backed runtime stores before calling the work durable.
 
 ## Important Separation
 

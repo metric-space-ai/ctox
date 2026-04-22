@@ -10,6 +10,8 @@ cluster: knowledge_bootstrap
 
 Use this skill when CTOX is dealing with a source whose reality is primarily exposed as rows, records, worksheets, exports, query results, or list endpoints.
 
+SQLite-backed discovery and downstream knowledge planes are the only durable target. CSVs, workbooks, and generated markdown summaries are source or build artifacts, not durable knowledge by themselves.
+
 Examples:
 
 - ticket system exports

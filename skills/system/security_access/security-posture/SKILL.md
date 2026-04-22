@@ -6,6 +6,8 @@ cluster: security_access
 
 # Security Posture
 
+For CTOX mission work, security findings become durable knowledge only when they are reflected in SQLite-backed runtime state, ticket knowledge, continuity, or verification records. Standalone notes do not count as durable knowledge by themselves.
+
 Use this skill for exposure, privilege, certificate, secret, firewall, and service-hardening questions.
 
 Do not use it for generic health review or broad inventory:

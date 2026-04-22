@@ -6,6 +6,8 @@ cluster: security_access
 
 # Privilege Escalation
 
+For CTOX mission work, only SQLite-backed secret/access state, ticket state, communication records, and verification records count as durable access knowledge. Workspace notes or copied commands do not count as durable knowledge by themselves.
+
 Use this skill when a local task requires `sudo` or another privileged host action.
 
 Do not use it for the whole deployment by itself. Pair it with `service-deployment`, `change_lifecycle`, or another concrete execution skill.

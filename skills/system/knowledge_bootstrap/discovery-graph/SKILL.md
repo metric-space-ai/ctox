@@ -8,6 +8,8 @@ cluster: knowledge_bootstrap
 
 Use this skill to inspect a host or repo, gather raw discovery evidence, and persist a normalized discovery model in SQLite.
 
+SQLite-backed discovery state is the durable knowledge plane. Discovery captures, entities, relations, evidence, continuity, ticket knowledge, and other runtime DB state count as knowledge. Workspace notes or exported summaries do not count as durable knowledge by themselves.
+
 The important rule is:
 
 - helper scripts are available and should be reused when they fit

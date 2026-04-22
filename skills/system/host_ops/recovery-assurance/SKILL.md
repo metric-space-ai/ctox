@@ -6,6 +6,8 @@ cluster: host_ops
 
 # Recovery Assurance
 
+Only SQLite-backed runtime state and direct recovery verification count as durable assurance evidence. Workspace notes or one-off artifacts do not count as durable knowledge by themselves.
+
 Use this skill for backup freshness, restoreability, and disaster-recovery confidence.
 
 Do not use it for generic filesystem health or planned change work:

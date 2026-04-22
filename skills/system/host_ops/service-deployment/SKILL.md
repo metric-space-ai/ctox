@@ -18,6 +18,8 @@ Do not use it for:
 
 This skill uses the shared SQLite kernel via `skill_key=service_deployment`.
 
+For CTOX mission work, only SQLite-backed runtime state counts as durable deployment knowledge. Continuity commits, ticket knowledge, verification runs, communication records, and ticket/self-work state count. Workspace markdown files or ad hoc notes do not count as durable knowledge on their own.
+
 ## Operating Model
 
 Treat this skill as:
@@ -71,6 +73,7 @@ They are inspectable helpers, not hidden authority. Read or patch them when the 
 7. Execute the install or rollout in bounded slices, verifying each slice before continuing.
 8. Persist the resulting deployment, blocker, or verification state.
 9. If the service starts but the acceptance check is still failing, do not report `executed`. Report `needs_repair` or `blocked` with the exact failing verification layer.
+10. When the deployment is owner-visible, ticket-bearing, or depends on prior operational knowledge, inspect the active ticket/knowledge plane first. If the source system, source skills, or knowledge domains are absent, treat that as an explicit maturity gap instead of silently substituting workspace notes for durable knowledge.
 
 ## Secret Handling
 
@@ -126,6 +129,7 @@ Do not finish the reply until all of the following are true:
 - No owner credential request unless `secret-management` says the value is truly owner-supplied.
 - No vague "I need variables" blocker messages.
 - No silent continuation of multi-step installs.
+- No claim that a deployment is operationally understood when the only written record is a workspace file rather than SQLite-backed runtime state.
 
 ## Resources
 

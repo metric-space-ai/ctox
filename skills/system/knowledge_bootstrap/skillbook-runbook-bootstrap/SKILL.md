@@ -10,6 +10,8 @@ cluster: knowledge_bootstrap
 
 Use this skill when the source material is good enough to produce explicit operational knowledge instead of vague summaries.
 
+The resulting knowledge is only durable when it is imported or referenced through SQLite-backed runtime state. Generated files on disk are build artifacts, not completed knowledge on their own.
+
 The target structure is:
 
 - one main skill that orchestrates work

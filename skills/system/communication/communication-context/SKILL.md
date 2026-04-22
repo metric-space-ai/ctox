@@ -14,6 +14,8 @@ Use this skill before replying when the latest inbound message may depend on ear
 
 Do not answer from the newest message alone. Reconstruct the relevant state first, then answer from that state.
 
+Only SQLite-backed communication state counts as durable communication knowledge. Messages, sync runs, approvals, continuity, ticket state, and verification records count. Workspace files or copied thread notes do not count as durable communication state by themselves.
+
 ## Tool Contract
 
 Prefer active lookup over passive wrapper context.

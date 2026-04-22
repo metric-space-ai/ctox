@@ -6,6 +6,8 @@ cluster: communication
 
 # Universal Scraping
 
+For CTOX mission work, scraped findings become durable knowledge only when the relevant facts are persisted into SQLite-backed runtime state. Raw exports or workspace notes do not count as durable knowledge by themselves.
+
 Use this skill when the task is really about recurring extraction:
 
 - scraping a website or portal
