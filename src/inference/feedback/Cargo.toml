@@ -1,0 +1,13 @@
+[package]
+name = "ctox-feedback"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+ctox-protocol = { workspace = true }
+sentry = { version = "0.46" }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+

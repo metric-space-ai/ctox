@@ -1,0 +1,16 @@
+[package]
+name = "ctox-utils-image"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+base64 = { workspace = true }
+image = { workspace = true, features = ["jpeg", "png", "gif", "webp"] }
+ctox-utils-cache = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["fs", "rt", "rt-multi-thread", "macros"] }
+

@@ -1523,6 +1523,9 @@ fn run_release_installer(release_root: &Path, state_root: &Path) -> Result<()> {
     let mut cmd = Command::new(chosen_script);
     cmd.current_dir(release_root)
         .env("CTOX_STATE_ROOT", state_root);
+    if let Some(bwrap_source_dir) = resolve_bwrap_source_dir_for_installer(release_root) {
+        cmd.env("CODEX_BWRAP_SOURCE_DIR", bwrap_source_dir);
+    }
     if chosen_script == &legacy_script {
         cmd.env("CTOX_INSTALL_SKIP_RUNTIME_WIPE", "1")
             .env("CTOX_INSTALL_SKIP_SERVICE_CONTROL", "1")
@@ -1538,6 +1541,41 @@ fn run_release_installer(release_root: &Path, state_root: &Path) -> Result<()> {
         anyhow::bail!("release installer failed for {}", release_root.display());
     }
     Ok(())
+}
+
+fn resolve_bwrap_source_dir_for_installer(release_root: &Path) -> Option<PathBuf> {
+    if let Ok(path) = env::var("CODEX_BWRAP_SOURCE_DIR") {
+        let candidate = PathBuf::from(path);
+        if bubblewrap_checkout_ready(&candidate) {
+            return Some(candidate);
+        }
+    }
+
+    if let Some(candidate) = runtime_env::env_or_config(release_root, "CODEX_BWRAP_SOURCE_DIR")
+        .map(PathBuf::from)
+        .filter(|candidate| bubblewrap_checkout_ready(candidate))
+    {
+        return Some(candidate);
+    }
+
+    let conventional_candidates = home_dir()
+        .into_iter()
+        .flat_map(|home| {
+            [
+                home.join("workspace/ctox-bwrap"),
+                home.join("workspace/bubblewrap"),
+                home.join("ctox-bwrap"),
+                home.join("bubblewrap"),
+            ]
+        })
+        .collect::<Vec<_>>();
+    conventional_candidates
+        .into_iter()
+        .find(|candidate| bubblewrap_checkout_ready(candidate))
+}
+
+fn bubblewrap_checkout_ready(path: &Path) -> bool {
+    path.join("bubblewrap.c").is_file() && path.join("bind-mount.c").is_file()
 }
 
 fn validate_release_source(source_root: &Path) -> Result<()> {
@@ -1728,7 +1766,8 @@ fn write_managed_wrapper(install_root: &Path, state_root: &Path) -> Result<()> {
         ensure_dir(parent)?;
     }
     let current_root = install_root.join("current");
-    let launcher_binary = wrapper_path.with_file_name("ctox-real");
+    let launcher_binary =
+        select_launch_binary(&current_root)?.unwrap_or_else(|| current_root.join("bin/ctox"));
     write_launch_wrapper(
         &wrapper_path,
         install_root,
@@ -1745,31 +1784,18 @@ fn sync_managed_launch_binaries(
 ) -> Result<()> {
     let bin_dir = install_root.join("bin");
     ensure_dir(&bin_dir)?;
-    let public_launcher = wrapper_path()?.with_file_name("ctox-real");
-    if let Some(current_binary) = select_launch_binary(current_root)? {
-        if current_binary != public_launcher {
-            copy_launch_binary(&current_binary, &public_launcher)?;
-        }
-    } else if !public_launcher.is_file() {
-        anyhow::bail!(
-            "no real CTOX launch binary found below {} and {} does not exist",
-            current_root.display(),
-            public_launcher.display()
-        );
-    }
+    let current_binary = select_launch_binary(current_root)?.ok_or_else(|| {
+        anyhow::anyhow!(
+            "no real CTOX launch binary found below {}",
+            current_root.display()
+        )
+    })?;
     write_launch_wrapper(
         &bin_dir.join("ctox"),
         install_root,
         current_root,
         state_root,
-        &public_launcher,
-    )?;
-    write_launch_wrapper(
-        &current_root.join("bin/ctox"),
-        install_root,
-        current_root,
-        state_root,
-        &public_launcher,
+        &current_binary,
     )?;
     let current_desktop_host = current_root.join("bin/ctox-desktop-host");
     if current_desktop_host.is_file() {
@@ -1831,7 +1857,11 @@ fn write_launch_wrapper(
 }
 
 fn copy_launch_binary(source: &Path, destination: &Path) -> Result<()> {
-    fs::copy(source, destination).with_context(|| {
+    let temporary_destination = destination.with_extension("new");
+    if temporary_destination.exists() || temporary_destination.symlink_metadata().is_ok() {
+        let _ = fs::remove_file(&temporary_destination);
+    }
+    fs::copy(source, &temporary_destination).with_context(|| {
         format!(
             "failed to copy launch binary {} -> {}",
             source.display(),
@@ -1841,9 +1871,34 @@ fn copy_launch_binary(source: &Path, destination: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let mut permissions = fs::metadata(destination)?.permissions();
+        let mut permissions = fs::metadata(&temporary_destination)?.permissions();
         permissions.set_mode(0o755);
-        fs::set_permissions(destination, permissions)?;
+        fs::set_permissions(&temporary_destination, permissions)?;
+    }
+    if let Err(err) = fs::rename(&temporary_destination, destination) {
+        if destination.exists() {
+            fs::remove_file(destination).with_context(|| {
+                format!(
+                    "failed to remove existing launcher {}",
+                    destination.display()
+                )
+            })?;
+            fs::rename(&temporary_destination, destination).with_context(|| {
+                format!(
+                    "failed to move staged launch binary {} into {} after replacing existing file ({err})",
+                    temporary_destination.display(),
+                    destination.display()
+                )
+            })?;
+        } else {
+            return Err(err).with_context(|| {
+                format!(
+                    "failed to move staged launch binary {} into {}",
+                    temporary_destination.display(),
+                    destination.display()
+                )
+            });
+        }
     }
     Ok(())
 }

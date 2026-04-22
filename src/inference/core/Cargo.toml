@@ -1,0 +1,153 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "ctox-core"
+version.workspace = true
+
+[lib]
+doctest = false
+name = "ctox_core"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ctox-write-config-schema"
+path = "src/bin/config_schema.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+arc-swap = "1.8.2"
+async-channel = { workspace = true }
+async-trait = { workspace = true }
+askama = { workspace = true }
+base64 = { workspace = true }
+bm25 = { workspace = true }
+chardetng = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+clap = { workspace = true, features = ["derive"] }
+ctox-api = { workspace = true }
+ctox-app-server-protocol = { workspace = true }
+ctox-apply-patch = { workspace = true }
+ctox-async-utils = { workspace = true }
+ctox-client = { workspace = true }
+ctox-connectors = { workspace = true }
+ctox-config = { workspace = true }
+ctox-shell-command = { workspace = true }
+ctox-execpolicy = { workspace = true }
+ctox-file-search = { workspace = true }
+ctox-git = { workspace = true }
+ctox-hooks = { workspace = true }
+ctox-keyring-store = { workspace = true }
+ctox-network-proxy = { workspace = true }
+ctox-otel = { workspace = true }
+ctox-artifacts = { workspace = true }
+ctox-protocol = { workspace = true }
+ctox-rmcp-client = { workspace = true }
+ctox-state = { workspace = true }
+ctox-utils-absolute-path = { workspace = true }
+ctox-utils-cache = { workspace = true }
+ctox-utils-image = { workspace = true }
+ctox-utils-home-dir = { workspace = true }
+ctox-utils-pty = { workspace = true }
+ctox-utils-readiness = { workspace = true }
+ctox-secrets = { workspace = true }
+ctox-utils-string = { workspace = true }
+ctox-utils-stream-parser = { workspace = true }
+csv = { workspace = true }
+dirs = { workspace = true }
+dunce = { workspace = true }
+encoding_rs = { workspace = true }
+env-flags = { workspace = true }
+eventsource-stream = { workspace = true }
+futures = { workspace = true }
+http = { workspace = true }
+iana-time-zone = { workspace = true }
+image = { workspace = true, features = ["jpeg", "png", "webp"] }
+include_dir = { workspace = true }
+indexmap = { workspace = true }
+keyring = { workspace = true, features = ["crypto-rust"] }
+libc = { workspace = true }
+notify = { workspace = true }
+once_cell = { workspace = true }
+os_info = { workspace = true }
+rand = { workspace = true }
+regex-lite = { workspace = true }
+reqwest = { workspace = true, features = ["json", "stream"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+rmcp = { workspace = true, default-features = false, features = [
+    "base64",
+    "macros",
+    "schemars",
+    "server",
+] }
+schemars = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+sha1 = { workspace = true }
+sha2 = { workspace = true }
+shlex = { workspace = true }
+similar = { workspace = true }
+tempfile = { workspace = true }
+test-log = { workspace = true }
+thiserror = { workspace = true }
+time = { workspace = true, features = [
+    "formatting",
+    "parsing",
+    "local-offset",
+    "macros",
+] }
+tokio = { workspace = true, features = [
+    "io-std",
+    "macros",
+    "process",
+    "rt-multi-thread",
+    "signal",
+] }
+tokio-util = { workspace = true, features = ["rt"] }
+tokio-tungstenite = { workspace = true }
+toml = { workspace = true }
+toml_edit = { workspace = true }
+tracing = { workspace = true, features = ["log"] }
+url = { workspace = true }
+uuid = { workspace = true, features = ["serde", "v4", "v5"] }
+which = { workspace = true }
+wildmatch = { workspace = true }
+zip = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { workspace = true, features = ["linux-native-async-persistent"] }
+landlock = { workspace = true }
+seccompiler = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.9"
+keyring = { workspace = true, features = ["apple-native"] }
+
+# Build OpenSSL from source for musl builds.
+[target.x86_64-unknown-linux-musl.dependencies]
+openssl-sys = { workspace = true, features = ["vendored"] }
+
+# Build OpenSSL from source for musl builds.
+[target.aarch64-unknown-linux-musl.dependencies]
+openssl-sys = { workspace = true, features = ["vendored"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+ctox-windows-sandbox = { package = "ctox-windows-sandbox", path = "../windows-sandbox-rs" }
+keyring = { workspace = true, features = ["windows-native"] }
+windows-sys = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_UI_Shell",
+] }
+
+[target.'cfg(any(target_os = "freebsd", target_os = "openbsd"))'.dependencies]
+keyring = { workspace = true, features = ["sync-secret-service"] }
+
+[target.'cfg(unix)'.dependencies]
+ctox-shell-escalation = { workspace = true }
+
+[package.metadata.cargo-shear]
+ignored = ["openssl-sys"]

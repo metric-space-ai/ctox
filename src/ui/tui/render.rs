@@ -10,6 +10,7 @@ use ratatui::text::Span;
 use ratatui::widgets::Block;
 use ratatui::widgets::BorderType;
 use ratatui::widgets::Borders;
+use ratatui::widgets::Clear;
 use ratatui::widgets::List;
 use ratatui::widgets::ListItem;
 use ratatui::widgets::Paragraph;
@@ -338,6 +339,9 @@ fn render_settings(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     .style(sidebar_style)
     .wrap(Wrap { trim: false });
     frame.render_widget(help_widget, body[1]);
+    if let Some(editor) = app.settings_text_editor.as_ref() {
+        render_settings_text_editor(frame, editor, area);
+    }
 }
 
 fn render_settings_update(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
@@ -755,6 +759,58 @@ fn render_settings_narrow(frame: &mut Frame, app: &App, area: ratatui::layout::R
         .wrap(Wrap { trim: false }),
         layout[1],
     );
+    if let Some(editor) = app.settings_text_editor.as_ref() {
+        render_settings_text_editor(frame, editor, area);
+    }
+}
+
+fn render_settings_text_editor(
+    frame: &mut Frame,
+    editor_state: &super::SettingsTextEditorState,
+    area: ratatui::layout::Rect,
+) {
+    let popup = centered_rect(area, 88, 78);
+    frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::LightCyan))
+        .title(Span::styled(
+            format!(" {} ", editor_state.label),
+            Style::default()
+                .fg(Color::LightCyan)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .title_bottom(Span::styled(
+            " Ctrl-X save · Esc cancel ",
+            Style::default().fg(Color::Gray),
+        ));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+    editor_state.editor.render(frame, inner);
+}
+
+fn centered_rect(
+    area: ratatui::layout::Rect,
+    width_pct: u16,
+    height_pct: u16,
+) -> ratatui::layout::Rect {
+    let vertical = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - height_pct) / 2),
+            Constraint::Percentage(height_pct),
+            Constraint::Percentage(100 - height_pct - (100 - height_pct) / 2),
+        ])
+        .split(area);
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - width_pct) / 2),
+            Constraint::Percentage(width_pct),
+            Constraint::Percentage(100 - width_pct - (100 - width_pct) / 2),
+        ])
+        .split(vertical[1])[1]
 }
 
 fn render_secrets(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {

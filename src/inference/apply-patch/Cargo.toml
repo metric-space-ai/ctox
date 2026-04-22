@@ -1,0 +1,24 @@
+[package]
+name = "ctox-apply-patch"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "ctox_apply_patch"
+path = "src/lib.rs"
+
+[[bin]]
+name = "apply_patch"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+similar = { workspace = true }
+thiserror = { workspace = true }
+tree-sitter = { workspace = true }
+tree-sitter-bash = { workspace = true }
+

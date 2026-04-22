@@ -108,7 +108,7 @@ ENGINE / GPU
   ctox doctor                    health check — update available? engine present? hints
 
 RUN / EXEC
-  ctox runtime switch <model> <quality|performance> [--context 32k|64k|128k|256k]
+  ctox runtime switch <model> <quality|performance> [--context 32k|64k|128k|256k] [--timeout <secs>]
 
 GOVERNANCE / MISSION
   ctox governance <subcmd>       governance decisions and audits
@@ -185,20 +185,24 @@ fn main() -> anyhow::Result<()> {
                 let model = args
                     .get(2)
                     .context(
-                        "usage: ctox runtime switch <model> <quality|performance> [--context 32k|64k|128k|256k]",
+                        "usage: ctox runtime switch <model> <quality|performance> [--context 32k|64k|128k|256k] [--timeout <secs>]",
                     )?;
                 let preset = args
                     .get(3)
                     .context(
-                        "usage: ctox runtime switch <model> <quality|performance> [--context 32k|64k|128k|256k]",
+                        "usage: ctox runtime switch <model> <quality|performance> [--context 32k|64k|128k|256k] [--timeout <secs>]",
                     )?;
                 let context = find_flag_value(&args[4..], "--context");
+                let timeout = find_flag_value(&args[4..], "--timeout");
                 let outcome = runtime_control::execute_runtime_switch_with_context(
                     &root,
                     model,
                     Some(preset),
                     context,
                 )?;
+                if timeout.is_some() {
+                    persist_runtime_turn_timeout(&root, timeout)?;
+                }
                 if let Some(plan) = runtime_plan::load_persisted_chat_runtime_plan(&root)? {
                     println!("{}", serde_json::to_string_pretty(&plan)?);
                 } else {
@@ -206,16 +210,17 @@ fn main() -> anyhow::Result<()> {
                     println!("{}", serde_json::to_string_pretty(&state)?);
                 }
                 eprintln!(
-                    "ctox runtime switch requested model={} context={} active_model={} phase={:?}",
+                    "ctox runtime switch requested model={} context={} timeout={} active_model={} phase={:?}",
                     model,
                     context.unwrap_or("default"),
+                    timeout.unwrap_or("default"),
                     outcome.active_model,
                     outcome.phase
                 );
                 Ok(())
             }
             _ => anyhow::bail!(
-                "usage: ctox runtime switch <model> <quality|performance> [--context 32k|64k|128k|256k]"
+                "usage: ctox runtime switch <model> <quality|performance> [--context 32k|64k|128k|256k] [--timeout <secs>]"
             ),
         },
         Some("boost") => match args.get(1).map(String::as_str) {
@@ -1040,6 +1045,26 @@ fn find_flag_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
     args.get(index + 1).map(String::as_str)
 }
 
+fn persist_runtime_turn_timeout(root: &Path, timeout: Option<&str>) -> anyhow::Result<()> {
+    let mut env_map = runtime_env::load_runtime_env_map(root)?;
+    let value = timeout
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .context("`--timeout` requires a value in seconds")?;
+    let parsed = value
+        .parse::<u64>()
+        .context("`--timeout` must be a positive integer number of seconds")?;
+    if parsed == 0 {
+        anyhow::bail!("`--timeout` must be greater than 0 seconds");
+    }
+    env_map.insert(
+        "CTOX_CHAT_TURN_TIMEOUT_SECS".to_string(),
+        parsed.to_string(),
+    );
+    runtime_env::save_runtime_env_map(root, &env_map)?;
+    Ok(())
+}
+
 fn find_ctox_root_from_ancestors(start: &Path) -> Option<PathBuf> {
     for candidate in start.ancestors() {
         if looks_like_ctox_root(candidate) {
@@ -1099,9 +1124,10 @@ fn resolve_systemd_user_ctox_root(home_dir: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        find_ctox_root_from_ancestors, looks_like_ctox_root, resolve_runtime_ctox_root,
-        validated_workspace_root_override,
+        find_ctox_root_from_ancestors, looks_like_ctox_root, persist_runtime_turn_timeout,
+        resolve_runtime_ctox_root, validated_workspace_root_override,
     };
+    use crate::execution::models::runtime_env;
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -1189,6 +1215,47 @@ mod tests {
         std::env::remove_var("CTOX_HOME");
         cleanup_test_dir(&root);
         cleanup_test_dir(&invalid);
+    }
+
+    #[test]
+    fn persist_runtime_turn_timeout_writes_to_runtime_env_store() {
+        let root = make_fake_ctox_root("runtime-timeout");
+
+        persist_runtime_turn_timeout(&root, Some("900")).unwrap();
+
+        let env_map = runtime_env::load_runtime_env_map(&root).unwrap();
+        assert_eq!(
+            env_map
+                .get("CTOX_CHAT_TURN_TIMEOUT_SECS")
+                .map(String::as_str),
+            Some("900")
+        );
+
+        cleanup_test_dir(&root);
+    }
+
+    #[test]
+    fn persist_runtime_turn_timeout_rejects_zero_seconds() {
+        let root = make_fake_ctox_root("runtime-timeout-zero");
+
+        let err = persist_runtime_turn_timeout(&root, Some("0")).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("`--timeout` must be greater than 0 seconds"));
+
+        cleanup_test_dir(&root);
+    }
+
+    #[test]
+    fn persist_runtime_turn_timeout_requires_numeric_value() {
+        let root = make_fake_ctox_root("runtime-timeout-invalid");
+
+        let err = persist_runtime_turn_timeout(&root, Some("fast")).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("`--timeout` must be a positive integer number of seconds"));
+
+        cleanup_test_dir(&root);
     }
 
     fn make_fake_ctox_root(name: &str) -> PathBuf {

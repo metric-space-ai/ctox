@@ -21,6 +21,9 @@ const MAX_CONTINUITY_BLOCK_LINES: usize = 10;
 const MAX_CONTINUITY_BLOCK_CHARS: usize = 900;
 const CTOX_CHAT_SYSTEM_PROMPT: &str =
     include_str!("../../assets/prompts/ctox_chat_system_prompt.md");
+const CTOX_DEFAULT_CTO_OPERATING_MODE: &str =
+    include_str!("../../assets/prompts/ctox_cto_operating_mode.md");
+const CTOX_CTO_OPERATING_MODE_KEY: &str = "CTOX_CTO_OPERATING_MODE_PROMPT";
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct PromptContextBreakdown {
@@ -124,13 +127,24 @@ fn render_system_prompt_template(
         .allowed_email_domain
         .unwrap_or_else(|| "not configured".to_string());
     let admin_email_policies = owner.admin_email_policies.join("\n");
+    let cto_operating_mode = resolve_cto_operating_mode(settings);
     Ok(strip_prompt_comments(template)
         .replace("{{OWNER_NAME}}", &owner.owner_name)
         .replace("{{OWNER_CHANNELS}}", &channels_block)
         .replace("{{OWNER_EMAIL_ADDRESS}}", &owner_email)
         .replace("{{OWNER_EMAIL_DOMAIN}}", &allowed_email_domain)
         .replace("{{OWNER_EMAIL_ADMINS}}", &admin_email_policies)
-        .replace("{{OWNER_PREFERRED_CHANNEL}}", &preferred_channel))
+        .replace("{{OWNER_PREFERRED_CHANNEL}}", &preferred_channel)
+        .replace("{{CTO_OPERATING_MODE_BLOCK}}", &cto_operating_mode))
+}
+
+fn resolve_cto_operating_mode(settings: &BTreeMap<String, String>) -> String {
+    settings
+        .get(CTOX_CTO_OPERATING_MODE_KEY)
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| CTOX_DEFAULT_CTO_OPERATING_MODE.trim().to_string())
 }
 
 pub fn render_runtime_prompt(
@@ -1877,5 +1891,26 @@ mod tests {
 
         assert!(prompt.contains("Suggested skill dispatch:"));
         assert!(prompt.contains("preferred_skill: system-onboarding"));
+    }
+
+    #[test]
+    fn render_system_prompt_includes_default_cto_operating_mode() {
+        let root = temp_root("default-cto-contract");
+        let prompt = render_system_prompt(&root, &BTreeMap::new()).expect("rendered prompt");
+        assert!(prompt.contains("## CTO Operating Mode"));
+        assert!(prompt.contains("You own the mission outcome, not just the next task."));
+    }
+
+    #[test]
+    fn render_system_prompt_uses_cto_operating_mode_override() {
+        let root = temp_root("override-cto-contract");
+        let mut settings = BTreeMap::new();
+        settings.insert(
+            "CTOX_CTO_OPERATING_MODE_PROMPT".to_string(),
+            "## CTO Operating Mode\n\nCustom CTO contract.\n".to_string(),
+        );
+        let prompt = render_system_prompt(&root, &settings).expect("rendered prompt");
+        assert!(prompt.contains("Custom CTO contract."));
+        assert!(!prompt.contains("You own the mission outcome, not just the next task."));
     }
 }

@@ -1,0 +1,9 @@
+[package]
+name = "ctox-utils-stream-parser"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+

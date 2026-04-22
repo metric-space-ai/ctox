@@ -32,6 +32,9 @@ use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
+use self::text_editor::EditorAction;
+use self::text_editor::ExitReason;
+use self::text_editor::TextEditor;
 use crate::channels;
 use crate::context_health;
 use crate::execution::models::vision_preprocessor;
@@ -54,12 +57,16 @@ use crate::secrets;
 use crate::service;
 
 mod render;
+mod text_editor;
 
 const DEFAULT_CHAT_SOURCE: &str = "local";
 const DEFAULT_API_PROVIDER: &str = "local";
 const DEFAULT_LOCAL_RUNTIME: &str = "candle";
 const DEFAULT_CHAT_PRESET: &str = "Quality";
 const DEFAULT_CHAT_SKILL_PRESET: &str = "Standard";
+const DEFAULT_CTO_OPERATING_MODE_PROMPT: &str =
+    include_str!("../../../assets/prompts/ctox_cto_operating_mode.md");
+const CTOX_CTO_OPERATING_MODE_KEY: &str = "CTOX_CTO_OPERATING_MODE_PROMPT";
 const DEFAULT_COMMUNICATION_PATH: &str = "tui";
 const CHAT_PRESET_CHOICES: &[&str] = &["Quality", "Performance"];
 const CHAT_SKILL_PRESET_CHOICES: &[&str] = &["Standard", "Simple"];
@@ -445,6 +452,13 @@ struct SecretItem {
     saved_value: String,
 }
 
+#[derive(Debug, Clone)]
+struct SettingsTextEditorState {
+    key: &'static str,
+    label: &'static str,
+    editor: TextEditor,
+}
+
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct HeaderState {
@@ -740,6 +754,7 @@ struct App {
     secret_items: Vec<SecretItem>,
     secrets_selected: usize,
     update_view: UpdateViewState,
+    settings_text_editor: Option<SettingsTextEditorState>,
     settings_menu_open: bool,
     settings_menu_index: usize,
     jami_qr_lines: Vec<String>,
@@ -1012,6 +1027,7 @@ impl App {
             secret_items: load_secret_items(&root),
             secrets_selected: 0,
             update_view: UpdateViewState::default(),
+            settings_text_editor: None,
             settings_menu_open: false,
             settings_menu_index: 0,
             jami_qr_lines: Vec::new(),
@@ -1149,6 +1165,10 @@ impl App {
     }
 
     fn handle_key_event(&mut self, key_event: KeyEvent) -> Result<bool> {
+        if self.page == Page::Settings && self.settings_text_editor.is_some() {
+            self.handle_settings_text_editor_key(key_event)?;
+            return Ok(false);
+        }
         if key_event.modifiers.contains(KeyModifiers::CONTROL)
             && matches!(key_event.code, KeyCode::Char('c') | KeyCode::Char('q'))
         {
@@ -1339,6 +1359,33 @@ impl App {
         Ok(())
     }
 
+    fn handle_settings_text_editor_key(&mut self, key_event: KeyEvent) -> Result<()> {
+        let Some(editor_state) = self.settings_text_editor.as_mut() else {
+            return Ok(());
+        };
+        match editor_state.editor.handle_key(key_event) {
+            EditorAction::Continue => {}
+            EditorAction::Exit(ExitReason::Cancelled) => {
+                self.status_line = format!("Cancelled editing {}.", editor_state.label);
+                self.settings_text_editor = None;
+            }
+            EditorAction::Exit(ExitReason::Saved) => {
+                let key = editor_state.key;
+                let label = editor_state.label;
+                let text = editor_state.editor.text();
+                self.settings_text_editor = None;
+                if let Some(item) = self.settings_items.iter_mut().find(|item| item.key == key) {
+                    item.value = text;
+                    self.settings_dirty = true;
+                }
+                self.refresh_dynamic_setting_choices();
+                self.save_settings()?;
+                self.status_line = format!("Saved {} to runtime state.", label);
+            }
+        }
+        Ok(())
+    }
+
     fn handle_skills_key(&mut self, key_event: KeyEvent) {
         match key_event.code {
             KeyCode::Up => self.move_skills_selection(-1),
@@ -1401,27 +1448,50 @@ impl App {
     }
 
     fn activate_selected_setting(&mut self) -> Result<()> {
-        match self.current_setting() {
-            Some(item) if item.kind == SettingKind::Env && self.setting_is_dirty(item) => {
+        match self.current_setting().map(|item| {
+            (
+                item.key,
+                item.label,
+                item.value.clone(),
+                item.kind,
+                self.setting_is_dirty(item),
+                item.choices.clone(),
+            )
+        }) {
+            Some((key, label, value, _, _, _)) if key == CTOX_CTO_OPERATING_MODE_KEY => {
+                self.open_settings_text_editor(key, label, &value);
+                Ok(())
+            }
+            Some((_, _, _, kind, dirty, _)) if kind == SettingKind::Env && dirty => {
                 self.save_settings()
             }
-            Some(item) if item.kind == SettingKind::Env => {
-                if item.choices.is_empty() {
+            Some((_, _, value, kind, _, choices)) if kind == SettingKind::Env => {
+                if choices.is_empty() {
                     Ok(())
                 } else {
-                    self.settings_menu_index = item
-                        .choices
+                    self.settings_menu_index = choices
                         .iter()
-                        .position(|choice| choice.eq_ignore_ascii_case(item.value.trim()))
+                        .position(|choice| choice.eq_ignore_ascii_case(value.trim()))
                         .unwrap_or(0);
                     self.settings_menu_open = true;
                     Ok(())
                 }
             }
-            Some(item) if item.kind == SettingKind::ServiceToggle => self.toggle_service(),
+            Some((_, _, _, kind, _, _)) if kind == SettingKind::ServiceToggle => {
+                self.toggle_service()
+            }
             Some(_) => Ok(()),
             None => Ok(()),
         }
+    }
+
+    fn open_settings_text_editor(&mut self, key: &'static str, label: &'static str, value: &str) {
+        self.settings_text_editor = Some(SettingsTextEditorState {
+            key,
+            label,
+            editor: TextEditor::scratch(value),
+        });
+        self.status_line = format!("Editing {label}. Ctrl-X saves to runtime state, Esc cancels.");
     }
 
     fn toggle_service(&mut self) -> Result<()> {
@@ -1638,13 +1708,21 @@ impl App {
     fn rendered_setting_value(&self, item: &SettingItem) -> String {
         match item.kind {
             SettingKind::Env => {
-                let mut rendered = if item.secret && !item.value.trim().is_empty() {
+                let preview_value = if item.key == CTOX_CTO_OPERATING_MODE_KEY {
+                    let line_count = item.value.lines().count().max(1);
+                    if item.value.trim().is_empty() {
+                        "(default CTO contract)".to_string()
+                    } else {
+                        format!("{line_count} lines configured")
+                    }
+                } else if item.secret && !item.value.trim().is_empty() {
                     mask_secret(&item.value)
                 } else if item.value.trim().is_empty() {
                     "(empty)".to_string()
                 } else {
                     item.value.clone()
                 };
+                let mut rendered = preview_value;
                 if self.setting_is_dirty(item) {
                     rendered.push_str(" *");
                 }
@@ -1660,7 +1738,11 @@ impl App {
             .map(|item| match item.kind {
                 SettingKind::Env => {
                     let mut lines = vec![item.help.to_string()];
-                    if self.setting_is_dirty(item) {
+                    if item.key == CTOX_CTO_OPERATING_MODE_KEY {
+                        lines.push(
+                            "Enter opens the full-screen text editor. Ctrl-X saves.".to_string(),
+                        );
+                    } else if self.setting_is_dirty(item) {
                         lines.push("Pending change. Enter saves it.".to_string());
                     } else if !item.choices.is_empty() {
                         lines.push("Enter opens the choice menu.".to_string());
@@ -1736,6 +1818,7 @@ impl App {
                     | "CTOX_CHAT_SKILL_PRESET"
                     | "CTOX_REFRESH_OUTPUT_BUDGET_PCT"
                     | "CTOX_AUTONOMY_LEVEL"
+                    | "CTOX_CTO_OPERATING_MODE_PROMPT"
                     | "CTOX_CHAT_MODEL"
                     | "CTOX_CHAT_MODEL_BOOST"
                     | "CTOX_BOOST_DEFAULT_MINUTES"
@@ -1841,6 +1924,7 @@ impl App {
             "CTOX_CHAT_SKILL_PRESET" => true,
             "CTOX_REFRESH_OUTPUT_BUDGET_PCT" => true,
             "CTOX_AUTONOMY_LEVEL" => true,
+            "CTOX_CTO_OPERATING_MODE_PROMPT" => true,
             "CTO_EMAIL_ADDRESS" | "CTO_EMAIL_PASSWORD" | "CTO_EMAIL_PROVIDER" => self
                 .value_for_setting("CTOX_OWNER_PREFERRED_CHANNEL")
                 .unwrap_or(DEFAULT_COMMUNICATION_PATH)
@@ -2830,7 +2914,13 @@ impl App {
                 } else {
                     trimmed.to_string()
                 };
-                operator_env_map.insert(item.key.to_string(), persisted_value);
+                if item.key == CTOX_CTO_OPERATING_MODE_KEY
+                    && persisted_value == DEFAULT_CTO_OPERATING_MODE_PROMPT.trim()
+                {
+                    operator_env_map.remove(item.key);
+                } else {
+                    operator_env_map.insert(item.key.to_string(), persisted_value);
+                }
             }
         }
         if let Some(family_label) = operator_env_map
@@ -3749,6 +3839,22 @@ fn load_settings_items(root: &Path) -> Vec<SettingItem> {
             secret: false,
             choices: vec!["progressive", "balanced", "defensive"],
             help: "How eagerly CTOX asks for owner approval before acting. Progressive: execute directly, auto-close approval-gate items (use for unattended / non-interactive runs). Balanced (default): approval-gate only for genuinely high-impact moves. Defensive: ask for approval on anything touching infrastructure, external services, or irreversible state, and nag faster.",
+            kind: SettingKind::Env,
+        },
+        SettingItem {
+            key: "CTOX_CTO_OPERATING_MODE_PROMPT",
+            label: "CTO Contract",
+            value: env_map
+                .get("CTOX_CTO_OPERATING_MODE_PROMPT")
+                .cloned()
+                .unwrap_or_else(|| DEFAULT_CTO_OPERATING_MODE_PROMPT.trim().to_string()),
+            saved_value: env_map
+                .get("CTOX_CTO_OPERATING_MODE_PROMPT")
+                .cloned()
+                .unwrap_or_else(|| DEFAULT_CTO_OPERATING_MODE_PROMPT.trim().to_string()),
+            secret: false,
+            choices: Vec::new(),
+            help: "Editable CTO operating contract injected into the system prompt. Use Enter to open the full-screen editor and tune how proactive, product-minded, and research-driven CTOX should be.",
             kind: SettingKind::Env,
         },
         SettingItem {
@@ -6248,6 +6354,7 @@ mod tests {
         assert!(keys.contains(&"CTO_EMAIL_PASSWORD"));
         assert!(keys.contains(&"CTO_EMAIL_PROVIDER"));
         assert!(keys.contains(&"CTO_JAMI_ACCOUNT_ID"));
+        assert!(keys.contains(&"CTOX_CTO_OPERATING_MODE_PROMPT"));
     }
 
     #[test]
@@ -6375,6 +6482,7 @@ mod tests {
                 "CTOX_CHAT_SKILL_PRESET",
                 "CTOX_REFRESH_OUTPUT_BUDGET_PCT",
                 "CTOX_AUTONOMY_LEVEL",
+                "CTOX_CTO_OPERATING_MODE_PROMPT",
                 "CTOX_CHAT_MODEL_BOOST",
                 "CTOX_BOOST_DEFAULT_MINUTES",
                 "CTOX_EMBEDDING_MODEL",
@@ -6413,6 +6521,7 @@ mod tests {
                 "CTOX_CHAT_SKILL_PRESET",
                 "CTOX_REFRESH_OUTPUT_BUDGET_PCT",
                 "CTOX_AUTONOMY_LEVEL",
+                "CTOX_CTO_OPERATING_MODE_PROMPT",
                 "CTOX_CHAT_MODEL_BOOST",
                 "CTOX_BOOST_DEFAULT_MINUTES",
                 "CTOX_EMBEDDING_MODEL",
@@ -6443,6 +6552,7 @@ mod tests {
                 "CTOX_CHAT_SKILL_PRESET",
                 "CTOX_REFRESH_OUTPUT_BUDGET_PCT",
                 "CTOX_AUTONOMY_LEVEL",
+                "CTOX_CTO_OPERATING_MODE_PROMPT",
                 "CTOX_CHAT_MODEL_BOOST",
                 "CTOX_BOOST_DEFAULT_MINUTES",
                 "CTOX_EMBEDDING_MODEL",
@@ -6473,6 +6583,39 @@ mod tests {
         assert!(!keys.contains(&"CTOX_WEBRTC_SIGNALING_URL"));
         assert!(!keys.contains(&"CTOX_WEBRTC_ROOM"));
         assert!(!keys.contains(&"CTOX_WEBRTC_PASSWORD"));
+    }
+
+    #[test]
+    fn cto_contract_setting_opens_editor_and_persists_to_runtime_store() {
+        let root = temp_root("cto-contract-editor");
+        let db_path = root.join("runtime/test.sqlite3");
+        let mut app = App::new(root.clone(), db_path);
+        let idx = app
+            .settings_items
+            .iter()
+            .position(|item| item.key == "CTOX_CTO_OPERATING_MODE_PROMPT")
+            .unwrap();
+        app.settings_selected = idx;
+
+        app.handle_settings_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .unwrap();
+        assert!(app.settings_text_editor.is_some());
+
+        {
+            let editor = &mut app.settings_text_editor.as_mut().unwrap().editor;
+            *editor = TextEditor::scratch("## CTO Operating Mode\n\nCustom.\n");
+        }
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL))
+            .unwrap();
+
+        assert!(app.settings_text_editor.is_none());
+        let saved = runtime_env::load_runtime_env_map(&root).unwrap();
+        assert_eq!(
+            saved
+                .get("CTOX_CTO_OPERATING_MODE_PROMPT")
+                .map(String::as_str),
+            Some("## CTO Operating Mode\n\nCustom.")
+        );
     }
 
     #[test]

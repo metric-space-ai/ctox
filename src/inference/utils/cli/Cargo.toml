@@ -1,0 +1,15 @@
+[package]
+name = "ctox-utils-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+clap = { workspace = true, features = ["derive", "wrap_help"] }
+ctox-protocol = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }
+

@@ -1,0 +1,12 @@
+[package]
+name = "ctox-utils-cache"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+lru = { workspace = true }
+sha1 = { workspace = true }

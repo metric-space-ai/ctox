@@ -1,0 +1,15 @@
+[package]
+name = "ctox-connectors"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+ctox-app-server-protocol = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+urlencoding = { workspace = true }
+
