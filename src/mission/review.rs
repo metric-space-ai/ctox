@@ -8,17 +8,17 @@ use crate::inference::runtime_env;
 
 const REVIEW_TIMEOUT_SECS: u64 = 90;
 
-const REVIEW_SYSTEM_PROMPT: &str = r#"You are CTOX's completion reviewer.
+const REVIEW_SYSTEM_PROMPT: &str = r#"You are CTOX's mission-state reviewer.
 
-Your job is to stop CTOX from treating an under-verified execution slice as complete.
+Your job is to stop CTOX from treating an under-verified execution slice or an unhealthy mission state as complete.
 
 You are a SEPARATE AGENT from the executor that produced the slice. You did not write the work. You have no attachment to it. Your bias is skepticism, not endorsement.
 
-Strict scope rule:
-- You review ONLY the slice described in the user message under SCOPE and WHAT EXECUTOR DID.
-- Do not invent new acceptance criteria beyond the explicit done_gate.
-- Do not review unrelated mission work, prior turns, or hypothetical issues.
-- If the slice's scope is ambiguous, return PARTIAL with a one-line clarification request rather than guessing.
+Mission-state scope rule:
+- Review the current mission state after the reported slice.
+- The explicit done_gate still comes first, but you may FAIL when the public or owner-visible outcome is obviously not commercially credible, leaks internal instructions, exposes admin-only surfaces, or breaks the buyer path.
+- Use the supplied mission, focus, anchors, narrative, workflow, and communication context to judge whether the slice moved the mission into a healthy state.
+- If the slice scope is ambiguous, return PARTIAL with a one-line clarification request rather than guessing.
 
 Verification discipline (strict read-only review mode):
 - Do not modify project files.
@@ -29,10 +29,16 @@ Verification discipline (strict read-only review mode):
 
 Done-gate-first discipline:
 - If an explicit done_gate is provided in SCOPE, test that done_gate FIRST. If unmet, FAIL — regardless of other evidence.
-- If no explicit done_gate is provided, derive the narrowest checkable claim from the slice prompt and test that.
+- If no explicit done_gate is provided, derive the narrowest checkable claim from the slice prompt and test that, then evaluate whether the resulting mission state is still obviously unhealthy.
 
 When the slice claims an install, rollout, migration, repair, or service readiness, inspect the live surface.
 When the slice claims a code or config change is complete, inspect current workspace state and run the narrowest relevant checks.
+When the work is owner-visible or public-facing, inspect the actual buyer-facing surface and the critical routes it depends on.
+For public launch surfaces, the following are failures even if the page technically loads:
+- internal prompt or instruction leakage
+- public navigation that exposes admin or internal operations as primary buyer flow
+- public pages that depend on broken critical API routes
+- obviously placeholder, raw operator, or implementation text presented as user-facing copy
 If evidence is incomplete or you cannot complete a check, return PARTIAL instead of PASS.
 
 Respond in exactly this shape:
@@ -64,6 +70,12 @@ pub struct CompletionReviewRequest {
     /// Anchors continuity excerpt (key facts discovered during the mission).
     /// Already-clipped text; passed through verbatim into the review brief.
     pub anchors_excerpt: String,
+    /// Narrative continuity excerpt (causal history / prior failures).
+    pub narrative_excerpt: String,
+    /// Workflow excerpt (open work / planning / queue state relevant to the slice).
+    pub workflow_excerpt: String,
+    /// Relevant communication excerpt (owner/founder/stakeholder thread context).
+    pub communication_excerpt: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -285,6 +297,21 @@ fn build_review_prompt(
     } else {
         request.anchors_excerpt.trim().to_string()
     };
+    let narrative_block = if request.narrative_excerpt.trim().is_empty() {
+        "(no narrative recorded)".to_string()
+    } else {
+        request.narrative_excerpt.trim().to_string()
+    };
+    let workflow_block = if request.workflow_excerpt.trim().is_empty() {
+        "(no workflow state recorded)".to_string()
+    } else {
+        request.workflow_excerpt.trim().to_string()
+    };
+    let communication_block = if request.communication_excerpt.trim().is_empty() {
+        "(no relevant communication recorded)".to_string()
+    } else {
+        request.communication_excerpt.trim().to_string()
+    };
     let source = request.source_label.as_str();
     let owner_visible = if request.owner_visible { "yes" } else { "no" };
     let goal = request.goal.trim();
@@ -293,9 +320,9 @@ fn build_review_prompt(
 
     format!(
         "==REVIEWER ROLE==\n\
-You are a separate, skeptical CTOX completion reviewer. You did not produce the work below — you are reviewing it cold. Your bias is skepticism, not endorsement. Operate strictly read-only: do not modify files, do not run git write operations, do not install or restart services. Use shell/read tools and browser/read verification when the slice is a public web, deploy, landing-page, or owner-visible surface.\n\
+You are a separate, skeptical CTOX mission-state reviewer. You did not produce the work below — you are reviewing it cold. Your bias is skepticism, not endorsement. Operate strictly read-only: do not modify files, do not run git write operations, do not install or restart services. Use shell/read tools and browser/read verification when the slice is a public web, deploy, landing-page, or owner-visible surface.\n\
 \n\
-==SCOPE (review ONLY what is below — do not invent new criteria)==\n\
+==SCOPE (judge the mission state after the slice using the context below)==\n\
 Mission: {mission_line}\n\
 Source label: {source}\n\
 Owner visible: {owner_visible}\n\
@@ -310,6 +337,15 @@ Focus snapshot:\n\
 \n\
 Anchors snapshot:\n\
 {anchors_block}\n\
+\n\
+Narrative snapshot:\n\
+{narrative_block}\n\
+\n\
+Workflow snapshot:\n\
+{workflow_block}\n\
+\n\
+Relevant communication state:\n\
+{communication_block}\n\
 \n\
 ==WHAT THE EXECUTOR DID==\n\
 Slice goal:\n\
@@ -327,8 +363,9 @@ Latest reported result from the executor:\n\
 3. Use direct evidence (shell/read tools) instead of prose-only reasoning.\n\
 3a. If the slice is owner-visible and touches a public website, landing page, deploy, domain, or browser-facing flow, verify the live surface directly. Prefer an actual browser or at least direct HTTP checks of the public URL plus one critical route the page depends on.\n\
 3b. A public page that returns HTML while its critical API route is 404/500 is FAIL, not PASS.\n\
-4. If the scope of the slice is ambiguous or under-specified, return PARTIAL with a one-line clarification request — do not guess.\n\
-5. Do not review unrelated mission work or prior turns. Stay inside the slice.\n\
+3c. If a public page visibly leaks internal instructions, planning text, prompt material, admin-only UI, operator notes, or broken buyer flow, return FAIL.\n\
+4. Use the mission, focus, anchors, narrative, workflow, and communication snapshots to judge whether this slice actually moved the mission into a healthier state. Do not bless a local success that leaves the public mission state obviously weak.\n\
+5. If the scope is ambiguous or under-specified, return PARTIAL with a one-line clarification request — do not guess.\n\
 6. If you cannot complete a check (timeout, missing artifact, permission), return PARTIAL — never PASS by default.\n\
 \n\
 Respond in exactly this shape:\n\
@@ -476,6 +513,9 @@ mod tests {
             done_gate: "curl -f https://staging/health returns 200".to_string(),
             focus_excerpt: "Active task: deploy v2.3".to_string(),
             anchors_excerpt: "Repo: /opt/api".to_string(),
+            narrative_excerpt: "Turn 1 failed on staging health.".to_string(),
+            workflow_excerpt: "Open slice: verify deploy and smoke tests.".to_string(),
+            communication_excerpt: "Owner asked whether staging is actually healthy.".to_string(),
         };
         let rendered = build_review_prompt(
             &request,
@@ -489,6 +529,8 @@ mod tests {
         assert!(rendered.contains("Stabilize staging deploys"));
         assert!(rendered.contains("==WHAT THE EXECUTOR DID=="));
         assert!(rendered.contains("Smoke test passed."));
+        assert!(rendered.contains("Relevant communication state"));
+        assert!(rendered.contains("Open slice: verify deploy and smoke tests."));
     }
 
     #[test]

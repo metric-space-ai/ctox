@@ -2347,7 +2347,15 @@ fn run_completion_review(
     mission_state: Option<&lcm::MissionStateRecord>,
 ) {
     let db_path = root.join("runtime/ctox.sqlite3");
-    let (mission_line, done_gate, focus_excerpt, anchors_excerpt) = {
+    let (
+        mission_line,
+        done_gate,
+        focus_excerpt,
+        anchors_excerpt,
+        narrative_excerpt,
+        workflow_excerpt,
+        communication_excerpt,
+    ) = {
         let mission_record = mission_state.cloned().or_else(|| {
             lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default())
                 .and_then(|engine| engine.mission_state(conversation_id))
@@ -2373,6 +2381,12 @@ fn run_completion_review(
                 .as_ref()
                 .map(|c| clip_multiline(&c.anchors.content, 1200))
                 .unwrap_or_default(),
+            continuity
+                .as_ref()
+                .map(|c| clip_multiline(&c.narrative.content, 1200))
+                .unwrap_or_default(),
+            format_review_workflow_state(job, mission_record.as_ref()),
+            format_review_communication_state(root, job),
         )
     };
     let owner_visible = derive_owner_visible_for_review(&job.source_label);
@@ -2386,6 +2400,9 @@ fn run_completion_review(
         done_gate,
         focus_excerpt,
         anchors_excerpt,
+        narrative_excerpt,
+        workflow_excerpt,
+        communication_excerpt,
     };
     let outcome = review::review_completion_if_needed(root, &review_request, reply_text);
     if !outcome.required {
@@ -2470,6 +2487,98 @@ fn clip_multiline(value: &str, max_chars: usize) -> String {
     let mut clipped: String = value.chars().take(max_chars.saturating_sub(1)).collect();
     clipped.push('…');
     clipped
+}
+
+fn format_review_workflow_state(
+    job: &QueuedPrompt,
+    mission_record: Option<&lcm::MissionStateRecord>,
+) -> String {
+    let mut lines = Vec::new();
+    if let Some(thread_key) = job.thread_key.as_deref().filter(|value| !value.trim().is_empty()) {
+        lines.push(format!("thread_key: {}", thread_key.trim()));
+    }
+    if !job.source_label.trim().is_empty() {
+        lines.push(format!("source_label: {}", job.source_label.trim()));
+    }
+    if let Some(skill) = job
+        .suggested_skill
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        lines.push(format!("suggested_skill: {}", skill.trim()));
+    }
+    if let Some(workspace_root) = job
+        .workspace_root
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        lines.push(format!("workspace_root: {}", workspace_root.trim()));
+    }
+    if let Some(mission) = mission_record {
+        if !mission.mission_status.trim().is_empty() {
+            lines.push(format!(
+                "mission_status: {}",
+                mission.mission_status.trim()
+            ));
+        }
+        if !mission.next_slice.trim().is_empty() {
+            lines.push(format!(
+                "mission_next_slice: {}",
+                clip_text(mission.next_slice.trim(), 220)
+            ));
+        }
+        if !mission.blocker.trim().is_empty() {
+            lines.push(format!("mission_blocker: {}", clip_text(mission.blocker.trim(), 220)));
+        }
+    }
+    if lines.is_empty() {
+        "(no workflow state recorded)".to_string()
+    } else {
+        lines.join("\n")
+    }
+}
+
+fn format_review_communication_state(root: &Path, job: &QueuedPrompt) -> String {
+    let thread_items = job
+        .thread_key
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .and_then(|thread_key| channels::load_thread_communication_feed(root, thread_key, 6).ok());
+    let items = thread_items.unwrap_or_else(|| {
+        channels::load_recent_communication_feed(root, 4).unwrap_or_default()
+    });
+    if items.is_empty() {
+        return "(no relevant communication recorded)".to_string();
+    }
+    items.into_iter()
+        .map(|item| {
+            let sender = item
+                .sender_address
+                .trim()
+                .strip_prefix("mailto:")
+                .unwrap_or(item.sender_address.trim());
+            let sender = if sender.is_empty() { "(unknown sender)" } else { sender };
+            let subject = if item.subject.trim().is_empty() {
+                "(no subject)"
+            } else {
+                item.subject.trim()
+            };
+            let preview = if item.preview.trim().is_empty() {
+                "(no preview)"
+            } else {
+                item.preview.trim()
+            };
+            format!(
+                "- [{}:{}] {} | {} | {}",
+                item.channel.trim(),
+                item.direction.trim(),
+                sender,
+                clip_text(subject, 100),
+                clip_text(preview, 160)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Enqueue a high-priority rework slice on the same thread as the rejected

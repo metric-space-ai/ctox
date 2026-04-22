@@ -86,6 +86,7 @@ You must judge the mission in full context:
 
 A page that returns HTTP 200 can still be a failure.
 A technically working flow can still be commercially wrong.
+Instruction leakage, planning text, internal operator notes, or admin-only surfaces visible on a public page are failures, not polish issues.
 
 ### Stakeholder Rules
 

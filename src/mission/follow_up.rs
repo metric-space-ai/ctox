@@ -119,8 +119,12 @@ fn evaluate_follow_up(request: FollowUpRequest) -> FollowUpDecision {
             follow_up_prompt: Some(prompt),
             suggested_skill: request.suggested_skill,
             suggested_thread_key: request.thread_key,
-            owner_communication_recommended: false,
-            owner_note: None,
+            owner_communication_recommended: request.owner_visible
+                && !review_verdict_passed(request.review_verdict.as_deref()),
+            owner_note: owner_note(
+                request.owner_visible && !review_verdict_passed(request.review_verdict.as_deref()),
+                review_summary_note(request.review_summary.as_deref()),
+            ),
         };
     }
 
@@ -265,6 +269,11 @@ fn normalize_review_verdict(value: Option<&str>) -> Option<String> {
 
 fn owner_note(enabled: bool, note: &str) -> Option<String> {
     enabled.then(|| note.trim().to_string())
+}
+
+fn review_summary_note(summary: Option<&str>) -> &'static str {
+    let _ = summary;
+    "The owner-visible mission is not actually done yet. Reconstruct the latest thread context, explain the blocker or quality gap plainly, and ask for approval or feedback only when a real external decision is needed."
 }
 
 fn render_owner_blocker_note(blocker: &str) -> String {
