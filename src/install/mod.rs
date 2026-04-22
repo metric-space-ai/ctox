@@ -1166,7 +1166,7 @@ fn fetch_remote_release(
                 let tarball_url =
                     format!("https://codeload.github.com/{repo}/tar.gz/refs/heads/{branch}");
                 return Ok(GitHubReleaseResponse {
-                    tag_name: format!("branch-{branch}"),
+                    tag_name: format!("branch-{branch}-{}", current_utc().format("%Y%m%dT%H%M%SZ")),
                     name: Some(format!("{branch} (development snapshot)")),
                     tarball_url,
                     html_url: None,
