@@ -2406,18 +2406,33 @@ fn run_completion_review(
     // on a flaky reviewer.
     let actionable_rejection = outcome.requires_follow_up()
         && !matches!(outcome.verdict, review::ReviewVerdict::Unavailable);
+    let active_plan_has_work = if actionable_rejection {
+        plan::has_active_goal_with_pending_step(root).unwrap_or(false)
+    } else {
+        false
+    };
     if actionable_rejection {
-        match enqueue_review_rework(root, job, &outcome) {
-            Ok(rework_title) => {
-                push_event(state, format!("Review rework enqueued: {rework_title}"))
-            }
-            Err(err) => push_event(
+        if active_plan_has_work {
+            push_event(
                 state,
                 format!(
-                    "Review rework enqueue failed for {}: {}",
-                    job.source_label, err
+                    "Review fail persisted for {} without review-rework enqueue because runnable plan work already exists",
+                    job.source_label
                 ),
-            ),
+            );
+        } else {
+            match enqueue_review_rework(root, job, &outcome) {
+                Ok(rework_title) => {
+                    push_event(state, format!("Review rework enqueued: {rework_title}"))
+                }
+                Err(err) => push_event(
+                    state,
+                    format!(
+                        "Review rework enqueue failed for {}: {}",
+                        job.source_label, err
+                    ),
+                ),
+            }
         }
     }
 }
