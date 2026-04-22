@@ -24,7 +24,7 @@
 use std::sync::{Arc, OnceLock};
 
 use anyhow::{anyhow, Result};
-use cudarc::driver::{CudaFunction, LaunchConfig, PushKernelArg};
+use cudarc::driver::{CudaFunction, CudaView, CudaViewMut, LaunchConfig, PushKernelArg};
 use cudarc::nvrtc::Ptx;
 use half::f16;
 
@@ -154,6 +154,92 @@ pub fn launch_mmvq_q8_0_f32(
 
     unsafe { launcher.launch(cfg) }
         .map_err(|e| anyhow!("mmvq_q8_0_f32_out launch (k={} n={}): {:?}", k, n, e))?;
+    Ok(())
+}
+
+/// Slice/view variant of [`launch_mmvq_q8_0_f32`] — same kernel, but
+/// the f32 activation row and the f32 output row are passed as cudarc
+/// device views instead of owned `CudaTensor`s.
+///
+/// Motivation: the host-side per-row loop in
+/// `PackedWeight::matmul_f32` used to memcpy each input row into a
+/// scratch `CudaTensor<f32>`, launch the mmvq, then memcpy the result
+/// row back out. With this entry point the caller slices directly
+/// into the contiguous `[m, k]` activation / `[m, n]` output tensors
+/// and hands this function a view for each row — zero row-level
+/// memcpys, just `m` kernel launches. See `matmul_q_rows` in
+/// `layers/packed_weight.rs` for the batched orchestration.
+///
+/// The `x_row` view must cover `k` f32s; the `y_row` view must cover
+/// `n` f32s. Weight-side validation matches the owned-tensor variant.
+pub fn launch_mmvq_q8_0_f32_view(
+    device: &Arc<DeviceContext>,
+    a_q80: &CudaTensor<i8>,
+    k: usize,
+    n: usize,
+    x_row: &CudaView<'_, f32>,
+    y_row: &mut CudaViewMut<'_, f32>,
+) -> Result<()> {
+    // Inlined weight shape check — the CudaTensor-only validator wants
+    // owned x/y tensors for their numel() assertions, which we don't
+    // have here. Everything else lines up with validate_mmvq_q8_0_shapes().
+    if k == 0 || n == 0 {
+        return Err(anyhow!("mmvq_q8_0: k and n must be nonzero (k={}, n={})", k, n));
+    }
+    if !k.is_multiple_of(Q8_0_BLOCK_ELEMS) {
+        return Err(anyhow!(
+            "mmvq_q8_0: k must be a multiple of {} (got k={})",
+            Q8_0_BLOCK_ELEMS,
+            k
+        ));
+    }
+    let blocks_per_col = k / Q8_0_BLOCK_ELEMS;
+    let expected_bytes = blocks_per_col * n * Q8_0_BLOCK_BYTES;
+    if a_q80.numel() != expected_bytes {
+        return Err(anyhow!(
+            "mmvq_q8_0: a_q8_0 byte count {} != (k/32)*n*34 = {} (k={}, n={})",
+            a_q80.numel(),
+            expected_bytes,
+            k,
+            n
+        ));
+    }
+    if x_row.len() < k {
+        return Err(anyhow!(
+            "mmvq_q8_0: x_row view len {} < k={}",
+            x_row.len(),
+            k
+        ));
+    }
+    if y_row.len() < n {
+        return Err(anyhow!(
+            "mmvq_q8_0: y_row view len {} < n={}",
+            y_row.len(),
+            n
+        ));
+    }
+
+    let grid_x = n.div_ceil(2) as u32;
+    let cfg = LaunchConfig {
+        grid_dim: (grid_x, 1, 1),
+        block_dim: (32, 2, 1),
+        shared_mem_bytes: 0,
+    };
+
+    let f = load_mmq_q8_0_fn(device, &MMVQ_Q8_0_F32_FN, "mmvq_q8_0_f32_out")?;
+    let stream = device.raw().default_stream();
+    let k_i32 = k as i32;
+    let n_i32 = n as i32;
+    let mut launcher = stream.launch_builder(&f);
+    launcher
+        .arg(a_q80.buf())
+        .arg(&k_i32)
+        .arg(&n_i32)
+        .arg(x_row)
+        .arg(y_row);
+
+    unsafe { launcher.launch(cfg) }
+        .map_err(|e| anyhow!("mmvq_q8_0_f32_view launch (k={} n={}): {:?}", k, n, e))?;
     Ok(())
 }
 

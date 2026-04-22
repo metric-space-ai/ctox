@@ -22,7 +22,7 @@
 use std::sync::{Arc, OnceLock};
 
 use anyhow::{anyhow, Result};
-use cudarc::driver::{CudaFunction, LaunchConfig, PushKernelArg};
+use cudarc::driver::{CudaFunction, CudaView, CudaViewMut, LaunchConfig, PushKernelArg};
 use cudarc::nvrtc::Ptx;
 use half::f16;
 
@@ -158,6 +158,89 @@ pub fn launch_mmvq_q4k_q8_1_f32(
 
     unsafe { launcher.launch(mmvq_launch_cfg(n)) }
         .map_err(|e| anyhow!("mmvq_q4k_q8_1_f32 launch (k={} n={}): {:?}", k, n, e))?;
+    Ok(())
+}
+
+/// Slice/view variant of [`launch_mmvq_q4k_q8_1_f32`] — same kernel,
+/// but the activation q8_1 bytes and the f32 output row are passed as
+/// cudarc device views instead of owned `CudaTensor`s.
+///
+/// Motivation: the host-side per-row loop in
+/// `PackedWeight::matmul_f32` used to memcpy each input row into a
+/// scratch `CudaTensor<f32>`, launch the mmvq, then memcpy the result
+/// row back out. With this entry point the caller pre-quantizes the
+/// whole `[m, k]` activation into a contiguous q8_1 scratch once,
+/// then hands this function a view for each row — zero row-level
+/// memcpys, just `m` kernel launches. See `matmul_q_rows` in
+/// `layers/packed_weight.rs` for the batched orchestration.
+///
+/// The `x_q8_1_row` view must cover at least `q8_1_packed_bytes(k)`
+/// bytes; the `y_row` view must cover `n` f32s. Validation on byte
+/// counts matches the owned-tensor variant.
+pub fn launch_mmvq_q4k_q8_1_f32_view(
+    device: &Arc<DeviceContext>,
+    a_q4k: &CudaTensor<i8>,
+    k: usize,
+    n: usize,
+    x_q8_1_row: &CudaView<'_, i8>,
+    y_row: &mut CudaViewMut<'_, f32>,
+) -> Result<()> {
+    // Inlined weight shape check — the CudaTensor-only validator wants
+    // an owned y tensor for its numel() assertion, which we don't have
+    // here. Everything else lines up with validate_mmvq_q4k_shapes().
+    if k == 0 || n == 0 {
+        return Err(anyhow!("mmvq_q4k: k and n must be nonzero (k={}, n={})", k, n));
+    }
+    if !k.is_multiple_of(Q4K_BLOCK_ELEMS) {
+        return Err(anyhow!(
+            "mmvq_q4k: k must be a multiple of {} (got k={})",
+            Q4K_BLOCK_ELEMS,
+            k
+        ));
+    }
+    let blocks_per_col = k / Q4K_BLOCK_ELEMS;
+    let expected_bytes = blocks_per_col * n * Q4K_BLOCK_BYTES;
+    if a_q4k.numel() != expected_bytes {
+        return Err(anyhow!(
+            "mmvq_q4k: a_q4k byte count {} != (k/256)*n*144 = {} (k={}, n={})",
+            a_q4k.numel(),
+            expected_bytes,
+            k,
+            n
+        ));
+    }
+
+    let needed_bytes = q8_1_packed_bytes(k);
+    if x_q8_1_row.len() < needed_bytes {
+        return Err(anyhow!(
+            "mmvq_q4k: x_q8_1 view len {} < required {} for k={}",
+            x_q8_1_row.len(),
+            needed_bytes,
+            k
+        ));
+    }
+    if y_row.len() < n {
+        return Err(anyhow!(
+            "mmvq_q4k: y_row view len {} < n={}",
+            y_row.len(),
+            n
+        ));
+    }
+
+    let f = load_mmq_q4k_fn(device, &MMVQ_Q4K_Q8_1_F32_FN, "mmvq_q4k_q8_1_f32_out")?;
+    let stream = device.raw().default_stream();
+    let k_i32 = k as i32;
+    let n_i32 = n as i32;
+    let mut launcher = stream.launch_builder(&f);
+    launcher
+        .arg(a_q4k.buf())
+        .arg(x_q8_1_row)
+        .arg(y_row)
+        .arg(&k_i32)
+        .arg(&n_i32);
+
+    unsafe { launcher.launch(mmvq_launch_cfg(n)) }
+        .map_err(|e| anyhow!("mmvq_q4k_q8_1_f32_view launch (k={} n={}): {:?}", k, n, e))?;
     Ok(())
 }
 

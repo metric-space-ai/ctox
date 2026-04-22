@@ -31,19 +31,25 @@
 //!
 //! ## Dispatch table
 //!
-//! | Variant | Path                                         |
-//! |---------|----------------------------------------------|
-//! | `Bf16`  | cast x → bf16; `launch_matmul_bf16_f32` GEMM |
-//! | `Q4K`   | loop m rows; per-row `launch_mmvq_q4k_f32`   |
-//! | `Q5K`   | loop m rows; per-row `launch_mmvq_q5k_f32`   |
-//! | `Q6K`   | loop m rows; per-row `launch_mmvq_q6k_f32`   |
-//! | `Q8_0`  | loop m rows; per-row `launch_mmvq_q8_0_f32`  |
-//! | `IQ4XS` | loop m rows; per-row `launch_mmvq_iq4_xs_f32`|
-//! | `Zero`  | memset y to zeros; no kernel launch          |
+//! | Variant | Path                                                    |
+//! |---------|---------------------------------------------------------|
+//! | `Bf16`  | cast x → bf16; `launch_matmul_bf16_f32` (cuBLAS GEMM)   |
+//! | `Q4K`   | bulk quantize x → q8_1; m view-launches of q4k kernel   |
+//! | `IQ4XS` | bulk quantize x → q8_1; m view-launches of iq4_xs kernel|
+//! | `Q5K`   | m view-launches of q5k kernel over f32 x-rows           |
+//! | `Q6K`   | m view-launches of q6k kernel over f32 x-rows           |
+//! | `Q8_0`  | m view-launches of q8_0 kernel over f32 x-rows          |
+//! | `Zero`  | memset y to zeros; no kernel launch                     |
 //!
-//! The per-row mmvq loop is strictly correctness-first; a batched
-//! mmvq entry point is a Phase-5 optimization (same cost-class as
-//! the existing `gather_head_from_packed` loops in the FA layer).
+//! Earlier iterations used an owned-`CudaTensor` per-row scratch
+//! with two `memcpy_dtod` calls per row (input fetch + output
+//! scatter). At 1024-token prefill that cost ~393k cudaMemcpy
+//! launches per forward — pure orchestration overhead on top of the
+//! actual matmul work. The current form skips both memcpys by
+//! handing the kernel a `CudaView` into `x` (and `CudaViewMut` into
+//! `y`) directly; the only remaining per-layer allocation is the
+//! q8_1 scratch for Q4K / IQ4_XS, which is populated in a single
+//! quantize launch rather than m.
 
 use std::sync::Arc;
 
@@ -54,8 +60,9 @@ use ctox_cuda_primitives::device::DeviceContext;
 use ctox_cuda_primitives::tensor::CudaTensor;
 
 use crate::kernels::{
-    launch_cast_f32_to_bf16, launch_matmul_bf16_f32, launch_mmvq_iq4_xs_f32, launch_mmvq_q4k_f32,
-    launch_mmvq_q5k_f32, launch_mmvq_q6k_f32, launch_mmvq_q8_0_f32,
+    launch_cast_f32_to_bf16, launch_matmul_bf16_f32, launch_mmvq_iq4_xs_q8_1_f32_view,
+    launch_mmvq_q4k_q8_1_f32_view, launch_mmvq_q5k_f32_view, launch_mmvq_q6k_f32_view,
+    launch_mmvq_q8_0_f32_view, launch_quantize_q8_1_f32, q8_1_packed_bytes,
 };
 
 /// A weight tensor as it lives on device — carrier type depends on
@@ -168,29 +175,27 @@ impl PackedWeight {
 
         match self {
             PackedWeight::Bf16 { t, .. } => matmul_bf16_batched(device, t, x, y, m, k, n),
-            PackedWeight::Q4K { t, .. } => {
-                matmul_q_rows(device, x, y, m, k, n, |dev, xr, yr| {
-                    launch_mmvq_q4k_f32(dev, t, k, n, xr, yr)
+            PackedWeight::Q4K { t, .. } => matmul_q8_1_rows(device, x, y, m, k, n, |dev, xv, yv| {
+                launch_mmvq_q4k_q8_1_f32_view(dev, t, k, n, xv, yv)
+            }),
+            PackedWeight::IQ4XS { t, .. } => {
+                matmul_q8_1_rows(device, x, y, m, k, n, |dev, xv, yv| {
+                    launch_mmvq_iq4_xs_q8_1_f32_view(dev, t, k, n, xv, yv)
                 })
             }
             PackedWeight::Q5K { t, .. } => {
-                matmul_q_rows(device, x, y, m, k, n, |dev, xr, yr| {
-                    launch_mmvq_q5k_f32(dev, t, k, n, xr, yr)
+                matmul_f32_rows(device, x, y, m, k, n, |dev, xv, yv| {
+                    launch_mmvq_q5k_f32_view(dev, t, k, n, xv, yv)
                 })
             }
             PackedWeight::Q6K { t, .. } => {
-                matmul_q_rows(device, x, y, m, k, n, |dev, xr, yr| {
-                    launch_mmvq_q6k_f32(dev, t, k, n, xr, yr)
+                matmul_f32_rows(device, x, y, m, k, n, |dev, xv, yv| {
+                    launch_mmvq_q6k_f32_view(dev, t, k, n, xv, yv)
                 })
             }
             PackedWeight::Q8_0 { t, .. } => {
-                matmul_q_rows(device, x, y, m, k, n, |dev, xr, yr| {
-                    launch_mmvq_q8_0_f32(dev, t, k, n, xr, yr)
-                })
-            }
-            PackedWeight::IQ4XS { t, .. } => {
-                matmul_q_rows(device, x, y, m, k, n, |dev, xr, yr| {
-                    launch_mmvq_iq4_xs_f32(dev, t, k, n, xr, yr)
+                matmul_f32_rows(device, x, y, m, k, n, |dev, xv, yv| {
+                    launch_mmvq_q8_0_f32_view(dev, t, k, n, xv, yv)
                 })
             }
             PackedWeight::Zero { .. } => zero_fill_f32(y, m * n),
@@ -231,14 +236,26 @@ fn matmul_bf16_batched(
     Ok(())
 }
 
-/// Loop per-row dispatch for Q4K/Q5K/Q6K/Q8_0 variants.
+/// Batched per-row dispatch for Q4K / IQ4_XS — quantized weights whose
+/// CUDA kernel consumes a pre-quantized q8_1 activation.
 ///
-/// We copy row `t` of `x` into a size-`k` scratch tensor, call the
-/// mmvq launcher (writes a size-`n` row), then copy that row back into
-/// `y[t, :]`. Two D2D memcpys per row; cost class matches the existing
-/// `gather_head_from_packed` loops in the FA layer. A batched mmvq
-/// entry point would collapse both memcpys into a single launch.
-fn matmul_q_rows<F>(
+/// Layout strategy:
+///   1. Allocate one q8_1 scratch of `m * q8_1_packed_bytes(k)` bytes.
+///   2. Run `launch_quantize_q8_1_f32` **once** over the full `m*k`
+///      activation. Since each q8_1 block is independent (32-elem
+///      scale/zero), quantizing `m*k` elements contiguously produces
+///      exactly the same layout as quantizing each of the `m` rows
+///      separately into its own sub-buffer — as long as `k` is a
+///      multiple of 32, which every Qwen3.5-27B projection satisfies.
+///   3. For each of the `m` output rows, hand the kernel a `CudaView`
+///      into the pre-quantized scratch and a `CudaViewMut` into the
+///      destination `y` row. Zero D2D memcpys, `m` kernel launches.
+///
+/// This replaces the previous scheme (per-row `CudaTensor` scratch +
+/// two `memcpy_dtod` per row) which was pure orchestration overhead
+/// — ~393k cudaMemcpy calls per 1024-token prefill before the
+/// refactor. See the top-level audit in the A1 commit message.
+fn matmul_q8_1_rows<F>(
     device: &Arc<DeviceContext>,
     x: &CudaTensor<f32>,
     y: &mut CudaTensor<f32>,
@@ -248,28 +265,75 @@ fn matmul_q_rows<F>(
     mut launch: F,
 ) -> Result<()>
 where
-    F: FnMut(&Arc<DeviceContext>, &CudaTensor<f32>, &mut CudaTensor<f32>) -> Result<()>,
+    F: FnMut(
+        &Arc<DeviceContext>,
+        &cudarc::driver::CudaView<'_, i8>,
+        &mut cudarc::driver::CudaViewMut<'_, f32>,
+    ) -> Result<()>,
 {
-    let mut x_row = CudaTensor::<f32>::zeros(device.clone(), vec![k])?;
-    let mut y_row = CudaTensor::<f32>::zeros(device.clone(), vec![n])?;
-    let stream = device.raw().default_stream();
+    if m == 0 {
+        return Ok(());
+    }
+    let row_bytes = q8_1_packed_bytes(k);
+    let total_elems = m * k;
+    let mut x_q8_1_scratch =
+        CudaTensor::<i8>::zeros(device.clone(), vec![m * row_bytes])
+            .map_err(|e| anyhow!("matmul_q8_1_rows: alloc q8_1 scratch ({}B): {:?}", m * row_bytes, e))?;
+    launch_quantize_q8_1_f32(device, x, &mut x_q8_1_scratch, total_elems)?;
+
     for t in 0..m {
-        let x_src_start = t * k;
-        let x_src_end = x_src_start + k;
-        let x_view = x.buf().slice(x_src_start..x_src_end);
-        stream
-            .memcpy_dtod(&x_view, x_row.buf_mut())
-            .map_err(|e| anyhow!("PackedWeight::matmul_q_rows: x row {} memcpy: {:?}", t, e))?;
+        let x_start = t * row_bytes;
+        let x_end = x_start + row_bytes;
+        let x_view = x_q8_1_scratch.buf().slice(x_start..x_end);
 
-        launch(device, &x_row, &mut y_row)?;
+        let y_start = t * n;
+        let y_end = y_start + n;
+        let mut y_view = y.buf_mut().slice_mut(y_start..y_end);
 
-        let y_dst_start = t * n;
-        let y_dst_end = y_dst_start + n;
-        let y_src_view = y_row.buf().slice(..n);
-        let mut y_dst_view = y.buf_mut().slice_mut(y_dst_start..y_dst_end);
-        stream
-            .memcpy_dtod(&y_src_view, &mut y_dst_view)
-            .map_err(|e| anyhow!("PackedWeight::matmul_q_rows: y row {} memcpy: {:?}", t, e))?;
+        launch(device, &x_view, &mut y_view)
+            .map_err(|e| anyhow!("matmul_q8_1_rows: row {} launch: {}", t, e))?;
+    }
+    Ok(())
+}
+
+/// Batched per-row dispatch for Q5K / Q6K / Q8_0 — quantized weights
+/// whose CUDA kernel consumes a raw f32 activation (no q8_1
+/// intermediate today; see each kernel's module doc for the TODO).
+///
+/// Layout strategy: just hand the kernel a `CudaView` into the
+/// activation `x` for each row and a `CudaViewMut` into the output
+/// `y` row. No scratch allocations, no D2D memcpys, `m` kernel
+/// launches.
+fn matmul_f32_rows<F>(
+    device: &Arc<DeviceContext>,
+    x: &CudaTensor<f32>,
+    y: &mut CudaTensor<f32>,
+    m: usize,
+    k: usize,
+    n: usize,
+    mut launch: F,
+) -> Result<()>
+where
+    F: FnMut(
+        &Arc<DeviceContext>,
+        &cudarc::driver::CudaView<'_, f32>,
+        &mut cudarc::driver::CudaViewMut<'_, f32>,
+    ) -> Result<()>,
+{
+    if m == 0 {
+        return Ok(());
+    }
+    for t in 0..m {
+        let x_start = t * k;
+        let x_end = x_start + k;
+        let x_view = x.buf().slice(x_start..x_end);
+
+        let y_start = t * n;
+        let y_end = y_start + n;
+        let mut y_view = y.buf_mut().slice_mut(y_start..y_end);
+
+        launch(device, &x_view, &mut y_view)
+            .map_err(|e| anyhow!("matmul_f32_rows: row {} launch: {}", t, e))?;
     }
     Ok(())
 }
