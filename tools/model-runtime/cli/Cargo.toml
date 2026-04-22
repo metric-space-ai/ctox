@@ -73,6 +73,7 @@ doc = false
 engine-core = { workspace = true }
 engine-server-core = { workspace = true }
 engine = { workspace = true }
+engine-runtime = { package = "ctox-engine-runtime", path = "../engine", version = "0.7.1-alpha.1" }
 ctox-dflash-ffi = { path = "../dflash-ffi" }
 ctox-qwen35-27b = { path = "../models/qwen35_27b", optional = true }
 ctox-cuda-primitives = { path = "../cuda-primitives", optional = true }

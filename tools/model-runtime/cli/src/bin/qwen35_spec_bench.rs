@@ -16,7 +16,7 @@ use std::time::Instant;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use engine::GenerativeModel;
+use engine_runtime::GenerativeModel;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 use ctox_cuda_primitives::device::DeviceContext;
