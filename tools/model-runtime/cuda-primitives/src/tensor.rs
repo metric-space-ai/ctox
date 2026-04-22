@@ -57,6 +57,44 @@ impl<T: TensorElem> CudaTensor<T> {
         })
     }
 
+    /// Allocate **uninitialized** storage for `shape`.
+    ///
+    /// Identical to [`zeros`][Self::zeros] except the initial memset
+    /// is skipped. Only use this when the caller immediately
+    /// overwrites every element of the buffer before anything reads
+    /// from it — e.g. a matmul output or a cast destination. Reading
+    /// from an `uninit` tensor before it has been written produces
+    /// undefined garbage on the device.
+    ///
+    /// # Safety
+    ///
+    /// The type system can't enforce "overwrite before read" on a
+    /// tensor-level granularity, so this constructor is `unsafe`
+    /// and leaves the guarantee to the caller. Most consumers that
+    /// zero-fill-then-overwrite should stay on `zeros`; using this
+    /// is worth it for per-forward scratch tensors where the memset
+    /// launch adds up across 64 layers × N scratches per layer.
+    pub unsafe fn uninit(device: Arc<DeviceContext>, shape: Shape) -> Result<Self> {
+        let n_elems = shape.iter().product::<usize>();
+        let stream = device.raw().default_stream();
+        let buf = unsafe { stream.alloc::<T>(n_elems) }.map_err(|e| {
+            anyhow!(
+                "alloc({} elems) on device {}: {:?}",
+                n_elems,
+                device.ordinal(),
+                e
+            )
+        })?;
+        let stride = default_stride(&shape);
+        Ok(Self {
+            buf,
+            shape,
+            stride,
+            device,
+            _marker: PhantomData,
+        })
+    }
+
     /// Upload host slice into a fresh device tensor with the given
     /// shape. `host.len()` must match `shape.iter().product()`.
     pub fn from_host(
