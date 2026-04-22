@@ -1,11 +1,13 @@
 //! Model layer compositions — explicit sequences of kernel launches
-//! over `CudaTensor` that implement a transformer block. Each family
-//! lives in its own submodule; the crate's stance is "no runtime
-//! graph", so these are plain Rust functions/structs that call
-//! `kernels::launch_*` directly.
+//! over `CudaTensor` that implement a transformer block.
 //!
-//! A module per model family lets downstream crates pick only the
-//! primitives they need; the CUDA primitives crate stays free of
-//! transformer-shaped assumptions.
+//! A model module composes primitives from `kernels::*` into a
+//! layer-level `forward` that's ultimately wired together into the
+//! full decoder by a higher-level stepper (lives outside this crate,
+//! in `ctox-engine-core`).
+//!
+//! Per-architecture split:
+//!   * `qwen35` — Qwen3.5-27B hybrid. 48 GDN (linear-attention) +
+//!     16 FullAttention layers, single tied embedding + LM head.
 
 pub mod qwen35;
