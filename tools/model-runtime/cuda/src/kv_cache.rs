@@ -112,6 +112,24 @@ impl KvCache {
         self.n_filled += n;
     }
 
+    /// Decrement `n_filled` by `n` without touching slab contents.
+    ///
+    /// Used by multi-layer forward passes: each FullAttention layer
+    /// today auto-advances `n_filled` inside its own `forward`. When
+    /// several FA layers run in a single forward, they all want to see
+    /// the same pre-layer `n_filled` as their write offset + attention
+    /// length. The target-level forward calls `rewind` between layers
+    /// so every FA layer observes the same `prompt_start`, then calls
+    /// `advance` once at the end after all layers have written.
+    ///
+    /// Panics (in debug) on underflow. Slab bytes for the "unfilled"
+    /// range are left unchanged — subsequent writes at offset
+    /// `n_filled` will overwrite them.
+    pub fn rewind(&mut self, n: usize) {
+        debug_assert!(n <= self.n_filled, "KvCache rewind underflow");
+        self.n_filled -= n;
+    }
+
     pub fn reset(&mut self) {
         self.n_filled = 0;
     }
