@@ -476,29 +476,20 @@ fn build_full_attention_layer(
     let attn_k_norm = load_f32_placeholder(device, tensors, &name_k_norm, vec![cfg.head_dim]);
 
     // dflash pre-packs `attn_q` as `[hidden, 2*q_dim]` — first half is
-    // Q, second half is the sigmoid gate. Slice on the host and upload
-    // two distinct bf16 tensors. When the GGUF dtype is unsupported
-    // (Q4_K_M ships `attn_q` as Q4_K which we don't dequant yet) the
-    // `load_bf16_placeholder` fallback path still needs a Q-side and a
-    // gate-side tensor, so we fall back twice with zero-filled halves.
-    let (w_q, w_q_gate) = match load_packed_bf16_halves(
+    // Q, second half is the sigmoid gate. `load_packed_halves` returns
+    // two `PackedWeight`s with whatever carrier the GGUF shipped
+    // (Bf16 for synthetic test fixtures, Q4K/Q5K/Q6K/Q8_0/IQ4XS for
+    // real-model block-quant layouts). When the tensor is missing, has
+    // the wrong shape/numel, or has an unsupported variant, both halves
+    // fall back to `PackedWeight::Zero` placeholders so the forward
+    // still runs.
+    let (w_q, w_q_gate) = match load_packed_halves(
         tensors,
         &name_q,
         cfg.hidden_dim,
         cfg.q_dim(),
     ) {
-        Ok((q_half, gate_half)) => (
-            PackedWeight::Bf16 {
-                t: q_half,
-                k: cfg.hidden_dim,
-                n: cfg.q_dim(),
-            },
-            PackedWeight::Bf16 {
-                t: gate_half,
-                k: cfg.hidden_dim,
-                n: cfg.q_dim(),
-            },
-        ),
+        Ok(pair) => pair,
         Err(reason) => {
             tracing::warn!(
                 key = %name_q,
@@ -558,50 +549,157 @@ fn build_full_attention_layer(
 
 /// Slice the packed `attn_q.weight` into its Q and Q-gate halves.
 ///
-/// GGUF stores the packed Q/gate tensor as `[hidden, 2*q_dim]`
-/// row-major; dflash splits on the last axis so that element
-/// `[i, j]` for `j in 0..q_dim` is the Q component and
-/// `j in q_dim..2*q_dim` is the gate component.
+/// GGUF stores the packed Q/gate tensor logically as `[hidden, 2*q_dim]`;
+/// dflash splits on the output axis so that element `[i, j]` for
+/// `j in 0..q_dim` is the Q component and `j in q_dim..2*q_dim` is the
+/// gate component.
 ///
-/// Returns a pair `(w_q, w_q_gate)`, both `[hidden, q_dim]` bf16. When
-/// the GGUF tensor is missing, non-bf16, or has the wrong shape, this
-/// returns `Err` so the caller can fall through to a zero placeholder
-/// (same lenient-loader contract the other `attn_*` weights follow).
+/// Carrier-specific layouts at the byte level:
+///
+///   * **Bf16** (test fixtures, hand-authored checkpoints). Device
+///     tensor shape is `[hidden, 2*q_dim]` row-major over the logical
+///     `[in, out]`. Splitting is a per-row strided copy (first `q_dim`
+///     elements of each row go to Q, last `q_dim` to gate).
+///
+///   * **Q4K / Q5K / Q6K / Q8_0 / IQ4XS** (production 27B). The mmvq
+///     kernels consume block-quant bytes laid out as `[n, k]` row-major
+///     — i.e. for each of `n = 2*q_dim` output rows, a contiguous run
+///     of `(k/block_elems) * block_bytes` block-quant bytes over the
+///     `k = hidden` reduction axis. The llama.cpp loader reverses the
+///     on-disk ggml `[in=hidden, out=2*q_dim]` shape to row-major
+///     `[out=2*q_dim, in=hidden]`, which matches the mmvq expectation
+///     exactly. That means the Q/gate split lands on a **row boundary
+///     in the packed byte stream**: the first `q_dim` rows are Q, the
+///     last `q_dim` rows are gate, byte-contiguous, no bit-level
+///     splitting. `hidden` must be a multiple of the format's block
+///     width (256 for everything except Q8_0 which uses 32) — the
+///     GGUF loader already enforces this at tensor-load time, so
+///     `hidden = 5120 = 20*256` on 27B is safe unconditionally.
+///
+/// Returns a pair `(w_q, w_q_gate)` of `PackedWeight`s, both logically
+/// `[hidden, q_dim]`. When the GGUF tensor is missing, has the wrong
+/// numel, or lands in an unsupported `GgufBuf` variant, this returns
+/// `Err` so the caller can fall through to a zero placeholder.
 ///
 /// Host CPU does the split because the GGUF loader hands us a single
-/// `CudaTensor<bf16>`; slicing on device would require another strided-
-/// copy kernel we don't have yet. The one-time cost is fine — this
-/// runs once at load, not at forward.
-fn load_packed_bf16_halves(
+/// `CudaTensor<bf16>` or `CudaTensor<i8>`; slicing on device would
+/// require another strided-copy kernel we don't have yet. The one-time
+/// cost is fine — this runs once at model load, not on the forward
+/// hot path.
+fn load_packed_halves(
     tensors: &HashMap<String, GgufTensor>,
     key: &str,
     hidden: usize,
     q_dim: usize,
-) -> std::result::Result<(CudaTensor<bf16>, CudaTensor<bf16>), String> {
+) -> std::result::Result<(PackedWeight, PackedWeight), String> {
     let Some(t) = tensors.get(key) else {
         return Err(format!("{} not present", key));
     };
-    let expected = [hidden, 2 * q_dim];
-    if t.shape != expected {
+    // Accept either on-disk orientation as long as numel matches the
+    // expected packed `[hidden, 2*q_dim]` count. Bf16 test fixtures
+    // ship shape `[hidden, 2*q_dim]`; quantized loaders reverse ggml
+    // order to `[2*q_dim, hidden]`. Either works — the carrier-specific
+    // arms below consume the right layout.
+    let numel: usize = t.shape.iter().product();
+    let expected_numel = hidden * 2 * q_dim;
+    if numel != expected_numel {
         return Err(format!(
-            "{}: shape {:?} != expected packed {:?}",
-            key, t.shape, expected
+            "{}: shape {:?} numel {} != expected {} (= hidden*2*q_dim = {}*{})",
+            key,
+            t.shape,
+            numel,
+            expected_numel,
+            hidden,
+            2 * q_dim
         ));
     }
-    let GgufBuf::Bf16(src) = &t.buf else {
-        return Err(format!(
-            "{}: packed-halves loader only handles BF16 inputs, got {:?} \
-             (packed tensor available but forward doesn't consume packed bytes yet)",
-            key, t.dtype
-        ));
-    };
+    match &t.buf {
+        GgufBuf::Bf16(src) => split_bf16_packed_halves(src, key, hidden, q_dim),
+        GgufBuf::Q4K(src) => split_block_quant_halves(
+            src,
+            key,
+            hidden,
+            q_dim,
+            256,
+            144,
+            PackedQuant::Q4K,
+        ),
+        GgufBuf::Q5K(src) => split_block_quant_halves(
+            src,
+            key,
+            hidden,
+            q_dim,
+            256,
+            176,
+            PackedQuant::Q5K,
+        ),
+        GgufBuf::Q6K(src) => split_block_quant_halves(
+            src,
+            key,
+            hidden,
+            q_dim,
+            256,
+            210,
+            PackedQuant::Q6K,
+        ),
+        GgufBuf::Q8_0(src) => split_block_quant_halves(
+            src,
+            key,
+            hidden,
+            q_dim,
+            32,
+            34,
+            PackedQuant::Q8_0,
+        ),
+        GgufBuf::IQ4XS(src) => split_block_quant_halves(
+            src,
+            key,
+            hidden,
+            q_dim,
+            256,
+            136,
+            PackedQuant::IQ4XS,
+        ),
+        other => Err(format!(
+            "{}: packed-halves loader does not handle GgufBuf variant {:?}",
+            key,
+            std::mem::discriminant(other)
+        )),
+    }
+}
+
+/// Tag used to pick the right `PackedWeight` constructor in
+/// [`split_block_quant_halves`]. Local-only — kernel dispatch still
+/// goes through [`PackedWeight::matmul_f32`].
+#[derive(Debug, Clone, Copy)]
+enum PackedQuant {
+    Q4K,
+    Q5K,
+    Q6K,
+    Q8_0,
+    IQ4XS,
+}
+
+/// Split a bf16 `[hidden, 2*q_dim]` device tensor into two `[hidden,
+/// q_dim]` bf16 halves, row-strided. See the `load_packed_halves`
+/// docstring.
+fn split_bf16_packed_halves(
+    src: &CudaTensor<bf16>,
+    key: &str,
+    hidden: usize,
+    q_dim: usize,
+) -> std::result::Result<(PackedWeight, PackedWeight), String> {
     let host = src
         .to_host()
-        .map_err(|e| format!("{}: download: {:?}", key, e))?;
-    // Split row by row: each row has 2*q_dim elements, Q in the first
-    // half, gate in the second. Allocate two contiguous row-major
-    // halves and copy element-wise — simpler than a chunked reshape
-    // dance and the cost is amortized over model load.
+        .map_err(|e| format!("{}: download bf16: {:?}", key, e))?;
+    if host.len() != hidden * 2 * q_dim {
+        return Err(format!(
+            "{}: bf16 host.len {} != hidden*2*q_dim {}",
+            key,
+            host.len(),
+            hidden * 2 * q_dim
+        ));
+    }
     let mut q_half: Vec<bf16> = Vec::with_capacity(hidden * q_dim);
     let mut g_half: Vec<bf16> = Vec::with_capacity(hidden * q_dim);
     for row in 0..hidden {
@@ -611,9 +709,92 @@ fn load_packed_bf16_halves(
     }
     let dev = src.device().clone();
     let w_q = CudaTensor::<bf16>::from_host(dev.clone(), vec![hidden, q_dim], &q_half)
-        .map_err(|e| format!("{}: upload Q half: {:?}", key, e))?;
+        .map_err(|e| format!("{}: upload Q bf16 half: {:?}", key, e))?;
     let w_q_gate = CudaTensor::<bf16>::from_host(dev, vec![hidden, q_dim], &g_half)
-        .map_err(|e| format!("{}: upload gate half: {:?}", key, e))?;
+        .map_err(|e| format!("{}: upload gate bf16 half: {:?}", key, e))?;
+    Ok((
+        PackedWeight::Bf16 { t: w_q, k: hidden, n: q_dim },
+        PackedWeight::Bf16 { t: w_q_gate, k: hidden, n: q_dim },
+    ))
+}
+
+/// Split a block-quantized device tensor — laid out as `[n=2*q_dim,
+/// k=hidden]` row-major blocks — into two `[n=q_dim, k=hidden]`
+/// packed halves. See the `load_packed_halves` docstring for the
+/// byte-layout rationale.
+///
+/// `block_elems` is the number of logical elements per block
+/// (256 for the K-quants / IQ4XS, 32 for Q8_0). `block_bytes` is the
+/// per-block byte count (144 for Q4K, 176 Q5K, 210 Q6K, 34 Q8_0,
+/// 136 IQ4XS). `hidden` must be a multiple of `block_elems`; the
+/// GGUF loader enforces this upstream, but we re-check defensively
+/// so a misconfigured caller hits a loud error instead of silently
+/// slicing across a block boundary.
+fn split_block_quant_halves(
+    src: &CudaTensor<i8>,
+    key: &str,
+    hidden: usize,
+    q_dim: usize,
+    block_elems: usize,
+    block_bytes: usize,
+    variant: PackedQuant,
+) -> std::result::Result<(PackedWeight, PackedWeight), String> {
+    if !hidden.is_multiple_of(block_elems) {
+        return Err(format!(
+            "{}: hidden={} not a multiple of block_elems={} for {:?}",
+            key, hidden, block_elems, variant
+        ));
+    }
+    let row_bytes = (hidden / block_elems) * block_bytes;
+    let total_rows = 2 * q_dim;
+    let expected_total_bytes = total_rows * row_bytes;
+    let host = src
+        .to_host()
+        .map_err(|e| format!("{}: download {:?} bytes: {:?}", key, variant, e))?;
+    if host.len() != expected_total_bytes {
+        return Err(format!(
+            "{}: {:?} host.len {} != expected {} (= 2*q_dim*(hidden/block_elems)*block_bytes = {}*{}*{})",
+            key,
+            variant,
+            host.len(),
+            expected_total_bytes,
+            total_rows,
+            hidden / block_elems,
+            block_bytes,
+        ));
+    }
+    // First q_dim rows → Q, last q_dim rows → gate. Byte-contiguous
+    // because the mmvq packed layout is row-major over `n`.
+    let half_bytes = q_dim * row_bytes;
+    let q_host = host[..half_bytes].to_vec();
+    let g_host = host[half_bytes..].to_vec();
+    let dev = src.device().clone();
+    let q_tensor = CudaTensor::<i8>::from_host(dev.clone(), vec![half_bytes], &q_host)
+        .map_err(|e| format!("{}: upload Q {:?} half ({} bytes): {:?}", key, variant, half_bytes, e))?;
+    let g_tensor = CudaTensor::<i8>::from_host(dev, vec![half_bytes], &g_host)
+        .map_err(|e| format!("{}: upload gate {:?} half ({} bytes): {:?}", key, variant, half_bytes, e))?;
+    let (w_q, w_q_gate) = match variant {
+        PackedQuant::Q4K => (
+            PackedWeight::Q4K { t: q_tensor, k: hidden, n: q_dim },
+            PackedWeight::Q4K { t: g_tensor, k: hidden, n: q_dim },
+        ),
+        PackedQuant::Q5K => (
+            PackedWeight::Q5K { t: q_tensor, k: hidden, n: q_dim },
+            PackedWeight::Q5K { t: g_tensor, k: hidden, n: q_dim },
+        ),
+        PackedQuant::Q6K => (
+            PackedWeight::Q6K { t: q_tensor, k: hidden, n: q_dim },
+            PackedWeight::Q6K { t: g_tensor, k: hidden, n: q_dim },
+        ),
+        PackedQuant::Q8_0 => (
+            PackedWeight::Q8_0 { t: q_tensor, k: hidden, n: q_dim },
+            PackedWeight::Q8_0 { t: g_tensor, k: hidden, n: q_dim },
+        ),
+        PackedQuant::IQ4XS => (
+            PackedWeight::IQ4XS { t: q_tensor, k: hidden, n: q_dim },
+            PackedWeight::IQ4XS { t: g_tensor, k: hidden, n: q_dim },
+        ),
+    };
     Ok((w_q, w_q_gate))
 }
 
@@ -958,7 +1139,7 @@ fn load_bf16_matrix(
 /// Post-Agent-C: the per-layer projection wiring now goes through
 /// [`load_packed_weight`] which produces [`PackedWeight`] carriers
 /// directly; this helper is retained so ad-hoc bf16-only callers (and
-/// the load_packed_bf16_halves FA-Q splitter above) don't churn, but
+/// the load_packed_halves FA-Q splitter above) don't churn, but
 /// no hot path uses it anymore. Tagged `allow(dead_code)` to suppress
 /// warnings until a future cleanup folds it into load_packed_weight.
 #[allow(dead_code)]
