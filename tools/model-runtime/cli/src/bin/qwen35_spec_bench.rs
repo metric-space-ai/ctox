@@ -148,6 +148,13 @@ fn main() -> Result<()> {
             .with_context(|| "measured generate")?;
         let wall_s = t0.elapsed().as_secs_f64();
         let gen_toks = tokens.len().saturating_sub(prompt.len());
+        // DIAGNOSTIC: dump the first 32 generated token IDs — used to
+        // cross-diff against the reference's output.bin. If these are
+        // not the HumanEval pattern continuation, target.forward has
+        // a correctness bug regardless of speculative decoding.
+        let gen_start = prompt.len();
+        let gen_end = (gen_start + 32).min(tokens.len());
+        eprintln!("  DIAG generated: {:?}", &tokens[gen_start..gen_end]);
         eprintln!(
             "  rep {}/{}: wall={:.3}s gen={} decode={:.2} tok/s steps={} accepted={}/{} ({:.1}%)",
             r + 1,
