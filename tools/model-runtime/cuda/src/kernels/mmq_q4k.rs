@@ -1,21 +1,23 @@
 //! Q4_K_M matrix-vector matmul (`mmvq`) — decode hot-path workhorse.
 //!
-//! Follows the conventions set by `rmsnorm`: one Rust wrapper module
-//! per `.cu` file, `OnceLock` caches per loaded `CudaFunction`, shape
-//! validation up front, no stream synchronization.
+//! Two launch tiers:
+//!   1. `launch_mmvq_q4k_q8_1_{f32,f16}` — the fast path. Caller has
+//!      already pre-quantized `x` to q8_1 blocks (via
+//!      `launch_quantize_q8_1_f32`) and can reuse the buffer across
+//!      several matmuls on the same activation. The kernel consumes
+//!      those bytes directly and runs the DP4A inner-product loop.
+//!   2. `launch_mmvq_q4k_{f32,f16}` — API-compatible entry that takes a
+//!      raw f32 `x` and does the q8_1 quantization internally into a
+//!      scratch buffer before invoking the fast path. This is what
+//!      keeps existing call sites working without touching every LLM
+//!      block that uses Q4_K for Q/K/V projections.
 //!
-//! The byte-packed Q4_K_M buffer is carried as a `CudaTensor<i8>` by
-//! convention — the call site tracks the real `DType::Q4K` out of
-//! band. The total byte count must equal `(k / 256) * n * 144`.
-//!
-//! Entry points:
-//!   * `launch_mmvq_q4k_f32` — `y: f32[n] = A_q4k[n,k] · x[k]`
-//!   * `launch_mmvq_q4k_f16` — same but writes to an f16 output buffer.
-//!
-//! TODO: batched `mmq_q4k` mat-mat variant (prefill path) — not ported
-//!       yet, decode-first.
-//! TODO: the reference quantizes `x` to q8_1 and uses DP4A. We skipped
-//!       that optimization; port when correctness is locked in.
+//! Entry-point details (ported from ggml-cuda's mul_mat_vec_q<Q4_K>):
+//!   * nwarps = 4, rows_per_cuda_block = 1, warp_size = 32.
+//!   * grid_dim = (n, 1, 1), block_dim = (32, 4, 1).
+//!   * Each CTA owns one output row; threads within the CTA iterate
+//!     `blocks_per_iter = 8` q4_K blocks per round with DP4A inner
+//!     products against q8_1 activations.
 
 use std::sync::{Arc, OnceLock};
 
@@ -27,16 +29,16 @@ use half::f16;
 use crate::device::DeviceContext;
 use crate::tensor::CudaTensor;
 
+use super::quantize_q8_1::{launch_quantize_q8_1_f32, q8_1_packed_bytes, Q8_1_BLOCK_ELEMS};
+
 // PTX blob emitted by build.rs for kernels/mmq_q4k.cu.
 use super::MMQ_Q4K_PTX;
 
-/// Per-process caches for the loaded kernel functions. See `rmsnorm.rs`
-/// for the multi-GPU caveat.
-static MMVQ_Q4K_F32_FN: OnceLock<CudaFunction> = OnceLock::new();
-static MMVQ_Q4K_F16_FN: OnceLock<CudaFunction> = OnceLock::new();
+/// Per-process caches for the loaded kernel functions.
+static MMVQ_Q4K_Q8_1_F32_FN: OnceLock<CudaFunction> = OnceLock::new();
+static MMVQ_Q4K_Q8_1_F16_FN: OnceLock<CudaFunction> = OnceLock::new();
 
-/// Bytes per Q4_K_M block and logical elements per block (both fixed
-/// by the GGUF format).
+/// Bytes per Q4_K_M block and logical elements per block (GGUF format).
 const Q4K_BLOCK_BYTES: usize = 144;
 const Q4K_BLOCK_ELEMS: usize = 256;
 
@@ -63,16 +65,16 @@ fn load_mmq_q4k_fn(
 }
 
 /// Validate common shapes/sizes before we touch the kernel. `k` must be
-/// a whole multiple of 256 (the Q4_K_M block width).
-fn validate_mmvq_q4k_shapes<T, U>(
+/// a whole multiple of 256 (the Q4_K_M block width) and a whole multiple
+/// of 32 (the Q8_1 block width — which is implied since 256 is a multiple
+/// of 32).
+fn validate_mmvq_q4k_shapes<U>(
     a_q4k: &CudaTensor<i8>,
     k: usize,
     n: usize,
-    x: &CudaTensor<T>,
     y: &CudaTensor<U>,
 ) -> Result<()>
 where
-    T: crate::tensor::TensorElem,
     U: crate::tensor::TensorElem,
 {
     if k == 0 || n == 0 {
@@ -96,28 +98,106 @@ where
             n
         ));
     }
-    // Input vector: [k] or [1, k] — accept either.
-    let x_numel = x.numel();
-    if x_numel != k {
-        return Err(anyhow!(
-            "mmvq_q4k: x.numel()={} != k={}",
-            x_numel,
-            k
-        ));
+    if y.numel() != n {
+        return Err(anyhow!("mmvq_q4k: y.numel()={} != n={}", y.numel(), n));
     }
-    // Output vector: [n] or [1, n] — accept either.
-    let y_numel = y.numel();
-    if y_numel != n {
+    Ok(())
+}
+
+fn validate_q8_1_x(x_q8_1: &CudaTensor<i8>, k: usize) -> Result<()> {
+    let expected = q8_1_packed_bytes(k);
+    if x_q8_1.numel() < expected {
         return Err(anyhow!(
-            "mmvq_q4k: y.numel()={} != n={}",
-            y_numel,
-            n
+            "mmvq_q4k: x_q8_1 bytes {} < required {} for k={}",
+            x_q8_1.numel(),
+            expected,
+            k
         ));
     }
     Ok(())
 }
 
+fn mmvq_launch_cfg(n: usize) -> LaunchConfig {
+    // One CTA per output row (rows_per_cuda_block=1), NWARPS=4.
+    LaunchConfig {
+        grid_dim: (n as u32, 1, 1),
+        block_dim: (32, 4, 1),
+        shared_mem_bytes: 0,
+    }
+}
+
+// ---- Direct (pre-quantized x) entry points --------------------------------
+
+/// Fast path — caller supplies a pre-quantized q8_1 activation buffer.
+///
+/// `x_q8_1` must be at least `q8_1_packed_bytes(k)` bytes and must have
+/// been produced by `launch_quantize_q8_1_f32` over the same `k`
+/// elements.
+pub fn launch_mmvq_q4k_q8_1_f32(
+    device: &Arc<DeviceContext>,
+    a_q4k: &CudaTensor<i8>,
+    k: usize,
+    n: usize,
+    x_q8_1: &CudaTensor<i8>,
+    y: &mut CudaTensor<f32>,
+) -> Result<()> {
+    validate_mmvq_q4k_shapes(a_q4k, k, n, y)?;
+    validate_q8_1_x(x_q8_1, k)?;
+
+    let f = load_mmq_q4k_fn(device, &MMVQ_Q4K_Q8_1_F32_FN, "mmvq_q4k_q8_1_f32_out")?;
+    let stream = device.raw().default_stream();
+    let k_i32 = k as i32;
+    let n_i32 = n as i32;
+    let mut launcher = stream.launch_builder(&f);
+    launcher
+        .arg(a_q4k.buf())
+        .arg(x_q8_1.buf())
+        .arg(y.buf_mut())
+        .arg(&k_i32)
+        .arg(&n_i32);
+
+    unsafe { launcher.launch(mmvq_launch_cfg(n)) }
+        .map_err(|e| anyhow!("mmvq_q4k_q8_1_f32 launch (k={} n={}): {:?}", k, n, e))?;
+    Ok(())
+}
+
+/// Same as the f32 variant but writes to an f16 output row.
+pub fn launch_mmvq_q4k_q8_1_f16(
+    device: &Arc<DeviceContext>,
+    a_q4k: &CudaTensor<i8>,
+    k: usize,
+    n: usize,
+    x_q8_1: &CudaTensor<i8>,
+    y: &mut CudaTensor<f16>,
+) -> Result<()> {
+    validate_mmvq_q4k_shapes(a_q4k, k, n, y)?;
+    validate_q8_1_x(x_q8_1, k)?;
+
+    let f = load_mmq_q4k_fn(device, &MMVQ_Q4K_Q8_1_F16_FN, "mmvq_q4k_q8_1_f16_out")?;
+    let stream = device.raw().default_stream();
+    let k_i32 = k as i32;
+    let n_i32 = n as i32;
+    let mut launcher = stream.launch_builder(&f);
+    launcher
+        .arg(a_q4k.buf())
+        .arg(x_q8_1.buf())
+        .arg(y.buf_mut())
+        .arg(&k_i32)
+        .arg(&n_i32);
+
+    unsafe { launcher.launch(mmvq_launch_cfg(n)) }
+        .map_err(|e| anyhow!("mmvq_q4k_q8_1_f16 launch (k={} n={}): {:?}", k, n, e))?;
+    Ok(())
+}
+
+// ---- API-compatible entry points (quantize internally) --------------------
+
 /// `y[n] ← A_q4k[n, k] · x[k]`, all in f32 on the host contract.
+///
+/// Internally quantizes `x` to q8_1 in a scratch buffer, then invokes the
+/// DP4A fast path. Callers that do repeated matmuls on the same `x` (e.g.
+/// fused Q/K/V projections) should pre-quantize once via
+/// `launch_quantize_q8_1_f32` and call `launch_mmvq_q4k_q8_1_f32` directly.
 pub fn launch_mmvq_q4k_f32(
     device: &Arc<DeviceContext>,
     a_q4k: &CudaTensor<i8>,
@@ -126,36 +206,26 @@ pub fn launch_mmvq_q4k_f32(
     x: &CudaTensor<f32>,
     y: &mut CudaTensor<f32>,
 ) -> Result<()> {
-    validate_mmvq_q4k_shapes(a_q4k, k, n, x, y)?;
+    validate_mmvq_q4k_shapes(a_q4k, k, n, y)?;
+    if x.numel() != k {
+        return Err(anyhow!("mmvq_q4k: x.numel()={} != k={}", x.numel(), k));
+    }
+    if !k.is_multiple_of(Q8_1_BLOCK_ELEMS) {
+        return Err(anyhow!(
+            "mmvq_q4k: k must be a multiple of {} (got k={})",
+            Q8_1_BLOCK_ELEMS,
+            k
+        ));
+    }
 
-    // grid.x = ceil(n/2): two output columns per block. Kernel guards
-    // the out-of-range column when n is odd.
-    let grid_x = n.div_ceil(2) as u32;
-    let cfg = LaunchConfig {
-        grid_dim: (grid_x, 1, 1),
-        block_dim: (32, 2, 1),
-        shared_mem_bytes: 0,
-    };
-
-    let f = load_mmq_q4k_fn(device, &MMVQ_Q4K_F32_FN, "mmvq_q4k_f32_out")?;
-    let stream = device.raw().default_stream();
-    let k_i32 = k as i32;
-    let n_i32 = n as i32;
-    let mut launcher = stream.launch_builder(&f);
-    launcher
-        .arg(a_q4k.buf())
-        .arg(&k_i32)
-        .arg(&n_i32)
-        .arg(x.buf())
-        .arg(y.buf_mut());
-
-    unsafe { launcher.launch(cfg) }
-        .map_err(|e| anyhow!("mmvq_q4k_f32_out launch (k={} n={}): {:?}", k, n, e))?;
-    Ok(())
+    let mut scratch =
+        CudaTensor::<i8>::zeros(device.clone(), vec![q8_1_packed_bytes(k)])
+            .map_err(|e| anyhow!("alloc q8_1 scratch: {:?}", e))?;
+    launch_quantize_q8_1_f32(device, x, &mut scratch, k)?;
+    launch_mmvq_q4k_q8_1_f32(device, a_q4k, k, n, &scratch, y)
 }
 
-/// Same as the f32 variant but writes an f16 output row (used when the
-/// downstream op consumes half-precision activations).
+/// Same as the f32 variant but writes an f16 output row.
 pub fn launch_mmvq_q4k_f16(
     device: &Arc<DeviceContext>,
     a_q4k: &CudaTensor<i8>,
@@ -164,30 +234,23 @@ pub fn launch_mmvq_q4k_f16(
     x: &CudaTensor<f32>,
     y: &mut CudaTensor<f16>,
 ) -> Result<()> {
-    validate_mmvq_q4k_shapes(a_q4k, k, n, x, y)?;
+    validate_mmvq_q4k_shapes(a_q4k, k, n, y)?;
+    if x.numel() != k {
+        return Err(anyhow!("mmvq_q4k: x.numel()={} != k={}", x.numel(), k));
+    }
+    if !k.is_multiple_of(Q8_1_BLOCK_ELEMS) {
+        return Err(anyhow!(
+            "mmvq_q4k: k must be a multiple of {} (got k={})",
+            Q8_1_BLOCK_ELEMS,
+            k
+        ));
+    }
 
-    let grid_x = n.div_ceil(2) as u32;
-    let cfg = LaunchConfig {
-        grid_dim: (grid_x, 1, 1),
-        block_dim: (32, 2, 1),
-        shared_mem_bytes: 0,
-    };
-
-    let f = load_mmq_q4k_fn(device, &MMVQ_Q4K_F16_FN, "mmvq_q4k_f16_out")?;
-    let stream = device.raw().default_stream();
-    let k_i32 = k as i32;
-    let n_i32 = n as i32;
-    let mut launcher = stream.launch_builder(&f);
-    launcher
-        .arg(a_q4k.buf())
-        .arg(&k_i32)
-        .arg(&n_i32)
-        .arg(x.buf())
-        .arg(y.buf_mut());
-
-    unsafe { launcher.launch(cfg) }
-        .map_err(|e| anyhow!("mmvq_q4k_f16_out launch (k={} n={}): {:?}", k, n, e))?;
-    Ok(())
+    let mut scratch =
+        CudaTensor::<i8>::zeros(device.clone(), vec![q8_1_packed_bytes(k)])
+            .map_err(|e| anyhow!("alloc q8_1 scratch: {:?}", e))?;
+    launch_quantize_q8_1_f32(device, x, &mut scratch, k)?;
+    launch_mmvq_q4k_q8_1_f16(device, a_q4k, k, n, &scratch, y)
 }
 
 #[cfg(test)]
@@ -196,47 +259,29 @@ mod tests {
     use half::f16;
 
     /// Encode 256 f32 elements into a single 144-byte Q4_K_M block.
-    /// Mirrors llama.cpp's `quantize_row_q4_K_ref` but simplified for a
-    /// single block in the test harness. The block-level dequantization
-    /// `dall * sc_j * q - dmin * m_j` must invert exactly (modulo 4-bit
-    /// round-trip loss).
+    /// Mirrors llama.cpp's `quantize_row_q4_K_ref` closely enough for a
+    /// single-block round-trip to be lossless modulo 4-bit and 6-bit
+    /// re-quantization.
     fn encode_q4k_block(vals: &[f32; 256], out: &mut [u8; 144]) {
-        // Per 32-element sub-block: choose (scale, min) that map q in
-        // 0..=15 back onto vals with min-MSE. Use the simple linear
-        // calibration: dmin_sub = min(vals), dmax_sub = max(vals),
-        // scale = (dmax - dmin) / 15. Then q = round((v - dmin)/scale).
-        // Then for the super-block: dall = max(scale_sub), dmin_all =
-        // max(min_sub). Each per-sub-block scale/min is re-quantized
-        // to 6 bits and packed into `scales[12]`.
         let mut scale_sub = [0.0f32; 8];
         let mut min_sub = [0.0f32; 8];
         let mut q_sub = [[0u8; 32]; 8];
 
         for s in 0..8 {
             let chunk = &vals[s * 32..(s + 1) * 32];
-            let (mn, mx) = chunk.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(a, b), &v| {
-                (a.min(v), b.max(v))
-            });
-            // scale_sub stores "dmin" in ggml-land (the min val); the
-            // ggml dequant is y = dall * sc * q - dmin_all * m, and the
-            // calibration solves (dall * sc, dmin_all * m) as (per-sub
-            // slope, per-sub intercept). For a single-block test we can
-            // choose dall = max(slope_sub), dmin_all = max(intercept_sub).
+            let (mn, mx) = chunk.iter().fold(
+                (f32::INFINITY, f32::NEG_INFINITY),
+                |(a, b), &v| (a.min(v), b.max(v)),
+            );
             let slope = (mx - mn).max(1e-8) / 15.0;
             scale_sub[s] = slope;
-            min_sub[s] = -mn;           // intercept = -mn so y=slope*q+mn → y=slope*q - (-mn)
+            min_sub[s] = -mn;
             for (i, &v) in chunk.iter().enumerate() {
                 let qf = ((v - mn) / slope).round().clamp(0.0, 15.0);
                 q_sub[s][i] = qf as u8;
             }
         }
 
-        // Super-block dall = max(scale_sub), dmin_all = max(min_sub).
-        // 6-bit per-sub (sc, m): sc_q = round(slope/dall * 63),
-        // m_q = round(intercept/dmin_all * 63). To keep the test
-        // small-and-correct, keep all sub-block slopes/intercepts
-        // identical (we'll feed vals that are uniform enough) — but
-        // guard against division-by-zero.
         let dall = scale_sub.iter().cloned().fold(0.0f32, f32::max);
         let dmin_all = min_sub.iter().cloned().fold(0.0f32, f32::max);
         let dall_safe = if dall > 0.0 { dall } else { 1.0 };
@@ -249,43 +294,28 @@ mod tests {
             m6[s] = ((min_sub[s] / dmin_safe) * 63.0).round().clamp(0.0, 63.0) as u8;
         }
 
-        // Write scales[12] per ggml's get_scale_min_k4:
-        //   j<4: scales[j] low 6b = sc; scales[j+4] low 6b = m
-        //   j>=4: scales[j+4] low nibble = sc_low; top 2 of sc go to
-        //         scales[j-4] high 2b. Same for m: scales[j+4] high
-        //         nibble = m_low; top 2 of m go to scales[j] high 2b.
         let mut scales = [0u8; 12];
         for j in 0..8 {
             let sc = sc6[j];
             let m = m6[j];
             if j < 4 {
-                scales[j]     |= sc & 0x3F;
+                scales[j] |= sc & 0x3F;
                 scales[j + 4] |= m & 0x3F;
             } else {
-                // low 4 of sc in scales[j+4] low nibble.
                 scales[j + 4] |= sc & 0x0F;
-                // top 2 of sc in scales[j-4] high 2 bits.
                 scales[j - 4] |= ((sc >> 4) & 0x3) << 6;
-                // low 4 of m in scales[j+4] high nibble.
                 scales[j + 4] |= (m & 0x0F) << 4;
-                // top 2 of m in scales[j] high 2 bits.
                 scales[j] |= ((m >> 4) & 0x3) << 6;
             }
         }
 
-        // Write the d/dmin halves (bytes 0..4).
         let d_h = f16::from_f32(dall_safe).to_bits();
         let dmin_h = f16::from_f32(dmin_safe).to_bits();
         out[0] = (d_h & 0xFF) as u8;
         out[1] = (d_h >> 8) as u8;
         out[2] = (dmin_h & 0xFF) as u8;
         out[3] = (dmin_h >> 8) as u8;
-        // scales[12] at bytes 4..16.
         out[4..16].copy_from_slice(&scales);
-        // qs[128] at bytes 16..144. The packing in ggml's dequant is:
-        //   for il in 0..4, ir in 0..8, l in 0..4:
-        //     qs[32*il + 4*ir + l] low nibble  = q_sub[2*il + 0][4*ir + l]
-        //     qs[32*il + 4*ir + l] high nibble = q_sub[2*il + 1][4*ir + l]
         let mut qs = [0u8; 128];
         for il in 0..4 {
             for ir in 0..8 {
@@ -300,8 +330,7 @@ mod tests {
         out[16..144].copy_from_slice(&qs);
     }
 
-    /// Reference CPU dequant mirroring the kernel math: walk the 8 sub-
-    /// blocks, decode (sc, m) with get_scale_min_k4, expand nibbles.
+    /// Reference CPU dequant mirroring the kernel math.
     fn dequant_q4k_block(bytes: &[u8; 144], out: &mut [f32; 256]) {
         let d = f16::from_bits(u16::from_le_bytes([bytes[0], bytes[1]])).to_f32();
         let dmin = f16::from_bits(u16::from_le_bytes([bytes[2], bytes[3]])).to_f32();
@@ -309,7 +338,6 @@ mod tests {
         let qs = &bytes[16..144];
 
         for il in 0..4usize {
-            // Decode scale/min pairs for sub_a = 2*il, sub_b = 2*il+1.
             let get = |j: usize| -> (u8, u8) {
                 if j < 4 {
                     (scales[j] & 63, scales[j + 4] & 63)
@@ -337,67 +365,42 @@ mod tests {
         }
     }
 
-    /// End-to-end integration test against a CPU golden. Run with:
-    ///   cargo test -p ctox-engine-cuda --features cuda --release -- \
-    ///       --ignored --nocapture mmvq_q4k
-    #[test]
-    #[ignore]
-    fn mmvq_q4k_vs_cpu_golden() {
-        // 16 blocks × 256 elems/block = 4096 columns (k). n = 64
-        // output columns gives 32 blocks × 2 cols/block in grid.
-        let k = 4096usize;
-        let n = 64usize;
-        let blocks_per_col = k / 256;
-        assert_eq!(blocks_per_col, 16);
-
-        // Deterministic pseudo-random. Use a narrower range so each
-        // 32-elem sub-block's local (scale, min) don't blow up the
-        // 6-bit super-block re-quantization.
+    /// Build the standard Q4_K_M test matrix + CPU golden used by both the
+    /// correctness test and the perf bench.
+    fn build_test_matrix(
+        n: usize,
+        k: usize,
+    ) -> (Vec<u8>, Vec<f32>, Vec<f32>, Vec<f32>) {
+        let blocks_per_col = k / Q4K_BLOCK_ELEMS;
         let mut seed: u32 = 0x9E3779B9;
         let mut rand_f = || -> f32 {
             seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
             ((seed >> 16) as f32 / 32768.0) - 1.0
         };
 
-        // Build the packed Q4_K_M matrix: n columns × blocks_per_col
-        // blocks/col × 144 bytes/block, laid out column-major over
-        // columns (i.e. all blocks of col 0, then all blocks of col 1).
-        // Track the CPU-dequantized matrix in parallel so we can compute
-        // the golden via a plain f32 matmul.
-        let total_bytes = n * blocks_per_col * 144;
+        let total_bytes = n * blocks_per_col * Q4K_BLOCK_BYTES;
         let mut a_bytes = vec![0u8; total_bytes];
         let mut a_deq = vec![0.0f32; n * k];
 
         for col in 0..n {
             for b in 0..blocks_per_col {
-                // Generate 256 random values, but compress the dynamic
-                // range a bit so the 4-bit quantizer's 15-step rounding
-                // doesn't dominate the error budget: one slope+offset
-                // per sub-block is already an approximation.
                 let mut vals = [0.0f32; 256];
                 for v in vals.iter_mut() {
                     *v = rand_f() * 0.5 + 0.25;
                 }
                 let mut block = [0u8; 144];
                 encode_q4k_block(&vals, &mut block);
-                // Actual Q4_K_M reconstruction — the matmul golden uses
-                // this, not the original vals, because Q4_K_M is lossy
-                // and the kernel's output matches the dequantized
-                // matrix exactly (up to f32 round-off), not the input.
                 let mut deq = [0.0f32; 256];
                 dequant_q4k_block(&block, &mut deq);
-                a_bytes[(col * blocks_per_col + b) * 144
-                    ..(col * blocks_per_col + b + 1) * 144]
-                    .copy_from_slice(&block);
-                a_deq[col * k + b * 256..col * k + (b + 1) * 256]
-                    .copy_from_slice(&deq);
+                let base = (col * blocks_per_col + b) * Q4K_BLOCK_BYTES;
+                a_bytes[base..base + Q4K_BLOCK_BYTES].copy_from_slice(&block);
+                a_deq[col * k + b * 256..col * k + (b + 1) * 256].copy_from_slice(&deq);
             }
         }
 
-        // Random f32 activation.
         let x_host: Vec<f32> = (0..k).map(|_| rand_f()).collect();
 
-        // CPU golden: y[col] = sum_i a_deq[col, i] * x[i].
+        // CPU golden — use the dequantized A and exact f32 matmul.
         let mut y_cpu = vec![0.0f32; n];
         for col in 0..n {
             let mut acc = 0.0f32;
@@ -407,50 +410,172 @@ mod tests {
             y_cpu[col] = acc;
         }
 
-        // Run on device. Transmute the u8 bytes to i8 for the carrier
-        // type; the kernel reads them as uint8_t internally.
+        (a_bytes, a_deq, x_host, y_cpu)
+    }
+
+    /// End-to-end integration test against a CPU golden.
+    /// Exercises both the API-compat path (quantize x internally) and the
+    /// pre-quantized-x fast path.
+    #[test]
+    #[ignore]
+    fn mmvq_q4k_vs_cpu_golden() {
+        let k = 4096usize;
+        let n = 64usize;
+        let (a_bytes, _a_deq, x_host, y_cpu) = build_test_matrix(n, k);
+
         let dev = Arc::new(DeviceContext::new(0).expect("cuda init"));
         let a_i8: Vec<i8> = a_bytes.iter().map(|&b| b as i8).collect();
-        let a_gpu = CudaTensor::<i8>::from_host(
-            dev.clone(),
-            vec![a_i8.len()],
-            &a_i8,
-        )
-        .expect("upload a_q4k");
+        let a_gpu = CudaTensor::<i8>::from_host(dev.clone(), vec![a_i8.len()], &a_i8)
+            .expect("upload a_q4k");
         let x_gpu = CudaTensor::<f32>::from_host(dev.clone(), vec![k], &x_host)
             .expect("upload x");
-        let mut y_gpu = CudaTensor::<f32>::zeros(dev.clone(), vec![n])
-            .expect("alloc y");
 
-        launch_mmvq_q4k_f32(&dev, &a_gpu, k, n, &x_gpu, &mut y_gpu).expect("launch");
-        dev.synchronize().expect("sync");
+        // Pass 1: API-compat path (internal quantize).
+        {
+            let mut y_gpu =
+                CudaTensor::<f32>::zeros(dev.clone(), vec![n]).expect("alloc y");
+            launch_mmvq_q4k_f32(&dev, &a_gpu, k, n, &x_gpu, &mut y_gpu)
+                .expect("launch internal-quant path");
+            dev.synchronize().expect("sync");
 
-        let y_host = y_gpu.to_host().expect("download y");
+            let y_host = y_gpu.to_host().expect("download y");
+            let (max_abs, max_rel) = diff(&y_cpu, &y_host);
+            eprintln!(
+                "[internal-quant] mmvq_q4k diff: max_abs={:.6e} max_rel={:.6e}",
+                max_abs, max_rel
+            );
+            assert!(
+                max_rel < 1e-2,
+                "internal-quant path diverges: max_rel={}",
+                max_rel
+            );
+        }
 
-        // Diff. The GPU kernel reconstructs the same dequantized matrix
-        // we used for the CPU golden, so the residual is just f32
-        // reduction-order drift (k=4096 → ~few × machine_eps).
+        // Pass 2: pre-quantized q8_1 path.
+        {
+            let mut x_q8_1 =
+                CudaTensor::<i8>::zeros(dev.clone(), vec![q8_1_packed_bytes(k)])
+                    .expect("alloc q8_1 scratch");
+            launch_quantize_q8_1_f32(&dev, &x_gpu, &mut x_q8_1, k)
+                .expect("launch quantize_q8_1");
+
+            let mut y_gpu =
+                CudaTensor::<f32>::zeros(dev.clone(), vec![n]).expect("alloc y");
+            launch_mmvq_q4k_q8_1_f32(&dev, &a_gpu, k, n, &x_q8_1, &mut y_gpu)
+                .expect("launch pre-quant path");
+            dev.synchronize().expect("sync");
+
+            let y_host = y_gpu.to_host().expect("download y");
+            let (max_abs, max_rel) = diff(&y_cpu, &y_host);
+            eprintln!(
+                "[pre-quant] mmvq_q4k diff: max_abs={:.6e} max_rel={:.6e}",
+                max_abs, max_rel
+            );
+            assert!(
+                max_rel < 1e-2,
+                "pre-quant path diverges: max_rel={}",
+                max_rel
+            );
+        }
+    }
+
+    fn diff(a: &[f32], b: &[f32]) -> (f32, f32) {
         let mut max_abs = 0.0f32;
         let mut max_rel = 0.0f32;
-        for (a, b) in y_cpu.iter().zip(y_host.iter()) {
-            let d = (a - b).abs();
+        for (x, y) in a.iter().zip(b.iter()) {
+            let d = (x - y).abs();
             if d > max_abs {
                 max_abs = d;
             }
-            let scale = a.abs().max(b.abs()).max(1e-6);
+            let scale = x.abs().max(y.abs()).max(1e-6);
             let rel = d / scale;
             if rel > max_rel {
                 max_rel = rel;
             }
         }
+        (max_abs, max_rel)
+    }
+
+    /// Perf bench — one 27B-sized Q projection per launch, 1000 iterations.
+    /// Target on sm_86: > 500 GB/s on the weight-matrix read.
+    ///
+    ///   cargo test -p ctox-engine-cuda --features cuda --release -- \
+    ///       --ignored --nocapture mmvq_q4k_perf_bench
+    #[test]
+    #[ignore]
+    fn mmvq_q4k_perf_bench() {
+        use cudarc::driver::sys::CUevent_flags;
+
+        // Shape: one 27B FullAttention Q projection (k=4096, n=5120).
+        let k = 4096usize;
+        let n = 5120usize;
+        let iters = 1000u32;
+
+        let (a_bytes, _a_deq, x_host, _y_cpu) = build_test_matrix(n, k);
+        let dev = Arc::new(DeviceContext::new(0).expect("cuda init"));
+        let a_i8: Vec<i8> = a_bytes.iter().map(|&b| b as i8).collect();
+        let a_gpu = CudaTensor::<i8>::from_host(dev.clone(), vec![a_i8.len()], &a_i8)
+            .expect("upload a");
+        let x_gpu =
+            CudaTensor::<f32>::from_host(dev.clone(), vec![k], &x_host).expect("upload x");
+        let mut x_q8_1 =
+            CudaTensor::<i8>::zeros(dev.clone(), vec![q8_1_packed_bytes(k)])
+                .expect("alloc q8_1 scratch");
+        launch_quantize_q8_1_f32(&dev, &x_gpu, &mut x_q8_1, k).expect("quantize");
+        let mut y_gpu =
+            CudaTensor::<f32>::zeros(dev.clone(), vec![n]).expect("alloc y");
+
+        // Warm-up — first launch also loads the PTX module.
+        for _ in 0..3 {
+            launch_mmvq_q4k_q8_1_f32(&dev, &a_gpu, k, n, &x_q8_1, &mut y_gpu)
+                .expect("warmup launch");
+        }
+        dev.synchronize().expect("warmup sync");
+
+        // CUDA event timing with cudarc's safe API. CU_EVENT_DEFAULT keeps
+        // timing enabled; DISABLE_TIMING would make elapsed_ms fail.
+        let ctx = dev.raw();
+        let stream = ctx.default_stream();
+        let start = ctx
+            .new_event(Some(CUevent_flags::CU_EVENT_DEFAULT))
+            .expect("create start event");
+        let end = ctx
+            .new_event(Some(CUevent_flags::CU_EVENT_DEFAULT))
+            .expect("create end event");
+
+        start.record(&stream).expect("record start");
+        for _ in 0..iters {
+            launch_mmvq_q4k_q8_1_f32(&dev, &a_gpu, k, n, &x_q8_1, &mut y_gpu)
+                .expect("bench launch");
+        }
+        end.record(&stream).expect("record end");
+        end.synchronize().expect("end sync");
+
+        let ms = start.elapsed_ms(&end).expect("elapsed_ms");
+        let per_iter_s = (ms as f64 / 1000.0) / iters as f64;
+        let a_bytes_read = (k as f64 / 256.0) * n as f64 * 144.0;
+        let gbps = a_bytes_read / per_iter_s / 1.0e9;
+
         eprintln!(
-            "mmvq_q4k diff: max_abs={:.6e} max_rel={:.6e}",
-            max_abs, max_rel
+            "mmvq_q4k_perf_bench: k={} n={} iters={} avg={:.3} us/iter, A-read = {:.1} GB/s",
+            k,
+            n,
+            iters,
+            per_iter_s * 1.0e6,
+            gbps
         );
+
+        // Hard floor: <300 GB/s means we broke the hot path or a launch
+        // setting regressed. Upper target is > 500 GB/s on sm_86 — below
+        // that we warn but don't fail, since HW/clocks/thermals can nudge
+        // the number on a single run.
         assert!(
-            max_rel < 1e-2,
-            "GPU mmvq_q4k diverges from CPU golden: max_rel={}",
-            max_rel
+            gbps > 300.0,
+            "mmvq_q4k perf floor breached: {:.1} GB/s < 300",
+            gbps
         );
+        if gbps < 500.0 {
+            eprintln!("WARN: below 500 GB/s target on sm_86 ({:.1} GB/s)", gbps);
+        }
     }
 }
