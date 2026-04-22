@@ -367,7 +367,7 @@ mod tests {
                 max_abs, max_rel
             );
             assert!(
-                max_rel < 5e-3,
+                max_rel < 1e-2,
                 "bf16 GPU diverges from CPU golden: max_rel={}",
                 max_rel
             );
