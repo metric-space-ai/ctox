@@ -20,17 +20,16 @@
 //! Agent O's deliverable is the layer-composition mechanics — forward
 //! threads the primitives end-to-end, validates shapes, and the smoke
 //! test confirms non-exploding outputs under small random weights.
-//! Integration into `Qwen35Target::forward` (the block ordering and
-//! kv-cache rewind dance for 64-layer dispatch) is a follow-up merge.
 //!
-//! Open TODOs:
-//!   * Q4_K_M quantized weight variant. Field layout stays the same;
-//!     swap `launch_matmul_bf16_bf16` for `launch_mmvq_q4k_*` once a
-//!     GGUF-driven loader populates these as `CudaTensor<i8>` blocks.
-//!   * Fused `rmsnorm + cast + matmul` — the cast-bf16→f32 + rmsnorm +
-//!     cast-f32→bf16 sandwich is numerically motivated but spends three
-//!     kernel launches on the hottest tensor in the layer. A fused
-//!     rmsnorm_bf16 kernel with an f32-accum internal would cut this.
+//! Agent C's refactor replaces the three bf16 projection fields with
+//! [`PackedWeight`] carriers — so Q4_K_M / Q5_K / Q6_K / Q8_0 / IQ4_XS
+//! tensors loaded via `LoaderConfig::keep_packed = true` can now flow
+//! into the FFN forward without a CPU dequant round-trip. The shape of
+//! the forward is unchanged; the only difference is that each projection
+//! now routes through [`PackedWeight::matmul_f32`] which stages an f32
+//! input tensor, dispatches to the right mmvq / bf16 gemm kernel, and
+//! returns an f32 output — bracketed by bf16↔f32 casts to keep the
+//! SwiGLU activation and residual add on their bf16 paths.
 
 use std::sync::Arc;
 
@@ -39,18 +38,20 @@ use half::bf16;
 
 use ctox_cuda_primitives::device::DeviceContext;
 use crate::kernels::{
-    launch_cast_bf16_to_f32, launch_cast_f32_to_bf16, launch_matmul_bf16_bf16,
-    launch_residual_add_bf16, launch_rmsnorm_f32, launch_silu_mul_bf16,
+    launch_cast_bf16_to_f32, launch_cast_f32_to_bf16, launch_residual_add_bf16,
+    launch_rmsnorm_f32, launch_silu_mul_bf16,
 };
 use ctox_cuda_primitives::tensor::CudaTensor;
 
 use crate::config::Qwen35Config;
+use crate::layers::packed_weight::PackedWeight;
 
 /// Weights + config for one Qwen3.5 SwiGLU FFN block.
 ///
-/// First port: all projection weights are plain bf16. Production 27B
-/// GGUF ships `ffn_{gate,up,down}.weight` as IQ4_XS; the Q4-quantized
-/// variant is a field-for-field swap once the loader supports it.
+/// The three projection weights are [`PackedWeight`] carriers so the
+/// same struct backs dense-bf16 smoke tests and the quantized
+/// production GGUF path uniformly — see [`PackedWeight::matmul_f32`]
+/// for dispatch details.
 pub struct Qwen35FFN {
     /// Pre-FFN RMSNorm weight. `[hidden_dim]` f32 — f32 because the
     /// sum-of-squares reduction inside rmsnorm needs the extra
@@ -59,19 +60,21 @@ pub struct Qwen35FFN {
     /// projection).
     pub pre_norm: CudaTensor<f32>,
 
-    /// Gate projection weight. `[hidden_dim, intermediate_dim]` bf16,
-    /// row-major. Produces the pre-SiLU gate stream.
-    pub w_gate: CudaTensor<bf16>,
+    /// Gate projection weight. Logical `[hidden_dim, intermediate_dim]`
+    /// with `K = hidden_dim` and `N = intermediate_dim`. Carrier dtype
+    /// is whatever the GGUF shipped; dispatch happens inside
+    /// [`PackedWeight::matmul_f32`]. Produces the pre-SiLU gate stream.
+    pub w_gate: PackedWeight,
 
-    /// Up projection weight. `[hidden_dim, intermediate_dim]` bf16,
-    /// row-major. Produces the stream multiplied in elementwise after
+    /// Up projection weight. Logical `[hidden_dim, intermediate_dim]`.
+    /// Produces the stream multiplied in elementwise after
     /// `silu(gate)`.
-    pub w_up: CudaTensor<bf16>,
+    pub w_up: PackedWeight,
 
-    /// Down projection weight. `[intermediate_dim, hidden_dim]` bf16,
-    /// row-major. Projects the SwiGLU-mixed activations back into the
-    /// residual stream width.
-    pub w_down: CudaTensor<bf16>,
+    /// Down projection weight. Logical
+    /// `[intermediate_dim, hidden_dim]`. Projects the SwiGLU-mixed
+    /// activations back into the residual stream width.
+    pub w_down: PackedWeight,
 
     /// Architectural constants — see [`Qwen35Config`]. The FFN uses
     /// `hidden_dim`, `intermediate_dim`, and `rms_eps` from this.
@@ -90,7 +93,10 @@ impl Qwen35FFN {
     ///
     /// Requires:
     ///   * `hidden.shape() == [n_tokens, hidden_dim]`, bf16
-    ///   * `n_tokens % 32 == 0` (matmul tile alignment)
+    ///   * `n_tokens % 32 == 0` (matmul tile alignment — only the bf16
+    ///     gemm path needs this; the per-row mmvq path tolerates any
+    ///     n_tokens, but we keep the uniform check so callers see the
+    ///     same alignment contract across layers).
     ///   * `hidden_dim` and `intermediate_dim` already 32-aligned
     ///     (true for production Qwen3.5-27B: 5120 and 13824).
     ///
@@ -159,29 +165,29 @@ impl Qwen35FFN {
                 hidden_dim
             ));
         }
-        if self.w_gate.shape() != [hidden_dim, inter] {
+        if self.w_gate.dims() != (hidden_dim, inter) {
             return Err(anyhow!(
-                "qwen35 ffn layer {}: w_gate.shape {:?} != [{}, {}]",
+                "qwen35 ffn layer {}: w_gate dims {:?} != ({}, {})",
                 self.layer_idx,
-                self.w_gate.shape(),
+                self.w_gate.dims(),
                 hidden_dim,
                 inter
             ));
         }
-        if self.w_up.shape() != [hidden_dim, inter] {
+        if self.w_up.dims() != (hidden_dim, inter) {
             return Err(anyhow!(
-                "qwen35 ffn layer {}: w_up.shape {:?} != [{}, {}]",
+                "qwen35 ffn layer {}: w_up dims {:?} != ({}, {})",
                 self.layer_idx,
-                self.w_up.shape(),
+                self.w_up.dims(),
                 hidden_dim,
                 inter
             ));
         }
-        if self.w_down.shape() != [inter, hidden_dim] {
+        if self.w_down.dims() != (inter, hidden_dim) {
             return Err(anyhow!(
-                "qwen35 ffn layer {}: w_down.shape {:?} != [{}, {}]",
+                "qwen35 ffn layer {}: w_down dims {:?} != ({}, {})",
                 self.layer_idx,
-                self.w_down.shape(),
+                self.w_down.dims(),
                 inter,
                 hidden_dim
             ));
@@ -207,8 +213,11 @@ impl Qwen35FFN {
         };
 
         // ------------------------------------------------------------
-        // 2. Pre-norm in f32 (RMSNorm is numerically sensitive), then
-        //    cast back to bf16 for the projection matmul.
+        // 2. Pre-norm in f32 (RMSNorm is numerically sensitive). We
+        //    keep `norm_f32` as the projection input — the PackedWeight
+        //    dispatch takes f32 in / f32 out and routes to whichever of
+        //    the mmvq / bf16 gemm kernels matches the on-device weight
+        //    carrier. Mirrors the full-attention path.
         // ------------------------------------------------------------
         let mut hidden_f32 =
             CudaTensor::<f32>::zeros(device.clone(), vec![n_tokens, hidden_dim])?;
@@ -218,41 +227,23 @@ impl Qwen35FFN {
             CudaTensor::<f32>::zeros(device.clone(), vec![n_tokens, hidden_dim])?;
         launch_rmsnorm_f32(device, &hidden_f32, &self.pre_norm, &mut norm_f32, cfg.rms_eps)?;
 
-        let mut norm_bf16 =
-            CudaTensor::<bf16>::zeros(device.clone(), vec![n_tokens, hidden_dim])?;
-        launch_cast_f32_to_bf16(device, &norm_f32, &mut norm_bf16)?;
-
         // ------------------------------------------------------------
-        // 3. Parallel gate + up projections.
-        //       gate = norm · w_gate        [n_tokens, inter]
-        //       up   = norm · w_up          [n_tokens, inter]
+        // 3. Parallel gate + up projections, both f32 in/out via the
+        //    PackedWeight dispatch, then downcast to bf16 for the fused
+        //    SwiGLU kernel.
         //
-        //    These are independent matmuls on the same input; the CUDA
-        //    stream naturally serializes them on the default stream. A
-        //    fused Q/K-style gate/up matmul is a future optimization
-        //    (TODO: fuse gate+up into one wide projection + split).
+        //    Fused gate/up is tracked as a Phase-5 optimization — a
+        //    wide projection + split would halve the matmul count.
         // ------------------------------------------------------------
+        let mut gate_f32 = CudaTensor::<f32>::zeros(device.clone(), vec![n_tokens, inter])?;
+        self.w_gate.matmul_f32(device, &norm_f32, &mut gate_f32)?;
         let mut gate = CudaTensor::<bf16>::zeros(device.clone(), vec![n_tokens, inter])?;
-        launch_matmul_bf16_bf16(
-            device,
-            &norm_bf16,
-            &self.w_gate,
-            &mut gate,
-            n_tokens,
-            hidden_dim,
-            inter,
-        )?;
+        launch_cast_f32_to_bf16(device, &gate_f32, &mut gate)?;
 
+        let mut up_f32 = CudaTensor::<f32>::zeros(device.clone(), vec![n_tokens, inter])?;
+        self.w_up.matmul_f32(device, &norm_f32, &mut up_f32)?;
         let mut up = CudaTensor::<bf16>::zeros(device.clone(), vec![n_tokens, inter])?;
-        launch_matmul_bf16_bf16(
-            device,
-            &norm_bf16,
-            &self.w_up,
-            &mut up,
-            n_tokens,
-            hidden_dim,
-            inter,
-        )?;
+        launch_cast_f32_to_bf16(device, &up_f32, &mut up)?;
 
         // ------------------------------------------------------------
         // 4. Fused SwiGLU activation: inter = silu(gate) * up.
@@ -264,18 +255,20 @@ impl Qwen35FFN {
 
         // ------------------------------------------------------------
         // 5. Down projection: ffn_out = inter · w_down  [n, hidden].
+        //    Cast inter up to f32 for the PackedWeight dispatch, then
+        //    cast the projected result back to bf16 for the residual
+        //    add. Same pattern the FA layer uses for its output
+        //    projection.
         // ------------------------------------------------------------
+        let mut inter_f32 =
+            CudaTensor::<f32>::zeros(device.clone(), vec![n_tokens, inter])?;
+        launch_cast_bf16_to_f32(device, &hidden_inter, &mut inter_f32)?;
+        let mut ffn_out_f32 =
+            CudaTensor::<f32>::zeros(device.clone(), vec![n_tokens, hidden_dim])?;
+        self.w_down.matmul_f32(device, &inter_f32, &mut ffn_out_f32)?;
         let mut ffn_out =
             CudaTensor::<bf16>::zeros(device.clone(), vec![n_tokens, hidden_dim])?;
-        launch_matmul_bf16_bf16(
-            device,
-            &hidden_inter,
-            &self.w_down,
-            &mut ffn_out,
-            n_tokens,
-            inter,
-            hidden_dim,
-        )?;
+        launch_cast_f32_to_bf16(device, &ffn_out_f32, &mut ffn_out)?;
 
         // ------------------------------------------------------------
         // 6. Residual add: hidden ← ffn_out + residual.
@@ -326,13 +319,18 @@ mod tests {
 
     /// `qwen35_ffn_smoke` — ignored, A6000-only.
     ///
-    /// Builds a `Qwen35FFN` with synthetic random bf16 weights scaled
-    /// to keep SiLU output bounded, runs one forward on a random
-    /// `[32, 5120]` bf16 activation, and asserts:
+    /// Builds a `Qwen35FFN` with synthetic random bf16 weights (wrapped
+    /// in `PackedWeight::Bf16`) scaled to keep SiLU output bounded, runs
+    /// one forward on a random `[32, 5120]` bf16 activation, and asserts:
     ///   * output shape preserved
     ///   * no NaN / Inf
     ///   * max absolute value stays below 10.0 (residual-stream values
     ///     shouldn't blow up under small random weights)
+    ///
+    /// The Bf16 variant of `PackedWeight` exercises the bf16 cuBLAS gemm
+    /// path with an f32 accumulator — same numerical contract as the
+    /// pre-refactor `launch_matmul_bf16_bf16` direct call, so the
+    /// finiteness bounds still hold.
     ///
     /// Exact-vs-reference comparison is Phase 6.
     ///
@@ -377,24 +375,39 @@ mod tests {
             &pre_norm_host,
         )
         .expect("upload pre_norm");
-        let w_gate = CudaTensor::<bf16>::from_host(
+        let w_gate_t = CudaTensor::<bf16>::from_host(
             dev.clone(),
             vec![hidden_dim, inter],
             &w_gate_host,
         )
         .expect("upload w_gate");
-        let w_up = CudaTensor::<bf16>::from_host(
+        let w_gate = PackedWeight::Bf16 {
+            t: w_gate_t,
+            k: hidden_dim,
+            n: inter,
+        };
+        let w_up_t = CudaTensor::<bf16>::from_host(
             dev.clone(),
             vec![hidden_dim, inter],
             &w_up_host,
         )
         .expect("upload w_up");
-        let w_down = CudaTensor::<bf16>::from_host(
+        let w_up = PackedWeight::Bf16 {
+            t: w_up_t,
+            k: hidden_dim,
+            n: inter,
+        };
+        let w_down_t = CudaTensor::<bf16>::from_host(
             dev.clone(),
             vec![inter, hidden_dim],
             &w_down_host,
         )
         .expect("upload w_down");
+        let w_down = PackedWeight::Bf16 {
+            t: w_down_t,
+            k: inter,
+            n: hidden_dim,
+        };
 
         let ffn = Qwen35FFN {
             pre_norm,
