@@ -22,6 +22,7 @@ include!(concat!(env!("OUT_DIR"), "/ptx_registry.rs"));
 pub mod cast;
 pub mod embedding;
 pub mod flash_attn;
+pub mod fused_ops;
 pub mod gated_delta_net;
 pub mod head_gather;
 pub mod l2_norm;
@@ -45,6 +46,10 @@ pub use cast::{
 };
 pub use embedding::{launch_embedding_bf16, launch_embedding_f16, launch_embedding_f32};
 pub use flash_attn::launch_flash_attn_bf16;
+pub use fused_ops::{
+    launch_scale_add_f32, launch_scale_add_with_bias_f32, launch_sigmoid_bf16,
+    launch_sigmoid_mul_bf16, launch_transpose_2d_bf16,
+};
 pub use gated_delta_net::{
     launch_gated_delta_net_f32, GdnGateKind, GdnInterDtype, GdnLaunchInputs, GdnPersistInter,
     GdnRecurrence, GdnShape, GDN_TREE_ROOT_PARENT,

@@ -303,22 +303,16 @@ impl Qwen35FullAttention {
         let mut v_flat = CudaTensor::<bf16>::zeros(device.clone(), vec![n_tokens, kv_dim])?;
         kernels::launch_cast_f32_to_bf16(device, &v_f32, &mut v_flat)?;
 
-        // ── 3b. Compute the sigmoid-gate tensor for the post-attention
-        //    elementwise multiply. The gate projection is `norm @ w_q_gate`
-        //    → `[n_tokens, q_dim]`. We apply `sigmoid` on the host
-        //    (no kernel yet) and keep it around until after attention.
-        //
-        //    Why host-sigmoid: the rest of the pipeline only needs
-        //    elementwise-mul which we can do via `launch_residual_add`
-        //    composed after a host scale, or via a round-trip — same
-        //    cost-class as the causal mask's host build above and far
-        //    simpler than adding a third kernel for ~kloc of new code.
-        //    A fused sigmoid-mul kernel is a Phase-5 optimization.
+        // ── 3b. Attention-gate projection. `w_q_gate` is the gate
+        //    matrix; the result is fed through a sigmoid and
+        //    multiplied into the attention output at step 7g. Both
+        //    the sigmoid and the subsequent mul happen in a single
+        //    fused `launch_sigmoid_mul_bf16` kernel later — we just
+        //    stage the raw gate projection in `q_gate` here.
         let mut q_gate_f32 = CudaTensor::<f32>::zeros(device.clone(), vec![n_tokens, q_dim])?;
         self.w_q_gate.matmul_f32(device, &norm_f32, &mut q_gate_f32)?;
         let mut q_gate = CudaTensor::<bf16>::zeros(device.clone(), vec![n_tokens, q_dim])?;
         kernels::launch_cast_f32_to_bf16(device, &q_gate_f32, &mut q_gate)?;
-        let q_gate_sig = sigmoid_host_bf16(&q_gate)?;
 
         // ── 3c. Per-head RMSNorm on Q and K (in place on the flat
         //    tensors). dflash applies these after the per-head reshape
@@ -381,7 +375,13 @@ impl Qwen35FullAttention {
         //    row-major, Q-head-major.
         let mut attn_out = CudaTensor::<bf16>::zeros(device.clone(), vec![n_tokens, q_dim])?;
         let scale = 1.0f32 / (cfg.head_dim as f32).sqrt();
+        // Build the causal mask on host once, upload it once. The
+        // per-head `scale_add_with_bias_f32` kernel below folds the
+        // mask into the scaled scores in a single launch — no
+        // per-head mask re-upload and no intermediate scaled_masked
+        // = mask memcpy.
         let mask_host = build_causal_mask(n_tokens, kv_len, prompt_start, scale);
+        let mask_dev = upload_mask(device, &mask_host, n_tokens, kv_len)?;
 
         for q_head in 0..cfg.n_q_heads {
             let kv_head = q_head / cfg.gqa_group();
@@ -437,17 +437,26 @@ impl Qwen35FullAttention {
             )?;
 
             // ── 7d. scale + causal mask + softmax, all f32.
-            let mut scaled_masked = upload_mask(device, &mask_host, n_tokens, kv_len)?;
-            // scaled_masked currently holds the mask. We need to compute
-            // `scaled_masked[i,j] = scores[i,j] * scale + mask[i,j]`.
-            // We have no fused kernel; fold `scale` into the score matmul
-            // by pre-scaling on the host via one scalar multiply plus an
-            // elementwise add kernel. Since we don't have an `axpby`
-            // yet, implement via residual_add_f32 after pre-scaling the
-            // scores on the device: the cheapest general path is a host
-            // round-trip + re-upload, which is fine for the smoke test.
-            // TODO: replace with a fused scale-add-softmax kernel.
-            host_scale_add(device, &mut scores, &mut scaled_masked, scale)?;
+            //       Fused scale + mask-add in one launch:
+            //
+            //          scaled_masked[i,j] = scores[i,j] * scale
+            //                             + mask_dev[i,j]
+            //
+            //       `mask_dev` was uploaded once outside the head
+            //       loop, so no per-head mask re-upload or D2D
+            //       memcpy. Replaces an earlier host round-trip
+            //       (download scores + mask, CPU scale-add, re-upload)
+            //       which also blocked graph capture for the decode
+            //       hot path.
+            let mut scaled_masked =
+                CudaTensor::<f32>::zeros(device.clone(), vec![n_tokens, kv_len])?;
+            kernels::launch_scale_add_with_bias_f32(
+                device,
+                &scores,
+                &mask_dev,
+                &mut scaled_masked,
+                scale,
+            )?;
 
             let mut attn_weights =
                 CudaTensor::<f32>::zeros(device.clone(), vec![n_tokens, kv_len])?;
@@ -487,11 +496,13 @@ impl Qwen35FullAttention {
         // ── 7g. Sigmoid gate elementwise-mul. dflash's
         //    `build_full_attn_block` applies `attn = attn * sigmoid(gate)`
         //    after the attention output is re-flattened into `[q_dim,
-        //    n_tokens]`. Here `attn_out` is already `[n_tokens, q_dim]`
-        //    row-major and `q_gate_sig` is the same shape — so the mul
-        //    is fully elementwise. We do it on the host alongside the
-        //    sigmoid computation at step 3b to avoid a dedicated kernel.
-        elementwise_mul_host_bf16(&mut attn_out, &q_gate_sig)?;
+        //    n_tokens]`. Both `attn_out` and `q_gate` are
+        //    `[n_tokens, q_dim]` row-major — fully elementwise. The
+        //    `launch_sigmoid_mul_bf16` kernel fuses the sigmoid and
+        //    the multiply into a single launch and, importantly,
+        //    keeps everything on the device (the previous host-side
+        //    sigmoid + mul blocked graph capture).
+        kernels::launch_sigmoid_mul_bf16(device, &q_gate, &mut attn_out)?;
 
         // ── 8. Output projection — `PackedWeight::matmul_f32` takes
         //    and produces f32, so cast `attn_out` (bf16) up to f32
@@ -617,12 +628,10 @@ fn gather_head_from_kv_slab(
     Ok(dst)
 }
 
-/// Host-side 2-D transpose via download/reupload. Used to produce
-/// `K^T` for the attention score matmul. O(n_rows × n_cols) host
-/// memory — fine for head-sized workloads (kv_len × head_dim = 128 ×
-/// 128 = 16K elements per head at decode-start).
-///
-/// TODO: replace with a proper device-side transpose kernel.
+/// Device-side 2-D transpose: produce `K^T` for the attention score
+/// matmul. Now a single `launch_transpose_2d_bf16` kernel call;
+/// earlier revisions round-tripped through the host, contributing
+/// hundreds of CPU syncs per forward and blocking graph capture.
 fn transpose_2d(
     device: &Arc<DeviceContext>,
     src: &CudaTensor<bf16>,
@@ -630,14 +639,9 @@ fn transpose_2d(
     cols: usize,
 ) -> Result<CudaTensor<bf16>> {
     debug_assert_eq!(src.shape(), [rows, cols]);
-    let host = src.to_host()?;
-    let mut transposed: Vec<bf16> = vec![bf16::ZERO; rows * cols];
-    for r in 0..rows {
-        for c in 0..cols {
-            transposed[c * rows + r] = host[r * cols + c];
-        }
-    }
-    CudaTensor::<bf16>::from_host(device.clone(), vec![cols, rows], &transposed)
+    let mut dst = CudaTensor::<bf16>::zeros(device.clone(), vec![cols, rows])?;
+    kernels::launch_transpose_2d_bf16(device, src, &mut dst, rows, cols)?;
+    Ok(dst)
 }
 
 /// Build an `[n_tokens, kv_len]` f32 mask. Positions beyond the causal
@@ -667,38 +671,6 @@ fn upload_mask(
 
 /// `scaled_masked ← scores * scale + mask`, host-loop fallback.
 ///
-/// We lack a fused scale+add kernel, so download both, compute, then
-/// re-upload. Scores are `[n_tokens, kv_len]` — at n_tokens=32,
-/// kv_len=32 this is 1 KiB of f32, vanishingly small; at production
-/// sizes this path must be replaced.
-///
-/// TODO: fused scale+add+softmax kernel.
-fn host_scale_add(
-    _device: &Arc<DeviceContext>,
-    scores: &mut CudaTensor<f32>,
-    scaled_masked: &mut CudaTensor<f32>,
-    scale: f32,
-) -> Result<()> {
-    let scores_host = scores.to_host()?;
-    let mask_host = scaled_masked.to_host()?;
-    if scores_host.len() != mask_host.len() {
-        return Err(anyhow!(
-            "host_scale_add: scores.len {} != mask.len {}",
-            scores_host.len(),
-            mask_host.len()
-        ));
-    }
-    let out_host: Vec<f32> = scores_host
-        .iter()
-        .zip(mask_host.iter())
-        .map(|(s, m)| s * scale + m)
-        .collect();
-    let dev = scaled_masked.device().clone();
-    let shape = scaled_masked.shape().to_vec();
-    *scaled_masked = CudaTensor::<f32>::from_host(dev, shape, &out_host)?;
-    Ok(())
-}
-
 /// In-place per-head RMSNorm on a `[n_tokens, n_heads * head_dim]` bf16
 /// tensor with weight `[head_dim]` f32.
 ///
@@ -756,50 +728,6 @@ fn per_head_rmsnorm_bf16(
 
     // f32 → bf16 into x (in-place output of caller).
     kernels::launch_cast_f32_to_bf16(device, &yf32, x)?;
-    Ok(())
-}
-
-/// Compute `sigmoid` of a bf16 tensor on the host and return the result
-/// as a fresh device tensor of matching shape.
-///
-/// We have no sigmoid kernel yet; the gate path runs once per forward
-/// on `n_tokens * q_dim` bf16 elements, i.e. ~200 KiB at 32×6144 — fine
-/// for a host round-trip. A fused sigmoid-mul kernel folds both this
-/// and `elementwise_mul_host_bf16` into one launch; tracked as a
-/// phase-5 optimization.
-fn sigmoid_host_bf16(x: &CudaTensor<bf16>) -> Result<CudaTensor<bf16>> {
-    let host = x.to_host()?;
-    let out_host: Vec<bf16> = host
-        .iter()
-        .map(|v| {
-            let f = v.to_f32();
-            bf16::from_f32(1.0 / (1.0 + (-f).exp()))
-        })
-        .collect();
-    CudaTensor::<bf16>::from_host(x.device().clone(), x.shape().to_vec(), &out_host)
-}
-
-/// In-place `x ← x * y` elementwise for bf16 tensors of identical
-/// shape, on the host. Paired with [`sigmoid_host_bf16`] for the
-/// attention gate mul.
-fn elementwise_mul_host_bf16(x: &mut CudaTensor<bf16>, y: &CudaTensor<bf16>) -> Result<()> {
-    if x.shape() != y.shape() {
-        return Err(anyhow!(
-            "elementwise_mul_host_bf16: shape {:?} != {:?}",
-            x.shape(),
-            y.shape()
-        ));
-    }
-    let xh = x.to_host()?;
-    let yh = y.to_host()?;
-    let out: Vec<bf16> = xh
-        .iter()
-        .zip(yh.iter())
-        .map(|(a, b)| bf16::from_f32(a.to_f32() * b.to_f32()))
-        .collect();
-    let dev = x.device().clone();
-    let shape = x.shape().to_vec();
-    *x = CudaTensor::<bf16>::from_host(dev, shape, &out)?;
     Ok(())
 }
 
