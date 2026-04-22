@@ -80,6 +80,17 @@ fn main() {
             .expect("kernel stem");
         let ptx_out = ptx_dir.join(format!("{}.ptx", stem));
 
+        // Include-path set for vendored upstream kernels.
+        //
+        // llama.cpp ggml-cuda kernels include each other and the ggml
+        // root headers (ggml.h, ggml-impl.h, ggml-common.h) plus the
+        // vendor-abstraction headers (vendors/cuda.h). We vendored the
+        // minimum header forest into vendor/{ggml-cuda,ggml-include};
+        // nvcc resolves everything via these -I flags without a
+        // submodule or a bloated copy of the whole llama.cpp tree.
+        let vendor_ggml_cuda = manifest_dir.join("vendor").join("ggml-cuda");
+        let vendor_ggml_include = manifest_dir.join("vendor").join("ggml-include");
+
         let status = Command::new(&nvcc)
             .arg("--ptx")
             .arg("-arch")
@@ -87,6 +98,10 @@ fn main() {
             .arg("-O3")
             .arg("-std=c++17")
             .arg("--ptxas-options=-v")
+            // Include paths must come BEFORE the input file so nvcc
+            // resolves the vendor headers referenced from the kernel.
+            .arg(format!("-I{}", vendor_ggml_cuda.display()))
+            .arg(format!("-I{}", vendor_ggml_include.display()))
             .arg("-o")
             .arg(&ptx_out)
             .arg(cu)
