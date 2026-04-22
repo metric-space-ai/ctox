@@ -6,10 +6,11 @@
 //! tokens at a time for the full 27B target to verify in a single
 //! batched forward. The draft is **not** a standalone language model:
 //! it consumes a concatenation of the target's last five hidden
-//! states (`target_hidden_cat [5*5120, ctx_len]`) plus a fresh noise
-//! embedding sequence (`noise_embed [5120, 16]`), fuses them via a
-//! per-call `target_feat = rms_norm(fc @ target_hidden_cat)` (where
-//! `fc [5120, 25600]` is the feature un-packer), then runs non-causal
+//! states (`target_hidden_cat [ctx_len, 5*hidden]`) plus a fresh noise
+//! embedding sequence (`noise_embed [16, hidden]`), fuses them via a
+//! per-call `target_feat = rms_norm(target_hidden_cat @ fc^T)` (where
+//! `fc` ships in HF layout `[hidden, 5*hidden]` and is transposed at
+//! load so the matmul sees `[5*hidden, hidden]`), then runs non-causal
 //! attention with K/V drawn from **both** the fused target features
 //! and the in-step noise sequence. The output is projected through
 //! the target's own `lm_head` — shared, not owned here — to emit
@@ -36,20 +37,23 @@
 //! existing batched forward path already accepts `n_tokens > 1`
 //! which is what verify needs.
 //!
-//! # Status
+//! # Weight layout & dtype at load time
 //!
-//! This is the first landing of the draft path. The current commit
-//! ships:
-//!   * `DraftConfig` constants matching `DFLASH27B_*`
-//!   * `DraftWeights` owned bf16 device tensors
-//!   * `DraftWeights::load_safetensors` — a zero-copy-from-mmap loader
-//!     for the 58-tensor `.safetensors` the reference ships
-//!   * `DraftModel` wrapping the weights + a scratch allocator for
-//!     the forward
+//! Two normalizations happen as the safetensors bundle is uploaded:
 //!
-//! A minimal `DraftModel::forward` stub returns `not-implemented` for
-//! now; the per-layer op sequencing lands alongside the verify loop
-//! so every commit is end-to-end runnable.
+//! * **Projection weights** ship in HF `nn.Linear` layout
+//!   `[out_features, in_features]`, but `PackedWeight::Bf16` and the
+//!   shared `launch_matmul_bf16_f32` wrapper expect `[k=in, n=out]`
+//!   row-major. Every projection gets a device-side
+//!   `launch_transpose_2d_bf16` during load to flip the orientation
+//!   once. This means `w_q.shape() == [hidden, q_dim]` on device even
+//!   though the tensor file has `[q_dim, hidden]`.
+//!
+//! * **RMSNorm gain vectors** arrive as bf16 in the bundle but
+//!   `launch_rmsnorm_f32` consumes f32 weights. Rather than cast on
+//!   every layer call (5 layers × 4 norms = 20 wasted casts per
+//!   forward), each gain gets a one-shot bf16→f32 cast at load and
+//!   is stored as `CudaTensor<f32>`.
 
 #![cfg(feature = "cuda")]
 
@@ -63,6 +67,15 @@ use safetensors::SafeTensors;
 
 use ctox_cuda_primitives::device::DeviceContext;
 use ctox_cuda_primitives::tensor::CudaTensor;
+
+use crate::kernels::{
+    launch_cast_bf16_to_f32, launch_cast_f32_to_bf16, launch_fill_const_f32,
+    launch_head_gather_bf16, launch_head_scatter_bf16, launch_matmul_bf16_bf16,
+    launch_matmul_bf16_f32, launch_residual_add_bf16, launch_rmsnorm_f32,
+    launch_rope_neox_bf16_inplace, launch_scale_add_with_bias_f32, launch_silu_mul_bf16,
+    launch_softmax_f32, launch_transpose_2d_bf16,
+};
+use crate::layers::packed_weight::PackedWeight;
 
 /// All shape constants of the shipping draft match the target's
 /// full-attention-layer dimensions. They are **fixed** for the
@@ -130,50 +143,53 @@ impl DraftConfig {
     }
 }
 
-/// Owned per-layer weight tensors. All tensors are bf16 on device;
-/// the draft is not quantized (the target is, but the draft is small
-/// enough — 3.3 GB at bf16 — that Q4_K would add decoding cost without
-/// much VRAM savings).
+/// Owned per-layer weight tensors. Projection weights are wrapped in
+/// `PackedWeight::Bf16` with the logical `[k=in, n=out]` shape on
+/// device (transposed from the safetensors' HF `[out, in]` orientation
+/// at load time). Norm gain vectors are stored as `CudaTensor<f32>` so
+/// `launch_rmsnorm_f32` can consume them without a per-call cast.
+///
+/// The forward path calls `PackedWeight::matmul_f32` by reference — no
+/// cloning or per-layer reconstruction on the hot path.
 pub struct DraftLayer {
-    /// Pre-attention RMSNorm gain. Shape `[hidden]`.
-    pub attn_norm: CudaTensor<bf16>,
-    /// Q projection. Shape `[hidden, q_dim]` (row-major; the matmul
-    /// expects input `[n_tokens, hidden]` × `[hidden, q_dim]`).
-    pub w_q: CudaTensor<bf16>,
-    /// K projection. Shape `[hidden, kv_dim]`.
-    pub w_k: CudaTensor<bf16>,
-    /// V projection. Shape `[hidden, kv_dim]`.
-    pub w_v: CudaTensor<bf16>,
-    /// O projection. Shape `[q_dim, hidden]`.
-    pub w_o: CudaTensor<bf16>,
-    /// Per-head Q RMSNorm gain. Shape `[head_dim]`.
-    pub q_norm: CudaTensor<bf16>,
-    /// Per-head K RMSNorm gain. Shape `[head_dim]`.
-    pub k_norm: CudaTensor<bf16>,
-    /// Pre-FFN RMSNorm gain. Shape `[hidden]`.
-    pub ffn_norm: CudaTensor<bf16>,
-    /// Gate projection (SwiGLU). Shape `[hidden, intermediate]`.
-    pub w_gate: CudaTensor<bf16>,
-    /// Up projection. Shape `[hidden, intermediate]`.
-    pub w_up: CudaTensor<bf16>,
-    /// Down projection. Shape `[intermediate, hidden]`.
-    pub w_down: CudaTensor<bf16>,
+    /// Pre-attention RMSNorm gain. Shape `[hidden]` f32.
+    pub attn_norm: CudaTensor<f32>,
+    /// Q projection. Logical `[hidden, q_dim]` bf16.
+    pub w_q: PackedWeight,
+    /// K projection. Logical `[hidden, kv_dim]` bf16.
+    pub w_k: PackedWeight,
+    /// V projection. Logical `[hidden, kv_dim]` bf16.
+    pub w_v: PackedWeight,
+    /// O projection. Logical `[q_dim, hidden]` bf16.
+    pub w_o: PackedWeight,
+    /// Per-head Q RMSNorm gain. Shape `[head_dim]` f32.
+    pub q_norm: CudaTensor<f32>,
+    /// Per-head K RMSNorm gain. Shape `[head_dim]` f32.
+    pub k_norm: CudaTensor<f32>,
+    /// Pre-FFN RMSNorm gain. Shape `[hidden]` f32.
+    pub ffn_norm: CudaTensor<f32>,
+    /// Gate projection (SwiGLU). Logical `[hidden, intermediate]` bf16.
+    pub w_gate: PackedWeight,
+    /// Up projection. Logical `[hidden, intermediate]` bf16.
+    pub w_up: PackedWeight,
+    /// Down projection. Logical `[intermediate, hidden]` bf16.
+    pub w_down: PackedWeight,
 }
 
 /// Owned top-level draft weights (layers + shared feature fusion).
 pub struct DraftWeights {
     pub config: DraftConfig,
     pub layers: Vec<DraftLayer>,
-    /// Feature un-packer. Shape `[5*hidden, hidden]` in row-major (GGML
-    /// layout `[hidden_target_cat, hidden]`). Applied as
-    /// `target_feat = fc @ target_hidden_cat` → `[hidden, ctx_len]`,
-    /// then rms-normalized by `hidden_norm`.
-    pub fc: CudaTensor<bf16>,
-    /// RMS gain applied to `target_feat` after `fc`. Shape `[hidden]`.
-    pub hidden_norm: CudaTensor<bf16>,
+    /// Feature un-packer. Logical `[5*hidden, hidden]` bf16 on device
+    /// (transposed from the safetensors' HF `[hidden, 5*hidden]`).
+    /// Applied as `target_feat = target_hidden_cat @ fc` →
+    /// `[ctx_len, hidden]`, then rms-normalized by `hidden_norm`.
+    pub fc: PackedWeight,
+    /// RMS gain applied to `target_feat` after `fc`. Shape `[hidden]` f32.
+    pub hidden_norm: CudaTensor<f32>,
     /// Final RMS gain applied to the output hidden state before
-    /// handing it to `lm_head`. Shape `[hidden]`.
-    pub out_norm: CudaTensor<bf16>,
+    /// handing it to `lm_head`. Shape `[hidden]` f32.
+    pub out_norm: CudaTensor<f32>,
 }
 
 impl DraftWeights {
@@ -239,56 +255,77 @@ impl DraftWeights {
                 .with_context(|| format!("draft: upload {name}"))
         };
 
+        // Load an HF projection weight `[out=rows, in=cols]` and
+        // transpose it on-device to `[in=k, n=out]` = `[cols, rows]`
+        // row-major, wrapping the result as `PackedWeight::Bf16` with
+        // `k=cols` (in) and `n=rows` (out). The transpose runs once
+        // at load and the resulting weight feeds every forward without
+        // further shuffling.
+        let load_proj = |name: &str, rows: usize, cols: usize| -> Result<PackedWeight> {
+            let src = load_bf16(name, &[rows, cols])?;
+            let mut dst = CudaTensor::<bf16>::zeros(device.clone(), vec![cols, rows])
+                .with_context(|| format!("draft: alloc transposed dst {name}"))?;
+            launch_transpose_2d_bf16(&device, &src, &mut dst, rows, cols)
+                .with_context(|| format!("draft: transpose {name}"))?;
+            Ok(PackedWeight::Bf16 {
+                t: dst,
+                k: cols,
+                n: rows,
+            })
+        };
+
+        // Load a norm gain (bf16 on disk) and cast it to f32 on-device
+        // so `launch_rmsnorm_f32` can consume it without per-call
+        // conversion.
+        let load_f32_from_bf16 = |name: &str, dim: usize| -> Result<CudaTensor<f32>> {
+            let src = load_bf16(name, &[dim])?;
+            let mut dst = CudaTensor::<f32>::zeros(device.clone(), vec![dim])
+                .with_context(|| format!("draft: alloc f32 dst {name}"))?;
+            launch_cast_bf16_to_f32(&device, &src, &mut dst)
+                .with_context(|| format!("draft: cast {name} bf16→f32"))?;
+            Ok(dst)
+        };
+
         // Top-level shared tensors.
-        let fc = load_bf16(
+        //
+        // `fc` ships as `[hidden, 5*hidden]` in HF row-major; we want
+        // `[5*hidden, hidden]` so the feature-fusion matmul reads
+        // `target_hidden_cat[ctx_len, 5*hidden] @ fc[5*hidden, hidden]`
+        // → `[ctx_len, hidden]`.
+        let fc = load_proj(
             "fc.weight",
-            &[config.hidden, config.target_hidden_layers * config.hidden],
+            config.hidden,
+            config.target_hidden_layers * config.hidden,
         )?;
-        let hidden_norm = load_bf16("hidden_norm.weight", &[config.hidden])?;
-        let out_norm = load_bf16("norm.weight", &[config.hidden])?;
+        let hidden_norm = load_f32_from_bf16("hidden_norm.weight", config.hidden)?;
+        let out_norm = load_f32_from_bf16("norm.weight", config.hidden)?;
 
         // Per-layer tensors.
         let mut layers: Vec<DraftLayer> = Vec::with_capacity(config.n_layers);
         for il in 0..config.n_layers {
             let p = |suffix: &str| format!("layers.{il}.{suffix}");
 
-            // Attention weights. `q_proj.weight` shape in the bundle is
-            // `[q_dim, hidden]` (HF convention: out, in). We keep the
-            // loaded shape as-is; per-matmul code transposes on
-            // dispatch where needed.
-            let w_q = load_bf16(&p("self_attn.q_proj.weight"), &[config.q_dim, config.hidden])?;
-            let w_k = load_bf16(
-                &p("self_attn.k_proj.weight"),
-                &[config.kv_dim, config.hidden],
-            )?;
-            let w_v = load_bf16(
-                &p("self_attn.v_proj.weight"),
-                &[config.kv_dim, config.hidden],
-            )?;
-            let w_o = load_bf16(
-                &p("self_attn.o_proj.weight"),
-                &[config.hidden, config.q_dim],
-            )?;
-            let q_norm = load_bf16(&p("self_attn.q_norm.weight"), &[config.head_dim])?;
-            let k_norm = load_bf16(&p("self_attn.k_norm.weight"), &[config.head_dim])?;
+            // Projections — HF `[out, in]` on disk, transposed to
+            // `[in, out]` on device, wrapped as `PackedWeight::Bf16`.
+            let w_q = load_proj(&p("self_attn.q_proj.weight"), config.q_dim, config.hidden)?;
+            let w_k = load_proj(&p("self_attn.k_proj.weight"), config.kv_dim, config.hidden)?;
+            let w_v = load_proj(&p("self_attn.v_proj.weight"), config.kv_dim, config.hidden)?;
+            let w_o = load_proj(&p("self_attn.o_proj.weight"), config.hidden, config.q_dim)?;
+            let q_norm = load_f32_from_bf16(&p("self_attn.q_norm.weight"), config.head_dim)?;
+            let k_norm = load_f32_from_bf16(&p("self_attn.k_norm.weight"), config.head_dim)?;
 
             // Layer norms.
-            let attn_norm = load_bf16(&p("input_layernorm.weight"), &[config.hidden])?;
-            let ffn_norm = load_bf16(&p("post_attention_layernorm.weight"), &[config.hidden])?;
+            let attn_norm = load_f32_from_bf16(&p("input_layernorm.weight"), config.hidden)?;
+            let ffn_norm =
+                load_f32_from_bf16(&p("post_attention_layernorm.weight"), config.hidden)?;
 
-            // SwiGLU MLP.
-            let w_gate = load_bf16(
-                &p("mlp.gate_proj.weight"),
-                &[config.intermediate, config.hidden],
-            )?;
-            let w_up = load_bf16(
-                &p("mlp.up_proj.weight"),
-                &[config.intermediate, config.hidden],
-            )?;
-            let w_down = load_bf16(
-                &p("mlp.down_proj.weight"),
-                &[config.hidden, config.intermediate],
-            )?;
+            // SwiGLU MLP projections.
+            let w_gate =
+                load_proj(&p("mlp.gate_proj.weight"), config.intermediate, config.hidden)?;
+            let w_up =
+                load_proj(&p("mlp.up_proj.weight"), config.intermediate, config.hidden)?;
+            let w_down =
+                load_proj(&p("mlp.down_proj.weight"), config.hidden, config.intermediate)?;
 
             layers.push(DraftLayer {
                 attn_norm,
@@ -366,23 +403,519 @@ impl DraftModel {
     ///   quantized — handed through the `PackedWeight` dispatch).
     ///
     /// # Output
-    /// Logits of shape `[block_size, vocab]` on device.
+    /// Logits of shape `[block_size, vocab]` f32 on device.
     ///
-    /// The per-layer op sequence is identical to
-    /// `dflash-ref::build_draft_graph`. This scaffold lands the type
-    /// signature; the body follows in the chain-verify commit (keeps
-    /// each commit end-to-end runnable and testable).
+    /// # Algorithm
+    ///
+    /// Mirrors `dflash-ref::build_draft_graph`:
+    ///
+    ///   1. Feature fusion — project the concatenated target hidden
+    ///      stack through `fc`, RMSNorm it, cast to bf16. Produces
+    ///      `target_feat [ctx_len, hidden]`. This is the K/V source
+    ///      for cross-attention and is reused across all layers; we
+    ///      compute both the bf16 copy (for attention K/V inputs) and
+    ///      the f32 copy (for the matmul into `w_k` / `w_v`) once and
+    ///      reuse.
+    ///   2. `h = noise_embed` (copied into a fresh bf16 buffer so the
+    ///      caller's input isn't mutated; subsequent layers
+    ///      write-through `h`).
+    ///   3. Per-layer loop (5 layers):
+    ///      a. RMSNorm h → hn
+    ///      b. Q = hn @ w_q, reshape + per-head q_norm
+    ///      c. K, V concat(target_feat, hn) → `[total_k, kv_dim]`,
+    ///         reshape + per-head k_norm
+    ///      d. NEOX RoPE in place on Q and K
+    ///      e. Non-causal attention — per-head loop: transpose K,
+    ///         matmul Q·Kᵀ in f32, scale by `1/√head_dim`, softmax
+    ///         (no mask), cast to bf16, matmul probs·V in bf16,
+    ///         scatter back into `attn_out [block_size, q_dim]`.
+    ///      f. `h ← h + (attn_out @ w_o)` residual
+    ///      g. RMSNorm + SwiGLU MLP: `h ← h + (w_down @ silu(w_gate)·w_up)`
+    ///   4. Final RMSNorm on h → out_hidden f32.
+    ///   5. logits = out_hidden @ lm_head, returned as f32.
     pub fn forward(
         &self,
-        _noise_embed: &CudaTensor<bf16>,
-        _target_hidden_cat: &CudaTensor<bf16>,
-        _positions_q: &CudaTensor<i32>,
-        _positions_k: &CudaTensor<i32>,
-        _lm_head: &crate::layers::packed_weight::PackedWeight,
+        noise_embed: &CudaTensor<bf16>,
+        target_hidden_cat: &CudaTensor<bf16>,
+        positions_q: &CudaTensor<i32>,
+        positions_k: &CudaTensor<i32>,
+        lm_head: &PackedWeight,
     ) -> Result<CudaTensor<f32>> {
-        Err(anyhow!(
-            "DraftModel::forward: body not yet wired — lands with the chain-verify commit"
-        ))
+        let cfg = self.weights.config;
+        let device = &self.device;
+        let stream = device.raw().default_stream();
+
+        // Shape validation. Everything downstream assumes these hold;
+        // surfacing the mismatch here gives a clear error rather than
+        // a cryptic kernel shape complaint three launches deep.
+        let q_len = cfg.block_size;
+        let hidden = cfg.hidden;
+        let q_dim = cfg.q_dim;
+        let kv_dim = cfg.kv_dim;
+        let head_dim = cfg.head_dim;
+        let n_head = cfg.n_head;
+        let n_kv = cfg.n_kv_heads;
+        let gqa = cfg.gqa_group();
+        let target_feat_dim = cfg.target_hidden_layers * hidden;
+        let eps = cfg.rms_eps;
+        let theta = cfg.rope_base;
+
+        if noise_embed.shape() != [q_len, hidden] {
+            return Err(anyhow!(
+                "draft.forward: noise_embed.shape {:?} != [{}, {}]",
+                noise_embed.shape(),
+                q_len,
+                hidden
+            ));
+        }
+        if target_hidden_cat.shape().len() != 2
+            || target_hidden_cat.shape()[1] != target_feat_dim
+        {
+            return Err(anyhow!(
+                "draft.forward: target_hidden_cat.shape {:?} != [ctx_len, {}]",
+                target_hidden_cat.shape(),
+                target_feat_dim
+            ));
+        }
+        let ctx_len = target_hidden_cat.shape()[0];
+        let total_k = ctx_len + q_len;
+        if positions_q.numel() < q_len {
+            return Err(anyhow!(
+                "draft.forward: positions_q.numel()={} < block_size={}",
+                positions_q.numel(),
+                q_len
+            ));
+        }
+        if positions_k.numel() < total_k {
+            return Err(anyhow!(
+                "draft.forward: positions_k.numel()={} < ctx_len+block_size={}",
+                positions_k.numel(),
+                total_k
+            ));
+        }
+        let (lm_k, lm_n) = lm_head.dims();
+        if lm_k != hidden {
+            return Err(anyhow!(
+                "draft.forward: lm_head.k={} != hidden={}",
+                lm_k,
+                hidden
+            ));
+        }
+        let vocab = lm_n;
+
+        // ─────────────────────────────────────────────────────────────
+        // Step 1. Feature fusion
+        //
+        //   target_feat_f32 [ctx_len, hidden] = target_hidden_cat @ fc
+        //   target_feat_f32 = rmsnorm(target_feat_f32, hidden_norm)
+        //   target_feat_bf16 = cast(target_feat_f32)
+        //
+        // `fc` is stored on device as `[target_feat_dim, hidden]`
+        // (transposed at load), so `PackedWeight::Bf16 { k=target_feat_dim,
+        // n=hidden }` routes through cuBLAS with the right shapes.
+        // ─────────────────────────────────────────────────────────────
+        let target_hidden_cat_f32 = {
+            let mut t = CudaTensor::<f32>::zeros(
+                device.clone(),
+                vec![ctx_len, target_feat_dim],
+            )?;
+            launch_cast_bf16_to_f32(device, target_hidden_cat, &mut t)?;
+            t
+        };
+        let mut target_feat_f32 =
+            CudaTensor::<f32>::zeros(device.clone(), vec![ctx_len, hidden])?;
+        self.weights
+            .fc
+            .matmul_f32(device, &target_hidden_cat_f32, &mut target_feat_f32)?;
+
+        let mut target_feat_norm_f32 =
+            CudaTensor::<f32>::zeros(device.clone(), vec![ctx_len, hidden])?;
+        launch_rmsnorm_f32(
+            device,
+            &target_feat_f32,
+            &self.weights.hidden_norm,
+            &mut target_feat_norm_f32,
+            eps,
+        )?;
+
+        // Drop the pre-norm buffer (the rmsnorm output lives in
+        // target_feat_norm_f32). The f32 side is what feeds each
+        // layer's K / V projections; the reference also materializes
+        // a bf16 copy for KV-side casts but we avoid that round-trip
+        // by keeping target_feat in f32 and letting the
+        // `PackedWeight::Bf16::matmul_f32` dispatch stage its own bf16
+        // x-view per call.
+        drop(target_feat_f32);
+        let target_feat_f32 = target_feat_norm_f32;
+
+        // ─────────────────────────────────────────────────────────────
+        // Step 2. Initialize h_bf16 from noise_embed (copy — the caller
+        // owns noise_embed and we must not mutate it).
+        // ─────────────────────────────────────────────────────────────
+        let mut h_bf16 = CudaTensor::<bf16>::zeros(device.clone(), vec![q_len, hidden])?;
+        stream
+            .memcpy_dtod(noise_embed.buf(), h_bf16.buf_mut())
+            .map_err(|e| anyhow!("draft.forward: noise_embed → h copy: {:?}", e))?;
+
+        // ─────────────────────────────────────────────────────────────
+        // Step 3. Layer loop.
+        // ─────────────────────────────────────────────────────────────
+        for il in 0..cfg.n_layers {
+            let layer = &self.weights.layers[il];
+
+            // ── 3a. Attn pre-norm. h_bf16 → h_f32 → hn_f32.
+            let mut h_f32 = CudaTensor::<f32>::zeros(device.clone(), vec![q_len, hidden])?;
+            launch_cast_bf16_to_f32(device, &h_bf16, &mut h_f32)?;
+            let mut hn_f32 = CudaTensor::<f32>::zeros(device.clone(), vec![q_len, hidden])?;
+            launch_rmsnorm_f32(device, &h_f32, &layer.attn_norm, &mut hn_f32, eps)?;
+
+            // ── 3b. Q projection + per-head q_norm.
+            //
+            //   q_f32 [q_len, q_dim] = hn_f32 @ w_q
+            //   reshape to [q_len * n_head, head_dim]
+            //   rmsnorm(q, q_norm, eps) — weight has shape [head_dim]
+            //   cast back to bf16 in [q_len, n_head, head_dim]
+            let mut q_f32 = CudaTensor::<f32>::zeros(device.clone(), vec![q_len, q_dim])?;
+            layer.w_q.matmul_f32(device, &hn_f32, &mut q_f32)?;
+
+            let q_reshape_in = q_f32.reshape(vec![q_len * n_head, head_dim])?;
+            let mut q_normed_f32 =
+                CudaTensor::<f32>::zeros(device.clone(), vec![q_len * n_head, head_dim])?;
+            launch_rmsnorm_f32(
+                device,
+                &q_reshape_in,
+                &layer.q_norm,
+                &mut q_normed_f32,
+                eps,
+            )?;
+            // Reshape back to [q_len, n_head, head_dim] for RoPE.
+            let q_normed_f32 = q_normed_f32.reshape(vec![q_len, n_head, head_dim])?;
+            let mut q_bf16 =
+                CudaTensor::<bf16>::zeros(device.clone(), vec![q_len, n_head, head_dim])?;
+            launch_cast_f32_to_bf16(device, &q_normed_f32, &mut q_bf16)?;
+
+            // ── 3c. K / V projections from `target_feat` AND `hn`,
+            //        concatenated along the token axis into a single
+            //        `[total_k, kv_dim]` K (same for V).
+            //
+            // Computing each branch separately avoids a large
+            // concat-in-activation-space: the bf16 K/V for the attention
+            // matmul are built from the two f32 halves in a combined
+            // buffer, then cast + per-head-normed + RoPE'd as one.
+            let mut k_ctx_f32 =
+                CudaTensor::<f32>::zeros(device.clone(), vec![ctx_len, kv_dim])?;
+            layer
+                .w_k
+                .matmul_f32(device, &target_feat_f32, &mut k_ctx_f32)?;
+            let mut k_new_f32 =
+                CudaTensor::<f32>::zeros(device.clone(), vec![q_len, kv_dim])?;
+            layer.w_k.matmul_f32(device, &hn_f32, &mut k_new_f32)?;
+
+            let mut v_ctx_f32 =
+                CudaTensor::<f32>::zeros(device.clone(), vec![ctx_len, kv_dim])?;
+            layer
+                .w_v
+                .matmul_f32(device, &target_feat_f32, &mut v_ctx_f32)?;
+            let mut v_new_f32 =
+                CudaTensor::<f32>::zeros(device.clone(), vec![q_len, kv_dim])?;
+            layer.w_v.matmul_f32(device, &hn_f32, &mut v_new_f32)?;
+
+            // Merge into combined [total_k, kv_dim] via two D2D
+            // memcpys — the ctx rows occupy the leading
+            // `ctx_len * kv_dim` elements, the new rows the tail.
+            let mut k_combined_f32 =
+                CudaTensor::<f32>::zeros(device.clone(), vec![total_k, kv_dim])?;
+            let mut v_combined_f32 =
+                CudaTensor::<f32>::zeros(device.clone(), vec![total_k, kv_dim])?;
+            {
+                let ctx_len_kv = ctx_len * kv_dim;
+                let tail_len_kv = q_len * kv_dim;
+
+                let k_ctx_src = k_ctx_f32.buf().slice(0..ctx_len_kv);
+                let mut k_ctx_dst = k_combined_f32.buf_mut().slice_mut(0..ctx_len_kv);
+                stream
+                    .memcpy_dtod(&k_ctx_src, &mut k_ctx_dst)
+                    .map_err(|e| anyhow!("draft.forward: K ctx concat: {:?}", e))?;
+
+                let k_new_src = k_new_f32.buf().slice(0..tail_len_kv);
+                let mut k_new_dst =
+                    k_combined_f32.buf_mut().slice_mut(ctx_len_kv..ctx_len_kv + tail_len_kv);
+                stream
+                    .memcpy_dtod(&k_new_src, &mut k_new_dst)
+                    .map_err(|e| anyhow!("draft.forward: K new concat: {:?}", e))?;
+
+                let v_ctx_src = v_ctx_f32.buf().slice(0..ctx_len_kv);
+                let mut v_ctx_dst = v_combined_f32.buf_mut().slice_mut(0..ctx_len_kv);
+                stream
+                    .memcpy_dtod(&v_ctx_src, &mut v_ctx_dst)
+                    .map_err(|e| anyhow!("draft.forward: V ctx concat: {:?}", e))?;
+
+                let v_new_src = v_new_f32.buf().slice(0..tail_len_kv);
+                let mut v_new_dst =
+                    v_combined_f32.buf_mut().slice_mut(ctx_len_kv..ctx_len_kv + tail_len_kv);
+                stream
+                    .memcpy_dtod(&v_new_src, &mut v_new_dst)
+                    .map_err(|e| anyhow!("draft.forward: V new concat: {:?}", e))?;
+            }
+            drop(k_ctx_f32);
+            drop(k_new_f32);
+            drop(v_ctx_f32);
+            drop(v_new_f32);
+
+            // Per-head k_norm — reshape K to [total_k * n_kv, head_dim].
+            let k_reshape_in = k_combined_f32.reshape(vec![total_k * n_kv, head_dim])?;
+            let mut k_normed_f32 =
+                CudaTensor::<f32>::zeros(device.clone(), vec![total_k * n_kv, head_dim])?;
+            launch_rmsnorm_f32(
+                device,
+                &k_reshape_in,
+                &layer.k_norm,
+                &mut k_normed_f32,
+                eps,
+            )?;
+            let k_normed_f32 = k_normed_f32.reshape(vec![total_k, n_kv, head_dim])?;
+            let mut k_bf16 =
+                CudaTensor::<bf16>::zeros(device.clone(), vec![total_k, n_kv, head_dim])?;
+            launch_cast_f32_to_bf16(device, &k_normed_f32, &mut k_bf16)?;
+
+            // V has no per-head norm; cast directly.
+            let v_combined_f32 = v_combined_f32.reshape(vec![total_k, n_kv, head_dim])?;
+            let mut v_bf16 =
+                CudaTensor::<bf16>::zeros(device.clone(), vec![total_k, n_kv, head_dim])?;
+            launch_cast_f32_to_bf16(device, &v_combined_f32, &mut v_bf16)?;
+
+            // ── 3d. NEOX RoPE on Q and K, in place.
+            //
+            // The reference applies RoPE to both sides but only with the
+            // new-token positions for the q-side and the concatenated
+            // positions for the k-side, which is what the caller-supplied
+            // `positions_q` / `positions_k` encode.
+            launch_rope_neox_bf16_inplace(device, &mut q_bf16, positions_q, head_dim, theta)?;
+            launch_rope_neox_bf16_inplace(device, &mut k_bf16, positions_k, head_dim, theta)?;
+
+            // ── 3e. Non-causal attention (naive per-head loop).
+            //
+            // `launch_flash_attn_bf16` only supports head_dim=256 for
+            // the target's layer; the draft uses head_dim=128 so we
+            // fall back to the correctness-first loop: gather per-head
+            // Q/K/V, transpose K, matmul scores in f32, apply scale +
+            // softmax (no mask), matmul probs·V in bf16, scatter into
+            // attn_out. A head-fused kernel is a future optimization.
+            //
+            // TODO(SPEC.2c): add a 1/√d pre-scaled softmax kernel or a
+            // head_dim≤128 flash-attention variant so we can drop the
+            // per-head loop. Today's launcher list exposes neither.
+            let scale = 1.0f32 / (head_dim as f32).sqrt();
+            let mut attn_out_bf16 =
+                CudaTensor::<bf16>::zeros(device.clone(), vec![q_len, n_head, head_dim])?;
+
+            // Per-head scratch that the inner loop reuses. The inner
+            // loop writes into these in fixed shapes; we allocate them
+            // once outside to cut the 32-head allocation count by 5×.
+            let mut q_head_bf16 =
+                CudaTensor::<bf16>::zeros(device.clone(), vec![q_len, head_dim])?;
+            let mut k_head_bf16 =
+                CudaTensor::<bf16>::zeros(device.clone(), vec![total_k, head_dim])?;
+            let mut v_head_bf16 =
+                CudaTensor::<bf16>::zeros(device.clone(), vec![total_k, head_dim])?;
+            let mut k_head_t_bf16 =
+                CudaTensor::<bf16>::zeros(device.clone(), vec![head_dim, total_k])?;
+            let mut scores_f32 =
+                CudaTensor::<f32>::zeros(device.clone(), vec![q_len, total_k])?;
+            let mut scores_scaled_f32 =
+                CudaTensor::<f32>::zeros(device.clone(), vec![q_len, total_k])?;
+            let mut zero_bias_f32 =
+                CudaTensor::<f32>::zeros(device.clone(), vec![q_len, total_k])?;
+            launch_fill_const_f32(device, &mut zero_bias_f32, 0.0f32)?;
+            let mut probs_f32 =
+                CudaTensor::<f32>::zeros(device.clone(), vec![q_len, total_k])?;
+            let mut probs_bf16 =
+                CudaTensor::<bf16>::zeros(device.clone(), vec![q_len, total_k])?;
+            let mut out_head_bf16 =
+                CudaTensor::<bf16>::zeros(device.clone(), vec![q_len, head_dim])?;
+
+            for q_head in 0..n_head {
+                let kv_head = q_head / gqa;
+
+                // Gather per-head stripes.
+                launch_head_gather_bf16(
+                    device,
+                    &q_bf16,
+                    &mut q_head_bf16,
+                    q_len,
+                    n_head,
+                    head_dim,
+                    q_head,
+                )?;
+                launch_head_gather_bf16(
+                    device,
+                    &k_bf16,
+                    &mut k_head_bf16,
+                    total_k,
+                    n_kv,
+                    head_dim,
+                    kv_head,
+                )?;
+                launch_head_gather_bf16(
+                    device,
+                    &v_bf16,
+                    &mut v_head_bf16,
+                    total_k,
+                    n_kv,
+                    head_dim,
+                    kv_head,
+                )?;
+
+                // Kᵀ [head_dim, total_k].
+                launch_transpose_2d_bf16(
+                    device,
+                    &k_head_bf16,
+                    &mut k_head_t_bf16,
+                    total_k,
+                    head_dim,
+                )?;
+
+                // Scores = Q · Kᵀ in f32. [q_len, head_dim] × [head_dim, total_k]
+                launch_matmul_bf16_f32(
+                    device,
+                    &q_head_bf16,
+                    &k_head_t_bf16,
+                    &mut scores_f32,
+                    q_len,
+                    head_dim,
+                    total_k,
+                )?;
+
+                // Scale by 1/sqrt(head_dim). We write into
+                // `scores_scaled_f32 = scores * scale + 0` using the
+                // scale-add-with-bias op against a zero bias. This is
+                // one extra buffer but reuses the existing fused op;
+                // no dedicated scale kernel exists at this list.
+                launch_scale_add_with_bias_f32(
+                    device,
+                    &scores_f32,
+                    &zero_bias_f32,
+                    &mut scores_scaled_f32,
+                    scale,
+                )?;
+
+                // Softmax (no mask — non-causal for the draft).
+                launch_softmax_f32(device, &scores_scaled_f32, &mut probs_f32)?;
+
+                // Cast probs to bf16 for the probs·V matmul.
+                launch_cast_f32_to_bf16(device, &probs_f32, &mut probs_bf16)?;
+
+                // out_head = probs @ V. [q_len, total_k] × [total_k, head_dim]
+                launch_matmul_bf16_bf16(
+                    device,
+                    &probs_bf16,
+                    &v_head_bf16,
+                    &mut out_head_bf16,
+                    q_len,
+                    total_k,
+                    head_dim,
+                )?;
+
+                // Scatter back into attn_out_bf16[:, q_head, :].
+                launch_head_scatter_bf16(
+                    device,
+                    &out_head_bf16,
+                    &mut attn_out_bf16,
+                    q_len,
+                    n_head,
+                    head_dim,
+                    q_head,
+                )?;
+            }
+
+            // ── 3f. Output projection + residual.
+            //
+            //   attn_out_2d = reshape attn_out_bf16 to [q_len, q_dim]
+            //   attn_out_f32 = cast to f32
+            //   proj_f32 [q_len, hidden] = attn_out_f32 @ w_o
+            //   proj_bf16 = cast to bf16
+            //   h_new = residual_add(h_bf16, proj_bf16)
+            //
+            // We allocate `h_new` separately and swap at the end — the
+            // residual_add kernel requires output ≠ either input.
+            let attn_out_bf16 = attn_out_bf16.reshape(vec![q_len, q_dim])?;
+            let mut attn_out_f32 = CudaTensor::<f32>::zeros(device.clone(), vec![q_len, q_dim])?;
+            launch_cast_bf16_to_f32(device, &attn_out_bf16, &mut attn_out_f32)?;
+
+            let mut proj_f32 = CudaTensor::<f32>::zeros(device.clone(), vec![q_len, hidden])?;
+            layer.w_o.matmul_f32(device, &attn_out_f32, &mut proj_f32)?;
+
+            let mut proj_bf16 =
+                CudaTensor::<bf16>::zeros(device.clone(), vec![q_len, hidden])?;
+            launch_cast_f32_to_bf16(device, &proj_f32, &mut proj_bf16)?;
+
+            let mut h_after_attn =
+                CudaTensor::<bf16>::zeros(device.clone(), vec![q_len, hidden])?;
+            launch_residual_add_bf16(device, &h_bf16, &proj_bf16, &mut h_after_attn)?;
+            h_bf16 = h_after_attn;
+
+            // ── 3g. FFN pre-norm.
+            let mut h2_f32 = CudaTensor::<f32>::zeros(device.clone(), vec![q_len, hidden])?;
+            launch_cast_bf16_to_f32(device, &h_bf16, &mut h2_f32)?;
+            let mut hf_f32 = CudaTensor::<f32>::zeros(device.clone(), vec![q_len, hidden])?;
+            launch_rmsnorm_f32(device, &h2_f32, &layer.ffn_norm, &mut hf_f32, eps)?;
+
+            // ── 3h. SwiGLU.
+            let mut gate_f32 =
+                CudaTensor::<f32>::zeros(device.clone(), vec![q_len, cfg.intermediate])?;
+            layer.w_gate.matmul_f32(device, &hf_f32, &mut gate_f32)?;
+            let mut up_f32 =
+                CudaTensor::<f32>::zeros(device.clone(), vec![q_len, cfg.intermediate])?;
+            layer.w_up.matmul_f32(device, &hf_f32, &mut up_f32)?;
+
+            let mut gate_bf16 =
+                CudaTensor::<bf16>::zeros(device.clone(), vec![q_len, cfg.intermediate])?;
+            launch_cast_f32_to_bf16(device, &gate_f32, &mut gate_bf16)?;
+            let mut up_bf16 =
+                CudaTensor::<bf16>::zeros(device.clone(), vec![q_len, cfg.intermediate])?;
+            launch_cast_f32_to_bf16(device, &up_f32, &mut up_bf16)?;
+
+            let mut gu_bf16 =
+                CudaTensor::<bf16>::zeros(device.clone(), vec![q_len, cfg.intermediate])?;
+            launch_silu_mul_bf16(device, &gate_bf16, &up_bf16, &mut gu_bf16)?;
+
+            let mut gu_f32 =
+                CudaTensor::<f32>::zeros(device.clone(), vec![q_len, cfg.intermediate])?;
+            launch_cast_bf16_to_f32(device, &gu_bf16, &mut gu_f32)?;
+
+            let mut ffn_out_f32 =
+                CudaTensor::<f32>::zeros(device.clone(), vec![q_len, hidden])?;
+            layer.w_down.matmul_f32(device, &gu_f32, &mut ffn_out_f32)?;
+
+            let mut ffn_out_bf16 =
+                CudaTensor::<bf16>::zeros(device.clone(), vec![q_len, hidden])?;
+            launch_cast_f32_to_bf16(device, &ffn_out_f32, &mut ffn_out_bf16)?;
+
+            let mut h_after_ffn =
+                CudaTensor::<bf16>::zeros(device.clone(), vec![q_len, hidden])?;
+            launch_residual_add_bf16(device, &h_bf16, &ffn_out_bf16, &mut h_after_ffn)?;
+            h_bf16 = h_after_ffn;
+        }
+
+        // ─────────────────────────────────────────────────────────────
+        // Step 4. Final RMSNorm + lm_head projection.
+        // ─────────────────────────────────────────────────────────────
+        let mut h_final_f32 = CudaTensor::<f32>::zeros(device.clone(), vec![q_len, hidden])?;
+        launch_cast_bf16_to_f32(device, &h_bf16, &mut h_final_f32)?;
+        let mut out_hidden_f32 =
+            CudaTensor::<f32>::zeros(device.clone(), vec![q_len, hidden])?;
+        launch_rmsnorm_f32(
+            device,
+            &h_final_f32,
+            &self.weights.out_norm,
+            &mut out_hidden_f32,
+            eps,
+        )?;
+
+        let mut logits_f32 = CudaTensor::<f32>::zeros(device.clone(), vec![q_len, vocab])?;
+        lm_head.matmul_f32(device, &out_hidden_f32, &mut logits_f32)?;
+
+        Ok(logits_f32)
     }
 }
 
@@ -417,21 +950,41 @@ mod tests {
             .expect("load draft safetensors");
 
         assert_eq!(model.weights.layers.len(), cfg.n_layers);
-        assert_eq!(model.weights.fc.shape(), &[cfg.hidden, cfg.target_hidden_layers * cfg.hidden]);
+        // `fc` is stored transposed: on-disk `[hidden, 5*hidden]` → on-device
+        // `[5*hidden, hidden]` so the feature-fusion matmul consumes it
+        // as the `[k, n]` right-hand operand.
+        assert_eq!(
+            model.weights.fc.dims(),
+            (cfg.target_hidden_layers * cfg.hidden, cfg.hidden)
+        );
         assert_eq!(model.weights.hidden_norm.shape(), &[cfg.hidden]);
         assert_eq!(model.weights.out_norm.shape(), &[cfg.hidden]);
         for (il, layer) in model.weights.layers.iter().enumerate() {
             assert_eq!(layer.attn_norm.shape(), &[cfg.hidden], "layer {il}");
-            assert_eq!(layer.w_q.shape(), &[cfg.q_dim, cfg.hidden], "layer {il}");
-            assert_eq!(layer.w_k.shape(), &[cfg.kv_dim, cfg.hidden], "layer {il}");
-            assert_eq!(layer.w_v.shape(), &[cfg.kv_dim, cfg.hidden], "layer {il}");
-            assert_eq!(layer.w_o.shape(), &[cfg.hidden, cfg.q_dim], "layer {il}");
+            // Projection weights are stored transposed from HF `[out, in]`
+            // to `[in=k, out=n]` on device.
+            assert_eq!(layer.w_q.dims(), (cfg.hidden, cfg.q_dim), "layer {il}");
+            assert_eq!(layer.w_k.dims(), (cfg.hidden, cfg.kv_dim), "layer {il}");
+            assert_eq!(layer.w_v.dims(), (cfg.hidden, cfg.kv_dim), "layer {il}");
+            assert_eq!(layer.w_o.dims(), (cfg.q_dim, cfg.hidden), "layer {il}");
             assert_eq!(layer.q_norm.shape(), &[cfg.head_dim], "layer {il}");
             assert_eq!(layer.k_norm.shape(), &[cfg.head_dim], "layer {il}");
             assert_eq!(layer.ffn_norm.shape(), &[cfg.hidden], "layer {il}");
-            assert_eq!(layer.w_gate.shape(), &[cfg.intermediate, cfg.hidden], "layer {il}");
-            assert_eq!(layer.w_up.shape(), &[cfg.intermediate, cfg.hidden], "layer {il}");
-            assert_eq!(layer.w_down.shape(), &[cfg.hidden, cfg.intermediate], "layer {il}");
+            assert_eq!(
+                layer.w_gate.dims(),
+                (cfg.hidden, cfg.intermediate),
+                "layer {il}"
+            );
+            assert_eq!(
+                layer.w_up.dims(),
+                (cfg.hidden, cfg.intermediate),
+                "layer {il}"
+            );
+            assert_eq!(
+                layer.w_down.dims(),
+                (cfg.intermediate, cfg.hidden),
+                "layer {il}"
+            );
         }
 
         eprintln!(
