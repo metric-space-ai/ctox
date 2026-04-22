@@ -1,7 +1,18 @@
 //! MRoPE — Qwen3.5 4-axis Multi-axis Rotary Position Embedding on bf16
 //! Q/K tensors. In-place rotation.
 //!
-//! See `kernels/rope.cu` for the math.
+//! Backed by the vendored upstream llama.cpp kernel
+//! `rope_multi<forward=true, has_ff=false, T=__nv_bfloat16>` (see
+//! `kernels/sm_86/rope.cu` for the verbatim-upstream copy with the
+//! PTX-emission sink). Our call-sites pass `freq_scale=1.0`,
+//! `ext_factor=0.0` (no YaRN), `attn_factor=1.0`, `freq_factors=nullptr`,
+//! `is_imrope=false` — those collapse upstream's YaRN/IMRoPE branches away
+//! and leave a plain 4-axis MRoPE identical to the previous self-authored
+//! implementation.
+//!
+//! Public signature `launch_rope_mrope_bf16(device, qk, positions,
+//! theta_base, rope_dim)` is preserved — call-sites in `layers/*.rs`
+//! continue to work unchanged.
 
 use std::sync::{Arc, OnceLock};
 
@@ -14,6 +25,18 @@ use ctox_cuda_primitives::device::DeviceContext;
 use ctox_cuda_primitives::tensor::CudaTensor;
 
 use super::ROPE_PTX;
+
+// Mangled name of the `rope_multi<true, false, __nv_bfloat16>`
+// specialization emitted by the vendored rope.cu. Verified in the compiled
+// `rope.ptx`. Itanium C++ ABI mangling of:
+//   rope_multi<(bool)true, (bool)false, __nv_bfloat16>(
+//       const __nv_bfloat16*, __nv_bfloat16*,
+//       int, int, int, int, int, int, int, int, int, int,
+//       const int32_t*, float, float, float,
+//       rope_corr_dims, float,
+//       const float*, mrope_sections, bool)
+const ROPE_MULTI_BF16_SYM: &str =
+    "_Z10rope_multiILb1ELb0E13__nv_bfloat16EvPKT1_PS1_iiiiiiiiiiPKifff14rope_corr_dimsfPKf14mrope_sectionsb";
 
 static ROPE_MROPE_BF16_FN: OnceLock<CudaFunction> = OnceLock::new();
 
@@ -29,11 +52,35 @@ fn rope_mrope_bf16_fn(device: &Arc<DeviceContext>) -> Result<CudaFunction> {
         .load_module(Ptx::from_src(ptx_src))
         .map_err(|e| anyhow!("load_module rope.ptx: {:?}", e))?;
     let f = module
-        .load_function("rope_mrope_bf16")
-        .map_err(|e| anyhow!("load_function rope_mrope_bf16: {:?}", e))?;
+        .load_function(ROPE_MULTI_BF16_SYM)
+        .map_err(|e| anyhow!("load_function {}: {:?}", ROPE_MULTI_BF16_SYM, e))?;
     let _ = ROPE_MROPE_BF16_FN.set(f.clone());
     Ok(f)
 }
+
+/// Rust mirror of upstream `rope_corr_dims` (2 floats). Used only when
+/// `ext_factor != 0.0` for YaRN; we always pass `ext_factor=0.0` so these
+/// values are don't-cares, but the struct must be present in the kernel
+/// ABI. Upstream layout: `struct rope_corr_dims { float v[2]; };`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+struct RopeCorrDims {
+    v: [f32; 2],
+}
+unsafe impl cudarc::driver::DeviceRepr for RopeCorrDims {}
+
+/// Rust mirror of upstream `mrope_sections` (4 ints). Defines how the
+/// head_dim pairs are partitioned across the 4 position axes. For
+/// Qwen3.5's plain MRoPE we set each section to `rope_dim / 8` (equal
+/// quarter-splits of `rope_dim/2` pairs), so pair index `p` maps to
+/// axis `p / (rope_dim/8)`. This reproduces the self-authored kernel's
+/// axis-sectioning exactly.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+struct MRopeSections {
+    v: [i32; 4],
+}
+unsafe impl cudarc::driver::DeviceRepr for MRopeSections {}
 
 /// Apply MRoPE in place to a Q- or K-tensor.
 ///
@@ -73,7 +120,10 @@ pub fn launch_rope_mrope_bf16(
         ));
     }
     if rope_dim <= 0 {
-        return Err(anyhow!("rope_mrope: rope_dim must be positive, got {}", rope_dim));
+        return Err(anyhow!(
+            "rope_mrope: rope_dim must be positive, got {}",
+            rope_dim
+        ));
     }
     if rope_dim as usize > head_dim {
         return Err(anyhow!(
@@ -92,38 +142,107 @@ pub fn launch_rope_mrope_bf16(
         return Ok(());
     }
 
-    // Element-pair-parallel launch. One thread handles one rotation
-    // pair. Total pairs = n_tokens * n_heads * (head_dim / 2). The
-    // kernel early-returns for pairs past rope_dim/2 within each head,
-    // so the grid can just cover head_dim/2.
-    let pairs_per_head = head_dim / 2;
-    let total_pairs = n_tokens * n_heads * pairs_per_head;
-    let block_dim: u32 = 256;
-    let grid_dim = (total_pairs as u32).div_ceil(block_dim);
+    // Upstream ggml index convention: ne00 = fastest/innermost dim.
+    // Our row-major [n_tokens, n_heads, head_dim] maps to:
+    //   ne00 = head_dim, ne01 = n_heads, ne02 = n_tokens, ne03 = 1.
+    let ne00 = head_dim as i32;
+    let ne01 = n_heads as i32;
+    let ne02 = n_tokens as i32;
+    // nr = "number of rows" = ne01*ne02*ne03 = count of head-vectors.
+    let nr = (n_heads * n_tokens) as i32;
+
+    // Strides in element units (upstream divides bytes by ggml_type_size).
+    let s01 = ne00; // step between heads within a token
+    let s02 = ne00 * ne01; // step between tokens
+    let s03 = ne00 * ne01 * ne02; // step between batch (unused, ne03=1)
+    let s1 = s01;
+    let s2 = s02;
+    let s3 = s03;
+
+    // Block / grid layout mirrors upstream rope_multi_cuda:
+    //   block_dims = (1, CUDA_ROPE_BLOCK_SIZE, 1)  — 256 threads along y.
+    //   n_blocks_x = ceil(ne00 / (2*256))          — one pair per thread.
+    //   block_nums = (nr, n_blocks_x, 1).
+    const ROPE_BLOCK: u32 = 256;
+    let n_blocks_y = ((ne00 as u32) + 2 * ROPE_BLOCK - 1) / (2 * ROPE_BLOCK);
     let cfg = LaunchConfig {
-        grid_dim: (grid_dim, 1, 1),
-        block_dim: (block_dim, 1, 1),
+        grid_dim: (nr as u32, n_blocks_y, 1),
+        block_dim: (1, ROPE_BLOCK, 1),
         shared_mem_bytes: 0,
     };
 
+    // theta_scale = theta_base^(-2/n_dims). Upstream precomputes this in
+    // rope_multi_cuda before launching the kernel.
+    let n_dims = rope_dim; // we rotate the full leading rope_dim of ne00
+    let theta_scale = theta_base.powf(-2.0 / n_dims as f32);
+
+    // mrope_sections: split rope_dim/2 pairs evenly across 4 axes so
+    // pair index p maps to axis `p / (rope_dim/8)`. Matches the
+    // self-authored kernel's sectioning AND the CPU reference in tests.
+    let section_size = rope_dim / 8;
+    let sections = MRopeSections {
+        v: [section_size, section_size, section_size, section_size],
+    };
+
+    // No YaRN. corr_dims only consulted when ext_factor != 0.
+    let corr_dims = RopeCorrDims { v: [0.0, 0.0] };
+    let freq_scale = 1.0f32;
+    let ext_factor = 0.0f32;
+    let attn_factor = 1.0f32;
+    let is_imrope = false;
+
+    // has_ff=false specialization means `freq_factors` pointer is never
+    // dereferenced — pass null.
+    let null_ptr: u64 = 0;
+
     let f = rope_mrope_bf16_fn(device)?;
     let stream = device.raw().default_stream();
-    let n_tokens_i32 = n_tokens as i32;
-    let n_heads_i32 = n_heads as i32;
-    let head_dim_i32 = head_dim as i32;
+
+    // In-place: x and dst alias. Rust-side borrow checker rejects taking
+    // both `qk.buf()` and `qk.buf_mut()` simultaneously, so we grab the
+    // mut borrow once and pass the raw device pointer for the `x` arg.
+    // The kernel's read-before-write pattern (each thread loads x[ix],
+    // x[ix+n_dims/2] before writing dst[idst]) is safe under aliasing.
+    let qk_dst = qk.buf_mut();
+    let qk_src_ptr: u64 = {
+        // The CudaSlice `DevicePtr` is stable across calls; we keep
+        // `qk_dst` live below so the underlying allocation isn't
+        // dropped. Using the raw pointer as an immutable kernel arg
+        // here is equivalent to passing `qk.buf()` but side-steps the
+        // borrow checker since we've already taken the mutable borrow.
+        use cudarc::driver::DevicePtr;
+        let stream_ref = device.raw().default_stream();
+        let (p, _guard) = qk_dst.device_ptr(&stream_ref);
+        p
+    };
+
     let mut launcher = stream.launch_builder(&f);
     launcher
-        .arg(qk.buf_mut())
+        .arg(&qk_src_ptr) // const T* x (alias of dst — in-place)
+        .arg(qk_dst) // T* dst
+        .arg(&ne00)
+        .arg(&ne01)
+        .arg(&ne02)
+        .arg(&s01)
+        .arg(&s02)
+        .arg(&s03)
+        .arg(&s1)
+        .arg(&s2)
+        .arg(&s3)
+        .arg(&n_dims)
         .arg(positions.buf())
-        .arg(&n_tokens_i32)
-        .arg(&n_heads_i32)
-        .arg(&head_dim_i32)
-        .arg(&rope_dim)
-        .arg(&theta_base);
+        .arg(&freq_scale)
+        .arg(&ext_factor)
+        .arg(&attn_factor)
+        .arg(&corr_dims)
+        .arg(&theta_scale)
+        .arg(&null_ptr) // const float* freq_factors = nullptr
+        .arg(&sections)
+        .arg(&is_imrope);
 
     unsafe { launcher.launch(cfg) }.map_err(|e| {
         anyhow!(
-            "rope_mrope_bf16 launch (n_tokens={} n_heads={} head_dim={} rope_dim={}): {:?}",
+            "rope_multi<bf16> launch (n_tokens={} n_heads={} head_dim={} rope_dim={}): {:?}",
             n_tokens,
             n_heads,
             head_dim,

@@ -1,7 +1,21 @@
 //! softmax — numerically stable row softmax over f32 tensors.
 //!
-//! See `kernels/softmax.cu` for the math. Mirrors the rmsnorm wrapper
-//! pattern: one block per row, warp-shuffle fan-in reduction.
+//! Backed by the vendored upstream llama.cpp kernel
+//! `soft_max_f32<use_shared=false, ncols_template=0, block_size_template=0,
+//! T=float>` (see `kernels/sm_86/softmax.cu` for the shim that pulls the
+//! vendored TU into the PTX registry).
+//!
+//! Our call-sites use softmax without ALiBi, without mask, without sinks,
+//! and without scale. Those are all "off-path" branches in the upstream
+//! kernel: mask=nullptr short-circuits the mask dereference; sinks=nullptr
+//! skips the sinks-exp term; scale=1.0 and max_bias=0.0 collapse the
+//! scale/slope multiplies. What remains is a plain row-softmax identical
+//! to the previous self-authored version, but with the vendored warp
+//! reduction and loop unrolls.
+//!
+//! Public signature unchanged from the self-authored version:
+//! `launch_softmax_f32(device, x, y)` — `[n_rows, n_cols]` f32 in/out,
+//! no synchronization.
 
 use std::sync::{Arc, OnceLock};
 
@@ -13,6 +27,13 @@ use ctox_cuda_primitives::device::DeviceContext;
 use ctox_cuda_primitives::tensor::CudaTensor;
 
 use super::SOFTMAX_PTX;
+
+// Mangled name of the `soft_max_f32<false, 0, 0, float>` specialization
+// emitted by the vendored softmax TU. Verified in the compiled
+// `softmax.ptx`. Exact string is the Itanium C++ ABI mangling of:
+//   soft_max_f32<(bool)false, 0, 0, float>(
+//       const float*, const float*, const float*, float*, soft_max_params)
+const SOFT_MAX_F32_SYM: &str = "_Z12soft_max_f32ILb0ELi0ELi0EfEvPKfPKT2_S1_Pf15soft_max_params";
 
 static SOFTMAX_F32_FN: OnceLock<CudaFunction> = OnceLock::new();
 
@@ -28,11 +49,50 @@ fn softmax_f32_fn(device: &Arc<DeviceContext>) -> Result<CudaFunction> {
         .load_module(Ptx::from_src(ptx_src))
         .map_err(|e| anyhow!("load_module softmax.ptx: {:?}", e))?;
     let f = module
-        .load_function("softmax_f32")
-        .map_err(|e| anyhow!("load_function softmax_f32: {:?}", e))?;
+        .load_function(SOFT_MAX_F32_SYM)
+        .map_err(|e| anyhow!("load_function {}: {:?}", SOFT_MAX_F32_SYM, e))?;
     let _ = SOFTMAX_F32_FN.set(f.clone());
     Ok(f)
 }
+
+/// Rust mirror of the upstream `soft_max_params` struct.
+///
+/// Field order, types, and natural alignment must exactly match the CUDA
+/// side — the kernel receives this struct by value and indexes fields by
+/// offset. The C++ layout inserts 4 bytes of tail padding after
+/// `n_head_log2` (u32) before the next i64; `#[repr(C)]` on x86-64 / sm_8x
+/// produces the same layout. Total size = 8*11 + 4 + 4 + 4*4 = 108 aligned
+/// to 120 bytes (one trailing 4-byte pad after `m1` to align to 8 is NOT
+/// required since there's no subsequent i64 — CUDA ABI treats the end as-is
+/// but we don't care about sizeof here, only field offsets).
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+struct SoftMaxParams {
+    nheads: i64,
+    n_head_log2: u32,
+    // 4-byte tail-align pad inserted by #[repr(C)] so `ncols` is 8-aligned.
+    _pad0: u32,
+    ncols: i64,
+    nrows_x: i64,
+    nrows_y: i64,
+    ne00: i64,
+    ne01: i64,
+    ne02: i64,
+    ne03: i64,
+    nb11: i64,
+    nb12: i64,
+    nb13: i64,
+    ne12: i64,
+    ne13: i64,
+    scale: f32,
+    max_bias: f32,
+    m0: f32,
+    m1: f32,
+}
+
+// Safety: plain-old-data, all fields trivially Pod. Needed so cudarc's
+// `PushKernelArg` can treat it as a kernel argument.
+unsafe impl cudarc::driver::DeviceRepr for SoftMaxParams {}
 
 /// `y[r, :] = softmax(x[r, :])` for every row.
 ///
@@ -64,26 +124,70 @@ pub fn launch_softmax_f32(
         return Ok(());
     }
 
-    // block_dim = min(n_cols, 1024) rounded up to a warp.
-    let mut block_dim = n_cols.min(1024);
-    block_dim = block_dim.div_ceil(32) * 32;
+    // Block-dim selection mirrors upstream `soft_max_f32_cuda`: start at
+    // WARP_SIZE=32 and double until we cover ncols or hit
+    // CUDA_SOFT_MAX_BLOCK_SIZE=1024.
+    let mut nth: u32 = 32;
+    while (nth as usize) < n_cols && nth < 1024 {
+        nth *= 2;
+    }
     let cfg = LaunchConfig {
         grid_dim: (n_rows as u32, 1, 1),
-        block_dim: (block_dim as u32, 1, 1),
-        shared_mem_bytes: 0,
+        block_dim: (nth, 1, 1),
+        // With use_shared=false, vals is aliased onto dst; the only shmem
+        // the kernel needs is WARP_SIZE floats for the inter-warp reduction
+        // buffer `buf_iw`. Upstream calls this `nbytes_shared_low`.
+        shared_mem_bytes: 32 * std::mem::size_of::<f32>() as u32,
+    };
+
+    // Build params. Mask/sinks paths are off — nb11/nb12/nb13 would divide
+    // `sizeof(T)` with T=float in the address computation for `mask`, but
+    // since mask=null the result gets multiplied by `(mask != nullptr)`
+    // (=0) in the upstream kernel, so values are don't-cares. We set them
+    // to 1 (float units) just to keep the shape coherent.
+    let params = SoftMaxParams {
+        nheads: 1,
+        n_head_log2: 1, // log2(1) == 0 — only used in get_alibi_slope with max_bias=0, which early-returns.
+        _pad0: 0,
+        ncols: n_cols as i64,
+        nrows_x: n_rows as i64,
+        nrows_y: n_rows as i64,
+        ne00: n_cols as i64,
+        ne01: n_rows as i64,
+        ne02: 1,
+        ne03: 1,
+        nb11: 1,
+        nb12: 1,
+        nb13: 1,
+        ne12: 1,
+        ne13: 1,
+        scale: 1.0,
+        max_bias: 0.0,
+        m0: 1.0,
+        m1: 1.0,
     };
 
     let f = softmax_f32_fn(device)?;
     let stream = device.raw().default_stream();
-    let n_cols_i32 = n_cols as i32;
+
+    // Null device pointers for `mask` and `sinks`. Upstream guards both
+    // with pointer-null checks before any dereference.
+    let null_ptr: u64 = 0;
+
     let mut launcher = stream.launch_builder(&f);
-    launcher.arg(x.buf()).arg(y.buf_mut()).arg(&n_cols_i32);
+    launcher
+        .arg(x.buf())
+        .arg(&null_ptr) // const T* mask = nullptr
+        .arg(&null_ptr) // const float* sinks = nullptr
+        .arg(y.buf_mut())
+        .arg(&params);
 
     unsafe { launcher.launch(cfg) }.map_err(|e| {
         anyhow!(
-            "softmax_f32 launch (n_rows={} n_cols={}): {:?}",
+            "soft_max_f32 launch (n_rows={} n_cols={} nth={}): {:?}",
             n_rows,
             n_cols,
+            nth,
             e
         )
     })?;
