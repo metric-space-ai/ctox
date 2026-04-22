@@ -22,6 +22,16 @@ half = { workspace = true, features = ["bytemuck"] }
 bytemuck = { workspace = true }
 memmap2 = { workspace = true }
 
+# Tokenization is pure Rust and used un-gated — the `tokenizer` module
+# is always compiled so non-CUDA hosts can still round-trip prompts.
+# The workspace declares `tokenizers` with default-features = false to
+# avoid pulling in training/download code; we re-enable `fancy-regex`
+# here because the HF `tokenizer.json` parser needs a regex backend to
+# decode the pre-tokenizer split patterns. `onig` would also work but
+# requires a C toolchain, and `fancy-regex` is pure Rust and matches
+# what `toktrie_hf_tokenizers` already turns on in the `core` crate.
+tokenizers = { workspace = true, features = ["fancy-regex"] }
+
 # cudarc provides typed wrappers over CUDA runtime / driver / cuBLAS +
 # raw CudaSlice<T> for owning device buffers. We use it as the thin
 # foundation layer only — NOT as an abstraction — so every kernel

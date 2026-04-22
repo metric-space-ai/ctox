@@ -45,6 +45,11 @@
 
 #![allow(dead_code)]
 
+// Tokenization is pure Rust and deliberately un-gated: consumers on
+// non-CUDA hosts (Mac dev boxes, CI shapes without nvcc) still need
+// to turn prompts into ids for bring-up and round-trip tests.
+pub mod tokenizer;
+
 #[cfg(feature = "cuda")]
 pub mod device;
 
