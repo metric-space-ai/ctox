@@ -323,6 +323,11 @@ pub fn emit_due_steps(root: &Path) -> Result<EmitDuePlansSummary> {
 fn create_goal(root: &Path, request: PlanCreateRequest) -> Result<GoalWithStepsView> {
     let conn = open_plan_db(root)?;
     let now = now_iso_string();
+    let approval_wait_goal = goal_waits_for_external_approval(
+        request.title.trim(),
+        request.prompt.trim(),
+        request.thread_key.as_deref(),
+    );
     let goal_id = format!(
         "goal_{}",
         stable_digest(&format!(
@@ -351,8 +356,16 @@ fn create_goal(root: &Path, request: PlanCreateRequest) -> Result<GoalWithStepsV
             request.prompt.trim(),
             thread_key,
             request.skill.as_deref(),
-            if request.auto_advance { 1 } else { 0 },
-            GOAL_STATUS_ACTIVE,
+            if request.auto_advance && !approval_wait_goal {
+                1
+            } else {
+                0
+            },
+            if approval_wait_goal {
+                GOAL_STATUS_BLOCKED
+            } else {
+                GOAL_STATUS_ACTIVE
+            },
             now,
         ],
     )?;
@@ -377,10 +390,27 @@ fn create_goal(root: &Path, request: PlanCreateRequest) -> Result<GoalWithStepsV
                 index as i64 + 1,
                 draft.title.trim(),
                 draft.instruction.trim(),
-                STEP_STATUS_PENDING,
+                if approval_wait_goal && index == 0 {
+                    STEP_STATUS_BLOCKED
+                } else {
+                    STEP_STATUS_PENDING
+                },
                 now,
             ],
         )?;
+        if approval_wait_goal && index == 0 {
+            tx.execute(
+                r#"
+                UPDATE planned_steps
+                SET blocked_reason = ?2
+                WHERE step_id = ?1
+                "#,
+                params![
+                    step_id,
+                    "waiting for explicit external approval/access evidence before auto-advance"
+                ],
+            )?;
+        }
     }
     tx.commit()?;
 
@@ -537,6 +567,14 @@ fn prepare_next_step_emission(
     let tx = conn.unchecked_transaction()?;
     let goal = load_goal_tx(&tx, goal_id)?.context("planned goal not found")?;
     if goal.status == GOAL_STATUS_COMPLETED {
+        tx.commit()?;
+        return Ok(None);
+    }
+    if goal_waits_for_external_approval(
+        goal.title.trim(),
+        goal.source_prompt.trim(),
+        Some(goal.thread_key.as_str()),
+    ) {
         tx.commit()?;
         return Ok(None);
     }
@@ -858,6 +896,39 @@ fn split_sentence_candidates(prompt: &str) -> Vec<String> {
         .filter(|candidate| candidate.split_whitespace().count() >= 5)
         .take(8)
         .collect()
+}
+
+fn goal_waits_for_external_approval(title: &str, prompt: &str, thread_key: Option<&str>) -> bool {
+    let lowered =
+        format!("{}\n{}\n{}", title, prompt, thread_key.unwrap_or_default()).to_ascii_lowercase();
+    let waits_for_external_input = [
+        "approval",
+        "access-grant",
+        "access grant",
+        "owner approval",
+        "explicit owner",
+        "explicit inbound",
+        "confirmed",
+        "confirmation",
+        "waiting",
+        "blocked until",
+    ]
+    .iter()
+    .any(|needle| lowered.contains(needle));
+    let monitor_only = [
+        "monitor inbound",
+        "monitor the jami thread",
+        "monitor the email thread",
+        "jami:",
+        "email",
+        "keep the deployment blocked",
+        "after confirmation, deploy",
+        "approval evidence",
+        "vercel approval",
+    ]
+    .iter()
+    .any(|needle| lowered.contains(needle));
+    waits_for_external_input && monitor_only
 }
 
 fn collapse_ws(value: &str) -> String {
@@ -1361,6 +1432,18 @@ fn stable_digest(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+
+    fn temp_plan_root(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "ctox-plan-{}-{}",
+            name,
+            stable_digest(&format!("{}:{}", name, now_iso_string()))
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("failed to create temp root");
+        root
+    }
 
     #[test]
     fn decompose_prefers_bullets() {
@@ -1388,6 +1471,31 @@ mod tests {
         let steps = decompose_prompt_into_steps("Follow up", "Need a durable follow-up.");
         assert_eq!(steps.len(), 3);
         assert_eq!(steps[0].title, "Inspect scope and constraints");
+    }
+
+    #[test]
+    fn approval_wait_plans_start_blocked_and_do_not_auto_emit() -> Result<()> {
+        let root = temp_plan_root("approval-wait");
+        let created = ingest_goal(
+            &root,
+            PlanIngestRequest {
+                title: "Wait for Vercel approval for kunstmen.com".to_string(),
+                prompt: "Monitor the Jami thread jami:abc123 for explicit Vercel access approval. Keep the deployment blocked until approval is confirmed. After confirmation, deploy production and verify kunstmen.com live.".to_string(),
+                thread_key: Some("jami:abc123".to_string()),
+                skill: Some("follow-up-orchestrator".to_string()),
+                auto_advance: true,
+                emit_now: false,
+            },
+        )?;
+        let view = load_goal_with_steps(&root, &created.goal.goal_id)?
+            .expect("created goal should reload");
+        assert!(!view.goal.auto_advance);
+        assert_eq!(view.goal.status, GOAL_STATUS_BLOCKED);
+        assert_eq!(view.steps[0].status, STEP_STATUS_BLOCKED);
+
+        let summary = emit_due_steps(&root)?;
+        assert_eq!(summary.emitted_count, 0);
+        Ok(())
     }
 
     // NOTE: The following three tests reference `ingest()` and `IngestPlanRequest`
