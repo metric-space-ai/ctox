@@ -2641,6 +2641,9 @@ fn monitor_mission_continuity(root: &Path, state: &Arc<Mutex<SharedState>>) -> R
         if (!mission.is_open || mission.allow_idle) && !plan_keeps_open {
             return false;
         }
+        if mission_waits_for_external_approval(mission) {
+            return false;
+        }
         if idle_secs < mission_idle_tolerance_secs(mission) {
             return false;
         }
@@ -2702,6 +2705,36 @@ fn monitor_mission_continuity(root: &Path, state: &Arc<Mutex<SharedState>>) -> R
         ),
     );
     Ok(())
+}
+
+fn mission_waits_for_external_approval(mission: &lcm::MissionStateRecord) -> bool {
+    let blocker = mission.blocker.to_ascii_lowercase();
+    let next_slice = mission.next_slice.to_ascii_lowercase();
+    let mission_text = mission.mission.to_ascii_lowercase();
+    let waits_for_external_input = [
+        "approval",
+        "blocked_on_user",
+        "owner approval",
+        "access-grant",
+        "access grant",
+        "waiting for explicit inbound",
+        "waiting for explicit owner",
+        "reply in tui",
+        "missing input",
+    ]
+    .iter()
+    .any(|needle| blocker.contains(needle) || mission_text.contains(needle));
+    let monitor_only = [
+        "monitor inbound",
+        "non-queue channels",
+        "jami",
+        "email",
+        "approval evidence",
+        "wait for vercel approval",
+    ]
+    .iter()
+    .any(|needle| next_slice.contains(needle) || mission_text.contains(needle));
+    waits_for_external_input && monitor_only
 }
 
 fn mission_watcher_disabled(root: &Path) -> bool {
@@ -6156,6 +6189,38 @@ mod tests {
             shared.last_error = Some(
                 "CTOX chat could not continue because the configured OpenAI API quota is exhausted or billing is unavailable for the selected model.".to_string(),
             );
+        }
+
+        monitor_mission_continuity(&root, &state).expect("mission watcher should succeed");
+
+        let tasks = channels::list_queue_tasks(&root, &["pending".to_string()], 10)
+            .expect("failed to list queue tasks");
+        assert!(tasks.is_empty());
+    }
+
+    #[test]
+    fn mission_watcher_skips_external_approval_monitor_loops() {
+        let root = temp_root("ctox-mission-watcher-approval-monitor");
+        std::fs::create_dir_all(root.join("runtime")).expect("failed to create runtime dir");
+        let engine = lcm::LcmEngine::open(
+            &root.join("runtime/ctox.sqlite3"),
+            lcm::LcmConfig::default(),
+        )
+        .expect("failed to open lcm");
+        let _ = engine
+            .continuity_init_documents(turn_loop::CHAT_CONVERSATION_ID)
+            .expect("failed to init continuity");
+        engine
+            .continuity_apply_diff(
+                turn_loop::CHAT_CONVERSATION_ID,
+                lcm::ContinuityKind::Focus,
+                "## Status\n+ Mission: Monitor inbound non-queue channels for explicit owner approval/access-grant confirmation for Vercel team/project access.\n+ Mission state: active\n+ Continuation mode: continuous\n+ Trigger intensity: hot\n## Blocker\n+ Current blocker: blocked_on_user | waiting for explicit inbound owner approval evidence.\n## Next\n+ Next slice: continue monitoring inbound non-queue channels (jami/email) for approval evidence.\n## Done / Gate\n+ Done gate: explicit approval evidence is visible before deploy retry.\n+ Closure confidence: low\n",
+            )
+            .expect("failed to update focus");
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        {
+            let mut shared = state.lock().expect("service state poisoned");
+            shared.last_progress_epoch_secs = current_epoch_secs().saturating_sub(120);
         }
 
         monitor_mission_continuity(&root, &state).expect("mission watcher should succeed");

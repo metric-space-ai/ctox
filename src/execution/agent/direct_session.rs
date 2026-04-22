@@ -104,6 +104,18 @@ impl PersistentSession {
             policy.emergency_fill_ratio = 2.0;
         }
         let ctx_log = ContextLogger::open(root);
+        let mut ctx_log = ctx_log.with_session_kind(if disable_compaction {
+            "review"
+        } else {
+            "mission"
+        });
+        ctx_log.log(
+            "session_started",
+            &format!(
+                "\"session_kind\":\"{}\",\"thread_id\":\"{}\"",
+                ctx_log.session_kind, thread_id
+            ),
+        );
 
         eprintln!(
             "[ctox direct-session] persistent session started thread_id={}",
@@ -597,6 +609,7 @@ struct ContextLogger {
     items_this_turn: u32,
     last_total_tokens: i64,
     last_context_window: i64,
+    session_kind: &'static str,
 }
 
 impl ContextLogger {
@@ -614,7 +627,13 @@ impl ContextLogger {
             items_this_turn: 0,
             last_total_tokens: 0,
             last_context_window: 0,
+            session_kind: "mission",
         }
+    }
+
+    fn with_session_kind(mut self, session_kind: &'static str) -> Self {
+        self.session_kind = session_kind;
+        self
     }
 
     fn log(&mut self, event: &str, extra: &str) {
@@ -627,8 +646,8 @@ impl ContextLogger {
         let _ = writeln!(
             f,
             "{{\"ts\":{ts},\"elapsed_s\":{elapsed},\"event\":\"{event}\",\
-             \"total_tokens\":{},\"context_window\":{},\"items_this_turn\":{},{extra}}}",
-            self.last_total_tokens, self.last_context_window, self.items_this_turn
+             \"total_tokens\":{},\"context_window\":{},\"items_this_turn\":{},\"session_kind\":\"{}\",{extra}}}",
+            self.last_total_tokens, self.last_context_window, self.items_this_turn, self.session_kind
         );
     }
 
@@ -687,6 +706,101 @@ impl ContextLogger {
             EventMsg::AgentMessage(am) => {
                 self.log("agent_message", &format!("\"chars\":{}", am.message.len()));
             }
+            EventMsg::ExecCommandBegin(ev) => {
+                let cmd = json_string(&ev.command.join(" "));
+                let cwd = json_string(ev.cwd.to_string_lossy().as_ref());
+                self.log(
+                    "tool_call_begin",
+                    &format!(
+                        "\"tool_type\":\"exec_command\",\"call_id\":\"{}\",\"command\":{},\"cwd\":{}",
+                        ev.call_id, cmd, cwd
+                    ),
+                );
+            }
+            EventMsg::ExecCommandEnd(ev) => {
+                let cmd = json_string(&ev.command.join(" "));
+                self.log(
+                    "tool_call_end",
+                    &format!(
+                        "\"tool_type\":\"exec_command\",\"call_id\":\"{}\",\"command\":{},\"exit_code\":{},\"status\":\"{:?}\"",
+                        ev.call_id, cmd, ev.exit_code, ev.status
+                    ),
+                );
+            }
+            EventMsg::McpToolCallBegin(ev) => {
+                let tool_name = json_string(&ev.invocation.tool);
+                let server = json_string(&ev.invocation.server);
+                self.log(
+                    "tool_call_begin",
+                    &format!(
+                        "\"tool_type\":\"mcp\",\"call_id\":\"{}\",\"server\":{},\"tool_name\":{}",
+                        ev.call_id, server, tool_name
+                    ),
+                );
+            }
+            EventMsg::McpToolCallEnd(ev) => {
+                let tool_name = json_string(&ev.invocation.tool);
+                let server = json_string(&ev.invocation.server);
+                self.log(
+                    "tool_call_end",
+                    &format!(
+                        "\"tool_type\":\"mcp\",\"call_id\":\"{}\",\"server\":{},\"tool_name\":{},\"success\":{}",
+                        ev.call_id,
+                        server,
+                        tool_name,
+                        ev.is_success()
+                    ),
+                );
+            }
+            EventMsg::DynamicToolCallRequest(ev) => {
+                let tool = json_string(&ev.tool);
+                self.log(
+                    "tool_call_begin",
+                    &format!(
+                        "\"tool_type\":\"dynamic\",\"call_id\":\"{}\",\"tool_name\":{}",
+                        ev.call_id, tool
+                    ),
+                );
+            }
+            EventMsg::DynamicToolCallResponse(ev) => {
+                let tool = json_string(&ev.tool);
+                self.log(
+                    "tool_call_end",
+                    &format!(
+                        "\"tool_type\":\"dynamic\",\"call_id\":\"{}\",\"tool_name\":{},\"success\":{}",
+                        ev.call_id, tool, ev.success
+                    ),
+                );
+            }
+            EventMsg::WebSearchBegin(ev) => {
+                self.log(
+                    "tool_call_begin",
+                    &format!(
+                        "\"tool_type\":\"web_search\",\"call_id\":\"{}\"",
+                        ev.call_id
+                    ),
+                );
+            }
+            EventMsg::WebSearchEnd(ev) => {
+                let query = json_string(&ev.query);
+                self.log(
+                    "tool_call_end",
+                    &format!(
+                        "\"tool_type\":\"web_search\",\"call_id\":\"{}\",\"query\":{}",
+                        ev.call_id, query
+                    ),
+                );
+            }
+            EventMsg::ViewImageToolCall(ev) => {
+                let path = json_string(ev.path.to_string_lossy().as_ref());
+                self.log(
+                    "tool_call_begin",
+                    &format!(
+                        "\"tool_type\":\"view_image\",\"call_id\":\"{}\",\"path\":{}",
+                        ev.call_id, path
+                    ),
+                );
+            }
             _ => {
                 self.items_this_turn += 1;
             }
@@ -709,4 +823,8 @@ impl ContextLogger {
             ),
         );
     }
+}
+
+fn json_string(value: &str) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| "\"<invalid>\"".to_string())
 }
