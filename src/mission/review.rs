@@ -21,6 +21,7 @@ Use the same inspection tools as normal CTOX work.
 Use multiple tool turns as needed.
 
 Verification standard:
+- active vision and active mission are the primary strategic context
 - explicit done gates
 - reviewed claims
 - resulting mission state
@@ -58,6 +59,8 @@ MISSION_STATE: HEALTHY|UNHEALTHY|UNCLEAR
 SUMMARY: <one sentence>
 FAILED_GATES:
 - <gate or "none">
+FINDINGS:
+- <semantic finding or "none">
 OPEN_ITEMS:
 - <item>
 EVIDENCE:
@@ -103,10 +106,16 @@ impl ReviewVerdict {
 pub struct ReviewOutcome {
     pub required: bool,
     pub verdict: ReviewVerdict,
+    pub mission_state: String,
     pub summary: String,
     pub report: String,
     pub score: u8,
     pub reasons: Vec<String>,
+    pub failed_gates: Vec<String>,
+    pub semantic_findings: Vec<String>,
+    pub open_items: Vec<String>,
+    pub evidence: Vec<String>,
+    pub handoff: Option<String>,
 }
 
 impl ReviewOutcome {
@@ -114,10 +123,16 @@ impl ReviewOutcome {
         Self {
             required: false,
             verdict: ReviewVerdict::Skipped,
+            mission_state: "UNCLEAR".to_string(),
             summary: summary.into(),
             report: String::new(),
             score: 0,
             reasons: Vec::new(),
+            failed_gates: Vec::new(),
+            semantic_findings: Vec::new(),
+            open_items: Vec::new(),
+            evidence: Vec::new(),
+            handoff: None,
         }
     }
 
@@ -143,6 +158,7 @@ pub fn review_completion_if_needed(
         Err(err) => ReviewOutcome {
             required: true,
             verdict: ReviewVerdict::Unavailable,
+            mission_state: "UNCLEAR".to_string(),
             summary: format!(
                 "Completion review could not finish: {}",
                 clip_text(&err.to_string(), 180)
@@ -150,6 +166,11 @@ pub fn review_completion_if_needed(
             report: err.to_string(),
             score,
             reasons,
+            failed_gates: Vec::new(),
+            semantic_findings: Vec::new(),
+            open_items: Vec::new(),
+            evidence: Vec::new(),
+            handoff: None,
         },
     }
 }
@@ -344,14 +365,20 @@ Open the review skill first and follow it.\n\
 Gather the review facts yourself from the runtime store, continuity records, ticket system, communication state, workspace, runtime, live URLs, and browser surface.\n\
 \n\
 Required review work:\n\
-1. discover the mission line and done gate for this conversation or thread\n\
-2. discover the reviewed slice or latest claimed progress for this conversation or thread\n\
-3. inspect related ticket/self-work/queue state\n\
-4. inspect relevant founder or owner communication facts when owner-visible is yes\n\
-5. inspect the live public/runtime surface when applicable\n\
-6. produce a verdict from evidence\n\
+1. load the active strategic directives for this conversation or thread from runtime SQLite state first\n\
+2. treat active vision and active mission as the primary review context\n\
+3. discover the done gate and the reviewed slice or latest claimed progress for this conversation or thread\n\
+4. inspect related ticket/self-work/queue state\n\
+5. inspect relevant founder or owner communication facts when owner-visible is yes\n\
+6. inspect the live public/runtime surface when applicable\n\
+7. produce a verdict from evidence\n\
 \n\
 Use the runtime DB path and workspace root above as the primary grounding points.\n\
+\n\
+Helpful runtime entrypoint:\n\
+- use `ctox strategy show --conversation-id {}` and `ctox verification runs --conversation-id {}` as starting lookups, then continue with direct SQLite/runtime/browser inspection\n\
+\n\
+If active vision or active mission is missing for strategic or owner-visible work, that is a review failure unless the slice itself is explicitly establishing them.\n\
 \n\
 Respond in exactly this shape:\n\
 VERDICT: PASS|FAIL|PARTIAL\n\
@@ -359,12 +386,16 @@ MISSION_STATE: HEALTHY|UNHEALTHY|UNCLEAR\n\
 SUMMARY: <one sentence>\n\
 FAILED_GATES:\n\
 - <gate or \"none\">\n\
+FINDINGS:\n\
+- <semantic finding or \"none\">\n\
 OPEN_ITEMS:\n\
 - <item>\n\
 EVIDENCE:\n\
 - <command or check> => <observed result>\n\
 HANDOFF:\n\
 - <only when another review run should continue; otherwise write \"none\">\n",
+        request.conversation_id,
+        request.conversation_id,
         request.conversation_id
     )
 }
@@ -414,6 +445,9 @@ Continue the remaining verification work and return the standard review format.\
 fn parse_review_report(score: u8, reasons: Vec<String>, report: &str) -> ReviewOutcome {
     let parsed_verdict = parse_verdict(report);
     let verdict = parsed_verdict.clone().unwrap_or(ReviewVerdict::Partial);
+    let mission_state = parse_prefixed_line(report, "MISSION_STATE:")
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "UNCLEAR".to_string());
     let summary = if parsed_verdict.is_none() {
         match parse_prefixed_line(report, "SUMMARY:") {
             Some(summary) if !summary.is_empty() => format!(
@@ -431,10 +465,16 @@ fn parse_review_report(score: u8, reasons: Vec<String>, report: &str) -> ReviewO
     ReviewOutcome {
         required: true,
         verdict,
+        mission_state,
         summary,
         report: report.trim().to_string(),
         score,
         reasons,
+        failed_gates: parse_section_items(report, "FAILED_GATES:"),
+        semantic_findings: parse_section_items(report, "FINDINGS:"),
+        open_items: parse_section_items(report, "OPEN_ITEMS:"),
+        evidence: parse_section_items(report, "EVIDENCE:"),
+        handoff: parse_handoff_block(report),
     }
 }
 
@@ -506,6 +546,40 @@ fn parse_handoff_block(report: &str) -> Option<String> {
     } else {
         Some(normalized.to_string())
     }
+}
+
+fn parse_section_items(report: &str, header: &str) -> Vec<String> {
+    let mut collecting = false;
+    let mut items = Vec::new();
+    for line in report.lines() {
+        let trimmed = line.trim();
+        if trimmed == header {
+            collecting = true;
+            continue;
+        }
+        if collecting {
+            if matches!(
+                trimmed,
+                "VERDICT:"
+                    | "MISSION_STATE:"
+                    | "SUMMARY:"
+                    | "FAILED_GATES:"
+                    | "FINDINGS:"
+                    | "OPEN_ITEMS:"
+                    | "EVIDENCE:"
+                    | "HANDOFF:"
+            ) {
+                break;
+            }
+            if let Some(item) = trimmed.strip_prefix("- ") {
+                let value = item.trim();
+                if !value.is_empty() && !value.eq_ignore_ascii_case("none") {
+                    items.push(value.to_string());
+                }
+            }
+        }
+    }
+    items
 }
 
 fn contains_any(haystack: &str, needles: &[&str]) -> bool {

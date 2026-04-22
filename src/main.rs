@@ -32,6 +32,7 @@ pub use mission::plan;
 pub use mission::queue;
 pub use mission::review;
 pub use mission::schedule;
+pub use mission::strategy;
 pub use mission::tickets;
 pub use mission::verification;
 pub use service::governance;
@@ -115,6 +116,7 @@ GOVERNANCE / MISSION
   ctox channel <subcmd>          communication channels (email, jami, webrtc)
   ctox plan <subcmd>             mission plans
   ctox schedule <subcmd>         recurring / deferred work
+  ctox strategy <subcmd>         canonical vision / mission / strategic directives
   ctox follow-up <subcmd>        blocked-task follow-ups
   ctox ticket <subcmd>           ticket integrations
   ctox secret <subcmd>           credential storage
@@ -316,6 +318,7 @@ fn main() -> anyhow::Result<()> {
         Some("scrape") => scrape::handle_scrape_command(&root, &args[1..]),
         Some("secret") => secrets::handle_secret_command(&root, &args[1..]),
         Some("schedule") => schedule::handle_schedule_command(&root, &args[1..]),
+        Some("strategy") => strategy::handle_strategy_command(&root, &args[1..]),
         Some("ticket") => tickets::handle_ticket_command(&root, &args[1..]),
         Some("web") => web::handle_web_command(&root, &args[1..]),
         Some("verification") => verification::handle_verification_command(&root, &args[1..]),

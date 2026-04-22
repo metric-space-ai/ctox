@@ -100,6 +100,7 @@ const QUEUE_PRESSURE_GUARD_THRESHOLD: usize = 20;
 const QUEUE_GUARD_SOURCE_LABEL: &str = "queue-guard";
 const PLATFORM_EXPERTISE_KIND: &str = "platform-expertise-pass";
 const PLATFORM_IMPLEMENTATION_KIND: &str = "platform-implementation";
+const STRATEGIC_DIRECTION_KIND: &str = "strategic-direction-pass";
 const SERVICE_SHUTDOWN_TIMEOUT_SECS: u64 = 15;
 const SERVICE_SHUTDOWN_POLL_MILLIS: u64 = 150;
 const SYSTEMCTL_USER_TIMEOUT_SECS: u64 = 5;
@@ -2182,6 +2183,26 @@ fn start_prompt_worker(
                 );
             }
         }
+        match maybe_redirect_owner_visible_work_to_strategy_setup(&root, &state, &job) {
+            Ok(true) => {
+                eprintln!(
+                    "ctox prompt worker rerouted-to-strategy source={} preview={}",
+                    job.source_label,
+                    clip_text(&job.preview, 120)
+                );
+                return;
+            }
+            Ok(false) => {}
+            Err(err) => {
+                push_event(
+                    &state,
+                    format!(
+                        "Failed to evaluate strategic direction routing for {}: {}",
+                        job.source_label, err
+                    ),
+                );
+            }
+        }
         match maybe_redirect_platform_work_to_expertise_passes(&root, &state, &job) {
             Ok(true) => {
                 eprintln!(
@@ -2702,17 +2723,64 @@ fn enqueue_review_rework(
         },
         outcome.verdict.as_gate_label()
     );
+    let failed_gates_block = if outcome.failed_gates.is_empty() {
+        "- none".to_string()
+    } else {
+        outcome
+            .failed_gates
+            .iter()
+            .take(6)
+            .map(|item| format!("- {}", item.trim()))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let findings_block = if outcome.semantic_findings.is_empty() {
+        "- none".to_string()
+    } else {
+        outcome
+            .semantic_findings
+            .iter()
+            .take(8)
+            .map(|item| format!("- {}", item.trim()))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let open_items_block = if outcome.open_items.is_empty() {
+        "- none".to_string()
+    } else {
+        outcome
+            .open_items
+            .iter()
+            .take(8)
+            .map(|item| format!("- {}", item.trim()))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
     let prompt = format!(
         "An external CTOX review run rejected the previous slice.\n\n\
 Verdict: {}\n\
+Mission state: {}\n\
 Review summary: {}\n\
+\n\
+Failed gates:\n\
+{}\n\
+\n\
+Semantic findings:\n\
+{}\n\
+\n\
+Open items:\n\
+{}\n\
 \n\
 Address the failed gates and open items surfaced by the external review. \
 Start by checking the persisted review verdict and evidence for this conversation or thread. \
 Do not start unrelated work. Either fix the gaps and verify them with direct checks, \
 or prove the review wrong with stronger evidence.",
         outcome.verdict.as_gate_label(),
+        outcome.mission_state,
         summary_line,
+        failed_gates_block,
+        findings_block,
+        open_items_block,
     );
     // Keep the rework on the original thread when one exists so the executor
     // sees its own prior conversation context. Synthesize a fallback thread
@@ -3894,6 +3962,165 @@ fn platform_expertise_pass_kind(item: &tickets::TicketSelfWorkItemView) -> Optio
     metadata_string(&item.metadata, "pass_kind")
 }
 
+fn is_owner_visible_strategic_job(job: &QueuedPrompt) -> bool {
+    if !derive_owner_visible_for_review(&job.source_label) {
+        return false;
+    }
+    let haystack = format!(
+        "{}\n{}\n{}\n{}\n{}",
+        job.prompt,
+        job.goal,
+        job.preview,
+        job.thread_key.clone().unwrap_or_default(),
+        job.workspace_root.clone().unwrap_or_default()
+    )
+    .to_ascii_lowercase();
+    haystack.contains("homepage")
+        || haystack.contains("landing")
+        || haystack.contains("website")
+        || haystack.contains("product")
+        || haystack.contains("platform")
+        || haystack.contains("marketplace")
+        || haystack.contains("public")
+        || haystack.contains("founder")
+        || haystack.contains("buyer")
+        || haystack.contains("customer")
+}
+
+fn queue_strategy_direction_pass(
+    root: &Path,
+    thread_key: &str,
+    workspace_root: Option<&str>,
+    resume_prompt: &str,
+    resume_goal: &str,
+    resume_preview: &str,
+    resume_skill: Option<&str>,
+) -> Result<channels::QueueTaskView> {
+    create_self_work_backed_queue_task(
+        root,
+        DurableSelfWorkQueueRequest {
+            kind: STRATEGIC_DIRECTION_KIND.to_string(),
+            title: "Strategic direction setup".to_string(),
+            prompt: format!(
+                "Before further strategic or owner-visible execution, establish canonical runtime direction in SQLite.\n\n\
+Required outputs:\n\
+- create or revise an active Vision record in SQLite-backed runtime state\n\
+- create or revise an active Mission record in SQLite-backed runtime state\n\
+- if founder or CEO guidance changed the direction, persist that revision with the decision reason\n\
+- do not treat markdown files or chat text as canonical knowledge\n\
+\n\
+Use `ctox strategy show`, `ctox strategy set`, `ctox strategy propose`, and `ctox strategy activate`.\n\
+The authoritative Vision and Mission must live in runtime SQLite state before implementation continues.\n\
+\n\
+After direction is canonical, the deferred execution target is:\n{}",
+                resume_prompt
+            ),
+            thread_key: thread_key.to_string(),
+            workspace_root: workspace_root.map(ToOwned::to_owned),
+            priority: "urgent".to_string(),
+            suggested_skill: Some(
+                resume_skill
+                    .filter(|value| !value.trim().is_empty())
+                    .unwrap_or("plan-orchestrator")
+                    .to_string(),
+            ),
+            parent_message_key: None,
+            metadata: serde_json::json!({
+                "thread_key": thread_key,
+                "workspace_root": workspace_root,
+                "priority": "urgent",
+                "skill": resume_skill,
+                "resume_prompt": resume_prompt,
+                "resume_goal": resume_goal,
+                "resume_preview": resume_preview,
+                "resume_skill": resume_skill,
+                "dedupe_key": format!("strategy-direction:{}", thread_key),
+            }),
+        },
+    )
+}
+
+fn maybe_redirect_owner_visible_work_to_strategy_setup(
+    root: &Path,
+    state: &Arc<Mutex<SharedState>>,
+    job: &QueuedPrompt,
+) -> Result<bool> {
+    if !is_owner_visible_strategic_job(job) {
+        return Ok(false);
+    }
+    let current_item = job.ticket_self_work_id.as_deref().and_then(|work_id| {
+        tickets::load_ticket_self_work_item(root, work_id)
+            .ok()
+            .flatten()
+    });
+    if current_item.as_ref().map(|item| item.kind.as_str()) == Some(STRATEGIC_DIRECTION_KIND) {
+        return Ok(false);
+    }
+    let thread_key = job
+        .thread_key
+        .clone()
+        .unwrap_or_else(|| default_follow_up_thread_key(&job.goal));
+    let conversation_id = turn_loop::conversation_id_for_thread_key(Some(thread_key.as_str()));
+    let db_path = root.join("runtime/ctox.sqlite3");
+    let engine = lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default())?;
+    let strategy = engine.active_strategy_snapshot(conversation_id, Some(thread_key.as_str()))?;
+    if strategy.active_vision.is_some() && strategy.active_mission.is_some() {
+        return Ok(false);
+    }
+    let created = queue_strategy_direction_pass(
+        root,
+        &thread_key,
+        job.workspace_root.as_deref(),
+        &job.prompt,
+        &job.goal,
+        &job.preview,
+        job.suggested_skill.as_deref(),
+    )?;
+    if !job.leased_message_keys.is_empty() {
+        let _ = channels::ack_leased_messages(root, &job.leased_message_keys, "blocked");
+    }
+    if !job.leased_ticket_event_keys.is_empty() {
+        let _ = tickets::ack_leased_ticket_events(root, &job.leased_ticket_event_keys, "blocked");
+    }
+    if let Some(work_id) = job.ticket_self_work_id.as_deref() {
+        close_ticket_self_work_item(
+            root,
+            work_id,
+            "Closed without execution because canonical Vision and Mission must be established in SQLite before strategic work continues.",
+        );
+    }
+    let mut next_prompt = None;
+    {
+        let mut shared = lock_shared_state(state);
+        shared.busy = false;
+        shared.current_goal_preview = None;
+        shared.active_source_label = None;
+        shared.last_completed_at = Some(now_iso_string());
+        shared.last_progress_epoch_secs = current_epoch_secs();
+        shared.last_reply_chars = None;
+        shared.last_error = None;
+        release_leased_keys_locked(
+            &mut shared,
+            &job.leased_message_keys,
+            &job.leased_ticket_event_keys,
+        );
+        push_event_locked(
+            &mut shared,
+            format!(
+                "Rerouted strategic work to canonical direction setup: {}",
+                created.title
+            ),
+        );
+        if runtime_blocker_backoff_remaining_secs(&shared).is_none() {
+            next_prompt = maybe_start_next_queued_prompt_locked(&mut shared);
+        }
+    }
+    if let Some(queued) = next_prompt {
+        start_prompt_worker(root.to_path_buf(), state.clone(), queued);
+    }
+    Ok(true)
+}
+
 fn is_owner_visible_platform_reset_job(job: &QueuedPrompt) -> bool {
     if !derive_owner_visible_for_review(&job.source_label) {
         return false;
@@ -4374,6 +4601,7 @@ fn suppress_self_work_reason(
     let blocked_labels: &[&str] = match item.kind.as_str() {
         "review-rework" => &["review rework"],
         PLATFORM_IMPLEMENTATION_KIND => &["platform implementation reset", "review rework"],
+        STRATEGIC_DIRECTION_KIND => &["strategic direction setup"],
         CTO_DRIFT_KIND => &["cto operating drift correction"],
         "mission-follow-up" if watchdog_generated_mission_follow_up(item) => &[
             "continue mission",
@@ -7573,10 +7801,16 @@ mod tests {
         let outcome = review::ReviewOutcome {
             required: true,
             verdict: review::ReviewVerdict::Fail,
+            mission_state: "UNHEALTHY".to_string(),
             score: 0,
             summary: "The homepage is still not a platform.".to_string(),
             report: "report".to_string(),
             reasons: vec!["Reset the IA".to_string()],
+            failed_gates: vec!["Mission fit".to_string()],
+            semantic_findings: vec!["Homepage still reads like a brochure.".to_string()],
+            open_items: vec!["Introduce clear roster and hire flow.".to_string()],
+            evidence: vec!["GET / => static shell".to_string()],
+            handoff: None,
         };
 
         let err = enqueue_review_rework(&root, &job, &outcome).expect_err("should suppress");

@@ -14,6 +14,7 @@ pub mod plan;
 pub mod queue;
 pub mod review;
 pub mod schedule;
+pub mod strategy;
 pub(crate) mod ticket_adapters;
 pub(crate) mod ticket_gateway;
 pub(crate) mod ticket_local_native;

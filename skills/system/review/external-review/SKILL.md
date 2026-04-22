@@ -30,13 +30,15 @@ The review run:
 4. Ticket/self-work state
 5. Relevant communication facts
 6. Service/runtime/log state
+7. Active strategic directives (Vision and Mission) stored in SQLite runtime state
 
 ## Suggested Workflow
 
 1. Read the review assignment carefully.
 2. Resolve the target conversation/thread in the runtime store.
 3. Discover:
-   - mission line
+   - active vision
+   - active mission
    - done gate
    - latest claimed slice/result
    - current blockers
@@ -53,6 +55,10 @@ The review run:
 Use the local CTOX CLI first where it gives a structured answer.
 
 ### Continuity and mission state
+
+```bash
+ctox strategy show --conversation-id <conversation-id> --thread-key <thread-key>
+```
 
 ```bash
 ctox continuity-show runtime/ctox.sqlite3 <conversation-id> focus
@@ -124,6 +130,7 @@ Use a browser for owner-visible or public surfaces whenever possible.
 
 Return FAIL when any of these are true:
 
+- active vision or active mission is missing for strategic or owner-visible work
 - internal instruction text is visible
 - planning or operator text is visible
 - admin or backoffice surfaces leak into the buyer flow

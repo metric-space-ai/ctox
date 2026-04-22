@@ -323,10 +323,44 @@ pub struct VerificationRunRecord {
     pub review_score: i64,
     pub review_reasons: Vec<String>,
     pub report_excerpt: String,
+    pub raw_report: String,
+    pub mission_state: String,
+    pub failed_gates: Vec<String>,
+    pub semantic_findings: Vec<String>,
+    pub open_items: Vec<String>,
+    pub evidence: Vec<String>,
+    pub handoff: Option<String>,
     pub claim_count: i64,
     pub open_claim_count: i64,
     pub closure_blocking_claim_count: i64,
     pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StrategicDirectiveRecord {
+    pub directive_id: String,
+    pub conversation_id: i64,
+    pub thread_key: Option<String>,
+    pub directive_kind: String,
+    pub title: String,
+    pub body_text: String,
+    pub status: String,
+    pub revision: i64,
+    pub previous_directive_id: Option<String>,
+    pub author: String,
+    pub decided_by: Option<String>,
+    pub decision_reason: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StrategySnapshot {
+    pub conversation_id: i64,
+    pub thread_key: Option<String>,
+    pub active_vision: Option<StrategicDirectiveRecord>,
+    pub active_mission: Option<StrategicDirectiveRecord>,
+    pub directives: Vec<StrategicDirectiveRecord>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -784,6 +818,25 @@ impl LcmEngine {
             CREATE INDEX IF NOT EXISTS idx_verification_runs_conversation_created_at
                 ON verification_runs(conversation_id, created_at DESC);
 
+            CREATE TABLE IF NOT EXISTS strategic_directives (
+                directive_id TEXT PRIMARY KEY,
+                conversation_id INTEGER NOT NULL,
+                thread_key TEXT,
+                directive_kind TEXT NOT NULL,
+                title TEXT NOT NULL,
+                body_text TEXT NOT NULL,
+                status TEXT NOT NULL,
+                revision INTEGER NOT NULL,
+                previous_directive_id TEXT,
+                author TEXT NOT NULL,
+                decided_by TEXT,
+                decision_reason TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_strategic_directives_scope
+                ON strategic_directives(conversation_id, directive_kind, status, updated_at DESC);
+
             CREATE TABLE IF NOT EXISTS mission_claims (
                 claim_key TEXT PRIMARY KEY,
                 conversation_id INTEGER NOT NULL,
@@ -823,6 +876,68 @@ impl LcmEngine {
             "#,
             journal_mode.as_sql()
         ))?;
+        self.ensure_schema_upgrades()?;
+        Ok(())
+    }
+
+    fn ensure_schema_upgrades(&self) -> Result<()> {
+        self.ensure_column(
+            "verification_runs",
+            "raw_report",
+            "TEXT NOT NULL DEFAULT ''",
+        )?;
+        self.ensure_column(
+            "verification_runs",
+            "mission_state",
+            "TEXT NOT NULL DEFAULT 'UNCLEAR'",
+        )?;
+        self.ensure_column(
+            "verification_runs",
+            "failed_gates_json",
+            "TEXT NOT NULL DEFAULT '[]'",
+        )?;
+        self.ensure_column(
+            "verification_runs",
+            "semantic_findings_json",
+            "TEXT NOT NULL DEFAULT '[]'",
+        )?;
+        self.ensure_column(
+            "verification_runs",
+            "open_items_json",
+            "TEXT NOT NULL DEFAULT '[]'",
+        )?;
+        self.ensure_column(
+            "verification_runs",
+            "evidence_json",
+            "TEXT NOT NULL DEFAULT '[]'",
+        )?;
+        self.ensure_column(
+            "verification_runs",
+            "handoff_text",
+            "TEXT NOT NULL DEFAULT ''",
+        )?;
+        Ok(())
+    }
+
+    fn ensure_column(&self, table: &str, column: &str, definition: &str) -> Result<()> {
+        let pragma = format!("PRAGMA table_info({table})");
+        let mut stmt = self
+            .conn
+            .prepare(&pragma)
+            .with_context(|| format!("failed to inspect table {table}"))?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+        let mut found = false;
+        for value in rows {
+            if value? == column {
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            self.conn.execute_batch(&format!(
+                "ALTER TABLE {table} ADD COLUMN {column} {definition};"
+            ))?;
+        }
         Ok(())
     }
 
@@ -1613,11 +1728,18 @@ impl LcmEngine {
                 review_score,
                 review_reasons,
                 report_excerpt,
+                raw_report,
+                mission_state,
+                failed_gates_json,
+                semantic_findings_json,
+                open_items_json,
+                evidence_json,
+                handoff_text,
                 claim_count,
                 open_claim_count,
                 closure_blocking_claim_count,
                 created_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)",
             params![
                 run.run_id,
                 run.conversation_id,
@@ -1632,6 +1754,13 @@ impl LcmEngine {
                 run.review_score,
                 serde_json::to_string(&run.review_reasons)?,
                 run.report_excerpt,
+                run.raw_report,
+                run.mission_state,
+                serde_json::to_string(&run.failed_gates)?,
+                serde_json::to_string(&run.semantic_findings)?,
+                serde_json::to_string(&run.open_items)?,
+                serde_json::to_string(&run.evidence)?,
+                run.handoff.clone().unwrap_or_default(),
                 run.claim_count,
                 run.open_claim_count,
                 run.closure_blocking_claim_count,
@@ -1694,7 +1823,7 @@ impl LcmEngine {
         limit: usize,
     ) -> Result<Vec<VerificationRunRecord>> {
         let mut stmt = self.conn.prepare(
-            "SELECT run_id, source_label, goal, preview, result_excerpt, blocker, review_required, review_verdict, review_summary, review_score, review_reasons, report_excerpt, claim_count, open_claim_count, closure_blocking_claim_count, created_at
+            "SELECT run_id, source_label, goal, preview, result_excerpt, blocker, review_required, review_verdict, review_summary, review_score, review_reasons, report_excerpt, raw_report, mission_state, failed_gates_json, semantic_findings_json, open_items_json, evidence_json, handoff_text, claim_count, open_claim_count, closure_blocking_claim_count, created_at
              FROM verification_runs
              WHERE conversation_id = ?1
              ORDER BY CAST(created_at AS INTEGER) DESC
@@ -1766,6 +1895,262 @@ impl LcmEngine {
             open_claims,
             closure_blocking_claims,
         })
+    }
+
+    pub fn create_strategic_directive(
+        &self,
+        conversation_id: i64,
+        thread_key: Option<&str>,
+        directive_kind: &str,
+        title: &str,
+        body_text: &str,
+        status: &str,
+        author: &str,
+        decision_reason: Option<&str>,
+    ) -> Result<StrategicDirectiveRecord> {
+        let now = iso_now();
+        let normalized_thread_key = thread_key
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        let revision = self.next_strategy_revision(
+            conversation_id,
+            normalized_thread_key.as_deref(),
+            directive_kind,
+        )?;
+        let directive_id = strategic_directive_id(
+            conversation_id,
+            normalized_thread_key.as_deref(),
+            directive_kind,
+            revision,
+            &now,
+        );
+        let previous = if status == "active" {
+            self.active_strategic_directive(
+                conversation_id,
+                normalized_thread_key.as_deref(),
+                directive_kind,
+            )?
+        } else {
+            None
+        };
+        if status == "active" {
+            if let Some(previous) = previous.as_ref() {
+                self.conn.execute(
+                    "UPDATE strategic_directives
+                     SET status = 'superseded', updated_at = ?1
+                     WHERE directive_id = ?2",
+                    params![now, previous.directive_id],
+                )?;
+            }
+        }
+        self.conn.execute(
+            "INSERT INTO strategic_directives (
+                directive_id,
+                conversation_id,
+                thread_key,
+                directive_kind,
+                title,
+                body_text,
+                status,
+                revision,
+                previous_directive_id,
+                author,
+                decided_by,
+                decision_reason,
+                created_at,
+                updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            params![
+                directive_id,
+                conversation_id,
+                normalized_thread_key,
+                directive_kind.trim(),
+                title.trim(),
+                body_text.trim(),
+                status.trim(),
+                revision,
+                previous.as_ref().map(|item| item.directive_id.clone()),
+                author.trim(),
+                if status == "active" {
+                    Some(author.trim().to_string())
+                } else {
+                    None
+                },
+                decision_reason.map(str::trim),
+                now,
+                now,
+            ],
+        )?;
+        self.load_strategic_directive(&directive_id)?
+            .context("new strategic directive missing after insert")
+    }
+
+    pub fn activate_strategic_directive(
+        &self,
+        directive_id: &str,
+        decided_by: &str,
+        decision_reason: Option<&str>,
+    ) -> Result<StrategicDirectiveRecord> {
+        let existing = self
+            .load_strategic_directive(directive_id)?
+            .with_context(|| format!("unknown strategic directive {directive_id}"))?;
+        let now = iso_now();
+        if let Some(active) = self.active_strategic_directive(
+            existing.conversation_id,
+            existing.thread_key.as_deref(),
+            &existing.directive_kind,
+        )? {
+            if active.directive_id != existing.directive_id {
+                self.conn.execute(
+                    "UPDATE strategic_directives
+                     SET status = 'superseded', updated_at = ?1
+                     WHERE directive_id = ?2",
+                    params![now, active.directive_id],
+                )?;
+            }
+        }
+        self.conn.execute(
+            "UPDATE strategic_directives
+             SET status = 'active',
+                 decided_by = ?1,
+                 decision_reason = COALESCE(?2, decision_reason),
+                 updated_at = ?3
+             WHERE directive_id = ?4",
+            params![
+                decided_by.trim(),
+                decision_reason.map(str::trim),
+                now,
+                directive_id
+            ],
+        )?;
+        self.load_strategic_directive(directive_id)?
+            .context("strategic directive missing after activation")
+    }
+
+    pub fn active_strategy_snapshot(
+        &self,
+        conversation_id: i64,
+        thread_key: Option<&str>,
+    ) -> Result<StrategySnapshot> {
+        let directives = self.list_strategic_directives(conversation_id, thread_key, None, 64)?;
+        let active_vision =
+            self.active_strategic_directive(conversation_id, thread_key, "vision")?;
+        let active_mission =
+            self.active_strategic_directive(conversation_id, thread_key, "mission")?;
+        Ok(StrategySnapshot {
+            conversation_id,
+            thread_key: thread_key.map(ToOwned::to_owned),
+            active_vision,
+            active_mission,
+            directives,
+        })
+    }
+
+    pub fn list_strategic_directives(
+        &self,
+        conversation_id: i64,
+        thread_key: Option<&str>,
+        directive_kind: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<StrategicDirectiveRecord>> {
+        let normalized_thread_key = thread_key
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        let mut stmt = self.conn.prepare(
+            "SELECT directive_id, conversation_id, thread_key, directive_kind, title, body_text, status, revision, previous_directive_id, author, decided_by, decision_reason, created_at, updated_at
+             FROM strategic_directives
+             WHERE conversation_id = ?1
+               AND (?2 IS NULL OR thread_key = ?2 OR thread_key IS NULL)
+               AND (?3 IS NULL OR directive_kind = ?3)
+             ORDER BY CASE WHEN thread_key = ?2 THEN 0 ELSE 1 END, revision DESC, updated_at DESC
+             LIMIT ?4",
+        )?;
+        let rows = stmt.query_map(
+            params![
+                conversation_id,
+                normalized_thread_key,
+                directive_kind.map(str::trim),
+                limit as i64
+            ],
+            map_strategic_directive_row,
+        )?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    pub fn active_strategic_directive(
+        &self,
+        conversation_id: i64,
+        thread_key: Option<&str>,
+        directive_kind: &str,
+    ) -> Result<Option<StrategicDirectiveRecord>> {
+        let normalized_thread_key = thread_key
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        let mut stmt = self.conn.prepare(
+            "SELECT directive_id, conversation_id, thread_key, directive_kind, title, body_text, status, revision, previous_directive_id, author, decided_by, decision_reason, created_at, updated_at
+             FROM strategic_directives
+             WHERE conversation_id = ?1
+               AND directive_kind = ?2
+               AND status = 'active'
+               AND (?3 IS NULL OR thread_key = ?3 OR thread_key IS NULL)
+             ORDER BY CASE WHEN thread_key = ?3 THEN 0 ELSE 1 END, revision DESC, updated_at DESC
+             LIMIT 1",
+        )?;
+        let mut rows = stmt.query(params![
+            conversation_id,
+            directive_kind.trim(),
+            normalized_thread_key
+        ])?;
+        match rows.next()? {
+            Some(row) => Ok(Some(map_strategic_directive_row(row)?)),
+            None => Ok(None),
+        }
+    }
+
+    pub fn load_strategic_directive(
+        &self,
+        directive_id: &str,
+    ) -> Result<Option<StrategicDirectiveRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT directive_id, conversation_id, thread_key, directive_kind, title, body_text, status, revision, previous_directive_id, author, decided_by, decision_reason, created_at, updated_at
+             FROM strategic_directives
+             WHERE directive_id = ?1
+             LIMIT 1",
+        )?;
+        let mut rows = stmt.query([directive_id])?;
+        match rows.next()? {
+            Some(row) => Ok(Some(map_strategic_directive_row(row)?)),
+            None => Ok(None),
+        }
+    }
+
+    fn next_strategy_revision(
+        &self,
+        conversation_id: i64,
+        thread_key: Option<&str>,
+        directive_kind: &str,
+    ) -> Result<i64> {
+        let normalized_thread_key = thread_key
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        let revision = self.conn.query_row(
+            "SELECT COALESCE(MAX(revision), 0) + 1
+             FROM strategic_directives
+             WHERE conversation_id = ?1
+               AND directive_kind = ?2
+               AND ((?3 IS NULL AND thread_key IS NULL) OR thread_key = ?3)",
+            params![
+                conversation_id,
+                directive_kind.trim(),
+                normalized_thread_key
+            ],
+            |row| row.get::<_, i64>(0),
+        )?;
+        Ok(revision)
     }
 
     pub fn continuity_rebuild(
@@ -4142,6 +4527,15 @@ fn map_verification_run_row(
 ) -> rusqlite::Result<VerificationRunRecord> {
     let review_reasons: Vec<String> =
         serde_json::from_str(&row.get::<_, String>(10)?).unwrap_or_default();
+    let failed_gates: Vec<String> =
+        serde_json::from_str(&row.get::<_, String>(14)?).unwrap_or_default();
+    let semantic_findings: Vec<String> =
+        serde_json::from_str(&row.get::<_, String>(15)?).unwrap_or_default();
+    let open_items: Vec<String> =
+        serde_json::from_str(&row.get::<_, String>(16)?).unwrap_or_default();
+    let evidence: Vec<String> =
+        serde_json::from_str(&row.get::<_, String>(17)?).unwrap_or_default();
+    let handoff = row.get::<_, String>(18)?;
     Ok(VerificationRunRecord {
         run_id: row.get(0)?,
         conversation_id,
@@ -4156,10 +4550,21 @@ fn map_verification_run_row(
         review_score: row.get(9)?,
         review_reasons,
         report_excerpt: row.get(11)?,
-        claim_count: row.get(12)?,
-        open_claim_count: row.get(13)?,
-        closure_blocking_claim_count: row.get(14)?,
-        created_at: row.get(15)?,
+        raw_report: row.get(12)?,
+        mission_state: row.get(13)?,
+        failed_gates,
+        semantic_findings,
+        open_items,
+        evidence,
+        handoff: if handoff.trim().is_empty() {
+            None
+        } else {
+            Some(handoff)
+        },
+        claim_count: row.get(19)?,
+        open_claim_count: row.get(20)?,
+        closure_blocking_claim_count: row.get(21)?,
+        created_at: row.get(22)?,
     })
 }
 
@@ -4181,6 +4586,27 @@ fn map_mission_claim_row(
         expires_at: row.get(9)?,
         created_at: row.get(10)?,
         updated_at: row.get(11)?,
+    })
+}
+
+fn map_strategic_directive_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<StrategicDirectiveRecord> {
+    Ok(StrategicDirectiveRecord {
+        directive_id: row.get(0)?,
+        conversation_id: row.get(1)?,
+        thread_key: row.get(2)?,
+        directive_kind: row.get(3)?,
+        title: row.get(4)?,
+        body_text: row.get(5)?,
+        status: row.get(6)?,
+        revision: row.get(7)?,
+        previous_directive_id: row.get(8)?,
+        author: row.get(9)?,
+        decided_by: row.get(10)?,
+        decision_reason: row.get(11)?,
+        created_at: row.get(12)?,
+        updated_at: row.get(13)?,
     })
 }
 
@@ -4431,6 +4857,27 @@ fn continuity_template(kind: ContinuityKind) -> &'static str {
 
 fn continuity_document_id(conversation_id: i64, kind: ContinuityKind) -> String {
     format!("contdoc_{}_{}", conversation_id, kind.as_str())
+}
+
+fn strategic_directive_id(
+    conversation_id: i64,
+    thread_key: Option<&str>,
+    directive_kind: &str,
+    revision: i64,
+    created_at: &str,
+) -> String {
+    let mut hash = Sha256::new();
+    hash.update(conversation_id.to_string().as_bytes());
+    hash.update(thread_key.unwrap_or_default().as_bytes());
+    hash.update(directive_kind.as_bytes());
+    hash.update(revision.to_string().as_bytes());
+    hash.update(created_at.as_bytes());
+    let digest = hash.finalize();
+    let prefix = digest[..8]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("sdir_{prefix}")
 }
 
 #[cfg(test)]
@@ -5597,6 +6044,13 @@ mod tests {
                 "runtime_or_infra_change".to_string(),
             ],
             report_excerpt: "VERDICT: FAIL".to_string(),
+            raw_report: "VERDICT: FAIL\nMISSION_STATE: UNHEALTHY".to_string(),
+            mission_state: "UNHEALTHY".to_string(),
+            failed_gates: vec!["HTTP health check still returns 502.".to_string()],
+            semantic_findings: vec!["Deployment is still unhealthy.".to_string()],
+            open_items: vec!["Repair upstream health failure.".to_string()],
+            evidence: vec!["curl /health => 502".to_string()],
+            handoff: None,
             claim_count: 2,
             open_claim_count: 2,
             closure_blocking_claim_count: 2,
@@ -5646,6 +6100,60 @@ mod tests {
         assert_eq!(assurance.open_claims.len(), 2);
         assert_eq!(assurance.closure_blocking_claims.len(), 2);
 
+        let _ = std::fs::remove_file(db_path);
+        Ok(())
+    }
+
+    #[test]
+    fn strategic_directives_are_versioned_and_activate_cleanly() -> Result<()> {
+        let db_path = temp_db();
+        let engine = LcmEngine::open(&db_path, LcmConfig::default())?;
+        let active = engine.create_strategic_directive(
+            99,
+            Some("kunstmen-supervisor"),
+            "mission",
+            "Launch the platform",
+            "Build a credible marketplace for hiring AI employees.",
+            "active",
+            "founder",
+            Some("initial mission"),
+        )?;
+        let proposed = engine.create_strategic_directive(
+            99,
+            Some("kunstmen-supervisor"),
+            "mission",
+            "Tighten the launch scope",
+            "Start with three hireable roles and a clear interview-to-hire path.",
+            "proposed",
+            "ctox",
+            Some("scope refinement"),
+        )?;
+        let activated = engine.activate_strategic_directive(
+            &proposed.directive_id,
+            "founder",
+            Some("approved refinement"),
+        )?;
+        let snapshot = engine.active_strategy_snapshot(99, Some("kunstmen-supervisor"))?;
+        assert_eq!(
+            snapshot
+                .active_mission
+                .as_ref()
+                .map(|item| item.directive_id.clone()),
+            Some(activated.directive_id.clone())
+        );
+        let history = engine.list_strategic_directives(
+            99,
+            Some("kunstmen-supervisor"),
+            Some("mission"),
+            10,
+        )?;
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[0].status, "active");
+        let superseded = history
+            .iter()
+            .find(|item| item.directive_id == active.directive_id)
+            .context("missing superseded mission revision")?;
+        assert_eq!(superseded.status, "superseded");
         let _ = std::fs::remove_file(db_path);
         Ok(())
     }

@@ -188,6 +188,25 @@ pub fn record_slice_assurance(
         report_excerpt: review_outcome
             .map(|outcome| clip_text(&outcome.report, 280))
             .unwrap_or_default(),
+        raw_report: review_outcome
+            .map(|outcome| outcome.report.clone())
+            .unwrap_or_default(),
+        mission_state: review_outcome
+            .map(|outcome| outcome.mission_state.clone())
+            .unwrap_or_else(|| "UNCLEAR".to_string()),
+        failed_gates: review_outcome
+            .map(|outcome| outcome.failed_gates.clone())
+            .unwrap_or_default(),
+        semantic_findings: review_outcome
+            .map(|outcome| outcome.semantic_findings.clone())
+            .unwrap_or_default(),
+        open_items: review_outcome
+            .map(|outcome| outcome.open_items.clone())
+            .unwrap_or_default(),
+        evidence: review_outcome
+            .map(|outcome| outcome.evidence.clone())
+            .unwrap_or_default(),
+        handoff: review_outcome.and_then(|outcome| outcome.handoff.clone()),
         claim_count: claims.len() as i64,
         open_claim_count,
         closure_blocking_claim_count,
@@ -554,6 +573,7 @@ mod tests {
         let review_outcome = review::ReviewOutcome {
             required: true,
             verdict: review::ReviewVerdict::Fail,
+            mission_state: "UNHEALTHY".to_string(),
             summary: "HTTP health check still returns 502.".to_string(),
             report: "VERDICT: FAIL".to_string(),
             score: 4,
@@ -561,6 +581,11 @@ mod tests {
                 "closure_claim".to_string(),
                 "runtime_or_infra_change".to_string(),
             ],
+            failed_gates: vec!["health endpoint".to_string()],
+            semantic_findings: vec!["Rollout is still unhealthy.".to_string()],
+            open_items: vec!["Repair the failing health endpoint.".to_string()],
+            evidence: vec!["curl /health => 502".to_string()],
+            handoff: None,
         };
 
         let recorded = record_slice_assurance(
