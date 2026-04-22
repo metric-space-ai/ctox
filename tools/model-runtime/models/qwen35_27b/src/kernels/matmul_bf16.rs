@@ -45,8 +45,8 @@ use cudarc::cublas::{result as cublas_result, sys as cublas_sys};
 use cudarc::driver::{DevicePtr, DevicePtrMut};
 use half::bf16;
 
-use crate::device::DeviceContext;
-use crate::tensor::CudaTensor;
+use ctox_cuda_primitives::device::DeviceContext;
+use ctox_cuda_primitives::tensor::CudaTensor;
 
 /// Shared validation. Both entry points require:
 ///   * A is [M, K], B is [K, N], C is [M, N]
@@ -64,7 +64,7 @@ fn validate_shapes<CT>(
     n: usize,
 ) -> Result<()>
 where
-    CT: crate::tensor::TensorElem,
+    CT: ctox_cuda_primitives::tensor::TensorElem,
 {
     if m == 0 || k == 0 || n == 0 {
         return Err(anyhow!(

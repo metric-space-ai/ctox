@@ -16,8 +16,8 @@ use anyhow::{anyhow, Result};
 use cudarc::driver::{CudaFunction, LaunchConfig, PushKernelArg};
 use cudarc::nvrtc::Ptx;
 
-use crate::device::DeviceContext;
-use crate::tensor::CudaTensor;
+use ctox_cuda_primitives::device::DeviceContext;
+use ctox_cuda_primitives::tensor::CudaTensor;
 
 // PTX blob emitted by build.rs for kernels/quantize_q8_1.cu.
 use super::QUANTIZE_Q8_1_PTX;

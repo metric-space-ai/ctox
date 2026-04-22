@@ -25,8 +25,8 @@ use anyhow::{anyhow, Result};
 use cudarc::driver::{CudaFunction, LaunchConfig, PushKernelArg};
 use cudarc::nvrtc::Ptx;
 
-use crate::device::DeviceContext;
-use crate::tensor::CudaTensor;
+use ctox_cuda_primitives::device::DeviceContext;
+use ctox_cuda_primitives::tensor::CudaTensor;
 
 // PTX blob comes from the parent module's auto-generated registry.
 use super::RMSNORM_PTX;

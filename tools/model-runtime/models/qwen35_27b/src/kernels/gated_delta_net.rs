@@ -30,8 +30,8 @@ use cudarc::driver::{CudaFunction, DeviceRepr, LaunchConfig, PushKernelArg};
 use cudarc::nvrtc::Ptx;
 use half::f16;
 
-use crate::device::DeviceContext;
-use crate::tensor::CudaTensor;
+use ctox_cuda_primitives::device::DeviceContext;
+use ctox_cuda_primitives::tensor::CudaTensor;
 
 use super::GATED_DELTA_NET_PTX;
 

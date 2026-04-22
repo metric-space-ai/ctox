@@ -62,9 +62,9 @@ use anyhow::{anyhow, Context, Result};
 use half::{bf16, f16};
 use memmap2::Mmap;
 
-use crate::device::DeviceContext;
-use crate::dtype::DType;
-use crate::tensor::CudaTensor;
+use ctox_cuda_primitives::device::DeviceContext;
+use ctox_cuda_primitives::dtype::DType;
+use ctox_cuda_primitives::tensor::CudaTensor;
 
 /// Magic bytes: ASCII "GGUF" stored little-endian as u32 = 0x46554747.
 const GGUF_MAGIC: u32 = 0x4655_4747;

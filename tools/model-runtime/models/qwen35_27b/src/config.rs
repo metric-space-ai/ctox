@@ -7,7 +7,7 @@
 //!     GGUF file.
 //!   * [`Qwen35Config::from_metadata`] — factory that pulls the actual
 //!     dimensions out of a GGUF's `qwen35.*` metadata section (see
-//!     [`crate::gguf::parse_qwen35_metadata`]). Prefer this path when
+//!     [`crate::gguf_loader::parse_qwen35_metadata`]). Prefer this path when
 //!     loading real weights so the config stays in lockstep with the
 //!     file — we hit a real mismatch once already, where the const said
 //!     `n_head=40 / n_head_kv=8 / head_dim=128` but the shipping 27B
@@ -18,7 +18,7 @@
 //! kept inside the layer structs today; unify at Phase 6 when real
 //! GDN weights are wired.
 
-use crate::gguf::Qwen35Metadata;
+use crate::gguf_loader::Qwen35Metadata;
 
 /// Static layer-shape parameters for Qwen3.5 models.
 #[derive(Debug, Clone, Copy)]

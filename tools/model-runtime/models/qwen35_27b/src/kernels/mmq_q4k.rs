@@ -26,8 +26,8 @@ use cudarc::driver::{CudaFunction, LaunchConfig, PushKernelArg};
 use cudarc::nvrtc::Ptx;
 use half::f16;
 
-use crate::device::DeviceContext;
-use crate::tensor::CudaTensor;
+use ctox_cuda_primitives::device::DeviceContext;
+use ctox_cuda_primitives::tensor::CudaTensor;
 
 use super::quantize_q8_1::{launch_quantize_q8_1_f32, q8_1_packed_bytes, Q8_1_BLOCK_ELEMS};
 
@@ -75,7 +75,7 @@ fn validate_mmvq_q4k_shapes<U>(
     y: &CudaTensor<U>,
 ) -> Result<()>
 where
-    U: crate::tensor::TensorElem,
+    U: ctox_cuda_primitives::tensor::TensorElem,
 {
     if k == 0 || n == 0 {
         return Err(anyhow!("mmvq_q4k: k and n must be nonzero (k={}, n={})", k, n));

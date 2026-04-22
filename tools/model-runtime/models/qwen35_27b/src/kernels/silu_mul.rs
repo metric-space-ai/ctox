@@ -15,8 +15,8 @@ use cudarc::driver::{CudaFunction, LaunchConfig, PushKernelArg};
 use cudarc::nvrtc::Ptx;
 use half::bf16;
 
-use crate::device::DeviceContext;
-use crate::tensor::CudaTensor;
+use ctox_cuda_primitives::device::DeviceContext;
+use ctox_cuda_primitives::tensor::CudaTensor;
 
 // PTX blob comes from the parent module's auto-generated registry.
 use super::SILU_MUL_PTX;
@@ -60,7 +60,7 @@ fn load_fn(
 /// Validate that gate/up/y share the same shape and return the numel.
 /// Empty tensors are allowed and report `0` so the caller can early-out
 /// without launching a zero-grid kernel.
-fn validate_shapes<T: crate::tensor::TensorElem>(
+fn validate_shapes<T: ctox_cuda_primitives::tensor::TensorElem>(
     gate: &CudaTensor<T>,
     up: &CudaTensor<T>,
     y: &CudaTensor<T>,

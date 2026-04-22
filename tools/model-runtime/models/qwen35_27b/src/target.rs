@@ -66,11 +66,11 @@
 //! policy:
 //!
 //! * If all required weight names resolve to supported-dtype
-//!   [`crate::gguf::GgufBuf::Bf16`] tensors matching the expected
+//!   [`crate::gguf_loader::GgufBuf::Bf16`] tensors matching the expected
 //!   shape, the layer gets real weights.
 //! * Any missing or wrong-shape weight triggers a `tracing::warn!`
 //!   and the weight is filled with a zeroed placeholder
-//!   [`crate::tensor::CudaTensor`] of the correct shape. The layer
+//!   [`ctox_cuda_primitives::tensor::CudaTensor`] of the correct shape. The layer
 //!   will still run (producing mostly-zero outputs that flow through
 //!   the residual stream as identity), satisfying the smoke-test
 //!   correctness bar: "forward doesn't NaN/Inf".
@@ -98,18 +98,18 @@ use std::sync::Arc;
 use anyhow::{anyhow, Context, Result};
 use half::{bf16, f16};
 
-use crate::device::DeviceContext;
-use crate::gguf::{load_gguf_lenient_with_config, GgufBuf, GgufTensor, LoaderConfig};
+use ctox_cuda_primitives::device::DeviceContext;
+use crate::gguf_loader::{load_gguf_lenient_with_config, GgufBuf, GgufTensor, LoaderConfig};
 use crate::kernels::{
     launch_cast_bf16_to_f32, launch_cast_f32_to_bf16, launch_embedding_bf16, launch_embedding_f16,
     launch_embedding_f32, launch_matmul_bf16_f32, launch_rmsnorm_f32,
 };
-use crate::kv_cache::KvCache;
-use crate::tensor::CudaTensor;
+use ctox_cuda_primitives::kv_cache::KvCache;
+use ctox_cuda_primitives::tensor::CudaTensor;
 
-use super::config::Qwen35Config;
-use super::full_attention::Qwen35FullAttention;
-use super::gdn::Qwen35GDN;
+use crate::config::Qwen35Config;
+use crate::layers::full_attention::Qwen35FullAttention;
+use crate::layers::gdn::Qwen35GDN;
 
 /// One decoder layer — either full attention or GDN.
 pub enum Qwen35Layer {
@@ -1056,7 +1056,7 @@ mod tests {
         let dev = Arc::new(DeviceContext::new(0).expect("cuda init"));
 
         // 1. Parse metadata from the GGUF header — no device uploads yet.
-        let meta = crate::gguf::parse_qwen35_metadata(QWEN35_27B_GGUF)
+        let meta = crate::gguf_loader::parse_qwen35_metadata(QWEN35_27B_GGUF)
             .expect("parse_qwen35_metadata");
         eprintln!(
             "qwen35 metadata: block_count={} embedding_length={} head_count={} head_count_kv={} \
@@ -1107,7 +1107,7 @@ mod tests {
             dev.clone(),
             cfg,
             QWEN35_27B_GGUF,
-            crate::gguf::LoaderConfig { keep_packed: true },
+            crate::gguf_loader::LoaderConfig { keep_packed: true },
         )
         .expect("load_from_gguf_with_config");
         eprintln!(

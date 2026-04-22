@@ -27,8 +27,8 @@ use cudarc::driver::{CudaFunction, LaunchConfig, PushKernelArg};
 use cudarc::nvrtc::Ptx;
 use half::{bf16, f16};
 
-use crate::device::DeviceContext;
-use crate::tensor::CudaTensor;
+use ctox_cuda_primitives::device::DeviceContext;
+use ctox_cuda_primitives::tensor::CudaTensor;
 
 // PTX blob comes from the parent module's auto-generated registry.
 use super::CAST_PTX;
@@ -69,7 +69,7 @@ fn load_fn(
 
 /// Require equal shapes and a non-zero element count, returning the
 /// numel. Callers pre-allocate `y` matching `x`'s shape.
-fn validate_shapes<Tx: crate::tensor::TensorElem, Ty: crate::tensor::TensorElem>(
+fn validate_shapes<Tx: ctox_cuda_primitives::tensor::TensorElem, Ty: ctox_cuda_primitives::tensor::TensorElem>(
     x: &CudaTensor<Tx>,
     y: &CudaTensor<Ty>,
 ) -> Result<usize> {

@@ -21,11 +21,27 @@
 //! means each model stays independently optimizable without
 //! regression risk elsewhere. See the top-level architecture doc in
 //! `tools/model-runtime/README.md`.
+//!
+//! ## Module layout
+//!
+//! ```text
+//!   src/
+//!     lib.rs                   — this file
+//!     config.rs                — Qwen35Config (hoisted from layer dir)
+//!     target.rs                — Qwen35Target (full-model forward)
+//!     gguf_loader.rs           — Qwen3.5-naming GGUF parser
+//!     tokenizer.rs             — Qwen35Tokenizer (HF wrapper)
+//!     layers/
+//!       mod.rs, ffn.rs, full_attention.rs, gdn.rs
+//!     kernels/
+//!       mod.rs, rmsnorm.rs, softmax.rs, rope.rs,
+//!       flash_attn.rs, mmq_*.rs, ...
+//!   kernels/                   — raw .cu source, nvcc-compiled in build.rs
+//!     sm_80/ (empty, TODO),  sm_86/ (populated),
+//!     sm_89/ (empty, TODO),  sm_90/ (empty, TODO)
+//! ```
 
 #![allow(dead_code)]
-
-#[cfg(feature = "cuda")]
-pub mod arch_dispatch;
 
 #[cfg(feature = "cuda")]
 pub mod kernels;
@@ -48,8 +64,21 @@ pub mod tokenizer;
 #[cfg(feature = "cuda")]
 pub mod prelude {
     pub use crate::config::Qwen35Config;
-    pub use crate::target::Qwen35Target;
+    pub use crate::layers::{Qwen35FFN, Qwen35FullAttention, Qwen35GDN};
+    pub use crate::target::{Qwen35Layer, Qwen35Target};
     pub use crate::tokenizer::Qwen35Tokenizer;
 }
 
+// Top-level re-exports for external consumers (matches the old
+// `cuda/src/models/qwen35/mod.rs` public surface).
+#[cfg(feature = "cuda")]
+pub use config::Qwen35Config;
+#[cfg(feature = "cuda")]
+pub use layers::{Qwen35FFN, Qwen35FullAttention, Qwen35GDN};
+#[cfg(feature = "cuda")]
+pub use target::{Qwen35Layer, Qwen35Target};
+#[cfg(feature = "cuda")]
+pub use tokenizer::Qwen35Tokenizer;
+
 pub const CRATE_NAME: &str = "ctox-qwen35-27b";
+pub const CUDA_ENABLED: bool = cfg!(feature = "cuda");

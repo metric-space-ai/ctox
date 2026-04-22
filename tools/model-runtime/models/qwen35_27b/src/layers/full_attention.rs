@@ -74,12 +74,12 @@ use std::sync::Arc;
 use anyhow::{anyhow, Result};
 use half::bf16;
 
-use crate::device::DeviceContext;
+use ctox_cuda_primitives::device::DeviceContext;
 use crate::kernels;
-use crate::kv_cache::KvCache;
-use crate::tensor::CudaTensor;
+use ctox_cuda_primitives::kv_cache::KvCache;
+use ctox_cuda_primitives::tensor::CudaTensor;
 
-use super::config::Qwen35Config;
+use crate::config::Qwen35Config;
 
 /// A single full-attention layer's parameters + config.
 ///

@@ -37,14 +37,14 @@ use std::sync::Arc;
 use anyhow::{anyhow, Result};
 use half::bf16;
 
-use crate::device::DeviceContext;
+use ctox_cuda_primitives::device::DeviceContext;
 use crate::kernels::{
     launch_cast_bf16_to_f32, launch_cast_f32_to_bf16, launch_matmul_bf16_bf16,
     launch_residual_add_bf16, launch_rmsnorm_f32, launch_silu_mul_bf16,
 };
-use crate::tensor::CudaTensor;
+use ctox_cuda_primitives::tensor::CudaTensor;
 
-use super::config::Qwen35Config;
+use crate::config::Qwen35Config;
 
 /// Weights + config for one Qwen3.5 SwiGLU FFN block.
 ///

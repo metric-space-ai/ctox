@@ -35,8 +35,8 @@ use cudarc::driver::{CudaFunction, LaunchConfig, PushKernelArg};
 use cudarc::nvrtc::Ptx;
 use half::f16;
 
-use crate::device::DeviceContext;
-use crate::tensor::CudaTensor;
+use ctox_cuda_primitives::device::DeviceContext;
+use ctox_cuda_primitives::tensor::CudaTensor;
 
 // PTX blob emitted by build.rs for kernels/mmq_q5k.cu.
 use super::MMQ_Q5K_PTX;
@@ -83,8 +83,8 @@ fn validate_mmvq_q5k_shapes<T, U>(
     y: &CudaTensor<U>,
 ) -> Result<()>
 where
-    T: crate::tensor::TensorElem,
-    U: crate::tensor::TensorElem,
+    T: ctox_cuda_primitives::tensor::TensorElem,
+    U: ctox_cuda_primitives::tensor::TensorElem,
 {
     if k == 0 || n == 0 {
         return Err(anyhow!("mmvq_q5k: k and n must be nonzero (k={}, n={})", k, n));
