@@ -376,18 +376,26 @@ impl Qwen35GDN {
             &v_host,
         )?;
 
-        // GDA gate stand-in: average V over the head-width to get a
-        // per-(token, v-head) scalar, clamped to [-10, 0] so the
-        // kernel's internal `exp(g)` stays bounded. This is NOT the
-        // reference's `softplus(ssm_alpha @ hidden + dt_bias) * ssm_a`
-        // pipeline — that needs the `ssm_alpha` / `ssm_a` weights and
-        // softplus/mul kernels we haven't wired yet. Using V-derived
-        // signal instead of a constant keeps the SSM recurrence
-        // data-dependent for spec-decode sanity.
+        // GDA gate stand-in: the reference computes
+        //   g = softplus(ssm_alpha @ hidden + ssm_dt_bias) * ssm_a
+        // with `ssm_a = -exp(A_log)` strictly negative. That makes the
+        // per-head `exp(g)` retention factor < 1 and the SSM state
+        // decays predictably as tokens compound. We don't have the
+        // ssm_alpha / ssm_a / softplus pieces wired yet, so we stub g
+        // as a V-derived signal pinned to a strictly-negative range
+        // `[-5, -0.5]`. That keeps the recurrence stable across 48
+        // GDN layers on real Q5_K weights — purely retention-close-
+        // to-1 gates saturate the state to ±inf after a few tokens.
         //
-        // TODO(gdn-ref): replace mean-over-v-head-width with the
-        // reference softplus(alpha + dt_bias) * ssm_a pipeline once
-        // the ssm_alpha/ssm_a/ssm_dt_bias weights + kernels land.
+        // The V-derived contribution is kept so the smoke tests can
+        // still see call 2's state diverge from call 1's; clamping
+        // to a negative-only range ensures `exp(g)` stays well under
+        // 1 and the state magnitudes remain finite.
+        //
+        // TODO(gdn-ref): replace with the reference
+        // softplus(alpha + dt_bias) * ssm_a pipeline once the
+        // ssm_alpha / ssm_a / ssm_dt_bias weights + softplus/mul
+        // kernels land.
         let mut g_host = vec![0.0f32; h_v * n_tokens * n_seqs];
         for t in 0..n_tokens {
             for hi in 0..h_v {
@@ -396,11 +404,15 @@ impl Qwen35GDN {
                 for s in 0..s_v {
                     acc += v_host[base + s];
                 }
-                g_host[hi + t * h_v] = acc / s_v as f32;
+                // Mean of V chunk, pulled into the stable [-5, -0.5]
+                // band by negating the magnitude and subtracting a
+                // fixed bias.
+                let mean = acc / s_v as f32;
+                g_host[hi + t * h_v] = -mean.abs() - 0.5;
             }
         }
         for g in g_host.iter_mut() {
-            *g = g.clamp(-10.0, 0.0);
+            *g = g.clamp(-5.0, -0.5);
         }
         let g = CudaTensor::<f32>::from_host(
             device.clone(),
