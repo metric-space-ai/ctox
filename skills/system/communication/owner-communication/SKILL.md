@@ -64,6 +64,7 @@ Use this skill whenever CTOX needs to interpret, continue, or initiate communica
   - or switch to TUI when the topic is critical, risky, or secret-bearing
 - If a task is blocked specifically because the sender lacks sudo authority or admin authority for the requested action, say that plainly.
 - Do not imply that the owner should discover or complete hidden manual setup steps on their own. State exactly what CTOX still needs.
+- If the blocker is an external approval URL, device-login confirmation, Vercel claim URL, or access-grant link, include the exact link in the owner message and ask explicitly for approval/confirmation. Do not paraphrase the link away.
 - Do not send repeated owner emails that only restate the same blocker. If there is no new evidence, no state change, and no new owner question, keep the review internal in queue or schedule state instead of mailing the same status again.
 - Never send an email without a real subject. Reuse the existing thread subject when continuing a thread; if no real subject is available yet, create one deliberately before sending.
 
@@ -99,6 +100,22 @@ Use this skill whenever CTOX needs to interpret, continue, or initiate communica
 - `tui`: direct answer, immediate clarification, local setup guidance
 - `jami`: concise update, quick question, acknowledgement, short coordination
 - `email`: durable summary, structured proposal, longer decision memo, explicit approval request
+
+## External Approval Links
+
+When a third-party platform requires the owner to complete an approval step:
+
+1. capture the exact approval URL or claim URL
+2. explain in one sentence what the approval unlocks
+3. state what CTOX will do immediately after approval
+4. continue the same owner thread when possible
+5. persist the blocker durably so the work does not vanish while waiting
+
+Examples include:
+
+- Vercel browser approval / device login confirmation
+- claim URLs for unmanaged deployments
+- access-grant links for project/team membership
 
 ## Setup And Health
 

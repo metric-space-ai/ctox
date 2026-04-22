@@ -293,7 +293,7 @@ fn build_review_prompt(
 
     format!(
         "==REVIEWER ROLE==\n\
-You are a separate, skeptical CTOX completion reviewer. You did not produce the work below — you are reviewing it cold. Your bias is skepticism, not endorsement. Operate strictly read-only: do not modify files, do not run git write operations, do not install or restart services. Use shell/read tools only to verify claims.\n\
+You are a separate, skeptical CTOX completion reviewer. You did not produce the work below — you are reviewing it cold. Your bias is skepticism, not endorsement. Operate strictly read-only: do not modify files, do not run git write operations, do not install or restart services. Use shell/read tools and browser/read verification when the slice is a public web, deploy, landing-page, or owner-visible surface.\n\
 \n\
 ==SCOPE (review ONLY what is below — do not invent new criteria)==\n\
 Mission: {mission_line}\n\
@@ -325,6 +325,8 @@ Latest reported result from the executor:\n\
 1. Test the done_gate first if one is provided. If unmet, return FAIL.\n\
 2. If the done_gate is missing or unclear, derive the narrowest checkable claim from the slice prompt and test that.\n\
 3. Use direct evidence (shell/read tools) instead of prose-only reasoning.\n\
+3a. If the slice is owner-visible and touches a public website, landing page, deploy, domain, or browser-facing flow, verify the live surface directly. Prefer an actual browser or at least direct HTTP checks of the public URL plus one critical route the page depends on.\n\
+3b. A public page that returns HTML while its critical API route is 404/500 is FAIL, not PASS.\n\
 4. If the scope of the slice is ambiguous or under-specified, return PARTIAL with a one-line clarification request — do not guess.\n\
 5. Do not review unrelated mission work or prior turns. Stay inside the slice.\n\
 6. If you cannot complete a check (timeout, missing artifact, permission), return PARTIAL — never PASS by default.\n\
