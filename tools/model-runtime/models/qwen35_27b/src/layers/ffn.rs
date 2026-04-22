@@ -337,7 +337,7 @@ mod tests {
     /// Exact-vs-reference comparison is Phase 6.
     ///
     /// Run:
-    ///   cargo test -p ctox-engine-cuda --features cuda --release -- \
+    ///   cargo test -p ctox-qwen35-27b --features cuda --release -- \
     ///       --ignored --nocapture qwen35_ffn_smoke
     #[test]
     #[ignore]

@@ -153,7 +153,7 @@ mod tests {
     }
 
     /// Device-backed end-to-end. Ignored by default — run with:
-    ///   cargo test -p ctox-engine-cuda --features cuda --release -- \
+    ///   cargo test -p ctox-qwen35-27b --features cuda --release -- \
     ///       --ignored --nocapture rmsnorm
     #[test]
     #[ignore]

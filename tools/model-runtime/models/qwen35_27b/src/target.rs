@@ -916,7 +916,7 @@ mod tests {
     /// trimmed.
     ///
     /// Run with:
-    ///   cargo test -p ctox-engine-cuda --features cuda --release -- \
+    ///   cargo test -p ctox-qwen35-27b --features cuda --release -- \
     ///     --ignored --nocapture qwen35_target_gguf_smoke
     #[test]
     #[ignore]
@@ -1048,7 +1048,7 @@ mod tests {
     /// will stop being zero on their own.
     ///
     /// Run with:
-    ///   cargo test -p ctox-engine-cuda --features cuda --release -- \
+    ///   cargo test -p ctox-qwen35-27b --features cuda --release -- \
     ///     --ignored --nocapture qwen35_target_gguf_smoke_v2
     #[test]
     #[ignore]

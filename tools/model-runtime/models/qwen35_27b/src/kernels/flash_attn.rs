@@ -402,7 +402,7 @@ mod tests {
     /// FullAttention: n_q_heads=24, n_kv_heads=4, head_dim=256, causal.
     ///
     /// Run:
-    ///   cargo test -p ctox-engine-cuda --features cuda --release -- \
+    ///   cargo test -p ctox-qwen35-27b --features cuda --release -- \
     ///       --ignored --nocapture flash_attn_vs_cpu_golden
     #[test]
     #[ignore]

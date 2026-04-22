@@ -1,4 +1,4 @@
-// FlashAttention v2 (tensor-core MMA path) for ctox-engine-cuda.
+// FlashAttention v2 (tensor-core MMA path) for ctox-qwen35-27b.
 //
 // ─────────────────────────────────────────────────────────────────
 // Copyright notice (verbatim llama.cpp MIT header — we port algorithm

@@ -135,7 +135,7 @@ mod tests {
     }
 
     /// Device-backed end-to-end. Ignored by default — run with:
-    ///   cargo test -p ctox-engine-cuda --features cuda --release -- \
+    ///   cargo test -p ctox-qwen35-27b --features cuda --release -- \
     ///       --ignored --nocapture l2_norm_vs_cpu_golden
     ///
     /// Shape [n_rows=16, n_cols=128] matches 16 Qwen3.5 attention

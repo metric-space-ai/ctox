@@ -499,7 +499,7 @@ mod tests {
     /// Perf bench — one 27B-sized Q projection per launch, 1000 iterations.
     /// Target on sm_86: > 500 GB/s on the weight-matrix read.
     ///
-    ///   cargo test -p ctox-engine-cuda --features cuda --release -- \
+    ///   cargo test -p ctox-qwen35-27b --features cuda --release -- \
     ///       --ignored --nocapture mmvq_q4k_perf_bench
     #[test]
     #[ignore]

@@ -1867,7 +1867,7 @@ mod tests {
     /// CUDA device.
     ///
     /// Run with:
-    ///   cargo test -p ctox-engine-cuda --features cuda --release -- \
+    ///   cargo test -p ctox-qwen35-27b --features cuda --release -- \
     ///     --ignored --nocapture load_gguf_27b_packed_no_oom
     #[test]
     #[ignore]

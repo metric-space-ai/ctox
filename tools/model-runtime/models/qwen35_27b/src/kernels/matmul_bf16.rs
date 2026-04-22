@@ -291,7 +291,7 @@ mod tests {
     }
 
     /// Device-backed end-to-end. Ignored by default — run with:
-    ///   cargo test -p ctox-engine-cuda --features cuda --release -- \
+    ///   cargo test -p ctox-qwen35-27b --features cuda --release -- \
     ///       --ignored --nocapture matmul_bf16_vs_cpu_golden
     ///
     /// Shape (M=32, K=5120, N=5120) matches a single Qwen3.5-27B full-
@@ -508,7 +508,7 @@ mod tests {
     }
 
     /// Performance benchmark. Ignored by default — run with:
-    ///   cargo test -p ctox-engine-cuda --features cuda --release -- \
+    ///   cargo test -p ctox-qwen35-27b --features cuda --release -- \
     ///       --ignored --nocapture matmul_bf16_perf_bench
     ///
     /// Two shapes:

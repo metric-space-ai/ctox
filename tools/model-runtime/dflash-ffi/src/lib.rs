@@ -23,7 +23,7 @@
 //! ## Stability
 //!
 //! This crate is the **intermediate** production path — the engine will
-//! use it until the bare-metal `ctox-engine-cuda` port catches up. The
+//! use it until the bare-metal `ctox-qwen35-27b` port catches up. The
 //! C API surface is owned by us (we refactored the reference to expose
 //! it); it will be deleted together with the FFI binding once the
 //! native port reaches tok/s parity.

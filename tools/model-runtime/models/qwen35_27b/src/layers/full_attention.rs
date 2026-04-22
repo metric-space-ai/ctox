@@ -851,7 +851,7 @@ mod tests {
     /// cache advances" correctness gate).
     ///
     /// Run with:
-    ///   cargo test -p ctox-engine-cuda --features cuda --release -- \
+    ///   cargo test -p ctox-qwen35-27b --features cuda --release -- \
     ///     --ignored --nocapture qwen35_full_attention_smoke
     #[test]
     #[ignore]

@@ -165,7 +165,7 @@ mod tests {
     }
 
     /// Device-backed end-to-end. Ignored by default — run with:
-    ///   cargo test -p ctox-engine-cuda --features cuda --release -- \
+    ///   cargo test -p ctox-qwen35-27b --features cuda --release -- \
     ///       --ignored --nocapture residual_add_vs_cpu_golden
     ///
     /// Shape [n_tokens=8, hidden=5120] matches the Qwen3.5-27B hidden

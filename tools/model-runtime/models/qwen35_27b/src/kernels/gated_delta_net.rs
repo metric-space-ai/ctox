@@ -654,7 +654,7 @@ mod tests {
     /// device.
     ///
     /// Run:
-    ///   cargo test -p ctox-engine-cuda --features cuda --release -- \
+    ///   cargo test -p ctox-qwen35-27b --features cuda --release -- \
     ///       --ignored --nocapture gated_delta_net
     #[test]
     #[ignore]

@@ -171,7 +171,7 @@ mod tests {
     }
 
     /// Device-backed end-to-end. Ignored by default — run with:
-    ///   cargo test -p ctox-engine-cuda --features cuda --release -- \
+    ///   cargo test -p ctox-qwen35-27b --features cuda --release -- \
     ///       --ignored --nocapture silu_mul_vs_cpu_golden
     ///
     /// Shape [n_tokens=8, intermediate_dim=13824] matches the

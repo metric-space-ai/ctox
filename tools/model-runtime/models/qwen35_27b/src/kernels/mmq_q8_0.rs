@@ -235,7 +235,7 @@ mod tests {
     }
 
     /// End-to-end integration test against a CPU golden. Run with:
-    ///   cargo test -p ctox-engine-cuda --features cuda --release -- \
+    ///   cargo test -p ctox-qwen35-27b --features cuda --release -- \
     ///       --ignored --nocapture mmvq_q8_0
     #[test]
     #[ignore]

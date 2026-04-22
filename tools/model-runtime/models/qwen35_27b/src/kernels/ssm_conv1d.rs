@@ -279,7 +279,7 @@ mod tests {
     }
 
     /// Device-backed end-to-end. Ignored by default — run with:
-    ///   cargo test -p ctox-engine-cuda --features cuda --release -- \
+    ///   cargo test -p ctox-qwen35-27b --features cuda --release -- \
     ///       --ignored --nocapture ssm_conv1d_vs_cpu_golden
     ///
     /// Shape [n_tokens=16, n_channels=5120] with K=4 roughly matches

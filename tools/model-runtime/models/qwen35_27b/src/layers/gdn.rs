@@ -622,7 +622,7 @@ mod tests {
     /// Phase 4 — this smoke test validates kernel composition only.
     ///
     /// Run:
-    ///   cargo test -p ctox-engine-cuda --features cuda --release -- \
+    ///   cargo test -p ctox-qwen35-27b --features cuda --release -- \
     ///       --ignored --nocapture qwen35_gdn_smoke
     #[test]
     #[ignore]
