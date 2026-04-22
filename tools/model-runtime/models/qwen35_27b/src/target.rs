@@ -432,6 +432,195 @@ let mut logits =
 
         Ok(logits)
     }
+
+    /// Chunked prefill matching dflash's reference implementation in
+    /// `test_dflash_lib.cpp::run_dflash_gen_loop` (the `// ── Prefill:`
+    /// section). Walks the prompt in ubatches of up to
+    /// [`Self::prefill_ubatch_for`] tokens — 16 for prompts ≤ 2048, 192
+    /// otherwise — and for each chunk runs a full [`Self::forward`]
+    /// which advances the KV cache and the recurrent GDN state.
+    ///
+    /// # Why chunked?
+    ///
+    /// The GDN layer's `gdn_inter` buffer has shape
+    /// `[S_v, S_v, H, n_tokens]` and is sized per forward call. Calling
+    /// [`Self::forward`] in one shot with a full prompt of length N
+    /// would allocate `O(N * S_v^2 * H)` bytes per GDN layer (~22 MB
+    /// per layer at N=8192, S_v=128, H=48), which OOMs long before the
+    /// 128K context target. The reference dodges this by running
+    /// prefill in 192-token ubatches, sizing `gdn_inter` for the chunk
+    /// only, and relying on the GDN layer's in-place update of
+    /// `gdn_state` to carry the recurrent state across chunks.
+    ///
+    /// # Inputs
+    /// * `prompt_tokens` — `[prompt_len]` i32. Must be on device.
+    /// * `kv_cache` — fresh (or reset) KV cache. Advanced by
+    ///    `prompt_len` over the course of this call.
+    /// * `gdn_states` — one `[S_v, S_v, H, 1]` f32 tensor per GDN
+    ///    layer, updated in-place by each chunk's forward.
+    ///
+    /// # Output
+    /// `[1, vocab_size]` f32 logits for the final prompt position
+    /// (seeds the greedy/sampled first decode step).
+    ///
+    /// # Discipline
+    /// * Chunk boundary == KV advance boundary: `kv_cache.n_filled`
+    ///   advances by `chunk_size` per chunk.
+    /// * `gdn_states` persist across chunks (SSM recurrent state from
+    ///   chunk N is input to chunk N+1).
+    /// * `gdn_inter` is allocated *inside* this function, sized
+    ///   `[S_v, S_v, H, PREFILL_UBATCH]`, and reused across chunks.
+    ///   It is never sized for the whole prompt.
+    pub fn prefill(
+        &self,
+        prompt_tokens: &CudaTensor<i32>,
+        kv_cache: &mut KvCache,
+        gdn_states: &mut [CudaTensor<f32>],
+    ) -> Result<CudaTensor<f32>> {
+        if prompt_tokens.shape().len() != 1 {
+            return Err(anyhow!(
+                "qwen35 target.prefill: prompt_tokens must be 1D [prompt_len], got {:?}",
+                prompt_tokens.shape()
+            ));
+        }
+        let prompt_len = prompt_tokens.shape()[0];
+        if prompt_len == 0 {
+            return Err(anyhow!("qwen35 target.prefill: prompt_len must be > 0"));
+        }
+        if gdn_states.len() < self.n_gdn {
+            return Err(anyhow!(
+                "qwen35 target.prefill: gdn_states.len()={} < n_gdn={}",
+                gdn_states.len(),
+                self.n_gdn
+            ));
+        }
+        if kv_cache.n_layers() < self.n_full_attn {
+            return Err(anyhow!(
+                "qwen35 target.prefill: kv_cache has {} layers, need >= {} FA layers",
+                kv_cache.n_layers(),
+                self.n_full_attn
+            ));
+        }
+
+        let ubatch = Self::prefill_ubatch_for(prompt_len);
+
+        // Per-chunk gdn_inter buffer, sized for the ubatch (never the
+        // full prompt). Matches dflash-ref's bounded intermediate-state
+        // region.
+        let cfg = self.config;
+        let s_v = cfg.gdn_ssm_dim;
+        let h_v = cfg.gdn_num_v_heads;
+        let mut gdn_inter: Vec<CudaTensor<f16>> = Vec::with_capacity(self.n_gdn);
+        for _ in 0..self.n_gdn {
+            gdn_inter.push(CudaTensor::<f16>::zeros(
+                self.device.clone(),
+                vec![s_v, s_v, h_v, ubatch],
+            )?);
+        }
+
+        // Pull the prompt into host memory once so we can slice per
+        // chunk without issuing device→device slice copies (prompt
+        // tokens are i32 and small — for a 16K prompt this is 64 KB).
+        let prompt_host = prompt_tokens
+            .to_host()
+            .map_err(|e| anyhow!("qwen35 target.prefill: download prompt: {:?}", e))?;
+
+        // Walk the prompt in chunks. After each chunk the KV cache is
+        // advanced by chunk_n inside the FA layers' forward, and the
+        // GDN recurrent state is updated in-place inside the GDN
+        // layers' forward. The per-chunk logits are discarded except
+        // for the final chunk's last row.
+        let mut last_logits: Option<CudaTensor<f32>> = None;
+        let mut start: usize = 0;
+        while start < prompt_len {
+            let chunk_n = std::cmp::min(ubatch, prompt_len - start);
+
+            // Slice prompt tokens for this chunk.
+            let tk = CudaTensor::<i32>::from_host(
+                self.device.clone(),
+                vec![chunk_n],
+                &prompt_host[start..start + chunk_n],
+            )
+            .map_err(|e| anyhow!("qwen35 target.prefill: upload chunk tokens: {:?}", e))?;
+
+            // MRoPE 4D positions: first 3 axes = absolute position
+            // (start + i), axis 3 = 0 for plain text. Matches
+            // dflash-ref's `pf_pos_buf` layout.
+            let mut pos_host = vec![0i32; 4 * chunk_n];
+            for i in 0..chunk_n {
+                let p = (start + i) as i32;
+                pos_host[i] = p;
+                pos_host[chunk_n + i] = p;
+                pos_host[2 * chunk_n + i] = p;
+                // pos_host[3 * chunk_n + i] already 0.
+            }
+            let pos = CudaTensor::<i32>::from_host(
+                self.device.clone(),
+                vec![4, chunk_n],
+                &pos_host,
+            )
+            .map_err(|e| anyhow!("qwen35 target.prefill: upload chunk positions: {:?}", e))?;
+
+            let logits = self
+                .forward(&tk, &pos, kv_cache, gdn_states, &mut gdn_inter)
+                .map_err(|e| {
+                    anyhow!(
+                        "qwen35 target.prefill: chunk forward start={} chunk_n={}: {:?}",
+                        start,
+                        chunk_n,
+                        e
+                    )
+                })?;
+            last_logits = Some(logits);
+            start += chunk_n;
+        }
+
+        // Pull the last chunk's final-row logits and repackage as
+        // `[1, vocab_size]` for the caller.
+        let logits = last_logits
+            .ok_or_else(|| anyhow!("qwen35 target.prefill: no chunks were run"))?;
+        let shape = logits.shape().to_vec();
+        if shape.len() != 2 || shape[1] != self.vocab_size {
+            return Err(anyhow!(
+                "qwen35 target.prefill: chunk logits shape {:?} not [_, {}]",
+                shape,
+                self.vocab_size
+            ));
+        }
+        let chunk_n = shape[0];
+        let vocab = self.vocab_size;
+        let host = logits
+            .to_host()
+            .map_err(|e| anyhow!("qwen35 target.prefill: download chunk logits: {:?}", e))?;
+        let last_row_start = (chunk_n - 1) * vocab;
+        let last_row = &host[last_row_start..last_row_start + vocab];
+        let out = CudaTensor::<f32>::from_host(self.device.clone(), vec![1, vocab], last_row)
+            .map_err(|e| anyhow!("qwen35 target.prefill: upload last-row logits: {:?}", e))?;
+        Ok(out)
+    }
+
+    /// Returns the prefill ubatch size to use for a given prompt
+    /// length. Matches dflash-ref's
+    /// `test_dflash_lib.cpp::run_dflash_gen_loop`:
+    ///
+    /// ```text
+    /// int prefill_ubatch_env = (prompt_len_auto > 2048) ? 192 : 16;
+    /// ```
+    ///
+    /// 16 for prompts ≤ 2048 (matches the DFlash block_size and
+    /// chain-verify q_len so per-chunk FA drift is smallest); 192 for
+    /// longer prompts where prefill time dominates. 192 is also the
+    /// ceiling dictated by the gated_delta_net intermediate-state OOM
+    /// envelope; see the comment above `PREFILL_UBATCH` in
+    /// `test_dflash_lib.cpp`.
+    #[inline]
+    pub fn prefill_ubatch_for(prompt_len: usize) -> usize {
+        if prompt_len > 2048 {
+            192
+        } else {
+            16
+        }
+    }
 }
 
 // ────────────────────────────────────────────────────────────────────

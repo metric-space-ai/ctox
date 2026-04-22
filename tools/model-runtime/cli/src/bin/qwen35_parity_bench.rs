@@ -463,12 +463,24 @@ fn run_ours_once(
     n_new: usize,
 ) -> Result<(f64, f64)> {
     let prompt_len = prompt.len();
-    // gdn_inter sized for the largest forward this state sees.
-    let n_inter = prompt_len.max(n_new).max(1);
-    let (mut kv, mut gs, mut gi) = setup_state(state, n_inter)?;
+    // Decode-phase gdn_inter: the decode loop below issues 1-token
+    // forwards, so n_inter for that path is just max(n_new, 1).
+    // Prefill runs through `target.prefill()` which allocates its own
+    // per-chunk gdn_inter sized for the ubatch (16 or 192), so we do
+    // NOT need to oversize `gi` for prompt_len here. This is what
+    // unblocks long-context prompts that previously OOMed at
+    // `[128, 128, 48, prompt_len]`.
+    let n_inter_decode = n_new.max(1);
+    let (mut kv, mut gs, mut gi) = setup_state(state, n_inter_decode)?;
 
-    // ── Prefill ──
-    let (tk, pos) = build_input(&state.device, prompt, 0, prompt_len)?;
+    // ── Prefill ── chunked via target.prefill (ubatch=16/192 matching
+    // dflash-ref's run_dflash_gen_loop).
+    let prompt_tk = CudaTensor::<i32>::from_host(
+        state.device.clone(),
+        vec![prompt_len],
+        prompt,
+    )
+    .map_err(|e| anyhow!("upload prompt tokens: {:?}", e))?;
     state
         .device
         .synchronize()
@@ -476,22 +488,21 @@ fn run_ours_once(
     let t0 = Instant::now();
     let logits = state
         .target
-        .forward(&tk, &pos, &mut kv, &mut gs, &mut gi)
-        .map_err(|e| anyhow!("prefill forward: {:?}", e))?;
+        .prefill(&prompt_tk, &mut kv, &mut gs)
+        .map_err(|e| anyhow!("prefill: {:?}", e))?;
     state
         .device
         .synchronize()
         .map_err(|e| anyhow!("post-prefill sync: {:?}", e))?;
     let prefill_ms = t0.elapsed().as_secs_f64() * 1000.0;
 
-    // Logits sanity — last row, a handful of values.
+    // Logits sanity — prefill returns [1, vocab].
     {
         let shape = logits.shape().to_vec();
-        if shape.len() != 2 || shape[0] != prompt_len {
+        if shape.len() != 2 || shape[0] != 1 {
             return Err(anyhow!(
-                "logits shape = {:?} expected [{}, vocab]",
-                shape,
-                prompt_len
+                "prefill logits shape = {:?} expected [1, vocab]",
+                shape
             ));
         }
     }
