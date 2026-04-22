@@ -2344,65 +2344,23 @@ fn run_completion_review(
     job: &QueuedPrompt,
     reply_text: &str,
     conversation_id: i64,
-    mission_state: Option<&lcm::MissionStateRecord>,
+    _mission_state: Option<&lcm::MissionStateRecord>,
 ) {
-    let db_path = root.join("runtime/ctox.sqlite3");
-    let (
-        mission_line,
-        done_gate,
-        focus_excerpt,
-        anchors_excerpt,
-        narrative_excerpt,
-        workflow_excerpt,
-        communication_excerpt,
-    ) = {
-        let mission_record = mission_state.cloned().or_else(|| {
-            lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default())
-                .and_then(|engine| engine.mission_state(conversation_id))
-                .ok()
-        });
-        let continuity = lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default())
-            .and_then(|engine| engine.continuity_show_all(conversation_id))
-            .ok();
-        (
-            mission_record
-                .as_ref()
-                .map(|m| m.mission.clone())
-                .unwrap_or_default(),
-            mission_record
-                .as_ref()
-                .map(|m| m.done_gate.clone())
-                .unwrap_or_default(),
-            continuity
-                .as_ref()
-                .map(|c| clip_multiline(&c.focus.content, 1200))
-                .unwrap_or_default(),
-            continuity
-                .as_ref()
-                .map(|c| clip_multiline(&c.anchors.content, 1200))
-                .unwrap_or_default(),
-            continuity
-                .as_ref()
-                .map(|c| clip_multiline(&c.narrative.content, 1200))
-                .unwrap_or_default(),
-            format_review_workflow_state(job, mission_record.as_ref()),
-            format_review_communication_state(root, job),
-        )
-    };
     let owner_visible = derive_owner_visible_for_review(&job.source_label);
+    let db_path = root.join("runtime/ctox.sqlite3");
+    let review_skill_path = root
+        .join("skills/system/review/external-review/SKILL.md")
+        .to_string_lossy()
+        .to_string();
     let review_request = review::CompletionReviewRequest {
-        goal: job.goal.clone(),
-        prompt: job.prompt.clone(),
         preview: job.preview.clone(),
         source_label: job.source_label.clone(),
         owner_visible,
-        mission: mission_line,
-        done_gate,
-        focus_excerpt,
-        anchors_excerpt,
-        narrative_excerpt,
-        workflow_excerpt,
-        communication_excerpt,
+        conversation_id,
+        thread_key: job.thread_key.clone().unwrap_or_default(),
+        workspace_root: job.workspace_root.clone().unwrap_or_default(),
+        runtime_db_path: db_path.to_string_lossy().to_string(),
+        review_skill_path,
     };
     let outcome = review::review_completion_if_needed(root, &review_request, reply_text);
     if !outcome.required {
@@ -2411,8 +2369,8 @@ fn run_completion_review(
     }
     let verification_request = verification::SliceVerificationRequest {
         conversation_id,
-        goal: review_request.goal.clone(),
-        prompt: review_request.prompt.clone(),
+        goal: job.goal.clone(),
+        prompt: job.prompt.clone(),
         preview: review_request.preview.clone(),
         source_label: review_request.source_label.clone(),
         owner_visible,
@@ -2476,120 +2434,14 @@ fn derive_owner_visible_for_review(source_label: &str) -> bool {
     !(lowered.contains("watchdog") || lowered.contains("timeout") || lowered.starts_with("cron"))
 }
 
-/// Truncate a multi-line string to `max_chars` characters without collapsing
-/// whitespace. The standard `clip_text` helper collapses newlines into single
-/// spaces, which is wrong for Focus/Anchors continuity excerpts where line
-/// structure carries meaning for the reviewer.
-fn clip_multiline(value: &str, max_chars: usize) -> String {
-    if value.chars().count() <= max_chars {
-        return value.to_string();
-    }
-    let mut clipped: String = value.chars().take(max_chars.saturating_sub(1)).collect();
-    clipped.push('…');
-    clipped
-}
-
-fn format_review_workflow_state(
-    job: &QueuedPrompt,
-    mission_record: Option<&lcm::MissionStateRecord>,
-) -> String {
-    let mut lines = Vec::new();
-    if let Some(thread_key) = job.thread_key.as_deref().filter(|value| !value.trim().is_empty()) {
-        lines.push(format!("thread_key: {}", thread_key.trim()));
-    }
-    if !job.source_label.trim().is_empty() {
-        lines.push(format!("source_label: {}", job.source_label.trim()));
-    }
-    if let Some(skill) = job
-        .suggested_skill
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-    {
-        lines.push(format!("suggested_skill: {}", skill.trim()));
-    }
-    if let Some(workspace_root) = job
-        .workspace_root
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-    {
-        lines.push(format!("workspace_root: {}", workspace_root.trim()));
-    }
-    if let Some(mission) = mission_record {
-        if !mission.mission_status.trim().is_empty() {
-            lines.push(format!(
-                "mission_status: {}",
-                mission.mission_status.trim()
-            ));
-        }
-        if !mission.next_slice.trim().is_empty() {
-            lines.push(format!(
-                "mission_next_slice: {}",
-                clip_text(mission.next_slice.trim(), 220)
-            ));
-        }
-        if !mission.blocker.trim().is_empty() {
-            lines.push(format!("mission_blocker: {}", clip_text(mission.blocker.trim(), 220)));
-        }
-    }
-    if lines.is_empty() {
-        "(no workflow state recorded)".to_string()
-    } else {
-        lines.join("\n")
-    }
-}
-
-fn format_review_communication_state(root: &Path, job: &QueuedPrompt) -> String {
-    let thread_items = job
-        .thread_key
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-        .and_then(|thread_key| channels::load_thread_communication_feed(root, thread_key, 6).ok());
-    let items = thread_items.unwrap_or_else(|| {
-        channels::load_recent_communication_feed(root, 4).unwrap_or_default()
-    });
-    if items.is_empty() {
-        return "(no relevant communication recorded)".to_string();
-    }
-    items.into_iter()
-        .map(|item| {
-            let sender = item
-                .sender_address
-                .trim()
-                .strip_prefix("mailto:")
-                .unwrap_or(item.sender_address.trim());
-            let sender = if sender.is_empty() { "(unknown sender)" } else { sender };
-            let subject = if item.subject.trim().is_empty() {
-                "(no subject)"
-            } else {
-                item.subject.trim()
-            };
-            let preview = if item.preview.trim().is_empty() {
-                "(no preview)"
-            } else {
-                item.preview.trim()
-            };
-            format!(
-                "- [{}:{}] {} | {} | {}",
-                item.channel.trim(),
-                item.direction.trim(),
-                sender,
-                clip_text(subject, 100),
-                clip_text(preview, 160)
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
 /// Enqueue a high-priority rework slice on the same thread as the rejected
-/// slice. The reviewer's verbatim report is included so the next executor
-/// turn has the open items inline — no need to consult assurance state.
+/// slice. Only the structured verdict summary is forwarded; the full review
+/// run remains external and should not leak back into executor prompts.
 fn enqueue_review_rework(
     root: &Path,
     job: &QueuedPrompt,
     outcome: &review::ReviewOutcome,
 ) -> Result<String> {
-    let report_excerpt = clip_multiline(&outcome.report, 1500);
     let summary_line = clip_text(&outcome.summary, 220);
     let preview = clip_text(&job.preview, 80);
     let title = format!(
@@ -2602,23 +2454,16 @@ fn enqueue_review_rework(
         outcome.verdict.as_gate_label()
     );
     let prompt = format!(
-        "The previous slice was reviewed by CTOX's completion reviewer and rejected.\n\n\
+        "An external CTOX review run rejected the previous slice.\n\n\
 Verdict: {}\n\
-Reviewer summary: {}\n\
+Review summary: {}\n\
 \n\
-=== Reviewer report (verbatim) ===\n\
-{}\n\
-\n\
-=== Original slice prompt (for context) ===\n\
-{}\n\
-\n\
-Address the open items listed in the reviewer report. Do not start unrelated work. \
-Either fix the gaps and verify them with direct checks, or explain why the reviewer's \
-objection is incorrect with concrete evidence.",
+Address the failed gates and open items surfaced by the external review. \
+Start by checking the persisted review verdict and evidence for this conversation or thread. \
+Do not start unrelated work. Either fix the gaps and verify them with direct checks, \
+or prove the review wrong with stronger evidence.",
         outcome.verdict.as_gate_label(),
         summary_line,
-        report_excerpt,
-        job.prompt.trim(),
     );
     // Keep the rework on the original thread when one exists so the executor
     // sees its own prior conversation context. Synthesize a fallback thread

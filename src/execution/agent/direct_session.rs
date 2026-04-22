@@ -33,7 +33,7 @@ use ctox_protocol::protocol::{AskForApproval, EventMsg, SandboxPolicy, SessionSo
 use ctox_protocol::user_input::UserInput;
 use ctox_utils_absolute_path::AbsolutePathBuf;
 
-use crate::context::compact::{CompactDecision, CompactMode, CompactPolicy};
+use crate::context::compact::{CompactDecision, CompactMode, CompactPolicy, CompactTrigger};
 use crate::inference::runtime_kernel;
 
 // ---------------------------------------------------------------------------
@@ -60,16 +60,30 @@ impl PersistentSession {
     /// Start a persistent session: creates tokio runtime, app-server client,
     /// and thread. Call this ONCE per mission-turn-loop iteration.
     pub fn start(root: &Path, settings: &BTreeMap<String, String>) -> Result<Self> {
+        Self::start_with_instructions(root, settings, None, false)
+    }
+
+    /// Start a persistent session with explicit base instructions and optional
+    /// compaction disablement. Review runs use this to create an isolated
+    /// external-review thread with its own system prompt and without normal
+    /// long-run compaction behavior.
+    pub fn start_with_instructions(
+        root: &Path,
+        settings: &BTreeMap<String, String>,
+        base_instructions: Option<&str>,
+        disable_compaction: bool,
+    ) -> Result<Self> {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
             .build()
             .context("failed to start tokio runtime")?;
 
-        let (client, thread_id, cwd, seq) =
-            rt.block_on(async { Self::start_client_and_thread(root, settings).await })?;
+        let (client, thread_id, cwd, seq) = rt.block_on(async {
+            Self::start_client_and_thread(root, settings, base_instructions).await
+        })?;
 
-        let policy = CompactPolicy::from_settings(
+        let mut policy = CompactPolicy::from_settings(
             settings.get("CTOX_COMPACT_TRIGGER").map(String::as_str),
             settings.get("CTOX_COMPACT_MODE").map(String::as_str),
             settings
@@ -85,6 +99,10 @@ impl PersistentSession {
                 .get("CTOX_CHAT_MODEL_MAX_CONTEXT")
                 .map(String::as_str),
         );
+        if disable_compaction {
+            policy.trigger = CompactTrigger::Off;
+            policy.emergency_fill_ratio = 2.0;
+        }
         let ctx_log = ContextLogger::open(root);
 
         eprintln!(
@@ -165,6 +183,7 @@ impl PersistentSession {
     async fn start_client_and_thread(
         root: &Path,
         settings: &BTreeMap<String, String>,
+        base_instructions: Option<&str>,
     ) -> Result<(InProcessAppServerClient, String, PathBuf, RequestIdSeq)> {
         let model = settings
             .get("CTOX_CHAT_MODEL")
@@ -303,6 +322,7 @@ impl PersistentSession {
                     cwd: Some(cwd.to_string_lossy().to_string()),
                     approval_policy: Some(AskForApproval::Never.into()),
                     sandbox: Some(ctox_app_server_protocol::SandboxMode::DangerFullAccess),
+                    base_instructions: base_instructions.map(ToOwned::to_owned),
                     ephemeral: Some(true),
                     ..ThreadStartParams::default()
                 },
