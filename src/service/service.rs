@@ -3841,6 +3841,20 @@ fn self_work_has_explicit_supersession(item: &tickets::TicketSelfWorkItemView) -
         || haystack.contains("superseded by clean probe")
 }
 
+fn watchdog_generated_mission_follow_up(item: &tickets::TicketSelfWorkItemView) -> bool {
+    if item.kind != "mission-follow-up" {
+        return false;
+    }
+    if item.body_text.contains("Mission continuity watchdog:") {
+        return true;
+    }
+    item.metadata
+        .get("dedupe_key")
+        .and_then(|value| value.as_str())
+        .map(|value| value.starts_with("mission-watchdog:"))
+        .unwrap_or(false)
+}
+
 fn suppress_self_work_reason(
     root: &Path,
     item: &tickets::TicketSelfWorkItemView,
@@ -3856,6 +3870,12 @@ fn suppress_self_work_reason(
     let blocked_labels: &[&str] = match item.kind.as_str() {
         "review-rework" => &["review rework"],
         CTO_DRIFT_KIND => &["cto operating drift correction"],
+        "mission-follow-up" if watchdog_generated_mission_follow_up(item) => &[
+            "continue mission",
+            "monitor ",
+            "approval",
+            "watch for effective",
+        ],
         _ => &[],
     };
     if blocked_labels.is_empty() {
@@ -7150,6 +7170,141 @@ mod tests {
 
         let skipped = maybe_skip_superseded_self_work_prompt(&root, &state, &job)
             .expect("skip check should succeed");
+        assert!(skipped);
+
+        let closed = tickets::list_ticket_self_work_items(&root, Some("local"), Some("closed"), 10)
+            .expect("failed to list closed self-work");
+        assert!(closed.iter().any(|entry| entry.work_id == item.work_id));
+
+        let tasks =
+            channels::list_queue_tasks(&root, &["pending".to_string(), "leased".to_string()], 10)
+                .expect("failed to list queue tasks");
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].title, "Kunstmen platform homepage reset");
+    }
+
+    #[test]
+    fn published_watchdog_mission_follow_up_is_closed_when_direct_reset_exists() {
+        let root = temp_root("ctox-mission-follow-up-route-suppressed");
+        channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Kunstmen platform homepage reset".to_string(),
+                prompt: "Direct corrective work for the Kunstmen homepage.".to_string(),
+                thread_key: "kunstmen-operator".to_string(),
+                workspace_root: Some("/home/ubuntu/workspace/kunstmen".to_string()),
+                priority: "urgent".to_string(),
+                suggested_skill: Some("service-deployment".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to seed direct corrective task");
+
+        let item = tickets::put_ticket_self_work_item(
+            &root,
+            tickets::TicketSelfWorkUpsertInput {
+                source_system: "local".to_string(),
+                kind: "mission-follow-up".to_string(),
+                title: "Continue mission Monitor inbound non-queue channels for explicit owner approval".to_string(),
+                body_text: "Mission continuity watchdog: the mission was idle for 59s.\n\nMission: Monitor inbound non-queue channels for explicit owner approval/access-grant confirmation for Vercel team/project access for kunstmen.com.".to_string(),
+                state: "open".to_string(),
+                metadata: serde_json::json!({
+                    "thread_key": "kunstmen-operator",
+                    "workspace_root": "/home/ubuntu/workspace/kunstmen",
+                    "priority": "high",
+                    "skill": "follow-up-orchestrator",
+                    "dedupe_key": "mission-watchdog:kunstmen-operator",
+                }),
+            },
+            true,
+        )
+        .expect("failed to create watchdog follow-up");
+        tickets::assign_ticket_self_work_item(&root, &item.work_id, "self", "ctox", None)
+            .expect("failed to assign self-work");
+
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        route_assigned_ticket_self_work(&root, &state).expect("routing should succeed");
+
+        let tasks =
+            channels::list_queue_tasks(&root, &["pending".to_string(), "leased".to_string()], 10)
+                .expect("failed to list queue tasks");
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].title, "Kunstmen platform homepage reset");
+
+        let closed = tickets::list_ticket_self_work_items(&root, Some("local"), Some("closed"), 10)
+            .expect("failed to list closed self-work");
+        assert!(closed.iter().any(|entry| entry.work_id == item.work_id));
+    }
+
+    #[test]
+    fn active_watchdog_mission_follow_up_is_skipped_before_turn_execution() {
+        let root = temp_root("ctox-mission-follow-up-active-suppressed");
+        channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Kunstmen platform homepage reset".to_string(),
+                prompt: "Direct corrective work for the Kunstmen homepage.".to_string(),
+                thread_key: "kunstmen-operator".to_string(),
+                workspace_root: Some("/home/ubuntu/workspace/kunstmen".to_string()),
+                priority: "urgent".to_string(),
+                suggested_skill: Some("service-deployment".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to seed direct corrective task");
+
+        let item = tickets::put_ticket_self_work_item(
+            &root,
+            tickets::TicketSelfWorkUpsertInput {
+                source_system: "local".to_string(),
+                kind: "mission-follow-up".to_string(),
+                title: "Continue mission Monitor inbound non-queue channels for explicit owner approval".to_string(),
+                body_text: "Mission continuity watchdog: the mission was idle for 59s.\n\nMission: Monitor inbound non-queue channels for explicit owner approval/access-grant confirmation for Vercel team/project access for kunstmen.com.".to_string(),
+                state: "open".to_string(),
+                metadata: serde_json::json!({
+                    "thread_key": "kunstmen-operator",
+                    "workspace_root": "/home/ubuntu/workspace/kunstmen",
+                    "priority": "high",
+                    "skill": "follow-up-orchestrator",
+                    "dedupe_key": "mission-watchdog:kunstmen-operator",
+                }),
+            },
+            true,
+        )
+        .expect("failed to create watchdog follow-up");
+        tickets::assign_ticket_self_work_item(&root, &item.work_id, "self", "ctox", None)
+            .expect("failed to assign self-work");
+
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        {
+            let mut shared = lock_shared_state(&state);
+            shared.busy = true;
+            shared.current_goal_preview = Some("Continue mission Monitor inbound ...".to_string());
+            shared.active_source_label = Some("queue".to_string());
+            shared
+                .leased_message_keys_inflight
+                .insert("queue-key-1".to_string());
+        }
+        let job = QueuedPrompt {
+            prompt: "Monitor inbound approval".to_string(),
+            goal: "Continue mission Monitor inbound non-queue channels for explicit owner approval"
+                .to_string(),
+            preview:
+                "Continue mission Monitor inbound non-queue channels for explicit owner approval"
+                    .to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: Some("follow-up-orchestrator".to_string()),
+            leased_message_keys: vec!["queue-key-1".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("kunstmen-operator".to_string()),
+            workspace_root: Some("/home/ubuntu/workspace/kunstmen".to_string()),
+            ticket_self_work_id: Some(item.work_id.clone()),
+        };
+
+        let skipped = maybe_skip_superseded_self_work_prompt(&root, &state, &job)
+            .expect("skip evaluation should succeed");
         assert!(skipped);
 
         let closed = tickets::list_ticket_self_work_items(&root, Some("local"), Some("closed"), 10)
