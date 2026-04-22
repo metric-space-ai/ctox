@@ -80,6 +80,7 @@ use anyhow::{anyhow, Result};
 use half::{bf16, f16};
 
 use ctox_cuda_primitives::device::DeviceContext;
+use crate::kernels::l2_norm::launch_l2_norm_f32;
 use crate::kernels::{
     launch_cast_bf16_to_f32, launch_cast_f32_to_bf16, launch_gated_delta_net_f32,
     launch_residual_add_bf16, launch_rmsnorm_f32, GdnGateKind, GdnLaunchInputs, GdnPersistInter,
@@ -384,16 +385,43 @@ impl Qwen35GDN {
         let k_host = build_stream(k_offset, k_width, per_k_elems);
         let v_host = build_stream(v_offset, v_width, per_v_elems);
 
-        let q = CudaTensor::<f32>::from_host(
+        // L2-normalize Q and K per-head. Matches the reference
+        // (`build_delta_net_block` does `ggml_l2_norm(q_c, EPS);
+        // ggml_l2_norm(k_c, EPS);` on the post-conv views). Without
+        // this, Q·K dot products inside the DeltaNet recurrence can
+        // get far outside the numerically-stable range and the
+        // state saturates to NaN/Inf after a few tokens.
+        //
+        // Each per-head slice has `s_v` elements; our host layout is
+        // `[t, head, col]` which flattens to `[n_tokens * h_k, s_v]`
+        // rows. That's exactly what `launch_l2_norm_f32` normalizes
+        // (one row per block). The kernel reads the 1-D tensor linear
+        // buffer via the GdnShape strides we set below — the tensor's
+        // `shape` metadata is used only for alloc sizing, so the
+        // `[n_tokens * h_k, s_v]` layout here and the `[s_v, h_k,
+        // n_tokens, n_seqs]` layout the kernel expects are the same
+        // linear buffer, just with different logical shape labels.
+        let q_tmp = CudaTensor::<f32>::from_host(
             device.clone(),
-            vec![s_v, h_k, n_tokens, n_seqs],
+            vec![n_tokens * h_k * n_seqs, s_v],
             &q_host,
         )?;
-        let k = CudaTensor::<f32>::from_host(
+        let mut q = CudaTensor::<f32>::zeros(
             device.clone(),
-            vec![s_v, h_k, n_tokens, n_seqs],
+            vec![n_tokens * h_k * n_seqs, s_v],
+        )?;
+        launch_l2_norm_f32(device, &q_tmp, &mut q, self.config.rms_eps)?;
+        let k_tmp = CudaTensor::<f32>::from_host(
+            device.clone(),
+            vec![n_tokens * h_k * n_seqs, s_v],
             &k_host,
         )?;
+        let mut k = CudaTensor::<f32>::zeros(
+            device.clone(),
+            vec![n_tokens * h_k * n_seqs, s_v],
+        )?;
+        launch_l2_norm_f32(device, &k_tmp, &mut k, self.config.rms_eps)?;
+
         let v = CudaTensor::<f32>::from_host(
             device.clone(),
             vec![s_v, h_v, n_tokens, n_seqs],
