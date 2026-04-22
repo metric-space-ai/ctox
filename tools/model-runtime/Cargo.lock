@@ -1139,6 +1139,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ctox-cuda-primitives"
+version = "0.7.1-alpha.1"
+dependencies = [
+ "anyhow",
+ "bytemuck",
+ "cudarc 0.17.8",
+ "half",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
 name = "ctox-dflash-ffi"
 version = "0.7.1-alpha.1"
 dependencies = [
@@ -1394,6 +1406,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ctox-engine-runtime"
+version = "0.7.1-alpha.1"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "ctox-engine-sdk"
 version = "0.7.1-alpha.1"
 dependencies = [
@@ -1458,6 +1481,21 @@ dependencies = [
  "candle-core",
  "image",
  "rayon",
+]
+
+[[package]]
+name = "ctox-qwen35-27b"
+version = "0.7.1-alpha.1"
+dependencies = [
+ "anyhow",
+ "bytemuck",
+ "ctox-cuda-primitives",
+ "cudarc 0.17.8",
+ "half",
+ "memmap2",
+ "thiserror 2.0.18",
+ "tokenizers",
+ "tracing",
 ]
 
 [[package]]

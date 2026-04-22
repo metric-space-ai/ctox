@@ -12,6 +12,9 @@ members = [
     "macros",
     "dflash-ffi",
     "cuda",
+    "cuda-primitives",
+    "engine",
+    "models/qwen35_27b",
 ]
 resolver = "2"
 

@@ -1,0 +1,29 @@
+[package]
+name = "ctox-engine-runtime"
+version.workspace = true
+edition.workspace = true
+description = "Generic serving layer for CTOX bare-metal model crates. Defines the Model trait that per-model crates (ctox-qwen35-27b, future ctox-llama-70b, etc.) implement, plus serving-side concerns (tokenizer bridge, streaming, KV pool management) that are model-agnostic."
+homepage.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "ctox_engine_runtime"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+
+# Note: does NOT depend on any specific model crate. Consumers pick
+# their models via Cargo feature flags or dynamic dispatch through
+# the `Model` trait.
+
+[features]
+default = []

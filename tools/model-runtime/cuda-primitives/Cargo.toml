@@ -1,0 +1,35 @@
+[package]
+name = "ctox-cuda-primitives"
+version.workspace = true
+edition.workspace = true
+description = "Device context, typed tensor storage, and dtype primitives shared across every per-model CUDA crate. NOT a kernel library — contains zero math. Per-model crates (e.g. models/qwen35_27b) import this for the CudaTensor + DeviceContext types and bring their own kernels."
+homepage.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "ctox_cuda_primitives"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+half = { workspace = true, features = ["bytemuck"] }
+bytemuck = { workspace = true }
+
+cudarc = { version = "0.17", default-features = false, features = [
+    "cuda-12060",
+    "dynamic-linking",
+    "driver",
+    "cublas",
+    "nvrtc",
+    "f16",
+], optional = true }
+
+[features]
+default = []
+cuda = ["dep:cudarc"]

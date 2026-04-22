@@ -1,0 +1,39 @@
+[package]
+name = "ctox-qwen35-27b"
+version.workspace = true
+edition.workspace = true
+description = "Qwen3.5-27B hybrid (16 FullAttention + 48 Gated DeltaNet) bare-metal CUDA model. Kernels vendored from llama.cpp ggml-cuda + dflash reference, per-SM variants under kernels/sm_XX/. Rust glue layer orchestrates layer composition and arch dispatch."
+homepage.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "ctox_qwen35_27b"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+half = { workspace = true, features = ["bytemuck"] }
+bytemuck = { workspace = true }
+memmap2 = { workspace = true }
+tokenizers = { workspace = true, features = ["fancy-regex"] }
+
+ctox-cuda-primitives = { path = "../../cuda-primitives" }
+
+cudarc = { version = "0.17", default-features = false, features = [
+    "cuda-12060",
+    "dynamic-linking",
+    "driver",
+    "cublas",
+    "nvrtc",
+    "f16",
+], optional = true }
+
+[features]
+default = []
+cuda = ["dep:cudarc", "ctox-cuda-primitives/cuda"]
