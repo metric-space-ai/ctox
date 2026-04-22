@@ -12,6 +12,7 @@ use cudarc::driver::CudaSlice;
 use half::bf16;
 
 use crate::device::DeviceContext;
+use crate::tensor::CudaTensor;
 
 /// Per-layer K/V slabs.
 ///
@@ -118,6 +119,110 @@ impl KvCache {
     pub fn device(&self) -> &Arc<DeviceContext> {
         &self.device
     }
+
+    /// Append a `[n_tokens, n_kv_heads, head_dim]` bf16 tensor into the
+    /// K slab for `layer`, starting at row `offset` along the max_ctx
+    /// axis. The slab is contiguous along its fastest axis
+    /// (`n_kv_heads × head_dim`), so a freshly-produced K projection —
+    /// laid out `[n_tokens, n_kv_heads, head_dim]` row-major — can be
+    /// blitted as a single contiguous device-to-device memcpy.
+    ///
+    /// Does NOT advance `n_filled`; callers call [`KvCache::advance`]
+    /// after both K and V have been written.
+    pub fn append_k(
+        &mut self,
+        layer: usize,
+        offset: usize,
+        src: &CudaTensor<bf16>,
+    ) -> Result<()> {
+        self.append_inner(layer, offset, src, CacheAxis::K)
+    }
+
+    /// Same as [`KvCache::append_k`] but for the V slab.
+    pub fn append_v(
+        &mut self,
+        layer: usize,
+        offset: usize,
+        src: &CudaTensor<bf16>,
+    ) -> Result<()> {
+        self.append_inner(layer, offset, src, CacheAxis::V)
+    }
+
+    fn append_inner(
+        &mut self,
+        layer: usize,
+        offset: usize,
+        src: &CudaTensor<bf16>,
+        axis: CacheAxis,
+    ) -> Result<()> {
+        if layer >= self.n_layers {
+            return Err(anyhow!(
+                "KvCache::append_{:?}: layer {} out of range (n_layers={})",
+                axis,
+                layer,
+                self.n_layers
+            ));
+        }
+        let slot_elems = self.slot_elems();
+        let expected_shape = [
+            src.shape().first().copied().unwrap_or(0),
+            self.n_kv_heads,
+            self.head_dim,
+        ];
+        if src.shape().len() != 3
+            || src.shape()[1] != self.n_kv_heads
+            || src.shape()[2] != self.head_dim
+        {
+            return Err(anyhow!(
+                "KvCache::append_{:?}: src shape {:?} must be [n_tokens, n_kv_heads={}, head_dim={}]",
+                axis,
+                src.shape(),
+                self.n_kv_heads,
+                self.head_dim
+            ));
+        }
+        let n_tokens = expected_shape[0];
+        if n_tokens == 0 {
+            return Ok(());
+        }
+        if offset + n_tokens > self.max_ctx {
+            return Err(anyhow!(
+                "KvCache::append_{:?}: offset {} + n_tokens {} > max_ctx {}",
+                axis,
+                offset,
+                n_tokens,
+                self.max_ctx
+            ));
+        }
+
+        let start = offset * slot_elems;
+        let end = (offset + n_tokens) * slot_elems;
+        let slab = match axis {
+            CacheAxis::K => &mut self.k_slabs[layer],
+            CacheAxis::V => &mut self.v_slabs[layer],
+        };
+        let stream = self.device.raw().default_stream();
+        let mut dst_view = slab.slice_mut(start..end);
+        stream
+            .memcpy_dtod(src.buf(), &mut dst_view)
+            .map_err(|e| {
+                anyhow!(
+                    "KvCache::append_{:?} memcpy_dtod (layer={} offset={} n_tokens={}): {:?}",
+                    axis,
+                    layer,
+                    offset,
+                    n_tokens,
+                    e
+                )
+            })?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum CacheAxis {
+    K,
+    V,
 }
 
 impl std::fmt::Debug for KvCache {
