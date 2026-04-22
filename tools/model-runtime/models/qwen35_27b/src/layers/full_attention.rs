@@ -366,132 +366,53 @@ impl Qwen35FullAttention {
 
         let kv_len = kv_cache.n_filled();
 
-        // ── 7. Attention, per Q head. The GQA group maps Q head `h` to
-        //    KV head `h / gqa_group`. We gather both the Q head stripe
-        //    and the KV slab head stripe into contiguous staging
-        //    tensors so the plain matmul kernels accept them.
+        // ── 7. Fused attention via flash-attn.
         //
-        //    Output layout matches the Q flat layout: `[n_tokens, q_dim]`
-        //    row-major, Q-head-major.
-        let mut attn_out = CudaTensor::<bf16>::zeros(device.clone(), vec![n_tokens, q_dim])?;
+        //    The previous port walked each Q-head in a Python-style
+        //    loop: gather q-stripe, gather k/v-stripes from the KV
+        //    slab, transpose k, matmul scores, scale+mask, softmax,
+        //    cast back to bf16, matmul with v, scatter — 10+ kernel
+        //    launches per head × 24 heads per layer × 16 FA layers =
+        //    roughly 4k kernel launches per forward just for the
+        //    attention math, on top of the per-head gather/scatter
+        //    memcpys killed in the A2 head-gather commit.
+        //
+        //    This replaces the whole head loop with a single
+        //    `launch_flash_attn_bf16_kv_slab` call. The KV slab's
+        //    `[max_ctx, n_kv_heads, head_dim]` layout is exactly
+        //    what flash-attn expects — no per-head gather, no
+        //    staged transpose, no intermediate f32 scores buffer.
+        //    Causal masking is handled inside the kernel
+        //    (`causal=true`): `q_abs = (kv_len - n_tokens) + t`
+        //    which equals `prompt_start + t` for our chunked prefill
+        //    layout, matching the mask the old `build_causal_mask`
+        //    was constructing on the host.
+        //
+        //    Output is `[n_tokens, n_q_heads, head_dim]` bf16;
+        //    relabeled as `[n_tokens, q_dim]` for the downstream
+        //    gate-mul and output projection via `CudaTensor::reshape`
+        //    (no device work; row-major contiguous storage makes it
+        //    a label swap).
         let scale = 1.0f32 / (cfg.head_dim as f32).sqrt();
-        // Build the causal mask on host once, upload it once. The
-        // per-head `scale_add_with_bias_f32` kernel below folds the
-        // mask into the scaled scores in a single launch — no
-        // per-head mask re-upload and no intermediate scaled_masked
-        // = mask memcpy.
-        let mask_host = build_causal_mask(n_tokens, kv_len, prompt_start, scale);
-        let mask_dev = upload_mask(device, &mask_host, n_tokens, kv_len)?;
-
-        for q_head in 0..cfg.n_q_heads {
-            let kv_head = q_head / cfg.gqa_group();
-
-            // ── 7a. Gather Q head stripe: a strided slice of q3.
-            //       q3 is `[n_tokens, n_q_heads, head_dim]` row-major;
-            //       per-token stripe for head `q_head` sits at offset
-            //       `q_head * head_dim` with stride `q_dim` between tokens.
-            let q_head_tensor = gather_head_from_packed(
-                device,
-                &q3,
-                n_tokens,
-                cfg.n_q_heads,
-                cfg.head_dim,
-                q_head,
-            )?;
-
-            // ── 7b. Gather K/V stripes from the cache. Slab layout is
-            //       `[max_ctx, n_kv_heads, head_dim]` row-major; we need
-            //       the first `kv_len` rows of head `kv_head`.
-            let k_head_tensor = gather_head_from_kv_slab(
-                device,
-                kv_cache.k_slab(self.layer_idx),
-                kv_len,
-                cfg.n_kv_heads,
-                cfg.head_dim,
-                kv_head,
-            )?;
-            let v_head_tensor = gather_head_from_kv_slab(
-                device,
-                kv_cache.v_slab(self.layer_idx),
-                kv_len,
-                cfg.n_kv_heads,
-                cfg.head_dim,
-                kv_head,
-            )?;
-
-            // ── 7c. scores = q_head · k_head^T. The matmul kernel wants
-            //       `A[M,K] · B[K,N]`, so we need k_head transposed.
-            //       Materialize the transpose into a staging buffer:
-            //       `k_head_T [head_dim, kv_len]`.
-            let k_head_t = transpose_2d(device, &k_head_tensor, kv_len, cfg.head_dim)?;
-
-            let mut scores = CudaTensor::<f32>::zeros(device.clone(), vec![n_tokens, kv_len])?;
-            kernels::launch_matmul_bf16_f32(
-                device,
-                &q_head_tensor,
-                &k_head_t,
-                &mut scores,
-                n_tokens,
-                cfg.head_dim,
-                kv_len,
-            )?;
-
-            // ── 7d. scale + causal mask + softmax, all f32.
-            //       Fused scale + mask-add in one launch:
-            //
-            //          scaled_masked[i,j] = scores[i,j] * scale
-            //                             + mask_dev[i,j]
-            //
-            //       `mask_dev` was uploaded once outside the head
-            //       loop, so no per-head mask re-upload or D2D
-            //       memcpy. Replaces an earlier host round-trip
-            //       (download scores + mask, CPU scale-add, re-upload)
-            //       which also blocked graph capture for the decode
-            //       hot path.
-            let mut scaled_masked =
-                CudaTensor::<f32>::zeros(device.clone(), vec![n_tokens, kv_len])?;
-            kernels::launch_scale_add_with_bias_f32(
-                device,
-                &scores,
-                &mask_dev,
-                &mut scaled_masked,
-                scale,
-            )?;
-
-            let mut attn_weights =
-                CudaTensor::<f32>::zeros(device.clone(), vec![n_tokens, kv_len])?;
-            kernels::launch_softmax_f32(device, &scaled_masked, &mut attn_weights)?;
-
-            // ── 7e. out_head = attn_weights · v_head. Downcast attn to
-            //       bf16 for the bf16 matmul; v_head is already bf16.
-            let mut attn_weights_bf16 =
-                CudaTensor::<bf16>::zeros(device.clone(), vec![n_tokens, kv_len])?;
-            kernels::launch_cast_f32_to_bf16(device, &attn_weights, &mut attn_weights_bf16)?;
-
-            let mut out_head =
-                CudaTensor::<bf16>::zeros(device.clone(), vec![n_tokens, cfg.head_dim])?;
-            kernels::launch_matmul_bf16_bf16(
-                device,
-                &attn_weights_bf16,
-                &v_head_tensor,
-                &mut out_head,
-                n_tokens,
-                kv_len,
-                cfg.head_dim,
-            )?;
-
-            // ── 7f. Scatter `out_head` back into the packed attn_out
-            //       at the `q_head * head_dim` stripe per token.
-            scatter_head_into_packed(
-                device,
-                &out_head,
-                &mut attn_out,
-                n_tokens,
-                cfg.n_q_heads,
-                cfg.head_dim,
-                q_head,
-            )?;
-        }
+        let _ = prompt_start; // Causal inside the kernel handles this.
+        let mut attn_out_3d = CudaTensor::<bf16>::zeros(
+            device.clone(),
+            vec![n_tokens, cfg.n_q_heads, cfg.head_dim],
+        )?;
+        kernels::launch_flash_attn_bf16_kv_slab(
+            device,
+            &q3,
+            kv_cache.k_slab(self.layer_idx),
+            kv_cache.v_slab(self.layer_idx),
+            None,
+            &mut attn_out_3d,
+            kv_len,
+            cfg.n_kv_heads,
+            scale,
+            cfg.gqa_group(),
+            /* causal */ true,
+        )?;
+        let mut attn_out = attn_out_3d.reshape(vec![n_tokens, q_dim])?;
 
         // ── 7g. Sigmoid gate elementwise-mul. dflash's
         //    `build_full_attn_block` applies `attn = attn * sigmoid(gate)`
@@ -555,111 +476,6 @@ fn reshape_3d(src: CudaTensor<bf16>, d0: usize, d1: usize, d2: usize) -> Result<
     src.reshape(vec![d0, d1, d2])
 }
 
-/// Extract head `h` from a `[n_tokens, n_heads, head_dim]` bf16
-/// tensor into a contiguous `[n_tokens, head_dim]` tensor.
-///
-/// Now a single-launch strided gather kernel
-/// (`launch_head_gather_bf16`). Earlier revisions walked every
-/// token with a dedicated `memcpy_dtod` — 24 heads × ~1024 tokens
-/// × 4 gather/scatter calls per head was one of the two dominant
-/// sources of launch-count overhead in the audit. One kernel
-/// launch per call now, regardless of `n_tokens`.
-fn gather_head_from_packed(
-    device: &Arc<DeviceContext>,
-    packed: &CudaTensor<bf16>,
-    n_tokens: usize,
-    n_heads: usize,
-    head_dim: usize,
-    head: usize,
-) -> Result<CudaTensor<bf16>> {
-    debug_assert_eq!(packed.shape(), [n_tokens, n_heads, head_dim]);
-    let mut dst = CudaTensor::<bf16>::zeros(device.clone(), vec![n_tokens, head_dim])?;
-    kernels::launch_head_gather_bf16(
-        device, packed, &mut dst, n_tokens, n_heads, head_dim, head,
-    )?;
-    Ok(dst)
-}
-
-/// Scatter a `[n_tokens, head_dim]` tensor into slot `head` of a
-/// `[n_tokens, n_heads, head_dim]` destination. Mirror of
-/// [`gather_head_from_packed`].
-fn scatter_head_into_packed(
-    device: &Arc<DeviceContext>,
-    head_tensor: &CudaTensor<bf16>,
-    packed: &mut CudaTensor<bf16>,
-    n_tokens: usize,
-    n_heads: usize,
-    head_dim: usize,
-    head: usize,
-) -> Result<()> {
-    debug_assert_eq!(head_tensor.shape(), [n_tokens, head_dim]);
-    debug_assert_eq!(packed.shape(), [n_tokens, n_heads * head_dim]);
-    kernels::launch_head_scatter_bf16(
-        device, head_tensor, packed, n_tokens, n_heads, head_dim, head,
-    )
-}
-
-/// Pull a contiguous `[kv_len, head_dim]` slice out of a KV slab.
-///
-/// Slab layout is `[max_ctx, n_kv_heads, head_dim]` row-major;
-/// we emit only the first `kv_len` rows. Single-launch strided
-/// gather — replaces the per-token `memcpy_dtod` loop for the
-/// same reason as [`gather_head_from_packed`].
-fn gather_head_from_kv_slab(
-    device: &Arc<DeviceContext>,
-    slab: &cudarc::driver::CudaSlice<bf16>,
-    kv_len: usize,
-    n_kv_heads: usize,
-    head_dim: usize,
-    head: usize,
-) -> Result<CudaTensor<bf16>> {
-    let mut dst = CudaTensor::<bf16>::zeros(device.clone(), vec![kv_len, head_dim])?;
-    kernels::launch_head_gather_slab_bf16(
-        device, slab, &mut dst, kv_len, n_kv_heads, head_dim, head,
-    )?;
-    Ok(dst)
-}
-
-/// Device-side 2-D transpose: produce `K^T` for the attention score
-/// matmul. Now a single `launch_transpose_2d_bf16` kernel call;
-/// earlier revisions round-tripped through the host, contributing
-/// hundreds of CPU syncs per forward and blocking graph capture.
-fn transpose_2d(
-    device: &Arc<DeviceContext>,
-    src: &CudaTensor<bf16>,
-    rows: usize,
-    cols: usize,
-) -> Result<CudaTensor<bf16>> {
-    debug_assert_eq!(src.shape(), [rows, cols]);
-    let mut dst = CudaTensor::<bf16>::zeros(device.clone(), vec![cols, rows])?;
-    kernels::launch_transpose_2d_bf16(device, src, &mut dst, rows, cols)?;
-    Ok(dst)
-}
-
-/// Build an `[n_tokens, kv_len]` f32 mask. Positions beyond the causal
-/// boundary get `-inf`; valid positions contribute `0.0` (i.e. no
-/// additive shift to the score). The prompt_start offset shifts the
-/// query index into absolute context space.
-fn build_causal_mask(n_tokens: usize, kv_len: usize, prompt_start: usize, _scale: f32) -> Vec<f32> {
-    let mut mask = vec![0.0f32; n_tokens * kv_len];
-    for i in 0..n_tokens {
-        for j in 0..kv_len {
-            if j > prompt_start + i {
-                mask[i * kv_len + j] = f32::NEG_INFINITY;
-            }
-        }
-    }
-    mask
-}
-
-fn upload_mask(
-    device: &Arc<DeviceContext>,
-    mask: &[f32],
-    n_tokens: usize,
-    kv_len: usize,
-) -> Result<CudaTensor<f32>> {
-    CudaTensor::<f32>::from_host(device.clone(), vec![n_tokens, kv_len], mask)
-}
 
 /// `scaled_masked ← scores * scale + mask`, host-loop fallback.
 ///

@@ -45,7 +45,7 @@ pub use cast::{
     launch_cast_f32_to_f16,
 };
 pub use embedding::{launch_embedding_bf16, launch_embedding_f16, launch_embedding_f32};
-pub use flash_attn::launch_flash_attn_bf16;
+pub use flash_attn::{launch_flash_attn_bf16, launch_flash_attn_bf16_kv_slab};
 pub use fused_ops::{
     launch_fill_const_f32, launch_gdn_gate_v_mean_standin_f32, launch_row_slice_f32,
     launch_scale_add_f32, launch_scale_add_with_bias_f32, launch_sigmoid_bf16,

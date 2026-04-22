@@ -25,7 +25,7 @@
 use std::sync::{Arc, OnceLock};
 
 use anyhow::{anyhow, Result};
-use cudarc::driver::{CudaFunction, LaunchConfig, PushKernelArg};
+use cudarc::driver::{CudaFunction, CudaSlice, LaunchConfig, PushKernelArg};
 use cudarc::driver::sys::CUfunction_attribute_enum;
 use cudarc::nvrtc::Ptx;
 use half::{bf16, f16};
@@ -270,6 +270,155 @@ pub fn launch_flash_attn_bf16(
     unsafe { launcher.launch(cfg) }.map_err(|e| {
         anyhow!(
             "flash_attn launch (n_tokens={}, kv_len={}, n_q_heads={}, gqa={}): {:?}",
+            n_tokens,
+            kv_len,
+            n_q_heads,
+            n_kv_heads_in_q_group,
+            e
+        )
+    })?;
+    Ok(())
+}
+
+/// KV-slab variant of [`launch_flash_attn_bf16`] — same kernel, but
+/// `k` and `v` come in as raw `CudaSlice` handles on the KV cache
+/// slab (layout `[max_ctx, n_kv_heads, head_dim]`, only the first
+/// `kv_len` rows valid). Q and the output stay as owned
+/// `CudaTensor`s because they're allocated per forward anyway.
+///
+/// This is the form the full-attention layer's forward uses to
+/// replace its 24-Q-head attention loop with a single flash-attn
+/// launch: no per-head gather/scatter, no per-head matmul, no
+/// per-head softmax — the kernel consumes the slab prefix and the
+/// dense Q tensor directly.
+///
+/// Validation follows the CudaTensor variant: `q` and `out` must be
+/// `[n_tokens, n_q_heads, 256]`, `kv_len * n_kv_heads * 256` must
+/// fit inside each slab, and the GQA factor must divide evenly.
+#[allow(clippy::too_many_arguments)]
+pub fn launch_flash_attn_bf16_kv_slab(
+    device: &Arc<DeviceContext>,
+    q: &CudaTensor<bf16>,
+    k_slab: &CudaSlice<bf16>,
+    v_slab: &CudaSlice<bf16>,
+    mask: Option<&CudaTensor<f16>>,
+    out: &mut CudaTensor<bf16>,
+    kv_len: usize,
+    n_kv_heads: usize,
+    scale: f32,
+    n_kv_heads_in_q_group: usize,
+    causal: bool,
+) -> Result<()> {
+    if q.shape().len() != 3 {
+        return Err(anyhow!(
+            "flash_attn kv_slab: q must be 3D [n_tokens, n_q_heads, head_dim], got {:?}",
+            q.shape()
+        ));
+    }
+    if out.shape() != q.shape() {
+        return Err(anyhow!(
+            "flash_attn kv_slab: out.shape {:?} != q.shape {:?}",
+            out.shape(),
+            q.shape()
+        ));
+    }
+
+    let n_tokens = q.shape()[0];
+    let n_q_heads = q.shape()[1];
+    let head_dim = q.shape()[2];
+    if head_dim != D_TOTAL {
+        return Err(anyhow!(
+            "flash_attn kv_slab: head_dim must be {}, got {}",
+            D_TOTAL,
+            head_dim
+        ));
+    }
+    if n_kv_heads_in_q_group == 0 {
+        return Err(anyhow!(
+            "flash_attn kv_slab: n_kv_heads_in_q_group (GQA factor) must be > 0"
+        ));
+    }
+    if n_q_heads != n_kv_heads * n_kv_heads_in_q_group {
+        return Err(anyhow!(
+            "flash_attn kv_slab: n_q_heads ({}) != n_kv_heads ({}) * gqa_group ({})",
+            n_q_heads,
+            n_kv_heads,
+            n_kv_heads_in_q_group
+        ));
+    }
+
+    let needed = kv_len * n_kv_heads * head_dim;
+    if k_slab.len() < needed || v_slab.len() < needed {
+        return Err(anyhow!(
+            "flash_attn kv_slab: slab too small — need {} elems, got k={} v={}",
+            needed,
+            k_slab.len(),
+            v_slab.len()
+        ));
+    }
+
+    if n_tokens == 0 || kv_len == 0 || n_q_heads == 0 {
+        return Ok(());
+    }
+
+    if let Some(m) = mask {
+        if m.shape().len() != 2 || m.shape()[0] != n_tokens || m.shape()[1] != kv_len {
+            return Err(anyhow!(
+                "flash_attn kv_slab: mask shape must be [n_tokens={}, kv_len={}], got {:?}",
+                n_tokens,
+                kv_len,
+                m.shape()
+            ));
+        }
+    }
+
+    let grid_x = n_tokens.div_ceil(BR) as u32;
+    let grid_y = n_q_heads as u32;
+    let shmem = shmem_bytes();
+    let cfg = LaunchConfig {
+        grid_dim: (grid_x, grid_y, 1),
+        block_dim: (WARP_SZ as u32, NWARPS as u32, 1),
+        shared_mem_bytes: shmem,
+    };
+
+    let f = flash_attn_fn(device)?;
+    set_max_dynamic_shmem(&f, shmem)?;
+
+    let stream = device.raw().default_stream();
+    let mut launcher = stream.launch_builder(&f);
+
+    let n_tokens_i32 = n_tokens as i32;
+    let kv_len_i32 = kv_len as i32;
+    let n_q_heads_i32 = n_q_heads as i32;
+    let n_kv_heads_i32 = n_kv_heads as i32;
+    let gqa_group_i32 = n_kv_heads_in_q_group as i32;
+    let causal_flag = if causal { 1i32 } else { 0i32 };
+    let has_mask = if mask.is_some() { 1i32 } else { 0i32 };
+    let null_ptr: u64 = 0;
+
+    launcher.arg(q.buf()).arg(k_slab).arg(v_slab);
+    match mask {
+        Some(m) => {
+            launcher.arg(m.buf());
+        }
+        None => {
+            launcher.arg(&null_ptr);
+        }
+    }
+    launcher
+        .arg(out.buf_mut())
+        .arg(&n_tokens_i32)
+        .arg(&kv_len_i32)
+        .arg(&n_q_heads_i32)
+        .arg(&n_kv_heads_i32)
+        .arg(&gqa_group_i32)
+        .arg(&causal_flag)
+        .arg(&has_mask)
+        .arg(&scale);
+
+    unsafe { launcher.launch(cfg) }.map_err(|e| {
+        anyhow!(
+            "flash_attn_kv_slab launch (n_tokens={}, kv_len={}, n_q_heads={}, gqa={}): {:?}",
             n_tokens,
             kv_len,
             n_q_heads,
