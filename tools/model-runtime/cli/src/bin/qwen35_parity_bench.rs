@@ -1,3 +1,4 @@
+Warning: Permanently added 'gpu1-a6000' (ED25519) to the list of known hosts.
 //! Qwen3.5-27B **parity bench** — side-by-side FFI reference vs our
 //! bare-metal stack across a prompt-length sweep.
 //!
@@ -392,7 +393,12 @@ struct OurState {
 fn setup_state(
     state: &OurState,
     n_inter: usize,
-) -> Result<(KvCache, Vec<CudaTensor<f32>>, Vec<CudaTensor<f16>>)> {
+) -> Result<(
+    KvCache,
+    Vec<CudaTensor<f32>>,
+    Vec<CudaTensor<f16>>,
+    Vec<CudaTensor<f32>>,
+)> {
     let kv = KvCache::new(
         state.device.clone(),
         state.target.n_full_attn,
@@ -403,8 +409,12 @@ fn setup_state(
     .map_err(|e| anyhow!("alloc kv cache: {:?}", e))?;
     let s_v = state.config.gdn_ssm_dim;
     let h = state.config.gdn_num_v_heads;
+    let qkv_proj_dim = state.config.gdn_qkv_proj_dim();
+    // ssm_conv1d kernel=4 → rolling state of K-1=3 rows per GDN layer.
+    let conv_state_rows = 3usize;
     let mut gdn_states: Vec<CudaTensor<f32>> = Vec::with_capacity(state.target.n_gdn);
     let mut gdn_inter: Vec<CudaTensor<f16>> = Vec::with_capacity(state.target.n_gdn);
+    let mut gdn_conv_states: Vec<CudaTensor<f32>> = Vec::with_capacity(state.target.n_gdn);
     for _ in 0..state.target.n_gdn {
         gdn_states
             .push(CudaTensor::<f32>::zeros(state.device.clone(), vec![s_v, s_v, h, 1]).map_err(
@@ -415,8 +425,15 @@ fn setup_state(
                 |e| anyhow!("alloc gdn inter n_inter={}: {:?}", n_inter, e),
             )?,
         );
+        gdn_conv_states.push(
+            CudaTensor::<f32>::zeros(
+                state.device.clone(),
+                vec![conv_state_rows, qkv_proj_dim],
+            )
+            .map_err(|e| anyhow!("alloc gdn conv state: {:?}", e))?,
+        );
     }
-    Ok((kv, gdn_states, gdn_inter))
+    Ok((kv, gdn_states, gdn_inter, gdn_conv_states))
 }
 
 /// Build token + MRoPE positions tensors for `n_tokens` starting at
@@ -471,7 +488,7 @@ fn run_ours_once(
     // unblocks long-context prompts that previously OOMed at
     // `[128, 128, 48, prompt_len]`.
     let n_inter_decode = n_new.max(1);
-    let (mut kv, mut gs, mut gi) = setup_state(state, n_inter_decode)?;
+    let (mut kv, mut gs, mut gi, mut gc) = setup_state(state, n_inter_decode)?;
 
     // ── Prefill ── chunked via target.prefill (ubatch=16/192 matching
     // dflash-ref's run_dflash_gen_loop).
@@ -488,7 +505,7 @@ fn run_ours_once(
     let t0 = Instant::now();
     let logits = state
         .target
-        .prefill(&prompt_tk, &mut kv, &mut gs)
+        .prefill(&prompt_tk, &mut kv, &mut gs, &mut gc)
         .map_err(|e| anyhow!("prefill: {:?}", e))?;
     state
         .device
@@ -528,7 +545,7 @@ fn run_ours_once(
         let (tk, pos) = build_input(&state.device, &chunk_tokens, past, 1)?;
         let _logits = state
             .target
-            .forward(&tk, &pos, &mut kv, &mut gs, &mut gi)
+            .forward(&tk, &pos, &mut kv, &mut gs, &mut gi, &mut gc)
             .map_err(|e| anyhow!("decode forward past={}: {:?}", past, e))?;
         past += 1;
     }
