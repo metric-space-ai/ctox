@@ -320,6 +320,18 @@ impl Qwen35FullAttention {
         let mut q_flat = CudaTensor::<bf16>::zeros(device.clone(), vec![n_tokens, q_dim])?;
         kernels::launch_cast_f32_to_bf16(device, &q_f32, &mut q_flat)?;
 
+        // ── CTOX_L3_WQ_CPU: CPU-reference w_q matmul for the last
+        //    token row — isolates whether the Q4K kernel (with
+        //    q8_1-activation quantization) loses significant
+        //    precision on the large-amax norm_f32 input. Runs once
+        //    at L3 / pos=127.
+        if lidx == 0
+            && kv_cache.n_filled() == 127
+            && std::env::var("CTOX_L3_WQ_CPU").is_ok()
+        {
+            cpu_ref_wq_probe(&norm_f32, &self.w_q, &q_f32, n_tokens, hidden_dim, q_dim)?;
+        }
+
         let mut k_f32 = CudaTensor::<f32>::zeros(device.clone(), vec![n_tokens, kv_dim])?;
         self.w_k.matmul_f32(device, &norm_f32, &mut k_f32)?;
         let mut k_flat = CudaTensor::<bf16>::zeros(device.clone(), vec![n_tokens, kv_dim])?;
@@ -584,6 +596,7 @@ impl Qwen35FullAttention {
         {
             cpu_ref_wo_probe(&attn_out_f32, &self.w_o, &proj_f32, n_tokens, q_dim, hidden_dim)?;
         }
+
 
         // ── 9. Residual add. `hidden ← proj + residual` (in-place on hidden).
         //
@@ -888,6 +901,88 @@ fn cpu_ref_wo_probe(
         amax
     );
 
+    Ok(())
+}
+
+/// CPU-reference matmul for `w_q` (or `w_q_gate`) at the last-token
+/// row, reporting values at the channels where the reference has its
+/// dominant values. This mirrors [`cpu_ref_wo_probe`] but for the
+/// input-side projection to test whether the Q4K + q8_1-activation
+/// path loses precision on extreme-amax activations (norm_f32 has
+/// amax ≈ 92 dominated by a single channel).
+fn cpu_ref_wq_probe(
+    norm_in_f32: &CudaTensor<f32>,
+    w_q: &PackedWeight,
+    gpu_q_f32: &CudaTensor<f32>,
+    n_tokens: usize,
+    hidden_dim: usize,
+    q_dim: usize,
+) -> Result<()> {
+    use crate::kernels::mmq_q4k::{dequant_q4k_block, Q4K_BLOCK_BYTES_PUB, Q4K_BLOCK_ELEMS_PUB};
+
+    let (k, n) = w_q.dims();
+    if k != hidden_dim || n != q_dim {
+        eprintln!(
+            "CPU_WQ_PROBE: w_q dims ({},{}) != (hidden,q_dim) ({},{}), skipping",
+            k, n, hidden_dim, q_dim
+        );
+        return Ok(());
+    }
+
+    let raw_bytes: Vec<u8> = match w_q {
+        PackedWeight::Q4K { t, .. } => t
+            .to_host()
+            .map_err(|e| anyhow!("CPU_WQ_PROBE: download w_q bytes: {:?}", e))?
+            .into_iter()
+            .map(|b| b as u8)
+            .collect(),
+        _ => {
+            eprintln!("CPU_WQ_PROBE: w_q not Q4K, skipping");
+            return Ok(());
+        }
+    };
+
+    let x_host = norm_in_f32
+        .to_host()
+        .map_err(|e| anyhow!("CPU_WQ_PROBE: download norm_f32: {:?}", e))?;
+    let x_last = &x_host[(n_tokens - 1) * k..n_tokens * k];
+
+    let blocks_per_col = k / Q4K_BLOCK_ELEMS_PUB;
+
+    // Only compute the 5 specific channels ref reports.
+    let probe_chs: [(usize, f32); 5] = [
+        (5658, 7.823), (5650, 6.407), (1042, 4.625), (6086, 4.417), (5062, 4.207),
+    ];
+    let mut msg = String::new();
+    for (ch, ref_val) in probe_chs.iter() {
+        let col_off = ch * blocks_per_col * Q4K_BLOCK_BYTES_PUB;
+        let mut acc = 0.0f64;
+        let mut dq = [0.0f32; 256];
+        for b in 0..blocks_per_col {
+            let off = col_off + b * Q4K_BLOCK_BYTES_PUB;
+            let mut block = [0u8; 144];
+            block.copy_from_slice(&raw_bytes[off..off + Q4K_BLOCK_BYTES_PUB]);
+            dequant_q4k_block(&block, &mut dq);
+            let base = b * Q4K_BLOCK_ELEMS_PUB;
+            for l in 0..Q4K_BLOCK_ELEMS_PUB {
+                acc += (x_last[base + l] as f64) * (dq[l] as f64);
+            }
+        }
+        let cpu_v = acc as f32;
+        msg.push_str(&format!(" ch{}={:.3}(gpu_via_kernel=?/ref={:+.3})", ch, cpu_v, ref_val));
+    }
+    eprintln!("CPU_WQ_PROBE{}", msg);
+
+    // Pair with GPU values at the same indices.
+    let gpu_host = gpu_q_f32
+        .to_host()
+        .map_err(|e| anyhow!("CPU_WQ_PROBE: download gpu q_f32: {:?}", e))?;
+    let gpu_last = &gpu_host[(n_tokens - 1) * n..n_tokens * n];
+    let mut g = String::new();
+    for (ch, _) in probe_chs.iter() {
+        g.push_str(&format!(" ch{}={:.3}", ch, gpu_last[*ch]));
+    }
+    eprintln!("CPU_WQ_PROBE gpu_at_same_chs{}", g);
     Ok(())
 }
 
