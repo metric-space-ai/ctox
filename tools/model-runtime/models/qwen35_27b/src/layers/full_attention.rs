@@ -290,6 +290,20 @@ impl Qwen35FullAttention {
         if dump_fa {
             fa_dbg_dump_bf16(&format!("FA[{}] 00_hidden_in", lidx), hidden, n_tokens, hidden_dim);
             fa_dbg_dump_f32 (&format!("FA[{}] 01_norm_f32",  lidx), &norm_f32, n_tokens, hidden_dim);
+            // Probe norm_f32 at ref cur_in top channels: ch3994=92.2,
+            // ch3842=6.5, ch310=-6.1, ch4673=2.9, ch2077=2.6.
+            if let Ok(host) = norm_f32.to_host() {
+                let last = &host[(n_tokens - 1) * hidden_dim..n_tokens * hidden_dim];
+                let probe_chs: [(usize, f32); 5] = [
+                    (3994, 92.197), (3842, 6.495), (310, -6.099),
+                    (4673, 2.939), (2077, 2.590),
+                ];
+                let mut probe = String::new();
+                for (ch, expect) in probe_chs.iter() {
+                    probe.push_str(&format!(" ch{}={:.3}(ref={:+.3})", ch, last[*ch], expect));
+                }
+                eprintln!("FA_DBG FA[{}] 01_norm_f32 REF_PROBE{}", lidx, probe);
+            }
         }
 
         // ── 3. Q/K/V projections — f32·packed → f32, then cast to bf16
