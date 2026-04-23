@@ -331,6 +331,20 @@ impl Qwen35FullAttention {
         if dump_fa {
             fa_dbg_dump_f32(&format!("FA[{}] 02_q_f32_pre_qnorm", lidx), &q_f32, n_tokens, q_dim);
             fa_dbg_dump_f32(&format!("FA[{}] 03_q_gate_pre_sigmoid", lidx), &q_gate_f32, n_tokens, q_dim);
+            if let Ok(host) = q_f32.to_host() {
+                let last = &host[(n_tokens - 1) * q_dim..n_tokens * q_dim];
+                let mut ranked: Vec<(usize, f32)> =
+                    last.iter().enumerate().map(|(i, &v)| (i, v.abs())).collect();
+                ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+                let top: Vec<String> = ranked.iter().take(5)
+                    .map(|(i, _)| format!("ch{}={:.3}", i, last[*i]))
+                    .collect();
+                let neg = last.iter().filter(|&&v| v < 0.0).count();
+                eprintln!(
+                    "FA_DBG FA[{}] 02_q_f32_pre_qnorm TOP5 {} neg={}",
+                    lidx, top.join(" "), neg
+                );
+            }
             if let Ok(host) = q_gate_f32.to_host() {
                 let last = &host[(n_tokens - 1) * q_dim..n_tokens * q_dim];
                 let mut ranked: Vec<(usize, f32)> =
