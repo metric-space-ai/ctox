@@ -665,6 +665,28 @@ let mut qkv_f32 =
             parent_ids: None,
         };
 
+        if std::env::var("CTOX_DEBUG_GDN_L2").is_ok() && self.layer_idx <= 1 {
+            let q_h = q.to_host().unwrap_or_default();
+            let k_h = k.to_host().unwrap_or_default();
+            let v_h = v.to_host().unwrap_or_default();
+            let g_h = g.to_host().unwrap_or_default();
+            let b_h = beta.to_host().unwrap_or_default();
+            let stats = |name: &str, buf: &[f32]| {
+                let (s, m) = buf.iter().fold((0.0f64, 0.0f32), |(s, m), &v| {
+                    (s + (v as f64).powi(2), m.max(v.abs()))
+                });
+                eprintln!(
+                    "GDN_DBG L{} IN {} numel={} l2={:.3e} amax={:.3e}",
+                    self.layer_idx, name, buf.len(), s.sqrt(), m
+                );
+            };
+            stats("q", &q_h);
+            stats("k", &k_h);
+            stats("v", &v_h);
+            stats("g", &g_h);
+            stats("beta", &b_h);
+        }
+
         launch_gated_delta_net_f32(
             device,
             &inputs,
