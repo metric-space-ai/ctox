@@ -1185,6 +1185,7 @@ dependencies = [
  "ctox-cuda-primitives",
  "ctox-dflash-ffi",
  "ctox-engine-core",
+ "ctox-engine-runtime",
  "ctox-engine-sdk",
  "ctox-engine-server",
  "ctox-qwen35-27b",

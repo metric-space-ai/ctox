@@ -711,6 +711,21 @@ let mut qkv_f32 =
             .memcpy_dtod(&attn_src, attn_f32.buf_mut())
             .map_err(|e| anyhow!("gdn: dst → attn_f32 dtod copy: {:?}", e))?;
 
+        if std::env::var("CTOX_DEBUG_GDN_L2").is_ok() && self.layer_idx <= 1 {
+            let h = attn_f32.to_host().unwrap_or_default();
+            if let Some(last) = h.chunks(inner_dim).last() {
+                let (l2, amax) = last.iter().fold((0.0f64, 0.0f32), |(s, m), &v| {
+                    (s + (v as f64).powi(2), m.max(v.abs()))
+                });
+                eprintln!(
+                    "GDN_DBG L{} attn_f32 (raw kernel out) last_row_l2={:.3e} amax={:.3e}",
+                    self.layer_idx,
+                    l2.sqrt(),
+                    amax
+                );
+            }
+        }
+
         // ------------------------------------------------------------
         // 7b. Gated output norm. Reference
         //     `qwen35_target_graph.cpp` lines ~650-662:
@@ -741,6 +756,21 @@ let mut qkv_f32 =
         // for the z-gate multiply. Same linear bytes, different label.
         let attn_norm = attn_norm_rows.reshape(vec![n_tokens, inner_dim])?;
 
+        if std::env::var("CTOX_DEBUG_GDN_L2").is_ok() && self.layer_idx <= 1 {
+            let h = attn_norm.to_host().unwrap_or_default();
+            if let Some(last) = h.chunks(inner_dim).last() {
+                let (l2, amax) = last.iter().fold((0.0f64, 0.0f32), |(s, m), &v| {
+                    (s + (v as f64).powi(2), m.max(v.abs()))
+                });
+                eprintln!(
+                    "GDN_DBG L{} attn_norm (rms*ssm_norm) last_row_l2={:.3e} amax={:.3e}",
+                    self.layer_idx,
+                    l2.sqrt(),
+                    amax
+                );
+            }
+        }
+
         // z = wqkv_gate @ hidden  [n_tokens, inner_dim].
         let mut z = CudaTensor::<f32>::zeros(device.clone(), vec![n_tokens, inner_dim])?;
         self.attn_gate.matmul_f32(device, &norm_f32, &mut z)?;
@@ -748,6 +778,25 @@ let mut qkv_f32 =
         let mut gated_attn =
             CudaTensor::<f32>::zeros(device.clone(), vec![n_tokens, inner_dim])?;
         launch_silu_mul_f32(device, &z, &attn_norm, &mut gated_attn)?;
+
+        if std::env::var("CTOX_DEBUG_GDN_L2").is_ok() && self.layer_idx <= 1 {
+            let h_z = z.to_host().unwrap_or_default();
+            let h_g = gated_attn.to_host().unwrap_or_default();
+            if let (Some(zl), Some(gl)) = (h_z.chunks(inner_dim).last(), h_g.chunks(inner_dim).last()) {
+                let z_stats = zl.iter().fold((0.0f64, 0.0f32), |(s, m), &v| {
+                    (s + (v as f64).powi(2), m.max(v.abs()))
+                });
+                let g_stats = gl.iter().fold((0.0f64, 0.0f32), |(s, m), &v| {
+                    (s + (v as f64).powi(2), m.max(v.abs()))
+                });
+                eprintln!(
+                    "GDN_DBG L{} z last_row_l2={:.3e} amax={:.3e} | gated_attn l2={:.3e} amax={:.3e}",
+                    self.layer_idx,
+                    z_stats.0.sqrt(), z_stats.1,
+                    g_stats.0.sqrt(), g_stats.1,
+                );
+            }
+        }
 
         // ------------------------------------------------------------
         // 8. Output projection. [n_tokens, inner_dim] · [inner_dim,
