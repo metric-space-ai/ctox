@@ -344,6 +344,17 @@ impl Qwen35FullAttention {
                     "FA_DBG FA[{}] 02_q_f32_pre_qnorm TOP5 {} neg={}",
                     lidx, top.join(" "), neg
                 );
+                // Named probes: ref top-5 channels are 5658, 5650, 1042, 6086, 5062
+                // (expected values +7.82, +6.41, +4.63, +4.42, +4.21). Compare to
+                // what we have at those exact indices.
+                let ref_chs: [(usize, f32); 5] = [
+                    (5658, 7.823), (5650, 6.407), (1042, 4.625), (6086, 4.417), (5062, 4.207)
+                ];
+                let mut probe = String::new();
+                for (ch, expect) in ref_chs.iter() {
+                    probe.push_str(&format!(" ch{}={:.3}(ref={:+.3})", ch, last[*ch], expect));
+                }
+                eprintln!("FA_DBG FA[{}] 02_q_f32_pre_qnorm REF_PROBE{}", lidx, probe);
             }
             if let Ok(host) = q_gate_f32.to_host() {
                 let last = &host[(n_tokens - 1) * q_dim..n_tokens * q_dim];
