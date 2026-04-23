@@ -1,18 +1,24 @@
 CTOX repository notice
 
-This repository contains first-party CTOX code plus integrated hard forks.
+This repository contains first-party CTOX code plus integrated hard forks
+and integrated per-model inference trees.
 
 Primary integrated source trees:
 
-- src/inference
+- src/harness
   Derived from https://github.com/openai/codex
   Upstream license: Apache-2.0
-  Integrated into CTOX as a source-owned hard fork
+  Integrated into CTOX as a source-owned hard fork and driven in-process
+  by CTOX's agent turn loop. Previously lived at src/inference/.
 
-- tools/model-runtime
-  CTOX serving fork with historical import lineage carried through mistral.rs / engine.rs naming
-  before being normalized here as a Candle-focused serving subtree.
-  This subtree keeps its own license file and provenance markers.
+- src/inference/models/<model>/
+  Per-model self-contained inference crates. Each crate carries its own
+  Rust inference code plus its own vendored kernel source (CUDA/Metal)
+  in-tree. Upstream vendored kernel provenance is pinned per crate in
+  `vendor/*.version` files. No code is shared across model crates.
 
-The root LICENSE applies to first-party CTOX repository code unless an integrated source subtree or file
-states otherwise.
+The previously-carried Candle-based `tools/model-runtime/` subtree has
+been retired.
+
+The root LICENSE applies to first-party CTOX repository code unless an
+integrated source subtree or file states otherwise.

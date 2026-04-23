@@ -317,66 +317,16 @@ pub fn version_info(root: &Path) -> Result<VersionInfo> {
     })
 }
 
-pub fn handle_engine_command(root: &Path, args: &[String]) -> Result<()> {
-    match args.first().map(String::as_str) {
-        Some("rebuild") | Some("reinstall") | None => {
-            let layout = InstallLayout::resolve(root)?;
-            let release_root = layout.active_root.clone();
-            if let Some(features) = find_flag_value(args, "--features") {
-                std::env::set_var("CTOX_ENGINE_FEATURES", features);
-            }
-            run_release_installer(&release_root, &layout.state_root)?;
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json!({
-                    "rebuilt": true,
-                    "release_root": release_root,
-                    "state_root": layout.state_root,
-                }))?
-            );
-            Ok(())
-        }
-        Some("status") => {
-            let layout = InstallLayout::resolve(root)?;
-            let stamp_path = managed_engine_feature_stamp_path(&layout.active_root);
-            let binary_path = managed_engine_binary_path(&layout.active_root);
-            let stamp = fs::read_to_string(&stamp_path).ok();
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json!({
-                    "engine_binary": binary_path,
-                    "engine_present": binary_path.is_file(),
-                    "feature_stamp_path": stamp_path,
-                    "feature_stamp": stamp,
-                }))?
-            );
-            Ok(())
-        }
-        _ => anyhow::bail!(
-            "usage: ctox engine rebuild [--features=\"cuda flash-attn nccl\"] | ctox engine status"
-        ),
-    }
-}
+// `handle_engine_command` was retired alongside `tools/model-runtime/`.
+// The Candle-based ctox-engine binary no longer exists; CTOX now calls
+// directly into per-model crates under src/inference/models/<model>/.
 
 /// Lightweight health check: prints current versions, engine presence, and a
 /// concrete next-step hint when things look off.
 pub fn handle_doctor_command(root: &Path) -> Result<()> {
     let layout = InstallLayout::resolve(root)?;
     let manifest = load_install_manifest(&layout.install_manifest_path())?;
-    let engine_binary = managed_engine_binary_path(&layout.active_root);
-    let engine_stamp = managed_engine_feature_stamp_path(&layout.active_root);
-    let stamp = fs::read_to_string(&engine_stamp).ok();
     let mut hints: Vec<String> = Vec::new();
-    if !engine_binary.is_file() {
-        hints.push(format!(
-            "ctox-engine binary missing at {} — run `ctox engine rebuild`",
-            engine_binary.display()
-        ));
-    } else if stamp.is_none() {
-        hints.push(
-            "engine feature stamp missing — run `ctox engine rebuild` to refresh it".to_string(),
-        );
-    }
     if manifest.is_none() {
         hints.push(
             "managed install manifest missing — run `ctox update adopt` to migrate".to_string(),
@@ -407,9 +357,6 @@ pub fn handle_doctor_command(root: &Path) -> Result<()> {
             "cli_version": build_version(),
             "managed_install": layout.managed(),
             "active_root": layout.active_root,
-            "engine_binary": engine_binary,
-            "engine_present": engine_binary.is_file(),
-            "engine_feature_stamp": stamp,
             "update_channel": remote.as_ref().and_then(|entry| entry.channel.clone()),
             "latest_release": remote.as_ref().and_then(|entry| entry.latest_release.clone()),
             "current_release": manifest.as_ref().and_then(|entry| entry.current_release.clone()),
@@ -1228,14 +1175,6 @@ fn resolve_tools_root(root: &Path) -> PathBuf {
         .filter(|value| !value.trim().is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| root.join("runtime/tools"))
-}
-
-fn managed_engine_binary_path(root: &Path) -> PathBuf {
-    resolve_tools_root(root).join("model-runtime/bin/ctox-engine")
-}
-
-fn managed_engine_feature_stamp_path(root: &Path) -> PathBuf {
-    resolve_tools_root(root).join("model-runtime/ctox-engine.features")
 }
 
 fn resolve_release_channel(

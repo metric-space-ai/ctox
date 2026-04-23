@@ -9,7 +9,12 @@ Before answering **any** question about CTOX's architecture, scope, what code do
 - `HARNESS.md` — harness-specific notes
 - `CLAUDE.md` — this file
 
-Do **not** rely on grep/memory/assumptions about what a given subsystem is supposed to be — the architecture docs in root are the source of truth. Specifically: `src/inference/` is the integrated in-process inference workspace built around the hard-forked OpenAI Codex runtime (`ctox-core`). It is executed **in-process** via `InProcessAppServerClient`, not as an external `codex-exec` subprocess. Any remaining `codex-exec` references in CTOX production code are leftover to be cleaned up, not the intended architecture.
+Do **not** rely on grep/memory/assumptions about what a given subsystem is supposed to be — the architecture docs in root are the source of truth. Specifically:
+
+- `src/harness/` is the integrated in-process agent harness built around the hard-forked OpenAI Codex runtime (`ctox-core`). Executed **in-process** via `InProcessAppServerClient`, not as an external `codex-exec` subprocess.
+- `src/inference/` holds per-model inference crates. Every curated model (first one: `src/inference/models/qwen35_27b_q4km_dflash/`) is **self-contained** — no code is shared across model crates. Each vendors its own kernels and its own ggml/CUDA FFI in-tree. CTOX calls these crates directly; there is no separate model-serving subprocess.
+
+Any `codex-exec` references and any remnants of the retired Candle-based `tools/model-runtime/` subtree in CTOX production code are leftover to be cleaned up, not the intended architecture.
 
 ## Operator Guardrails (hard rules)
 
@@ -19,7 +24,7 @@ Do **not** rely on grep/memory/assumptions about what a given subsystem is suppo
 
 ## What CTOX Is (one-paragraph orientation)
 
-CTOX is an AI agent system for autonomous server and DevOps work. It combines (1) an orchestration layer with mission queue, continuity tracking, governance and communication routing, (2) an in-process inference workspace under `src/inference/` built around the hard-forked OpenAI Codex runtime (`ctox-core`), (3) an internal model gateway that keeps CTOX on an OpenAI Responses-shaped contract, and (4) an optional internal on-host model-serving runtime (`tools/model-runtime/`). The two explicit provider modes are `ctox_core_local` for managed local inference over private IPC and `ctox_core_api` for remote/API-backed providers normalized back to Responses at the adapter edge. TUI uses ratatui + crossterm. Persistence: a single SQLite runtime store at `runtime/ctox.sqlite3`. Rust toolchain: 1.93. Full architecture is in `AGENTS.md` — read it before making architectural claims.
+CTOX is an AI agent system for autonomous server and DevOps work. It combines (1) an orchestration layer with mission queue, continuity tracking, governance and communication routing, (2) an in-process agent harness under `src/harness/` built around the hard-forked OpenAI Codex runtime (`ctox-core`), (3) an internal model gateway that keeps CTOX on an OpenAI Responses-shaped contract, and (4) a set of curated per-model inference crates under `src/inference/models/<model>/`, each self-contained (Rust + vendored kernels per-model, no code sharing across models), called directly by CTOX for on-host inference. The two explicit provider modes are `ctox_core_local` for managed local inference and `ctox_core_api` for remote/API-backed providers normalized back to Responses at the adapter edge. TUI uses ratatui + crossterm. Persistence: a single SQLite runtime store at `runtime/ctox.sqlite3`. Rust toolchain: 1.93. Full architecture is in `AGENTS.md` — read it before making architectural claims.
 
 ## TUI Surface (orientation only)
 
@@ -45,6 +50,6 @@ When the user asks for a TUI layout or rendering change, they are the ones who r
 | `src/execution/responses/` | Model gateway metadata and runtime control surface |
 | `src/mission/` | Queue, tickets, plans, communication, review |
 | `src/service/` | systemd service daemon |
-| `src/inference/` | Integrated in-process inference workspace around `ctox-core` |
-| `tools/model-runtime/` | Local model serving engine — integrated source tree |
+| `src/harness/` | Agent harness (OpenAI-Codex fork, `ctox-core`) |
+| `src/inference/models/<model>/` | Per-model self-contained inference crates (Rust + vendored kernels) |
 | `runtime/ctox.sqlite3` | Unified runtime store: settings, runtime state, queue, continuity, secrets |

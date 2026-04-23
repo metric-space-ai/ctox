@@ -103,10 +103,7 @@ INSTALL / UPGRADE
   ctox update status             dump install layout + manifest + update state
 
 ENGINE / GPU
-  ctox engine rebuild [--features=\"cuda flash-attn nccl\"]
-                                 re-run GPU/CUDA/Metal detection + rebuild ctox-engine
-  ctox engine status             show engine binary path and persisted feature stamp
-  ctox doctor                    health check — update available? engine present? hints
+  ctox doctor                    health check — update available? hints
 
 RUN / EXEC
   ctox runtime switch <model> <quality|performance> [--context 32k|64k|128k|256k] [--timeout <secs>]
@@ -327,7 +324,6 @@ fn main() -> anyhow::Result<()> {
             state_invariants::handle_state_invariants_command(&root, &args[1..])
         }
         Some("update") | Some("upgrade") => install::handle_update_command(&root, &args[1..]),
-        Some("engine") => install::handle_engine_command(&root, &args[1..]),
         Some("doctor") => install::handle_doctor_command(&root),
         Some("lcm-init") => {
             let db_path = args.get(1).context("usage: ctox lcm-init <db-path>")?;

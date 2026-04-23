@@ -83,17 +83,12 @@ CTOX uses four distinct web paths:
 
 ## Integrated Source Trees
 
-CTOX carries two integrated hard-fork source trees inside the project:
+CTOX carries integrated hard-fork and per-model source trees inside the project:
 
-- `src/inference`
-- `tools/model-runtime/`
+- `src/harness/` — integrated in-process **agent harness**, hard-forked from the OpenAI Codex runtime (`ctox-core`). CTOX drives its turn loop through this tree in-process via `InProcessAppServerClient`, not as an external subprocess.
+- `src/inference/models/<model>/` — per-model, **self-contained** inference crates. Each curated model (first one: `qwen35_27b_q4km_dflash` — Qwen3.5-27B Q4_K_M target + z-lab DFlash draft) vendors its own Rust inference code plus its own kernels in-tree; no code is shared across model crates. CTOX calls these crates directly.
 
-`src/inference` is the integrated in-process inference workspace around the hard-forked `ctox-core` runtime. `tools/model-runtime` is
-the local model-serving hard fork that CTOX had previously carried under misleading
-`mistral.rs` / `engine` naming. These are integrated CTOX source trees, not package-manager
-dependencies and not live upstream checkouts. Run `ctox source-status` to validate the source
-layout and provenance markers. CTOX's context system, orchestration, governance, routing,
-verification, and runtime mediation live in the main repository code.
+The previously-carried Candle-based `tools/model-runtime/` subtree has been retired in favor of the per-model direct-call architecture. Run `ctox source-status` to validate the source layout and provenance markers. CTOX's context system, orchestration, governance, routing, verification, and runtime mediation live in the main repository code.
 
 
 ## Installation
