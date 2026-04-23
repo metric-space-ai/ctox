@@ -104,16 +104,19 @@ pub struct Qwen35FullAttention {
     /// GGUF loader has somewhere to deposit it; the FA forward does
     /// not reference it.
     pub post_attn_norm: CudaTensor<f32>,
-    /// Q projection weight (first half of the GGUF's packed
-    /// `attn_q.weight`). `[hidden_dim, n_q_heads * head_dim]` with
-    /// K=hidden_dim and N=q_dim. Carrier dtype is whatever the GGUF
-    /// shipped; dispatch happens inside [`PackedWeight::matmul_f32`].
-    pub w_q: PackedWeight,
-    /// Q-side gate weight (second half of the GGUF's packed
-    /// `attn_q.weight`). `[hidden_dim, n_q_heads * head_dim]`.
-    /// Consumed by the sigmoid-gate branch after attention: `attn ←
-    /// attn * sigmoid(norm @ w_q_gate)`.
-    pub w_q_gate: PackedWeight,
+    /// Fused Q + Q-gate projection weight. Matches the GGUF's
+    /// packed `attn_q.weight` at `[hidden_dim, 2 * n_q_heads *
+    /// head_dim]`. The Q and gate halves are interleaved per-head
+    /// along the output axis: for each head `h`, columns
+    /// `h*2*head_dim .. h*2*head_dim + head_dim` are Q, and columns
+    /// `h*2*head_dim + head_dim .. (h+1)*2*head_dim` are gate.
+    /// Forward runs one matmul then slices the f32 output into the
+    /// two halves via `launch_row_slice_f32`. This mirrors the
+    /// reference's `ggml_mul_mat(L.wq, cur) + ggml_view_3d` pattern
+    /// exactly — a previous load-time split broke the per-head
+    /// Q4_K_M block alignment and produced wrong Q values at the
+    /// `(k=hidden, n=q_dim)` shape.
+    pub w_qg: PackedWeight,
     /// K projection weight. `[hidden_dim, n_kv_heads * head_dim]`.
     pub w_k: PackedWeight,
     /// V projection weight. `[hidden_dim, n_kv_heads * head_dim]`.
@@ -190,20 +193,12 @@ impl Qwen35FullAttention {
                 cfg.hidden_dim
             ));
         }
-        if self.w_q_gate.dims() != (cfg.hidden_dim, cfg.q_dim()) {
+        if self.w_qg.dims() != (cfg.hidden_dim, 2 * cfg.q_dim()) {
             return Err(anyhow!(
-                "qwen35 full_attn: w_q_gate dims {:?} != ({}, {})",
-                self.w_q_gate.dims(),
+                "qwen35 full_attn: w_qg dims {:?} != ({}, {})",
+                self.w_qg.dims(),
                 cfg.hidden_dim,
-                cfg.q_dim()
-            ));
-        }
-        if self.w_q.dims() != (cfg.hidden_dim, cfg.q_dim()) {
-            return Err(anyhow!(
-                "qwen35 full_attn: w_q dims {:?} != ({}, {})",
-                self.w_q.dims(),
-                cfg.hidden_dim,
-                cfg.q_dim()
+                2 * cfg.q_dim()
             ));
         }
         if self.w_k.dims() != (cfg.hidden_dim, cfg.kv_dim()) {
@@ -315,22 +310,31 @@ impl Qwen35FullAttention {
         let q_dim = cfg.q_dim();
         let kv_dim = cfg.kv_dim();
 
+        // ── Fused Q + Q-gate projection (mirrors reference's
+        //    `ggml_mul_mat(L.wq, cur)` → reshape + view pattern).
+        //    One matmul into `[n_tokens, 2*q_dim]`, then per-head
+        //    split via `launch_row_slice_f32` using the canonical
+        //    interleave layout: Q at offset 0, gate at offset
+        //    head_dim, stride 2*head_dim per head.
+        let two_q_dim = 2 * q_dim;
+        let head_dim = cfg.head_dim;
+        let n_q_heads = cfg.n_q_heads;
+        let mut qg_f32 = CudaTensor::<f32>::zeros(device.clone(), vec![n_tokens, two_q_dim])?;
+        self.w_qg.matmul_f32(device, &norm_f32, &mut qg_f32)?;
+
+        let rows = n_tokens * n_q_heads;
+        let src_cols = 2 * head_dim;
         let mut q_f32 = CudaTensor::<f32>::zeros(device.clone(), vec![n_tokens, q_dim])?;
-        self.w_q.matmul_f32(device, &norm_f32, &mut q_f32)?;
+        let mut q_gate_f32 = CudaTensor::<f32>::zeros(device.clone(), vec![n_tokens, q_dim])?;
+        kernels::launch_row_slice_f32(
+            device, &qg_f32, &mut q_f32, rows, src_cols, 0, head_dim,
+        )?;
+        kernels::launch_row_slice_f32(
+            device, &qg_f32, &mut q_gate_f32, rows, src_cols, head_dim, head_dim,
+        )?;
+
         let mut q_flat = CudaTensor::<bf16>::zeros(device.clone(), vec![n_tokens, q_dim])?;
         kernels::launch_cast_f32_to_bf16(device, &q_f32, &mut q_flat)?;
-
-        // ── CTOX_L3_WQ_CPU: CPU-reference w_q matmul for the last
-        //    token row — isolates whether the Q4K kernel (with
-        //    q8_1-activation quantization) loses significant
-        //    precision on the large-amax norm_f32 input. Runs once
-        //    at L3 / pos=127.
-        if lidx == 0
-            && kv_cache.n_filled() == 127
-            && std::env::var("CTOX_L3_WQ_CPU").is_ok()
-        {
-            cpu_ref_wq_probe(&norm_f32, &self.w_q, &q_f32, n_tokens, hidden_dim, q_dim)?;
-        }
 
         let mut k_f32 = CudaTensor::<f32>::zeros(device.clone(), vec![n_tokens, kv_dim])?;
         self.w_k.matmul_f32(device, &norm_f32, &mut k_f32)?;
@@ -342,15 +346,6 @@ impl Qwen35FullAttention {
         let mut v_flat = CudaTensor::<bf16>::zeros(device.clone(), vec![n_tokens, kv_dim])?;
         kernels::launch_cast_f32_to_bf16(device, &v_f32, &mut v_flat)?;
 
-
-        // ── 3b. Attention-gate projection. `w_q_gate` is the gate
-        //    matrix; the result is fed through a sigmoid and
-        //    multiplied into the attention output at step 7g. Both
-        //    the sigmoid and the subsequent mul happen in a single
-        //    fused `launch_sigmoid_mul_bf16` kernel later — we just
-        //    stage the raw gate projection in `q_gate` here.
-        let mut q_gate_f32 = CudaTensor::<f32>::zeros(device.clone(), vec![n_tokens, q_dim])?;
-        self.w_q_gate.matmul_f32(device, &norm_f32, &mut q_gate_f32)?;
         let mut q_gate = CudaTensor::<bf16>::zeros(device.clone(), vec![n_tokens, q_dim])?;
         kernels::launch_cast_f32_to_bf16(device, &q_gate_f32, &mut q_gate)?;
 

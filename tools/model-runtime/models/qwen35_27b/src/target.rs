@@ -1126,36 +1126,25 @@ fn build_full_attention_layer(
     let attn_q_norm = load_f32_placeholder(device, tensors, &name_q_norm, vec![cfg.head_dim]);
     let attn_k_norm = load_f32_placeholder(device, tensors, &name_k_norm, vec![cfg.head_dim]);
 
-    // dflash pre-packs `attn_q` as `[hidden, 2*q_dim]` — first half is
-    // Q, second half is the sigmoid gate. `load_packed_halves` returns
-    // two `PackedWeight`s with whatever carrier the GGUF shipped
-    // (Bf16 for synthetic test fixtures, Q4K/Q5K/Q6K/Q8_0/IQ4XS for
-    // real-model block-quant layouts). When the tensor is missing, has
-    // the wrong shape/numel, or has an unsupported variant, both halves
-    // fall back to `PackedWeight::Zero` placeholders so the forward
-    // still runs.
-    let (w_q, w_q_gate) = match load_packed_halves(
+    // dflash pre-packs `attn_q` as `[hidden, 2*q_dim]` — per-head Q
+    // and gate halves interleaved along the output axis. The previous
+    // load-time split (`load_packed_halves`) sliced the packed Q4K
+    // bytes along column boundaries which broke per-head scale
+    // alignment at the Prod shape — verified by CPU-ref matmul
+    // against the reference runtime (our stored bytes produced the
+    // wrong Q at layer 3 despite the kernel being correct).
+    //
+    // Match the reference's pattern: keep the whole `[hidden,
+    // 2*q_dim]` packed tensor and split on the f32 matmul output
+    // (see `full_attention.rs::forward` for the per-head slicing
+    // via `launch_row_slice_f32`).
+    let w_qg = load_packed_weight(
+        device,
         tensors,
         &name_q,
         cfg.hidden_dim,
-        cfg.q_dim(),
-    ) {
-        Ok(pair) => pair,
-        Err(reason) => {
-            tracing::warn!(
-                key = %name_q,
-                q_dim = cfg.q_dim(),
-                %reason,
-                "qwen35_target: attn_q weight unavailable or packed-shape mismatch; \
-                 using zero placeholders for both Q and Q-gate halves"
-            );
-            let zero = || PackedWeight::Zero {
-                k: cfg.hidden_dim,
-                n: cfg.q_dim(),
-            };
-            (zero(), zero())
-        }
-    };
+        2 * cfg.q_dim(),
+    );
 
     let w_k = load_packed_weight(
         device,
@@ -1188,8 +1177,7 @@ fn build_full_attention_layer(
         attn_q_norm,
         attn_k_norm,
         post_attn_norm,
-        w_q,
-        w_q_gate,
+        w_qg,
         w_k,
         w_v,
         w_o,
