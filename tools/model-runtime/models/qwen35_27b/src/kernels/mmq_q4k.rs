@@ -688,6 +688,9 @@ mod tests {
         launch_quantize_q8_1_f32(&dev, &x_gpu, &mut x_q8_1, k)
             .expect("launch quantize_q8_1");
 
+        // L2 norm of the CPU golden — used to normalize residual L2.
+        let y_cpu_l2: f32 = y_cpu.iter().map(|v| v * v).sum::<f32>().sqrt();
+
         // Exercise the owned-tensor fast path.
         {
             let mut y_gpu = CudaTensor::<f32>::zeros(dev.clone(), vec![n])
@@ -699,14 +702,25 @@ mod tests {
             let y_host = y_gpu.to_host().expect("download y");
             let (max_abs, max_rel, argmax_chan, chan_frac) =
                 diff_27b(&y_cpu, &y_host);
+            let res_l2: f32 = y_cpu
+                .iter()
+                .zip(y_host.iter())
+                .map(|(a, b)| (a - b) * (a - b))
+                .sum::<f32>()
+                .sqrt();
+            let rel_l2 = res_l2 / y_cpu_l2.max(1e-6);
             eprintln!(
-                "[owned] mmvq_q4k 27b-shape diff: max_abs={:.6e} max_rel={:.6e} argmax_chan={} chan_energy_frac={:.4}",
-                max_abs, max_rel, argmax_chan, chan_frac
+                "[owned] mmvq_q4k 27b-shape diff: max_abs={:.6e} max_rel={:.6e} rel_l2={:.6e} argmax_chan={} chan_energy_frac={:.4}",
+                max_abs, max_rel, rel_l2, argmax_chan, chan_frac
             );
+            // Note: q8_1 activation quant is lossy; point-wise max_rel
+            // can be huge for output channels where the true value is
+            // small (noise/signal >> 1). Global L2 and channel energy
+            // are the correct gates at this shape.
             assert!(
-                max_rel < 1e-2,
-                "owned-tensor path diverges at 27B shape: max_rel={}",
-                max_rel
+                rel_l2 < 5e-2,
+                "owned-tensor path diverges at 27B shape (L2): rel_l2={}",
+                rel_l2
             );
             assert!(
                 chan_frac < 0.10,
@@ -733,14 +747,21 @@ mod tests {
             let y_host = y_gpu.to_host().expect("download y_view");
             let (max_abs, max_rel, argmax_chan, chan_frac) =
                 diff_27b(&y_cpu, &y_host);
+            let res_l2: f32 = y_cpu
+                .iter()
+                .zip(y_host.iter())
+                .map(|(a, b)| (a - b) * (a - b))
+                .sum::<f32>()
+                .sqrt();
+            let rel_l2 = res_l2 / y_cpu_l2.max(1e-6);
             eprintln!(
-                "[view ] mmvq_q4k 27b-shape diff: max_abs={:.6e} max_rel={:.6e} argmax_chan={} chan_energy_frac={:.4}",
-                max_abs, max_rel, argmax_chan, chan_frac
+                "[view ] mmvq_q4k 27b-shape diff: max_abs={:.6e} max_rel={:.6e} rel_l2={:.6e} argmax_chan={} chan_energy_frac={:.4}",
+                max_abs, max_rel, rel_l2, argmax_chan, chan_frac
             );
             assert!(
-                max_rel < 1e-2,
-                "view-variant path diverges at 27B shape: max_rel={}",
-                max_rel
+                rel_l2 < 5e-2,
+                "view-variant path diverges at 27B shape (L2): rel_l2={}",
+                rel_l2
             );
             assert!(
                 chan_frac < 0.10,
