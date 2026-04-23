@@ -1477,14 +1477,46 @@ fn split_block_quant_halves(
     let half_bytes = q_dim * row_bytes; // = n_heads * head_rows * row_bytes.
     let mut q_host = Vec::with_capacity(half_bytes);
     let mut g_host = Vec::with_capacity(half_bytes);
-    for h in 0..n_heads {
-        let head_base = h * head_block_bytes;
-        let q_start = head_base;
-        let q_end = q_start + head_rows * row_bytes;
-        let g_start = q_end;
-        let g_end = g_start + head_rows * row_bytes;
-        q_host.extend_from_slice(&host[q_start..q_end]);
-        g_host.extend_from_slice(&host[g_start..g_end]);
+    // CTOX_QGATE_SPLIT={interleave,naive,swap_per_head,swap_naive}
+    //   interleave (default): Q=first 256 cols, gate=next 256 cols, per head.
+    //   naive: Q=cols 0..q_dim, gate=cols q_dim..2*q_dim (two big halves).
+    //   swap_per_head: per-head but gate-first-then-Q instead of Q-then-gate.
+    //   swap_naive: naive with halves swapped (gate first, Q second).
+    // This is an explicit bug-lateralization knob for the L3 FA chan3994
+    // investigation. Remove once the correct variant is locked in.
+    let mode = std::env::var("CTOX_QGATE_SPLIT").unwrap_or_else(|_| "interleave".to_string());
+    match mode.as_str() {
+        "naive" => {
+            q_host.extend_from_slice(&host[0..half_bytes]);
+            g_host.extend_from_slice(&host[half_bytes..2 * half_bytes]);
+        }
+        "swap_naive" => {
+            q_host.extend_from_slice(&host[half_bytes..2 * half_bytes]);
+            g_host.extend_from_slice(&host[0..half_bytes]);
+        }
+        "swap_per_head" => {
+            for h in 0..n_heads {
+                let head_base = h * head_block_bytes;
+                let q_start = head_base;
+                let q_end = q_start + head_rows * row_bytes;
+                let g_start = q_end;
+                let g_end = g_start + head_rows * row_bytes;
+                // gate first in source, emit as Q
+                q_host.extend_from_slice(&host[g_start..g_end]);
+                g_host.extend_from_slice(&host[q_start..q_end]);
+            }
+        }
+        _ => {
+            for h in 0..n_heads {
+                let head_base = h * head_block_bytes;
+                let q_start = head_base;
+                let q_end = q_start + head_rows * row_bytes;
+                let g_start = q_end;
+                let g_end = g_start + head_rows * row_bytes;
+                q_host.extend_from_slice(&host[q_start..q_end]);
+                g_host.extend_from_slice(&host[g_start..g_end]);
+            }
+        }
     }
     let dev = src.device().clone();
     let q_tensor = CudaTensor::<i8>::from_host(dev.clone(), vec![half_bytes], &q_host)
