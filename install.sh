@@ -1238,25 +1238,34 @@ build_ctox() {
     fi
   fi
 
-  # 3. Build the internal inference runtime with detected features
-  if [[ -f "$source_root/tools/model-runtime/Cargo.toml" && -n "$ENGINE_FEATURES" ]]; then
+  # 3. Build the internal inference runtime. CPU-only hosts still need a
+  # usable ctox-engine payload, so an empty ENGINE_FEATURES must not skip the
+  # build entirely.
+  if [[ -f "$source_root/tools/model-runtime/Cargo.toml" ]]; then
     local cargo_features=""
-    for feat in $ENGINE_FEATURES; do
-      [[ -n "$cargo_features" ]] && cargo_features="$cargo_features,"
-      cargo_features="${cargo_features}${feat}"
-    done
+    local engine_label="${ENGINE_FEATURES:-cpu-only}"
+    local -a engine_build_cmd=(
+      "$cargo" build --release --package ctox-engine-cli --bin ctox-engine
+    )
+
+    if [[ -n "$ENGINE_FEATURES" ]]; then
+      for feat in $ENGINE_FEATURES; do
+        [[ -n "$cargo_features" ]] && cargo_features="$cargo_features,"
+        cargo_features="${cargo_features}${feat}"
+      done
+      engine_build_cmd+=(--features "$cargo_features")
+    fi
 
     # Build the internal inference runtime binary (not the workspace default)
     (cd "$source_root/tools/model-runtime" && \
-      "$cargo" build --release --package ctox-engine-cli --bin ctox-engine \
-        --features "$cargo_features") 2>&1 | tail -5
+      "${engine_build_cmd[@]}") 2>&1 | tail -5
 
     # Write feature stamp for runtime verification
     local stamp_dir="$source_root/tools/model-runtime/target/release"
     local install_engine_dir="$TOOLS_ROOT/model-runtime/bin"
     mkdir -p "$stamp_dir" "$install_engine_dir" "$TOOLS_ROOT/model-runtime"
     printf 'features=%s;cudarc=%s\n' \
-      "${ENGINE_FEATURES:-cpu-only}" \
+      "$engine_label" \
       "${CUDARC_CUDA_VERSION:-none}" \
       > "$stamp_dir/ctox-engine.features"
     cp "$source_root/tools/model-runtime/target/release/ctox-engine" "$install_engine_dir/" 2>/dev/null || true
@@ -1370,12 +1379,7 @@ setup_managed_install() {
 }
 MANIFEST
 
-  # `cond && action` returns non-zero when cond is false, which `set -e` would
-  # treat as fatal. Wrap in a conditional so CPU-only installs (no engine
-  # features) do not abort the installer at the very last step.
-  if [[ -n "$ENGINE_FEATURES" ]]; then
-    printf '%s\n' "$ENGINE_FEATURES" > "$STATE_ROOT/engine_features"
-  fi
+  printf '%s\n' "$ENGINE_FEATURES" > "$STATE_ROOT/engine_features"
 }
 
 # ── Jami DBus env file ────────────────────────────────────────────────────────
