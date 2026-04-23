@@ -665,6 +665,47 @@ let mut qkv_f32 =
             parent_ids: None,
         };
 
+        if std::env::var("CTOX_DEBUG_GDN_L2").is_ok() && self.layer_idx == 0 {
+            let ssm_a_h = self.ssm_a.to_host().unwrap_or_default();
+            let ssm_dt_h = self.ssm_dt_bias.to_host().unwrap_or_default();
+            let g_h_pre = g.to_host().unwrap_or_default();
+            let (a_min, a_max, a_neg, a_pos) = ssm_a_h.iter().fold(
+                (f32::INFINITY, f32::NEG_INFINITY, 0usize, 0usize),
+                |(mn, mx, neg, pos), &v| (
+                    mn.min(v), mx.max(v),
+                    neg + if v < 0.0 { 1 } else { 0 },
+                    pos + if v > 0.0 { 1 } else { 0 },
+                ),
+            );
+            let (dt_min, dt_max) = ssm_dt_h.iter().fold(
+                (f32::INFINITY, f32::NEG_INFINITY),
+                |(mn, mx), &v| (mn.min(v), mx.max(v)),
+            );
+            let (g_min, g_max, g_neg, g_pos) = g_h_pre.iter().fold(
+                (f32::INFINITY, f32::NEG_INFINITY, 0usize, 0usize),
+                |(mn, mx, neg, pos), &v| (
+                    mn.min(v), mx.max(v),
+                    neg + if v < 0.0 { 1 } else { 0 },
+                    pos + if v > 0.0 { 1 } else { 0 },
+                ),
+            );
+            eprintln!(
+                "GDN_DBG L0 ssm_a: len={} min={:.3e} max={:.3e} neg={} pos={} first8={:?}",
+                ssm_a_h.len(), a_min, a_max, a_neg, a_pos,
+                &ssm_a_h[..ssm_a_h.len().min(8)]
+            );
+            eprintln!(
+                "GDN_DBG L0 ssm_dt_bias: len={} min={:.3e} max={:.3e} first8={:?}",
+                ssm_dt_h.len(), dt_min, dt_max,
+                &ssm_dt_h[..ssm_dt_h.len().min(8)]
+            );
+            eprintln!(
+                "GDN_DBG L0 g: len={} min={:.3e} max={:.3e} neg={} pos={} first8={:?}",
+                g_h_pre.len(), g_min, g_max, g_neg, g_pos,
+                &g_h_pre[..g_h_pre.len().min(8)]
+            );
+        }
+
         if std::env::var("CTOX_DEBUG_GDN_L2").is_ok() && self.layer_idx <= 1 {
             let q_h = q.to_host().unwrap_or_default();
             let k_h = k.to_host().unwrap_or_default();
