@@ -1836,6 +1836,7 @@ impl App {
                 "CTOX_SERVICE_TOGGLE"
                     | "CTOX_OWNER_NAME"
                     | "CTOX_OWNER_EMAIL_ADDRESS"
+                    | "CTOX_FOUNDER_EMAIL_ADDRESSES"
                     | "CTOX_ALLOWED_EMAIL_DOMAIN"
                     | "CTOX_EMAIL_ADMIN_POLICIES"
                     | "CTOX_OWNER_PREFERRED_CHANNEL"
@@ -1904,6 +1905,7 @@ impl App {
             | "CTOX_COMPACT_ADAPTIVE_THRESHOLD"
             | "CTOX_OWNER_NAME"
             | "CTOX_OWNER_EMAIL_ADDRESS"
+            | "CTOX_FOUNDER_EMAIL_ADDRESSES"
             | "CTOX_ALLOWED_EMAIL_DOMAIN"
             | "CTOX_EMAIL_ADMIN_POLICIES"
             | "CTOX_OWNER_PREFERRED_CHANNEL"
@@ -3998,6 +4000,22 @@ fn load_settings_items(root: &Path) -> Vec<SettingItem> {
             kind: SettingKind::Env,
         },
         SettingItem {
+            key: "CTOX_FOUNDER_EMAIL_ADDRESSES",
+            label: "Founder E-Mails",
+            value: env_map
+                .get("CTOX_FOUNDER_EMAIL_ADDRESSES")
+                .cloned()
+                .unwrap_or_default(),
+            saved_value: env_map
+                .get("CTOX_FOUNDER_EMAIL_ADDRESSES")
+                .cloned()
+                .unwrap_or_default(),
+            secret: false,
+            choices: Vec::new(),
+            help: "Comma/newline list of founder mailboxes that should bypass the employee domain filter and be treated as high-priority strategic senders.",
+            kind: SettingKind::Env,
+        },
+        SettingItem {
             key: "CTOX_ALLOWED_EMAIL_DOMAIN",
             label: "Allowed Domain",
             value: env_map
@@ -4010,7 +4028,7 @@ fn load_settings_items(root: &Path) -> Vec<SettingItem> {
                 .unwrap_or_default(),
             secret: false,
             choices: Vec::new(),
-            help: "Any sender from this mail domain may contact CTOX for support and account help. Leave blank to derive it from the owner e-mail domain.",
+            help: "Employee/support mail domain. Founder/owner/admin addresses are matched explicitly and do not need to live on this domain. Leave blank to derive it from the owner e-mail domain.",
             kind: SettingKind::Env,
         },
         SettingItem {
@@ -6576,6 +6594,7 @@ mod tests {
         assert!(keys.contains(&"CTOX_SERVICE_TOGGLE"));
         assert!(keys.contains(&"CTOX_OWNER_NAME"));
         assert!(keys.contains(&"CTOX_OWNER_EMAIL_ADDRESS"));
+        assert!(keys.contains(&"CTOX_FOUNDER_EMAIL_ADDRESSES"));
         assert!(keys.contains(&"CTOX_ALLOWED_EMAIL_DOMAIN"));
         assert!(keys.contains(&"CTOX_EMAIL_ADMIN_POLICIES"));
         assert!(keys.contains(&"CTOX_OWNER_PREFERRED_CHANNEL"));

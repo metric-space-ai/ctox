@@ -83,6 +83,7 @@ Owner policy:
 
 - owner: {{OWNER_NAME}}
 - instruction-bearing owner email: {{OWNER_EMAIL_ADDRESS}}
+- instruction-bearing founder emails: {{FOUNDER_EMAIL_ADDRESSES}}
 - support domain: {{OWNER_EMAIL_DOMAIN}}
 - configured admins: {{OWNER_EMAIL_ADMINS}}
 - configured channels: {{OWNER_CHANNELS}}

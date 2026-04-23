@@ -123,6 +123,11 @@ fn render_system_prompt_template(
     let owner_email = owner
         .owner_email_address
         .unwrap_or_else(|| "not configured".to_string());
+    let founder_emails = if owner.founder_email_addresses.is_empty() {
+        "not configured".to_string()
+    } else {
+        owner.founder_email_addresses.join(", ")
+    };
     let allowed_email_domain = owner
         .allowed_email_domain
         .unwrap_or_else(|| "not configured".to_string());
@@ -132,6 +137,7 @@ fn render_system_prompt_template(
         .replace("{{OWNER_NAME}}", &owner.owner_name)
         .replace("{{OWNER_CHANNELS}}", &channels_block)
         .replace("{{OWNER_EMAIL_ADDRESS}}", &owner_email)
+        .replace("{{FOUNDER_EMAIL_ADDRESSES}}", &founder_emails)
         .replace("{{OWNER_EMAIL_DOMAIN}}", &allowed_email_domain)
         .replace("{{OWNER_EMAIL_ADMINS}}", &admin_email_policies)
         .replace("{{OWNER_PREFERRED_CHANNEL}}", &preferred_channel)

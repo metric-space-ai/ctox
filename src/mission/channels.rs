@@ -83,6 +83,7 @@ pub struct QueueTaskUpdateRequest {
 pub struct OwnerPromptContext {
     pub owner_name: String,
     pub owner_email_address: Option<String>,
+    pub founder_email_addresses: Vec<String>,
     pub allowed_email_domain: Option<String>,
     pub admin_email_policies: Vec<String>,
     pub channels: Vec<String>,
@@ -288,6 +289,7 @@ pub fn load_prompt_identity(
             .get("CTOX_OWNER_EMAIL_ADDRESS")
             .map(|value| normalize_email_address(value))
             .filter(|value| !value.is_empty()),
+        founder_email_addresses: parse_founder_email_addresses(settings),
         allowed_email_domain: normalized_allowed_email_domain(settings),
         admin_email_policies: admin_email_policy_summaries(settings),
         channels: channels.into_iter().collect(),
@@ -307,6 +309,7 @@ pub fn classify_email_sender(
         .get("CTOX_OWNER_EMAIL_ADDRESS")
         .map(|value| normalize_email_address(value))
         .filter(|value| !value.is_empty());
+    let founder_emails = parse_founder_email_addresses(settings);
     let allowed_email_domain = normalized_allowed_email_domain(settings);
     let admin_policies = parse_admin_email_policies(settings);
 
@@ -330,6 +333,19 @@ pub fn classify_email_sender(
             allowed: true,
             allow_admin_actions: true,
             allow_sudo_actions: true,
+            secrets_via_email_allowed: false,
+            allowed_email_domain,
+            block_reason: None,
+        };
+    }
+
+    if founder_emails.iter().any(|email| email == &normalized_email) {
+        return EmailSenderPolicy {
+            normalized_email,
+            role: "founder".to_string(),
+            allowed: true,
+            allow_admin_actions: true,
+            allow_sudo_actions: false,
             secrets_via_email_allowed: false,
             allowed_email_domain,
             block_reason: None,
@@ -375,7 +391,10 @@ pub fn classify_email_sender(
         allow_sudo_actions: false,
         secrets_via_email_allowed: false,
         allowed_email_domain,
-        block_reason: Some("sender is outside the allowed email domain".to_string()),
+        block_reason: Some(
+            "sender is outside the configured founder/owner/admin list and allowed employee email domain"
+                .to_string(),
+        ),
     }
 }
 
@@ -3081,6 +3100,21 @@ fn sync_identity_profiles(
         )?;
     }
 
+    for founder_email in parse_founder_email_addresses(settings) {
+        upsert_identity_profile(
+            conn,
+            &founder_email,
+            &founder_email,
+            json!({
+                "email": founder_email,
+                "role": "founder",
+                "allow_admin_actions": true,
+                "allow_sudo_actions": false,
+                "mail_instruction_scope": "founder_strategic",
+            }),
+        )?;
+    }
+
     for admin in parse_admin_email_policies(settings) {
         upsert_identity_profile(
             conn,
@@ -3159,6 +3193,21 @@ fn admin_email_policy_summaries(settings: &BTreeMap<String, String>) -> Vec<Stri
                 }
             )
         })
+        .collect()
+}
+
+fn parse_founder_email_addresses(settings: &BTreeMap<String, String>) -> Vec<String> {
+    let raw = settings
+        .get("CTOX_FOUNDER_EMAIL_ADDRESSES")
+        .map(String::as_str)
+        .unwrap_or("");
+    let mut seen = BTreeSet::new();
+    raw.split(|ch| matches!(ch, '\n' | ',' | ';'))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(normalize_email_address)
+        .filter(|value| !value.is_empty())
+        .filter(|value| seen.insert(value.clone()))
         .collect()
 }
 

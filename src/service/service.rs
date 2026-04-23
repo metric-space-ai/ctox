@@ -3860,7 +3860,11 @@ fn source_label_dispatch_rank(source_label: &str) -> u8 {
     if lowered == QUEUE_GUARD_SOURCE_LABEL {
         return 5;
     }
-    if lowered == "tui" || lowered == "email:owner" || lowered == "email:admin" {
+    if lowered == "tui"
+        || lowered == "email:owner"
+        || lowered == "email:founder"
+        || lowered == "email:admin"
+    {
         return 4;
     }
     if lowered.starts_with("email")
@@ -3956,6 +3960,7 @@ fn inbound_source_label(
         let policy = channels::classify_email_sender(settings, &message.sender_address);
         return match policy.role.as_str() {
             "owner" => "email:owner".to_string(),
+            "founder" => "email:founder".to_string(),
             "admin" => "email:admin".to_string(),
             _ => "email".to_string(),
         };
@@ -7427,7 +7432,10 @@ mod tests {
 
         assert_eq!(
             blocked_inbound_reason(&message, &settings),
-            Some("sender is outside the allowed email domain".to_string())
+            Some(
+                "sender is outside the configured founder/owner/admin list and allowed employee email domain"
+                    .to_string()
+            )
         );
     }
 
@@ -7462,6 +7470,40 @@ mod tests {
     }
 
     #[test]
+    fn allows_founder_email_outside_employee_domain() {
+        let mut settings = BTreeMap::new();
+        settings.insert(
+            "CTOX_OWNER_EMAIL_ADDRESS".to_string(),
+            "michael.welsch@example.com".to_string(),
+        );
+        settings.insert(
+            "CTOX_FOUNDER_EMAIL_ADDRESSES".to_string(),
+            "founder@external.net,cofounder@startup.test".to_string(),
+        );
+        settings.insert(
+            "CTOX_ALLOWED_EMAIL_DOMAIN".to_string(),
+            "example.com".to_string(),
+        );
+        let message = channels::RoutedInboundMessage {
+            message_key: "m-founder".to_string(),
+            channel: "email".to_string(),
+            account_key: "email:cto1@example.com".to_string(),
+            thread_key: "t-founder".to_string(),
+            sender_display: "Founder".to_string(),
+            sender_address: "cofounder@startup.test".to_string(),
+            subject: "founder input".to_string(),
+            preview: "founder input".to_string(),
+            body_text: "founder input".to_string(),
+            external_created_at: "2026-03-26T00:00:00Z".to_string(),
+            workspace_root: None,
+            metadata: serde_json::json!({}),
+            preferred_reply_modality: None,
+        };
+
+        assert_eq!(blocked_inbound_reason(&message, &settings), None);
+    }
+
+    #[test]
     fn owner_email_inbound_gets_owner_source_label() {
         let mut settings = BTreeMap::new();
         settings.insert(
@@ -7485,6 +7527,36 @@ mod tests {
         };
 
         assert_eq!(inbound_source_label(&settings, &message), "email:owner");
+    }
+
+    #[test]
+    fn founder_email_inbound_gets_founder_source_label() {
+        let mut settings = BTreeMap::new();
+        settings.insert(
+            "CTOX_OWNER_EMAIL_ADDRESS".to_string(),
+            "michael.welsch@example.com".to_string(),
+        );
+        settings.insert(
+            "CTOX_FOUNDER_EMAIL_ADDRESSES".to_string(),
+            "founder@other.example, cofounder@startup.test".to_string(),
+        );
+        let message = channels::RoutedInboundMessage {
+            message_key: "m-founder".to_string(),
+            channel: "email".to_string(),
+            account_key: "email:cto1@example.com".to_string(),
+            thread_key: "t-founder".to_string(),
+            sender_display: "Founder".to_string(),
+            sender_address: "cofounder@startup.test".to_string(),
+            subject: "prio".to_string(),
+            preview: "prio".to_string(),
+            body_text: "prio".to_string(),
+            external_created_at: "2026-03-26T00:00:00Z".to_string(),
+            workspace_root: None,
+            metadata: serde_json::json!({}),
+            preferred_reply_modality: None,
+        };
+
+        assert_eq!(inbound_source_label(&settings, &message), "email:founder");
     }
 
     #[test]
@@ -7522,6 +7594,47 @@ mod tests {
         );
 
         assert_eq!(pending.front().map(|item| item.source_label.as_str()), Some("email:owner"));
+        assert_eq!(pending.back().map(|item| item.source_label.as_str()), Some("queue"));
+    }
+
+    #[test]
+    fn ordered_pending_prompts_put_founder_email_ahead_of_queue_work() {
+        let mut pending = VecDeque::new();
+        insert_pending_prompt_ordered(
+            &mut pending,
+            QueuedPrompt {
+                prompt: "legacy".to_string(),
+                goal: "legacy".to_string(),
+                preview: "legacy".to_string(),
+                source_label: "queue".to_string(),
+                suggested_skill: None,
+                leased_message_keys: Vec::new(),
+                leased_ticket_event_keys: Vec::new(),
+                thread_key: None,
+                workspace_root: None,
+                ticket_self_work_id: None,
+            },
+        );
+        insert_pending_prompt_ordered(
+            &mut pending,
+            QueuedPrompt {
+                prompt: "founder".to_string(),
+                goal: "founder".to_string(),
+                preview: "founder".to_string(),
+                source_label: "email:founder".to_string(),
+                suggested_skill: None,
+                leased_message_keys: Vec::new(),
+                leased_ticket_event_keys: Vec::new(),
+                thread_key: None,
+                workspace_root: None,
+                ticket_self_work_id: None,
+            },
+        );
+
+        assert_eq!(
+            pending.front().map(|item| item.source_label.as_str()),
+            Some("email:founder")
+        );
         assert_eq!(pending.back().map(|item| item.source_label.as_str()), Some("queue"));
     }
 
@@ -7573,6 +7686,10 @@ mod tests {
             "CTOX_EMAIL_ADMIN_POLICIES".to_string(),
             "opsadmin@example.com:sudo,helpdesk@example.com:nosudo".to_string(),
         );
+        settings.insert(
+            "CTOX_FOUNDER_EMAIL_ADDRESSES".to_string(),
+            "founder@external.net".to_string(),
+        );
 
         let sudo_admin = channels::classify_email_sender(&settings, "opsadmin@example.com");
         assert_eq!(sudo_admin.role, "admin");
@@ -7583,6 +7700,11 @@ mod tests {
         assert_eq!(plain_admin.role, "admin");
         assert!(plain_admin.allow_admin_actions);
         assert!(!plain_admin.allow_sudo_actions);
+
+        let founder = channels::classify_email_sender(&settings, "founder@external.net");
+        assert_eq!(founder.role, "founder");
+        assert!(founder.allow_admin_actions);
+        assert!(!founder.allow_sudo_actions);
 
         let domain_user = channels::classify_email_sender(&settings, "user@example.com");
         assert_eq!(domain_user.role, "domain_user");
