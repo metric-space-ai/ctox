@@ -1,0 +1,57 @@
+{
+  "model": "Qwen/Qwen3.5-27B",
+  "sizing": {
+    "non_repeating_weight_mb_q4": 1200,
+    "repeating_layer_weight_mb_q4": 240,
+    "load_peak_slack_mb_q4": 1024,
+    "kv_mb_per_1k_tokens_q4": 180,
+    "base_toks_per_sec_q4": 77.0,
+    "repeating_layers": 64,
+    "context_cap": 131072
+  },
+  "runtime_defaults": {
+    "paged_attn": "auto",
+    "pa_cache_type": null,
+    "pa_memory_fraction": "0.85",
+    "force_no_mmap": false,
+    "force_language_model_only": false,
+    "disable_flash_attn": false,
+    "isq_singlethread": false,
+    "isq_cpu_threads": null
+  },
+  "placement": {
+    "primary_gpu_index": 0,
+    "primary_gpu_holds_non_repeating": true,
+    "primary_gpu_desktop_reserve_mb": 1024
+  },
+  "quality": {
+    "objective": "quality",
+    "candidates": [
+      {
+        "quantization": "q4k",
+        "backend": "device_layers",
+        "max_batch_size": 1,
+        "max_seqs": 1,
+        "context_fraction_milli": 1000,
+        "context_target_cap": 131072,
+        "min_context_required": 131072,
+        "per_gpu_headroom_mb": 1024
+      }
+    ]
+  },
+  "performance": {
+    "objective": "performance",
+    "candidates": [
+      {
+        "quantization": "q4k",
+        "backend": "device_layers",
+        "max_batch_size": 1,
+        "max_seqs": 1,
+        "context_fraction_milli": 1000,
+        "context_target_cap": 131072,
+        "min_context_required": 131072,
+        "per_gpu_headroom_mb": 1024
+      }
+    ]
+  }
+}

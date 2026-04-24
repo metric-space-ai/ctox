@@ -26,10 +26,16 @@ old-legacy-for-transplation-only/
 /qualification/
 /docs/
 /output/
-/contracts/
+# /contracts/ was a blanket ignore. Carve out models/ so runtime
+# manifests are tracked; other subdirs stay untracked.
+/contracts/history/
+/contracts/qualification/
+!/contracts/models/
+!/contracts/models/**
 /.claude/
 /.playwright-cli/
 /.remote_import/
+
 
 # Dev-only files
 *.expect
