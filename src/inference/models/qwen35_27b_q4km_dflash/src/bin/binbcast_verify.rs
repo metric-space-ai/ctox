@@ -103,7 +103,7 @@ fn run_case(
         &BinBcastTensor,
         &BinBcastTensor,
         CUstream,
-    ) -> u32,
+    ) -> i32,
     cpu: impl Fn(f32, f32) -> f32,
     tol: f32,
 ) -> Result<()> {
