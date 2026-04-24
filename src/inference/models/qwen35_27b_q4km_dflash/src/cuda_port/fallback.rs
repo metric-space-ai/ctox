@@ -71,6 +71,10 @@ pub struct GgmlBackendCtx {
     backend: sys::ggml_backend_t,
     ctx: *mut sys::ggml_context,
     buffer: sys::ggml_backend_buffer_t, // null until realize()
+    /// Lazy-initialized graph allocator. Holds device memory for
+    /// intermediates and op outputs across `compute()` calls; must
+    /// live at least as long as any op output we read.
+    gallocr: *mut sys::ggml_gallocr,
 }
 
 impl GgmlBackendCtx {
@@ -92,6 +96,7 @@ impl GgmlBackendCtx {
             backend,
             ctx,
             buffer: ptr::null_mut(),
+            gallocr: ptr::null_mut(),
         })
     }
 
@@ -201,7 +206,7 @@ impl GgmlBackendCtx {
     ///
     /// Works for any op whose inputs live inside this context —
     /// including ops we haven't ported (mmq, fattn, gated_delta_net).
-    pub fn compute<F>(&self, build: F) -> Result<*mut sys::ggml_tensor, String>
+    pub fn compute<F>(&mut self, build: F) -> Result<*mut sys::ggml_tensor, String>
     where
         F: FnOnce(*mut sys::ggml_context) -> *mut sys::ggml_tensor,
     {
@@ -218,19 +223,23 @@ impl GgmlBackendCtx {
         // Allocate any op-created intermediates (including `out` itself
         // if it wasn't among the pre-declared tensors). Without this
         // the mul_mat output has no backing buffer → segfault.
-        let buft = unsafe { sys::ggml_backend_get_default_buffer_type(self.backend) };
-        let alloc = unsafe { sys::ggml_gallocr_new(buft) };
-        if alloc.is_null() {
-            return Err("ggml_gallocr_new returned null".into());
+        //
+        // The gallocr must outlive the returned tensor's `data`
+        // pointer — caller may still read from it after compute
+        // returns — so we keep it in the struct until drop.
+        if self.gallocr.is_null() {
+            let buft = unsafe { sys::ggml_backend_get_default_buffer_type(self.backend) };
+            self.gallocr = unsafe { sys::ggml_gallocr_new(buft) };
+            if self.gallocr.is_null() {
+                return Err("ggml_gallocr_new returned null".into());
+            }
         }
-        let ok = unsafe { sys::ggml_gallocr_alloc_graph(alloc, gf) };
+        let ok = unsafe { sys::ggml_gallocr_alloc_graph(self.gallocr, gf) };
         if !ok {
-            unsafe { sys::ggml_gallocr_free(alloc) };
             return Err("ggml_gallocr_alloc_graph failed".into());
         }
 
         let rc = unsafe { sys::ggml_backend_graph_compute(self.backend, gf) };
-        unsafe { sys::ggml_gallocr_free(alloc) };
         match rc {
             sys::ggml_status::GGML_STATUS_SUCCESS => Ok(out),
             other => Err(format!("ggml_backend_graph_compute: status={:?}", other)),
@@ -245,6 +254,10 @@ impl GgmlBackendCtx {
 impl Drop for GgmlBackendCtx {
     fn drop(&mut self) {
         unsafe {
+            if !self.gallocr.is_null() {
+                sys::ggml_gallocr_free(self.gallocr);
+                self.gallocr = ptr::null_mut();
+            }
             if !self.buffer.is_null() {
                 sys::ggml_backend_buffer_free(self.buffer);
                 self.buffer = ptr::null_mut();
