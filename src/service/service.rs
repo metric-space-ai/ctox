@@ -4061,8 +4061,18 @@ fn platform_expertise_pass_kind(item: &tickets::TicketSelfWorkItemView) -> Optio
     metadata_string(&item.metadata, "pass_kind")
 }
 
+fn is_founder_or_owner_email_job(job: &QueuedPrompt) -> bool {
+    matches!(
+        job.source_label.to_ascii_lowercase().as_str(),
+        "email:owner" | "email:founder" | "email:admin"
+    )
+}
+
 fn is_owner_visible_strategic_job(job: &QueuedPrompt) -> bool {
     if !derive_owner_visible_for_review(&job.source_label) {
+        return false;
+    }
+    if is_founder_or_owner_email_job(job) {
         return false;
     }
     let haystack = format!(
@@ -4271,6 +4281,9 @@ fn maybe_redirect_owner_visible_work_to_strategy_setup(
 
 fn is_owner_visible_platform_reset_job(job: &QueuedPrompt) -> bool {
     if !derive_owner_visible_for_review(&job.source_label) {
+        return false;
+    }
+    if is_founder_or_owner_email_job(job) {
         return false;
     }
     let haystack = format!(
@@ -8820,6 +8833,114 @@ mod tests {
         assert!(items[0]
             .body_text
             .contains("--thread-key kunstmen-supervisor"));
+    }
+
+    #[test]
+    fn founder_email_thread_is_not_rerouted_into_strategy_setup() {
+        let root = temp_root("ctox-founder-email-no-strategy-reroute");
+        let queue_task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Founder inbound".to_string(),
+                prompt: "[E-Mail eingegangen]\nSender: founder@example.com\nBetreff: Homepage\nPlease fix the public platform flow and answer me clearly."
+                    .to_string(),
+                thread_key: "<founder-thread@example.com>".to_string(),
+                workspace_root: Some("/home/ubuntu/workspace/kunstmen".to_string()),
+                priority: "urgent".to_string(),
+                suggested_skill: Some("frontend-skill".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to seed founder queue task");
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        {
+            let mut shared = lock_shared_state(&state);
+            shared.busy = true;
+            shared.current_goal_preview = Some("Founder inbound".to_string());
+            shared.active_source_label = Some("email:founder".to_string());
+            track_leased_keys_locked(
+                &mut shared,
+                std::slice::from_ref(&queue_task.message_key),
+                &[],
+            );
+        }
+        let job = QueuedPrompt {
+            prompt: "[E-Mail eingegangen]\nSender: founder@example.com\nBetreff: Homepage\nPlease fix the public platform flow and answer me clearly."
+                .to_string(),
+            goal: "Reply to founder".to_string(),
+            preview: "Founder mail about homepage".to_string(),
+            source_label: "email:founder".to_string(),
+            suggested_skill: Some("frontend-skill".to_string()),
+            leased_message_keys: vec![queue_task.message_key.clone()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("<founder-thread@example.com>".to_string()),
+            workspace_root: Some("/home/ubuntu/workspace/kunstmen".to_string()),
+            ticket_self_work_id: None,
+        };
+
+        let redirected = maybe_redirect_owner_visible_work_to_strategy_setup(&root, &state, &job)
+            .expect("strategy evaluation should succeed");
+        assert!(!redirected);
+
+        let tasks =
+            channels::list_queue_tasks(&root, &["pending".to_string(), "leased".to_string()], 10)
+                .expect("failed to list queue tasks");
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].title, "Founder inbound");
+    }
+
+    #[test]
+    fn founder_email_thread_is_not_rerouted_into_platform_passes() {
+        let root = temp_root("ctox-founder-email-no-platform-reroute");
+        let queue_task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Founder inbound".to_string(),
+                prompt: "[E-Mail eingegangen]\nSender: founder@example.com\nBetreff: Homepage\nThis platform is too noisy; simplify the page and make interview flow obvious."
+                    .to_string(),
+                thread_key: "<founder-thread@example.com>".to_string(),
+                workspace_root: Some("/home/ubuntu/workspace/kunstmen".to_string()),
+                priority: "urgent".to_string(),
+                suggested_skill: Some("frontend-skill".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to seed founder queue task");
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        {
+            let mut shared = lock_shared_state(&state);
+            shared.busy = true;
+            shared.current_goal_preview = Some("Founder inbound".to_string());
+            shared.active_source_label = Some("email:founder".to_string());
+            track_leased_keys_locked(
+                &mut shared,
+                std::slice::from_ref(&queue_task.message_key),
+                &[],
+            );
+        }
+        let job = QueuedPrompt {
+            prompt: "[E-Mail eingegangen]\nSender: founder@example.com\nBetreff: Homepage\nThis platform is too noisy; simplify the page and make interview flow obvious."
+                .to_string(),
+            goal: "Reply to founder".to_string(),
+            preview: "Founder mail about homepage".to_string(),
+            source_label: "email:founder".to_string(),
+            suggested_skill: Some("frontend-skill".to_string()),
+            leased_message_keys: vec![queue_task.message_key.clone()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("<founder-thread@example.com>".to_string()),
+            workspace_root: Some("/home/ubuntu/workspace/kunstmen".to_string()),
+            ticket_self_work_id: None,
+        };
+
+        let redirected = maybe_redirect_platform_work_to_expertise_passes(&root, &state, &job)
+            .expect("platform evaluation should succeed");
+        assert!(!redirected);
+
+        let items = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
+            .expect("failed to list self-work");
+        assert!(items.is_empty());
     }
 
     #[test]
