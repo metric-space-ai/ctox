@@ -2637,6 +2637,7 @@ fn run_completion_review(
         workspace_root: job.workspace_root.clone().unwrap_or_default(),
         runtime_db_path: db_path.to_string_lossy().to_string(),
         review_skill_path,
+        artifact_text: reply_text.to_string(),
     };
     let outcome = review::review_completion_if_needed(root, &review_request, reply_text);
     if !outcome.required {

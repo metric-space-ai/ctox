@@ -79,6 +79,7 @@ pub struct CompletionReviewRequest {
     pub workspace_root: String,
     pub runtime_db_path: String,
     pub review_skill_path: String,
+    pub artifact_text: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -408,11 +409,35 @@ fn build_review_prompt(request: &CompletionReviewRequest, reasons: &[String]) ->
     } else {
         request.review_skill_path.trim()
     };
+    let artifact_kind = match request.source_label.to_ascii_lowercase().as_str() {
+        "email:owner" | "email:founder" | "email:admin" => "founder_or_owner_outbound_email_draft",
+        _ => "reviewed_output_artifact",
+    };
+    let artifact_text = if request.artifact_text.trim().is_empty() {
+        "(empty artifact)"
+    } else {
+        request.artifact_text.trim()
+    };
+    let founder_specific_work = if matches!(
+        request.source_label.to_ascii_lowercase().as_str(),
+        "email:owner" | "email:founder" | "email:admin"
+    ) {
+        "\
+Founder/owner communication gate:\n\
+- judge the outbound draft itself as the artifact under review\n\
+- decide whether the draft should be sent now, blocked, or reworked first\n\
+- fail the review when the draft does not answer the latest founder mail, dodges the requested deliverable, promises future work instead of delivering, or leaks internal/system language\n\
+- do not fail only because the broader mission is still open; fail only when the draft makes a false claim, omits a required answer, or the missing deliverable means the mail should not be sent yet\n\
+"
+    } else {
+        ""
+    };
 
     format!(
         "== REVIEW ASSIGNMENT ==\n\
 \n\
 Source label: {source}\n\
+Artifact kind: {artifact_kind}\n\
 Owner visible: {owner_visible}\n\
 Conversation id: {}\n\
 Thread key: {thread_key}\n\
@@ -420,6 +445,11 @@ Workspace root: {workspace_root}\n\
 Runtime DB: {runtime_db_path}\n\
 Review skill: {review_skill_path}\n\
 Trigger reasons: {reason_block}\n\
+\n\
+Artifact under review:\n\
+--- BEGIN ARTIFACT ---\n\
+{artifact_text}\n\
+--- END ARTIFACT ---\n\
 \n\
 Open the review skill first and follow it.\n\
 \n\
@@ -432,9 +462,12 @@ Required review work:\n\
 4. inspect related ticket/self-work/queue state\n\
 5. inspect relevant founder or owner communication facts when owner-visible is yes\n\
 6. inspect the live public/runtime surface when applicable\n\
-7. produce a verdict from evidence\n\
+7. decide whether this specific artifact is ready to send/release/close, or whether real rework is required first\n\
+8. produce a verdict from evidence\n\
 \n\
 Use the runtime DB path and workspace root above as the primary grounding points.\n\
+\n\
+{founder_specific_work}\
 \n\
 Helpful runtime entrypoint:\n\
 - use `ctox strategy show --conversation-id {}` and `ctox verification runs --conversation-id {}` as starting lookups, then continue with direct SQLite/runtime/browser inspection\n\
@@ -734,14 +767,35 @@ mod tests {
             workspace_root: "/srv/kunstmen".to_string(),
             runtime_db_path: "/srv/runtime/ctox.sqlite3".to_string(),
             review_skill_path: "/srv/skills/system/review/external-review/SKILL.md".to_string(),
+            artifact_text: "Patched rollout artifact".to_string(),
         };
         let rendered = build_review_prompt(&request, &["closure_claim".to_string()]);
         assert!(rendered.contains("== REVIEW ASSIGNMENT =="));
         assert!(rendered.contains("Conversation id: 42"));
         assert!(rendered.contains("/srv/skills/system/review/external-review/SKILL.md"));
         assert!(rendered.contains("Open the review skill first and follow it."));
-        assert!(!rendered.contains("Latest reported result from the executor"));
-        assert!(!rendered.contains("Focus snapshot"));
+        assert!(rendered.contains("Artifact under review:"));
+        assert!(rendered.contains("Patched rollout artifact"));
+    }
+
+    #[test]
+    fn founder_review_prompt_explicitly_reviews_the_mail_artifact() {
+        let request = CompletionReviewRequest {
+            preview: "[E-Mail eingegangen] Sender: Founder".to_string(),
+            source_label: "email:owner".to_string(),
+            owner_visible: true,
+            conversation_id: 77,
+            thread_key: "email-review:owner:abc".to_string(),
+            workspace_root: "/srv/kunstmen".to_string(),
+            runtime_db_path: "/srv/runtime/ctox.sqlite3".to_string(),
+            review_skill_path: "/srv/skills/system/review/external-review/SKILL.md".to_string(),
+            artifact_text: "Kurzstand: Ich liefere spaeter.".to_string(),
+        };
+        let rendered = build_review_prompt(&request, &["founder_communication".to_string()]);
+        assert!(rendered.contains("Artifact kind: founder_or_owner_outbound_email_draft"));
+        assert!(rendered.contains("judge the outbound draft itself as the artifact under review"));
+        assert!(rendered.contains("does not answer the latest founder mail"));
+        assert!(rendered.contains("Kurzstand: Ich liefere spaeter."));
     }
 
     #[test]
