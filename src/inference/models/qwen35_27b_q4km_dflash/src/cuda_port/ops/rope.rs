@@ -64,21 +64,31 @@ pub struct RopeKernels {
 ///                         of param list. Discriminates from f16/half
 ///                         instantiations that carry `6__half`.
 pub fn mangled_rope_norm_f32(has_ff: bool) -> Result<&'static [u8], String> {
-    let ff: &[u8] = if has_ff { b"Lb1E" } else { b"Lb0E" };
+    // Template args mangle as `ILb<fwd>ELb<ff>Eff` (forward, has_ff,
+    // T=f, D=f). Concatenated needle locks the exact combination.
+    let combined: &[u8] = if has_ff {
+        b"ILb1ELb1Eff"
+    } else {
+        b"ILb1ELb0Eff"
+    };
     crate::cuda_port::ptx::find_entry(
         crate::cuda_port::ptx::rope_entries::ENTRIES,
         // `9rope_norm` length prefix excludes `rope_norm_back` if it
         // ever shows up alongside.
-        &[b"9rope_norm", b"Lb1E", ff, b"ffEv"],
+        &[b"9rope_norm", combined],
     )
 }
 
 /// Resolve `rope_multi<forward=true, has_ff, T=float>`.
 pub fn mangled_rope_multi_f32(has_ff: bool) -> Result<&'static [u8], String> {
-    let ff: &[u8] = if has_ff { b"Lb1E" } else { b"Lb0E" };
+    let combined: &[u8] = if has_ff {
+        b"ILb1ELb1EfEv"
+    } else {
+        b"ILb1ELb0EfEv"
+    };
     crate::cuda_port::ptx::find_entry(
         crate::cuda_port::ptx::rope_entries::ENTRIES,
-        &[b"10rope_multi", b"Lb1E", ff, b"IfEvPKf"],
+        &[b"10rope_multi", combined],
     )
 }
 
