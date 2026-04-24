@@ -20,5 +20,6 @@ pub mod rope;
 pub mod scale;
 pub mod softmax;
 pub mod solve_tri;
+pub mod ssm_conv;
 pub mod tri;
 pub mod unary;

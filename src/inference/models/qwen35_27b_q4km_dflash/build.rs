@@ -91,7 +91,7 @@ fn main() {
 /// `src/cuda_port/ptx.rs`.
 const CUDA_PORT_PTX_MODULES: &[&str] = &[
     "norm", "unary", "scale", "fill", "diag", "binbcast", "tri", "pad", "cumsum", "concat", "cpy",
-    "solve_tri", "rope", "softmax",
+    "solve_tri", "rope", "softmax", "ssm-conv",
 ];
 
 fn compile_cuda_port_ptx_modules() {
