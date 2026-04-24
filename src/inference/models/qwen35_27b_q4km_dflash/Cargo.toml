@@ -144,6 +144,12 @@ name = "qwen35-27b-q4km-dflash-attn-smoke"
 path = "src/bin/attn_smoke.rs"
 required-features = ["cuda"]
 
+[[bin]]
+# Full Qwen3.5 transformer block (attention + FFN) through hybrid executor.
+name = "qwen35-27b-q4km-dflash-block-smoke"
+path = "src/bin/block_smoke.rs"
+required-features = ["cuda"]
+
 [features]
 default = []
 # CUDA is the only real build mode — the target model is 27B in Q4_K_M,
