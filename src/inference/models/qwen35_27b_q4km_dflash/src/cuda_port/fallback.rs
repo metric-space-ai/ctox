@@ -195,10 +195,12 @@ impl GgmlBackendCtx {
     }
 
     /// Build a single-op subgraph rooted at whatever tensor the
-    /// closure returns, then compute it via
-    /// `ggml_backend_graph_compute`. Works for any op whose inputs
-    /// live inside this context — including ops we haven't ported
-    /// (mmq, fattn, gated_delta_net).
+    /// closure returns, allocate it via `ggml_gallocr_alloc_graph`
+    /// (so any op-created intermediates get a real buffer), then
+    /// compute it via `ggml_backend_graph_compute`.
+    ///
+    /// Works for any op whose inputs live inside this context —
+    /// including ops we haven't ported (mmq, fattn, gated_delta_net).
     pub fn compute<F>(&self, build: F) -> Result<*mut sys::ggml_tensor, String>
     where
         F: FnOnce(*mut sys::ggml_context) -> *mut sys::ggml_tensor,
@@ -212,7 +214,23 @@ impl GgmlBackendCtx {
             return Err("ggml_new_graph_custom returned null".into());
         }
         unsafe { sys::ggml_build_forward_expand(gf, out) };
+
+        // Allocate any op-created intermediates (including `out` itself
+        // if it wasn't among the pre-declared tensors). Without this
+        // the mul_mat output has no backing buffer → segfault.
+        let buft = unsafe { sys::ggml_backend_get_default_buffer_type(self.backend) };
+        let alloc = unsafe { sys::ggml_gallocr_new(buft) };
+        if alloc.is_null() {
+            return Err("ggml_gallocr_new returned null".into());
+        }
+        let ok = unsafe { sys::ggml_gallocr_alloc_graph(alloc, gf) };
+        if !ok {
+            unsafe { sys::ggml_gallocr_free(alloc) };
+            return Err("ggml_gallocr_alloc_graph failed".into());
+        }
+
         let rc = unsafe { sys::ggml_backend_graph_compute(self.backend, gf) };
+        unsafe { sys::ggml_gallocr_free(alloc) };
         match rc {
             sys::ggml_status::GGML_STATUS_SUCCESS => Ok(out),
             other => Err(format!("ggml_backend_graph_compute: status={:?}", other)),
