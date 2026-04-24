@@ -470,10 +470,9 @@ pub fn handle_channel_command(root: &Path, args: &[String]) -> Result<()> {
             print_json(&result)
         }
         "founder-reply" => {
-            let message_key = required_flag_value(args, "--message-key")?;
-            let body = required_flag_value(args, "--body")?;
-            let result = send_reviewed_founder_reply(root, message_key, body)?;
-            print_json(&result)
+            anyhow::bail!(
+                "direct founder-reply is disabled; founder/owner outbound email must be sent only through the reviewed service path"
+            )
         }
         "test" => {
             let db_path = resolve_db_path(root, find_flag_value(args, "--db"));
