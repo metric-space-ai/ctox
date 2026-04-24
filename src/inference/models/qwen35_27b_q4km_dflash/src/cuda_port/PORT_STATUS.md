@@ -5,6 +5,10 @@ nach Rust, pro CLAUDE.md Inference-Engine Architecture Rules.
 
 ## Was verifiziert läuft (A6000)
 
+**18 `.cu`-Files ported + verified** (alle 17 aus der vorherigen Liste
+plus **`ssm-conv`** mit drei-teiligem Fix: Function-pointer-Shim +
+`build.rs::.visible .entry` Parse + korrekte Itanium length prefixes).
+
 **Executor-Status — alle smokes grün:**
 
 | Smoke | Shape | Ops | Drift | Hybrid-Zeit | ggml-Zeit |
