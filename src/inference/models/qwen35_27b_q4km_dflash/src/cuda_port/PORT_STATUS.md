@@ -5,7 +5,7 @@ nach Rust, pro CLAUDE.md Inference-Engine Architecture Rules.
 
 ## Was verifiziert läuft (A6000)
 
-15 `.cu`-Files, 30+ Kernel-Varianten — jede einzeln bit-close /
+16 `.cu`-Files, 34+ Kernel-Varianten — jede einzeln bit-close /
 bit-exakt verifiziert durch `src/bin/<op>_verify.rs`:
 
 | Op | Source | Verify | Max-Drift |
@@ -38,6 +38,10 @@ bit-exakt verifiziert durch `src/bin/<op>_verify.rs`:
 | `cpy<f32→f16>` | (same) | (same) | 0 (bit-exact half-round) |
 | `cpy<f16→f16>` | (same) | (same) | 0 (exact) |
 | `solve_tri<f32, 0, 0>` | solve_tri.cu:91-178 | `solve-tri-verify` | 6e-8 (~1 ULP) |
+| `rope_norm<true, false, f32, f32>` | rope.cu:43-113 | `rope-verify` | 8.3e-7 |
+| `rope_norm<true, true, f32, f32>` | (same) | (wired, unverified) | — |
+| `rope_multi<true, false, f32>` | rope.cu:182-265 | (wired, unverified) | — |
+| `rope_multi<true, true, f32>` | (same) | (wired, unverified) | — |
 
 ## Infrastruktur (bewiesen, reusable)
 
