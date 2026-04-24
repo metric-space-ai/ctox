@@ -126,6 +126,12 @@ name = "qwen35-27b-q4km-dflash-graph-smoke"
 path = "src/bin/graph_smoke.rs"
 required-features = ["cuda"]
 
+[[bin]]
+# Hybrid-executor smoke: Rust-native + ggml-fallback in the same chain.
+name = "qwen35-27b-q4km-dflash-hybrid-smoke"
+path = "src/bin/hybrid_smoke.rs"
+required-features = ["cuda"]
+
 [features]
 default = []
 # CUDA is the only real build mode — the target model is 27B in Q4_K_M,
