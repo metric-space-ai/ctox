@@ -102,6 +102,7 @@ const QUEUE_GUARD_SOURCE_LABEL: &str = "queue-guard";
 const PLATFORM_EXPERTISE_KIND: &str = "platform-expertise-pass";
 const PLATFORM_IMPLEMENTATION_KIND: &str = "platform-implementation";
 const STRATEGIC_DIRECTION_KIND: &str = "strategic-direction-pass";
+const FOUNDER_COMMUNICATION_REWORK_KIND: &str = "founder-communication-rework";
 const SERVICE_SHUTDOWN_TIMEOUT_SECS: u64 = 15;
 const SERVICE_SHUTDOWN_POLL_MILLIS: u64 = 150;
 const SYSTEMCTL_USER_TIMEOUT_SECS: u64 = 5;
@@ -2745,6 +2746,38 @@ fn run_completion_review(
                         work_id,
                         summary: outcome.summary.clone(),
                     }
+                } else if let Some(message_key) = founder_reply_key {
+                    match enqueue_founder_communication_rework(
+                        root,
+                        job,
+                        message_key,
+                        &outcome,
+                    ) {
+                        Ok(title) => {
+                            push_event(
+                                state,
+                                format!(
+                                    "Founder review fail for {} enqueued real communication rework via {}",
+                                    job.source_label, title
+                                ),
+                            );
+                            CompletionReviewDisposition::Hold {
+                                summary: outcome.summary.clone(),
+                            }
+                        }
+                        Err(err) => {
+                            push_event(
+                                state,
+                                format!(
+                                    "Founder review fail for {} could not enqueue communication rework: {}",
+                                    job.source_label, err
+                                ),
+                            );
+                            CompletionReviewDisposition::Hold {
+                                summary: outcome.summary.clone(),
+                            }
+                        }
+                    }
                 } else {
                     CompletionReviewDisposition::Hold {
                         summary: outcome.summary.clone(),
@@ -2933,6 +2966,110 @@ or prove the review wrong with stronger evidence.",
                     outcome.verdict.as_gate_label(),
                     clip_text(&summary_line, 80),
                 ),
+                "origin_source_label": job.source_label,
+            }),
+        },
+    )?;
+    Ok(view.title)
+}
+
+fn enqueue_founder_communication_rework(
+    root: &Path,
+    job: &QueuedPrompt,
+    inbound_message_key: &str,
+    outcome: &review::ReviewOutcome,
+) -> Result<String> {
+    let summary_line = clip_text(&outcome.summary, 220);
+    let preview = clip_text(&job.preview, 80);
+    let title = format!(
+        "Founder communication rework: {} ({})",
+        if preview.is_empty() {
+            "(no preview)"
+        } else {
+            preview.as_str()
+        },
+        outcome.verdict.as_gate_label()
+    );
+    let failed_gates_block = if outcome.failed_gates.is_empty() {
+        "- none".to_string()
+    } else {
+        outcome
+            .failed_gates
+            .iter()
+            .take(6)
+            .map(|item| format!("- {}", item.trim()))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let findings_block = if outcome.semantic_findings.is_empty() {
+        "- none".to_string()
+    } else {
+        outcome
+            .semantic_findings
+            .iter()
+            .take(8)
+            .map(|item| format!("- {}", item.trim()))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let open_items_block = if outcome.open_items.is_empty() {
+        "- none".to_string()
+    } else {
+        outcome
+            .open_items
+            .iter()
+            .take(8)
+            .map(|item| format!("- {}", item.trim()))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let thread_key = job
+        .thread_key
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| format!("founder-rework:{}", job.source_label));
+    let prompt = format!(
+        "An external CTOX review rejected a founder or owner communication artifact.\n\n\
+Do not send any founder or owner reply yet.\n\
+Perform the required rework first. If the founder requested a concrete deliverable (for example a QR code, link set, mockups, attachment, or corrected recipients), create or gather it before drafting any new reply.\n\
+The inbound founder message must remain unanswered until the missing deliverable and mail action are correct.\n\n\
+Inbound message key: {}\n\
+Review summary: {}\n\n\
+Failed gates:\n\
+{}\n\n\
+Semantic findings:\n\
+{}\n\n\
+Open items:\n\
+{}\n\n\
+Required behavior:\n\
+- do real work, not just rephrase the previous mail\n\
+- if recipients or cc behavior were wrong, correct the mail action itself\n\
+- if a requested deliverable is missing, create or gather it first\n\
+- after the rework is complete, allow the founder mail to be reviewed again through the reviewed founder communication path\n\
+- do not use generic `ctox channel send` for founder or owner email\n",
+        inbound_message_key,
+        summary_line,
+        failed_gates_block,
+        findings_block,
+        open_items_block,
+    );
+    let view = create_self_work_backed_queue_task(
+        root,
+        DurableSelfWorkQueueRequest {
+            kind: FOUNDER_COMMUNICATION_REWORK_KIND.to_string(),
+            title,
+            prompt,
+            thread_key: thread_key.clone(),
+            workspace_root: job.workspace_root.clone(),
+            priority: "urgent".to_string(),
+            suggested_skill: Some("follow-up-orchestrator".to_string()),
+            parent_message_key: Some(inbound_message_key.to_string()),
+            metadata: serde_json::json!({
+                "thread_key": thread_key,
+                "workspace_root": job.workspace_root.clone(),
+                "priority": "urgent",
+                "inbound_message_key": inbound_message_key,
+                "dedupe_key": format!("founder-communication-rework:{inbound_message_key}"),
                 "origin_source_label": job.source_label,
             }),
         },
@@ -9141,6 +9278,57 @@ mod tests {
         let items = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
             .expect("failed to list self-work");
         assert!(items.is_empty());
+    }
+
+    #[test]
+    fn founder_review_rejection_enqueues_real_communication_rework() {
+        let root = temp_root("ctox-founder-communication-rework");
+        let job = QueuedPrompt {
+            prompt: "[E-Mail eingegangen]\nSender: michael.welsch@metric-space.ai\nBetreff: Jami zugang schicken.\nSchick mir bitte den Jami QR code Zugang fuer den Chat mit dir."
+                .to_string(),
+            goal: "Reply to founder".to_string(),
+            preview: "Founder asks for Jami QR code".to_string(),
+            source_label: "email:owner".to_string(),
+            suggested_skill: Some("follow-up-orchestrator".to_string()),
+            leased_message_keys: vec!["email:cto1@metric-space.ai::INBOX::82".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("<founder-thread@example.com>".to_string()),
+            workspace_root: Some("/home/ubuntu/workspace/kunstmen".to_string()),
+            ticket_self_work_id: None,
+        };
+        let outcome = review::ReviewOutcome {
+            required: true,
+            verdict: review::ReviewVerdict::Fail,
+            mission_state: "HEALTHY".to_string(),
+            summary: "Owner requested a QR code and the draft does not include it.".to_string(),
+            report: String::new(),
+            score: 21,
+            reasons: vec!["missing_deliverable".to_string()],
+            failed_gates: vec!["missing_deliverable".to_string()],
+            semantic_findings: vec!["QR code is required before any reply can be sent.".to_string()],
+            open_items: vec!["Generate or retrieve the Jami QR code.".to_string()],
+            evidence: vec!["owner mail explicitly asks for QR code".to_string()],
+            handoff: None,
+        };
+
+        let title = enqueue_founder_communication_rework(
+            &root,
+            &job,
+            "email:cto1@metric-space.ai::INBOX::82",
+            &outcome,
+        )
+        .expect("founder communication rework should enqueue");
+        assert!(title.starts_with("Founder communication rework:"));
+
+        let tasks =
+            channels::list_queue_tasks(&root, &["pending".to_string(), "leased".to_string()], 10)
+                .expect("failed to list queue tasks");
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].title, title);
+        assert!(tasks[0].prompt.contains("Do not send any founder or owner reply yet."));
+        assert!(tasks[0].prompt.contains("Generate or retrieve the Jami QR code."));
+        assert!(tasks[0].ticket_self_work_id.is_some());
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
