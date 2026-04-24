@@ -3701,7 +3701,7 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
                 suggested_skill: suggested_skill_from_message(&message),
                 leased_message_keys: vec![leased_message_key],
                 leased_ticket_event_keys: Vec::new(),
-                thread_key: Some(message.thread_key.clone()),
+                thread_key: Some(execution_thread_key_for_inbound_message(&settings, &message)),
                 workspace_root: message.workspace_root.clone(),
                 ticket_self_work_id: ticket_self_work_id_from_metadata(&message.metadata),
             },
@@ -4039,6 +4039,29 @@ fn inbound_source_label(
         };
     }
     message.channel.clone()
+}
+
+fn isolated_founder_email_thread_key(raw_thread_key: &str, role: &str) -> String {
+    use sha2::Digest;
+    let digest = sha2::Sha256::digest(raw_thread_key.trim().as_bytes());
+    let suffix = digest[..8]
+        .iter()
+        .map(|byte| format!("{:02x}", byte))
+        .collect::<String>();
+    format!("email-review:{}:{}", role.trim().to_ascii_lowercase(), suffix)
+}
+
+fn execution_thread_key_for_inbound_message(
+    settings: &BTreeMap<String, String>,
+    message: &channels::RoutedInboundMessage,
+) -> String {
+    if message.channel == "email" {
+        let policy = channels::classify_email_sender(settings, &message.sender_address);
+        if matches!(policy.role.as_str(), "owner" | "founder" | "admin") {
+            return isolated_founder_email_thread_key(&message.thread_key, &policy.role);
+        }
+    }
+    message.thread_key.clone()
 }
 
 fn metadata_string(metadata: &Value, key: &str) -> Option<String> {
@@ -7724,6 +7747,59 @@ mod tests {
         };
 
         assert_eq!(inbound_source_label(&settings, &message), "email:founder");
+    }
+
+    #[test]
+    fn founder_email_inbound_uses_isolated_execution_thread_key() {
+        let mut settings = BTreeMap::new();
+        settings.insert(
+            "CTOX_FOUNDER_EMAIL_ADDRESSES".to_string(),
+            "cofounder@startup.test".to_string(),
+        );
+        let message = channels::RoutedInboundMessage {
+            message_key: "m-founder".to_string(),
+            channel: "email".to_string(),
+            account_key: "email:cto1@example.com".to_string(),
+            thread_key: "<founder-thread@example.com>".to_string(),
+            sender_display: "Founder".to_string(),
+            sender_address: "cofounder@startup.test".to_string(),
+            subject: "prio".to_string(),
+            preview: "prio".to_string(),
+            body_text: "prio".to_string(),
+            external_created_at: "2026-03-26T00:00:00Z".to_string(),
+            workspace_root: None,
+            metadata: serde_json::json!({}),
+            preferred_reply_modality: None,
+        };
+
+        let derived = execution_thread_key_for_inbound_message(&settings, &message);
+        assert!(derived.starts_with("email-review:founder:"));
+        assert_ne!(derived, message.thread_key);
+    }
+
+    #[test]
+    fn ordinary_email_inbound_keeps_original_execution_thread_key() {
+        let settings = BTreeMap::new();
+        let message = channels::RoutedInboundMessage {
+            message_key: "m-email".to_string(),
+            channel: "email".to_string(),
+            account_key: "email:cto1@example.com".to_string(),
+            thread_key: "<plain-thread@example.com>".to_string(),
+            sender_display: "External".to_string(),
+            sender_address: "person@example.com".to_string(),
+            subject: "hello".to_string(),
+            preview: "hello".to_string(),
+            body_text: "hello".to_string(),
+            external_created_at: "2026-03-26T00:00:00Z".to_string(),
+            workspace_root: None,
+            metadata: serde_json::json!({}),
+            preferred_reply_modality: None,
+        };
+
+        assert_eq!(
+            execution_thread_key_for_inbound_message(&settings, &message),
+            message.thread_key
+        );
     }
 
     #[test]
