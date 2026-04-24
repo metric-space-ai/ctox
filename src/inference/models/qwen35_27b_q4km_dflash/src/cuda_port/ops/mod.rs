@@ -18,6 +18,7 @@ pub mod norm;
 pub mod pad;
 pub mod rope;
 pub mod scale;
+pub mod softmax;
 pub mod solve_tri;
 pub mod tri;
 pub mod unary;

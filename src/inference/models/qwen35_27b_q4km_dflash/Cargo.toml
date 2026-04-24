@@ -114,6 +114,12 @@ name = "qwen35-27b-q4km-dflash-rope-verify"
 path = "src/bin/rope_verify.rs"
 required-features = ["cuda"]
 
+[[bin]]
+# Verifier for the `cuda_port::ops::softmax` port (f32 fallback).
+name = "qwen35-27b-q4km-dflash-softmax-verify"
+path = "src/bin/softmax_verify.rs"
+required-features = ["cuda"]
+
 [features]
 default = []
 # CUDA is the only real build mode — the target model is 27B in Q4_K_M,

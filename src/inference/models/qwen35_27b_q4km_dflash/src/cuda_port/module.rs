@@ -25,13 +25,14 @@ use super::ops::concat::{mangled_concat_dim, mangled_concat_non_cont, ConcatKern
 use super::ops::cpy::{mangled_cpy_scalar, CpyDtype, CpyKernels};
 use super::ops::cumsum::{mangled_cumsum_kernel_f32, CumsumKernels};
 use super::ops::rope::{mangled_rope_multi_f32, mangled_rope_norm_f32, RopeKernels};
+use super::ops::softmax::{mangled_soft_max_f32_fallback, SoftMaxKernels};
 use super::ops::solve_tri::{mangled_solve_tri_f32_general, SolveTriKernels};
 use super::ops::pad::{mangled_pad_f32, PadKernels};
 use super::ops::tri::{mangled_tri_kernel_f32, TriKernels};
 use super::ops::unary::{mangled_unary_op_f32, UnaryKernels};
 use super::ptx::{
     get_function, load_module, BINBCAST_PTX, CONCAT_PTX, CPY_PTX, CUMSUM_PTX, DIAG_PTX, FILL_PTX,
-    NORM_PTX, PAD_PTX, ROPE_PTX, SCALE_PTX, SOLVE_TRI_PTX, TRI_PTX, UNARY_PTX,
+    NORM_PTX, PAD_PTX, ROPE_PTX, SCALE_PTX, SOFTMAX_PTX, SOLVE_TRI_PTX, TRI_PTX, UNARY_PTX,
 };
 
 /// All kernel handles the Rust side needs, resolved once.
@@ -63,6 +64,8 @@ pub struct PortedKernels {
     solve_tri_module: CUmodule,
     #[allow(dead_code)]
     rope_module: CUmodule,
+    #[allow(dead_code)]
+    softmax_module: CUmodule,
     pub rms_norm: RmsNormKernels,
     pub unary: UnaryKernels,
     pub scale: ScaleKernel,
@@ -76,6 +79,7 @@ pub struct PortedKernels {
     pub cpy: CpyKernels,
     pub solve_tri: SolveTriKernels,
     pub rope: RopeKernels,
+    pub softmax: SoftMaxKernels,
 }
 
 // SAFETY: `CUmodule` / `CUfunction` are opaque device-side handles.
@@ -301,6 +305,24 @@ fn init_ported_kernels() -> Result<PortedKernels, String> {
     )
     .map_err(|e| format!("rope_multi ff: {e}"))?;
 
+    // softmax.cu — soft_max_f32<true, 0, 0, T> fallback for T ∈ {f32, f16}
+    let softmax_module =
+        load_module(SOFTMAX_PTX).map_err(|e| format!("softmax.ptx: {e}"))?;
+    let softmax = SoftMaxKernels {
+        f32_mask_f32: get_function(
+            softmax_module,
+            mangled_soft_max_f32_fallback(false)
+                .map_err(|e| format!("soft_max<f32-mask> lookup: {e}"))?,
+        )
+        .map_err(|e| format!("soft_max<f32-mask>: {e}"))?,
+        f32_mask_f16: get_function(
+            softmax_module,
+            mangled_soft_max_f32_fallback(true)
+                .map_err(|e| format!("soft_max<f16-mask> lookup: {e}"))?,
+        )
+        .map_err(|e| format!("soft_max<f16-mask>: {e}"))?,
+    };
+
     Ok(PortedKernels {
         norm_module,
         unary_module,
@@ -315,6 +337,7 @@ fn init_ported_kernels() -> Result<PortedKernels, String> {
         cpy_module,
         solve_tri_module,
         rope_module,
+        softmax_module,
         rms_norm: RmsNormKernels { b256, b1024 },
         unary: uk,
         scale,
@@ -328,5 +351,6 @@ fn init_ported_kernels() -> Result<PortedKernels, String> {
         cpy: cp,
         solve_tri,
         rope,
+        softmax,
     })
 }
