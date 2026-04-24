@@ -9,10 +9,14 @@ pub mod binbcast;
 pub mod concat;
 pub mod cpy;
 pub mod cumsum;
+
+/// Re-export for op modules that need host-side fastdiv cookies.
+pub use binbcast::init_fastdiv_values as binbcast_fastdiv;
 pub mod diag;
 pub mod fill;
 pub mod norm;
 pub mod pad;
 pub mod scale;
+pub mod solve_tri;
 pub mod tri;
 pub mod unary;

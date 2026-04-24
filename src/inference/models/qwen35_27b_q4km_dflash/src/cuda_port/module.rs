@@ -24,12 +24,13 @@ use super::ops::scale::{mangled_scale_f32, ScaleKernel};
 use super::ops::concat::{mangled_concat_dim, mangled_concat_non_cont, ConcatKernels};
 use super::ops::cpy::{mangled_cpy_scalar, CpyDtype, CpyKernels};
 use super::ops::cumsum::{mangled_cumsum_kernel_f32, CumsumKernels};
+use super::ops::solve_tri::{mangled_solve_tri_f32_general, SolveTriKernels};
 use super::ops::pad::{mangled_pad_f32, PadKernels};
 use super::ops::tri::{mangled_tri_kernel_f32, TriKernels};
 use super::ops::unary::{mangled_unary_op_f32, UnaryKernels};
 use super::ptx::{
     get_function, load_module, BINBCAST_PTX, CONCAT_PTX, CPY_PTX, CUMSUM_PTX, DIAG_PTX, FILL_PTX,
-    NORM_PTX, PAD_PTX, SCALE_PTX, TRI_PTX, UNARY_PTX,
+    NORM_PTX, PAD_PTX, SCALE_PTX, SOLVE_TRI_PTX, TRI_PTX, UNARY_PTX,
 };
 
 /// All kernel handles the Rust side needs, resolved once.
@@ -57,6 +58,8 @@ pub struct PortedKernels {
     concat_module: CUmodule,
     #[allow(dead_code)]
     cpy_module: CUmodule,
+    #[allow(dead_code)]
+    solve_tri_module: CUmodule,
     pub rms_norm: RmsNormKernels,
     pub unary: UnaryKernels,
     pub scale: ScaleKernel,
@@ -68,6 +71,7 @@ pub struct PortedKernels {
     pub cumsum: CumsumKernels,
     pub concat: ConcatKernels,
     pub cpy: CpyKernels,
+    pub solve_tri: SolveTriKernels,
 }
 
 // SAFETY: `CUmodule` / `CUfunction` are opaque device-side handles.
@@ -253,6 +257,19 @@ fn init_ported_kernels() -> Result<PortedKernels, String> {
         unsafe { *slot = f };
     }
 
+    // solve_tri.cu — `solve_tri_f32_fast<0, 0>` general-case only.
+    let solve_tri_module =
+        load_module(SOLVE_TRI_PTX).map_err(|e| format!("solve_tri.ptx: {e}"))?;
+    let solve_tri_fn = get_function(
+        solve_tri_module,
+        mangled_solve_tri_f32_general()
+            .map_err(|e| format!("solve_tri<0,0> lookup: {e}"))?,
+    )
+    .map_err(|e| format!("solve_tri<0,0>: {e}"))?;
+    let solve_tri = SolveTriKernels {
+        fast_f32_general: solve_tri_fn,
+    };
+
     Ok(PortedKernels {
         norm_module,
         unary_module,
@@ -265,6 +282,7 @@ fn init_ported_kernels() -> Result<PortedKernels, String> {
         cumsum_module,
         concat_module,
         cpy_module,
+        solve_tri_module,
         rms_norm: RmsNormKernels { b256, b1024 },
         unary: uk,
         scale,
@@ -276,5 +294,6 @@ fn init_ported_kernels() -> Result<PortedKernels, String> {
         cumsum,
         concat: ck,
         cpy: cp,
+        solve_tri,
     })
 }

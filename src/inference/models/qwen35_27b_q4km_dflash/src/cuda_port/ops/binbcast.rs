@@ -110,9 +110,12 @@ pub fn mangled_k_bin_bcast_fff(op: BinOp) -> Result<&'static [u8], String> {
 /// Returns a `(mp, L, d)` uint3 cookie the device-side `fastdiv` /
 /// `fastmodulo` intrinsic expects.
 ///
+/// Exposed for any op that needs the same host-side cookie packing
+/// (solve_tri, etc.) — re-exported as `super::binbcast_fastdiv`.
+///
 /// ref: vendor/ggml-cuda/common.cuh:865-880
 #[inline]
-fn init_fastdiv_values(d_64: u64) -> [u32; 3] {
+pub fn init_fastdiv_values(d_64: u64) -> [u32; 3] {
     assert!(d_64 != 0, "fastdiv divisor must be non-zero");
     assert!(d_64 <= u32::MAX as u64, "fastdiv divisor out of range");
     let d = d_64 as u32;

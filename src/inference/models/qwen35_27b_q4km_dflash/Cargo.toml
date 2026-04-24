@@ -101,6 +101,13 @@ name = "qwen35-27b-q4km-dflash-cpy-verify"
 path = "src/bin/cpy_verify.rs"
 required-features = ["cuda"]
 
+[[bin]]
+# Verifier for the `cuda_port::ops::solve_tri` port
+# (fast kernel, <0,0> general case).
+name = "qwen35-27b-q4km-dflash-solve-tri-verify"
+path = "src/bin/solve_tri_verify.rs"
+required-features = ["cuda"]
+
 [features]
 default = []
 # CUDA is the only real build mode — the target model is 27B in Q4_K_M,
