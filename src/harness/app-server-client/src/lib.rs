@@ -180,6 +180,10 @@ pub struct InProcessClientStartArgs {
     pub loader_overrides: LoaderOverrides,
     /// Preloaded cloud requirements provider.
     pub cloud_requirements: CloudRequirementsLoader,
+    /// Optional prebuilt auth manager reused by an embedding caller.
+    pub auth_manager: Option<Arc<AuthManager>>,
+    /// Optional prebuilt thread manager reused by an embedding caller.
+    pub thread_manager: Option<Arc<ThreadManager>>,
     /// Feedback sink used by app-server/core telemetry and logs.
     pub feedback: CodexFeedback,
     /// Startup warnings emitted after initialize succeeds.
@@ -202,22 +206,26 @@ pub struct InProcessClientStartArgs {
 
 impl InProcessClientStartArgs {
     fn shared_core_managers(&self) -> SharedCoreManagers {
-        let auth_manager = AuthManager::shared(
-            self.config.codex_home.clone(),
-            self.enable_ctox_api_key_env,
-            self.config.cli_auth_credentials_store_mode,
-        );
-        let thread_manager = Arc::new(ThreadManager::new(
-            self.config.as_ref(),
-            auth_manager.clone(),
-            self.session_source.clone(),
-            CollaborationModesConfig {
-                default_mode_request_user_input: self
-                    .config
-                    .features
-                    .enabled(ctox_core::features::Feature::DefaultModeRequestUserInput),
-            },
-        ));
+        let auth_manager = self.auth_manager.clone().unwrap_or_else(|| {
+            AuthManager::shared(
+                self.config.codex_home.clone(),
+                self.enable_ctox_api_key_env,
+                self.config.cli_auth_credentials_store_mode,
+            )
+        });
+        let thread_manager = self.thread_manager.clone().unwrap_or_else(|| {
+            Arc::new(ThreadManager::new(
+                self.config.as_ref(),
+                auth_manager.clone(),
+                self.session_source.clone(),
+                CollaborationModesConfig {
+                    default_mode_request_user_input: self
+                        .config
+                        .features
+                        .enabled(ctox_core::features::Feature::DefaultModeRequestUserInput),
+                },
+            ))
+        });
 
         SharedCoreManagers {
             auth_manager,
@@ -886,6 +894,8 @@ mod tests {
             cli_overrides: Vec::new(),
             loader_overrides: LoaderOverrides::default(),
             cloud_requirements: CloudRequirementsLoader::default(),
+            auth_manager: None,
+            thread_manager: None,
             feedback: CodexFeedback::new(),
             config_warnings: Vec::new(),
             session_source,

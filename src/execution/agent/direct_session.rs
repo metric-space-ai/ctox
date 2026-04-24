@@ -26,7 +26,9 @@ use ctox_cloud_requirements::cloud_requirements_loader;
 use ctox_core::config::{
     find_codex_home, load_config_as_toml_with_cli_overrides, ConfigBuilder, ConfigOverrides,
 };
+use ctox_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use ctox_core::AuthManager;
+use ctox_core::ThreadManager;
 use ctox_feedback::CodexFeedback;
 use ctox_protocol::config_types::SandboxMode;
 use ctox_protocol::protocol::{AskForApproval, EventMsg, SandboxPolicy, SessionSource};
@@ -236,7 +238,7 @@ impl PersistentSession {
             )
         };
         let cloud_requirements = cloud_requirements_loader(
-            auth_manager,
+            auth_manager.clone(),
             config_toml
                 .chatgpt_base_url
                 .clone()
@@ -304,20 +306,30 @@ impl PersistentSession {
                 provider.provider_id, provider.base_url, provider.wire_api
             );
         }
-        let config = ConfigBuilder::default()
+        let config = Arc::new(
+            ConfigBuilder::default()
             .cli_overrides(cli_overrides)
             .harness_overrides(overrides)
             .cloud_requirements(cloud_requirements.clone())
             .build()
             .await
-            .map_err(|err| anyhow::anyhow!("config build: {err}"))?;
+            .map_err(|err| anyhow::anyhow!("config build: {err}"))?,
+        );
+        let thread_manager = Arc::new(ThreadManager::new(
+            config.as_ref(),
+            auth_manager.clone(),
+            SessionSource::Exec,
+            CollaborationModesConfig::default(),
+        ));
 
         let start_args = InProcessClientStartArgs {
             arg0_paths: Arg0DispatchPaths::default(),
-            config: Arc::new(config),
+            config,
             cli_overrides: vec![],
             loader_overrides: Default::default(),
             cloud_requirements,
+            auth_manager: Some(auth_manager),
+            thread_manager: Some(thread_manager),
             feedback: CodexFeedback::new(),
             config_warnings: vec![],
             session_source: SessionSource::Exec,
