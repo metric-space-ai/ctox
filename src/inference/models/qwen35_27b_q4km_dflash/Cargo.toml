@@ -39,6 +39,13 @@ name = "qwen35-27b-q4km-dflash-rms-norm-verify"
 path = "src/bin/rms_norm_verify.rs"
 required-features = ["cuda"]
 
+[[bin]]
+# Verifier for the `cuda_port::ops::unary` port — exercises silu,
+# neg, exp on f32 and byte-compares against CPU reference impls.
+name = "qwen35-27b-q4km-dflash-unary-verify"
+path = "src/bin/unary_verify.rs"
+required-features = ["cuda"]
+
 [features]
 default = []
 # CUDA is the only real build mode — the target model is 27B in Q4_K_M,
