@@ -92,9 +92,11 @@ pub fn mangled_tri_kernel_f32(prefix_keep: bool, add_to_split: i32) -> Result<&'
     };
     crate::cuda_port::ptx::find_entry(
         crate::cuda_port::ptx::tri_entries::ENTRIES,
-        // `tri_kernel` + `IfE` (T=float) can collide across variants
-        // only by the two non-type args — both included below.
-        &[b"tri_kernel", b"Ifb", bn, add],
+        // `tri_kernel` prefix + `IfLb` (template args start with
+        // T=float, then Lb for the bool) pins us to the f32
+        // instantiation; the two non-type-arg needles disambiguate
+        // the four variants.
+        &[b"tri_kernel", b"IfLb", bn, add],
     )
 }
 
