@@ -553,7 +553,7 @@ pub fn handle_channel_command(root: &Path, args: &[String]) -> Result<()> {
         }
         _ => {
             anyhow::bail!(
-                "usage:\n  ctox channel init [--db <path>]\n  ctox channel sync --channel <email|jami> [--db <path>] [adapter flags]\n  ctox channel take [--db <path>] [--channel <name>] [--limit <n>] [--lease-owner <owner>]\n  ctox channel ack [--db <path>] [--status <status>] <message-key>...\n  ctox channel send --channel <tui|email|jami> --account-key <key> --thread-key <key> --body <text> [--subject <text>] [--to <addr>]... [--send-voice]\n  ctox channel test --channel <tui|email|jami> [--db <path>] [--account-key <key>]\n  ctox channel ingest-tui --account-key <key> --thread-key <key> --body <text> [--sender-display <name>] [--sender-address <addr>] [--subject <text>]\n  ctox channel list [--db <path>] [--channel <name>] [--limit <n>]\n  ctox channel history --thread-key <key> [--db <path>] [--limit <n>]\n  ctox channel search --query <text> [--db <path>] [--channel <name>] [--sender <addr>] [--limit <n>]\n  ctox channel context --thread-key <key> [--db <path>] [--query <text>] [--sender <addr>] [--limit <n>]"
+                "usage:\n  ctox channel init [--db <path>]\n  ctox channel sync --channel <email|jami> [--db <path>] [adapter flags]\n  ctox channel take [--db <path>] [--channel <name>] [--limit <n>] [--lease-owner <owner>]\n  ctox channel ack [--db <path>] [--status <status>] <message-key>...\n  ctox channel send --channel <tui|email|jami> --account-key <key> --thread-key <key> --body <text> [--subject <text>] [--to <addr>]... [--send-voice] [--reviewed-founder-send]\n  ctox channel test --channel <tui|email|jami> [--db <path>] [--account-key <key>]\n  ctox channel ingest-tui --account-key <key> --thread-key <key> --body <text> [--sender-display <name>] [--sender-address <addr>] [--subject <text>]\n  ctox channel list [--db <path>] [--channel <name>] [--limit <n>]\n  ctox channel history --thread-key <key> [--db <path>] [--limit <n>]\n  ctox channel search --query <text> [--db <path>] [--channel <name>] [--sender <addr>] [--limit <n>]\n  ctox channel context --thread-key <key> [--db <path>] [--query <text>] [--sender <addr>] [--limit <n>]"
             )
         }
     }
@@ -1221,6 +1221,7 @@ struct ChannelSendRequest {
     sender_display: Option<String>,
     sender_address: Option<String>,
     send_voice: bool,
+    reviewed_founder_send: bool,
 }
 
 fn sync_channel(root: &Path, db_path: &Path, channel: &str, args: &[String]) -> Result<Value> {
@@ -1313,6 +1314,11 @@ fn send_message(root: &Path, db_path: &Path, request: ChannelSendRequest) -> Res
             }))
         }
         "email" => {
+            let settings = communication_gateway::runtime_settings_from_root(
+                root,
+                communication_gateway::CommunicationAdapterKind::Email,
+            );
+            validate_founder_outbound_email(&settings, &request)?;
             let adapter = communication_adapters::email();
             let sender_email = request
                 .sender_address
@@ -1642,7 +1648,68 @@ fn parse_send_request(args: &[String]) -> Result<ChannelSendRequest> {
         sender_display: find_flag_value(args, "--sender-display").map(ToOwned::to_owned),
         sender_address: find_flag_value(args, "--sender-address").map(ToOwned::to_owned),
         send_voice: has_flag(args, "--send-voice"),
+        reviewed_founder_send: has_flag(args, "--reviewed-founder-send"),
     })
+}
+
+fn validate_founder_outbound_email(
+    settings: &BTreeMap<String, String>,
+    request: &ChannelSendRequest,
+) -> Result<()> {
+    if request.channel != "email" {
+        return Ok(());
+    }
+    let protected_recipients = request
+        .to
+        .iter()
+        .chain(request.cc.iter())
+        .map(|email| classify_email_sender(settings, email))
+        .filter(|policy| matches!(policy.role.as_str(), "owner" | "founder" | "admin"))
+        .collect::<Vec<_>>();
+    if protected_recipients.is_empty() {
+        return Ok(());
+    }
+    if !request.reviewed_founder_send {
+        let recipient_summary = protected_recipients
+            .iter()
+            .map(|policy| format!("{} ({})", policy.normalized_email, policy.role))
+            .collect::<Vec<_>>()
+            .join(", ");
+        anyhow::bail!(
+            "direct outbound email to founder/owner/admin recipients is blocked without review: {}. Use a reviewed founder-send path.",
+            recipient_summary
+        );
+    }
+    let lowered = request.body.to_ascii_lowercase();
+    let forbidden_markers = [
+        "/home/",
+        "queue:",
+        "runtime/ctox.sqlite3",
+        "strategic direction setup",
+        "review rework",
+        "review-rework",
+        "self-work",
+        "thread_key",
+        "conversation_id",
+        "lease_owner",
+        "route_status",
+        "sqlite",
+        "host-pfad",
+        "host-pfade",
+        "vps-pfad",
+    ];
+    let hits = forbidden_markers
+        .iter()
+        .filter(|marker| lowered.contains(**marker))
+        .copied()
+        .collect::<Vec<_>>();
+    if !hits.is_empty() {
+        anyhow::bail!(
+            "founder/owner outbound email failed communication review due to internal-language leakage: {}",
+            hits.join(", ")
+        );
+    }
+    Ok(())
 }
 
 fn resolve_outbound_subject(
@@ -3994,6 +4061,7 @@ mod tests {
                 sender_display: None,
                 sender_address: None,
                 send_voice: false,
+                reviewed_founder_send: false,
             },
         )
         .expect("failed to resolve subject");
@@ -4019,6 +4087,7 @@ mod tests {
                 sender_display: None,
                 sender_address: None,
                 send_voice: false,
+                reviewed_founder_send: false,
             },
         )
         .expect_err("missing email subject should fail");
@@ -4030,6 +4099,74 @@ mod tests {
         );
 
         let _ = fs::remove_file(&db_path);
+    }
+
+    #[test]
+    fn founder_outbound_email_requires_review_override() {
+        let mut settings = BTreeMap::new();
+        settings.insert(
+            "CTOX_OWNER_EMAIL_ADDRESS".to_string(),
+            "michael.welsch@metric-space.ai".to_string(),
+        );
+
+        let error = validate_founder_outbound_email(
+            &settings,
+            &ChannelSendRequest {
+                channel: "email".to_string(),
+                account_key: "email:cto1@metric-space.ai".to_string(),
+                thread_key: "mail-thread".to_string(),
+                body: "Short founder update.".to_string(),
+                subject: "Re: Test".to_string(),
+                to: vec!["michael.welsch@metric-space.ai".to_string()],
+                cc: Vec::new(),
+                sender_display: None,
+                sender_address: None,
+                send_voice: false,
+                reviewed_founder_send: false,
+            },
+        )
+        .expect_err("founder outbound should require review override");
+
+        assert!(
+            error
+                .to_string()
+                .contains("blocked without review"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn founder_outbound_email_rejects_internal_language_even_with_override() {
+        let mut settings = BTreeMap::new();
+        settings.insert(
+            "CTOX_FOUNDER_EMAIL_ADDRESSES".to_string(),
+            "founder@example.com".to_string(),
+        );
+
+        let error = validate_founder_outbound_email(
+            &settings,
+            &ChannelSendRequest {
+                channel: "email".to_string(),
+                account_key: "email:cto1@metric-space.ai".to_string(),
+                thread_key: "mail-thread".to_string(),
+                body: "Die Dateien liegen unter /home/ubuntu/workspace/kunstmen/public/mockups/.".to_string(),
+                subject: "Re: Test".to_string(),
+                to: vec!["founder@example.com".to_string()],
+                cc: Vec::new(),
+                sender_display: None,
+                sender_address: None,
+                send_voice: false,
+                reviewed_founder_send: true,
+            },
+        )
+        .expect_err("internal leakage should be blocked");
+
+        assert!(
+            error
+                .to_string()
+                .contains("internal-language leakage"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
