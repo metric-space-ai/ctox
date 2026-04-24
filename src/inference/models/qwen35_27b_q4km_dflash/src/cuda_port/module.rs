@@ -22,13 +22,14 @@ use super::ops::norm::{
 };
 use super::ops::scale::{mangled_scale_f32, ScaleKernel};
 use super::ops::concat::{mangled_concat_dim, mangled_concat_non_cont, ConcatKernels};
+use super::ops::cpy::{mangled_cpy_scalar, CpyDtype, CpyKernels};
 use super::ops::cumsum::{mangled_cumsum_kernel_f32, CumsumKernels};
 use super::ops::pad::{mangled_pad_f32, PadKernels};
 use super::ops::tri::{mangled_tri_kernel_f32, TriKernels};
 use super::ops::unary::{mangled_unary_op_f32, UnaryKernels};
 use super::ptx::{
-    get_function, load_module, BINBCAST_PTX, CONCAT_PTX, CUMSUM_PTX, DIAG_PTX, FILL_PTX, NORM_PTX,
-    PAD_PTX, SCALE_PTX, TRI_PTX, UNARY_PTX,
+    get_function, load_module, BINBCAST_PTX, CONCAT_PTX, CPY_PTX, CUMSUM_PTX, DIAG_PTX, FILL_PTX,
+    NORM_PTX, PAD_PTX, SCALE_PTX, TRI_PTX, UNARY_PTX,
 };
 
 /// All kernel handles the Rust side needs, resolved once.
@@ -54,6 +55,8 @@ pub struct PortedKernels {
     cumsum_module: CUmodule,
     #[allow(dead_code)]
     concat_module: CUmodule,
+    #[allow(dead_code)]
+    cpy_module: CUmodule,
     pub rms_norm: RmsNormKernels,
     pub unary: UnaryKernels,
     pub scale: ScaleKernel,
@@ -64,6 +67,7 @@ pub struct PortedKernels {
     pub pad: PadKernels,
     pub cumsum: CumsumKernels,
     pub concat: ConcatKernels,
+    pub cpy: CpyKernels,
 }
 
 // SAFETY: `CUmodule` / `CUfunction` are opaque device-side handles.
@@ -234,6 +238,21 @@ fn init_ported_kernels() -> Result<PortedKernels, String> {
         ck.non_cont[d as usize] = f;
     }
 
+    // cpy.cu — 3 dtype-pair kernels (f32→f32, f32→f16, f16→f16)
+    let cpy_module = load_module(CPY_PTX).map_err(|e| format!("cpy.ptx: {e}"))?;
+    let mut cp = CpyKernels::default();
+    for (slot, dtype) in [
+        (&mut cp.f32_f32 as *mut _, CpyDtype::F32ToF32),
+        (&mut cp.f32_f16 as *mut _, CpyDtype::F32ToF16),
+        (&mut cp.f16_f16 as *mut _, CpyDtype::F16ToF16),
+    ] {
+        let name = mangled_cpy_scalar(dtype)
+            .map_err(|e| format!("cpy {dtype:?} lookup: {e}"))?;
+        let f = get_function(cpy_module, name)
+            .map_err(|e| format!("cpy {dtype:?}: {e}"))?;
+        unsafe { *slot = f };
+    }
+
     Ok(PortedKernels {
         norm_module,
         unary_module,
@@ -245,6 +264,7 @@ fn init_ported_kernels() -> Result<PortedKernels, String> {
         pad_module,
         cumsum_module,
         concat_module,
+        cpy_module,
         rms_norm: RmsNormKernels { b256, b1024 },
         unary: uk,
         scale,
@@ -255,5 +275,6 @@ fn init_ported_kernels() -> Result<PortedKernels, String> {
         pad,
         cumsum,
         concat: ck,
+        cpy: cp,
     })
 }

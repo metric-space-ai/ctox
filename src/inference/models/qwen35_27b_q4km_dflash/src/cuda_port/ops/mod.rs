@@ -7,6 +7,7 @@
 
 pub mod binbcast;
 pub mod concat;
+pub mod cpy;
 pub mod cumsum;
 pub mod diag;
 pub mod fill;

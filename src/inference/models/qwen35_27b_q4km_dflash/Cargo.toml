@@ -94,6 +94,13 @@ name = "qwen35-27b-q4km-dflash-concat-verify"
 path = "src/bin/concat_verify.rs"
 required-features = ["cuda"]
 
+[[bin]]
+# Verifier for the `cuda_port::ops::cpy` port
+# (f32→f32, f32→f16, f16→f16 via the generic cpy_scalar path).
+name = "qwen35-27b-q4km-dflash-cpy-verify"
+path = "src/bin/cpy_verify.rs"
+required-features = ["cuda"]
+
 [features]
 default = []
 # CUDA is the only real build mode — the target model is 27B in Q4_K_M,
