@@ -86,29 +86,19 @@ fn main() -> Result<()> {
     gctx.realize().map_err(|e| anyhow!(e))?;
     println!("[hybrid] tensors realized on backend");
 
-    eprintln!("[hybrid] about to upload x");
     gctx.upload_f32(t_x, &h_x).map_err(|e| anyhow!(e))?;
-    eprintln!("[hybrid] about to upload w");
     gctx.upload_f32(t_w, &h_w).map_err(|e| anyhow!(e))?;
-    eprintln!("[hybrid] about to upload bias");
     gctx.upload_f32(t_bias, &h_bias).map_err(|e| anyhow!(e))?;
-    eprintln!("[hybrid] uploads done");
 
     let stream = CUstream(std::ptr::null_mut());
     let exec = ExecCtx::new(kernels, stream);
 
     // Step 1 — RMSNorm (Rust-native)
-    eprintln!("[hybrid] building rust tensors");
     let rt_x = gctx.as_rust_tensor(t_x);
     let rt_x1 = gctx.as_rust_tensor(t_x1);
-    eprintln!("[hybrid] rt_x.data=0x{:x} rt_x1.data=0x{:x}", rt_x.data.0, rt_x1.data.0);
-    eprintln!("[hybrid] launching rms_norm");
     rms_norm(&exec, &rt_x, &rt_x1, 1e-6).map_err(|e| anyhow!(e))?;
-    eprintln!("[hybrid] rms_norm queued, syncing");
-
     // Sync so ggml sees rms_norm's writes before mul_mat reads them.
     unsafe { dflash::cuda_port::driver::cuStreamSynchronize(stream) };
-    eprintln!("[hybrid] rms_norm done");
 
     // Step 2 — mul_mat (ggml-cuda fallback). ggml allocates the
     // output tensor from the context's metadata arena (buffer is

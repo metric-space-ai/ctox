@@ -5,6 +5,12 @@ nach Rust, pro CLAUDE.md Inference-Engine Architecture Rules.
 
 ## Was verifiziert läuft (A6000)
 
+**Executor-Status:**
+- `graph_smoke`: 5-op pure-Rust chain (RMSNorm → SiLU → Scale → Add → Mul),
+  131K Elemente, drift **1.9e-6** vs CPU-f64.
+- `hybrid_smoke`: 3-op Rust+ggml chain (Rust RMSNorm → ggml mul_mat →
+  Rust Add) vs pure-ggml reference, drift **0 (bit-exact)**.
+
 17 `.cu`-Files, 37+ Kernel-Varianten — jede einzeln bit-close /
 bit-exakt verifiziert durch `src/bin/<op>_verify.rs`:
 
