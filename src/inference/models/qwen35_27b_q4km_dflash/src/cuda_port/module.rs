@@ -21,13 +21,14 @@ use super::ops::norm::{
     mangled_rms_norm_f32_b1024, mangled_rms_norm_f32_b256, RmsNormKernels,
 };
 use super::ops::scale::{mangled_scale_f32, ScaleKernel};
+use super::ops::concat::{mangled_concat_dim, mangled_concat_non_cont, ConcatKernels};
 use super::ops::cumsum::{mangled_cumsum_kernel_f32, CumsumKernels};
 use super::ops::pad::{mangled_pad_f32, PadKernels};
 use super::ops::tri::{mangled_tri_kernel_f32, TriKernels};
 use super::ops::unary::{mangled_unary_op_f32, UnaryKernels};
 use super::ptx::{
-    get_function, load_module, BINBCAST_PTX, CUMSUM_PTX, DIAG_PTX, FILL_PTX, NORM_PTX, PAD_PTX,
-    SCALE_PTX, TRI_PTX, UNARY_PTX,
+    get_function, load_module, BINBCAST_PTX, CONCAT_PTX, CUMSUM_PTX, DIAG_PTX, FILL_PTX, NORM_PTX,
+    PAD_PTX, SCALE_PTX, TRI_PTX, UNARY_PTX,
 };
 
 /// All kernel handles the Rust side needs, resolved once.
@@ -51,6 +52,8 @@ pub struct PortedKernels {
     pad_module: CUmodule,
     #[allow(dead_code)]
     cumsum_module: CUmodule,
+    #[allow(dead_code)]
+    concat_module: CUmodule,
     pub rms_norm: RmsNormKernels,
     pub unary: UnaryKernels,
     pub scale: ScaleKernel,
@@ -60,6 +63,7 @@ pub struct PortedKernels {
     pub tri: TriKernels,
     pub pad: PadKernels,
     pub cumsum: CumsumKernels,
+    pub concat: ConcatKernels,
 }
 
 // SAFETY: `CUmodule` / `CUfunction` are opaque device-side handles.
@@ -207,6 +211,29 @@ fn init_ported_kernels() -> Result<PortedKernels, String> {
     .map_err(|e| format!("cumsum<float>: {e}"))?;
     let cumsum = CumsumKernels { cumsum_f32: cumsum_fn };
 
+    // concat.cu — 3 contiguous dim kernels + 4 non-cont template instantiations
+    let concat_module =
+        load_module(CONCAT_PTX).map_err(|e| format!("concat.ptx: {e}"))?;
+    let mut ck = ConcatKernels::default();
+    for (slot, dim) in [
+        (&mut ck.dim0 as *mut _, 0i32),
+        (&mut ck.dim1 as *mut _, 1i32),
+        (&mut ck.dim2 as *mut _, 2i32),
+    ] {
+        let name = mangled_concat_dim(dim)
+            .map_err(|e| format!("concat_dim{dim} lookup: {e}"))?;
+        let f = get_function(concat_module, name)
+            .map_err(|e| format!("concat_dim{dim}: {e}"))?;
+        unsafe { *slot = f };
+    }
+    for d in 0..4i32 {
+        let name = mangled_concat_non_cont(d)
+            .map_err(|e| format!("concat_non_cont<{d}> lookup: {e}"))?;
+        let f = get_function(concat_module, name)
+            .map_err(|e| format!("concat_non_cont<{d}>: {e}"))?;
+        ck.non_cont[d as usize] = f;
+    }
+
     Ok(PortedKernels {
         norm_module,
         unary_module,
@@ -217,6 +244,7 @@ fn init_ported_kernels() -> Result<PortedKernels, String> {
         tri_module,
         pad_module,
         cumsum_module,
+        concat_module,
         rms_norm: RmsNormKernels { b256, b1024 },
         unary: uk,
         scale,
@@ -226,5 +254,6 @@ fn init_ported_kernels() -> Result<PortedKernels, String> {
         tri: tk,
         pad,
         cumsum,
+        concat: ck,
     })
 }
