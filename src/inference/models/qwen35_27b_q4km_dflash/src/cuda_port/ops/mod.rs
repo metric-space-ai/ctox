@@ -16,6 +16,7 @@ pub mod diag;
 pub mod fill;
 pub mod norm;
 pub mod pad;
+pub mod rope;
 pub mod scale;
 pub mod solve_tri;
 pub mod tri;

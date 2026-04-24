@@ -108,6 +108,12 @@ name = "qwen35-27b-q4km-dflash-solve-tri-verify"
 path = "src/bin/solve_tri_verify.rs"
 required-features = ["cuda"]
 
+[[bin]]
+# Verifier for the `cuda_port::ops::rope` port (rope_norm f32 no_ff).
+name = "qwen35-27b-q4km-dflash-rope-verify"
+path = "src/bin/rope_verify.rs"
+required-features = ["cuda"]
+
 [features]
 default = []
 # CUDA is the only real build mode — the target model is 27B in Q4_K_M,

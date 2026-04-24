@@ -24,13 +24,14 @@ use super::ops::scale::{mangled_scale_f32, ScaleKernel};
 use super::ops::concat::{mangled_concat_dim, mangled_concat_non_cont, ConcatKernels};
 use super::ops::cpy::{mangled_cpy_scalar, CpyDtype, CpyKernels};
 use super::ops::cumsum::{mangled_cumsum_kernel_f32, CumsumKernels};
+use super::ops::rope::{mangled_rope_multi_f32, mangled_rope_norm_f32, RopeKernels};
 use super::ops::solve_tri::{mangled_solve_tri_f32_general, SolveTriKernels};
 use super::ops::pad::{mangled_pad_f32, PadKernels};
 use super::ops::tri::{mangled_tri_kernel_f32, TriKernels};
 use super::ops::unary::{mangled_unary_op_f32, UnaryKernels};
 use super::ptx::{
     get_function, load_module, BINBCAST_PTX, CONCAT_PTX, CPY_PTX, CUMSUM_PTX, DIAG_PTX, FILL_PTX,
-    NORM_PTX, PAD_PTX, SCALE_PTX, SOLVE_TRI_PTX, TRI_PTX, UNARY_PTX,
+    NORM_PTX, PAD_PTX, ROPE_PTX, SCALE_PTX, SOLVE_TRI_PTX, TRI_PTX, UNARY_PTX,
 };
 
 /// All kernel handles the Rust side needs, resolved once.
@@ -60,6 +61,8 @@ pub struct PortedKernels {
     cpy_module: CUmodule,
     #[allow(dead_code)]
     solve_tri_module: CUmodule,
+    #[allow(dead_code)]
+    rope_module: CUmodule,
     pub rms_norm: RmsNormKernels,
     pub unary: UnaryKernels,
     pub scale: ScaleKernel,
@@ -72,6 +75,7 @@ pub struct PortedKernels {
     pub concat: ConcatKernels,
     pub cpy: CpyKernels,
     pub solve_tri: SolveTriKernels,
+    pub rope: RopeKernels,
 }
 
 // SAFETY: `CUmodule` / `CUfunction` are opaque device-side handles.
@@ -270,6 +274,30 @@ fn init_ported_kernels() -> Result<PortedKernels, String> {
         fast_f32_general: solve_tri_fn,
     };
 
+    // rope.cu — rope_norm + rope_multi, f32, 2 has_ff variants each.
+    let rope_module = load_module(ROPE_PTX).map_err(|e| format!("rope.ptx: {e}"))?;
+    let mut rope = RopeKernels::default();
+    rope.norm_f32_no_ff = get_function(
+        rope_module,
+        mangled_rope_norm_f32(false).map_err(|e| format!("rope_norm no_ff lookup: {e}"))?,
+    )
+    .map_err(|e| format!("rope_norm no_ff: {e}"))?;
+    rope.norm_f32_ff = get_function(
+        rope_module,
+        mangled_rope_norm_f32(true).map_err(|e| format!("rope_norm ff lookup: {e}"))?,
+    )
+    .map_err(|e| format!("rope_norm ff: {e}"))?;
+    rope.multi_f32_no_ff = get_function(
+        rope_module,
+        mangled_rope_multi_f32(false).map_err(|e| format!("rope_multi no_ff lookup: {e}"))?,
+    )
+    .map_err(|e| format!("rope_multi no_ff: {e}"))?;
+    rope.multi_f32_ff = get_function(
+        rope_module,
+        mangled_rope_multi_f32(true).map_err(|e| format!("rope_multi ff lookup: {e}"))?,
+    )
+    .map_err(|e| format!("rope_multi ff: {e}"))?;
+
     Ok(PortedKernels {
         norm_module,
         unary_module,
@@ -283,6 +311,7 @@ fn init_ported_kernels() -> Result<PortedKernels, String> {
         concat_module,
         cpy_module,
         solve_tri_module,
+        rope_module,
         rms_norm: RmsNormKernels { b256, b1024 },
         unary: uk,
         scale,
@@ -295,5 +324,6 @@ fn init_ported_kernels() -> Result<PortedKernels, String> {
         concat: ck,
         cpy: cp,
         solve_tri,
+        rope,
     })
 }
