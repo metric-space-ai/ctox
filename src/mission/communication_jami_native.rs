@@ -145,7 +145,14 @@ pub(crate) fn service_sync(
         .get("CTO_JAMI_ACCOUNT_ID")
         .map(|value| value.trim())
         .filter(|value| !value.is_empty());
+    let profile_name = settings
+        .get("CTO_JAMI_PROFILE_NAME")
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty());
     if !preferred_is_jami && account_id.is_none() {
+        return Ok(None);
+    }
+    if account_id.is_none() && profile_name.is_none() {
         return Ok(None);
     }
     let mut args = vec!["sync".to_string()];
@@ -153,11 +160,7 @@ pub(crate) fn service_sync(
         args.push("--account-id".to_string());
         args.push(account_id.to_string());
     }
-    if let Some(profile_name) = settings
-        .get("CTO_JAMI_PROFILE_NAME")
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-    {
+    if let Some(profile_name) = profile_name {
         args.push("--profile-name".to_string());
         args.push(profile_name.to_string());
     }
@@ -372,7 +375,8 @@ fn execute_test(options: &JamiOptions) -> Result<Value> {
 fn execute_sync(options: &JamiOptions) -> Result<Value> {
     let mut options = options.clone();
     ensure_dirs(&options)?;
-    let resolved = resolve_jami_account(&mut options, true)?;
+    require_explicit_jami_identity(&options)?;
+    let resolved = resolve_jami_account(&mut options, false)?;
     // Populate own username so the self-echo filter in normalize_jami_git_commit works.
     if options.username.is_empty() && !resolved.username.is_empty() {
         options.username = resolved.username.clone();
@@ -1964,6 +1968,9 @@ fn store_inbound_message(
     inbound: &JamiInboundMessage,
     raw_payload: &Value,
 ) -> Result<bool> {
+    if inbound_matches_existing_outbound(conn, inbound)? {
+        return Ok(true);
+    }
     let already_known: i64 = conn.query_row(
         "SELECT COUNT(*) FROM communication_messages WHERE message_key = ?1",
         [inbound.message_key.as_str()],
@@ -2013,6 +2020,70 @@ fn store_inbound_message(
     )?;
     refresh_thread(conn, &inbound.thread_key)?;
     Ok(already_known > 0)
+}
+
+fn require_explicit_jami_identity(options: &JamiOptions) -> Result<()> {
+    if !options.account_id.trim().is_empty() || !options.profile_name.trim().is_empty() {
+        return Ok(());
+    }
+    bail!(
+        "Jami sync requires CTO_JAMI_ACCOUNT_ID or CTO_JAMI_PROFILE_NAME; refusing implicit account resolution"
+    )
+}
+
+fn inbound_matches_existing_outbound(
+    conn: &rusqlite::Connection,
+    inbound: &JamiInboundMessage,
+) -> Result<bool> {
+    if inbound.sender_address.trim().is_empty() || inbound.body_text.trim().is_empty() {
+        return Ok(false);
+    }
+    let own_account = inbound
+        .recipients
+        .iter()
+        .map(|value| value.trim())
+        .find(|value| !value.is_empty())
+        .unwrap_or_default()
+        .to_string();
+    if own_account.is_empty() {
+        return Ok(false);
+    }
+
+    let mut stmt = conn.prepare(
+        r#"
+        SELECT sender_address, recipient_addresses_json
+        FROM communication_messages
+        WHERE channel = 'jami'
+          AND account_key = ?1
+          AND thread_key = ?2
+          AND direction = 'outbound'
+          AND body_text = ?3
+        ORDER BY external_created_at DESC, observed_at DESC
+        LIMIT 25
+        "#,
+    )?;
+    let rows = stmt.query_map(
+        rusqlite::params![
+            inbound.account_key,
+            inbound.thread_key,
+            inbound.body_text.trim()
+        ],
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+    )?;
+    for row in rows {
+        let (sender_address, recipients_json) = row?;
+        if sender_address.trim() != own_account {
+            continue;
+        }
+        let recipients = serde_json::from_str::<Vec<String>>(&recipients_json).unwrap_or_default();
+        if recipients
+            .iter()
+            .any(|value| value.trim() == inbound.sender_address.trim())
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn synthesize_voice_attachment(
@@ -2309,9 +2380,17 @@ fn optional_flag<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
 
 #[cfg(test)]
 mod tests {
+    use super::inbound_matches_existing_outbound;
+    use super::require_explicit_jami_identity;
+    use super::store_inbound_message;
     use super::conversation_id_from_thread_key;
+    use super::JamiInboundMessage;
+    use super::JamiOptions;
     use super::normalize_jami_uri_for_match;
     use super::thread_key_for_conversation;
+    use crate::mission::channels::{open_channel_db, upsert_communication_message, UpsertMessage};
+    use serde_json::json;
+    use std::path::PathBuf;
 
     #[test]
     fn thread_key_round_trip_preserves_conversation_id() {
@@ -2342,5 +2421,126 @@ mod tests {
             normalize_jami_uri_for_match("ring:AbCd"),
             normalize_jami_uri_for_match("jami:abcd")
         );
+    }
+
+    #[test]
+    fn jami_sync_requires_explicit_identity_configuration() {
+        let options = JamiOptions {
+            root: PathBuf::from("/tmp/ctox"),
+            db_path: PathBuf::from("/tmp/ctox/runtime/ctox.sqlite3"),
+            raw_dir: PathBuf::from("/tmp/ctox/runtime/raw"),
+            inbox_dir: PathBuf::from("/tmp/ctox/runtime/inbox"),
+            outbox_dir: PathBuf::from("/tmp/ctox/runtime/outbox"),
+            archive_dir: PathBuf::from("/tmp/ctox/runtime/archive"),
+            account_id: String::new(),
+            username: String::new(),
+            profile_name: String::new(),
+            account_uri: String::new(),
+            device_name: String::new(),
+            provider: "native".to_string(),
+            limit: 20,
+            trust_level: "owner".to_string(),
+            dbus_env_file: String::new(),
+            transcription_model: String::new(),
+            speech_model: String::new(),
+            speech_voice: String::new(),
+        };
+        let err = require_explicit_jami_identity(&options).unwrap_err().to_string();
+        assert!(err.contains("CTO_JAMI_ACCOUNT_ID"));
+    }
+
+    #[test]
+    fn jami_sync_skips_outbound_self_echo_duplicates() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "ctox-jami-self-echo-test-{}",
+            std::process::id()
+        ));
+        let db_path = temp_root.join("runtime/ctox.sqlite3");
+        let raw_dir = temp_root.join("runtime/communication/jami/raw");
+        let mut conn = open_channel_db(&db_path).expect("open db");
+        upsert_communication_message(
+            &mut conn,
+            UpsertMessage {
+                message_key: "jami:cae::OUTBOUND::queued-1",
+                channel: "jami",
+                account_key: "jami:cae",
+                thread_key: "jami:cae::conv-1",
+                remote_id: "queued-1",
+                direction: "outbound",
+                folder_hint: "OUTBOX",
+                sender_display: "CTO1",
+                sender_address: "cae53c1469355a5d",
+                recipient_addresses_json: "[\"e617d2f0a05095b8289415f92f8e7bbeab64dedf\"]",
+                cc_addresses_json: "[]",
+                bcc_addresses_json: "[]",
+                subject: "Jami conv-1",
+                preview: "Verstanden. Sobald die Vercel-Freigabe sichtbar ist...",
+                body_text: "Verstanden. Sobald die Vercel-Freigabe sichtbar ist...",
+                body_html: "",
+                raw_payload_ref: "",
+                trust_level: "owner",
+                status: "submitted",
+                seen: true,
+                has_attachments: false,
+                external_created_at: "2026-04-24T10:00:00Z",
+                observed_at: "2026-04-24T10:00:00Z",
+                metadata_json: "{}",
+            },
+        )
+        .expect("seed outbound");
+
+        let inbound = JamiInboundMessage {
+            account_key: "jami:cae".to_string(),
+            thread_key: "jami:cae::conv-1".to_string(),
+            message_key: "jami:cae::INBOX::commit-1".to_string(),
+            remote_id: "commit-1".to_string(),
+            sender_display: "e617d2f0a05095b8289415f92f8e7bbeab64dedf".to_string(),
+            sender_address: "e617d2f0a05095b8289415f92f8e7bbeab64dedf".to_string(),
+            recipients: vec!["cae53c1469355a5d".to_string()],
+            subject: "Jami conv-1".to_string(),
+            body_text: "Verstanden. Sobald die Vercel-Freigabe sichtbar ist...".to_string(),
+            preview: "Verstanden. Sobald die Vercel-Freigabe sichtbar ist...".to_string(),
+            seen: false,
+            has_attachments: false,
+            external_created_at: "2026-04-24T10:01:00Z".to_string(),
+            metadata: json!({}),
+        };
+
+        assert!(
+            inbound_matches_existing_outbound(&conn, &inbound).expect("check echo"),
+            "exact jami outbound/inbound duplicates should be treated as self-echo"
+        );
+
+        let options = JamiOptions {
+            root: temp_root.clone(),
+            db_path,
+            raw_dir,
+            inbox_dir: temp_root.join("runtime/communication/jami/inbox"),
+            outbox_dir: temp_root.join("runtime/communication/jami/outbox"),
+            archive_dir: temp_root.join("runtime/communication/jami/archive"),
+            account_id: "cae53c1469355a5d".to_string(),
+            username: String::new(),
+            profile_name: "CTO1".to_string(),
+            account_uri: "jami:cae53c1469355a5d".to_string(),
+            device_name: "CTO1".to_string(),
+            provider: "native".to_string(),
+            limit: 20,
+            trust_level: "owner".to_string(),
+            dbus_env_file: String::new(),
+            transcription_model: String::new(),
+            speech_model: String::new(),
+            speech_voice: String::new(),
+        };
+        let known = store_inbound_message(&mut conn, &options, &inbound, &json!({}))
+            .expect("store inbound");
+        assert!(known, "self-echo duplicates should not be persisted as fresh inbound");
+        let inbox_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM communication_messages WHERE direction = 'inbound'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count inbound");
+        assert_eq!(inbox_count, 0);
     }
 }
