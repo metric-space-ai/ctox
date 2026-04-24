@@ -31,6 +31,14 @@ name = "qwen35-27b-q4km-dflash-server"
 path = "src/bin/server.rs"
 required-features = ["cuda"]
 
+[[bin]]
+# Standalone bit-exact verifier for the `cuda_port::ops::norm` Rust port.
+# Runs rms_norm on a device-allocated f32 tensor via the ported
+# dispatcher, compares against a CPU reference implementation.
+name = "qwen35-27b-q4km-dflash-rms-norm-verify"
+path = "src/bin/rms_norm_verify.rs"
+required-features = ["cuda"]
+
 [features]
 default = []
 # CUDA is the only real build mode — the target model is 27B in Q4_K_M,
