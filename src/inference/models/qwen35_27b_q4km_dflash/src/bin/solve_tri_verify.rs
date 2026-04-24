@@ -1,8 +1,15 @@
 //! Bit-close verifier for the bare-metal `solve_tri` port
 //! (fast kernel, `<0,0>` general-case specialization).
 //!
-//! Computes X = B · A^(-1) where A is upper-triangular, non-unit-diag.
-//! Reference: host-side back-substitution using f64 accumulators.
+//! Empirical semantics (matching the kernel body at solve_tri.cu:
+//! 143-154): for each column of B, solve L · y = b by forward
+//! substitution where L is the **lower**-triangular part (plus
+//! diagonal) of the A buffer. That's equivalent to the upstream
+//! cuBLAS call `cublasStrsmBatched(SIDE_RIGHT, FILL_UPPER, OP_N)`
+//! acting on the col-major view of the same buffer (lower-tri in
+//! row-major ↔ upper-tri in col-major).
+//!
+//! Reference: host-side forward-substitution using f64 accumulators.
 
 use std::ffi::c_void;
 
@@ -58,15 +65,15 @@ fn main() -> Result<()> {
     let a_elems = (n * n * total_batches) as usize;
     let b_elems = (k * n * total_batches) as usize;
 
-    // Host A: upper triangular with positive diagonal to stay
-    // well-conditioned.
+    // Host A: lower-triangular factor L in the lower half of the
+    // buffer (the kernel uses `sA[row*n + col]` for `col < row`),
+    // positive diagonal for conditioning.
     let mut h_a = vec![0.0_f32; a_elems];
     for batch in 0..total_batches {
         let base = (batch * n * n) as usize;
         for i in 0..n as usize {
             for j in 0..n as usize {
-                let v = if i <= j {
-                    // Make diagonal-dominant: diag ~ 2-3, off-diag < 1.
+                let v = if i >= j {
                     if i == j {
                         2.0 + 0.5 * (i as f32 + batch as f32).sin()
                     } else {
@@ -158,9 +165,9 @@ fn main() -> Result<()> {
     unsafe { cuMemFree_v2(d_x) };
     unsafe { sys::ggml_backend_free(backend) };
 
-    // CPU reference: solve X · A = B for each batch via back-substitution.
-    // X_batch[j, col] = (B_batch[j, col] - Σ_{i<j} A_batch[i, j] · X_batch[i, col]) / A_batch[j, j]
-    // (Upper-tri, right-side-solve.)
+    // CPU reference: per column, forward-substitute L · y = b_col.
+    //   y[j] = (b[j] - Σ_{i<j} L[j, i] * y[i]) / L[j, j]
+    // where L[j, i] = h_a[batch*n*n + j*n + i] (row-major lower-tri).
     let n_us = n as usize;
     let k_us = k as usize;
     let mut max_abs = 0.0_f32;
@@ -173,7 +180,7 @@ fn main() -> Result<()> {
             for j in 0..n_us {
                 let mut sum = h_b[bx_base + j * k_us + col] as f64;
                 for i in 0..j {
-                    sum -= h_a[a_base + i * n_us + j] as f64 * x_ref[i * k_us + col];
+                    sum -= h_a[a_base + j * n_us + i] as f64 * x_ref[i * k_us + col];
                 }
                 x_ref[j * k_us + col] = sum / h_a[a_base + j * n_us + j] as f64;
             }
