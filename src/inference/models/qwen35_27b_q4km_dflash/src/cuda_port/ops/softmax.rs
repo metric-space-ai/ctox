@@ -85,10 +85,17 @@ pub struct SoftMaxKernels {
 ///                        Itanium encoding.
 ///   • T-discriminator: `fE` for f32, `6__halfE` for f16.
 pub fn mangled_soft_max_f32_fallback(mask_is_f16: bool) -> Result<&'static [u8], String> {
-    let t: &[u8] = if mask_is_f16 { b"6__halfE" } else { b"fE" };
+    // Anchor the dtype discriminator to the position right after the
+    // `Li0E` that closes the `block_size_template` non-type arg, so
+    // `fE` doesn't match the suffix of `6__halfE` from the half variant.
+    let t: &[u8] = if mask_is_f16 {
+        b"Li0E6__halfE"
+    } else {
+        b"Li0EfE"
+    };
     crate::cuda_port::ptx::find_entry(
         crate::cuda_port::ptx::softmax_entries::ENTRIES,
-        &[b"12soft_max_f32", b"Lb1ELi0ELi0E", t],
+        &[b"12soft_max_f32", b"Lb1ELi0E", t],
     )
 }
 
