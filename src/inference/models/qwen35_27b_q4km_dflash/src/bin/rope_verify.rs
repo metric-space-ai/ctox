@@ -176,15 +176,13 @@ fn main() -> Result<()> {
             let base = (i1 * ne00 + i2 * ne00 * ne01) as usize;
             for pair in 0..(n_dims / 2) {
                 let i0 = 2 * pair;
+                // ext_factor = 0 → no ramp mix; attn_factor = 1 → no mscale.
+                // rope_yarn with those settings collapses to plain rotate
+                // at theta = freq_scale * theta_base.
                 let theta_base = h_pos[i2 as usize] as f32 * theta_scale.powi(pair);
-                let (cos_t, sin_t) = {
-                    let theta = args.freq_scale * theta_base;
-                    (theta.cos() * args.attn_factor.max(1.0).min(1.0).max(1.0), theta.sin())
-                };
-                // ext_factor = 0 so no ramp mix; attn_factor = 1 so no mscale.
-                // That simplifies to plain rotate.
-                let cos_t = theta_base.cos();
-                let sin_t = theta_base.sin();
+                let theta = args.freq_scale * theta_base;
+                let cos_t = theta.cos();
+                let sin_t = theta.sin();
                 let x0 = h_x[base + i0 as usize];
                 let x1 = h_x[base + (i0 + n_dims / 2) as usize];
                 let expected_0 = x0 * cos_t - x1 * sin_t;
