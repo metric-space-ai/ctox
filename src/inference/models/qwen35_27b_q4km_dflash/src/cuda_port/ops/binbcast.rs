@@ -86,10 +86,14 @@ impl BinBcastKernels {
 /// Needle set:
 ///   • `11k_bin_bcast`  — Itanium length prefix, excludes unravel.
 ///   • `6op_addE` / `_subE` / `_mulE` — functor name.
-///   • `fffJPKfEE`      — dtype triple (float,float,float) + pack
-///                         `JPKfE` (one const-float*) + close `E`.
-///                         Rejects f16 triples and fused n_fuse≥2
-///                         variants (`fffJPKfPKfE…`).
+///   • `EEfffJPKfEE`    — `EE` closes the functor template-arg (so
+///                         the `fff` that follows can't be the tail
+///                         of a wider dtype-string like
+///                         `6__halfff`), then `fff` is the dtype
+///                         triple (float,float,float), then the
+///                         pack `JPKfE` (one const-float*) and
+///                         close `E`. Rejects f16/mixed triples and
+///                         fused n_fuse≥2 variants.
 pub fn mangled_k_bin_bcast_fff(op: BinOp) -> Result<&'static [u8], String> {
     let op_needle: &[u8] = match op {
         BinOp::Add => b"6op_addE",
@@ -98,7 +102,7 @@ pub fn mangled_k_bin_bcast_fff(op: BinOp) -> Result<&'static [u8], String> {
     };
     crate::cuda_port::ptx::find_entry(
         crate::cuda_port::ptx::binbcast_entries::ENTRIES,
-        &[b"11k_bin_bcast", op_needle, b"fffJPKfEE"],
+        &[b"11k_bin_bcast", op_needle, b"EEfffJPKfEE"],
     )
 }
 
