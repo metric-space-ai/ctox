@@ -169,7 +169,9 @@ fn init_ported_kernels() -> Result<PortedKernels, String> {
     .map_err(|e| format!("diag<__half>: {e}"))?;
     let diag = DiagKernels { diag_f32, diag_f16 };
 
-    // binbcast.cu — k_bin_bcast<op_add/sub/mul, float, float, float>
+    // binbcast.cu — k_bin_bcast<op_*, float, float, float>
+    //   • add/sub/mul use n_fuse=1 (pack has one element)
+    //   • repeat    uses n_fuse=0 (empty pack)
     let binbcast_module =
         load_module(BINBCAST_PTX).map_err(|e| format!("binbcast.ptx: {e}"))?;
     let mut bb = BinBcastKernels::default();
@@ -177,6 +179,7 @@ fn init_ported_kernels() -> Result<PortedKernels, String> {
         (&mut bb.add_fff as *mut _, BinOp::Add),
         (&mut bb.sub_fff as *mut _, BinOp::Sub),
         (&mut bb.mul_fff as *mut _, BinOp::Mul),
+        (&mut bb.repeat_fff as *mut _, BinOp::Repeat),
     ] {
         let name = mangled_k_bin_bcast_fff(op)
             .map_err(|e| format!("binbcast {op:?} lookup: {e}"))?;

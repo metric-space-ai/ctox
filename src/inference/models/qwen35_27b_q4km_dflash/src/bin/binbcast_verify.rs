@@ -20,7 +20,8 @@ use dflash::cuda_port::driver::{
 };
 use dflash::cuda_port::module::porter;
 use dflash::cuda_port::ops::binbcast::{
-    ggml_cuda_op_add_f32, ggml_cuda_op_mul_f32, ggml_cuda_op_sub_f32, BinBcastTensor,
+    ggml_cuda_op_add_f32, ggml_cuda_op_mul_f32, ggml_cuda_op_repeat_f32, ggml_cuda_op_sub_f32,
+    BinBcastTensor,
 };
 use dflash::ffi as sys;
 
@@ -212,6 +213,38 @@ fn main() -> Result<()> {
         |a, b| a * b,
         args.tol,
     )?;
+
+    // op_repeat — broadcast src0 (shape == dst) into dst. For equal-
+    // shape no-broadcast inputs this is just a memcpy, giving
+    // dst[i] = src[i]. Bit-exact.
+    {
+        let mut d_src = CUdeviceptr(0);
+        let mut d_dst = CUdeviceptr(0);
+        upload(&mut d_src, &h_a)?;
+        let bytes = (n * std::mem::size_of::<f32>()) as libc::size_t;
+        unsafe { cuMemAlloc_v2(&mut d_dst, bytes) };
+
+        let rc = ggml_cuda_op_repeat_f32(&kernels.binbcast, d_src, d_dst, &shape, &shape, stream);
+        if rc != CUDA_SUCCESS {
+            return Err(anyhow!("repeat launch failed: {rc}"));
+        }
+        unsafe { cuStreamSynchronize(stream) };
+
+        let h_y = download(d_dst, stream, n)?;
+        unsafe { cuMemFree_v2(d_src) };
+        unsafe { cuMemFree_v2(d_dst) };
+
+        let mut bad = 0usize;
+        for i in 0..n {
+            if h_y[i] != h_a[i] {
+                bad += 1;
+            }
+        }
+        if bad > 0 {
+            return Err(anyhow!("repeat: {bad}/{n} mismatches"));
+        }
+        println!("repeat: PASSED ({n} elems, equal-shape copy)");
+    }
 
     unsafe { sys::ggml_backend_free(backend) };
     println!("ALL BINBCAST PASSED");

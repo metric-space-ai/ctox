@@ -51,16 +51,24 @@ pub enum BinOp {
     Add,
     Sub,
     Mul,
+    /// ref: binbcast.cu:5-8 — `op_repeat(a, b) { return b; }`. Driven
+    /// by `ggml_cuda_op_repeat` with `n_fuse=0`, so the variadic
+    /// pack is empty (`fffJEE`, not `fffJPKfEE`).
+    Repeat,
 }
 
 /// Resolved kernel handles — one per supported (op, dtype-triple)
-/// combination. For now that's three entries (f32/f32/f32 × add,
-/// sub, mul).
+/// combination. For now that's four entries (f32/f32/f32 × add,
+/// sub, mul, repeat).
 #[derive(Default)]
 pub struct BinBcastKernels {
     pub add_fff: CUfunction,
     pub sub_fff: CUfunction,
     pub mul_fff: CUfunction,
+    /// `k_bin_bcast<op_repeat, float, float, float>` with n_fuse=0
+    /// (empty variadic pack — distinct kernel instantiation from
+    /// add/sub/mul which use n_fuse=1).
+    pub repeat_fff: CUfunction,
 }
 
 impl BinBcastKernels {
@@ -69,6 +77,18 @@ impl BinBcastKernels {
             BinOp::Add => self.add_fff,
             BinOp::Sub => self.sub_fff,
             BinOp::Mul => self.mul_fff,
+            BinOp::Repeat => self.repeat_fff,
+        }
+    }
+
+    /// Pack size (variadic template's `n_fuse`) for the kernel
+    /// instantiation the op maps to. Returned value matters for
+    /// the kernel ABI: the caller must push exactly `22 +
+    /// pack_size` args.
+    fn pack_size(op: BinOp) -> u32 {
+        match op {
+            BinOp::Add | BinOp::Sub | BinOp::Mul => 1,
+            BinOp::Repeat => 0,
         }
     }
 }
@@ -95,14 +115,16 @@ impl BinBcastKernels {
 ///                         close `E`. Rejects f16/mixed triples and
 ///                         fused n_fuse≥2 variants.
 pub fn mangled_k_bin_bcast_fff(op: BinOp) -> Result<&'static [u8], String> {
-    let op_needle: &[u8] = match op {
-        BinOp::Add => b"6op_addE",
-        BinOp::Sub => b"6op_subE",
-        BinOp::Mul => b"6op_mulE",
+    let (op_needle, sig): (&[u8], &[u8]) = match op {
+        BinOp::Add => (b"6op_addE", b"EEfffJPKfEE"),
+        BinOp::Sub => (b"6op_subE", b"EEfffJPKfEE"),
+        BinOp::Mul => (b"6op_mulE", b"EEfffJPKfEE"),
+        // op_repeat uses n_fuse=0 → empty pack `JEE`.
+        BinOp::Repeat => (b"9op_repeatE", b"EEfffJEE"),
     };
     crate::cuda_port::ptx::find_entry(
         crate::cuda_port::ptx::binbcast_entries::ENTRIES,
-        &[b"11k_bin_bcast", op_needle, b"EEfffJPKfEE"],
+        &[b"11k_bin_bcast", op_needle, sig],
     )
 }
 
@@ -248,6 +270,8 @@ pub fn launch_bin_bcast_f32(
     // The non-pack `src1` pointer is still passed — the kernel body
     // ignores it under `if constexpr (sizeof...(src1_ptrs) > 0)`,
     // but the ABI slot is present.
+    // 22 fixed slots + up to 1 pack pointer (n_fuse=1 for add/sub/mul,
+    // n_fuse=0 for repeat).
     let args: [*const c_void; 23] = [
         &src0_val as *const u64 as *const c_void,
         &src1_val as *const u64 as *const c_void,
@@ -272,10 +296,12 @@ pub fn launch_bin_bcast_f32(
         &s12 as *const c_int as *const c_void,
         &s13 as *const c_int as *const c_void,
         // Pack element 0: const float * — upstream passes
-        // `dst->src[1]->data`, which for the non-fused ggml_cuda_op_add
-        // is the same buffer as src1_dd.
+        // `dst->src[1]->data`, same buffer as src1 for non-fused.
+        // Unused when pack_size == 0 (op_repeat).
         &src1_val as *const u64 as *const c_void,
     ];
+
+    let n_args = 22 + BinBcastKernels::pack_size(op) as usize;
 
     unsafe {
         cuLaunchKernel(
@@ -288,10 +314,42 @@ pub fn launch_bin_bcast_f32(
             block_dims[2],
             0, // shmem
             stream,
-            args.as_ptr(),
+            args[..n_args].as_ptr(),
             std::ptr::null(),
         )
     }
+}
+
+/// ref: vendor/ggml-cuda/binbcast.cu:393-395
+///
+/// `ggml_cuda_op_repeat` — src0 broadcasts to dst's shape via the
+/// `op_repeat(a, b) { return b; }` functor. Upstream passes
+/// `(dst, dst->src[0], dst, nullptr, dst->src[0]->data, dst->data)`
+/// — src0 NULL on the device side. The kernel's `src0 ? ... : 0.0f`
+/// check suppresses the dead read.
+#[allow(clippy::too_many_arguments)]
+pub fn ggml_cuda_op_repeat_f32(
+    kernels: &BinBcastKernels,
+    src0: CUdeviceptr,
+    dst: CUdeviceptr,
+    dst_shape: &BinBcastTensor,
+    src0_shape: &BinBcastTensor,
+    stream: CUstream,
+) -> CUresult {
+    // src0 parameter stays — upstream passes `dst` there (arbitrary,
+    // ignored by the kernel because of the `nullptr`-first arg handling).
+    // src1 is the data we want to replicate.
+    launch_bin_bcast_f32(
+        kernels,
+        BinOp::Repeat,
+        CUdeviceptr(0), // src0 = nullptr (matches upstream's `nullptr, dst->src[0]->data` pair)
+        src0,           // src1 = the source to broadcast
+        dst,
+        dst_shape,
+        src0_shape, // upstream calls this via (dst, dst->src[0], dst, …), so src0-shape == dst-shape
+        src0_shape,
+        stream,
+    )
 }
 
 /// ref: vendor/ggml-cuda/binbcast.cu:397-407
