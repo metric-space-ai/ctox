@@ -26,13 +26,15 @@ use super::ops::cpy::{mangled_cpy_scalar, CpyDtype, CpyKernels};
 use super::ops::cumsum::{mangled_cumsum_kernel_f32, CumsumKernels};
 use super::ops::rope::{mangled_rope_multi_f32, mangled_rope_norm_f32, RopeKernels};
 use super::ops::softmax::{mangled_soft_max_f32_fallback, SoftMaxKernels};
+use super::ops::ssm_conv::{mangled_ssm_conv_long, mangled_ssm_conv_short, SsmConvKernels};
 use super::ops::solve_tri::{mangled_solve_tri_f32_general, SolveTriKernels};
 use super::ops::pad::{mangled_pad_f32, PadKernels};
 use super::ops::tri::{mangled_tri_kernel_f32, TriKernels};
 use super::ops::unary::{mangled_unary_op_f32, UnaryKernels};
 use super::ptx::{
     get_function, load_module, BINBCAST_PTX, CONCAT_PTX, CPY_PTX, CUMSUM_PTX, DIAG_PTX, FILL_PTX,
-    NORM_PTX, PAD_PTX, ROPE_PTX, SCALE_PTX, SOFTMAX_PTX, SOLVE_TRI_PTX, TRI_PTX, UNARY_PTX,
+    NORM_PTX, PAD_PTX, ROPE_PTX, SCALE_PTX, SOFTMAX_PTX, SOLVE_TRI_PTX, SSM_CONV_PTX, TRI_PTX,
+    UNARY_PTX,
 };
 
 /// All kernel handles the Rust side needs, resolved once.
@@ -66,6 +68,8 @@ pub struct PortedKernels {
     rope_module: CUmodule,
     #[allow(dead_code)]
     softmax_module: CUmodule,
+    #[allow(dead_code)]
+    ssm_conv_module: CUmodule,
     pub rms_norm: RmsNormKernels,
     pub unary: UnaryKernels,
     pub scale: ScaleKernel,
@@ -80,6 +84,7 @@ pub struct PortedKernels {
     pub solve_tri: SolveTriKernels,
     pub rope: RopeKernels,
     pub softmax: SoftMaxKernels,
+    pub ssm_conv: SsmConvKernels,
 }
 
 // SAFETY: `CUmodule` / `CUfunction` are opaque device-side handles.
@@ -323,6 +328,27 @@ fn init_ported_kernels() -> Result<PortedKernels, String> {
         .map_err(|e| format!("soft_max<f16-mask>: {e}"))?,
     };
 
+    // ssm-conv.cu — 16 instantiations: 2 paths (short/long) × 2 silu × 4 d_conv.
+    let ssm_conv_module =
+        load_module(SSM_CONV_PTX).map_err(|e| format!("ssm-conv.ptx: {e}"))?;
+    let mut sc = SsmConvKernels::default();
+    for (silu_idx, apply_silu) in [(0, false), (1, true)] {
+        for (nc_idx, nc) in [(0, 3i64), (1, 4), (2, 5), (3, 9)] {
+            sc.short_kernels[silu_idx][nc_idx] = get_function(
+                ssm_conv_module,
+                mangled_ssm_conv_short(apply_silu, nc)
+                    .map_err(|e| format!("ssm_conv_short[{apply_silu},{nc}] lookup: {e}"))?,
+            )
+            .map_err(|e| format!("ssm_conv_short[{apply_silu},{nc}]: {e}"))?;
+            sc.long_kernels[silu_idx][nc_idx] = get_function(
+                ssm_conv_module,
+                mangled_ssm_conv_long(apply_silu, nc)
+                    .map_err(|e| format!("ssm_conv_long[{apply_silu},{nc}] lookup: {e}"))?,
+            )
+            .map_err(|e| format!("ssm_conv_long[{apply_silu},{nc}]: {e}"))?;
+        }
+    }
+
     Ok(PortedKernels {
         norm_module,
         unary_module,
@@ -338,6 +364,7 @@ fn init_ported_kernels() -> Result<PortedKernels, String> {
         solve_tri_module,
         rope_module,
         softmax_module,
+        ssm_conv_module,
         rms_norm: RmsNormKernels { b256, b1024 },
         unary: uk,
         scale,
@@ -352,5 +379,6 @@ fn init_ported_kernels() -> Result<PortedKernels, String> {
         solve_tri,
         rope,
         softmax,
+        ssm_conv: sc,
     })
 }
