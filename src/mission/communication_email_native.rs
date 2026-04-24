@@ -484,6 +484,7 @@ fn execute_sync(options: &EmailOptions) -> Result<Value> {
                     let sender_address = extract_address(&parsed.from_header);
                     let sender_display = extract_display_name(&parsed.from_header)
                         .unwrap_or_else(|| sender_address.clone());
+                    let direction = synced_message_direction(&sender_address, &options.email);
                     let thread_key =
                         thread_key_from_email(&parsed, &format!("{account_key}::{uid}"));
                     let message_key = message_key_from_remote(&account_key, &options.folder, &uid);
@@ -503,7 +504,7 @@ fn execute_sync(options: &EmailOptions) -> Result<Value> {
                             account_key: &account_key,
                             thread_key: &thread_key,
                             remote_id: &uid,
-                            direction: "inbound",
+                            direction,
                             folder_hint: &options.folder,
                             sender_display: &sender_display,
                             sender_address: &sender_address,
@@ -649,6 +650,7 @@ fn store_provider_message(
 ) -> Result<()> {
     let observed_at = now_iso_string();
     let message_key = message_key_from_remote(account_key, &item.folder_hint, &item.remote_id);
+    let direction = synced_message_direction(&item.sender_address, &options.email);
     upsert_communication_message(
         conn,
         UpsertMessage {
@@ -657,7 +659,7 @@ fn store_provider_message(
             account_key,
             thread_key: &item.thread_key,
             remote_id: &item.remote_id,
-            direction: "inbound",
+            direction,
             folder_hint: &item.folder_hint,
             sender_display: &item.sender_display,
             sender_address: &item.sender_address,
@@ -1468,6 +1470,20 @@ fn extract_addresses(raw: &str) -> Vec<String> {
         out.push(address);
     }
     out
+}
+
+fn normalize_email_identity(value: &str) -> String {
+    extract_address(value)
+}
+
+fn synced_message_direction(sender_address: &str, account_email: &str) -> &'static str {
+    let sender = normalize_email_identity(sender_address);
+    let account = normalize_email_identity(account_email);
+    if !sender.is_empty() && !account.is_empty() && sender == account {
+        "outbound"
+    } else {
+        "inbound"
+    }
 }
 
 fn normalize_provider(value: &str) -> String {
@@ -3333,4 +3349,33 @@ fn normalize_activesync_mail_item(
             "activeSyncFolderId": folder_id,
         }),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{extract_address, synced_message_direction};
+
+    #[test]
+    fn synced_message_direction_treats_self_authored_mail_as_outbound() {
+        assert_eq!(
+            synced_message_direction("CTO1 <cto1@metric-space.ai>", "cto1@metric-space.ai"),
+            "outbound"
+        );
+    }
+
+    #[test]
+    fn synced_message_direction_keeps_external_sender_as_inbound() {
+        assert_eq!(
+            synced_message_direction("Michael Welsch <michael.welsch@metric-space.ai>", "cto1@metric-space.ai"),
+            "inbound"
+        );
+    }
+
+    #[test]
+    fn extract_address_normalizes_wrapped_email() {
+        assert_eq!(
+            extract_address("CTO1 <cto1@metric-space.ai>"),
+            "cto1@metric-space.ai"
+        );
+    }
 }
