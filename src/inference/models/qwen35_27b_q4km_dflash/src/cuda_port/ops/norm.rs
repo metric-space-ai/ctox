@@ -26,15 +26,24 @@ use crate::cuda_port::driver::{
 /// ref: vendor/ggml-cuda/common.cuh (WARP_SIZE define)
 const WARP_SIZE: c_int = 32;
 
-/// Mangled kernel name for `rms_norm_f32<256, false, false>`.
-/// Extracted from `nvcc --ptx` output of `norm.cu` at sm_86.
-/// Keep in sync if upstream renames the template.
-pub const MANGLED_RMS_NORM_F32_B256: &[u8] =
-    b"_Z12rms_norm_f32ILi256ELb0ELb0EEvPKfPfilllfS1_lll5uint3S3_S3_S3_S1_lllS3_S3_S3_S3_\0";
+/// Resolve the two `rms_norm_f32<N,false,false>` kernel names at
+/// runtime by scanning the build-time-parsed PTX entries for
+/// substring matches. More robust than hard-coded strings —
+/// future upstream renames / ABI tweaks just need the crate
+/// recompiled, not a patch here.
+pub fn mangled_rms_norm_f32_b256() -> Result<&'static [u8], String> {
+    crate::cuda_port::ptx::find_entry(
+        crate::cuda_port::ptx::norm_entries::ENTRIES,
+        &[b"rms_norm_f32", b"Li256", b"Lb0ELb0"],
+    )
+}
 
-/// Mangled kernel name for `rms_norm_f32<1024, false, false>`.
-pub const MANGLED_RMS_NORM_F32_B1024: &[u8] =
-    b"_Z12rms_norm_f32ILi1024ELb0ELb0EEvPKfPfilllfS1_lll5uint3S3_S3_S3_S1_lllS3_S3_S3_S3_\0";
+pub fn mangled_rms_norm_f32_b1024() -> Result<&'static [u8], String> {
+    crate::cuda_port::ptx::find_entry(
+        crate::cuda_port::ptx::norm_entries::ENTRIES,
+        &[b"rms_norm_f32", b"Li1024", b"Lb0ELb0"],
+    )
+}
 
 /// Handle pair — the two kernel instantiations the dispatcher picks
 /// between. Resolved once per module-load by
