@@ -1042,6 +1042,11 @@ pub fn set_credential(root: &Path, key: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
+/// Remove a credential value from the encrypted secret store.
+pub fn delete_credential(root: &Path, key: &str) -> Result<()> {
+    delete_secret(root, CREDENTIAL_SCOPE, key)
+}
+
 /// Retrieve a credential value from the encrypted secret store.
 /// Returns None if the key does not exist or on any error.
 pub fn get_credential(root: &Path, key: &str) -> Option<String> {

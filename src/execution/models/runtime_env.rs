@@ -62,6 +62,7 @@ pub fn save_runtime_state_projection(
 ) -> Result<()> {
     let mut normalized_env_map = env_map.clone();
     normalized_env_map.retain(|key, _| !runtime_state::is_runtime_state_key(key));
+    normalized_env_map.retain(|key, _| !secrets::is_secret_key(key));
     runtime_state::apply_runtime_state_to_env_map(&mut normalized_env_map, state);
     runtime_state::persist_runtime_state(root, state)?;
     write_runtime_env_map(root, &normalized_env_map)
@@ -180,13 +181,18 @@ fn load_persisted_runtime_env_map(root: &Path) -> Result<BTreeMap<String, String
 }
 
 fn write_runtime_env_map(root: &Path, env_map: &BTreeMap<String, String>) -> Result<()> {
+    let filtered_env_map = env_map
+        .iter()
+        .filter(|(key, _)| !secrets::is_secret_key(key))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect::<BTreeMap<_, _>>();
     let mut conn = open_runtime_persistence_db(root)?;
     let tx = conn
         .transaction()
         .context("failed to open runtime env transaction")?;
     tx.execute(&format!("DELETE FROM {RUNTIME_ENV_TABLE}"), [])
         .context("failed to clear runtime env table")?;
-    for (key, value) in env_map {
+    for (key, value) in &filtered_env_map {
         if key.trim().is_empty() {
             continue;
         }

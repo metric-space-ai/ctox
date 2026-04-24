@@ -2904,6 +2904,16 @@ impl App {
             if item.kind != SettingKind::Env {
                 continue;
             }
+            if is_secret_backed_runtime_setting(item.key) {
+                let trimmed = item.value.trim();
+                if trimmed.is_empty() {
+                    secrets::delete_credential(&self.root, item.key)?;
+                } else {
+                    secrets::set_credential(&self.root, item.key, trimmed)?;
+                }
+                operator_env_map.remove(item.key);
+                continue;
+            }
             if runtime_state::is_runtime_state_key(item.key) {
                 continue;
             }
@@ -2939,6 +2949,7 @@ impl App {
                 );
             }
         }
+        operator_env_map.retain(|key, _| !is_secret_backed_runtime_setting(key));
 
         let mut selection_env_map = operator_env_map.clone();
         if let Some(source) = self.value_for_setting("CTOX_CHAT_SOURCE") {
@@ -3526,7 +3537,7 @@ fn apply_runtime_model_selection(
 }
 
 fn load_settings_items(root: &Path) -> Vec<SettingItem> {
-    let env_map = runtime_env::load_runtime_env_map(root).unwrap_or_default();
+    let env_map = runtime_env::effective_runtime_env_map(root).unwrap_or_default();
     let current_runtime_state = runtime_state::load_or_resolve_runtime_state(root).ok();
     let inferred_chat_source = current_runtime_state
         .as_ref()
@@ -4631,6 +4642,13 @@ fn settings_map_from_items(items: &[SettingItem]) -> BTreeMap<String, String> {
         env_map.insert(item.key.to_string(), trimmed.to_string());
     }
     env_map
+}
+
+fn is_secret_backed_runtime_setting(key: &str) -> bool {
+    matches!(
+        key,
+        "OPENAI_API_KEY" | "ANTHROPIC_API_KEY" | "OPENROUTER_API_KEY"
+    )
 }
 
 fn current_context_tokens(db_path: &Path, max_context: usize) -> Result<usize> {
@@ -7228,5 +7246,46 @@ mod tests {
             saved.get("CTOX_CHAT_MODEL_BASE").map(String::as_str),
             Some("gpt-5.4-mini")
         );
+    }
+
+    #[test]
+    fn save_settings_persists_openai_token_only_in_secret_store() {
+        let root = temp_root("settings-openai-secret");
+        let db_path = root.join("runtime/test.sqlite3");
+        let mut app = App::new(root.clone(), db_path);
+        let token_idx = app
+            .settings_items
+            .iter()
+            .position(|item| item.key == "OPENAI_API_KEY")
+            .unwrap();
+        app.settings_items[token_idx].value = "sk-secret-store".to_string();
+        app.save_settings().unwrap();
+
+        assert_eq!(
+            secrets::get_credential(&root, "OPENAI_API_KEY").as_deref(),
+            Some("sk-secret-store")
+        );
+        let conn = rusqlite::Connection::open(crate::persistence::sqlite_path(&root)).unwrap();
+        let persisted = match conn.query_row(
+            "SELECT env_value FROM runtime_env_kv WHERE env_key = 'OPENAI_API_KEY'",
+            [],
+            |row| row.get::<_, String>(0),
+        ) {
+            Ok(value) => Some(value),
+            Err(rusqlite::Error::QueryReturnedNoRows) => None,
+            Err(err) => panic!("unexpected sqlite error: {err}"),
+        };
+        let all_rows = {
+            let mut stmt = conn
+                .prepare("SELECT env_key, env_value FROM runtime_env_kv ORDER BY env_key ASC")
+                .unwrap();
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })
+                .unwrap();
+            rows.map(|row| row.unwrap()).collect::<Vec<_>>()
+        };
+        assert!(persisted.is_none(), "persisted={persisted:?} rows={all_rows:?}");
     }
 }
