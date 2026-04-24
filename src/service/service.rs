@@ -2771,7 +2771,28 @@ fn run_completion_review(
     );
     if founder_mail_source {
         return match outcome.verdict {
-            review::ReviewVerdict::Pass => CompletionReviewDisposition::Approved,
+            review::ReviewVerdict::Pass => {
+                if let Some(message_key) = founder_reply_key {
+                    if let Err(err) = channels::record_founder_reply_review_approval(
+                        root,
+                        message_key,
+                        reply_text,
+                        &outcome.summary,
+                    ) {
+                        push_event(
+                            state,
+                            format!(
+                                "Founder review passed for {} but approval persistence failed: {}",
+                                job.source_label, err
+                            ),
+                        );
+                        return CompletionReviewDisposition::Hold {
+                            summary: err.to_string(),
+                        };
+                    }
+                }
+                CompletionReviewDisposition::Approved
+            }
             review::ReviewVerdict::Fail if actionable_rejection => {
                 if let Some(work_id) = resolve_review_rejection_target_self_work_id(root, job) {
                     push_event(
@@ -9376,9 +9397,13 @@ mod tests {
     #[test]
     fn open_founder_inbound_blocks_strategy_reroute_for_queue_work() {
         let root = temp_root("ctox-open-founder-blocks-strategy-reroute");
-        let owner_key = "CTOX_OWNER_EMAIL_ADDRESS";
-        let previous_owner = std::env::var_os(owner_key);
-        std::env::set_var(owner_key, "michael.welsch@metric-space.ai");
+        let mut runtime_settings = BTreeMap::new();
+        runtime_settings.insert(
+            "CTOX_OWNER_EMAIL_ADDRESS".to_string(),
+            "michael.welsch@metric-space.ai".to_string(),
+        );
+        runtime_env::save_runtime_env_map(&root, &runtime_settings)
+            .expect("failed to persist owner setting");
         let db_path = root.join("runtime/ctox.sqlite3");
         let conn = channels::open_channel_db(&db_path).expect("failed to open channel db");
         conn.execute(
@@ -9445,10 +9470,6 @@ mod tests {
                 .expect("failed to list queue tasks");
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0].title, "Platform homepage work");
-        match previous_owner {
-            Some(value) => std::env::set_var(owner_key, value),
-            None => std::env::remove_var(owner_key),
-        }
     }
 
     #[test]

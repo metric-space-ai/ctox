@@ -3,12 +3,12 @@ use anyhow::Result;
 use chrono::DateTime;
 use chrono::Duration;
 use chrono::Utc;
+use qrcode::types::Color as QrColor;
+use qrcode::QrCode;
 use rusqlite::params;
 use rusqlite::Connection;
 use rusqlite::OptionalExtension;
 use rusqlite::Transaction;
-use qrcode::types::Color as QrColor;
-use qrcode::QrCode;
 use serde::Serialize;
 use serde_json::json;
 use serde_json::Value;
@@ -713,6 +713,7 @@ pub fn has_runnable_inbound_message(root: &Path) -> Result<bool> {
 pub fn ack_leased_messages(root: &Path, message_keys: &[String], status: &str) -> Result<usize> {
     let db_path = resolve_db_path(root, None);
     let mut conn = open_channel_db(&db_path)?;
+    guard_founder_handled_ack(root, &conn, message_keys, status)?;
     ack_messages(&mut conn, message_keys, status)
 }
 
@@ -1560,7 +1561,8 @@ fn normalize_email_list(values: impl IntoIterator<Item = String>) -> Vec<String>
 }
 
 fn normalize_deliverable_text(value: &str) -> String {
-    value.to_ascii_lowercase()
+    value
+        .to_ascii_lowercase()
         .chars()
         .map(|ch| {
             if ch.is_ascii_alphanumeric() || ch.is_ascii_whitespace() {
@@ -1645,25 +1647,33 @@ fn founder_reply_satisfies_deliverable(
     }
     let normalized = normalize_deliverable_text(body);
     match deliverable {
-        "qr_code" => text_mentions_any(
-            &normalized,
-            &["qr code", "qrcode", "jami qr", "qr zugang"],
-        ),
+        "qr_code" => text_mentions_any(&normalized, &["qr code", "qrcode", "jami qr", "qr zugang"]),
         "mockup_links_or_files" => text_mentions_any(
             &normalized,
-            &["mockup", "entwurf", "design vorlage", "html", "http", "https", "link"],
+            &[
+                "mockup",
+                "entwurf",
+                "design vorlage",
+                "html",
+                "http",
+                "https",
+                "link",
+            ],
         ),
         "link_set" => text_mentions_any(&normalized, &["http", "https", "link", "links"]),
         _ => true,
     }
 }
 
-fn prepare_founder_reply_attachments(root: &Path, subject: &str, body: &str) -> Result<Vec<String>> {
+fn prepare_founder_reply_attachments(
+    root: &Path,
+    subject: &str,
+    body: &str,
+) -> Result<Vec<String>> {
     let required = detect_required_founder_deliverables(subject, body);
     let mut attachments = Vec::new();
     if required.iter().any(|value| value == "qr_code")
-        && normalize_deliverable_text(&format!("{subject} {body}"))
-            .contains("jami")
+        && normalize_deliverable_text(&format!("{subject} {body}")).contains("jami")
     {
         attachments.push(generate_jami_setup_pdf_artifact(root)?);
     }
@@ -1687,8 +1697,12 @@ fn generate_jami_setup_pdf_artifact(root: &Path) -> Result<String> {
         .unwrap_or("CTO1");
     let share_uri = format!("jami:{account_id}");
     let artifact_dir = root.join("runtime/communication/artifacts/jami");
-    fs::create_dir_all(&artifact_dir)
-        .with_context(|| format!("failed to create Jami artifact dir {}", artifact_dir.display()))?;
+    fs::create_dir_all(&artifact_dir).with_context(|| {
+        format!(
+            "failed to create Jami artifact dir {}",
+            artifact_dir.display()
+        )
+    })?;
     let file_name = format!(
         "ctox-jami-setup-{}.pdf",
         SystemTime::now()
@@ -1748,7 +1762,9 @@ fn build_simple_jami_setup_pdf(profile_name: &str, share_uri: &str) -> Result<Ve
     objects.push("1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n".to_string());
     objects.push("2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n".to_string());
     objects.push("3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >> endobj\n".to_string());
-    objects.push("4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n".to_string());
+    objects.push(
+        "4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n".to_string(),
+    );
     objects.push(format!(
         "5 0 obj << /Length {} >> stream\n{}endstream\nendobj\n",
         content.as_bytes().len(),
@@ -1819,7 +1835,8 @@ fn derive_founder_reply_recipients(
     let external_to = normalize_email_list(filter_external(&addressing.recipient_addresses));
     let external_cc = normalize_email_list(filter_external(&addressing.cc_addresses));
 
-    if derives_targets_from_forward(&inbound.subject, &inbound.body_text) && !external_to.is_empty() {
+    if derives_targets_from_forward(&inbound.subject, &inbound.body_text) && !external_to.is_empty()
+    {
         let mut cc = vec![inbound.sender_address.clone()];
         cc.extend(external_cc);
         return (external_to, normalize_email_list(cc));
@@ -1949,7 +1966,8 @@ pub(crate) fn prepare_reviewed_founder_reply(
     let addressing = load_message_addressing_from_conn(&conn, inbound_message_key)?
         .with_context(|| format!("missing communication addressing for {inbound_message_key}"))?;
     let (to, cc) = derive_founder_reply_recipients(&inbound, &addressing);
-    let attachments = prepare_founder_reply_attachments(root, &inbound.subject, &inbound.body_text)?;
+    let attachments =
+        prepare_founder_reply_attachments(root, &inbound.subject, &inbound.body_text)?;
     let request = resolve_outbound_subject(
         &conn,
         ChannelSendRequest {
@@ -2010,6 +2028,192 @@ pub(crate) fn ensure_founder_reply_deliverables_present(
     Ok(())
 }
 
+pub(crate) fn record_founder_reply_review_approval(
+    root: &Path,
+    inbound_message_key: &str,
+    body: &str,
+    review_summary: &str,
+) -> Result<()> {
+    let db_path = resolve_db_path(root, None);
+    let conn = open_channel_db(&db_path)?;
+    let action = prepare_reviewed_founder_reply(root, inbound_message_key)?;
+    let (action_digest, action_json, body_sha256) = founder_reply_review_digest(&action, body);
+    let approval_key = format!("founder-review:{inbound_message_key}:{action_digest}");
+    conn.execute(
+        r#"
+        INSERT INTO communication_founder_reply_reviews (
+            approval_key, inbound_message_key, action_digest, action_json,
+            body_sha256, reviewer, review_summary, approved_at, sent_at, send_result_json
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, 'external-review', ?6, ?7, NULL, '{}')
+        ON CONFLICT(inbound_message_key, action_digest) DO UPDATE SET
+            approval_key=excluded.approval_key,
+            action_json=excluded.action_json,
+            body_sha256=excluded.body_sha256,
+            reviewer=excluded.reviewer,
+            review_summary=excluded.review_summary,
+            approved_at=excluded.approved_at,
+            sent_at=NULL,
+            send_result_json='{}'
+        "#,
+        params![
+            approval_key,
+            inbound_message_key,
+            action_digest,
+            action_json,
+            body_sha256,
+            review_summary,
+            now_iso_string()
+        ],
+    )
+    .context("failed to record founder reply review approval")?;
+    Ok(())
+}
+
+fn founder_reply_review_digest(
+    action: &FounderReplyAction,
+    body: &str,
+) -> (String, String, String) {
+    let action_json = json!({
+        "thread_key": &action.thread_key,
+        "subject": &action.subject,
+        "to": &action.to,
+        "cc": &action.cc,
+        "attachments": &action.attachments,
+    })
+    .to_string();
+    let body_sha256 = format!("{:x}", Sha256::digest(body.trim().as_bytes()));
+    let mut hasher = Sha256::new();
+    hasher.update(action_json.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(body_sha256.as_bytes());
+    let action_digest = format!("{:x}", hasher.finalize());
+    (action_digest, action_json, body_sha256)
+}
+
+fn require_unconsumed_founder_reply_review(
+    conn: &Connection,
+    inbound_message_key: &str,
+    action: &FounderReplyAction,
+    body: &str,
+) -> Result<String> {
+    let (action_digest, _, _) = founder_reply_review_digest(action, body);
+    let approval_key = conn
+        .query_row(
+            r#"
+            SELECT approval_key
+            FROM communication_founder_reply_reviews
+            WHERE inbound_message_key = ?1
+              AND action_digest = ?2
+              AND sent_at IS NULL
+            LIMIT 1
+            "#,
+            params![inbound_message_key, action_digest],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .context("failed to load founder reply review approval")?;
+    approval_key.with_context(|| {
+        "reviewed founder reply has no matching unconsumed review approval for the exact body, recipients, cc, subject, and attachments"
+            .to_string()
+    })
+}
+
+fn mark_founder_reply_review_sent(
+    conn: &Connection,
+    approval_key: &str,
+    send_result: &Value,
+) -> Result<()> {
+    conn.execute(
+        r#"
+        UPDATE communication_founder_reply_reviews
+        SET sent_at = ?2,
+            send_result_json = ?3
+        WHERE approval_key = ?1
+          AND sent_at IS NULL
+        "#,
+        params![approval_key, now_iso_string(), send_result.to_string()],
+    )
+    .context("failed to mark founder reply review as sent")?;
+    Ok(())
+}
+
+fn founder_reply_sent_after_review(conn: &Connection, inbound_message_key: &str) -> Result<bool> {
+    let count: i64 = conn.query_row(
+        r#"
+        SELECT COUNT(*)
+        FROM communication_founder_reply_reviews
+        WHERE inbound_message_key = ?1
+          AND sent_at IS NOT NULL
+        "#,
+        params![inbound_message_key],
+        |row| row.get(0),
+    )?;
+    Ok(count > 0)
+}
+
+fn protected_founder_inbound_message(
+    root: &Path,
+    conn: &Connection,
+    message_key: &str,
+) -> Result<bool> {
+    let Some((channel, direction, sender_address)) = conn
+        .query_row(
+            r#"
+            SELECT channel, direction, sender_address
+            FROM communication_messages
+            WHERE message_key = ?1
+            LIMIT 1
+            "#,
+            params![message_key],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .optional()?
+    else {
+        return Ok(false);
+    };
+    if channel != "email" || direction != "inbound" {
+        return Ok(false);
+    }
+    let settings = communication_gateway::runtime_settings_from_root(
+        root,
+        communication_gateway::CommunicationAdapterKind::Email,
+    );
+    let policy = classify_email_sender(&settings, &sender_address);
+    Ok(matches!(
+        policy.role.as_str(),
+        "owner" | "founder" | "admin"
+    ))
+}
+
+fn guard_founder_handled_ack(
+    root: &Path,
+    conn: &Connection,
+    message_keys: &[String],
+    status: &str,
+) -> Result<()> {
+    if status != "handled" {
+        return Ok(());
+    }
+    for message_key in message_keys {
+        if protected_founder_inbound_message(root, conn, message_key)?
+            && !founder_reply_sent_after_review(conn, message_key)?
+        {
+            anyhow::bail!(
+                "cannot mark founder/owner/admin inbound mail as handled before an exact reviewed reply was accepted by the email adapter: {}",
+                message_key
+            );
+        }
+    }
+    Ok(())
+}
+
 pub fn send_reviewed_founder_reply(
     root: &Path,
     inbound_message_key: &str,
@@ -2025,12 +2229,12 @@ pub fn send_reviewed_founder_reply(
         ChannelSendRequest {
             channel: "email".to_string(),
             account_key: inbound.account_key.clone(),
-            thread_key: action.thread_key,
+            thread_key: action.thread_key.clone(),
             body: body.trim().to_string(),
-            subject: action.subject,
-            to: action.to,
-            cc: action.cc,
-            attachments: action.attachments,
+            subject: action.subject.clone(),
+            to: action.to.clone(),
+            cc: action.cc.clone(),
+            attachments: action.attachments.clone(),
             sender_display: None,
             sender_address: None,
             send_voice: false,
@@ -2046,6 +2250,12 @@ pub fn send_reviewed_founder_reply(
         !protected.is_empty(),
         "reviewed founder reply requires founder/owner/admin recipient"
     );
+    let approval_key = require_unconsumed_founder_reply_review(
+        &conn,
+        inbound_message_key,
+        &action,
+        &request.body,
+    )?;
     ensure_founder_outbound_body_clean(&request)?;
     ensure_founder_reply_deliverables_present(
         root,
@@ -2053,7 +2263,9 @@ pub fn send_reviewed_founder_reply(
         &request.body,
         &request.attachments,
     )?;
-    send_email_message(root, &conn, &db_path, &request)
+    let send_result = send_email_message(root, &conn, &db_path, &request)?;
+    mark_founder_reply_review_sent(&conn, &approval_key, &send_result)?;
+    Ok(send_result)
 }
 
 fn test_channel(
@@ -2506,6 +2718,24 @@ fn ensure_schema(conn: &Connection) -> Result<()> {
             last_error TEXT,
             updated_at TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS communication_founder_reply_reviews (
+            approval_key TEXT PRIMARY KEY,
+            inbound_message_key TEXT NOT NULL,
+            action_digest TEXT NOT NULL,
+            action_json TEXT NOT NULL,
+            body_sha256 TEXT NOT NULL,
+            reviewer TEXT NOT NULL,
+            review_summary TEXT NOT NULL,
+            approved_at TEXT NOT NULL,
+            sent_at TEXT,
+            send_result_json TEXT NOT NULL DEFAULT '{{}}',
+            UNIQUE(inbound_message_key, action_digest)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_founder_reply_reviews_inbound
+            ON communication_founder_reply_reviews(inbound_message_key, sent_at);
+
         CREATE TABLE IF NOT EXISTS owner_profiles (
             owner_key TEXT PRIMARY KEY,
             display_name TEXT NOT NULL,
@@ -4764,9 +4994,7 @@ mod tests {
         .expect_err("founder outbound should require review override");
 
         assert!(
-            error
-                .to_string()
-                .contains("blocked without review"),
+            error.to_string().contains("blocked without review"),
             "unexpected error: {error}"
         );
     }
@@ -4785,7 +5013,8 @@ mod tests {
                 channel: "email".to_string(),
                 account_key: "email:cto1@metric-space.ai".to_string(),
                 thread_key: "mail-thread".to_string(),
-                body: "Die Dateien liegen unter /home/ubuntu/workspace/kunstmen/public/mockups/.".to_string(),
+                body: "Die Dateien liegen unter /home/ubuntu/workspace/kunstmen/public/mockups/."
+                    .to_string(),
                 subject: "Re: Test".to_string(),
                 to: vec!["founder@example.com".to_string()],
                 cc: Vec::new(),
@@ -4799,9 +5028,7 @@ mod tests {
         .expect_err("internal leakage should be blocked");
 
         assert!(
-            error
-                .to_string()
-                .contains("internal-language leakage"),
+            error.to_string().contains("internal-language leakage"),
             "unexpected error: {error}"
         );
     }
@@ -4961,6 +5188,136 @@ mod tests {
     }
 
     #[test]
+    fn reviewed_founder_reply_requires_exact_approval_before_send() {
+        let root = std::env::temp_dir().join(format!(
+            "ctox-founder-exact-review-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(root.join("runtime")).expect("failed to create runtime dir");
+        let db_path = root.join("runtime/ctox.sqlite3");
+        let mut conn = open_channel_db(&db_path).expect("failed to open db");
+        let inbound_key = "email:cto1@metric-space.ai::INBOX::exact-review-1";
+        upsert_communication_message(
+            &mut conn,
+            UpsertMessage {
+                message_key: inbound_key,
+                channel: "email",
+                account_key: "email:cto1@metric-space.ai",
+                thread_key: "<exact-review-thread@example.com>",
+                remote_id: "remote-exact-review-1",
+                direction: "inbound",
+                folder_hint: "INBOX",
+                sender_display: "Michael Welsch",
+                sender_address: "michael.welsch@metric-space.ai",
+                recipient_addresses_json: "[\"cto1@metric-space.ai\"]",
+                cc_addresses_json: "[]",
+                bcc_addresses_json: "[]",
+                subject: "Status",
+                preview: "Status bitte",
+                body_text: "Bitte antworte mit dem aktuellen Stand.",
+                body_html: "",
+                raw_payload_ref: "",
+                trust_level: "trusted",
+                status: "received",
+                seen: false,
+                has_attachments: false,
+                external_created_at: "2026-04-24T18:00:00Z",
+                observed_at: "2026-04-24T18:00:00Z",
+                metadata_json: "{}",
+            },
+        )
+        .expect("message upsert");
+
+        let action = prepare_reviewed_founder_reply(&root, inbound_key).expect("prepare reply");
+        let approved_body = "Hi Michael,\n\nDer Status ist jetzt konkret.";
+        let before_approval =
+            require_unconsumed_founder_reply_review(&conn, inbound_key, &action, approved_body)
+                .expect_err("send must be blocked before review approval");
+        assert!(before_approval
+            .to_string()
+            .contains("no matching unconsumed review approval"));
+
+        record_founder_reply_review_approval(&root, inbound_key, approved_body, "PASS")
+            .expect("record approval");
+        let conn = open_channel_db(&db_path).expect("reopen db");
+        require_unconsumed_founder_reply_review(&conn, inbound_key, &action, approved_body)
+            .expect("exact reviewed body should be approved");
+        let changed_body =
+            require_unconsumed_founder_reply_review(&conn, inbound_key, &action, "Changed body")
+                .expect_err("changed body must not inherit the approval");
+        assert!(changed_body
+            .to_string()
+            .contains("no matching unconsumed review approval"));
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn founder_inbound_cannot_be_handled_without_reviewed_send() {
+        let root = std::env::temp_dir().join(format!(
+            "ctox-founder-handled-guard-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(root.join("runtime")).expect("failed to create runtime dir");
+        let mut runtime_settings = BTreeMap::new();
+        runtime_settings.insert(
+            "CTOX_OWNER_EMAIL_ADDRESS".to_string(),
+            "michael.welsch@metric-space.ai".to_string(),
+        );
+        crate::inference::runtime_env::save_runtime_env_map(&root, &runtime_settings)
+            .expect("failed to persist owner setting");
+        let db_path = root.join("runtime/ctox.sqlite3");
+        let mut conn = open_channel_db(&db_path).expect("failed to open db");
+        let inbound_key = "email:cto1@metric-space.ai::INBOX::handled-guard-1";
+        upsert_communication_message(
+            &mut conn,
+            UpsertMessage {
+                message_key: inbound_key,
+                channel: "email",
+                account_key: "email:cto1@metric-space.ai",
+                thread_key: "<handled-guard-thread@example.com>",
+                remote_id: "remote-handled-guard-1",
+                direction: "inbound",
+                folder_hint: "INBOX",
+                sender_display: "Michael Welsch",
+                sender_address: "michael.welsch@metric-space.ai",
+                recipient_addresses_json: "[\"cto1@metric-space.ai\"]",
+                cc_addresses_json: "[]",
+                bcc_addresses_json: "[]",
+                subject: "Bitte antworten",
+                preview: "Bitte antworten",
+                body_text: "Bitte antworte.",
+                body_html: "",
+                raw_payload_ref: "",
+                trust_level: "trusted",
+                status: "received",
+                seen: false,
+                has_attachments: false,
+                external_created_at: "2026-04-24T18:05:00Z",
+                observed_at: "2026-04-24T18:05:00Z",
+                metadata_json: "{}",
+            },
+        )
+        .expect("message upsert");
+
+        let err = ack_leased_messages(&root, &[inbound_key.to_string()], "handled")
+            .expect_err("founder inbound should not be handleable before reviewed send");
+        assert!(err
+            .to_string()
+            .contains("cannot mark founder/owner/admin inbound mail as handled"));
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn take_messages_allows_pending_rows_with_stale_lease_owner() {
         let db_path = unique_test_db_path("ctox-channel-take-pending-stale-owner");
         let mut conn = open_channel_db(&db_path).expect("failed to open db");
@@ -5014,8 +5371,16 @@ mod tests {
         let db_path = unique_test_db_path("ctox-channel-take-latest-per-thread");
         let mut conn = open_channel_db(&db_path).expect("failed to open db");
         for (message_key, external_created_at, preview) in [
-            ("thread-msg-old", "2026-04-24T18:10:00Z", "old founder reply"),
-            ("thread-msg-new", "2026-04-24T18:41:06Z", "latest founder reply"),
+            (
+                "thread-msg-old",
+                "2026-04-24T18:10:00Z",
+                "old founder reply",
+            ),
+            (
+                "thread-msg-new",
+                "2026-04-24T18:41:06Z",
+                "latest founder reply",
+            ),
         ] {
             upsert_communication_message(
                 &mut conn,
