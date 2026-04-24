@@ -1155,6 +1155,12 @@ struct ChannelMessageView {
     routing: RoutingView,
 }
 
+#[derive(Debug)]
+struct MessageAddressing {
+    recipient_addresses: Vec<String>,
+    cc_addresses: Vec<String>,
+}
+
 #[derive(Debug, Serialize)]
 struct CommunicationStateCandidate {
     kind: String,
@@ -1499,6 +1505,93 @@ fn load_message_from_conn(
     .map_err(anyhow::Error::from)
 }
 
+fn load_message_addressing_from_conn(
+    conn: &Connection,
+    message_key: &str,
+) -> Result<Option<MessageAddressing>> {
+    conn.query_row(
+        r#"
+        SELECT recipient_addresses_json, cc_addresses_json
+        FROM communication_messages
+        WHERE message_key = ?1
+        LIMIT 1
+        "#,
+        params![message_key],
+        |row| {
+            Ok(MessageAddressing {
+                recipient_addresses: parse_string_json_array(&row.get::<_, String>(0)?),
+                cc_addresses: parse_string_json_array(&row.get::<_, String>(1)?),
+            })
+        },
+    )
+    .optional()
+    .map_err(anyhow::Error::from)
+}
+
+fn normalize_email_list(values: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    let mut ordered = Vec::new();
+    for value in values {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let normalized = normalize_email_address(trimmed);
+        if normalized.is_empty() || !seen.insert(normalized.clone()) {
+            continue;
+        }
+        ordered.push(trimmed.to_string());
+    }
+    ordered
+}
+
+fn derives_targets_from_forward(subject: &str, body: &str) -> bool {
+    let lowered_subject = subject.to_ascii_lowercase();
+    if lowered_subject.starts_with("fwd:") || lowered_subject.starts_with("fw:") {
+        return true;
+    }
+    let lowered_body = body.to_ascii_lowercase();
+    lowered_body.contains("weitergeleiteten nachricht")
+        || lowered_body.contains("begin forwarded message")
+        || lowered_body.contains("forwarded message")
+}
+
+fn derive_founder_reply_recipients(
+    inbound: &ChannelMessageView,
+    addressing: &MessageAddressing,
+) -> (Vec<String>, Vec<String>) {
+    let account_email =
+        normalize_email_address(&email_address_from_account_key(&inbound.account_key));
+    let sender_email = normalize_email_address(&inbound.sender_address);
+
+    let filter_external = |values: &[String]| {
+        values
+            .iter()
+            .filter(|value| {
+                let normalized = normalize_email_address(value);
+                !normalized.is_empty() && normalized != account_email && normalized != sender_email
+            })
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+
+    let external_to = normalize_email_list(filter_external(&addressing.recipient_addresses));
+    let external_cc = normalize_email_list(filter_external(&addressing.cc_addresses));
+
+    if derives_targets_from_forward(&inbound.subject, &inbound.body_text) && !external_to.is_empty() {
+        let mut cc = vec![inbound.sender_address.clone()];
+        cc.extend(external_cc);
+        return (external_to, normalize_email_list(cc));
+    }
+
+    let mut cc = external_to;
+    cc.extend(external_cc);
+    (
+        vec![inbound.sender_address.clone()],
+        normalize_email_list(cc),
+    )
+}
+
 fn protected_recipient_policies(
     settings: &BTreeMap<String, String>,
     request: &ChannelSendRequest,
@@ -1604,6 +1697,9 @@ pub fn send_reviewed_founder_reply(
         inbound.channel == "email" && inbound.direction == "inbound",
         "reviewed founder reply requires an inbound email message"
     );
+    let addressing = load_message_addressing_from_conn(&conn, inbound_message_key)?
+        .with_context(|| format!("missing communication addressing for {inbound_message_key}"))?;
+    let (to, cc) = derive_founder_reply_recipients(&inbound, &addressing);
     let request = resolve_outbound_subject(
         &conn,
         ChannelSendRequest {
@@ -1612,8 +1708,8 @@ pub fn send_reviewed_founder_reply(
             thread_key: inbound.thread_key.clone(),
             body: body.trim().to_string(),
             subject: format!("Re: {}", inbound.subject.trim()),
-            to: vec![inbound.sender_address.clone()],
-            cc: Vec::new(),
+            to,
+            cc,
             sender_display: None,
             sender_address: None,
             send_voice: false,
@@ -4384,6 +4480,58 @@ mod tests {
                 .contains("generic channel send is disabled"),
             "unexpected error: {error}"
         );
+    }
+
+    #[test]
+    fn reviewed_founder_reply_for_forward_targets_original_recipient_and_ccs_sender() {
+        let db_path = unique_test_db_path("ctox-founder-forward-reply");
+        let mut conn = open_channel_db(&db_path).expect("failed to open db");
+        upsert_communication_message(
+            &mut conn,
+            UpsertMessage {
+                message_key: "email:cto1@metric-space.ai::INBOX::forward-1",
+                channel: "email",
+                account_key: "email:cto1@metric-space.ai",
+                thread_key: "<forward-thread@example.com>",
+                remote_id: "remote-forward-1",
+                direction: "inbound",
+                folder_hint: "INBOX",
+                sender_display: "Michael Welsch",
+                sender_address: "michael.welsch@metric-space.ai",
+                recipient_addresses_json: "[\"o.schaefers@gmx.net\"]",
+                cc_addresses_json: "[\"cto1@metric-space.ai\"]",
+                bcc_addresses_json: "[]",
+                subject: "Fwd: Visuelle Homepage",
+                preview: "Hi Olaf",
+                body_text: "Hi Olaf,\n\nAnfang der weitergeleiteten Nachricht:\n...",
+                body_html: "",
+                raw_payload_ref: "",
+                trust_level: "trusted",
+                status: "received",
+                seen: false,
+                has_attachments: false,
+                external_created_at: "2026-04-24T12:04:04Z",
+                observed_at: "2026-04-24T12:04:05Z",
+                metadata_json: "{}",
+            },
+        )
+        .expect("message upsert");
+
+        let inbound = load_message_from_conn(&conn, "email:cto1@metric-space.ai::INBOX::forward-1")
+            .expect("load inbound")
+            .expect("inbound missing");
+        let addressing = load_message_addressing_from_conn(
+            &conn,
+            "email:cto1@metric-space.ai::INBOX::forward-1",
+        )
+        .expect("load addressing")
+        .expect("addressing missing");
+
+        let (to, cc) = derive_founder_reply_recipients(&inbound, &addressing);
+        assert_eq!(to, vec!["o.schaefers@gmx.net".to_string()]);
+        assert_eq!(cc, vec!["michael.welsch@metric-space.ai".to_string()]);
+
+        let _ = std::fs::remove_file(&db_path);
     }
 
     #[test]
