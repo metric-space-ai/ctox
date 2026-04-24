@@ -36,6 +36,14 @@ fn main() {
     let cuda_feature = env::var("CARGO_FEATURE_CUDA").is_ok();
     let ggml_lib_dir = env::var("GGML_LIB_DIR").ok();
 
+    // PTX stubs must exist before the Rust sources are compiled
+    // (include_str! in src/cuda_port/ptx.rs resolves at compile time).
+    // On a non-CUDA host we write empty placeholders so the library
+    // still compiles; runtime module-load errors take over from
+    // there. When the cuda feature is set, the real nvcc compile in
+    // `compile_cuda_port_ptx_modules` overwrites these.
+    write_ptx_stubs();
+
     // `cargo check` on a non-CUDA host without GGML_LIB_DIR: just compile
     // the Rust surface and bail out of linker setup.
     if !cuda_feature && ggml_lib_dir.is_none() {
@@ -58,11 +66,62 @@ fn main() {
 
     compile_f16_convert();
 
+    // cuda_port bare-metal migration: compile vendored .cu files to PTX
+    // for the Rust-side dispatcher port. Each op landed in
+    // src/cuda_port/ops/<op>.rs needs the matching kernel source here.
+    // List grows as ports land.
+    if cuda_feature {
+        compile_cuda_port_ptx_modules();
+    } else {
+        // Without the cuda feature the PTX blobs aren't included, but
+        // include_str! still resolves at compile time — write empty
+        // stubs so the non-CUDA `cargo check` path compiles.
+        write_ptx_stubs();
+    }
+
     // Linux + CUDA needs libstdc++ because nvcc-emitted objects reference
     // C++ runtime symbols (`__cxa_guard_*`, `__gxx_personality_v0`). On
     // macOS + Metal we don't hit this path; the warning above fires first.
     #[cfg(target_os = "linux")]
     println!("cargo:rustc-link-lib=dylib=stdc++");
+}
+
+/// PTX stems to compile. Each entry gets one `<stem>.ptx` file in
+/// `$OUT_DIR`, consumed by the Rust side via `include_str!` in
+/// `src/cuda_port/ptx.rs`.
+const CUDA_PORT_PTX_MODULES: &[&str] = &["norm"];
+
+fn compile_cuda_port_ptx_modules() {
+    for stem in CUDA_PORT_PTX_MODULES {
+        let ok = compile_kernel_to_ptx(stem);
+        if !ok {
+            // Don't fail the build — write an empty stub so include_str!
+            // still compiles; runtime module-load will fail with a clear
+            // error later. Safer than breaking `cargo check` on a CI host
+            // with a stale nvcc.
+            write_ptx_stub(stem);
+        }
+    }
+}
+
+fn write_ptx_stubs() {
+    for stem in CUDA_PORT_PTX_MODULES {
+        write_ptx_stub(stem);
+    }
+}
+
+fn write_ptx_stub(stem: &str) {
+    let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
+    let ptx = out_dir.join(format!("{stem}.ptx"));
+    if !ptx.exists() {
+        let content = format!(
+            "// PTX stub — cuda feature off or nvcc failed during build.\n\
+             // Runtime `cuModuleLoadData` will return an error if this\n\
+             // file is actually loaded. Rebuild with `--features=cuda`\n\
+             // and a working nvcc on PATH to fill this in.\n"
+        );
+        let _ = std::fs::write(&ptx, content);
+    }
 }
 
 /// Emit `cargo:rustc-link-*` directives for the pre-built ggml `.so` set.

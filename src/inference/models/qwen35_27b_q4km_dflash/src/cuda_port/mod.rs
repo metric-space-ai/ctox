@@ -29,5 +29,6 @@
 //! will take over op-by-op as each port lands + is bit-exact-verified.
 
 pub mod driver;
+pub mod module;
 pub mod ops;
 pub mod ptx;
