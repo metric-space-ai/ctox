@@ -58,6 +58,12 @@ name = "qwen35-27b-q4km-dflash-fill-verify"
 path = "src/bin/fill_verify.rs"
 required-features = ["cuda"]
 
+[[bin]]
+# Verifier for the `cuda_port::ops::diag` port.
+name = "qwen35-27b-q4km-dflash-diag-verify"
+path = "src/bin/diag_verify.rs"
+required-features = ["cuda"]
+
 [features]
 default = []
 # CUDA is the only real build mode — the target model is 27B in Q4_K_M,

@@ -14,13 +14,16 @@
 use std::sync::OnceLock;
 
 use super::driver::CUmodule;
+use super::ops::diag::{mangled_diag_kernel_f16, mangled_diag_kernel_f32, DiagKernels};
 use super::ops::fill::{mangled_fill_kernel_f16, mangled_fill_kernel_f32, FillKernels};
 use super::ops::norm::{
     mangled_rms_norm_f32_b1024, mangled_rms_norm_f32_b256, RmsNormKernels,
 };
 use super::ops::scale::{mangled_scale_f32, ScaleKernel};
 use super::ops::unary::{mangled_unary_op_f32, UnaryKernels};
-use super::ptx::{get_function, load_module, FILL_PTX, NORM_PTX, SCALE_PTX, UNARY_PTX};
+use super::ptx::{
+    get_function, load_module, DIAG_PTX, FILL_PTX, NORM_PTX, SCALE_PTX, UNARY_PTX,
+};
 
 /// All kernel handles the Rust side needs, resolved once.
 pub struct PortedKernels {
@@ -33,10 +36,13 @@ pub struct PortedKernels {
     scale_module: CUmodule,
     #[allow(dead_code)]
     fill_module: CUmodule,
+    #[allow(dead_code)]
+    diag_module: CUmodule,
     pub rms_norm: RmsNormKernels,
     pub unary: UnaryKernels,
     pub scale: ScaleKernel,
     pub fill: FillKernels,
+    pub diag: DiagKernels,
 }
 
 // SAFETY: `CUmodule` / `CUfunction` are opaque device-side handles.
@@ -116,14 +122,30 @@ fn init_ported_kernels() -> Result<PortedKernels, String> {
     .map_err(|e| format!("fill<__half>: {e}"))?;
     let fill = FillKernels { fill_f32, fill_f16 };
 
+    // diag.cu — diag_kernel<float> + diag_kernel<__half>
+    let diag_module = load_module(DIAG_PTX).map_err(|e| format!("diag.ptx: {e}"))?;
+    let diag_f32 = get_function(
+        diag_module,
+        mangled_diag_kernel_f32().map_err(|e| format!("diag<float> lookup: {e}"))?,
+    )
+    .map_err(|e| format!("diag<float>: {e}"))?;
+    let diag_f16 = get_function(
+        diag_module,
+        mangled_diag_kernel_f16().map_err(|e| format!("diag<__half> lookup: {e}"))?,
+    )
+    .map_err(|e| format!("diag<__half>: {e}"))?;
+    let diag = DiagKernels { diag_f32, diag_f16 };
+
     Ok(PortedKernels {
         norm_module,
         unary_module,
         scale_module,
         fill_module,
+        diag_module,
         rms_norm: RmsNormKernels { b256, b1024 },
         unary: uk,
         scale,
         fill,
+        diag,
     })
 }

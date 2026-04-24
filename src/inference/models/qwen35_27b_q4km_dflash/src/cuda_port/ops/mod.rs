@@ -5,6 +5,7 @@
 //! anchors pointing at the upstream line ranges (same porting
 //! discipline as `graph.rs` for the Qwen3.5 forward pass).
 
+pub mod diag;
 pub mod fill;
 pub mod norm;
 pub mod scale;
