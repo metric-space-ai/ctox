@@ -7,7 +7,6 @@ use serde::Deserialize;
 use serde::Serialize;
 #[cfg(test)]
 use serial_test::serial;
-use std::env;
 use std::fmt::Debug;
 use std::path::Path;
 use std::path::PathBuf;
@@ -378,17 +377,11 @@ pub const OPENAI_API_KEY_ENV_VAR: &str = "OPENAI_API_KEY";
 pub const CODEX_API_KEY_ENV_VAR: &str = "CODEX_API_KEY";
 
 pub fn read_openai_api_key_from_env() -> Option<String> {
-    env::var(OPENAI_API_KEY_ENV_VAR)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
+    None
 }
 
 pub fn read_ctox_api_key_from_env() -> Option<String> {
-    env::var(CODEX_API_KEY_ENV_VAR)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
+    None
 }
 
 /// Delete the auth.json file inside `codex_home` if it exists. Returns `Ok(true)`
@@ -1097,6 +1090,22 @@ impl AuthManager {
         auth: CodexAuth,
         codex_home: PathBuf,
     ) -> Arc<Self> {
+        let cached = CachedAuth {
+            auth: Some(auth),
+            external_refresher: None,
+        };
+        Arc::new(Self {
+            codex_home,
+            inner: RwLock::new(cached),
+            enable_ctox_api_key_env: false,
+            auth_credentials_store_mode: AuthCredentialsStoreMode::File,
+            forced_chatgpt_workspace_id: RwLock::new(None),
+        })
+    }
+
+    /// Create an AuthManager from explicitly supplied runtime auth without
+    /// consulting auth.json or process-global environment fallbacks.
+    pub fn from_runtime_auth(auth: CodexAuth, codex_home: PathBuf) -> Arc<Self> {
         let cached = CachedAuth {
             auth: Some(auth),
             external_refresher: None,

@@ -35,6 +35,7 @@ use ctox_utils_absolute_path::AbsolutePathBuf;
 
 use crate::context::compact::{CompactDecision, CompactMode, CompactPolicy, CompactTrigger};
 use crate::inference::runtime_kernel;
+use crate::secrets;
 
 // ---------------------------------------------------------------------------
 // PersistentSession — lives across turns within a mission-turn-loop iteration
@@ -207,17 +208,17 @@ impl PersistentSession {
         let codex_home =
             find_codex_home().map_err(|err| anyhow::anyhow!("find_codex_home: {err}"))?;
 
-        // Write API key from CTOX settings map into auth.json.
-        // No process env — key flows: TUI/SQLite settings → settings map → auth.json → AuthManager.
         let api_key = settings
             .get("OPENAI_API_KEY")
             .or_else(|| settings.get("OPENROUTER_API_KEY"))
             .or_else(|| settings.get("ANTHROPIC_API_KEY"))
             .or_else(|| settings.get("MINIMAX_API_KEY"))
+            .cloned()
+            .or_else(|| secrets::get_credential(root, "OPENAI_API_KEY"))
+            .or_else(|| secrets::get_credential(root, "OPENROUTER_API_KEY"))
+            .or_else(|| secrets::get_credential(root, "ANTHROPIC_API_KEY"))
+            .or_else(|| secrets::get_credential(root, "MINIMAX_API_KEY"))
             .filter(|v| !v.trim().is_empty());
-        if let Some(key) = api_key {
-            let _ = ctox_core::auth::login_with_api_key(&codex_home, key, Default::default());
-        }
         let config_cwd =
             AbsolutePathBuf::from_absolute_path(cwd.canonicalize().unwrap_or(cwd.clone()))
                 .map_err(|err| anyhow::anyhow!("cwd resolve: {err}"))?;
@@ -225,11 +226,15 @@ impl PersistentSession {
             .await
             .map_err(|err| anyhow::anyhow!("load config.toml: {err}"))?;
 
-        let auth_manager = AuthManager::shared(
-            codex_home.clone(),
-            true,
-            config_toml.cli_auth_credentials_store.unwrap_or_default(),
-        );
+        let auth_manager = if let Some(ref key) = api_key {
+            AuthManager::from_runtime_auth(ctox_core::CodexAuth::from_api_key(key), codex_home.clone())
+        } else {
+            AuthManager::shared(
+                codex_home.clone(),
+                false,
+                config_toml.cli_auth_credentials_store.unwrap_or_default(),
+            )
+        };
         let cloud_requirements = cloud_requirements_loader(
             auth_manager,
             config_toml
@@ -248,6 +253,11 @@ impl PersistentSession {
         );
         let local_provider =
             super::turn_loop::resolve_local_model_provider_spec(resolved_runtime.as_ref());
+        if api_provider.is_some() && local_provider.is_none() && api_key.is_none() {
+            anyhow::bail!(
+                "API runtime requires provider credentials from the CTOX SQLite secret store or runtime settings; auth.json and process env fallbacks are disabled"
+            );
+        }
         if resolved_runtime
             .as_ref()
             .is_some_and(|runtime| runtime.state.source.is_local())

@@ -75,7 +75,12 @@ pub fn evaluate_runtime_state_invariants(
             .map(|status| (*status).to_string())
             .collect::<Vec<_>>(),
         10_000,
-    )?;
+    )?
+    .into_iter()
+    .filter(|task| {
+        turn_loop::conversation_id_for_thread_key(Some(task.thread_key.as_str())) == conversation_id
+    })
+    .collect::<Vec<_>>();
     let open_queue_titles = queue_tasks
         .iter()
         .map(|task| task.title.trim())
@@ -85,6 +90,10 @@ pub fn evaluate_runtime_state_invariants(
 
     let plan_goals = plan::list_goals(root)?
         .into_iter()
+        .filter(|goal| {
+            turn_loop::conversation_id_for_thread_key(Some(goal.thread_key.as_str()))
+                == conversation_id
+        })
         .filter(|goal| goal.status != "completed")
         .collect::<Vec<_>>();
     let open_plan_titles = plan_goals
@@ -320,6 +329,7 @@ fn focus_semantic_conflicts(content: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::evaluate_runtime_state_invariants;
+    use crate::channels;
     use crate::lcm::{ContinuityKind, LcmConfig, LcmEngine};
     use crate::plan;
     use anyhow::Context;
@@ -376,6 +386,42 @@ mod tests {
             .violations
             .iter()
             .any(|issue| issue.code == "idle_allowed_with_open_runtime_work"));
+
+        let _ = fs::remove_dir_all(root);
+        Ok(())
+    }
+
+    #[test]
+    fn ignores_open_queue_work_from_other_conversations() -> anyhow::Result<()> {
+        let root = temp_root();
+        let _engine = seed_focus(
+            &root,
+            "## Status\n+ Mission: Keep the root chat mission clean.\n+ Mission state: done.\n+ Continuation mode: closed.\n+ Trigger intensity: cold.\n## Next\n+ Next slice: none.\n## Done / Gate\n+ Done gate: the root chat mission stays closed unless its own work reopens.\n+ Closure confidence: high.\n",
+        )?;
+        channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Unrelated queue mission".to_string(),
+                prompt: "This belongs to queue/mission-1, not the root conversation.".to_string(),
+                thread_key: "queue/mission-1".to_string(),
+                workspace_root: None,
+                priority: "high".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )?;
+
+        let report = evaluate_runtime_state_invariants(&root, 1)?;
+        assert_eq!(report.open_queue_count, 0);
+        assert!(
+            !report
+                .violations
+                .iter()
+                .any(|issue| issue.code == "closed_mission_with_open_runtime_work"),
+            "unexpected violations: {:?}",
+            report.violations
+        );
 
         let _ = fs::remove_dir_all(root);
         Ok(())

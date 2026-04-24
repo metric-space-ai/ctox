@@ -155,16 +155,12 @@ impl ModelProviderInfo {
             }
         }
 
-        if let Some(env_headers) = &self.env_http_headers {
-            for (header, env_var) in env_headers {
-                if let Ok(val) = std::env::var(env_var)
-                    && !val.trim().is_empty()
-                    && let (Ok(name), Ok(value)) =
-                        (HeaderName::try_from(header), HeaderValue::try_from(val))
-                {
-                    headers.insert(name, value);
-                }
-            }
+        if let Some(env_headers) = &self.env_http_headers
+            && !env_headers.is_empty()
+        {
+            return Err(crate::error::CodexErr::InvalidRequest(
+                "environment-backed provider headers are disabled; store provider secrets in the CTOX SQLite secret store instead".to_string(),
+            ));
         }
 
         Ok(headers)
@@ -210,18 +206,12 @@ impl ModelProviderInfo {
     /// cannot be found, returns an error.
     pub fn api_key(&self) -> crate::error::Result<Option<String>> {
         match &self.env_key {
-            Some(env_key) => {
-                let api_key = std::env::var(env_key)
-                    .ok()
-                    .filter(|v| !v.trim().is_empty())
-                    .ok_or_else(|| {
-                        crate::error::CodexErr::EnvVar(EnvVarError {
-                            var: env_key.clone(),
-                            instructions: self.env_key_instructions.clone(),
-                        })
-                    })?;
-                Ok(Some(api_key))
-            }
+            Some(env_key) => Err(crate::error::CodexErr::EnvVar(EnvVarError {
+                var: env_key.clone(),
+                instructions: Some(
+                    "provider API keys must come from the CTOX SQLite secret store; process environment variables are disabled".to_string(),
+                ),
+            })),
             None => Ok(None),
         }
     }
@@ -270,17 +260,7 @@ impl ModelProviderInfo {
                     .into_iter()
                     .collect(),
             ),
-            env_http_headers: Some(
-                [
-                    (
-                        "OpenAI-Organization".to_string(),
-                        "OPENAI_ORGANIZATION".to_string(),
-                    ),
-                    ("OpenAI-Project".to_string(), "OPENAI_PROJECT".to_string()),
-                ]
-                .into_iter()
-                .collect(),
-            ),
+            env_http_headers: None,
             // Use global defaults for retry/timeout unless overridden in config.toml.
             request_max_retries: None,
             stream_max_retries: None,
