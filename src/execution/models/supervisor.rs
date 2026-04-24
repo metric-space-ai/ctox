@@ -1746,6 +1746,30 @@ fn ensure_backend_process(
     if spec.request_model.trim().is_empty() {
         return Ok(());
     }
+
+    // Auxiliary-role soft-skip: while the per-role inference crates
+    // under src/inference/models/ are still being landed (embedding,
+    // STT, TTS, vision), the Candle-engine subprocess that used to
+    // host them is retired. Without a matching entry in
+    // `local_model::resolve_local_model_backend`, the spawn would
+    // fail every cycle and flood the log. Silently skip the role so
+    // chat can keep running — the role stays "unavailable" until the
+    // per-model crate lands, at which point this check becomes a
+    // no-op (the registry lookup succeeds).
+    if role.is_auxiliary()
+        && super::local_model::resolve_local_model_backend(super::local_model::LocalModelRequest {
+            request_model: spec.request_model.as_str(),
+            transport_endpoint: spec.transport_endpoint.as_deref(),
+            root,
+        })
+        .is_none()
+    {
+        let pid_path = backend_pid_path(root, role);
+        let _ = stop_process(root, pid_path);
+        release_backend_runtime_ownership(root, role);
+        return Ok(());
+    }
+
     let descriptor = backend_runtime_descriptor(role, &spec);
     let admission = runtime_gpu_manager::resolve_gpu_admission(root, &descriptor)?;
     let pid_path = backend_pid_path(root, role);
