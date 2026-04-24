@@ -22,6 +22,15 @@ name = "qwen35-27b-q4km-dflash-bench"
 path = "src/bin/bench.rs"
 required-features = ["cuda"]
 
+[[bin]]
+# Local inference socket server. Speaks CTOX's line-delimited JSON IPC on
+# a Unix domain socket (matches src/harness/core/src/client.rs::LocalIpcRequest).
+# No HTTP, no network listener — peer UID check via SO_PEERCRED. Emits
+# OpenAI Responses API stream events. See src/server.rs.
+name = "qwen35-27b-q4km-dflash-server"
+path = "src/bin/server.rs"
+required-features = ["cuda"]
+
 [features]
 default = []
 # CUDA is the only real build mode — the target model is 27B in Q4_K_M,
@@ -38,13 +47,24 @@ half = { version = "2", features = ["bytemuck"] }
 bytemuck = "1"
 memmap2 = "0.9"
 libc = "0.2"
-# Data-parallel helper for the per-position top-K extract in the
-# DDTree path. Matches the reference's `#pragma omp parallel for`.
+# Data-parallel helper for the per-position top-K extract in the DDTree
+# path. Matches the reference's `#pragma omp parallel for`.
 rayon = "1.10"
 # First-party parser for the draft model format.
 safetensors = "0.4"
-# Bench binary CLI.
+# Bench + server CLIs.
 clap = { version = "4", features = ["derive"] }
+# Server-bin additions: async runtime, socket IO, wire serde, tokenizer.
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "signal", "time", "sync"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokenizers = { version = "0.21", default-features = false, features = ["onig"] }
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
+# SO_PEERCRED peer-UID auth on Linux.
+[target.'cfg(target_os = "linux")'.dependencies]
+nix = { version = "0.30", default-features = false, features = ["socket", "user"] }
 
 [profile.release]
 lto = "fat"

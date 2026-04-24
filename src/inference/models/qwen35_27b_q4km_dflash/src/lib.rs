@@ -48,6 +48,15 @@ pub mod graph;
 pub mod loader;
 pub mod model;
 
+// Server-side modules — wire + tokenizer + adapter + socket listener.
+// Enabled on the server binary's required-features path (cuda-only);
+// listed unconditionally here because the Rust sources compile without
+// CUDA too and we want `cargo check` to cover them.
+pub mod adapter;
+pub mod server;
+pub mod tokenizer;
+pub mod wire;
+
 // ─── Target model constants ─────────────────────────────────────────
 //
 // ref: `dflash/include/dflash27b.h`
