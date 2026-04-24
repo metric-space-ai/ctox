@@ -1,11 +1,30 @@
 //! ggml-cuda fallback for ops not yet ported to Rust.
 //!
-//! Bridges the Rust-native graph executor (`cuda_port::graph::Tensor`)
-//! to the C++ dispatcher (`libggml-cuda.so`) for ops where the
-//! Rust port isn't done yet (mmq, fattn, gated_delta_net,
-//! ssm_conv-non-tree). The bridge works by constructing a
-//! single-node `ggml_cgraph` that points at device memory we
-//! already own, then calling `ggml_backend_graph_compute`.
+//! **STATUS: WIP — wrap_tensor + exec_ggml_single segfaults inside
+//! ggml-cuda's mul_mat dispatcher because `tensor->buffer` is null.
+//! ggml-cuda derives the backend from the buffer pointer; our
+//! "wrap the raw CUdeviceptr" approach leaves it unset. Two
+//! workable fixes:**
+//!
+//!  1. **Route device memory through ggml's backend allocator**
+//!     (`ggml_backend_alloc_buffer(ggml_backend_cuda, bytes)`) so
+//!     every tensor has a proper ggml_backend_buffer attached.
+//!     Then the Rust-native path extracts `tensor->data` as a
+//!     CUdeviceptr instead of us allocating `cuMemAlloc_v2` ourselves.
+//!  2. **Call ggml-cuda's per-op dispatcher directly** rather than
+//!     through `ggml_backend_graph_compute` — bypasses the buffer
+//!     indirection but requires reverse-engineering ggml-cuda's
+//!     internal per-node ABI.
+//!
+//! (1) is cleaner and will be the path once the hybrid executor
+//! needs mmq/fattn/gdn. For now, the per-op verifiers + the
+//! pure-Rust `graph_smoke` test prove the ported ops work; the
+//! hybrid-fallback path is still needed before the full forward
+//! can run, but won't get fixed as a drive-by — it's worth its own
+//! focused session to integrate with ggml's backend buffer API.
+//!
+//! Below is the scaffold for that future integration — exports
+//! kept stable so callers can land.
 //!
 //! This lets the Rust executor cover the **whole** Qwen3.5 forward
 //! pass today — ported ops go through our bare-metal dispatcher,

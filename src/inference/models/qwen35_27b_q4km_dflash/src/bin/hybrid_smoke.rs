@@ -1,5 +1,15 @@
 //! Hybrid-executor smoke test.
 //!
+//! **STATUS: KNOWN BROKEN — segfaults in ggml-cuda's mul_mat
+//! dispatcher because our `wrap_tensor` leaves `tensor->buffer`
+//! null and ggml-cuda uses that to identify the backend. See
+//! `cuda_port/fallback.rs` header for fix paths.**
+//!
+//! The test is kept in-tree as documentation of what the hybrid
+//! dispatch story needs. When the fallback integrates with ggml's
+//! backend-buffer API, this smoke will be uncommented as the proof
+//! that Rust-native + ggml-cuda co-dispatch works end-to-end.
+//!
 //! Exercises the combined Rust-native + ggml-cuda-fallback dispatch
 //! path on a realistic 3-op chain:
 //!
