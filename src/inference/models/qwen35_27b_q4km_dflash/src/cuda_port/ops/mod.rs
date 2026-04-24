@@ -9,6 +9,7 @@ pub mod binbcast;
 pub mod diag;
 pub mod fill;
 pub mod norm;
+pub mod pad;
 pub mod scale;
 pub mod tri;
 pub mod unary;

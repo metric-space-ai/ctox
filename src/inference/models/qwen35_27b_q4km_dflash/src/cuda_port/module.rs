@@ -21,11 +21,12 @@ use super::ops::norm::{
     mangled_rms_norm_f32_b1024, mangled_rms_norm_f32_b256, RmsNormKernels,
 };
 use super::ops::scale::{mangled_scale_f32, ScaleKernel};
+use super::ops::pad::{mangled_pad_f32, PadKernels};
 use super::ops::tri::{mangled_tri_kernel_f32, TriKernels};
 use super::ops::unary::{mangled_unary_op_f32, UnaryKernels};
 use super::ptx::{
-    get_function, load_module, BINBCAST_PTX, DIAG_PTX, FILL_PTX, NORM_PTX, SCALE_PTX, TRI_PTX,
-    UNARY_PTX,
+    get_function, load_module, BINBCAST_PTX, DIAG_PTX, FILL_PTX, NORM_PTX, PAD_PTX, SCALE_PTX,
+    TRI_PTX, UNARY_PTX,
 };
 
 /// All kernel handles the Rust side needs, resolved once.
@@ -45,6 +46,8 @@ pub struct PortedKernels {
     binbcast_module: CUmodule,
     #[allow(dead_code)]
     tri_module: CUmodule,
+    #[allow(dead_code)]
+    pad_module: CUmodule,
     pub rms_norm: RmsNormKernels,
     pub unary: UnaryKernels,
     pub scale: ScaleKernel,
@@ -52,6 +55,7 @@ pub struct PortedKernels {
     pub diag: DiagKernels,
     pub binbcast: BinBcastKernels,
     pub tri: TriKernels,
+    pub pad: PadKernels,
 }
 
 // SAFETY: `CUmodule` / `CUfunction` are opaque device-side handles.
@@ -180,6 +184,15 @@ fn init_ported_kernels() -> Result<PortedKernels, String> {
         unsafe { *slot = f };
     }
 
+    // pad.cu — pad_f32 (single kernel, f32 only).
+    let pad_module = load_module(PAD_PTX).map_err(|e| format!("pad.ptx: {e}"))?;
+    let pad_fn = get_function(
+        pad_module,
+        mangled_pad_f32().map_err(|e| format!("pad_f32 lookup: {e}"))?,
+    )
+    .map_err(|e| format!("pad_f32: {e}"))?;
+    let pad = PadKernels { pad_f32: pad_fn };
+
     Ok(PortedKernels {
         norm_module,
         unary_module,
@@ -188,6 +201,7 @@ fn init_ported_kernels() -> Result<PortedKernels, String> {
         diag_module,
         binbcast_module,
         tri_module,
+        pad_module,
         rms_norm: RmsNormKernels { b256, b1024 },
         unary: uk,
         scale,
@@ -195,5 +209,6 @@ fn init_ported_kernels() -> Result<PortedKernels, String> {
         diag,
         binbcast: bb,
         tri: tk,
+        pad,
     })
 }

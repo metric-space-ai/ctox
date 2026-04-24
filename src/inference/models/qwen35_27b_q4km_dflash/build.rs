@@ -89,8 +89,9 @@ fn main() {
 /// PTX stems to compile. Each entry gets one `<stem>.ptx` file in
 /// `$OUT_DIR`, consumed by the Rust side via `include_str!` in
 /// `src/cuda_port/ptx.rs`.
-const CUDA_PORT_PTX_MODULES: &[&str] =
-    &["norm", "unary", "scale", "fill", "diag", "binbcast", "tri"];
+const CUDA_PORT_PTX_MODULES: &[&str] = &[
+    "norm", "unary", "scale", "fill", "diag", "binbcast", "tri", "pad",
+];
 
 fn compile_cuda_port_ptx_modules() {
     for stem in CUDA_PORT_PTX_MODULES {
