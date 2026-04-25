@@ -768,15 +768,24 @@
               <span>Use ticket sync, plans, and schedules when work needs approval, follow-up, replay, verification, or long-term ownership.</span>
             </div>
           </div>
-          <h3>Direct terminal submission</h3>
+          <h3>Simple terminal submission</h3>
           <pre><code>ctox start
-ctox chat "Investigate the failing checkout worker, open a ticket if it is not a one-line fix, and verify production health." --wait --thread-key ops/checkout --workspace /srv/checkout</code></pre>
+ctox chat "Investigate the failing checkout worker, open a ticket if it is not a one-line fix, and verify production health."</code></pre>
+          <p>
+            This is the normal minimal form. The prompt is handed to the
+            running daemon, stored as runtime work, and processed by the mission
+            loop.
+          </p>
+          <h3>Optional flags for scripts and controlled runs</h3>
+          <pre><code>ctox chat "Investigate checkout health." --wait
+ctox chat "Investigate checkout health." --thread-key ops/checkout
+ctox chat "Investigate checkout health." --workspace /srv/checkout</code></pre>
           <p>
             <code>--wait</code> blocks until the leased worker run finishes.
-            <code>--thread-key</code> ties the request to a durable thread.
-            <code>--workspace</code> gives the worker an explicit working
-            directory. Without <code>--wait</code>, the prompt is queued for the
-            daemon and the caller can disconnect.
+            <code>--thread-key</code> is useful when a script wants to attach
+            work to an explicit durable thread. <code>--workspace</code>
+            overrides the working directory for that run. They are not required
+            for a first manual request.
           </p>
           <h3>Channel and ticket intake</h3>
           <pre><code># channel-oriented operation
