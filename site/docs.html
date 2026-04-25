@@ -619,6 +619,14 @@
               <b>Execution worker</b>
               <p>The agent run is a bounded worker execution. CTOX handles the state before and after that run.</p>
             </div>
+            <div class="cell">
+              <b>Model backends</b>
+              <p>CTOX can use API-backed models or its integrated inference engine with curated local model profiles.</p>
+            </div>
+            <div class="cell">
+              <b>Runtime switching</b>
+              <p>The active model/runtime is configured through the TUI or with <code>ctox runtime switch</code> when operating directly.</p>
+            </div>
           </div>
         </section>
 
@@ -698,6 +706,11 @@
                   <td>Everyday</td>
                   <td><code>ctox start</code>, <code>stop</code>, <code>status</code>, <code>chat</code>, <code>tui</code>, <code>version</code></td>
                   <td>Start the daemon, submit direct prompts, inspect service state, or open the TUI.</td>
+                </tr>
+                <tr>
+                  <td>Runtime</td>
+                  <td><code>ctox runtime switch &lt;model&gt; &lt;quality|performance&gt;</code></td>
+                  <td>Select an API-backed model or a curated local inference profile for the execution backend.</td>
                 </tr>
                 <tr>
                   <td>Update</td>
