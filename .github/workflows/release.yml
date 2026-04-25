@@ -183,9 +183,9 @@ jobs:
 
           # Copy binary and icon to WiX source directory
           Copy-Item "desktop\target\x86_64-pc-windows-msvc\release\ctox-desktop.exe" "desktop\packaging\windows\"
-          (Get-Content "desktop\packaging\windows\main.wxs") `
-            -replace 'Version="[^"]+"', "Version=""$version""" `
-            | Set-Content "desktop\packaging\windows\main.release.wxs"
+          (Get-Content "desktop\packaging\windows\main.wxs" -Raw) `
+            -creplace '(?m)^        Version="[^"]+">$', "        Version=""$version"">" `
+            | Set-Content "desktop\packaging\windows\main.release.wxs" -Encoding ascii
 
           # WiX v3 is pre-installed on windows-latest runners
           & "C:\Program Files (x86)\WiX Toolset v3.14\bin\candle.exe" `

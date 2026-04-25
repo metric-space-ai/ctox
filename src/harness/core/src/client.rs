@@ -1013,7 +1013,6 @@ impl ModelClientSession {
         }
     }
 
-    #[cfg(unix)]
     #[allow(clippy::too_many_arguments)]
     #[instrument(
         name = "model_client.stream_responses_local_transport",
