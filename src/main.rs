@@ -120,6 +120,8 @@ GOVERNANCE / MISSION
   ctox ticket <subcmd>           ticket integrations
   ctox secret <subcmd>           credential storage
   ctox state-invariants [--conversation-id <id>]
+  ctox turn status|end           inspect or close the current CLI turn ledger
+  ctox process-mining <subcmd>   SQLite mutation event log and transition mining
 
 CONTEXT / LCM (power-user)
   ctox lcm-init | lcm-add-message | lcm-compact | lcm-grep | lcm-dump
@@ -295,6 +297,10 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Some("tui") => tui::run_tui(&root),
+        Some("turn") => service::turn_ledger::handle_turn_command(&root, &args[1..]),
+        Some("process-mining") => {
+            service::process_mining::handle_process_mining_command(&root, &args[1..])
+        }
         Some("tui-smoke") => {
             let page = args.get(1).map(String::as_str).unwrap_or("chat");
             let width: u16 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(120);
