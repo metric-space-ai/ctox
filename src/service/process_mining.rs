@@ -47,6 +47,7 @@ const PROCESS_MINING_USAGE: &str = "usage:
   ctox process-mining proofs [--limit <n>]
   ctox process-mining state-scan [--limit <n>]
   ctox process-mining assert-clean [--limit <n>] [--allow-rejected]
+  ctox process-mining self-diagnose [--limit <n>]
   ctox process-mining state-audit [--limit <n>]
   ctox process-mining coverage [--limit <n>]
   ctox process-mining violations [--limit <n>]
@@ -1568,6 +1569,13 @@ pub fn handle_process_mining_command(root: &Path, args: &[String]) -> Result<()>
             );
             Ok(())
         }
+        Some("self-diagnose") => {
+            ensure_process_mining_schema(&conn, &db_path)?;
+            let limit = process_mining_limit(args, 5000, 50000);
+            let report = run_process_mining_self_diagnosis(&conn, limit)?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            Ok(())
+        }
         Some("coverage") => {
             ensure_process_mining_schema(&conn, &db_path)?;
             let limit = process_mining_limit(args, 50, 500);
@@ -2356,6 +2364,677 @@ fn assert_process_mining_clean_summary(summary: &Value, allow_rejected: bool) ->
     }))
 }
 
+fn run_process_mining_self_diagnosis(conn: &Connection, limit: i64) -> Result<Value> {
+    let scanned_at = now_expr_value();
+    let state_summary = scan_core_state_machine_violations(conn, limit)?;
+    let liveness = csm::analyze_core_liveness();
+    let mut subsystems = Vec::new();
+
+    let unmapped = json_usize(&state_summary, "unmapped");
+    let rule_without = json_usize(&state_summary, "rule_matched_without_core_transition");
+    let rejected = json_usize(&state_summary, "rejected");
+    let violation_count = json_usize(&state_summary, "violation_count");
+    push_subsystem(
+        &mut subsystems,
+        "process_mining_coverage",
+        if unmapped == 0 && rule_without == 0 {
+            "ok"
+        } else {
+            "critical"
+        },
+        "SQLite mutations must be either explicit telemetry or deterministic core transitions.",
+        json!({
+            "scanned_events": json_usize(&state_summary, "scanned_events"),
+            "mapped_telemetry": json_usize(&state_summary, "mapped_telemetry"),
+            "core_transitions": json_usize(&state_summary, "inferred_transitions"),
+            "accepted": json_usize(&state_summary, "accepted"),
+            "rejected": rejected,
+            "unmapped": unmapped,
+            "rule_matched_without_core_transition": rule_without,
+            "violation_count": violation_count,
+        }),
+        findings_for_mapping(unmapped, rule_without),
+    );
+
+    push_subsystem(
+        &mut subsystems,
+        "core_liveness",
+        if liveness.ok { "ok" } else { "critical" },
+        "Every modeled harness entity must have reachable states and a terminal path.",
+        serde_json::to_value(&liveness)?,
+        liveness_findings(&liveness),
+    );
+
+    subsystems.push(diagnose_knowledge(conn)?);
+    subsystems.push(diagnose_lcm(conn)?);
+    subsystems.push(diagnose_queue(conn)?);
+    subsystems.push(diagnose_founder_review(conn)?);
+    subsystems.push(diagnose_tickets(conn)?);
+    subsystems.push(diagnose_schedules(conn)?);
+
+    let critical_count = subsystems
+        .iter()
+        .filter(|item| item.get("status").and_then(Value::as_str) == Some("critical"))
+        .count();
+    let warning_count = subsystems
+        .iter()
+        .filter(|item| item.get("status").and_then(Value::as_str) == Some("warning"))
+        .count();
+
+    Ok(json!({
+        "ok": critical_count == 0,
+        "scanned_at": scanned_at,
+        "event_limit": limit,
+        "critical_count": critical_count,
+        "warning_count": warning_count,
+        "state_summary": state_summary,
+        "subsystems": subsystems,
+    }))
+}
+
+fn push_subsystem(
+    out: &mut Vec<Value>,
+    name: &str,
+    status: &str,
+    summary: &str,
+    metrics: Value,
+    findings: Vec<Value>,
+) {
+    out.push(json!({
+        "name": name,
+        "status": status,
+        "summary": summary,
+        "metrics": metrics,
+        "findings": findings,
+    }));
+}
+
+fn subsystem_json(
+    name: &str,
+    status: &str,
+    summary: &str,
+    metrics: Value,
+    findings: Vec<Value>,
+) -> Value {
+    json!({
+        "name": name,
+        "status": status,
+        "summary": summary,
+        "metrics": metrics,
+        "findings": findings,
+    })
+}
+
+fn findings_for_mapping(unmapped: usize, rule_without: usize) -> Vec<Value> {
+    let mut findings = Vec::new();
+    if unmapped > 0 {
+        findings.push(json!({
+            "severity": "critical",
+            "code": "unmapped_sqlite_events",
+            "message": "At least one SQLite table mutation has no explicit process-mining mapping rule."
+        }));
+    }
+    if rule_without > 0 {
+        findings.push(json!({
+            "severity": "critical",
+            "code": "non_deterministic_mapping_rule",
+            "message": "A mapping rule matched but could not produce a deterministic core-state transition."
+        }));
+    }
+    findings
+}
+
+fn liveness_findings(report: &csm::CoreLivenessReport) -> Vec<Value> {
+    let mut findings = Vec::new();
+    for entity in &report.entities {
+        if !entity.unreachable_states.is_empty()
+            || !entity.nonterminal_dead_end_states.is_empty()
+            || !entity.states_without_terminal_path.is_empty()
+        {
+            findings.push(json!({
+                "severity": "critical",
+                "code": "core_graph_liveness_gap",
+                "entity_type": format!("{:?}", entity.entity_type),
+                "unreachable_states": entity.unreachable_states,
+                "nonterminal_dead_end_states": entity.nonterminal_dead_end_states,
+                "states_without_terminal_path": entity.states_without_terminal_path,
+            }));
+        }
+    }
+    findings
+}
+
+fn diagnose_knowledge(conn: &Connection) -> Result<Value> {
+    let entries = table_count(conn, "ticket_knowledge_entries")?;
+    let loads = table_count(conn, "ticket_knowledge_loads")?;
+    let recent_events = recent_table_event_count(conn, "%knowledge%")?;
+    let mut findings = Vec::new();
+    if entries == 0 {
+        findings.push(json!({
+            "severity": "critical",
+            "code": "no_knowledge_entries",
+            "message": "The SQLite knowledge subsystem has no durable ticket knowledge entries."
+        }));
+    }
+    if entries > 0 && loads == 0 {
+        findings.push(json!({
+            "severity": "warning",
+            "code": "knowledge_not_loaded",
+            "message": "Knowledge exists but no ticket knowledge load is recorded."
+        }));
+    }
+    if recent_events == 0 {
+        findings.push(json!({
+            "severity": "warning",
+            "code": "no_recent_knowledge_activity",
+            "message": "No recent knowledge-table mutation was observed in the process log."
+        }));
+    }
+    let status = status_from_findings(&findings);
+    Ok(subsystem_json(
+        "knowledge",
+        status,
+        "Knowledge must accumulate as durable SQLite records and must be loaded back into work.",
+        json!({
+            "ticket_knowledge_entries": entries,
+            "ticket_knowledge_loads": loads,
+            "recent_process_events": recent_events,
+        }),
+        findings,
+    ))
+}
+
+fn diagnose_lcm(conn: &Connection) -> Result<Value> {
+    let documents = table_count(conn, "continuity_documents")?;
+    let commits = table_count(conn, "continuity_commits")?;
+    let verification_runs = table_count(conn, "verification_runs")?;
+    let broken_heads = if table_exists(conn, "continuity_documents")?
+        && table_exists(conn, "continuity_commits")?
+    {
+        conn.query_row(
+            r#"
+            SELECT COUNT(*)
+            FROM continuity_documents d
+            LEFT JOIN continuity_commits c ON c.commit_id = d.head_commit_id
+            WHERE c.commit_id IS NULL
+            "#,
+            [],
+            |row| row.get::<_, i64>(0),
+        )?
+    } else {
+        0
+    };
+    let compact_without_lcm_change = if table_exists(conn, PROCESS_EVENTS_TABLE)? {
+        conn.query_row(
+            r#"
+            SELECT COUNT(DISTINCT e.command_id)
+            FROM ctox_process_events e
+            WHERE e.command_id IS NOT NULL
+              AND lower(COALESCE(e.command_name, '')) LIKE '%compact%'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM ctox_process_events c
+                  WHERE c.command_id = e.command_id
+                    AND c.table_name IN ('continuity_documents', 'continuity_commits')
+              )
+            "#,
+            [],
+            |row| row.get::<_, i64>(0),
+        )?
+    } else {
+        0
+    };
+    let mut findings = Vec::new();
+    if documents == 0 || commits == 0 {
+        findings.push(json!({
+            "severity": "critical",
+            "code": "missing_lcm_continuity",
+            "message": "LCM continuity documents or commits are missing."
+        }));
+    }
+    if broken_heads > 0 {
+        findings.push(json!({
+            "severity": "critical",
+            "code": "broken_lcm_head",
+            "message": "At least one continuity document points to a missing head commit."
+        }));
+    }
+    if compact_without_lcm_change > 0 {
+        findings.push(json!({
+            "severity": "warning",
+            "code": "compaction_without_lcm_change",
+            "message": "A compact command was observed without continuity document/commit mutation."
+        }));
+    }
+    let status = status_from_findings(&findings);
+    Ok(subsystem_json(
+        "lcm_continuity",
+        status,
+        "Compaction and continuity updates must leave durable LCM document/commit evidence.",
+        json!({
+            "continuity_documents": documents,
+            "continuity_commits": commits,
+            "verification_runs": verification_runs,
+            "broken_document_heads": broken_heads,
+            "compact_commands_without_lcm_change": compact_without_lcm_change,
+        }),
+        findings,
+    ))
+}
+
+fn diagnose_queue(conn: &Connection) -> Result<Value> {
+    let routing_rows = table_count(conn, "communication_routing_state")?;
+    let status_counts = grouped_counts(conn, "communication_routing_state", "route_status")?;
+    let (completed_count, avg_seconds, fastest, slowest) =
+        routing_duration_stats(conn, "communication_routing_state", "message_key")?;
+    let stuck_leased = if table_exists(conn, "communication_routing_state")? {
+        conn.query_row(
+            r#"
+            SELECT COUNT(*)
+            FROM communication_routing_state
+            WHERE route_status IN ('leased', 'running')
+              AND leased_at IS NOT NULL
+              AND (acked_at IS NULL OR acked_at = '')
+            "#,
+            [],
+            |row| row.get::<_, i64>(0),
+        )?
+    } else {
+        0
+    };
+    let mut findings = Vec::new();
+    if stuck_leased > 0 {
+        findings.push(json!({
+            "severity": "critical",
+            "code": "stuck_queue_items",
+            "message": "Queue items are leased/running without acknowledgement."
+        }));
+    }
+    if completed_count == 0 && routing_rows > 0 {
+        findings.push(json!({
+            "severity": "warning",
+            "code": "no_completed_queue_latency",
+            "message": "Queue rows exist but no completed leased-to-acknowledged duration can be measured."
+        }));
+    }
+    let status = status_from_findings(&findings);
+    Ok(subsystem_json(
+        "queue_processing",
+        status,
+        "Queue forensics must expose throughput, stuck items, and fastest/slowest completed tasks.",
+        json!({
+            "routing_rows": routing_rows,
+            "status_counts": status_counts,
+            "stuck_leased": stuck_leased,
+            "completed_with_duration": completed_count,
+            "average_seconds": avg_seconds,
+            "fastest": fastest,
+            "slowest": slowest,
+        }),
+        findings,
+    ))
+}
+
+fn diagnose_founder_review(conn: &Connection) -> Result<Value> {
+    let reviews = table_count(conn, "communication_founder_reply_reviews")?;
+    let rejected_founder = if table_exists(conn, "ctox_pm_core_transition_audit")? {
+        conn.query_row(
+            r#"
+            SELECT COUNT(*)
+            FROM ctox_pm_core_transition_audit
+            WHERE entity_type = 'FounderCommunication'
+              AND accepted = 0
+            "#,
+            [],
+            |row| row.get::<_, i64>(0),
+        )?
+    } else {
+        0
+    };
+    let critical_review_violations = if table_exists(conn, "ctox_pm_state_violations")? {
+        conn.query_row(
+            r#"
+            SELECT COUNT(*)
+            FROM ctox_pm_state_violations
+            WHERE severity = 'critical'
+              AND (
+                  violation_code LIKE 'founder_%'
+                  OR message LIKE '%Founder%'
+                  OR message LIKE '%Communication%'
+              )
+            "#,
+            [],
+            |row| row.get::<_, i64>(0),
+        )?
+    } else {
+        0
+    };
+    let mut findings = Vec::new();
+    if reviews == 0 {
+        findings.push(json!({
+            "severity": "warning",
+            "code": "no_founder_review_rows",
+            "message": "No founder reply review rows are present."
+        }));
+    }
+    if rejected_founder > 0 || critical_review_violations > 0 {
+        findings.push(json!({
+            "severity": "critical",
+            "code": "founder_review_gate_rejections",
+            "message": "Founder communication has rejected or critical review-gate evidence."
+        }));
+    }
+    let status = status_from_findings(&findings);
+    Ok(subsystem_json(
+        "founder_communication_review",
+        status,
+        "Founder communication must be blocked unless reviewed with matching content and recipients.",
+        json!({
+            "founder_reply_reviews": reviews,
+            "rejected_founder_transition_audits": rejected_founder,
+            "critical_founder_review_violations": critical_review_violations,
+        }),
+        findings,
+    ))
+}
+
+fn diagnose_tickets(conn: &Connection) -> Result<Value> {
+    let local_tickets = table_count(conn, "local_tickets")?;
+    let self_work = table_count(conn, "ticket_self_work_items")?;
+    let active_self_work = if table_exists(conn, "ticket_self_work_items")? {
+        conn.query_row(
+            "SELECT COUNT(*) FROM ticket_self_work_items WHERE state IN ('open','queued','published','blocked')",
+            [],
+            |row| row.get::<_, i64>(0),
+        )?
+    } else {
+        0
+    };
+    let (closed_count, avg_seconds, fastest, slowest) = ticket_self_work_duration_stats(conn)?;
+    let mut findings = Vec::new();
+    if self_work >= 10 && local_tickets == 0 {
+        findings.push(json!({
+            "severity": "warning",
+            "code": "self_work_without_canonical_tickets",
+            "message": "Self-work dominates while canonical local tickets remain empty."
+        }));
+    }
+    if active_self_work > 25 {
+        findings.push(json!({
+            "severity": "warning",
+            "code": "large_active_self_work_backlog",
+            "message": "The active self-work backlog is high."
+        }));
+    }
+    let status = status_from_findings(&findings);
+    Ok(subsystem_json(
+        "tickets_and_self_work",
+        status,
+        "Ticket/self-work forensics must expose backlog, closure rate, and task duration extremes.",
+        json!({
+            "local_tickets": local_tickets,
+            "ticket_self_work_items": self_work,
+            "active_self_work": active_self_work,
+            "closed_self_work_with_duration": closed_count,
+            "average_seconds": avg_seconds,
+            "fastest": fastest,
+            "slowest": slowest,
+        }),
+        findings,
+    ))
+}
+
+fn diagnose_schedules(conn: &Connection) -> Result<Value> {
+    let tasks = table_count(conn, "scheduled_tasks")?;
+    let runs = table_count(conn, "scheduled_task_runs")?;
+    let enabled = if table_exists(conn, "scheduled_tasks")? {
+        conn.query_row(
+            "SELECT COUNT(*) FROM scheduled_tasks WHERE enabled != 0",
+            [],
+            |row| row.get::<_, i64>(0),
+        )?
+    } else {
+        0
+    };
+    let due_enabled = if table_exists(conn, "scheduled_tasks")? {
+        conn.query_row(
+            r#"
+            SELECT COUNT(*)
+            FROM scheduled_tasks
+            WHERE enabled != 0
+              AND next_run_at IS NOT NULL
+              AND next_run_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            "#,
+            [],
+            |row| row.get::<_, i64>(0),
+        )?
+    } else {
+        0
+    };
+    let mut findings = Vec::new();
+    if enabled > 0 && runs == 0 {
+        findings.push(json!({
+            "severity": "warning",
+            "code": "scheduled_tasks_without_runs",
+            "message": "Enabled scheduled tasks exist but no emitted runs are recorded."
+        }));
+    }
+    if due_enabled > 0 {
+        findings.push(json!({
+            "severity": "critical",
+            "code": "overdue_scheduled_tasks",
+            "message": "Enabled scheduled tasks are due and have not been emitted."
+        }));
+    }
+    let status = status_from_findings(&findings);
+    Ok(subsystem_json(
+        "schedules_and_commitments",
+        status,
+        "Deadline and commitment backing needs scheduled tasks with emitted runs before due time.",
+        json!({
+            "scheduled_tasks": tasks,
+            "enabled_scheduled_tasks": enabled,
+            "scheduled_task_runs": runs,
+            "due_enabled_tasks": due_enabled,
+        }),
+        findings,
+    ))
+}
+
+fn status_from_findings(findings: &[Value]) -> &'static str {
+    if findings
+        .iter()
+        .any(|finding| finding.get("severity").and_then(Value::as_str) == Some("critical"))
+    {
+        "critical"
+    } else if findings.is_empty() {
+        "ok"
+    } else {
+        "warning"
+    }
+}
+
+fn table_exists(conn: &Connection, table_name: &str) -> Result<bool> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+        params![table_name],
+        |row| row.get(0),
+    )?;
+    Ok(count > 0)
+}
+
+fn table_count(conn: &Connection, table_name: &str) -> Result<i64> {
+    if !table_exists(conn, table_name)? {
+        return Ok(0);
+    }
+    conn.query_row(
+        &format!("SELECT COUNT(*) FROM {}", quote_ident(table_name)),
+        [],
+        |row| row.get(0),
+    )
+    .map_err(anyhow::Error::from)
+}
+
+fn recent_table_event_count(conn: &Connection, table_like: &str) -> Result<i64> {
+    if !table_exists(conn, PROCESS_EVENTS_TABLE)? {
+        return Ok(0);
+    }
+    conn.query_row(
+        r#"
+        SELECT COUNT(*)
+        FROM (
+            SELECT table_name
+            FROM ctox_process_events
+            ORDER BY event_seq DESC
+            LIMIT 5000
+        )
+        WHERE table_name LIKE ?1
+        "#,
+        params![table_like],
+        |row| row.get(0),
+    )
+    .map_err(anyhow::Error::from)
+}
+
+fn grouped_counts(conn: &Connection, table_name: &str, column_name: &str) -> Result<Value> {
+    if !table_exists(conn, table_name)? {
+        return Ok(json!({}));
+    }
+    let sql = format!(
+        "SELECT CAST({column} AS TEXT), COUNT(*) FROM {table} GROUP BY {column} ORDER BY COUNT(*) DESC, {column}",
+        column = quote_ident(column_name),
+        table = quote_ident(table_name)
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, Option<String>>(0)?
+                    .unwrap_or_else(|| "<null>".to_string()),
+                row.get::<_, i64>(1)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(json!(rows
+        .into_iter()
+        .map(|(state, count)| json!({"state": state, "count": count}))
+        .collect::<Vec<_>>()))
+}
+
+fn routing_duration_stats(
+    conn: &Connection,
+    table_name: &str,
+    key_column: &str,
+) -> Result<(i64, Option<f64>, Value, Value)> {
+    if !table_exists(conn, table_name)? {
+        return Ok((0, None, Value::Null, Value::Null));
+    }
+    let table = quote_ident(table_name);
+    let (count, avg): (i64, Option<f64>) = conn.query_row(
+        &format!(
+            "SELECT COUNT(*), AVG((julianday(acked_at) - julianday(leased_at)) * 86400.0)
+             FROM {table}
+             WHERE leased_at IS NOT NULL AND acked_at IS NOT NULL"
+        ),
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    let fastest = duration_extreme(conn, table_name, key_column, "ASC")?;
+    let slowest = duration_extreme(conn, table_name, key_column, "DESC")?;
+    Ok((count, avg, fastest, slowest))
+}
+
+fn duration_extreme(
+    conn: &Connection,
+    table_name: &str,
+    key_column: &str,
+    direction: &str,
+) -> Result<Value> {
+    let sql = format!(
+        "SELECT {key}, ((julianday(acked_at) - julianday(leased_at)) * 86400.0) AS seconds
+         FROM {table}
+         WHERE leased_at IS NOT NULL AND acked_at IS NOT NULL
+         ORDER BY seconds {direction}
+         LIMIT 1",
+        key = quote_ident(key_column),
+        table = quote_ident(table_name),
+        direction = direction,
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let mut rows = stmt.query([])?;
+    if let Some(row) = rows.next()? {
+        Ok(json!({
+            "id": row.get::<_, String>(0)?,
+            "seconds": row.get::<_, Option<f64>>(1)?,
+        }))
+    } else {
+        Ok(Value::Null)
+    }
+}
+
+fn ticket_self_work_duration_stats(conn: &Connection) -> Result<(i64, Option<f64>, Value, Value)> {
+    if !table_exists(conn, "ticket_self_work_items")? {
+        return Ok((0, None, Value::Null, Value::Null));
+    }
+    let has_created_at = table_has_column(conn, "ticket_self_work_items", "created_at")?;
+    let has_updated_at = table_has_column(conn, "ticket_self_work_items", "updated_at")?;
+    if !has_created_at || !has_updated_at {
+        return Ok((0, None, Value::Null, Value::Null));
+    }
+    let (count, avg): (i64, Option<f64>) = conn.query_row(
+        r#"
+        SELECT COUNT(*), AVG((julianday(updated_at) - julianday(created_at)) * 86400.0)
+        FROM ticket_self_work_items
+        WHERE state = 'closed'
+          AND created_at IS NOT NULL
+          AND updated_at IS NOT NULL
+        "#,
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    let fastest = self_work_duration_extreme(conn, "ASC")?;
+    let slowest = self_work_duration_extreme(conn, "DESC")?;
+    Ok((count, avg, fastest, slowest))
+}
+
+fn self_work_duration_extreme(conn: &Connection, direction: &str) -> Result<Value> {
+    let sql = format!(
+        "SELECT work_id, title, ((julianday(updated_at) - julianday(created_at)) * 86400.0) AS seconds
+         FROM ticket_self_work_items
+         WHERE state = 'closed'
+           AND created_at IS NOT NULL
+           AND updated_at IS NOT NULL
+         ORDER BY seconds {direction}
+         LIMIT 1"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let mut rows = stmt.query([])?;
+    if let Some(row) = rows.next()? {
+        Ok(json!({
+            "work_id": row.get::<_, String>(0)?,
+            "title": row.get::<_, Option<String>>(1)?,
+            "seconds": row.get::<_, Option<f64>>(2)?,
+        }))
+    } else {
+        Ok(Value::Null)
+    }
+}
+
+fn table_has_column(conn: &Connection, table_name: &str, column_name: &str) -> Result<bool> {
+    if !table_exists(conn, table_name)? {
+        return Ok(false);
+    }
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({})", quote_ident(table_name)))?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        let name: String = row.get(1)?;
+        if name == column_name {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 fn ensure_table_column(
     conn: &Connection,
     table_name: &str,
@@ -2470,6 +3149,84 @@ fn upsert_default_core_transition_rules(conn: &Connection) -> Result<()> {
             "LocalTicketEvent",
             "P2MissionDelivery",
             "telemetry.ticket.local_event",
+            json!({"core_transition": false}),
+        ),
+        (
+            "continuity-document-telemetry",
+            12,
+            Some("=continuity_documents"),
+            None,
+            None,
+            None,
+            "telemetry",
+            "ContinuityDocument",
+            "P1RuntimeSafety",
+            "telemetry.continuity.document",
+            json!({"core_transition": false}),
+        ),
+        (
+            "continuity-commit-telemetry",
+            13,
+            Some("=continuity_commits"),
+            None,
+            None,
+            None,
+            "telemetry",
+            "ContinuityCommit",
+            "P1RuntimeSafety",
+            "telemetry.continuity.commit",
+            json!({"core_transition": false}),
+        ),
+        (
+            "verification-run-telemetry",
+            14,
+            Some("=verification_runs"),
+            None,
+            None,
+            None,
+            "telemetry",
+            "VerificationRun",
+            "P1RuntimeSafety",
+            "telemetry.verification.run",
+            json!({"core_transition": false}),
+        ),
+        (
+            "ticket-knowledge-entry-telemetry",
+            15,
+            Some("=ticket_knowledge_entries"),
+            None,
+            None,
+            None,
+            "telemetry",
+            "TicketKnowledgeEntry",
+            "P1RuntimeSafety",
+            "telemetry.ticket.knowledge_entry",
+            json!({"core_transition": false}),
+        ),
+        (
+            "ticket-knowledge-load-telemetry",
+            16,
+            Some("=ticket_knowledge_loads"),
+            None,
+            None,
+            None,
+            "telemetry",
+            "TicketKnowledgeLoad",
+            "P1RuntimeSafety",
+            "telemetry.ticket.knowledge_load",
+            json!({"core_transition": false}),
+        ),
+        (
+            "ticket-self-work-assignment-telemetry",
+            17,
+            Some("=ticket_self_work_assignments"),
+            None,
+            None,
+            None,
+            "telemetry",
+            "TicketSelfWorkAssignment",
+            "P2MissionDelivery",
+            "telemetry.ticket.self_work_assignment",
             json!({"core_transition": false}),
         ),
         (
@@ -3362,13 +4119,62 @@ fn is_state_preserving_update(event: &ProcessEventForStateMachine) -> bool {
     if !event.operation.eq_ignore_ascii_case("UPDATE") {
         return false;
     }
-    let Some(from_state) = normalize_state(event.from_state.as_deref()) else {
-        return false;
-    };
-    let Some(to_state) = normalize_state(event.to_state.as_deref()) else {
-        return false;
-    };
-    from_state == to_state
+    if let (Some(from_state), Some(to_state)) = (
+        normalize_state(event.from_state.as_deref()),
+        normalize_state(event.to_state.as_deref()),
+    ) {
+        return from_state == to_state;
+    }
+
+    let before = parse_json_value(&event.row_before_json);
+    let after = parse_json_value(&event.row_after_json);
+    match (
+        inferred_domain_state_for_preserving_update(event, &before),
+        inferred_domain_state_for_preserving_update(event, &after),
+    ) {
+        (Some(from_state), Some(to_state)) => from_state == to_state,
+        _ => false,
+    }
+}
+
+fn inferred_domain_state_for_preserving_update(
+    event: &ProcessEventForStateMachine,
+    row: &Value,
+) -> Option<csm::CoreState> {
+    if event.table_name == "communication_routing_state"
+        || event.table_name.contains("queue")
+        || event.entity_type.eq_ignore_ascii_case("queue")
+    {
+        return json_string(row, &["route_status", "queue_status", "status", "state"])
+            .and_then(|value| map_queue_state(Some(&value)));
+    }
+    if event.table_name.starts_with("communication_") || event.table_name.contains("mail") {
+        return communication_state_from_row(event, row).or_else(|| {
+            json_string(row, &["status", "state"])
+                .and_then(|value| map_communication_state(Some(&value)))
+        });
+    }
+    if event.table_name.contains("ticket") || event.table_name.contains("work_item") {
+        return json_string(row, &["status", "state"])
+            .and_then(|value| map_ticket_state(Some(&value)));
+    }
+    if event.table_name.contains("commitment") {
+        return json_string(row, &["status", "state"])
+            .and_then(|value| map_commitment_state(Some(&value)));
+    }
+    if event.table_name.starts_with("scheduled_") || event.table_name.contains("schedule") {
+        return json_string(row, &["status", "state", "enabled"])
+            .and_then(|value| map_schedule_state(Some(&value)));
+    }
+    if event.table_name.contains("knowledge") {
+        return json_string(row, &["status", "state"])
+            .and_then(|value| map_knowledge_state(Some(&value)));
+    }
+    if event.table_name.contains("repair") || event.table_name.contains("health") {
+        return json_string(row, &["status", "state"])
+            .and_then(|value| map_repair_state(Some(&value)));
+    }
+    None
 }
 
 fn load_state_machine_events(
@@ -3764,8 +4570,8 @@ fn communication_state_from_row(
     row: &Value,
 ) -> Option<csm::CoreState> {
     let direction = json_string(row, &["direction"]).map(|value| normalize_text(&value));
-    let folder = json_string(row, &["folder_hint", "folder", "mailbox"])
-        .map(|value| normalize_text(&value));
+    let folder =
+        json_string(row, &["folder_hint", "folder", "mailbox"]).map(|value| normalize_text(&value));
     let message_key = json_string(row, &["message_key", "mailbox_key", "external_key"])
         .map(|value| normalize_text(&value));
     let status = json_string(row, &["status", "state", "route_status", "delivery_status"])
@@ -3784,7 +4590,10 @@ fn communication_state_from_row(
         if matches!(folder.as_deref(), Some("sent") | Some("sent_mail")) {
             return Some(csm::CoreState::Sent);
         }
-        if matches!(folder.as_deref(), Some("outbox") | Some("queued") | Some("send_queue")) {
+        if matches!(
+            folder.as_deref(),
+            Some("outbox") | Some("queued") | Some("send_queue")
+        ) {
             return Some(csm::CoreState::Sending);
         }
         if let Some(status) = status {
@@ -3837,7 +4646,7 @@ fn map_ticket_state(raw: Option<&str>) -> Option<csm::CoreState> {
         "created" | "open" | "queued" => Some(csm::CoreState::Created),
         "classified" => Some(csm::CoreState::Classified),
         "ticket_backed" => Some(csm::CoreState::TicketBacked),
-        "planned" | "ready" => Some(csm::CoreState::Planned),
+        "planned" | "ready" | "publishing" | "published" => Some(csm::CoreState::Planned),
         "executing" | "in_progress" | "running" => Some(csm::CoreState::Executing),
         "awaiting_review" | "review" | "reviewing" => Some(csm::CoreState::AwaitingReview),
         "rework_required" | "rework" => Some(csm::CoreState::ReworkRequired),
@@ -5077,6 +5886,199 @@ mod tests {
         assert_eq!(unmapped, 0, "{summary}");
         assert_eq!(telemetry_count, 14);
         assert_eq!(communication_message_misclassified, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn state_scan_treats_domain_noop_route_updates_as_telemetry() -> Result<()> {
+        let dir = tempdir()?;
+        let db_path = dir.path().join("ctox.sqlite3");
+        let conn = Connection::open(&db_path)?;
+        conn.execute_batch(
+            r#"
+            CREATE TABLE communication_routing_state (
+                message_key TEXT PRIMARY KEY,
+                route_status TEXT NOT NULL,
+                leased_at TEXT,
+                acked_at TEXT
+            );
+            "#,
+        )?;
+        ensure_process_mining_schema(&conn, &db_path)?;
+        conn.execute(
+            r#"
+            INSERT INTO communication_routing_state (
+                message_key, route_status, leased_at, acked_at
+            )
+            VALUES (
+                'plan:system::goal::step', 'handled',
+                '2026-04-25T10:00:00Z', '2026-04-25T10:01:00Z'
+            )
+            "#,
+            [],
+        )?;
+        conn.execute(
+            "UPDATE communication_routing_state SET acked_at = '2026-04-25T10:02:00Z' WHERE message_key = 'plan:system::goal::step'",
+            [],
+        )?;
+
+        let summary = scan_core_state_machine_violations(&conn, 100)?;
+        let rejected = summary
+            .get("rejected")
+            .and_then(Value::as_u64)
+            .unwrap_or_default();
+        let noop_telemetry: i64 = conn.query_row(
+            r#"
+            SELECT COUNT(*)
+            FROM ctox_pm_event_transition_coverage
+            WHERE table_name = 'communication_routing_state'
+              AND reason = 'state_preserving_update'
+            "#,
+            [],
+            |row| row.get(0),
+        )?;
+
+        assert_eq!(rejected, 0, "{summary}");
+        assert_eq!(noop_telemetry, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn self_diagnose_reports_subsystem_forensics() -> Result<()> {
+        let dir = tempdir()?;
+        let db_path = dir.path().join("ctox.sqlite3");
+        let conn = Connection::open(&db_path)?;
+        conn.execute_batch(
+            r#"
+            CREATE TABLE ticket_knowledge_entries (
+                entry_id TEXT PRIMARY KEY,
+                status TEXT NOT NULL
+            );
+            CREATE TABLE ticket_knowledge_loads (
+                load_id TEXT PRIMARY KEY,
+                ticket_key TEXT NOT NULL
+            );
+            CREATE TABLE continuity_documents (
+                document_id TEXT PRIMARY KEY,
+                conversation_id INTEGER NOT NULL,
+                kind TEXT NOT NULL,
+                head_commit_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE continuity_commits (
+                commit_id TEXT PRIMARY KEY,
+                document_id TEXT NOT NULL,
+                parent_commit_id TEXT,
+                diff_text TEXT NOT NULL,
+                rendered_text TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE verification_runs (
+                run_id TEXT PRIMARY KEY,
+                conversation_id INTEGER NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE communication_routing_state (
+                message_key TEXT PRIMARY KEY,
+                route_status TEXT NOT NULL,
+                leased_at TEXT,
+                acked_at TEXT
+            );
+            CREATE TABLE communication_founder_reply_reviews (
+                review_id TEXT PRIMARY KEY,
+                verdict TEXT NOT NULL
+            );
+            CREATE TABLE ticket_self_work_items (
+                work_id TEXT PRIMARY KEY,
+                title TEXT,
+                state TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE scheduled_tasks (
+                task_id TEXT PRIMARY KEY,
+                enabled INTEGER NOT NULL,
+                next_run_at TEXT
+            );
+            CREATE TABLE scheduled_task_runs (
+                run_id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL,
+                scheduled_for TEXT NOT NULL
+            );
+            "#,
+        )?;
+        ensure_process_mining_schema(&conn, &db_path)?;
+        conn.execute(
+            "INSERT INTO ticket_knowledge_entries (entry_id, status) VALUES ('k1', 'active')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO ticket_knowledge_loads (load_id, ticket_key) VALUES ('l1', 't1')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO continuity_commits (commit_id, document_id, diff_text, rendered_text, created_at) VALUES ('c1', 'd1', '+x', 'x', '2026-04-25T10:00:00Z')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO continuity_documents (document_id, conversation_id, kind, head_commit_id, created_at, updated_at) VALUES ('d1', 1, 'focus', 'c1', '2026-04-25T10:00:00Z', '2026-04-25T10:00:00Z')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO verification_runs (run_id, conversation_id, created_at) VALUES ('v1', 1, '2026-04-25T10:00:00Z')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO communication_founder_reply_reviews (review_id, verdict) VALUES ('r1', 'approved')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO communication_routing_state (message_key, route_status, leased_at, acked_at) VALUES ('q1', 'handled', '2026-04-25T10:00:00Z', '2026-04-25T10:01:00Z')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO ticket_self_work_items (work_id, title, state, created_at, updated_at) VALUES ('w1', 'Done', 'closed', '2026-04-25T10:00:00Z', '2026-04-25T10:05:00Z')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO scheduled_tasks (task_id, enabled, next_run_at) VALUES ('s1', 1, '2999-01-01T00:00:00Z')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO scheduled_task_runs (run_id, task_id, scheduled_for) VALUES ('sr1', 's1', '2026-04-25T10:00:00Z')",
+            [],
+        )?;
+
+        let report = run_process_mining_self_diagnosis(&conn, 100)?;
+        let names = report
+            .get("subsystems")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|item| {
+                item.get("name")
+                    .and_then(Value::as_str)
+                    .map(ToString::to_string)
+            })
+            .collect::<Vec<_>>();
+
+        assert!(names.contains(&"knowledge".to_string()), "{report}");
+        assert!(names.contains(&"lcm_continuity".to_string()), "{report}");
+        assert!(names.contains(&"queue_processing".to_string()), "{report}");
+        assert!(
+            names.contains(&"founder_communication_review".to_string()),
+            "{report}"
+        );
+        assert!(
+            names.contains(&"tickets_and_self_work".to_string()),
+            "{report}"
+        );
+        assert!(
+            names.contains(&"schedules_and_commitments".to_string()),
+            "{report}"
+        );
         Ok(())
     }
 
