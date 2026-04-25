@@ -709,20 +709,28 @@
       <aside class="toc" aria-label="Documentation navigation">
         <strong>Docs</strong>
         <nav>
+          <a href="#map">Documentation Map</a>
+          <a href="#quick-start">Quick Start</a>
+          <a href="#install">Install</a>
+          <a href="#configuration">Configuration</a>
           <a href="#intake">Giving CTOX Work</a>
           <a href="#tui">TUI</a>
           <a href="#desktop">Desktop App</a>
+          <a href="#service">Daemon Service</a>
           <a href="#runtime">Runtime</a>
           <a href="#layout">Runtime Layout</a>
           <a href="#commands">CLI Commands</a>
+          <a href="#lifecycle">Work Lifecycle</a>
           <a href="#loop">Mission Loop</a>
           <a href="#harness-diagram">Harness Diagram</a>
           <a href="#context">Context Build</a>
           <a href="#self-calls">CTOX Calls CTOX</a>
           <a href="#skills-tools">Skills & Tools</a>
+          <a href="#verification">Verification</a>
           <a href="#state-model">State Model</a>
           <a href="#process-mining">Process Mining</a>
           <a href="#work">Work Systems</a>
+          <a href="#troubleshooting">Troubleshooting</a>
           <a href="#operations">Operations</a>
         </nav>
       </aside>
@@ -740,6 +748,215 @@
             work.
           </p>
         </div>
+
+        <section id="map">
+          <p class="kicker">Documentation Map</p>
+          <h2>What is covered here</h2>
+          <p>
+            This page is the technical runtime manual. It explains how to
+            install and configure CTOX, how work enters the daemon, how the
+            daemon runs long-lived work, how state is stored, how context is
+            rebuilt, how verification and process evidence work, and how to
+            recover from common failures. The exhaustive command syntax lives in
+            the <a href="cli.html">CLI reference</a>.
+          </p>
+          <div class="quick-strip">
+            <a href="#quick-start">
+              <b>First run</b>
+              <span>Install, configure a model backend, start the daemon, open the TUI, and submit one mission.</span>
+            </a>
+            <a href="#configuration">
+              <b>Configuration</b>
+              <span>Runtime paths, API keys, local inference, context window, autonomy, communication paths, and updates.</span>
+            </a>
+            <a href="#lifecycle">
+              <b>Work lifecycle</b>
+              <span>How chat, tickets, queue work, schedules, verification, and follow-ups connect.</span>
+            </a>
+            <a href="#troubleshooting">
+              <b>Recovery</b>
+              <span>What to inspect when the daemon is offline, work is stuck, context is wrong, or closure is suspect.</span>
+            </a>
+          </div>
+        </section>
+
+        <section id="quick-start">
+          <p class="kicker">Quick Start</p>
+          <h2>From install to first managed mission</h2>
+          <p>
+            The minimal path is: install CTOX on the host that should own the
+            work, configure the runtime in the TUI, start the daemon, and submit
+            a mission that may need waiting, verification, and ticket updates.
+          </p>
+          <pre><code>curl -fsSL https://raw.githubusercontent.com/metric-space-ai/ctox/main/install.sh | bash
+ctox doctor
+ctox
+ctox start
+ctox status
+ctox chat "Take ownership of OPS-204. Wait for approval, deploy when allowed, verify the gates, and update the ticket."</code></pre>
+          <div class="grid">
+            <div class="cell">
+              <b>Install on the owning host</b>
+              <p>Run CTOX where the technical work should be carried: your workstation, a project server, or a remote ops host.</p>
+            </div>
+            <div class="cell">
+              <b>Configure before real work</b>
+              <p>Open <code>ctox</code> and set model backend, API keys or local runtime, paths, communication, secrets, and update behavior.</p>
+            </div>
+            <div class="cell">
+              <b>Start the loop</b>
+              <p><code>ctox start</code> starts the persistent background service. <code>ctox status</code> prints the service snapshot as JSON.</p>
+            </div>
+            <div class="cell">
+              <b>Submit a mission</b>
+              <p>Use <code>ctox chat</code>, TUI chat, mail, tickets, or schedules. The daemon turns input into durable work state.</p>
+            </div>
+          </div>
+        </section>
+
+        <section id="install">
+          <p class="kicker">Installation</p>
+          <h2>Install layout and update model</h2>
+          <p>
+            The installer creates a managed install layout by default:
+            installation files under <code>~/.local/lib/ctox</code>, runtime
+            state under <code>~/.local/state/ctox</code>, cache files under
+            <code>~/.cache/ctox</code>, and command symlinks under
+            <code>~/.local/bin</code>. The exact paths can be overridden at
+            install time or through environment variables.
+          </p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Installer flag</th>
+                  <th>Environment variable</th>
+                  <th>Purpose</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>--backend=&lt;cuda|metal|cpu&gt;</code></td>
+                  <td><code>CTOX_BACKEND</code></td>
+                  <td>Select the local inference backend instead of relying on auto-detection.</td>
+                </tr>
+                <tr>
+                  <td><code>--model=&lt;model&gt;</code></td>
+                  <td><code>CTOX_MODEL</code></td>
+                  <td>Seed the default local model profile.</td>
+                </tr>
+                <tr>
+                  <td><code>--install-root=&lt;path&gt;</code></td>
+                  <td><code>CTOX_INSTALL_ROOT</code></td>
+                  <td>Managed install root; default <code>~/.local/lib/ctox</code>.</td>
+                </tr>
+                <tr>
+                  <td><code>--state-root=&lt;path&gt;</code></td>
+                  <td><code>CTOX_STATE_ROOT</code></td>
+                  <td>Runtime state root; default <code>~/.local/state/ctox</code>.</td>
+                </tr>
+                <tr>
+                  <td><code>--cache-root=&lt;path&gt;</code></td>
+                  <td><code>CTOX_CACHE_ROOT</code></td>
+                  <td>Model and runtime cache root; default <code>~/.cache/ctox</code>.</td>
+                </tr>
+                <tr>
+                  <td><code>--bin-dir=&lt;path&gt;</code></td>
+                  <td><code>CTOX_BIN_DIR</code></td>
+                  <td>Directory for command symlinks; default <code>~/.local/bin</code>.</td>
+                </tr>
+                <tr>
+                  <td><code>--repo</code>, <code>--branch</code>, <code>--rebuild</code></td>
+                  <td><code>CTOX_REPO</code>, <code>CTOX_BRANCH</code></td>
+                  <td>Use a custom repository, branch, or in-place rebuild path.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <h3>Updates and rollback</h3>
+          <pre><code>ctox update status
+ctox update check
+ctox upgrade --stable
+ctox update apply --version &lt;tag&gt;
+ctox update rollback</code></pre>
+          <p>
+            Managed installs keep release state in the install and state roots.
+            <code>ctox update status</code> is the first command to run when the
+            active binary, release slot, or rollback state is unclear.
+          </p>
+        </section>
+
+        <section id="configuration">
+          <p class="kicker">Configuration</p>
+          <h2>Runtime, model, context, communication, and paths</h2>
+          <p>
+            Most configuration should be done in the TUI. CTOX persists runtime
+            settings and also reads environment overrides. The important split
+            is model source: either API-backed models through provider keys, or
+            local inference through the integrated runtime.
+          </p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Setting</th>
+                  <th>Typical values</th>
+                  <th>Purpose</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>CTOX_CHAT_SOURCE</code></td>
+                  <td><code>local</code>, <code>api</code></td>
+                  <td>Select local integrated inference or API model execution.</td>
+                </tr>
+                <tr>
+                  <td><code>CTOX_API_PROVIDER</code></td>
+                  <td><code>openai</code>, <code>anthropic</code>, <code>openrouter</code>, <code>minimax</code></td>
+                  <td>API provider when <code>CTOX_CHAT_SOURCE=api</code>.</td>
+                </tr>
+                <tr>
+                  <td><code>OPENAI_API_KEY</code>, <code>ANTHROPIC_API_KEY</code>, <code>OPENROUTER_API_KEY</code>, <code>MINIMAX_API_KEY</code></td>
+                  <td>Provider credentials</td>
+                  <td>Keys are configured through the TUI or secret-aware runtime settings.</td>
+                </tr>
+                <tr>
+                  <td><code>CTOX_LOCAL_RUNTIME</code></td>
+                  <td><code>candle</code></td>
+                  <td>Local inference runtime selection.</td>
+                </tr>
+                <tr>
+                  <td><code>CTOX_CHAT_MODEL</code></td>
+                  <td>Local or API model id</td>
+                  <td>Active chat model. API examples include <code>gpt-5.4</code>, <code>gpt-5.4-mini</code>, <code>anthropic/claude-sonnet-4.6</code>, and MiniMax profiles supported by the build.</td>
+                </tr>
+                <tr>
+                  <td><code>CTOX_CHAT_MODEL_MAX_CONTEXT</code></td>
+                  <td><code>32768</code>, <code>65536</code>, <code>131072</code>, <code>262144</code></td>
+                  <td>Target context window for prompt assembly and runtime planning.</td>
+                </tr>
+                <tr>
+                  <td><code>CTOX_CHAT_SKILL_PRESET</code>, <code>CTOX_CHAT_LOCAL_PRESET</code></td>
+                  <td><code>Standard</code>, <code>Simple</code>, <code>Quality</code>, <code>Performance</code></td>
+                  <td>Skill loading and local runtime performance profile.</td>
+                </tr>
+                <tr>
+                  <td><code>CTOX_AUTONOMY_LEVEL</code></td>
+                  <td><code>progressive</code>, <code>balanced</code>, <code>defensive</code></td>
+                  <td>Controls how aggressively CTOX can continue, approve low-risk operations, and ask for confirmation.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <pre><code>ctox runtime switch gpt-5.4 quality --context 128k --timeout 1800
+ctox runtime switch google/gemma-4-E4B-it quality --context 128k</code></pre>
+          <p class="note">
+            A configured model backend is necessary, but it is not the core
+            CTOX concept. The daemon, runtime state, work queue, context
+            builder, verification, and process evidence are what make CTOX more
+            than an interactive model session.
+          </p>
+        </section>
 
         <section id="intake">
           <p class="kicker">Work Intake</p>
@@ -790,13 +1007,14 @@ ctox chat "Resume OPS-204 and verify the rollout gates." --workspace /srv/checko
           </p>
           <h3>Channel and ticket intake</h3>
           <pre><code># channel-oriented operation
-ctox channel sync --source email
+ctox channel sync --channel email
 ctox channel context --thread-key email/customer-ops-204
 
 # ticket-oriented operation
-ctox ticket sync
+ctox ticket sync --system local
 ctox ticket dry-run --ticket-key OPS-204
-ctox ticket execute --ticket-key OPS-204</code></pre>
+ctox ticket cases --ticket-key OPS-204
+ctox ticket execute --case-id case-123 --summary "rolled out after approval"</code></pre>
           <p class="note">
             The direct commands are useful for operators and tests, but the
             normal CTOX flow is: input enters through a surface, the daemon
@@ -864,6 +1082,59 @@ ctox tui</code></pre>
             instance exists, the same daemon, TUI, SQLite state, channels,
             tickets, schedules, process mining, and worker context loop are used.
           </p>
+        </section>
+
+        <section id="service">
+          <p class="kicker">Daemon Service</p>
+          <h2>How the persistent loop is operated</h2>
+          <p>
+            <code>ctox start</code> starts the background loop. On managed
+            installs the generated user service runs <code>ctox service
+            --foreground</code> with <code>CTOX_ROOT</code> and
+            <code>CTOX_STATE_ROOT</code> set to the resolved install layout. The
+            service restarts on failure and owns queue leases, channel sync,
+            schedules, mission watching, backend supervision, and continuation
+            decisions.
+          </p>
+          <pre><code>ctox start
+ctox status
+ctox stop
+
+# direct foreground mode for debugging
+ctox service --foreground --autonomy balanced</code></pre>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>State</th>
+                  <th>Meaning</th>
+                  <th>Operator action</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Stopped</td>
+                  <td>No persistent loop is running. TUI and direct commands still work, but queued work will not be processed by the daemon.</td>
+                  <td>Run <code>ctox start</code> or debug with <code>ctox service --foreground</code>.</td>
+                </tr>
+                <tr>
+                  <td>Idle</td>
+                  <td>The daemon is alive and waiting for queue work, channel messages, due schedules, or follow-ups.</td>
+                  <td>Submit work, sync tickets/channels, or inspect queue state.</td>
+                </tr>
+                <tr>
+                  <td>Leased/running</td>
+                  <td>A worker run owns an item temporarily. The durable lease protects against duplicate execution.</td>
+                  <td>Wait, inspect status, or investigate stale leases with queue/process commands.</td>
+                </tr>
+                <tr>
+                  <td>Blocked/waiting</td>
+                  <td>Work cannot continue because approval, access, time, external response, or evidence is missing.</td>
+                  <td>Resolve the blocker, release queue work, approve a case, or let the scheduled follow-up resume it.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </section>
 
         <section id="runtime">
@@ -954,6 +1225,61 @@ ctox tui</code></pre>
             Older internal notes may mention a former database filename. The
             current consolidated core state file is <code>runtime/ctox.sqlite3</code>.
           </p>
+          <h3>Core database areas</h3>
+          <p>
+            The database is not one monolithic transcript. It contains separate
+            areas for communication, queue routing, schedules, tickets,
+            knowledge, continuity, governance, process evidence, and command
+            ledgers.
+          </p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Area</th>
+                  <th>Representative tables</th>
+                  <th>Purpose</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Communication</td>
+                  <td><code>communication_accounts</code>, <code>communication_threads</code>, <code>communication_messages</code>, <code>communication_routing_state</code></td>
+                  <td>Channel messages, routing state, and owner communication history.</td>
+                </tr>
+                <tr>
+                  <td>Tickets</td>
+                  <td><code>ticket_items</code>, <code>ticket_events</code>, <code>ticket_cases</code>, <code>ticket_verifications</code>, <code>ticket_writebacks</code></td>
+                  <td>Mirrored tickets, execution cases, approvals, verifications, and writebacks.</td>
+                </tr>
+                <tr>
+                  <td>Knowledge</td>
+                  <td><code>knowledge_main_skills</code>, <code>knowledge_runbooks</code>, <code>ticket_knowledge_entries</code>, <code>ticket_knowledge_loads</code></td>
+                  <td>Learned runbooks, source skills, and ticket-derived durable knowledge.</td>
+                </tr>
+                <tr>
+                  <td>Schedules</td>
+                  <td><code>scheduled_tasks</code>, <code>scheduled_task_runs</code></td>
+                  <td>Recurring or deferred work that emits queue items when due.</td>
+                </tr>
+                <tr>
+                  <td>Governance</td>
+                  <td><code>governance_mechanisms</code>, <code>governance_events</code></td>
+                  <td>Policies and recorded governance decisions around runtime behavior.</td>
+                </tr>
+                <tr>
+                  <td>Process mining</td>
+                  <td><code>ctox_process_events</code>, <code>ctox_process_context</code>, <code>ctox_pm_case_events</code>, <code>ctox_core_transition_proofs</code></td>
+                  <td>Mutation events, process projections, transition proofs, and conformance checks.</td>
+                </tr>
+                <tr>
+                  <td>Turn ledger</td>
+                  <td><code>ctox_turns</code>, <code>ctox_turn_commands</code>, <code>ctox_turn_violations</code></td>
+                  <td>Command-level trace of CLI and worker turns.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </section>
 
         <section id="commands">
@@ -1046,6 +1372,81 @@ ctox tui</code></pre>
               </tbody>
             </table>
           </div>
+        </section>
+
+        <section id="lifecycle">
+          <p class="kicker">Work Lifecycle</p>
+          <h2>How work moves through CTOX</h2>
+          <p>
+            CTOX does not treat all work as a single prompt. It chooses the
+            right state carrier depending on timing, approval, evidence, and
+            ownership. The same mission can move through chat, queue, ticket,
+            schedule, verification, and process-mining state.
+          </p>
+          <pre class="flow"><code>operator/channel/ticket/schedule
+  -> queue item or ticket case
+  -> leased worker run
+  -> context build from runtime state
+  -> execution + CTOX CLI self-inspection
+  -> verification and writeback
+  -> complete, blocked, waiting, scheduled, or requeued</code></pre>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Situation</th>
+                  <th>State carrier</th>
+                  <th>Why</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>One immediate operator request</td>
+                  <td><code>ctox chat</code> or TUI chat</td>
+                  <td>Fastest way to create durable work from a human instruction.</td>
+                </tr>
+                <tr>
+                  <td>More work arrives than can be handled now</td>
+                  <td>Queue item</td>
+                  <td>Queue state gives priority, status, leases, blockers, and repair operations.</td>
+                </tr>
+                <tr>
+                  <td>Work needs approval, audit, or external writeback</td>
+                  <td>Ticket case</td>
+                  <td>Ticket state separates dry-run understanding, approval, execution, verification, writeback, learning, and close.</td>
+                </tr>
+                <tr>
+                  <td>Work depends on time or an external window</td>
+                  <td>Schedule or follow-up</td>
+                  <td>The daemon can resume later without relying on an open chat session.</td>
+                </tr>
+                <tr>
+                  <td>Work has multiple coordinated steps</td>
+                  <td>Plan goal and steps</td>
+                  <td>Plans emit the next executable step while preserving the larger goal state.</td>
+                </tr>
+                <tr>
+                  <td>Work should not close without evidence</td>
+                  <td>Verification, claims, process events</td>
+                  <td>Closure can be checked against runtime evidence rather than model prose.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <h3>Ticket case lifecycle</h3>
+          <pre><code>ctox ticket show --ticket-key OPS-204
+ctox ticket dry-run --ticket-key OPS-204 --understanding "rollout requires approval and maintenance window"
+ctox ticket approve --case-id case-123 --status approved
+ctox ticket execute --case-id case-123 --summary "deployed payment callback fix"
+ctox ticket verify --case-id case-123 --status passed --summary "checkout and webhook gates passed"
+ctox ticket writeback-comment --case-id case-123 --body "Deployed and verified."
+ctox ticket close --case-id case-123 --summary "OPS-204 closed with evidence"</code></pre>
+          <p>
+            The names are intentionally explicit: <code>ticket-key</code> refers
+            to the external or local ticket. <code>case-id</code> refers to the
+            CTOX execution case created from that ticket. The CLI reference
+            documents these ID types in detail.
+          </p>
         </section>
 
         <section id="loop">
@@ -1275,7 +1676,7 @@ FOCUS
 Mission state: active
 Continuation mode: continuous
 Trigger intensity: hot
-Next slice: run production rollout and verification for the payment callback fix.
+Next step: run production rollout and verification for the payment callback fix.
 Done gate: live checkout, webhook replay, backup probe, alert check, ticket
 writeback, and continuity update all passed.
 Closure confidence: low
@@ -1315,12 +1716,11 @@ ctox: Resuming from Focus. I will deploy, replay one webhook, run checkout
 smoke tests, verify backups and alerts, then write evidence back to the ticket.
 
 PROCESS EVIDENCE
-ctox ticket show OPS-204
-ctox queue lease queue:payment-rollout
-ctox verification run --gate checkout-live
-ctox verification run --gate webhook-replay
-ctox verification run --gate backup-current
-ctox process-mining assert-clean --case OPS-204
+ctox ticket show --ticket-key OPS-204
+ctox queue show --message-key queue-payment-rollout
+ctox verification claim-set --conversation-id conv-ops-204 --kind rollout_gate --status verified --subject checkout-live --summary "checkout returned a payment URL" --evidence "smoke log: checkout-live-204"
+ctox verification claim-set --conversation-id conv-ops-204 --kind rollout_gate --status verified --subject webhook-replay --summary "provider replay accepted once" --evidence "provider event replay-8891"
+ctox process-mining explain-case case-OPS-204 --limit 50
 
 WORKER INSTRUCTION
 Use the blocks above as the current working state. Deploy only if the approval
@@ -1527,6 +1927,48 @@ ctox queue complete --message-key queue-123 --note "deployed and verified"</code
           </div>
         </section>
 
+        <section id="verification">
+          <p class="kicker">Verification</p>
+          <h2>How CTOX decides work is actually done</h2>
+          <p>
+            CTOX should not close long-running technical work because a worker
+            produced a confident summary. Closure is based on done gates,
+            claims, verification records, ticket writeback, process state, and
+            continuity updates. The exact checks depend on the mission, but the
+            pattern is consistent: define the gate, collect evidence, write it
+            into runtime state, then close.
+          </p>
+          <div class="grid">
+            <div class="cell">
+              <b>Done gates</b>
+              <p>Concrete conditions such as deploy marker present, endpoint returns 200, webhook replay accepted, backup current, tests passed, or owner approved.</p>
+            </div>
+            <div class="cell">
+              <b>Claims</b>
+              <p>Structured statements about what changed, what was verified, and what remains open.</p>
+            </div>
+            <div class="cell">
+              <b>Verification commands</b>
+              <p>Runtime commands record assurance, claim sets, and gate results so they can be inspected later.</p>
+            </div>
+            <div class="cell">
+              <b>Process evidence</b>
+              <p>Process mining reconstructs event sequences and highlights illegal or incomplete transitions.</p>
+            </div>
+          </div>
+          <pre><code>ctox verification assurance
+ctox verification claims --conversation-id 1 --limit 20
+ctox state-invariants
+ctox process-mining assert-clean --limit 100
+ctox process-mining case &lt;case-id&gt; --limit 200</code></pre>
+          <p class="note">
+            A mission can still be wrong even if the state model is clean. The
+            state model constrains CTOX's process; the mission still needs
+            domain-specific evidence such as tests, production checks, logs,
+            monitoring, or ticket approval.
+          </p>
+        </section>
+
         <section id="state-model">
           <p class="kicker">State Model</p>
           <h2>Formal transitions and graph checks</h2>
@@ -1664,6 +2106,68 @@ ctox process-mining assert-clean --limit 100</code></pre>
           </div>
         </section>
 
+        <section id="troubleshooting">
+          <p class="kicker">Troubleshooting</p>
+          <h2>What to inspect when CTOX looks wrong</h2>
+          <p>
+            Start with the service and runtime database, then narrow the
+            problem to queue state, ticket state, context state, model runtime,
+            or process evidence. Do not start by adding more prompts if the
+            control plane is already inconsistent.
+          </p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Symptom</th>
+                  <th>Inspect</th>
+                  <th>Likely action</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Daemon is not processing work</td>
+                  <td><code>ctox status</code>, <code>ctox doctor</code>, foreground <code>ctox service --foreground</code></td>
+                  <td>Start the service, fix install paths, or inspect foreground errors.</td>
+                </tr>
+                <tr>
+                  <td>Work is stuck or duplicated</td>
+                  <td><code>ctox queue list --status pending --status leased --status blocked</code>, <code>ctox queue repair --dry-run</code></td>
+                  <td>Release blocked work, repair stale routes, or spill overloaded work into tickets.</td>
+                </tr>
+                <tr>
+                  <td>CTOX appears to forget context</td>
+                  <td><code>ctox chat-prompt-export</code>, <code>ctox context-health runtime/ctox.sqlite3 1</code>, <code>ctox continuity-show runtime/ctox.sqlite3 1 focus</code></td>
+                  <td>Check Focus, Anchors, Narrative, context pressure, and whether important facts were promoted into durable state.</td>
+                </tr>
+                <tr>
+                  <td>Ticket work cannot close</td>
+                  <td><code>ctox ticket case-show --case-id case-123</code>, <code>ctox ticket history --ticket-key OPS-204</code>, <code>ctox verification assurance</code></td>
+                  <td>Finish missing approval, execution, verification, writeback, or learning steps.</td>
+                </tr>
+                <tr>
+                  <td>Runtime/model selection is wrong</td>
+                  <td>TUI Settings, <code>ctox runtime switch</code>, <code>ctox update status</code></td>
+                  <td>Set model source, provider key, context window, local runtime, or update channel.</td>
+                </tr>
+                <tr>
+                  <td>State looks inconsistent</td>
+                  <td><code>ctox state-invariants</code>, <code>ctox process-mining assert-clean</code>, <code>ctox process-mining state-audit</code></td>
+                  <td>Use the reported violation, proof, or invariant code to repair the specific subsystem.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <pre><code>ctox status
+ctox doctor
+ctox update status
+ctox queue list --status pending --status leased --status blocked --limit 50
+ctox state-invariants
+ctox context-health runtime/ctox.sqlite3 1
+ctox process-mining assert-clean --limit 100
+ctox verification assurance</code></pre>
+        </section>
+
         <section id="operations">
           <p class="kicker">Operations</p>
           <h2>Debugging and recovery checklist</h2>
@@ -1728,7 +2232,7 @@ FOCUS
 Mission state: active
 Continuation mode: continuous
 Trigger intensity: hot
-Next slice: run production rollout and verification for the payment callback fix.
+Next step: run production rollout and verification for the payment callback fix.
 Done gate: live checkout, webhook replay, backup probe, alert check, ticket
 writeback, and continuity update all passed.
 Closure confidence: low
@@ -1768,12 +2272,11 @@ ctox: Resuming from Focus. I will deploy, replay one webhook, run checkout
 smoke tests, verify backups and alerts, then write evidence back to the ticket.
 
 PROCESS EVIDENCE
-ctox ticket show OPS-204
-ctox queue lease queue:payment-rollout
-ctox verification run --gate checkout-live
-ctox verification run --gate webhook-replay
-ctox verification run --gate backup-current
-ctox process-mining assert-clean --case OPS-204
+ctox ticket show --ticket-key OPS-204
+ctox queue show --message-key queue-payment-rollout
+ctox verification claim-set --conversation-id conv-ops-204 --kind rollout_gate --status verified --subject checkout-live --summary "checkout returned a payment URL" --evidence "smoke log: checkout-live-204"
+ctox verification claim-set --conversation-id conv-ops-204 --kind rollout_gate --status verified --subject webhook-replay --summary "provider replay accepted once" --evidence "provider event replay-8891"
+ctox process-mining explain-case case-OPS-204 --limit 50
 
 WORKER INSTRUCTION
 Use the blocks above as the current working state. Deploy only if the approval
@@ -1823,7 +2326,7 @@ Task is complete only when:
   window is over.
 
 ## Next
-- Next slice: run production rollout and verification for the payment callback fix.
+- Next step: run production rollout and verification for the payment callback fix.
 
 ## Done / Gate
 - Done gate: live checkout, webhook replay, backup probe, alert check, ticket
