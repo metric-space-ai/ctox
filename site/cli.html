@@ -1,0 +1,1110 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Structured CTOX CLI reference: command surfaces, identifiers, flags, lifecycle examples, and command inventory."
+    />
+    <title>CTOX CLI Reference</title>
+    <link rel="icon" href="assets/ctox-app-icon.png" />
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #151515;
+        --muted: #646b75;
+        --line: #d9dfe8;
+        --surface: #f5f7fb;
+        --panel: #ffffff;
+        --code: #0f141a;
+        --cyan: #00a8df;
+        --magenta: #ec2b87;
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+          "Segoe UI", sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        scroll-behavior: smooth;
+      }
+
+      body {
+        margin: 0;
+        background: var(--surface);
+        color: var(--ink);
+      }
+
+      a {
+        color: inherit;
+      }
+
+      code,
+      pre {
+        font-family: "SFMono-Regular", ui-monospace, "Cascadia Code", monospace;
+      }
+
+      code {
+        padding: 0.12em 0.32em;
+        background: #edf2f8;
+        font-size: 0.92em;
+      }
+
+      .topline {
+        position: sticky;
+        top: 0;
+        z-index: 5;
+        border-bottom: 1px solid var(--line);
+        background: rgba(245, 247, 251, 0.94);
+        backdrop-filter: blur(14px);
+      }
+
+      .topline-inner,
+      .shell,
+      footer .inner {
+        width: min(1180px, calc(100% - 40px));
+        margin: 0 auto;
+      }
+
+      .topline-inner {
+        display: flex;
+        min-height: 72px;
+        align-items: center;
+        justify-content: space-between;
+        gap: 20px;
+      }
+
+      .topline img {
+        display: block;
+        width: 128px;
+        height: auto;
+      }
+
+      .top-actions {
+        display: flex;
+        align-items: center;
+        gap: 18px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      .top-actions a {
+        text-decoration: none;
+      }
+
+      .nav-cta {
+        display: inline-flex;
+        min-height: 40px;
+        align-items: center;
+        justify-content: center;
+        padding: 0 16px;
+        background: var(--ink);
+        color: #fff;
+        font-weight: 750;
+      }
+
+      .shell {
+        display: grid;
+        grid-template-columns: 250px minmax(0, 1fr);
+        gap: 54px;
+        align-items: start;
+        padding: 54px 0 80px;
+      }
+
+      .toc {
+        position: sticky;
+        top: 96px;
+        padding: 20px;
+        border: 1px solid var(--line);
+        background: #fff;
+      }
+
+      .toc strong {
+        display: block;
+        margin-bottom: 14px;
+        font-size: 13px;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      .toc a {
+        display: block;
+        padding: 8px 0;
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.25;
+        text-decoration: none;
+      }
+
+      .toc a:hover,
+      .toc a:focus-visible {
+        color: var(--ink);
+        outline: none;
+      }
+
+      .doc {
+        min-width: 0;
+      }
+
+      .hero {
+        padding: 10px 0 46px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .kicker {
+        margin: 0 0 16px;
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 750;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      h1 {
+        max-width: 900px;
+        margin: 0;
+        font-size: clamp(42px, 6vw, 76px);
+        line-height: 0.96;
+        letter-spacing: 0;
+      }
+
+      h2 {
+        margin: 0;
+        max-width: 820px;
+        font-size: clamp(30px, 4vw, 44px);
+        line-height: 1.04;
+        letter-spacing: 0;
+      }
+
+      h3 {
+        margin: 34px 0 12px;
+        font-size: 22px;
+        line-height: 1.2;
+      }
+
+      p,
+      li {
+        color: #3f4650;
+        font-size: 16px;
+        line-height: 1.62;
+      }
+
+      p {
+        max-width: 880px;
+      }
+
+      .lead {
+        max-width: 880px;
+        margin: 24px 0 0;
+        color: #343c46;
+        font-size: clamp(18px, 2.2vw, 22px);
+        line-height: 1.42;
+      }
+
+      section {
+        padding: 50px 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .note {
+        border-left: 4px solid var(--cyan);
+        padding: 14px 18px;
+        background: #fff;
+      }
+
+      .warning {
+        border-left-color: var(--magenta);
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 1px;
+        margin-top: 26px;
+        border: 1px solid var(--line);
+        background: var(--line);
+      }
+
+      .cell {
+        padding: 22px;
+        background: #fff;
+      }
+
+      .cell b {
+        display: block;
+        margin-bottom: 10px;
+        font-size: 17px;
+      }
+
+      .cell p {
+        margin: 0;
+        font-size: 15px;
+      }
+
+      .table-wrap {
+        margin-top: 24px;
+        overflow-x: auto;
+        border: 1px solid var(--line);
+        background: #fff;
+      }
+
+      table {
+        width: 100%;
+        min-width: 760px;
+        border-collapse: collapse;
+        font-size: 15px;
+      }
+
+      th,
+      td {
+        padding: 14px 16px;
+        border-bottom: 1px solid var(--line);
+        text-align: left;
+        vertical-align: top;
+      }
+
+      th {
+        color: var(--muted);
+        font-size: 12px;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+      }
+
+      td:first-child {
+        width: 260px;
+      }
+
+      pre {
+        margin: 24px 0 0;
+        padding: 22px;
+        overflow-x: auto;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        background: var(--code);
+        color: #d9eef6;
+        font-size: 14px;
+        line-height: 1.65;
+        white-space: pre;
+      }
+
+      pre code {
+        padding: 0;
+        background: transparent;
+        color: inherit;
+        font-size: inherit;
+      }
+
+      .flow-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 1px;
+        margin-top: 26px;
+        border: 1px solid var(--line);
+        background: var(--line);
+      }
+
+      .flow-card {
+        padding: 20px;
+        background: #fff;
+      }
+
+      .flow-card b {
+        display: block;
+        margin-bottom: 10px;
+      }
+
+      .flow-card pre {
+        margin-top: 12px;
+        font-size: 12px;
+        line-height: 1.5;
+      }
+
+      footer {
+        padding: 28px 0;
+        background: #111418;
+        color: rgba(249, 251, 255, 0.62);
+        font-size: 13px;
+      }
+
+      footer .inner {
+        display: flex;
+        justify-content: space-between;
+        gap: 20px;
+        flex-wrap: wrap;
+      }
+
+      @media (max-width: 980px) {
+        .shell {
+          grid-template-columns: 1fr;
+          gap: 28px;
+        }
+
+        .toc {
+          position: static;
+        }
+
+        .toc nav {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 0 22px;
+        }
+
+        .grid,
+        .flow-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (max-width: 620px) {
+        .topline-inner,
+        .shell,
+        footer .inner {
+          width: min(100% - 28px, 1180px);
+        }
+
+        .topline img {
+          width: 108px;
+        }
+
+        .top-actions {
+          gap: 12px;
+        }
+
+        .top-actions a[href*="github"] {
+          display: none;
+        }
+
+        .toc nav {
+          grid-template-columns: 1fr;
+        }
+
+        section {
+          padding: 42px 0;
+        }
+
+        pre {
+          font-size: 12px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="topline" aria-label="Documentation header">
+      <div class="topline-inner">
+        <a href="index.html" aria-label="CTOX home">
+          <img src="assets/ctox-full-logo.png" alt="CTOX" />
+        </a>
+        <div class="top-actions">
+          <a href="index.html">Overview</a>
+          <a href="docs.html">Docs</a>
+          <a href="https://github.com/metric-space-ai/ctox">GitHub</a>
+          <a class="nav-cta" href="index.html#install">Install</a>
+        </div>
+      </div>
+    </header>
+
+    <main class="shell">
+      <aside class="toc" aria-label="CLI reference navigation">
+        <strong>CLI Reference</strong>
+        <nav>
+          <a href="#read-first">Read First</a>
+          <a href="#terms">Terms and IDs</a>
+          <a href="#flows">Common Flows</a>
+          <a href="#everyday">Everyday</a>
+          <a href="#queue">Queue</a>
+          <a href="#tickets">Tickets</a>
+          <a href="#plans">Plans and Schedules</a>
+          <a href="#channels">Channels</a>
+          <a href="#context">Context and LCM</a>
+          <a href="#process-mining">Process Mining</a>
+          <a href="#security">Secrets and Governance</a>
+          <a href="#inventory">Inventory</a>
+        </nav>
+      </aside>
+
+      <article class="doc">
+        <div class="hero">
+          <p class="kicker">CTOX CLI Reference</p>
+          <h1>Commands, flags, IDs, and what they are for.</h1>
+          <p class="lead">
+            CTOX has a large CLI because the daemon uses the same surface as a
+            human operator. This page documents the current command surface from
+            the implementation and separates everyday usage from internal,
+            diagnostic, and recovery commands.
+          </p>
+        </div>
+
+        <section id="read-first">
+          <p class="kicker">Read First</p>
+          <h2>The CLI has three audiences</h2>
+          <p>
+            Some commands are for humans, some are for scripts, and many are for
+            CTOX itself. Treating all of them as equal user-facing commands is
+            what makes the raw command list look chaotic.
+          </p>
+          <div class="grid">
+            <div class="cell">
+              <b>Human operator surface</b>
+              <p>Use <code>ctox</code>, <code>ctox tui</code>, <code>ctox chat</code>, Desktop, and high-level status/update commands.</p>
+            </div>
+            <div class="cell">
+              <b>Operational control surface</b>
+              <p>Use queue, ticket, schedule, channel, verification, and process-mining commands when debugging, scripting, or recovering state.</p>
+            </div>
+            <div class="cell">
+              <b>Daemon tool surface</b>
+              <p>CTOX calls commands such as queue, ticket, context, process-mining, and verification commands from worker runs.</p>
+            </div>
+            <div class="cell">
+              <b>Power-user internals</b>
+              <p>LCM, continuity, source-skill, self-work, and low-level process commands are mostly for inspection, tests, migrations, and repair.</p>
+            </div>
+          </div>
+          <p class="note warning">
+            There is real naming debt in the current CLI. For example,
+            <code>ctox chat</code> uses <code>--workspace</code>, while
+            <code>ctox queue add</code> uses <code>--workspace-root</code>.
+            The documentation below calls out those differences instead of
+            pretending the surface is already perfectly normalized.
+          </p>
+        </section>
+
+        <section id="terms">
+          <p class="kicker">Terms and IDs</p>
+          <h2>Identifiers used by commands</h2>
+          <p>
+            The fastest way to make sense of the CLI is to understand which
+            object a command operates on.
+          </p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Term</th>
+                  <th>Meaning</th>
+                  <th>Where it appears</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>thread-key</code></td>
+                  <td>Durable conversation or work thread. Use it to attach repeated prompts, channel messages, queue items, or strategy decisions to the same thread.</td>
+                  <td><code>ctox chat --thread-key</code>, <code>queue add</code>, <code>strategy set</code></td>
+                </tr>
+                <tr>
+                  <td><code>message-key</code></td>
+                  <td>Queue item identifier. It is the handle for blocking, releasing, completing, failing, cancelling, spilling, or restoring queued work.</td>
+                  <td><code>ctox queue show|block|release|complete|spill</code></td>
+                </tr>
+                <tr>
+                  <td><code>ticket-key</code></td>
+                  <td>External or local ticket key, for example <code>OPS-204</code>. Use it before a CTOX execution case exists.</td>
+                  <td><code>ticket show</code>, <code>ticket dry-run</code>, <code>ticket history</code></td>
+                </tr>
+                <tr>
+                  <td><code>case-id</code></td>
+                  <td>CTOX ticket execution case. It appears after the ticket workflow creates an execution case from a ticket.</td>
+                  <td><code>ticket approve</code>, <code>execute</code>, <code>verify</code>, <code>close</code>, <code>writeback-*</code></td>
+                </tr>
+                <tr>
+                  <td><code>goal-id</code> / <code>step-id</code></td>
+                  <td>Plan identifiers. A plan has a goal; the goal contains executable steps.</td>
+                  <td><code>plan show</code>, <code>emit-next</code>, <code>complete-step</code>, <code>block-step</code></td>
+                </tr>
+                <tr>
+                  <td><code>task-id</code></td>
+                  <td>Schedule identifier. It controls recurring or deferred tasks.</td>
+                  <td><code>schedule pause</code>, <code>resume</code>, <code>remove</code>, <code>run-now</code></td>
+                </tr>
+                <tr>
+                  <td><code>conversation-id</code></td>
+                  <td>LCM conversation identifier used by context and continuity internals.</td>
+                  <td><code>lcm-*</code>, <code>continuity-*</code>, <code>context-health</code></td>
+                </tr>
+                <tr>
+                  <td><code>workspace</code> / <code>workspace-root</code></td>
+                  <td>Filesystem working directory for a run. <code>ctox chat</code> calls it <code>--workspace</code>; queue commands call it <code>--workspace-root</code>.</td>
+                  <td><code>ctox chat --workspace</code>, <code>queue add --workspace-root</code></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h3>Syntax conventions</h3>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Form</th>
+                  <th>Meaning</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>&lt;value&gt;</code></td>
+                  <td>Required positional or flag value.</td>
+                </tr>
+                <tr>
+                  <td><code>[--flag &lt;value&gt;]</code></td>
+                  <td>Optional flag and value.</td>
+                </tr>
+                <tr>
+                  <td><code>&lt;a|b|c&gt;</code></td>
+                  <td>One of the listed values.</td>
+                </tr>
+                <tr>
+                  <td><code>...</code></td>
+                  <td>Repeatable argument. Example: multiple message keys or statuses.</td>
+                </tr>
+                <tr>
+                  <td><code>--metadata-json</code>, <code>--evidence-json</code></td>
+                  <td>Raw JSON string. Quote it in the shell.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="flows">
+          <p class="kicker">Common Flows</p>
+          <h2>Use the CLI by lifecycle, not alphabetically</h2>
+          <div class="flow-grid">
+            <div class="flow-card">
+              <b>Give CTOX work</b>
+              <p>Use this for a normal operator request.</p>
+              <pre><code>ctox start
+ctox chat "Take ownership of OPS-204. Wait for approval, deploy when allowed, verify gates, and update the ticket."</code></pre>
+            </div>
+            <div class="flow-card">
+              <b>Inspect queue pressure</b>
+              <p>Use this when work is blocked, duplicated, or stalled.</p>
+              <pre><code>ctox queue list --status pending --status leased --status blocked --limit 50
+ctox queue show --message-key queue-123
+ctox queue release --message-key queue-123 --note "access restored"</code></pre>
+            </div>
+            <div class="flow-card">
+              <b>Run a ticket case</b>
+              <p>Use this when work should be tracked by ticket state and evidence.</p>
+              <pre><code>ctox ticket show --ticket-key OPS-204
+ctox ticket dry-run --ticket-key OPS-204
+ctox ticket approve --case-id case-123 --status approved
+ctox ticket execute --case-id case-123 --summary "deployed"
+ctox ticket verify --case-id case-123 --status passed</code></pre>
+            </div>
+            <div class="flow-card">
+              <b>Schedule a follow-up</b>
+              <p>Use this when work depends on time, maintenance windows, or retries.</p>
+              <pre><code>ctox schedule add --name "retry OPS-204" --cron "*/15 * * * *" --prompt "resume OPS-204 if approval exists"
+ctox schedule run-now --task-id task-123</code></pre>
+            </div>
+            <div class="flow-card">
+              <b>Inspect context</b>
+              <p>Use this when the worker seems to have the wrong working state.</p>
+              <pre><code>ctox chat-prompt-export --conversation-id 1 --output /tmp/prompt.md
+ctox context-retrieve --conversation-id 1 --mode current --query OPS-204</code></pre>
+            </div>
+            <div class="flow-card">
+              <b>Audit process state</b>
+              <p>Use this before trusting that a long-running case really closed.</p>
+              <pre><code>ctox state-invariants
+ctox process-mining assert-clean --limit 100
+ctox process-mining case case-OPS-204 --limit 200</code></pre>
+            </div>
+          </div>
+        </section>
+
+        <section id="everyday">
+          <p class="kicker">Everyday Commands</p>
+          <h2>Commands humans normally touch</h2>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Command</th>
+                  <th>Purpose</th>
+                  <th>Flags</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>ctox</code>, <code>ctox tui</code></td>
+                  <td>Open the terminal UI.</td>
+                  <td>No required flags.</td>
+                </tr>
+                <tr>
+                  <td><code>ctox start</code>, <code>ctox stop</code>, <code>ctox status</code></td>
+                  <td>Start, stop, or inspect the background daemon.</td>
+                  <td><code>status</code> prints JSON.</td>
+                </tr>
+                <tr>
+                  <td><code>ctox chat &lt;instruction&gt;</code></td>
+                  <td>Submit work to the running daemon.</td>
+                  <td><code>--wait</code>, <code>--thread-key</code>, <code>--workspace</code>, <code>--timeout-secs</code>, <code>--atif-out</code>.</td>
+                </tr>
+                <tr>
+                  <td><code>ctox runtime switch &lt;model&gt; &lt;quality|performance&gt;</code></td>
+                  <td>Switch the active model/runtime profile.</td>
+                  <td><code>--context 32k|64k|128k|256k</code>, <code>--timeout &lt;secs&gt;</code>.</td>
+                </tr>
+                <tr>
+                  <td><code>ctox doctor</code>, <code>ctox version</code></td>
+                  <td>Inspect install health and version state.</td>
+                  <td>No required flags.</td>
+                </tr>
+                <tr>
+                  <td><code>ctox update ...</code>, <code>ctox upgrade</code></td>
+                  <td>Check, apply, rollback, or configure release channels.</td>
+                  <td><code>--stable</code>, <code>--dev</code>, <code>--latest</code>, <code>--version</code>, <code>--from-source</code>, <code>--repo</code>.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="queue">
+          <p class="kicker">Queue</p>
+          <h2>Short-term executable work</h2>
+          <p>
+            Queue commands operate on <code>message-key</code>. The queue is
+            where immediate work waits, gets leased, blocked, released, failed,
+            cancelled, completed, or spilled into tickets.
+          </p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Command</th>
+                  <th>Use</th>
+                  <th>Important flags</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>queue add</code></td>
+                  <td>Create executable work.</td>
+                  <td><code>--title</code>, <code>--prompt</code>, optional <code>--thread-key</code>, <code>--workspace-root</code>, <code>--skill</code>, <code>--priority</code>, <code>--parent-message-key</code>.</td>
+                </tr>
+                <tr>
+                  <td><code>queue list</code>, <code>queue show</code></td>
+                  <td>Inspect pending or specific work.</td>
+                  <td><code>--status</code> is repeatable; <code>--limit</code>; <code>--message-key</code>.</td>
+                </tr>
+                <tr>
+                  <td><code>queue edit</code>, <code>reprioritize</code></td>
+                  <td>Correct or reprioritize work before execution.</td>
+                  <td><code>--title</code>, <code>--prompt</code>, <code>--priority</code>, <code>--clear-skill</code>, <code>--clear-workspace-root</code>.</td>
+                </tr>
+                <tr>
+                  <td><code>queue block</code>, <code>release</code></td>
+                  <td>Record a blocker or make blocked work executable again.</td>
+                  <td><code>--reason</code> for block; <code>--note</code>, <code>--clear-note</code>, <code>--priority</code> for release.</td>
+                </tr>
+                <tr>
+                  <td><code>queue complete</code>, <code>fail</code>, <code>cancel</code></td>
+                  <td>Close queue work with outcome state.</td>
+                  <td><code>--note</code> or <code>--reason</code>.</td>
+                </tr>
+                <tr>
+                  <td><code>queue spill</code>, <code>spills</code>, <code>restore</code></td>
+                  <td>Move overloaded queue work into ticket-style tracking and restore it later.</td>
+                  <td><code>--ticket-system</code>, <code>--publish</code>, <code>--state</code>.</td>
+                </tr>
+                <tr>
+                  <td><code>queue repair</code></td>
+                  <td>Repair stale or inconsistent queue state.</td>
+                  <td><code>--dry-run</code>, <code>--mechanical</code>.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="tickets">
+          <p class="kicker">Tickets</p>
+          <h2>Ticket, case, writeback, and knowledge workflow</h2>
+          <p>
+            Ticket commands are the biggest group because they model external
+            work, local fallback tickets, execution cases, approval, verification,
+            writeback, learning, and source-specific knowledge.
+          </p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Area</th>
+                  <th>Commands</th>
+                  <th>What to know</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Connectors</td>
+                  <td><code>ticket init</code>, <code>sync --system</code>, <code>test --system</code>, <code>capabilities --system</code>, <code>sources</code></td>
+                  <td><code>--system local</code> is the current explicit local adapter path.</td>
+                </tr>
+                <tr>
+                  <td>Ticket read path</td>
+                  <td><code>show --ticket-key</code>, <code>history --ticket-key</code>, <code>label-set</code>, <code>label-show</code></td>
+                  <td>Use <code>ticket-key</code> while referring to the external/local ticket itself.</td>
+                </tr>
+                <tr>
+                  <td>Case lifecycle</td>
+                  <td><code>dry-run --ticket-key</code>, <code>approve --case-id</code>, <code>execute --case-id</code>, <code>verify --case-id</code>, <code>close --case-id</code></td>
+                  <td>Use <code>case-id</code> after CTOX creates an execution case from a ticket.</td>
+                </tr>
+                <tr>
+                  <td>Writeback</td>
+                  <td><code>writeback-comment</code>, <code>writeback-transition</code>, <code>ack</code></td>
+                  <td>Writes results or transitions back to the ticket/event source.</td>
+                </tr>
+                <tr>
+                  <td>Local tickets</td>
+                  <td><code>ticket local create</code>, <code>comment</code>, <code>transition</code>, <code>show</code></td>
+                  <td>Local fallback ticket system for development, demos, or self-contained operation.</td>
+                </tr>
+                <tr>
+                  <td>Knowledge</td>
+                  <td><code>knowledge-bootstrap</code>, <code>knowledge-show</code>, <code>knowledge-load</code>, <code>learn-candidate-*</code></td>
+                  <td>Captures durable learnings from ticket work.</td>
+                </tr>
+                <tr>
+                  <td>Source skills</td>
+                  <td><code>source-skill-set</code>, <code>show</code>, <code>query</code>, <code>import-bundle</code>, <code>review-note</code></td>
+                  <td>Associates ticket sources with operating-model skills and runbooks.</td>
+                </tr>
+                <tr>
+                  <td>Self-work and access</td>
+                  <td><code>self-work-*</code>, <code>access-request-put</code>, <code>autonomy-grant-set</code>, <code>bundle-put</code></td>
+                  <td>Internal work management and approval/autonomy metadata.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="plans">
+          <p class="kicker">Plans and Schedules</p>
+          <h2>Longer work and delayed work</h2>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Command</th>
+                  <th>Purpose</th>
+                  <th>Flags</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>plan ingest</code>, <code>plan draft</code></td>
+                  <td>Create a multi-step goal from a title and prompt.</td>
+                  <td><code>--title</code>, <code>--prompt</code>.</td>
+                </tr>
+                <tr>
+                  <td><code>plan show</code>, <code>emit-next</code></td>
+                  <td>Inspect a plan or emit its next executable queue item.</td>
+                  <td><code>--goal-id</code>.</td>
+                </tr>
+                <tr>
+                  <td><code>complete-step</code>, <code>fail-step</code>, <code>retry-step</code>, <code>block-step</code>, <code>unblock-step</code></td>
+                  <td>Move a plan step through its lifecycle.</td>
+                  <td><code>--step-id</code>, <code>--result</code>, <code>--reason</code>, <code>--defer-minutes</code>.</td>
+                </tr>
+                <tr>
+                  <td><code>schedule add</code></td>
+                  <td>Create recurring or deferred work from a cron expression and prompt.</td>
+                  <td><code>--name</code>, <code>--cron</code>, <code>--prompt</code>.</td>
+                </tr>
+                <tr>
+                  <td><code>schedule pause|resume|remove|run-now</code></td>
+                  <td>Operate an existing scheduled task.</td>
+                  <td><code>--task-id</code>.</td>
+                </tr>
+                <tr>
+                  <td><code>follow-up evaluate</code></td>
+                  <td>Turn a result or blocker into follow-up state.</td>
+                  <td><code>--goal</code>, <code>--result</code>.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="channels">
+          <p class="kicker">Channels</p>
+          <h2>Messages, meetings, and asynchronous intake</h2>
+          <p>
+            Channel commands are used to sync, acknowledge, search, and respond
+            to external communication. Meeting and Jami commands are native
+            communication adapters.
+          </p>
+          <pre><code>ctox channel ack [--db &lt;path&gt;] [--status &lt;status&gt;] &lt;message-key&gt;...
+ctox meeting join &lt;url&gt; [--name &lt;bot-name&gt;]
+ctox meeting schedule &lt;url&gt; --time &lt;ISO-8601&gt;
+ctox meeting cancel &lt;url&gt;
+ctox meeting transcript &lt;session_id&gt;
+ctox jami-daemon --foreground</code></pre>
+          <p class="note">
+            Channel subcommands beyond <code>ack</code> are exposed through the
+            channel handler and used by CTOX workers for sync, context, search,
+            send, and history operations. They belong to the daemon tool surface
+            more than the everyday human surface.
+          </p>
+        </section>
+
+        <section id="context">
+          <p class="kicker">Context and LCM</p>
+          <h2>Long-context memory and continuity internals</h2>
+          <p>
+            These commands inspect or repair the context-building machinery.
+            Most users should read the output, not manually mutate it.
+          </p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Area</th>
+                  <th>Commands</th>
+                  <th>Purpose</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Messages and summaries</td>
+                  <td><code>lcm-init</code>, <code>lcm-add-message</code>, <code>lcm-compact</code>, <code>lcm-grep</code>, <code>lcm-describe</code>, <code>lcm-expand</code>, <code>lcm-dump</code></td>
+                  <td>Raw messages, summary trees, retrieval, dump, and expansion.</td>
+                </tr>
+                <tr>
+                  <td>Continuity docs</td>
+                  <td><code>continuity-init</code>, <code>show</code>, <code>apply</code>, <code>update</code>, <code>log</code>, <code>rebuild</code>, <code>forgotten</code>, <code>build-prompt</code></td>
+                  <td>Focus, Anchors, and Narrative state used to assemble worker prompts.</td>
+                </tr>
+                <tr>
+                  <td>Health and retrieval</td>
+                  <td><code>context-health</code>, <code>context-stress</code>, <code>context-retrieve</code>, <code>chat-prompt-export</code></td>
+                  <td>Inspect token pressure, retrieve context, and export the assembled prompt artifact.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="process-mining">
+          <p class="kicker">Process Mining</p>
+          <h2>Runtime process evidence</h2>
+          <p>
+            Process-mining commands operate on the SQLite event log and formal
+            transition proofs. They are how CTOX reconstructs what happened
+            after a long-running mission.
+          </p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Area</th>
+                  <th>Commands</th>
+                  <th>Purpose</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Setup and inventory</td>
+                  <td><code>ensure</code>, <code>schema</code>, <code>inventory</code></td>
+                  <td>Create or inspect process-mining tables and triggers.</td>
+                </tr>
+                <tr>
+                  <td>Events and cases</td>
+                  <td><code>events</code>, <code>projection</code>, <code>cases</code>, <code>case &lt;case-id&gt;</code>, <code>objects</code></td>
+                  <td>Read the event log by event, case, or object relation.</td>
+                </tr>
+                <tr>
+                  <td>Models</td>
+                  <td><code>transitions</code>, <code>dfg</code>, <code>discover-dfg</code>, <code>discover-petri</code>, <code>replay</code>, <code>deadlocks</code></td>
+                  <td>Discover and replay directly-follows graphs and Petri-net style models.</td>
+                </tr>
+                <tr>
+                  <td>State checks</td>
+                  <td><code>core-liveness</code>, <code>proofs</code>, <code>state-audit</code>, <code>scan-violations</code>, <code>violations</code>, <code>coverage</code>, <code>assert-clean</code></td>
+                  <td>Check graph reachability, illegal transitions, and closure evidence.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="security">
+          <p class="kicker">Secrets, Governance, Strategy</p>
+          <h2>State that needs explicit intent</h2>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Command</th>
+                  <th>Purpose</th>
+                  <th>Flags</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>secret put|get|show|delete</code></td>
+                  <td>Store and retrieve named secret references.</td>
+                  <td><code>--scope</code>, <code>--name</code>, <code>--value</code>, <code>--description</code>, <code>--metadata-json</code>.</td>
+                </tr>
+                <tr>
+                  <td><code>secret intake</code>, <code>memory-rewrite</code></td>
+                  <td>Move secrets out of memory/context and replace them with references.</td>
+                  <td><code>--db</code>, <code>--conversation-id</code>, <code>--match-text</code>, <code>--label</code>.</td>
+                </tr>
+                <tr>
+                  <td><code>strategy set|propose|activate</code></td>
+                  <td>Manage canonical vision, mission, or strategic directives.</td>
+                  <td><code>--kind</code>, <code>--title</code>, <code>--body</code>, <code>--body-file</code>, <code>--author</code>, <code>--reason</code>.</td>
+                </tr>
+                <tr>
+                  <td><code>governance &lt;subcmd&gt;</code></td>
+                  <td>Governance decisions and audit state.</td>
+                  <td>Subcommand-specific.</td>
+                </tr>
+                <tr>
+                  <td><code>turn status|end</code></td>
+                  <td>Inspect or close the CLI turn ledger.</td>
+                  <td><code>--turn-id</code>, <code>--status done|blocked|escalated|waiting_external|invalid</code>, <code>--reason</code>.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="inventory">
+          <p class="kicker">Source-Derived Inventory</p>
+          <h2>Current command forms</h2>
+          <p>
+            This inventory is generated from current usage strings in
+            <code>src/main.rs</code>, <code>src/mission</code>,
+            <code>src/service</code>, and <code>src/secrets.rs</code>. It is
+            intentionally exhaustive enough to expose rough edges in the current
+            CLI design.
+          </p>
+          <pre><code>ctox boost status | ctox boost start [--minutes &lt;n&gt;] [--model &lt;id&gt;] [--reason &lt;text&gt;] | ctox boost stop
+ctox channel ack [--db &lt;path&gt;] [--status &lt;status&gt;] &lt;message-key&gt;...
+ctox chat "&lt;instruction&gt;" [--thread-key &lt;key&gt;] [--workspace &lt;path&gt;] [--wait] [--timeout-secs &lt;n&gt;] [--atif-out &lt;path&gt;]
+ctox context-health &lt;db-path&gt; &lt;conversation-id&gt; [latest-user-prompt] [token-budget]
+ctox context-stress &lt;db-path&gt; [conversation-id] [iterations] [token-budget]
+ctox continuity-apply &lt;db-path&gt; &lt;conversation-id&gt; &lt;narrative|anchors|focus&gt; &lt;diff-path&gt;
+ctox continuity-build-prompt &lt;db-path&gt; &lt;conversation-id&gt; &lt;narrative|anchors|focus&gt;
+ctox continuity-forgotten &lt;db-path&gt; &lt;conversation-id&gt; [narrative|anchors|focus] [query]
+ctox continuity-init &lt;db-path&gt; &lt;conversation-id&gt;
+ctox continuity-log &lt;db-path&gt; &lt;conversation-id&gt; [narrative|anchors|focus]
+ctox continuity-rebuild &lt;db-path&gt; &lt;conversation-id&gt; &lt;narrative|anchors|focus&gt;
+ctox continuity-show &lt;db-path&gt; &lt;conversation-id&gt; [narrative|anchors|focus]
+ctox continuity-update --kind &lt;narrative|anchors|focus&gt; --mode &lt;full|replace|diff&gt; [--conversation-id &lt;id&gt;] [--db &lt;path&gt;] [--find &lt;text&gt;] [--replace &lt;text&gt;]
+ctox follow-up evaluate --goal &lt;text&gt; --result &lt;text&gt;
+ctox jami-daemon --foreground
+ctox lcm-add-message &lt;db-path&gt; &lt;conversation-id&gt; &lt;role&gt; &lt;content&gt;
+ctox lcm-compact &lt;db-path&gt; &lt;conversation-id&gt; [token-budget] [--force]
+ctox lcm-describe &lt;db-path&gt; &lt;summary-id&gt;
+ctox lcm-dump &lt;db-path&gt; &lt;conversation-id&gt;
+ctox lcm-expand &lt;db-path&gt; &lt;summary-id&gt; [depth] [--messages] [token-cap]
+ctox lcm-grep &lt;db-path&gt; &lt;conversation-id|all&gt; &lt;scope&gt; &lt;mode&gt; &lt;query&gt; [limit]
+ctox lcm-init &lt;db-path&gt;
+ctox lcm-refresh-continuity &lt;db-path&gt; &lt;conversation-id&gt;
+ctox lcm-run-fixture &lt;db-path&gt; &lt;fixture-path&gt;
+ctox lcm-show-continuity &lt;db-path&gt; &lt;conversation-id&gt;
+ctox meeting &lt;join|schedule|cancel|status|transcript&gt; [args]
+ctox meeting cancel &lt;url&gt;
+ctox meeting dump-script &lt;url&gt;
+ctox meeting join &lt;url&gt; [--name &lt;bot-name&gt;]
+ctox meeting schedule &lt;url&gt; --time &lt;ISO-8601&gt;
+ctox meeting transcript &lt;session_id&gt;
+ctox plan block-step --step-id &lt;id&gt; --reason &lt;text&gt;
+ctox plan complete-step --step-id &lt;id&gt; [--result &lt;text&gt;]
+ctox plan draft --title &lt;label&gt; --prompt &lt;text&gt;
+ctox plan emit-next --goal-id &lt;id&gt;
+ctox plan fail-step --step-id &lt;id&gt; --reason &lt;text&gt;
+ctox plan ingest --title &lt;label&gt; --prompt &lt;text&gt;
+ctox plan retry-step --step-id &lt;id&gt;
+ctox plan show --goal-id &lt;id&gt;
+ctox plan unblock-step --step-id &lt;id&gt; [--defer-minutes &lt;n&gt;]
+ctox queue add --title &lt;label&gt; --prompt &lt;text&gt; [--thread-key &lt;key&gt;] [--workspace-root &lt;path&gt;] [--skill &lt;name&gt;] [--priority &lt;urgent|high|normal|low&gt;] [--parent-message-key &lt;key&gt;]
+ctox queue block --message-key &lt;key&gt; --reason &lt;text&gt;
+ctox queue cancel --message-key &lt;key&gt; [--reason &lt;text&gt;]
+ctox queue complete --message-key &lt;key&gt; [--note &lt;text&gt;]
+ctox queue edit --message-key &lt;key&gt; [--title &lt;label&gt;] [--prompt &lt;text&gt;] [--thread-key &lt;key&gt;] [--workspace-root &lt;path&gt;] [--clear-workspace-root] [--skill &lt;name&gt;] [--clear-skill] [--priority &lt;urgent|high|normal|low&gt;]
+ctox queue fail --message-key &lt;key&gt; --reason &lt;text&gt;
+ctox queue release --message-key &lt;key&gt; [--priority &lt;urgent|high|normal|low&gt;] [--clear-note] [--note &lt;text&gt;]
+ctox queue reprioritize --message-key &lt;key&gt; --priority &lt;urgent|high|normal|low&gt;
+ctox queue restore --message-key &lt;key&gt; [--priority &lt;urgent|high|normal|low&gt;] [--note &lt;text&gt;]
+ctox queue show --message-key &lt;key&gt;
+ctox queue spill --message-key &lt;key&gt; [--ticket-system &lt;name&gt;] [--reason &lt;text&gt;] [--skill &lt;name&gt;] [--publish]
+ctox runtime switch &lt;model&gt; &lt;quality|performance&gt; [--context 32k|64k|128k|256k] [--timeout &lt;secs&gt;]
+ctox schedule add --name &lt;label&gt; --cron '&lt;expr&gt;' --prompt &lt;text&gt;
+ctox schedule pause --task-id &lt;id&gt;
+ctox schedule remove --task-id &lt;id&gt;
+ctox schedule resume --task-id &lt;id&gt;
+ctox schedule run-now --task-id &lt;id&gt;
+ctox secret delete --scope &lt;scope&gt; --name &lt;name&gt;
+ctox secret get --scope &lt;scope&gt; --name &lt;name&gt;
+ctox secret intake --scope &lt;scope&gt; --name &lt;name&gt; --value &lt;text&gt; [--description &lt;text&gt;] [--metadata-json &lt;json&gt;] [--db &lt;path&gt; --conversation-id &lt;id&gt; --match-text &lt;text&gt; [--label &lt;text&gt;]]
+ctox secret memory-rewrite --db &lt;path&gt; --conversation-id &lt;id&gt; --scope &lt;scope&gt; --name &lt;name&gt; --match-text &lt;text&gt; [--label &lt;text&gt;]
+ctox secret put --scope &lt;scope&gt; --name &lt;name&gt; --value &lt;text&gt; [--description &lt;text&gt;] [--metadata-json &lt;json&gt;]
+ctox secret show --scope &lt;scope&gt; --name &lt;name&gt;
+ctox strategy activate --directive-id &lt;id&gt; [--decided-by &lt;name&gt;] [--reason &lt;text&gt;]
+ctox strategy propose --kind &lt;vision|mission|...&gt; --title &lt;text&gt; --body &lt;text&gt;|--body-file &lt;path&gt; [--conversation-id &lt;id&gt;|--thread-key &lt;key&gt;] [--author &lt;name&gt;] [--reason &lt;text&gt;]
+ctox strategy set --kind &lt;vision|mission|...&gt; --title &lt;text&gt; --body &lt;text&gt;|--body-file &lt;path&gt; [--conversation-id &lt;id&gt;|--thread-key &lt;key&gt;] [--author &lt;name&gt;] [--reason &lt;text&gt;]
+ctox ticket access-request-put --system &lt;name&gt; --title &lt;title&gt; --body &lt;text&gt; [--required-scopes &lt;csv&gt;] [--secret-refs &lt;csv&gt;] [--channels &lt;csv&gt;] [--skill &lt;name&gt;] [--metadata-json &lt;json&gt;] [--publish]
+ctox ticket ack --status &lt;handled|failed|duplicate|blocked&gt; &lt;event-key&gt;...
+ctox ticket approve --case-id &lt;id&gt; --status &lt;approved|rejected&gt;
+ctox ticket autonomy-grant-set --label &lt;label&gt; --approval-mode &lt;mode&gt; --autonomy-level &lt;level&gt;
+ctox ticket bundle-put --label &lt;label&gt; --runbook-id &lt;id&gt; --policy-id &lt;id&gt;
+ctox ticket capabilities --system &lt;name&gt;
+ctox ticket case-show --case-id &lt;id&gt;
+ctox ticket close --case-id &lt;id&gt; [--summary &lt;text&gt;]
+ctox ticket dry-run --ticket-key &lt;key&gt; [--understanding &lt;text&gt;]
+ctox ticket execute --case-id &lt;id&gt; --summary &lt;text&gt;
+ctox ticket history --ticket-key &lt;key&gt; [--limit &lt;n&gt;]
+ctox ticket history-export --system &lt;name&gt; --output &lt;path&gt;
+ctox ticket knowledge-bootstrap --system &lt;name&gt;
+ctox ticket knowledge-load --ticket-key &lt;key&gt; [--domains &lt;csv&gt;]
+ctox ticket knowledge-show --system &lt;name&gt; --domain &lt;name&gt; --key &lt;value&gt;
+ctox ticket label-set --ticket-key &lt;key&gt; --label &lt;label&gt;
+ctox ticket label-show --ticket-key &lt;key&gt;
+ctox ticket learn-candidate-create --case-id &lt;id&gt; --summary &lt;text&gt; [--actions &lt;json-array&gt;] [--evidence-json &lt;json&gt;]
+ctox ticket learn-candidate-decide --candidate-id &lt;id&gt; --status &lt;approved|rejected&gt;
+ctox ticket local comment --ticket-id &lt;id&gt; --body &lt;text&gt;
+ctox ticket local create --title &lt;text&gt; --body &lt;text&gt;
+ctox ticket local show --ticket-id &lt;id&gt;
+ctox ticket local transition --ticket-id &lt;id&gt; --status &lt;value&gt;
+ctox ticket monitoring-ingest --system &lt;name&gt; --snapshot-json &lt;json&gt; [--key &lt;value&gt;] [--title &lt;text&gt;] [--summary &lt;text&gt;] [--status &lt;value&gt;]
+ctox ticket self-work-assign --work-id &lt;id&gt; --assignee &lt;name&gt; [--assigned-by &lt;actor&gt;] [--rationale &lt;text&gt;]
+ctox ticket self-work-note --work-id &lt;id&gt; --body &lt;text&gt; [--authored-by &lt;actor&gt;] [--visibility &lt;internal|public&gt;]
+ctox ticket self-work-publish --work-id &lt;id&gt;
+ctox ticket self-work-put --system &lt;name&gt; --kind &lt;kind&gt; --title &lt;title&gt; --body &lt;text&gt; [--skill &lt;name&gt;] [--metadata-json &lt;json&gt;] [--publish]
+ctox ticket self-work-show --work-id &lt;id&gt;
+ctox ticket self-work-transition --work-id &lt;id&gt; --state &lt;value&gt; [--transitioned-by &lt;actor&gt;] [--note &lt;text&gt;] [--visibility &lt;internal|public&gt;]
+ctox ticket show --ticket-key &lt;key&gt;
+ctox ticket source-skill-import-bundle --system &lt;name&gt; --bundle-dir &lt;path&gt; [--embedding-model &lt;model&gt;] [--skip-embeddings]
+ctox ticket source-skill-query --system &lt;name&gt; --query &lt;text&gt; [--top-k &lt;n&gt;]
+ctox ticket source-skill-review-note (--ticket-key &lt;key&gt; | --case-id &lt;id&gt;) --body &lt;text&gt; [--top-k &lt;n&gt;]
+ctox ticket source-skill-set --system &lt;name&gt; --skill &lt;name&gt; [--archetype &lt;value&gt;] [--status &lt;active|inactive&gt;] [--origin &lt;value&gt;] [--artifact-path &lt;path&gt;] [--notes &lt;text&gt;]
+ctox ticket source-skill-show --system &lt;name&gt;
+ctox ticket sync --system &lt;local&gt;
+ctox ticket test --system &lt;local&gt;
+ctox ticket verify --case-id &lt;id&gt; --status &lt;passed|failed&gt; [--summary &lt;text&gt;]
+ctox ticket writeback-comment --case-id &lt;id&gt; --body &lt;text&gt;
+ctox ticket writeback-transition --case-id &lt;id&gt; --state &lt;value&gt; [--body &lt;text&gt;] [--internal]
+ctox turn end --status &lt;done|blocked|escalated|waiting_external|invalid&gt; [--reason &lt;text&gt;] [--turn-id &lt;id&gt;]</code></pre>
+        </section>
+      </article>
+    </main>
+
+    <footer>
+      <div class="inner">
+        <span>CTOX CLI reference</span>
+        <span>metric-space-ai/ctox</span>
+      </div>
+    </footer>
+  </body>
+</html>
