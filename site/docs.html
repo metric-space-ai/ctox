@@ -332,6 +332,129 @@
         margin-top: 14px;
       }
 
+      .harness {
+        display: grid;
+        gap: 14px;
+        margin-top: 28px;
+        padding: 22px;
+        border: 1px solid #24313d;
+        background: #111820;
+        color: #e9f5f8;
+      }
+
+      .harness-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 38px minmax(0, 1fr);
+        gap: 14px;
+        align-items: stretch;
+      }
+
+      .harness-box {
+        padding: 16px;
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        background: rgba(255, 255, 255, 0.06);
+      }
+
+      .harness-box strong {
+        display: block;
+        margin-bottom: 8px;
+        color: #fff;
+        font-size: 15px;
+      }
+
+      .harness-box span {
+        display: block;
+        color: rgba(233, 245, 248, 0.74);
+        font-size: 13px;
+        line-height: 1.45;
+      }
+
+      .harness-arrow {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #7edcff;
+        font-family: "SFMono-Regular", ui-monospace, "Cascadia Code", monospace;
+        font-weight: 800;
+      }
+
+      .harness-loop {
+        padding: 16px;
+        border: 1px solid rgba(126, 220, 255, 0.36);
+        background: rgba(0, 168, 223, 0.12);
+      }
+
+      .context-example {
+        margin-top: 28px;
+        border: 1px solid var(--line);
+        background: #fff;
+      }
+
+      .context-example-head {
+        padding: 22px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .context-example-head h3 {
+        margin-top: 0;
+      }
+
+      .context-pickers {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 1px;
+        background: var(--line);
+      }
+
+      .context-pickers button {
+        min-height: 74px;
+        padding: 14px;
+        border: 0;
+        background: #f9fbfe;
+        color: #232b35;
+        font: inherit;
+        font-size: 14px;
+        line-height: 1.2;
+        text-align: left;
+        cursor: pointer;
+      }
+
+      .context-pickers button:hover,
+      .context-pickers button:focus-visible,
+      .context-pickers button.is-active {
+        background: #111820;
+        color: #fff;
+        outline: none;
+      }
+
+      .prompt-viewer {
+        display: grid;
+        grid-template-columns: minmax(0, 0.72fr) minmax(320px, 1.28fr);
+        gap: 1px;
+        background: var(--line);
+      }
+
+      .prompt-meta,
+      .prompt-output {
+        padding: 22px;
+        background: #fff;
+      }
+
+      .prompt-meta b {
+        display: block;
+        margin-bottom: 10px;
+        font-size: 18px;
+      }
+
+      .prompt-meta p {
+        margin: 0;
+        font-size: 15px;
+      }
+
+      .prompt-output pre {
+        margin: 0;
+      }
+
       footer {
         padding: 28px 0;
         background: #111418;
@@ -365,6 +488,20 @@
         .grid {
           grid-template-columns: 1fr;
         }
+
+        .harness-row,
+        .prompt-viewer {
+          grid-template-columns: 1fr;
+        }
+
+        .harness-arrow {
+          min-height: 24px;
+          transform: rotate(90deg);
+        }
+
+        .context-pickers {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
       }
 
       @media (max-width: 620px) {
@@ -387,6 +524,10 @@
         }
 
         .toc nav {
+          grid-template-columns: 1fr;
+        }
+
+        .context-pickers {
           grid-template-columns: 1fr;
         }
 
@@ -422,6 +563,7 @@
           <a href="#layout">Runtime Layout</a>
           <a href="#commands">CLI Commands</a>
           <a href="#loop">Mission Loop</a>
+          <a href="#harness-diagram">Harness Diagram</a>
           <a href="#context">Context Build</a>
           <a href="#self-calls">CTOX Calls CTOX</a>
           <a href="#state-model">State Model</a>
@@ -631,6 +773,46 @@
             model context. If work is incomplete, CTOX records why and keeps a
             continuation path.
           </p>
+          <div class="harness" id="harness-diagram" aria-label="CTOX harness diagram">
+            <div class="harness-row">
+              <div class="harness-box">
+                <strong>Intake producers</strong>
+                <span>TUI chat, channel messages, ticket sync, schedules, plan steps, and direct CLI submissions create durable work.</span>
+              </div>
+              <div class="harness-arrow">-&gt;</div>
+              <div class="harness-box">
+                <strong>Mission queue</strong>
+                <span>Queue rows in <code>runtime/ctox.sqlite3</code> hold prompt, priority, thread key, workspace root, lease status, and parent work.</span>
+              </div>
+            </div>
+            <div class="harness-row">
+              <div class="harness-box">
+                <strong>Context builder</strong>
+                <span>Builds the worker prompt from mission contract, active work, Focus, Anchors, Narrative, knowledge, claims, and recent events.</span>
+              </div>
+              <div class="harness-arrow">-&gt;</div>
+              <div class="harness-box">
+                <strong>Worker run</strong>
+                <span>The agent executes bounded work with shell, browser, file tools, and CTOX CLI commands. The chat turn is not the durable state.</span>
+              </div>
+            </div>
+            <div class="harness-row">
+              <div class="harness-box">
+                <strong>Continuity refresh</strong>
+                <span>Focus, Anchors, Narrative, knowledge, and verification claims are updated when the run produced useful new state.</span>
+              </div>
+              <div class="harness-arrow">-&gt;</div>
+              <div class="harness-box">
+                <strong>Decision</strong>
+                <span>Close, verify, requeue, block, schedule, escalate, or emit follow-up work. The daemon returns to intake while service is running.</span>
+              </div>
+            </div>
+            <div class="harness-loop">
+              <strong>Persistent loop:</strong>
+              the next run is created from database state and continuity, not
+              from an ever-growing chat transcript.
+            </div>
+          </div>
         </section>
 
         <section id="context">
@@ -666,6 +848,45 @@
             <div class="cell">
               <b>Recent events</b>
               <p>Channel history, process events, queue notes, and ticket history provide recent operational context.</p>
+            </div>
+          </div>
+          <div class="context-example" id="context-example">
+            <div class="context-example-head">
+              <h3>Example: VPS maintenance context</h3>
+              <p>
+                Hover or click a context source to see the prompt fragment CTOX
+                can build for a worker run. Values use documentation examples;
+                secrets are referenced, not printed into the prompt.
+              </p>
+            </div>
+            <div class="context-pickers" aria-label="Context prompt examples">
+              <button class="is-active" type="button" data-context-example="queue">Queue task</button>
+              <button type="button" data-context-example="focus">Continuity: Focus</button>
+              <button type="button" data-context-example="anchors">Continuity: Anchors</button>
+              <button type="button" data-context-example="narrative">Continuity: Narrative</button>
+              <button type="button" data-context-example="worker">Worker prompt</button>
+            </div>
+            <div class="prompt-viewer">
+              <div class="prompt-meta">
+                <b id="context-example-title">Queue task</b>
+                <p id="context-example-note">
+                  Executable work that entered CTOX through chat, ticket,
+                  channel, plan, or schedule.
+                </p>
+              </div>
+              <div class="prompt-output">
+                <pre><code id="context-example-output">queue_task:
+  title: "Inspect VPS and prepare CTOX remote host"
+  source: "operator_chat"
+  priority: "high"
+  thread_key: "ops/vps-maintenance"
+  workspace_root: "/srv/ctox"
+  prompt: |
+    Check whether the Ubuntu VPS can run CTOX as a remote instance.
+    Use SSH with stored credentials only. Do not print secrets.
+    Verify disk, memory, systemd, network reachability, and current CTOX status.
+    If CTOX is missing, prepare an install plan and stop before destructive changes.</code></pre>
+              </div>
             </div>
           </div>
           <h3>Compaction and continuation</h3>
@@ -881,5 +1102,153 @@ ctox follow-up evaluate --goal "finish rollout" --result "blocked on access" --b
         <span>metric-space-ai/ctox</span>
       </div>
     </footer>
+    <script>
+      const contextExamples = {
+        queue: {
+          title: "Queue task",
+          note: "Executable work that entered CTOX through chat, ticket, channel, plan, or schedule.",
+          prompt: `queue_task:
+  title: "Inspect VPS and prepare CTOX remote host"
+  source: "operator_chat"
+  priority: "high"
+  thread_key: "ops/vps-maintenance"
+  workspace_root: "/srv/ctox"
+  prompt: |
+    Check whether the Ubuntu VPS can run CTOX as a remote instance.
+    Use SSH with stored credentials only. Do not print secrets.
+    Verify disk, memory, systemd, network reachability, and current CTOX status.
+    If CTOX is missing, prepare an install plan and stop before destructive changes.`
+        },
+        focus: {
+          title: "Continuity: Focus",
+          note: "The short live state CTOX wants the next worker run to preserve.",
+          prompt: `# Focus
+
+## Contract
+mission: Prepare remote CTOX host for VPS maintenance
+mission_state: active
+continuation_mode: continuous
+done_gate: host status known, install path selected, no secrets leaked
+
+## State
+goal: inspect and prepare the VPS for CTOX remote management
+target_host: vps-example-01.vps.example.net
+ssh_user: ubuntu
+credential_ref: secret://ops/vps-example-01/ssh-password
+next_step: run non-destructive host checks through SSH
+blocker:
+verification_gap: host has not been checked in this run
+
+## Rules
+- Never print stored credentials.
+- Do not run destructive package or firewall changes without an explicit plan.
+- Record findings back into queue notes or ticket evidence.`
+        },
+        anchors: {
+          title: "Continuity: Anchors",
+          note: "Durable facts that should survive context compaction and future turns.",
+          prompt: `# Anchors
+
+## Entries
+- anchor_id: vps-hostname
+  anchor_type: host_identity
+  statement: Target host is vps-example-01.vps.example.net.
+  source_class: operator_supplied
+  confidence: high
+
+- anchor_id: vps-addresses
+  anchor_type: network
+  statement: IPv4 203.0.113.120 and IPv6 2001:db8:404:200::2c56 are documentation examples for the VPS record.
+  source_class: sanitized_doc_example
+  confidence: medium
+
+- anchor_id: ssh-user
+  anchor_type: access
+  statement: SSH user is ubuntu; password is stored as a secret reference and must not be placed in prompts.
+  source_class: secret_hygiene
+  confidence: high
+
+[...]
+- anchor_id: done-gate
+  anchor_type: verification
+  statement: Done requires ctox status or install-readiness evidence, not a verbal claim.`
+        },
+        narrative: {
+          title: "Continuity: Narrative",
+          note: "A compressed history of prior turns, not a full chat transcript.",
+          prompt: `# Narrative
+
+## Entries
+- Turn 1: Operator asked CTOX to prepare a remote VPS instance.
+  CTOX stored the access material as a secret reference and redacted it from working prompts.
+
+- Turn 2: Host identity and intended remote-management goal were written into Focus and Anchors.
+  No SSH command has been executed yet in this example.
+
+- Turn 3: Next worker run should inspect the host non-destructively:
+  hostname, OS release, disk, memory, systemd availability, network reachability, and CTOX install status.
+
+[...]
+- Current risk: confusing "credential available" with "host verified".
+  Required evidence: command output from the target host or an explicit blocker.`
+        },
+        worker: {
+          title: "Final worker prompt",
+          note: "The bounded prompt assembled from mission contract, queue item, continuity, knowledge, and verification.",
+          prompt: `You are CTOX running a bounded worker execution for a persistent mission.
+
+Active task:
+Inspect the Ubuntu VPS and prepare CTOX remote-host setup.
+
+Target:
+- host: vps-example-01.vps.example.net
+- IPv4: 203.0.113.120
+- IPv6: 2001:db8:404:200::2c56
+- ssh_user: ubuntu
+- credential_ref: secret://ops/vps-example-01/ssh-password
+
+Relevant continuity:
+- Mission is active.
+- Do not reveal or echo secrets.
+- No destructive host changes without an explicit install plan.
+- Done gate: host status known and evidence recorded.
+
+Use CTOX tools where useful:
+- ctox status
+- ctox queue show --message-key <current>
+- ctox process-mining assert-clean
+- ctox verification claim-set [...]
+
+Work:
+1. Retrieve the secret through the approved secret path if SSH is required.
+2. Run non-destructive checks only: whoami, hostname, lsb_release, df, free, systemctl, ctox status.
+3. Summarize findings.
+4. If CTOX is missing, create the next queue task for installation instead of silently changing the host.`
+        }
+      };
+
+      const contextTitle = document.querySelector("#context-example-title");
+      const contextNote = document.querySelector("#context-example-note");
+      const contextOutput = document.querySelector("#context-example-output");
+      const contextButtons = [...document.querySelectorAll("[data-context-example]")];
+
+      function showContextExample(key) {
+        const example = contextExamples[key];
+        if (!example || !contextTitle || !contextNote || !contextOutput) return;
+        contextTitle.textContent = example.title;
+        contextNote.textContent = example.note;
+        contextOutput.textContent = example.prompt;
+        contextButtons.forEach((button) => {
+          button.classList.toggle("is-active", button.dataset.contextExample === key);
+        });
+      }
+
+      contextButtons.forEach((button) => {
+        const key = button.dataset.contextExample;
+        button.addEventListener("mouseenter", () => showContextExample(key));
+        button.addEventListener("focus", () => showContextExample(key));
+        button.addEventListener("click", () => showContextExample(key));
+      });
+    </script>
   </body>
 </html>
