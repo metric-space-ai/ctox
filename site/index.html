@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta
       name="description"
-      content="CTOX is an agentic daemon for long-running technical work, not another coding agent."
+      content="CTOX is an agentic daemon for important Dev, DevOps, and Ops work on real systems."
     />
     <title>CTOX</title>
     <link rel="icon" href="assets/ctox-app-icon.png" />
@@ -620,11 +620,12 @@
         <div class="hero-inner">
           <div class="hero-copy">
             <img class="brand-mark" src="assets/ctox-full-logo.png" alt="" />
-            <h1 id="hero-title">An agentic daemon, not another coding agent.</h1>
+            <h1 id="hero-title">An agentic daemon for Dev, DevOps, and Ops work.</h1>
             <p class="lead">
-              CTOX keeps technical work alive between agent runs. It watches
-              queues and plans, starts the next slice, records what happened,
-              and resumes until the work is done, blocked, or handed back.
+              You have servers, services, releases, incidents, migrations, and
+              maintenance tasks. CTOX keeps that work organized, uses tickets
+              and knowledge to build context, then dispatches agents to execute
+              the next slice.
             </p>
           </div>
         </div>
@@ -634,26 +635,31 @@
         <div class="section-inner what-layout">
           <div class="what-copy">
             <p class="section-kicker">What CTOX is</p>
-            <h2 id="what-title">The daemon around the agents.</h2>
+            <h2 id="what-title">The daemon around technical operations.</h2>
             <p>
-              Coding agents do the concrete work: inspect code, edit files, run
-              commands, explain results. CTOX is the persistent layer around
-              them: it owns the queue, state, checks, and continuation.
+              CTOX is for ongoing work on real systems. It owns the operating
+              loop around tickets, plans, schedules, knowledge, communication,
+              review, and follow-up. Coding agents are one execution layer
+              inside that loop.
             </p>
           </div>
 
           <div class="capability-lines" aria-label="CTOX capabilities">
             <div>
-              <b>Daemon</b>
-              <span>CTOX keeps running and tracks work even when no one is actively steering a chat session.</span>
+              <b>Work intake</b>
+              <span>Important Dev, DevOps, and Ops work can enter through tickets, queues, schedules, plans, or communication channels.</span>
             </div>
             <div>
-              <b>Agentic</b>
-              <span>It can choose the next runnable slice, dispatch it through the agent stack, and react to blockers.</span>
+              <b>Knowledge builder</b>
+              <span>CTOX preserves findings, decisions, blockers, evidence, and context so the next run does not start cold.</span>
             </div>
             <div>
-              <b>Durable</b>
-              <span>Queue, context, review notes, blockers, decisions, and follow-ups survive beyond one agent turn.</span>
+              <b>Agent execution</b>
+              <span>When work is runnable, CTOX sends a focused slice through the coding-agent stack and local tools.</span>
+            </div>
+            <div>
+              <b>Follow-up</b>
+              <span>Incomplete, blocked, failed, or review-rejected work stays visible until it is handled or handed back.</span>
             </div>
           </div>
         </div>
@@ -662,21 +668,25 @@
       <section class="platforms" aria-labelledby="platforms-title">
         <div class="section-inner">
           <p class="section-kicker">How it works</p>
-          <h2 id="platforms-title">CTOX runs the work loop around the coding agent.</h2>
+          <h2 id="platforms-title">CTOX runs the operating loop around your systems.</h2>
 
           <div class="platform-grid">
             <div class="platform-list">
               <div class="platform-row">
-                <b>1. Observe</b>
-                <p>CTOX watches plans, queues, schedules, tickets, channel input, and the current mission state.</p>
+                <b>1. Track</b>
+                <p>CTOX watches the work backlog: tickets, plans, queues, schedules, channel input, and mission state.</p>
               </div>
               <div class="platform-row">
-                <b>2. Dispatch</b>
-                <p>It hands one focused slice to the coding-agent stack and records the result as durable state.</p>
+                <b>2. Build context</b>
+                <p>It pulls together prior decisions, known blockers, relevant knowledge, current state, and expected next action.</p>
               </div>
               <div class="platform-row">
-                <b>3. Continue</b>
-                <p>If the slice is incomplete, blocked, or fails review, CTOX keeps the next action instead of losing the thread.</p>
+                <b>3. Execute</b>
+                <p>It dispatches the next runnable slice to agents and tools: code changes, checks, scripts, browser work, or documentation.</p>
+              </div>
+              <div class="platform-row">
+                <b>4. Close or continue</b>
+                <p>It records the result, updates tickets or knowledge, and keeps a follow-up when the work is not done.</p>
               </div>
             </div>
 
@@ -687,11 +697,11 @@
                   <span class="dot"></span>
                   <span class="dot"></span>
                 </div>
-                <pre>daemon: running
-mission: ship release
-slice: build binaries
-review: pending
-next: publish notes</pre>
+                <pre>server: production
+work: release / incident / migration
+tickets: synced
+knowledge: updated
+next: runnable slice</pre>
               </div>
             </div>
           </div>
@@ -701,20 +711,20 @@ next: publish notes</pre>
       <section class="compare" aria-labelledby="compare-title">
         <div class="section-inner">
           <p class="section-kicker">Compared with coding agents</p>
-          <h2 id="compare-title">The coding agent is the worker. CTOX is the daemon.</h2>
+          <h2 id="compare-title">The coding agent is the worker. CTOX owns the ops loop.</h2>
 
           <div class="compare-list">
             <div class="compare-row">
               <b>OpenAI Codex, Claude Code, OpenCode</b>
-              <p>These tools are strongest while a person is actively steering a coding session. CTOX is built for work that must keep moving after that moment.</p>
+              <p>These tools are strongest while a person is actively steering code work. CTOX is built for important work that must stay organized across many runs.</p>
             </div>
             <div class="compare-row">
               <b>OpenClaw, Hermes-style agent runners</b>
-              <p>CTOX focuses on the daemon layer: keep the goal, decide the next slice, run it, check it, and preserve the handoff.</p>
+              <p>CTOX focuses on the daemon layer: keep the goal, ticket, knowledge, current state, next slice, result, and handoff.</p>
             </div>
             <div class="compare-row">
               <b>CTOX</b>
-              <p>The important part is ownership. CTOX keeps responsibility for the unfinished task until it is blocked, handed back, or closed.</p>
+              <p>The important part is operational ownership. CTOX keeps responsibility for unfinished Dev, DevOps, and Ops work until it is blocked, handed back, or closed.</p>
             </div>
           </div>
         </div>
