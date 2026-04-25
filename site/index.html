@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta
       name="description"
-      content="CTOX is an agentic daemon for important Dev, DevOps, and Ops work on real systems."
+      content="CTOX is an agentic daemon for technical work that no longer fits in coding-agent sessions."
     />
     <title>CTOX</title>
     <link rel="icon" href="assets/ctox-app-icon.png" />
@@ -95,7 +95,7 @@
       }
 
       .topline {
-        position: absolute;
+        position: fixed;
         top: 24px;
         left: 50%;
         z-index: 2;
@@ -109,6 +109,12 @@
         color: var(--muted);
       }
 
+      .top-actions {
+        display: flex;
+        align-items: center;
+        gap: 18px;
+      }
+
       .topline img {
         width: 138px;
         height: auto;
@@ -117,6 +123,27 @@
 
       .topline a {
         text-decoration: none;
+      }
+
+      .nav-cta {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 42px;
+        padding: 0 18px;
+        background: var(--ink);
+        color: #fff;
+        font-weight: 750;
+        transition:
+          transform 180ms ease,
+          background 180ms ease;
+      }
+
+      .nav-cta:hover,
+      .nav-cta:focus-visible {
+        background: #27313d;
+        transform: translateY(-2px);
+        outline: none;
       }
 
       .hero-copy {
@@ -146,6 +173,42 @@
         font-size: clamp(18px, 2.4vw, 25px);
         line-height: 1.35;
         color: #323943;
+      }
+
+      .hero-actions {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        margin-top: 34px;
+        flex-wrap: wrap;
+      }
+
+      .hero-link {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 54px;
+        padding: 0 22px;
+        background: var(--ink);
+        color: #fff;
+        font-weight: 750;
+        text-decoration: none;
+        transition:
+          transform 180ms ease,
+          background 180ms ease;
+      }
+
+      .hero-link:hover,
+      .hero-link:focus-visible {
+        background: #27313d;
+        transform: translateY(-3px);
+        outline: none;
+      }
+
+      .hero-note {
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.35;
       }
 
       .download-strip {
@@ -409,13 +472,14 @@
       .install {
         background: #111418;
         color: #f9fbff;
+        scroll-margin-top: 84px;
       }
 
       .install .section-inner {
         display: grid;
-        grid-template-columns: minmax(0, 0.86fr) minmax(420px, 1.14fr);
+        grid-template-columns: minmax(0, 0.82fr) minmax(440px, 1.18fr);
         gap: 56px;
-        align-items: center;
+        align-items: start;
       }
 
       .install h2 {
@@ -438,7 +502,74 @@
 
       .release-actions {
         display: grid;
-        gap: 18px;
+        gap: 20px;
+        min-width: 0;
+      }
+
+      .install-paths {
+        display: grid;
+        gap: 1px;
+        background: rgba(255, 255, 255, 0.14);
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        min-width: 0;
+      }
+
+      .install-path {
+        padding: 24px;
+        background: #151a20;
+        min-width: 0;
+      }
+
+      .install-path h3 {
+        margin: 0;
+        font-size: 22px;
+        line-height: 1.12;
+      }
+
+      .install-path p {
+        margin: 12px 0 0;
+        color: rgba(249, 251, 255, 0.72);
+        font-size: 16px;
+        line-height: 1.5;
+      }
+
+      .install-path ol {
+        margin: 18px 0 0;
+        padding-left: 20px;
+        color: rgba(249, 251, 255, 0.78);
+        line-height: 1.55;
+      }
+
+      .install-path li + li {
+        margin-top: 8px;
+      }
+
+      .command-block {
+        margin: 18px 0 0;
+        padding: 16px;
+        overflow-x: auto;
+        background: #070a0d;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+      }
+
+      .command-block code {
+        display: block;
+        color: #d9eef6;
+        background: transparent;
+        padding: 0;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        font-size: 13px;
+        line-height: 1.55;
+      }
+
+      .download-heading {
+        margin-top: 8px;
+        color: rgba(249, 251, 255, 0.58);
+        font-size: 13px;
+        font-weight: 700;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
       }
 
       .install .download-strip {
@@ -569,6 +700,19 @@
           width: 112px;
         }
 
+        .top-actions {
+          gap: 12px;
+        }
+
+        .top-actions > a:not(.nav-cta) {
+          display: none;
+        }
+
+        .nav-cta {
+          min-height: 38px;
+          padding: 0 14px;
+        }
+
         .hero-copy {
           padding-top: 96px;
         }
@@ -613,20 +757,29 @@
         <a href="#" aria-label="CTOX home">
           <img src="assets/ctox-full-logo.png" alt="CTOX" />
         </a>
-        <a href="https://github.com/metric-space-ai/ctox">GitHub</a>
+        <div class="top-actions">
+          <a href="https://github.com/metric-space-ai/ctox">GitHub</a>
+          <a class="nav-cta" href="#install" data-scroll-to="install">Install</a>
+        </div>
       </header>
 
       <section class="hero" aria-labelledby="hero-title">
         <div class="hero-inner">
           <div class="hero-copy">
             <img class="brand-mark" src="assets/ctox-full-logo.png" alt="" />
-            <h1 id="hero-title">An agentic daemon for Dev, DevOps, and Ops work.</h1>
+            <h1 id="hero-title">When coding-agent sessions are no longer enough.</h1>
             <p class="lead">
-              You have servers, services, releases, incidents, migrations, and
-              maintenance tasks. CTOX keeps that work organized, uses tickets
-              and knowledge to build context, then starts the next useful
-              action.
+              Coding agents are useful workers for scoped sessions. Real
+              technical work keeps changing: tickets arrive, systems fail,
+              approvals wait, decisions need evidence, and follow-ups matter
+              later. CTOX is the agentic daemon around that work. It keeps
+              state, drives the next action, and uses agents and tools as
+              workers.
             </p>
+            <div class="hero-actions">
+              <a class="hero-link" href="#install" data-scroll-to="install">Install CTOX</a>
+              <span class="hero-note">Install on one host, or manage local and remote instances with Desktop.</span>
+            </div>
           </div>
         </div>
       </section>
@@ -634,32 +787,33 @@
       <section class="what" aria-labelledby="what-title">
         <div class="section-inner what-layout">
           <div class="what-copy">
-            <p class="section-kicker">What CTOX is</p>
-            <h2 id="what-title">The daemon around technical operations.</h2>
+            <p class="section-kicker">Why it exists</p>
+            <h2 id="what-title">Technical work is not a chain of clean chat sessions.</h2>
             <p>
-              CTOX is for ongoing work on real systems. It owns the operating
-              loop around tickets, plans, schedules, knowledge, communication,
-              review, and follow-up. Coding agents are one worker layer
-              inside that loop.
+              CTOX is for people who already use coding agents and trust them
+              for individual tasks, but need stricter control around the work:
+              durable state, tickets, communication, knowledge, verification,
+              waiting states, and controlled continuation. CTOX is an
+              agentic daemon, not an agentic worker.
             </p>
           </div>
 
           <div class="capability-lines" aria-label="CTOX capabilities">
             <div>
-              <b>Work intake</b>
-              <span>Important Dev, DevOps, and Ops work can enter through tickets, queues, schedules, plans, or communication channels.</span>
+              <b>Coding agents</b>
+              <span>Good at bounded work inside a session. The session is not the project state.</span>
             </div>
             <div>
-              <b>Knowledge builder</b>
-              <span>CTOX preserves findings, decisions, open issues, evidence, and context so the next run does not start cold.</span>
+              <b>CTOX daemon</b>
+              <span>Runs on the host that should carry the work and watches queues, tickets, schedules, channels, plans, and current task state.</span>
             </div>
             <div>
-              <b>Agent execution</b>
-              <span>When work is ready, CTOX starts the next action with coding agents and local tools.</span>
+              <b>Agents and tools</b>
+              <span>Used as workers when there is enough context and a concrete next action.</span>
             </div>
             <div>
-              <b>Follow-up</b>
-              <span>Incomplete, blocked, failed, or review-rejected work stays visible until it is handled or handed back.</span>
+              <b>What is kept</b>
+              <span>Results are written back as evidence, knowledge, ticket changes, follow-ups, or new work.</span>
             </div>
           </div>
         </div>
@@ -667,26 +821,26 @@
 
       <section class="platforms" aria-labelledby="platforms-title">
         <div class="section-inner">
-          <p class="section-kicker">How it works</p>
-          <h2 id="platforms-title">CTOX runs the operating loop around your systems.</h2>
+          <p class="section-kicker">What actually runs</p>
+          <h2 id="platforms-title">CTOX turns ongoing technical work into tracked runtime state.</h2>
 
           <div class="platform-grid">
             <div class="platform-list">
               <div class="platform-row">
-                <b>1. Track</b>
-                <p>CTOX watches the work backlog: tickets, plans, queues, schedules, channel input, and current task state.</p>
+                <b>State database</b>
+                <p><code>runtime/ctox.sqlite3</code> stores queues, tickets, governance, channels, schedules, plans, knowledge, continuity, verification, and claims.</p>
               </div>
               <div class="platform-row">
-                <b>2. Build context</b>
-                <p>It pulls together prior decisions, open issues, relevant knowledge, current state, and expected next action.</p>
+                <b>Daemon loops</b>
+                <p>The service starts channel routing, channel syncing, mission watching, CTO operating checks, and the backend supervisor.</p>
               </div>
               <div class="platform-row">
-                <b>3. Execute</b>
-                <p>It starts the next action with agents and tools: code changes, checks, scripts, browser work, or documentation.</p>
+                <b>Work controls</b>
+                <p><code>ctox queue</code>, <code>ticket</code>, <code>plan</code>, <code>schedule</code>, <code>channel</code>, <code>governance</code>, <code>verification</code>, <code>process-mining</code>, and <code>state-invariants</code> inspect and control that state.</p>
               </div>
               <div class="platform-row">
-                <b>4. Close or continue</b>
-                <p>It records the result, updates tickets or knowledge, and keeps a follow-up when the work is not done.</p>
+                <b>Knowledge</b>
+                <p>Findings, decisions, known issues, and useful context are persisted so the next run does not rely on chat memory.</p>
               </div>
             </div>
 
@@ -697,11 +851,18 @@
                   <span class="dot"></span>
                   <span class="dot"></span>
                 </div>
-                <pre>server: production
-work: release / incident / migration
-tickets: synced
-knowledge: updated
-next: publish notes</pre>
+                <pre>runtime/ctox.sqlite3
+  queue / tickets / schedule / channels
+  knowledge / continuity / verification
+
+daemon
+  router -> watcher -> supervisor
+
+workers
+  agents / tools / shell / browser
+
+records
+  events / proofs / follow-ups</pre>
               </div>
             </div>
           </div>
@@ -710,38 +871,70 @@ next: publish notes</pre>
 
       <section class="compare" aria-labelledby="compare-title">
         <div class="section-inner">
-          <p class="section-kicker">Compared with coding agents</p>
-          <h2 id="compare-title">The coding agent is the worker. CTOX owns the ops loop.</h2>
+          <p class="section-kicker">Control</p>
+          <h2 id="compare-title">Control is better than trust.</h2>
 
           <div class="compare-list">
             <div class="compare-row">
-              <b>OpenAI Codex, Claude Code, OpenCode</b>
-              <p>These tools are strongest while a person is actively steering code work. CTOX is built for important work that must stay organized across many runs.</p>
+              <b>Process mining</b>
+              <p>CTOX records SQLite mutation events and exposes cases, projections, DFG and Petri discovery, replay, conformance runs, deadlock checks, proofs, state scans, and violation scans.</p>
             </div>
             <div class="compare-row">
-              <b>OpenClaw, Hermes-style agent runners</b>
-              <p>CTOX focuses on the daemon role: keep the goal, ticket, knowledge, current state, next action, result, and handoff.</p>
+              <b>State model</b>
+              <p>The harness uses a typed core state machine for service, mission, queue items, tickets, reviews, communication, commitments, schedules, knowledge, and repair. Transitions are checked against allowed states, required evidence, and a formal transition graph with liveness checks.</p>
             </div>
             <div class="compare-row">
-              <b>CTOX</b>
-              <p>The important part is operational ownership. CTOX keeps responsibility for unfinished Dev, DevOps, and Ops work until it is blocked, handed back, or closed.</p>
+              <b>Transition proofs</b>
+              <p>Accepted and rejected transitions are persisted with violation codes and reports. Invalid transitions can be blocked before tickets, commitments, or review gates are closed incorrectly.</p>
+            </div>
+            <div class="compare-row">
+              <b>Verification</b>
+              <p>CTOX does not treat the last agent message as ground truth. Sensitive state changes need durable evidence, and unresolved work remains visible as follow-up.</p>
             </div>
           </div>
         </div>
       </section>
 
-      <section class="install" aria-labelledby="install-title">
+      <section class="install" id="install" aria-labelledby="install-title">
         <div class="section-inner">
           <div>
-            <p class="section-kicker">Downloads</p>
-            <h2 id="install-title">Download the current release.</h2>
+            <p class="section-kicker">Install</p>
+            <h2 id="install-title">Install CTOX on the host that should carry the work.</h2>
             <p>
-              The release includes builds for macOS, Linux, and Windows. The
-              binaries are just the delivery form; CTOX itself is the autonomous
-              work system described above.
+              Use the terminal path when you are already on the target host.
+              Open the TUI to configure runtime, communication, tickets, and
+              remote access. Use the desktop app when you want a guided setup
+              for this machine or remote servers, and when you want to manage
+              more than one CTOX instance from one place.
             </p>
           </div>
           <div class="release-actions">
+            <div class="install-paths">
+              <div class="install-path">
+                <h3>Terminal install</h3>
+                <p>Use this when you are already on the server or SSH session that should run CTOX.</p>
+                <div class="command-block" aria-label="Terminal install commands">
+                  <code>curl -fsSL https://raw.githubusercontent.com/metric-space-ai/ctox/main/install.sh | bash
+ctox
+ctox start
+ctox status</code>
+                </div>
+                <ol>
+                  <li>Run the installer on the host that should own the work.</li>
+                  <li>Open <code>ctox</code> to configure model/runtime, communication, tickets, and remote access.</li>
+                  <li>Start the daemon and check status before handing it real work.</li>
+                </ol>
+              </div>
+              <div class="install-path">
+                <h3>Desktop install and instance manager</h3>
+                <p>
+                  The desktop app can prepare CTOX on this computer or on SSH
+                  hosts, connect to remote WebRTC hosts, and keep multiple
+                  local or remote instances in one registry.
+                </p>
+              </div>
+            </div>
+            <div class="download-heading">Current release</div>
             <nav class="download-strip" aria-label="CTOX downloads">
               <a class="download" data-asset="ctox-macos-arm64.tar.gz" href="https://github.com/metric-space-ai/ctox/releases/latest">
                 <strong>macOS Apple Silicon</strong>
@@ -790,6 +983,17 @@ next: publish notes</pre>
       const repo = "metric-space-ai/ctox";
       const statusEl = document.querySelector("#release-status");
       const downloads = [...document.querySelectorAll("[data-asset]")];
+      const installLinks = [...document.querySelectorAll("[data-scroll-to='install']")];
+
+      installLinks.forEach((installLink) => {
+        installLink.addEventListener("click", (event) => {
+          const target = document.querySelector("#install");
+          if (!target) return;
+          event.preventDefault();
+          target.scrollIntoView({ behavior: "smooth", block: "start" });
+          history.replaceState(null, "", "#install");
+        });
+      });
 
       async function wireLatestRelease() {
         try {
