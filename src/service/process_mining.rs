@@ -21,7 +21,7 @@ const PROCESS_CONTEXT_TABLE: &str = "ctox_process_context";
 const PROCESS_EVENTS_TABLE: &str = "ctox_process_events";
 const PROCESS_TRIGGER_REGISTRY_TABLE: &str = "ctox_process_trigger_registry";
 const PROCESS_MODEL_TABLE_PREFIX: &str = "ctox_pm_";
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 const PROCESS_MINING_USAGE: &str = "usage:
   ctox process-mining ensure
   ctox process-mining schema
@@ -2382,6 +2382,97 @@ fn upsert_default_core_transition_rules(conn: &Connection) -> Result<()> {
     let now = now_expr_value();
     let defaults = [
         (
+            "context-message-telemetry",
+            5,
+            Some("=messages"),
+            None,
+            None,
+            None,
+            "telemetry",
+            "ContextMessage",
+            "P1RuntimeSafety",
+            "telemetry.context.message",
+            json!({"core_transition": false}),
+        ),
+        (
+            "context-item-telemetry",
+            6,
+            Some("=context_items"),
+            None,
+            None,
+            None,
+            "telemetry",
+            "ContextItem",
+            "P1RuntimeSafety",
+            "telemetry.context.item",
+            json!({"core_transition": false}),
+        ),
+        (
+            "governance-event-telemetry",
+            7,
+            Some("=governance_events"),
+            None,
+            None,
+            None,
+            "telemetry",
+            "GovernanceEvent",
+            "P3Housekeeping",
+            "telemetry.governance.event",
+            json!({"core_transition": false}),
+        ),
+        (
+            "mission-claim-telemetry",
+            8,
+            Some("=mission_claims"),
+            None,
+            None,
+            None,
+            "telemetry",
+            "MissionClaim",
+            "P1RuntimeSafety",
+            "telemetry.mission.claim",
+            json!({"core_transition": false}),
+        ),
+        (
+            "ticket-audit-telemetry",
+            9,
+            Some("=ticket_audit_log"),
+            None,
+            None,
+            None,
+            "telemetry",
+            "TicketAuditLog",
+            "P2MissionDelivery",
+            "telemetry.ticket.audit",
+            json!({"core_transition": false}),
+        ),
+        (
+            "ticket-note-telemetry",
+            10,
+            Some("=ticket_self_work_notes"),
+            None,
+            None,
+            None,
+            "telemetry",
+            "TicketSelfWorkNote",
+            "P2MissionDelivery",
+            "telemetry.ticket.note",
+            json!({"core_transition": false}),
+        ),
+        (
+            "local-ticket-event-telemetry",
+            11,
+            Some("=local_ticket_events"),
+            None,
+            None,
+            None,
+            "telemetry",
+            "LocalTicketEvent",
+            "P2MissionDelivery",
+            "telemetry.ticket.local_event",
+            json!({"core_transition": false}),
+        ),
+        (
             "communication-founder",
             10,
             Some("communication_founder"),
@@ -2470,7 +2561,7 @@ fn upsert_default_core_transition_rules(conn: &Connection) -> Result<()> {
         (
             "communication-message",
             30,
-            Some("message"),
+            Some("=communication_messages"),
             None,
             None,
             None,
@@ -2861,6 +2952,9 @@ fn pattern_matches(pattern: Option<&str>, value: &str) -> bool {
     if pattern.is_empty() || pattern == "*" {
         return true;
     }
+    if let Some(exact) = pattern.strip_prefix('=') {
+        return value.eq_ignore_ascii_case(exact.trim());
+    }
     value
         .to_ascii_lowercase()
         .contains(&pattern.to_ascii_lowercase())
@@ -3087,6 +3181,21 @@ fn scan_core_state_machine_violations(conn: &Connection, limit: i64) -> Result<V
             continue;
         }
 
+        if is_state_preserving_update(&event) {
+            mapped_telemetry += 1;
+            record_event_coverage(
+                conn,
+                &event,
+                "telemetry",
+                Some(&rule.rule_id),
+                Some(&rule.petri_transition_id),
+                "state_preserving_update",
+                &scanned_at,
+            )?;
+            clear_unmapped_event(conn, &event.event_id)?;
+            continue;
+        }
+
         let Some(request) = infer_core_transition_from_rule(&rule, &event) else {
             rule_matched_without_core_transition += 1;
             record_event_coverage(
@@ -3247,6 +3356,19 @@ fn scan_core_state_machine_violations(conn: &Connection, limit: i64) -> Result<V
         "recent_unmapped": recent_unmapped,
         "scanned_at": scanned_at,
     }))
+}
+
+fn is_state_preserving_update(event: &ProcessEventForStateMachine) -> bool {
+    if !event.operation.eq_ignore_ascii_case("UPDATE") {
+        return false;
+    }
+    let Some(from_state) = normalize_state(event.from_state.as_deref()) else {
+        return false;
+    };
+    let Some(to_state) = normalize_state(event.to_state.as_deref()) else {
+        return false;
+    };
+    from_state == to_state
 }
 
 fn load_state_machine_events(
@@ -4824,6 +4946,36 @@ mod tests {
                 state_id TEXT PRIMARY KEY,
                 state_json TEXT
             );
+            CREATE TABLE messages (
+                message_id INTEGER PRIMARY KEY,
+                body TEXT
+            );
+            CREATE TABLE context_items (
+                conversation_id INTEGER NOT NULL,
+                ordinal INTEGER NOT NULL,
+                body TEXT,
+                PRIMARY KEY (conversation_id, ordinal)
+            );
+            CREATE TABLE governance_events (
+                event_id TEXT PRIMARY KEY,
+                event_type TEXT NOT NULL
+            );
+            CREATE TABLE mission_claims (
+                claim_key TEXT PRIMARY KEY,
+                status TEXT NOT NULL
+            );
+            CREATE TABLE ticket_audit_log (
+                audit_id TEXT PRIMARY KEY,
+                event_type TEXT NOT NULL
+            );
+            CREATE TABLE ticket_self_work_notes (
+                note_id TEXT PRIMARY KEY,
+                body TEXT NOT NULL
+            );
+            CREATE TABLE local_ticket_events (
+                event_id TEXT PRIMARY KEY,
+                event_type TEXT NOT NULL
+            );
             "#,
         )?;
         ensure_process_mining_schema(&conn, &db_path)?;
@@ -4851,6 +5003,38 @@ mod tests {
             "INSERT INTO mission_states (state_id, state_json) VALUES ('m1', '{}')",
             [],
         )?;
+        conn.execute(
+            "INSERT INTO messages (message_id, body) VALUES (1, 'context message')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO context_items (conversation_id, ordinal, body) VALUES (1, 1, 'context item')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO governance_events (event_id, event_type) VALUES ('g1', 'created')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO mission_claims (claim_key, status) VALUES ('c1', 'open')",
+            [],
+        )?;
+        conn.execute(
+            "UPDATE mission_claims SET status = 'open' WHERE claim_key = 'c1'",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO ticket_audit_log (audit_id, event_type) VALUES ('a1', 'created')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO ticket_self_work_notes (note_id, body) VALUES ('n1', 'note')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO local_ticket_events (event_id, event_type) VALUES ('le1', 'created')",
+            [],
+        )?;
 
         let summary = scan_core_state_machine_violations(&conn, 100)?;
         let unmapped = summary
@@ -4866,15 +5050,33 @@ mod tests {
                   'payload-store-telemetry',
                   'operating-health-telemetry',
                   'governance-telemetry',
-                  'mission-state-telemetry'
+                  'mission-state-telemetry',
+                  'context-message-telemetry',
+                  'context-item-telemetry',
+                  'governance-event-telemetry',
+                  'mission-claim-telemetry',
+                  'ticket-audit-telemetry',
+                  'ticket-note-telemetry',
+                  'local-ticket-event-telemetry'
               )
+            "#,
+            [],
+            |row| row.get(0),
+        )?;
+        let communication_message_misclassified: i64 = conn.query_row(
+            r#"
+            SELECT COUNT(*)
+            FROM ctox_pm_event_transition_coverage
+            WHERE table_name = 'messages'
+              AND rule_id = 'communication-message'
             "#,
             [],
             |row| row.get(0),
         )?;
 
         assert_eq!(unmapped, 0, "{summary}");
-        assert_eq!(telemetry_count, 6);
+        assert_eq!(telemetry_count, 14);
+        assert_eq!(communication_message_misclassified, 0);
         Ok(())
     }
 
