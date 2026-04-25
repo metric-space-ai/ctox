@@ -1,0 +1,885 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Technical documentation for the CTOX daemon, runtime state, CLI commands, context loop, process mining, and core state model."
+    />
+    <title>CTOX Docs</title>
+    <link rel="icon" href="assets/ctox-app-icon.png" />
+    <link rel="preload" href="assets/ctox-full-logo.png" as="image" />
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #151515;
+        --muted: #646b75;
+        --line: #d9dfe8;
+        --surface: #f5f7fb;
+        --panel: #ffffff;
+        --code: #0f141a;
+        --cyan: #00a8df;
+        --magenta: #ec2b87;
+        --green: #0f8d5f;
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+          "Segoe UI", sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        scroll-behavior: smooth;
+      }
+
+      body {
+        margin: 0;
+        background: var(--surface);
+        color: var(--ink);
+      }
+
+      a {
+        color: inherit;
+      }
+
+      code,
+      pre {
+        font-family: "SFMono-Regular", ui-monospace, "Cascadia Code", monospace;
+      }
+
+      code {
+        padding: 0.12em 0.32em;
+        background: #edf2f8;
+        font-size: 0.92em;
+      }
+
+      .topline {
+        position: sticky;
+        top: 0;
+        z-index: 5;
+        border-bottom: 1px solid var(--line);
+        background: rgba(245, 247, 251, 0.94);
+        backdrop-filter: blur(14px);
+      }
+
+      .topline-inner,
+      .doc-shell,
+      footer .inner {
+        width: min(1180px, calc(100% - 40px));
+        margin: 0 auto;
+      }
+
+      .topline-inner {
+        display: flex;
+        min-height: 72px;
+        align-items: center;
+        justify-content: space-between;
+        gap: 20px;
+      }
+
+      .topline img {
+        display: block;
+        width: 128px;
+        height: auto;
+      }
+
+      .top-actions {
+        display: flex;
+        align-items: center;
+        gap: 18px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      .top-actions a {
+        text-decoration: none;
+      }
+
+      .nav-cta {
+        display: inline-flex;
+        min-height: 40px;
+        align-items: center;
+        justify-content: center;
+        padding: 0 16px;
+        background: var(--ink);
+        color: #fff;
+        font-weight: 750;
+      }
+
+      .doc-shell {
+        display: grid;
+        grid-template-columns: 250px minmax(0, 1fr);
+        gap: 54px;
+        align-items: start;
+        padding: 54px 0 80px;
+      }
+
+      .toc {
+        position: sticky;
+        top: 96px;
+        padding: 20px;
+        border: 1px solid var(--line);
+        background: #fff;
+      }
+
+      .toc strong {
+        display: block;
+        margin-bottom: 14px;
+        font-size: 13px;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      .toc a {
+        display: block;
+        padding: 8px 0;
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.25;
+        text-decoration: none;
+      }
+
+      .toc a:hover,
+      .toc a:focus-visible {
+        color: var(--ink);
+        outline: none;
+      }
+
+      .doc {
+        min-width: 0;
+      }
+
+      .hero {
+        padding: 10px 0 46px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .kicker {
+        margin: 0 0 16px;
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 750;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      h1 {
+        max-width: 860px;
+        margin: 0;
+        font-size: clamp(42px, 6vw, 78px);
+        line-height: 0.96;
+        letter-spacing: 0;
+      }
+
+      .lead {
+        max-width: 840px;
+        margin: 24px 0 0;
+        color: #343c46;
+        font-size: clamp(18px, 2.2vw, 23px);
+        line-height: 1.42;
+      }
+
+      section {
+        padding: 50px 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      h2 {
+        margin: 0;
+        max-width: 760px;
+        font-size: clamp(30px, 4vw, 46px);
+        line-height: 1.04;
+        letter-spacing: 0;
+      }
+
+      h3 {
+        margin: 34px 0 12px;
+        font-size: 22px;
+        line-height: 1.2;
+      }
+
+      p {
+        max-width: 850px;
+        color: #3f4650;
+        font-size: 17px;
+        line-height: 1.62;
+      }
+
+      ul,
+      ol {
+        max-width: 880px;
+        color: #3f4650;
+        font-size: 16px;
+        line-height: 1.62;
+      }
+
+      li + li {
+        margin-top: 8px;
+      }
+
+      .note {
+        border-left: 4px solid var(--cyan);
+        padding: 14px 18px;
+        background: #fff;
+      }
+
+      .warning {
+        border-left-color: var(--magenta);
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 1px;
+        margin-top: 26px;
+        border: 1px solid var(--line);
+        background: var(--line);
+      }
+
+      .cell {
+        padding: 22px;
+        background: #fff;
+      }
+
+      .cell b {
+        display: block;
+        margin-bottom: 10px;
+        font-size: 17px;
+      }
+
+      .cell p {
+        margin: 0;
+        font-size: 15px;
+      }
+
+      .table-wrap {
+        margin-top: 26px;
+        overflow-x: auto;
+        border: 1px solid var(--line);
+        background: #fff;
+      }
+
+      table {
+        width: 100%;
+        min-width: 720px;
+        border-collapse: collapse;
+        font-size: 15px;
+      }
+
+      th,
+      td {
+        padding: 14px 16px;
+        border-bottom: 1px solid var(--line);
+        text-align: left;
+        vertical-align: top;
+      }
+
+      th {
+        color: var(--muted);
+        font-size: 12px;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+      }
+
+      td:first-child {
+        width: 250px;
+        white-space: nowrap;
+      }
+
+      pre {
+        margin: 24px 0 0;
+        padding: 22px;
+        overflow-x: auto;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        background: var(--code);
+        color: #d9eef6;
+        font-size: 14px;
+        line-height: 1.65;
+        white-space: pre;
+      }
+
+      pre code {
+        padding: 0;
+        background: transparent;
+        color: inherit;
+        font-size: inherit;
+      }
+
+      .flow {
+        border-color: #1f2a34;
+      }
+
+      .cmd-grid {
+        display: grid;
+        gap: 18px;
+        margin-top: 24px;
+      }
+
+      .cmd {
+        padding: 20px;
+        border: 1px solid var(--line);
+        background: #fff;
+      }
+
+      .cmd h3 {
+        margin-top: 0;
+      }
+
+      .cmd pre {
+        margin-top: 14px;
+      }
+
+      footer {
+        padding: 28px 0;
+        background: #111418;
+        color: rgba(249, 251, 255, 0.62);
+        font-size: 13px;
+      }
+
+      footer .inner {
+        display: flex;
+        justify-content: space-between;
+        gap: 20px;
+        flex-wrap: wrap;
+      }
+
+      @media (max-width: 980px) {
+        .doc-shell {
+          grid-template-columns: 1fr;
+          gap: 28px;
+        }
+
+        .toc {
+          position: static;
+        }
+
+        .toc nav {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 0 22px;
+        }
+
+        .grid {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (max-width: 620px) {
+        .topline-inner,
+        .doc-shell,
+        footer .inner {
+          width: min(100% - 28px, 1180px);
+        }
+
+        .topline img {
+          width: 108px;
+        }
+
+        .top-actions {
+          gap: 12px;
+        }
+
+        .top-actions a[href*="github"] {
+          display: none;
+        }
+
+        .toc nav {
+          grid-template-columns: 1fr;
+        }
+
+        section {
+          padding: 42px 0;
+        }
+
+        pre {
+          font-size: 12px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="topline" aria-label="Documentation header">
+      <div class="topline-inner">
+        <a href="index.html" aria-label="CTOX home">
+          <img src="assets/ctox-full-logo.png" alt="CTOX" />
+        </a>
+        <div class="top-actions">
+          <a href="index.html">Overview</a>
+          <a href="https://github.com/metric-space-ai/ctox">GitHub</a>
+          <a class="nav-cta" href="index.html#install">Install</a>
+        </div>
+      </div>
+    </header>
+
+    <main class="doc-shell">
+      <aside class="toc" aria-label="Documentation navigation">
+        <strong>Docs</strong>
+        <nav>
+          <a href="#runtime">Runtime</a>
+          <a href="#layout">Runtime Layout</a>
+          <a href="#commands">CLI Commands</a>
+          <a href="#loop">Mission Loop</a>
+          <a href="#context">Context Build</a>
+          <a href="#self-calls">CTOX Calls CTOX</a>
+          <a href="#state-model">State Model</a>
+          <a href="#process-mining">Process Mining</a>
+          <a href="#work">Work Systems</a>
+          <a href="#operations">Operations</a>
+        </nav>
+      </aside>
+
+      <article class="doc">
+        <div class="hero">
+          <p class="kicker">Technical Documentation</p>
+          <h1>CTOX daemon, CLI, context loop, and runtime state.</h1>
+          <p class="lead">
+            This document explains the CTOX runtime as implemented by the
+            daemon and command-line tools: where state lives, how work enters
+            the loop, how context is rebuilt across turns, how CTOX calls its
+            own tools, and how process mining plus the core state model constrain
+            long-running technical work.
+          </p>
+        </div>
+
+        <section id="runtime">
+          <p class="kicker">Runtime</p>
+          <h2>System overview</h2>
+          <p>
+            CTOX is a persistent runtime around bounded agent execution. The
+            daemon owns the durable work state. Agents and local tools execute
+            bounded execution runs, then CTOX records what changed and decides
+            whether to close, verify, requeue, block, schedule, or continue.
+          </p>
+          <pre class="flow"><code>ctox start
+  -> service process
+  -> runtime/ctox.sqlite3
+  -> channel router + syncer
+  -> mission watcher + operating watcher
+  -> backend supervisor
+  -> queue / ticket / schedule / channel work</code></pre>
+          <div class="grid">
+            <div class="cell">
+              <b>Daemon</b>
+              <p>Runs the service loop, owns leases, watches channels and schedules, dispatches work, and supervises the execution backend.</p>
+            </div>
+            <div class="cell">
+              <b>SQLite state</b>
+              <p><code>runtime/ctox.sqlite3</code> stores mission-side state and LCM-side state in one consolidated database.</p>
+            </div>
+            <div class="cell">
+              <b>CLI control surface</b>
+              <p>Every important subsystem has a command group. Humans and agents use the same surface to inspect or mutate state.</p>
+            </div>
+            <div class="cell">
+              <b>Execution worker</b>
+              <p>The agent run is a bounded worker execution. CTOX handles the state before and after that run.</p>
+            </div>
+          </div>
+        </section>
+
+        <section id="layout">
+          <p class="kicker">Runtime Layout</p>
+          <h2>Files and state boundaries</h2>
+          <p>
+            CTOX separates repository files from runtime state. The main runtime
+            database is resolved through the centralized path helpers and can be
+            moved with <code>CTOX_STATE_ROOT</code>.
+          </p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Path</th>
+                  <th>Purpose</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>runtime/ctox.sqlite3</code></td>
+                  <td>Consolidated core state: queue, tickets, governance, secrets, channels, schedules, plans, knowledge, LCM messages, continuity, mission state, verification, and claims.</td>
+                </tr>
+                <tr>
+                  <td><code>runtime/backup/</code></td>
+                  <td>Backup location used by migrations from legacy runtime databases.</td>
+                </tr>
+                <tr>
+                  <td><code>runtime/ticket_local.db</code></td>
+                  <td>Tool-owned store for the local ticket adapter. It remains separate by design.</td>
+                </tr>
+                <tr>
+                  <td><code>runtime/ctox_scraping.db</code></td>
+                  <td>Tool-owned store for durable scraping capability data.</td>
+                </tr>
+                <tr>
+                  <td><code>runtime/context-log.jsonl</code></td>
+                  <td>Turn and token forensics written by execution paths that emit direct session context logs.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="note warning">
+            Older internal notes may mention a former database filename. The
+            current consolidated core state file is <code>runtime/ctox.sqlite3</code>.
+          </p>
+        </section>
+
+        <section id="commands">
+          <p class="kicker">CLI Reference</p>
+          <h2>Command groups</h2>
+          <p>
+            CTOX commands are grouped by subsystem. Use <code>ctox</code>
+            without arguments to open the TUI; use explicit commands when
+            scripting, debugging, or letting the daemon inspect its own state.
+          </p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Group</th>
+                  <th>Commands</th>
+                  <th>Use</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Everyday</td>
+                  <td><code>ctox start</code>, <code>stop</code>, <code>status</code>, <code>chat</code>, <code>tui</code>, <code>version</code></td>
+                  <td>Start the daemon, submit direct prompts, inspect service state, or open the TUI.</td>
+                </tr>
+                <tr>
+                  <td>Update</td>
+                  <td><code>ctox upgrade</code>, <code>update check</code>, <code>update apply</code>, <code>update rollback</code>, <code>update status</code></td>
+                  <td>Move between release slots, source checkouts, and rollback points.</td>
+                </tr>
+                <tr>
+                  <td>Queue</td>
+                  <td><code>ctox queue add</code>, <code>list</code>, <code>show</code>, <code>block</code>, <code>release</code>, <code>complete</code>, <code>spill</code>, <code>repair</code></td>
+                  <td>Manage short-term executable work and recovery from stuck queue state.</td>
+                </tr>
+                <tr>
+                  <td>Tickets</td>
+                  <td><code>ctox ticket sync</code>, <code>list</code>, <code>show</code>, <code>dry-run</code>, <code>approve</code>, <code>execute</code>, <code>verify</code>, <code>close</code>, <code>audit</code></td>
+                  <td>Integrate external or local ticket systems, execute cases, write back results, and capture learnings.</td>
+                </tr>
+                <tr>
+                  <td>Plans and schedules</td>
+                  <td><code>ctox plan ingest</code>, <code>emit-next</code>, <code>complete-step</code>, <code>schedule add</code>, <code>schedule tick</code>, <code>follow-up evaluate</code></td>
+                  <td>Represent multi-step work, recurring work, and blocked or deferred continuations.</td>
+                </tr>
+                <tr>
+                  <td>Communication</td>
+                  <td><code>ctox channel sync</code>, <code>take</code>, <code>ack</code>, <code>send</code>, <code>history</code>, <code>search</code>, <code>context</code></td>
+                  <td>Bring messages into the same durable work loop as tickets and scheduled work.</td>
+                </tr>
+                <tr>
+                  <td>Governance and verification</td>
+                  <td><code>ctox governance snapshot</code>, <code>verification assurance</code>, <code>verification claim-set</code>, <code>state-invariants</code></td>
+                  <td>Inspect policy, claims, closure-blocking evidence, and state consistency.</td>
+                </tr>
+                <tr>
+                  <td>Context</td>
+                  <td><code>ctox lcm-init</code>, <code>lcm-add-message</code>, <code>lcm-compact</code>, <code>lcm-grep</code>, <code>continuity-show</code>, <code>continuity-apply</code>, <code>context-health</code>, <code>context-retrieve</code></td>
+                  <td>Inspect or repair long-context memory, continuity documents, and retrieval.</td>
+                </tr>
+                <tr>
+                  <td>Process mining</td>
+                  <td><code>ctox process-mining events</code>, <code>cases</code>, <code>dfg</code>, <code>discover-petri</code>, <code>replay</code>, <code>core-liveness</code>, <code>assert-clean</code></td>
+                  <td>Analyze what actually happened in the runtime database and compare events with expected process models.</td>
+                </tr>
+                <tr>
+                  <td>Secrets and turns</td>
+                  <td><code>ctox secret put</code>, <code>secret intake</code>, <code>turn status</code>, <code>turn end</code></td>
+                  <td>Store credentials deliberately and close CLI command ledgers with explicit status.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="loop">
+          <p class="kicker">Persistent Mission Loop</p>
+          <h2>The loop is the product boundary</h2>
+          <p>
+            A single agent turn is not the unit of ownership. CTOX treats a turn
+            as one run inside a durable control loop. The loop continues while
+            the service is running and while durable state says there is work to
+            process, verify, wait on, repair, or resume.
+          </p>
+          <pre class="flow"><code>1. Intake
+   queue task, ticket event, scheduled task, channel message, or chat prompt
+
+2. Lease
+   select executable work and mark it leased/running
+
+3. Context build
+   mission contract + current task + continuity + knowledge + verification
+
+4. Worker turn
+   agent uses tools, shell, browser, files, and CTOX CLI commands
+
+5. Persist result
+   write event, status, evidence, note, claim, knowledge, or follow-up
+
+6. Decide next state
+   close, verify, requeue, block, schedule, escalate, or continue</code></pre>
+          <p>
+            The loop survives a finished chat turn because the queue, tickets,
+            schedules, continuity, claims, and process events live outside the
+            model context. If work is incomplete, CTOX records why and keeps a
+            continuation path.
+          </p>
+        </section>
+
+        <section id="context">
+          <p class="kicker">Context Build</p>
+          <h2>How CTOX builds context across turns</h2>
+          <p>
+            CTOX does not preserve continuity by appending every previous token
+            to the next prompt. It builds a new working context from durable
+            sources, then lets the bounded worker turn operate inside that
+            context window.
+          </p>
+          <div class="grid">
+            <div class="cell">
+              <b>Mission contract</b>
+              <p>The system-level contract describes the role, host boundaries, tool behavior, and governance expectations.</p>
+            </div>
+            <div class="cell">
+              <b>Current work item</b>
+              <p>The active queue task, ticket case, schedule emission, plan step, or channel message defines the immediate task.</p>
+            </div>
+            <div class="cell">
+              <b>Continuity</b>
+              <p>Focus holds active status and next step. Anchors hold durable facts. Narrative compresses prior turns into usable history.</p>
+            </div>
+            <div class="cell">
+              <b>Knowledge</b>
+              <p>Known failures, decisions, runbooks, source skills, and ticket learnings are retrieved when relevant.</p>
+            </div>
+            <div class="cell">
+              <b>Verification</b>
+              <p>Claims, done gates, evidence, and closure-blocking checks shape what can be considered finished.</p>
+            </div>
+            <div class="cell">
+              <b>Recent events</b>
+              <p>Channel history, process events, queue notes, and ticket history provide recent operational context.</p>
+            </div>
+          </div>
+          <h3>Compaction and continuation</h3>
+          <p>
+            When context pressure rises, CTOX compacts or refreshes continuity
+            instead of losing the mission. The next turn is rebuilt from Focus,
+            Anchors, Narrative, the current work record, and durable runtime
+            state. This is the practical meaning of long-running multi-turn
+            execution: each turn is bounded, but the mission state is not.
+          </p>
+          <pre><code>ctox context-health
+ctox context-retrieve --mode continuity --document focus
+ctox continuity-show
+ctox continuity-apply --kind focus --diff-file focus.patch</code></pre>
+        </section>
+
+        <section id="self-calls">
+          <p class="kicker">Self-Inspection</p>
+          <h2>CTOX calls CTOX through CLI tools</h2>
+          <p>
+            CTOX exposes its control plane through CLI commands. The agent can
+            call those commands as tools, which means self-inspection and state
+            changes go through the same interface a human operator would use.
+            That creates an auditable process surface instead of hidden prompt
+            assumptions.
+          </p>
+          <pre><code># inspect active work
+ctox status
+ctox queue list --status pending --status leased --limit 20
+ctox ticket cases --limit 20
+
+# verify process health before closing work
+ctox state-invariants
+ctox process-mining assert-clean
+ctox verification assurance
+
+# record the outcome through the runtime surface
+ctox ticket verify --case-id case-123 --status passed --summary "smoke tests passed"
+ctox queue complete --message-key queue-123 --note "deployed and verified"</code></pre>
+          <p class="note">
+            The important property is not that an LLM says it followed a
+            process. The important property is that the process has commands,
+            persisted events, transition checks, and queryable evidence.
+          </p>
+        </section>
+
+        <section id="state-model">
+          <p class="kicker">State Model</p>
+          <h2>Formal transitions and graph checks</h2>
+          <p>
+            The core state machine protects runtime behavior that should not be
+            left to prompt discipline: founder communication, deadlines, queue
+            repair, ticket closure, review gates, and knowledge capture.
+          </p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Concept</th>
+                  <th>Implementation</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Entity types</td>
+                  <td>Service, Mission, Context, QueueItem, WorkItem, Ticket, Review, FounderCommunication, Commitment, Schedule, Knowledge, Repair.</td>
+                </tr>
+                <tr>
+                  <td>Runtime lanes</td>
+                  <td>P0 founder communication, P0 commitment backing, P1 runtime safety, P1 queue repair, P2 mission delivery, P3 housekeeping.</td>
+                </tr>
+                <tr>
+                  <td>Transition request</td>
+                  <td>Entity, entity id, lane, from-state, to-state, event, actor, evidence refs, and metadata.</td>
+                </tr>
+                <tr>
+                  <td>Transition guard</td>
+                  <td>Validates allowed transitions and domain rules, then persists accepted or rejected proofs in <code>ctox_core_transition_proofs</code>.</td>
+                </tr>
+                <tr>
+                  <td>Graph checks</td>
+                  <td>Liveness analysis checks start-state reachability, nonterminal dead ends, and whether states can reach terminal states.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <pre><code>ctox process-mining core-liveness
+ctox process-mining proofs --limit 20
+ctox process-mining state-audit --limit 50</code></pre>
+          <p class="note warning">
+            The state model does not prove that an implementation is correct or
+            that a deployment is healthy. It constrains the CTOX runtime process:
+            illegal transitions can be rejected, suspicious paths can be found,
+            and closure can require durable evidence.
+          </p>
+        </section>
+
+        <section id="process-mining">
+          <p class="kicker">Process Mining</p>
+          <h2>Reconstruct what happened</h2>
+          <p>
+            Process mining records SQLite mutation events and projects them into
+            cases, activities, directly-follows graphs, Petri nets, replay
+            results, conformance runs, state scans, and violation reports. This
+            turns runtime behavior into data that can be audited after the fact.
+          </p>
+          <div class="cmd-grid">
+            <div class="cmd">
+              <h3>Inspect events and cases</h3>
+              <pre><code>ctox process-mining ensure
+ctox process-mining events --limit 25
+ctox process-mining cases --limit 20
+ctox process-mining explain-case case-123 --limit 50</code></pre>
+            </div>
+            <div class="cmd">
+              <h3>Discover and replay models</h3>
+              <pre><code>ctox process-mining discover-dfg --model-id model-dfg
+ctox process-mining discover-petri --model-id model-petri
+ctox process-mining replay model-petri
+ctox process-mining deadlocks --model-id model-petri</code></pre>
+            </div>
+            <div class="cmd">
+              <h3>Audit state and coverage</h3>
+              <pre><code>ctox process-mining scan-violations
+ctox process-mining violations --limit 20
+ctox process-mining coverage --limit 50
+ctox process-mining assert-clean --limit 100</code></pre>
+            </div>
+          </div>
+        </section>
+
+        <section id="work">
+          <p class="kicker">Work Systems</p>
+          <h2>How work is represented</h2>
+          <p>
+            CTOX uses multiple state carriers because real work enters from
+            multiple places and has different timing requirements.
+          </p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Subsystem</th>
+                  <th>Role</th>
+                  <th>Example</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Queue</td>
+                  <td>Short-term executable work with priority, lease status, notes, and repair commands.</td>
+                  <td><code>ctox queue add --title "smoke test" --prompt "run staging smoke tests"</code></td>
+                </tr>
+                <tr>
+                  <td>Tickets</td>
+                  <td>Longer-lived external or local work cases with approval, execution, verification, writeback, and audit.</td>
+                  <td><code>ctox ticket dry-run --ticket-key OPS-42</code></td>
+                </tr>
+                <tr>
+                  <td>Plans</td>
+                  <td>Multi-step goals that can emit the next executable step into the queue.</td>
+                  <td><code>ctox plan emit-next --goal-id goal-123</code></td>
+                </tr>
+                <tr>
+                  <td>Schedules</td>
+                  <td>Recurring or deferred work that becomes queue work when due.</td>
+                  <td><code>ctox schedule add --name "backup check" --cron "0 3 * * *" --prompt "verify backups"</code></td>
+                </tr>
+                <tr>
+                  <td>Channels</td>
+                  <td>Inbound and outbound communication, including thread history and context search.</td>
+                  <td><code>ctox channel context --thread-key email/thread-1</code></td>
+                </tr>
+                <tr>
+                  <td>Knowledge</td>
+                  <td>Learned facts, runbooks, source skills, known issues, and ticket-derived operational memory.</td>
+                  <td><code>ctox ticket knowledge-load --ticket-key OPS-42</code></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="operations">
+          <p class="kicker">Operations</p>
+          <h2>Debugging and recovery checklist</h2>
+          <p>
+            For operations work, start with the daemon status and then move from
+            state consistency to process mining, queue repair, and verification.
+          </p>
+          <pre><code>ctox status
+ctox doctor
+ctox queue list --status pending --status leased --status blocked --limit 50
+ctox state-invariants
+ctox process-mining assert-clean --limit 100
+ctox verification assurance
+ctox update status</code></pre>
+          <p>
+            If the queue is under pressure, inspect spilled work and blocked
+            items before adding more worker turns:
+          </p>
+          <pre><code>ctox queue spill-candidates --limit 20
+ctox queue spills --limit 20
+ctox ticket self-work-list --state open --limit 20
+ctox follow-up evaluate --goal "finish rollout" --result "blocked on access" --blocker "missing SSH key"</code></pre>
+        </section>
+      </article>
+    </main>
+
+    <footer>
+      <div class="inner">
+        <span>CTOX technical documentation</span>
+        <span>metric-space-ai/ctox</span>
+      </div>
+    </footer>
+  </body>
+</html>
