@@ -1,0 +1,708 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Download the CTOX desktop app for macOS, Windows, and Linux."
+    />
+    <title>CTOX Desktop</title>
+    <link rel="icon" href="assets/ctox-app-icon.png" />
+    <link rel="preload" href="assets/ctox-full-logo.png" as="image" />
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #151515;
+        --muted: #676b73;
+        --line: #d7dde6;
+        --surface: #f5f7fb;
+        --panel: #ffffff;
+        --cyan: #00a8df;
+        --magenta: #ec2b87;
+        --green: #0f8d5f;
+        --shadow: 0 24px 70px rgba(16, 22, 34, 0.12);
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+          "Segoe UI", sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        scroll-behavior: smooth;
+      }
+
+      body {
+        margin: 0;
+        background: var(--surface);
+        color: var(--ink);
+      }
+
+      a {
+        color: inherit;
+      }
+
+      .page {
+        min-height: 100svh;
+        overflow: hidden;
+      }
+
+      .hero {
+        position: relative;
+        display: grid;
+        min-height: 88svh;
+        align-items: center;
+        border-bottom: 1px solid var(--line);
+        background:
+          linear-gradient(90deg, rgba(255, 255, 255, 0.95) 0 46%, rgba(255, 255, 255, 0.76) 64%, rgba(245, 247, 251, 0.2) 100%),
+          radial-gradient(circle at 88% 24%, rgba(0, 168, 223, 0.22), transparent 26rem),
+          radial-gradient(circle at 94% 74%, rgba(236, 43, 135, 0.18), transparent 23rem),
+          #f7f9fd;
+      }
+
+      .hero::after {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        content: "";
+        background-image:
+          linear-gradient(rgba(21, 21, 21, 0.06) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(21, 21, 21, 0.06) 1px, transparent 1px);
+        background-size: 56px 56px;
+        mask-image: linear-gradient(90deg, transparent 0, black 42%, transparent 100%);
+      }
+
+      .hero-inner,
+      .section-inner {
+        position: relative;
+        z-index: 1;
+        width: min(1160px, calc(100% - 40px));
+        margin: 0 auto;
+      }
+
+      .topline {
+        position: absolute;
+        top: 24px;
+        left: 50%;
+        z-index: 2;
+        display: flex;
+        width: min(1160px, calc(100% - 40px));
+        transform: translateX(-50%);
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        font-size: 13px;
+        color: var(--muted);
+      }
+
+      .topline img {
+        width: 138px;
+        height: auto;
+        display: block;
+      }
+
+      .topline a {
+        text-decoration: none;
+      }
+
+      .hero-copy {
+        width: min(680px, 100%);
+        padding: 112px 0 64px;
+        animation: enter 650ms ease-out both;
+      }
+
+      .brand-mark {
+        width: min(520px, 86vw);
+        height: auto;
+        display: block;
+        margin-bottom: 34px;
+      }
+
+      h1 {
+        max-width: 640px;
+        margin: 0;
+        font-size: clamp(44px, 8vw, 92px);
+        line-height: 0.94;
+        letter-spacing: 0;
+      }
+
+      .lead {
+        max-width: 620px;
+        margin: 24px 0 0;
+        font-size: clamp(18px, 2.4vw, 25px);
+        line-height: 1.35;
+        color: #323943;
+      }
+
+      .download-strip {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 1px;
+        margin-top: 44px;
+        border: 1px solid var(--line);
+        background: var(--line);
+        box-shadow: var(--shadow);
+      }
+
+      .download {
+        display: flex;
+        min-height: 132px;
+        padding: 22px;
+        background: rgba(255, 255, 255, 0.94);
+        text-decoration: none;
+        flex-direction: column;
+        justify-content: space-between;
+        transition:
+          transform 180ms ease,
+          background 180ms ease,
+          color 180ms ease;
+      }
+
+      .download:hover,
+      .download:focus-visible {
+        color: #fff;
+        background: var(--ink);
+        transform: translateY(-4px);
+        outline: none;
+      }
+
+      .download strong {
+        display: block;
+        font-size: 19px;
+        line-height: 1.15;
+      }
+
+      .download span {
+        display: block;
+        margin-top: 10px;
+        font-size: 13px;
+        line-height: 1.35;
+        color: var(--muted);
+      }
+
+      .download:hover span,
+      .download:focus-visible span {
+        color: rgba(255, 255, 255, 0.72);
+      }
+
+      .release-note {
+        margin-top: 18px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      .release-note a {
+        color: var(--ink);
+        font-weight: 650;
+        text-decoration-thickness: 1px;
+        text-underline-offset: 3px;
+      }
+
+      section {
+        padding: 84px 0;
+      }
+
+      .what {
+        background: #fff;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .what-layout {
+        display: grid;
+        grid-template-columns: minmax(0, 0.92fr) minmax(300px, 1.08fr);
+        gap: 64px;
+        align-items: start;
+      }
+
+      .what-copy p {
+        max-width: 720px;
+        margin: 24px 0 0;
+        color: #424955;
+        font-size: 20px;
+        line-height: 1.55;
+      }
+
+      .capability-lines {
+        display: grid;
+        gap: 0;
+        border-top: 1px solid var(--line);
+      }
+
+      .capability-lines div {
+        display: grid;
+        grid-template-columns: 170px 1fr;
+        gap: 24px;
+        padding: 22px 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .capability-lines b {
+        font-size: 17px;
+      }
+
+      .capability-lines span {
+        color: var(--muted);
+        line-height: 1.5;
+      }
+
+      .platforms {
+        background: var(--panel);
+      }
+
+      .section-kicker {
+        margin: 0 0 16px;
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 700;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      h2 {
+        max-width: 760px;
+        margin: 0;
+        font-size: clamp(34px, 5vw, 58px);
+        line-height: 1;
+        letter-spacing: 0;
+      }
+
+      .platform-grid {
+        display: grid;
+        grid-template-columns: 0.95fr 1.05fr;
+        gap: 52px;
+        align-items: end;
+        margin-top: 50px;
+      }
+
+      .platform-list {
+        display: grid;
+        gap: 18px;
+      }
+
+      .platform-row {
+        display: grid;
+        grid-template-columns: 136px 1fr;
+        gap: 24px;
+        padding: 22px 0;
+        border-top: 1px solid var(--line);
+      }
+
+      .platform-row:last-child {
+        border-bottom: 1px solid var(--line);
+      }
+
+      .platform-row b {
+        font-size: 18px;
+      }
+
+      .platform-row p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.55;
+      }
+
+      .app-visual {
+        position: relative;
+        min-height: 420px;
+        padding: 42px;
+        background: #14181d;
+        color: #f5f7fb;
+        box-shadow: var(--shadow);
+        overflow: hidden;
+      }
+
+      .app-visual::before {
+        position: absolute;
+        inset: auto 0 0 auto;
+        width: 58%;
+        height: 72%;
+        content: "";
+        background:
+          linear-gradient(135deg, rgba(0, 168, 223, 0.9), rgba(236, 43, 135, 0.85));
+        clip-path: polygon(30% 0, 100% 0, 68% 100%, 0 100%);
+        opacity: 0.88;
+      }
+
+      .terminal {
+        position: relative;
+        width: min(460px, 100%);
+        padding: 22px;
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        background: rgba(7, 10, 13, 0.72);
+        backdrop-filter: blur(16px);
+      }
+
+      .terminal-bar {
+        display: flex;
+        gap: 7px;
+        margin-bottom: 24px;
+      }
+
+      .dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 999px;
+        background: #7e8794;
+      }
+
+      .terminal pre {
+        margin: 0;
+        white-space: pre-wrap;
+        font-family: "SFMono-Regular", ui-monospace, "Cascadia Code", monospace;
+        font-size: 14px;
+        line-height: 1.65;
+        color: #d9eef6;
+      }
+
+      .terminal em {
+        color: #ff75b4;
+        font-style: normal;
+      }
+
+      .install {
+        background: #111418;
+        color: #f9fbff;
+      }
+
+      .install .section-inner {
+        display: grid;
+        grid-template-columns: minmax(0, 1.1fr) minmax(260px, 0.9fr);
+        gap: 56px;
+        align-items: center;
+      }
+
+      .install h2 {
+        max-width: 720px;
+      }
+
+      .install p {
+        max-width: 600px;
+        margin: 22px 0 0;
+        color: rgba(249, 251, 255, 0.72);
+        font-size: 20px;
+        line-height: 1.45;
+      }
+
+      .final-link {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 54px;
+        padding: 0 22px;
+        border: 1px solid rgba(255, 255, 255, 0.22);
+        background: #fff;
+        color: #111418;
+        font-weight: 750;
+        text-decoration: none;
+        transition:
+          transform 180ms ease,
+          background 180ms ease;
+      }
+
+      .final-link:hover,
+      .final-link:focus-visible {
+        background: #e6f7fc;
+        transform: translateY(-3px);
+        outline: none;
+      }
+
+      footer {
+        padding: 28px 0;
+        background: #111418;
+        color: rgba(249, 251, 255, 0.54);
+        font-size: 13px;
+      }
+
+      footer .section-inner {
+        display: flex;
+        justify-content: space-between;
+        gap: 20px;
+        flex-wrap: wrap;
+      }
+
+      @keyframes enter {
+        from {
+          opacity: 0;
+          transform: translateY(18px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          animation-duration: 1ms !important;
+          scroll-behavior: auto !important;
+          transition-duration: 1ms !important;
+        }
+      }
+
+      @media (max-width: 900px) {
+        .hero {
+          min-height: auto;
+        }
+
+        .download-strip,
+        .what-layout,
+        .platform-grid,
+        .install .section-inner {
+          grid-template-columns: 1fr;
+        }
+
+        .download-strip {
+          margin-top: 34px;
+        }
+
+        .download {
+          min-height: 104px;
+        }
+
+        .app-visual {
+          min-height: 360px;
+        }
+      }
+
+      @media (max-width: 620px) {
+        .hero-inner,
+        .section-inner,
+        .topline {
+          width: min(100% - 28px, 1160px);
+        }
+
+        .topline {
+          top: 16px;
+        }
+
+        .topline img {
+          width: 112px;
+        }
+
+        .hero-copy {
+          padding-top: 96px;
+        }
+
+        .brand-mark {
+          width: min(380px, 90vw);
+          margin-bottom: 28px;
+        }
+
+        section {
+          padding: 62px 0;
+        }
+
+        .platform-row {
+          grid-template-columns: 1fr;
+          gap: 8px;
+        }
+
+        .capability-lines div {
+          grid-template-columns: 1fr;
+          gap: 8px;
+        }
+
+        .app-visual {
+          padding: 24px;
+        }
+
+        .terminal pre {
+          font-size: 12px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <header class="topline" aria-label="Site header">
+        <a href="#" aria-label="CTOX home">
+          <img src="assets/ctox-full-logo.png" alt="CTOX" />
+        </a>
+        <a href="https://github.com/metric-space-ai/ctox">GitHub</a>
+      </header>
+
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="hero-inner">
+          <div class="hero-copy">
+            <img class="brand-mark" src="assets/ctox-full-logo.png" alt="" />
+            <h1 id="hero-title">Desktop control for CTOX.</h1>
+            <p class="lead">
+              CTOX is an autonomous technical control layer for hosts, services,
+              and long-running infrastructure work.
+            </p>
+
+            <nav class="download-strip" aria-label="Desktop downloads">
+              <a class="download" data-asset="ctox-desktop-macos-arm64.dmg" href="https://github.com/metric-space-ai/ctox/releases/latest">
+                <strong>macOS Apple Silicon</strong>
+                <span>DMG for M-series Macs</span>
+              </a>
+              <a class="download" data-asset="ctox-desktop-macos-x64.dmg" href="https://github.com/metric-space-ai/ctox/releases/latest">
+                <strong>macOS Intel</strong>
+                <span>DMG for x64 Macs</span>
+              </a>
+              <a class="download" data-asset="ctox-desktop-windows-x64.msi" href="https://github.com/metric-space-ai/ctox/releases/latest">
+                <strong>Windows</strong>
+                <span>MSI installer for x64 PCs</span>
+              </a>
+              <a class="download" data-asset="ctox-desktop-linux-x64.AppImage" href="https://github.com/metric-space-ai/ctox/releases/latest">
+                <strong>Linux</strong>
+                <span>AppImage for x64 desktops</span>
+              </a>
+            </nav>
+
+            <p class="release-note">
+              <span id="release-status">Checking latest release assets...</span>
+              <a href="https://github.com/metric-space-ai/ctox/releases/latest">View releases</a>
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="what" aria-labelledby="what-title">
+        <div class="section-inner what-layout">
+          <div class="what-copy">
+            <p class="section-kicker">What CTOX is</p>
+            <h2 id="what-title">Persistent autonomy for technical operations.</h2>
+            <p>
+              CTOX runs as a durable agent system around a machine or service:
+              it plans work, continues interrupted missions, routes communication,
+              supervises context, and drives execution until the operational task
+              is actually closed.
+            </p>
+          </div>
+
+          <div class="capability-lines" aria-label="CTOX capabilities">
+            <div>
+              <b>Long-running work</b>
+              <span>Mission state, queues, schedules, watchdogs, and follow-ups survive beyond a single agent turn.</span>
+            </div>
+            <div>
+              <b>Host control</b>
+              <span>Built for build, DevOps, infrastructure, browser, web, and verification workflows on real systems.</span>
+            </div>
+            <div>
+              <b>Desktop entry point</b>
+              <span>The desktop app gives users a guided local surface and installs the CTOX CLI from inside the product.</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="platforms" aria-labelledby="platforms-title">
+        <div class="section-inner">
+          <p class="section-kicker">Desktop binaries</p>
+          <h2 id="platforms-title">One release layout for macOS, Windows, and Linux.</h2>
+
+          <div class="platform-grid">
+            <div class="platform-list">
+              <div class="platform-row">
+                <b>macOS</b>
+                <p>Separate Apple Silicon and Intel DMGs so users download the native build.</p>
+              </div>
+              <div class="platform-row">
+                <b>Windows</b>
+                <p>A signed-ready MSI package path for the CTOX Desktop app on x64 Windows.</p>
+              </div>
+              <div class="platform-row">
+                <b>Linux</b>
+                <p>A portable AppImage that keeps install friction low across common desktops.</p>
+              </div>
+            </div>
+
+            <div class="app-visual" aria-hidden="true">
+              <div class="terminal">
+                <div class="terminal-bar">
+                  <span class="dot"></span>
+                  <span class="dot"></span>
+                  <span class="dot"></span>
+                </div>
+                <pre>ctox desktop
+  <em>download</em> app
+  <em>install</em> cli
+  <em>connect</em> workspace
+  <em>run</em> missions</pre>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="install" aria-labelledby="install-title">
+        <div class="section-inner">
+          <div>
+            <p class="section-kicker">CLI installation</p>
+            <h2 id="install-title">Start with Desktop. Install CTOX CLI from there.</h2>
+            <p>
+              The desktop app is the main download surface. It guides the local CLI
+              installation so users do not need a separate terminal-first setup path.
+            </p>
+          </div>
+          <a class="final-link" href="https://github.com/metric-space-ai/ctox/releases/latest">
+            Open latest release
+          </a>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <div class="section-inner">
+        <span>CTOX Desktop downloads</span>
+        <span>metric-space-ai/ctox</span>
+      </div>
+    </footer>
+
+    <script>
+      const repo = "metric-space-ai/ctox";
+      const statusEl = document.querySelector("#release-status");
+      const downloads = [...document.querySelectorAll("[data-asset]")];
+
+      async function wireLatestRelease() {
+        try {
+          const response = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, {
+            headers: { Accept: "application/vnd.github+json" },
+          });
+          if (!response.ok) throw new Error(`GitHub API ${response.status}`);
+
+          const release = await response.json();
+          const assets = new Map((release.assets || []).map((asset) => [asset.name, asset]));
+          let ready = 0;
+
+          for (const link of downloads) {
+            const asset = assets.get(link.dataset.asset);
+            if (!asset) continue;
+            link.href = asset.browser_download_url;
+            const meta = link.querySelector("span");
+            meta.textContent = `${meta.textContent} · ${formatBytes(asset.size)}`;
+            ready += 1;
+          }
+
+          statusEl.textContent =
+            ready === downloads.length
+              ? `${release.tag_name} is ready for all desktop platforms.`
+              : `${release.tag_name} is live; desktop assets are still being published.`;
+        } catch {
+          statusEl.textContent = "Latest release links are available on GitHub.";
+        }
+      }
+
+      function formatBytes(bytes) {
+        if (!Number.isFinite(bytes) || bytes <= 0) return "download";
+        const units = ["B", "KB", "MB", "GB"];
+        let value = bytes;
+        let unit = 0;
+        while (value >= 1024 && unit < units.length - 1) {
+          value /= 1024;
+          unit += 1;
+        }
+        return `${value.toFixed(value >= 10 || unit === 0 ? 0 : 1)} ${units[unit]}`;
+      }
+
+      wireLatestRelease();
+    </script>
+  </body>
+</html>

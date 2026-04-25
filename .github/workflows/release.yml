@@ -21,7 +21,7 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact: ctox-desktop-macos-arm64
-          - os: macos-13
+          - os: macos-15-intel
             target: x86_64-apple-darwin
             artifact: ctox-desktop-macos-x64
 
@@ -112,7 +112,7 @@ jobs:
           sudo apt-get install -y \
             libgtk-3-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
             libxkbcommon-dev libssl-dev libfontconfig1-dev pkg-config \
-            fuse libfuse2
+            fuse libfuse2 imagemagick
 
       - name: Build desktop app
         working-directory: desktop
@@ -131,14 +131,15 @@ jobs:
 
           cp desktop/target/release/ctox-desktop AppDir/usr/bin/
           cp desktop/packaging/linux/ctox-desktop.desktop AppDir/usr/share/applications/
-          cp desktop/CTOX_app_icon.png AppDir/usr/share/icons/hicolor/256x256/apps/ctox-desktop.png
+          convert desktop/CTOX_app_icon.png -resize 256x256 ctox-desktop.png
+          cp ctox-desktop.png AppDir/usr/share/icons/hicolor/256x256/apps/ctox-desktop.png
 
           # Create AppImage
           export OUTPUT="ctox-desktop-linux-x64.AppImage"
           ./linuxdeploy-x86_64.AppImage \
             --appdir AppDir \
             --desktop-file desktop/packaging/linux/ctox-desktop.desktop \
-            --icon-file desktop/CTOX_app_icon.png \
+            --icon-file ctox-desktop.png \
             --output appimage
 
       - name: Upload artifact
@@ -218,9 +219,12 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact: ctox-macos-arm64
-          - os: macos-13
+          - os: macos-15-intel
             target: x86_64-apple-darwin
             artifact: ctox-macos-x64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: ctox-windows-x64
 
     runs-on: ${{ matrix.os }}
     name: CTOX CLI — ${{ matrix.artifact }}
@@ -249,7 +253,8 @@ jobs:
       - name: Build CTOX
         run: cargo build --locked --release --target ${{ matrix.target }}
 
-      - name: Package runtime bundle
+      - name: Package runtime bundle (Unix)
+        if: runner.os != 'Windows'
         run: |
           mkdir -p bundle/target/release
           cp target/${{ matrix.target }}/release/ctox bundle/target/release/
@@ -259,6 +264,18 @@ jobs:
           cd bundle && tar czf ../${{ matrix.artifact }}.tar.gz .
           cd .. && shasum -a 256 ${{ matrix.artifact }}.tar.gz > ${{ matrix.artifact }}.tar.gz.sha256
 
+      - name: Package runtime bundle (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force bundle\target\release | Out-Null
+          Copy-Item "target\${{ matrix.target }}\release\ctox.exe" "bundle\target\release\"
+          Copy-Item -Path "skills" -Destination "bundle\skills" -Recurse
+          Copy-Item -Path "install.sh", "LICENSE", "NOTICE" -Destination "bundle\"
+          Compress-Archive -Path "bundle\*" -DestinationPath "${{ matrix.artifact }}.zip" -Force
+          $hash = (Get-FileHash "${{ matrix.artifact }}.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  ${{ matrix.artifact }}.zip" | Set-Content "${{ matrix.artifact }}.zip.sha256" -NoNewline
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -266,6 +283,9 @@ jobs:
           path: |
             ${{ matrix.artifact }}.tar.gz
             ${{ matrix.artifact }}.tar.gz.sha256
+            ${{ matrix.artifact }}.zip
+            ${{ matrix.artifact }}.zip.sha256
+          if-no-files-found: error
 
   release:
     needs: [build-desktop-macos, build-desktop-linux, build-desktop-windows, build-ctox]
