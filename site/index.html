@@ -5,9 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta
       name="description"
-      content="Download the CTOX desktop app for macOS, Windows, and Linux."
+      content="Download CTOX CLI and learn how its persistent agent runtime differs from ordinary coding agents."
     />
-    <title>CTOX Desktop</title>
+    <title>CTOX CLI</title>
     <link rel="icon" href="assets/ctox-app-icon.png" />
     <link rel="preload" href="assets/ctox-full-logo.png" as="image" />
     <style>
@@ -43,6 +43,17 @@
 
       a {
         color: inherit;
+      }
+
+      code {
+        font-family: "SFMono-Regular", ui-monospace, "Cascadia Code", monospace;
+        font-size: 0.92em;
+      }
+
+      .what code,
+      .platform-row code {
+        padding: 0.12em 0.32em;
+        background: #edf2f8;
       }
 
       .page {
@@ -304,6 +315,39 @@
         line-height: 1.55;
       }
 
+      .compare {
+        background: #f5f7fb;
+        border-top: 1px solid var(--line);
+        border-bottom: 1px solid var(--line);
+      }
+
+      .compare-list {
+        display: grid;
+        gap: 1px;
+        margin-top: 46px;
+        background: var(--line);
+        border: 1px solid var(--line);
+      }
+
+      .compare-row {
+        display: grid;
+        grid-template-columns: 250px 1fr;
+        gap: 28px;
+        padding: 26px;
+        background: #fff;
+      }
+
+      .compare-row b {
+        font-size: 18px;
+      }
+
+      .compare-row p {
+        margin: 0;
+        color: #424955;
+        font-size: 18px;
+        line-height: 1.48;
+      }
+
       .app-visual {
         position: relative;
         min-height: 420px;
@@ -386,6 +430,17 @@
         line-height: 1.45;
       }
 
+      .install code {
+        color: #fff;
+        background: rgba(255, 255, 255, 0.12);
+        padding: 0.12em 0.32em;
+      }
+
+      .release-actions {
+        display: grid;
+        gap: 18px;
+      }
+
       .final-link {
         display: inline-flex;
         align-items: center;
@@ -407,6 +462,19 @@
         background: #e6f7fc;
         transform: translateY(-3px);
         outline: none;
+      }
+
+      .desktop-links {
+        display: grid;
+        gap: 9px;
+        color: rgba(249, 251, 255, 0.72);
+        font-size: 14px;
+        line-height: 1.35;
+      }
+
+      .desktop-links a {
+        text-decoration-thickness: 1px;
+        text-underline-offset: 3px;
       }
 
       footer {
@@ -452,6 +520,7 @@
         .download-strip,
         .what-layout,
         .platform-grid,
+        .compare-row,
         .install .section-inner {
           grid-template-columns: 1fr;
         }
@@ -502,6 +571,11 @@
           gap: 8px;
         }
 
+        .compare-row {
+          gap: 10px;
+          padding: 22px;
+        }
+
         .capability-lines div {
           grid-template-columns: 1fr;
           gap: 8px;
@@ -530,28 +604,29 @@
         <div class="hero-inner">
           <div class="hero-copy">
             <img class="brand-mark" src="assets/ctox-full-logo.png" alt="" />
-            <h1 id="hero-title">Desktop control for CTOX.</h1>
+            <h1 id="hero-title">CTOX CLI keeps agent work alive.</h1>
             <p class="lead">
-              CTOX is an autonomous technical control layer for hosts, services,
-              and long-running infrastructure work.
+              Start a local service, submit work from the terminal, and let CTOX
+              keep the queue, context, review state, and follow-up after a single
+              agent turn would normally be over.
             </p>
 
-            <nav class="download-strip" aria-label="Desktop downloads">
-              <a class="download" data-asset="ctox-desktop-macos-arm64.dmg" href="https://github.com/metric-space-ai/ctox/releases/latest">
+            <nav class="download-strip" aria-label="CTOX CLI downloads">
+              <a class="download" data-asset="ctox-macos-arm64.tar.gz" href="https://github.com/metric-space-ai/ctox/releases/latest">
                 <strong>macOS Apple Silicon</strong>
-                <span>DMG for M-series Macs</span>
+                <span>CLI archive for M-series Macs</span>
               </a>
-              <a class="download" data-asset="ctox-desktop-macos-x64.dmg" href="https://github.com/metric-space-ai/ctox/releases/latest">
+              <a class="download" data-asset="ctox-macos-x64.tar.gz" href="https://github.com/metric-space-ai/ctox/releases/latest">
                 <strong>macOS Intel</strong>
-                <span>DMG for x64 Macs</span>
+                <span>CLI archive for x64 Macs</span>
               </a>
-              <a class="download" data-asset="ctox-desktop-windows-x64.msi" href="https://github.com/metric-space-ai/ctox/releases/latest">
-                <strong>Windows</strong>
-                <span>MSI installer for x64 PCs</span>
+              <a class="download" data-asset="ctox-linux-x64.tar.gz" href="https://github.com/metric-space-ai/ctox/releases/latest">
+                <strong>Linux x64</strong>
+                <span>CLI archive for Linux hosts</span>
               </a>
-              <a class="download" data-asset="ctox-desktop-linux-x64.AppImage" href="https://github.com/metric-space-ai/ctox/releases/latest">
-                <strong>Linux</strong>
-                <span>AppImage for x64 desktops</span>
+              <a class="download" data-asset="ctox-windows-x64.zip" href="https://github.com/metric-space-ai/ctox/releases/latest">
+                <strong>Windows x64</strong>
+                <span>CLI ZIP for Windows PCs</span>
               </a>
             </nav>
 
@@ -567,27 +642,27 @@
         <div class="section-inner what-layout">
           <div class="what-copy">
             <p class="section-kicker">What CTOX is</p>
-            <h2 id="what-title">Persistent autonomy for technical operations.</h2>
+            <h2 id="what-title">A CLI daemon around agent turns.</h2>
             <p>
-              CTOX runs as a durable agent system around a machine or service:
-              it plans work, continues interrupted missions, routes communication,
-              supervises context, and drives execution until the operational task
-              is actually closed.
+              CTOX is not primarily a desktop app. It is a command-line runtime:
+              start the service with <code>ctox start</code>, send work with
+              <code>ctox chat</code>, and let the service decide whether to run,
+              queue, review, block, or continue that work later.
             </p>
           </div>
 
           <div class="capability-lines" aria-label="CTOX capabilities">
             <div>
-              <b>Long-running work</b>
-              <span>Mission state, queues, schedules, watchdogs, and follow-ups survive beyond a single agent turn.</span>
+              <b>Service first</b>
+              <span>The CLI talks to a persistent local service instead of treating every prompt as a disposable process.</span>
             </div>
             <div>
-              <b>Host control</b>
-              <span>Built for build, DevOps, infrastructure, browser, web, and verification workflows on real systems.</span>
+              <b>Durable state</b>
+              <span>Queue items, plans, schedules, governance events, secrets, continuity, and mission state live in <code>runtime/ctox.sqlite3</code>.</span>
             </div>
             <div>
-              <b>Desktop entry point</b>
-              <span>The desktop app gives users a guided local surface and installs the CTOX CLI from inside the product.</span>
+              <b>Execution slices</b>
+              <span>Work is leased, executed through the embedded Codex harness, reviewed, persisted, and followed up when it is not actually done.</span>
             </div>
           </div>
         </div>
@@ -595,22 +670,22 @@
 
       <section class="platforms" aria-labelledby="platforms-title">
         <div class="section-inner">
-          <p class="section-kicker">Desktop binaries</p>
-          <h2 id="platforms-title">One release layout for macOS, Windows, and Linux.</h2>
+          <p class="section-kicker">How it feels in use</p>
+          <h2 id="platforms-title">You operate CTOX from the terminal, but it behaves like a running service.</h2>
 
           <div class="platform-grid">
             <div class="platform-list">
               <div class="platform-row">
-                <b>macOS</b>
-                <p>Separate Apple Silicon and Intel DMGs so users download the native build.</p>
+                <b>Submit</b>
+                <p><code>ctox chat</code>, queue items, plans, schedules, tickets, and communication channels all feed the same service loop.</p>
               </div>
               <div class="platform-row">
-                <b>Windows</b>
-                <p>A signed-ready MSI package path for the CTOX Desktop app on x64 Windows.</p>
+                <b>Coordinate</b>
+                <p>CTOX tracks what is pending, leased, blocked, failed, handled, or waiting for owner approval.</p>
               </div>
               <div class="platform-row">
-                <b>Linux</b>
-                <p>A portable AppImage that keeps install friction low across common desktops.</p>
+                <b>Resume</b>
+                <p>Context health, compaction, continuity refreshes, and mission sync keep long work from depending on one perfect chat transcript.</p>
               </div>
             </div>
 
@@ -621,12 +696,34 @@
                   <span class="dot"></span>
                   <span class="dot"></span>
                 </div>
-                <pre>ctox desktop
-  <em>download</em> app
-  <em>install</em> cli
-  <em>connect</em> workspace
-  <em>run</em> missions</pre>
+                <pre>ctox start
+ctox chat "ship the release" --wait
+ctox queue list --status pending
+ctox plan tick
+ctox runtime switch &lt;model&gt; quality</pre>
               </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="compare" aria-labelledby="compare-title">
+        <div class="section-inner">
+          <p class="section-kicker">Compared with agent CLIs</p>
+          <h2 id="compare-title">CTOX is the runtime around the worker.</h2>
+
+          <div class="compare-list">
+            <div class="compare-row">
+              <b>Codex-style agents</b>
+              <p>They are strongest at an interactive turn: inspect a repo, edit files, run commands, explain the result. CTOX keeps that kind of turn, but wraps it in a service, queue, database, watchdogs, and recovery rules.</p>
+            </div>
+            <div class="compare-row">
+              <b>Claude Code, OpenCode, OpenClaw, Hermes-style tools</b>
+              <p>The difference is not another chat box. CTOX is built for lifecycle: intake, lease, execute, review, persist evidence, schedule follow-up, and continue when the first slice is not enough.</p>
+            </div>
+            <div class="compare-row">
+              <b>CTOX CLI</b>
+              <p>The CLI is the operator interface for that runtime: start or stop the daemon, switch models, inspect status, repair queues, manage plans, store secrets, and keep autonomous work bounded by explicit governance.</p>
             </div>
           </div>
         </div>
@@ -635,23 +732,33 @@
       <section class="install" aria-labelledby="install-title">
         <div class="section-inner">
           <div>
-            <p class="section-kicker">CLI installation</p>
-            <h2 id="install-title">Start with Desktop. Install CTOX CLI from there.</h2>
+            <p class="section-kicker">Release binaries</p>
+            <h2 id="install-title">Download the CLI. Use Desktop only if you want a guided local surface.</h2>
             <p>
-              The desktop app is the main download surface. It guides the local CLI
-              installation so users do not need a separate terminal-first setup path.
+              Releases include native CLI archives for macOS, Linux, and Windows.
+              Desktop installers are published too, but the core product is
+              <code>ctox</code> on your command line.
             </p>
           </div>
-          <a class="final-link" href="https://github.com/metric-space-ai/ctox/releases/latest">
-            Open latest release
-          </a>
+          <div class="release-actions">
+            <a class="final-link" href="https://github.com/metric-space-ai/ctox/releases/latest">
+              Open latest release
+            </a>
+            <div class="desktop-links" aria-label="Desktop downloads">
+              <span>Optional Desktop installers:</span>
+              <a data-asset="ctox-desktop-macos-arm64.dmg" href="https://github.com/metric-space-ai/ctox/releases/latest">macOS Apple Silicon DMG</a>
+              <a data-asset="ctox-desktop-macos-x64.dmg" href="https://github.com/metric-space-ai/ctox/releases/latest">macOS Intel DMG</a>
+              <a data-asset="ctox-desktop-windows-x64.msi" href="https://github.com/metric-space-ai/ctox/releases/latest">Windows x64 MSI</a>
+              <a data-asset="ctox-desktop-linux-x64.AppImage" href="https://github.com/metric-space-ai/ctox/releases/latest">Linux x64 AppImage</a>
+            </div>
+          </div>
         </div>
       </section>
     </main>
 
     <footer>
       <div class="section-inner">
-        <span>CTOX Desktop downloads</span>
+        <span>CTOX CLI downloads</span>
         <span>metric-space-ai/ctox</span>
       </div>
     </footer>
@@ -677,14 +784,18 @@
             if (!asset) continue;
             link.href = asset.browser_download_url;
             const meta = link.querySelector("span");
-            meta.textContent = `${meta.textContent} · ${formatBytes(asset.size)}`;
+            if (meta) {
+              meta.textContent = `${meta.textContent} · ${formatBytes(asset.size)}`;
+            } else {
+              link.textContent = `${link.textContent} · ${formatBytes(asset.size)}`;
+            }
             ready += 1;
           }
 
           statusEl.textContent =
             ready === downloads.length
-              ? `${release.tag_name} is ready for all desktop platforms.`
-              : `${release.tag_name} is live; desktop assets are still being published.`;
+              ? `${release.tag_name} is ready for all listed downloads.`
+              : `${release.tag_name} is live; some assets are still being published.`;
         } catch {
           statusEl.textContent = "Latest release links are available on GitHub.";
         }
