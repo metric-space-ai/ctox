@@ -676,6 +676,7 @@ pub fn allowed_transition_catalog(
             (SentBackForRework, Drafting),
         ],
         FounderCommunication => &[
+            (InboundObserved, InboundObserved),
             (InboundObserved, ContextBuilt),
             (ContextBuilt, ReplyNeeded),
             (ContextBuilt, NoResponseNeeded),

@@ -63,6 +63,7 @@ struct TableInfo {
 #[derive(Debug, Clone)]
 struct ColumnInfo {
     name: String,
+    decl_type: String,
     pk_rank: i64,
 }
 
@@ -2107,6 +2108,7 @@ fn table_columns(conn: &Connection, table_name: &str) -> Result<Vec<ColumnInfo>>
         .query_map([], |row| {
             Ok(ColumnInfo {
                 name: row.get(1)?,
+                decl_type: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
                 pk_rank: row.get(5)?,
             })
         })?
@@ -2202,7 +2204,7 @@ fn json_object_expr<'a>(
     let parts = columns
         .flat_map(|column| {
             let value = if let Some(alias) = alias {
-                format!("{alias}.{}", quote_ident(&column.name))
+                json_safe_column_expr(alias, column)
             } else {
                 "NULL".to_string()
             };
@@ -2211,6 +2213,18 @@ fn json_object_expr<'a>(
         .collect::<Vec<_>>()
         .join(", ");
     format!("json_object({parts})")
+}
+
+fn json_safe_column_expr(alias: &str, column: &ColumnInfo) -> String {
+    let column_ref = format!("{alias}.{}", quote_ident(&column.name));
+    if column.decl_type.to_ascii_uppercase().contains("BLOB") {
+        return format!(
+            "CASE WHEN {column_ref} IS NULL THEN NULL ELSE '[blob:' || length({column_ref}) || ':' || lower(hex({column_ref})) || ']' END"
+        );
+    }
+    format!(
+        "CASE WHEN typeof({column_ref}) = 'blob' THEN '[blob:' || length({column_ref}) || ':' || lower(hex({column_ref})) || ']' ELSE {column_ref} END"
+    )
 }
 
 fn entity_type_for_table(table_name: &str) -> String {
@@ -2441,6 +2455,19 @@ fn upsert_default_core_transition_rules(conn: &Connection) -> Result<()> {
             json!({"core_transition": false}),
         ),
         (
+            "communication-sync-telemetry",
+            28,
+            Some("communication_sync_runs"),
+            None,
+            None,
+            None,
+            "telemetry",
+            "CommunicationSyncRun",
+            "P3Housekeeping",
+            "telemetry.communication.sync",
+            json!({"core_transition": false}),
+        ),
+        (
             "communication-message",
             30,
             Some("message"),
@@ -2612,6 +2639,58 @@ fn upsert_default_core_transition_rules(conn: &Connection) -> Result<()> {
             "P1RuntimeSafety",
             "telemetry.core.transition.proof",
             json!({"core_transition": false, "records_state_machine_proofs": true}),
+        ),
+        (
+            "payload-store-telemetry",
+            830,
+            Some("ctox_payload_store"),
+            None,
+            None,
+            None,
+            "telemetry",
+            "PayloadStore",
+            "P3Housekeeping",
+            "telemetry.payload.store",
+            json!({"core_transition": false}),
+        ),
+        (
+            "operating-health-telemetry",
+            840,
+            Some("operating_health_snapshots"),
+            None,
+            None,
+            None,
+            "telemetry",
+            "OperatingHealthSnapshot",
+            "P3Housekeeping",
+            "telemetry.operating_health.snapshot",
+            json!({"core_transition": false}),
+        ),
+        (
+            "governance-telemetry",
+            850,
+            Some("governance_mechanisms"),
+            None,
+            None,
+            None,
+            "telemetry",
+            "GovernanceMechanism",
+            "P3Housekeeping",
+            "telemetry.governance.mechanism",
+            json!({"core_transition": false}),
+        ),
+        (
+            "mission-state-telemetry",
+            860,
+            Some("mission_states"),
+            None,
+            None,
+            None,
+            "telemetry",
+            "MissionState",
+            "P3Housekeeping",
+            "telemetry.mission.state",
+            json!({"core_transition": false}),
         ),
         (
             "sqlite-read-telemetry",
@@ -3211,10 +3290,12 @@ fn infer_communication_transition(
     after: &Value,
     haystack: &str,
 ) -> Option<csm::CoreTransitionRequest> {
-    let to_state = map_communication_state(event.to_state.as_deref())
-        .or_else(|| communication_state_from_activity(&event.activity, haystack))?;
+    let to_state = communication_state_from_row(event, after)
+        .or_else(|| map_communication_state(event.to_state.as_deref()))
+        .or_else(|| communication_state_from_activity(&event.activity))?;
     let from_state =
         map_communication_state(event.from_state.as_deref()).unwrap_or_else(|| match to_state {
+            csm::CoreState::InboundObserved => csm::CoreState::InboundObserved,
             csm::CoreState::ContextBuilt => csm::CoreState::InboundObserved,
             csm::CoreState::ReplyNeeded | csm::CoreState::NoResponseNeeded => {
                 csm::CoreState::ContextBuilt
@@ -3530,7 +3611,9 @@ fn infer_knowledge_transition(
 
 fn map_communication_state(raw: Option<&str>) -> Option<csm::CoreState> {
     match normalize_state(raw).as_deref()? {
-        "inbound" | "inbound_observed" | "observed" => Some(csm::CoreState::InboundObserved),
+        "inbound" | "inbound_observed" | "observed" | "received" | "receive" | "inbox" => {
+            Some(csm::CoreState::InboundObserved)
+        }
         "context" | "context_built" => Some(csm::CoreState::ContextBuilt),
         "reply_needed" | "needs_reply" | "pending_reply" => Some(csm::CoreState::ReplyNeeded),
         "no_response_needed" | "no_reply_needed" => Some(csm::CoreState::NoResponseNeeded),
@@ -3554,15 +3637,60 @@ fn map_communication_state(raw: Option<&str>) -> Option<csm::CoreState> {
     }
 }
 
-fn communication_state_from_activity(activity: &str, haystack: &str) -> Option<csm::CoreState> {
+fn communication_state_from_row(
+    event: &ProcessEventForStateMachine,
+    row: &Value,
+) -> Option<csm::CoreState> {
+    let direction = json_string(row, &["direction"]).map(|value| normalize_text(&value));
+    let folder = json_string(row, &["folder_hint", "folder", "mailbox"])
+        .map(|value| normalize_text(&value));
+    let message_key = json_string(row, &["message_key", "mailbox_key", "external_key"])
+        .map(|value| normalize_text(&value));
+    let status = json_string(row, &["status", "state", "route_status", "delivery_status"])
+        .and_then(|value| map_communication_state(Some(&value)));
+
+    if matches!(direction.as_deref(), Some("inbound"))
+        || matches!(folder.as_deref(), Some("inbox"))
+        || message_key
+            .as_deref()
+            .is_some_and(|value| value.contains("::inbox::"))
+    {
+        return Some(csm::CoreState::InboundObserved);
+    }
+
+    if matches!(direction.as_deref(), Some("outbound")) {
+        if matches!(folder.as_deref(), Some("sent") | Some("sent_mail")) {
+            return Some(csm::CoreState::Sent);
+        }
+        if matches!(folder.as_deref(), Some("outbox") | Some("queued") | Some("send_queue")) {
+            return Some(csm::CoreState::Sending);
+        }
+        if let Some(status) = status {
+            return Some(status);
+        }
+    }
+
+    if event.table_name.contains("communication_messages")
+        && matches!(
+            event.to_state.as_deref().map(normalize_text).as_deref(),
+            Some("received") | Some("inbound") | Some("inbox")
+        )
+    {
+        return Some(csm::CoreState::InboundObserved);
+    }
+
+    None
+}
+
+fn communication_state_from_activity(activity: &str) -> Option<csm::CoreState> {
     let activity = activity.to_ascii_lowercase();
-    if activity.contains("send") || haystack.contains("send") {
+    if activity.contains("send") {
         Some(csm::CoreState::Sending)
-    } else if activity.contains("sent") || haystack.contains("sent") {
+    } else if activity.contains("sent") {
         Some(csm::CoreState::Sent)
-    } else if activity.contains("review") || haystack.contains("review") {
+    } else if activity.contains("review") {
         Some(csm::CoreState::Reviewing)
-    } else if activity.contains("draft") || haystack.contains("draft") {
+    } else if activity.contains("draft") {
         Some(csm::CoreState::Drafting)
     } else {
         None
@@ -3800,12 +3928,15 @@ fn normalize_state(raw: Option<&str>) -> Option<String> {
     if value.is_empty() || value == "row_present" {
         return None;
     }
-    Some(
-        value
-            .replace('-', "_")
-            .replace(' ', "_")
-            .to_ascii_lowercase(),
-    )
+    Some(normalize_text(value))
+}
+
+fn normalize_text(value: &str) -> String {
+    value
+        .trim()
+        .replace('-', "_")
+        .replace(' ', "_")
+        .to_ascii_lowercase()
 }
 
 fn json_string(row: &Value, keys: &[&str]) -> Option<String> {
@@ -4571,6 +4702,179 @@ mod tests {
         assert_eq!(account_telemetry, 1);
         assert_eq!(thread_telemetry, 1);
         assert_eq!(routing_core, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn inbound_communication_messages_do_not_trip_founder_send_review_gate() -> Result<()> {
+        let dir = tempdir()?;
+        let db_path = dir.path().join("ctox.sqlite3");
+        let conn = Connection::open(&db_path)?;
+        conn.execute_batch(
+            r#"
+            CREATE TABLE communication_messages (
+                message_key TEXT PRIMARY KEY,
+                direction TEXT NOT NULL,
+                folder_hint TEXT NOT NULL,
+                status TEXT NOT NULL,
+                sender_address TEXT,
+                recipient_addresses_json TEXT,
+                body_text TEXT
+            );
+            CREATE TABLE communication_sync_runs (
+                run_key TEXT PRIMARY KEY,
+                channel TEXT NOT NULL,
+                folder_hint TEXT NOT NULL,
+                ok INTEGER NOT NULL
+            );
+            "#,
+        )?;
+        ensure_process_mining_schema(&conn, &db_path)?;
+        conn.execute(
+            r#"
+            INSERT INTO communication_messages (
+                message_key, direction, folder_hint, status, sender_address,
+                recipient_addresses_json, body_text
+            )
+            VALUES (
+                'jami:ctox::INBOX::m1', 'inbound', 'INBOX', 'received',
+                'founder@example.com', '["ctox"]', 'Bitte Stand an Michael senden'
+            )
+            "#,
+            [],
+        )?;
+        conn.execute(
+            "UPDATE communication_messages SET status = 'received' WHERE message_key = 'jami:ctox::INBOX::m1'",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO communication_sync_runs (run_key, channel, folder_hint, ok) VALUES ('sync-1', 'jami', 'INBOX', 1)",
+            [],
+        )?;
+
+        let summary = scan_core_state_machine_violations(&conn, 100)?;
+        let rejected = summary
+            .get("rejected")
+            .and_then(Value::as_u64)
+            .unwrap_or_default();
+        let send_gate_violations: i64 = conn.query_row(
+            r#"
+            SELECT COUNT(*)
+            FROM ctox_pm_state_violations
+            WHERE violation_code IN (
+                'founder_send_requires_review_audit',
+                'founder_send_body_hash_mismatch',
+                'founder_send_recipient_hash_mismatch'
+            )
+            "#,
+            [],
+            |row| row.get(0),
+        )?;
+        let inbound_core: i64 = conn.query_row(
+            r#"
+            SELECT COUNT(*)
+            FROM ctox_pm_core_transition_audit
+            WHERE rule_id = 'communication-message'
+              AND entity_type = 'FounderCommunication'
+              AND to_state = 'InboundObserved'
+              AND accepted = 1
+            "#,
+            [],
+            |row| row.get(0),
+        )?;
+        let sync_telemetry: i64 = conn.query_row(
+            r#"
+            SELECT COUNT(*)
+            FROM ctox_pm_event_transition_coverage
+            WHERE rule_id = 'communication-sync-telemetry'
+              AND mapping_kind = 'telemetry'
+            "#,
+            [],
+            |row| row.get(0),
+        )?;
+
+        assert_eq!(rejected, 0, "{summary}");
+        assert_eq!(send_gate_violations, 0);
+        assert!(inbound_core > 0);
+        assert_eq!(sync_telemetry, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_housekeeping_tables_have_explicit_telemetry_coverage() -> Result<()> {
+        let dir = tempdir()?;
+        let db_path = dir.path().join("ctox.sqlite3");
+        let conn = Connection::open(&db_path)?;
+        conn.execute_batch(
+            r#"
+            CREATE TABLE ctox_payload_store (
+                payload_key TEXT PRIMARY KEY,
+                payload BLOB,
+                updated_at TEXT
+            );
+            CREATE TABLE operating_health_snapshots (
+                snapshot_id TEXT PRIMARY KEY,
+                status TEXT NOT NULL
+            );
+            CREATE TABLE governance_mechanisms (
+                mechanism_id TEXT PRIMARY KEY,
+                enabled INTEGER NOT NULL
+            );
+            CREATE TABLE mission_states (
+                state_id TEXT PRIMARY KEY,
+                state_json TEXT
+            );
+            "#,
+        )?;
+        ensure_process_mining_schema(&conn, &db_path)?;
+        conn.execute(
+            "INSERT INTO ctox_payload_store (payload_key, payload, updated_at) VALUES ('p1', x'01', 'now')",
+            [],
+        )?;
+        conn.execute(
+            "UPDATE ctox_payload_store SET updated_at = 'later' WHERE payload_key = 'p1'",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO operating_health_snapshots (snapshot_id, status) VALUES ('h1', 'ok')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO governance_mechanisms (mechanism_id, enabled) VALUES ('g1', 1)",
+            [],
+        )?;
+        conn.execute(
+            "UPDATE governance_mechanisms SET enabled = 0 WHERE mechanism_id = 'g1'",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO mission_states (state_id, state_json) VALUES ('m1', '{}')",
+            [],
+        )?;
+
+        let summary = scan_core_state_machine_violations(&conn, 100)?;
+        let unmapped = summary
+            .get("unmapped")
+            .and_then(Value::as_u64)
+            .unwrap_or_default();
+        let telemetry_count: i64 = conn.query_row(
+            r#"
+            SELECT COUNT(*)
+            FROM ctox_pm_event_transition_coverage
+            WHERE mapping_kind = 'telemetry'
+              AND rule_id IN (
+                  'payload-store-telemetry',
+                  'operating-health-telemetry',
+                  'governance-telemetry',
+                  'mission-state-telemetry'
+              )
+            "#,
+            [],
+            |row| row.get(0),
+        )?;
+
+        assert_eq!(unmapped, 0, "{summary}");
+        assert_eq!(telemetry_count, 6);
         Ok(())
     }
 
