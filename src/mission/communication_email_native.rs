@@ -3441,7 +3441,10 @@ mod tests {
     #[test]
     fn synced_message_direction_keeps_external_sender_as_inbound() {
         assert_eq!(
-            synced_message_direction("Michael Welsch <michael.welsch@metric-space.ai>", "cto1@metric-space.ai"),
+            synced_message_direction(
+                "Michael Welsch <michael.welsch@metric-space.ai>",
+                "cto1@metric-space.ai"
+            ),
             "inbound"
         );
     }

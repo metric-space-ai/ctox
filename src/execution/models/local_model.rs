@@ -68,7 +68,10 @@ pub struct LocalModelRequest<'a> {
 pub fn resolve_local_model_backend(req: LocalModelRequest<'_>) -> Option<LocalModelBackend> {
     let model = req.request_model.trim();
     if is_qwen35_27b(model) {
-        return Some(qwen35_27b_q4km_dflash_backend(req.root, req.transport_endpoint));
+        return Some(qwen35_27b_q4km_dflash_backend(
+            req.root,
+            req.transport_endpoint,
+        ));
     }
     None
 }

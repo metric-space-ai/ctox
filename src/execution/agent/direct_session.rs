@@ -229,7 +229,10 @@ impl PersistentSession {
             .map_err(|err| anyhow::anyhow!("load config.toml: {err}"))?;
 
         let auth_manager = if let Some(ref key) = api_key {
-            AuthManager::from_runtime_auth(ctox_core::CodexAuth::from_api_key(key), codex_home.clone())
+            AuthManager::from_runtime_auth(
+                ctox_core::CodexAuth::from_api_key(key),
+                codex_home.clone(),
+            )
         } else {
             AuthManager::shared(
                 codex_home.clone(),
@@ -308,12 +311,12 @@ impl PersistentSession {
         }
         let config = Arc::new(
             ConfigBuilder::default()
-            .cli_overrides(cli_overrides)
-            .harness_overrides(overrides)
-            .cloud_requirements(cloud_requirements.clone())
-            .build()
-            .await
-            .map_err(|err| anyhow::anyhow!("config build: {err}"))?,
+                .cli_overrides(cli_overrides)
+                .harness_overrides(overrides)
+                .cloud_requirements(cloud_requirements.clone())
+                .build()
+                .await
+                .map_err(|err| anyhow::anyhow!("config build: {err}"))?,
         );
         let thread_manager = Arc::new(ThreadManager::new(
             config.as_ref(),

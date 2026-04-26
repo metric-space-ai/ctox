@@ -1540,13 +1540,13 @@ fn resolve_managed_engine_binary(
     // retired in the Candle-engine removal; any request-model that
     // doesn't resolve to a local backend ends up here and bails
     // clearly rather than trying to spawn a deleted binary.
-    if let Some(backend) = super::local_model::resolve_local_model_backend(
-        super::local_model::LocalModelRequest {
+    if let Some(backend) =
+        super::local_model::resolve_local_model_backend(super::local_model::LocalModelRequest {
             request_model: launch_spec.request_model.as_str(),
             transport_endpoint: launch_spec.transport_endpoint.as_deref(),
             root,
-        },
-    ) {
+        })
+    {
         if backend.binary.exists() {
             return Ok(backend.binary);
         }
@@ -1660,13 +1660,13 @@ fn spawn_managed_engine_backend(
     // spawn with *that* server's CLI and skip the legacy
     // TOML-config flow entirely. Those binaries take their model
     // paths + socket as plain CLI args; no runtime config file.
-    if let Some(backend) = super::local_model::resolve_local_model_backend(
-        super::local_model::LocalModelRequest {
+    if let Some(backend) =
+        super::local_model::resolve_local_model_backend(super::local_model::LocalModelRequest {
             request_model: launch_spec.request_model.as_str(),
             transport_endpoint: launch_spec.transport_endpoint.as_deref(),
             root,
-        },
-    ) {
+        })
+    {
         let mut command = Command::new(&engine_binary);
         for arg in &backend.args {
             command.arg(arg);

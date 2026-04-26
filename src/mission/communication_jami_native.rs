@@ -2407,14 +2407,14 @@ fn optional_flag<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
 
 #[cfg(test)]
 mod tests {
+    use super::conversation_id_from_thread_key;
     use super::inbound_matches_existing_outbound;
+    use super::normalize_jami_uri_for_match;
     use super::require_explicit_jami_identity;
     use super::store_inbound_message;
-    use super::conversation_id_from_thread_key;
+    use super::thread_key_for_conversation;
     use super::JamiInboundMessage;
     use super::JamiOptions;
-    use super::normalize_jami_uri_for_match;
-    use super::thread_key_for_conversation;
     use crate::mission::channels::{open_channel_db, upsert_communication_message, UpsertMessage};
     use serde_json::json;
     use std::path::PathBuf;
@@ -2472,16 +2472,16 @@ mod tests {
             speech_model: String::new(),
             speech_voice: String::new(),
         };
-        let err = require_explicit_jami_identity(&options).unwrap_err().to_string();
+        let err = require_explicit_jami_identity(&options)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("CTO_JAMI_ACCOUNT_ID"));
     }
 
     #[test]
     fn jami_sync_skips_outbound_self_echo_duplicates() {
-        let temp_root = std::env::temp_dir().join(format!(
-            "ctox-jami-self-echo-test-{}",
-            std::process::id()
-        ));
+        let temp_root =
+            std::env::temp_dir().join(format!("ctox-jami-self-echo-test-{}", std::process::id()));
         let db_path = temp_root.join("runtime/ctox.sqlite3");
         let raw_dir = temp_root.join("runtime/communication/jami/raw");
         let mut conn = open_channel_db(&db_path).expect("open db");
@@ -2560,7 +2560,10 @@ mod tests {
         };
         let known = store_inbound_message(&mut conn, &options, &inbound, &json!({}))
             .expect("store inbound");
-        assert!(known, "self-echo duplicates should not be persisted as fresh inbound");
+        assert!(
+            known,
+            "self-echo duplicates should not be persisted as fresh inbound"
+        );
         let inbox_count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM communication_messages WHERE direction = 'inbound'",
