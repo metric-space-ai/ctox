@@ -2627,6 +2627,8 @@ fn diagnose_queue(conn: &Connection) -> Result<Value> {
     let status_counts = grouped_counts(conn, "communication_routing_state", "route_status")?;
     let (completed_count, avg_seconds, fastest, slowest) =
         routing_duration_stats(conn, "communication_routing_state", "message_key")?;
+    let negative_duration_count =
+        negative_routing_duration_count(conn, "communication_routing_state")?;
     let stuck_leased = if table_exists(conn, "communication_routing_state")? {
         conn.query_row(
             r#"
@@ -2657,6 +2659,13 @@ fn diagnose_queue(conn: &Connection) -> Result<Value> {
             "message": "Queue rows exist but no completed leased-to-acknowledged duration can be measured."
         }));
     }
+    if negative_duration_count > 0 {
+        findings.push(json!({
+            "severity": "warning",
+            "code": "negative_queue_durations",
+            "message": "Queue rows contain acknowledgement timestamps before lease timestamps; those rows are excluded from latency statistics."
+        }));
+    }
     let status = status_from_findings(&findings);
     Ok(subsystem_json(
         "queue_processing",
@@ -2666,6 +2675,7 @@ fn diagnose_queue(conn: &Connection) -> Result<Value> {
             "routing_rows": routing_rows,
             "status_counts": status_counts,
             "stuck_leased": stuck_leased,
+            "negative_duration_rows": negative_duration_count,
             "completed_with_duration": completed_count,
             "average_seconds": avg_seconds,
             "fastest": fastest,
@@ -2929,12 +2939,18 @@ fn routing_duration_stats(
     if !table_exists(conn, table_name)? {
         return Ok((0, None, Value::Null, Value::Null));
     }
+    if !table_has_column(conn, table_name, "leased_at")?
+        || !table_has_column(conn, table_name, "acked_at")?
+    {
+        return Ok((0, None, Value::Null, Value::Null));
+    }
     let table = quote_ident(table_name);
     let (count, avg): (i64, Option<f64>) = conn.query_row(
         &format!(
             "SELECT COUNT(*), AVG((julianday(acked_at) - julianday(leased_at)) * 86400.0)
              FROM {table}
-             WHERE leased_at IS NOT NULL AND acked_at IS NOT NULL"
+             WHERE leased_at IS NOT NULL AND acked_at IS NOT NULL
+               AND ((julianday(acked_at) - julianday(leased_at)) * 86400.0) >= 0.0"
         ),
         [],
         |row| Ok((row.get(0)?, row.get(1)?)),
@@ -2950,10 +2966,17 @@ fn duration_extreme(
     key_column: &str,
     direction: &str,
 ) -> Result<Value> {
+    if !table_has_column(conn, table_name, key_column)?
+        || !table_has_column(conn, table_name, "leased_at")?
+        || !table_has_column(conn, table_name, "acked_at")?
+    {
+        return Ok(Value::Null);
+    }
     let sql = format!(
         "SELECT {key}, ((julianday(acked_at) - julianday(leased_at)) * 86400.0) AS seconds
          FROM {table}
          WHERE leased_at IS NOT NULL AND acked_at IS NOT NULL
+           AND ((julianday(acked_at) - julianday(leased_at)) * 86400.0) >= 0.0
          ORDER BY seconds {direction}
          LIMIT 1",
         key = quote_ident(key_column),
@@ -2970,6 +2993,23 @@ fn duration_extreme(
     } else {
         Ok(Value::Null)
     }
+}
+
+fn negative_routing_duration_count(conn: &Connection, table_name: &str) -> Result<i64> {
+    if !table_exists(conn, table_name)?
+        || !table_has_column(conn, table_name, "leased_at")?
+        || !table_has_column(conn, table_name, "acked_at")?
+    {
+        return Ok(0);
+    }
+    let sql = format!(
+        "SELECT COUNT(*)
+         FROM {table}
+         WHERE leased_at IS NOT NULL AND acked_at IS NOT NULL
+           AND ((julianday(acked_at) - julianday(leased_at)) * 86400.0) < 0.0",
+        table = quote_ident(table_name),
+    );
+    Ok(conn.query_row(&sql, [], |row| row.get(0))?)
 }
 
 fn ticket_self_work_duration_stats(conn: &Connection) -> Result<(i64, Option<f64>, Value, Value)> {
@@ -3228,6 +3268,32 @@ fn upsert_default_core_transition_rules(conn: &Connection) -> Result<()> {
             "P2MissionDelivery",
             "telemetry.ticket.self_work_assignment",
             json!({"core_transition": false}),
+        ),
+        (
+            "skill-bundle-telemetry",
+            18,
+            Some("=ctox_skill_bundles"),
+            None,
+            None,
+            None,
+            "telemetry",
+            "SkillBundle",
+            "P1RuntimeSafety",
+            "telemetry.skill.bundle",
+            json!({"core_transition": false, "records_runtime_skill_registry": true}),
+        ),
+        (
+            "skill-file-telemetry",
+            19,
+            Some("=ctox_skill_files"),
+            None,
+            None,
+            None,
+            "telemetry",
+            "SkillFile",
+            "P1RuntimeSafety",
+            "telemetry.skill.file",
+            json!({"core_transition": false, "records_runtime_skill_registry": true}),
         ),
         (
             "communication-founder",
