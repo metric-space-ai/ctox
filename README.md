@@ -64,7 +64,7 @@ to override hardware detection or seed a specific local model:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/metric-space-ai/ctox/main/install.sh \
-  | bash -s -- --backend=metal --model=google/gemma-4-E4B-it
+  | bash -s -- --backend=metal
 ```
 
 First-install overrides:
@@ -72,7 +72,7 @@ First-install overrides:
 | Flag | Environment variable | When to use it |
 | --- | --- | --- |
 | `--backend=<cuda\|metal\|cpu>` | `CTOX_BACKEND` | Forces the local inference backend. Leave it unset unless auto-detection is wrong or you intentionally want CPU fallback. `cuda` is for NVIDIA Linux hosts, `metal` is for Apple Silicon macOS, and `cpu` is the slow fallback. |
-| `--model=<model>` | `CTOX_MODEL` | Seeds the default local model profile. This is not required for API usage and can be changed later in the TUI. |
+| `--model=<model>` | `CTOX_MODEL` | Seeds the default local model profile. Do not use this during a first install unless you know the exact model id is supported by the current build; model selection can be changed later in the TUI. |
 
 Advanced installer options:
 
