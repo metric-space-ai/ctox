@@ -6140,6 +6140,7 @@ fn mission_is_internal_harness_or_forensics(mission: &lcm::MissionStateRecord) -
     (haystack.contains("harness")
         || haystack.contains("forensics")
         || haystack.contains("process-mining")
+        || haystack.contains("smoke")
         || haystack.contains("smoke-test")
         || haystack.contains("smoke compliance"))
         && (haystack.contains("codex")
@@ -8964,6 +8965,38 @@ mod tests {
                 turn_loop::CHAT_CONVERSATION_ID,
                 lcm::ContinuityKind::Focus,
                 "## Status\n+ Mission: Interner Codex harness smoke for process-mining forensics.\n+ Mission state: active\n+ Continuation mode: continuous\n+ Trigger intensity: hot\n## Blocker\n+ Current blocker: Pending explicit smoke-compliance persistence confirmation.\n## Next\n+ Next slice: persist one harness_forensics knowledge-put note.\n## Done / Gate\n+ Done gate: harness_forensics knowledge-put note exists.\n+ Closure confidence: low\n",
+            )
+            .expect("failed to update focus");
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        {
+            let mut shared = state.lock().expect("service state poisoned");
+            shared.last_progress_epoch_secs = current_epoch_secs().saturating_sub(120);
+        }
+
+        monitor_mission_continuity(&root, &state).expect("mission watcher should succeed");
+
+        let tasks = channels::list_queue_tasks(&root, &["pending".to_string()], 10)
+            .expect("failed to list queue tasks");
+        assert!(tasks.is_empty());
+    }
+
+    #[test]
+    fn mission_watcher_skips_codex_noop_smoke_missions() {
+        let root = temp_root("ctox-mission-watcher-codex-noop-smoke");
+        std::fs::create_dir_all(root.join("runtime")).expect("failed to create runtime dir");
+        let engine = lcm::LcmEngine::open(
+            &root.join("runtime/ctox.sqlite3"),
+            lcm::LcmConfig::default(),
+        )
+        .expect("failed to open lcm");
+        let _ = engine
+            .continuity_init_documents(turn_loop::CHAT_CONVERSATION_ID)
+            .expect("failed to init continuity");
+        engine
+            .continuity_apply_diff(
+                turn_loop::CHAT_CONVERSATION_ID,
+                lcm::ContinuityKind::Focus,
+                "## Status\n+ Mission: Codex internal no-op smoke after watchdog fix\n+ Mission state: active\n+ Continuation mode: continuous\n+ Trigger intensity: hot\n## Blocker\n+ Current blocker: none\n## Next\n+ Next slice: Codex internal no-op smoke after watchdog fix\n## Done / Gate\n+ Done gate: only close the mission when current evidence clearly satisfies the gate\n+ Closure confidence: low\n",
             )
             .expect("failed to update focus");
         let state = Arc::new(Mutex::new(SharedState::default()));
