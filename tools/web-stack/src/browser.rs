@@ -271,12 +271,20 @@ pub fn capture_browser_transport(root: &Path, request: &BrowserCaptureRequest) -
     let stderr_file = fs::File::create(&chrome_stderr_path)
         .with_context(|| format!("failed to create {}", chrome_stderr_path.display()))?;
 
-    let mut chrome = Command::new(&browser_executable)
+    let headless_without_gui = looks_headless_without_browser_session();
+    let chrome_launch_args =
+        capture_chrome_extra_args(headless_without_gui, cfg!(target_os = "linux"));
+    let mut chrome_command = Command::new(&browser_executable);
+    chrome_command
         .arg(format!("--user-data-dir={}", profile_dir.display()))
         .arg("--remote-debugging-address=127.0.0.1")
         .arg("--remote-debugging-port=0")
         .arg("--no-first-run")
-        .arg("--no-default-browser-check")
+        .arg("--no-default-browser-check");
+    for arg in &chrome_launch_args {
+        chrome_command.arg(arg);
+    }
+    let mut chrome = chrome_command
         .arg(format!("--log-net-log={}", netlog_path.display()))
         .arg("--net-log-capture-mode=Everything")
         .arg("about:blank")
@@ -367,8 +375,41 @@ pub fn capture_browser_transport(root: &Path, request: &BrowserCaptureRequest) -
             "reference_dir".to_string(),
             Value::String(reference_dir.display().to_string()),
         );
+        object.insert(
+            "headless_without_gui".to_string(),
+            Value::Bool(headless_without_gui),
+        );
+        object.insert(
+            "chrome_launch_args".to_string(),
+            Value::Array(
+                chrome_launch_args
+                    .into_iter()
+                    .map(|arg| Value::String(arg.to_string()))
+                    .collect(),
+            ),
+        );
     }
     Ok(payload)
+}
+
+fn looks_headless_without_browser_session() -> bool {
+    if cfg!(target_os = "macos") {
+        return false;
+    }
+    std::env::var_os("DISPLAY").is_none() && std::env::var_os("WAYLAND_DISPLAY").is_none()
+}
+
+fn capture_chrome_extra_args(headless_without_gui: bool, linux: bool) -> Vec<&'static str> {
+    let mut args = Vec::new();
+    if headless_without_gui {
+        args.push("--headless=new");
+        args.push("--disable-gpu");
+        args.push("--disable-dev-shm-usage");
+    }
+    if linux {
+        args.push("--no-sandbox");
+    }
+    args
 }
 
 fn build_doctor_report(reference_dir: &Path) -> Result<BrowserDoctorReport> {
@@ -1141,6 +1182,7 @@ fn unix_ts() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::build_browser_runner_script;
+    use super::capture_chrome_extra_args;
     use super::ensure_reference_package_json;
     use super::parse_browser_automation_source;
     use super::parse_node_major_version;
@@ -1195,5 +1237,21 @@ mod tests {
         assert_eq!(parse_node_major_version("v12.22.9"), Some(12));
         assert_eq!(parse_node_major_version("18.19.1"), Some(18));
         assert_eq!(parse_node_major_version("not-a-version"), None);
+    }
+
+    #[test]
+    fn capture_chrome_uses_headless_args_without_gui() {
+        let args = capture_chrome_extra_args(true, true);
+        assert!(args.contains(&"--headless=new"));
+        assert!(args.contains(&"--disable-gpu"));
+        assert!(args.contains(&"--disable-dev-shm-usage"));
+        assert!(args.contains(&"--no-sandbox"));
+    }
+
+    #[test]
+    fn capture_chrome_keeps_headed_mode_when_gui_exists() {
+        let args = capture_chrome_extra_args(false, false);
+        assert!(!args.contains(&"--headless=new"));
+        assert!(!args.contains(&"--disable-gpu"));
     }
 }
