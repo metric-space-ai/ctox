@@ -139,6 +139,33 @@ The helper scripts are the current local implementations of these capabilities.
 - GPU: `nvidia-smi`
 - Service state: `systemctl`, `journalctl`, container logs
 
+## Harness-Internal Signals
+
+For harness-internal degradation (the agent's own behaviour, not host load),
+host-level tools see nothing. Use these in addition:
+
+```sh
+ctox harness-mining drift --window 1000 --threshold 5.0
+ctox harness-mining sojourn --limit 30
+ctox harness-mining conformance --window 2000 --fitness-threshold 0.95
+```
+
+What to read:
+
+- `drift`: `drift_detected: true` is the alarm. `top_drift_activities[]`
+  identifies which activities changed regime — e.g. a sudden burst of
+  `ctox_skill_files.DELETE` is a regression after a skill change.
+- `sojourn`: `states[].p95_seconds` ranks hot states by dwell time. A state
+  whose p95 grew sharply since the last assessment is a saturation candidate
+  even if no host metric is elevated.
+- `conformance`: `fitness_ok: false` means the harness is acting outside its
+  declared spec. Treat this as `Status: degraded` even when host metrics are
+  green — drift inside the spec is invisible at the OS level.
+
+The split is intentional: host signals catch infrastructure failures, harness
+signals catch the agent's own degeneration. A reliability assessment that
+reads only one half is incomplete.
+
 ## CTOX Integration
 
 - For recurring health checks, use `ctox schedule add --skill "reliability-ops"`.

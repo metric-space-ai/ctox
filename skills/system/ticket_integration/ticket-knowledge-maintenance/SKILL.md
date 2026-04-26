@@ -64,6 +64,28 @@ Ingest monitoring evidence:
 ctox ticket monitoring-ingest --system "<system>" --snapshot-json '<json>'
 ```
 
+Inspect ticket-lifecycle variants:
+
+```sh
+ctox harness-mining variants --entity-type ticket --cluster --limit 20
+```
+
+What to read:
+
+- `pareto.variants_for_80pct`: how many distinct ticket-lifecycle paths
+  account for 80% of cases. A small number (1–3) means the desk is
+  well-shaped; a large number means the closure procedure is unstable —
+  often a glossary or service-catalog gap that creates inconsistent
+  triage.
+- `variants[].activities`: the actual sequence of states a ticket walks
+  through. Surprising transitions (e.g. a ticket reopened many times) hint
+  at missing knowledge — phrase the maintenance work item against the
+  variant, not against an individual ticket.
+- `clusters[]`: near-variants merged by edit distance. A cluster with many
+  member-variants but few cases each indicates *bespoke* handling — the
+  desk lacks a stable shape there. Promote the dominant variant to the
+  source skill via `dataset-skill-creator` and tighten the binding.
+
 ## Operating Pattern
 
 1. Refresh the mirrored desk and inspect the current knowledge domains.

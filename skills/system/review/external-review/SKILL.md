@@ -126,6 +126,31 @@ curl -i <critical-route>
 
 Use a browser for owner-visible or public surfaces whenever possible.
 
+### Harness conformance and constraint coverage
+
+```bash
+ctox harness-mining conformance --window 2000 --fitness-threshold 0.95
+ctox harness-mining multiperspective --limit 30
+```
+
+What to read for the verdict:
+
+- `conformance.fitness_ok`: if `false`, the harness is acting outside its
+  declared spec. This alone is sufficient to set `MISSION_STATE: UNHEALTHY`
+  even if the public surface looks fine. Quote the failing buckets in
+  `EVIDENCE`.
+- `conformance.trigger.failing_buckets[]`: each row names an out-of-catalog
+  transition (e.g. `ticket: queued → closed` skipping `verified`). Treat
+  this as a `FAILED_GATES` entry — it is a Spec-vs-Reality drift the
+  reviewed slice has either caused or inherited.
+- `multiperspective.evidence_presence`: per evidence-key presence ratio
+  across recent proofs. A `review_audit_key` presence ratio < 1.0 on any
+  protected entity type is a critical gate failure for owner-visible work.
+- `multiperspective.constraint_coverage[].acceptance_ratio`: rejected →
+  accepted ratio per (entity_type, lane, from→to). Use this to spot review
+  bottlenecks — a transition with high rejected count and low acceptance
+  ratio is a procedural break, not a one-off bug.
+
 ## Public Launch Failure Conditions
 
 Return FAIL when any of these are true:

@@ -30,6 +30,20 @@ ctox follow-up evaluate --goal "<goal>" --result "<latest result>" [--step-title
 - `blocked_on_external`: an external dependency blocks progress
 - `needs_replan`: assumptions or requirements changed enough that the existing path is no longer reliable
 
+## Harness Signals to Consult
+
+Before classifying a turn as `done` or `needs_followup`, run:
+
+```sh
+ctox harness-mining stuck-cases --min-attempts 5 --limit 20
+```
+
+Read `cases[].entity_id` and `rejected_attempts`. If any entity touched by this
+turn appears in the list, the turn is not `done` even if the visible work
+finished — it is `needs_followup` with an `--open-item "stop retry-loop on
+<entity_id> (<N> rejected attempts)"`. A turn that closes the foreground task
+while leaving a hot retry-loop downstream is misclassified by definition.
+
 ## Workflow
 
 1. Finish the meaningful execution slice first.

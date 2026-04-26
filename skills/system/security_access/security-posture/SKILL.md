@@ -38,10 +38,45 @@ These scripts are open helper resources. Read them before relying on them in a t
 - `security.query`
 - `security.bootstrap_findings`
 
+## Harness Compliance Surface
+
+The host posture (sockets, sudo, firewall) does not capture how the agent
+itself enforces compliance constraints inside the harness. Use these to
+audit the harness layer:
+
+```sh
+ctox harness-mining multiperspective --limit 30
+```
+
+What to read for findings:
+
+- `evidence_presence[].evidence_keys[]`: per evidence-key presence ratio
+  on protected entity types (e.g. `FounderCommunication`). A
+  `review_audit_key` presence ratio < 1.0 across recent proofs is a
+  critical finding — the protected lane has been entered without the
+  required audit evidence. Tie it to the affected `entity_type` and
+  capture the ratio as evidence.
+- `constraint_coverage[].dominant_violation_code`: per (entity, lane,
+  from→to) the most frequent violation code. `founder_send_body_hash_mismatch`
+  or `founder_send_requires_review_audit` appearing in any lane with
+  `rejected > 0` is a posture finding, not a one-off bug — the audit
+  contract is being missed at scale.
+- `rule_firing[]`: declared transition rules ranked by `audit_count`.
+  `enabled: true` with `audit_count: 0` over a non-trivial window means
+  a declared compliance rule never matched live traffic — either the
+  policy is stale or a real evasion path is bypassing it. Both cases
+  are posture findings.
+
+Treat any non-zero presence-ratio violation on a protected entity as
+critical; treat dead rules as warning unless the protected scope is
+financial or owner-visible.
+
 ## Workflow
 
 1. Define the security surface.
 2. Capture raw evidence for accounts, listeners, firewall, certs, permissions, and hardening.
+   For harness-internal posture, also run `harness-mining multiperspective`
+   and treat the three sub-reports above as first-class evidence.
 3. Read the raw output and tie every finding to exact evidence.
 4. Persist a `compliance_snapshot`, concrete `security_finding` rows, and a `remediation_plan`.
 5. Hand real mutations to `change_lifecycle`.

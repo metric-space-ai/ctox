@@ -38,13 +38,46 @@ They are open helper resources. Read them, patch them, or bypass them when the i
 - `incident.query`
 - `incident.bootstrap_case`
 
+## Harness Mining for Hypothesis Generation
+
+When the incident touches harness behaviour (queue stalls, communication
+failures, repeated state-machine rejections), use these CLIs to derive
+hypotheses from the trigger ledger and preventive proofs rather than guessing:
+
+```sh
+ctox harness-mining causal --violation-code "<code>" --lookback 5 --limit 10
+ctox harness-mining alignment --entity-type "<type>" --limit 10
+```
+
+What to read:
+
+- `causal`: `by_violation_code[].predecessor_activity_lift[]`. The activity
+  with the highest `lift` (and `support` ≥ 3) is your strongest causal
+  hypothesis — record it as a `hypothesis` with the lift value as its evidence
+  weight, not as a confirmed cause.
+- `alignment`: `alignments[].moves[]`. Every `kind: "model"` move marks a step
+  the spec demanded but the trace skipped — that is a concrete reparation
+  hypothesis. Use `from_state` and `to_state` from those moves to phrase the
+  mitigation, e.g. "force `<entity>` through `<missing_state>` before
+  `<observed_state>`".
+
+A `causal` lift > 5.0 with `support` ≥ 5 is strong enough to anchor the
+mitigation. Below that, treat it as a working theory only.
+
 ## Workflow
 
 1. State the symptom, affected scope, and urgency.
 2. Capture first evidence before acting.
 3. Build a small hypothesis set.
+   For state-machine-shaped incidents, run `harness-mining causal` and
+   `harness-mining alignment` first — they convert raw violation counts into
+   ranked predecessor hypotheses and concrete reparation moves.
 4. Prefer the smallest mitigation that matches the evidence.
+   If alignment proposes a missing intermediate state, prefer mutating the
+   spec or the producer — do not silently force the entity through.
 5. Persist an `incident_case`, `hypothesis_set`, `mitigation_action`, and `status_update`.
+   Include the top three predecessor activities from `causal` (with their
+   lift) inside `hypothesis_set` evidence.
 6. If a real mutation is needed, hand the next slice to `change_lifecycle`.
 
 ## Operator Feedback Contract

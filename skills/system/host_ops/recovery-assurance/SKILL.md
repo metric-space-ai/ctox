@@ -38,10 +38,29 @@ They are open helper resources.
 - `recovery.query`
 - `recovery.bootstrap_assurance`
 
+## Harness Reparation Hypotheses
+
+When the recoverable scope includes harness-internal flows (queue, communication,
+ticket lifecycles), use alignment-based conformance to derive a concrete
+restoration path before designing a runbook:
+
+```sh
+ctox harness-mining alignment --entity-type "<type>" --limit 5
+```
+
+Read `alignments[].moves[]`. Every `kind: "model"` entry tells you a state
+the spec demands but the trace skipped. The minimum-cost sequence of model
+moves between `from_state` and `to_state` is the smallest restoration path.
+Use it to phrase the recovery procedure: "to restore `<entity>` from state
+`<observed>` to `<target>`, force-traverse `<missing_states>`". Treat
+`alignment_cost` as the recovery distance metric.
+
 ## Workflow
 
 1. Name what must be recoverable.
 2. Capture scheduler, artifact, snapshot-tool, and restore evidence.
+   For harness-internal entities, also run `harness-mining alignment` to
+   capture the missing-state sequence as part of the restore evidence.
 3. Distinguish artifact existence from restore proof.
 4. Persist `backup_coverage`, `restore_evidence`, `rpo_gap`, and `dr_runbook`.
 5. Hand real backup mutations to `change_lifecycle`.

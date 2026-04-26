@@ -58,9 +58,32 @@ ctox queue complete --message-key "<message_key>" [--note "<text>"]
 ctox queue cancel --message-key "<message_key>" [--reason "<why>"]
 ```
 
+### Read Harness Signals Before Reordering
+
+```sh
+ctox harness-mining stuck-cases --min-attempts 5 --limit 20
+ctox harness-mining sojourn --entity-type queue --limit 20
+ctox harness-mining variants --entity-type queue --limit 10
+```
+
+What to look at:
+
+- `cases[].entity_id` + `rejected_attempts` from `stuck-cases` — if a queue item has
+  ≥5 rejected preventive proofs, treat it as a retry-loop. Do not `release` it; either
+  `block` with `--reason "harness-mining: <N> retries"` or `fail` it.
+- `states[].p95_seconds` from `sojourn` — a queue state with extreme p95 indicates a
+  bottleneck downstream of that state. Reordering queue items will not fix it; surface
+  it as escalation instead.
+- `pareto.variants_for_80pct` from `variants` — if 80% of queue traces collapse into
+  just 1–2 variants, the queue is doing one repetitive thing. New queue work that
+  fits an existing variant is likely redundant; prefer `--parent-message-key` linking
+  over creating a fresh queue item.
+
 ## Operating Pattern
 
-1. Read the queue if ordering or existing work matters.
+1. Read the queue if ordering or existing work matters. If you are about to release,
+   reprioritize, or reorder live items, first run `ctox harness-mining stuck-cases`
+   to make sure none of the candidates are hot retry-loops.
 2. Add follow-up work explicitly with `ctox queue add`.
 3. If a task should be decomposed first, use `ctox plan draft` and then enqueue only the concrete slices that should really execute.
 4. Prefer one coherent queue task per execution slice.

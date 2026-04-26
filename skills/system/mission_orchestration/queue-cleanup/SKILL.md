@@ -45,6 +45,18 @@ Use these tools directly:
 - `ctox queue restore --message-key <key> [--priority <urgent|high|normal|low>] [--note <text>]`
 - `ctox ticket self-work-show --work-id <id>`
 
+Harness signals to consult before acting:
+
+- `ctox harness-mining stuck-cases --min-attempts 5 --limit 50`
+  Returns entities whose preventive layer kept rejecting them. Read `cases[].entity_id`,
+  `rejected_attempts`, `last_attempted_to_state`, and `dominant_violation_codes_json`.
+  An entity with ≥5 rejected attempts is a retry-loop suspect — block it before spilling
+  so the loop stops, do not just spill.
+- `ctox harness-mining sojourn --limit 50`
+  Returns per-state holding-time percentiles. Read `states[].state` together with
+  `p95_seconds` and `p99_seconds`. A queue-related state with extreme p95 is a bottleneck,
+  not a flooding source — pause/throttle the producer rather than draining the consumer.
+
 If needed for diagnosis, inspect SQLite state directly:
 
 - `sqlite3 runtime/ctox.sqlite3`
@@ -54,23 +66,32 @@ If needed for diagnosis, inspect SQLite state directly:
 
 1. Confirm queue pressure.
    Use `ctox status` and identify whether `pending_count` is rising, stuck, or dominated by one source.
-2. Identify the flooding source.
+2. Surface retry-loops before any other cleanup.
+   Run `ctox harness-mining stuck-cases --min-attempts 5 --limit 50`. For each returned
+   `entity_id`, derive its `message_key` and `ctox queue block --message-key <key>
+   --reason "harness-mining: <N> rejected attempts at <to_state>"`. This stops the loop
+   before you risk spilling work that will just re-flood after restore.
+3. Identify the flooding source.
    Check `ctox schedule list` and `ctox queue list` for repeated task sources, duplicated prompts, or stuck follow-up work.
-3. Identify explicit spill candidates.
+   If `harness-mining sojourn` reports a queue state with p95 > 600s, treat the producer
+   for that state as a flooding suspect.
+4. Identify explicit spill candidates.
    Use `ctox queue spill-candidates` to find lower-risk or already blocked work that can leave the hot queue without being lost.
-4. Contain the producer.
+5. Contain the producer.
    If one schedule or queue source is clearly flooding the system, pause or block that source before doing anything else.
-5. Preserve valid work.
+6. Preserve valid work.
    Do not cancel unrelated operator work just because the queue is busy.
-6. Minimize duplicates.
+7. Minimize duplicates.
    Prefer blocking, pausing, or cancelling only the repeated or clearly redundant work.
-7. Spill durable work into the internal ticket system if the queue cannot safely hold all valid work at once.
+8. Spill durable work into the internal ticket system if the queue cannot safely hold all valid work at once.
    Use `ctox queue spill` for work that must stay visible and durable but should temporarily leave the hot queue. Restore it with `ctox queue restore` when capacity returns.
    Use `ctox queue spills` to review what is currently parked outside the hot queue.
-8. Restore a safe backlog.
+9. Restore a safe backlog.
    The queue should return to a size that CTOX can drain safely.
-9. Report what changed.
-   State what was paused, blocked, cancelled, preserved, and what still needs follow-up.
+10. Report what changed.
+    State what was paused, blocked, cancelled, preserved, and what still needs follow-up.
+    Include a `Harness signals` line listing any blocked retry-loops with their
+    `dominant_violation_codes_json`, so the operator sees what was contained.
 
 ## Guardrails
 

@@ -44,16 +44,44 @@ They are inspectable helpers, not hidden authority. Read or patch them when the 
 - `change.query`
 - `change.bootstrap_plan`
 
+## Post-Change Drift Verification
+
+Every executed change shifts the harness's behaviour distribution. Use drift
+detection to make that shift visible — a "successful" change that triggers a
+drift alarm is a regression candidate, not a closed change:
+
+```sh
+ctox harness-mining drift --window 1000 --threshold 5.0
+```
+
+Read `chi_squared_activity.drift_detected` and `top_drift_activities[]`.
+
+- If `drift_detected: false` after the change has settled (≥1000 events): the
+  change is behaviour-stable. Record this in `change_result.verification`.
+- If `drift_detected: true` and the top drift activities involve tables you
+  changed: that is the expected first-order effect of the change. Note it,
+  do not alarm.
+- If `drift_detected: true` and the top drift activities are unrelated to
+  your change scope: that is a side effect. Treat the change as `blocked`
+  and create a recovery slice — even if the primary success condition is met.
+
+Run drift detection both **before** the change (baseline) and **after** the
+change has produced ≥1000 fresh events (verification). The pre/post pair is
+the change's behaviour-stability evidence.
+
 ## Workflow
 
 1. State the change target and success condition.
 2. Capture current state first.
+   This includes a pre-change baseline `harness-mining drift` snapshot.
 3. Read the helper scripts if the change shape is unusual.
 4. Gather dry-run evidence with `change_collect.py` or `change_capture_run.py`.
 5. Read the raw output, especially diffs, service state, and verification output.
 6. Persist captures first, then persist a `change_request`, `config_snapshot`, `change_plan`, `rollback_bundle`, and only an executed `change_result` if a change really happened.
 7. Keep the change slice narrow.
 8. If rollback is unclear, stop before mutation.
+9. Post-change: rerun `harness-mining drift` once ≥1000 fresh events have
+   accumulated. Attach the diff to `change_result.verification`.
 
 ## Operator Feedback Contract
 
