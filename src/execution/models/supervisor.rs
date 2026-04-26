@@ -1527,6 +1527,19 @@ fn is_qwen35_vision_request_model(model: &str) -> bool {
     model.starts_with("Qwen/Qwen3.5-") || model.starts_with("Qwen/Qwen3.6-")
 }
 
+fn ctox_engine_can_serve_auxiliary_model(root: &Path, request_model: &str) -> bool {
+    let binary = engine::discover_source_layout_paths(root).model_runtime_binary;
+    binary.is_file()
+        && engine::model_profile_for_model(request_model)
+            .map(|profile| {
+                matches!(
+                    profile.family_profile.launcher_mode.trim(),
+                    "embedding" | "speech" | "vision"
+                )
+            })
+            .unwrap_or(false)
+}
+
 fn resolve_managed_engine_binary(
     root: &Path,
     launch_spec: &ManagedBackendLaunchSpec,
@@ -1566,13 +1579,17 @@ fn resolve_managed_engine_binary(
                 .unwrap_or_else(|| "src/inference/models/<model>".to_string()),
         );
     }
+    let ctox_engine = engine::discover_source_layout_paths(root).model_runtime_binary;
+    if launch_spec.role != "chat"
+        && ctox_engine_can_serve_auxiliary_model(root, &launch_spec.request_model)
+    {
+        return Ok(ctox_engine);
+    }
     anyhow::bail!(
-        "no local inference backend registered for `{}`. The Candle-based \
-         ctox-engine subprocess backend was retired; add a per-model crate \
-         under src/inference/models/<model>/ and register it in \
-         `local_model::resolve_local_model_backend` to serve it locally, or \
-         configure this role against an external API provider.",
-        launch_spec.request_model
+        "no local inference backend registered for `{}` and ctox-engine is not available for role `{}` at {}. Add a per-model crate under src/inference/models/<model>/, install the ctox-engine auxiliary runtime, or configure this role against an external API provider.",
+        launch_spec.request_model,
+        launch_spec.role,
+        ctox_engine.display()
     )
 }
 
@@ -1763,6 +1780,7 @@ fn ensure_backend_process(
             root,
         })
         .is_none()
+        && !ctox_engine_can_serve_auxiliary_model(root, spec.request_model.as_str())
     {
         let pid_path = backend_pid_path(root, role);
         let _ = stop_process(root, pid_path);
@@ -4203,6 +4221,44 @@ mod tests {
         assert!(err
             .to_string()
             .contains("embedding backend requires ctox-engine"));
+    }
+
+    #[test]
+    fn auxiliary_embedding_uses_ctox_engine_when_installed() {
+        let root = temp_root("aux-embedding-ctox-engine");
+        let engine_binary = root.join("runtime/tools/model-runtime/bin/ctox-engine");
+        std::fs::create_dir_all(engine_binary.parent().unwrap()).unwrap();
+        std::fs::write(&engine_binary, "#!/bin/sh\nexit 0\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&engine_binary).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&engine_binary, perms).unwrap();
+        }
+
+        let launch_spec = ManagedBackendLaunchSpec {
+            version: 2,
+            role: "embedding".to_string(),
+            display_model: "Qwen/Qwen3-Embedding-0.6B [CPU]".to_string(),
+            request_model: "Qwen/Qwen3-Embedding-0.6B".to_string(),
+            port: 1237,
+            transport_endpoint: Some(
+                root.join("runtime/sockets/embedding.sock")
+                    .display()
+                    .to_string(),
+            ),
+            health_path: "/health".to_string(),
+            launcher_kind: "engine".to_string(),
+            compute_target: Some("cpu".to_string()),
+            visible_devices: None,
+            engine_config: ManagedEngineLaunchConfig::default(),
+        };
+
+        assert_eq!(
+            resolve_managed_engine_binary(&root, &launch_spec).unwrap(),
+            engine_binary
+        );
     }
 
     #[test]
