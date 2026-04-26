@@ -4539,6 +4539,9 @@ fn is_owner_visible_strategic_job(job: &QueuedPrompt) -> bool {
     if is_founder_or_owner_email_job(job) {
         return false;
     }
+    if is_internal_harness_or_forensics_job(job) {
+        return false;
+    }
     let haystack = format!(
         "{}\n{}\n{}\n{}\n{}",
         job.prompt,
@@ -4558,6 +4561,26 @@ fn is_owner_visible_strategic_job(job: &QueuedPrompt) -> bool {
         || haystack.contains("founder")
         || haystack.contains("buyer")
         || haystack.contains("customer")
+}
+
+fn is_internal_harness_or_forensics_job(job: &QueuedPrompt) -> bool {
+    let thread_key = job
+        .thread_key
+        .as_deref()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    if thread_key.starts_with("codex/")
+        || thread_key.starts_with("internal/")
+        || thread_key.contains("harness")
+        || thread_key.contains("process-mining")
+    {
+        return true;
+    }
+    let haystack = format!("{}\n{}\n{}", job.prompt, job.goal, job.preview).to_ascii_lowercase();
+    (haystack.contains("harness-smoke") || haystack.contains("process-mining"))
+        && (haystack.contains("keine externe kommunikation")
+            || haystack.contains("no external communication"))
 }
 
 fn queue_strategy_direction_pass(
@@ -9440,6 +9463,28 @@ mod tests {
         assert!(items[0]
             .body_text
             .contains("--thread-key kunstmen-supervisor"));
+    }
+
+    #[test]
+    fn internal_harness_smoke_does_not_reroute_to_strategy_setup() {
+        let root = temp_root("ctox-internal-harness-smoke-no-strategy-reroute");
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        let job = QueuedPrompt {
+            prompt: "Interner CTOX-Harness-Smoke-Test. Keine externe Kommunikation. Pruefe Process-Mining-Selbstdiagnose und Founder review warnings.".to_string(),
+            goal: "Process-mining harness smoke".to_string(),
+            preview: "Codex harness smoke: process mining and no external communication".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: None,
+            leased_message_keys: vec!["queue:system::smoke".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("codex/harness-live-smoke-20260426".to_string()),
+            workspace_root: None,
+            ticket_self_work_id: None,
+        };
+
+        let redirected = maybe_redirect_owner_visible_work_to_strategy_setup(&root, &state, &job)
+            .expect("internal harness smoke should not fail reroute check");
+        assert!(!redirected);
     }
 
     #[test]
