@@ -1920,7 +1920,7 @@ fn send_service_ipc_request(root: &Path, request: ServiceIpcRequest) -> Result<S
 #[cfg(unix)]
 fn service_ipc_timeout(request: &ServiceIpcRequest) -> Duration {
     match request {
-        ServiceIpcRequest::Status => Duration::from_secs(5),
+        ServiceIpcRequest::Status => Duration::from_secs(30),
         ServiceIpcRequest::ScrapeApi { .. } => Duration::from_millis(750),
         ServiceIpcRequest::ChatSubmit { .. } => Duration::from_secs(10),
         ServiceIpcRequest::Stop => Duration::from_secs(2),

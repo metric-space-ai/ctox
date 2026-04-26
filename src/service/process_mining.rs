@@ -2629,7 +2629,9 @@ fn diagnose_queue(conn: &Connection) -> Result<Value> {
         routing_duration_stats(conn, "communication_routing_state", "message_key")?;
     let negative_duration_count =
         negative_routing_duration_count(conn, "communication_routing_state")?;
-    let stuck_leased = if table_exists(conn, "communication_routing_state")? {
+    let stale_lease_cutoff = (chrono::Utc::now() - chrono::Duration::minutes(15))
+        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let active_leased = if table_exists(conn, "communication_routing_state")? {
         conn.query_row(
             r#"
             SELECT COUNT(*)
@@ -2644,12 +2646,28 @@ fn diagnose_queue(conn: &Connection) -> Result<Value> {
     } else {
         0
     };
+    let stuck_leased = if table_exists(conn, "communication_routing_state")? {
+        conn.query_row(
+            r#"
+            SELECT COUNT(*)
+            FROM communication_routing_state
+            WHERE route_status IN ('leased', 'running')
+              AND leased_at IS NOT NULL
+              AND leased_at < ?1
+              AND (acked_at IS NULL OR acked_at = '')
+            "#,
+            params![stale_lease_cutoff],
+            |row| row.get::<_, i64>(0),
+        )?
+    } else {
+        0
+    };
     let mut findings = Vec::new();
     if stuck_leased > 0 {
         findings.push(json!({
             "severity": "critical",
             "code": "stuck_queue_items",
-            "message": "Queue items are leased/running without acknowledgement."
+            "message": "Queue items are stale leased/running without acknowledgement."
         }));
     }
     if completed_count == 0 && routing_rows > 0 {
@@ -2674,7 +2692,9 @@ fn diagnose_queue(conn: &Connection) -> Result<Value> {
         json!({
             "routing_rows": routing_rows,
             "status_counts": status_counts,
+            "active_leased": active_leased,
             "stuck_leased": stuck_leased,
+            "stale_lease_cutoff": stale_lease_cutoff,
             "negative_duration_rows": negative_duration_count,
             "completed_with_duration": completed_count,
             "average_seconds": avg_seconds,
@@ -6220,6 +6240,94 @@ mod tests {
         );
         assert!(
             names.contains(&"schedules_and_commitments".to_string()),
+            "{report}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn queue_diagnosis_does_not_flag_fresh_active_lease_as_stuck() -> Result<()> {
+        let dir = tempdir()?;
+        let db_path = dir.path().join("ctox.sqlite3");
+        let conn = Connection::open(&db_path)?;
+        conn.execute_batch(
+            r#"
+            CREATE TABLE communication_routing_state (
+                message_key TEXT PRIMARY KEY,
+                route_status TEXT NOT NULL,
+                leased_at TEXT,
+                acked_at TEXT
+            );
+            "#,
+        )?;
+        let fresh = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        conn.execute(
+            "INSERT INTO communication_routing_state (message_key, route_status, leased_at, acked_at) VALUES ('fresh', 'leased', ?1, NULL)",
+            params![fresh],
+        )?;
+
+        let report = diagnose_queue(&conn)?;
+        let findings = report
+            .get("findings")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            !findings.iter().any(|finding| {
+                finding.get("code").and_then(Value::as_str) == Some("stuck_queue_items")
+            }),
+            "{report}"
+        );
+        assert_eq!(
+            report
+                .pointer("/metrics/active_leased")
+                .and_then(Value::as_i64),
+            Some(1),
+            "{report}"
+        );
+        assert_eq!(
+            report
+                .pointer("/metrics/stuck_leased")
+                .and_then(Value::as_i64),
+            Some(0),
+            "{report}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn queue_diagnosis_flags_only_stale_unacked_leases_as_stuck() -> Result<()> {
+        let dir = tempdir()?;
+        let db_path = dir.path().join("ctox.sqlite3");
+        let conn = Connection::open(&db_path)?;
+        conn.execute_batch(
+            r#"
+            CREATE TABLE communication_routing_state (
+                message_key TEXT PRIMARY KEY,
+                route_status TEXT NOT NULL,
+                leased_at TEXT,
+                acked_at TEXT
+            );
+            "#,
+        )?;
+        let stale = (chrono::Utc::now() - chrono::Duration::minutes(30))
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        conn.execute(
+            "INSERT INTO communication_routing_state (message_key, route_status, leased_at, acked_at) VALUES ('stale', 'leased', ?1, NULL)",
+            params![stale],
+        )?;
+
+        let report = diagnose_queue(&conn)?;
+        assert_eq!(
+            report.get("status").and_then(Value::as_str),
+            Some("critical"),
+            "{report}"
+        );
+        assert_eq!(
+            report
+                .pointer("/metrics/stuck_leased")
+                .and_then(Value::as_i64),
+            Some(1),
             "{report}"
         );
         Ok(())
