@@ -409,7 +409,7 @@ where
         turn_engine::assess_compaction_guard(&decision, compaction_result.as_ref());
     emit(&format!("compaction-guard {}", compaction_guard.summary));
     emit("persist-user-turn");
-    lcm::run_add_message(db_path, conversation_id, "user", prompt)
+    persist_lcm_message_with_retry(db_path, conversation_id, "user", prompt, &mut emit)
         .context("failed to persist user message into LCM")?;
     emit("snapshot-context");
     let snapshot = engine.snapshot(conversation_id)?;
@@ -468,7 +468,7 @@ where
             )?,
     };
     emit("persist-assistant-turn");
-    lcm::run_add_message(db_path, conversation_id, "assistant", &reply)?;
+    persist_lcm_message_with_retry(db_path, conversation_id, "assistant", &reply, &mut emit)?;
     // Detect durable state transitions triggered by the agent's tool calls
     // during this turn (self-work closed, knowledge entry added, focus
     // document replaced). These count as task boundaries and force a
@@ -570,6 +570,48 @@ where
     ));
     emit("turn-complete");
     Ok(reply)
+}
+
+fn persist_lcm_message_with_retry(
+    db_path: &Path,
+    conversation_id: i64,
+    role: &str,
+    content: &str,
+    emit: &mut dyn FnMut(&str),
+) -> Result<lcm::MessageRecord> {
+    let mut last_error = None;
+    for attempt in 1..=4 {
+        match lcm::run_add_message(db_path, conversation_id, role, content) {
+            Ok(record) => return Ok(record),
+            Err(err) => {
+                let summary = err.to_string();
+                last_error = Some(err);
+                if attempt == 4 {
+                    break;
+                }
+                emit(&format!(
+                    "persist-{role}-turn-retry attempt={attempt} error={}",
+                    clip_for_log(&summary, 160)
+                ));
+                std::thread::sleep(Duration::from_millis(250 * attempt as u64));
+            }
+        }
+    }
+    Err(last_error
+        .unwrap_or_else(|| anyhow::anyhow!("LCM message persistence failed without error")))
+}
+
+fn clip_for_log(value: &str, max_chars: usize) -> String {
+    let collapsed = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.chars().count() <= max_chars {
+        return collapsed;
+    }
+    let mut clipped = collapsed
+        .chars()
+        .take(max_chars.saturating_sub(1))
+        .collect::<String>();
+    clipped.push('…');
+    clipped
 }
 
 #[cfg(test)]
