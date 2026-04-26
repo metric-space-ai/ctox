@@ -3604,6 +3604,23 @@ fn upsert_default_core_transition_rules(conn: &Connection) -> Result<()> {
             json!({"active_requires_incident": true}),
         ),
         (
+            "scrape-subsystem-telemetry",
+            130,
+            Some("scrape_"),
+            None,
+            None,
+            None,
+            "telemetry",
+            "ScrapeTelemetry",
+            "P2MissionDelivery",
+            "telemetry.scrape.subsystem",
+            json!({
+                "core_transition": false,
+                "records_scrape_run": true,
+                "records_scrape_snapshot": true
+            }),
+        ),
+        (
             "turn-ledger",
             800,
             Some("ctox_turns"),
@@ -4319,7 +4336,7 @@ fn inferred_domain_state_for_preserving_update(
     }
     if event.table_name.contains("ticket") || event.table_name.contains("work_item") {
         return json_string(row, &["status", "state"])
-            .and_then(|value| map_ticket_state(Some(&value)));
+            .and_then(|value| map_ticket_state_for_event(event, Some(&value)));
     }
     if event.table_name.contains("commitment") {
         return json_string(row, &["status", "state"])
@@ -4497,15 +4514,16 @@ fn infer_ticket_transition(
     after: &Value,
     haystack: &str,
 ) -> Option<csm::CoreTransitionRequest> {
-    let to_state = map_ticket_state(event.to_state.as_deref())?;
-    let from_state = map_ticket_state(event.from_state.as_deref()).unwrap_or(match to_state {
-        csm::CoreState::Closed => csm::CoreState::Verified,
-        csm::CoreState::Verified => csm::CoreState::AwaitingVerification,
-        csm::CoreState::AwaitingVerification => csm::CoreState::AwaitingReview,
-        csm::CoreState::AwaitingReview => csm::CoreState::Executing,
-        csm::CoreState::Executing => csm::CoreState::Planned,
-        _ => csm::CoreState::Created,
-    });
+    let to_state = map_ticket_state_for_event(event, event.to_state.as_deref())?;
+    let from_state =
+        map_ticket_state_for_event(event, event.from_state.as_deref()).unwrap_or(match to_state {
+            csm::CoreState::Closed => csm::CoreState::Verified,
+            csm::CoreState::Verified => csm::CoreState::AwaitingVerification,
+            csm::CoreState::AwaitingVerification => csm::CoreState::AwaitingReview,
+            csm::CoreState::AwaitingReview => csm::CoreState::Executing,
+            csm::CoreState::Executing => csm::CoreState::Planned,
+            _ => csm::CoreState::Created,
+        });
     let core_event = match to_state {
         csm::CoreState::Classified => csm::CoreEvent::Classify,
         csm::CoreState::TicketBacked => csm::CoreEvent::CreateTicket,
@@ -4819,6 +4837,22 @@ fn map_ticket_state(raw: Option<&str>) -> Option<csm::CoreState> {
         "blocked" => Some(csm::CoreState::Blocked),
         _ => None,
     }
+}
+
+fn map_ticket_state_for_event(
+    event: &ProcessEventForStateMachine,
+    raw: Option<&str>,
+) -> Option<csm::CoreState> {
+    let normalized = normalize_state(raw)?;
+    if event.table_name == "ticket_self_work_items"
+        && matches!(
+            normalized.as_str(),
+            "queued" | "publishing" | "published" | "ready"
+        )
+    {
+        return Some(csm::CoreState::Planned);
+    }
+    map_ticket_state(Some(&normalized))
 }
 
 fn map_commitment_state(raw: Option<&str>) -> Option<csm::CoreState> {

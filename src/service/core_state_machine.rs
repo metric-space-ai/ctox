@@ -642,6 +642,7 @@ pub fn allowed_transition_catalog(
         ],
         WorkItem => &[
             (Created, Classified),
+            (Created, Planned),
             (Classified, TicketBacked),
             (TicketBacked, Planned),
             (Planned, Executing),
@@ -656,6 +657,7 @@ pub fn allowed_transition_catalog(
         ],
         Ticket => &[
             (Created, Classified),
+            (Created, Planned),
             (Classified, Planned),
             (Planned, Executing),
             (Executing, AwaitingReview),
