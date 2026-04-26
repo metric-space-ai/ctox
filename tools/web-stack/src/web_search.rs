@@ -25,9 +25,11 @@ use crate::runtime_config;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ProviderKind {
+    Auto,
     Google,
     GoogleBootstrapNative,
     GoogleBrowser,
+    DuckDuckGo,
     Bing,
     Searxng,
     Mock,
@@ -37,15 +39,17 @@ impl ProviderKind {
     fn from_env(raw: Option<String>) -> Self {
         match raw
             .as_deref()
-            .unwrap_or("google_bootstrap_native")
+            .unwrap_or("auto")
             .trim()
             .to_ascii_lowercase()
             .as_str()
         {
+            "auto" | "" => Self::Auto,
             "google_bootstrap_native" | "google_bootstrapped" | "google_hybrid" => {
                 Self::GoogleBootstrapNative
             }
             "google_browser" => Self::GoogleBrowser,
+            "duckduckgo" | "ddg" => Self::DuckDuckGo,
             "bing" => Self::Bing,
             "mock" => Self::Mock,
             "searxng" => Self::Searxng,
@@ -55,9 +59,11 @@ impl ProviderKind {
 
     fn as_str(self) -> &'static str {
         match self {
+            Self::Auto => "auto",
             Self::Google => "google",
             Self::GoogleBootstrapNative => "google_bootstrap_native",
             Self::GoogleBrowser => "google_browser",
+            Self::DuckDuckGo => "duckduckgo",
             Self::Bing => "bing",
             Self::Searxng => "searxng",
             Self::Mock => "mock",
@@ -1140,7 +1146,9 @@ fn search_with_query_plan(
     for query_text in planned_queries {
         let mut query = base_query.clone();
         query.text = query_text.clone();
-        let response = match config.provider {
+        let provider = resolve_effective_provider(root, config.provider);
+        let response = match provider {
+            ProviderKind::Auto => unreachable!("auto provider must be resolved before execution"),
             ProviderKind::Google => google_search(
                 root,
                 config,
@@ -1165,6 +1173,7 @@ fn search_with_query_plan(
                 GoogleFetchTransport::BrowserClone,
                 false,
             ),
+            ProviderKind::DuckDuckGo => duckduckgo_search(config, &query),
             ProviderKind::Bing => bing_search(config, &query),
             ProviderKind::Searxng => searxng_search(config, &query),
             ProviderKind::Mock => Ok(mock_search(&query)),
@@ -1196,7 +1205,9 @@ fn search_with_query_plan(
 
     Ok(SearchResponse {
         provider: if providers.is_empty() {
-            config.provider.as_str().to_string()
+            resolve_effective_provider(root, config.provider)
+                .as_str()
+                .to_string()
         } else {
             providers.join("+")
         },
@@ -1492,6 +1503,136 @@ fn bing_search(config: &SearchConfig, query: &SearchQuery) -> Result<SearchRespo
         evidence: Vec::new(),
         executed_queries: vec![query.text.clone()],
     })
+}
+
+fn resolve_effective_provider(root: &Path, provider: ProviderKind) -> ProviderKind {
+    if provider != ProviderKind::Auto {
+        return provider;
+    }
+    let profile_path = google_bootstrap_profile_path(root);
+    let profile_ready = read_google_bootstrap_profile_file(&profile_path)
+        .ok()
+        .flatten()
+        .and_then(|profile| validate_google_bootstrap_profile_fields(&profile).ok())
+        .is_some();
+    if profile_ready || !looks_headless_without_browser_session() {
+        ProviderKind::GoogleBootstrapNative
+    } else {
+        ProviderKind::DuckDuckGo
+    }
+}
+
+fn duckduckgo_search(config: &SearchConfig, query: &SearchQuery) -> Result<SearchResponse> {
+    let mut url =
+        Url::parse("https://html.duckduckgo.com/html/").expect("static DuckDuckGo HTML URL");
+    {
+        let mut qp = url.query_pairs_mut();
+        qp.append_pair("q", &query.text);
+        if let Some(region) = query.region.as_deref() {
+            qp.append_pair("kl", &region.to_ascii_lowercase());
+        }
+        if query.safe_search > 0 {
+            qp.append_pair("kp", if query.safe_search > 1 { "1" } else { "-1" });
+        } else {
+            qp.append_pair("kp", "-2");
+        }
+    }
+
+    let response = build_agent(config)?
+        .get(url.as_str())
+        .set(
+            "accept",
+            "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        )
+        .set("accept-language", "en-US,en;q=0.9")
+        .call()
+        .context("failed to query DuckDuckGo HTML endpoint")?;
+    let body = response
+        .into_string()
+        .context("failed to read DuckDuckGo search response")?;
+    let hits = parse_duckduckgo_html_results(&body, query.offset, query.count)?;
+    Ok(SearchResponse {
+        provider: ProviderKind::DuckDuckGo.as_str().to_string(),
+        hits,
+        evidence: Vec::new(),
+        executed_queries: vec![query.text.clone()],
+    })
+}
+
+fn parse_duckduckgo_html_results(
+    body: &str,
+    absolute_offset: usize,
+    max_count: usize,
+) -> Result<Vec<SearchHit>> {
+    let html = Html::parse_document(body);
+    let result_selector = Selector::parse(".result")
+        .map_err(|err| anyhow!("invalid DuckDuckGo result selector: {err}"))?;
+    let link_selector = Selector::parse("a.result__a, a.result-link, a[href]")
+        .map_err(|err| anyhow!("invalid DuckDuckGo link selector: {err}"))?;
+    let snippet_selector = Selector::parse(".result__snippet, .result-snippet")
+        .map_err(|err| anyhow!("invalid DuckDuckGo snippet selector: {err}"))?;
+
+    let mut hits = Vec::new();
+    for result in html.select(&result_selector) {
+        if hits.len() >= max_count.max(1) {
+            break;
+        }
+        let Some(link) = result.select(&link_selector).find_map(|candidate| {
+            candidate
+                .value()
+                .attr("href")
+                .and_then(resolve_duckduckgo_result_url)
+                .map(|url| (candidate, url))
+        }) else {
+            continue;
+        };
+        let (anchor, url) = link;
+        if hits.iter().any(|hit: &SearchHit| hit.url == url) {
+            continue;
+        }
+        let title = normalize_ws(&anchor.text().collect::<Vec<_>>().join(" "));
+        let snippet = result
+            .select(&snippet_selector)
+            .next()
+            .map(|node| normalize_ws(&node.text().collect::<Vec<_>>().join(" ")))
+            .unwrap_or_default();
+        hits.push(SearchHit {
+            title: if title.is_empty() {
+                display_url(&url)
+            } else {
+                title
+            },
+            url,
+            snippet,
+            source: "duckduckgo".to_string(),
+            rank: absolute_offset + hits.len() + 1,
+        });
+    }
+    Ok(hits)
+}
+
+fn resolve_duckduckgo_result_url(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        return Some(trimmed.to_string());
+    }
+    let duckduckgo_url = if trimmed.starts_with("//") {
+        format!("https:{trimmed}")
+    } else {
+        format!("https://duckduckgo.com{trimmed}")
+    };
+    let url = Url::parse(&duckduckgo_url).ok()?;
+    if !url.path().contains("/l/") {
+        return None;
+    }
+    let uddg = url
+        .query_pairs()
+        .find_map(|(key, value)| (key == "uddg").then(|| value.into_owned()))?;
+    if uddg.starts_with("http://") || uddg.starts_with("https://") {
+        Some(uddg)
+    } else {
+        None
+    }
 }
 
 fn parse_bing_rss_results(
@@ -6664,9 +6805,7 @@ mod tests {
     #[test]
     fn openai_web_search_mode_reads_passthrough_override() {
         let root = unique_test_root("web_search_mode_passthrough");
-        let runtime_config = crate::runtime_config::runtime_config_path(&root);
-        fs::create_dir_all(runtime_config.parent().unwrap()).unwrap();
-        fs::write(&runtime_config, "CTOX_WEB_SEARCH_OPENAI_MODE=passthrough\n").unwrap();
+        set_runtime_config(&root, "CTOX_WEB_SEARCH_OPENAI_MODE", "passthrough");
         assert_eq!(
             OpenAiWebSearchCompatMode::from_root(&root),
             OpenAiWebSearchCompatMode::Passthrough
@@ -6676,9 +6815,7 @@ mod tests {
     #[test]
     fn augment_request_strips_native_tool_and_injects_context() {
         let root = unique_test_root("augment_request_ctox_primary");
-        let runtime_config = crate::runtime_config::runtime_config_path(&root);
-        fs::create_dir_all(runtime_config.parent().unwrap()).unwrap();
-        fs::write(&runtime_config, "CTOX_WEB_SEARCH_PROVIDER=mock\n").unwrap();
+        set_runtime_config(&root, "CTOX_WEB_SEARCH_PROVIDER", "mock");
 
         let mut payload = json!({
             "tools": [
@@ -6708,9 +6845,7 @@ mod tests {
     #[test]
     fn ctox_web_search_tool_returns_namespaced_payload() {
         let root = unique_test_root("ctox_web_search_tool");
-        let runtime_config = crate::runtime_config::runtime_config_path(&root);
-        fs::create_dir_all(runtime_config.parent().unwrap()).unwrap();
-        fs::write(&runtime_config, "CTOX_WEB_SEARCH_PROVIDER=mock\n").unwrap();
+        set_runtime_config(&root, "CTOX_WEB_SEARCH_PROVIDER", "mock");
 
         let payload = run_ctox_web_search_tool(
             &root,
@@ -6737,9 +6872,7 @@ mod tests {
     #[test]
     fn ctox_web_read_tool_returns_find_results() {
         let root = unique_test_root("ctox_web_read_tool");
-        let runtime_config = crate::runtime_config::runtime_config_path(&root);
-        fs::create_dir_all(runtime_config.parent().unwrap()).unwrap();
-        fs::write(&runtime_config, "CTOX_WEB_SEARCH_PROVIDER=mock\n").unwrap();
+        set_runtime_config(&root, "CTOX_WEB_SEARCH_PROVIDER", "mock");
 
         let payload = run_ctox_web_read_tool(
             &root,
@@ -7062,6 +7195,29 @@ mod tests {
         assert_eq!(hits[1].rank, 2);
     }
 
+    #[test]
+    fn duckduckgo_html_parser_extracts_search_hits() {
+        let payload = r#"
+<html>
+  <body>
+    <div class="result">
+      <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.artisan.co%2F">Artisan</a>
+      <a class="result__snippet">AI employees for go-to-market teams.</a>
+    </div>
+    <div class="result">
+      <a class="result__a" href="https://relevanceai.com/">Relevance AI</a>
+      <div class="result__snippet">Build and run an AI workforce.</div>
+    </div>
+  </body>
+</html>"#;
+        let hits = parse_duckduckgo_html_results(payload, 0, 5).expect("duckduckgo html results");
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].url, "https://www.artisan.co/");
+        assert!(hits[0].snippet.contains("AI employees"));
+        assert_eq!(hits[1].url, "https://relevanceai.com/");
+        assert_eq!(hits[1].rank, 2);
+    }
+
     // The stdout-capture path uses process-wide dup2, which races with any
     // other test thread that also writes to stdout. That makes this test
     // flaky under `cargo test` default parallelism. Run it explicitly with
@@ -7071,9 +7227,7 @@ mod tests {
     #[test]
     fn ctox_web_read_tool_keeps_stdout_clean_for_pdf_reads() {
         let root = unique_test_root("ctox_web_read_pdf_stdout");
-        let runtime_config = crate::runtime_config::runtime_config_path(&root);
-        fs::create_dir_all(runtime_config.parent().unwrap()).unwrap();
-        fs::write(&runtime_config, "CTOX_WEB_SEARCH_PROVIDER=mock\n").unwrap();
+        set_runtime_config(&root, "CTOX_WEB_SEARCH_PROVIDER", "mock");
 
         let (captured_stdout, payload) = capture_stdout(|| {
             run_ctox_web_read_tool(
@@ -8591,9 +8745,10 @@ mod tests {
 
     #[test]
     fn parses_google_browser_provider_from_env() {
+        assert_eq!(ProviderKind::from_env(None), ProviderKind::Auto);
         assert_eq!(
-            ProviderKind::from_env(None),
-            ProviderKind::GoogleBootstrapNative
+            ProviderKind::from_env(Some("auto".to_string())),
+            ProviderKind::Auto
         );
         assert_eq!(
             ProviderKind::from_env(Some("google_browser".to_string())),
@@ -8602,6 +8757,14 @@ mod tests {
         assert_eq!(
             ProviderKind::from_env(Some("google_bootstrap_native".to_string())),
             ProviderKind::GoogleBootstrapNative
+        );
+        assert_eq!(
+            ProviderKind::from_env(Some("duckduckgo".to_string())),
+            ProviderKind::DuckDuckGo
+        );
+        assert_eq!(
+            ProviderKind::from_env(Some("ddg".to_string())),
+            ProviderKind::DuckDuckGo
         );
     }
 
@@ -8667,9 +8830,10 @@ mod tests {
             ),
         )
         .expect("write fake probe script");
-        std::env::set_var(
+        set_runtime_config(
+            &root,
             "CTOX_WEB_GOOGLE_BOOTSTRAP_PROBE",
-            script_path.to_string_lossy().to_string(),
+            &script_path.to_string_lossy(),
         );
 
         let mut config = test_config(ProviderKind::GoogleBootstrapNative);
@@ -8677,8 +8841,6 @@ mod tests {
         let plan = test_google_plan("https://www.google.com/search?q=rust");
         let loaded = load_or_refresh_google_bootstrap_profile(&root, &config, &plan, "en-US")
             .expect("refresh bootstrap profile");
-
-        std::env::remove_var("CTOX_WEB_GOOGLE_BOOTSTRAP_PROBE");
 
         assert_eq!(loaded.user_agent, "Mozilla/5.0 ProbeBrowser");
         assert_eq!(loaded.cookie_header, "SID=probe; HSID=probe2");
@@ -8736,9 +8898,10 @@ mod tests {
             ),
         )
         .expect("write fake failing probe script");
-        std::env::set_var(
+        set_runtime_config(
+            &root,
             "CTOX_WEB_GOOGLE_BOOTSTRAP_PROBE",
-            script_path.to_string_lossy().to_string(),
+            &script_path.to_string_lossy(),
         );
 
         let mut config = test_config(ProviderKind::GoogleBootstrapNative);
@@ -8746,8 +8909,6 @@ mod tests {
         let plan = test_google_plan("https://www.google.com/search?q=rust");
         let err = load_or_refresh_google_bootstrap_profile(&root, &config, &plan, "en-US")
             .expect_err("challenge probe should not produce a bootstrap profile");
-
-        std::env::remove_var("CTOX_WEB_GOOGLE_BOOTSTRAP_PROBE");
 
         let err_text = format!("{err:#}");
         assert!(
@@ -8816,6 +8977,26 @@ mod tests {
         let root = std::env::temp_dir().join(format!("{}_{}", prefix, unix_ts()));
         let _ = fs::remove_dir_all(&root);
         root
+    }
+
+    fn set_runtime_config(root: &Path, key: &str, value: &str) {
+        let runtime_config = crate::runtime_config::runtime_config_path(root);
+        fs::create_dir_all(runtime_config.parent().unwrap()).unwrap();
+        let conn = rusqlite::Connection::open(runtime_config).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS runtime_env_kv (
+                env_key TEXT PRIMARY KEY,
+                env_value TEXT NOT NULL
+            );",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO runtime_env_kv(env_key, env_value)
+             VALUES(?1, ?2)
+             ON CONFLICT(env_key) DO UPDATE SET env_value = excluded.env_value",
+            (key, value),
+        )
+        .unwrap();
     }
 
     #[cfg(unix)]

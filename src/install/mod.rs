@@ -11,6 +11,7 @@ use std::fs::OpenOptions;
 use std::io::{copy, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Instant;
 
 use crate::inference::engine;
 use crate::inference::runtime_env;
@@ -24,6 +25,18 @@ const DEFAULT_CACHE_ROOT_RELATIVE_PATH: &str = ".cache/ctox";
 const DEFAULT_GITHUB_API_BASE: &str = "https://api.github.com";
 const DEFAULT_GITHUB_TOKEN_ENV: &str = "CTOX_UPDATE_GITHUB_TOKEN";
 const DEFAULT_RELEASE_REPO: &str = "metric-space-ai/ctox";
+
+fn progress_step(label: impl AsRef<str>) {
+    eprintln!("ctox upgrade | {}", label.as_ref());
+}
+
+fn progress_done(label: impl AsRef<str>, started: Instant) {
+    eprintln!(
+        "ctox upgrade | ok | {} | {}s",
+        label.as_ref(),
+        started.elapsed().as_secs()
+    );
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct VersionInfo {
@@ -390,7 +403,13 @@ pub fn handle_update_command(root: &Path, args: &[String]) -> Result<()> {
         } else {
             RemoteReleaseRequest::Latest
         };
+        progress_step(if use_dev {
+            "starting dev upgrade from main"
+        } else {
+            "starting stable upgrade"
+        });
         let result = apply_remote_update(root, request, false, false, false)?;
+        progress_step("upgrade completed; emitting machine-readable summary");
         println!("{}", serde_json::to_string_pretty(&result)?);
         return Ok(());
     }
@@ -637,16 +656,35 @@ fn apply_remote_update(
     keep_failed_release: bool,
     from_source: bool,
 ) -> Result<ApplyResult> {
+    let started = Instant::now();
     let layout = InstallLayout::resolve(root)?;
+    progress_step(format!(
+        "resolved install layout: active={} state={} cache={}",
+        layout.active_root.display(),
+        layout.state_root.display(),
+        layout.cache_root.display()
+    ));
     let manifest = load_install_manifest(&layout.install_manifest_path())?;
     let channel = resolve_release_channel(&layout, manifest.as_ref())
         .context("release channel is not configured; use `ctox update channel set-github --repo <owner/repo>` first")?;
+    progress_step(format!(
+        "release channel: {}",
+        match &channel.config {
+            ReleaseChannelConfig::GitHub { repo, .. } => repo.as_str(),
+        }
+    ));
     // Branch requests only have a source tarball — no binary assets for arbitrary branches.
     let is_branch = matches!(request, RemoteReleaseRequest::Branch(_));
     let from_source = is_branch || from_source;
     // Branch HEADs move; always bypass the on-disk cache so `ctox upgrade --dev`
     // genuinely picks up the latest commit.
     let force = force || is_branch;
+    let download_started = Instant::now();
+    progress_step(if from_source {
+        "fetching source archive"
+    } else {
+        "fetching binary release bundle"
+    });
     let (downloaded, kind) = if from_source {
         (
             download_release_source(&layout, &channel.config, request, force)?,
@@ -658,14 +696,20 @@ fn apply_remote_update(
             UpdateSourceKind::Binary,
         )
     };
-    apply_update(
+    progress_done(
+        format!("downloaded {}", downloaded.release.tag_name),
+        download_started,
+    );
+    let result = apply_update(
         root,
         &downloaded.extracted_root,
         &downloaded.release.tag_name,
         force,
         keep_failed_release,
         kind,
-    )
+    )?;
+    progress_done("remote upgrade", started);
+    Ok(result)
 }
 
 fn adopt_installation(
@@ -741,10 +785,16 @@ fn apply_update(
     keep_failed_release: bool,
     kind: UpdateSourceKind,
 ) -> Result<ApplyResult> {
+    let update_started = Instant::now();
+    progress_step(format!(
+        "applying release {release} from {}",
+        source_root.display()
+    ));
     match kind {
         UpdateSourceKind::Source => validate_release_source(source_root)?,
         UpdateSourceKind::Binary => validate_binary_bundle(source_root)?,
     }
+    progress_step("release source validated");
     let layout = InstallLayout::resolve(root)?;
     let install_root = layout
         .install_root
@@ -769,6 +819,7 @@ fn apply_update(
                 .map(|name| releases_dir.join(name))
         });
     let backup_path = backup_state_root(&layout.state_root)?;
+    progress_step(format!("state backup created: {}", backup_path.display()));
     persist_update_state(
         &layout.update_state_path(),
         &UpdateState {
@@ -785,7 +836,13 @@ fn apply_update(
             last_error: None,
         },
     )?;
+    let copy_started = Instant::now();
+    progress_step(format!(
+        "copying release workspace to {}",
+        release_root.display()
+    ));
     copy_workspace(source_root, &release_root, kind)?;
+    progress_done("copied release workspace", copy_started);
     if kind == UpdateSourceKind::Binary {
         if let Some(prev) = previous_release_root.as_deref() {
             carry_over_engine_from_previous(prev, &release_root)?;
@@ -794,6 +851,7 @@ fn apply_update(
     ensure_runtime_symlink(&release_root, &layout.state_root)?;
     persist_update_phase(&layout.update_state_path(), "building", None)?;
     if kind == UpdateSourceKind::Source {
+        progress_step("running release installer / source build");
         if let Err(err) = run_release_installer(&release_root, &layout.state_root) {
             persist_update_phase(
                 &layout.update_state_path(),
@@ -805,6 +863,7 @@ fn apply_update(
             }
             return Err(err);
         }
+        progress_step("release installer finished");
     }
     let pre_switch_status = service::service_status_snapshot(&layout.active_root).ok();
     let should_restart = pre_switch_status
@@ -812,6 +871,7 @@ fn apply_update(
         .map(|status| status.running || status.autostart_enabled)
         .unwrap_or(false);
     persist_update_phase(&layout.update_state_path(), "switching", None)?;
+    progress_step("switching current symlink and restarting service if required");
     let _ = service::stop_background(&layout.active_root);
     if let Err(err) = switch_current_release(&current_link, &release_root) {
         maybe_restart_service(previous_release_root.as_deref())?;
@@ -841,6 +901,7 @@ fn apply_update(
         return Err(err);
     }
     if should_restart {
+        progress_step("starting CTOX background service");
         if let Err(err) = service::start_background(&current_link)
             .and_then(|_| service::service_status_snapshot(&current_link).map(|_| ()))
         {
@@ -879,6 +940,7 @@ fn apply_update(
         last_error: None,
     };
     persist_update_state(&layout.update_state_path(), &completed)?;
+    progress_done(format!("applied release {release}"), update_started);
     Ok(ApplyResult {
         updated: true,
         release: release.to_string(),
@@ -1583,6 +1645,7 @@ fn migrate_legacy_state(root: &Path, state_root: &Path, force: bool) -> Result<(
 }
 
 fn run_release_installer(release_root: &Path, state_root: &Path) -> Result<()> {
+    let started = Instant::now();
     let script = release_root.join("install.sh");
     let legacy_script = release_root.join("scripts/install/install_ctox.sh");
     let (chosen_script, args) = if script.is_file() {
@@ -1613,12 +1676,19 @@ fn run_release_installer(release_root: &Path, state_root: &Path) -> Result<()> {
     for arg in &args {
         cmd.arg(arg);
     }
+    progress_step(format!(
+        "installer command: {} {}",
+        chosen_script.display(),
+        args.join(" ")
+    ));
+    progress_step("installer output follows");
     let status = cmd
         .status()
         .with_context(|| format!("failed to start installer {}", chosen_script.display()))?;
     if !status.success() {
         anyhow::bail!("release installer failed for {}", release_root.display());
     }
+    progress_done("installer", started);
     Ok(())
 }
 

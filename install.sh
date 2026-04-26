@@ -180,6 +180,35 @@ tui_fatal() {
   exit 1
 }
 
+tui_note() {
+  printf '\n  %b%s%b\n' "$C_GREY" "$1" "$C_RESET" >&2
+}
+
+tui_module_start() {
+  printf '\n  %b%b▶ %s%b\n' "$C_BOLD" "$C_CYAN" "$1" "$C_RESET" >&2
+}
+
+tui_module_done() {
+  local label="$1"
+  local started="$2"
+  local finished; finished="$(date +%s)"
+  printf '  %b✔ %s completed in %ss%b\n' "$C_GREEN" "$label" "$((finished - started))" "$C_RESET" >&2
+}
+
+run_build_module() {
+  local label="$1"
+  local workdir="$2"
+  shift 2
+  local started; started="$(date +%s)"
+  tui_module_start "Compiling ${label}"
+  printf '  %bdir:%b %s\n' "$C_GREY" "$C_RESET" "$workdir" >&2
+  printf '  %bcmd:%b' "$C_GREY" "$C_RESET" >&2
+  printf ' %q' "$@" >&2
+  printf '\n' >&2
+  (cd "$workdir" && "$@")
+  tui_module_done "$label" "$started"
+}
+
 # ── Interactive backend selector ─────────────────────────────────────────────
 tui_select_backend() {
   local detected_gpu="$1"     # "nvidia", "metal", "none"
@@ -794,8 +823,12 @@ prepare_speaches_runtime() {
   [[ -f "$requirements_lock" ]] || return 0
   command -v uv >/dev/null 2>&1 || { ensure_uv_runtime; command -v uv >/dev/null 2>&1 || return 0; }
   mkdir -p "$runtime_root"
-  uv venv "$venv_root" 2>/dev/null
-  uv pip install --python "$venv_root/bin/python" --requirement "$requirements_lock" 2>/dev/null
+  local started; started="$(date +%s)"
+  tui_module_start "Preparing TTS/STT runtime"
+  printf '  %bdir:%b %s\n' "$C_GREY" "$C_RESET" "$runtime_root" >&2
+  uv venv "$venv_root"
+  uv pip install --python "$venv_root/bin/python" --requirement "$requirements_lock"
+  tui_module_done "TTS/STT runtime" "$started"
 }
 
 # ── Browser / Playwright ─────────────────────────────────────────────────────
@@ -805,6 +838,8 @@ prepare_speaches_runtime() {
 # requiring the user to run `ctox web browser-prepare` afterwards.
 setup_browser_runtime() {
   local source_root="$1"
+  local started; started="$(date +%s)"
+  tui_module_start "Preparing browser / Playwright runtime"
   ensure_linux_browser_prereqs
   command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1 && command -v npx >/dev/null 2>&1 || return 0
   # Prefer the managed-install binary so its runtime-root resolution lands at
@@ -823,8 +858,9 @@ setup_browser_runtime() {
   # `web browser-prepare --install-reference --install-browser` is the
   # documented one-shot: it installs package.json, runs npm install, and
   # fetches the Chromium browser binary that Playwright drives.
-  "$ctox_bin" web browser-prepare --install-reference --install-browser >/dev/null 2>&1 || \
-    "$ctox_bin" browser install-reference >/dev/null 2>&1 || true
+  printf '  %bctox:%b %s\n' "$C_GREY" "$C_RESET" "$ctox_bin" >&2
+  "$ctox_bin" web browser-prepare --install-reference --install-browser || \
+    "$ctox_bin" browser install-reference || true
   # Resolve the real reference dir via the doctor output so this works whether
   # the user set CTOX_WEB_BROWSER_REFERENCE_DIR or relies on the default.
   local browser_ref
@@ -834,12 +870,14 @@ setup_browser_runtime() {
     (cd "$browser_ref" && npm run doctor >/dev/null 2>&1) || true
     if "$ctox_bin" browser doctor 2>/dev/null | grep -q '"chromium_fallback_executable": null'; then
       if [[ "$PLATFORM" == "linux" ]]; then
-        (cd "$browser_ref" && npx playwright install --with-deps chromium >/dev/null 2>&1) || true
+        tui_note "Installing Chromium browser binary via Playwright"
+        (cd "$browser_ref" && npx playwright install --with-deps chromium) || true
       else
-        "$ctox_bin" browser install-reference --skip-npm-install --install-browser >/dev/null 2>&1 || true
+        "$ctox_bin" browser install-reference --skip-npm-install --install-browser || true
       fi
     fi
   fi
+  tui_module_done "browser / Playwright runtime" "$started"
 }
 
 build_google_fetch_helper() {
@@ -847,7 +885,7 @@ build_google_fetch_helper() {
   local tool_dir="$source_root/tools/google-fetch"
   [[ -f "$tool_dir/Cargo.toml" ]] || return 0
   command -v cargo >/dev/null 2>&1 || return 0
-  (cd "$tool_dir" && cargo build --release --bin ctox-google-fetch >/dev/null 2>&1)
+  run_build_module "ctox Google fetch helper" "$tool_dir" cargo build --release --bin ctox-google-fetch
 }
 
 # ── systemd services ─────────────────────────────────────────────────────────
@@ -1197,12 +1235,12 @@ build_ctox() {
   local cargo; cargo="$(resolve_cargo)"
 
   # 1. Build main CTOX binary
-  (cd "$source_root" && "$cargo" build --release --bin ctox) 2>&1 | tail -5
+  run_build_module "ctox CLI" "$source_root" "$cargo" build --release --bin ctox
   mkdir -p "$source_root/bin"
   cp "$source_root/target/release/ctox" "$source_root/bin/" 2>/dev/null || true
 
   if [[ -f "$source_root/desktop/Cargo.toml" ]]; then
-    (cd "$source_root" && "$cargo" build --release --manifest-path desktop/Cargo.toml --bin ctox-desktop-host) 2>&1 | tail -5
+    run_build_module "ctox desktop host" "$source_root" "$cargo" build --release --manifest-path desktop/Cargo.toml --bin ctox-desktop-host
     cp "$source_root/desktop/target/release/ctox-desktop-host" "$source_root/bin/" 2>/dev/null || true
   fi
 
@@ -1265,8 +1303,7 @@ build_ctox() {
     fi
 
     # Build the internal inference runtime binary (not the workspace default)
-    (cd "$source_root/tools/model-runtime" && \
-      "${engine_build_cmd[@]}") 2>&1 | tail -5
+    run_build_module "ctox model engine (${engine_label})" "$source_root/tools/model-runtime" "${engine_build_cmd[@]}"
 
     # Write feature stamp for runtime verification
     local stamp_dir="$source_root/tools/model-runtime/target/release"
@@ -1506,7 +1543,14 @@ INSERT INTO runtime_env_kv(env_key, env_value) VALUES
 ('CTOX_AUXILIARY_GPU_LAYER_RESERVATION_MAP', '$(sql_escape "${CTOX_AUXILIARY_GPU_LAYER_RESERVATION_MAP:-}")'),
 ('CTOX_EMBEDDING_GPU_LAYER_RESERVATION', '$(sql_escape "${CTOX_EMBEDDING_GPU_LAYER_RESERVATION:-0.30}")'),
 ('CTOX_STT_GPU_LAYER_RESERVATION', '$(sql_escape "${CTOX_STT_GPU_LAYER_RESERVATION:-0.55}")'),
-('CTOX_TTS_GPU_LAYER_RESERVATION', '$(sql_escape "${CTOX_TTS_GPU_LAYER_RESERVATION:-0.35}")');
+('CTOX_TTS_GPU_LAYER_RESERVATION', '$(sql_escape "${CTOX_TTS_GPU_LAYER_RESERVATION:-0.35}")'),
+('CTOX_WEB_SEARCH_ENABLED', 'true'),
+('CTOX_WEB_SEARCH_PROVIDER', 'auto'),
+('CTOX_WEB_SEARCH_TIMEOUT_MS', '10000'),
+('CTOX_WEB_SEARCH_TOP_K', '5'),
+('CTOX_WEB_SEARCH_MAX_TOP_K', '8'),
+('CTOX_WEB_SEARCH_CACHE_TTL_SECS', '86400'),
+('CTOX_WEB_SEARCH_PAGE_CACHE_TTL_SECS', '259200');
 COMMIT;
 SQL
 }
@@ -1529,10 +1573,17 @@ run_rebuild() {
   build_ctox "$root"
   populate_rebuild_release_layout "$root"
 
-  # Ensure ctox is available as a command everywhere
   STATE_ROOT="${CTOX_STATE_ROOT:-$root/runtime}"
   TOOLS_ROOT="${CTOX_TOOLS_ROOT:-$STATE_ROOT/tools}"
   DEPENDENCIES_ROOT="${CTOX_DEPENDENCIES_ROOT:-$STATE_ROOT/dependencies}"
+
+  # Keep the web stack operational after source upgrades, not only after first
+  # install. These are idempotent and leave existing runtime config untouched.
+  ensure_web_runtime_defaults "$STATE_ROOT"
+  setup_browser_runtime "$root" || true
+  build_google_fetch_helper "$root" || true
+
+  # Ensure ctox is available as a command everywhere
   write_wrapper_script "$root"
 
   # Ensure BIN_DIR is in PATH for future shells
@@ -1545,6 +1596,28 @@ run_rebuild() {
   if [[ -n "$shell_rc" ]] && ! grep -q "$BIN_DIR" "$shell_rc" 2>/dev/null; then
     printf '\nexport PATH="%s:$PATH"\n' "$BIN_DIR" >> "$shell_rc"
   fi
+}
+
+ensure_web_runtime_defaults() {
+  local state_root="$1"
+  command -v sqlite3 >/dev/null 2>&1 || return 0
+  mkdir -p "$state_root"
+  local db_path="$state_root/ctox.sqlite3"
+  sqlite3 "$db_path" <<SQL
+PRAGMA journal_mode=WAL;
+CREATE TABLE IF NOT EXISTS runtime_env_kv (
+  env_key TEXT PRIMARY KEY,
+  env_value TEXT NOT NULL
+);
+INSERT OR IGNORE INTO runtime_env_kv(env_key, env_value) VALUES
+('CTOX_WEB_SEARCH_ENABLED', 'true'),
+('CTOX_WEB_SEARCH_PROVIDER', 'auto'),
+('CTOX_WEB_SEARCH_TIMEOUT_MS', '10000'),
+('CTOX_WEB_SEARCH_TOP_K', '5'),
+('CTOX_WEB_SEARCH_MAX_TOP_K', '8'),
+('CTOX_WEB_SEARCH_CACHE_TTL_SECS', '86400'),
+('CTOX_WEB_SEARCH_PAGE_CACHE_TTL_SECS', '259200');
+SQL
 }
 
 # Auto-detect without interactivity (for rebuild / non-interactive)
@@ -1862,13 +1935,13 @@ main() {
   # ── Step 11: Speaches + Browser ──
   tui_start_step 11
   local runtime_details=""
-  if prepare_speaches_runtime "$source_root" 2>/dev/null; then
+  if prepare_speaches_runtime "$source_root"; then
     runtime_details="TTS/STT"
   fi
-  if setup_browser_runtime "$source_root" 2>/dev/null; then
+  if setup_browser_runtime "$source_root"; then
     runtime_details="${runtime_details:+$runtime_details, }Browser"
   fi
-  if build_google_fetch_helper "$source_root" 2>/dev/null; then
+  if build_google_fetch_helper "$source_root"; then
     runtime_details="${runtime_details:+$runtime_details, }Google-Fetch"
   fi
   tui_complete_step 11 "${runtime_details:-bereitgestellt}"
