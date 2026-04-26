@@ -48,6 +48,7 @@ const PROCESS_MINING_USAGE: &str = "usage:
   ctox process-mining state-scan [--limit <n>]
   ctox process-mining assert-clean [--limit <n>] [--allow-rejected]
   ctox process-mining self-diagnose [--limit <n>]
+  ctox process-mining guidance [--limit <n>]
   ctox process-mining state-audit [--limit <n>]
   ctox process-mining coverage [--limit <n>]
   ctox process-mining violations [--limit <n>]
@@ -1576,6 +1577,13 @@ pub fn handle_process_mining_command(root: &Path, args: &[String]) -> Result<()>
             println!("{}", serde_json::to_string_pretty(&report)?);
             Ok(())
         }
+        Some("guidance") => {
+            ensure_process_mining_schema(&conn, &db_path)?;
+            let limit = process_mining_limit(args, 5000, 50000);
+            let guidance = run_process_mining_guidance(&conn, limit)?;
+            println!("{}", serde_json::to_string_pretty(&guidance)?);
+            Ok(())
+        }
         Some("coverage") => {
             ensure_process_mining_schema(&conn, &db_path)?;
             let limit = process_mining_limit(args, 50, 500);
@@ -2343,12 +2351,28 @@ fn assert_process_mining_clean_summary(summary: &Value, allow_rejected: bool) ->
     }
 
     if !failures.is_empty() {
+        let mut hints = Vec::new();
+        for failure in &failures {
+            match failure.get("code").and_then(Value::as_str) {
+                Some("unmapped_events") => hints.push(
+                    "Es gibt SQLite-Aenderungen ohne bekannte Prozess-Mapping-Regel. Behandle das als Harness-Arbeit: fuehre `ctox process-mining guidance --limit 50` aus und erweitere zuerst die Mapping-Regeln, bevor du fachlich weiterarbeitest.",
+                ),
+                Some("rule_without_core_transition") => hints.push(
+                    "Eine Prozessregel konnte keinen eindeutigen Core-Zustandswechsel bilden. Fuehre `ctox process-mining guidance --limit 50` aus und korrigiere zuerst die betroffene State-Machine-Abbildung.",
+                ),
+                Some("rejected_core_transitions") => hints.push(
+                    "Mindestens ein Core-Zustandswechsel wurde abgelehnt. Stoppe den betroffenen Pfad, fuehre `ctox process-mining guidance --limit 50` aus und arbeite die dort genannten Zwischenschritte nach.",
+                ),
+                _ => hints.push(
+                    "Die Prozess-Mining-Pruefung ist nicht sauber. Fuehre `ctox process-mining guidance --limit 50` aus und behebe die dort genannten Punkte, bevor du den Pfad fortsetzt.",
+                ),
+            }
+        }
+        hints.sort_unstable();
+        hints.dedup();
         anyhow::bail!(
-            "process mining harness assertion failed: {}",
-            serde_json::to_string(&json!({
-                "failures": failures,
-                "summary": summary
-            }))?
+            "Die Harness-Pruefung hat den naechsten Schritt gestoppt. {}",
+            hints.join(" ")
         );
     }
 
@@ -2434,6 +2458,143 @@ fn run_process_mining_self_diagnosis(conn: &Connection, limit: i64) -> Result<Va
         "state_summary": state_summary,
         "subsystems": subsystems,
     }))
+}
+
+fn run_process_mining_guidance(conn: &Connection, limit: i64) -> Result<Value> {
+    let diagnosis = run_process_mining_self_diagnosis(conn, limit)?;
+    let mut next_actions = Vec::<String>::new();
+    let mut attention = Vec::<Value>::new();
+
+    if let Some(subsystems) = diagnosis.get("subsystems").and_then(Value::as_array) {
+        for subsystem in subsystems {
+            let status = subsystem
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            if status == "ok" {
+                continue;
+            }
+            let name = subsystem
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            let summary = subsystem
+                .get("summary")
+                .and_then(Value::as_str)
+                .unwrap_or("Harness subsystem needs attention.");
+            attention.push(json!({
+                "subsystem": name,
+                "status": status,
+                "summary": summary,
+            }));
+            if let Some(findings) = subsystem.get("findings").and_then(Value::as_array) {
+                for finding in findings {
+                    let code = finding
+                        .get("code")
+                        .and_then(Value::as_str)
+                        .unwrap_or("unknown");
+                    next_actions.push(guidance_action_for_finding(name, code).to_string());
+                }
+            }
+        }
+    }
+
+    if next_actions.is_empty() {
+        next_actions.push(
+            "Der Harness sieht aktuell sauber aus. Arbeite mit normaler Priorisierung weiter und pruefe bei Blockaden erneut `ctox process-mining guidance --limit 50`."
+                .to_string(),
+        );
+    }
+    next_actions.sort();
+    next_actions.dedup();
+
+    Ok(json!({
+        "ok": diagnosis.get("ok").and_then(Value::as_bool).unwrap_or(false),
+        "status": if attention.iter().any(|item| item.get("status").and_then(Value::as_str) == Some("critical")) {
+            "critical"
+        } else if attention.is_empty() {
+            "ok"
+        } else {
+            "warning"
+        },
+        "summary": "Natuerliche Harness-Diagnose fuer den Agenten. Keine Rohdaten, keine internen Proofs, keine Source-Code-Hinweise.",
+        "next_actions": next_actions,
+        "attention": attention,
+        "safe_commands": [
+            "ctox process-mining guidance --limit 50",
+            "ctox process-mining self-diagnose --limit 20000",
+            "ctox process-mining coverage --limit 20",
+            "ctox process-mining violations --limit 20"
+        ]
+    }))
+}
+
+fn guidance_action_for_finding(subsystem: &str, code: &str) -> &'static str {
+    match code {
+        "unmapped_sqlite_events" => {
+            "Stoppe fachliche Arbeit kurz und erweitere die Prozess-Mapping-Regeln fuer die unbekannten SQLite-Aenderungen. Danach `ctox process-mining self-diagnose --limit 20000` erneut ausfuehren."
+        }
+        "non_deterministic_mapping_rule" => {
+            "Korrigiere die betroffene Mapping-Regel so, dass sie eindeutig einen Core-Zustandswechsel oder explizite Telemetrie erzeugt."
+        }
+        "core_graph_liveness_gap" => {
+            "Repariere den Core-State-Graphen: jeder erreichbare Zustand braucht einen erlaubten Pfad zu einem Terminalzustand."
+        }
+        "no_knowledge_entries" => {
+            "Baue Knowledge aus der aktuellen Arbeit auf: Vorfall oder Erkenntnis speichern, Evidenz verknuepfen und spaeter wieder laden."
+        }
+        "knowledge_not_loaded" => {
+            "Lade vorhandenes Knowledge aktiv in die naechste Arbeitseinheit, bevor du weiter entscheidest."
+        }
+        "no_recent_knowledge_activity" => {
+            "Pruefe nach Abschluss der aktuellen Arbeit, ob eine neue Knowledge-Notiz oder Runbook-Ergaenzung dauerhaft gespeichert werden muss."
+        }
+        "missing_lcm_continuity" => {
+            "Repariere Continuity: aktueller Kontext muss als LCM-Dokument und Commit dauerhaft vorhanden sein."
+        }
+        "broken_lcm_head" => {
+            "Repariere den LCM-Head, bevor weitere Langzeit-Arbeit fortgesetzt wird."
+        }
+        "compaction_without_lcm_change" => {
+            "Pruefe Compaction: nach einer Verdichtung muss ein LCM-Dokument oder Commit die Kontextveraenderung belegen."
+        }
+        "stuck_queue_items" => {
+            "Bearbeite zuerst stale leased/running Queue-Eintraege: entscheiden, ob fortsetzen, requeue, blocken oder superseden."
+        }
+        "negative_queue_durations" => {
+            "Korrigiere Queue-Zeitstempel, damit Latenzen auswertbar bleiben."
+        }
+        "founder_review_gate_rejections" => {
+            "Stoppe Founder-Kommunikation. Baue Kontext, Entwurf, echtes Review und matching Empfaenger/Text-Freigabe neu auf, bevor gesendet wird."
+        }
+        "historical_founder_review_gate_rejections" => {
+            "Behandle Founder-Kommunikation weiterhin als P0: bei jeder neuen Mail Review, Empfaengerabgleich und Versand-Audit pruefen."
+        }
+        "self_work_without_canonical_tickets" => {
+            "Ueberfuehre wiederkehrende Self-Work in kanonische Tickets, damit Arbeit priorisierbar und forensisch vergleichbar wird."
+        }
+        "large_active_self_work_backlog" => {
+            "Reduziere den aktiven Self-Work-Backlog: P0/P1 priorisieren, Ueberholtes superseden, Blockiertes explizit markieren."
+        }
+        "scheduled_tasks_without_runs" => {
+            "Pruefe Scheduler-Ausfuehrung: faellige Zusagen brauchen emit/run-Evidenz vor der Deadline."
+        }
+        "overdue_scheduled_tasks" => {
+            "Bearbeite ueberfaellige Scheduled Tasks sofort und sende keine neue Zusage ohne neue Absicherung."
+        }
+        _ => match subsystem {
+            "process_mining_coverage" => {
+                "Pruefe Process-Mining-Coverage und entscheide fuer neue SQLite-Aenderungen explizit: Telemetrie oder Core-Zustandswechsel."
+            }
+            "founder_communication_review" => {
+                "Pruefe Founder-Kommunikation vor jeder Sendung auf Kontext, Review, Empfaengerliste und unveraenderten finalen Text."
+            }
+            "schedules_and_commitments" => {
+                "Pruefe Zusagen und Deadlines: jede Zusage braucht einen rechtzeitig angesetzten, beobachtbaren Trigger."
+            }
+            _ => "Fuehre `ctox process-mining self-diagnose --limit 20000` aus, behebe das genannte Subsystem und pruefe danach erneut.",
+        },
+    }
 }
 
 fn push_subsystem(
@@ -4552,6 +4713,7 @@ fn infer_ticket_transition(
     let from_state =
         map_ticket_state_for_event(event, event.from_state.as_deref()).unwrap_or(match to_state {
             csm::CoreState::Closed => csm::CoreState::Verified,
+            csm::CoreState::Superseded => csm::CoreState::Created,
             csm::CoreState::Verified => csm::CoreState::AwaitingVerification,
             csm::CoreState::AwaitingVerification => csm::CoreState::AwaitingReview,
             csm::CoreState::AwaitingReview => csm::CoreState::Executing,
@@ -4569,10 +4731,11 @@ fn infer_ticket_transition(
         csm::CoreState::Verified => csm::CoreEvent::Verify,
         csm::CoreState::Closed => csm::CoreEvent::Close,
         csm::CoreState::Blocked => csm::CoreEvent::Block,
+        csm::CoreState::Superseded => csm::CoreEvent::Supersede,
         _ => csm::CoreEvent::Execute,
     };
     let mut metadata = common_metadata(event);
-    if owner_visible_text(haystack) {
+    if ticket_event_can_mark_owner_visible(event) && owner_visible_text(haystack) {
         metadata.insert("owner_visible_completion".to_string(), "true".to_string());
     }
     Some(csm::CoreTransitionRequest {
@@ -4868,9 +5031,17 @@ fn map_ticket_state(raw: Option<&str>) -> Option<csm::CoreState> {
         "awaiting_verification" | "verification" => Some(csm::CoreState::AwaitingVerification),
         "verified" | "writeback_pending" => Some(csm::CoreState::Verified),
         "closed" | "done" | "completed" => Some(csm::CoreState::Closed),
+        "superseded" | "cancelled" | "canceled" => Some(csm::CoreState::Superseded),
         "blocked" => Some(csm::CoreState::Blocked),
         _ => None,
     }
+}
+
+fn ticket_event_can_mark_owner_visible(event: &ProcessEventForStateMachine) -> bool {
+    matches!(
+        event.table_name.as_str(),
+        "ticket_cases" | "ticket_case_events" | "communication_messages"
+    )
 }
 
 fn map_ticket_state_for_event(
@@ -6668,7 +6839,12 @@ mod tests {
             [],
         )?;
         let dirty_summary = scan_core_state_machine_violations(&conn, 100)?;
-        assert!(assert_process_mining_clean_summary(&dirty_summary, false).is_err());
+        let err = assert_process_mining_clean_summary(&dirty_summary, false)
+            .expect_err("dirty process mining summary must fail");
+        let message = err.to_string();
+        assert!(message.contains("ctox process-mining guidance --limit 50"));
+        assert!(!message.contains("\"summary\""));
+        assert!(!message.contains("row_after_json"));
         Ok(())
     }
 }

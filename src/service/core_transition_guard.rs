@@ -110,17 +110,7 @@ pub fn enforce_core_transition(
         return Ok(proof);
     }
 
-    let reasons = proof
-        .report
-        .violations
-        .iter()
-        .map(|violation| format!("{}: {}", violation.code, violation.message))
-        .collect::<Vec<_>>()
-        .join("; ");
-    anyhow::bail!(
-        "core transition guard rejected transition {}: {reasons}",
-        proof.proof_id
-    );
+    anyhow::bail!("{}", agent_recovery_message(&proof.report));
 }
 
 fn deterministic_proof_id(request_json: &str) -> String {
@@ -128,6 +118,57 @@ fn deterministic_proof_id(request_json: &str) -> String {
     hasher.update(b"ctox-core-transition-proof-v1");
     hasher.update(request_json.as_bytes());
     format!("ctp-{:x}", hasher.finalize())
+}
+
+fn agent_recovery_message(report: &csm::CoreTransitionReport) -> String {
+    let mut actions = Vec::new();
+    for violation in &report.violations {
+        let action = match violation.code.as_str() {
+            "invalid_transition" => {
+                "Bleib im erlaubten Arbeitsablauf: springe nicht direkt zum Zielzustand. Fuehre die fehlenden Zwischenschritte aus, dokumentiere jeden Schritt dauerhaft und versuche danach erneut fortzufahren."
+            }
+            "owner_visible_completion_requires_review" => {
+                "Schliesse owner- oder founder-sichtbare Arbeit noch nicht ab. Fuehre zuerst ein echtes Review durch, arbeite kritische Review-Punkte inhaltlich nach und speichere die Review-Freigabe dauerhaft."
+            }
+            "closure_requires_verification" => {
+                "Schliesse die Aufgabe noch nicht. Verifiziere das Ergebnis zuerst mit belastbarer Evidenz, speichere diese Evidenz und schliesse erst danach."
+            }
+            "founder_send_requires_review_audit" => {
+                "Sende diese Founder-Kommunikation noch nicht. Baue zuerst den vollstaendigen Kontext auf, lasse den finalen Entwurf durch das Review laufen und speichere die Review-Freigabe dauerhaft."
+            }
+            "founder_send_body_hash_mismatch" => {
+                "Der zu sendende Text entspricht nicht dem freigegebenen Review-Text. Stoppe den Versand, erstelle den finalen Entwurf erneut und lasse genau diese finale Fassung freigeben."
+            }
+            "founder_send_recipient_hash_mismatch" => {
+                "Die Empfaenger oder CC-Liste entsprechen nicht der freigegebenen Fassung. Stoppe den Versand, pruefe To/CC gegen den Mail-Thread-Kontext und lasse die finale Empfaengerliste erneut freigeben."
+            }
+            "commitment_requires_backing_schedule" => {
+                "Lege kein Versprechen ohne Absicherung ab. Erstelle zuerst eine konkrete Termin- oder Queue-Absicherung, damit die Zusage rechtzeitig bearbeitet wird."
+            }
+            "commitment_delivery_requires_evidence" => {
+                "Markiere die Zusage noch nicht als geliefert. Sammle zuerst belastbare Liefer-Evidenz und verknuepfe sie mit der Zusage."
+            }
+            "repair_requires_canonical_hot_path" => {
+                "Fuehre die Reparatur ueber den kanonischen Repair-Pfad aus: Diagnose, Plan, Review, deterministische Massnahmen, Verifikation. Starte nicht mitten im Prozess."
+            }
+            "active_knowledge_requires_incident" => {
+                "Lege Knowledge nicht direkt als aktiv ab. Halte zuerst den beobachteten Vorfall fest, formuliere die Lehre, pruefe sie und aktiviere sie erst nach Evidenz."
+            }
+            _ => "Die geplante Aktion passt noch nicht zum gesicherten Harness-Zustand. Pruefe den naechsten erlaubten Arbeitsschritt, halte Evidenz fest und versuche erst danach erneut fortzufahren.",
+        };
+        if !actions.iter().any(|existing| *existing == action) {
+            actions.push(action);
+        }
+    }
+
+    if actions.is_empty() {
+        actions.push("Die Aktion wurde vom Harness gestoppt. Pruefe den naechsten erlaubten Arbeitsschritt, halte Evidenz fest und versuche danach erneut fortzufahren.");
+    }
+
+    format!(
+        "Diese Aktion wurde noch nicht ausgefuehrt, weil der abgesicherte Arbeitsablauf unvollstaendig ist. {}\nWenn du eine kompakte Diagnose brauchst, nutze `ctox process-mining guidance --limit 50` und arbeite die dort genannten naechsten Schritte ab.",
+        actions.join(" ")
+    )
 }
 
 #[cfg(test)]
@@ -192,6 +233,22 @@ mod tests {
             |row| row.get(0),
         )?;
         assert_eq!(accepted, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn rejected_transition_error_is_agent_readable_without_internal_ids() -> Result<()> {
+        let conn = Connection::open_in_memory()?;
+        let err =
+            enforce_core_transition(&conn, &founder_send_request(CoreEvidenceRefs::default()))
+                .expect_err("founder send without review must be rejected");
+        let message = err.to_string();
+
+        assert!(message.contains("Sende diese Founder-Kommunikation noch nicht"));
+        assert!(message.contains("ctox process-mining guidance --limit 50"));
+        assert!(!message.contains("ctp-"));
+        assert!(!message.contains("founder_send_requires_review_audit"));
+        assert!(!message.contains("core transition guard rejected"));
         Ok(())
     }
 }

@@ -2519,7 +2519,7 @@ fn start_prompt_worker(
                                     "Execution slice hit the turn time budget. Durable continuation: {}",
                                     title
                                 );
-                                close_ticket_self_work_item(&root, work_id, &note);
+                                supersede_ticket_self_work_item(&root, work_id, &note);
                             } else {
                                 let note = format!("Execution slice failed: {}", compact_error);
                                 block_ticket_self_work_item(&root, work_id, &note);
@@ -4118,7 +4118,7 @@ fn route_assigned_ticket_self_work(root: &Path, state: &Arc<Mutex<SharedState>>)
             continue;
         }
         if let Some(reason) = suppress_self_work_reason(root, &item)? {
-            close_ticket_self_work_item(
+            supersede_ticket_self_work_item(
                 root,
                 &item.work_id,
                 &format!("Closed without routing because the work was superseded: {reason}"),
@@ -4878,7 +4878,7 @@ fn cancel_runnable_thread_tasks_for_strategy(
             },
         )?;
         if let Some(work_id) = task.ticket_self_work_id.as_deref() {
-            close_ticket_self_work_item(root, work_id, note);
+            supersede_ticket_self_work_item(root, work_id, note);
         }
         cancelled += 1;
     }
@@ -4949,7 +4949,7 @@ fn maybe_redirect_owner_visible_work_to_strategy_setup(
         let _ = tickets::ack_leased_ticket_events(root, &job.leased_ticket_event_keys, "blocked");
     }
     if let Some(work_id) = job.ticket_self_work_id.as_deref() {
-        close_ticket_self_work_item(
+        supersede_ticket_self_work_item(
             root,
             work_id,
             "Closed without execution because canonical Vision and Mission must be established in SQLite before strategic work continues.",
@@ -5306,7 +5306,7 @@ fn maybe_redirect_platform_work_to_expertise_passes(
         job.suggested_skill.as_deref(),
     )?;
     if let Some(work_id) = job.ticket_self_work_id.as_deref() {
-        close_ticket_self_work_item(
+        supersede_ticket_self_work_item(
             root,
             work_id,
             &format!(
@@ -5537,7 +5537,7 @@ fn maybe_skip_superseded_self_work_prompt(
     if !job.leased_ticket_event_keys.is_empty() {
         let _ = tickets::ack_leased_ticket_events(root, &job.leased_ticket_event_keys, "blocked");
     }
-    close_ticket_self_work_item(
+    supersede_ticket_self_work_item(
         root,
         work_id,
         &format!("Closed without execution because the work was superseded: {reason}"),
@@ -5642,7 +5642,7 @@ fn requeue_review_rejected_self_work(
         "internal",
     )?;
     if let Some(reason) = suppress_self_work_reason(root, &item)? {
-        close_ticket_self_work_item(
+        supersede_ticket_self_work_item(
             root,
             work_id,
             &format!(
@@ -5710,6 +5710,17 @@ fn close_ticket_self_work_item(root: &Path, work_id: &str, note: &str) {
         root,
         work_id,
         "closed",
+        "ctox-service",
+        Some(note),
+        "internal",
+    );
+}
+
+fn supersede_ticket_self_work_item(root: &Path, work_id: &str, note: &str) {
+    let _ = tickets::transition_ticket_self_work_item(
+        root,
+        work_id,
+        "superseded",
         "ctox-service",
         Some(note),
         "internal",
@@ -9060,7 +9071,7 @@ mod tests {
         let self_work = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
             .expect("failed to list mission self-work");
         assert_eq!(self_work.len(), 1);
-        close_ticket_self_work_item(
+        supersede_ticket_self_work_item(
             &root,
             &self_work[0].work_id,
             "superseded by canonical mission conversation",
