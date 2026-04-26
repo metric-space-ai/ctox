@@ -374,7 +374,11 @@ fn assess_review_requirement(
     let founder_or_owner_email = matches!(
         request.source_label.to_ascii_lowercase().as_str(),
         "email:owner" | "email:founder" | "email:admin"
-    );
+    ) || request
+        .artifact_action
+        .as_deref()
+        .map(|value| value.to_ascii_lowercase().contains("founder"))
+        .unwrap_or(false);
     if founder_or_owner_email {
         score = score.saturating_add(3);
         push_unique_reason(&mut reasons, "founder_communication");
@@ -416,9 +420,18 @@ fn build_review_prompt(request: &CompletionReviewRequest, reasons: &[String]) ->
     } else {
         request.review_skill_path.trim()
     };
-    let artifact_kind = match request.source_label.to_ascii_lowercase().as_str() {
-        "email:owner" | "email:founder" | "email:admin" => "founder_or_owner_outbound_email_draft",
-        _ => "reviewed_output_artifact",
+    let founder_artifact = matches!(
+        request.source_label.to_ascii_lowercase().as_str(),
+        "email:owner" | "email:founder" | "email:admin"
+    ) || request
+        .artifact_action
+        .as_deref()
+        .map(|value| value.to_ascii_lowercase().contains("founder"))
+        .unwrap_or(false);
+    let artifact_kind = if founder_artifact {
+        "founder_or_owner_outbound_email_draft"
+    } else {
+        "reviewed_output_artifact"
     };
     let artifact_text = if request.artifact_text.trim().is_empty() {
         "(empty artifact)"
@@ -461,10 +474,7 @@ fn build_review_prompt(request: &CompletionReviewRequest, reasons: &[String]) ->
     } else {
         request.commitment_backing.join(" | ")
     };
-    let founder_specific_work = if matches!(
-        request.source_label.to_ascii_lowercase().as_str(),
-        "email:owner" | "email:founder" | "email:admin"
-    ) {
+    let founder_specific_work = if founder_artifact {
         "\
 Founder/owner communication gate:\n\
 - judge the outbound draft itself as the artifact under review\n\
@@ -855,23 +865,32 @@ mod tests {
             artifact_action: Some("reply".to_string()),
             artifact_to: vec!["o.schaefers@gmx.net".to_string()],
             artifact_cc: vec!["michael.welsch@metric-space.ai".to_string()],
-            artifact_attachments: vec!["/srv/runtime/communication/artifacts/jami/ctox-jami-setup.pdf".to_string()],
+            artifact_attachments: vec![
+                "/srv/runtime/communication/artifacts/jami/ctox-jami-setup.pdf".to_string(),
+            ],
             required_deliverables: vec!["qr_code".to_string()],
-            artifact_commitments: vec!["Today, 24.04.2026, send an update by 20:00 UTC.".to_string()],
-            commitment_backing: vec!["kunstmen founder update 20utc @ 2026-04-24T20:00:00+00:00".to_string()],
+            artifact_commitments: vec![
+                "Today, 24.04.2026, send an update by 20:00 UTC.".to_string()
+            ],
+            commitment_backing: vec![
+                "kunstmen founder update 20utc @ 2026-04-24T20:00:00+00:00".to_string()
+            ],
         };
         let rendered = build_review_prompt(&request, &["founder_communication".to_string()]);
         assert!(rendered.contains("Artifact kind: founder_or_owner_outbound_email_draft"));
         assert!(rendered.contains("judge the outbound draft itself as the artifact under review"));
         assert!(rendered.contains("Artifact action: reply"));
         assert!(rendered.contains("Artifact to: o.schaefers@gmx.net"));
+        assert!(rendered.contains("Artifact cc: michael.welsch@metric-space.ai"));
         assert!(rendered.contains(
-            "Artifact cc: michael.welsch@metric-space.ai"
+            "Artifact attachments: /srv/runtime/communication/artifacts/jami/ctox-jami-setup.pdf"
         ));
-        assert!(rendered.contains("Artifact attachments: /srv/runtime/communication/artifacts/jami/ctox-jami-setup.pdf"));
         assert!(rendered.contains("Required deliverables: qr_code"));
-        assert!(rendered.contains("Artifact commitments: Today, 24.04.2026, send an update by 20:00 UTC."));
-        assert!(rendered.contains("Commitment backing: kunstmen founder update 20utc @ 2026-04-24T20:00:00+00:00"));
+        assert!(rendered
+            .contains("Artifact commitments: Today, 24.04.2026, send an update by 20:00 UTC."));
+        assert!(rendered.contains(
+            "Commitment backing: kunstmen founder update 20utc @ 2026-04-24T20:00:00+00:00"
+        ));
         assert!(rendered.contains("judge the full mail action, not just the prose"));
         assert!(rendered.contains("treat every listed required deliverable as mandatory"));
         assert!(rendered.contains("future promise, dated commitment, or deadline promise"));

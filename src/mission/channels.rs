@@ -1249,6 +1249,16 @@ pub(crate) struct FounderReplyAction {
     pub attachments: Vec<String>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub(crate) struct FounderOutboundAction {
+    pub account_key: String,
+    pub thread_key: String,
+    pub subject: String,
+    pub to: Vec<String>,
+    pub cc: Vec<String>,
+    pub attachments: Vec<String>,
+}
+
 fn sync_channel(root: &Path, db_path: &Path, channel: &str, args: &[String]) -> Result<Value> {
     let conn = open_channel_db(db_path)?;
     match communication_adapters::external_adapter_for_channel(channel) {
@@ -2091,6 +2101,77 @@ fn founder_reply_review_digest(
     (action_digest, action_json, body_sha256)
 }
 
+fn founder_outbound_review_digest(
+    action: &FounderOutboundAction,
+    body: &str,
+) -> (String, String, String) {
+    let action_json = json!({
+        "account_key": &action.account_key,
+        "thread_key": &action.thread_key,
+        "subject": &action.subject,
+        "to": &action.to,
+        "cc": &action.cc,
+        "attachments": &action.attachments,
+    })
+    .to_string();
+    let body_sha256 = format!("{:x}", Sha256::digest(body.trim().as_bytes()));
+    let mut hasher = Sha256::new();
+    hasher.update(action_json.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(body_sha256.as_bytes());
+    let action_digest = format!("{:x}", hasher.finalize());
+    (action_digest, action_json, body_sha256)
+}
+
+pub(crate) fn default_email_account_key(root: &Path) -> Result<String> {
+    let db_path = resolve_db_path(root, None);
+    bootstrap_channel_account(root, "email")?;
+    let conn = open_channel_db(&db_path)?;
+    resolve_account_key(&conn, "email", None)
+}
+
+pub(crate) fn record_founder_outbound_review_approval(
+    root: &Path,
+    anchor_message_key: &str,
+    action: &FounderOutboundAction,
+    body: &str,
+    review_summary: &str,
+) -> Result<()> {
+    let db_path = resolve_db_path(root, None);
+    let conn = open_channel_db(&db_path)?;
+    let (action_digest, action_json, body_sha256) = founder_outbound_review_digest(action, body);
+    let approval_key = format!("founder-outbound-review:{anchor_message_key}:{action_digest}");
+    conn.execute(
+        r#"
+        INSERT INTO communication_founder_reply_reviews (
+            approval_key, inbound_message_key, action_digest, action_json,
+            body_sha256, reviewer, review_summary, approved_at, sent_at, send_result_json
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, 'external-review', ?6, ?7, NULL, '{}')
+        ON CONFLICT(inbound_message_key, action_digest) DO UPDATE SET
+            approval_key=excluded.approval_key,
+            action_json=excluded.action_json,
+            body_sha256=excluded.body_sha256,
+            reviewer=excluded.reviewer,
+            review_summary=excluded.review_summary,
+            approved_at=excluded.approved_at,
+            sent_at=NULL,
+            send_result_json='{}'
+        "#,
+        params![
+            approval_key,
+            anchor_message_key,
+            action_digest,
+            action_json,
+            body_sha256,
+            review_summary,
+            now_iso_string()
+        ],
+    )
+    .context("failed to record founder outbound review approval")?;
+    Ok(())
+}
+
 fn require_unconsumed_founder_reply_review(
     conn: &Connection,
     inbound_message_key: &str,
@@ -2115,6 +2196,34 @@ fn require_unconsumed_founder_reply_review(
         .context("failed to load founder reply review approval")?;
     approval_key.with_context(|| {
         "reviewed founder reply has no matching unconsumed review approval for the exact body, recipients, cc, subject, and attachments"
+            .to_string()
+    })
+}
+
+fn require_unconsumed_founder_outbound_review(
+    conn: &Connection,
+    anchor_message_key: &str,
+    action: &FounderOutboundAction,
+    body: &str,
+) -> Result<String> {
+    let (action_digest, _, _) = founder_outbound_review_digest(action, body);
+    let approval_key = conn
+        .query_row(
+            r#"
+            SELECT approval_key
+            FROM communication_founder_reply_reviews
+            WHERE inbound_message_key = ?1
+              AND action_digest = ?2
+              AND sent_at IS NULL
+            LIMIT 1
+            "#,
+            params![anchor_message_key, action_digest],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .context("failed to load founder outbound review approval")?;
+    approval_key.with_context(|| {
+        "reviewed founder outbound has no matching unconsumed review approval for the exact body, recipients, cc, subject, and attachments"
             .to_string()
     })
 }
@@ -2263,6 +2372,52 @@ pub fn send_reviewed_founder_reply(
         &request.body,
         &request.attachments,
     )?;
+    let send_result = send_email_message(root, &conn, &db_path, &request)?;
+    mark_founder_reply_review_sent(&conn, &approval_key, &send_result)?;
+    Ok(send_result)
+}
+
+pub(crate) fn send_reviewed_founder_outbound(
+    root: &Path,
+    anchor_message_key: &str,
+    action: &FounderOutboundAction,
+    body: &str,
+) -> Result<Value> {
+    let db_path = resolve_db_path(root, None);
+    let conn = open_channel_db(&db_path)?;
+    let request = resolve_outbound_subject(
+        &conn,
+        ChannelSendRequest {
+            channel: "email".to_string(),
+            account_key: action.account_key.clone(),
+            thread_key: action.thread_key.clone(),
+            body: body.trim().to_string(),
+            subject: action.subject.clone(),
+            to: action.to.clone(),
+            cc: action.cc.clone(),
+            attachments: action.attachments.clone(),
+            sender_display: None,
+            sender_address: None,
+            send_voice: false,
+            reviewed_founder_send: true,
+        },
+    )?;
+    let settings = communication_gateway::runtime_settings_from_root(
+        root,
+        communication_gateway::CommunicationAdapterKind::Email,
+    );
+    let protected = protected_recipient_policies(&settings, &request);
+    anyhow::ensure!(
+        !protected.is_empty(),
+        "reviewed founder outbound requires founder/owner/admin recipient"
+    );
+    let approval_key = require_unconsumed_founder_outbound_review(
+        &conn,
+        anchor_message_key,
+        action,
+        &request.body,
+    )?;
+    ensure_founder_outbound_body_clean(&request)?;
     let send_result = send_email_message(root, &conn, &db_path, &request)?;
     mark_founder_reply_review_sent(&conn, &approval_key, &send_result)?;
     Ok(send_result)

@@ -76,6 +76,7 @@ use crate::inference::supervisor;
 use crate::inference::turn_loop;
 use crate::lcm;
 use crate::mission::communication_adapters;
+use crate::mission::communication_gateway;
 use crate::mission::plan;
 use crate::mission::tickets;
 use crate::review;
@@ -2332,6 +2333,14 @@ fn start_prompt_worker(
                     Ok(reply) => {
                         let founder_reply_key =
                             founder_email_reply_message_key(&job).map(ToOwned::to_owned);
+                        let proactive_founder_action = if founder_reply_key.is_none() {
+                            proactive_founder_outbound_action(&root, &job)
+                        } else {
+                            None
+                        };
+                        let proactive_founder_anchor = proactive_founder_action
+                            .as_ref()
+                            .and_then(|_| founder_outbound_anchor_key(&job).map(ToOwned::to_owned));
                         let founder_reply_action =
                             founder_reply_key.as_ref().and_then(|message_key| {
                                 channels::prepare_reviewed_founder_reply(&root, message_key).ok()
@@ -2360,6 +2369,26 @@ fn start_prompt_worker(
                                                 false
                                             }
                                         },
+                                        Err(err) => {
+                                            founder_send_error = Some(err.to_string());
+                                            false
+                                        }
+                                    }
+                                }
+                                CompletionReviewDisposition::None
+                                | CompletionReviewDisposition::Hold { .. }
+                                | CompletionReviewDisposition::RequeueSelfWork { .. } => false,
+                            }
+                        } else if let (Some(anchor_key), Some(action)) = (
+                            proactive_founder_anchor.as_deref(),
+                            proactive_founder_action.as_ref(),
+                        ) {
+                            match &review_disposition {
+                                CompletionReviewDisposition::Approved => {
+                                    match channels::send_reviewed_founder_outbound(
+                                        &root, anchor_key, action, &reply,
+                                    ) {
+                                        Ok(_) => true,
                                         Err(err) => {
                                             founder_send_error = Some(err.to_string());
                                             false
@@ -2663,16 +2692,22 @@ fn run_completion_review(
     let founder_reply_key = founder_email_reply_message_key(job);
     let founder_reply_action = founder_reply_key
         .and_then(|message_key| channels::prepare_reviewed_founder_reply(root, message_key).ok());
+    let proactive_founder_action = if founder_reply_key.is_none() {
+        proactive_founder_outbound_action(root, job)
+    } else {
+        None
+    };
     let founder_required_deliverables = founder_reply_key
         .and_then(|message_key| {
             channels::required_founder_reply_deliverables(root, message_key).ok()
         })
         .unwrap_or_default();
-    let founder_commitments = if is_founder_or_owner_email_job(job) {
-        detect_founder_mail_commitments(reply_text)
-    } else {
-        Vec::new()
-    };
+    let founder_commitments =
+        if is_founder_or_owner_email_job(job) || proactive_founder_action.is_some() {
+            detect_founder_mail_commitments(reply_text)
+        } else {
+            Vec::new()
+        };
     let founder_commitment_backing = if founder_commitments.is_empty() {
         Vec::new()
     } else {
@@ -2688,25 +2723,47 @@ fn run_completion_review(
         runtime_db_path: db_path.to_string_lossy().to_string(),
         review_skill_path,
         artifact_text: reply_text.to_string(),
-        artifact_action: founder_reply_action.as_ref().map(|_| "reply".to_string()),
+        artifact_action: founder_reply_action
+            .as_ref()
+            .map(|_| "reply".to_string())
+            .or_else(|| {
+                proactive_founder_action
+                    .as_ref()
+                    .map(|_| "proactive_founder_outbound_email".to_string())
+            }),
         artifact_to: founder_reply_action
             .as_ref()
             .map(|action| action.to.clone())
+            .or_else(|| {
+                proactive_founder_action
+                    .as_ref()
+                    .map(|action| action.to.clone())
+            })
             .unwrap_or_default(),
         artifact_cc: founder_reply_action
             .as_ref()
             .map(|action| action.cc.clone())
+            .or_else(|| {
+                proactive_founder_action
+                    .as_ref()
+                    .map(|action| action.cc.clone())
+            })
             .unwrap_or_default(),
         artifact_attachments: founder_reply_action
             .as_ref()
             .map(|action| action.attachments.clone())
+            .or_else(|| {
+                proactive_founder_action
+                    .as_ref()
+                    .map(|action| action.attachments.clone())
+            })
             .unwrap_or_default(),
         required_deliverables: founder_required_deliverables,
         artifact_commitments: founder_commitments.clone(),
         commitment_backing: founder_commitment_backing.clone(),
     };
     let mut outcome = review::review_completion_if_needed(root, &review_request, reply_text);
-    if is_founder_or_owner_email_job(job) {
+    if is_founder_or_owner_email_job(job) || proactive_founder_action.is_some() {
         if let Some(guard_outcome) = founder_commitment_guard_outcome(
             &review_request.artifact_commitments,
             &review_request.commitment_backing,
@@ -2836,6 +2893,58 @@ fn run_completion_review(
                     CompletionReviewDisposition::Hold {
                         summary: outcome.summary.clone(),
                     }
+                }
+            }
+            _ => CompletionReviewDisposition::Hold {
+                summary: outcome.summary.clone(),
+            },
+        };
+    }
+    if let (Some(anchor_key), Some(action)) = (
+        founder_outbound_anchor_key(job),
+        proactive_founder_action.as_ref(),
+    ) {
+        return match outcome.verdict {
+            review::ReviewVerdict::Pass => {
+                if let Err(err) = channels::record_founder_outbound_review_approval(
+                    root,
+                    anchor_key,
+                    action,
+                    reply_text,
+                    &outcome.summary,
+                ) {
+                    push_event(
+                        state,
+                        format!(
+                            "Founder outbound review passed for {} but approval persistence failed: {}",
+                            job.source_label, err
+                        ),
+                    );
+                    CompletionReviewDisposition::Hold {
+                        summary: err.to_string(),
+                    }
+                } else {
+                    CompletionReviewDisposition::Approved
+                }
+            }
+            review::ReviewVerdict::Fail | review::ReviewVerdict::Partial
+                if actionable_rejection =>
+            {
+                match enqueue_review_rework(root, job, &outcome) {
+                    Ok(title) => push_event(
+                        state,
+                        format!("Founder outbound review rework enqueued: {title}"),
+                    ),
+                    Err(err) => push_event(
+                        state,
+                        format!(
+                            "Founder outbound review rework enqueue failed for {}: {}",
+                            job.source_label, err
+                        ),
+                    ),
+                }
+                CompletionReviewDisposition::Hold {
+                    summary: outcome.summary.clone(),
                 }
             }
             _ => CompletionReviewDisposition::Hold {
@@ -4416,6 +4525,93 @@ fn founder_email_reply_message_key(job: &QueuedPrompt) -> Option<&str> {
         .iter()
         .find(|key| key.starts_with("email:"))
         .map(|key| key.as_str())
+}
+
+fn founder_outbound_anchor_key(job: &QueuedPrompt) -> Option<&str> {
+    job.leased_message_keys.first().map(|key| key.as_str())
+}
+
+fn extract_email_addresses(text: &str) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut emails = Vec::new();
+    for token in text.split_whitespace() {
+        let candidate = token
+            .trim_matches(|ch: char| {
+                matches!(
+                    ch,
+                    '<' | '>' | '(' | ')' | '[' | ']' | '{' | '}' | ',' | ';' | ':' | '"' | '\''
+                )
+            })
+            .trim_end_matches('.')
+            .to_ascii_lowercase();
+        if !candidate.contains('@') || !candidate.contains('.') {
+            continue;
+        }
+        let valid = candidate
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '@' | '.' | '_' | '-' | '+'));
+        if valid && seen.insert(candidate.clone()) {
+            emails.push(candidate);
+        }
+    }
+    emails
+}
+
+fn proactive_founder_outbound_action(
+    root: &Path,
+    job: &QueuedPrompt,
+) -> Option<channels::FounderOutboundAction> {
+    let source = job.source_label.to_ascii_lowercase();
+    if !matches!(source.as_str(), "tui" | "queue" | "ticket:local") {
+        return None;
+    }
+    let haystack = format!("{}\n{}", job.preview, job.prompt);
+    let lowered = haystack.to_ascii_lowercase();
+    let explicit_reviewed_send = lowered.contains("reviewed founder outbound")
+        || lowered.contains("reviewed founder-send")
+        || lowered.contains("reviewed founder send")
+        || lowered.contains("reviewed service path")
+        || lowered.contains("founder-kommunikation")
+        || lowered.contains("founder communication");
+    if !explicit_reviewed_send {
+        return None;
+    }
+    let settings = communication_gateway::runtime_settings_from_root(
+        root,
+        communication_gateway::CommunicationAdapterKind::Email,
+    );
+    let recipients = extract_email_addresses(&haystack);
+    if recipients.is_empty() {
+        return None;
+    }
+    let has_protected_recipient = recipients.iter().any(|email| {
+        let policy = channels::classify_email_sender(&settings, email);
+        matches!(policy.role.as_str(), "owner" | "founder" | "admin")
+    });
+    if !has_protected_recipient {
+        return None;
+    }
+    let account_key = channels::default_email_account_key(root).ok()?;
+    let thread_key = job
+        .thread_key
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "founder-proactive-outbound".to_string());
+    let subject = if lowered.contains("crm") {
+        "CRM-Entscheidung und Kunstmen-Integration".to_string()
+    } else if lowered.contains("wettbewerb") || lowered.contains("competitor") {
+        "Kunstmen Wettbewerbsmonitoring".to_string()
+    } else {
+        "Kunstmen Update".to_string()
+    };
+    Some(channels::FounderOutboundAction {
+        account_key,
+        thread_key,
+        subject,
+        to: recipients,
+        cc: Vec::new(),
+        attachments: Vec::new(),
+    })
 }
 
 fn detect_founder_mail_commitments(text: &str) -> Vec<String> {
