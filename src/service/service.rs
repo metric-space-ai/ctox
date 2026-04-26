@@ -3715,6 +3715,9 @@ fn monitor_mission_continuity(root: &Path, state: &Arc<Mutex<SharedState>>) -> R
         if mission_is_internal_harness_or_forensics(mission) {
             return false;
         }
+        if mission_watchdog_terminal_follow_up_exists(root, mission).unwrap_or(true) {
+            return false;
+        }
         if idle_secs < mission_idle_tolerance_secs(mission) {
             return false;
         }
@@ -6148,6 +6151,27 @@ fn mission_is_internal_harness_or_forensics(mission: &lcm::MissionStateRecord) -
             || haystack.contains("interner")
             || haystack.contains("knowledge-put")
             || haystack.contains("harness_forensics"))
+}
+
+fn mission_watchdog_terminal_follow_up_exists(
+    root: &Path,
+    mission: &lcm::MissionStateRecord,
+) -> Result<bool> {
+    let dedupe_key = mission_watchdog_dedupe_key(mission);
+    let items = tickets::list_ticket_self_work_items(root, Some("local"), None, 512)?;
+    Ok(items.into_iter().any(|item| {
+        item.kind == "mission-follow-up"
+            && item
+                .metadata
+                .get("dedupe_key")
+                .and_then(Value::as_str)
+                .map(|value| value == dedupe_key)
+                .unwrap_or(false)
+            && (matches!(
+                item.state.as_str(),
+                "blocked" | "cancelled" | "closed" | "superseded"
+            ) || self_work_has_explicit_supersession(&item))
+    }))
 }
 
 fn mission_task_priority(mission: &lcm::MissionStateRecord) -> &'static str {
@@ -8801,6 +8825,62 @@ mod tests {
         assert!(events
             .iter()
             .any(|event| event.mechanism_id == "mission_idle_watchdog"));
+    }
+
+    #[test]
+    fn mission_watcher_does_not_reopen_terminal_follow_up() {
+        let root = temp_root("ctox-mission-watcher-terminal-follow-up");
+        std::fs::create_dir_all(root.join("runtime")).expect("failed to create runtime dir");
+        let engine = lcm::LcmEngine::open(
+            &root.join("runtime/ctox.sqlite3"),
+            lcm::LcmConfig::default(),
+        )
+        .expect("failed to open lcm");
+        let _ = engine
+            .continuity_init_documents(turn_loop::CHAT_CONVERSATION_ID)
+            .expect("failed to init continuity");
+        engine
+            .continuity_apply_diff(
+                turn_loop::CHAT_CONVERSATION_ID,
+                lcm::ContinuityKind::Focus,
+                "## Status\n+ Mission: Build and operate the Airbnb clone.\n+ Mission state: active\n+ Continuation mode: continuous\n+ Trigger intensity: hot\n## Blocker\n+ Current blocker: none\n## Next\n+ Next slice: implement the host onboarding flow\n## Done / Gate\n+ Done gate: do not close while the capability audit is still open\n+ Closure confidence: low\n",
+            )
+            .expect("failed to update focus");
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        {
+            let mut shared = state.lock().expect("service state poisoned");
+            shared.last_progress_epoch_secs = current_epoch_secs().saturating_sub(90);
+        }
+
+        monitor_mission_continuity(&root, &state).expect("mission watcher should enqueue once");
+        let tasks = channels::list_queue_tasks(&root, &["pending".to_string()], 10)
+            .expect("failed to list queue tasks");
+        assert_eq!(tasks.len(), 1);
+        channels::set_queue_task_route_status(&root, &tasks[0].message_key, "cancelled")
+            .expect("failed to cancel queued task");
+        let self_work = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
+            .expect("failed to list mission self-work");
+        assert_eq!(self_work.len(), 1);
+        close_ticket_self_work_item(
+            &root,
+            &self_work[0].work_id,
+            "superseded by canonical mission conversation",
+        );
+
+        {
+            let mut shared = state.lock().expect("service state poisoned");
+            shared.last_progress_epoch_secs = current_epoch_secs().saturating_sub(90);
+        }
+        monitor_mission_continuity(&root, &state)
+            .expect("mission watcher should skip terminal follow-up");
+
+        let tasks = channels::list_queue_tasks(&root, &["pending".to_string()], 10)
+            .expect("failed to list queue tasks");
+        assert!(tasks.is_empty());
+        let self_work = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
+            .expect("failed to list mission self-work");
+        assert_eq!(self_work.len(), 1);
+        assert_eq!(self_work[0].state, "closed");
     }
 
     #[test]
