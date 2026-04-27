@@ -2219,12 +2219,61 @@ fn refresh_service_unit(
         ensure_dir(parent)?;
     }
     fs::write(&marker, "").with_context(|| format!("failed to update {}", marker.display()))?;
+
+    install_ctox_watchdog_units(&service_dir)?;
+
     let _ = Command::new("systemctl")
         .args(["--user", "daemon-reload"])
         .status();
     let _ = Command::new("systemctl")
         .args(["--user", "enable", "ctox.service"])
         .status();
+    let _ = Command::new("systemctl")
+        .args(["--user", "enable", "--now", "ctox-watchdog.timer"])
+        .status();
+    Ok(())
+}
+
+/// Writes the watchdog timer + service that re-starts ctox.service if it ever
+/// drops out of the active state. `Restart=always` in the unit file does NOT
+/// trigger after an explicit `systemctl stop` (e.g. from an upgrade pipeline
+/// that crashed between stop and start, or a misbehaving skill that stopped
+/// the service and never re-started it). The watchdog closes that loop with
+/// a minutely guard: `is-active --quiet || start`. ConditionPathExists ensures
+/// the timer stays dormant if the user uninstalled ctox.service entirely.
+fn install_ctox_watchdog_units(service_dir: &Path) -> Result<()> {
+    let watchdog_service = service_dir.join("ctox-watchdog.service");
+    let watchdog_timer = service_dir.join("ctox-watchdog.timer");
+
+    // The ExecStart guard runs `is-active --quiet ctox.service`; if exit != 0,
+    // start it. We use `bash -c` because systemd ExecStart does not natively
+    // chain `||`. We do not use `RemainAfterExit` since this is one-shot per
+    // tick; the timer keeps re-firing.
+    let watchdog_service_contents = "[Unit]\n\
+Description=CTOX Background Service Watchdog\n\
+ConditionPathExists=%h/.config/systemd/user/ctox.service\n\
+\n\
+[Service]\n\
+Type=oneshot\n\
+ExecStart=/bin/bash -c 'systemctl --user is-active --quiet ctox.service || systemctl --user start ctox.service'\n";
+
+    let watchdog_timer_contents = "[Unit]\n\
+Description=CTOX Background Service Watchdog Timer\n\
+ConditionPathExists=%h/.config/systemd/user/ctox.service\n\
+\n\
+[Timer]\n\
+OnBootSec=30s\n\
+OnUnitActiveSec=60s\n\
+AccuracySec=5s\n\
+Persistent=true\n\
+\n\
+[Install]\n\
+WantedBy=timers.target\n";
+
+    fs::write(&watchdog_service, watchdog_service_contents)
+        .with_context(|| format!("failed to write {}", watchdog_service.display()))?;
+    fs::write(&watchdog_timer, watchdog_timer_contents)
+        .with_context(|| format!("failed to write {}", watchdog_timer.display()))?;
     Ok(())
 }
 
