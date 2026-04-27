@@ -24,6 +24,27 @@ Do not derive register from prompt wording. Derive it from the recipient classif
 
 Anti-pattern: addressing the operator/founders with "Sehr geehrter Herr X / Sehr geehrte Damen und Herren" — these are colleagues, not Mandanten.
 
+## Prior-Communication Sufficiency Check (proactive outbound)
+
+Before producing the body of a **proactive** outbound founder/owner mail (i.e. a mail not triggered as a reply to a specific inbound), the agent runs the following check:
+
+1. Query `communication_messages` for outbound mails with overlapping recipients, sent within the last 24h:
+   ```
+   SELECT message_key, subject, datetime(observed_at), substr(body_text, 1, 200)
+   FROM communication_messages
+   WHERE direction = 'outbound'
+     AND recipient_addresses_json LIKE '%<recipient>%'
+     AND observed_at > strftime('%s','now')-86400
+   ORDER BY rowid DESC LIMIT 5;
+   ```
+2. If there is recent overlap **and** the operator's prompt does not explicitly state a *new* anchor (a reply-to context, a deadline, a separate reason), do **not** produce a body. Instead reply with:
+   - the overlapping prior mail's key and subject,
+   - the question whether the proactive resend is intended,
+   - or a request to the operator for an explicit follow-up purpose.
+3. If overlap exists but the prompt names a clear new purpose (deadline, reply-to, escalation), include that purpose explicitly in the body and proceed.
+
+This check prevents "unanchored proactive resends" — the reviewer treats those as failed gates by design.
+
 ## Scope
 
 - Channels are limited to `tui`, `email`, and `jami`.
@@ -169,6 +190,16 @@ CTOX core does **not** scan the outbound body for "internal vocabulary" — body
 If you need to mention a deliverable, name the **business artifact** (the file the recipient cares about, the date, the decision, the next step), not the CTOX subsystem that produced it.
 
 If you cannot describe something to the founder without leaking internal vocabulary, that is a signal the message is not ready to send — request a clarifying review or escalate to TUI.
+
+**Specific phrases observed leaking from earlier production runs — do not include these in mandantengerechte oder founder-kollegiale prose:**
+
+- "über die TUI" / "via TUI" / "in der TUI"   → say "in einem Folge-Gespräch" or omit
+- "reviewed founder send Pfad" / "reviewed-founder-send" → say "über den freigegebenen, nachvollziehbaren Versandweg" or just omit
+- "queue", "pending", "leased", "self-work"   → these are runtime mechanics, not for mandantengerechtes Briefing
+- "runtime/ctox.sqlite3", "host-pfade", "VPS-Pfade", "conversation_id", "thread_key"  → never. Use "in unseren Unterlagen" / "im Vorgangs-Sicht-Stand"
+- "process-mining", "harness-mining", "review_disposition", "approval_key" → operator vocabulary; do not surface to recipients
+
+If unsure, paraphrase to plain business German.
 
 ## References
 

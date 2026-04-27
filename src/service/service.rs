@@ -546,6 +546,10 @@ pub fn run_foreground(root: &Path) -> Result<()> {
 
 fn run_boot_state_invariant_check(root: &Path, state: &Arc<Mutex<SharedState>>) {
     run_plan_routing_repair(root, state, "boot");
+    // P2 — flush any mission_state field-clobber attempts that the guard
+    // suppressed during pre-boot writes (the previous run may have
+    // ended without flushing if it crashed before the turn-end pass).
+    lcm::drain_pending_mission_state_clobber_events_to_governance(root);
     match state_invariants::evaluate_runtime_state_invariants(root, turn_loop::CHAT_CONVERSATION_ID)
     {
         Ok(report) => {
@@ -842,6 +846,11 @@ fn run_turn_end_state_invariant_check(
     conversation_id: i64,
 ) -> Option<lcm::MissionStateRecord> {
     run_plan_routing_repair(root, state, "turn");
+    // P2 — flush any mission_state field-clobber attempts that the guard
+    // suppressed during the just-finished turn. Done at turn-end (and at
+    // boot) so the audit trail catches them on the same DB connection
+    // pass that records the rest of the post-turn governance updates.
+    lcm::drain_pending_mission_state_clobber_events_to_governance(root);
     match state_invariants::evaluate_runtime_state_invariants(root, conversation_id) {
         Ok(report) => {
             let violation_codes = report
