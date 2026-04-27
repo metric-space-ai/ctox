@@ -237,6 +237,11 @@ struct ChatSubmitRequest {
     thread_key: Option<String>,
     #[serde(default)]
     outbound_email: Option<channels::FounderOutboundAction>,
+    /// Operator-set anchor for TUI-initiated proactive outbound jobs that
+    /// have no leased inbound message key. Routed through into
+    /// `QueuedPrompt.outbound_anchor` verbatim.
+    #[serde(default)]
+    outbound_anchor: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -263,6 +268,11 @@ enum ServiceIpcRequest {
         thread_key: Option<String>,
         #[serde(default)]
         outbound_email: Option<channels::FounderOutboundAction>,
+        /// Operator-set anchor for TUI-initiated proactive outbound jobs
+        /// that have no leased inbound message key. Routed through into
+        /// `QueuedPrompt.outbound_anchor` verbatim.
+        #[serde(default)]
+        outbound_anchor: Option<String>,
     },
     Stop,
     ScrapeApi {
@@ -370,6 +380,10 @@ struct QueuedPrompt {
     workspace_root: Option<String>,
     ticket_self_work_id: Option<String>,
     outbound_email: Option<channels::FounderOutboundAction>,
+    /// Stable anchor key used to dedupe and reference review approvals when
+    /// the job has no leased inbound message (e.g. TUI-initiated proactive
+    /// outbound). Set explicitly by callers; never inferred at routing time.
+    outbound_anchor: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1311,6 +1325,15 @@ pub fn submit_chat_prompt_with_intent(
 ) -> Result<()> {
     let prepared = prepare_chat_prompt(root, prompt)?;
     let outbound_email = outbound_email.map(channels::FounderOutboundAction::from);
+    // TUI-initiated proactive outbound has no leased inbound message key,
+    // so without an explicit anchor the post-turn dispatcher cannot match
+    // the review approval to the draft. Mint a synthetic anchor here, at
+    // the structural boundary where we know the call originated from the
+    // TUI submit path. The format `tui-outbound:<uuid>` is reserved for
+    // this purpose and never derived from prompt content.
+    let outbound_anchor = outbound_email
+        .as_ref()
+        .map(|_| format!("tui-outbound:{}", uuid::Uuid::new_v4()));
     #[cfg(unix)]
     {
         match send_service_ipc_request(
@@ -1319,6 +1342,7 @@ pub fn submit_chat_prompt_with_intent(
                 prompt: prepared.prompt,
                 thread_key: thread_key.map(str::to_owned),
                 outbound_email,
+                outbound_anchor,
             },
         )? {
             ServiceIpcResponse::Accepted(_) => return Ok(()),
@@ -1333,6 +1357,7 @@ pub fn submit_chat_prompt_with_intent(
             prompt: prepared.prompt,
             thread_key: thread_key.map(str::to_owned),
             outbound_email,
+            outbound_anchor,
         })?;
         let response = ureq::post(&url)
             .set("content-type", "application/json")
@@ -1465,6 +1490,7 @@ fn handle_service_ipc_request(
             prompt,
             thread_key,
             outbound_email,
+            outbound_anchor,
         } => {
             let prepared = prepare_chat_prompt(root, &prompt)?;
             let prompt = prepared.prompt;
@@ -1487,6 +1513,7 @@ fn handle_service_ipc_request(
                             workspace_root: workspace_root.clone(),
                             ticket_self_work_id: None,
                             outbound_email: outbound_email.clone(),
+                            outbound_anchor: outbound_anchor.clone(),
                         },
                     );
                     ensure_queue_guard_locked(root, &mut shared);
@@ -1543,6 +1570,7 @@ fn handle_service_ipc_request(
                         workspace_root,
                         ticket_self_work_id: None,
                         outbound_email,
+                        outbound_anchor,
                     },
                 );
             }
@@ -1617,6 +1645,7 @@ fn handle_request(
                             workspace_root: workspace_root.clone(),
                             ticket_self_work_id: None,
                             outbound_email: payload.outbound_email.clone(),
+                            outbound_anchor: payload.outbound_anchor.clone(),
                         },
                     );
                     ensure_queue_guard_locked(root, &mut shared);
@@ -1673,6 +1702,7 @@ fn handle_request(
                         workspace_root,
                         ticket_self_work_id: None,
                         outbound_email: payload.outbound_email,
+                        outbound_anchor: payload.outbound_anchor,
                     },
                 );
             }
@@ -4349,6 +4379,7 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
                 workspace_root: message.workspace_root.clone(),
                 ticket_self_work_id: ticket_self_work_id_from_metadata(&message.metadata),
                 outbound_email: None,
+                outbound_anchor: None,
             },
             format!(
                 "Queued {} inbound from {}",
@@ -4486,6 +4517,7 @@ fn route_ticket_events(root: &Path, state: &Arc<Mutex<SharedState>>) -> Result<(
                 workspace_root: None,
                 ticket_self_work_id: None,
                 outbound_email: None,
+                outbound_anchor: None,
             },
             format!(
                 "Queued ticket {} event {} for dry-run-controlled handling",
@@ -4792,6 +4824,13 @@ fn founder_email_reply_message_key(job: &QueuedPrompt) -> Option<&str> {
 }
 
 fn founder_outbound_anchor_key(job: &QueuedPrompt) -> Option<&str> {
+    // Prefer an explicit operator-set anchor (e.g. TUI-initiated proactive
+    // outbound where there is no leased inbound message). Fall back to the
+    // first leased message key for inbound-driven jobs. Never derived from
+    // prompt text — this is structural.
+    if let Some(anchor) = job.outbound_anchor.as_deref() {
+        return Some(anchor);
+    }
     job.leased_message_keys.first().map(|key| key.as_str())
 }
 
@@ -6333,6 +6372,7 @@ fn ensure_queue_guard_locked(root: &Path, shared: &mut SharedState) {
         workspace_root: None,
         ticket_self_work_id: None,
         outbound_email: None,
+        outbound_anchor: None,
     });
     if let Err(err) = governance::record_event(
         root,
@@ -7048,6 +7088,7 @@ mod tests {
                 workspace_root: None,
                 ticket_self_work_id: None,
                 outbound_email: None,
+                outbound_anchor: None,
             })
             .collect();
 
@@ -7584,6 +7625,7 @@ mod tests {
                 workspace_root: None,
                 ticket_self_work_id: None,
                 outbound_email: None,
+                outbound_anchor: None,
             },
             QueuedPrompt {
                 prompt: "b".to_string(),
@@ -7597,6 +7639,7 @@ mod tests {
                 workspace_root: None,
                 ticket_self_work_id: None,
                 outbound_email: None,
+                outbound_anchor: None,
             },
         ]);
 
@@ -7819,6 +7862,7 @@ mod tests {
             workspace_root: None,
             ticket_self_work_id: None,
             outbound_email: None,
+            outbound_anchor: None,
         });
 
         let next = maybe_start_next_queued_prompt_locked(&mut shared)
@@ -8121,6 +8165,7 @@ mod tests {
                 prompt: prompt.to_string(),
                 thread_key: None,
                 outbound_email: None,
+                outbound_anchor: None,
             },
             &root,
             state.clone(),
@@ -8155,6 +8200,7 @@ mod tests {
                 prompt: "Create src/main.cpp".to_string(),
                 thread_key: Some("smoke/cpp-thread".to_string()),
                 outbound_email: None,
+                outbound_anchor: None,
             },
             &root,
             state.clone(),
@@ -8189,6 +8235,7 @@ mod tests {
                 prompt: "openAI API key:\nsk-proj-service-secret-1234567890".to_string(),
                 thread_key: None,
                 outbound_email: None,
+                outbound_anchor: None,
             },
             &root,
             state.clone(),
@@ -8456,6 +8503,7 @@ mod tests {
                 prompt: "Run an internal harness self-check.".to_string(),
                 thread_key: None,
                 outbound_email: None,
+                outbound_anchor: None,
             },
         )
         .unwrap();
@@ -8905,6 +8953,7 @@ mod tests {
                 workspace_root: None,
                 ticket_self_work_id: None,
                 outbound_email: None,
+                outbound_anchor: None,
             },
         );
         insert_pending_prompt_ordered(
@@ -8921,6 +8970,7 @@ mod tests {
                 workspace_root: None,
                 ticket_self_work_id: None,
                 outbound_email: None,
+                outbound_anchor: None,
             },
         );
 
@@ -8951,6 +9001,7 @@ mod tests {
                 workspace_root: None,
                 ticket_self_work_id: None,
                 outbound_email: None,
+                outbound_anchor: None,
             },
         );
         insert_pending_prompt_ordered(
@@ -8967,6 +9018,7 @@ mod tests {
                 workspace_root: None,
                 ticket_self_work_id: None,
                 outbound_email: None,
+                outbound_anchor: None,
             },
         );
 
@@ -9092,6 +9144,7 @@ mod tests {
             workspace_root: Some("/tmp/ctox-timeout-followup-test".to_string()),
             ticket_self_work_id: None,
             outbound_email: None,
+            outbound_anchor: None,
         };
 
         let created =
@@ -9146,6 +9199,7 @@ mod tests {
             workspace_root: Some("/tmp/ctox-timeout-followup-test".to_string()),
             ticket_self_work_id: None,
             outbound_email: None,
+            outbound_anchor: None,
         };
 
         let created =
@@ -9187,6 +9241,7 @@ mod tests {
             workspace_root: Some("/tmp/ctox-timeout-followup-test".to_string()),
             ticket_self_work_id: None,
             outbound_email: None,
+            outbound_anchor: None,
         };
 
         let created =
@@ -9591,6 +9646,7 @@ mod tests {
             workspace_root: Some("/home/ubuntu/workspace/kunstmen".to_string()),
             ticket_self_work_id: None,
             outbound_email: None,
+            outbound_anchor: None,
         };
         let outcome = review::ReviewOutcome {
             required: true,
@@ -9674,6 +9730,7 @@ mod tests {
             workspace_root: None,
             ticket_self_work_id: Some(review_item.work_id.clone()),
             outbound_email: None,
+            outbound_anchor: None,
         };
 
         let target = resolve_review_rejection_target_self_work_id(&root, &job);
@@ -9850,6 +9907,7 @@ mod tests {
             workspace_root: Some("/home/ubuntu/workspace/kunstmen".to_string()),
             ticket_self_work_id: Some(item.work_id.clone()),
             outbound_email: None,
+            outbound_anchor: None,
         };
 
         let skipped = maybe_skip_superseded_self_work_prompt(&root, &state, &job)
@@ -9986,6 +10044,7 @@ mod tests {
             workspace_root: Some("/home/ubuntu/workspace/kunstmen".to_string()),
             ticket_self_work_id: Some(item.work_id.clone()),
             outbound_email: None,
+            outbound_anchor: None,
         };
 
         let skipped = maybe_skip_superseded_self_work_prompt(&root, &state, &job)
@@ -10045,6 +10104,7 @@ mod tests {
             workspace_root: Some("/home/ubuntu/workspace/kunstmen".to_string()),
             ticket_self_work_id: None,
             outbound_email: None,
+            outbound_anchor: None,
         };
 
         let redirected = maybe_redirect_platform_work_to_expertise_passes(&root, &state, &job)
@@ -10122,6 +10182,7 @@ mod tests {
             workspace_root: Some("/home/ubuntu/workspace/kunstmen".to_string()),
             ticket_self_work_id: None,
             outbound_email: None,
+            outbound_anchor: None,
         };
 
         let redirected = maybe_redirect_owner_visible_work_to_strategy_setup(&root, &state, &job)
@@ -10171,6 +10232,7 @@ mod tests {
             workspace_root: None,
             ticket_self_work_id: None,
             outbound_email: None,
+            outbound_anchor: None,
         };
 
         let redirected = maybe_redirect_owner_visible_work_to_strategy_setup(&root, &state, &job)
@@ -10244,6 +10306,7 @@ mod tests {
             workspace_root: Some("/home/ubuntu/workspace/kunstmen".to_string()),
             ticket_self_work_id: None,
             outbound_email: None,
+            outbound_anchor: None,
         };
 
         let redirected = maybe_redirect_owner_visible_work_to_strategy_setup(&root, &state, &job)
@@ -10300,6 +10363,7 @@ mod tests {
             workspace_root: Some("/home/ubuntu/workspace/kunstmen".to_string()),
             ticket_self_work_id: None,
             outbound_email: None,
+            outbound_anchor: None,
         };
 
         let redirected = maybe_redirect_owner_visible_work_to_strategy_setup(&root, &state, &job)
@@ -10356,6 +10420,7 @@ mod tests {
             workspace_root: Some("/home/ubuntu/workspace/kunstmen".to_string()),
             ticket_self_work_id: None,
             outbound_email: None,
+            outbound_anchor: None,
         };
 
         let redirected = maybe_redirect_platform_work_to_expertise_passes(&root, &state, &job)
@@ -10383,6 +10448,7 @@ mod tests {
             workspace_root: Some("/home/ubuntu/workspace/kunstmen".to_string()),
             ticket_self_work_id: None,
             outbound_email: None,
+            outbound_anchor: None,
         };
         let outcome = review::ReviewOutcome {
             required: true,
@@ -10506,6 +10572,7 @@ mod tests {
             workspace_root: Some("/home/ubuntu/workspace/kunstmen".to_string()),
             ticket_self_work_id: Some(item.work_id.clone()),
             outbound_email: None,
+            outbound_anchor: None,
         };
 
         let note = maybe_continue_platform_expertise_pipeline_after_success(&root, &job)
@@ -10699,6 +10766,7 @@ mod tests {
                 workspace_root: None,
                 ticket_self_work_id: None,
                 outbound_email: None,
+                outbound_anchor: None,
             },
             "Queued queue inbound from CTOX queue".to_string(),
         );
@@ -11021,6 +11089,7 @@ mod tests {
             workspace_root: None,
             ticket_self_work_id: None,
             outbound_email: None,
+            outbound_anchor: None,
         };
 
         // No structured intent on the job: post-turn proactive action must be
@@ -11052,6 +11121,7 @@ mod tests {
             workspace_root: None,
             ticket_self_work_id: None,
             outbound_email: Some(intent.clone()),
+            outbound_anchor: None,
         };
 
         let routed = job.outbound_email.clone().expect("outbound_email present");
@@ -11060,6 +11130,83 @@ mod tests {
         assert_eq!(routed.subject, intent.subject);
         assert_eq!(routed.to, intent.to);
         assert_eq!(routed.cc, intent.cc);
+    }
+
+    // Anchor wire-up: TUI-initiated proactive outbound has no leased
+    // inbound message key, so the post-turn dispatcher would silently
+    // skip the reviewed-founder-outbound send. The synthetic anchor
+    // (set by `submit_chat_prompt_with_intent`) restores the link.
+    #[test]
+    fn founder_outbound_anchor_key_prefers_explicit_outbound_anchor() {
+        let intent = channels::FounderOutboundAction {
+            account_key: "email:cto1@example.com".to_string(),
+            thread_key: "chat-outbound".to_string(),
+            subject: "Update".to_string(),
+            to: vec!["founder@example.test".to_string()],
+            cc: Vec::new(),
+            attachments: Vec::new(),
+        };
+        let job = QueuedPrompt {
+            prompt: "Draft a quick update for the founder.".to_string(),
+            goal: "Draft a quick update for the founder.".to_string(),
+            preview: "preview".to_string(),
+            source_label: "tui".to_string(),
+            suggested_skill: None,
+            leased_message_keys: Vec::new(),
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("chat-outbound".to_string()),
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: Some(intent),
+            outbound_anchor: Some("tui-outbound:test-id".to_string()),
+        };
+        assert_eq!(
+            founder_outbound_anchor_key(&job),
+            Some("tui-outbound:test-id"),
+        );
+    }
+
+    // Regression guard: without an explicit anchor and no leased inbound
+    // message key, the resolver must return None — never invent one from
+    // prompt text.
+    #[test]
+    fn founder_outbound_anchor_key_returns_none_when_unset_and_no_lease() {
+        let job = QueuedPrompt {
+            prompt: "Reach out to the founder about Kunstmen.".to_string(),
+            goal: "Reach out to the founder about Kunstmen.".to_string(),
+            preview: "preview".to_string(),
+            source_label: "tui".to_string(),
+            suggested_skill: None,
+            leased_message_keys: Vec::new(),
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: None,
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+        assert!(founder_outbound_anchor_key(&job).is_none());
+    }
+
+    // Inbound-driven jobs (no synthetic anchor) keep the legacy fallback:
+    // anchor is the first leased message key.
+    #[test]
+    fn founder_outbound_anchor_key_falls_back_to_leased_message_key() {
+        let job = QueuedPrompt {
+            prompt: "Reply to the founder.".to_string(),
+            goal: "Reply to the founder.".to_string(),
+            preview: "preview".to_string(),
+            source_label: "email".to_string(),
+            suggested_skill: None,
+            leased_message_keys: vec!["msg-key-42".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: None,
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+        assert_eq!(founder_outbound_anchor_key(&job), Some("msg-key-42"));
     }
 
     #[test]

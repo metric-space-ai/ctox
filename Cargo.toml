@@ -29,6 +29,7 @@ sha2 = "0.10"
 tiny_http = "0.12"
 ureq = { version = "2.12", features = ["native-tls"] }
 url = "2.5"
+uuid = { version = "1", features = ["v4"] }
 zeroize = "1.8"
 zbus = "5.14"
 

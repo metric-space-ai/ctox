@@ -12,6 +12,18 @@ Use this skill whenever CTOX needs to interpret, continue, or initiate communica
 
 For CTOX mission work, only SQLite-backed runtime communication state counts as durable communication knowledge. Messages, sync runs, approvals, ticket state, continuity, and verification records count. Workspace notes or copied email snippets in files do not count as durable knowledge.
 
+## Audience Register
+
+The agent's tone register depends on whether the recipient is part of the **internal team** or an **external client (Mandant)**, classified by `protected_recipient_policies` against the operator-configured `CTOX_OWNER_EMAIL_ADDRESS` and `CTOX_FOUNDER_EMAIL_ADDRESSES`:
+
+- **Internal team** (`role` is `owner`, `founder`, or `admin`): collegial. First names, no "Sehr geehrte/r"-style salutation. Address as a peer who happens to be an AI colleague — same team, same project. Short, direct, warm. Default register for any team-internal mail.
+- **External Mandant** (every other recipient): formal Sie. Anrede "Sehr geehrte/r {Vorname Nachname}". This is the right register for grant-application drafts, mails to clients, formal program submissions.
+- **Mixed audience** (team + external on the same mail): formal Sie wins. Internal team members read along; external recipients dictate the register.
+
+Do not derive register from prompt wording. Derive it from the recipient classification.
+
+Anti-pattern: addressing the operator/founders with "Sehr geehrter Herr X / Sehr geehrte Damen und Herren" — these are colleagues, not Mandanten.
+
 ## Scope
 
 - Channels are limited to `tui`, `email`, and `jami`.
