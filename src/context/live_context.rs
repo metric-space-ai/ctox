@@ -807,16 +807,13 @@ fn derive_prompt_runtime_blocks(
     mission_assurance: &lcm::MissionAssuranceSnapshot,
     latest_user_prompt: &str,
 ) -> Result<PromptRuntimeBlocks> {
-    let mission_context = derive_mission_context(&snapshot.messages, latest_user_prompt);
-    let override_continuity = mission_context
-        .workspace_root
-        .as_ref()
-        .map(|workspace| {
-            !continuity.focus.content.contains(workspace)
-                || continuity.anchors.content.contains("rust-blog-feed")
-                || continuity.anchors.content.contains("planet-python-feed")
-        })
-        .unwrap_or(false);
+    let mut mission_context = derive_mission_context(&snapshot.messages, latest_user_prompt);
+    if mission_context.main_objective.is_none() && !mission_state.mission.trim().is_empty() {
+        mission_context.main_objective = Some(collapse_spaces(mission_state.mission.trim()));
+        mission_context.mission_id =
+            derive_mission_id(None, mission_context.main_objective.as_deref());
+    }
+    let override_continuity = false;
 
     let focus = if override_continuity {
         synthesize_focus_block(&mission_context)
@@ -907,83 +904,12 @@ pub(crate) fn derive_mission_context(
     messages: &[lcm::MessageRecord],
     latest_user_prompt: &str,
 ) -> MissionContext {
-    let mut context = MissionContext {
+    let context = MissionContext {
         turn_class: "execute".to_string(),
         read_scope: "narrow".to_string(),
         ..MissionContext::default()
     };
-    let latest_user_seq = messages
-        .iter()
-        .rev()
-        .find(|message| {
-            message.role.eq_ignore_ascii_case("user") && message.content == latest_user_prompt
-        })
-        .map(|message| message.seq);
-    let mission_bootstrap = messages.iter().rev().find(|message| {
-        message.role.eq_ignore_ascii_case("user") && looks_like_mission_bootstrap(&message.content)
-    });
-    if let Some(message) = mission_bootstrap {
-        context.start_seq = Some(message.seq);
-        context.workspace_root =
-            extract_block_value(&message.content, "Work only inside this workspace:");
-        context.main_objective = extract_block_value(&message.content, "Main objective:");
-        context.mission_id = derive_mission_id(
-            context.workspace_root.as_deref(),
-            context.main_objective.as_deref(),
-        );
-        context.non_negotiable_rules =
-            extract_bullet_list(&message.content, "Non-negotiable rules:");
-        context.report_headings = extract_report_headings(&message.content);
-    } else if looks_like_progress_report_prompt(latest_user_prompt) {
-        context.start_seq = latest_user_seq;
-    }
-    if looks_like_service_continuation_prompt(latest_user_prompt) {
-        context.start_seq = latest_user_seq;
-        context.turn_class = "continue".to_string();
-        context.read_scope = "narrow".to_string();
-    }
-    if looks_like_progress_report_prompt(latest_user_prompt) {
-        context.turn_class = "report".to_string();
-        context.read_scope = "wide".to_string();
-        context.report_cycle =
-            first_non_empty_line(latest_user_prompt).map(|line| collapse_spaces(line.trim()));
-        context.progress_artifact =
-            extract_block_value(latest_user_prompt, "First update this file:");
-        if context.workspace_root.is_none() {
-            context.workspace_root = context.progress_artifact.as_deref().and_then(|path| {
-                path.split_once("/ops/progress/")
-                    .map(|(root, _)| root.to_string())
-            });
-        }
-        if context.main_objective.is_none() {
-            context.main_objective = Some(
-                "Continue the active durable mission, re-verify the current workspace state, and return a structured progress report.".to_string(),
-            );
-        }
-        if context.mission_id.is_none() {
-            context.mission_id = derive_mission_id(
-                context.workspace_root.as_deref(),
-                context.main_objective.as_deref(),
-            )
-            .or_else(|| Some("active_mission".to_string()));
-        }
-        let headings = extract_reply_headings(latest_user_prompt);
-        if !headings.is_empty() {
-            context.report_headings = headings;
-        }
-    }
-    context.previous_blocker = messages
-        .iter()
-        .rev()
-        .filter(|message| latest_user_seq.map(|seq| message.seq < seq).unwrap_or(true))
-        .find(|message| {
-            message.role.eq_ignore_ascii_case("assistant") && message.content.contains("Blocker:")
-        })
-        .and_then(|message| extract_blocker_line(&message.content));
-    context.verification_gap = context
-        .previous_blocker
-        .as_ref()
-        .map(|blocker| format!("workspace state not re-verified after prior {}", blocker));
+    let _ = (messages, latest_user_prompt);
     context
 }
 
@@ -998,100 +924,6 @@ fn derive_mission_id(_workspace_root: Option<&str>, objective: Option<&str>) -> 
                 .join("_")
         })
         .filter(|id| !id.is_empty())
-}
-
-fn looks_like_mission_bootstrap(content: &str) -> bool {
-    content.contains("Work only inside this workspace:")
-        && content.contains("Main objective:")
-        && (content.contains("durable mission") || content.contains("long-horizon"))
-}
-
-fn looks_like_progress_report_prompt(content: &str) -> bool {
-    content.contains("AIRBNB_BENCH_REPORT_CYCLE_")
-        || content.contains("MISSION_PROGRESS_REPORT_CYCLE_")
-        || (content.contains("Benchmark progress report is due now.")
-            && content.contains("First update this file:"))
-        || (content.contains("Mission progress report is due now.")
-            && content.contains("First update this file:"))
-}
-
-fn looks_like_service_continuation_prompt(content: &str) -> bool {
-    let trimmed = content.trim();
-    trimmed.starts_with("Mission continuity watchdog:")
-        || trimmed.starts_with("Mission continuity watchdog detected")
-        || trimmed.starts_with("Continue the interrupted CTOX slice")
-        || trimmed.starts_with("Continue the interrupted task from the latest durable state")
-}
-
-fn extract_block_value(content: &str, header: &str) -> Option<String> {
-    let mut lines = content.lines();
-    while let Some(line) = lines.next() {
-        if line.trim() == header.trim() {
-            for candidate in lines.by_ref() {
-                let trimmed = candidate.trim();
-                if trimmed.is_empty() {
-                    continue;
-                }
-                return Some(collapse_spaces(trimmed));
-            }
-        }
-    }
-    None
-}
-
-fn extract_bullet_list(content: &str, header: &str) -> Vec<String> {
-    let mut lines = content.lines().peekable();
-    while let Some(line) = lines.next() {
-        if line.trim() == header.trim() {
-            let mut out = Vec::new();
-            while let Some(candidate) = lines.peek() {
-                let trimmed = candidate.trim();
-                if trimmed.is_empty() {
-                    lines.next();
-                    if !out.is_empty() {
-                        break;
-                    }
-                    continue;
-                }
-                if let Some(value) = trimmed.strip_prefix("- ") {
-                    out.push(collapse_spaces(value.trim()));
-                    lines.next();
-                    continue;
-                }
-                break;
-            }
-            return out;
-        }
-    }
-    Vec::new()
-}
-
-fn extract_report_headings(content: &str) -> Vec<String> {
-    extract_bullet_list(
-        content,
-        "When later asked for a mission progress report, use these exact headings:",
-    )
-}
-
-fn extract_reply_headings(content: &str) -> Vec<String> {
-    extract_bullet_list(content, "Then reply in chat using these exact headings:")
-}
-
-fn first_non_empty_line(content: &str) -> Option<&str> {
-    content.lines().map(str::trim).find(|line| !line.is_empty())
-}
-
-fn extract_blocker_line(content: &str) -> Option<String> {
-    content.lines().find_map(|line| {
-        line.split_once(':').and_then(|(key, value)| {
-            if key.trim().eq_ignore_ascii_case("Blocker") {
-                let cleaned = value.trim().trim_matches('`').trim();
-                (!cleaned.is_empty()).then(|| collapse_spaces(cleaned))
-            } else {
-                None
-            }
-        })
-    })
 }
 
 fn synthesize_focus_block(context: &MissionContext) -> String {
@@ -1169,84 +1001,15 @@ pub(crate) fn synthesize_anchor_block(context: &MissionContext) -> String {
             context.report_headings.join("|")
         ));
     }
-    let mut constraint_codes = prioritized_anchor_rules(&context.non_negotiable_rules)
-        .into_iter()
-        .filter_map(|rule| anchor_code_for_rule(&rule))
-        .collect::<Vec<_>>();
-    if context.workspace_root.is_some()
-        && !constraint_codes
-            .iter()
-            .any(|code| *code == "work only inside the workspace")
-    {
-        constraint_codes.insert(0, "work only inside the workspace");
-    }
-    constraint_codes.truncate(6);
     lines.push("constraints:".to_string());
-    if constraint_codes.is_empty() {
+    if context.non_negotiable_rules.is_empty() {
         lines.push("[]".to_string());
     } else {
-        for code in constraint_codes {
-            lines.push(format!("- {}", code));
+        for rule in context.non_negotiable_rules.iter().take(6) {
+            lines.push(format!("- {}", rule));
         }
     }
     lines.join("\n")
-}
-
-fn prioritized_anchor_rules(rules: &[String]) -> Vec<String> {
-    let priority_needles = [
-        "main mission",
-        "sidequest",
-        "durable next",
-        "progress-latest",
-        "progress report",
-        "explicit docs",
-    ];
-    let mut scored = rules
-        .iter()
-        .map(|rule| {
-            let normalized = rule.to_ascii_lowercase();
-            let score = priority_needles
-                .iter()
-                .enumerate()
-                .find_map(|(index, needle)| normalized.contains(needle).then_some(index))
-                .unwrap_or(priority_needles.len());
-            (score, rule.clone())
-        })
-        .collect::<Vec<_>>();
-    scored.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
-    scored.dedup_by(|left, right| left.1 == right.1);
-    scored.into_iter().map(|(_, rule)| rule).collect()
-}
-
-fn anchor_code_for_rule(rule: &str) -> Option<&'static str> {
-    let normalized = rule.to_ascii_lowercase();
-    if normalized.contains("work only inside") {
-        Some("work only inside the workspace")
-    } else if normalized.contains("ongoing product-and-operations mission")
-        || normalized.contains("ongoing build-and-operate mission")
-    {
-        Some("treat this as an ongoing mission, not a one-shot task")
-    } else if normalized.contains("do not abandon the main mission")
-        || normalized.contains("main roadmap intact")
-    {
-        Some("keep the main mission primary")
-    } else if normalized.contains("durable next slices") {
-        Some("leave durable next slices")
-    } else if normalized.contains("progress-latest.md") && normalized.contains("canonical") {
-        Some("use the canonical progress file")
-    } else if normalized.contains("progress report")
-        && normalized.contains("update")
-        && normalized.contains("first")
-    {
-        Some("update the progress file before the report")
-    } else if normalized.contains("explicit docs")
-        || normalized.contains("runbooks")
-        || normalized.contains("backlog artifacts")
-    {
-        Some("prefer explicit docs and artifacts")
-    } else {
-        None
-    }
 }
 
 fn synthesize_narrative_block(context: &MissionContext) -> String {
@@ -1507,13 +1270,6 @@ fn mission_search_terms(context: &MissionContext) -> Vec<String> {
                 .map(|part| part.to_ascii_lowercase()),
         );
     }
-    if let Some(workspace) = &context.workspace_root {
-        if workspace.contains("airbnb_clone_bench") {
-            terms.push("airbnb_clone_bench".to_string());
-            terms.push("airbnb".to_string());
-            terms.push("progress".to_string());
-        }
-    }
     if let Some(objective) = &context.main_objective {
         terms.extend(
             objective
@@ -1595,12 +1351,6 @@ pub(crate) fn sanitize_context_message(content: &str) -> String {
     if trimmed.is_empty() {
         return String::new();
     }
-    if looks_like_mission_bootstrap(trimmed) {
-        return summarize_mission_bootstrap_prompt(trimmed);
-    }
-    if looks_like_progress_report_prompt(trimmed) {
-        return summarize_progress_report_request(trimmed);
-    }
     if let Some(summary) = summarize_inbound_email_wrapper(trimmed) {
         return clip_prompt_text(&summary, 8_000);
     }
@@ -1614,98 +1364,15 @@ pub(crate) fn sanitize_context_message(content: &str) -> String {
     clip_prompt_text(&normalized, 8_000)
 }
 
-fn summarize_mission_bootstrap_prompt(content: &str) -> String {
-    let workspace_raw = extract_block_value(content, "Work only inside this workspace:");
-    let workspace = workspace_raw
-        .as_ref()
-        .map(|path| compact_workspace_path(path, Some(path)))
-        .unwrap_or_else(|| "<workspace>".to_string());
-    let objective = extract_block_value(content, "Main objective:")
-        .unwrap_or_else(|| "start the active durable mission".to_string());
-    let mut lines = vec![
-        "durable_mission_bootstrap:".to_string(),
-        format!("workspace_root: {workspace}"),
-        format!(
-            "mission_id: {}",
-            derive_mission_id(workspace_raw.as_deref(), Some(&objective))
-                .unwrap_or_else(|| "active_mission".to_string())
-        ),
-    ];
-    let headings = extract_report_headings(content);
-    if !headings.is_empty() {
-        lines.push(format!("report_headings: {}", headings.join("|")));
-    }
-    lines.join("\n")
-}
-
-fn summarize_progress_report_request(content: &str) -> String {
-    let cycle = first_non_empty_line(content)
-        .map(|line| collapse_spaces(line))
-        .unwrap_or_else(|| "MISSION_PROGRESS_REPORT".to_string());
-    let progress_artifact = extract_block_value(content, "First update this file:")
-        .map(|path| {
-            let workspace_root = path
-                .split_once("/ops/progress/")
-                .map(|(root, _)| root.to_string());
-            compact_workspace_path(&path, workspace_root.as_deref())
-        })
-        .unwrap_or_else(|| "<workspace>/ops/progress/progress-latest.md".to_string());
-    let headings = extract_reply_headings(content);
-    let mut lines = vec![
-        "progress_report_request:".to_string(),
-        format!("cycle: {cycle}"),
-        format!("progress_artifact: {progress_artifact}"),
-    ];
-    if !headings.is_empty() {
-        lines.push(format!("reply_headings: {}", headings.join("|")));
-    }
-    lines.join("\n")
-}
-
 pub(crate) fn render_context_message(role: &str, content: &str) -> String {
     let sanitized = sanitize_context_message(content);
     let label = render_message_role_label(role, content);
-    if role == "assistant" && is_historical_status_note(&sanitized) {
-        format!(
-            "assistant_status_history: Historical assistant status note only; re-check the current runtime and host state before relying on it. {}",
-            sanitized
-        )
-    } else {
-        format!("{label}: {sanitized}")
-    }
+    format!("{label}: {sanitized}")
 }
 
 pub(crate) fn render_message_role_label<'a>(role: &'a str, content: &str) -> &'a str {
-    if role == "user" && is_internal_queue_prompt(content) {
-        "internal_queue"
-    } else {
-        role
-    }
-}
-
-pub(crate) fn is_internal_queue_prompt(content: &str) -> bool {
-    let trimmed = content.trim_start();
-    [
-        "Continue the broader goal using the latest completed turn as the starting point.",
-        "Review the blocked owner-visible task without losing continuity.",
-        "Recover or finish the owner-visible task without losing continuity.",
-        "Use the queue-cleanup skill first.",
-    ]
-    .iter()
-    .any(|prefix| trimmed.starts_with(prefix))
-}
-
-pub(crate) fn is_historical_status_note(content: &str) -> bool {
-    let trimmed = content.trim_start();
-    let lower = trimmed.to_ascii_lowercase();
-    lower.starts_with("blocked:")
-        || lower.starts_with("completed:")
-        || lower.starts_with("failed:")
-        || lower.starts_with("prepared:")
-        || lower.starts_with("still blocked")
-        || lower.starts_with("nextcloud_")
-        || lower.starts_with("zammad_")
-        || lower.starts_with("redis_")
+    let _ = content;
+    role
 }
 
 pub(crate) fn looks_like_codex_event_stream(content: &str) -> bool {

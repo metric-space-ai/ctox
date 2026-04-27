@@ -1092,20 +1092,17 @@ fn render_transcript_lines(app: &App, width: usize, height: usize) -> Vec<Line<'
         .into_iter()
         .rev()
     {
-        let internal_queue = message.role.eq_ignore_ascii_case("user")
-            && is_internal_queue_prompt(message.content.as_str());
-        let (label, role_label, badge_color, body_color) = if internal_queue {
-            (" AUTO ", "system follow-up", Color::Yellow, Color::Gray)
-        } else if message.role.eq_ignore_ascii_case("assistant") {
-            (" CTOX ", "assistant", Color::LightGreen, Color::White)
-        } else {
-            (
-                " YOU ",
-                message.role.as_str(),
-                Color::LightCyan,
-                Color::Gray,
-            )
-        };
+        let (label, role_label, badge_color, body_color) =
+            if message.role.eq_ignore_ascii_case("assistant") {
+                (" CTOX ", "assistant", Color::LightGreen, Color::White)
+            } else {
+                (
+                    " YOU ",
+                    message.role.as_str(),
+                    Color::LightCyan,
+                    Color::Gray,
+                )
+            };
         lines.push(truncate_line_spans(
             vec![
                 Span::styled(
@@ -1123,11 +1120,7 @@ fn render_transcript_lines(app: &App, width: usize, height: usize) -> Vec<Line<'
             ],
             width,
         ));
-        let rendered_body = if internal_queue {
-            summarize_internal_queue_prompt(&message.content, width.saturating_sub(2))
-        } else {
-            wrap_text_lines(&message.content, width.saturating_sub(2))
-        };
+        let rendered_body = wrap_text_lines(&message.content, width.saturating_sub(2));
         for chunk in rendered_body {
             lines.push(Line::from(vec![
                 Span::raw("  "),
@@ -1628,64 +1621,6 @@ fn mission_lines(app: &App, width: usize) -> Vec<String> {
 fn spinner_frame(phase: usize) -> &'static str {
     let frames = ["⠁", "⠂", "⠄", "⠂"];
     frames[phase % frames.len()]
-}
-
-fn is_internal_queue_prompt(content: &str) -> bool {
-    let trimmed = content.trim_start();
-    [
-        "Continue the broader goal using the latest completed turn as the starting point.",
-        "Review the blocked owner-visible task without losing continuity.",
-        "Recover or finish the owner-visible task without losing continuity.",
-        "Use the queue-cleanup skill first.",
-    ]
-    .iter()
-    .any(|prefix| trimmed.starts_with(prefix))
-}
-
-fn summarize_internal_queue_prompt(content: &str, width: usize) -> Vec<String> {
-    let mut lines = Vec::new();
-    if let Some(first_line) = content.lines().find(|line| !line.trim().is_empty()) {
-        lines.push(truncate_line(first_line.trim(), width));
-    }
-    if let Some(goal) = extract_prompt_section(content, "Goal:") {
-        lines.push(format!(
-            "goal {}",
-            truncate_line(&goal, width.saturating_sub(5))
-        ));
-    }
-    if let Some(blocker) = extract_prompt_section(
-        content,
-        "The latest attempt failed or stalled with this blocker:",
-    ) {
-        lines.push(format!(
-            "blocker {}",
-            truncate_line(&blocker, width.saturating_sub(8))
-        ));
-    }
-    if lines.is_empty() {
-        lines.push(truncate_line(content.trim(), width));
-    }
-    lines
-}
-
-fn extract_prompt_section(content: &str, marker: &str) -> Option<String> {
-    let (_, tail) = content.split_once(marker)?;
-    let mut collected = Vec::new();
-    for line in tail.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            if !collected.is_empty() {
-                break;
-            }
-            continue;
-        }
-        collected.push(trimmed.to_string());
-    }
-    if collected.is_empty() {
-        None
-    } else {
-        Some(collected.join(" "))
-    }
 }
 
 fn section_title(title: &str, color: Color, width: usize) -> Line<'static> {

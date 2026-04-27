@@ -23,8 +23,7 @@ pub fn evaluate_loop_governor(
     let latest_blocker = latest_runtime_error
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .or_else(|| extract_blocker(latest_result));
+        .map(ToOwned::to_owned);
     let repeated_blocker = mission
         .and_then(|record| {
             latest_blocker
@@ -33,7 +32,8 @@ pub fn evaluate_loop_governor(
         })
         .unwrap_or(false);
     let loop_warning = health.map(has_loop_warning).unwrap_or(false);
-    let progress_visible = progress_signal_visible(latest_result);
+    let _ = latest_result;
+    let progress_visible = false;
 
     if !(repeated_blocker && loop_warning && !progress_visible) {
         return MissionLoopGovernorDecision {
@@ -121,32 +121,10 @@ fn render_loop_repair_prompt(
     lines.join("\n")
 }
 
-fn extract_blocker(result: &str) -> Option<String> {
-    for line in result.lines() {
-        let trimmed = line.trim();
-        let lowered = normalize_token(trimmed);
-        if lowered.starts_with("blocked ") || lowered == "blocked" {
-            return Some(trimmed.to_string());
-        }
-        if let Some((prefix, value)) = trimmed.split_once(':') {
-            let key = normalize_token(prefix);
-            if key == "blocked" || key == "blocker" || key == "current blocker" {
-                let value = value.trim();
-                if !value.is_empty() {
-                    return Some(value.to_string());
-                }
-            }
-        }
-    }
-    None
-}
-
 fn blockers_equivalent(left: &str, right: &str) -> bool {
     let left = normalize_token(left);
     let right = normalize_token(right);
-    !left.is_empty()
-        && !right.is_empty()
-        && (left == right || left.contains(&right) || right.contains(&left))
+    !left.is_empty() && !right.is_empty() && left == right
 }
 
 fn has_loop_warning(health: &context_health::ContextHealthSnapshot) -> bool {
@@ -160,25 +138,6 @@ fn has_loop_warning(health: &context_health::ContextHealthSnapshot) -> bool {
                 | "mission_contract_thin"
         )
     })
-}
-
-fn progress_signal_visible(result: &str) -> bool {
-    let lowered = result.to_ascii_lowercase();
-    [
-        "completed",
-        "done",
-        "implemented",
-        "fixed",
-        "created",
-        "updated",
-        "tests passed",
-        "verified",
-        "green",
-        "applied",
-        "persisted",
-    ]
-    .iter()
-    .any(|needle| lowered.contains(needle))
 }
 
 fn normalize_token(value: &str) -> String {
@@ -257,13 +216,13 @@ mod tests {
     }
 
     #[test]
-    fn governor_enqueues_repair_for_repeated_blocker_without_progress() {
+    fn governor_enqueues_repair_for_repeated_structured_runtime_blocker() {
         let decision = evaluate_loop_governor(
             "Repair deployment loop",
             Some(&mission()),
             Some(&health()),
             "Status: `blocked`\n\nBlocker: deploy still failing because SECRET_TOKEN is missing",
-            None,
+            Some("deploy still failing because SECRET_TOKEN is missing"),
         );
         assert!(decision.should_enqueue_repair);
         assert!(decision.repeated_blocker);
@@ -275,7 +234,7 @@ mod tests {
     }
 
     #[test]
-    fn governor_stays_quiet_when_progress_signal_exists() {
+    fn governor_stays_quiet_without_structured_runtime_blocker() {
         let decision = evaluate_loop_governor(
             "Repair deployment loop",
             Some(&mission()),

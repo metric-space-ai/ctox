@@ -1,5 +1,4 @@
 use anyhow::Context;
-use regex::Regex;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::json;
@@ -1151,223 +1150,8 @@ pub(crate) fn normalize_responses_input(input: Option<&Value>) -> Vec<Value> {
 pub fn extract_exact_text_override_from_materialized_request(
     request_payload: &Value,
 ) -> Option<String> {
-    let latest_user_text = normalize_responses_input(request_payload.get("input"))
-        .into_iter()
-        .rev()
-        .find_map(|item| {
-            let object = item.as_object()?;
-            if object
-                .get("type")
-                .and_then(Value::as_str)
-                .unwrap_or("message")
-                != "message"
-            {
-                return None;
-            }
-            if object.get("role").and_then(Value::as_str).unwrap_or("user") != "user" {
-                return None;
-            }
-            let text = extract_message_content_text(object.get("content"));
-            if text.trim().is_empty() {
-                None
-            } else {
-                Some(text)
-            }
-        })?;
-    let exact_text_override = extract_explicit_exact_text_request(&latest_user_text)?;
-    if should_preserve_tool_capability_for_exact_text_request(request_payload, &latest_user_text) {
-        return None;
-    }
-    Some(exact_text_override)
-}
-
-fn should_preserve_tool_capability_for_exact_text_request(
-    request_payload: &Value,
-    latest_user_text: &str,
-) -> bool {
-    let has_tools = request_payload
-        .get("tools")
-        .and_then(Value::as_array)
-        .is_some_and(|tools| !tools.is_empty());
-    if !has_tools {
-        return false;
-    }
-
-    let lower = latest_user_text.to_ascii_lowercase();
-    let workspace_bound = lower.contains("work only inside this workspace")
-        || lower.contains("work only in this workspace")
-        || lower.contains("workspace:")
-        || lower.contains("workspace root")
-        || lower.contains("workspace_root")
-        || latest_user_text.contains("/home/")
-        || latest_user_text.contains("/tmp/")
-        || latest_user_text.contains("/Users/");
-    let has_action_verb = [
-        "create ",
-        "edit ",
-        "modify ",
-        "implement ",
-        "build ",
-        "compile ",
-        "run ",
-        "test ",
-        "verify ",
-        "fix ",
-        "debug ",
-        "refactor ",
-        "rename ",
-        "patch ",
-    ]
-    .iter()
-    .any(|needle| lower.contains(needle));
-    let has_strong_verification_marker = [
-        "cmake",
-        "cargo ",
-        "pytest",
-        "npm ",
-        "pnpm ",
-        "make ",
-        "./build/",
-        "do not answer before",
-        "on successful run",
-        "must print exactly",
-        "must output exactly",
-        "verify the binary",
-        "create at least these files",
-        ".cpp",
-        ".cc",
-        ".cxx",
-        ".h",
-        ".hpp",
-        "cmakelists.txt",
-    ]
-    .iter()
-    .any(|needle| lower.contains(needle));
-
-    (workspace_bound && has_action_verb) || has_strong_verification_marker
-}
-
-fn extract_explicit_exact_text_request(text: &str) -> Option<String> {
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    let quoted = Regex::new(r#"(?is)^\s*(?:please\s+)?(?:reply|respond|return|output|say|print|emit|antworte(?:\s+genau)?(?:\s+mit)?)\s+(?:with\s+|exactly\s+|genau\s+|mit\s+)?(?:"([^"\r\n]{1,128})"|'([^'\r\n]{1,128})')\s*(?:and\s+nothing\s+else|und\s+nichts\s+ander(?:em|es))?[.!]?\s*$"#)
-        .expect("valid exact-text quoted regex");
-    if let Some(captures) = quoted.captures(trimmed) {
-        return captures
-            .get(1)
-            .or_else(|| captures.get(2))
-            .map(|capture| capture.as_str().to_string())
-            .filter(|value| !value.trim().is_empty());
-    }
-    let bare = Regex::new(r#"(?is)^\s*(?:please\s+)?(?:reply|respond|return|output|say|print|emit)\s+(?:with\s+)?exactly\s+([^\r\n]{1,128}?)\s*(?:and\s+nothing\s+else)?[.!]?\s*$"#)
-        .expect("valid exact-text bare regex");
-    let german_bare = Regex::new(r#"(?is)^\s*antworte(?:\s+genau)?(?:\s+mit)?\s+([^\r\n]{1,128}?)\s*(?:und\s+nichts\s+ander(?:em|es))?[.!]?\s*$"#)
-        .expect("valid exact-text german bare regex");
-    bare.captures(trimmed)
-        .and_then(|captures| captures.get(1))
-        .map(|capture| {
-            capture
-                .as_str()
-                .trim()
-                .trim_end_matches(['.', '!', '?'])
-                .trim()
-                .to_string()
-        })
-        .filter(|value| !value.is_empty())
-        .or_else(|| {
-            german_bare
-                .captures(trimmed)
-                .and_then(|captures| captures.get(1))
-                .map(|capture| {
-                    capture
-                        .as_str()
-                        .trim()
-                        .trim_end_matches(['.', '!', '?'])
-                        .trim()
-                        .to_string()
-                })
-                .filter(|value| !value.is_empty())
-        })
-        .or_else(|| extract_embedded_exact_text_request(trimmed))
-}
-
-fn extract_embedded_exact_text_request(text: &str) -> Option<String> {
-    let quoted = Regex::new(r#"(?is)(?:please\s+)?(?:reply|respond|return|output|say|print|emit|antworte(?:\s+genau)?(?:\s+mit)?)\s+(?:with\s+|exactly\s+|genau\s+|mit\s+)?(?:"([^"\r\n]{1,128})"|'([^'\r\n]{1,128})')\s*(?:and\s+nothing\s+else|und\s+nichts\s+ander(?:em|es))?[.!]?\s*$"#)
-        .expect("valid embedded exact-text quoted regex");
-    let bare = Regex::new(r#"(?is)(?:please\s+)?(?:reply|respond|return|output|say|print|emit)\s+(?:with\s+)?exactly\s+([^\r\n]{1,128}?)\s*(?:and\s+nothing\s+else)?[.!]?\s*$"#)
-        .expect("valid embedded exact-text bare regex");
-    let german_bare = Regex::new(r#"(?is)antworte(?:\s+genau)?(?:\s+mit)?\s+([^\r\n]{1,128}?)\s*(?:und\s+nichts\s+ander(?:em|es))?[.!]?\s*$"#)
-        .expect("valid embedded exact-text german bare regex");
-
-    let clauses = split_exact_request_clauses(text);
-    for clause in clauses.into_iter().rev() {
-        let clause = clause.trim();
-        if clause.is_empty() {
-            continue;
-        }
-        if let Some(captures) = quoted.captures(clause) {
-            let candidate = captures
-                .get(1)
-                .or_else(|| captures.get(2))
-                .map(|capture| capture.as_str().trim().to_string())
-                .filter(|value| !value.is_empty());
-            if candidate.is_some() {
-                return candidate;
-            }
-        }
-        if let Some(captures) = bare.captures(clause) {
-            let candidate = captures
-                .get(1)
-                .map(|capture| {
-                    capture
-                        .as_str()
-                        .trim()
-                        .trim_end_matches(['.', '!', '?'])
-                        .trim()
-                        .to_string()
-                })
-                .filter(|value| !value.is_empty());
-            if candidate.is_some() {
-                return candidate;
-            }
-        }
-        if let Some(captures) = german_bare.captures(clause) {
-            let candidate = captures
-                .get(1)
-                .map(|capture| {
-                    capture
-                        .as_str()
-                        .trim()
-                        .trim_end_matches(['.', '!', '?'])
-                        .trim()
-                        .to_string()
-                })
-                .filter(|value| !value.is_empty());
-            if candidate.is_some() {
-                return candidate;
-            }
-        }
-    }
-
+    let _ = request_payload;
     None
-}
-
-fn split_exact_request_clauses(text: &str) -> Vec<&str> {
-    let mut clauses = Vec::new();
-    let mut start = 0usize;
-    for (idx, ch) in text.char_indices() {
-        if matches!(ch, '.' | '!' | '?' | '\n' | '\r') {
-            let end = idx + ch.len_utf8();
-            clauses.push(&text[start..end]);
-            start = end;
-        }
-    }
-    if start < text.len() {
-        clauses.push(&text[start..]);
-    }
-    clauses
 }
 
 pub fn materialize_responses_request(
@@ -2637,7 +2421,7 @@ mod tests {
     }
 
     #[test]
-    fn extracts_exact_text_override_from_latest_user_message() {
+    fn does_not_extract_exact_text_override_from_latest_user_message() {
         let payload = json!({
             "input": [
                 {
@@ -2659,12 +2443,12 @@ mod tests {
         });
         assert_eq!(
             extract_exact_text_override_from_materialized_request(&payload),
-            Some("OK".to_string())
+            None
         );
     }
 
     #[test]
-    fn extracts_exact_text_override_from_embedded_user_clause() {
+    fn does_not_extract_exact_text_override_from_embedded_user_clause() {
         let payload = json!({
             "input": [
                 {
@@ -2676,12 +2460,12 @@ mod tests {
         });
         assert_eq!(
             extract_exact_text_override_from_materialized_request(&payload),
-            Some("21".to_string())
+            None
         );
     }
 
     #[test]
-    fn extracts_exact_text_override_from_german_embedded_user_clause() {
+    fn does_not_extract_exact_text_override_from_german_embedded_user_clause() {
         let payload = json!({
             "input": [
                 {
@@ -2693,7 +2477,7 @@ mod tests {
         });
         assert_eq!(
             extract_exact_text_override_from_materialized_request(&payload),
-            Some("CTOX_SOCKET_SMOKE_OK".to_string())
+            None
         );
     }
 

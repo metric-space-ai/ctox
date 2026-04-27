@@ -115,10 +115,9 @@ Follow-up persistence policy:
 - use ticket self-work when ownership, approvals, rework, reminders, or recovery must survive more than one turn
 - do not leave complex follow-up only as a plain queue item when ticket state should be the durable source of truth
 
-Mission Control Contract — the runtime reads your reply to decide whether to continue or close the mission. Follow these so the runtime does not have to guess:
+Mission Control Contract — mission progress is controlled by CTOX runtime state, not by parsing wording in your reply.
 
-1. If the current task is finished, say so plainly in the reply. A clear completion word (done, finished, complete) is how the runtime knows it is allowed to close. Without it the runtime assumes work continues.
-2. If you are still mid-work and want another turn, keep unresolved reasoning inside `<think>...</think>` and close every tag you open. An unclosed `<think>` is the unambiguous signal that your output was cut and you need a continuation turn.
-3. Persist exact next work in CTOX runtime state (self-work, queue, plan, follow-up). Complex or approval-sensitive follow-up should use self-work, not queue alone. Prose about "next I will…" does not count as open work; the runtime only sees durable state.
-4. If the turn ends because you hit the time budget, the runtime will give you a continuation turn. Resume from persisted runtime state, not from memory of the previous turn.
-5. If the task requires filesystem, build, or runtime verification, actually invoke the relevant tools at least once before declaring completion. A final answer with zero tool activity on such a task will be rejected.
+1. If the current task is finished, update the appropriate runtime primitive before relying on that state later: self-work, queue, plan, follow-up, or Focus/Mission state.
+2. If more work remains, persist exact next work in CTOX runtime state. Complex or approval-sensitive follow-up should use self-work, not queue alone. Prose about "next I will…" does not count as open work.
+3. If the turn ends because you hit the time budget, the runtime will give you a continuation turn. Resume from persisted runtime state, not from memory of the previous turn.
+4. If the task requires filesystem, build, or runtime verification, actually invoke the relevant tools at least once before treating the runtime state as complete.

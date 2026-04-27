@@ -4692,116 +4692,53 @@ fn first_meaningful_line(lines: &[String]) -> Option<String> {
 fn canonicalize_mission_status(raw: Option<&str>) -> Option<String> {
     let raw = raw?;
     let normalized = normalize_mission_text(raw);
-    if normalized.contains("done")
-        || normalized.contains("complete")
-        || normalized.contains("completed")
-        || normalized.contains("closed")
-        || normalized.contains("abgeschlossen")
-    {
-        return Some("done".to_string());
+    match normalized.as_str() {
+        "done" | "complete" | "completed" | "closed" | "abgeschlossen" => Some("done".to_string()),
+        "maintenance" => Some("maintenance".to_string()),
+        "scheduled" => Some("scheduled".to_string()),
+        "dormant" => Some("dormant".to_string()),
+        "open" | "active" | "ongoing" | "in progress" => Some("active".to_string()),
+        _ => None,
     }
-    if normalized.contains("maintenance") {
-        return Some("maintenance".to_string());
-    }
-    if normalized.contains("scheduled") {
-        return Some("scheduled".to_string());
-    }
-    if normalized.contains("dormant") {
-        return Some("dormant".to_string());
-    }
-    if normalized.contains("open")
-        || normalized.contains("active")
-        || normalized.contains("ongoing")
-        || normalized.contains("in progress")
-        || normalized.contains("remain")
-        || normalized.contains("remains")
-        || normalized.contains("main thread")
-        || normalized.contains("main mission thread")
-        || normalized.contains("still open")
-        || normalized.contains("still")
-    {
-        return Some("active".to_string());
-    }
-    None
 }
 
 fn canonicalize_continuation_mode(raw: Option<&str>) -> Option<String> {
     let raw = raw?;
     let normalized = normalize_mission_text(raw);
-    if normalized.contains("maintenance") {
-        return Some("maintenance".to_string());
+    match normalized.as_str() {
+        "maintenance" => Some("maintenance".to_string()),
+        "scheduled" | "cron" => Some("scheduled".to_string()),
+        "dormant" | "archive" => Some("dormant".to_string()),
+        "closed" => Some("closed".to_string()),
+        "continuous" | "continue" | "open" | "reopen" | "reopened" | "resume" | "active"
+        | "ongoing" => Some("continuous".to_string()),
+        _ => None,
     }
-    if normalized.contains("scheduled") || normalized.contains("cron") {
-        return Some("scheduled".to_string());
-    }
-    if normalized.contains("dormant") || normalized.contains("archive") {
-        return Some("dormant".to_string());
-    }
-    if normalized.contains("closed") {
-        return Some("closed".to_string());
-    }
-    if normalized.contains("continuous")
-        || normalized.contains("continue")
-        || normalized.contains("open")
-        || normalized.contains("reopen")
-        || normalized.contains("reopened")
-        || normalized.contains("resume")
-        || normalized.contains("active")
-        || normalized.contains("same durable slice")
-        || normalized.contains("keep")
-        || normalized.contains("ongoing")
-        || normalized.contains("stay attached")
-    {
-        return Some("continuous".to_string());
-    }
-    None
 }
 
 fn canonicalize_trigger_intensity(raw: Option<&str>) -> Option<String> {
     let raw = raw?;
     let normalized = normalize_mission_text(raw);
-    if normalized.contains("archive") {
-        return Some("archive".to_string());
+    match normalized.as_str() {
+        "archive" => Some("archive".to_string()),
+        "cold" | "low" => Some("cold".to_string()),
+        "warm" | "medium" | "moderate" => Some("warm".to_string()),
+        "hot" | "high" | "urgent" => Some("hot".to_string()),
+        _ => None,
     }
-    if normalized.contains("cold") || normalized.contains("low") {
-        return Some("cold".to_string());
-    }
-    if normalized.contains("warm")
-        || normalized.contains("medium")
-        || normalized.contains("moderate")
-    {
-        return Some("warm".to_string());
-    }
-    if normalized.contains("hot") || normalized.contains("high") || normalized.contains("urgent") {
-        return Some("hot".to_string());
-    }
-    None
 }
 
 fn canonicalize_closure_confidence(raw: Option<&str>) -> Option<String> {
     let raw = raw?;
     let normalized = normalize_mission_text(raw);
-    if normalized.contains("complete") || normalized.contains("certain") {
-        return Some("complete".to_string());
+    match normalized.as_str() {
+        "complete" | "completed" | "certain" => Some("complete".to_string()),
+        "high" => Some("high".to_string()),
+        "medium" | "moderate" => Some("medium".to_string()),
+        "low" | "partial" | "provisional" | "tentative" | "pending" | "unverified" | "unclear"
+        | "unknown" => Some("low".to_string()),
+        _ => None,
     }
-    if normalized.contains("high") {
-        return Some("high".to_string());
-    }
-    if normalized.contains("medium") || normalized.contains("moderate") {
-        return Some("medium".to_string());
-    }
-    if normalized.contains("low")
-        || normalized.contains("partial")
-        || normalized.contains("provisional")
-        || normalized.contains("tentative")
-        || normalized.contains("pending")
-        || normalized.contains("unverified")
-        || normalized.contains("unclear")
-        || normalized.contains("unknown")
-    {
-        return Some("low".to_string());
-    }
-    None
 }
 
 fn mission_is_open(

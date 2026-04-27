@@ -26,7 +26,7 @@
 ║  │   │ A. Context aufbauen                                        │    │   ║
 ║  │   │                                                            │    │   ║
 ║  │   │ ┌─ System Prompt ──────────────────────────────────────┐   │    │   ║
-║  │   │ │  CTOX Mission Control Contract                       │   │    │   ║
+║  │   │ │  CTOX Runtime Contract                               │   │    │   ║
 ║  │   │ │  "You are CTOX, an autonomous agent on this host..." │   │    │   ║
 ║  │   │ │  Tool-Beschreibungen, Governance-Regeln              │   │    │   ║
 ║  │   │ └──────────────────────────────────────────────────────┘   │    │   ║
@@ -145,7 +145,7 @@
 | Queue-Pfad `runtime/ctox.sqlite3` | [src/service/service.rs:328](src/service/service.rs#L328) |
 | Queue task creation | [src/mission/channels.rs:685](src/mission/channels.rs#L685) |
 | Queue leasing / worker dispatch | [src/service/service.rs:2411](src/service/service.rs#L2411) · [src/service/service.rs:1962](src/service/service.rs#L1962) |
-| System Prompt "Mission Control Contract" | [assets/prompts/ctox_chat_system_prompt.md:105](assets/prompts/ctox_chat_system_prompt.md#L105) |
+| System Prompt Runtime Contract | [assets/prompts/ctox_chat_system_prompt.md:105](assets/prompts/ctox_chat_system_prompt.md#L105) |
 | `PersistentSession` lifecycle | [src/execution/agent/direct_session.rs:43](src/execution/agent/direct_session.rs#L43) |
 | Service currently uses per-turn clients | [src/service/service.rs:1995](src/service/service.rs#L1995) |
 | Continuity-Kinds Loop (Focus/Anchors/Narrative) | [src/execution/agent/turn_loop.rs:588](src/execution/agent/turn_loop.rs#L588) |

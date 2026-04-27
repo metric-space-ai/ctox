@@ -645,17 +645,6 @@ fn build_warnings(
                 recommended_action: "Rebuild focus, anchors, and narrative from the active mission before trusting older continuity.".to_string(),
             });
         }
-        if continuity_text.contains("rust-blog-feed")
-            || continuity_text.contains("planet-python-feed")
-        {
-            warnings.push(ContextHealthWarning {
-                code: "mission_contamination".to_string(),
-                severity: WarningSeverity::Critical,
-                summary: "Continuity still carries a previous mission into the current mission window.".to_string(),
-                evidence: "scraper-specific continuity is still present while the active mission targets another workspace".to_string(),
-                recommended_action: "Demote or discard stale mission-specific continuity and promote only the current mission contract.".to_string(),
-            });
-        }
     }
     let ratio = (context_tokens.max(0) as f64) / (token_budget.max(1) as f64);
     if ratio > 0.80 {
@@ -945,30 +934,7 @@ fn detect_current_workspace_root(
     snapshot: &lcm::LcmSnapshot,
     latest_user_prompt: &str,
 ) -> Option<String> {
-    if let Some(workspace) = extract_workspace_root(latest_user_prompt) {
-        return Some(workspace);
-    }
-    snapshot
-        .messages
-        .iter()
-        .rev()
-        .filter(|message| message.role.eq_ignore_ascii_case("user"))
-        .find_map(|message| extract_workspace_root(&message.content))
-}
-
-fn extract_workspace_root(content: &str) -> Option<String> {
-    let mut lines = content.lines();
-    while let Some(line) = lines.next() {
-        if line.trim() == "Work only inside this workspace:" {
-            for candidate in lines.by_ref() {
-                let trimmed = candidate.trim();
-                if trimmed.is_empty() {
-                    continue;
-                }
-                return Some(trimmed.to_string());
-            }
-        }
-    }
+    let _ = (snapshot, latest_user_prompt);
     None
 }
 
@@ -1059,47 +1025,13 @@ fn repeated_recent_user_turns(snapshot: &lcm::LcmSnapshot, latest_user_prompt: &
 }
 
 fn recent_blocked_status_count(snapshot: &lcm::LcmSnapshot) -> usize {
-    snapshot
-        .messages
-        .iter()
-        .rev()
-        .filter(|message| message.role == "assistant")
-        .take(8)
-        .filter(|message| looks_like_blocked_status(&message.content))
-        .count()
-}
-
-fn looks_like_blocked_status(content: &str) -> bool {
-    let normalized = normalize_text(content);
-    normalized.starts_with("status blocked")
-        || normalized.starts_with("blocked")
-        || normalized.contains("still blocked")
-        || normalized.contains("remains blocked")
-        || normalized.contains("bleibt blockiert")
+    let _ = snapshot;
+    0
 }
 
 fn recent_internal_repair_prompt_count(snapshot: &lcm::LcmSnapshot) -> usize {
-    snapshot
-        .messages
-        .iter()
-        .rev()
-        .filter(|message| message.role == "user")
-        .take(8)
-        .filter(|message| is_internal_repair_prompt(&message.content))
-        .count()
-}
-
-fn is_internal_repair_prompt(content: &str) -> bool {
-    let trimmed = content.trim_start();
-    [
-        "Continue the broader goal using the latest completed turn as the starting point.",
-        "Review the blocked owner-visible task without losing continuity.",
-        "Recover or finish the owner-visible task without losing continuity.",
-        "Use the queue-cleanup skill first.",
-        "Review and repair CTOX context health without letting repair become the main mission.",
-    ]
-    .iter()
-    .any(|prefix| trimmed.starts_with(prefix))
+    let _ = snapshot;
+    0
 }
 
 fn is_context_repair_source(source_label: &str) -> bool {
