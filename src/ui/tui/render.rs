@@ -3731,6 +3731,7 @@ mod tests {
             watcher_trigger_count: 0,
             agent_failure_count: 0,
             deferred_reason: None,
+            rewrite_failure_count: 0,
         });
         app.chat_messages.push(crate::lcm::MessageRecord {
             message_id: 1,

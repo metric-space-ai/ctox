@@ -236,6 +236,7 @@ mod tests {
             watcher_trigger_count: 0,
             agent_failure_count: 0,
             deferred_reason: None,
+            rewrite_failure_count: 0,
         }
     }
 

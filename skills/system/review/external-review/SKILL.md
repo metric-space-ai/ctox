@@ -151,6 +151,34 @@ What to read for the verdict:
   bottlenecks — a transition with high rejected count and low acceptance
   ratio is a procedural break, not a one-off bug.
 
+## Finding categories
+
+Every concrete finding the review run produces must be tagged with one of:
+
+- **`rewrite`** — pure body / subject / wording correction; the agent can fix it by editing the prior outbound body without changing any durable state. Examples:
+  - internal-vocabulary leak in prose ("TUI", "queue", "sqlite", "reviewed founder send Pfad", etc.)
+  - salutation wrong for audience register (formal Sie when collegial expected, or vice-versa)
+  - tone or register slip
+  - typos, grammar, capitalisation
+  - politeness formula missing or wrong
+  - body too long / too short for purpose
+  - subject suboptimal
+  - line breaks / formatting
+
+- **`rework`** — substantive change requiring durable state mutation, fresh research, or new structural artefacts. Examples:
+  - mismatch between body claim and durable state (strategic_directives, mission_states, communication_messages, communication_routing_state)
+  - missing durable backing record (planned_goal, planned_step, ticket, founder_reply_review approval)
+  - missing recipient anchor for proactive outbound (no inbound reply, no clear new purpose, recent overlapping mail to same recipients)
+  - body asserts something not supported by evidence the reviewer was able to gather
+  - audience misrouted (recipient classification doesn't match content)
+  - mission contract incomplete (`done_gate`, `next_slice` missing while the slice claims completion-readiness)
+
+If a finding could plausibly be either, default to `rework`.
+
+The agent's machine-readable output for the verdict must include each finding with `id`, `category` (one of `rewrite` / `rework`), `evidence`, and `corrective_action`. The dispatcher uses these tags structurally — there is no string scraping in core.
+
+Emit one entry per finding under the `CATEGORIZED_FINDINGS:` block as a single line of pipe-delimited `key: value` pairs in the order `id | category | evidence | corrective_action`. Use `- none` if the run produced no concrete findings.
+
 ## Public Launch Failure Conditions
 
 Return FAIL when any of these are true:
@@ -184,6 +212,8 @@ Return exactly:
 - `MISSION_STATE: HEALTHY|UNHEALTHY|UNCLEAR`
 - `SUMMARY: ...`
 - `FAILED_GATES:`
+- `FINDINGS:`
+- `CATEGORIZED_FINDINGS:`
 - `OPEN_ITEMS:`
 - `EVIDENCE:`
 - `HANDOFF:`

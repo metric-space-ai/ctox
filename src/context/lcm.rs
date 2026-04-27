@@ -360,6 +360,13 @@ pub struct MissionStateRecord {
     /// (e.g. `agent_failure_threshold`). `None` for active missions.
     #[serde(default)]
     pub deferred_reason: Option<String>,
+    /// Number of consecutive rewrite-only review iterations that failed to
+    /// converge for this mission. Reset on a successful approval; bumped on
+    /// each non-converging rewrite turn. Once it crosses the configured
+    /// threshold the mission is deferred with reason
+    /// `rewrite_failure_threshold`.
+    #[serde(default)]
+    pub rewrite_failure_count: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -858,7 +865,8 @@ impl LcmEngine {
                 watcher_last_triggered_at TEXT,
                 watcher_trigger_count INTEGER NOT NULL DEFAULT 0,
                 agent_failure_count INTEGER NOT NULL DEFAULT 0,
-                deferred_reason TEXT
+                deferred_reason TEXT,
+                rewrite_failure_count INTEGER NOT NULL DEFAULT 0
             );
 
             CREATE TABLE IF NOT EXISTS verification_runs (
@@ -994,6 +1002,15 @@ impl LcmEngine {
         self.ensure_column("mission_states", "deferred_reason", "TEXT")?;
         // F3: structured agent outcome on assistant rows; NULL for non-assistant rows.
         self.ensure_column("messages", "agent_outcome", "TEXT")?;
+        // Review rewrite/rework split: per-(conversation, mission)
+        // counter for consecutive non-converging rewrite-only review
+        // iterations. Trips the mission into `deferred` once the
+        // configured threshold is reached.
+        self.ensure_column(
+            "mission_states",
+            "rewrite_failure_count",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
         Ok(())
     }
 
@@ -1805,6 +1822,36 @@ impl LcmEngine {
         record.agent_failure_count = 0;
         // A successful turn implicitly clears any prior deferral reason.
         record.deferred_reason = None;
+        self.persist_mission_state(&record)?;
+        Ok(record)
+    }
+
+    /// Increment the per-mission rewrite-only review failure counter when a
+    /// rewrite-class review iteration failed to converge (next reviewer
+    /// verdict is again non-PASS for the same artifact). Returns the
+    /// post-increment record so the caller can decide whether the
+    /// dispatcher should defer the mission.
+    pub fn increment_mission_rewrite_failure_count(
+        &self,
+        conversation_id: i64,
+    ) -> Result<MissionStateRecord> {
+        let mut record = self.mission_state(conversation_id)?;
+        record.rewrite_failure_count = record.rewrite_failure_count.saturating_add(1);
+        self.persist_mission_state(&record)?;
+        Ok(record)
+    }
+
+    /// Reset the per-mission rewrite-only review failure counter on a
+    /// successful approval. No-op when already zero.
+    pub fn reset_mission_rewrite_failure_count(
+        &self,
+        conversation_id: i64,
+    ) -> Result<MissionStateRecord> {
+        let mut record = self.mission_state(conversation_id)?;
+        if record.rewrite_failure_count == 0 {
+            return Ok(record);
+        }
+        record.rewrite_failure_count = 0;
         self.persist_mission_state(&record)?;
         Ok(record)
     }
@@ -4070,7 +4117,7 @@ fn load_mission_state_with(
     conversation_id: i64,
 ) -> Result<Option<MissionStateRecord>> {
     conn.query_row(
-        "SELECT mission, mission_status, continuation_mode, trigger_intensity, blocker, next_slice, done_gate, closure_confidence, is_open, allow_idle, focus_head_commit_id, last_synced_at, watcher_last_triggered_at, watcher_trigger_count, agent_failure_count, deferred_reason FROM mission_states WHERE conversation_id = ?1",
+        "SELECT mission, mission_status, continuation_mode, trigger_intensity, blocker, next_slice, done_gate, closure_confidence, is_open, allow_idle, focus_head_commit_id, last_synced_at, watcher_last_triggered_at, watcher_trigger_count, agent_failure_count, deferred_reason, rewrite_failure_count FROM mission_states WHERE conversation_id = ?1",
         [conversation_id],
         |row| {
             Ok(MissionStateRecord {
@@ -4091,6 +4138,7 @@ fn load_mission_state_with(
                 watcher_trigger_count: row.get(13)?,
                 agent_failure_count: row.get(14)?,
                 deferred_reason: row.get(15)?,
+                rewrite_failure_count: row.get(16)?,
             })
         },
     )
@@ -4101,7 +4149,7 @@ fn load_mission_state_with(
 fn load_mission_states_with(conn: &Connection, open_only: bool) -> Result<Vec<MissionStateRecord>> {
     let mut stmt = conn
         .prepare(
-            "SELECT conversation_id, mission, mission_status, continuation_mode, trigger_intensity, blocker, next_slice, done_gate, closure_confidence, is_open, allow_idle, focus_head_commit_id, last_synced_at, watcher_last_triggered_at, watcher_trigger_count, agent_failure_count, deferred_reason
+            "SELECT conversation_id, mission, mission_status, continuation_mode, trigger_intensity, blocker, next_slice, done_gate, closure_confidence, is_open, allow_idle, focus_head_commit_id, last_synced_at, watcher_last_triggered_at, watcher_trigger_count, agent_failure_count, deferred_reason, rewrite_failure_count
              FROM mission_states
              WHERE (?1 = 0 OR is_open = 1)
              ORDER BY is_open DESC, last_synced_at DESC, conversation_id ASC",
@@ -4126,6 +4174,7 @@ fn load_mission_states_with(conn: &Connection, open_only: bool) -> Result<Vec<Mi
             watcher_trigger_count: row.get(14)?,
             agent_failure_count: row.get(15)?,
             deferred_reason: row.get(16)?,
+            rewrite_failure_count: row.get(17)?,
         })
     })?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
@@ -4309,8 +4358,9 @@ fn persist_mission_state_with(conn: &Connection, record: &MissionStateRecord) ->
             watcher_last_triggered_at,
             watcher_trigger_count,
             agent_failure_count,
-            deferred_reason
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+            deferred_reason,
+            rewrite_failure_count
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
         ON CONFLICT(conversation_id) DO UPDATE SET
             mission = excluded.mission,
             mission_status = excluded.mission_status,
@@ -4327,7 +4377,8 @@ fn persist_mission_state_with(conn: &Connection, record: &MissionStateRecord) ->
             watcher_last_triggered_at = excluded.watcher_last_triggered_at,
             watcher_trigger_count = excluded.watcher_trigger_count,
             agent_failure_count = excluded.agent_failure_count,
-            deferred_reason = excluded.deferred_reason",
+            deferred_reason = excluded.deferred_reason,
+            rewrite_failure_count = excluded.rewrite_failure_count",
         params![
             record.conversation_id,
             record.mission,
@@ -4346,6 +4397,7 @@ fn persist_mission_state_with(conn: &Connection, record: &MissionStateRecord) ->
             record.watcher_trigger_count,
             record.agent_failure_count,
             record.deferred_reason,
+            record.rewrite_failure_count,
         ],
     )?;
     Ok(())
@@ -4721,6 +4773,9 @@ fn derive_mission_state_from_continuity(
             .map(|record| record.agent_failure_count)
             .unwrap_or(0),
         deferred_reason: previous.and_then(|record| record.deferred_reason.clone()),
+        rewrite_failure_count: previous
+            .map(|record| record.rewrite_failure_count)
+            .unwrap_or(0),
     }
 }
 
@@ -6335,6 +6390,7 @@ mod tests {
             watcher_trigger_count: 16,
             agent_failure_count: 0,
             deferred_reason: None,
+            rewrite_failure_count: 0,
         };
 
         let mission = derive_mission_state_from_continuity(&continuity, Some(&previous));
@@ -6382,6 +6438,7 @@ mod tests {
             watcher_trigger_count: 0,
             agent_failure_count: 0,
             deferred_reason: None,
+            rewrite_failure_count: 0,
         };
 
         let mission = derive_mission_state_from_continuity(&continuity, Some(&previous));

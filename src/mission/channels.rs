@@ -427,6 +427,22 @@ pub struct PipelineStatusReport {
     pub send_attempts: Vec<PipelineSendAttempt>,
     pub current_mission_status: String,
     pub agent_failure_count: i64,
+    /// Iteration counter for the lightweight rewrite-only review path
+    /// (per-mission, reset on approval). Surfaced so operators can see
+    /// when a thread is bouncing in the body-fix loop versus the heavy
+    /// rework path.
+    pub rewrite_iteration_count: i64,
+    /// Iteration counter for the heavy rework path. Derived from the
+    /// stored `agent_failure_count` because rework continuations inherit
+    /// the agent-failure backoff machinery; this duplication keeps the
+    /// pipeline-status surface self-describing without changing the
+    /// underlying schema.
+    pub rework_iteration_count: i64,
+    /// Most recent disposition the dispatcher chose. One of `Approved`,
+    /// `RewriteOnly`, `RequeueSelfWork`, `None`. Computed from the latest
+    /// review run / mission status, so it stays accurate without an
+    /// extra column.
+    pub current_disposition: String,
     pub last_error: Option<String>,
 }
 
@@ -488,13 +504,21 @@ pub(crate) fn pipeline_status(
     } else {
         None
     };
-    let (current_mission_status, agent_failure_count, last_error) = match &mission_state {
+    let (
+        current_mission_status,
+        agent_failure_count,
+        rewrite_iteration_count,
+        rework_iteration_count,
+        last_error,
+    ) = match &mission_state {
         Some(record) => (
             record.mission_status.clone(),
             record.agent_failure_count,
+            record.rewrite_failure_count,
+            record.agent_failure_count,
             record.deferred_reason.clone(),
         ),
-        None => ("unknown".to_string(), 0, None),
+        None => ("unknown".to_string(), 0, 0, 0, None),
     };
 
     // Agent attempts: most recent assistant rows for the conversation, in
@@ -600,6 +624,22 @@ pub(crate) fn pipeline_status(
     // record for this thread (a reviewed founder send was prepared).
     let founder_outbound_intent = !approval_records.is_empty();
 
+    // The dispatcher disposition is structural (no string scraping). We
+    // derive it from the persisted state: an approval row implies the most
+    // recent disposition was `Approved`; a non-zero rewrite_failure_count
+    // implies the loop is in the lightweight rewrite path; a non-zero
+    // agent_failure_count implies the heavy rework path. Otherwise the
+    // pipeline has never produced a reviewed slice — `None`.
+    let current_disposition = if !approval_records.is_empty() {
+        "Approved".to_string()
+    } else if rewrite_iteration_count > 0 {
+        "RewriteOnly".to_string()
+    } else if rework_iteration_count > 0 {
+        "RequeueSelfWork".to_string()
+    } else {
+        "None".to_string()
+    };
+
     Ok(PipelineStatusReport {
         thread_key: thread_key.map(ToOwned::to_owned),
         founder_outbound_intent,
@@ -609,6 +649,9 @@ pub(crate) fn pipeline_status(
         send_attempts,
         current_mission_status,
         agent_failure_count,
+        rewrite_iteration_count,
+        rework_iteration_count,
+        current_disposition,
         last_error,
     })
 }
@@ -6208,6 +6251,9 @@ mod tests {
         assert_eq!(report.agent_failure_count, 1);
         // No review row was seeded → no founder_outbound_intent.
         assert!(!report.founder_outbound_intent);
+        assert_eq!(report.rewrite_iteration_count, 0);
+        assert_eq!(report.rework_iteration_count, 1);
+        assert_eq!(report.current_disposition, "RequeueSelfWork");
 
         let _ = fs::remove_dir_all(&root);
     }

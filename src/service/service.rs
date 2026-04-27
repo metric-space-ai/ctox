@@ -428,9 +428,71 @@ const PLATFORM_EXPERTISE_PASSES: [ExpertisePassSpec; 3] = [
 enum CompletionReviewDisposition {
     None,
     Approved,
-    Hold { summary: String },
-    RequeueSelfWork { work_id: String, summary: String },
+    Hold {
+        summary: String,
+    },
+    RequeueSelfWork {
+        work_id: String,
+        summary: String,
+    },
+    /// Lightweight in-process body fix triggered when every reviewer finding
+    /// is structurally tagged `rewrite`. The post-turn handler synthesises a
+    /// new `QueuedPrompt` with `source_label = "review-rewrite"` that
+    /// re-uses the parent job's outbound metadata and inlines the prior
+    /// body. No durable state mutation, no new plan goal, no queue task —
+    /// just a fast in-process turn that converges the body.
+    RewriteOnly {
+        findings: Vec<RewriteFinding>,
+        prior_body: String,
+        anchor_message_key: Option<String>,
+        review_summary: String,
+    },
 }
+
+/// Pure-data finding consumed by the lightweight rewrite path. Mirrors the
+/// `category: rewrite` half of `review::CategorizedFinding`; the rework half
+/// stays inside `RequeueSelfWork`'s payload as semantic findings strings.
+#[derive(Debug, Clone)]
+pub(crate) struct RewriteFinding {
+    pub id: String,
+    pub evidence: String,
+    pub corrective_action: String,
+}
+
+/// Result of classifying the reviewer's structured findings list. The
+/// dispatcher consumes the classification verbatim — no fallback heuristics,
+/// no string scraping. Empty findings ⇒ `Approved`; all entries tagged
+/// `rewrite` ⇒ `RewriteOnly`; any other mix (rework-only or mixed) ⇒
+/// `Substantive`. Missing-category items are coerced to `Rework` upstream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReviewRoutingClass {
+    Approved,
+    RewriteOnly,
+    Substantive,
+}
+
+fn classify_findings(findings: &[review::CategorizedFinding]) -> ReviewRoutingClass {
+    if findings.is_empty() {
+        return ReviewRoutingClass::Approved;
+    }
+    if findings
+        .iter()
+        .all(|f| f.category == review::FindingCategory::Rewrite)
+    {
+        ReviewRoutingClass::RewriteOnly
+    } else {
+        ReviewRoutingClass::Substantive
+    }
+}
+
+/// Source label applied to lightweight rewrite-only post-turn prompts. Kept
+/// distinct from `tui` / `queue` / `plan` / `ticket:local` so the dispatcher
+/// can identify them in logs and the pipeline status surface.
+const REVIEW_REWRITE_SOURCE_LABEL: &str = "review-rewrite";
+
+/// Default convergence threshold for consecutive rewrite-only iterations.
+/// Overridable via the `CTOX_MISSION_REWRITE_FAILURE_THRESHOLD` env var.
+const DEFAULT_REWRITE_FAILURE_THRESHOLD: i64 = 3;
 
 struct ServiceExitGuard {
     pid: u32,
@@ -2541,7 +2603,8 @@ fn start_prompt_worker(
                                 }
                                 CompletionReviewDisposition::None
                                 | CompletionReviewDisposition::Hold { .. }
-                                | CompletionReviewDisposition::RequeueSelfWork { .. } => false,
+                                | CompletionReviewDisposition::RequeueSelfWork { .. }
+                                | CompletionReviewDisposition::RewriteOnly { .. } => false,
                             }
                         } else if let (Some(anchor_key), Some(action)) = (
                             proactive_founder_anchor.as_deref(),
@@ -2561,7 +2624,8 @@ fn start_prompt_worker(
                                 }
                                 CompletionReviewDisposition::None
                                 | CompletionReviewDisposition::Hold { .. }
-                                | CompletionReviewDisposition::RequeueSelfWork { .. } => false,
+                                | CompletionReviewDisposition::RequeueSelfWork { .. }
+                                | CompletionReviewDisposition::RewriteOnly { .. } => false,
                             }
                         } else {
                             true
@@ -2634,6 +2698,20 @@ fn start_prompt_worker(
                                         format!(
                                             "Review held the slice open without send/closure: {}",
                                             clip_text(summary, 180)
+                                        ),
+                                    );
+                                }
+                                CompletionReviewDisposition::RewriteOnly {
+                                    findings,
+                                    review_summary,
+                                    ..
+                                } => {
+                                    push_event_locked(
+                                        &mut shared,
+                                        format!(
+                                            "Review found {} rewrite-class issue(s); body fix scheduled in-process: {}",
+                                            findings.len(),
+                                            clip_text(review_summary, 180)
                                         ),
                                     );
                                 }
@@ -2723,6 +2801,96 @@ fn start_prompt_worker(
                 }
                 if let Some(event) = &platform_pipeline_event {
                     push_event_locked(&mut shared, event.clone());
+                }
+                // Lightweight rewrite path: when every reviewer finding is
+                // structurally `rewrite`-class, synthesise an in-process
+                // body-fix prompt instead of spawning the heavy rework
+                // queue task. The prompt inherits outbound recipient/anchor
+                // metadata from the parent job, sandwiches the prior body
+                // and the categorized findings, and is pushed to the front
+                // of the pending queue so the next pick picks it up.
+                if let CompletionReviewDisposition::RewriteOnly {
+                    findings,
+                    prior_body,
+                    anchor_message_key,
+                    review_summary,
+                } = &review_disposition
+                {
+                    let synthesised = synthesise_review_rewrite_prompt(
+                        &job,
+                        findings,
+                        prior_body,
+                        anchor_message_key.as_deref(),
+                        review_summary,
+                    );
+                    shared.pending_prompts.push_front(synthesised);
+                    push_event_locked(
+                        &mut shared,
+                        format!(
+                            "Queued lightweight rewrite-only retry ({} finding(s)) for {}",
+                            findings.len(),
+                            job.source_label
+                        ),
+                    );
+                    if let Ok(engine) = lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default()) {
+                        match engine.increment_mission_rewrite_failure_count(conversation_id) {
+                            Ok(record) => {
+                                let threshold = mission_rewrite_failure_threshold();
+                                if record.rewrite_failure_count >= threshold {
+                                    let _ = engine.defer_mission_for_reason(
+                                        conversation_id,
+                                        "rewrite_failure_threshold",
+                                    );
+                                    push_event_locked(
+                                        &mut shared,
+                                        format!(
+                                            "Rewrite-only loop hit threshold ({}) for conversation {}; mission deferred",
+                                            threshold, conversation_id
+                                        ),
+                                    );
+                                    // Drop the synthesised retry — the
+                                    // mission is now deferred and we do
+                                    // not want to keep re-spawning. Pop
+                                    // the prompt we just pushed to the
+                                    // front.
+                                    let _ = shared.pending_prompts.pop_front();
+                                    let _ = governance::record_event(
+                                        &root,
+                                        governance::GovernanceEventRequest {
+                                            mechanism_id: "review_rewrite_threshold",
+                                            conversation_id: Some(conversation_id),
+                                            severity: "warning",
+                                            reason: "rewrite-only review iterations failed to converge",
+                                            action_taken: "deferred mission and stopped respawning rewrite retries",
+                                            details: serde_json::json!({
+                                                "thread_key": job.thread_key,
+                                                "source_label": job.source_label,
+                                                "rewrite_failure_count": record.rewrite_failure_count,
+                                                "threshold": threshold,
+                                            }),
+                                            idempotence_key: Some(&format!(
+                                                "rewrite-threshold:{}:{}",
+                                                conversation_id, record.rewrite_failure_count
+                                            )),
+                                        },
+                                    );
+                                }
+                            }
+                            Err(err) => push_event_locked(
+                                &mut shared,
+                                format!(
+                                    "rewrite_failure_count bump failed for conversation {}: {}",
+                                    conversation_id, err
+                                ),
+                            ),
+                        }
+                    }
+                } else if matches!(&review_disposition, CompletionReviewDisposition::Approved) {
+                    // Successful approval clears the rewrite-only failure
+                    // counter so a future regression starts from zero.
+                    if let Ok(engine) = lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default()) {
+                        let _ = engine.reset_mission_rewrite_failure_count(conversation_id);
+                    }
                 }
                 if let Some(remaining_secs) = runtime_blocker_backoff_remaining_secs(&shared) {
                     if !shared.pending_prompts.is_empty() {
@@ -2985,6 +3153,13 @@ fn run_completion_review(
     // on a flaky reviewer.
     let actionable_rejection = outcome.requires_follow_up()
         && !matches!(outcome.verdict, review::ReviewVerdict::Unavailable);
+    // Structural routing class derived from the reviewer's CATEGORIZED_FINDINGS
+    // block. Empty findings ⇒ Approved; all `rewrite` ⇒ RewriteOnly; any
+    // `rework` (or mixed) ⇒ Substantive. Legacy reports without a
+    // categorized block fall through to Substantive because
+    // `categorized_findings` will be empty *and* the reviewer's verdict
+    // dictates the path — `Approved` for Pass, the heavy path for Fail.
+    let routing_class = classify_findings(&outcome.categorized_findings);
     let founder_mail_source = matches!(
         job.source_label.to_ascii_lowercase().as_str(),
         "email:owner" | "email:founder" | "email:admin"
@@ -3014,6 +3189,23 @@ fn run_completion_review(
                 CompletionReviewDisposition::Approved
             }
             review::ReviewVerdict::Fail if actionable_rejection => {
+                if matches!(routing_class, ReviewRoutingClass::RewriteOnly) {
+                    let findings = rewrite_findings_from(&outcome.categorized_findings);
+                    push_event(
+                        state,
+                        format!(
+                            "Founder review fail for {} routed to lightweight rewrite-only path ({} finding(s))",
+                            job.source_label,
+                            findings.len()
+                        ),
+                    );
+                    return CompletionReviewDisposition::RewriteOnly {
+                        findings,
+                        prior_body: reply_text.to_string(),
+                        anchor_message_key: founder_reply_key.map(ToOwned::to_owned),
+                        review_summary: outcome.summary.clone(),
+                    };
+                }
                 if let Some(work_id) = resolve_review_rejection_target_self_work_id(root, job) {
                     push_event(
                         state,
@@ -3094,6 +3286,23 @@ fn run_completion_review(
             review::ReviewVerdict::Fail | review::ReviewVerdict::Partial
                 if actionable_rejection =>
             {
+                if matches!(routing_class, ReviewRoutingClass::RewriteOnly) {
+                    let findings = rewrite_findings_from(&outcome.categorized_findings);
+                    push_event(
+                        state,
+                        format!(
+                            "Founder outbound review for {} routed to lightweight rewrite-only path ({} finding(s))",
+                            job.source_label,
+                            findings.len()
+                        ),
+                    );
+                    return CompletionReviewDisposition::RewriteOnly {
+                        findings,
+                        prior_body: reply_text.to_string(),
+                        anchor_message_key: Some(anchor_key.to_string()),
+                        review_summary: outcome.summary.clone(),
+                    };
+                }
                 match enqueue_review_rework(root, job, &outcome) {
                     Ok(title) => push_event(
                         state,
@@ -3171,6 +3380,118 @@ fn derive_owner_visible_for_review(source_label: &str) -> bool {
         return false;
     }
     !(lowered.contains("watchdog") || lowered.contains("timeout") || lowered.starts_with("cron"))
+}
+
+/// Synthesise the in-process `QueuedPrompt` that drives the lightweight
+/// rewrite-only retry. The new prompt inherits outbound recipient/anchor
+/// metadata from the parent job verbatim — no re-derivation, no leak of
+/// internal vocab into the agent-facing instruction beyond what the
+/// reviewer already surfaced.
+fn synthesise_review_rewrite_prompt(
+    parent: &QueuedPrompt,
+    findings: &[RewriteFinding],
+    prior_body: &str,
+    anchor_message_key: Option<&str>,
+    review_summary: &str,
+) -> QueuedPrompt {
+    let prompt = build_review_rewrite_prompt(prior_body, findings, anchor_message_key);
+    QueuedPrompt {
+        prompt,
+        goal: format!("Body rewrite for {}", parent.source_label),
+        preview: clip_text(review_summary, 160),
+        source_label: REVIEW_REWRITE_SOURCE_LABEL.to_string(),
+        suggested_skill: parent.suggested_skill.clone(),
+        leased_message_keys: Vec::new(),
+        leased_ticket_event_keys: Vec::new(),
+        thread_key: parent.thread_key.clone(),
+        workspace_root: parent.workspace_root.clone(),
+        ticket_self_work_id: None,
+        outbound_email: parent.outbound_email.clone(),
+        outbound_anchor: parent.outbound_anchor.clone(),
+    }
+}
+
+/// Project the `Rewrite`-class half of a reviewer's `categorized_findings`
+/// list onto the dispatcher's `RewriteFinding` shape. Items tagged `Rework`
+/// stay in the heavy-path payload elsewhere; this helper does not coerce
+/// categories.
+fn rewrite_findings_from(findings: &[review::CategorizedFinding]) -> Vec<RewriteFinding> {
+    findings
+        .iter()
+        .filter(|f| matches!(f.category, review::FindingCategory::Rewrite))
+        .map(|f| RewriteFinding {
+            id: f.id.clone(),
+            evidence: f.evidence.clone(),
+            corrective_action: f.corrective_action.clone(),
+        })
+        .collect()
+}
+
+/// Convergence threshold for the lightweight rewrite-only loop. Defaults to
+/// `DEFAULT_REWRITE_FAILURE_THRESHOLD` (3) and is overridable via the
+/// `CTOX_MISSION_REWRITE_FAILURE_THRESHOLD` env var. Non-numeric or
+/// non-positive overrides fall back to the default.
+fn mission_rewrite_failure_threshold() -> i64 {
+    match std::env::var("CTOX_MISSION_REWRITE_FAILURE_THRESHOLD") {
+        Ok(value) => match value.trim().parse::<i64>() {
+            Ok(parsed) if parsed > 0 => parsed,
+            _ => DEFAULT_REWRITE_FAILURE_THRESHOLD,
+        },
+        Err(_) => DEFAULT_REWRITE_FAILURE_THRESHOLD,
+    }
+}
+
+/// Build the lightweight rewrite-only prompt body. The agent receives the
+/// prior outbound body verbatim (between fenced markers), the structured
+/// list of rewrite findings with corrective actions, and a strict
+/// "reply-with-body-only" instruction so the post-turn auto-send pipeline
+/// can splice the corrected body into the same outbound action without
+/// re-deriving recipients/subjects from scratch.
+fn build_review_rewrite_prompt(
+    prior_body: &str,
+    findings: &[RewriteFinding],
+    anchor_message_key: Option<&str>,
+) -> String {
+    let mut numbered = String::new();
+    for (idx, finding) in findings.iter().enumerate() {
+        let id = if finding.id.trim().is_empty() {
+            format!("f{}", idx + 1)
+        } else {
+            finding.id.trim().to_string()
+        };
+        numbered.push_str(&format!(
+            "{}. [{}] evidence: {} | corrective_action: {}\n",
+            idx + 1,
+            id,
+            finding.evidence.trim(),
+            finding.corrective_action.trim()
+        ));
+    }
+    if numbered.is_empty() {
+        numbered.push_str("(none)\n");
+    }
+    let anchor_note = match anchor_message_key {
+        Some(key) if !key.trim().is_empty() => {
+            format!("\nKontext-Anchor: {}\n", key.trim())
+        }
+        _ => String::new(),
+    };
+    format!(
+        "Du erhältst den vorigen Body einer reviewed founder send Mail und eine Liste von Wording-/Style-Findings.\n\
+Erstelle den korrigierten Body — alles andere bleibt unverändert.\n\
+{anchor_note}\n\
+Vorheriger Body (zwischen ====):\n\
+====\n\
+{prior_body}\n\
+====\n\
+\n\
+Findings (jeweils mit corrective_action):\n\
+{numbered}\n\
+Reply: nur der korrigierte Body. Keine eigenen \"An:\", \"Betreff:\" oder \"From:\"-Zeilen. Keine Erläuterung.\n",
+        anchor_note = anchor_note,
+        prior_body = prior_body.trim(),
+        numbered = numbered.trim_end(),
+    )
 }
 
 /// Enqueue a high-priority rework slice on the same thread as the rejected
@@ -4947,6 +5268,7 @@ fn founder_commitment_guard_outcome(
             .iter()
             .map(|item| format!("Commitment requires backing before send: {item}"))
             .collect(),
+        categorized_findings: Vec::new(),
         open_items: vec![
             "Create concrete CTOX schedule or follow-up backing for every promised founder deadline before sending."
                 .to_string(),
@@ -8582,6 +8904,7 @@ mod tests {
             watcher_trigger_count: 0,
             agent_failure_count: 0,
             deferred_reason: None,
+            rewrite_failure_count: 0,
         };
         let prompt = render_mission_continuation_prompt(&mission, 45);
         assert!(prompt.contains("Mission continuity watchdog: the mission was idle for 45s."));
@@ -8609,6 +8932,7 @@ mod tests {
             watcher_trigger_count: 0,
             agent_failure_count: 0,
             deferred_reason: None,
+            rewrite_failure_count: 0,
         };
         let same_key = mission_watchdog_dedupe_key(&base);
         let mut changed = base.clone();
@@ -8645,6 +8969,7 @@ mod tests {
             watcher_trigger_count: 0,
             agent_failure_count: 0,
             deferred_reason: None,
+            rewrite_failure_count: 0,
         };
 
         assert!(mission_waits_for_external_approval(&mission));
@@ -8674,6 +8999,7 @@ mod tests {
             watcher_trigger_count: 0,
             agent_failure_count: 0,
             deferred_reason: None,
+            rewrite_failure_count: 0,
         };
 
         assert!(!mission_waits_for_external_approval(&mission));
@@ -9667,6 +9993,7 @@ mod tests {
             reasons: vec!["Reset the IA".to_string()],
             failed_gates: vec!["Mission fit".to_string()],
             semantic_findings: vec!["Homepage still reads like a brochure.".to_string()],
+            categorized_findings: Vec::new(),
             open_items: vec!["Introduce clear roster and hire flow.".to_string()],
             evidence: vec!["GET / => static shell".to_string()],
             handoff: None,
@@ -10469,6 +10796,7 @@ mod tests {
             reasons: vec!["missing_deliverable".to_string()],
             failed_gates: vec!["missing_deliverable".to_string()],
             semantic_findings: vec!["QR code is required before any reply can be sent.".to_string()],
+            categorized_findings: Vec::new(),
             open_items: vec!["Generate or retrieve the Jami QR code.".to_string()],
             evidence: vec!["owner mail explicitly asks for QR code".to_string()],
             handoff: None,
@@ -11347,5 +11675,174 @@ mod tests {
         );
         assert!(!deferred.is_open);
         assert!(deferred.allow_idle);
+    }
+
+    fn rewrite_finding(id: &str) -> review::CategorizedFinding {
+        review::CategorizedFinding {
+            id: id.to_string(),
+            category: review::FindingCategory::Rewrite,
+            evidence: format!("evidence for {id}"),
+            corrective_action: format!("fix wording for {id}"),
+        }
+    }
+
+    fn rework_finding(id: &str) -> review::CategorizedFinding {
+        review::CategorizedFinding {
+            id: id.to_string(),
+            category: review::FindingCategory::Rework,
+            evidence: format!("durable mismatch for {id}"),
+            corrective_action: format!("create durable backing for {id}"),
+        }
+    }
+
+    fn parent_outbound_job() -> QueuedPrompt {
+        QueuedPrompt {
+            prompt: "draft founder reply".to_string(),
+            goal: "founder mail".to_string(),
+            preview: "founder thread".to_string(),
+            source_label: "email:owner".to_string(),
+            suggested_skill: Some("communication-orchestrator".to_string()),
+            leased_message_keys: vec!["email:cto1@example.com:msg-1".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("email-review:owner:thread-1".to_string()),
+            workspace_root: Some("/srv/kunstmen".to_string()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: Some("email:cto1@example.com:msg-1".to_string()),
+        }
+    }
+
+    #[test]
+    fn dispatcher_routes_all_rewrite_findings_to_rewrite_only() {
+        let findings = vec![rewrite_finding("f1"), rewrite_finding("f2")];
+        assert_eq!(
+            classify_findings(&findings),
+            ReviewRoutingClass::RewriteOnly
+        );
+    }
+
+    #[test]
+    fn dispatcher_routes_mixed_findings_to_requeue_self_work() {
+        let mixed = vec![rewrite_finding("f1"), rework_finding("f2")];
+        assert_eq!(classify_findings(&mixed), ReviewRoutingClass::Substantive);
+        let only_rework = vec![rework_finding("f1")];
+        assert_eq!(
+            classify_findings(&only_rework),
+            ReviewRoutingClass::Substantive
+        );
+    }
+
+    #[test]
+    fn dispatcher_routes_empty_findings_to_approved() {
+        let empty: Vec<review::CategorizedFinding> = Vec::new();
+        assert_eq!(classify_findings(&empty), ReviewRoutingClass::Approved);
+    }
+
+    #[test]
+    fn rewrite_only_post_turn_spawns_lightweight_pending_prompt() {
+        let _ = temp_root("rewrite-only-post-turn");
+        let parent = parent_outbound_job();
+        let findings = vec![
+            RewriteFinding {
+                id: "f1".to_string(),
+                evidence: "salutation uses internal vocab".to_string(),
+                corrective_action: "use neutral salutation".to_string(),
+            },
+            RewriteFinding {
+                id: "f2".to_string(),
+                evidence: "body too long".to_string(),
+                corrective_action: "trim to two paragraphs".to_string(),
+            },
+        ];
+        let prior_body = "Hallo TUI-Founder, hier kommt der Stand…".to_string();
+        let synthesised = synthesise_review_rewrite_prompt(
+            &parent,
+            &findings,
+            &prior_body,
+            parent.outbound_anchor.as_deref(),
+            "two wording issues to address",
+        );
+
+        assert_eq!(synthesised.source_label, REVIEW_REWRITE_SOURCE_LABEL);
+        assert!(synthesised.leased_message_keys.is_empty());
+        assert_eq!(
+            synthesised.outbound_email.is_some(),
+            parent.outbound_email.is_some()
+        );
+        assert_eq!(synthesised.outbound_anchor, parent.outbound_anchor);
+        assert_eq!(synthesised.thread_key, parent.thread_key);
+        assert!(synthesised.ticket_self_work_id.is_none());
+        assert!(synthesised.prompt.contains(&prior_body));
+        assert!(synthesised
+            .prompt
+            .contains("salutation uses internal vocab"));
+        assert!(synthesised.prompt.contains("trim to two paragraphs"));
+        assert!(synthesised.prompt.contains("nur der korrigierte Body"));
+
+        let mut shared = SharedState::default();
+        shared.pending_prompts.push_front(synthesised);
+        assert_eq!(shared.pending_prompts.len(), 1);
+        let front = shared.pending_prompts.front().unwrap();
+        assert_eq!(front.source_label, REVIEW_REWRITE_SOURCE_LABEL);
+        assert_eq!(front.outbound_anchor, parent.outbound_anchor);
+        // No durable side effects: no ticket id and no plan goal/step row
+        // could exist because we never called plan::ingest. Confirming the
+        // synthesis path itself never inherited a ticket id is enough.
+        assert!(front.ticket_self_work_id.is_none());
+    }
+
+    #[test]
+    fn rewrite_failure_count_threshold_defers_mission() {
+        let root = temp_root("rewrite-threshold-defer");
+        std::fs::create_dir_all(root.join("runtime")).unwrap();
+        let db_path = root.join("runtime/ctox.sqlite3");
+        let engine = LcmEngine::open(&db_path, LcmConfig::default()).unwrap();
+        // Seed an initial mission so the counter has somewhere to land.
+        let _ = engine
+            .continuity_init_documents(turn_loop::CHAT_CONVERSATION_ID)
+            .unwrap();
+        let _ = engine
+            .sync_mission_state_from_continuity(turn_loop::CHAT_CONVERSATION_ID)
+            .unwrap();
+
+        let threshold = mission_rewrite_failure_threshold();
+        for _ in 0..threshold {
+            let _ = engine
+                .increment_mission_rewrite_failure_count(turn_loop::CHAT_CONVERSATION_ID)
+                .unwrap();
+        }
+        let pre_defer = engine
+            .stored_mission_state(turn_loop::CHAT_CONVERSATION_ID)
+            .unwrap()
+            .unwrap();
+        assert_eq!(pre_defer.rewrite_failure_count, threshold);
+
+        let deferred = engine
+            .defer_mission_for_reason(turn_loop::CHAT_CONVERSATION_ID, "rewrite_failure_threshold")
+            .unwrap();
+        assert_eq!(deferred.mission_status, "deferred");
+        assert_eq!(
+            deferred.deferred_reason.as_deref(),
+            Some("rewrite_failure_threshold")
+        );
+        assert!(!deferred.is_open);
+
+        let _ = governance::record_event(
+            &root,
+            governance::GovernanceEventRequest {
+                mechanism_id: "review_rewrite_threshold",
+                conversation_id: Some(turn_loop::CHAT_CONVERSATION_ID),
+                severity: "warning",
+                reason: "rewrite-only review iterations failed to converge",
+                action_taken: "deferred mission and stopped respawning rewrite retries",
+                details: serde_json::json!({"threshold": threshold}),
+                idempotence_key: Some("rewrite-threshold-test"),
+            },
+        );
+        let events = governance::list_recent_events(&root, turn_loop::CHAT_CONVERSATION_ID, 8)
+            .expect("failed to list governance events");
+        assert!(events
+            .iter()
+            .any(|event| event.mechanism_id == "review_rewrite_threshold"));
     }
 }

@@ -61,12 +61,21 @@ FAILED_GATES:
 - <gate or "none">
 FINDINGS:
 - <semantic finding or "none">
+CATEGORIZED_FINDINGS:
+- id: <id> | category: rewrite|rework | evidence: "<evidence>" | corrective_action: "<corrective action>"
+- <or "none">
 OPEN_ITEMS:
 - <item>
 EVIDENCE:
 - <check> => <result>
 HANDOFF:
 - <only when another review run should continue; otherwise write "none">
+
+CATEGORIZED_FINDINGS contract:
+- emit one line per concrete finding the run produces
+- each line is pipe-delimited key:value pairs in the order id | category | evidence | corrective_action
+- category is the structural enum the dispatcher routes on; the skill teaches the rules
+- if there is no concrete finding, write a single "- none" line under the section
 "#;
 
 #[derive(Debug, Clone, Default)]
@@ -96,6 +105,53 @@ pub enum ReviewVerdict {
     Partial,
     Skipped,
     Unavailable,
+}
+
+/// Structural category emitted by the reviewer for every concrete finding.
+///
+/// `Rewrite` means the slice can be repaired by editing the prior outbound
+/// body without mutating durable state. `Rework` means the finding requires
+/// a substantive change (durable record, fresh research, structural artefact)
+/// and must run on the heavy review-rework path. The dispatcher routes on
+/// this enum directly — no string scraping in core.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum FindingCategory {
+    Rewrite,
+    Rework,
+}
+
+impl FindingCategory {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Rewrite => "rewrite",
+            Self::Rework => "rework",
+        }
+    }
+
+    /// Parse a single category token. Returns `None` for unknown values; the
+    /// caller decides the legacy fallback (the dispatcher defaults to
+    /// `Rework` to preserve safety).
+    pub fn parse(token: &str) -> Option<Self> {
+        match token.trim().to_ascii_lowercase().as_str() {
+            "rewrite" => Some(Self::Rewrite),
+            "rework" => Some(Self::Rework),
+            _ => None,
+        }
+    }
+}
+
+/// Structured reviewer finding paired with its category.
+///
+/// Carries the deterministic metadata the dispatcher consumes to choose
+/// between the lightweight rewrite path and the heavy rework loop. Plain
+/// string findings (the legacy `semantic_findings` list) stay unchanged for
+/// backward compatibility and operator surfaces.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CategorizedFinding {
+    pub id: String,
+    pub category: FindingCategory,
+    pub evidence: String,
+    pub corrective_action: String,
 }
 
 impl ReviewVerdict {
@@ -131,6 +187,12 @@ pub struct ReviewOutcome {
     pub reasons: Vec<String>,
     pub failed_gates: Vec<String>,
     pub semantic_findings: Vec<String>,
+    /// Structured per-finding entries with deterministic `category` tags.
+    /// Populated when the reviewer emits a `CATEGORIZED_FINDINGS:` block.
+    /// Empty for legacy reports — callers must not infer category from the
+    /// plain `semantic_findings` strings.
+    #[serde(default)]
+    pub categorized_findings: Vec<CategorizedFinding>,
     pub open_items: Vec<String>,
     pub evidence: Vec<String>,
     pub handoff: Option<String>,
@@ -148,6 +210,7 @@ impl ReviewOutcome {
             reasons: Vec::new(),
             failed_gates: Vec::new(),
             semantic_findings: Vec::new(),
+            categorized_findings: Vec::new(),
             open_items: Vec::new(),
             evidence: Vec::new(),
             handoff: None,
@@ -169,6 +232,20 @@ impl ReviewOutcome {
         rendered.push(format!("SUMMARY: {}", self.summary.trim()));
         append_report_section(&mut rendered, "FAILED_GATES", &self.failed_gates);
         append_report_section(&mut rendered, "FINDINGS", &self.semantic_findings);
+        rendered.push("CATEGORIZED_FINDINGS:".to_string());
+        if self.categorized_findings.is_empty() {
+            rendered.push("- none".to_string());
+        } else {
+            for finding in &self.categorized_findings {
+                rendered.push(format!(
+                    "- id: {} | category: {} | evidence: {} | corrective_action: {}",
+                    finding.id,
+                    finding.category.as_str(),
+                    finding.evidence,
+                    finding.corrective_action,
+                ));
+            }
+        }
         append_report_section(&mut rendered, "OPEN_ITEMS", &self.open_items);
         append_report_section(&mut rendered, "EVIDENCE", &self.evidence);
         rendered.push("HANDOFF:".to_string());
@@ -228,6 +305,7 @@ pub fn review_completion_if_needed(
             reasons,
             failed_gates: Vec::new(),
             semantic_findings: Vec::new(),
+            categorized_findings: Vec::new(),
             open_items: Vec::new(),
             evidence: Vec::new(),
             handoff: None,
@@ -546,12 +624,17 @@ FAILED_GATES:\n\
 - <gate or \"none\">\n\
 FINDINGS:\n\
 - <semantic finding or \"none\">\n\
+CATEGORIZED_FINDINGS:\n\
+- id: <id> | category: rewrite|rework | evidence: \"<evidence>\" | corrective_action: \"<corrective action>\"\n\
+- <or \"none\">\n\
 OPEN_ITEMS:\n\
 - <item>\n\
 EVIDENCE:\n\
 - <command or check> => <observed result>\n\
 HANDOFF:\n\
-- <only when another review run should continue; otherwise write \"none\">\n",
+- <only when another review run should continue; otherwise write \"none\">\n\
+\n\
+The CATEGORIZED_FINDINGS block is the structural input the dispatcher uses to choose between the lightweight rewrite path (body wording / subject / tonality fixes) and the heavy rework loop (durable state changes, missing artefacts, evidence gaps). Read the review skill section on Finding categories before assigning.\n",
         conversation_id = request.conversation_id,
         artifact_action = artifact_action,
         artifact_to = artifact_to,
@@ -637,6 +720,7 @@ fn parse_review_report(score: u8, reasons: Vec<String>, report: &str) -> ReviewO
         reasons,
         failed_gates: parse_section_items(report, "FAILED_GATES:"),
         semantic_findings: parse_section_items(report, "FINDINGS:"),
+        categorized_findings: parse_categorized_findings(report),
         open_items: parse_section_items(report, "OPEN_ITEMS:"),
         evidence: parse_section_items(report, "EVIDENCE:"),
         handoff: parse_handoff_block(report),
@@ -693,6 +777,7 @@ fn parse_handoff_block(report: &str) -> Option<String> {
                 || trimmed.starts_with("FAILED_GATES:")
                 || trimmed.starts_with("OPEN_ITEMS:")
                 || trimmed.starts_with("EVIDENCE:")
+                || trimmed.starts_with("CATEGORIZED_FINDINGS:")
             {
                 break;
             }
@@ -730,6 +815,7 @@ fn parse_section_items(report: &str, header: &str) -> Vec<String> {
                     | "SUMMARY:"
                     | "FAILED_GATES:"
                     | "FINDINGS:"
+                    | "CATEGORIZED_FINDINGS:"
                     | "OPEN_ITEMS:"
                     | "EVIDENCE:"
                     | "HANDOFF:"
@@ -745,6 +831,101 @@ fn parse_section_items(report: &str, header: &str) -> Vec<String> {
         }
     }
     items
+}
+
+/// Parse the optional `CATEGORIZED_FINDINGS:` block. Each item is a single
+/// line of pipe-delimited `key: value` pairs:
+///
+/// ```text
+/// - id: f1 | category: rewrite | evidence: "internal vocab leak in greeting" | corrective_action: "use 'Hallo Founder,' instead"
+/// ```
+///
+/// Items missing a recognised `category` token are dropped. The dispatcher
+/// applies a conservative `Rework` default when it falls back to the legacy
+/// `semantic_findings` list (i.e. when this returns empty); inside this
+/// parser we never coerce unknown tokens — silent rejection keeps the
+/// classification structural.
+fn parse_categorized_findings(report: &str) -> Vec<CategorizedFinding> {
+    let mut collecting = false;
+    let mut findings = Vec::new();
+    for line in report.lines() {
+        let trimmed = line.trim();
+        if trimmed == "CATEGORIZED_FINDINGS:" {
+            collecting = true;
+            continue;
+        }
+        if collecting {
+            if matches!(
+                trimmed,
+                "VERDICT:"
+                    | "MISSION_STATE:"
+                    | "SUMMARY:"
+                    | "FAILED_GATES:"
+                    | "FINDINGS:"
+                    | "OPEN_ITEMS:"
+                    | "EVIDENCE:"
+                    | "HANDOFF:"
+            ) {
+                break;
+            }
+            let Some(item) = trimmed.strip_prefix("- ") else {
+                continue;
+            };
+            let value = item.trim();
+            if value.is_empty() || value.eq_ignore_ascii_case("none") {
+                continue;
+            }
+            if let Some(finding) = parse_categorized_finding_line(value) {
+                findings.push(finding);
+            }
+        }
+    }
+    findings
+}
+
+fn parse_categorized_finding_line(line: &str) -> Option<CategorizedFinding> {
+    let mut id: Option<String> = None;
+    let mut category: Option<FindingCategory> = None;
+    let mut evidence: Option<String> = None;
+    let mut corrective_action: Option<String> = None;
+    for raw_segment in line.split('|') {
+        let segment = raw_segment.trim();
+        if segment.is_empty() {
+            continue;
+        }
+        let Some((key, value)) = segment.split_once(':') else {
+            continue;
+        };
+        let key = key.trim().to_ascii_lowercase();
+        let value = unquote_field_value(value.trim());
+        match key.as_str() {
+            "id" => id = Some(value),
+            "category" => category = FindingCategory::parse(&value),
+            "evidence" => evidence = Some(value),
+            "corrective_action" => corrective_action = Some(value),
+            _ => {}
+        }
+    }
+    let category = category?;
+    Some(CategorizedFinding {
+        id: id.unwrap_or_default(),
+        category,
+        evidence: evidence.unwrap_or_default(),
+        corrective_action: corrective_action.unwrap_or_default(),
+    })
+}
+
+fn unquote_field_value(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.len() >= 2 {
+        let bytes = trimmed.as_bytes();
+        let first = bytes[0];
+        let last = bytes[bytes.len() - 1];
+        if (first == b'"' && last == b'"') || (first == b'\'' && last == b'\'') {
+            return trimmed[1..trimmed.len() - 1].to_string();
+        }
+    }
+    trimmed.to_string()
 }
 
 fn contains_any(haystack: &str, needles: &[&str]) -> bool {
@@ -923,5 +1104,45 @@ mod tests {
         let handoff = parse_handoff_block(report).expect("handoff missing");
         assert!(handoff.contains("Verified public URL returns 200"));
         assert!(handoff.contains("Still need /api/state"));
+    }
+
+    #[test]
+    fn parses_categorized_findings_block() {
+        let report = "VERDICT: FAIL\nMISSION_STATE: UNCLEAR\nSUMMARY: wording issues.\nFAILED_GATES:\n- none\nFINDINGS:\n- internal vocab leak\nCATEGORIZED_FINDINGS:\n- id: f1 | category: rewrite | evidence: \"greeting uses TUI jargon\" | corrective_action: \"replace with neutral salutation\"\n- id: f2 | category: rework | evidence: \"body claims send before approval row exists\" | corrective_action: \"create approval and re-run review\"\nOPEN_ITEMS:\n- none\n";
+        let outcome = parse_review_report(4, vec![], report);
+        assert_eq!(outcome.verdict, ReviewVerdict::Fail);
+        assert_eq!(outcome.categorized_findings.len(), 2);
+        assert_eq!(outcome.categorized_findings[0].id, "f1");
+        assert_eq!(
+            outcome.categorized_findings[0].category,
+            FindingCategory::Rewrite
+        );
+        assert!(outcome.categorized_findings[0]
+            .evidence
+            .contains("greeting"));
+        assert!(outcome.categorized_findings[0]
+            .corrective_action
+            .contains("salutation"));
+        assert_eq!(
+            outcome.categorized_findings[1].category,
+            FindingCategory::Rework
+        );
+    }
+
+    #[test]
+    fn parses_review_report_without_categorized_block_keeps_findings_empty() {
+        let report = "VERDICT: FAIL\nSUMMARY: legacy report.\nFINDINGS:\n- something is off\nOPEN_ITEMS:\n- none\n";
+        let outcome = parse_review_report(3, vec![], report);
+        assert_eq!(outcome.verdict, ReviewVerdict::Fail);
+        assert!(outcome.categorized_findings.is_empty());
+        assert_eq!(outcome.semantic_findings.len(), 1);
+    }
+
+    #[test]
+    fn drops_findings_with_unknown_or_missing_category() {
+        let report = "VERDICT: FAIL\nSUMMARY: noise.\nCATEGORIZED_FINDINGS:\n- id: f1 | category: bogus | evidence: \"x\" | corrective_action: \"y\"\n- id: f2 | evidence: \"x\" | corrective_action: \"y\"\n- id: f3 | category: rewrite | evidence: \"x\" | corrective_action: \"y\"\nOPEN_ITEMS:\n- none\n";
+        let outcome = parse_review_report(3, vec![], report);
+        assert_eq!(outcome.categorized_findings.len(), 1);
+        assert_eq!(outcome.categorized_findings[0].id, "f3");
     }
 }

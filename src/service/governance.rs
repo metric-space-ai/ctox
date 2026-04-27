@@ -202,6 +202,14 @@ const DEFAULT_MECHANISMS: &[DefaultMechanism] = &[
         module_hint: "src/context/lcm.rs",
         description: "One-way ratchet on `mission_states.next_slice` and `mission_states.done_gate`: once non-empty, automation may replace them with new non-empty content but cannot silently clear them — surfaces the attempted clobber as a governance event instead.",
     },
+    DefaultMechanism {
+        mechanism_id: "review_rewrite_threshold",
+        mechanism_class: "safety",
+        autonomy: "autonomous_review_rewrite_threshold",
+        prompt_visibility: "prompt_visible",
+        module_hint: "src/service/service.rs",
+        description: "Stops respawning lightweight rewrite-only review retries once the per-mission convergence threshold is hit; defers the mission and records a governance event so operators see why the loop stopped.",
+    },
 ];
 
 pub fn handle_governance_command(root: &Path, args: &[String]) -> Result<()> {

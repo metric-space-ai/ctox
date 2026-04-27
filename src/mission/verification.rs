@@ -634,6 +634,7 @@ mod tests {
             ],
             failed_gates: vec!["health endpoint".to_string()],
             semantic_findings: vec!["Rollout is still unhealthy.".to_string()],
+            categorized_findings: Vec::new(),
             open_items: vec!["Repair the failing health endpoint.".to_string()],
             evidence: vec!["curl /health => 502".to_string()],
             handoff: None,
@@ -715,6 +716,7 @@ mod tests {
             semantic_findings: vec![
                 "Homepage still behaves like a brochure instead of a platform.".to_string(),
             ],
+            categorized_findings: Vec::new(),
             open_items: vec!["Persist active strategy, then rework the buyer path.".to_string()],
             evidence: vec!["GET / => static shell".to_string()],
             handoff: None,
