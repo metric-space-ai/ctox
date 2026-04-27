@@ -90,6 +90,10 @@ EVERYDAY
   ctox status                    show service status (JSON)
   ctox chat <instruction>        submit a prompt to the running service
                                  add --wait to block until the slice completes
+                                 add --to <addr> (repeatable), --cc <addr> (repeatable),
+                                 and --subject <text> to mark the job as an
+                                 owner/founder outbound email; the reply is
+                                 routed through the reviewed-send pipeline
   ctox tui                       open the TUI
   ctox version                   print the version string
 
@@ -845,12 +849,26 @@ fn handle_chat(root: &Path, args: &[String]) -> anyhow::Result<()> {
         anyhow::bail!("--atif-out requires --wait");
     }
 
+    // Repeatable outbound-mail flags: --to/--cc collect every occurrence;
+    // --subject is a single string. When any --to is present we synthesize an
+    // explicit `OutboundEmailIntent` and attach it to the chat submission.
+    let to_recipients: Vec<String> = collect_flag_values(args, "--to");
+    let cc_recipients: Vec<String> = collect_flag_values(args, "--cc");
+    let subject = find_flag_value(args, "--subject").map(str::to_owned);
+    if !cc_recipients.is_empty() && to_recipients.is_empty() {
+        anyhow::bail!("--cc requires at least one --to recipient");
+    }
+    if subject.is_some() && to_recipients.is_empty() {
+        anyhow::bail!("--subject requires at least one --to recipient");
+    }
+
     let mut prompt_parts = Vec::new();
     let mut idx = 0usize;
     while idx < args.len() {
         match args[idx].as_str() {
             "--wait" => idx += 1,
-            "--thread-key" | "--workspace" | "--atif-out" | "--timeout-secs" => {
+            "--thread-key" | "--workspace" | "--atif-out" | "--timeout-secs" | "--to" | "--cc"
+            | "--subject" => {
                 idx += 2;
             }
             value => {
@@ -870,7 +888,30 @@ fn handle_chat(root: &Path, args: &[String]) -> anyhow::Result<()> {
         );
     }
 
-    service::submit_chat_prompt_with_thread_key(root, &prompt, thread_key.as_deref())?;
+    let outbound_email = if to_recipients.is_empty() {
+        None
+    } else {
+        let account_key = channels::default_email_account_key(root)
+            .context("--to provided but no default email account is configured")?;
+        let intent_thread_key = thread_key
+            .clone()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "chat-outbound".to_string());
+        let intent_subject = subject
+            .clone()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "Update".to_string());
+        Some(service::OutboundEmailIntent {
+            account_key,
+            thread_key: intent_thread_key,
+            subject: intent_subject,
+            to: to_recipients,
+            cc: cc_recipients,
+            attachments: Vec::new(),
+        })
+    };
+
+    service::submit_chat_prompt_with_intent(root, &prompt, thread_key.as_deref(), outbound_email)?;
 
     let conversation_id =
         inference::turn_loop::conversation_id_for_thread_key(thread_key.as_deref());
@@ -944,7 +985,7 @@ fn handle_chat(root: &Path, args: &[String]) -> anyhow::Result<()> {
 fn build_chat_prompt(raw_prompt: &str, workspace: Option<&Path>) -> anyhow::Result<String> {
     if raw_prompt.is_empty() {
         anyhow::bail!(
-            "usage: ctox chat \"<instruction>\" [--thread-key <key>] [--workspace <path>] [--wait] [--timeout-secs <n>] [--atif-out <path>]"
+            "usage: ctox chat \"<instruction>\" [--thread-key <key>] [--workspace <path>] [--wait] [--timeout-secs <n>] [--atif-out <path>] [--to <addr> ...] [--cc <addr> ...] [--subject <text>]"
         );
     }
     if raw_prompt.starts_with("Work only inside this workspace:") || workspace.is_none() {
@@ -1055,6 +1096,26 @@ fn validated_workspace_root_override(key: &str) -> Option<PathBuf> {
 fn find_flag_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
     let index = args.iter().position(|arg| arg == flag)?;
     args.get(index + 1).map(String::as_str)
+}
+
+/// Collect every value that follows a repeatable flag (e.g. `--to` / `--cc`).
+fn collect_flag_values(args: &[String], flag: &str) -> Vec<String> {
+    let mut values = Vec::new();
+    let mut idx = 0;
+    while idx < args.len() {
+        if args[idx] == flag {
+            if let Some(value) = args.get(idx + 1) {
+                let trimmed = value.trim();
+                if !trimmed.is_empty() {
+                    values.push(trimmed.to_string());
+                }
+                idx += 2;
+                continue;
+            }
+        }
+        idx += 1;
+    }
+    values
 }
 
 fn persist_runtime_turn_timeout(root: &Path, timeout: Option<&str>) -> anyhow::Result<()> {

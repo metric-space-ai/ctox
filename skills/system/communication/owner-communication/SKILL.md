@@ -127,6 +127,24 @@ Examples include:
 - If the owner entered communication credentials in TUI settings, treat that as configuration input, not automatic proof that the transport works.
 - Treat CTOX mail self-tests as technical channel-health artifacts, not as ordinary owner communication. They may be stored for verification, but they must not create normal owner-facing queue work unless a human explicitly asked for mail validation.
 
+## Owner / Founder Outbound Email
+
+Outbound email to owner, founder, or admin recipients (configured via `CTOX_FOUNDER_EMAIL_ADDRESSES` and `CTOX_OWNER_EMAIL_ADDRESS`) is **only** sent through the reviewed founder-outbound pipeline (`send_reviewed_founder_outbound`). The agent does **not** call `ctox channel send` for these recipients — that command is structurally blocked.
+
+The send is triggered automatically after the agent's turn completes successfully **if** the job carries explicit outbound-email intent and at least one recipient is owner/founder/admin per the configured policy.
+
+How to give a job the outbound-email intent (operator-side):
+
+- `ctox chat --to d.lottes@remcapital.de --cc j.kienzler@remcapital.de --subject "INF Yoda Update" "<prompt body>"`
+- Equivalent metadata when creating a queue task: populate `outbound_email` with `account_key`, `thread_key`, `subject`, `to`, `cc`.
+
+Agent responsibilities for such a job:
+
+- Produce the email body as the turn reply, in mandantengerechter Sprache.
+- Do **not** include internal CTOX vocabulary (`queue`, `runtime/`, `sqlite`, `route_status`, `runtime_env_kv`, host paths, etc.) — these will be rejected by the body cleanliness check.
+- Do **not** invoke `ctox channel send` yourself; the service routes the send.
+- The reply you produce **is** the email body; the service uses recipients/subject from the job metadata.
+
 ## References
 
 - For routing rules and examples, read `references/channel-routing.md`.
