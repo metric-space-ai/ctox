@@ -22,6 +22,9 @@ use crate::mission::channels::{
 use crate::mission::communication_adapters::{
     AdapterSyncCommandRequest, EmailSendCommandRequest, EmailTestCommandRequest,
 };
+use crate::mission::microsoft_graph_auth::{
+    acquire_app_token, acquire_ropc_token, ROPC_PUBLIC_CLIENT_ID,
+};
 
 const DEFAULT_IMAP_HOST: &str = "imap.one.com";
 const DEFAULT_IMAP_PORT: u16 = 993;
@@ -59,6 +62,11 @@ struct EmailOptions {
     graph_access_token: String,
     graph_base_url: String,
     graph_user: String,
+    graph_tenant_id: String,
+    graph_client_id: String,
+    graph_client_secret: String,
+    graph_username: String,
+    graph_password: String,
     ews_url: String,
     owa_url: String,
     ews_version: String,
@@ -170,6 +178,9 @@ pub(crate) fn service_sync(
         ("CTO_EMAIL_SMTP_HOST", "--smtp-host"),
         ("CTO_EMAIL_SMTP_PORT", "--smtp-port"),
         ("CTO_EMAIL_GRAPH_USER", "--graph-user"),
+        ("CTO_EMAIL_GRAPH_TENANT_ID", "--graph-tenant-id"),
+        ("CTO_EMAIL_GRAPH_CLIENT_ID", "--graph-client-id"),
+        ("CTO_EMAIL_GRAPH_USERNAME", "--graph-username"),
         ("CTO_EMAIL_EWS_URL", "--ews-url"),
         ("CTO_EMAIL_OWA_URL", "--owa-url"),
         ("CTO_EMAIL_EWS_VERSION", "--ews-version"),
@@ -816,6 +827,11 @@ fn base_options_from_runtime(
             optional_setting(runtime, "CTO_EMAIL_GRAPH_USER"),
             DEFAULT_GRAPH_USER,
         ),
+        graph_tenant_id: setting(runtime, "CTO_EMAIL_GRAPH_TENANT_ID"),
+        graph_client_id: setting(runtime, "CTO_EMAIL_GRAPH_CLIENT_ID"),
+        graph_client_secret: setting(runtime, "CTO_EMAIL_GRAPH_CLIENT_SECRET"),
+        graph_username: setting(runtime, "CTO_EMAIL_GRAPH_USERNAME"),
+        graph_password: setting(runtime, "CTO_EMAIL_GRAPH_PASSWORD"),
         ews_url: setting(runtime, "CTO_EMAIL_EWS_URL"),
         owa_url: setting(runtime, "CTO_EMAIL_OWA_URL"),
         ews_version: non_empty_or_default(
@@ -859,6 +875,15 @@ fn apply_flag_overrides(options: &mut EmailOptions, args: &[String]) {
     }
     if let Some(value) = optional_flag(args, "--graph-base-url") {
         options.graph_base_url = value.to_string();
+    }
+    if let Some(value) = optional_flag(args, "--graph-tenant-id") {
+        options.graph_tenant_id = value.to_string();
+    }
+    if let Some(value) = optional_flag(args, "--graph-client-id") {
+        options.graph_client_id = value.to_string();
+    }
+    if let Some(value) = optional_flag(args, "--graph-username") {
+        options.graph_username = value.to_string();
     }
     if let Some(value) = optional_flag(args, "--ews-url") {
         options.ews_url = value.to_string();
@@ -935,6 +960,15 @@ fn apply_profile_json(options: &mut EmailOptions, profile_json: &Value) {
     if let Some(value) = object.get("graphUser").and_then(Value::as_str) {
         options.graph_user = value.to_string();
     }
+    if let Some(value) = object.get("graphTenantId").and_then(Value::as_str) {
+        options.graph_tenant_id = value.to_string();
+    }
+    if let Some(value) = object.get("graphClientId").and_then(Value::as_str) {
+        options.graph_client_id = value.to_string();
+    }
+    if let Some(value) = object.get("graphUsername").and_then(Value::as_str) {
+        options.graph_username = value.to_string();
+    }
     if let Some(value) = object.get("ewsUrl").and_then(Value::as_str) {
         options.ews_url = value.to_string();
     }
@@ -986,6 +1020,9 @@ fn build_profile_json(options: &EmailOptions) -> Value {
         "folder": options.folder,
         "graphBaseUrl": options.graph_base_url,
         "graphUser": options.graph_user,
+        "graphTenantId": options.graph_tenant_id,
+        "graphClientId": options.graph_client_id,
+        "graphUsername": options.graph_username,
         "ewsUrl": resolve_ews_url(options),
         "owaUrl": options.owa_url,
         "ewsVersion": options.ews_version,
@@ -1689,8 +1726,24 @@ fn require_provider_credentials(options: &EmailOptions) -> Result<()> {
             }
         }
         "graph" => {
-            if options.graph_access_token.trim().is_empty() {
-                bail!("Missing CTO_EMAIL_GRAPH_ACCESS_TOKEN for Graph.");
+            if !options.graph_access_token.trim().is_empty() {
+                // Pre-acquired bearer token — nothing else to check.
+            } else {
+                let username = effective_graph_username(options);
+                let password = effective_graph_password(options);
+                let has_user_creds = !username.trim().is_empty() && !password.is_empty();
+                let has_app_creds = !options.graph_tenant_id.trim().is_empty()
+                    && !options.graph_client_id.trim().is_empty()
+                    && !options.graph_client_secret.trim().is_empty();
+                if !has_user_creds && !has_app_creds {
+                    bail!(
+                        "Graph adapter needs credentials: set CTO_EMAIL_GRAPH_ACCESS_TOKEN, \
+                         OR provide a username+password (CTO_EMAIL_GRAPH_USERNAME/PASSWORD, \
+                         falling back to CTO_EMAIL_ADDRESS/CTO_EMAIL_PASSWORD) for ROPC, \
+                         OR provide CTO_EMAIL_GRAPH_TENANT_ID + CTO_EMAIL_GRAPH_CLIENT_ID + \
+                         CTO_EMAIL_GRAPH_CLIENT_SECRET for the client-credentials flow."
+                    );
+                }
             }
         }
         "ews" | "owa" => {
@@ -2247,8 +2300,13 @@ struct GraphClient {
 
 impl GraphClient {
     fn from_options(options: &EmailOptions) -> Result<Self> {
+        let access_token = if !options.graph_access_token.trim().is_empty() {
+            options.graph_access_token.clone()
+        } else {
+            acquire_graph_access_token(options)?
+        };
         Ok(Self {
-            access_token: options.graph_access_token.clone(),
+            access_token,
             base_url: options.graph_base_url.trim_end_matches('/').to_string(),
             user: options.graph_user.clone(),
         })
@@ -3426,10 +3484,121 @@ fn normalize_activesync_mail_item(
     })
 }
 
+/// The Graph adapter accepts a dedicated `CTO_EMAIL_GRAPH_USERNAME`, but for
+/// the common single-account case ROPC just needs the mailbox owner. Fall
+/// back to `CTO_EMAIL_ADDRESS` so a minimal config (`provider=graph`,
+/// `CTO_EMAIL_ADDRESS`, `CTO_EMAIL_PASSWORD`) is sufficient.
+fn effective_graph_username(options: &EmailOptions) -> String {
+    let explicit = options.graph_username.trim();
+    if explicit.is_empty() {
+        options.email.trim().to_string()
+    } else {
+        explicit.to_string()
+    }
+}
+
+/// Same fallback story as `effective_graph_username`: prefer the dedicated
+/// Graph credential, otherwise reuse `CTO_EMAIL_PASSWORD`.
+fn effective_graph_password(options: &EmailOptions) -> String {
+    if !options.graph_password.is_empty() {
+        options.graph_password.clone()
+    } else {
+        options.password.clone()
+    }
+}
+
+/// Acquire an access token for the Graph adapter when the operator has not
+/// supplied a long-lived `CTO_EMAIL_GRAPH_ACCESS_TOKEN`. Prefers ROPC when a
+/// username + password are reachable (with the well-known Microsoft Office
+/// public client id as a default), otherwise falls back to the OAuth2
+/// client-credentials flow.
+fn acquire_graph_access_token(options: &EmailOptions) -> Result<String> {
+    let username = effective_graph_username(options);
+    let password = effective_graph_password(options);
+    let has_user_creds = !username.trim().is_empty() && !password.is_empty();
+    let has_app_creds = !options.graph_tenant_id.trim().is_empty()
+        && !options.graph_client_id.trim().is_empty()
+        && !options.graph_client_secret.trim().is_empty();
+
+    if has_user_creds {
+        let client_id = if options.graph_client_id.trim().is_empty() {
+            ROPC_PUBLIC_CLIENT_ID.to_string()
+        } else {
+            options.graph_client_id.clone()
+        };
+        return acquire_ropc_token(&options.graph_tenant_id, &username, &password, &client_id);
+    }
+    if has_app_creds {
+        return acquire_app_token(
+            &options.graph_tenant_id,
+            &options.graph_client_id,
+            &options.graph_client_secret,
+        );
+    }
+    bail!(
+        "Graph adapter has no usable credentials: set CTO_EMAIL_GRAPH_ACCESS_TOKEN, \
+         OR provide a username+password (CTO_EMAIL_GRAPH_USERNAME/PASSWORD or \
+         CTO_EMAIL_ADDRESS/CTO_EMAIL_PASSWORD) for ROPC, OR provide \
+         CTO_EMAIL_GRAPH_TENANT_ID + CTO_EMAIL_GRAPH_CLIENT_ID + \
+         CTO_EMAIL_GRAPH_CLIENT_SECRET for the client-credentials flow."
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{extract_address, synced_message_direction};
+    use super::{
+        acquire_graph_access_token, effective_graph_password, effective_graph_username,
+        extract_address, require_provider_credentials, synced_message_direction, EmailOptions,
+    };
+    use std::path::PathBuf;
 
+    fn empty_options() -> EmailOptions {
+        EmailOptions {
+            db_path: PathBuf::new(),
+            raw_dir: PathBuf::new(),
+            email: String::new(),
+            provider: String::new(),
+            folder: String::new(),
+            limit: 0,
+            trust_level: String::new(),
+            verify_send: false,
+            sent_verify_window_seconds: 0,
+            imap_host: String::new(),
+            imap_port: 0,
+            smtp_host: String::new(),
+            smtp_port: 0,
+            password: String::new(),
+            graph_access_token: String::new(),
+            graph_base_url: String::new(),
+            graph_user: String::new(),
+            graph_tenant_id: String::new(),
+            graph_client_id: String::new(),
+            graph_client_secret: String::new(),
+            graph_username: String::new(),
+            graph_password: String::new(),
+            ews_url: String::new(),
+            owa_url: String::new(),
+            ews_version: String::new(),
+            ews_auth_type: String::new(),
+            ews_username: String::new(),
+            ews_bearer_token: String::new(),
+            active_sync_server: String::new(),
+            active_sync_username: String::new(),
+            active_sync_path: String::new(),
+            active_sync_device_id: String::new(),
+            active_sync_device_type: String::new(),
+            active_sync_protocol_version: String::new(),
+            active_sync_policy_key: String::new(),
+        }
+    }
+
+    fn graph_options_with_token(token: &str) -> EmailOptions {
+        let mut options = empty_options();
+        options.email = "user@example.com".into();
+        options.provider = "graph".into();
+        options.graph_access_token = token.into();
+        options
+    }
     #[test]
     fn synced_message_direction_treats_self_authored_mail_as_outbound() {
         assert_eq!(
@@ -3455,5 +3624,59 @@ mod tests {
             extract_address("CTO1 <cto1@metric-space.ai>"),
             "cto1@metric-space.ai"
         );
+    }
+
+    #[test]
+    fn graph_username_falls_back_to_email() {
+        let mut options = empty_options();
+        options.email = "yoda@example.com".into();
+        assert_eq!(effective_graph_username(&options), "yoda@example.com");
+        options.graph_username = "graphuser@example.com".into();
+        assert_eq!(effective_graph_username(&options), "graphuser@example.com");
+    }
+
+    #[test]
+    fn graph_password_falls_back_to_email_password() {
+        let mut options = empty_options();
+        options.password = "imap-pw".into();
+        assert_eq!(effective_graph_password(&options), "imap-pw");
+        options.graph_password = "graph-pw".into();
+        assert_eq!(effective_graph_password(&options), "graph-pw");
+    }
+
+    #[test]
+    fn require_provider_credentials_accepts_graph_with_pre_acquired_token() {
+        let options = graph_options_with_token("eyJ0eXAi...redacted...");
+        assert!(require_provider_credentials(&options).is_ok());
+    }
+
+    #[test]
+    fn require_provider_credentials_accepts_graph_with_user_password_fallback() {
+        let mut options = graph_options_with_token("");
+        options.password = "secret".into();
+        assert!(require_provider_credentials(&options).is_ok());
+    }
+
+    #[test]
+    fn require_provider_credentials_accepts_graph_with_client_credentials() {
+        let mut options = graph_options_with_token("");
+        options.graph_tenant_id = "contoso".into();
+        options.graph_client_id = "client-id".into();
+        options.graph_client_secret = "client-secret".into();
+        assert!(require_provider_credentials(&options).is_ok());
+    }
+
+    #[test]
+    fn require_provider_credentials_rejects_graph_without_any_credentials() {
+        let options = graph_options_with_token("");
+        let err = require_provider_credentials(&options).unwrap_err();
+        assert!(err.to_string().contains("Graph adapter"));
+    }
+
+    #[test]
+    fn acquire_graph_access_token_rejects_when_no_credentials() {
+        let options = graph_options_with_token("");
+        let err = acquire_graph_access_token(&options).unwrap_err();
+        assert!(err.to_string().contains("no usable credentials"));
     }
 }

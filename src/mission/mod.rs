@@ -10,6 +10,7 @@ pub(crate) mod communication_jami_native;
 pub(crate) mod communication_meeting_native;
 pub(crate) mod communication_teams_native;
 pub mod follow_up;
+pub(crate) mod microsoft_graph_auth;
 pub mod plan;
 pub mod queue;
 pub mod review;

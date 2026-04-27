@@ -13,12 +13,12 @@ use crate::mission::communication_adapters::{
     AdapterSyncCommandRequest, TeamsSendCommandRequest, TeamsTestCommandRequest,
 };
 use crate::mission::communication_email_native;
+use crate::mission::microsoft_graph_auth::{
+    acquire_app_token, acquire_ropc_token, ROPC_PUBLIC_CLIENT_ID,
+};
 
 const GRAPH_DEFAULT_BASE_URL: &str = "https://graph.microsoft.com/v1.0";
 const TEAMS_SYNC_LIMIT: usize = 50;
-
-// Well-known public client ID (Microsoft Office) — works for ROPC without app registration.
-const ROPC_PUBLIC_CLIENT_ID: &str = "d3590ed6-52b3-4102-aeff-aad2292ab01c";
 
 #[derive(Clone, Debug)]
 struct TeamsOptions {
@@ -245,101 +245,6 @@ impl GraphTeamsClient {
     fn get_app_info(&self) -> Result<Value> {
         self.request("GET", "/organization", &[], None)
     }
-}
-
-fn acquire_app_token(tenant_id: &str, client_id: &str, client_secret: &str) -> Result<String> {
-    let token_url = format!("https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token");
-    let form_body = format!(
-        "client_id={}&scope=https%3A%2F%2Fgraph.microsoft.com%2F.default&client_secret={}&grant_type=client_credentials",
-        urlencoding_encode(client_id),
-        urlencoding_encode(client_secret),
-    );
-    let mut headers = BTreeMap::new();
-    headers.insert(
-        "content-type".to_string(),
-        "application/x-www-form-urlencoded".to_string(),
-    );
-    let response = communication_email_native::http_request(
-        "POST",
-        &token_url,
-        &headers,
-        Some(form_body.as_bytes()),
-    )?;
-    if !(200..300).contains(&response.status) {
-        let body_text = String::from_utf8_lossy(&response.body);
-        bail!(
-            "OAuth2 token request failed (HTTP {}): {body_text}",
-            response.status
-        );
-    }
-    let token_json: Value =
-        serde_json::from_slice(&response.body).context("failed to parse OAuth2 token response")?;
-    token_json
-        .get("access_token")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
-        .context("access_token missing from OAuth2 response")
-}
-
-fn acquire_ropc_token(
-    tenant_id: &str,
-    username: &str,
-    password: &str,
-    client_id: &str,
-) -> Result<String> {
-    let effective_tenant = if tenant_id.is_empty() {
-        "organizations"
-    } else {
-        tenant_id
-    };
-    let token_url =
-        format!("https://login.microsoftonline.com/{effective_tenant}/oauth2/v2.0/token");
-    let form_body = format!(
-        "client_id={}&scope=https%3A%2F%2Fgraph.microsoft.com%2F.default+offline_access&username={}&password={}&grant_type=password",
-        urlencoding_encode(client_id),
-        urlencoding_encode(username),
-        urlencoding_encode(password),
-    );
-    let mut headers = BTreeMap::new();
-    headers.insert(
-        "content-type".to_string(),
-        "application/x-www-form-urlencoded".to_string(),
-    );
-    let response = communication_email_native::http_request(
-        "POST",
-        &token_url,
-        &headers,
-        Some(form_body.as_bytes()),
-    )?;
-    if !(200..300).contains(&response.status) {
-        let body_text = String::from_utf8_lossy(&response.body);
-        bail!(
-            "ROPC token request failed (HTTP {}): {body_text}",
-            response.status
-        );
-    }
-    let token_json: Value =
-        serde_json::from_slice(&response.body).context("failed to parse ROPC token response")?;
-    token_json
-        .get("access_token")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
-        .context("access_token missing from ROPC response")
-}
-
-fn urlencoding_encode(value: &str) -> String {
-    let mut encoded = String::with_capacity(value.len() * 2);
-    for byte in value.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                encoded.push(byte as char);
-            }
-            _ => {
-                encoded.push_str(&format!("%{byte:02X}"));
-            }
-        }
-    }
-    encoded
 }
 
 pub(crate) fn sync(
@@ -1047,12 +952,8 @@ fn runtime_from_settings(
 mod tests {
     use super::*;
 
-    #[test]
-    fn urlencoding_encodes_special_chars() {
-        assert_eq!(urlencoding_encode("hello world"), "hello%20world");
-        assert_eq!(urlencoding_encode("a+b=c&d"), "a%2Bb%3Dc%26d");
-        assert_eq!(urlencoding_encode("simple"), "simple");
-    }
+    // Note: `urlencoding_encode` was moved to `crate::mission::microsoft_graph_auth`
+    // and is unit-tested there. The previous duplicate test for it has been removed.
 
     #[test]
     fn strip_html_basic_removes_tags() {
