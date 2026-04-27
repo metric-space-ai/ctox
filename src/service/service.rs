@@ -133,6 +133,11 @@ pub struct ServiceStatus {
     pub monitor_last_check_at: Option<String>,
     pub monitor_alerts: Vec<String>,
     pub monitor_last_error: Option<String>,
+    /// F3: the structured outcome of the most recent agent assistant turn
+    /// for the chat conversation. `None` when there is no assistant row yet
+    /// or when the row predates the schema upgrade.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_agent_outcome: Option<String>,
 }
 
 #[cfg(any(test, not(unix)))]
@@ -156,6 +161,7 @@ struct ServiceStatusWire {
     monitor_last_check_at: Option<String>,
     monitor_alerts: Vec<String>,
     monitor_last_error: Option<String>,
+    last_agent_outcome: Option<String>,
 }
 
 impl ServiceStatus {
@@ -184,6 +190,7 @@ impl ServiceStatus {
             monitor_last_check_at: None,
             monitor_alerts: Vec::new(),
             monitor_last_error: None,
+            last_agent_outcome: None,
         }
     }
 }
@@ -218,6 +225,7 @@ fn parse_service_status(body: &str, root: &Path) -> Result<ServiceStatus> {
         monitor_last_check_at: wire.monitor_last_check_at,
         monitor_alerts: wire.monitor_alerts,
         monitor_last_error: wire.monitor_last_error,
+        last_agent_outcome: wire.last_agent_outcome,
     })
 }
 
@@ -1834,6 +1842,18 @@ fn status_from_shared_state(root: &Path, state: &Arc<Mutex<SharedState>>) -> Res
         }
     }
 
+    let last_agent_outcome = {
+        let db_path = root.join("runtime/ctox.sqlite3");
+        lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default())
+            .ok()
+            .and_then(|engine| {
+                engine
+                    .last_agent_outcome(turn_loop::CHAT_CONVERSATION_ID)
+                    .ok()
+                    .flatten()
+            })
+            .map(|outcome| outcome.as_str().to_string())
+    };
     Ok(ServiceStatus {
         running: true,
         busy,
@@ -1860,6 +1880,7 @@ fn status_from_shared_state(root: &Path, state: &Arc<Mutex<SharedState>>) -> Res
         monitor_last_check_at: None,
         monitor_alerts: runtime_lifecycle_alerts(root, pid, true)?,
         monitor_last_error: None,
+        last_agent_outcome,
     })
 }
 
@@ -2350,18 +2371,43 @@ fn start_prompt_worker(
                     .flatten(),
                 _ => None,
             };
-            let failure_reply = result.as_ref().err().map(|err| {
-                if let Some(title) = timeout_follow_up_outcome.as_ref() {
-                    format!(
-                        "Status: `deferred`\n\nCheckpoint: the slice hit the turn time budget and a durable continuation task was queued: {title}\n\nLatest runtime summary: {}",
-                        turn_loop::summarize_runtime_error(&err.to_string())
-                    )
+            // F3: classify the turn outcome explicitly. The structured value
+            // is persisted on the assistant row in `messages.agent_outcome`
+            // so downstream consumers (mission watchdog, founder-send
+            // pipeline, status snapshots) can branch on a typed enum
+            // instead of scraping reply text.
+            let agent_outcome = match &result {
+                Ok(_) => lcm::AgentOutcome::Success,
+                Err(err) => classify_agent_failure(&err.to_string()),
+            };
+            // F3: when the turn failed, persist a structured outcome with a
+            // neutral, non-leaking body. The legacy "Status: `blocked`" /
+            // "Status: `deferred`" prose is no longer how downstream
+            // consumers determine the outcome — they read
+            // `messages.agent_outcome`. We still record a short neutral
+            // body so the conversation transcript stays readable.
+            let failure_reply = result.as_ref().err().map(|_err| {
+                if timeout_follow_up_outcome.is_some() {
+                    "(agent turn deferred to a continuation slice)".to_string()
                 } else {
-                    turn_loop::synthesize_failure_reply(&err.to_string())
+                    "(agent turn did not complete)".to_string()
                 }
             });
             if let Some(reply) = &failure_reply {
-                let _ = lcm::run_add_message(&db_path, conversation_id, "assistant", reply);
+                let _ =
+                    lcm::run_add_assistant_turn(&db_path, conversation_id, reply, agent_outcome);
+            }
+            // F2: feed the structured outcome into the per-mission
+            // agent-failure counter. Successful turns reset the counter;
+            // non-success outcomes increment it. The watchdog reads the
+            // updated count on its next tick and defers when it crosses
+            // the configured threshold.
+            if let Ok(engine) = lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default()) {
+                if agent_outcome.is_agent_failure() {
+                    let _ = engine.increment_mission_agent_failure_count(conversation_id);
+                } else {
+                    let _ = engine.reset_mission_agent_failure_count(conversation_id);
+                }
             }
             let latest_runtime_error = result.as_ref().err().map(|err| err.to_string());
             let context_health =
@@ -3944,9 +3990,74 @@ fn monitor_mission_continuity(root: &Path, state: &Arc<Mutex<SharedState>>) -> R
             }
         }
     }
+    // F2: agent-failure backoff — any mission whose consecutive agent
+    // failures crossed the operator-configured threshold is escalated to
+    // `deferred` here (idempotent) and excluded from continuation
+    // re-spawning. The operator must explicitly resume the mission to
+    // re-arm continuation.
+    let agent_failure_threshold = mission_agent_failure_threshold(root);
+    for mission in &missions {
+        if mission.mission_status == "deferred"
+            || mission.agent_failure_count < agent_failure_threshold
+        {
+            continue;
+        }
+        let conversation_id = mission.conversation_id;
+        let failure_count = mission.agent_failure_count;
+        let mission_label = if mission.mission.trim().is_empty() {
+            format!("conversation {conversation_id}")
+        } else {
+            clip_text(&mission.mission, 80)
+        };
+        match engine.defer_mission_for_reason(conversation_id, "agent_failure_threshold") {
+            Ok(_) => {
+                let event_key = format!("mission-agent-failure-backoff:{conversation_id}");
+                let _ = governance::record_event(
+                    root,
+                    governance::GovernanceEventRequest {
+                        mechanism_id: "mission_agent_failure_backoff",
+                        conversation_id: Some(conversation_id),
+                        severity: "warning",
+                        reason: "agent failure threshold reached; deferring mission continuation",
+                        action_taken:
+                            "set mission_status=deferred and stopped continuation respawn",
+                        details: serde_json::json!({
+                            "conversation_id": conversation_id,
+                            "agent_failure_count": failure_count,
+                            "threshold": agent_failure_threshold,
+                            "mission": mission_label,
+                            "deferred_reason": "agent_failure_threshold",
+                        }),
+                        idempotence_key: Some(&event_key),
+                    },
+                );
+                push_event(
+                    state,
+                    format!(
+                        "Mission watchdog backoff: deferring mission {conversation_id} after {failure_count} agent failures (threshold {agent_failure_threshold})"
+                    ),
+                );
+            }
+            Err(err) => {
+                push_event(
+                    state,
+                    format!(
+                        "Mission watchdog backoff failed to defer mission {conversation_id}: {err}"
+                    ),
+                );
+            }
+        }
+    }
+
     let candidate = missions.into_iter().find(|mission| {
         let plan_keeps_open =
             mission.conversation_id == turn_loop::CHAT_CONVERSATION_ID && active_plan_has_work;
+        if mission.mission_status == "deferred" {
+            return false;
+        }
+        if mission.agent_failure_count >= agent_failure_threshold {
+            return false;
+        }
         if (!mission.is_open || mission.allow_idle) && !plan_keeps_open {
             return false;
         }
@@ -4070,6 +4181,25 @@ fn mission_watcher_disabled(root: &Path) -> bool {
         .trim()
         .to_ascii_lowercase();
     matches!(value.as_str(), "1" | "true" | "yes" | "on")
+}
+
+/// F2: configurable consecutive-agent-failure threshold at which the
+/// mission watchdog stops spawning continuation self-work and defers the
+/// mission. Default is 3. Operators tune via
+/// `CTOX_MISSION_AGENT_FAILURE_THRESHOLD`.
+pub(crate) const DEFAULT_MISSION_AGENT_FAILURE_THRESHOLD: i64 = 3;
+
+pub(crate) fn mission_agent_failure_threshold(root: &Path) -> i64 {
+    let raw = runtime_env::env_or_config(root, "CTOX_MISSION_AGENT_FAILURE_THRESHOLD")
+        .unwrap_or_default();
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return DEFAULT_MISSION_AGENT_FAILURE_THRESHOLD;
+    }
+    match trimmed.parse::<i64>() {
+        Ok(value) if value >= 1 => value,
+        _ => DEFAULT_MISSION_AGENT_FAILURE_THRESHOLD,
+    }
 }
 
 fn live_service_settings(root: &Path) -> BTreeMap<String, String> {
@@ -6323,7 +6453,27 @@ fn maybe_enqueue_timeout_continuation(
 
 fn is_turn_timeout_blocker(value: &str) -> bool {
     let lowered = value.to_ascii_lowercase();
-    lowered.contains("timed out after") || lowered.contains("time budget")
+    lowered.contains("timed out after")
+        || lowered.contains("time budget")
+        || lowered.contains("session timeout")
+}
+
+/// F3: classify a harness-error string into a structured `AgentOutcome`.
+/// The error text comes from the harness/turn-loop itself (we own its
+/// format), not from free-form prompt content. Keep the matchers narrow
+/// and stable; downstream branching always reads the structured value.
+pub(crate) fn classify_agent_failure(error_text: &str) -> lcm::AgentOutcome {
+    if is_turn_timeout_blocker(error_text) {
+        return lcm::AgentOutcome::TurnTimeout;
+    }
+    let lowered = error_text.to_ascii_lowercase();
+    if lowered.contains("cancelled") || lowered.contains("canceled") {
+        return lcm::AgentOutcome::Cancelled;
+    }
+    if lowered.contains("aborted") || lowered.contains("invariant violated") {
+        return lcm::AgentOutcome::Aborted;
+    }
+    lcm::AgentOutcome::ExecutionError
 }
 
 fn render_timeout_continue_prompt(
@@ -7970,6 +8120,7 @@ mod tests {
             ServiceIpcRequest::ChatSubmit {
                 prompt: prompt.to_string(),
                 thread_key: None,
+                outbound_email: None,
             },
             &root,
             state.clone(),
@@ -8003,6 +8154,7 @@ mod tests {
             ServiceIpcRequest::ChatSubmit {
                 prompt: "Create src/main.cpp".to_string(),
                 thread_key: Some("smoke/cpp-thread".to_string()),
+                outbound_email: None,
             },
             &root,
             state.clone(),
@@ -8036,6 +8188,7 @@ mod tests {
             ServiceIpcRequest::ChatSubmit {
                 prompt: "openAI API key:\nsk-proj-service-secret-1234567890".to_string(),
                 thread_key: None,
+                outbound_email: None,
             },
             &root,
             state.clone(),
@@ -8151,6 +8304,7 @@ mod tests {
             monitor_last_check_at: None,
             monitor_alerts: Vec::new(),
             monitor_last_error: None,
+            last_agent_outcome: None,
         }))
         .unwrap();
         let handle = std::thread::spawn(move || {
@@ -8244,6 +8398,7 @@ mod tests {
             monitor_last_check_at: None,
             monitor_alerts: Vec::new(),
             monitor_last_error: None,
+            last_agent_outcome: None,
         }))
         .unwrap();
         let handle = std::thread::spawn(move || {
@@ -8300,6 +8455,7 @@ mod tests {
             ServiceIpcRequest::ChatSubmit {
                 prompt: "Run an internal harness self-check.".to_string(),
                 thread_key: None,
+                outbound_email: None,
             },
         )
         .unwrap();
@@ -8367,6 +8523,8 @@ mod tests {
             last_synced_at: "2026-04-06T00:00:00Z".to_string(),
             watcher_last_triggered_at: None,
             watcher_trigger_count: 0,
+            agent_failure_count: 0,
+            deferred_reason: None,
         };
         let prompt = render_mission_continuation_prompt(&mission, 45);
         assert!(prompt.contains("Mission continuity watchdog: the mission was idle for 45s."));
@@ -8392,6 +8550,8 @@ mod tests {
             last_synced_at: "2026-04-26T00:00:00Z".to_string(),
             watcher_last_triggered_at: None,
             watcher_trigger_count: 0,
+            agent_failure_count: 0,
+            deferred_reason: None,
         };
         let same_key = mission_watchdog_dedupe_key(&base);
         let mut changed = base.clone();
@@ -8426,6 +8586,8 @@ mod tests {
             last_synced_at: "2026-04-24T00:00:00Z".to_string(),
             watcher_last_triggered_at: None,
             watcher_trigger_count: 0,
+            agent_failure_count: 0,
+            deferred_reason: None,
         };
 
         assert!(mission_waits_for_external_approval(&mission));
@@ -8453,6 +8615,8 @@ mod tests {
             last_synced_at: "2026-04-24T00:00:00Z".to_string(),
             watcher_last_triggered_at: None,
             watcher_trigger_count: 0,
+            agent_failure_count: 0,
+            deferred_reason: None,
         };
 
         assert!(!mission_waits_for_external_approval(&mission));
@@ -10914,5 +11078,118 @@ mod tests {
         assert_eq!(action.subject, "Update");
         assert_eq!(action.to, vec!["d.lottes@example.test".to_string()]);
         assert_eq!(action.cc, vec!["j.kienzler@example.test".to_string()]);
+    }
+
+    // F3: classify_agent_failure must produce stable, structured outcomes.
+    #[test]
+    fn classify_agent_failure_recognises_turn_timeout() {
+        assert_eq!(
+            classify_agent_failure("direct session timeout after 600s"),
+            crate::lcm::AgentOutcome::TurnTimeout
+        );
+        assert_eq!(
+            classify_agent_failure("turn timed out after 180s"),
+            crate::lcm::AgentOutcome::TurnTimeout
+        );
+        assert_eq!(
+            classify_agent_failure("hit the time budget"),
+            crate::lcm::AgentOutcome::TurnTimeout
+        );
+    }
+
+    #[test]
+    fn classify_agent_failure_recognises_aborted_and_cancelled() {
+        assert_eq!(
+            classify_agent_failure("operator cancelled"),
+            crate::lcm::AgentOutcome::Cancelled
+        );
+        assert_eq!(
+            classify_agent_failure("invariant violated, aborted"),
+            crate::lcm::AgentOutcome::Aborted
+        );
+    }
+
+    #[test]
+    fn classify_agent_failure_falls_back_to_execution_error() {
+        assert_eq!(
+            classify_agent_failure("connection refused"),
+            crate::lcm::AgentOutcome::ExecutionError
+        );
+    }
+
+    // F2: env knob honours operator overrides; default is 3.
+    #[test]
+    fn mission_agent_failure_threshold_default_is_three() {
+        let root = temp_root("agent-failure-threshold-default");
+        assert_eq!(
+            mission_agent_failure_threshold(&root),
+            DEFAULT_MISSION_AGENT_FAILURE_THRESHOLD
+        );
+    }
+
+    #[test]
+    fn mission_agent_failure_threshold_respects_env_override() {
+        let root = temp_root("agent-failure-threshold-env");
+        let mut env_map = std::collections::BTreeMap::new();
+        env_map.insert(
+            "CTOX_MISSION_AGENT_FAILURE_THRESHOLD".to_string(),
+            "7".to_string(),
+        );
+        runtime_env::save_runtime_env_map(&root, &env_map).expect("save env");
+        assert_eq!(mission_agent_failure_threshold(&root), 7);
+
+        env_map.insert(
+            "CTOX_MISSION_AGENT_FAILURE_THRESHOLD".to_string(),
+            "garbage".to_string(),
+        );
+        runtime_env::save_runtime_env_map(&root, &env_map).expect("save env");
+        assert_eq!(
+            mission_agent_failure_threshold(&root),
+            DEFAULT_MISSION_AGENT_FAILURE_THRESHOLD
+        );
+
+        env_map.insert(
+            "CTOX_MISSION_AGENT_FAILURE_THRESHOLD".to_string(),
+            "0".to_string(),
+        );
+        runtime_env::save_runtime_env_map(&root, &env_map).expect("save env");
+        assert_eq!(
+            mission_agent_failure_threshold(&root),
+            DEFAULT_MISSION_AGENT_FAILURE_THRESHOLD
+        );
+    }
+
+    // F2: lcm helpers manage the per-mission failure counter and deferral.
+    #[test]
+    fn mission_failure_counter_increments_resets_and_defers() {
+        let root = temp_root("mission-failure-counter");
+        let db_path = root.join("ctox.sqlite3");
+        let engine = LcmEngine::open(&db_path, LcmConfig::default()).unwrap();
+        let _ = engine.continuity_init_documents(101).unwrap();
+        let initial = engine.sync_mission_state_from_continuity(101).unwrap();
+        assert_eq!(initial.agent_failure_count, 0);
+        assert!(initial.deferred_reason.is_none());
+
+        let after_one = engine.increment_mission_agent_failure_count(101).unwrap();
+        assert_eq!(after_one.agent_failure_count, 1);
+        let after_two = engine.increment_mission_agent_failure_count(101).unwrap();
+        assert_eq!(after_two.agent_failure_count, 2);
+
+        let after_reset = engine.reset_mission_agent_failure_count(101).unwrap();
+        assert_eq!(after_reset.agent_failure_count, 0);
+
+        let _ = engine.increment_mission_agent_failure_count(101).unwrap();
+        let _ = engine.increment_mission_agent_failure_count(101).unwrap();
+        let _ = engine.increment_mission_agent_failure_count(101).unwrap();
+        let deferred = engine
+            .defer_mission_for_reason(101, "agent_failure_threshold")
+            .unwrap();
+        assert_eq!(deferred.mission_status, "deferred");
+        assert_eq!(
+            deferred.deferred_reason.as_deref(),
+            Some("agent_failure_threshold")
+        );
+        assert!(!deferred.is_open);
+        assert!(deferred.allow_idle);
     }
 }

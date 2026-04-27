@@ -3729,6 +3729,8 @@ mod tests {
             last_synced_at: "2026-03-31T00:00:00Z".to_string(),
             watcher_last_triggered_at: None,
             watcher_trigger_count: 0,
+            agent_failure_count: 0,
+            deferred_reason: None,
         });
         app.chat_messages.push(crate::lcm::MessageRecord {
             message_id: 1,
@@ -3738,6 +3740,7 @@ mod tests {
             content: "Installiere Nextcloud.".to_string(),
             created_at: "2026-03-26T10:00:00Z".to_string(),
             token_count: 10,
+            agent_outcome: None,
         });
         app.chat_messages.push(crate::lcm::MessageRecord {
             message_id: 2,
@@ -3747,6 +3750,7 @@ mod tests {
             content: "Nextcloud bleibt blockiert.".to_string(),
             created_at: "2026-03-26T10:00:01Z".to_string(),
             token_count: 12,
+            agent_outcome: None,
         });
         terminal.draw(|frame| draw(frame, &app)).unwrap();
         let text = buffer_text(terminal.backend().buffer());
@@ -3779,6 +3783,7 @@ mod tests {
             content: "Review the blocked owner-visible task without losing continuity.\n\nGoal:\nInstall Redis cleanly\n\nThe latest attempt failed or stalled with this blocker:\nexecution timed out after 180s\n".to_string(),
             created_at: "2026-03-26T10:00:00Z".to_string(),
             token_count: 40,
+            agent_outcome: None,
         });
 
         terminal.draw(|frame| draw(frame, &app)).unwrap();

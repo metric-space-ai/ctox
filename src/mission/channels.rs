@@ -407,6 +407,212 @@ pub fn classify_email_sender(
     }
 }
 
+/// F4: snapshot of the founder/owner outbound pipeline for a single thread.
+/// Joins:
+/// - `mission_states`        — current mission status, agent_failure_count
+/// - `messages`              — agent attempts and their structured outcomes
+/// - `communication_founder_reply_reviews` — review and approval records
+/// - `communication_messages` (outbound rows, plus their routing state) —
+///   actual send attempts and their delivery state
+///
+/// Output is flat JSON shaped for operator consumption, intentionally
+/// avoiding internal-only field names where they would leak past CTOX.
+#[derive(Debug, Clone, Serialize)]
+pub struct PipelineStatusReport {
+    pub thread_key: Option<String>,
+    pub founder_outbound_intent: bool,
+    pub agent_attempts: Vec<PipelineAgentAttempt>,
+    pub review_runs: Vec<PipelineReviewRun>,
+    pub approval_records: Vec<PipelineApprovalRecord>,
+    pub send_attempts: Vec<PipelineSendAttempt>,
+    pub current_mission_status: String,
+    pub agent_failure_count: i64,
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PipelineAgentAttempt {
+    pub turn_id: String,
+    pub outcome: Option<String>,
+    pub started_at: Option<String>,
+    pub ended_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PipelineReviewRun {
+    pub approval_key: String,
+    pub inbound_message_key: String,
+    pub reviewer: String,
+    pub review_summary: String,
+    pub approved_at: String,
+    pub sent_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PipelineApprovalRecord {
+    pub approval_key: String,
+    pub action_digest: String,
+    pub body_sha256: String,
+    pub approved_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PipelineSendAttempt {
+    pub message_key: String,
+    pub direction: String,
+    pub subject: String,
+    pub external_created_at: String,
+    pub route_status: Option<String>,
+    pub last_error: Option<String>,
+}
+
+pub(crate) fn pipeline_status(
+    root: &Path,
+    thread_key: Option<&str>,
+    limit: usize,
+) -> Result<PipelineStatusReport> {
+    let db_path = resolve_db_path(root, None);
+    let conn = open_channel_db(&db_path)?;
+
+    // Agent attempts and reviews are scoped per-conversation_id derived
+    // from the thread_key. If the operator did not supply one, we report
+    // global state without per-thread review/send rows.
+    let conversation_id = thread_key
+        .map(|key| crate::execution::agent::turn_loop::conversation_id_for_thread_key(Some(key)));
+
+    // Mission state for the conversation that owns this thread.
+    let mission_state = if let Some(conv_id) = conversation_id {
+        crate::lcm::LcmEngine::open(&db_path, crate::lcm::LcmConfig::default())
+            .ok()
+            .and_then(|engine| engine.stored_mission_state(conv_id).ok().flatten())
+    } else {
+        None
+    };
+    let (current_mission_status, agent_failure_count, last_error) = match &mission_state {
+        Some(record) => (
+            record.mission_status.clone(),
+            record.agent_failure_count,
+            record.deferred_reason.clone(),
+        ),
+        None => ("unknown".to_string(), 0, None),
+    };
+
+    // Agent attempts: most recent assistant rows for the conversation, in
+    // reverse-chronological order, along with their structured outcome.
+    let agent_attempts = if let Some(conv_id) = conversation_id {
+        let mut stmt = conn.prepare(
+            "SELECT message_id, agent_outcome, created_at
+             FROM messages
+             WHERE conversation_id = ?1 AND role = 'assistant'
+             ORDER BY seq DESC
+             LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![conv_id, limit as i64], |row| {
+            let id: i64 = row.get(0)?;
+            let outcome: Option<String> = row.get(1)?;
+            let ended: Option<String> = row.get(2)?;
+            Ok(PipelineAgentAttempt {
+                turn_id: format!("msg:{id}"),
+                outcome,
+                started_at: None,
+                ended_at: ended,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    } else {
+        Vec::new()
+    };
+
+    // Review and approval records keyed on the inbound message belonging
+    // to this thread. If thread_key is None, return all recent reviews.
+    let mut review_runs = Vec::new();
+    let mut approval_records = Vec::new();
+    if let Some(thread) = thread_key {
+        let mut stmt = conn.prepare(
+            "SELECT r.approval_key, r.inbound_message_key, r.action_digest, r.body_sha256,
+                    r.reviewer, r.review_summary, r.approved_at, r.sent_at
+             FROM communication_founder_reply_reviews r
+             JOIN communication_messages m ON m.message_key = r.inbound_message_key
+             WHERE m.thread_key = ?1
+             ORDER BY r.approved_at DESC
+             LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![thread, limit as i64], |row| {
+            let approval_key: String = row.get(0)?;
+            let inbound_message_key: String = row.get(1)?;
+            let action_digest: String = row.get(2)?;
+            let body_sha256: String = row.get(3)?;
+            let reviewer: String = row.get(4)?;
+            let review_summary: String = row.get(5)?;
+            let approved_at: String = row.get(6)?;
+            let sent_at: Option<String> = row.get(7)?;
+            Ok((
+                PipelineReviewRun {
+                    approval_key: approval_key.clone(),
+                    inbound_message_key,
+                    reviewer,
+                    review_summary,
+                    approved_at: approved_at.clone(),
+                    sent_at,
+                },
+                PipelineApprovalRecord {
+                    approval_key,
+                    action_digest,
+                    body_sha256,
+                    approved_at,
+                },
+            ))
+        })?;
+        for row in rows {
+            let (review, approval) = row?;
+            review_runs.push(review);
+            approval_records.push(approval);
+        }
+    }
+
+    // Send attempts: outbound communication_messages rows for this thread.
+    let send_attempts = if let Some(thread) = thread_key {
+        let mut stmt = conn.prepare(
+            "SELECT m.message_key, m.direction, m.subject, m.external_created_at,
+                    r.route_status, r.last_error
+             FROM communication_messages m
+             LEFT JOIN communication_routing_state r ON r.message_key = m.message_key
+             WHERE m.thread_key = ?1 AND m.direction = 'outbound'
+             ORDER BY m.external_created_at DESC, m.observed_at DESC
+             LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![thread, limit as i64], |row| {
+            Ok(PipelineSendAttempt {
+                message_key: row.get(0)?,
+                direction: row.get(1)?,
+                subject: row.get(2)?,
+                external_created_at: row.get(3)?,
+                route_status: row.get(4)?,
+                last_error: row.get(5)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    } else {
+        Vec::new()
+    };
+
+    // founder_outbound_intent is true if there's at least one approval
+    // record for this thread (a reviewed founder send was prepared).
+    let founder_outbound_intent = !approval_records.is_empty();
+
+    Ok(PipelineStatusReport {
+        thread_key: thread_key.map(ToOwned::to_owned),
+        founder_outbound_intent,
+        agent_attempts,
+        review_runs,
+        approval_records,
+        send_attempts,
+        current_mission_status,
+        agent_failure_count,
+        last_error,
+    })
+}
+
 pub fn handle_channel_command(root: &Path, args: &[String]) -> Result<()> {
     let command = args.first().map(String::as_str).unwrap_or("");
     match command {
@@ -560,9 +766,20 @@ pub fn handle_channel_command(root: &Path, args: &[String]) -> Result<()> {
                 "context": context,
             }))
         }
+        "pipeline-status" => {
+            let limit = find_flag_value(args, "--limit")
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(DEFAULT_TAKE_LIMIT);
+            let thread_key = find_flag_value(args, "--thread-key");
+            let report = pipeline_status(root, thread_key, limit)?;
+            print_json(&json!({
+                "ok": true,
+                "report": report,
+            }))
+        }
         _ => {
             anyhow::bail!(
-                "usage:\n  ctox channel init [--db <path>]\n  ctox channel sync --channel <email|jami> [--db <path>] [adapter flags]\n  ctox channel take [--db <path>] [--channel <name>] [--limit <n>] [--lease-owner <owner>]\n  ctox channel ack [--db <path>] [--status <status>] <message-key>...\n  ctox channel send --channel <tui|email|jami> --account-key <key> --thread-key <key> --body <text> [--subject <text>] [--to <addr>]... [--cc <addr>]... [--attach-file <path>]... [--send-voice] [--reviewed-founder-send]\n  ctox channel founder-reply --message-key <inbound-email-key> --body <text>\n  ctox channel test --channel <tui|email|jami> [--db <path>] [--account-key <key>]\n  ctox channel ingest-tui --account-key <key> --thread-key <key> --body <text> [--sender-display <name>] [--sender-address <addr>] [--subject <text>]\n  ctox channel list [--db <path>] [--channel <name>] [--limit <n>]\n  ctox channel history --thread-key <key> [--db <path>] [--limit <n>]\n  ctox channel search --query <text> [--db <path>] [--channel <name>] [--sender <addr>] [--limit <n>]\n  ctox channel context --thread-key <key> [--db <path>] [--query <text>] [--sender <addr>] [--limit <n>]"
+                "usage:\n  ctox channel init [--db <path>]\n  ctox channel sync --channel <email|jami> [--db <path>] [adapter flags]\n  ctox channel take [--db <path>] [--channel <name>] [--limit <n>] [--lease-owner <owner>]\n  ctox channel ack [--db <path>] [--status <status>] <message-key>...\n  ctox channel send --channel <tui|email|jami> --account-key <key> --thread-key <key> --body <text> [--subject <text>] [--to <addr>]... [--cc <addr>]... [--attach-file <path>]... [--send-voice] [--reviewed-founder-send]\n  ctox channel founder-reply --message-key <inbound-email-key> --body <text>\n  ctox channel test --channel <tui|email|jami> [--db <path>] [--account-key <key>]\n  ctox channel ingest-tui --account-key <key> --thread-key <key> --body <text> [--sender-display <name>] [--sender-address <addr>] [--subject <text>]\n  ctox channel list [--db <path>] [--channel <name>] [--limit <n>]\n  ctox channel history --thread-key <key> [--db <path>] [--limit <n>]\n  ctox channel search --query <text> [--db <path>] [--channel <name>] [--sender <addr>] [--limit <n>]\n  ctox channel context --thread-key <key> [--db <path>] [--query <text>] [--sender <addr>] [--limit <n>]\n  ctox channel pipeline-status [--thread-key <key>] [--limit <n>]"
             )
         }
     }
@@ -1874,44 +2091,15 @@ fn protected_recipient_policies(
         .collect::<Vec<_>>()
 }
 
-fn ensure_founder_outbound_body_clean(request: &ChannelSendRequest) -> Result<()> {
-    let lowered = request.body.to_ascii_lowercase();
-    let forbidden_markers = [
-        "/home/",
-        "queue:",
-        "runtime/ctox.sqlite3",
-        "strategic direction setup",
-        "review rework",
-        "review-rework",
-        "self-work",
-        "thread_key",
-        "conversation_id",
-        "lease_owner",
-        "route_status",
-        "sqlite",
-        "host-pfad",
-        "host-pfade",
-        "vps-pfad",
-        "api.qrserver.com",
-        "qrserver.com",
-        "public server",
-        "public link",
-        "oeffentlicher server",
-        "oeffentlicher link",
-        "offentlicher server",
-        "offentlicher link",
-    ];
-    let hits = forbidden_markers
-        .iter()
-        .filter(|marker| lowered.contains(**marker))
-        .copied()
-        .collect::<Vec<_>>();
-    if !hits.is_empty() {
-        anyhow::bail!(
-            "founder/owner outbound email failed communication review due to internal-language leakage: {}",
-            hits.join(", ")
-        );
-    }
+/// Body-content cleanliness for founder/owner outbound mail is the agent's
+/// responsibility, taught explicitly via `owner-communication/SKILL.md`.
+/// CTOX core no longer scans outbound bodies for hardcoded "internal vocabulary"
+/// substrings — that string-scraping behaviour is exactly the kind of
+/// "Cheating-Eingriff unter der Haube" that is forbidden by the architectural
+/// rule. The function is kept as a no-op stub so that surrounding state-machine
+/// flow stays explicit and any future operator-configured cleanliness check
+/// has a single hook to plug into.
+fn ensure_founder_outbound_body_clean(_request: &ChannelSendRequest) -> Result<()> {
     Ok(())
 }
 
@@ -2652,35 +2840,9 @@ fn validate_founder_outbound_email(
         "direct outbound email to founder/owner/admin recipients is blocked without review: {}. Use a reviewed founder-send path.",
         recipient_summary
     );
-    let lowered = request.body.to_ascii_lowercase();
-    let forbidden_markers = [
-        "/home/",
-        "queue:",
-        "runtime/ctox.sqlite3",
-        "strategic direction setup",
-        "review rework",
-        "review-rework",
-        "self-work",
-        "thread_key",
-        "conversation_id",
-        "lease_owner",
-        "route_status",
-        "sqlite",
-        "host-pfad",
-        "host-pfade",
-        "vps-pfad",
-    ];
-    let hits = forbidden_markers
-        .iter()
-        .filter(|marker| lowered.contains(**marker))
-        .copied()
-        .collect::<Vec<_>>();
-    if !hits.is_empty() {
-        anyhow::bail!(
-            "founder/owner outbound email failed communication review due to internal-language leakage: {}",
-            hits.join(", ")
-        );
-    }
+    // Body-content guidance for mandantengerechte mail lives in
+    // `owner-communication/SKILL.md`. CTOX core does not scrape the body for
+    // internal vocabulary — the agent owns the wording, not the harness.
     anyhow::bail!(
         "generic channel send is disabled for founder/owner/admin outbound email: {}. Use the dedicated reviewed founder communication path instead.",
         recipient_summary
@@ -5156,7 +5318,12 @@ mod tests {
     }
 
     #[test]
-    fn founder_outbound_email_rejects_internal_language_even_with_override() {
+    fn founder_outbound_email_does_not_string_scrape_body_content() {
+        // Core no longer scrapes outbound bodies for "internal vocabulary"
+        // substrings. That guidance lives in `owner-communication/SKILL.md`.
+        // Whatever the body contains, the generic `channel send` path is
+        // still blocked for founder/owner/admin recipients — the operator
+        // must use the reviewed founder-outbound pipeline.
         let mut settings = BTreeMap::new();
         settings.insert(
             "CTOX_FOUNDER_EMAIL_ADDRESSES".to_string(),
@@ -5181,11 +5348,16 @@ mod tests {
                 reviewed_founder_send: true,
             },
         )
-        .expect_err("internal leakage should be blocked");
+        .expect_err("generic founder send should still be blocked irrespective of body content");
 
+        let message = error.to_string();
         assert!(
-            error.to_string().contains("internal-language leakage"),
-            "unexpected error: {error}"
+            message.contains("generic channel send is disabled"),
+            "unexpected error: {message}"
+        );
+        assert!(
+            !message.contains("internal-language leakage"),
+            "core must not string-scrape outbound bodies anymore: {message}"
         );
     }
 
@@ -5953,5 +6125,90 @@ mod tests {
             .any(|item| item.message_key == "ctx-4"));
 
         let _ = fs::remove_file(&db_path);
+    }
+
+    // F4: pipeline_status returns a structured snapshot joining mission
+    // state, agent attempts, review/approval rows, and outbound sends for
+    // a given thread_key. The test seeds rows into the runtime db that
+    // `pipeline_status` will resolve via `resolve_db_path(root, None)`.
+    #[test]
+    fn pipeline_status_reports_thread_state() {
+        let root = std::env::temp_dir().join(format!(
+            "ctox-pipeline-status-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(root.join("runtime")).expect("failed to create runtime dir");
+
+        let thread_key = "pipeline-status-thread";
+
+        // Seed the channel db with one outbound message and one routing row.
+        let db_path = root.join(DEFAULT_DB_RELATIVE_PATH);
+        let mut conn = open_channel_db(&db_path).expect("open channel db");
+        upsert_communication_message(
+            &mut conn,
+            UpsertMessage {
+                message_key: "outbound-1",
+                channel: "email",
+                account_key: "email:cto1@example.com",
+                thread_key,
+                remote_id: "remote-1",
+                direction: "outbound",
+                folder_hint: "Sent",
+                sender_display: "CTOX",
+                sender_address: "cto1@example.com",
+                recipient_addresses_json: "[\"founder@example.com\"]",
+                cc_addresses_json: "[]",
+                bcc_addresses_json: "[]",
+                subject: "Founder update",
+                preview: "Update for founder.",
+                body_text: "Update for founder.",
+                body_html: "",
+                raw_payload_ref: "",
+                trust_level: "trusted",
+                status: "sent",
+                seen: true,
+                has_attachments: false,
+                external_created_at: "2026-04-27T10:00:00Z",
+                observed_at: "2026-04-27T10:00:00Z",
+                metadata_json: "{}",
+            },
+        )
+        .expect("failed to upsert outbound");
+
+        // Seed an agent assistant row with structured outcome on the matching conversation_id.
+        let conversation_id =
+            crate::execution::agent::turn_loop::conversation_id_for_thread_key(Some(thread_key));
+        let engine = crate::lcm::LcmEngine::open(&db_path, crate::lcm::LcmConfig::default())
+            .expect("open lcm engine");
+        let _ = engine
+            .add_message_with_outcome(
+                conversation_id,
+                "assistant",
+                "(agent turn did not complete)",
+                Some(crate::lcm::AgentOutcome::TurnTimeout),
+            )
+            .expect("seed assistant row");
+        // Bump the failure counter to simulate one failed turn.
+        let _ = engine
+            .increment_mission_agent_failure_count(conversation_id)
+            .expect("bump failure count");
+
+        let report = pipeline_status(&root, Some(thread_key), 10).expect("pipeline status");
+        assert_eq!(report.thread_key.as_deref(), Some(thread_key));
+        assert_eq!(report.send_attempts.len(), 1);
+        assert_eq!(report.send_attempts[0].message_key, "outbound-1");
+        assert_eq!(report.agent_attempts.len(), 1);
+        assert_eq!(
+            report.agent_attempts[0].outcome.as_deref(),
+            Some("TurnTimeout")
+        );
+        assert_eq!(report.agent_failure_count, 1);
+        // No review row was seeded → no founder_outbound_intent.
+        assert!(!report.founder_outbound_intent);
+
+        let _ = fs::remove_dir_all(&root);
     }
 }

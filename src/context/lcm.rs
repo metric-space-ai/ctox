@@ -4,6 +4,7 @@ use regex::Regex;
 use rusqlite::params;
 use rusqlite::Connection;
 use rusqlite::OptionalExtension;
+use serde::Deserialize;
 use serde::Serialize;
 use sha2::Digest;
 use sha2::Sha256;
@@ -69,6 +70,58 @@ pub struct MessageRecord {
     pub content: String,
     pub token_count: i64,
     pub created_at: String,
+    /// F3: structured agent outcome for assistant rows. Always `None` for
+    /// non-assistant rows (`user`, `system`, etc.). Replaces string-scraping
+    /// of `"Status: \`blocked\`"` text-status replies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_outcome: Option<String>,
+}
+
+/// F3: structured outcome of a single agent turn. Persisted on the
+/// corresponding assistant message row in `messages.agent_outcome` so that
+/// downstream consumers (mission watchdog, founder-send pipeline, status
+/// snapshots) can branch on the outcome without scraping the reply body.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AgentOutcome {
+    /// The turn ran to completion and produced a real reply.
+    Success,
+    /// The turn hit the configured turn time budget.
+    TurnTimeout,
+    /// The turn aborted with a runtime / harness execution error.
+    ExecutionError,
+    /// The turn was aborted by the harness (e.g. mission state invariant).
+    Aborted,
+    /// The turn was cancelled before it could finish (operator stop).
+    Cancelled,
+}
+
+impl AgentOutcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AgentOutcome::Success => "Success",
+            AgentOutcome::TurnTimeout => "TurnTimeout",
+            AgentOutcome::ExecutionError => "ExecutionError",
+            AgentOutcome::Aborted => "Aborted",
+            AgentOutcome::Cancelled => "Cancelled",
+        }
+    }
+
+    /// True when this outcome represents a non-success that the watchdog
+    /// should count toward the agent-failure backoff threshold.
+    pub fn is_agent_failure(self) -> bool {
+        !matches!(self, AgentOutcome::Success)
+    }
+
+    pub fn from_token(value: &str) -> Option<Self> {
+        match value {
+            "Success" => Some(AgentOutcome::Success),
+            "TurnTimeout" => Some(AgentOutcome::TurnTimeout),
+            "ExecutionError" => Some(AgentOutcome::ExecutionError),
+            "Aborted" => Some(AgentOutcome::Aborted),
+            "Cancelled" => Some(AgentOutcome::Cancelled),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -297,6 +350,15 @@ pub struct MissionStateRecord {
     pub last_synced_at: String,
     pub watcher_last_triggered_at: Option<String>,
     pub watcher_trigger_count: i64,
+    /// F2: number of consecutive agent-failure outcomes for this mission.
+    /// Reset to 0 on a successful agent turn; incremented on
+    /// `AgentOutcome::TurnTimeout`, `ExecutionError`, `Aborted`.
+    #[serde(default)]
+    pub agent_failure_count: i64,
+    /// F2: structured reason set when the watchdog deferred the mission
+    /// (e.g. `agent_failure_threshold`). `None` for active missions.
+    #[serde(default)]
+    pub deferred_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -793,7 +855,9 @@ impl LcmEngine {
                 focus_head_commit_id TEXT NOT NULL,
                 last_synced_at TEXT NOT NULL,
                 watcher_last_triggered_at TEXT,
-                watcher_trigger_count INTEGER NOT NULL DEFAULT 0
+                watcher_trigger_count INTEGER NOT NULL DEFAULT 0,
+                agent_failure_count INTEGER NOT NULL DEFAULT 0,
+                deferred_reason TEXT
             );
 
             CREATE TABLE IF NOT EXISTS verification_runs (
@@ -916,6 +980,19 @@ impl LcmEngine {
             "handoff_text",
             "TEXT NOT NULL DEFAULT ''",
         )?;
+        // F2: per-(conversation, mission) agent-failure tracking for the
+        // watchdog backoff. `agent_failure_count` increments on
+        // non-Success agent outcomes (timeout, panic, runtime error) and
+        // resets on success; `deferred_reason` stores the structured reason
+        // when the watchdog stops spawning continuations.
+        self.ensure_column(
+            "mission_states",
+            "agent_failure_count",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+        self.ensure_column("mission_states", "deferred_reason", "TEXT")?;
+        // F3: structured agent outcome on assistant rows; NULL for non-assistant rows.
+        self.ensure_column("messages", "agent_outcome", "TEXT")?;
         Ok(())
     }
 
@@ -947,6 +1024,21 @@ impl LcmEngine {
         role: &str,
         content: &str,
     ) -> Result<MessageRecord> {
+        self.add_message_with_outcome(conversation_id, role, content, None)
+    }
+
+    /// F3: insert an assistant turn with a structured `AgentOutcome` recorded
+    /// in `messages.agent_outcome`. Non-assistant rows always store NULL;
+    /// callers that pass an outcome for a non-assistant role are corrected
+    /// silently (and the helper logs nothing — the column column is the
+    /// authoritative state, not the role argument).
+    pub fn add_message_with_outcome(
+        &self,
+        conversation_id: i64,
+        role: &str,
+        content: &str,
+        outcome: Option<AgentOutcome>,
+    ) -> Result<MessageRecord> {
         let _ = self.continuity_init_documents(conversation_id)?;
         let now = iso_now();
         let seq = self
@@ -958,10 +1050,23 @@ impl LcmEngine {
             )
             .unwrap_or(1);
         let token_count = estimate_tokens(content) as i64;
+        let stored_outcome = if role == "assistant" {
+            outcome.map(|value| value.as_str().to_string())
+        } else {
+            None
+        };
         self.conn.execute(
-            "INSERT INTO messages (conversation_id, seq, role, content, token_count, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![conversation_id, seq, role, content, token_count, now],
+            "INSERT INTO messages (conversation_id, seq, role, content, token_count, created_at, agent_outcome)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                conversation_id,
+                seq,
+                role,
+                content,
+                token_count,
+                now,
+                stored_outcome,
+            ],
         )?;
         let message_id = self.conn.last_insert_rowid();
         self.conn.execute(
@@ -982,7 +1087,28 @@ impl LcmEngine {
             content: content.to_string(),
             token_count,
             created_at: now,
+            agent_outcome: stored_outcome,
         })
+    }
+
+    /// F3: read the most recent assistant `agent_outcome` for a conversation.
+    /// Returns `None` if there is no assistant row yet, or if the latest
+    /// assistant row predates the schema upgrade and has a NULL outcome.
+    pub fn last_agent_outcome(&self, conversation_id: i64) -> Result<Option<AgentOutcome>> {
+        let raw: Option<Option<String>> = self
+            .conn
+            .query_row(
+                "SELECT agent_outcome FROM messages
+                 WHERE conversation_id = ?1 AND role = 'assistant'
+                 ORDER BY seq DESC LIMIT 1",
+                [conversation_id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .context("failed to load last agent outcome")?;
+        Ok(raw
+            .flatten()
+            .and_then(|token| AgentOutcome::from_token(&token)))
     }
 
     pub fn evaluate_compaction(
@@ -1647,6 +1773,55 @@ impl LcmEngine {
         let mut record = self.mission_state(conversation_id)?;
         record.watcher_last_triggered_at = Some(triggered_at.to_string());
         record.watcher_trigger_count += 1;
+        self.persist_mission_state(&record)?;
+        Ok(record)
+    }
+
+    /// F2: increment the per-mission agent-failure counter when an agent
+    /// turn ended with a non-success outcome (timeout, panic, runtime error).
+    /// Returns the post-increment record so the caller can decide whether
+    /// the watchdog should defer the mission.
+    pub fn increment_mission_agent_failure_count(
+        &self,
+        conversation_id: i64,
+    ) -> Result<MissionStateRecord> {
+        let mut record = self.mission_state(conversation_id)?;
+        record.agent_failure_count = record.agent_failure_count.saturating_add(1);
+        self.persist_mission_state(&record)?;
+        Ok(record)
+    }
+
+    /// F2: reset the per-mission agent-failure counter on a successful turn.
+    /// No-op when already zero (avoids touching the row unnecessarily).
+    pub fn reset_mission_agent_failure_count(
+        &self,
+        conversation_id: i64,
+    ) -> Result<MissionStateRecord> {
+        let mut record = self.mission_state(conversation_id)?;
+        if record.agent_failure_count == 0 && record.deferred_reason.is_none() {
+            return Ok(record);
+        }
+        record.agent_failure_count = 0;
+        // A successful turn implicitly clears any prior deferral reason.
+        record.deferred_reason = None;
+        self.persist_mission_state(&record)?;
+        Ok(record)
+    }
+
+    /// F2: defer a mission because the agent-failure threshold was hit.
+    /// Sets `mission_status = 'deferred'`, stores a structured reason, and
+    /// flips `is_open=false` / `allow_idle=true` so the watchdog stops
+    /// spawning continuation self-work for this mission.
+    pub fn defer_mission_for_reason(
+        &self,
+        conversation_id: i64,
+        reason: &str,
+    ) -> Result<MissionStateRecord> {
+        let mut record = self.mission_state(conversation_id)?;
+        record.mission_status = "deferred".to_string();
+        record.deferred_reason = Some(reason.to_string());
+        record.is_open = false;
+        record.allow_idle = true;
         self.persist_mission_state(&record)?;
         Ok(record)
     }
@@ -2835,7 +3010,7 @@ impl LcmEngine {
     fn get_message(&self, message_id: i64) -> Result<MessageRecord> {
         self.conn
             .query_row(
-                "SELECT message_id, conversation_id, seq, role, content, token_count, created_at
+                "SELECT message_id, conversation_id, seq, role, content, token_count, created_at, agent_outcome
              FROM messages WHERE message_id = ?1",
                 [message_id],
                 |row| {
@@ -2847,6 +3022,7 @@ impl LcmEngine {
                         content: row.get(4)?,
                         token_count: row.get(5)?,
                         created_at: row.get(6)?,
+                        agent_outcome: row.get(7)?,
                     })
                 },
             )
@@ -2858,7 +3034,7 @@ impl LcmEngine {
         conversation_id: i64,
     ) -> Result<Vec<MessageRecord>> {
         let mut stmt = self.conn.prepare(
-            "SELECT message_id, conversation_id, seq, role, content, token_count, created_at
+            "SELECT message_id, conversation_id, seq, role, content, token_count, created_at, agent_outcome
              FROM messages WHERE conversation_id = ?1 ORDER BY seq ASC",
         )?;
         let rows = stmt.query_map([conversation_id], |row| {
@@ -2870,6 +3046,7 @@ impl LcmEngine {
                 content: row.get(4)?,
                 token_count: row.get(5)?,
                 created_at: row.get(6)?,
+                agent_outcome: row.get(7)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -3014,7 +3191,7 @@ impl LcmEngine {
     fn messages_for_summary(&self, summary_id: &str) -> Result<Vec<MessageRecord>> {
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT m.message_id, m.conversation_id, m.seq, m.role, m.content, m.token_count, m.created_at
+            SELECT m.message_id, m.conversation_id, m.seq, m.role, m.content, m.token_count, m.created_at, m.agent_outcome
             FROM summary_messages sm
             JOIN messages m ON m.message_id = sm.message_id
             WHERE sm.summary_id = ?1
@@ -3030,6 +3207,7 @@ impl LcmEngine {
                 content: row.get(4)?,
                 token_count: row.get(5)?,
                 created_at: row.get(6)?,
+                agent_outcome: row.get(7)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -3489,6 +3667,18 @@ pub fn run_add_message(
     engine.add_message(conversation_id, role, content)
 }
 
+/// F3: convenience wrapper for the agent harness — record an assistant
+/// turn with its structured outcome in a single call.
+pub fn run_add_assistant_turn(
+    db_path: &Path,
+    conversation_id: i64,
+    content: &str,
+    outcome: AgentOutcome,
+) -> Result<MessageRecord> {
+    let engine = LcmEngine::open(db_path, LcmConfig::default())?;
+    engine.add_message_with_outcome(conversation_id, "assistant", content, Some(outcome))
+}
+
 pub fn run_compact(
     db_path: &Path,
     conversation_id: i64,
@@ -3845,7 +4035,7 @@ fn load_mission_state_with(
     conversation_id: i64,
 ) -> Result<Option<MissionStateRecord>> {
     conn.query_row(
-        "SELECT mission, mission_status, continuation_mode, trigger_intensity, blocker, next_slice, done_gate, closure_confidence, is_open, allow_idle, focus_head_commit_id, last_synced_at, watcher_last_triggered_at, watcher_trigger_count FROM mission_states WHERE conversation_id = ?1",
+        "SELECT mission, mission_status, continuation_mode, trigger_intensity, blocker, next_slice, done_gate, closure_confidence, is_open, allow_idle, focus_head_commit_id, last_synced_at, watcher_last_triggered_at, watcher_trigger_count, agent_failure_count, deferred_reason FROM mission_states WHERE conversation_id = ?1",
         [conversation_id],
         |row| {
             Ok(MissionStateRecord {
@@ -3864,6 +4054,8 @@ fn load_mission_state_with(
                 last_synced_at: row.get(11)?,
                 watcher_last_triggered_at: row.get(12)?,
                 watcher_trigger_count: row.get(13)?,
+                agent_failure_count: row.get(14)?,
+                deferred_reason: row.get(15)?,
             })
         },
     )
@@ -3874,7 +4066,7 @@ fn load_mission_state_with(
 fn load_mission_states_with(conn: &Connection, open_only: bool) -> Result<Vec<MissionStateRecord>> {
     let mut stmt = conn
         .prepare(
-            "SELECT conversation_id, mission, mission_status, continuation_mode, trigger_intensity, blocker, next_slice, done_gate, closure_confidence, is_open, allow_idle, focus_head_commit_id, last_synced_at, watcher_last_triggered_at, watcher_trigger_count
+            "SELECT conversation_id, mission, mission_status, continuation_mode, trigger_intensity, blocker, next_slice, done_gate, closure_confidence, is_open, allow_idle, focus_head_commit_id, last_synced_at, watcher_last_triggered_at, watcher_trigger_count, agent_failure_count, deferred_reason
              FROM mission_states
              WHERE (?1 = 0 OR is_open = 1)
              ORDER BY is_open DESC, last_synced_at DESC, conversation_id ASC",
@@ -3897,6 +4089,8 @@ fn load_mission_states_with(conn: &Connection, open_only: bool) -> Result<Vec<Mi
             last_synced_at: row.get(12)?,
             watcher_last_triggered_at: row.get(13)?,
             watcher_trigger_count: row.get(14)?,
+            agent_failure_count: row.get(15)?,
+            deferred_reason: row.get(16)?,
         })
     })?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
@@ -3921,8 +4115,10 @@ fn persist_mission_state_with(conn: &Connection, record: &MissionStateRecord) ->
             focus_head_commit_id,
             last_synced_at,
             watcher_last_triggered_at,
-            watcher_trigger_count
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+            watcher_trigger_count,
+            agent_failure_count,
+            deferred_reason
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
         ON CONFLICT(conversation_id) DO UPDATE SET
             mission = excluded.mission,
             mission_status = excluded.mission_status,
@@ -3937,7 +4133,9 @@ fn persist_mission_state_with(conn: &Connection, record: &MissionStateRecord) ->
             focus_head_commit_id = excluded.focus_head_commit_id,
             last_synced_at = excluded.last_synced_at,
             watcher_last_triggered_at = excluded.watcher_last_triggered_at,
-            watcher_trigger_count = excluded.watcher_trigger_count",
+            watcher_trigger_count = excluded.watcher_trigger_count,
+            agent_failure_count = excluded.agent_failure_count,
+            deferred_reason = excluded.deferred_reason",
         params![
             record.conversation_id,
             record.mission,
@@ -3954,6 +4152,8 @@ fn persist_mission_state_with(conn: &Connection, record: &MissionStateRecord) ->
             record.last_synced_at,
             record.watcher_last_triggered_at,
             record.watcher_trigger_count,
+            record.agent_failure_count,
+            record.deferred_reason,
         ],
     )?;
     Ok(())
@@ -4325,6 +4525,10 @@ fn derive_mission_state_from_continuity(
         watcher_trigger_count: previous
             .map(|record| record.watcher_trigger_count)
             .unwrap_or(0),
+        agent_failure_count: previous
+            .map(|record| record.agent_failure_count)
+            .unwrap_or(0),
+        deferred_reason: previous.and_then(|record| record.deferred_reason.clone()),
     }
 }
 
@@ -5937,6 +6141,8 @@ mod tests {
             last_synced_at: iso_now(),
             watcher_last_triggered_at: Some("2026-04-05T23:02:04Z".to_string()),
             watcher_trigger_count: 16,
+            agent_failure_count: 0,
+            deferred_reason: None,
         };
 
         let mission = derive_mission_state_from_continuity(&continuity, Some(&previous));
@@ -5982,6 +6188,8 @@ mod tests {
             last_synced_at: iso_now(),
             watcher_last_triggered_at: None,
             watcher_trigger_count: 0,
+            agent_failure_count: 0,
+            deferred_reason: None,
         };
 
         let mission = derive_mission_state_from_continuity(&continuity, Some(&previous));
@@ -6431,5 +6639,68 @@ mod tests {
         let fallback = build_deterministic_fallback(&content, 1234);
         assert!(fallback.contains("[Truncated from 1234 tokens]"));
         assert!(std::str::from_utf8(fallback.as_bytes()).is_ok());
+    }
+
+    // F3: structured agent_outcome round-trips on assistant rows and is
+    // ignored on non-assistant rows.
+    #[test]
+    fn add_message_with_outcome_persists_for_assistant_only() -> Result<()> {
+        let db_path = temp_db();
+        let engine = LcmEngine::open(&db_path, LcmConfig::default())?;
+        let _ = engine.continuity_init_documents(7)?;
+
+        // user row: outcome must be ignored.
+        let user_record =
+            engine.add_message_with_outcome(7, "user", "ping", Some(AgentOutcome::TurnTimeout))?;
+        assert!(user_record.agent_outcome.is_none());
+
+        // assistant success row.
+        let success_record = engine.add_message_with_outcome(
+            7,
+            "assistant",
+            "all done",
+            Some(AgentOutcome::Success),
+        )?;
+        assert_eq!(success_record.agent_outcome.as_deref(), Some("Success"));
+        assert_eq!(engine.last_agent_outcome(7)?, Some(AgentOutcome::Success));
+
+        // assistant timeout row supersedes the success.
+        let _ = engine.add_message_with_outcome(
+            7,
+            "assistant",
+            "(agent turn did not complete)",
+            Some(AgentOutcome::TurnTimeout),
+        )?;
+        assert_eq!(
+            engine.last_agent_outcome(7)?,
+            Some(AgentOutcome::TurnTimeout)
+        );
+
+        let _ = std::fs::remove_file(db_path);
+        Ok(())
+    }
+
+    #[test]
+    fn agent_outcome_token_round_trips() {
+        for outcome in [
+            AgentOutcome::Success,
+            AgentOutcome::TurnTimeout,
+            AgentOutcome::ExecutionError,
+            AgentOutcome::Aborted,
+            AgentOutcome::Cancelled,
+        ] {
+            let token = outcome.as_str();
+            assert_eq!(AgentOutcome::from_token(token), Some(outcome));
+        }
+        assert!(AgentOutcome::from_token("unknown").is_none());
+    }
+
+    #[test]
+    fn agent_outcome_failure_predicate_only_excludes_success() {
+        assert!(!AgentOutcome::Success.is_agent_failure());
+        assert!(AgentOutcome::TurnTimeout.is_agent_failure());
+        assert!(AgentOutcome::ExecutionError.is_agent_failure());
+        assert!(AgentOutcome::Aborted.is_agent_failure());
+        assert!(AgentOutcome::Cancelled.is_agent_failure());
     }
 }

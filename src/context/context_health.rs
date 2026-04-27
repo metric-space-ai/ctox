@@ -1065,8 +1065,21 @@ fn recent_blocked_status_count(snapshot: &lcm::LcmSnapshot) -> usize {
         .rev()
         .filter(|message| message.role == "assistant")
         .take(8)
-        .filter(|message| looks_like_blocked_status(&message.content))
+        .filter(|message| message_indicates_blocked_status(message))
         .count()
+}
+
+/// Prefer the structured `agent_outcome` (F3) when present; fall back to
+/// the legacy text-status scrape only for assistant rows that predate the
+/// schema upgrade and therefore have a NULL outcome. New code paths must
+/// populate `agent_outcome` so this fallback fades away.
+fn message_indicates_blocked_status(message: &lcm::MessageRecord) -> bool {
+    if let Some(token) = message.agent_outcome.as_deref() {
+        if let Some(outcome) = lcm::AgentOutcome::from_token(token) {
+            return outcome.is_agent_failure();
+        }
+    }
+    looks_like_blocked_status(&message.content)
 }
 
 fn looks_like_blocked_status(content: &str) -> bool {
@@ -1155,6 +1168,7 @@ mod tests {
                 content: content.to_string(),
                 token_count: 100,
                 created_at: "2026-03-31T00:00:00Z".to_string(),
+                agent_outcome: None,
             })
             .collect::<Vec<_>>();
         lcm::LcmSnapshot {

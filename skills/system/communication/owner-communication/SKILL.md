@@ -141,9 +141,22 @@ How to give a job the outbound-email intent (operator-side):
 Agent responsibilities for such a job:
 
 - Produce the email body as the turn reply, in mandantengerechter Sprache.
-- Do **not** include internal CTOX vocabulary (`queue`, `runtime/`, `sqlite`, `route_status`, `runtime_env_kv`, host paths, etc.) — these will be rejected by the body cleanliness check.
 - Do **not** invoke `ctox channel send` yourself; the service routes the send.
 - The reply you produce **is** the email body; the service uses recipients/subject from the job metadata.
+
+### Anti-pattern: internal vocabulary in mandantengerechter Sprache
+
+CTOX core does **not** scan the outbound body for "internal vocabulary" — body cleanliness is your responsibility. Treat the following categories as forbidden in any text that goes to a founder, owner, or admin recipient. The list is illustrative, not exhaustive: any term that exposes CTOX-internal mechanics belongs in the same bucket.
+
+- **Storage and runtime layout**: `sqlite`, `runtime/ctox.sqlite3`, `/home/...`, `runtime_env_kv`, host paths, VPS paths.
+- **Queue and orchestration internals**: `queue`, `queue:`, `self-work`, `mission-follow-up`, `lease_owner`, `route_status`, `thread_key`, `conversation_id`, `dedupe_key`, `claim_key`.
+- **Mission machinery and review pipeline names**: `strategic direction setup`, `review rework`, `mission watchdog`, `continuation slice`, `agent_outcome`, `approval_key`.
+- **Tool / technical scaffolding**: `ctox channel send`, `ctox lcm-grep`, `governance::record_event`, table names, column names.
+- **Generic infrastructure naming that the recipient did not ask about**: "public server", "öffentlicher Link", QR-server URLs (`api.qrserver.com`), JSON shapes, headers, env keys.
+
+If you need to mention a deliverable, name the **business artifact** (the file the recipient cares about, the date, the decision, the next step), not the CTOX subsystem that produced it.
+
+If you cannot describe something to the founder without leaking internal vocabulary, that is a signal the message is not ready to send — request a clarifying review or escalate to TUI.
 
 ## References
 

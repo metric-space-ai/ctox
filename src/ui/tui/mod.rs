@@ -1029,6 +1029,7 @@ impl App {
                 monitor_last_check_at: None,
                 monitor_alerts: Vec::new(),
                 monitor_last_error: None,
+                last_agent_outcome: None,
             });
         let mut app = Self {
             root: root.clone(),
@@ -1662,6 +1663,7 @@ impl App {
                 monitor_last_check_at: None,
                 monitor_alerts: Vec::new(),
                 monitor_last_error: None,
+                last_agent_outcome: None,
             }
         });
         self.request_in_flight = self.service_status.running && self.service_status.busy;
