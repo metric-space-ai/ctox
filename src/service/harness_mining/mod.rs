@@ -25,15 +25,18 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 
 pub mod alignment;
+pub mod brief;
 pub mod causal;
 pub mod conformance;
 pub mod drift;
+pub mod findings;
 pub mod multiperspective;
 pub mod sojourn;
 pub mod stuck_cases;
 pub mod variants;
 
 const USAGE: &str = "Usage:
+  ctox harness-mining brief          [--stuck-min-attempts <n>] [--conformance-threshold <0..1>] [--drift-threshold <f>]
   ctox harness-mining stuck-cases    [--min-attempts <n>] [--idle-seconds <s>] [--limit <n>]
   ctox harness-mining variants       [--entity-type <t>] [--limit <n>] [--cluster]
   ctox harness-mining sojourn        [--entity-type <t>] [--limit <n>]
@@ -41,7 +44,12 @@ const USAGE: &str = "Usage:
   ctox harness-mining alignment      [--entity-type <t>] [--limit <n>]
   ctox harness-mining causal         [--violation-code <code>] [--lookback <n>] [--limit <n>]
   ctox harness-mining drift          [--window <n>] [--threshold <f>]
-  ctox harness-mining multiperspective [--entity-type <t>] [--limit <n>]";
+  ctox harness-mining multiperspective [--entity-type <t>] [--limit <n>]
+  ctox harness-mining audit-tick     [--stuck-min-attempts <n>] [--conformance-threshold <0..1>] [--drift-threshold <f>]
+  ctox harness-mining findings       [--status <detected|confirmed|acknowledged|mitigated|verified|stale>] [--kind <k>] [--limit <n>]
+  ctox harness-mining finding-ack    --finding-id <id> [--note <text>]
+  ctox harness-mining finding-mitigate --finding-id <id> --by <agent|operator|spec-change> [--note <text>]
+  ctox harness-mining finding-verify --finding-id <id> [--note <text>]";
 
 pub fn handle_harness_mining_command(root: &Path, args: &[String]) -> Result<()> {
     let db_path = harness_mining_db_path(root);
@@ -49,6 +57,60 @@ pub fn handle_harness_mining_command(root: &Path, args: &[String]) -> Result<()>
         .with_context(|| format!("failed to open runtime database at {}", db_path.display()))?;
 
     match args.first().map(String::as_str) {
+        Some("brief") => {
+            let report = brief::synthesize(&conn, &brief::Options::from_args(args))?;
+            print_json(&report)
+        }
+        Some("audit-tick") => {
+            let opts = brief::Options::from_args(args);
+            let report = findings::run_audit_tick(&conn, &opts, &now_iso_z())?;
+            print_json(&serde_json::json!({
+                "ok": true,
+                "run_id": report.run_id,
+                "recorded": report.recorded,
+                "confirmed": report.confirmed,
+                "marked_stale": report.stale,
+                "brief": report.brief,
+            }))
+        }
+        Some("findings") => {
+            findings::ensure_findings_schema(&conn)?;
+            let status = parse_string_flag(args, "--status");
+            let kind = parse_string_flag(args, "--kind");
+            let limit = parse_i64_flag(args, "--limit", 50);
+            let rows = findings::list(&conn, status, kind, limit)?;
+            print_json(&serde_json::json!({
+                "ok": true,
+                "findings": rows,
+                "count": rows.len(),
+            }))
+        }
+        Some("finding-ack") => {
+            findings::ensure_findings_schema(&conn)?;
+            let id = parse_string_flag(args, "--finding-id")
+                .ok_or_else(|| anyhow::anyhow!("missing --finding-id"))?;
+            let note = parse_string_flag(args, "--note");
+            findings::acknowledge(&conn, id, note, &now_iso_z())?;
+            print_json(&serde_json::json!({"ok": true, "finding_id": id, "status": "acknowledged"}))
+        }
+        Some("finding-mitigate") => {
+            findings::ensure_findings_schema(&conn)?;
+            let id = parse_string_flag(args, "--finding-id")
+                .ok_or_else(|| anyhow::anyhow!("missing --finding-id"))?;
+            let by = parse_string_flag(args, "--by")
+                .ok_or_else(|| anyhow::anyhow!("missing --by (agent|operator|spec-change)"))?;
+            let note = parse_string_flag(args, "--note");
+            findings::mitigate(&conn, id, by, note, &now_iso_z())?;
+            print_json(&serde_json::json!({"ok": true, "finding_id": id, "status": "mitigated"}))
+        }
+        Some("finding-verify") => {
+            findings::ensure_findings_schema(&conn)?;
+            let id = parse_string_flag(args, "--finding-id")
+                .ok_or_else(|| anyhow::anyhow!("missing --finding-id"))?;
+            let note = parse_string_flag(args, "--note");
+            findings::verify(&conn, id, note, &now_iso_z())?;
+            print_json(&serde_json::json!({"ok": true, "finding_id": id, "status": "verified"}))
+        }
         Some("stuck-cases") => {
             let report = stuck_cases::detect(&conn, &stuck_cases::Options::from_args(args))?;
             print_json(&report)
@@ -107,6 +169,12 @@ fn print_json(value: &Value) -> Result<()> {
 
 fn harness_mining_db_path(root: &Path) -> PathBuf {
     root.join("runtime").join("ctox.sqlite3")
+}
+
+pub(crate) fn now_iso_z() -> String {
+    chrono::Utc::now()
+        .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+        .to_string()
 }
 
 /// Compact aggregate snapshot for the TUI. Contains only counts, ratios, and

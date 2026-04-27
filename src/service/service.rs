@@ -97,6 +97,7 @@ const SYSTEMD_USER_UNIT_NAME: &str = "ctox.service";
 const CHANNEL_ROUTER_POLL_SECS: u64 = 8;
 const MISSION_WATCHER_POLL_SECS: u64 = 15;
 const CTO_OPERATING_WATCHER_POLL_SECS: u64 = 60;
+const HARNESS_AUDIT_TICK_SECS: u64 = 300;
 const CHANNEL_ROUTER_LEASE_OWNER: &str = "ctox-service";
 const QUEUE_PRESSURE_GUARD_THRESHOLD: usize = 20;
 const QUEUE_GUARD_SOURCE_LABEL: &str = "queue-guard";
@@ -440,6 +441,7 @@ pub fn run_foreground(root: &Path) -> Result<()> {
     start_channel_syncer(root.to_path_buf());
     start_mission_watcher(root.to_path_buf(), state.clone());
     start_cto_operating_watcher(root.to_path_buf(), state.clone());
+    start_harness_audit_watcher(root.to_path_buf(), state.clone());
     // The service control plane must come up independently of backend warmup.
     supervisor::start_backend_supervisor(root.to_path_buf());
     #[cfg(unix)]
@@ -3344,6 +3346,59 @@ fn start_cto_operating_watcher(root: std::path::PathBuf, state: Arc<Mutex<Shared
         }
         thread::sleep(Duration::from_secs(CTO_OPERATING_WATCHER_POLL_SECS));
     });
+}
+
+fn start_harness_audit_watcher(root: std::path::PathBuf, state: Arc<Mutex<SharedState>>) {
+    // Periodically synthesizes a harness-mining brief and persists confirmed
+    // findings to ctox_hm_findings via the 2-tick gate. Read-only against the
+    // domain tables; only writes to ctox_hm_findings + ctox_hm_audit_runs, so
+    // a failure here cannot poison the runtime store.
+    thread::spawn(move || {
+        // Initial offset so the first tick does not collide with the boot
+        // burst (channel router + mission watcher + supervisor are all
+        // hammering the DB in the first 30s).
+        thread::sleep(Duration::from_secs(60));
+        loop {
+            match harness_audit_tick_once(&root) {
+                Ok(summary) => {
+                    if summary.recorded > 0 || summary.confirmed > 0 {
+                        push_event(
+                            &state,
+                            format!(
+                                "Harness audit tick: recorded={}, confirmed={}, stale={} (run {})",
+                                summary.recorded, summary.confirmed, summary.stale, summary.run_id
+                            ),
+                        );
+                    }
+                }
+                Err(err) => {
+                    push_event(&state, format!("Harness audit tick failed: {err}"));
+                }
+            }
+            thread::sleep(Duration::from_secs(HARNESS_AUDIT_TICK_SECS));
+        }
+    });
+}
+
+struct HarnessAuditTickSummary {
+    run_id: String,
+    recorded: i64,
+    confirmed: i64,
+    stale: i64,
+}
+
+fn harness_audit_tick_once(root: &Path) -> Result<HarnessAuditTickSummary> {
+    use crate::service::harness_mining::{brief, findings, now_iso_z};
+    let db_path = root.join("runtime/ctox.sqlite3");
+    let conn = Connection::open(&db_path)
+        .with_context(|| format!("audit tick: open db {}", db_path.display()))?;
+    let report = findings::run_audit_tick(&conn, &brief::Options::default(), &now_iso_z())?;
+    Ok(HarnessAuditTickSummary {
+        run_id: report.run_id,
+        recorded: report.recorded,
+        confirmed: report.confirmed,
+        stale: report.stale,
+    })
 }
 
 fn capture_operating_health_snapshot(
