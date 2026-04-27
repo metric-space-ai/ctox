@@ -280,12 +280,12 @@ impl ApiModelProviderSpec {
     pub(crate) fn ctox_core_cli_overrides(&self) -> Vec<(String, TomlValue)> {
         vec![
             (
-                format!("model_providers.{}.base_url", self.provider_id),
-                TomlValue::String(self.base_url.clone()),
+                format!("model_providers.{}.name", self.provider_id),
+                TomlValue::String(self.name.to_string()),
             ),
             (
-                format!("model_providers.{}.api_key_env_var", self.provider_id),
-                TomlValue::String(self.env_key.to_string()),
+                format!("model_providers.{}.base_url", self.provider_id),
+                TomlValue::String(self.base_url.clone()),
             ),
             (
                 format!("model_providers.{}.wire_api", self.provider_id),
@@ -1027,4 +1027,45 @@ fn continuity_refresh_timeout_secs(settings: &BTreeMap<String, String>) -> u64 {
         CONTINUITY_REFRESH_TIMEOUT_ENV_KEY,
         DEFAULT_CONTINUITY_REFRESH_TIMEOUT_SECS as usize,
     ) as u64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn api_provider_overrides_define_core_provider_without_env_key() {
+        let spec = ApiModelProviderSpec {
+            provider_id: "ctox_core_api",
+            name: "ctox-core-api",
+            base_url: "https://contoso.cognitiveservices.azure.com/openai/v1".to_string(),
+            env_key: "AZURE_FOUNDRY_API_KEY",
+            wire_api: "responses",
+        };
+
+        let overrides = spec
+            .ctox_core_cli_overrides()
+            .into_iter()
+            .collect::<BTreeMap<_, _>>();
+
+        assert_eq!(
+            overrides.get("model_providers.ctox_core_api.name"),
+            Some(&TomlValue::String("ctox-core-api".to_string()))
+        );
+        assert_eq!(
+            overrides.get("model_providers.ctox_core_api.base_url"),
+            Some(&TomlValue::String(
+                "https://contoso.cognitiveservices.azure.com/openai/v1".to_string()
+            ))
+        );
+        assert_eq!(
+            overrides.get("model_providers.ctox_core_api.wire_api"),
+            Some(&TomlValue::String("responses".to_string()))
+        );
+        assert_eq!(
+            overrides.get("model_providers.ctox_core_api.requires_openai_auth"),
+            Some(&TomlValue::Boolean(false))
+        );
+        assert!(!overrides.contains_key("model_providers.ctox_core_api.env_key"));
+    }
 }

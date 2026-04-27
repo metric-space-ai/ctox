@@ -56,6 +56,8 @@ pub(crate) struct PersistentSession {
     thread_id: String,
     seq: RequestIdSeq,
     cwd: PathBuf,
+    model: String,
+    model_provider: Option<String>,
     policy: CompactPolicy,
     ctx_log: ContextLogger,
     root: PathBuf,
@@ -84,7 +86,7 @@ impl PersistentSession {
             .build()
             .context("failed to start tokio runtime")?;
 
-        let (client, thread_id, cwd, seq) = rt.block_on(async {
+        let (client, thread_id, cwd, seq, model, model_provider) = rt.block_on(async {
             Self::start_client_and_thread(root, settings, base_instructions).await
         })?;
 
@@ -133,6 +135,8 @@ impl PersistentSession {
             thread_id,
             seq,
             cwd,
+            model,
+            model_provider,
             policy,
             ctx_log,
             root: root.to_path_buf(),
@@ -155,6 +159,8 @@ impl PersistentSession {
             .ok_or_else(|| anyhow::anyhow!("session already shut down"))?;
         let thread_id = self.thread_id.clone();
         let cwd = self.cwd.clone();
+        let model = self.model.clone();
+        let model_provider = self.model_provider.clone();
         let prompt = prompt.to_string();
         let root = self.root.clone();
 
@@ -168,6 +174,8 @@ impl PersistentSession {
                 client,
                 &thread_id,
                 &cwd,
+                &model,
+                model_provider.as_deref(),
                 &root,
                 &prompt,
                 timeout,
@@ -201,18 +209,47 @@ impl PersistentSession {
         root: &Path,
         settings: &BTreeMap<String, String>,
         base_instructions: Option<&str>,
-    ) -> Result<(InProcessAppServerClient, String, PathBuf, RequestIdSeq)> {
+    ) -> Result<(
+        InProcessAppServerClient,
+        String,
+        PathBuf,
+        RequestIdSeq,
+        String,
+        Option<String>,
+    )> {
+        let resolved_runtime = runtime_kernel::InferenceRuntimeKernel::resolve(root).ok();
+        let runtime_model = resolved_runtime.as_ref().and_then(|runtime| {
+            runtime
+                .state
+                .active_model
+                .clone()
+                .or_else(|| runtime.state.requested_model.clone())
+                .or_else(|| runtime.state.base_model.clone())
+        });
         let model = settings
             .get("CTOX_CHAT_MODEL")
             .or_else(|| settings.get("CODEX_MODEL"))
             .cloned()
+            .or(runtime_model)
             .unwrap_or_else(|| "gpt-5.4-mini".to_string());
+        let runtime_api_provider = resolved_runtime
+            .as_ref()
+            .filter(|runtime| !runtime.state.source.is_local())
+            .map(|runtime| {
+                runtime_state::api_provider_for_runtime_state(&runtime.state).to_string()
+            });
         let selected_api_provider = settings
             .get("CTOX_API_PROVIDER")
             .map(|value| runtime_state::normalize_api_provider(value).to_string())
             .filter(|provider| {
                 !provider.eq_ignore_ascii_case("local")
                     && engine::api_provider_supports_model(provider, &model)
+            })
+            .or_else(|| {
+                runtime_api_provider.filter(|provider| {
+                    !provider.eq_ignore_ascii_case("local")
+                        && engine::api_provider_supports_model(provider, &model)
+                })
             })
             .or_else(|| {
                 let explicit_api_source = settings
@@ -277,7 +314,6 @@ impl PersistentSession {
         );
 
         // Resolve model-provider BEFORE building overrides
-        let resolved_runtime = runtime_kernel::InferenceRuntimeKernel::resolve(root).ok();
         let api_provider = super::turn_loop::resolve_api_model_provider_spec(
             &model,
             settings,
@@ -309,7 +345,7 @@ impl PersistentSession {
             });
         let overrides = ConfigOverrides {
             model: Some(model.clone()),
-            model_provider: selected_provider_id,
+            model_provider: selected_provider_id.clone(),
             cwd: Some(cwd.clone()),
             approval_policy: Some(AskForApproval::Never),
             sandbox_mode: Some(SandboxMode::DangerFullAccess),
@@ -338,7 +374,7 @@ impl PersistentSession {
         }
         let config = Arc::new(
             ConfigBuilder::default()
-                .cli_overrides(cli_overrides)
+                .cli_overrides(cli_overrides.clone())
                 .harness_overrides(overrides)
                 .cloud_requirements(cloud_requirements.clone())
                 .build()
@@ -355,7 +391,7 @@ impl PersistentSession {
         let start_args = InProcessClientStartArgs {
             arg0_paths: Arg0DispatchPaths::default(),
             config,
-            cli_overrides: vec![],
+            cli_overrides: cli_overrides.clone(),
             loader_overrides: Default::default(),
             cloud_requirements,
             auth_manager: Some(auth_manager),
@@ -382,7 +418,8 @@ impl PersistentSession {
             .request_typed(ClientRequest::ThreadStart {
                 request_id: seq.next(),
                 params: ThreadStartParams {
-                    model: Some(model),
+                    model: Some(model.clone()),
+                    model_provider: selected_provider_id.clone(),
                     cwd: Some(cwd.to_string_lossy().to_string()),
                     approval_policy: Some(AskForApproval::Never.into()),
                     sandbox: Some(ctox_app_server_protocol::SandboxMode::DangerFullAccess),
@@ -397,13 +434,15 @@ impl PersistentSession {
         let thread_id = thread_resp.thread.id.clone();
         eprintln!("[ctox direct-session] thread started: {}", thread_id);
 
-        Ok((client, thread_id, cwd, seq))
+        Ok((client, thread_id, cwd, seq, model, selected_provider_id))
     }
 
     async fn run_turn_async(
         client: &mut InProcessAppServerClient,
         _old_thread_id: &str,
         cwd: &Path,
+        model: &str,
+        model_provider: Option<&str>,
         root: &Path,
         prompt: &str,
         timeout: Option<Duration>,
@@ -418,6 +457,8 @@ impl PersistentSession {
             .request_typed(ClientRequest::ThreadStart {
                 request_id: seq.next(),
                 params: ThreadStartParams {
+                    model: Some(model.to_string()),
+                    model_provider: model_provider.map(str::to_string),
                     cwd: Some(cwd.to_string_lossy().to_string()),
                     approval_policy: Some(AskForApproval::Never.into()),
                     sandbox: Some(ctox_app_server_protocol::SandboxMode::DangerFullAccess),
