@@ -15,6 +15,7 @@ use std::path::Path;
 use std::time::SystemTime;
 
 use crate::channels;
+use crate::governance;
 
 const DEFAULT_DB_RELATIVE_PATH: &str = "runtime/ctox.sqlite3";
 const DEFAULT_GOAL_THREAD_PREFIX: &str = "plan";
@@ -30,6 +31,15 @@ const GOAL_STATUS_ACTIVE: &str = "active";
 const GOAL_STATUS_COMPLETED: &str = "completed";
 const GOAL_STATUS_BLOCKED: &str = "blocked";
 const GOAL_STATUS_FAILED: &str = "failed";
+/// A previously-active goal that is being replaced by a freshly-ingested goal
+/// pointing at the same `thread_key`. The reviewer-rework loop saw a stale
+/// "Owner-Mail zu aktiver Vision/Mission Rev. 2" goal sitting active next to a
+/// freshly-ingested unversioned goal on the same thread_key — both lit up in
+/// the reviewer's scan and produced a phantom "revision mismatch". A new
+/// ingest on the same `thread_key` is the operator's structural signal that
+/// the older slice is no longer the live one; we mark it `superseded` instead
+/// of leaving two competing live truths.
+const GOAL_STATUS_SUPERSEDED: &str = "superseded";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PlannedGoalView {
@@ -341,12 +351,33 @@ fn create_goal(root: &Path, request: PlanCreateRequest) -> Result<GoalWithStepsV
             now
         ))
     );
+    let explicit_thread_key = request.thread_key.is_some();
     let thread_key = request
         .thread_key
         .unwrap_or_else(|| format!("{DEFAULT_GOAL_THREAD_PREFIX}/{goal_id}"));
     let drafts = decompose_prompt_into_steps(&request.title, &request.prompt);
 
     let tx = conn.unchecked_transaction()?;
+
+    // P1 — Plan-Goal supersede on duplicate thread_key.
+    //
+    // Production smoke-test (Befund D) hit a reviewer-rework loop where two
+    // active planned_goals existed for the same `thread_key`: an older
+    // version-stamped goal title and a fresh unversioned ingest. The reviewer
+    // pulled both into its scan and produced a phantom "Revision 2 vs
+    // revision 1" mismatch. A new `plan ingest` against the same `thread_key`
+    // is structurally the operator declaring "this is the live slice now" —
+    // older active goals on that same thread_key must be marked superseded
+    // so they stop competing for active-list / due-work / has-runnable-work
+    // queries. We only fire when the operator explicitly passed a
+    // `thread_key`; the default `plan/{goal_id}` thread_key is per-goal-
+    // unique by construction and cannot collide.
+    let superseded_supersede = if explicit_thread_key {
+        supersede_active_goals_for_thread_key_tx(&tx, &thread_key, &goal_id, &now)?
+    } else {
+        Vec::new()
+    };
+
     tx.execute(
         r#"
         INSERT INTO planned_goals (
@@ -418,11 +449,101 @@ fn create_goal(root: &Path, request: PlanCreateRequest) -> Result<GoalWithStepsV
     }
     tx.commit()?;
 
+    // P1 — record one governance event per superseded goal after the
+    // supersede commit, so the supersede mapping is durably auditable. We
+    // intentionally do not abort goal creation if the governance write fails
+    // (mirrors the prevailing `let _ =` pattern around governance writes in
+    // service.rs); the supersede itself is already committed.
+    for entry in &superseded_supersede {
+        let _ = governance::record_event(
+            root,
+            governance::GovernanceEventRequest {
+                mechanism_id: "plan_goal_superseded_for_duplicate_slice",
+                conversation_id: None,
+                severity: "info",
+                reason: "duplicate_thread_key_active_goal",
+                action_taken: "marked_older_planned_goal_superseded",
+                details: json!({
+                    "thread_key": thread_key,
+                    "new_goal_id": goal_id,
+                    "new_goal_title": request.title.trim(),
+                    "superseded_goal_id": entry.goal_id,
+                    "superseded_goal_title": entry.title,
+                    "superseded_previous_status": entry.previous_status,
+                }),
+                idempotence_key: Some(&format!(
+                    "plan_goal_superseded::{}::{}",
+                    entry.goal_id, goal_id
+                )),
+            },
+        );
+    }
+
     if request.emit_now {
         let _ = emit_next_step_for_goal(root, &goal_id)?;
     }
 
     load_goal_with_steps(root, &goal_id)?.context("failed to reload created planned goal")
+}
+
+#[derive(Debug, Clone)]
+struct SupersededGoalEntry {
+    goal_id: String,
+    title: String,
+    previous_status: String,
+}
+
+/// Mark every previously-active goal sharing the supplied `thread_key` as
+/// `superseded`, returning their identifiers so the caller can emit one
+/// governance event per supersede after the surrounding transaction commits.
+///
+/// Structural match: pure `(thread_key)` tuple (the planned_goals row carries
+/// no separate `conversation_id` column). No string-scraping, no title regex.
+fn supersede_active_goals_for_thread_key_tx(
+    tx: &Transaction<'_>,
+    thread_key: &str,
+    new_goal_id: &str,
+    now: &str,
+) -> Result<Vec<SupersededGoalEntry>> {
+    let mut stmt = tx.prepare(
+        r#"
+        SELECT goal_id, title, status
+        FROM planned_goals
+        WHERE thread_key = ?1
+          AND goal_id <> ?2
+          AND status = ?3
+        "#,
+    )?;
+    let entries = stmt
+        .query_map(
+            params![thread_key, new_goal_id, GOAL_STATUS_ACTIVE],
+            |row| {
+                Ok(SupersededGoalEntry {
+                    goal_id: row.get::<_, String>(0)?,
+                    title: row.get::<_, String>(1)?,
+                    previous_status: row.get::<_, String>(2)?,
+                })
+            },
+        )?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(stmt);
+
+    if entries.is_empty() {
+        return Ok(entries);
+    }
+
+    for entry in &entries {
+        tx.execute(
+            r#"
+            UPDATE planned_goals
+            SET status = ?2,
+                updated_at = ?3
+            WHERE goal_id = ?1
+            "#,
+            params![entry.goal_id, GOAL_STATUS_SUPERSEDED, now],
+        )?;
+    }
+    Ok(entries)
 }
 
 fn draft_plan(request: PlanCreateRequest) -> PlanDraftView {
@@ -488,6 +609,7 @@ pub fn list_goals(root: &Path) -> Result<Vec<PlannedGoalView>> {
                 WHEN 'active' THEN 0
                 WHEN 'blocked' THEN 1
                 WHEN 'completed' THEN 2
+                WHEN 'superseded' THEN 4
                 ELSE 3
             END,
             g.updated_at DESC
@@ -1332,6 +1454,19 @@ fn set_queue_routing_status_tx(
 }
 
 fn refresh_goal_status_tx(tx: &Transaction<'_>, goal_id: &str) -> Result<()> {
+    // Preserve a `superseded` terminal status — once another ingest has taken
+    // over this thread_key, never reanimate this goal back to active even if
+    // its leftover step counters happen to match an active shape.
+    let current_status: Option<String> = tx
+        .query_row(
+            "SELECT status FROM planned_goals WHERE goal_id = ?1",
+            params![goal_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if matches!(current_status.as_deref(), Some(GOAL_STATUS_SUPERSEDED)) {
+        return Ok(());
+    }
     let completed: i64 = tx.query_row(
         "SELECT COUNT(*) FROM planned_steps WHERE goal_id = ?1 AND status = 'completed'",
         params![goal_id],
@@ -1728,6 +1863,128 @@ mod tests {
             .expect("blocked step should exist");
         assert_eq!(blocked_step.status, STEP_STATUS_BLOCKED);
         assert!(blocked_step.last_message_key.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn duplicate_thread_key_ingest_supersedes_older_active_goal() -> Result<()> {
+        let root = temp_plan_root("supersede-on-duplicate-thread-key");
+
+        // First ingest — older goal, version-stamped title (mirrors Befund D
+        // production state where "Owner-Mail zu aktiver Vision/Mission Rev. 2"
+        // was sitting on the same thread_key as a freshly-ingested unversioned
+        // goal).
+        let older = ingest_goal(
+            &root,
+            PlanIngestRequest {
+                title: "Owner-Mail zu aktiver Vision/Mission Rev. 2".to_string(),
+                prompt: "- draft owner-mail Rev. 2 covering vision and mission".to_string(),
+                thread_key: Some("vision-mission-founder".to_string()),
+                skill: Some("owner-communication".to_string()),
+                auto_advance: false,
+                emit_now: false,
+            },
+        )?;
+        assert_eq!(older.goal.status, GOAL_STATUS_ACTIVE);
+
+        // Second ingest — fresh unversioned goal on the SAME thread_key.
+        let newer = ingest_goal(
+            &root,
+            PlanIngestRequest {
+                title: "Vision-Mission Founder Mail".to_string(),
+                prompt: "- draft a fresh founder mail covering vision and mission".to_string(),
+                thread_key: Some("vision-mission-founder".to_string()),
+                skill: Some("owner-communication".to_string()),
+                auto_advance: false,
+                emit_now: false,
+            },
+        )?;
+
+        let reloaded_older = load_goal_with_steps(&root, &older.goal.goal_id)?
+            .expect("older goal should still load");
+        let reloaded_newer = load_goal_with_steps(&root, &newer.goal.goal_id)?
+            .expect("newer goal should still load");
+
+        assert_eq!(
+            reloaded_older.goal.status, GOAL_STATUS_SUPERSEDED,
+            "older goal on the duplicated thread_key must flip to superseded",
+        );
+        assert_eq!(
+            reloaded_newer.goal.status, GOAL_STATUS_ACTIVE,
+            "newer goal must own the active slot on the thread_key",
+        );
+
+        // Default-thread_key ingests must not collide with each other (their
+        // thread_keys are per-goal-unique by construction).
+        let unrelated_a = ingest_goal(
+            &root,
+            PlanIngestRequest {
+                title: "Unrelated default-thread plan A".to_string(),
+                prompt: "- inspect repo state\n- patch deploy script".to_string(),
+                thread_key: None,
+                skill: None,
+                auto_advance: false,
+                emit_now: false,
+            },
+        )?;
+        let unrelated_b = ingest_goal(
+            &root,
+            PlanIngestRequest {
+                title: "Unrelated default-thread plan B".to_string(),
+                prompt: "- inspect runtime status\n- verify rollout".to_string(),
+                thread_key: None,
+                skill: None,
+                auto_advance: false,
+                emit_now: false,
+            },
+        )?;
+        let reloaded_a = load_goal_with_steps(&root, &unrelated_a.goal.goal_id)?
+            .expect("unrelated plan A should reload");
+        let reloaded_b = load_goal_with_steps(&root, &unrelated_b.goal.goal_id)?
+            .expect("unrelated plan B should reload");
+        assert_eq!(reloaded_a.goal.status, GOAL_STATUS_ACTIVE);
+        assert_eq!(reloaded_b.goal.status, GOAL_STATUS_ACTIVE);
+
+        // The supersede must be durably auditable as a governance event.
+        let events =
+            governance::list_recent_events(&root, 1, 16).expect("failed to list governance events");
+        let supersede_event = events
+            .iter()
+            .find(|event| event.mechanism_id == "plan_goal_superseded_for_duplicate_slice")
+            .expect("expected a plan_goal_superseded_for_duplicate_slice event");
+        assert_eq!(supersede_event.severity, "info");
+        assert_eq!(
+            supersede_event.reason, "duplicate_thread_key_active_goal",
+            "reason must structurally identify the duplicate-thread_key cause"
+        );
+        let details = &supersede_event.details;
+        assert_eq!(
+            details.get("thread_key").and_then(|value| value.as_str()),
+            Some("vision-mission-founder")
+        );
+        assert_eq!(
+            details
+                .get("superseded_goal_id")
+                .and_then(|value| value.as_str()),
+            Some(older.goal.goal_id.as_str()),
+        );
+        assert_eq!(
+            details.get("new_goal_id").and_then(|value| value.as_str()),
+            Some(newer.goal.goal_id.as_str()),
+        );
+
+        // Active-listing queries must exclude the superseded goal — otherwise
+        // the reviewer scan (Befund D) keeps surfacing two competing live
+        // truths.
+        assert!(
+            has_active_goal_with_pending_step(&root)?,
+            "newer goal still has runnable work"
+        );
+        let due = list_goal_ids_with_due_work(&open_plan_db(&root)?)?;
+        assert!(
+            !due.contains(&older.goal.goal_id),
+            "superseded goal must not appear in due-work scan; got {due:?}",
+        );
         Ok(())
     }
 

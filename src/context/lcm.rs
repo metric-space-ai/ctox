@@ -8,6 +8,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use sha2::Digest;
 use sha2::Sha256;
+use std::cell::RefCell;
 use std::path::Path;
 #[cfg(test)]
 use std::sync::atomic::AtomicU64;
@@ -1828,6 +1829,40 @@ impl LcmEngine {
 
     pub fn overwrite_mission_state(&self, record: &MissionStateRecord) -> Result<()> {
         self.persist_mission_state(record)
+    }
+
+    /// P2 — explicit owner-intent path for clearing the protected
+    /// `mission_states.next_slice` / `mission_states.done_gate` fields.
+    ///
+    /// The clobber guard in `persist_mission_state_with` rejects any
+    /// automation write that would silently empty those fields. When an
+    /// operator or skill genuinely needs to clear them (e.g. a mission was
+    /// completed and the owner is retiring the slice), this method flips a
+    /// thread-local bypass for the duration of the write so the guard does
+    /// not interpret it as accidental clobbering. **Do not call this from
+    /// automation.** The harness uses the guarded path; operator/skill
+    /// callers can reach this through a dedicated entry point.
+    pub fn clear_mission_state_done_fields_with_owner_intent(
+        &self,
+        conversation_id: i64,
+        clear_next_slice: bool,
+        clear_done_gate: bool,
+    ) -> Result<MissionStateRecord> {
+        let mut record = self.mission_state(conversation_id)?;
+        if clear_next_slice {
+            record.next_slice = String::new();
+        }
+        if clear_done_gate {
+            record.done_gate = String::new();
+        }
+        let _bypass = OwnerIntentClearGuard::enter();
+        self.persist_mission_state(&record)?;
+        Ok(record)
+    }
+
+    /// Convenience method calling [`drain_pending_mission_state_clobber_events_to_governance`].
+    pub fn drain_pending_mission_state_clobber_events_to_governance(&self, root: &Path) {
+        drain_pending_mission_state_clobber_events_to_governance(root);
     }
 
     pub fn rewrite_focus_continuity_from_mission_state(
@@ -4098,7 +4133,164 @@ fn load_mission_states_with(conn: &Connection, open_only: bool) -> Result<Vec<Mi
         .context("failed to load mission states")
 }
 
+/// One recorded attempt to clobber a protected `mission_states` field. The
+/// guard preserved the prior non-empty value; this entry is staged on the
+/// thread-local buffer and flushed to `governance_events` after the
+/// surrounding transaction commits (governance writes open a separate
+/// connection and would deadlock against an open lcm write transaction on
+/// the same DB if emitted inline).
+#[derive(Debug, Clone)]
+pub(crate) struct PendingMissionStateClobberAttempt {
+    pub conversation_id: i64,
+    pub field: &'static str,
+    pub previous_value: String,
+    pub attempted_value: String,
+    pub previous_value_chars: usize,
+}
+
+thread_local! {
+    /// Per-thread buffer of suppressed clobber attempts. Drained by
+    /// `LcmEngine::drain_pending_mission_state_clobber_events_to_governance`
+    /// once the surrounding lcm transaction has committed and a governance
+    /// connection can safely be opened.
+    static PENDING_MISSION_STATE_CLOBBERS: RefCell<Vec<PendingMissionStateClobberAttempt>> =
+        const { RefCell::new(Vec::new()) };
+}
+
+fn push_pending_mission_state_clobber(attempt: PendingMissionStateClobberAttempt) {
+    PENDING_MISSION_STATE_CLOBBERS.with(|cell| cell.borrow_mut().push(attempt));
+}
+
+pub(crate) fn drain_pending_mission_state_clobbers() -> Vec<PendingMissionStateClobberAttempt> {
+    PENDING_MISSION_STATE_CLOBBERS.with(|cell| std::mem::take(&mut *cell.borrow_mut()))
+}
+
+/// Drain any clobber attempts that the P2 guard suppressed during this
+/// thread's recent persist calls and publish them as
+/// `mission_state_field_clobbered_blocked` governance events. Safe to call
+/// from any post-turn / post-boot maintenance pass: a no-op when the buffer
+/// is empty. Failures are swallowed so the audit channel never breaks a
+/// successful state transition (mirrors the `let _ =
+/// governance::record_event(...)` pattern in service.rs).
+pub fn drain_pending_mission_state_clobber_events_to_governance(root: &Path) {
+    let pending = drain_pending_mission_state_clobbers();
+    for attempt in pending {
+        let _ = crate::governance::record_event(
+            root,
+            crate::governance::GovernanceEventRequest {
+                mechanism_id: "mission_state_field_clobbered_blocked",
+                conversation_id: Some(attempt.conversation_id),
+                severity: "warning",
+                reason: "mission_state_field_clobber_blocked",
+                action_taken: "preserved_prior_non_empty_field",
+                details: serde_json::json!({
+                    "field": attempt.field,
+                    "previous_value_chars": attempt.previous_value_chars,
+                    "previous_value": attempt.previous_value,
+                    "attempted_value": attempt.attempted_value,
+                }),
+                idempotence_key: None,
+            },
+        );
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn drain_pending_mission_state_clobbers_for_test(
+) -> Vec<PendingMissionStateClobberAttempt> {
+    drain_pending_mission_state_clobbers()
+}
+
+/// True when `value` is empty after trimming whitespace (`""`, `"   "`,
+/// `"\n"`, etc. all collapse to "this writer cleared the field"). Structural
+/// — no parsing, no string-matching against any sentinel.
+fn is_blank_field(value: &str) -> bool {
+    value.trim().is_empty()
+}
+
+/// Bypass key the dedicated owner-intent clearer flips before issuing a
+/// legitimate clear. Wired through a thread-local so we don't have to
+/// thread an extra parameter through every persist path.
+thread_local! {
+    static OWNER_INTENT_CLEAR_BYPASS_DEPTH: RefCell<u32> = const { RefCell::new(0) };
+}
+
+struct OwnerIntentClearGuard;
+impl OwnerIntentClearGuard {
+    fn enter() -> Self {
+        OWNER_INTENT_CLEAR_BYPASS_DEPTH.with(|cell| *cell.borrow_mut() += 1);
+        Self
+    }
+}
+impl Drop for OwnerIntentClearGuard {
+    fn drop(&mut self) {
+        OWNER_INTENT_CLEAR_BYPASS_DEPTH.with(|cell| {
+            let mut depth = cell.borrow_mut();
+            if *depth > 0 {
+                *depth -= 1;
+            }
+        });
+    }
+}
+
+fn owner_intent_clear_active() -> bool {
+    OWNER_INTENT_CLEAR_BYPASS_DEPTH.with(|cell| *cell.borrow() > 0)
+}
+
 fn persist_mission_state_with(conn: &Connection, record: &MissionStateRecord) -> Result<()> {
+    // P2 — Mission-state field clobber guard.
+    //
+    // Production smoke-test (Befund C) saw `next_slice` (81 chars) and
+    // `done_gate` (289 chars) silently collapse to length 0 within ~25
+    // minutes while `mission` (217 chars) was preserved. The suspected
+    // writer is `derive_mission_state_from_continuity`, which produces
+    // empty `next_slice` / `done_gate` strings whenever the focus
+    // continuity document does not currently carry an explicit
+    // `next_slice:` / `done_gate:` line. That overwrite path is a
+    // mission-continuity-normalize pass triggered by every
+    // `continuity_apply_diff` / full-replace / string-replace / sync.
+    //
+    // We install a one-way ratchet on `next_slice` and `done_gate`: once
+    // they hold non-empty content, automation may only replace them with
+    // new non-empty content. A blank-incoming write while the prior row
+    // is non-empty preserves the prior value field-locally, and the
+    // attempted clobber is staged on a thread-local buffer that the
+    // engine flushes to `governance_events` once the surrounding
+    // transaction has committed (we cannot open a second connection
+    // against the same WAL DB while a write transaction is still open
+    // on this thread without risking a busy_timeout deadlock).
+    //
+    // Operator/skill paths that legitimately *want* to clear these
+    // fields call `clear_mission_state_done_fields_with_owner_intent`,
+    // which sets a thread-local bypass for the duration of the clear.
+    let mut effective_next_slice = record.next_slice.clone();
+    let mut effective_done_gate = record.done_gate.clone();
+    if !owner_intent_clear_active() {
+        let existing = load_mission_state_with(conn, record.conversation_id)?;
+        if let Some(existing) = existing {
+            if !is_blank_field(&existing.next_slice) && is_blank_field(&effective_next_slice) {
+                push_pending_mission_state_clobber(PendingMissionStateClobberAttempt {
+                    conversation_id: record.conversation_id,
+                    field: "next_slice",
+                    previous_value: existing.next_slice.clone(),
+                    attempted_value: effective_next_slice.clone(),
+                    previous_value_chars: existing.next_slice.chars().count(),
+                });
+                effective_next_slice = existing.next_slice;
+            }
+            if !is_blank_field(&existing.done_gate) && is_blank_field(&effective_done_gate) {
+                push_pending_mission_state_clobber(PendingMissionStateClobberAttempt {
+                    conversation_id: record.conversation_id,
+                    field: "done_gate",
+                    previous_value: existing.done_gate.clone(),
+                    attempted_value: effective_done_gate.clone(),
+                    previous_value_chars: existing.done_gate.chars().count(),
+                });
+                effective_done_gate = existing.done_gate;
+            }
+        }
+    }
+
     conn.execute(
         "INSERT INTO mission_states (
             conversation_id,
@@ -4143,8 +4335,8 @@ fn persist_mission_state_with(conn: &Connection, record: &MissionStateRecord) ->
             record.continuation_mode,
             record.trigger_intensity,
             record.blocker,
-            record.next_slice,
-            record.done_gate,
+            effective_next_slice,
+            effective_done_gate,
             record.closure_confidence,
             if record.is_open { 1 } else { 0 },
             if record.allow_idle { 1 } else { 0 },
@@ -6702,5 +6894,146 @@ mod tests {
         assert!(AgentOutcome::ExecutionError.is_agent_failure());
         assert!(AgentOutcome::Aborted.is_agent_failure());
         assert!(AgentOutcome::Cancelled.is_agent_failure());
+    }
+
+    /// P2 — clobber guard: a watchdog write that tries to clear
+    /// `done_gate` while the prior row carried a non-empty `done_gate`
+    /// must be silently downgraded to a no-op for that field, the prior
+    /// value preserved, and the attempt audited as a governance event.
+    /// (The reviewer-rework loop in production saw `next_slice` /
+    /// `done_gate` collapse to length 0 within ~25 minutes; this guard
+    /// is the structural fix.)
+    #[test]
+    fn mission_state_done_gate_clobber_is_blocked_and_audited() -> Result<()> {
+        // Test root layout: runtime/ctox.sqlite3 is the shared DB used
+        // by both LcmEngine and governance::record_event.
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|value| value.as_nanos())
+            .unwrap_or(0);
+        let counter = TEMP_DB_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("ctox-clobber-guard-{nanos}-{counter}"));
+        std::fs::create_dir_all(root.join("runtime"))?;
+        let db_path = root.join("runtime/ctox.sqlite3");
+        let engine = LcmEngine::open(&db_path, LcmConfig::default())?;
+
+        // Drain anything other tests may have leaked onto this thread.
+        let _ = drain_pending_mission_state_clobbers_for_test();
+
+        // Seed an existing mission_states row with non-empty done_gate.
+        let baseline = MissionStateRecord {
+            conversation_id: 7,
+            mission: "Founder mail covering vision and mission".to_string(),
+            mission_status: "active".to_string(),
+            continuation_mode: "continuous".to_string(),
+            trigger_intensity: "hot".to_string(),
+            blocker: "operator-set blocker".to_string(),
+            next_slice: "wait for reviewer disposition before sending".to_string(),
+            done_gate: "X".to_string(),
+            closure_confidence: "low".to_string(),
+            is_open: true,
+            allow_idle: false,
+            focus_head_commit_id: "focus-clobber".to_string(),
+            last_synced_at: iso_now(),
+            watcher_last_triggered_at: None,
+            watcher_trigger_count: 0,
+            agent_failure_count: 0,
+            deferred_reason: None,
+        };
+        engine.overwrite_mission_state(&baseline)?;
+        let after_seed = engine
+            .stored_mission_state(7)?
+            .expect("seeded mission state should be visible");
+        assert_eq!(after_seed.done_gate, "X");
+        assert_eq!(
+            after_seed.next_slice,
+            "wait for reviewer disposition before sending"
+        );
+        // Drain the buffer caused by the seed write itself (none expected,
+        // but keep the test deterministic).
+        let _ = drain_pending_mission_state_clobbers_for_test();
+
+        // Watchdog-shaped write: same row, but `done_gate` empty and
+        // `next_slice` empty. The guard must preserve both prior
+        // non-empty values.
+        let watchdog_write = MissionStateRecord {
+            done_gate: String::new(),
+            next_slice: String::new(),
+            mission: "Founder mail covering vision and mission updated".to_string(),
+            ..baseline.clone()
+        };
+        engine.overwrite_mission_state(&watchdog_write)?;
+
+        let after_watchdog = engine
+            .stored_mission_state(7)?
+            .expect("mission state still present after blocked clobber");
+        assert_eq!(
+            after_watchdog.done_gate, "X",
+            "guard must preserve the prior non-empty done_gate"
+        );
+        assert_eq!(
+            after_watchdog.next_slice, "wait for reviewer disposition before sending",
+            "guard must preserve the prior non-empty next_slice"
+        );
+        // Other fields keep their existing semantics: `mission` was
+        // overwritten exactly as the writer requested.
+        assert_eq!(
+            after_watchdog.mission, "Founder mail covering vision and mission updated",
+            "guard must not interfere with non-protected fields"
+        );
+
+        // Flush the suppressed clobber attempts to governance and verify
+        // the audit event landed.
+        engine.drain_pending_mission_state_clobber_events_to_governance(&root);
+        let events = crate::governance::list_recent_events(&root, 7, 16)
+            .expect("failed to list governance events");
+        let clobber_events: Vec<_> = events
+            .iter()
+            .filter(|event| event.mechanism_id == "mission_state_field_clobbered_blocked")
+            .collect();
+        assert_eq!(
+            clobber_events.len(),
+            2,
+            "expected exactly two clobber-blocked events (next_slice, done_gate); got {clobber_events:?}",
+        );
+        let blocked_fields: std::collections::BTreeSet<String> = clobber_events
+            .iter()
+            .filter_map(|event| {
+                event
+                    .details
+                    .get("field")
+                    .and_then(|value| value.as_str())
+                    .map(|value| value.to_string())
+            })
+            .collect();
+        assert!(blocked_fields.contains("done_gate"));
+        assert!(blocked_fields.contains("next_slice"));
+        for event in &clobber_events {
+            assert_eq!(event.severity, "warning");
+            assert_eq!(event.action_taken, "preserved_prior_non_empty_field");
+        }
+
+        // Replacement with NEW non-empty content must succeed (the
+        // ratchet allows replace, only blocks silent clear).
+        let replacement = MissionStateRecord {
+            done_gate: "fresh non-empty done gate".to_string(),
+            next_slice: "fresh non-empty next slice".to_string(),
+            ..baseline.clone()
+        };
+        engine.overwrite_mission_state(&replacement)?;
+        let after_replace = engine.stored_mission_state(7)?.unwrap();
+        assert_eq!(after_replace.done_gate, "fresh non-empty done gate");
+        assert_eq!(after_replace.next_slice, "fresh non-empty next slice");
+
+        // Owner-intent clear bypasses the guard.
+        let cleared = engine.clear_mission_state_done_fields_with_owner_intent(7, true, true)?;
+        assert!(cleared.next_slice.is_empty());
+        assert!(cleared.done_gate.is_empty());
+        let after_owner_clear = engine.stored_mission_state(7)?.unwrap();
+        assert!(after_owner_clear.next_slice.is_empty());
+        assert!(after_owner_clear.done_gate.is_empty());
+
+        let _ = std::fs::remove_dir_all(root);
+        Ok(())
     }
 }

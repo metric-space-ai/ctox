@@ -186,6 +186,22 @@ const DEFAULT_MECHANISMS: &[DefaultMechanism] = &[
         module_hint: "src/mission/tickets.rs",
         description: "Prevents ticket work from entering the active loop unless label binding, dry-run controls, and bundle-gated execution state are all explicit and audit-ready.",
     },
+    DefaultMechanism {
+        mechanism_id: "plan_goal_superseded_for_duplicate_slice",
+        mechanism_class: "safety",
+        autonomy: "autonomous_plan_goal_supersede",
+        prompt_visibility: "inventory_only",
+        module_hint: "src/mission/plan.rs",
+        description: "Marks an older active planned_goal as superseded when a fresh `ctox plan ingest` arrives on the same thread_key, so two competing live goals cannot both light up in a reviewer scan and produce a phantom revision mismatch.",
+    },
+    DefaultMechanism {
+        mechanism_id: "mission_state_field_clobbered_blocked",
+        mechanism_class: "safety",
+        autonomy: "autonomous_mission_state_field_ratchet",
+        prompt_visibility: "inventory_only",
+        module_hint: "src/context/lcm.rs",
+        description: "One-way ratchet on `mission_states.next_slice` and `mission_states.done_gate`: once non-empty, automation may replace them with new non-empty content but cannot silently clear them — surfaces the attempted clobber as a governance event instead.",
+    },
 ];
 
 pub fn handle_governance_command(root: &Path, args: &[String]) -> Result<()> {
