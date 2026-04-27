@@ -76,7 +76,6 @@ use crate::inference::supervisor;
 use crate::inference::turn_loop;
 use crate::lcm;
 use crate::mission::communication_adapters;
-use crate::mission::communication_gateway;
 use crate::mission::plan;
 use crate::mission::tickets;
 use crate::review;
@@ -228,6 +227,8 @@ struct ChatSubmitRequest {
     prompt: String,
     #[serde(default)]
     thread_key: Option<String>,
+    #[serde(default)]
+    outbound_email: Option<channels::FounderOutboundAction>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -252,6 +253,8 @@ enum ServiceIpcRequest {
         prompt: String,
         #[serde(default)]
         thread_key: Option<String>,
+        #[serde(default)]
+        outbound_email: Option<channels::FounderOutboundAction>,
     },
     Stop,
     ScrapeApi {
@@ -336,6 +339,16 @@ impl Default for SharedState {
     }
 }
 
+/// A prompt enqueued for the agent to work on.
+///
+/// `outbound_email` carries explicit operator intent that this job is an
+/// owner/founder/admin-targeted outbound email. When set, the post-turn
+/// review pipeline routes the agent's reply through `send_reviewed_founder_outbound`
+/// instead of letting the agent invoke `ctox channel send` directly. The field
+/// is the *only* signal used for that routing — there is no text-scraping or
+/// keyword-based fallback in core. Recipient eligibility is still gated by
+/// the deterministic `protected_recipient_policies` check against the
+/// configured founder/owner/admin address lists.
 #[derive(Debug, Clone)]
 struct QueuedPrompt {
     prompt: String,
@@ -348,6 +361,7 @@ struct QueuedPrompt {
     thread_key: Option<String>,
     workspace_root: Option<String>,
     ticket_self_work_id: Option<String>,
+    outbound_email: Option<channels::FounderOutboundAction>,
 }
 
 #[derive(Debug, Clone)]
@@ -1234,6 +1248,35 @@ pub fn submit_chat_prompt(root: &Path, prompt: &str) -> Result<()> {
     submit_chat_prompt_with_thread_key(root, prompt, None)
 }
 
+/// Operator-supplied outbound-email intent attached to a chat submission.
+///
+/// When present, the agent's reply will be routed through the reviewed
+/// founder-outbound pipeline if (and only if) at least one recipient is
+/// classified as owner/founder/admin per the deterministic
+/// `protected_recipient_policies` check. There is no text-scraping fallback.
+#[derive(Debug, Clone)]
+pub struct OutboundEmailIntent {
+    pub account_key: String,
+    pub thread_key: String,
+    pub subject: String,
+    pub to: Vec<String>,
+    pub cc: Vec<String>,
+    pub attachments: Vec<String>,
+}
+
+impl From<OutboundEmailIntent> for channels::FounderOutboundAction {
+    fn from(value: OutboundEmailIntent) -> Self {
+        channels::FounderOutboundAction {
+            account_key: value.account_key,
+            thread_key: value.thread_key,
+            subject: value.subject,
+            to: value.to,
+            cc: value.cc,
+            attachments: value.attachments,
+        }
+    }
+}
+
 pub fn prepare_chat_prompt(root: &Path, prompt: &str) -> Result<PreparedChatPrompt> {
     let sanitized = secrets::auto_intake_prompt_secrets(root, prompt)?;
     Ok(PreparedChatPrompt {
@@ -1249,7 +1292,17 @@ pub fn submit_chat_prompt_with_thread_key(
     prompt: &str,
     thread_key: Option<&str>,
 ) -> Result<()> {
+    submit_chat_prompt_with_intent(root, prompt, thread_key, None)
+}
+
+pub fn submit_chat_prompt_with_intent(
+    root: &Path,
+    prompt: &str,
+    thread_key: Option<&str>,
+    outbound_email: Option<OutboundEmailIntent>,
+) -> Result<()> {
     let prepared = prepare_chat_prompt(root, prompt)?;
+    let outbound_email = outbound_email.map(channels::FounderOutboundAction::from);
     #[cfg(unix)]
     {
         match send_service_ipc_request(
@@ -1257,6 +1310,7 @@ pub fn submit_chat_prompt_with_thread_key(
             ServiceIpcRequest::ChatSubmit {
                 prompt: prepared.prompt,
                 thread_key: thread_key.map(str::to_owned),
+                outbound_email,
             },
         )? {
             ServiceIpcResponse::Accepted(_) => return Ok(()),
@@ -1270,6 +1324,7 @@ pub fn submit_chat_prompt_with_thread_key(
         let payload = serde_json::to_string(&ChatSubmitRequest {
             prompt: prepared.prompt,
             thread_key: thread_key.map(str::to_owned),
+            outbound_email,
         })?;
         let response = ureq::post(&url)
             .set("content-type", "application/json")
@@ -1398,7 +1453,11 @@ fn handle_service_ipc_request(
         ServiceIpcRequest::Status => Ok(ServiceIpcResponse::Status(status_from_shared_state(
             root, &state,
         )?)),
-        ServiceIpcRequest::ChatSubmit { prompt, thread_key } => {
+        ServiceIpcRequest::ChatSubmit {
+            prompt,
+            thread_key,
+            outbound_email,
+        } => {
             let prepared = prepare_chat_prompt(root, &prompt)?;
             let prompt = prepared.prompt;
             let suggested_skill = prepared.suggested_skill.clone();
@@ -1419,6 +1478,7 @@ fn handle_service_ipc_request(
                             thread_key: thread_key.clone(),
                             workspace_root: workspace_root.clone(),
                             ticket_self_work_id: None,
+                            outbound_email: outbound_email.clone(),
                         },
                     );
                     ensure_queue_guard_locked(root, &mut shared);
@@ -1474,6 +1534,7 @@ fn handle_service_ipc_request(
                         thread_key,
                         workspace_root,
                         ticket_self_work_id: None,
+                        outbound_email,
                     },
                 );
             }
@@ -1547,6 +1608,7 @@ fn handle_request(
                             thread_key: payload.thread_key.clone(),
                             workspace_root: workspace_root.clone(),
                             ticket_self_work_id: None,
+                            outbound_email: payload.outbound_email.clone(),
                         },
                     );
                     ensure_queue_guard_locked(root, &mut shared);
@@ -1602,6 +1664,7 @@ fn handle_request(
                         thread_key: payload.thread_key,
                         workspace_root,
                         ticket_self_work_id: None,
+                        outbound_email: payload.outbound_email,
                     },
                 );
             }
@@ -2350,7 +2413,7 @@ fn start_prompt_worker(
                         let founder_reply_key =
                             founder_email_reply_message_key(&job).map(ToOwned::to_owned);
                         let proactive_founder_action = if founder_reply_key.is_none() {
-                            proactive_founder_outbound_action(&root, &job)
+                            job.outbound_email.clone()
                         } else {
                             None
                         };
@@ -2709,7 +2772,7 @@ fn run_completion_review(
     let founder_reply_action = founder_reply_key
         .and_then(|message_key| channels::prepare_reviewed_founder_reply(root, message_key).ok());
     let proactive_founder_action = if founder_reply_key.is_none() {
-        proactive_founder_outbound_action(root, job)
+        job.outbound_email.clone()
     } else {
         None
     };
@@ -4155,6 +4218,7 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
                 )),
                 workspace_root: message.workspace_root.clone(),
                 ticket_self_work_id: ticket_self_work_id_from_metadata(&message.metadata),
+                outbound_email: None,
             },
             format!(
                 "Queued {} inbound from {}",
@@ -4291,6 +4355,7 @@ fn route_ticket_events(root: &Path, state: &Arc<Mutex<SharedState>>) -> Result<(
                 thread_key: Some(prepared.thread_key.clone()),
                 workspace_root: None,
                 ticket_self_work_id: None,
+                outbound_email: None,
             },
             format!(
                 "Queued ticket {} event {} for dry-run-controlled handling",
@@ -4598,89 +4663,6 @@ fn founder_email_reply_message_key(job: &QueuedPrompt) -> Option<&str> {
 
 fn founder_outbound_anchor_key(job: &QueuedPrompt) -> Option<&str> {
     job.leased_message_keys.first().map(|key| key.as_str())
-}
-
-fn extract_email_addresses(text: &str) -> Vec<String> {
-    let mut seen = HashSet::new();
-    let mut emails = Vec::new();
-    for token in text.split_whitespace() {
-        let candidate = token
-            .trim_matches(|ch: char| {
-                matches!(
-                    ch,
-                    '<' | '>' | '(' | ')' | '[' | ']' | '{' | '}' | ',' | ';' | ':' | '"' | '\''
-                )
-            })
-            .trim_end_matches('.')
-            .to_ascii_lowercase();
-        if !candidate.contains('@') || !candidate.contains('.') {
-            continue;
-        }
-        let valid = candidate
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '@' | '.' | '_' | '-' | '+'));
-        if valid && seen.insert(candidate.clone()) {
-            emails.push(candidate);
-        }
-    }
-    emails
-}
-
-fn proactive_founder_outbound_action(
-    root: &Path,
-    job: &QueuedPrompt,
-) -> Option<channels::FounderOutboundAction> {
-    let source = job.source_label.to_ascii_lowercase();
-    if !matches!(source.as_str(), "tui" | "queue" | "ticket:local") {
-        return None;
-    }
-    let haystack = format!("{}\n{}", job.preview, job.prompt);
-    let lowered = haystack.to_ascii_lowercase();
-    let explicit_reviewed_send = lowered.contains("reviewed founder outbound")
-        || lowered.contains("reviewed founder-send")
-        || lowered.contains("reviewed founder send")
-        || lowered.contains("reviewed service path")
-        || lowered.contains("founder-kommunikation")
-        || lowered.contains("founder communication");
-    if !explicit_reviewed_send {
-        return None;
-    }
-    let settings = communication_gateway::runtime_settings_from_root(
-        root,
-        communication_gateway::CommunicationAdapterKind::Email,
-    );
-    let recipients = extract_email_addresses(&haystack);
-    if recipients.is_empty() {
-        return None;
-    }
-    let has_protected_recipient = recipients.iter().any(|email| {
-        let policy = channels::classify_email_sender(&settings, email);
-        matches!(policy.role.as_str(), "owner" | "founder" | "admin")
-    });
-    if !has_protected_recipient {
-        return None;
-    }
-    let account_key = channels::default_email_account_key(root).ok()?;
-    let thread_key = job
-        .thread_key
-        .clone()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| "founder-proactive-outbound".to_string());
-    let subject = if lowered.contains("crm") {
-        "CRM-Entscheidung und Kunstmen-Integration".to_string()
-    } else if lowered.contains("wettbewerb") || lowered.contains("competitor") {
-        "Kunstmen Wettbewerbsmonitoring".to_string()
-    } else {
-        "Kunstmen Update".to_string()
-    };
-    Some(channels::FounderOutboundAction {
-        account_key,
-        thread_key,
-        subject,
-        to: recipients,
-        cc: Vec::new(),
-        attachments: Vec::new(),
-    })
 }
 
 fn detect_founder_mail_commitments(text: &str) -> Vec<String> {
@@ -6220,6 +6202,7 @@ fn ensure_queue_guard_locked(root: &Path, shared: &mut SharedState) {
         thread_key: None,
         workspace_root: None,
         ticket_self_work_id: None,
+        outbound_email: None,
     });
     if let Err(err) = governance::record_event(
         root,
@@ -6914,6 +6897,7 @@ mod tests {
                 thread_key: None,
                 workspace_root: None,
                 ticket_self_work_id: None,
+                outbound_email: None,
             })
             .collect();
 
@@ -7449,6 +7433,7 @@ mod tests {
                 thread_key: None,
                 workspace_root: None,
                 ticket_self_work_id: None,
+                outbound_email: None,
             },
             QueuedPrompt {
                 prompt: "b".to_string(),
@@ -7461,6 +7446,7 @@ mod tests {
                 thread_key: None,
                 workspace_root: None,
                 ticket_self_work_id: None,
+                outbound_email: None,
             },
         ]);
 
@@ -7682,6 +7668,7 @@ mod tests {
             thread_key: None,
             workspace_root: None,
             ticket_self_work_id: None,
+            outbound_email: None,
         });
 
         let next = maybe_start_next_queued_prompt_locked(&mut shared)
@@ -8753,6 +8740,7 @@ mod tests {
                 thread_key: None,
                 workspace_root: None,
                 ticket_self_work_id: None,
+                outbound_email: None,
             },
         );
         insert_pending_prompt_ordered(
@@ -8768,6 +8756,7 @@ mod tests {
                 thread_key: None,
                 workspace_root: None,
                 ticket_self_work_id: None,
+                outbound_email: None,
             },
         );
 
@@ -8797,6 +8786,7 @@ mod tests {
                 thread_key: None,
                 workspace_root: None,
                 ticket_self_work_id: None,
+                outbound_email: None,
             },
         );
         insert_pending_prompt_ordered(
@@ -8812,6 +8802,7 @@ mod tests {
                 thread_key: None,
                 workspace_root: None,
                 ticket_self_work_id: None,
+                outbound_email: None,
             },
         );
 
@@ -8936,6 +8927,7 @@ mod tests {
             thread_key: Some("tui/main".to_string()),
             workspace_root: Some("/tmp/ctox-timeout-followup-test".to_string()),
             ticket_self_work_id: None,
+            outbound_email: None,
         };
 
         let created =
@@ -8989,6 +8981,7 @@ mod tests {
             thread_key: Some("tui/main".to_string()),
             workspace_root: Some("/tmp/ctox-timeout-followup-test".to_string()),
             ticket_self_work_id: None,
+            outbound_email: None,
         };
 
         let created =
@@ -9029,6 +9022,7 @@ mod tests {
             thread_key: Some("tui/main".to_string()),
             workspace_root: Some("/tmp/ctox-timeout-followup-test".to_string()),
             ticket_self_work_id: None,
+            outbound_email: None,
         };
 
         let created =
@@ -9432,6 +9426,7 @@ mod tests {
             thread_key: Some("kunstmen-operator".to_string()),
             workspace_root: Some("/home/ubuntu/workspace/kunstmen".to_string()),
             ticket_self_work_id: None,
+            outbound_email: None,
         };
         let outcome = review::ReviewOutcome {
             required: true,
@@ -9514,6 +9509,7 @@ mod tests {
             thread_key: Some("queue/mission-1".to_string()),
             workspace_root: None,
             ticket_self_work_id: Some(review_item.work_id.clone()),
+            outbound_email: None,
         };
 
         let target = resolve_review_rejection_target_self_work_id(&root, &job);
@@ -9689,6 +9685,7 @@ mod tests {
             thread_key: Some("kunstmen-operator".to_string()),
             workspace_root: Some("/home/ubuntu/workspace/kunstmen".to_string()),
             ticket_self_work_id: Some(item.work_id.clone()),
+            outbound_email: None,
         };
 
         let skipped = maybe_skip_superseded_self_work_prompt(&root, &state, &job)
@@ -9824,6 +9821,7 @@ mod tests {
             thread_key: Some("kunstmen-operator".to_string()),
             workspace_root: Some("/home/ubuntu/workspace/kunstmen".to_string()),
             ticket_self_work_id: Some(item.work_id.clone()),
+            outbound_email: None,
         };
 
         let skipped = maybe_skip_superseded_self_work_prompt(&root, &state, &job)
@@ -9882,6 +9880,7 @@ mod tests {
             thread_key: Some("kunstmen-supervisor".to_string()),
             workspace_root: Some("/home/ubuntu/workspace/kunstmen".to_string()),
             ticket_self_work_id: None,
+            outbound_email: None,
         };
 
         let redirected = maybe_redirect_platform_work_to_expertise_passes(&root, &state, &job)
@@ -9958,6 +9957,7 @@ mod tests {
             thread_key: Some("kunstmen-supervisor".to_string()),
             workspace_root: Some("/home/ubuntu/workspace/kunstmen".to_string()),
             ticket_self_work_id: None,
+            outbound_email: None,
         };
 
         let redirected = maybe_redirect_owner_visible_work_to_strategy_setup(&root, &state, &job)
@@ -10006,6 +10006,7 @@ mod tests {
             thread_key: Some("codex/harness-live-smoke-20260426".to_string()),
             workspace_root: None,
             ticket_self_work_id: None,
+            outbound_email: None,
         };
 
         let redirected = maybe_redirect_owner_visible_work_to_strategy_setup(&root, &state, &job)
@@ -10078,6 +10079,7 @@ mod tests {
             thread_key: Some("kunstmen-supervisor".to_string()),
             workspace_root: Some("/home/ubuntu/workspace/kunstmen".to_string()),
             ticket_self_work_id: None,
+            outbound_email: None,
         };
 
         let redirected = maybe_redirect_owner_visible_work_to_strategy_setup(&root, &state, &job)
@@ -10133,6 +10135,7 @@ mod tests {
             thread_key: Some("<founder-thread@example.com>".to_string()),
             workspace_root: Some("/home/ubuntu/workspace/kunstmen".to_string()),
             ticket_self_work_id: None,
+            outbound_email: None,
         };
 
         let redirected = maybe_redirect_owner_visible_work_to_strategy_setup(&root, &state, &job)
@@ -10188,6 +10191,7 @@ mod tests {
             thread_key: Some("<founder-thread@example.com>".to_string()),
             workspace_root: Some("/home/ubuntu/workspace/kunstmen".to_string()),
             ticket_self_work_id: None,
+            outbound_email: None,
         };
 
         let redirected = maybe_redirect_platform_work_to_expertise_passes(&root, &state, &job)
@@ -10214,6 +10218,7 @@ mod tests {
             thread_key: Some("<founder-thread@example.com>".to_string()),
             workspace_root: Some("/home/ubuntu/workspace/kunstmen".to_string()),
             ticket_self_work_id: None,
+            outbound_email: None,
         };
         let outcome = review::ReviewOutcome {
             required: true,
@@ -10336,6 +10341,7 @@ mod tests {
             thread_key: Some("kunstmen-supervisor".to_string()),
             workspace_root: Some("/home/ubuntu/workspace/kunstmen".to_string()),
             ticket_self_work_id: Some(item.work_id.clone()),
+            outbound_email: None,
         };
 
         let note = maybe_continue_platform_expertise_pipeline_after_success(&root, &job)
@@ -10528,6 +10534,7 @@ mod tests {
                 thread_key: Some("queue/mission-1".to_string()),
                 workspace_root: None,
                 ticket_self_work_id: None,
+                outbound_email: None,
             },
             "Queued queue inbound from CTOX queue".to_string(),
         );
@@ -10833,5 +10840,79 @@ mod tests {
             .iter()
             .any(|alert| alert.contains("backend residue stale pid file")));
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn queued_prompt_without_outbound_email_yields_no_proactive_action() {
+        let job = QueuedPrompt {
+            prompt: "Please reach out to founder@external.test about the Kunstmen update."
+                .to_string(),
+            goal: "outreach".to_string(),
+            preview: "outreach".to_string(),
+            source_label: "tui".to_string(),
+            suggested_skill: None,
+            leased_message_keys: Vec::new(),
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("kunstmen".to_string()),
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: None,
+        };
+
+        // No structured intent on the job: post-turn proactive action must be
+        // None even though the prompt body name-drops a founder address and
+        // mentions "Kunstmen update". This is the deliberate, post-heuristic
+        // contract — keyword-scanning is gone.
+        assert!(job.outbound_email.is_none());
+    }
+
+    #[test]
+    fn queued_prompt_with_explicit_outbound_email_clones_through() {
+        let intent = channels::FounderOutboundAction {
+            account_key: "email:cto1@example.com".to_string(),
+            thread_key: "kunstmen-supervisor".to_string(),
+            subject: "Operator-supplied Subject".to_string(),
+            to: vec!["founder@external.test".to_string()],
+            cc: vec!["co@external.test".to_string()],
+            attachments: Vec::new(),
+        };
+        let job = QueuedPrompt {
+            prompt: "Body".to_string(),
+            goal: "Body".to_string(),
+            preview: "Body".to_string(),
+            source_label: "tui".to_string(),
+            suggested_skill: None,
+            leased_message_keys: Vec::new(),
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("kunstmen-supervisor".to_string()),
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: Some(intent.clone()),
+        };
+
+        let routed = job.outbound_email.clone().expect("outbound_email present");
+        assert_eq!(routed.account_key, intent.account_key);
+        assert_eq!(routed.thread_key, intent.thread_key);
+        assert_eq!(routed.subject, intent.subject);
+        assert_eq!(routed.to, intent.to);
+        assert_eq!(routed.cc, intent.cc);
+    }
+
+    #[test]
+    fn outbound_email_intent_round_trips_into_founder_outbound_action() {
+        let intent = OutboundEmailIntent {
+            account_key: "email:cto1@example.com".to_string(),
+            thread_key: "chat-outbound".to_string(),
+            subject: "Update".to_string(),
+            to: vec!["d.lottes@example.test".to_string()],
+            cc: vec!["j.kienzler@example.test".to_string()],
+            attachments: Vec::new(),
+        };
+        let action: channels::FounderOutboundAction = intent.into();
+        assert_eq!(action.account_key, "email:cto1@example.com");
+        assert_eq!(action.thread_key, "chat-outbound");
+        assert_eq!(action.subject, "Update");
+        assert_eq!(action.to, vec!["d.lottes@example.test".to_string()]);
+        assert_eq!(action.cc, vec!["j.kienzler@example.test".to_string()]);
     }
 }

@@ -9,6 +9,7 @@ use rusqlite::params;
 use rusqlite::Connection;
 use rusqlite::OptionalExtension;
 use rusqlite::Transaction;
+use serde::Deserialize;
 use serde::Serialize;
 use serde_json::json;
 use serde_json::Value;
@@ -1249,7 +1250,7 @@ pub(crate) struct FounderReplyAction {
     pub attachments: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(crate) struct FounderOutboundAction {
     pub account_key: String,
     pub thread_key: String,
