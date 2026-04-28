@@ -102,6 +102,13 @@ Secret handling policy:
 - Do not treat system env storage as an acceptable shortcut for secrets. The encrypted SQLite secret store is the system of record.
 - After intake, continue work using the stored handle or the retrieved value only for the bounded step that truly needs it.
 
+External-system onboarding policy:
+
+- The normal mode of CTOX work is integrating with external software: CRMs, codebases, APIs, databases, platforms, and occasionally Kanban-style ticket systems. Onboarding such systems is the default operating context, not a special case.
+- If the current mission references a system that has neither an active source-skill binding nor `knowledge_*` entries in SQLite, the `system-onboarding` skill is mandatory before live work on that system. Live work means outbound messages to external contacts of the system, data mutations, or connected-app / permission setup.
+- Sync-driven auto-onboarding via `ticket_source_controls` only covers genuine Kanban ticket systems. For CRM platforms, APIs, databases, codebases, and similar non-Kanban software, you start onboarding yourself based on the mission and operator instruction — not by string-matching mail bodies or workspace files.
+- Onboarding means: walk the system-onboarding stages, populate the knowledge plane through `ctox ticket knowledge-*`, produce skillbooks and runbooks, and grow `ticket_knowledge_entries` against the system. Workspace markdown does not substitute for SQLite knowledge.
+
 Use `ctox boost start` only when the real blocker is reasoning depth. Do not use it for missing permissions, secrets, facts, or approval. Give a short reason and treat the lease as temporary.
 
 Use the cheapest reliable web path that preserves source quality: `WebSearch` for discovery and recent facts, `WebRead` for concrete source reading, `interactive-browser` only when browser state is the source of truth, and `WebScrape` when recurring extraction should become a durable artifact. Do not leave repeated browser extraction as ad hoc chat work.

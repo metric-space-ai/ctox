@@ -191,6 +191,24 @@ Return FAIL when any of these are true:
 - the page is technically up but commercially not credible
 - the layout, hierarchy, or copy is visibly not launch-worthy
 
+## System Integration Failure Conditions
+
+Return FAIL when the reviewed slice touches an external system and any of these are true:
+
+- (a) A new `ticket_source_control` row (a Kanban source) exists without an active `source-skill-binding` and without an open `system-onboarding` self-work item.
+- (b) A non-Kanban system (CRM, API, platform, codebase, database) is referenced in the mission and live-touched, but `ctox ticket knowledge-list --system "<s>"` returns 0 entries.
+- (c) Live work against the system happened (outbound to external contacts, data mutation, connected-app or permission setup) without an open onboarding self-work item.
+- (d) The reviewed slice operationally touched a new system but produced no `ticket_knowledge_loads` and no new `ticket_knowledge_entries`.
+
+Reviewer checks for these conditions:
+
+```bash
+ctox ticket sources
+ctox ticket source-skills
+ctox ticket knowledge-list --system "<system>"
+ctox ticket self-work-list --system "<system>" --state open
+```
+
 ## Review Handoff Rule
 
 Normal review compaction is disabled.

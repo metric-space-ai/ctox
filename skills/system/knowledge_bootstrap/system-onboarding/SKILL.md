@@ -1,6 +1,6 @@
 ---
 name: system-onboarding
-description: Use when CTOX is assigned to any new system (codebase, platform, API, ticket system, database, infrastructure) and must build a knowledge base, skillbooks, runbooks, and operator-visible review tickets through generic primitives.
+description: Use when CTOX is working with any external system (codebase, platform, API, ticket system, database, CRM, infrastructure) and must build a knowledge base, skillbooks, runbooks, and operator-visible review tickets through generic primitives. This is the default onboarding path, not a special case.
 metadata:
   short-description: Onboard any system through skill-driven discovery and knowledge building
 cluster: knowledge_bootstrap
@@ -8,7 +8,9 @@ cluster: knowledge_bootstrap
 
 # System Onboarding
 
-Use this skill when CTOX is assigned to a new system of any kind — a codebase, a community platform, an API integration, a ticket system, a database, or infrastructure — and needs to build operational understanding from scratch.
+The typical CTOX work pattern is: there is a system to onboard. Codebases, CRM platforms, API integrations, ticket systems, databases, infrastructure — integration is the default mode of work, and this is the central onboarding skill that drives it.
+
+Use this skill whenever CTOX is operating against an external system and needs to build operational understanding from scratch — whether triggered automatically by a Kanban source sync or started manually for a non-Kanban system (CRM, API, database, codebase, platform).
 
 The kernel provides storage, references, self-work CRUD, publishing, and audit. This skill owns the onboarding behavior.
 
@@ -52,6 +54,31 @@ Do not leave remote work items hanging without ownership, notes, or an end state
 When you need remote ticket work, you must go through the `ctox ticket self-work-*` and `ctox ticket access-request-put` primitives.
 
 Do not use raw HTTP calls, `curl`, ad hoc browser actions, or direct remote API writes to create or update ticket work during onboarding. If the generic ticket primitives are insufficient, stop and state the missing primitive instead of bypassing SQLite truth.
+
+## Knowledge System Integration — Mandatory
+
+Onboarding is incomplete unless the SQLite knowledge plane is populated. Workspace markdown, plan steps, conversation history, and reply prose are not knowledge.
+
+- Every onboarding phase starts with a knowledge inventory:
+
+  ```sh
+  ctox ticket knowledge-list --system "<system>"
+  ```
+
+- Every fact you learn about the system must be registered as a durable `ticket_knowledge_entries` row — either directly via `ctox ticket knowledge-load` or through the bootstrap skills (`tabular-knowledge-bootstrap`, `dataset-skill-creator`, `skillbook-runbook-bootstrap`). Example:
+
+  ```sh
+  ctox ticket knowledge-load --ticket-key "<ticket-key>" --domains "vendor_api,operational,data_model"
+  ```
+
+- Skillbooks (`knowledge_skillbooks`) and runbooks (`knowledge_runbooks`) are mandatory outputs of onboarding, not optional polish. If `knowledge_count` for the system is `0` at the end of a slice, onboarding is incomplete and the slice may not be closed.
+- Learning is real work: produce a self-work item and a knowledge entry for each meaningful fact. Knowledge that lives only in chat history, plan steps, or workspace files does not count.
+- Sync-driven onboarding triggers (`ctox ticket sync` / `ticket_source_controls`) only fire for genuine Kanban ticket systems. For CRMs, APIs, platforms, codebases, and other non-Kanban software, you start onboarding yourself — but the knowledge-population requirements above are identical.
+- Once a source-specific operating skill is justified, bind it on the source so live work routes to it:
+
+  ```sh
+  ctox ticket source-skill-set --system "<system>" --skill "<system>-desk-operator"
+  ```
 
 ## Required Inputs
 
