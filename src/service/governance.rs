@@ -210,6 +210,22 @@ const DEFAULT_MECHANISMS: &[DefaultMechanism] = &[
         module_hint: "src/service/service.rs",
         description: "Stops respawning lightweight rewrite-only review retries once the per-mission convergence threshold is hit; defers the mission and records a governance event so operators see why the loop stopped.",
     },
+    DefaultMechanism {
+        mechanism_id: "strategic_directive_mutation_blocked_non_owner_sender",
+        mechanism_class: "safety",
+        autonomy: "autonomous_strategic_directive_authority_block",
+        prompt_visibility: "prompt_visible",
+        module_hint: "src/mission/strategy.rs",
+        description: "Blocks an inbound-mail-driven strategic-directive mutation (`ctox strategy set --status active` / `ctox strategy activate`) when the sender of the triggering message is not the configured owner. Owner-authored mail is the canonical authority for active vision/mission/strategy; founder/admin replies may only produce proposals; other senders cannot mutate strategy at all. Operator-direct invocations (no `--triggered-by-inbound`) are unaffected.",
+    },
+    DefaultMechanism {
+        mechanism_id: "strategic_directive_mutation_owner_authorised",
+        mechanism_class: "safety",
+        autonomy: "autonomous_strategic_directive_authority_audit",
+        prompt_visibility: "inventory_only",
+        module_hint: "src/mission/strategy.rs",
+        description: "Records a positive audit trail when an inbound-mail-driven strategic-directive mutation passes the owner-authority gate. Pairs with `strategic_directive_mutation_blocked_non_owner_sender`; together they make the authority decision visible in `ctox channel pipeline-status`.",
+    },
 ];
 
 pub fn handle_governance_command(root: &Path, args: &[String]) -> Result<()> {
@@ -783,7 +799,7 @@ mod tests {
         assert!(block.contains("why:"));
         assert!(!block.contains("Only `survival` and `safety` mechanisms"));
         assert!(
-            block.len() < 800,
+            block.len() < 1024,
             "governance block too large: {}",
             block.len()
         );
