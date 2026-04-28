@@ -444,6 +444,27 @@ pub struct PipelineStatusReport {
     /// extra column.
     pub current_disposition: String,
     pub last_error: Option<String>,
+    /// Recent governance events from the strategic-directive owner-authority
+    /// gate that touched this thread. Surfaces both permitted and blocked
+    /// inbound-mail-driven mutations so operators can see whether the
+    /// authority gate fired (and how) for the conversation. Filtered by
+    /// `details.thread_key` or `details.conversation_id` so unrelated
+    /// global authority events do not leak into the per-thread surface.
+    pub strategic_directive_authority_events: Vec<StrategicDirectiveAuthorityEvent>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StrategicDirectiveAuthorityEvent {
+    pub event_id: String,
+    pub mechanism_id: String,
+    pub severity: String,
+    pub created_at: String,
+    pub sender_role: Option<String>,
+    pub sender_address: Option<String>,
+    pub directive_kind: Option<String>,
+    pub attempted_status: Option<String>,
+    pub action: Option<String>,
+    pub triggered_by_message_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -640,6 +661,17 @@ pub(crate) fn pipeline_status(
         "None".to_string()
     };
 
+    // E (PR): per-thread strategic-directive authority audit trail. We
+    // pull both the `_owner_authorised` and `_blocked_non_owner_sender`
+    // events the strategy-mutation gate emits, and filter to those whose
+    // structured details reference this thread (`thread_key` or
+    // `conversation_id`). The default surface is the last `limit` such
+    // events; if no thread was supplied we leave the list empty rather
+    // than reporting global state, which matches how the surrounding
+    // pipeline fields treat an absent thread_key.
+    let strategic_directive_authority_events =
+        load_strategic_directive_authority_events(&db_path, thread_key, conversation_id, limit)?;
+
     Ok(PipelineStatusReport {
         thread_key: thread_key.map(ToOwned::to_owned),
         founder_outbound_intent,
@@ -653,7 +685,119 @@ pub(crate) fn pipeline_status(
         rework_iteration_count,
         current_disposition,
         last_error,
+        strategic_directive_authority_events,
     })
+}
+
+fn load_strategic_directive_authority_events(
+    db_path: &Path,
+    thread_key: Option<&str>,
+    conversation_id: Option<i64>,
+    limit: usize,
+) -> Result<Vec<StrategicDirectiveAuthorityEvent>> {
+    if thread_key.is_none() && conversation_id.is_none() {
+        return Ok(Vec::new());
+    }
+    // The governance schema is created lazily by the governance module; if
+    // it does not exist yet, return an empty vec rather than erroring.
+    let conn = Connection::open(db_path).with_context(|| {
+        format!(
+            "failed to open db {} for strategic-directive authority events",
+            db_path.display()
+        )
+    })?;
+    let exists: bool = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='governance_events'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()?
+        .is_some();
+    if !exists {
+        return Ok(Vec::new());
+    }
+    let mut stmt = conn.prepare(
+        "SELECT event_id, mechanism_id, severity, details_json, created_at
+         FROM governance_events
+         WHERE mechanism_id IN (
+             'strategic_directive_mutation_owner_authorised',
+             'strategic_directive_mutation_blocked_non_owner_sender'
+         )
+         ORDER BY CAST(created_at AS INTEGER) DESC
+         LIMIT ?1",
+    )?;
+    // We pull a generous slice and filter in Rust because the structured
+    // thread/conversation match lives inside `details_json`. Clamp to a
+    // sane upper bound so this stays cheap even if the audit trail is busy.
+    let scan_limit = (limit.max(1) * 8).min(512) as i64;
+    let rows = stmt.query_map(params![scan_limit], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, String>(4)?,
+        ))
+    })?;
+    let mut out: Vec<StrategicDirectiveAuthorityEvent> = Vec::new();
+    for row in rows {
+        let (event_id, mechanism_id, severity, details_json, created_at) = row?;
+        let details: serde_json::Value =
+            serde_json::from_str(&details_json).unwrap_or(serde_json::Value::Null);
+        let detail_thread = details
+            .get("thread_key")
+            .and_then(|value| value.as_str())
+            .map(str::to_string);
+        let detail_conversation = details
+            .get("conversation_id")
+            .and_then(|value| value.as_i64());
+        let matches_thread = match thread_key {
+            Some(key) => detail_thread.as_deref() == Some(key),
+            None => false,
+        };
+        let matches_conversation = match (conversation_id, detail_conversation) {
+            (Some(want), Some(got)) => want == got,
+            _ => false,
+        };
+        if !matches_thread && !matches_conversation {
+            continue;
+        }
+        out.push(StrategicDirectiveAuthorityEvent {
+            event_id,
+            mechanism_id,
+            severity,
+            created_at,
+            sender_role: details
+                .get("sender_role")
+                .and_then(|value| value.as_str())
+                .map(str::to_string),
+            sender_address: details
+                .get("sender_address")
+                .and_then(|value| value.as_str())
+                .map(str::to_string),
+            directive_kind: details
+                .get("directive_kind")
+                .and_then(|value| value.as_str())
+                .map(str::to_string),
+            attempted_status: details
+                .get("attempted_status")
+                .and_then(|value| value.as_str())
+                .map(str::to_string),
+            action: details
+                .get("action")
+                .and_then(|value| value.as_str())
+                .map(str::to_string),
+            triggered_by_message_key: details
+                .get("triggered_by_message_key")
+                .and_then(|value| value.as_str())
+                .map(str::to_string),
+        });
+        if out.len() >= limit {
+            break;
+        }
+    }
+    Ok(out)
 }
 
 pub fn handle_channel_command(root: &Path, args: &[String]) -> Result<()> {
@@ -6254,6 +6398,98 @@ mod tests {
         assert_eq!(report.rewrite_iteration_count, 0);
         assert_eq!(report.rework_iteration_count, 1);
         assert_eq!(report.current_disposition, "RequeueSelfWork");
+        assert!(
+            report.strategic_directive_authority_events.is_empty(),
+            "no strategic-directive authority events seeded → field must be empty"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    // E (PR): pipeline_status surfaces strategic-directive owner-authority
+    // governance events that match the thread, but skips events whose
+    // details reference a different thread.
+    #[test]
+    fn pipeline_status_surfaces_strategic_directive_authority_events() {
+        let root = std::env::temp_dir().join(format!(
+            "ctox-pipeline-strategy-auth-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(root.join("runtime")).expect("failed to create runtime dir");
+
+        let thread_key = "pipeline-strategy-auth-thread";
+        let conversation_id =
+            crate::execution::agent::turn_loop::conversation_id_for_thread_key(Some(thread_key));
+
+        // Seed two strategic-directive authority events: one matching this
+        // thread, one matching an unrelated thread. Only the first should
+        // surface in the report.
+        let _ = crate::governance::record_event(
+            &root,
+            crate::governance::GovernanceEventRequest {
+                mechanism_id: "strategic_directive_mutation_owner_authorised",
+                conversation_id: Some(conversation_id),
+                severity: "info",
+                reason: "test-permitted",
+                action_taken: "permitted_strategic_directive_mutation",
+                details: serde_json::json!({
+                    "triggered_by_message_key": "owner-msg-A",
+                    "sender_address": "owner@example.com",
+                    "sender_role": "owner",
+                    "directive_kind": "mission",
+                    "attempted_status": "active",
+                    "action": "set",
+                    "thread_key": thread_key,
+                    "conversation_id": conversation_id,
+                }),
+                idempotence_key: Some("test-permitted-A"),
+            },
+        )
+        .expect("record permitted event");
+        let _ = crate::governance::record_event(
+            &root,
+            crate::governance::GovernanceEventRequest {
+                mechanism_id: "strategic_directive_mutation_blocked_non_owner_sender",
+                conversation_id: None,
+                severity: "critical",
+                reason: "test-blocked-other-thread",
+                action_taken: "blocked_strategic_directive_mutation",
+                details: serde_json::json!({
+                    "triggered_by_message_key": "founder-msg-B",
+                    "sender_address": "founder@example.com",
+                    "sender_role": "founder",
+                    "directive_kind": "vision",
+                    "attempted_status": "active",
+                    "action": "set",
+                    "thread_key": "some-other-thread",
+                }),
+                idempotence_key: Some("test-blocked-B"),
+            },
+        )
+        .expect("record blocked event");
+
+        let report = pipeline_status(&root, Some(thread_key), 10).expect("pipeline status");
+        let events = &report.strategic_directive_authority_events;
+        assert_eq!(
+            events.len(),
+            1,
+            "expected exactly the matching authority event in the per-thread report, got {events:#?}"
+        );
+        assert_eq!(
+            events[0].mechanism_id,
+            "strategic_directive_mutation_owner_authorised"
+        );
+        assert_eq!(events[0].sender_role.as_deref(), Some("owner"));
+        assert_eq!(events[0].directive_kind.as_deref(), Some("mission"));
+        assert_eq!(events[0].action.as_deref(), Some("set"));
+        assert_eq!(
+            events[0].triggered_by_message_key.as_deref(),
+            Some("owner-msg-A")
+        );
 
         let _ = fs::remove_dir_all(&root);
     }
