@@ -599,6 +599,8 @@ Founder/owner communication gate:\n\
 - if the correct outcome is no outbound mail yet because the thread is waiting on specific founder input, return FAIL, begin SUMMARY with `NO-SEND:`, and state the wait condition; do not invent rework\n\
 - treat every listed required deliverable as mandatory; if a required deliverable is missing, the mail must fail review and be reworked first\n\
 - treat every listed future promise, dated commitment, or deadline promise as mandatory review context; if a promise is not backed by a concrete CTOX schedule or open follow-up, the mail must fail review and be reworked first\n\
+- compare the draft against observed runtime facts and completed work; fail the review when the mail contradicts verified actions, hides completed verification, or says work still needs to be set up after it was already installed/tested\n\
+- when a founder explicitly requests setup, access, credentials, links, or next operational steps, require the draft to state the exact verified state and the exact remaining blocker or access path; vague option lists are not enough\n\
 - fail the review when the draft does not answer the latest founder mail, dodges the requested deliverable, promises future work instead of delivering, or leaks internal/system language\n\
 - fail the review when the recipients or cc list are wrong, when sender-only reply is incorrect, or when a forwarded/delegated founder mail should target different recipients\n\
 - do not fail only because the broader mission is still open; fail only when the draft makes a false claim, omits a required answer, or the missing deliverable means the mail should not be sent yet\n\
@@ -1115,6 +1117,8 @@ mod tests {
         assert!(rendered.contains("judge the full mail action, not just the prose"));
         assert!(rendered.contains("treat every listed required deliverable as mandatory"));
         assert!(rendered.contains("future promise, dated commitment, or deadline promise"));
+        assert!(rendered.contains("contradicts verified actions"));
+        assert!(rendered.contains("setup, access, credentials, links, or next operational steps"));
         assert!(rendered.contains("does not answer the latest founder mail"));
         assert!(rendered.contains("Kurzstand: Ich liefere spaeter."));
     }
