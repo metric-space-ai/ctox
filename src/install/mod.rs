@@ -1325,6 +1325,14 @@ fn resolve_install_root(root: &Path) -> Option<PathBuf> {
 }
 
 fn resolve_state_root(root: &Path, install_root: Option<&Path>) -> Result<PathBuf> {
+    if let Some(install_root) = install_root {
+        let manifest_path = install_root.join(INSTALL_MANIFEST_FILE_NAME);
+        if let Some(manifest) = load_install_manifest(&manifest_path)? {
+            if !manifest.state_root.as_os_str().is_empty() {
+                return Ok(manifest.state_root);
+            }
+        }
+    }
     if let Some(state_root) = std::env::var_os("CTOX_STATE_ROOT")
         .map(PathBuf::from)
         .filter(|path| !path.as_os_str().is_empty())
@@ -1335,14 +1343,6 @@ fn resolve_state_root(root: &Path, install_root: Option<&Path>) -> Result<PathBu
         runtime_env::env_or_config(root, "CTOX_STATE_ROOT").filter(|value| !value.trim().is_empty())
     {
         return Ok(PathBuf::from(state_root));
-    }
-    if let Some(install_root) = install_root {
-        let manifest_path = install_root.join(INSTALL_MANIFEST_FILE_NAME);
-        if let Some(manifest) = load_install_manifest(&manifest_path)? {
-            if !manifest.state_root.as_os_str().is_empty() {
-                return Ok(manifest.state_root);
-            }
-        }
     }
     let runtime_path = root.join("runtime");
     if let Ok(target) = fs::read_link(&runtime_path) {
