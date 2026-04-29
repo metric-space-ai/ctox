@@ -144,7 +144,7 @@ impl InstallLayout {
         let workspace_root = root.to_path_buf();
         let active_root = resolve_active_root(root);
         let install_root = resolve_install_root(root);
-        let state_root = resolve_state_root(root)?;
+        let state_root = resolve_state_root(root, install_root.as_deref())?;
         let cache_root = resolve_cache_root(root)?;
         Ok(Self {
             workspace_root,
@@ -1324,7 +1324,7 @@ fn resolve_install_root(root: &Path) -> Option<PathBuf> {
     None
 }
 
-fn resolve_state_root(root: &Path) -> Result<PathBuf> {
+fn resolve_state_root(root: &Path, install_root: Option<&Path>) -> Result<PathBuf> {
     if let Some(state_root) = std::env::var_os("CTOX_STATE_ROOT")
         .map(PathBuf::from)
         .filter(|path| !path.as_os_str().is_empty())
@@ -1335,6 +1335,14 @@ fn resolve_state_root(root: &Path) -> Result<PathBuf> {
         runtime_env::env_or_config(root, "CTOX_STATE_ROOT").filter(|value| !value.trim().is_empty())
     {
         return Ok(PathBuf::from(state_root));
+    }
+    if let Some(install_root) = install_root {
+        let manifest_path = install_root.join(INSTALL_MANIFEST_FILE_NAME);
+        if let Some(manifest) = load_install_manifest(&manifest_path)? {
+            if !manifest.state_root.as_os_str().is_empty() {
+                return Ok(manifest.state_root);
+            }
+        }
     }
     let runtime_path = root.join("runtime");
     if let Ok(target) = fs::read_link(&runtime_path) {
@@ -2563,6 +2571,42 @@ mod tests {
         assert_eq!(state.phase, "building");
         assert!(state.finished_at.is_none());
         assert!(state.last_error.is_none());
+    }
+
+    #[test]
+    fn managed_layout_prefers_manifest_state_root_over_current_runtime_symlink() {
+        let temp = tempdir().unwrap();
+        let install_root = temp.path().join("install");
+        let releases = install_root.join("releases");
+        let release_root = releases.join("current-release");
+        let stable_state_root = temp.path().join("state");
+        ensure_dir(&release_root).unwrap();
+        ensure_dir(&stable_state_root).unwrap();
+        create_symlink(&release_root, &install_root.join("current")).unwrap();
+        create_symlink(
+            Path::new("/would/be/self/referential/after/switch"),
+            &release_root.join("runtime"),
+        )
+        .unwrap();
+        persist_install_manifest(
+            &install_root.join(INSTALL_MANIFEST_FILE_NAME),
+            &InstallManifest {
+                schema_version: 1,
+                install_root: install_root.clone(),
+                state_root: stable_state_root.clone(),
+                current_release: Some("current-release".to_string()),
+                previous_release: None,
+                adopted_from: None,
+                release_channel: None,
+                updated_at: now_rfc3339(),
+            },
+        )
+        .unwrap();
+
+        let layout = InstallLayout::resolve(&install_root.join("current")).unwrap();
+
+        assert_eq!(layout.install_root.as_deref(), Some(install_root.as_path()));
+        assert_eq!(layout.state_root, stable_state_root);
     }
 
     #[test]
