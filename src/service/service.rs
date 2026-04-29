@@ -4974,8 +4974,19 @@ fn live_service_settings(root: &Path) -> BTreeMap<String, String> {
     settings
 }
 
+fn active_agent_loop_in_progress(state: &Arc<Mutex<SharedState>>) -> bool {
+    let shared = lock_shared_state(state);
+    shared.busy
+}
+
 fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Result<()> {
     if queue_pressure_active(state) {
+        return Ok(());
+    }
+    // The channel router runs on its own timer. It may not repair, lease, or
+    // reprioritize external work while a worker is still inside a full
+    // reasoning/tool/review loop; arbitration belongs after that loop ends.
+    if active_agent_loop_in_progress(state) {
         return Ok(());
     }
     route_assigned_ticket_self_work(root, state)?;
@@ -12763,6 +12774,72 @@ mod tests {
             )
             .expect("failed to reload route status");
         assert_eq!(route_status, "review_rework");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn channel_router_does_not_repair_founder_mail_during_active_agent_loop() {
+        let root = temp_root("ctox-founder-router-active-loop");
+        let mut settings = BTreeMap::new();
+        settings.insert(
+            "CTOX_OWNER_EMAIL_ADDRESS".to_string(),
+            "michael.welsch@metric-space.ai".to_string(),
+        );
+        runtime_env::save_runtime_env_map(&root, &settings)
+            .expect("failed to persist owner setting");
+        let inbound_key = "email:cto1@metric-space.ai::INBOX::active-loop";
+        let db_path = root.join("runtime/ctox.sqlite3");
+        let conn = channels::open_channel_db(&db_path).expect("failed to open channel db");
+        conn.execute(
+            r#"INSERT INTO communication_messages (
+                message_key, channel, account_key, thread_key, remote_id, direction, folder_hint,
+                sender_display, sender_address, recipient_addresses_json, cc_addresses_json,
+                bcc_addresses_json, subject, preview, body_text, body_html, raw_payload_ref,
+                trust_level, status, seen, has_attachments, external_created_at, observed_at,
+                metadata_json
+            ) VALUES (
+                ?1, 'email', 'email:cto1@metric-space.ai', '<founder-active-loop@example.com>',
+                'remote-founder-active-loop', 'inbound', 'INBOX', 'Michael Welsch',
+                'michael.welsch@metric-space.ai', '[]', '[]', '[]',
+                'Aw: Kunstmen CRM',
+                'Founder asks for CRM update while work is active.',
+                'Bitte CRM erst sauber fertigstellen und dann antworten.',
+                '', '', 'normal', 'received', 0, 0,
+                '2026-04-29T20:00:00Z', '2026-04-29T20:00:00Z', '{}'
+            )"#,
+            rusqlite::params![inbound_key],
+        )
+        .expect("failed to insert founder inbound");
+        conn.execute(
+            r#"INSERT INTO communication_routing_state (
+                message_key, route_status, lease_owner, leased_at, acked_at, last_error, updated_at
+            ) VALUES (?1, 'failed', NULL, NULL, NULL, NULL, '2026-04-29T20:01:00Z')"#,
+            rusqlite::params![inbound_key],
+        )
+        .expect("failed to insert failed founder route");
+
+        let state = Arc::new(Mutex::new(SharedState {
+            busy: true,
+            ..SharedState::default()
+        }));
+        route_external_messages(&root, &state)
+            .expect("busy channel router pass should not fail");
+
+        let route_status: String = conn
+            .query_row(
+                "SELECT route_status FROM communication_routing_state WHERE message_key = ?1",
+                rusqlite::params![inbound_key],
+                |row| row.get(0),
+            )
+            .expect("failed to reload route status");
+        assert_eq!(route_status, "failed");
+        let tasks =
+            channels::list_queue_tasks(&root, &["pending".to_string(), "leased".to_string()], 10)
+                .expect("failed to list queue tasks");
+        assert!(
+            tasks.is_empty(),
+            "router must not create founder rework while an agent loop is active"
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
