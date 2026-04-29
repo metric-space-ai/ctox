@@ -4835,6 +4835,7 @@ fn live_service_settings(root: &Path) -> BTreeMap<String, String> {
         }
         settings.insert(key, value);
     }
+    let _ = channels::merge_owner_profile_settings(root, &mut settings);
     settings
 }
 
@@ -7796,7 +7797,10 @@ fn email_contains_secret_material(message: &channels::RoutedInboundMessage) -> b
         "passwort:",
         "passwort=",
         "token:",
-        "token=",
+        "api_token=",
+        "access_token=",
+        "refresh_token=",
+        "bearer token",
         "secret:",
         "secret=",
         "api key:",
@@ -7804,7 +7808,7 @@ fn email_contains_secret_material(message: &channels::RoutedInboundMessage) -> b
         "api_key=",
         "apikey=",
         "_password=",
-        "_token=",
+        "_api_token=",
         "_secret=",
         "sudo password:",
         "root password:",
@@ -10407,6 +10411,46 @@ mod tests {
         };
 
         assert_eq!(blocked_inbound_reason(&message, &settings), None);
+    }
+
+    #[test]
+    fn founder_dashboard_url_token_does_not_block_inbound_reply() {
+        let mut settings = BTreeMap::new();
+        settings.insert(
+            "CTOX_OWNER_EMAIL_ADDRESS".to_string(),
+            "michael.welsch@metric-space.ai".to_string(),
+        );
+        settings.insert(
+            "CTOX_FOUNDER_EMAIL_ADDRESSES".to_string(),
+            "mp@iip-gmbh.de".to_string(),
+        );
+        let mut message = routed_email_message("mp@iip-gmbh.de");
+        message.subject = "AW: Kunstmen Wettbewerbsdashboard".to_string();
+        message.preview = "Danke, hier ist der zitierte Dashboard-Link".to_string();
+        message.body_text =
+            "Danke.\n\n> https://www.kunstmen.com/internal/competitors?token=abc123".to_string();
+
+        assert_eq!(blocked_inbound_reason(&message, &settings), None);
+    }
+
+    #[test]
+    fn founder_api_token_text_still_blocks_inbound_reply() {
+        let mut settings = BTreeMap::new();
+        settings.insert(
+            "CTOX_OWNER_EMAIL_ADDRESS".to_string(),
+            "michael.welsch@metric-space.ai".to_string(),
+        );
+        settings.insert(
+            "CTOX_FOUNDER_EMAIL_ADDRESSES".to_string(),
+            "mp@iip-gmbh.de".to_string(),
+        );
+        let mut message = routed_email_message("mp@iip-gmbh.de");
+        message.body_text = "api_token=abcd1234".to_string();
+
+        assert_eq!(
+            blocked_inbound_reason(&message, &settings),
+            Some("secret-bearing input must move to TUI".to_string())
+        );
     }
 
     #[test]

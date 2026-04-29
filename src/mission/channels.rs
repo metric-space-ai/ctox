@@ -206,6 +206,117 @@ pub fn sync_prompt_identity(root: &Path, settings: &BTreeMap<String, String>) ->
     Ok(())
 }
 
+pub fn merge_owner_profile_settings(
+    root: &Path,
+    settings: &mut BTreeMap<String, String>,
+) -> Result<()> {
+    let db_path = resolve_db_path(root, None);
+    let conn = open_channel_db(&db_path)?;
+    let mut stmt = conn.prepare(
+        r#"
+        SELECT owner_key, metadata_json
+        FROM owner_profiles
+        ORDER BY owner_key ASC
+        "#,
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+
+    let mut founder_emails = parse_founder_email_addresses(settings)
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    let mut founder_roles = parse_founder_email_roles(settings);
+    let mut admin_policies = parse_admin_email_policies(settings)
+        .into_iter()
+        .map(|entry| (entry.email, entry.can_sudo))
+        .collect::<BTreeMap<_, _>>();
+
+    for row in rows {
+        let (owner_key, metadata_json) = row?;
+        let metadata = serde_json::from_str::<Value>(&metadata_json).unwrap_or(Value::Null);
+        let email = metadata
+            .get("email")
+            .and_then(Value::as_str)
+            .map(normalize_email_address)
+            .filter(|value| !value.is_empty())
+            .or_else(|| {
+                let normalized = normalize_email_address(&owner_key);
+                normalized.contains('@').then_some(normalized)
+            });
+        let Some(email) = email else {
+            continue;
+        };
+        let role = metadata
+            .get("role")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase();
+        match role.as_str() {
+            "owner" => {
+                settings
+                    .entry("CTOX_OWNER_EMAIL_ADDRESS".to_string())
+                    .or_insert(email);
+            }
+            "founder" => {
+                founder_emails.insert(email.clone());
+                let role_title = metadata
+                    .get("role_title")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or("Founder");
+                founder_roles
+                    .entry(email)
+                    .or_insert_with(|| role_title.to_string());
+            }
+            "admin" => {
+                let can_sudo = metadata
+                    .get("allow_sudo_actions")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                admin_policies.entry(email).or_insert(can_sudo);
+            }
+            _ => {}
+        }
+    }
+
+    if !founder_emails.is_empty() {
+        settings.insert(
+            "CTOX_FOUNDER_EMAIL_ADDRESSES".to_string(),
+            founder_emails.into_iter().collect::<Vec<_>>().join(","),
+        );
+    }
+    if !founder_roles.is_empty() {
+        settings.insert(
+            "CTOX_FOUNDER_EMAIL_ROLES".to_string(),
+            founder_roles
+                .into_iter()
+                .map(|(email, role)| format!("{email}={role}"))
+                .collect::<Vec<_>>()
+                .join(","),
+        );
+    }
+    if !admin_policies.is_empty() {
+        settings.insert(
+            "CTOX_EMAIL_ADMIN_POLICIES".to_string(),
+            admin_policies
+                .into_iter()
+                .map(|(email, can_sudo)| {
+                    if can_sudo {
+                        format!("{email}=sudo")
+                    } else {
+                        email
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(","),
+        );
+    }
+    Ok(())
+}
+
 pub fn ensure_store(root: &Path) -> Result<()> {
     let db_path = resolve_db_path(root, None);
     let _conn = open_channel_db(&db_path)?;
@@ -5605,6 +5716,52 @@ mod tests {
             metadata.get("role_title").and_then(Value::as_str),
             Some("Sales Officer")
         );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn owner_profile_settings_merge_adds_founder_mailboxes_for_routing() {
+        let root = std::env::temp_dir().join(format!(
+            "ctox-founder-profile-settings-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(root.join("runtime")).expect("failed to create temp test root");
+
+        let db_path = resolve_db_path(&root, None);
+        let mut conn = open_channel_db(&db_path).expect("failed to open channel db");
+        upsert_identity_profile(
+            &mut conn,
+            "mp@iip-gmbh.de",
+            "Marco Pucciarelli",
+            json!({
+                "email": "mp@iip-gmbh.de",
+                "role": "founder",
+                "role_title": "CFO / Founder",
+                "allow_admin_actions": true,
+                "allow_sudo_actions": false,
+                "mail_instruction_scope": "founder_strategic",
+            }),
+        )
+        .expect("failed to insert founder profile");
+
+        let mut settings = BTreeMap::new();
+        settings.insert(
+            "CTOX_FOUNDER_EMAIL_ADDRESSES".to_string(),
+            "o.schaefers@gmx.net".to_string(),
+        );
+
+        merge_owner_profile_settings(&root, &mut settings).expect("failed to merge owner profiles");
+
+        let policy = classify_email_sender(&settings, "mp@iip-gmbh.de");
+        assert!(policy.allowed);
+        assert_eq!(policy.role, "founder");
+        assert!(settings
+            .get("CTOX_FOUNDER_EMAIL_ROLES")
+            .is_some_and(|roles| roles.contains("mp@iip-gmbh.de=CFO / Founder")));
 
         let _ = fs::remove_dir_all(&root);
     }
