@@ -5862,15 +5862,6 @@ fn repair_stalled_founder_communications(
             .unwrap_or(0);
             continue;
         }
-        if founder_sender_has_later_reviewed_send(root, &message)? {
-            repaired += channels::ack_leased_messages(
-                root,
-                std::slice::from_ref(&message.message_key),
-                "cancelled",
-            )
-            .unwrap_or(0);
-            continue;
-        }
         let rework_changed = ensure_founder_communication_rework_runnable(
             root,
             &message,
@@ -5935,25 +5926,6 @@ fn repair_stalled_founder_communications(
             )?;
             continue;
         }
-        if founder_sender_has_later_reviewed_send(root, &message)? {
-            repaired += channels::ack_leased_messages(
-                root,
-                std::slice::from_ref(&message.message_key),
-                "cancelled",
-            )
-            .unwrap_or(0);
-            repaired += close_open_founder_communication_self_work_for_inbound(
-                root,
-                &message.message_key,
-                "Founder communication was superseded by a later reviewed send to the same founder/owner.",
-            )?;
-            repaired += cancel_open_founder_communication_rework_queue_for_inbound(
-                root,
-                &message.message_key,
-                "Superseded by later reviewed founder reply to the same founder/owner.",
-            )?;
-            continue;
-        }
         if founder_thread_has_newer_founder_or_owner_inbound(root, settings, &message)? {
             repaired += channels::ack_leased_messages(
                 root,
@@ -6012,51 +5984,15 @@ fn founder_thread_has_later_reviewed_send(
         SELECT EXISTS(
             SELECT 1
             FROM communication_founder_reply_reviews
-            WHERE sent_at IS NOT NULL
-              AND sent_at > ?2
-              AND json_extract(action_json, '$.thread_key') = ?1
-            LIMIT 1
-        )
+        WHERE sent_at IS NOT NULL
+          AND sent_at > ?2
+          AND COALESCE(json_extract(send_result_json, '$.synthetic'), 0) != 1
+          AND COALESCE(json_extract(send_result_json, '$.status'), '') != 'no-send-recorded'
+          AND json_extract(action_json, '$.thread_key') = ?1
+        LIMIT 1
+    )
         "#,
         params![message.thread_key, message.external_created_at],
-        |row| row.get(0),
-    )?;
-    Ok(exists != 0)
-}
-
-fn founder_sender_has_later_reviewed_send(
-    root: &Path,
-    message: &channels::RoutedInboundMessage,
-) -> Result<bool> {
-    if message.sender_address.trim().is_empty() || message.external_created_at.trim().is_empty() {
-        return Ok(false);
-    }
-    let sender = message.sender_address.trim().to_ascii_lowercase();
-    let db_path = root.join("runtime").join("ctox.sqlite3");
-    let conn = channels::open_channel_db(&db_path)?;
-    let exists: i64 = conn.query_row(
-        r#"
-        SELECT EXISTS(
-            SELECT 1
-            FROM communication_founder_reply_reviews r
-            WHERE r.sent_at IS NOT NULL
-              AND r.sent_at > ?1
-              AND (
-                    EXISTS (
-                        SELECT 1
-                        FROM json_each(r.action_json, '$.to') to_addr
-                        WHERE lower(CAST(to_addr.value AS TEXT)) = ?2
-                    )
-                 OR EXISTS (
-                        SELECT 1
-                        FROM json_each(r.action_json, '$.cc') cc_addr
-                        WHERE lower(CAST(cc_addr.value AS TEXT)) = ?2
-                    )
-              )
-            LIMIT 1
-        )
-        "#,
-        params![message.external_created_at, sender],
         |row| row.get(0),
     )?;
     Ok(exists != 0)
@@ -12830,8 +12766,93 @@ mod tests {
     }
 
     #[test]
-    fn stalled_founder_email_superseded_by_later_reviewed_sender_send_is_cancelled() {
-        let root = temp_root("ctox-stalled-founder-sender-superseded");
+    fn synthetic_no_send_review_does_not_count_as_founder_send_proof() {
+        let root = temp_root("ctox-synthetic-no-send-not-send-proof");
+        let mut settings = BTreeMap::new();
+        settings.insert(
+            "CTOX_OWNER_EMAIL_ADDRESS".to_string(),
+            "marco@example.com".to_string(),
+        );
+        runtime_env::save_runtime_env_map(&root, &settings)
+            .expect("failed to persist owner setting");
+        let inbound_key = "email:cto1@metric-space.ai::INBOX::100";
+        let thread_key = "<dashboard-thread@example.com>";
+        let db_path = root.join("runtime/ctox.sqlite3");
+        let conn = channels::open_channel_db(&db_path).expect("failed to open channel db");
+        conn.execute(
+            r#"INSERT INTO communication_messages (
+                message_key, channel, account_key, thread_key, remote_id, direction, folder_hint,
+                sender_display, sender_address, recipient_addresses_json, cc_addresses_json,
+                bcc_addresses_json, subject, preview, body_text, body_html, raw_payload_ref,
+                trust_level, status, seen, has_attachments, external_created_at, observed_at,
+                metadata_json
+            ) VALUES (
+                ?1, 'email', 'email:cto1@metric-space.ai', ?2,
+                'remote-founder-100', 'inbound', 'INBOX', 'Marco',
+                'marco@example.com', '[]', '[]', '[]',
+                'AW: Kunstmen Wettbewerbsdashboard',
+                'Please add market, funding, and investor research.',
+                'Please add market, funding, and investor research.',
+                '', '', 'normal', 'received', 0, 0,
+                '2026-04-29T06:31:57Z', '2026-04-29T06:31:57Z', '{}'
+            )"#,
+            rusqlite::params![inbound_key, thread_key],
+        )
+        .expect("failed to insert founder inbound");
+        conn.execute(
+            r#"INSERT INTO communication_routing_state (
+                message_key, route_status, lease_owner, leased_at, acked_at, last_error, updated_at
+            ) VALUES (?1, 'failed', NULL, NULL, NULL, NULL, '2026-04-29T09:14:27Z')"#,
+            rusqlite::params![inbound_key],
+        )
+        .expect("failed to insert failed route");
+        conn.execute(
+            r#"INSERT INTO communication_founder_reply_reviews (
+                approval_key, inbound_message_key, action_digest, action_json, body_sha256,
+                reviewer, review_summary, approved_at, sent_at, send_result_json
+            ) VALUES (
+                'synthetic-no-send', ?1, 'digest-no-send', ?2, 'body-sha',
+                'codex-no-send', 'NO-SEND: wait for a different CRM thread',
+                '2026-04-29T10:25:21Z', '2026-04-29T10:25:21Z',
+                '{"channel":"email","ok":true,"status":"no-send-recorded","synthetic":true}'
+            )"#,
+            rusqlite::params![
+                inbound_key,
+                serde_json::json!({
+                    "thread_key": thread_key,
+                    "to": ["marco@example.com"],
+                    "cc": [],
+                    "subject": "Re: AW: Kunstmen Wettbewerbsdashboard",
+                    "attachments": [],
+                })
+                .to_string()
+            ],
+        )
+        .expect("failed to insert synthetic no-send proof");
+
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        let repaired = repair_stalled_founder_communications(&root, &state, &settings)
+            .expect("stalled founder repair should succeed");
+        assert!(repaired >= 1);
+        let route_status: String = conn
+            .query_row(
+                "SELECT route_status FROM communication_routing_state WHERE message_key = ?1",
+                rusqlite::params![inbound_key],
+                |row| row.get(0),
+            )
+            .expect("failed to reload route status");
+        assert_eq!(route_status, "review_rework");
+        let tasks =
+            channels::list_queue_tasks(&root, &["pending".to_string(), "leased".to_string()], 10)
+                .expect("failed to list queue tasks");
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].parent_message_key.as_deref(), Some(inbound_key));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn stalled_founder_email_not_superseded_by_later_cross_thread_sender_send() {
+        let root = temp_root("ctox-stalled-founder-cross-thread-sender-not-superseded");
         let mut settings = BTreeMap::new();
         settings.insert(
             "CTOX_OWNER_EMAIL_ADDRESS".to_string(),
@@ -12895,8 +12916,8 @@ mod tests {
             ) VALUES (
                 'review-later-cross-thread-send', 'email:cto1@metric-space.ai::INBOX::99',
                 'digest-cross-thread', ?1, 'body-sha-cross-thread', 'external-review',
-                'later reviewed founder reply copied Michael on the current founder thread',
-                '2026-04-27T23:21:23Z', '2026-04-27T23:21:23Z', '{}'
+                'later reviewed founder reply copied Michael on a different founder thread',
+                '2026-04-27T23:21:23Z', '2026-04-27T23:21:23Z', '{"ok":true}'
             )"#,
             rusqlite::params![serde_json::json!({
                 "thread_key": "<current-thread@example.com>",
@@ -12912,7 +12933,10 @@ mod tests {
         let state = Arc::new(Mutex::new(SharedState::default()));
         let repaired = repair_stalled_founder_communications(&root, &state, &settings)
             .expect("stalled founder repair should succeed");
-        assert!(repaired >= 1);
+        assert_eq!(
+            repaired, 0,
+            "a different thread to the same founder must not close this founder mail"
+        );
         let route_status: String = conn
             .query_row(
                 "SELECT route_status FROM communication_routing_state WHERE message_key = ?1",
@@ -12920,7 +12944,7 @@ mod tests {
                 |row| row.get(0),
             )
             .expect("failed to reload route status");
-        assert_eq!(route_status, "cancelled");
+        assert_eq!(route_status, "review_rework");
         let task_status: String = conn
             .query_row(
                 "SELECT route_status FROM communication_routing_state WHERE message_key = ?1",
@@ -12928,7 +12952,7 @@ mod tests {
                 |row| row.get(0),
             )
             .expect("failed to reload queue route status");
-        assert_eq!(task_status, "cancelled");
+        assert_eq!(task_status, "leased");
         let _ = std::fs::remove_dir_all(root);
     }
 

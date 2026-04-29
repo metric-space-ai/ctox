@@ -2966,6 +2966,8 @@ fn founder_reply_sent_after_review(conn: &Connection, inbound_message_key: &str)
         FROM communication_founder_reply_reviews
         WHERE inbound_message_key = ?1
           AND sent_at IS NOT NULL
+          AND COALESCE(json_extract(send_result_json, '$.synthetic'), 0) != 1
+          AND COALESCE(json_extract(send_result_json, '$.status'), '') != 'no-send-recorded'
         "#,
         params![inbound_message_key],
         |row| row.get(0),
