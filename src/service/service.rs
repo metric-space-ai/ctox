@@ -2675,16 +2675,26 @@ fn start_prompt_worker(
                 }
             }
             let latest_runtime_error = result.as_ref().err().map(|err| err.to_string());
-            let context_health =
-                assess_current_context_health(&root, &db_path, conversation_id, Some(&job.prompt));
-            let mut mission_sync_outcome =
+            let founder_visible_mail_turn =
+                is_founder_or_owner_email_job(&job) || job.outbound_email.is_some();
+            let context_health = if founder_visible_mail_turn {
+                None
+            } else {
+                assess_current_context_health(&root, &db_path, conversation_id, Some(&job.prompt))
+            };
+            let mut mission_sync_outcome = if founder_visible_mail_turn {
+                None
+            } else {
                 lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default())
                     .and_then(|engine| engine.sync_mission_state_from_continuity(conversation_id))
-                    .ok();
-            if let Some(repaired) =
-                run_turn_end_state_invariant_check(&root, &state, conversation_id)
-            {
-                mission_sync_outcome = Some(repaired);
+                    .ok()
+            };
+            if !founder_visible_mail_turn {
+                if let Some(repaired) =
+                    run_turn_end_state_invariant_check(&root, &state, conversation_id)
+                {
+                    mission_sync_outcome = Some(repaired);
+                }
             }
             // Completion review gate: when the executor's slice succeeded,
             // hand the slice to a separate, skeptical reviewer agent (a fresh
