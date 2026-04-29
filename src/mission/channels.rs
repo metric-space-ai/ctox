@@ -28,6 +28,9 @@ use crate::mission::communication_adapters;
 use crate::mission::communication_adapters::CommunicationTransportAdapter;
 use crate::mission::communication_gateway;
 use crate::secrets;
+use crate::service::harness_flow::{
+    record_harness_flow_event_lossy, RecordHarnessFlowEventRequest,
+};
 
 const DEFAULT_DB_RELATIVE_PATH: &str = "runtime/ctox.sqlite3";
 const DEFAULT_TAKE_LIMIT: usize = 10;
@@ -2574,6 +2577,23 @@ pub(crate) fn record_founder_reply_review_approval(
         ],
     )
     .context("failed to record founder reply review approval")?;
+    record_harness_flow_event_lossy(
+        root,
+        RecordHarnessFlowEventRequest {
+            event_kind: "review.approved",
+            title: "Review approved",
+            body_text: review_summary,
+            message_key: Some(inbound_message_key),
+            work_id: None,
+            ticket_key: None,
+            attempt_index: Some(1),
+            metadata: json!({
+                "approval_key": approval_key,
+                "body_sha256": body_sha256,
+                "action_digest": action_digest,
+            }),
+        },
+    );
     Ok(())
 }
 
@@ -2666,6 +2686,24 @@ pub(crate) fn record_founder_outbound_review_approval(
         ],
     )
     .context("failed to record founder outbound review approval")?;
+    record_harness_flow_event_lossy(
+        root,
+        RecordHarnessFlowEventRequest {
+            event_kind: "review.approved",
+            title: "Review approved",
+            body_text: review_summary,
+            message_key: Some(anchor_message_key),
+            work_id: None,
+            ticket_key: None,
+            attempt_index: Some(1),
+            metadata: json!({
+                "approval_key": approval_key,
+                "body_sha256": body_sha256,
+                "action_digest": action_digest,
+                "outbound": true,
+            }),
+        },
+    );
     Ok(())
 }
 

@@ -15,6 +15,9 @@ use crate::channels;
 use crate::execution::agent::direct_session::PersistentSession;
 use crate::inference::runtime_env;
 use crate::plan;
+use crate::service::harness_flow::{
+    record_harness_flow_event_lossy, RecordHarnessFlowEventRequest,
+};
 use crate::tickets;
 
 const DEFAULT_LIST_LIMIT: usize = 20;
@@ -964,6 +967,27 @@ fn spill_queue_task_to_ticket(
         },
     )?;
     let _ = ensure_spill_restore_follow_up(root, &task, &ticket.work_id, reason)?;
+    record_harness_flow_event_lossy(
+        root,
+        RecordHarnessFlowEventRequest {
+            event_kind: "queue.spilled_to_ticket",
+            title: "Queue item moved to ticket backlog",
+            body_text: reason
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("Queue item was moved out of the active queue."),
+            message_key: Some(&task.message_key),
+            work_id: Some(&ticket.work_id),
+            ticket_key: None,
+            attempt_index: None,
+            metadata: json!({
+                "ticket_system": ticket.source_system,
+                "ticket_state": ticket.state,
+                "queue_priority": task.priority,
+                "queue_status": task.route_status,
+            }),
+        },
+    );
     Ok(QueueTicketBridgeView {
         message_key: bridge.message_key,
         work_id: bridge.work_id,
@@ -1007,7 +1031,7 @@ fn restore_spilled_queue_task(
             message_key: message_key.to_string(),
             title: Some(restored_title),
             priority: priority.map(ToOwned::to_owned),
-            status_note: Some(restored_note),
+            status_note: Some(restored_note.clone()),
             ..Default::default()
         },
     )?;
@@ -1025,6 +1049,24 @@ fn restore_spilled_queue_task(
             restored_at: Some(now_iso_string()),
         },
     )?;
+    record_harness_flow_event_lossy(
+        root,
+        RecordHarnessFlowEventRequest {
+            event_kind: "queue.restored_from_ticket",
+            title: "Ticket backlog restored to queue",
+            body_text: &restored_note,
+            message_key: Some(message_key),
+            work_id: Some(&ticket.work_id),
+            ticket_key: None,
+            attempt_index: None,
+            metadata: json!({
+                "ticket_system": ticket.source_system,
+                "ticket_state": ticket.state,
+                "queue_priority": task.priority,
+                "queue_status": task.route_status,
+            }),
+        },
+    );
     Ok(QueueTicketBridgeView {
         message_key: bridge.message_key,
         work_id: bridge.work_id,

@@ -35,6 +35,9 @@ use crate::service::core_state_machine::{
     CoreEntityType, CoreEvent, CoreEvidenceRefs, CoreState, CoreTransitionRequest, RuntimeLane,
 };
 use crate::service::core_transition_guard::enforce_core_transition;
+use crate::service::harness_flow::{
+    record_harness_flow_event_lossy, RecordHarnessFlowEventRequest,
+};
 
 const DEFAULT_DB_RELATIVE_PATH: &str = "runtime/ctox.sqlite3";
 const DEFAULT_LIST_LIMIT: usize = 20;
@@ -2211,6 +2214,30 @@ fn create_ticket_knowledge_load(
             }),
         },
     )?;
+    record_harness_flow_event_lossy(
+        root,
+        RecordHarnessFlowEventRequest {
+            event_kind: "knowledge.loaded",
+            title: "Knowledge loaded",
+            body_text: if gap_domains.is_empty() {
+                "Knowledge gate loaded all requested domains."
+            } else {
+                "Knowledge gate loaded with missing domains."
+            },
+            message_key: None,
+            work_id: None,
+            ticket_key: Some(ticket_key),
+            attempt_index: None,
+            metadata: json!({
+                "load_id": load_id,
+                "source_system": ticket.source_system,
+                "domains": requested_domains,
+                "loaded_count": loaded_entries.len(),
+                "gap_domains": gap_domains,
+                "status": status,
+            }),
+        },
+    );
     Ok(TicketKnowledgeLoadView {
         load_id,
         ticket_key: ticket_key.to_string(),
@@ -2262,6 +2289,24 @@ pub(crate) fn put_ticket_self_work_item(
             }),
         },
     )?;
+    record_harness_flow_event_lossy(
+        root,
+        RecordHarnessFlowEventRequest {
+            event_kind: "ticket.self_work_created",
+            title: "Ticket self-work item created",
+            body_text: &item.title,
+            message_key: self_work_message_key(&item),
+            work_id: Some(&item.work_id),
+            ticket_key: None,
+            attempt_index: None,
+            metadata: json!({
+                "source_system": item.source_system,
+                "kind": item.kind,
+                "state": item.state,
+                "remote_ticket_id": item.remote_ticket_id,
+            }),
+        },
+    );
     if publish {
         publish_ticket_self_work_item(root, &item.work_id)
     } else {
@@ -2329,6 +2374,25 @@ pub(crate) fn publish_ticket_self_work_item(
             }),
         },
     )?;
+    record_harness_flow_event_lossy(
+        root,
+        RecordHarnessFlowEventRequest {
+            event_kind: "ticket.self_work_published",
+            title: "Ticket self-work item published",
+            body_text: &published_item.title,
+            message_key: self_work_message_key(&published_item),
+            work_id: Some(&published_item.work_id),
+            ticket_key: None,
+            attempt_index: None,
+            metadata: json!({
+                "source_system": published_item.source_system,
+                "kind": published_item.kind,
+                "state": published_item.state,
+                "remote_ticket_id": published_item.remote_ticket_id,
+                "remote_locator": published_item.remote_locator,
+            }),
+        },
+    );
     Ok(published_item)
 }
 
@@ -2525,6 +2589,25 @@ pub(crate) fn transition_ticket_self_work_item(
             }),
         },
     )?;
+    record_harness_flow_event_lossy(
+        root,
+        RecordHarnessFlowEventRequest {
+            event_kind: "ticket.self_work_transitioned",
+            title: "Ticket self-work state changed",
+            body_text: note.unwrap_or(state),
+            message_key: self_work_message_key(&item),
+            work_id: Some(&item.work_id),
+            ticket_key: None,
+            attempt_index: None,
+            metadata: json!({
+                "source_system": item.source_system,
+                "kind": item.kind,
+                "state": item.state,
+                "transitioned_by": transitioned_by,
+                "visibility": visibility,
+            }),
+        },
+    );
     Ok(item)
 }
 
@@ -2603,6 +2686,23 @@ pub(crate) fn set_ticket_self_work_state(
             }),
         },
     )?;
+    record_harness_flow_event_lossy(
+        root,
+        RecordHarnessFlowEventRequest {
+            event_kind: "ticket.self_work_state_set",
+            title: "Ticket self-work state set",
+            body_text: state,
+            message_key: self_work_message_key(&item),
+            work_id: Some(&item.work_id),
+            ticket_key: None,
+            attempt_index: None,
+            metadata: json!({
+                "source_system": item.source_system,
+                "kind": item.kind,
+                "state": item.state,
+            }),
+        },
+    );
     Ok(item)
 }
 
@@ -2699,6 +2799,18 @@ fn hydrate_ticket_self_work_item(
         item.assigned_at = Some(assignment.created_at);
     }
     Ok(item)
+}
+
+fn self_work_message_key(item: &TicketSelfWorkItemView) -> Option<&str> {
+    ["queue_message_key", "parent_message_key", "message_key"]
+        .iter()
+        .find_map(|key| {
+            item.metadata
+                .get(*key)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
 }
 
 fn set_ticket_self_work_state_internal(

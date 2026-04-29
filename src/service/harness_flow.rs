@@ -12,7 +12,7 @@ use std::path::Path;
 const USAGE: &str = "Usage:
   ctox harness-flow [--latest] [--message-key <key>] [--work-id <id>] [--width <n>] [--json]
   ctox harness-flow init
-  ctox harness-flow events [--message-key <key>] [--work-id <id>] [--limit <n>]
+  ctox harness-flow events [--message-key <key>] [--work-id <id>] [--ticket-key <key>] [--limit <n>]
 
 Renders a human-readable harness work flow: main work stays on the left spine,
 while queue, context, review, ticket, knowledge, guard, and verification support
@@ -184,8 +184,9 @@ pub fn handle_harness_flow_command(root: &Path, args: &[String]) -> Result<()> {
         Some("events") => {
             let message_key = parse_string_flag(&args[1..], "--message-key");
             let work_id = parse_string_flag(&args[1..], "--work-id");
+            let ticket_key = parse_string_flag(&args[1..], "--ticket-key");
             let limit = parse_usize_flag(&args[1..], "--limit", 50).min(500);
-            let events = load_flow_events(root, message_key, work_id, limit)?;
+            let events = load_flow_events(root, message_key, work_id, ticket_key, limit)?;
             println!("{}", serde_json::to_string_pretty(&events)?);
             return Ok(());
         }
@@ -367,6 +368,7 @@ fn build_flow(
         work_for_attempt_2
             .as_ref()
             .map(|work| work.work_id.as_str()),
+        None,
         12,
     )
     .unwrap_or_default();
@@ -1232,7 +1234,9 @@ fn ensure_event_schema(conn: &Connection) -> Result<()> {
          CREATE INDEX IF NOT EXISTS idx_ctox_harness_flow_events_message
            ON ctox_harness_flow_events(message_key, created_at ASC);
          CREATE INDEX IF NOT EXISTS idx_ctox_harness_flow_events_work
-           ON ctox_harness_flow_events(work_id, created_at ASC);",
+           ON ctox_harness_flow_events(work_id, created_at ASC);
+         CREATE INDEX IF NOT EXISTS idx_ctox_harness_flow_events_ticket
+           ON ctox_harness_flow_events(ticket_key, created_at ASC);",
     )?;
     Ok(())
 }
@@ -1241,6 +1245,7 @@ fn load_flow_events(
     root: &Path,
     message_key: Option<&str>,
     work_id: Option<&str>,
+    ticket_key: Option<&str>,
     limit: usize,
 ) -> Result<Vec<HarnessFlowEvent>> {
     let db_path = root.join("runtime").join("ctox.sqlite3");
@@ -1267,11 +1272,12 @@ fn load_flow_events(
          FROM ctox_harness_flow_events
          WHERE (?1 IS NOT NULL AND message_key = ?1)
             OR (?2 IS NOT NULL AND work_id = ?2)
-            OR (?1 IS NULL AND ?2 IS NULL)
+            OR (?3 IS NOT NULL AND ticket_key = ?3)
+            OR (?1 IS NULL AND ?2 IS NULL AND ?3 IS NULL)
          ORDER BY created_at ASC
-         LIMIT ?3",
+         LIMIT ?4",
     )?;
-    let rows = stmt.query_map(params![message_key, work_id, limit], |row| {
+    let rows = stmt.query_map(params![message_key, work_id, ticket_key, limit], |row| {
         Ok(HarnessFlowEvent {
             event_id: row.get(0)?,
             chain_key: row.get(1)?,
