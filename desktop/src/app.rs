@@ -2229,6 +2229,10 @@ impl CtoxDesktopApp {
                                 let msgs = dvs.comm_messages.clone();
                                 views::queue::render(ui, &msgs, &mut dvs.queue_state);
                             }
+                            DataView::HarnessFlow => {
+                                let flow = dvs.harness_flow_text.clone();
+                                views::harness_flow::render(ui, &flow);
+                            }
                             DataView::Conversations => {
                                 let msgs = dvs.lcm_messages.clone();
                                 let missions = dvs.mission_states.clone();

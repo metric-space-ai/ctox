@@ -1012,3 +1012,417 @@ pub fn query_execution_actions(root: &Path) -> Vec<ExecutionActionRow> {
     .map(|rows| rows.filter_map(|r| r.ok()).collect())
     .unwrap_or_default()
 }
+
+#[derive(Debug, Clone)]
+struct HarnessFlowMessage {
+    message_key: String,
+    channel: String,
+    direction: String,
+    thread_key: String,
+    subject: String,
+    preview: String,
+    body_text: String,
+    sender_display: String,
+    observed_at: String,
+    route_status: Option<String>,
+    acked_at: Option<String>,
+    updated_at: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct HarnessFlowWork {
+    work_id: String,
+    kind: String,
+    title: String,
+    body_text: String,
+    state: String,
+    created_at: String,
+    updated_at: String,
+}
+
+pub fn query_harness_flow_text(root: &Path, width: usize) -> String {
+    let Some(path) = agent_db_path(root) else {
+        return "Harness flow unavailable.\n\nNo runtime/ctox.sqlite3 database found.".to_string();
+    };
+    let Some(conn) = open_readonly(&path) else {
+        return format!("Harness flow unavailable.\n\nCould not open {}.", path.display());
+    };
+    let Some(message) = latest_harness_flow_message(&conn) else {
+        return render_flow_boxes(
+            width,
+            vec![FlowBlock {
+                title: "NO FLOW SOURCE FOUND".to_string(),
+                lines: vec![
+                    "No communication message exists in runtime/ctox.sqlite3 yet.".to_string(),
+                    "Once queue or ticket activity is present, this view becomes the live flow.".to_string(),
+                ],
+                branches: Vec::new(),
+            }],
+        );
+    };
+
+    let related_work = related_harness_flow_work(&conn, &message.message_key);
+    let review_summary = optional_string(
+        &conn,
+        "SELECT review_summary FROM communication_founder_reply_reviews
+         WHERE inbound_message_key = ?1 ORDER BY approved_at DESC LIMIT 1",
+        &message.message_key,
+    );
+    let ticket_count = optional_count(&conn, "SELECT COUNT(*) FROM ticket_items");
+    let self_work_count = optional_count(&conn, "SELECT COUNT(*) FROM ticket_self_work_items");
+    let knowledge_entries = optional_count(&conn, "SELECT COUNT(*) FROM ticket_knowledge_entries");
+    let continuity_docs = optional_count(&conn, "SELECT COUNT(*) FROM continuity_documents");
+    let continuity_commits = optional_count(&conn, "SELECT COUNT(*) FROM continuity_commits");
+    let verification_runs = optional_count(&conn, "SELECT COUNT(*) FROM verification_runs");
+    let ticket_verifications = optional_count(&conn, "SELECT COUNT(*) FROM ticket_verifications");
+
+    let preview = first_non_empty(&[&message.preview, &message.body_text]).unwrap_or("");
+    let mut blocks = Vec::new();
+    blocks.push(FlowBlock {
+        title: "TASK".to_string(),
+        lines: vec![
+            format!(
+                "{} from {}",
+                sentence_case(&message.direction),
+                non_empty(&message.sender_display, "unknown sender")
+            ),
+            format!("Subject: {}", clip(non_empty(&message.subject, "(no subject)"), 82)),
+            format!("What CTOX has to handle: {}", clip(preview, 82)),
+            format!(
+                "Source: {} · thread {} · observed {}",
+                message.channel,
+                clip(&message.thread_key, 38),
+                short_time(&message.observed_at)
+            ),
+        ],
+        branches: vec![
+            FlowBranch {
+                title: "QUEUE PICKUP".to_string(),
+                lines: vec![
+                    format!("Current queue state: {}", message.route_status.as_deref().unwrap_or("unknown")),
+                    format!("Acknowledged: {}", message.acked_at.as_deref().map(short_time).unwrap_or_else(|| "not yet".to_string())),
+                    format!("Last queue update: {}", message.updated_at.as_deref().map(short_time).unwrap_or_else(|| "unknown".to_string())),
+                ],
+                returns_to_spine: true,
+            },
+            FlowBranch {
+                title: "CONTEXT".to_string(),
+                lines: vec![
+                    format!("Continuity docs: {continuity_docs} · commits: {continuity_commits}"),
+                    "Purpose: keep the worker on the current task context.".to_string(),
+                ],
+                returns_to_spine: true,
+            },
+            FlowBranch {
+                title: "KNOWLEDGE".to_string(),
+                lines: vec![
+                    format!("Captured knowledge entries: {knowledge_entries}"),
+                    "Shown here when ticket knowledge is written into the runtime DB.".to_string(),
+                ],
+                returns_to_spine: true,
+            },
+        ],
+    });
+
+    let mut attempt_branches = Vec::new();
+    if let Some(summary) = review_summary.filter(|s| !s.trim().is_empty()) {
+        attempt_branches.push(FlowBranch {
+            title: "REVIEW".to_string(),
+            lines: vec![
+                "Result: send allowed.".to_string(),
+                format!("Review summary: {}", clip(&summary, 76)),
+            ],
+            returns_to_spine: true,
+        });
+    } else if let Some(work) = related_work.first() {
+        attempt_branches.push(FlowBranch {
+            title: "REVIEW".to_string(),
+            lines: vec![
+                "Result: not finished; durable rework exists.".to_string(),
+                format!("Rework item: {}", clip(&work.title, 76)),
+                format!("Reason/work requested: {}", clip(&work.body_text, 76)),
+            ],
+            returns_to_spine: false,
+        });
+        attempt_branches.push(FlowBranch {
+            title: "TICKET BACKLOG".to_string(),
+            lines: vec![
+                format!("Created: {} · {}", clip(&work.work_id, 24), clip(&work.title, 56)),
+                format!("State: {} · kind: {}", work.state, work.kind),
+                format!("Runtime totals: tickets {ticket_count} · self-work {self_work_count}"),
+            ],
+            returns_to_spine: false,
+        });
+    } else {
+        attempt_branches.push(FlowBranch {
+            title: "REVIEW".to_string(),
+            lines: vec![
+                "No persisted review result found for this source.".to_string(),
+                "If a review happened, the flow needs that outcome captured durably.".to_string(),
+            ],
+            returns_to_spine: true,
+        });
+    }
+
+    blocks.push(FlowBlock {
+        title: "ATTEMPT 1".to_string(),
+        lines: vec![
+            "CTOX works on the first answer or slice.".to_string(),
+            format!("Input: {}", clip(preview, 82)),
+            "Work metrics: not instrumented yet (files/line deltas need a turn diff ledger).".to_string(),
+        ],
+        branches: attempt_branches,
+    });
+
+    if let Some(work) = related_work.first() {
+        blocks.push(FlowBlock {
+            title: "ATTEMPT 2".to_string(),
+            lines: vec![
+                "CTOX resumes from durable rework and continues the same task.".to_string(),
+                format!("Picked up: {} ({})", clip(&work.title, 70), work.kind),
+                format!("Backlog state: {} · updated {}", work.state, short_time(&work.updated_at)),
+            ],
+            branches: vec![FlowBranch {
+                title: "SOURCE FROM TICKET BACKLOG".to_string(),
+                lines: vec![
+                    format!("Picked up work item: {}", clip(&work.work_id, 48)),
+                    format!("State: {} · created {}", work.state, short_time(&work.created_at)),
+                ],
+                returns_to_spine: true,
+            }],
+        });
+    }
+
+    blocks.push(FlowBlock {
+        title: "FINISH / CURRENT STATE".to_string(),
+        lines: vec![
+            format!("Original queue state: {}", message.route_status.as_deref().unwrap_or("unknown")),
+            format!("Runtime totals: tickets {ticket_count} · self-work {self_work_count}"),
+        ],
+        branches: vec![
+            FlowBranch {
+                title: "SEND / CLOSE GUARD".to_string(),
+                lines: vec![
+                    "Core transition proof details are shown when linked to this source.".to_string(),
+                    "Rejected transitions and state violations should branch here.".to_string(),
+                ],
+                returns_to_spine: true,
+            },
+            FlowBranch {
+                title: "VERIFICATION".to_string(),
+                lines: vec![
+                    format!("Verification runs in runtime: {verification_runs}"),
+                    format!("Ticket verification records: {ticket_verifications}"),
+                ],
+                returns_to_spine: true,
+            },
+        ],
+    });
+
+    render_flow_boxes(width, blocks)
+}
+
+fn latest_harness_flow_message(conn: &Connection) -> Option<HarnessFlowMessage> {
+    conn.query_row(
+        "SELECT cm.message_key, cm.channel, cm.direction, cm.thread_key, cm.subject,
+                cm.preview, cm.body_text, cm.sender_display, cm.observed_at,
+                cr.route_status, cr.acked_at, cr.updated_at
+         FROM communication_messages cm
+         LEFT JOIN communication_routing_state cr ON cm.message_key = cr.message_key
+         ORDER BY cm.observed_at DESC LIMIT 1",
+        [],
+        |row| {
+            Ok(HarnessFlowMessage {
+                message_key: row.get(0)?,
+                channel: row.get(1)?,
+                direction: row.get(2)?,
+                thread_key: row.get(3)?,
+                subject: row.get(4)?,
+                preview: row.get(5)?,
+                body_text: row.get(6)?,
+                sender_display: row.get(7)?,
+                observed_at: row.get(8)?,
+                route_status: row.get(9)?,
+                acked_at: row.get(10)?,
+                updated_at: row.get(11)?,
+            })
+        },
+    )
+    .ok()
+}
+
+fn related_harness_flow_work(conn: &Connection, message_key: &str) -> Vec<HarnessFlowWork> {
+    let mut stmt = match conn.prepare(
+        "SELECT work_id, kind, title, body_text, state, created_at, updated_at
+         FROM ticket_self_work_items
+         WHERE json_extract(metadata_json, '$.parent_message_key') = ?1
+            OR json_extract(metadata_json, '$.inbound_message_key') = ?1
+            OR metadata_json LIKE '%' || ?1 || '%'
+         ORDER BY created_at ASC LIMIT 4",
+    ) {
+        Ok(stmt) => stmt,
+        Err(_) => return Vec::new(),
+    };
+    stmt.query_map(params![message_key], |row| {
+        Ok(HarnessFlowWork {
+            work_id: row.get(0)?,
+            kind: row.get(1)?,
+            title: row.get(2)?,
+            body_text: row.get(3)?,
+            state: row.get(4)?,
+            created_at: row.get(5)?,
+            updated_at: row.get(6)?,
+        })
+    })
+    .ok()
+    .map(|rows| rows.filter_map(|row| row.ok()).collect())
+    .unwrap_or_default()
+}
+
+fn optional_string(conn: &Connection, sql: &str, param: &str) -> Option<String> {
+    conn.query_row(sql, params![param], |row| row.get(0)).ok()
+}
+
+fn optional_count(conn: &Connection, sql: &str) -> i64 {
+    conn.query_row(sql, [], |row| row.get(0)).unwrap_or(0)
+}
+
+#[derive(Debug)]
+struct FlowBlock {
+    title: String,
+    lines: Vec<String>,
+    branches: Vec<FlowBranch>,
+}
+
+#[derive(Debug)]
+struct FlowBranch {
+    title: String,
+    lines: Vec<String>,
+    returns_to_spine: bool,
+}
+
+fn render_flow_boxes(width: usize, blocks: Vec<FlowBlock>) -> String {
+    let width = width.clamp(92, 180);
+    let main_width = (width * 54 / 100).clamp(50, 82);
+    let branch_width = width.saturating_sub(main_width + 8).clamp(34, 86);
+    let mut out = String::new();
+    for (index, block) in blocks.iter().enumerate() {
+        render_box(&mut out, "", main_width, &block.title, &block.lines);
+        for branch in &block.branches {
+            let stem_pad = " ".repeat(main_width / 2);
+            out.push_str(&format!("{stem_pad}│\n"));
+            render_branch_box(&mut out, &stem_pad, branch_width, &branch.title, &branch.lines);
+            if branch.returns_to_spine {
+                out.push_str(&format!("{stem_pad}│\n"));
+            }
+        }
+        if index + 1 < blocks.len() {
+            out.push_str(&format!("{}│\n{}▼\n", " ".repeat(main_width / 2), " ".repeat(main_width / 2)));
+        }
+    }
+    out.trim_end().to_string()
+}
+
+fn render_box(out: &mut String, prefix: &str, width: usize, title: &str, lines: &[String]) {
+    let inner = width.saturating_sub(2);
+    out.push_str(prefix);
+    out.push('┌');
+    out.push_str(&"─".repeat(inner));
+    out.push_str("┐\n");
+    render_box_line(out, prefix, inner, title);
+    for line in lines {
+        for wrapped in wrap_line(line, inner.saturating_sub(2)) {
+            render_box_line(out, prefix, inner, &format!("  {wrapped}"));
+        }
+    }
+    out.push_str(prefix);
+    out.push('└');
+    out.push_str(&"─".repeat(inner));
+    out.push_str("┘\n");
+}
+
+fn render_branch_box(out: &mut String, stem_pad: &str, width: usize, title: &str, lines: &[String]) {
+    let mut rendered = String::new();
+    render_box(&mut rendered, "", width, title, lines);
+    for (idx, line) in rendered.lines().enumerate() {
+        out.push_str(stem_pad);
+        if idx == 0 {
+            out.push_str("├──►");
+        } else {
+            out.push_str("│   ");
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+}
+
+fn render_box_line(out: &mut String, prefix: &str, inner: usize, text: &str) {
+    let clipped = clip(text, inner);
+    out.push_str(prefix);
+    out.push('│');
+    out.push_str(&clipped);
+    out.push_str(&" ".repeat(inner.saturating_sub(clipped.chars().count())));
+    out.push_str("│\n");
+}
+
+fn wrap_line(text: &str, width: usize) -> Vec<String> {
+    if text.chars().count() <= width {
+        return vec![text.to_string()];
+    }
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    for word in text.split_whitespace() {
+        let next_len = current.chars().count() + if current.is_empty() { 0 } else { 1 } + word.chars().count();
+        if next_len > width && !current.is_empty() {
+            lines.push(current);
+            current = word.to_string();
+        } else {
+            if !current.is_empty() {
+                current.push(' ');
+            }
+            current.push_str(word);
+        }
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    if lines.is_empty() {
+        vec![clip(text, width)]
+    } else {
+        lines
+    }
+}
+
+fn first_non_empty<'a>(values: &[&'a str]) -> Option<&'a str> {
+    values.iter().copied().find(|value| !value.trim().is_empty())
+}
+
+fn non_empty<'a>(value: &'a str, fallback: &'a str) -> &'a str {
+    if value.trim().is_empty() { fallback } else { value }
+}
+
+fn sentence_case(value: &str) -> String {
+    let mut chars = value.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
+fn short_time(value: &str) -> String {
+    value
+        .split('T')
+        .nth(1)
+        .map(|time| time.trim_end_matches('Z').to_string())
+        .unwrap_or_else(|| value.to_string())
+}
+
+fn clip(value: &str, max: usize) -> String {
+    let cleaned = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if cleaned.chars().count() <= max {
+        cleaned
+    } else {
+        let take = max.saturating_sub(3);
+        format!("{}...", cleaned.chars().take(take).collect::<String>())
+    }
+}

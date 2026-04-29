@@ -1,4 +1,5 @@
 pub mod conversations;
+pub mod harness_flow;
 pub mod kanban;
 pub mod queue;
 pub mod threads;
@@ -22,15 +23,17 @@ pub enum DataView {
     Terminal,
     Tickets,
     Queue,
+    HarnessFlow,
     Conversations,
     Threads,
     Logs,
 }
 
 impl DataView {
-    pub const DATA_VIEWS: [Self; 5] = [
+    pub const DATA_VIEWS: [Self; 6] = [
         Self::Tickets,
         Self::Queue,
+        Self::HarnessFlow,
         Self::Conversations,
         Self::Threads,
         Self::Logs,
@@ -41,6 +44,7 @@ impl DataView {
             Self::Terminal => "Terminal",
             Self::Tickets => "Tickets",
             Self::Queue => "Queue",
+            Self::HarnessFlow => "Flow",
             Self::Conversations => "Conversations",
             Self::Threads => "Threads",
             Self::Logs => "Logs",
@@ -69,6 +73,7 @@ pub struct DataViewState {
     pub ticket_cases: Vec<db_reader::TicketCaseRow>,
     pub comm_messages: Vec<db_reader::CommMessageRow>,
     pub execution_actions: Vec<db_reader::ExecutionActionRow>,
+    pub harness_flow_text: String,
 
     // Per-view state
     pub kanban_state: kanban::KanbanState,
@@ -93,6 +98,7 @@ impl Default for DataViewState {
             ticket_cases: Vec::new(),
             comm_messages: Vec::new(),
             execution_actions: Vec::new(),
+            harness_flow_text: String::new(),
             kanban_state: kanban::KanbanState::default(),
             queue_state: queue::QueueState::default(),
             conversations_state: conversations::ConversationsState::default(),
@@ -122,6 +128,7 @@ impl DataViewState {
         self.ticket_cases = db_reader::query_ticket_cases(&root);
         self.comm_messages = db_reader::query_comm_messages(&root);
         self.execution_actions = db_reader::query_execution_actions(&root);
+        self.harness_flow_text = db_reader::query_harness_flow_text(&root, 132);
 
         self.last_refresh = Some(Instant::now());
     }
