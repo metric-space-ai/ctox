@@ -5438,7 +5438,10 @@ fn source_label_dispatch_rank(source_label: &str) -> u8 {
     {
         return 4;
     }
-    if lowered.starts_with("email") || lowered.starts_with("jami") || lowered.starts_with("meeting")
+    if lowered.starts_with("email")
+        || lowered.starts_with("jami")
+        || lowered.starts_with("teams")
+        || lowered.starts_with("meeting")
     {
         return 3;
     }
@@ -7735,6 +7738,21 @@ fn enrich_inbound_prompt(
             prepend_workspace_contract(prompt_body, message.workspace_root.as_deref())
         );
     }
+    if message.channel == "teams" {
+        let sender = display_inbound_sender(message);
+        let subject_line = if message.subject.trim().is_empty() {
+            String::new()
+        } else {
+            format!("\nBetreff: {}", message.subject.trim())
+        };
+        return format!(
+            "[Teams-Nachricht eingegangen]\nSender: {sender}{subject_line}\nThread: {}\nWenn du antwortest, nutze `ctox channel send --channel teams --account-key {} --thread-key '{}' --body \"<deine Antwort>\"`. Der Teams-Adapter sendet ueber Microsoft Graph in den konfigurierten Chat oder Channel-Thread; erfinde keine Empfaengeradresse und wechsle fuer Live-Meeting-Chat nur auf den `meeting`-Kanal, wenn die Nachricht aus einer aktiven Meeting-Session stammt.\n\n{}",
+            message.thread_key,
+            message.account_key,
+            message.thread_key,
+            prepend_workspace_contract(prompt_body, message.workspace_root.as_deref())
+        );
+    }
     if message.channel == "meeting" {
         let sender = display_inbound_sender(message);
         let session_id = &message.thread_key; // thread_key == session_id
@@ -8881,6 +8899,24 @@ mod tests {
             external_created_at: "2026-04-28T12:00:00Z".to_string(),
             workspace_root: None,
             metadata: json!({}),
+            preferred_reply_modality: None,
+        }
+    }
+
+    fn routed_teams_message() -> channels::RoutedInboundMessage {
+        channels::RoutedInboundMessage {
+            message_key: "teams-msg-1".to_string(),
+            channel: "teams".to_string(),
+            account_key: "teams:bot".to_string(),
+            thread_key: "teams:bot::chat::chat-123".to_string(),
+            sender_display: "Alice".to_string(),
+            sender_address: "user-alice".to_string(),
+            subject: String::new(),
+            preview: "Bitte pruefen".to_string(),
+            body_text: "Bitte pruefen".to_string(),
+            external_created_at: "2026-04-28T12:00:00Z".to_string(),
+            workspace_root: None,
+            metadata: json!({"teams_chat_id": "chat-123"}),
             preferred_reply_modality: None,
         }
     }
@@ -10794,6 +10830,31 @@ mod tests {
         };
 
         assert_eq!(inbound_source_label(&settings, &message), "email:owner");
+    }
+
+    #[test]
+    fn teams_inbound_gets_full_channel_prompt() {
+        let root = temp_root("teams-inbound-prompt");
+        let settings = BTreeMap::new();
+        let message = routed_teams_message();
+
+        let prompt = enrich_inbound_prompt(&root, &settings, &message, &message.body_text);
+
+        assert!(prompt.contains("[Teams-Nachricht eingegangen]"));
+        assert!(prompt.contains("ctox channel send --channel teams"));
+        assert!(prompt.contains("--account-key teams:bot"));
+        assert!(prompt.contains("--thread-key 'teams:bot::chat::chat-123'"));
+        assert!(prompt.contains("Microsoft Graph"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn teams_inbound_participates_in_communication_priority() {
+        assert_eq!(source_label_dispatch_rank("teams"), 3);
+        assert_eq!(
+            inbound_source_label(&BTreeMap::new(), &routed_teams_message()),
+            "teams"
+        );
     }
 
     #[test]

@@ -192,6 +192,22 @@ Return FAIL when any of these are true:
 - the page is technically up but commercially not credible
 - the layout, hierarchy, or copy is visibly not launch-worthy
 
+## Stateful Product Failure Conditions
+
+When the reviewed slice claims a product with UI, database-backed workflow, or AI/agent automation, apply the `stateful-product-from-scratch` review contract. Return FAIL when any of these are true:
+
+- the central object, states, gates, or transitions are not modeled durably
+- UI state is backed mainly by frontend arrays or demo fixtures
+- UI writes bypass repository/service/backend mutation paths
+- drag/drop or status changes are not backend-validated
+- an AI/agent step exists only as prompt copy and has no CLI/API/tool contract
+- progress, logs, chat/messages, blockers, or transition results are not persisted
+- a progress bar or status label exists without a durable `TransitionRun` or equivalent
+- failure/blocker states are not visible to the user and stored
+- the claimed main flow lacks browser QA or mutation smoke evidence
+
+Default classification for these findings is `rework`, not `rewrite`.
+
 ## System Integration Failure Conditions
 
 Return FAIL when the reviewed slice touches an external system and any of these are true:

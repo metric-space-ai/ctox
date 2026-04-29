@@ -54,6 +54,18 @@ struct TeamsInboundMessage {
     metadata: Value,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum TeamsSendDestination {
+    Chat {
+        chat_id: String,
+    },
+    Channel {
+        team_id: String,
+        channel_id: String,
+        parent_message_id: Option<String>,
+    },
+}
+
 struct GraphTeamsClient {
     access_token: String,
     base_url: String,
@@ -656,26 +668,26 @@ fn execute_send(options: &TeamsOptions, request: &TeamsSendCommandRequest<'_>) -
         request.subject.to_string()
     };
 
-    // Determine destination: thread metadata tells us if this is a channel reply or chat
-    let send_result = if !options.chat_id.is_empty() {
-        client.send_chat_message(&options.chat_id, request.body)
-    } else if !options.team_id.is_empty() && !options.channel_id.is_empty() {
-        // Check if thread_key contains a parent message id for replying
-        let parent_msg_id = extract_parent_message_id(&thread_key);
-        if let Some(parent_id) = parent_msg_id {
-            client.send_channel_reply(
-                &options.team_id,
-                &options.channel_id,
-                &parent_id,
-                request.body,
-            )
-        } else {
-            client.send_channel_message(&options.team_id, &options.channel_id, request.body)
+    let destination = resolve_send_destination(&thread_key, options)?;
+    let (send_result, sent_team_id, sent_channel_id, sent_chat_id) = match &destination {
+        TeamsSendDestination::Chat { chat_id } => (
+            client.send_chat_message(chat_id, request.body),
+            String::new(),
+            String::new(),
+            chat_id.clone(),
+        ),
+        TeamsSendDestination::Channel {
+            team_id,
+            channel_id,
+            parent_message_id,
+        } => {
+            let result = if let Some(parent_id) = parent_message_id {
+                client.send_channel_reply(team_id, channel_id, parent_id, request.body)
+            } else {
+                client.send_channel_message(team_id, channel_id, request.body)
+            };
+            (result, team_id.clone(), channel_id.clone(), String::new())
         }
-    } else {
-        bail!(
-            "Teams send requires either CTO_TEAMS_CHAT_ID or CTO_TEAMS_TEAM_ID + CTO_TEAMS_CHANNEL_ID"
-        );
     };
 
     let sent_remote_id = send_result
@@ -684,6 +696,7 @@ fn execute_send(options: &TeamsOptions, request: &TeamsSendCommandRequest<'_>) -
         .and_then(|value| value.get("id"))
         .and_then(Value::as_str)
         .unwrap_or(&remote_id);
+    let delivery_confirmed = send_result.is_ok();
     let sender_display = request.sender_display.unwrap_or("CTOX Bot");
     let message_key = format!("{account_key}::SENT::{sent_remote_id}");
     upsert_communication_message(
@@ -707,21 +720,20 @@ fn execute_send(options: &TeamsOptions, request: &TeamsSendCommandRequest<'_>) -
             body_html: "",
             raw_payload_ref: "",
             trust_level: "high",
-            status: "sent",
+            status: if delivery_confirmed { "sent" } else { "failed" },
             seen: true,
             has_attachments: false,
             external_created_at: &timestamp,
             observed_at: &timestamp,
             metadata_json: &serde_json::to_string(&json!({
                 "teams_sent_message_id": sent_remote_id,
-                "teams_team_id": options.team_id,
-                "teams_channel_id": options.channel_id,
-                "teams_chat_id": options.chat_id,
+                "teams_team_id": sent_team_id,
+                "teams_channel_id": sent_channel_id,
+                "teams_chat_id": sent_chat_id,
             }))?,
         },
     )?;
     refresh_thread(&mut conn, &thread_key)?;
-    let delivery_confirmed = send_result.is_ok();
     Ok(json!({
         "ok": true,
         "status": if delivery_confirmed { "sent" } else { "failed" },
@@ -802,6 +814,52 @@ fn extract_parent_message_id(thread_key: &str) -> Option<String> {
         }
     }
     None
+}
+
+fn resolve_send_destination(
+    thread_key: &str,
+    options: &TeamsOptions,
+) -> Result<TeamsSendDestination> {
+    let parts: Vec<&str> = thread_key.split("::").collect();
+    if parts.len() >= 3 && parts[1] == "chat" && !parts[2].trim().is_empty() {
+        return Ok(TeamsSendDestination::Chat {
+            chat_id: parts[2].trim().to_string(),
+        });
+    }
+    if parts.len() >= 3
+        && !parts[1].trim().is_empty()
+        && !parts[2].trim().is_empty()
+        && parts[1] != "chat"
+        && parts[1] != "outbound"
+    {
+        let parent_message_id = parts
+            .get(3)
+            .map(|value| value.trim())
+            .filter(|value| {
+                !value.is_empty() && !value.starts_with("outbound") && !value.starts_with("chat")
+            })
+            .map(ToOwned::to_owned);
+        return Ok(TeamsSendDestination::Channel {
+            team_id: parts[1].trim().to_string(),
+            channel_id: parts[2].trim().to_string(),
+            parent_message_id,
+        });
+    }
+    if !options.chat_id.trim().is_empty() {
+        return Ok(TeamsSendDestination::Chat {
+            chat_id: options.chat_id.trim().to_string(),
+        });
+    }
+    if !options.team_id.trim().is_empty() && !options.channel_id.trim().is_empty() {
+        return Ok(TeamsSendDestination::Channel {
+            team_id: options.team_id.trim().to_string(),
+            channel_id: options.channel_id.trim().to_string(),
+            parent_message_id: extract_parent_message_id(thread_key),
+        });
+    }
+    bail!(
+        "Teams send requires either CTO_TEAMS_CHAT_ID or CTO_TEAMS_TEAM_ID + CTO_TEAMS_CHANNEL_ID"
+    )
 }
 
 fn build_profile_json(options: &TeamsOptions) -> Value {
@@ -1018,6 +1076,50 @@ mod tests {
         assert_eq!(extract_parent_message_id(thread), None);
         let thread = "teams:bot123::chat::chat-id-here";
         assert_eq!(extract_parent_message_id(thread), None);
+    }
+
+    #[test]
+    fn resolve_send_destination_prefers_chat_thread_key() {
+        let mut options = test_options("user@example.com", "bot", "tenant");
+        options.chat_id = "configured-chat".to_string();
+        let destination =
+            resolve_send_destination("teams:bot::chat::thread-chat", &options).unwrap();
+        assert_eq!(
+            destination,
+            TeamsSendDestination::Chat {
+                chat_id: "thread-chat".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn resolve_send_destination_prefers_channel_thread_key_over_configured_chat() {
+        let mut options = test_options("user@example.com", "bot", "tenant");
+        options.chat_id = "configured-chat".to_string();
+        let destination =
+            resolve_send_destination("teams:bot::team-1::channel-1::parent-1", &options).unwrap();
+        assert_eq!(
+            destination,
+            TeamsSendDestination::Channel {
+                team_id: "team-1".to_string(),
+                channel_id: "channel-1".to_string(),
+                parent_message_id: Some("parent-1".to_string())
+            }
+        );
+    }
+
+    #[test]
+    fn resolve_send_destination_falls_back_to_configured_chat() {
+        let mut options = test_options("user@example.com", "bot", "tenant");
+        options.chat_id = "configured-chat".to_string();
+        let destination =
+            resolve_send_destination("teams:bot::outbound::queued", &options).unwrap();
+        assert_eq!(
+            destination,
+            TeamsSendDestination::Chat {
+                chat_id: "configured-chat".to_string()
+            }
+        );
     }
 
     #[test]

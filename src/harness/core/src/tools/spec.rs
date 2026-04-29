@@ -1453,7 +1453,7 @@ fn create_channel_sync_tool() -> ToolSpec {
     properties.insert(
         "channel".to_string(),
         JsonSchema::String {
-            description: Some("Channel adapter to sync into the shared SQLite substrate. Supported values: email, jami.".to_string()),
+            description: Some("Channel adapter to sync into the shared SQLite substrate. Supported values: email, jami, teams, meeting.".to_string()),
         },
     );
     properties.insert(
@@ -1493,7 +1493,10 @@ fn create_channel_take_tool() -> ToolSpec {
     properties.insert(
         "channel".to_string(),
         JsonSchema::String {
-            description: Some("Optional channel filter such as email, jami, or tui.".to_string()),
+            description: Some(
+                "Optional channel filter such as email, jami, teams, meeting, or tui."
+                    .to_string(),
+            ),
         },
     );
     properties.insert(
@@ -1579,7 +1582,8 @@ fn create_channel_send_tool() -> ToolSpec {
         "channel".to_string(),
         JsonSchema::String {
             description: Some(
-                "Outbound channel target. Supported values: tui, email, jami.".to_string(),
+                "Outbound channel target. Supported values: tui, email, jami, teams, meeting."
+                    .to_string(),
             ),
         },
     );
@@ -1587,7 +1591,7 @@ fn create_channel_send_tool() -> ToolSpec {
         "account_key".to_string(),
         JsonSchema::String {
             description: Some(
-                "Stable local account key, for example email:me@example.com or jami:abcdef."
+                "Stable local account key, for example email:me@example.com, jami:abcdef, or teams:bot."
                     .to_string(),
             ),
         },
@@ -1649,7 +1653,7 @@ fn create_channel_send_tool() -> ToolSpec {
     ToolSpec::Function(ResponsesApiTool {
         name: "channel_send".to_string(),
         description:
-            "Send an outbound message through the CTOX channel router for tui, email, or jami."
+            "Send an outbound message through the CTOX channel router for tui, email, jami, teams, or meeting."
                 .to_string(),
         strict: false,
         defer_loading: None,

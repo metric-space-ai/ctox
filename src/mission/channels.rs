@@ -1092,7 +1092,7 @@ pub fn handle_channel_command(root: &Path, args: &[String]) -> Result<()> {
         }
         _ => {
             anyhow::bail!(
-                "usage:\n  ctox channel init [--db <path>]\n  ctox channel sync --channel <email|jami> [--db <path>] [adapter flags]\n  ctox channel take [--db <path>] [--channel <name>] [--limit <n>] [--lease-owner <owner>]\n  ctox channel ack [--db <path>] [--status <status>] <message-key>...\n  ctox channel send --channel <tui|email|jami> --account-key <key> --thread-key <key> --body <text> [--subject <text>] [--to <addr>]... [--cc <addr>]... [--attach-file <path>]... [--send-voice] [--reviewed-founder-send]\n  ctox channel founder-reply --message-key <inbound-email-key> --body <text>\n  ctox channel test --channel <tui|email|jami> [--db <path>] [--account-key <key>]\n  ctox channel ingest-tui --account-key <key> --thread-key <key> --body <text> [--sender-display <name>] [--sender-address <addr>] [--subject <text>]\n  ctox channel list [--db <path>] [--channel <name>] [--limit <n>]\n  ctox channel history --thread-key <key> [--db <path>] [--limit <n>]\n  ctox channel search --query <text> [--db <path>] [--channel <name>] [--sender <addr>] [--limit <n>]\n  ctox channel context --thread-key <key> [--db <path>] [--query <text>] [--sender <addr>] [--limit <n>]\n  ctox channel pipeline-status [--thread-key <key>] [--limit <n>]"
+                "usage:\n  ctox channel init [--db <path>]\n  ctox channel sync --channel <email|jami|teams|meeting> [--db <path>] [adapter flags]\n  ctox channel take [--db <path>] [--channel <name>] [--limit <n>] [--lease-owner <owner>]\n  ctox channel ack [--db <path>] [--status <status>] <message-key>...\n  ctox channel send --channel <tui|email|jami|teams|meeting> --account-key <key> --thread-key <key> --body <text> [--subject <text>] [--to <addr>]... [--cc <addr>]... [--attach-file <path>]... [--send-voice] [--reviewed-founder-send]\n  ctox channel founder-reply --message-key <inbound-email-key> --body <text>\n  ctox channel test --channel <tui|email|jami|teams> [--db <path>] [--account-key <key>]\n  ctox channel ingest-tui --account-key <key> --thread-key <key> --body <text> [--sender-display <name>] [--sender-address <addr>] [--subject <text>]\n  ctox channel list [--db <path>] [--channel <name>] [--limit <n>]\n  ctox channel history --thread-key <key> [--db <path>] [--limit <n>]\n  ctox channel search --query <text> [--db <path>] [--channel <name>] [--sender <addr>] [--limit <n>]\n  ctox channel context --thread-key <key> [--db <path>] [--query <text>] [--sender <addr>] [--limit <n>]\n  ctox channel pipeline-status [--thread-key <key>] [--limit <n>]"
             )
         }
     }
@@ -3316,10 +3316,11 @@ fn parse_send_request(args: &[String]) -> Result<ChannelSendRequest> {
         .map(ToOwned::to_owned)
         .unwrap_or_default();
     let to = collect_flag_values(args, "--to");
-    // "tui" and "meeting" don't have addressable recipients — tui is a local
-    // interface, meeting broadcasts to all participants via the Playwright
-    // stdin pipe. All other channels require at least one --to.
-    if channel != "tui" && channel != "meeting" && to.is_empty() {
+    // "tui", "teams", and "meeting" don't require ad hoc recipients here:
+    // tui is local, teams targets the configured Graph chat/channel or the
+    // stored Teams thread key, and meeting broadcasts through the active
+    // Playwright session. Email and Jami still need explicit remote targets.
+    if !matches!(channel.as_str(), "tui" | "teams" | "meeting") && to.is_empty() {
         anyhow::bail!("channel send for {channel} requires at least one --to value");
     }
     Ok(ChannelSendRequest {
@@ -6113,6 +6114,48 @@ mod tests {
 
         assert!(
             error.to_string().contains("blocked without review"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn parse_send_request_allows_teams_without_to_recipient() {
+        let args = vec![
+            "send".to_string(),
+            "--channel".to_string(),
+            "teams".to_string(),
+            "--account-key".to_string(),
+            "teams:bot".to_string(),
+            "--thread-key".to_string(),
+            "teams:bot::chat::chat-123".to_string(),
+            "--body".to_string(),
+            "kurze antwort".to_string(),
+        ];
+
+        let request = parse_send_request(&args).expect("teams send should not require --to");
+        assert_eq!(request.channel, "teams");
+        assert!(request.to.is_empty());
+    }
+
+    #[test]
+    fn parse_send_request_still_requires_email_to_recipient() {
+        let args = vec![
+            "send".to_string(),
+            "--channel".to_string(),
+            "email".to_string(),
+            "--account-key".to_string(),
+            "email:cto@example.com".to_string(),
+            "--thread-key".to_string(),
+            "email-thread".to_string(),
+            "--body".to_string(),
+            "kurze antwort".to_string(),
+        ];
+
+        let error = parse_send_request(&args).expect_err("email send should require --to");
+        assert!(
+            error
+                .to_string()
+                .contains("channel send for email requires at least one --to value"),
             "unexpected error: {error}"
         );
     }

@@ -841,10 +841,10 @@ ctox process-mining case case-OPS-204 --limit 200</code></pre>
             to external communication. Meeting and Jami commands are native
             communication adapters.
           </p>
-          <pre><code>ctox channel sync --channel &lt;email|jami&gt; [--db &lt;path&gt;] [adapter flags]
+          <pre><code>ctox channel sync --channel &lt;email|jami|teams|meeting&gt; [--db &lt;path&gt;] [adapter flags]
 ctox channel take [--db &lt;path&gt;] [--channel &lt;name&gt;] [--limit &lt;n&gt;] [--lease-owner &lt;owner&gt;]
 ctox channel ack [--db &lt;path&gt;] [--status &lt;status&gt;] &lt;message-key&gt;...
-ctox channel send --channel &lt;tui|email|jami&gt; --account-key &lt;key&gt; --thread-key &lt;key&gt; --body &lt;text&gt; [--subject &lt;text&gt;] [--to &lt;addr&gt;]...
+ctox channel send --channel &lt;tui|email|jami|teams|meeting&gt; --account-key &lt;key&gt; --thread-key &lt;key&gt; --body &lt;text&gt; [--subject &lt;text&gt;] [--to &lt;addr&gt;]...
 ctox channel history --thread-key &lt;key&gt; [--db &lt;path&gt;] [--limit &lt;n&gt;]
 ctox channel search --query &lt;text&gt; [--db &lt;path&gt;] [--channel &lt;name&gt;] [--sender &lt;addr&gt;] [--limit &lt;n&gt;]
 ctox channel context --thread-key &lt;key&gt; [--db &lt;path&gt;] [--query &lt;text&gt;] [--sender &lt;addr&gt;] [--limit &lt;n&gt;]

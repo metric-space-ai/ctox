@@ -1,0 +1,5 @@
+interface:
+  display_name: Stateful Product
+  short_description: Build UI, database, and AI automation as real state-driven software.
+  default_prompt:
+    - Build this as a state-driven product, not a mockup. Define the object, states, gates, transitions, durable storage, agent tool contract, UI work surface, and verification plan before implementation.
