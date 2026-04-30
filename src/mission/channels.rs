@@ -2565,9 +2565,21 @@ fn ensure_founder_outbound_body_clean(request: &ChannelSendRequest) -> Result<()
         "review-rework",
         "self-work",
         "thread_key",
+        "message_key",
         "conversation_id",
         "lease_owner",
         "route_status",
+        "routing-state",
+        "review-approval",
+        "review approval",
+        "send-proof",
+        "send proof",
+        "outbound-message-row",
+        "outbound message row",
+        "review/send proof",
+        "inbound `email:",
+        "steht jetzt auf `handled`",
+        "status `handled`",
         "sqlite",
         "host-pfad",
         "host-pfade",
@@ -6314,6 +6326,36 @@ mod tests {
                 .to_string()
                 .contains("headers were placed in the message body"),
             "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn founder_outbound_body_rejects_internal_send_status_report() {
+        let error = ensure_founder_outbound_body_clean(&ChannelSendRequest {
+            channel: "email".to_string(),
+            account_key: "email:cto1@metric-space.ai".to_string(),
+            thread_key: "mail-thread".to_string(),
+            body: "Die Founder-Mail ist als Reply raus. Review-Approval, Send-Proof, Outbound-Message-Row und Routing-State sind persistiert; Michaels Inbound `email:cto1@metric-space.ai::INBOX::105` steht jetzt auf `handled`."
+                .to_string(),
+            subject: "Kunstmen CRM: ehrlicher Zwischenstand".to_string(),
+            to: vec!["founder@example.com".to_string()],
+            cc: Vec::new(),
+            attachments: Vec::new(),
+            sender_display: None,
+            sender_address: None,
+            send_voice: false,
+            reviewed_founder_send: true,
+        })
+        .expect_err("internal send status reports must never reach founders");
+
+        let message = error.to_string();
+        assert!(
+            message.contains("internal-language leakage"),
+            "unexpected error: {message}"
+        );
+        assert!(
+            message.contains("review-approval") || message.contains("routing-state"),
+            "unexpected markers: {message}"
         );
     }
 
