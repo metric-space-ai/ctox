@@ -6288,6 +6288,40 @@ fn ensure_founder_communication_rework_runnable(
         )?;
         return Ok(queued.is_some());
     }
+    // Bug #4: the inbound-message-key dedupe above does not cover NEW
+    // founder mails that arrive on the same thread while a prior rework
+    // is `Blocked` by the review-loop circuit-breaker. Each new mail has
+    // a fresh `message_key` and would otherwise spawn a new rework on a
+    // new `work_id`, bypassing the counter-based circuit-breaker that
+    // is keyed on the prior `work_id`.
+    //
+    // Trigger is purely structural: same isolated thread-key AND prior
+    // rework state == "blocked". No string-heuristics on prose content.
+    let isolated_thread_key = isolated_founder_email_thread_key(&message.thread_key, "founder");
+    if let Some(blocked) =
+        find_blocked_founder_communication_rework_self_work_by_thread(root, &isolated_thread_key)?
+    {
+        eprintln!(
+            "ctox governance: founder_rework_blocked_by_thread_circuit thread={} prior_work_id={} new_inbound={}",
+            isolated_thread_key, blocked.work_id, message.message_key
+        );
+        let note = format!(
+            "Founder-rework circuit-breaker: a new inbound message on the same thread \
+             (message_key={}) arrived while this work is `blocked` after \
+             {} review-loop attempts. Suppressed spawning a fresh rework on a new \
+             work_id to keep the circuit-breaker effective. Resolve the substantive \
+             rework on this thread before answering further inbounds.",
+            message.message_key, FOUNDER_REWORK_REQUEUE_BLOCK_THRESHOLD
+        );
+        let _ = tickets::append_ticket_self_work_note(
+            root,
+            &blocked.work_id,
+            &note,
+            "ctox-founder-repair",
+            "internal",
+        );
+        return Ok(false);
+    }
     create_founder_communication_repair_rework(root, message, reason)?;
     Ok(true)
 }
@@ -6301,6 +6335,28 @@ fn find_founder_communication_rework_self_work(
         item.kind == FOUNDER_COMMUNICATION_REWORK_KIND
             && metadata_string(&item.metadata, "inbound_message_key").as_deref()
                 == Some(inbound_message_key)
+    }))
+}
+
+/// Bug #4 helper: find a `blocked` founder-communication rework self-work
+/// item that lives on the same isolated thread-key as the incoming message.
+///
+/// This complements `find_founder_communication_rework_self_work`, which is
+/// keyed on `inbound_message_key`. When a NEW founder mail arrives on a
+/// thread whose previous rework was structurally blocked by the
+/// review-loop circuit-breaker (`FOUNDER_REWORK_REQUEUE_BLOCK_THRESHOLD`
+/// reached), the new mail has a different `message_key` and would
+/// otherwise escape the circuit-breaker. Trigger is purely structural:
+/// same `thread_key` (already isolated by `isolated_founder_email_thread_key`)
+/// AND `state == "blocked"`. No prose heuristics.
+fn find_blocked_founder_communication_rework_self_work_by_thread(
+    root: &Path,
+    isolated_thread_key: &str,
+) -> Result<Option<tickets::TicketSelfWorkItemView>> {
+    let items = tickets::list_ticket_self_work_items(root, Some("local"), Some("blocked"), 512)?;
+    Ok(items.into_iter().find(|item| {
+        item.kind == FOUNDER_COMMUNICATION_REWORK_KIND
+            && metadata_string(&item.metadata, "thread_key").as_deref() == Some(isolated_thread_key)
     }))
 }
 
@@ -13049,6 +13105,268 @@ mod tests {
             .as_deref()
             .unwrap_or("")
             .contains("neue belastbare Grundlage")));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Bug #4 helper: routed inbound that lives on a deterministic
+    /// raw thread-key. Tests in this module use the raw thread-key;
+    /// the production code derives the isolated key via
+    /// `isolated_founder_email_thread_key`.
+    fn routed_founder_inbound(
+        message_key: &str,
+        thread_key: &str,
+    ) -> channels::RoutedInboundMessage {
+        channels::RoutedInboundMessage {
+            message_key: message_key.to_string(),
+            channel: "email".to_string(),
+            account_key: "email:cto1@metric-space.ai".to_string(),
+            thread_key: thread_key.to_string(),
+            sender_display: "Jill Cakmak".to_string(),
+            sender_address: "j.cakmak@remcapital.de".to_string(),
+            subject: "Re: Förderanträge".to_string(),
+            preview: "preview".to_string(),
+            body_text: "body".to_string(),
+            external_created_at: "2026-04-29T19:42:00Z".to_string(),
+            workspace_root: None,
+            metadata: serde_json::json!({}),
+            preferred_reply_modality: None,
+        }
+    }
+
+    /// Bug #4 baseline: with no prior rework on the thread,
+    /// `ensure_founder_communication_rework_runnable` spawns a fresh
+    /// rework self-work-item for the inbound message.
+    #[test]
+    fn founder_rework_baseline_spawns_when_no_prior_work_on_thread() {
+        let root = temp_root("ctox-founder-rework-bug4-baseline");
+        let inbound = routed_founder_inbound(
+            "email:cto1@metric-space.ai::INBOX::bug4-baseline",
+            "raw-thread-bug4-baseline",
+        );
+
+        let changed = ensure_founder_communication_rework_runnable(
+            &root,
+            &inbound,
+            "Founder mail blieb ohne geprüften Versand stehen.",
+        )
+        .expect("rework runnable check should not error");
+        assert!(changed, "first rework on the thread must spawn");
+
+        let items = tickets::list_ticket_self_work_items(&root, Some("local"), None, 64)
+            .expect("failed to list self-work");
+        let founder_items: Vec<_> = items
+            .iter()
+            .filter(|item| item.kind == FOUNDER_COMMUNICATION_REWORK_KIND)
+            .collect();
+        assert_eq!(
+            founder_items.len(),
+            1,
+            "exactly one founder rework self-work-item should be created"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Bug #4 existing dedupe: a repeated call with the same
+    /// `inbound_message_key` and an `open` prior rework re-queues
+    /// the existing item rather than spawning a duplicate.
+    #[test]
+    fn founder_rework_repeat_with_same_inbound_key_does_not_duplicate() {
+        let root = temp_root("ctox-founder-rework-bug4-same-key");
+        let inbound = routed_founder_inbound(
+            "email:cto1@metric-space.ai::INBOX::bug4-same-key",
+            "raw-thread-bug4-same-key",
+        );
+
+        ensure_founder_communication_rework_runnable(
+            &root,
+            &inbound,
+            "Founder mail blieb ohne geprüften Versand stehen.",
+        )
+        .expect("first call must succeed");
+
+        ensure_founder_communication_rework_runnable(
+            &root,
+            &inbound,
+            "Founder mail blieb ohne geprüften Versand stehen.",
+        )
+        .expect("second call must succeed");
+
+        let items = tickets::list_ticket_self_work_items(&root, Some("local"), None, 64)
+            .expect("failed to list self-work");
+        let founder_items: Vec<_> = items
+            .iter()
+            .filter(|item| item.kind == FOUNDER_COMMUNICATION_REWORK_KIND)
+            .collect();
+        assert_eq!(
+            founder_items.len(),
+            1,
+            "existing inbound-message-key dedupe must prevent a second spawn"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Bug #4 fix: a NEW founder mail arriving on the same thread
+    /// while a prior rework is `blocked` by the review-loop
+    /// circuit-breaker MUST NOT spawn a fresh rework on a new
+    /// `work_id`. Trigger is purely structural (state == blocked AND
+    /// thread_key match), no string-heuristics.
+    #[test]
+    fn founder_rework_new_inbound_on_same_thread_blocked_by_circuit() {
+        let root = temp_root("ctox-founder-rework-bug4-thread-block");
+        let raw_thread = "raw-thread-bug4-thread-block";
+        let isolated_thread = isolated_founder_email_thread_key(raw_thread, "founder");
+        let prior_inbound_key = "email:cto1@metric-space.ai::INBOX::bug4-thread-block-prior";
+
+        // Seed a prior rework self-work-item already in `blocked`
+        // state (mirrors what `requeue_review_rejected_self_work` does
+        // after FOUNDER_REWORK_REQUEUE_BLOCK_THRESHOLD review loops).
+        let seeded = tickets::put_ticket_self_work_item(
+            &root,
+            tickets::TicketSelfWorkUpsertInput {
+                source_system: "local".to_string(),
+                kind: FOUNDER_COMMUNICATION_REWORK_KIND.to_string(),
+                title: "Founder communication rework: prior".to_string(),
+                body_text: "Existing prior rework.".to_string(),
+                state: "open".to_string(),
+                metadata: serde_json::json!({
+                    "thread_key": isolated_thread,
+                    "priority": "urgent",
+                    "skill": "follow-up-orchestrator",
+                    "parent_message_key": prior_inbound_key,
+                    "inbound_message_key": prior_inbound_key,
+                    "dedupe_key": format!("founder-communication-rework:{prior_inbound_key}"),
+                }),
+            },
+            false,
+        )
+        .expect("failed to seed prior rework");
+        tickets::transition_ticket_self_work_item(
+            &root,
+            &seeded.work_id,
+            "blocked",
+            "ctox-test",
+            Some("circuit-breaker reached threshold"),
+            "internal",
+        )
+        .expect("failed to transition prior rework to blocked");
+
+        // A NEW inbound mail on the SAME thread arrives -- different
+        // `message_key`, same `thread_key`.
+        let new_inbound = routed_founder_inbound(
+            "email:cto1@metric-space.ai::INBOX::bug4-thread-block-new",
+            raw_thread,
+        );
+
+        let changed = ensure_founder_communication_rework_runnable(
+            &root,
+            &new_inbound,
+            "Neue Founder-Mail auf demselben Thread während prior=blocked.",
+        )
+        .expect("rework runnable check should not error");
+        assert!(
+            !changed,
+            "thread-scoped circuit-breaker must veto fresh rework spawn"
+        );
+
+        // Exactly one founder rework self-work-item should still exist
+        // -- the original blocked one. No new work_id was minted.
+        let items = tickets::list_ticket_self_work_items(&root, Some("local"), None, 64)
+            .expect("failed to list self-work");
+        let founder_items: Vec<_> = items
+            .iter()
+            .filter(|item| item.kind == FOUNDER_COMMUNICATION_REWORK_KIND)
+            .collect();
+        assert_eq!(
+            founder_items.len(),
+            1,
+            "no new founder rework self-work-item must be spawned (Bug #4)"
+        );
+        assert_eq!(founder_items[0].work_id, seeded.work_id);
+        assert_eq!(founder_items[0].state, "blocked");
+
+        // No new founder rework queue task should have been enqueued.
+        let tasks =
+            channels::list_queue_tasks(&root, &["pending".to_string(), "leased".to_string()], 16)
+                .expect("failed to list queue tasks");
+        assert!(
+            tasks
+                .iter()
+                .all(|task| !task.title.starts_with("Founder communication rework:")),
+            "no new founder rework should have been queued"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Bug #4 over-block guard: a NEW founder mail arriving on a
+    /// DIFFERENT thread (even when a prior rework on another thread
+    /// is `blocked`) MUST still spawn a fresh rework. The
+    /// circuit-breaker is thread-scoped, not global.
+    #[test]
+    fn founder_rework_new_inbound_on_different_thread_still_spawns() {
+        let root = temp_root("ctox-founder-rework-bug4-different-thread");
+        let blocked_raw_thread = "raw-thread-bug4-blocked";
+        let blocked_isolated_thread =
+            isolated_founder_email_thread_key(blocked_raw_thread, "founder");
+        let blocked_inbound_key = "email:cto1@metric-space.ai::INBOX::bug4-different-blocked";
+
+        let seeded = tickets::put_ticket_self_work_item(
+            &root,
+            tickets::TicketSelfWorkUpsertInput {
+                source_system: "local".to_string(),
+                kind: FOUNDER_COMMUNICATION_REWORK_KIND.to_string(),
+                title: "Founder communication rework: blocked thread".to_string(),
+                body_text: "Existing prior rework on the blocked thread.".to_string(),
+                state: "open".to_string(),
+                metadata: serde_json::json!({
+                    "thread_key": blocked_isolated_thread,
+                    "priority": "urgent",
+                    "skill": "follow-up-orchestrator",
+                    "parent_message_key": blocked_inbound_key,
+                    "inbound_message_key": blocked_inbound_key,
+                    "dedupe_key": format!("founder-communication-rework:{blocked_inbound_key}"),
+                }),
+            },
+            false,
+        )
+        .expect("failed to seed prior rework");
+        tickets::transition_ticket_self_work_item(
+            &root,
+            &seeded.work_id,
+            "blocked",
+            "ctox-test",
+            Some("circuit-breaker reached threshold"),
+            "internal",
+        )
+        .expect("failed to transition prior rework to blocked");
+
+        // A NEW inbound mail on a DIFFERENT thread arrives.
+        let other_inbound = routed_founder_inbound(
+            "email:cto1@metric-space.ai::INBOX::bug4-different-other",
+            "raw-thread-bug4-other",
+        );
+
+        let changed = ensure_founder_communication_rework_runnable(
+            &root,
+            &other_inbound,
+            "Neue Founder-Mail auf anderem Thread.",
+        )
+        .expect("rework runnable check should not error");
+        assert!(
+            changed,
+            "different-thread inbound must still spawn its own rework"
+        );
+
+        let items = tickets::list_ticket_self_work_items(&root, Some("local"), None, 64)
+            .expect("failed to list self-work");
+        let founder_items: Vec<_> = items
+            .iter()
+            .filter(|item| item.kind == FOUNDER_COMMUNICATION_REWORK_KIND)
+            .collect();
+        assert_eq!(
+            founder_items.len(),
+            2,
+            "different-thread inbound must produce a second self-work-item"
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
