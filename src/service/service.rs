@@ -7298,7 +7298,10 @@ fn maybe_redirect_platform_work_to_expertise_passes(
             .ok()
             .flatten()
     });
-    if current_item.as_ref().map(|item| item.kind.as_str()) == Some(PLATFORM_EXPERTISE_KIND) {
+    if matches!(
+        current_item.as_ref().map(|item| item.kind.as_str()),
+        Some(PLATFORM_EXPERTISE_KIND | PLATFORM_IMPLEMENTATION_KIND | STRATEGIC_DIRECTION_KIND)
+    ) {
         return Ok(false);
     }
     let thread_key = job
@@ -12548,6 +12551,56 @@ mod tests {
         let redirected = maybe_redirect_owner_visible_work_to_strategy_setup(&root, &state, &job)
             .expect("proactive founder outbound should not fail reroute check");
         assert!(!redirected);
+    }
+
+    #[test]
+    fn strategic_direction_pass_is_not_rerouted_into_platform_passes() {
+        let root = temp_root("ctox-strategy-pass-no-platform-reroute");
+        let item = tickets::put_ticket_self_work_item(
+            &root,
+            tickets::TicketSelfWorkUpsertInput {
+                source_system: "local".to_string(),
+                kind: STRATEGIC_DIRECTION_KIND.to_string(),
+                title: "Strategic direction setup".to_string(),
+                body_text: "Establish Vision and Mission before continuing Kunstmen platform work."
+                    .to_string(),
+                state: "queued".to_string(),
+                metadata: serde_json::json!({
+                    "thread_key": "kunstmen-supervisor",
+                    "workspace_root": "/home/ubuntu/workspace/kunstmen",
+                    "priority": "urgent",
+                    "skill": "plan-orchestrator",
+                    "resume_prompt": "Reset kunstmen.com so it behaves like a platform.",
+                }),
+            },
+            false,
+        )
+        .expect("failed to create strategic direction self-work");
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        let job = QueuedPrompt {
+            prompt: "Before further strategic or owner-visible execution, establish canonical runtime direction in SQLite.\n\nAfter direction is canonical, the deferred execution target is:\nReset kunstmen.com so it behaves like a platform for hiring AI employees.".to_string(),
+            goal: "Strategic direction setup".to_string(),
+            preview: "Strategic direction setup".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: Some("plan-orchestrator".to_string()),
+            leased_message_keys: vec!["queue:system::strategy".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("kunstmen-supervisor".to_string()),
+            workspace_root: Some("/home/ubuntu/workspace/kunstmen".to_string()),
+            ticket_self_work_id: Some(item.work_id.clone()),
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let redirected = maybe_redirect_platform_work_to_expertise_passes(&root, &state, &job)
+            .expect("platform reroute check should succeed");
+        assert!(!redirected);
+
+        let items = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
+            .expect("failed to list self-work");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].kind, STRATEGIC_DIRECTION_KIND);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
