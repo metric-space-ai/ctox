@@ -1,5 +1,4 @@
 use super::*;
-use crate::agent::control::SpawnAgentOptions;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::apply_role_to_config;
 
@@ -30,6 +29,11 @@ impl ToolHandler for Handler {
         } = invocation;
         let arguments = function_arguments(payload)?;
         let args: SpawnAgentArgs = parse_arguments(&arguments)?;
+        if args.fork_context {
+            return Err(FunctionCallError::RespondToModel(
+                "fork_context is disabled for CTOX sub-agents; provide a self-contained task prompt instead".to_string(),
+            ));
+        }
         let role_name = args
             .agent_type
             .as_deref()
@@ -58,8 +62,7 @@ impl ToolHandler for Handler {
                 .into(),
             )
             .await;
-        let mut config =
-            build_agent_spawn_config(&session.get_base_instructions().await, turn.as_ref())?;
+        let mut config = build_agent_spawn_config(turn.as_ref())?;
         apply_requested_spawn_agent_model_overrides(
             &session,
             turn.as_ref(),
@@ -71,13 +74,14 @@ impl ToolHandler for Handler {
         apply_role_to_config(&mut config, role_name)
             .await
             .map_err(FunctionCallError::RespondToModel)?;
+        apply_subagent_context_profile(&mut config);
         apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;
         apply_spawn_agent_overrides(&mut config, child_depth);
 
         let result = session
             .services
             .agent_control
-            .spawn_agent_with_options(
+            .spawn_agent(
                 config,
                 input_items,
                 Some(thread_spawn_source(
@@ -85,9 +89,6 @@ impl ToolHandler for Handler {
                     child_depth,
                     role_name,
                 )),
-                SpawnAgentOptions {
-                    fork_parent_spawn_call_id: args.fork_context.then(|| call_id.clone()),
-                },
             )
             .await
             .map_err(collab_spawn_error);
@@ -108,19 +109,22 @@ impl ToolHandler for Handler {
             }
             None => None,
         };
-        let (new_agent_nickname, new_agent_role) = match (&agent_snapshot, new_thread_id) {
-            (Some(snapshot), _) => (
-                snapshot.session_source.get_nickname(),
-                snapshot.session_source.get_agent_role(),
-            ),
-            (None, Some(thread_id)) => session
-                .services
-                .agent_control
-                .get_agent_nickname_and_role(thread_id)
-                .await
-                .unwrap_or((None, None)),
-            (None, None) => (None, None),
-        };
+        let (new_agent_path, new_agent_nickname, new_agent_role) =
+            match (&agent_snapshot, new_thread_id) {
+                (Some(snapshot), _) => (
+                    snapshot.session_source.get_agent_path(),
+                    snapshot.session_source.get_nickname(),
+                    snapshot.session_source.get_agent_role(),
+                ),
+                (None, Some(thread_id)) => session
+                    .services
+                    .agent_control
+                    .get_agent_nickname_and_role(thread_id)
+                    .await
+                    .map(|(nickname, role)| (None, nickname, role))
+                    .unwrap_or((None, None, None)),
+                (None, None) => (None, None, None),
+            };
         let effective_model = agent_snapshot
             .as_ref()
             .map(|snapshot| snapshot.model.clone())
@@ -157,6 +161,7 @@ impl ToolHandler for Handler {
 
         Ok(SpawnAgentResult {
             agent_id: new_thread_id.to_string(),
+            agent_path: new_agent_path.map(|path| path.to_string()),
             nickname,
         })
     }
@@ -176,6 +181,7 @@ struct SpawnAgentArgs {
 #[derive(Debug, Serialize)]
 pub(crate) struct SpawnAgentResult {
     agent_id: String,
+    agent_path: Option<String>,
     nickname: Option<String>,
 }
 

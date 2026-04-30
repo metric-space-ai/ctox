@@ -5,7 +5,12 @@ use crate::config_loader::ConfigLayerEntry;
 use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigRequirementsToml;
 use crate::plugins::PluginsManager;
+use crate::skills::SkillMetadata;
+use crate::skills::config_rules::resolve_disabled_skill_paths;
+use crate::skills::config_rules::skill_config_rules_from_stack;
+use ctox_app_server_protocol::ConfigLayerSource;
 use pretty_assertions::assert_eq;
+use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
 use tempfile::TempDir;
@@ -15,6 +20,21 @@ fn write_user_skill(codex_home: &TempDir, dir: &str, name: &str, description: &s
     fs::create_dir_all(&skill_dir).unwrap();
     let content = format!("---\nname: {name}\ndescription: {description}\n---\n\n# Body\n");
     fs::write(skill_dir.join("SKILL.md"), content).unwrap();
+}
+
+fn test_skill(name: &str, path: PathBuf) -> SkillMetadata {
+    SkillMetadata {
+        name: name.to_string(),
+        description: "test skill".to_string(),
+        short_description: None,
+        interface: None,
+        dependencies: None,
+        policy: None,
+        permission_profile: None,
+        managed_network_override: None,
+        path_to_skills_md: path,
+        scope: SkillScope::User,
+    }
 }
 
 #[test]
@@ -350,7 +370,12 @@ enabled = true
     )
     .expect("valid config layer stack");
 
-    assert_eq!(disabled_paths_from_stack(&stack), HashSet::new());
+    let skill = test_skill("demo", skill_path);
+    let skill_config_rules = skill_config_rules_from_stack(&stack);
+    assert_eq!(
+        resolve_disabled_skill_paths(&[skill], &skill_config_rules),
+        HashSet::new()
+    );
 }
 
 #[cfg_attr(windows, ignore)]
@@ -389,8 +414,42 @@ enabled = false
     )
     .expect("valid config layer stack");
 
+    let skill = test_skill("demo", skill_path.clone());
+    let skill_config_rules = skill_config_rules_from_stack(&stack);
     assert_eq!(
-        disabled_paths_from_stack(&stack),
+        resolve_disabled_skill_paths(&[skill], &skill_config_rules),
+        HashSet::from([skill_path])
+    );
+}
+
+#[cfg_attr(windows, ignore)]
+#[test]
+fn disabled_paths_for_skills_disables_matching_name_selectors() {
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let skill_path = tempdir.path().join("skills").join("demo").join("SKILL.md");
+    let skill = test_skill("github:yeet", skill_path.clone());
+    let user_file = AbsolutePathBuf::try_from(tempdir.path().join("config.toml"))
+        .expect("user config path should be absolute");
+    let user_layer = ConfigLayerEntry::new(
+        ConfigLayerSource::User { file: user_file },
+        toml::from_str(
+            r#"[[skills.config]]
+name = "github:yeet"
+enabled = false
+"#,
+        )
+        .expect("user layer toml"),
+    );
+    let stack = ConfigLayerStack::new(
+        vec![user_layer],
+        Default::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect("valid config layer stack");
+
+    let skill_config_rules = skill_config_rules_from_stack(&stack);
+    assert_eq!(
+        resolve_disabled_skill_paths(&[skill], &skill_config_rules),
         HashSet::from([skill_path])
     );
 }

@@ -137,12 +137,16 @@ fn spawn_agent_output_schema() -> JsonValue {
                 "type": "string",
                 "description": "Thread identifier for the spawned agent."
             },
+            "agent_path": {
+                "type": ["string", "null"],
+                "description": "Canonical agent path when available."
+            },
             "nickname": {
                 "type": ["string", "null"],
                 "description": "User-facing nickname for the spawned agent when available."
             }
         },
-        "required": ["agent_id", "nickname"],
+        "required": ["agent_id", "agent_path", "nickname"],
         "additionalProperties": false
     })
 }
@@ -201,6 +205,43 @@ fn close_agent_output_schema() -> JsonValue {
             }
         },
         "required": ["previous_status"],
+        "additionalProperties": false
+    })
+}
+
+fn list_agents_output_schema() -> JsonValue {
+    json!({
+        "type": "object",
+        "properties": {
+            "agents": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "agent_id": {
+                            "type": "string",
+                            "description": "Thread identifier for the spawned agent."
+                        },
+                        "agent_path": {
+                            "type": ["string", "null"],
+                            "description": "Canonical agent path when available."
+                        },
+                        "agent_nickname": {
+                            "type": ["string", "null"],
+                            "description": "User-facing nickname for the agent when available."
+                        },
+                        "agent_role": {
+                            "type": ["string", "null"],
+                            "description": "Agent role used for the spawned agent when available."
+                        },
+                        "status": agent_status_output_schema()
+                    },
+                    "required": ["agent_id", "agent_path", "agent_nickname", "agent_role", "status"],
+                    "additionalProperties": false
+                }
+            }
+        },
+        "required": ["agents"],
         "additionalProperties": false
     })
 }
@@ -326,8 +367,12 @@ impl ToolsConfig {
         let include_js_repl = features.enabled(Feature::JsRepl);
         let include_js_repl_tools_only =
             include_js_repl && features.enabled(Feature::JsReplToolsOnly);
-        let include_collab_tools = features.enabled(Feature::Collab);
-        let include_agent_jobs = features.enabled(Feature::SpawnCsv);
+        let thread_spawn_subagent = matches!(
+            session_source,
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. })
+        );
+        let include_collab_tools = features.enabled(Feature::Collab) && !thread_spawn_subagent;
+        let include_agent_jobs = features.enabled(Feature::SpawnCsv) && !thread_spawn_subagent;
         let include_request_user_input = !matches!(session_source, SessionSource::SubAgent(_));
         let include_default_mode_request_user_input =
             include_request_user_input && features.enabled(Feature::DefaultModeRequestUserInput);
@@ -1380,7 +1425,9 @@ fn create_meeting_join_tool() -> ToolSpec {
         (
             "url".to_string(),
             JsonSchema::String {
-                description: Some("The Google Meet, Microsoft Teams, or Zoom URL to join.".to_string()),
+                description: Some(
+                    "The Google Meet, Microsoft Teams, or Zoom URL to join.".to_string(),
+                ),
             },
         ),
         (
@@ -1414,7 +1461,9 @@ fn create_meeting_schedule_tool() -> ToolSpec {
         (
             "url".to_string(),
             JsonSchema::String {
-                description: Some("The Google Meet, Microsoft Teams, or Zoom URL to schedule.".to_string()),
+                description: Some(
+                    "The Google Meet, Microsoft Teams, or Zoom URL to schedule.".to_string(),
+                ),
             },
         ),
         (
@@ -1494,8 +1543,7 @@ fn create_channel_take_tool() -> ToolSpec {
         "channel".to_string(),
         JsonSchema::String {
             description: Some(
-                "Optional channel filter such as email, jami, teams, meeting, or tui."
-                    .to_string(),
+                "Optional channel filter such as email, jami, teams, meeting, or tui.".to_string(),
             ),
         },
     );
@@ -1827,15 +1875,6 @@ fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
             },
         ),
         (
-            "fork_context".to_string(),
-            JsonSchema::Boolean {
-                description: Some(
-                    "When true, fork the current thread history into the new agent before sending the initial prompt. This must be used when you want the new agent to have exactly the same context as you."
-                        .to_string(),
-                ),
-            },
-        ),
-        (
             "model".to_string(),
             JsonSchema::String {
                 description: Some(
@@ -1862,7 +1901,13 @@ fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
         Only use `spawn_agent` if and only if the user explicitly asks for sub-agents, delegation, or parallel agent work.
         Requests for depth, thoroughness, research, investigation, or detailed codebase analysis do not count as permission to spawn.
         Agent-role guidance below only helps choose which agent to use after spawning is already authorized; it never authorizes spawning by itself.
-        Spawn a sub-agent for a well-scoped task. Returns the agent id (and user-facing nickname when available) to use to communicate with this agent. This spawn_agent tool provides you access to smaller but more efficient sub-agents. A mini model can solve many tasks faster than the main model. You should follow the rules and guidelines below to use this tool.
+        Spawn a sub-agent for a well-scoped task. Returns the agent id (and user-facing nickname when available) to use to communicate with this agent. The new agent receives the explicit task prompt only, not the current thread history, so every delegated task must be self-contained. This spawn_agent tool provides you access to smaller but more efficient sub-agents. A mini model can solve many tasks faster than the main model. You should follow the rules and guidelines below to use this tool.
+
+### CTOX review governance
+- Treat spawned agents as parallel pre-review workers only.
+- Do not ask spawned agents to approve, bypass, complete, or advance the CTOX state machine or review system.
+- Sub-agent outputs are working material for the parent/root agent. The parent/root agent remains responsible for integrating the results and submitting one aggregated review-relevant outcome.
+- Do not start or continue sub-agent work after the task has entered a review phase unless the surrounding CTOX workflow explicitly created a review-specific verifier.
 
 {available_models_description}
 ### When to delegate vs. do the subtask yourself
@@ -1873,6 +1918,7 @@ fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
 
 ### Designing delegated subtasks
 - Subtasks must be concrete, well-defined, and self-contained.
+- Include all files, constraints, acceptance criteria, and review-sensitive boundaries the sub-agent needs; do not assume it can see the parent conversation.
 - Delegated subtasks must materially advance the main task.
 - Do not duplicate work between the main rollout and delegated subtasks.
 - Avoid issuing multiple delegate calls on the same unresolved thread unless the new delegated task is genuinely different and necessary.
@@ -2110,6 +2156,31 @@ fn create_send_input_tool() -> ToolSpec {
             additional_properties: Some(false.into()),
         },
         output_schema: Some(send_input_output_schema()),
+    })
+}
+
+fn create_list_agents_tool() -> ToolSpec {
+    let properties = BTreeMap::from([(
+        "path_prefix".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Optional canonical agent path prefix, for example /root/researcher.".to_string(),
+            ),
+        },
+    )]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "list_agents".to_string(),
+        description: "List active sub-agents spawned by the current parent thread. Use this to inspect parallel pre-review workers and their status without starting new work."
+            .to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::Object {
+            properties,
+            required: None,
+            additional_properties: Some(false.into()),
+        },
+        output_schema: Some(list_agents_output_schema()),
     })
 }
 
@@ -3345,6 +3416,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::UnifiedExecHandler;
     use crate::tools::handlers::ViewImageHandler;
     use crate::tools::handlers::multi_agents::CloseAgentHandler;
+    use crate::tools::handlers::multi_agents::ListAgentsHandler;
     use crate::tools::handlers::multi_agents::ResumeAgentHandler;
     use crate::tools::handlers::multi_agents::SendInputHandler;
     use crate::tools::handlers::multi_agents::SpawnAgentHandler;
@@ -3872,6 +3944,12 @@ pub(crate) fn build_specs_with_discoverable_tools(
         );
         push_tool_spec(
             &mut builder,
+            create_list_agents_tool(),
+            /*supports_parallel_tool_calls*/ false,
+            config.code_mode_enabled,
+        );
+        push_tool_spec(
+            &mut builder,
             create_resume_agent_tool(),
             /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
@@ -3890,6 +3968,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
         );
         builder.register_handler("spawn_agent", Arc::new(SpawnAgentHandler));
         builder.register_handler("send_input", Arc::new(SendInputHandler));
+        builder.register_handler("list_agents", Arc::new(ListAgentsHandler));
         builder.register_handler("resume_agent", Arc::new(ResumeAgentHandler));
         builder.register_handler("wait_agent", Arc::new(WaitAgentHandler));
         builder.register_handler("close_agent", Arc::new(CloseAgentHandler));

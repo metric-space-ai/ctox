@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
+use crate::AgentPath;
 use crate::ThreadId;
 use crate::approvals::ElicitationRequestEvent;
 use crate::config_types::ApprovalsReviewer;
@@ -2283,6 +2284,8 @@ pub enum SubAgentSource {
         parent_thread_id: ThreadId,
         depth: i32,
         #[serde(default)]
+        agent_path: Option<AgentPath>,
+        #[serde(default)]
         agent_nickname: Option<String>,
         #[serde(default, alias = "agent_type")]
         agent_role: Option<String>,
@@ -2305,6 +2308,18 @@ impl fmt::Display for SessionSource {
 }
 
 impl SessionSource {
+    pub fn get_agent_path(&self) -> Option<AgentPath> {
+        match self {
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn { agent_path, .. }) => {
+                agent_path.clone()
+            }
+            SessionSource::SubAgent(SubAgentSource::MemoryConsolidation) => {
+                Some(AgentPath::morpheus())
+            }
+            _ => None,
+        }
+    }
+
     pub fn get_nickname(&self) -> Option<String> {
         match self {
             SessionSource::SubAgent(SubAgentSource::ThreadSpawn { agent_nickname, .. }) => {

@@ -9,6 +9,9 @@ use crate::config::ConfigBuilder;
 use crate::config_loader::LoaderOverrides;
 use crate::contextual_user_message::SUBAGENT_NOTIFICATION_OPEN_TAG;
 use crate::features::Feature;
+use crate::model_provider_info::OLLAMA_OSS_PROVIDER_ID;
+use crate::model_provider_info::WireApi;
+use crate::model_provider_info::create_oss_provider_with_base_url;
 use assert_matches::assert_matches;
 use ctox_protocol::config_types::ModeKind;
 use ctox_protocol::models::ContentItem;
@@ -135,6 +138,41 @@ async fn wait_for_subagent_notification(parent_thread: &Arc<CodexThread>) -> boo
                 .raw_items()
                 .to_vec();
             if has_subagent_notification(&history_items) {
+                return true;
+            }
+            sleep(Duration::from_millis(25)).await;
+        }
+    };
+    timeout(Duration::from_secs(2), wait).await.is_ok()
+}
+
+fn captured_user_input_contains(
+    manager: &ThreadManager,
+    thread_id: ThreadId,
+    needle: &str,
+) -> bool {
+    manager.captured_ops().into_iter().any(|(id, op)| {
+        if id != thread_id {
+            return false;
+        }
+        let Op::UserInput { items, .. } = op else {
+            return false;
+        };
+        items.into_iter().any(|item| match item {
+            UserInput::Text { text, .. } => text.contains(needle),
+            _ => false,
+        })
+    })
+}
+
+async fn wait_for_captured_user_input(
+    manager: &ThreadManager,
+    thread_id: ThreadId,
+    needle: &str,
+) -> bool {
+    let wait = async {
+        loop {
+            if captured_user_input_contains(manager, thread_id, needle) {
                 return true;
             }
             sleep(Duration::from_millis(25)).await;
@@ -377,6 +415,75 @@ async fn spawn_agent_creates_thread_and_sends_prompt() {
 }
 
 #[tokio::test]
+async fn local_subagent_prompts_are_dispatched_serially() {
+    let (_home, mut config) = test_config().await;
+    config.model_provider_id = OLLAMA_OSS_PROVIDER_ID.to_string();
+    config.model_provider =
+        create_oss_provider_with_base_url("http://localhost:11434/v1", WireApi::Responses);
+    let manager = ThreadManager::with_models_provider_and_home_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+        config.codex_home.clone(),
+    );
+    let control = manager.agent_control();
+    let parent_thread_id = manager
+        .start_thread(config.clone())
+        .await
+        .expect("start parent thread")
+        .thread_id;
+
+    let first_id = control
+        .spawn_agent(
+            config.clone(),
+            text_input("first local task"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: None,
+            })),
+        )
+        .await
+        .expect("first sub-agent should spawn");
+    let second_id = control
+        .spawn_agent(
+            config.clone(),
+            text_input("second local task"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: None,
+            })),
+        )
+        .await
+        .expect("second sub-agent should spawn");
+
+    assert!(
+        wait_for_captured_user_input(&manager, first_id, "first local task").await,
+        "first local sub-agent should start"
+    );
+    assert_eq!(
+        captured_user_input_contains(&manager, second_id, "second local task"),
+        false,
+        "second local sub-agent must remain queued while first is active"
+    );
+
+    control
+        .shutdown_agent(first_id)
+        .await
+        .expect("first shutdown should submit");
+    assert!(
+        wait_for_captured_user_input(&manager, second_id, "second local task").await,
+        "second local sub-agent should start after first finalizes"
+    );
+
+    let _ = control.shutdown_agent(second_id).await;
+}
+
+#[tokio::test]
 async fn spawn_agent_can_fork_parent_thread_history() {
     let harness = AgentControlHarness::new().await;
     let (parent_thread_id, parent_thread) = harness.start_thread().await;
@@ -412,6 +519,7 @@ async fn spawn_agent_can_fork_parent_thread_history() {
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
                 depth: 1,
+                agent_path: None,
                 agent_nickname: None,
                 agent_role: None,
             })),
@@ -495,6 +603,7 @@ async fn spawn_agent_fork_injects_output_for_parent_spawn_call() {
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
                 depth: 1,
+                agent_path: None,
                 agent_nickname: None,
                 agent_role: None,
             })),
@@ -565,6 +674,7 @@ async fn spawn_agent_fork_flushes_parent_rollout_before_loading_history() {
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
                 depth: 1,
+                agent_path: None,
                 agent_nickname: None,
                 agent_role: None,
             })),
@@ -818,6 +928,7 @@ async fn spawn_child_completion_notifies_parent_history() {
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
                 depth: 1,
+                agent_path: None,
                 agent_nickname: None,
                 agent_role: Some("explorer".to_string()),
             })),
@@ -849,6 +960,7 @@ async fn completion_watcher_notifies_parent_when_child_is_missing() {
         Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id,
             depth: 1,
+            agent_path: None,
             agent_nickname: None,
             agent_role: Some("explorer".to_string()),
         })),
@@ -889,6 +1001,7 @@ async fn spawn_thread_subagent_gets_random_nickname_in_session_source() {
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
                 depth: 1,
+                agent_path: None,
                 agent_nickname: None,
                 agent_role: Some("explorer".to_string()),
             })),
@@ -908,6 +1021,7 @@ async fn spawn_thread_subagent_gets_random_nickname_in_session_source() {
         depth,
         agent_nickname,
         agent_role,
+        ..
     }) = snapshot.session_source
     else {
         panic!("expected thread-spawn sub-agent source");
@@ -939,6 +1053,7 @@ async fn spawn_thread_subagent_uses_role_specific_nickname_candidates() {
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
                 depth: 1,
+                agent_path: None,
                 agent_nickname: None,
                 agent_role: Some("researcher".to_string()),
             })),
@@ -990,6 +1105,7 @@ async fn resume_thread_subagent_restores_stored_nickname_and_role() {
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
                 depth: 1,
+                agent_path: None,
                 agent_nickname: None,
                 agent_role: Some("explorer".to_string()),
             })),
@@ -1058,6 +1174,7 @@ async fn resume_thread_subagent_restores_stored_nickname_and_role() {
             SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
                 depth: 1,
+                agent_path: None,
                 agent_nickname: None,
                 agent_role: None,
             }),
@@ -1076,6 +1193,7 @@ async fn resume_thread_subagent_restores_stored_nickname_and_role() {
     let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
         parent_thread_id: resumed_parent_thread_id,
         depth: resumed_depth,
+        agent_path: None,
         agent_nickname: resumed_nickname,
         agent_role: resumed_role,
     }) = resumed_snapshot.session_source

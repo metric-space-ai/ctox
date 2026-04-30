@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
+use tokio::sync::Mutex as AsyncMutex;
 
 /// This structure is used to add some limits on the multi-agent capabilities for Codex. In
 /// the current implementation, it limits:
@@ -20,6 +21,7 @@ use std::sync::atomic::Ordering;
 #[derive(Default)]
 pub(crate) struct Guards {
     active_agents: Mutex<ActiveAgents>,
+    pub(crate) local_subagent_serial: AsyncMutex<()>,
     total_count: AtomicUsize,
 }
 

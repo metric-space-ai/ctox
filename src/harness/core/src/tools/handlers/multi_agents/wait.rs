@@ -44,6 +44,9 @@ impl ToolHandler for Handler {
             .iter()
             .map(|id| agent_id(id))
             .collect::<Result<Vec<_>, _>>()?;
+        for receiver_thread_id in &receiver_thread_ids {
+            ensure_live_agent_is_current_child_or_missing(&session, *receiver_thread_id).await?;
+        }
         let mut receiver_agents = Vec::with_capacity(receiver_thread_ids.len());
         for receiver_thread_id in &receiver_thread_ids {
             let (agent_nickname, agent_role) = session

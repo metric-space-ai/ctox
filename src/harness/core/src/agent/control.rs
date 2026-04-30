@@ -4,15 +4,21 @@ use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::resolve_role_config;
 use crate::agent::status::is_final;
 use crate::codex_thread::ThreadConfigSnapshot;
+use crate::config::Config;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::find_thread_path_by_id_str;
+use crate::model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
+use crate::model_provider_info::ModelProviderInfo;
+use crate::model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use crate::rollout::RolloutRecorder;
+use crate::rollout::list::read_session_meta_line;
 use crate::session_prefix::format_subagent_context_line;
 use crate::session_prefix::format_subagent_notification_message;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::state_db;
 use crate::thread_manager::ThreadManagerState;
+use ctox_protocol::AgentPath;
 use ctox_protocol::ThreadId;
 use ctox_protocol::models::FunctionCallOutputPayload;
 use ctox_protocol::models::ResponseItem;
@@ -23,9 +29,13 @@ use ctox_protocol::protocol::SessionSource;
 use ctox_protocol::protocol::SubAgentSource;
 use ctox_protocol::protocol::TokenUsage;
 use ctox_protocol::user_input::UserInput;
+use serde::Serialize;
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::Weak;
 use tokio::sync::watch;
+use tracing::warn;
+use url::Url;
 
 const AGENT_NAMES: &str = include_str!("agent_names.txt");
 const FORKED_SPAWN_AGENT_OUTPUT_MESSAGE: &str = "You are the newly spawned agent. The prior conversation history was forked from your parent agent. Treat the next user message as your new task, and use the forked history only as background context.";
@@ -33,6 +43,19 @@ const FORKED_SPAWN_AGENT_OUTPUT_MESSAGE: &str = "You are the newly spawned agent
 #[derive(Clone, Debug, Default)]
 pub(crate) struct SpawnAgentOptions {
     pub(crate) fork_parent_spawn_call_id: Option<String>,
+}
+
+pub(crate) fn should_serialize_subagent_execution(config: &Config) -> bool {
+    is_local_model_provider(&config.model_provider_id, &config.model_provider)
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub(crate) struct ListedAgent {
+    pub(crate) agent_id: String,
+    pub(crate) agent_path: Option<String>,
+    pub(crate) agent_nickname: Option<String>,
+    pub(crate) agent_role: Option<String>,
+    pub(crate) status: AgentStatus,
 }
 
 fn default_agent_nickname_list() -> Vec<&'static str> {
@@ -104,6 +127,8 @@ impl AgentControl {
     ) -> CodexResult<ThreadId> {
         let state = self.upgrade()?;
         let mut reservation = self.state.reserve_spawn_slot(config.agent_max_threads)?;
+        let serialize_subagent_execution = should_serialize_subagent_execution(&config)
+            && should_serialize_session_source(session_source.as_ref());
         let inherited_shell_snapshot = self
             .inherited_shell_snapshot_for_source(&state, session_source.as_ref())
             .await;
@@ -111,6 +136,7 @@ impl AgentControl {
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
                 depth,
+                agent_path,
                 agent_role,
                 ..
             })) => {
@@ -118,9 +144,20 @@ impl AgentControl {
                 let candidate_name_refs: Vec<&str> =
                     candidate_names.iter().map(String::as_str).collect();
                 let agent_nickname = reservation.reserve_agent_nickname(&candidate_name_refs)?;
+                let agent_path = match agent_path {
+                    Some(agent_path) => Some(agent_path),
+                    None => {
+                        let segment = agent_path_segment(&agent_nickname);
+                        parent_agent_path_for_thread(&state, parent_thread_id)
+                            .await
+                            .join(&segment)
+                            .ok()
+                    }
+                };
                 Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                     parent_thread_id,
                     depth,
+                    agent_path,
                     agent_nickname: Some(agent_nickname),
                     agent_role,
                 }))
@@ -213,7 +250,8 @@ impl AgentControl {
         // TODO(jif) add helper for drain
         state.notify_thread_created(new_thread.thread_id);
 
-        self.send_input(new_thread.thread_id, items).await?;
+        self.dispatch_initial_input(new_thread.thread_id, items, serialize_subagent_execution)
+            .await?;
         self.maybe_start_completion_watcher(new_thread.thread_id, notification_source);
 
         Ok(new_thread.thread_id)
@@ -232,6 +270,7 @@ impl AgentControl {
             SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
                 depth,
+                agent_path,
                 ..
             }) => {
                 // Collab resume callers rebuild a placeholder ThreadSpawn source. Rehydrate the
@@ -261,6 +300,19 @@ impl AgentControl {
                 SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                     parent_thread_id,
                     depth,
+                    agent_path: match agent_path {
+                        Some(agent_path) => Some(agent_path),
+                        None => {
+                            let segment = resumed_agent_nickname
+                                .as_deref()
+                                .map(agent_path_segment)
+                                .unwrap_or_else(|| agent_path_segment(&thread_id.to_string()));
+                            parent_agent_path_for_thread(&state, parent_thread_id)
+                                .await
+                                .join(&segment)
+                                .ok()
+                        }
+                    },
                     agent_nickname: reserved_agent_nickname,
                     agent_role: resumed_agent_role,
                 })
@@ -315,6 +367,48 @@ impl AgentControl {
             self.state.release_spawned_thread(agent_id);
         }
         result
+    }
+
+    async fn dispatch_initial_input(
+        &self,
+        agent_id: ThreadId,
+        items: Vec<UserInput>,
+        serialize_subagent_execution: bool,
+    ) -> CodexResult<()> {
+        if !serialize_subagent_execution {
+            self.send_input(agent_id, items).await?;
+            return Ok(());
+        }
+
+        let control = self.clone();
+        tokio::spawn(async move {
+            let _serial = control.state.local_subagent_serial.lock().await;
+            if is_final(&control.get_status(agent_id).await) {
+                return;
+            }
+            if let Err(err) = control.send_input(agent_id, items).await {
+                warn!("failed to dispatch serialized sub-agent input for {agent_id}: {err}");
+                return;
+            }
+            let _ = control.wait_for_final_status(agent_id).await;
+        });
+        Ok(())
+    }
+
+    async fn wait_for_final_status(&self, agent_id: ThreadId) -> AgentStatus {
+        match self.subscribe_status(agent_id).await {
+            Ok(mut status_rx) => {
+                let mut status = status_rx.borrow().clone();
+                while !is_final(&status) {
+                    if status_rx.changed().await.is_err() {
+                        return self.get_status(agent_id).await;
+                    }
+                    status = status_rx.borrow().clone();
+                }
+                status
+            }
+            Err(_) => self.get_status(agent_id).await,
+        }
     }
 
     /// Interrupt the current task for an existing agent thread.
@@ -372,6 +466,98 @@ impl AgentControl {
             return None;
         };
         Some(thread.config_snapshot().await)
+    }
+
+    pub(crate) async fn list_agents(
+        &self,
+        parent_thread_id: ThreadId,
+        path_prefix: Option<&AgentPath>,
+    ) -> CodexResult<Vec<ListedAgent>> {
+        let state = self.upgrade()?;
+        let mut agents = Vec::new();
+        for thread_id in state.list_thread_ids().await {
+            let Ok(thread) = state.get_thread(thread_id).await else {
+                continue;
+            };
+            let snapshot = thread.config_snapshot().await;
+            let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: agent_parent_thread_id,
+                agent_path,
+                agent_nickname,
+                agent_role,
+                ..
+            }) = snapshot.session_source
+            else {
+                continue;
+            };
+            if agent_parent_thread_id != parent_thread_id {
+                continue;
+            }
+            if path_prefix
+                .is_some_and(|prefix| !agent_path_matches_prefix(agent_path.as_ref(), prefix))
+            {
+                continue;
+            }
+            agents.push(ListedAgent {
+                agent_id: thread_id.to_string(),
+                agent_path: agent_path.map(|path| path.to_string()),
+                agent_nickname,
+                agent_role,
+                status: thread.agent_status().await,
+            });
+        }
+        agents.sort_by(|left, right| {
+            left.agent_path
+                .as_deref()
+                .unwrap_or_default()
+                .cmp(right.agent_path.as_deref().unwrap_or_default())
+                .then_with(|| left.agent_id.cmp(&right.agent_id))
+        });
+        Ok(agents)
+    }
+
+    pub(crate) async fn is_thread_spawn_child_of(
+        &self,
+        parent_thread_id: ThreadId,
+        child_thread_id: ThreadId,
+    ) -> CodexResult<bool> {
+        let state = self.upgrade()?;
+        let thread = state.get_thread(child_thread_id).await?;
+        Ok(matches!(
+            thread.config_snapshot().await.session_source,
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: agent_parent_thread_id,
+                ..
+            }) if agent_parent_thread_id == parent_thread_id
+        ))
+    }
+
+    pub(crate) async fn stored_thread_spawn_parent(
+        &self,
+        config: &Config,
+        thread_id: ThreadId,
+    ) -> CodexResult<Option<ThreadId>> {
+        let rollout_path = if let Some(state_db_ctx) = state_db::get_state_db(config).await {
+            match state_db_ctx.get_thread(thread_id).await {
+                Ok(Some(metadata)) => Some(metadata.rollout_path),
+                Ok(None) | Err(_) => None,
+            }
+        } else {
+            None
+        };
+        let rollout_path = match rollout_path {
+            Some(path) => path,
+            None => find_thread_path_by_id_str(config.codex_home.as_path(), &thread_id.to_string())
+                .await?
+                .ok_or_else(|| CodexErr::ThreadNotFound(thread_id))?,
+        };
+        let session_meta = read_session_meta_line(&rollout_path).await?;
+        Ok(match session_meta.meta.source {
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id, ..
+            }) => Some(parent_thread_id),
+            _ => None,
+        })
     }
 
     /// Subscribe to status updates for `agent_id`, yielding the latest value and changes.
@@ -499,6 +685,81 @@ impl AgentControl {
         let parent_thread = state.get_thread(*parent_thread_id).await.ok()?;
         parent_thread.codex.session.user_shell().shell_snapshot()
     }
+}
+
+fn should_serialize_session_source(session_source: Option<&SessionSource>) -> bool {
+    matches!(session_source, Some(SessionSource::SubAgent(_)))
+}
+
+fn is_local_model_provider(provider_id: &str, provider: &ModelProviderInfo) -> bool {
+    provider_id == OLLAMA_OSS_PROVIDER_ID
+        || provider_id == LMSTUDIO_OSS_PROVIDER_ID
+        || provider.requires_socket_transport()
+        || provider
+            .base_url
+            .as_deref()
+            .is_some_and(is_loopback_base_url)
+}
+
+fn is_loopback_base_url(base_url: &str) -> bool {
+    let Ok(url) = Url::parse(base_url) else {
+        return false;
+    };
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    if host.eq_ignore_ascii_case("localhost") || host.ends_with(".localhost") {
+        return true;
+    }
+    host.parse::<IpAddr>()
+        .map(|addr| addr.is_loopback())
+        .unwrap_or(false)
+}
+
+async fn parent_agent_path_for_thread(
+    state: &Arc<ThreadManagerState>,
+    parent_thread_id: ThreadId,
+) -> AgentPath {
+    if let Ok(parent_thread) = state.get_thread(parent_thread_id).await {
+        if let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            agent_path: Some(agent_path),
+            ..
+        }) = parent_thread.config_snapshot().await.session_source
+        {
+            return agent_path;
+        }
+    }
+    AgentPath::root()
+}
+
+fn agent_path_segment(value: &str) -> String {
+    let mut segment = String::new();
+    let mut previous_underscore = false;
+    for ch in value.chars().flat_map(char::to_lowercase) {
+        if ch.is_ascii_lowercase() || ch.is_ascii_digit() {
+            segment.push(ch);
+            previous_underscore = false;
+        } else if !previous_underscore {
+            segment.push('_');
+            previous_underscore = true;
+        }
+    }
+    let segment = segment.trim_matches('_').to_string();
+    if segment.is_empty() {
+        "agent".to_string()
+    } else {
+        segment
+    }
+}
+
+fn agent_path_matches_prefix(agent_path: Option<&AgentPath>, prefix: &AgentPath) -> bool {
+    agent_path.is_some_and(|agent_path| {
+        agent_path == prefix
+            || agent_path
+                .as_str()
+                .strip_prefix(prefix.as_str())
+                .is_some_and(|rest| rest.starts_with('/'))
+    })
 }
 #[cfg(test)]
 #[path = "control_tests.rs"]

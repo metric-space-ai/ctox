@@ -39,6 +39,7 @@ impl ToolHandler for Handler {
                 "Agent depth limit reached. Solve the task yourself.".to_string(),
             ));
         }
+        ensure_agent_is_current_child_or_resumable(&session, &turn, receiver_thread_id).await?;
 
         session
             .send_event(

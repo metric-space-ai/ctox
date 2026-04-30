@@ -775,7 +775,10 @@ impl Notice {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct SkillConfig {
-    pub path: AbsolutePathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<AbsolutePathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     pub enabled: bool,
 }
 

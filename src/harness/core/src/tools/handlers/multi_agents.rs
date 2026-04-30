@@ -1,9 +1,9 @@
 //! Implements the collaboration tool surface for spawning and managing sub-agents.
 //!
 //! This handler translates model tool calls into `AgentControl` operations and keeps spawned
-//! agents aligned with the live turn that created them. Sub-agents start from the turn's effective
-//! config, inherit runtime-only state such as provider, approval policy, sandbox, and cwd, and
-//! then optionally layer role-specific config on top.
+//! agents aligned with the live turn that created them. Sub-agents inherit runtime-only state such
+//! as provider, approval policy, sandbox, and cwd, but start from an explicit task prompt instead
+//! of the parent thread history.
 
 use crate::agent::AgentStatus;
 use crate::agent::exceeds_thread_spawn_depth_limit;
@@ -23,7 +23,6 @@ use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use async_trait::async_trait;
 use ctox_protocol::ThreadId;
-use ctox_protocol::models::BaseInstructions;
 use ctox_protocol::models::ResponseInputItem;
 use ctox_protocol::openai_models::ReasoningEffort;
 use ctox_protocol::openai_models::ReasoningEffortPreset;
@@ -49,6 +48,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 pub(crate) use close_agent::Handler as CloseAgentHandler;
+pub(crate) use list_agents::Handler as ListAgentsHandler;
 pub(crate) use resume_agent::Handler as ResumeAgentHandler;
 pub(crate) use send_input::Handler as SendInputHandler;
 pub(crate) use spawn::Handler as SpawnAgentHandler;
@@ -58,6 +58,40 @@ pub(crate) use wait::Handler as WaitAgentHandler;
 pub(crate) const MIN_WAIT_TIMEOUT_MS: i64 = 10_000;
 pub(crate) const DEFAULT_WAIT_TIMEOUT_MS: i64 = 30_000;
 pub(crate) const MAX_WAIT_TIMEOUT_MS: i64 = 3600 * 1000;
+
+const SUBAGENT_DEVELOPER_INSTRUCTIONS: &str = r#"You are a stateless Codex sub-agent working on one bounded task for a parent agent.
+
+Context strategy:
+- You do not receive the parent conversation history.
+- Treat the user's spawn prompt as the complete task brief.
+- If context is missing, inspect the repository with available tools and skills, or report the exact blocker.
+- Do not assume decisions, constraints, or prior conclusions that were not included in your prompt or discovered locally.
+- Keep your working context focused on the assigned task.
+
+CTOX governance:
+- You are not the orchestrating agent.
+- Do not approve, bypass, advance, or emulate the review/state-machine system.
+- Do not spawn additional sub-agents or delegate work further.
+- Your output is evidence for the parent agent, which remains responsible for aggregation and review-relevant transitions.
+
+Output contract:
+- State what you changed or found.
+- List files changed, if any.
+- List checks or tests run, including failures.
+- Call out blockers, uncertainty, or assumptions explicitly.
+"#;
+
+const SUBAGENT_COMPACT_PROMPT: &str = r#"Summarize this sub-agent task for continuation.
+
+Preserve:
+- the explicit assigned task,
+- relevant files and commands inspected,
+- changes made,
+- tests/checks run and their results,
+- blockers, assumptions, and open questions.
+
+Do not add parent-thread context or review/state-machine decisions that are not present in this sub-agent thread.
+"#;
 
 #[derive(Debug, Deserialize)]
 struct CloseAgentArgs {
@@ -106,6 +140,7 @@ where
 }
 
 pub mod close_agent;
+mod list_agents;
 mod resume_agent;
 mod send_input;
 mod spawn;
@@ -177,6 +212,74 @@ fn collab_agent_error(agent_id: ThreadId, err: CodexErr) -> FunctionCallError {
     }
 }
 
+fn unowned_agent_error(agent_id: ThreadId) -> FunctionCallError {
+    FunctionCallError::RespondToModel(format!(
+        "agent with id {agent_id} is not a sub-agent spawned by this thread"
+    ))
+}
+
+async fn ensure_agent_is_current_child(
+    session: &Arc<Session>,
+    agent_id: ThreadId,
+) -> Result<(), FunctionCallError> {
+    match session
+        .services
+        .agent_control
+        .is_thread_spawn_child_of(session.conversation_id, agent_id)
+        .await
+    {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(unowned_agent_error(agent_id)),
+        Err(err) => Err(collab_agent_error(agent_id, err)),
+    }
+}
+
+async fn ensure_live_agent_is_current_child_or_missing(
+    session: &Arc<Session>,
+    agent_id: ThreadId,
+) -> Result<(), FunctionCallError> {
+    match session
+        .services
+        .agent_control
+        .is_thread_spawn_child_of(session.conversation_id, agent_id)
+        .await
+    {
+        Ok(true) | Err(CodexErr::ThreadNotFound(_)) => Ok(()),
+        Ok(false) => Err(unowned_agent_error(agent_id)),
+        Err(err) => Err(collab_agent_error(agent_id, err)),
+    }
+}
+
+async fn ensure_agent_is_current_child_or_resumable(
+    session: &Arc<Session>,
+    turn: &Arc<TurnContext>,
+    agent_id: ThreadId,
+) -> Result<(), FunctionCallError> {
+    match session
+        .services
+        .agent_control
+        .is_thread_spawn_child_of(session.conversation_id, agent_id)
+        .await
+    {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(unowned_agent_error(agent_id)),
+        Err(CodexErr::ThreadNotFound(_)) => {
+            match session
+                .services
+                .agent_control
+                .stored_thread_spawn_parent(turn.config.as_ref(), agent_id)
+                .await
+            {
+                Ok(Some(parent_thread_id)) if parent_thread_id == session.conversation_id => Ok(()),
+                Ok(Some(_)) | Ok(None) => Err(unowned_agent_error(agent_id)),
+                Err(CodexErr::ThreadNotFound(_)) => Ok(()),
+                Err(err) => Err(collab_agent_error(agent_id, err)),
+            }
+        }
+        Err(err) => Err(collab_agent_error(agent_id, err)),
+    }
+}
+
 fn thread_spawn_source(
     parent_thread_id: ThreadId,
     depth: i32,
@@ -185,6 +288,7 @@ fn thread_spawn_source(
     SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
         parent_thread_id,
         depth,
+        agent_path: None,
         agent_nickname: None,
         agent_role: agent_role.map(str::to_string),
     })
@@ -247,14 +351,32 @@ fn input_preview(items: &[UserInput]) -> String {
 /// runtime-owned fields carried on `turn`, including model selection, reasoning settings,
 /// approval policy, sandbox, and cwd. Role-specific overrides are layered after this step;
 /// skipping this helper and cloning stale config state directly can send the child agent out with
-/// the wrong provider or runtime policy.
-pub(crate) fn build_agent_spawn_config(
-    base_instructions: &BaseInstructions,
-    turn: &TurnContext,
-) -> Result<Config, FunctionCallError> {
+/// the wrong provider or runtime policy. Conversation context is intentionally not inherited:
+/// thread-spawn workers receive the explicit task prompt plus role instructions, so the parent/root
+/// agent remains responsible for aggregation and review-relevant state transitions.
+pub(crate) fn build_agent_spawn_config(turn: &TurnContext) -> Result<Config, FunctionCallError> {
     let mut config = build_agent_shared_config(turn)?;
-    config.base_instructions = Some(base_instructions.text.clone());
+    config.base_instructions = None;
+    config.developer_instructions = None;
+    config.compact_prompt = None;
     Ok(config)
+}
+
+pub(crate) fn apply_subagent_context_profile(config: &mut Config) {
+    let role_instructions = config
+        .developer_instructions
+        .take()
+        .map(|instructions| instructions.trim().to_string())
+        .filter(|instructions| !instructions.is_empty());
+    let developer_instructions = match role_instructions {
+        Some(role_instructions) => format!(
+            "{SUBAGENT_DEVELOPER_INSTRUCTIONS}\nRole-specific instructions, subordinate to the sub-agent context strategy above:\n\n{role_instructions}"
+        ),
+        None => SUBAGENT_DEVELOPER_INSTRUCTIONS.to_string(),
+    };
+    config.base_instructions = None;
+    config.developer_instructions = Some(developer_instructions);
+    config.compact_prompt = Some(SUBAGENT_COMPACT_PROMPT.to_string());
 }
 
 fn build_agent_resume_config(
@@ -265,6 +387,9 @@ fn build_agent_resume_config(
     apply_spawn_agent_overrides(&mut config, child_depth);
     // For resume, keep base instructions sourced from rollout/session metadata.
     config.base_instructions = None;
+    config.developer_instructions = None;
+    config.compact_prompt = None;
+    apply_subagent_context_profile(&mut config);
     Ok(config)
 }
 
@@ -312,11 +437,11 @@ fn apply_spawn_agent_runtime_overrides(
     Ok(())
 }
 
-fn apply_spawn_agent_overrides(config: &mut Config, child_depth: i32) {
-    if child_depth >= config.agent_max_depth {
-        let _ = config.features.disable(Feature::SpawnCsv);
-        let _ = config.features.disable(Feature::Collab);
-    }
+fn apply_spawn_agent_overrides(config: &mut Config, _child_depth: i32) {
+    // Thread-spawn subagents are leaf workers. They may produce parallel work material, but the
+    // parent/root agent owns aggregation and the single review-relevant state transition.
+    let _ = config.features.disable(Feature::SpawnCsv);
+    let _ = config.features.disable(Feature::Collab);
 }
 
 async fn apply_requested_spawn_agent_model_overrides(

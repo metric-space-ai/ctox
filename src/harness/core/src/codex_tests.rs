@@ -1087,7 +1087,9 @@ async fn recompute_token_usage_updates_model_context_window() {
 async fn turn_context_model_context_window_prefers_config_override() {
     let (_session, mut turn_context) = make_session_and_context().await;
 
-    turn_context.config.model_context_window = Some(131_072);
+    let mut config = (*turn_context.config).clone();
+    config.model_context_window = Some(131_072);
+    turn_context.config = Arc::new(config);
     turn_context.model_info.context_window = Some(272_000);
     turn_context.model_info.effective_context_window_percent = 95;
 

@@ -552,9 +552,40 @@ fn test_build_specs_collab_tools_enabled() {
     let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
     assert_contains_tool_names(
         &tools,
-        &["spawn_agent", "send_input", "wait_agent", "close_agent"],
+        &[
+            "spawn_agent",
+            "send_input",
+            "list_agents",
+            "wait_agent",
+            "close_agent",
+        ],
     );
     assert_lacks_tool_name(&tools, "spawn_agents_on_csv");
+}
+
+#[test]
+fn spawn_agent_schema_does_not_expose_context_forking() {
+    let config = test_config();
+    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+    let features = Features::with_defaults();
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let tool = create_spawn_agent_tool(&tools_config);
+    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = tool else {
+        panic!("expected function tool");
+    };
+    let JsonSchema::Object { properties, .. } = parameters else {
+        panic!("expected object parameters");
+    };
+    assert!(!properties.contains_key("fork_context"));
 }
 
 #[test]
@@ -580,11 +611,51 @@ fn test_build_specs_enable_fanout_enables_agent_jobs_and_collab_tools() {
         &[
             "spawn_agent",
             "send_input",
+            "list_agents",
             "wait_agent",
             "close_agent",
             "spawn_agents_on_csv",
         ],
     );
+}
+
+#[test]
+fn test_build_specs_thread_spawn_subagents_are_leaf_workers() {
+    let config = test_config();
+    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+    let mut features = Features::with_defaults();
+    features.enable(Feature::SpawnCsv);
+    features.normalize_dependencies();
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id: ctox_protocol::ThreadId::new(),
+            depth: 1,
+            agent_path: None,
+            agent_nickname: Some("worker".to_string()),
+            agent_role: None,
+        }),
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
+    for tool_name in [
+        "spawn_agent",
+        "send_input",
+        "list_agents",
+        "resume_agent",
+        "wait_agent",
+        "close_agent",
+        "spawn_agents_on_csv",
+        "report_agent_job_result",
+    ] {
+        assert_lacks_tool_name(&tools, tool_name);
+    }
+    assert_lacks_tool_name(&tools, "request_user_input");
 }
 
 #[test]
@@ -700,6 +771,7 @@ fn test_build_specs_agent_job_worker_tools_enabled() {
         &[
             "spawn_agent",
             "send_input",
+            "list_agents",
             "resume_agent",
             "wait_agent",
             "close_agent",
@@ -1364,6 +1436,7 @@ fn test_build_specs_gpt5_codex_default() {
             "view_image",
             "spawn_agent",
             "send_input",
+            "list_agents",
             "resume_agent",
             "wait_agent",
             "close_agent",
@@ -1387,6 +1460,7 @@ fn test_build_specs_gpt51_codex_default() {
             "view_image",
             "spawn_agent",
             "send_input",
+            "list_agents",
             "resume_agent",
             "wait_agent",
             "close_agent",
@@ -1412,6 +1486,7 @@ fn test_build_specs_gpt5_codex_unified_exec_web_search() {
             "view_image",
             "spawn_agent",
             "send_input",
+            "list_agents",
             "resume_agent",
             "wait_agent",
             "close_agent",
@@ -1437,6 +1512,7 @@ fn test_build_specs_gpt51_codex_unified_exec_web_search() {
             "view_image",
             "spawn_agent",
             "send_input",
+            "list_agents",
             "resume_agent",
             "wait_agent",
             "close_agent",
@@ -1460,6 +1536,7 @@ fn test_gpt_5_1_codex_max_defaults() {
             "view_image",
             "spawn_agent",
             "send_input",
+            "list_agents",
             "resume_agent",
             "wait_agent",
             "close_agent",
@@ -1483,6 +1560,7 @@ fn test_codex_5_1_mini_defaults() {
             "view_image",
             "spawn_agent",
             "send_input",
+            "list_agents",
             "resume_agent",
             "wait_agent",
             "close_agent",
@@ -1505,6 +1583,7 @@ fn test_gpt_5_defaults() {
             "view_image",
             "spawn_agent",
             "send_input",
+            "list_agents",
             "resume_agent",
             "wait_agent",
             "close_agent",
@@ -1528,6 +1607,7 @@ fn test_gpt_5_1_defaults() {
             "view_image",
             "spawn_agent",
             "send_input",
+            "list_agents",
             "resume_agent",
             "wait_agent",
             "close_agent",
@@ -1553,6 +1633,7 @@ fn test_gpt_5_1_codex_max_unified_exec_web_search() {
             "view_image",
             "spawn_agent",
             "send_input",
+            "list_agents",
             "resume_agent",
             "wait_agent",
             "close_agent",

@@ -5165,8 +5165,27 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: SkillsConfigWriteParams,
     ) {
-        let SkillsConfigWriteParams { path, enabled } = params;
-        let edits = vec![ConfigEdit::SetSkillConfig { path, enabled }];
+        let SkillsConfigWriteParams {
+            path,
+            name,
+            enabled,
+        } = params;
+        let edit = match (path, name) {
+            (Some(path), None) => ConfigEdit::SetSkillConfig { path, enabled },
+            (None, Some(name)) if !name.trim().is_empty() => {
+                ConfigEdit::SetSkillConfigByName { name, enabled }
+            }
+            _ => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_PARAMS_ERROR_CODE,
+                    message: "skills/config/write requires exactly one of path or name".to_string(),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+        let edits = vec![edit];
         let result = ConfigEditsBuilder::new(&self.config.codex_home)
             .with_edits(edits)
             .apply()
@@ -7581,6 +7600,7 @@ fn with_thread_spawn_agent_metadata(
             ctox_protocol::protocol::SubAgentSource::ThreadSpawn {
                 parent_thread_id,
                 depth,
+                agent_path,
                 agent_nickname: existing_agent_nickname,
                 agent_role: existing_agent_role,
             },
@@ -7588,6 +7608,7 @@ fn with_thread_spawn_agent_metadata(
             ctox_protocol::protocol::SubAgentSource::ThreadSpawn {
                 parent_thread_id,
                 depth,
+                agent_path,
                 agent_nickname: agent_nickname.or(existing_agent_nickname),
                 agent_role: agent_role.or(existing_agent_role),
             },
@@ -7961,6 +7982,7 @@ mod tests {
             source: SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
                 depth: 1,
+                agent_path: None,
                 agent_nickname: None,
                 agent_role: None,
             }),
@@ -8053,6 +8075,7 @@ mod tests {
             serde_json::to_string(&SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id: ThreadId::from_string("ad7f0408-99b8-4f6e-a46f-bd0eec433370")?,
                 depth: 1,
+                agent_path: None,
                 agent_nickname: None,
                 agent_role: None,
             }))?;

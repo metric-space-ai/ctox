@@ -1,5 +1,6 @@
 use crate::agent::exceeds_thread_spawn_depth_limit;
 use crate::agent::next_thread_spawn_depth;
+use crate::agent::should_serialize_subagent_execution;
 use crate::agent::status::is_final;
 use crate::codex::Session;
 use crate::codex::TurnContext;
@@ -9,6 +10,7 @@ use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::handlers::multi_agents::apply_subagent_context_profile;
 use crate::tools::handlers::multi_agents::build_agent_spawn_config;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
@@ -522,7 +524,7 @@ fn required_state_db(
 }
 
 async fn build_runner_options(
-    session: &Arc<Session>,
+    _session: &Arc<Session>,
     turn: &Arc<TurnContext>,
     requested_concurrency: Option<usize>,
 ) -> Result<JobRunnerOptions, FunctionCallError> {
@@ -534,10 +536,13 @@ async fn build_runner_options(
             "agent depth limit reached; this session cannot spawn more subagents".to_string(),
         ));
     }
-    let max_concurrency =
+    let mut max_concurrency =
         normalize_concurrency(requested_concurrency, turn.config.agent_max_threads);
-    let base_instructions = session.get_base_instructions().await;
-    let spawn_config = build_agent_spawn_config(&base_instructions, turn.as_ref())?;
+    let mut spawn_config = build_agent_spawn_config(turn.as_ref())?;
+    apply_subagent_context_profile(&mut spawn_config);
+    if should_serialize_subagent_execution(&spawn_config) {
+        max_concurrency = 1;
+    }
     Ok(JobRunnerOptions {
         max_concurrency,
         spawn_config,

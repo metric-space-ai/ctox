@@ -4,6 +4,7 @@ pub(crate) mod role;
 pub(crate) mod status;
 
 pub(crate) use control::AgentControl;
+pub(crate) use control::should_serialize_subagent_execution;
 pub(crate) use ctox_protocol::protocol::AgentStatus;
 pub(crate) use guards::exceeds_thread_spawn_depth_limit;
 pub(crate) use guards::next_thread_spawn_depth;

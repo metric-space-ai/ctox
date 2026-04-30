@@ -3320,7 +3320,12 @@ pub enum PluginSource {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct SkillsConfigWriteParams {
-    pub path: PathBuf,
+    /// Path-based selector.
+    #[ts(optional = nullable)]
+    pub path: Option<PathBuf>,
+    /// Name-based selector.
+    #[ts(optional = nullable)]
+    pub name: Option<String>,
     pub enabled: bool,
 }
 

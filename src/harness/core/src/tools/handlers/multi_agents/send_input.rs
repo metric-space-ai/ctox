@@ -25,6 +25,7 @@ impl ToolHandler for Handler {
         let arguments = function_arguments(payload)?;
         let args: SendInputArgs = parse_arguments(&arguments)?;
         let receiver_thread_id = agent_id(&args.id)?;
+        ensure_agent_is_current_child(&session, receiver_thread_id).await?;
         let input_items = parse_collab_input(args.message, args.items)?;
         let prompt = input_preview(&input_items);
         let (receiver_agent_nickname, receiver_agent_role) = session

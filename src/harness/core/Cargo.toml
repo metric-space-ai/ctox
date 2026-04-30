@@ -117,6 +117,20 @@ which = { workspace = true }
 wildmatch = { workspace = true }
 zip = { workspace = true }
 
+[dev-dependencies]
+assert_matches = { workspace = true }
+core_test_support = { workspace = true }
+ctox-utils-cargo-bin = { workspace = true }
+insta = { workspace = true }
+maplit = { workspace = true }
+opentelemetry = { workspace = true }
+opentelemetry_sdk = { workspace = true }
+pretty_assertions = { workspace = true }
+serial_test = { workspace = true }
+tracing-opentelemetry = { workspace = true }
+tracing-subscriber = { workspace = true }
+wiremock = { workspace = true }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { workspace = true, features = ["linux-native-async-persistent"] }
 landlock = { workspace = true }

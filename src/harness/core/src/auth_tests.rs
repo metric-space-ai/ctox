@@ -13,6 +13,7 @@ use ctox_protocol::config_types::ForcedLoginMethod;
 use pretty_assertions::assert_eq;
 use serde::Serialize;
 use serde_json::json;
+use std::env;
 use std::sync::Arc;
 use tempfile::tempdir;
 

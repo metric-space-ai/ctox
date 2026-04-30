@@ -25,6 +25,7 @@ impl ToolHandler for Handler {
         let arguments = function_arguments(payload)?;
         let args: CloseAgentArgs = parse_arguments(&arguments)?;
         let agent_id = agent_id(&args.id)?;
+        ensure_agent_is_current_child(&session, agent_id).await?;
         let (receiver_agent_nickname, receiver_agent_role) = session
             .services
             .agent_control
