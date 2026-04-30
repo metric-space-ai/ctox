@@ -5720,6 +5720,9 @@ fn platform_expertise_pass_kind(item: &tickets::TicketSelfWorkItemView) -> Optio
 }
 
 fn is_founder_or_owner_email_job(job: &QueuedPrompt) -> bool {
+    if job.outbound_email.is_some() {
+        return true;
+    }
     matches!(
         job.source_label.to_ascii_lowercase().as_str(),
         "email:owner" | "email:founder" | "email:admin"
@@ -12397,6 +12400,37 @@ mod tests {
         assert!(items[0]
             .body_text
             .contains("--thread-key kunstmen-supervisor"));
+    }
+
+    #[test]
+    fn proactive_founder_outbound_does_not_reroute_to_strategy_setup() {
+        let root = temp_root("ctox-proactive-founder-outbound-no-strategy-reroute");
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        let job = QueuedPrompt {
+            prompt: "Write the honest Kunstmen CRM interim update for the founders.".to_string(),
+            goal: "Kunstmen CRM founder interim mail".to_string(),
+            preview: "Founder outbound mail about Kunstmen CRM".to_string(),
+            source_label: "tui".to_string(),
+            suggested_skill: None,
+            leased_message_keys: Vec::new(),
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("chat-outbound".to_string()),
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: Some(channels::FounderOutboundAction {
+                account_key: "email:cto1@example.test".to_string(),
+                thread_key: "chat-outbound".to_string(),
+                subject: "Kunstmen CRM: ehrlicher Zwischenstand".to_string(),
+                to: vec!["founder@example.test".to_string()],
+                cc: Vec::new(),
+                attachments: Vec::new(),
+            }),
+            outbound_anchor: Some("tui-outbound:test".to_string()),
+        };
+
+        let redirected = maybe_redirect_owner_visible_work_to_strategy_setup(&root, &state, &job)
+            .expect("proactive founder outbound should not fail reroute check");
+        assert!(!redirected);
     }
 
     #[test]

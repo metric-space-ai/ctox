@@ -893,7 +893,14 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
     }
 }
 
+const CHAT_USAGE: &str = "usage: ctox chat \"<instruction>\" [--thread-key <key>] [--workspace <path>] [--wait] [--timeout-secs <n>] [--atif-out <path>] [--to <addr> ...] [--cc <addr> ...] [--subject <text>]";
+
 fn handle_chat(root: &Path, args: &[String]) -> anyhow::Result<()> {
+    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
+        println!("{CHAT_USAGE}");
+        return Ok(());
+    }
+
     let wait = args.iter().any(|arg| arg == "--wait");
     let thread_key = find_flag_value(args, "--thread-key").map(str::to_owned);
     let workspace = find_flag_value(args, "--workspace").map(PathBuf::from);
@@ -1078,9 +1085,7 @@ fn parse_compute_target_value(value: &str) -> anyhow::Result<engine::ComputeTarg
 
 fn build_chat_prompt(raw_prompt: &str, workspace: Option<&Path>) -> anyhow::Result<String> {
     if raw_prompt.is_empty() {
-        anyhow::bail!(
-            "usage: ctox chat \"<instruction>\" [--thread-key <key>] [--workspace <path>] [--wait] [--timeout-secs <n>] [--atif-out <path>] [--to <addr> ...] [--cc <addr> ...] [--subject <text>]"
-        );
+        anyhow::bail!(CHAT_USAGE);
     }
     if raw_prompt.starts_with("Work only inside this workspace:") || workspace.is_none() {
         return Ok(raw_prompt.to_string());
