@@ -436,6 +436,60 @@ pub fn load_prompt_identity(
     })
 }
 
+/// Whether the inbound message metadata carries the structured
+/// "auto-submitted" marker we extract from RFC 3834 / Outlook headers
+/// at IMAP/Graph ingestion time.
+///
+/// We deliberately do NOT inspect subject lines or body text here:
+/// language- and template-specific scraping belongs in skills, not in
+/// the core. This check looks only at JSON fields written by the
+/// inbound parser.
+pub fn metadata_marks_auto_submitted(metadata: &Value) -> bool {
+    let direct = metadata
+        .get("autoSubmitted")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if direct {
+        return true;
+    }
+    let suppress = metadata
+        .get("autoResponseSuppress")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if suppress {
+        return true;
+    }
+    // Defense-in-depth: when the inbound parser captured the raw
+    // header value but failed to populate the boolean (older row
+    // shape), still honour an `auto-replied`/`auto-generated`/
+    // `auto-notified` token. We compare structured tokens, not
+    // free-form strings.
+    if let Some(value) = metadata.get("autoSubmittedValue").and_then(Value::as_str) {
+        let token = value
+            .split(';')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase();
+        if !token.is_empty() && token != "no" {
+            return true;
+        }
+    }
+    false
+}
+
+/// Terminal route states that are sticky against further re-routing.
+/// Once an inbound message is acked into one of these, the service
+/// loop must NOT pull it back into `review_rework` or any other
+/// non-terminal state. New work for the same thread must arrive via a
+/// fresh inbound message (with its own message_key).
+pub fn route_status_is_terminal(route_status: &str) -> bool {
+    matches!(
+        route_status,
+        "handled" | "cancelled" | "failed" | "completed"
+    )
+}
+
 pub fn classify_email_sender(
     settings: &BTreeMap<String, String>,
     sender_address: &str,
@@ -2900,6 +2954,127 @@ pub(crate) fn record_founder_outbound_review_approval(
     Ok(())
 }
 
+/// Persist a structured "no-send" verdict for an inbound message. The
+/// terminal NO-SEND disposition is identified by a synthetic
+/// `terminal-no-send:<inbound>` digest; it does not reference any
+/// outbound action because the whole point of the verdict is that no
+/// reply is going to be drafted. Re-recording is idempotent: the
+/// underlying UNIQUE(inbound_message_key, action_digest) constraint
+/// upserts on conflict.
+pub fn record_terminal_no_send_verdict(
+    root: &Path,
+    inbound_message_key: &str,
+    reviewer: &str,
+    review_summary: &str,
+) -> Result<()> {
+    let db_path = resolve_db_path(root, None);
+    let conn = open_channel_db(&db_path)?;
+    let action_digest = format!(
+        "{:x}",
+        Sha256::digest(format!("terminal-no-send:{inbound_message_key}").as_bytes())
+    );
+    let approval_key = format!("founder-no-send:{inbound_message_key}:{action_digest}");
+    let action_json = json!({
+        "kind": "terminal_no_send",
+        "inbound_message_key": inbound_message_key,
+    })
+    .to_string();
+    let body_sha256 = format!("{:x}", Sha256::digest(b""));
+    conn.execute(
+        r#"
+        INSERT INTO communication_founder_reply_reviews (
+            approval_key, inbound_message_key, action_digest, action_json,
+            body_sha256, reviewer, review_summary, approved_at, sent_at,
+            send_result_json, terminal_no_send
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, '{}', 1)
+        ON CONFLICT(inbound_message_key, action_digest) DO UPDATE SET
+            approval_key=excluded.approval_key,
+            action_json=excluded.action_json,
+            reviewer=excluded.reviewer,
+            review_summary=excluded.review_summary,
+            approved_at=excluded.approved_at,
+            terminal_no_send=1
+        "#,
+        params![
+            approval_key,
+            inbound_message_key,
+            action_digest,
+            action_json,
+            body_sha256,
+            reviewer,
+            review_summary,
+            now_iso_string()
+        ],
+    )
+    .context("failed to record terminal NO-SEND verdict")?;
+    record_harness_flow_event_lossy(
+        root,
+        RecordHarnessFlowEventRequest {
+            event_kind: "review.no_send",
+            title: "Review verdict: no-send",
+            body_text: review_summary,
+            message_key: Some(inbound_message_key),
+            work_id: None,
+            ticket_key: None,
+            attempt_index: Some(1),
+            metadata: json!({
+                "approval_key": approval_key,
+                "terminal_no_send": true,
+            }),
+        },
+    );
+    Ok(())
+}
+
+/// Whether a structured terminal NO-SEND verdict has been recorded for
+/// the inbound message. Callers (notably the rework-spawn gate) must
+/// query this BEFORE creating new founder-communication rework, so a
+/// later auto-classifier cannot overwrite the original NO-SEND review.
+pub fn inbound_message_has_terminal_no_send(
+    root: &Path,
+    inbound_message_key: &str,
+) -> Result<bool> {
+    let db_path = resolve_db_path(root, None);
+    let conn = open_channel_db(&db_path)?;
+    let exists: i64 = conn.query_row(
+        r#"
+        SELECT EXISTS(
+            SELECT 1
+            FROM communication_founder_reply_reviews
+            WHERE inbound_message_key = ?1
+              AND terminal_no_send = 1
+            LIMIT 1
+        )
+        "#,
+        params![inbound_message_key],
+        |row| row.get(0),
+    )?;
+    Ok(exists != 0)
+}
+
+/// Whether an inbound message is structurally non-actionable (i.e. an
+/// auto-submitted/out-of-office reply per RFC 3834). The check looks
+/// only at the metadata JSON written by the inbound parser; subject
+/// and body text are not inspected here.
+pub fn inbound_message_is_auto_submitted(root: &Path, inbound_message_key: &str) -> Result<bool> {
+    let db_path = resolve_db_path(root, None);
+    let conn = open_channel_db(&db_path)?;
+    let row: Option<String> = conn
+        .query_row(
+            "SELECT metadata_json FROM communication_messages WHERE message_key = ?1",
+            params![inbound_message_key],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .context("failed to load inbound metadata for auto-submitted check")?;
+    let Some(raw) = row else {
+        return Ok(false);
+    };
+    let metadata: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
+    Ok(metadata_marks_auto_submitted(&metadata))
+}
+
 fn require_unconsumed_founder_reply_review(
     conn: &Connection,
     inbound_message_key: &str,
@@ -3031,6 +3206,38 @@ fn protected_founder_inbound_message(
     ))
 }
 
+fn message_metadata_marks_auto_submitted(conn: &Connection, message_key: &str) -> Result<bool> {
+    let raw: Option<String> = conn
+        .query_row(
+            "SELECT metadata_json FROM communication_messages WHERE message_key = ?1",
+            params![message_key],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    let Some(raw) = raw else {
+        return Ok(false);
+    };
+    let metadata: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
+    Ok(metadata_marks_auto_submitted(&metadata))
+}
+
+fn message_has_terminal_no_send_in_conn(conn: &Connection, message_key: &str) -> Result<bool> {
+    let exists: i64 = conn.query_row(
+        r#"
+        SELECT EXISTS(
+            SELECT 1
+            FROM communication_founder_reply_reviews
+            WHERE inbound_message_key = ?1
+              AND terminal_no_send = 1
+            LIMIT 1
+        )
+        "#,
+        params![message_key],
+        |row| row.get(0),
+    )?;
+    Ok(exists != 0)
+}
+
 fn guard_founder_handled_ack(
     root: &Path,
     conn: &Connection,
@@ -3041,14 +3248,29 @@ fn guard_founder_handled_ack(
         return Ok(());
     }
     for message_key in message_keys {
-        if protected_founder_inbound_message(root, conn, message_key)?
-            && !founder_reply_sent_after_review(conn, message_key)?
-        {
-            anyhow::bail!(
-                "cannot mark founder/owner/admin inbound mail as handled before an exact reviewed reply was accepted by the email adapter: {}",
-                message_key
-            );
+        if !protected_founder_inbound_message(root, conn, message_key)? {
+            continue;
         }
+        if founder_reply_sent_after_review(conn, message_key)? {
+            continue;
+        }
+        // Bug #1: an auto-submitted (RFC 3834) founder/owner/admin
+        // mail does not require a reviewed reply. The structured
+        // header marker is checked at ingestion time and persisted
+        // into metadata_json; we only consult the structured field
+        // here, never subject/body strings.
+        if message_metadata_marks_auto_submitted(conn, message_key)? {
+            continue;
+        }
+        // Bug #3: an explicit terminal NO-SEND verdict closes the
+        // inbound without a reply.
+        if message_has_terminal_no_send_in_conn(conn, message_key)? {
+            continue;
+        }
+        anyhow::bail!(
+            "cannot mark founder/owner/admin inbound mail as handled before an exact reviewed reply was accepted by the email adapter: {}",
+            message_key
+        );
     }
     Ok(())
 }
@@ -3673,6 +3895,7 @@ fn ensure_schema(conn: &Connection) -> Result<()> {
             approved_at TEXT NOT NULL,
             sent_at TEXT,
             send_result_json TEXT NOT NULL DEFAULT '{{}}',
+            terminal_no_send INTEGER NOT NULL DEFAULT 0,
             UNIQUE(inbound_message_key, action_digest)
         );
 
@@ -3689,7 +3912,39 @@ fn ensure_schema(conn: &Connection) -> Result<()> {
         "#,
     ))
     .context("failed to ensure channel schema")?;
+    ensure_terminal_no_send_column(conn)?;
     ensure_routing_rows_for_inbound(conn)?;
+    Ok(())
+}
+
+/// Add the `terminal_no_send` column to
+/// `communication_founder_reply_reviews` on existing databases that
+/// were created before the NO-SEND verdict was a structured field.
+/// New databases pick the column up from the CREATE TABLE statement
+/// in this same migration block. This is idempotent: we probe via
+/// `pragma_table_info` and only ALTER when the column is missing.
+fn ensure_terminal_no_send_column(conn: &Connection) -> Result<()> {
+    let column_exists: bool = conn
+        .query_row(
+            r#"
+            SELECT EXISTS(
+                SELECT 1
+                FROM pragma_table_info('communication_founder_reply_reviews')
+                WHERE name = 'terminal_no_send'
+            )
+            "#,
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|value| value != 0)
+        .unwrap_or(false);
+    if !column_exists {
+        conn.execute(
+            "ALTER TABLE communication_founder_reply_reviews ADD COLUMN terminal_no_send INTEGER NOT NULL DEFAULT 0",
+            [],
+        )
+        .context("failed to add terminal_no_send column to communication_founder_reply_reviews")?;
+    }
     Ok(())
 }
 
@@ -7486,5 +7741,173 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    fn unique_root(prefix: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "{prefix}-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ))
+    }
+
+    fn upsert_test_inbound(
+        conn: &mut Connection,
+        message_key: &str,
+        metadata: Value,
+    ) -> Result<()> {
+        upsert_communication_message(
+            conn,
+            UpsertMessage {
+                message_key,
+                channel: "email",
+                account_key: "email:cto1@metric-space.ai",
+                thread_key: "email/test-thread",
+                remote_id: message_key,
+                direction: "inbound",
+                folder_hint: "INBOX",
+                sender_display: "Jill",
+                sender_address: "j.cakmak@remcapital.de",
+                recipient_addresses_json: "[]",
+                cc_addresses_json: "[]",
+                bcc_addresses_json: "[]",
+                subject: "Re: any subject (irrelevant for structural test)",
+                preview: "preview",
+                body_text: "body",
+                body_html: "",
+                raw_payload_ref: "",
+                trust_level: "high",
+                status: "received",
+                seen: false,
+                has_attachments: false,
+                external_created_at: "2026-04-27T09:00:00Z",
+                observed_at: "2026-04-27T09:00:00Z",
+                metadata_json: &metadata.to_string(),
+            },
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn metadata_marks_auto_submitted_consults_only_structured_fields() {
+        // Subject and body content must NOT influence the decision —
+        // only the structured fields written by the inbound parser.
+        let positive = json!({"autoSubmitted": true});
+        assert!(metadata_marks_auto_submitted(&positive));
+        let suppress = json!({"autoResponseSuppress": true});
+        assert!(metadata_marks_auto_submitted(&suppress));
+        let raw_value = json!({"autoSubmittedValue": "auto-replied; foo=bar"});
+        assert!(metadata_marks_auto_submitted(&raw_value));
+        let neg = json!({
+            "subject": "Automatische Antwort: ich bin im Urlaub",
+            "body_text": "Out of office until 2026-05-12.",
+        });
+        assert!(
+            !metadata_marks_auto_submitted(&neg),
+            "subject/body strings must never trigger the marker"
+        );
+        let explicit_no = json!({"autoSubmitted": false, "autoSubmittedValue": "no"});
+        assert!(!metadata_marks_auto_submitted(&explicit_no));
+    }
+
+    #[test]
+    fn route_status_is_terminal_covers_documented_terminal_states() {
+        for sticky in ["handled", "cancelled", "failed", "completed"] {
+            assert!(
+                route_status_is_terminal(sticky),
+                "{sticky} must be terminal"
+            );
+        }
+        for non_sticky in ["pending", "leased", "review_rework", "blocked", ""] {
+            assert!(
+                !route_status_is_terminal(non_sticky),
+                "{non_sticky} must NOT be terminal"
+            );
+        }
+    }
+
+    #[test]
+    fn record_terminal_no_send_verdict_is_persistent_and_idempotent() -> Result<()> {
+        let root = unique_root("ctox-no-send-verdict");
+        fs::create_dir_all(root.join("runtime"))?;
+        let db_path = resolve_db_path(&root, None);
+        let mut conn = open_channel_db(&db_path)?;
+        let key = "email:cto1@metric-space.ai::ooo-1";
+        upsert_test_inbound(
+            &mut conn,
+            key,
+            json!({"autoSubmitted": true, "autoSubmittedValue": "auto-replied"}),
+        )?;
+        drop(conn);
+
+        record_terminal_no_send_verdict(&root, key, "test", "first NO-SEND: auto-reply")?;
+        assert!(inbound_message_has_terminal_no_send(&root, key)?);
+
+        // Re-recording must be idempotent and must not flip the flag.
+        record_terminal_no_send_verdict(&root, key, "test", "second NO-SEND record (idempotent)")?;
+        assert!(inbound_message_has_terminal_no_send(&root, key)?);
+
+        // A different inbound key has no verdict.
+        assert!(!inbound_message_has_terminal_no_send(
+            &root,
+            "email:cto1@metric-space.ai::other"
+        )?);
+
+        let _ = fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn inbound_message_is_auto_submitted_reads_persisted_metadata() -> Result<()> {
+        let root = unique_root("ctox-auto-submitted-metadata");
+        fs::create_dir_all(root.join("runtime"))?;
+        let db_path = resolve_db_path(&root, None);
+        let mut conn = open_channel_db(&db_path)?;
+        let auto_key = "email:cto1@metric-space.ai::ooo-2";
+        let human_key = "email:cto1@metric-space.ai::human-1";
+        upsert_test_inbound(
+            &mut conn,
+            auto_key,
+            json!({"autoSubmitted": true, "autoSubmittedValue": "auto-replied"}),
+        )?;
+        upsert_test_inbound(&mut conn, human_key, json!({"autoSubmitted": false}))?;
+        drop(conn);
+        assert!(inbound_message_is_auto_submitted(&root, auto_key)?);
+        assert!(!inbound_message_is_auto_submitted(&root, human_key)?);
+        assert!(!inbound_message_is_auto_submitted(
+            &root,
+            "email:does-not-exist"
+        )?);
+        let _ = fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn message_metadata_marks_auto_submitted_low_level_helper_works_off_db() -> Result<()> {
+        // Tests the low-level conn-bound helper used by the
+        // founder-handled-ack guard. It must consult only the
+        // structured metadata field, never subject/body strings.
+        let root = unique_root("ctox-meta-marks-auto-submitted");
+        fs::create_dir_all(root.join("runtime"))?;
+        let db_path = resolve_db_path(&root, None);
+        let mut conn = open_channel_db(&db_path)?;
+        let auto_key = "email:cto1@metric-space.ai::ooo-low";
+        let human_key = "email:cto1@metric-space.ai::human-low";
+        upsert_test_inbound(&mut conn, auto_key, json!({"autoSubmitted": true}))?;
+        upsert_test_inbound(&mut conn, human_key, json!({}))?;
+        assert!(message_metadata_marks_auto_submitted(&conn, auto_key)?);
+        assert!(!message_metadata_marks_auto_submitted(&conn, human_key)?);
+
+        // And the no-send-flag helper reads only the
+        // terminal_no_send column, not the review_summary string.
+        record_terminal_no_send_verdict(&root, auto_key, "test", "auto-replied / NO-SEND")?;
+        let conn = open_channel_db(&db_path)?;
+        assert!(message_has_terminal_no_send_in_conn(&conn, auto_key)?);
+        assert!(!message_has_terminal_no_send_in_conn(&conn, human_key)?);
+
+        let _ = fs::remove_dir_all(&root);
+        Ok(())
     }
 }

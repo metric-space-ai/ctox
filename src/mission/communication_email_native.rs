@@ -95,6 +95,22 @@ struct ParsedEmailMessage {
     body_text: String,
     body_html: String,
     has_attachments: bool,
+    /// RFC 3834 `Auto-Submitted` marker. Populated when the inbound
+    /// header is present and its value is anything other than `no` /
+    /// empty. We intentionally key off the structured RFC field instead
+    /// of subject- or body-pattern matching, so the core remains free of
+    /// language- or template-specific heuristics.
+    auto_submitted: bool,
+    /// The raw Auto-Submitted header value (e.g. `auto-replied`,
+    /// `auto-generated`) so downstream skills can branch on the
+    /// structured value when that is useful.
+    auto_submitted_value: Option<String>,
+    /// Defense-in-depth: Outlook/Exchange and Notes use the
+    /// `X-Auto-Response-Suppress` header on auto-responders (and on
+    /// out-of-office assistant mails) to avoid loops. Treating the
+    /// presence of this header as a non-actionable marker is a
+    /// structured deterministic check (not a string-pattern match).
+    auto_response_suppress: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -563,6 +579,10 @@ fn execute_sync(options: &EmailOptions) -> Result<Value> {
                                 "inReplyTo": parsed.in_reply_to,
                                 "imapFlags": fetched.flags,
                                 "technicalSelfTest": technical_self_test,
+                                "autoSubmitted": parsed.auto_submitted
+                                    || parsed.auto_response_suppress,
+                                "autoSubmittedValue": parsed.auto_submitted_value,
+                                "autoResponseSuppress": parsed.auto_response_suppress,
                             }))?,
                         },
                     )?;
@@ -1267,6 +1287,14 @@ fn parse_rfc822_message(raw: &[u8]) -> Result<ParsedEmailMessage> {
         .get_first_value("Date")
         .and_then(|value| mailparse::dateparse(&value).ok())
         .and_then(epoch_seconds_to_iso);
+    let auto_submitted_raw = parsed.headers.get_first_value("Auto-Submitted");
+    let (auto_submitted, auto_submitted_value) =
+        classify_auto_submitted_header(auto_submitted_raw.as_deref());
+    let auto_response_suppress = parsed
+        .headers
+        .get_first_value("X-Auto-Response-Suppress")
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false);
     let (body_text, body_html, has_attachments) = collect_mail_bodies(&parsed)?;
     Ok(ParsedEmailMessage {
         subject,
@@ -1280,7 +1308,35 @@ fn parse_rfc822_message(raw: &[u8]) -> Result<ParsedEmailMessage> {
         body_text,
         body_html,
         has_attachments,
+        auto_submitted,
+        auto_submitted_value,
+        auto_response_suppress,
     })
+}
+
+/// Parse an `Auto-Submitted` header value per RFC 3834 §5. We treat any
+/// keyword other than the literal `no` (or an empty/missing header) as
+/// "this is an auto-submitted message". The full set of registered
+/// keywords currently in use is `auto-generated`, `auto-replied`,
+/// `auto-notified`; downstream code should not encode that list, only
+/// the boolean.
+fn classify_auto_submitted_header(raw: Option<&str>) -> (bool, Option<String>) {
+    let Some(raw) = raw else {
+        return (false, None);
+    };
+    // Per RFC 3834 the value is a structured token followed by optional
+    // `;`-separated parameters (e.g. `auto-replied; foo=bar`). Keep only
+    // the leading token, trimmed and lowercased, for the boolean check.
+    let token = raw
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    if token.is_empty() || token == "no" {
+        return (false, Some(raw.trim().to_string()));
+    }
+    (true, Some(raw.trim().to_string()))
 }
 
 fn collect_mail_bodies(parsed: &ParsedMail<'_>) -> Result<(String, String, bool)> {
@@ -3727,5 +3783,95 @@ mod tests {
         let options = graph_options_with_token("");
         let err = acquire_graph_access_token(&options).unwrap_err();
         assert!(err.to_string().contains("no usable credentials"));
+    }
+
+    #[test]
+    fn classify_auto_submitted_header_recognises_rfc3834_keywords() {
+        use super::classify_auto_submitted_header;
+        // Missing or `no` is not auto-submitted.
+        assert_eq!(classify_auto_submitted_header(None), (false, None));
+        let (flag, raw) = classify_auto_submitted_header(Some("no"));
+        assert!(!flag);
+        assert_eq!(raw.as_deref(), Some("no"));
+
+        // RFC 3834 keywords (the structurally-defined set we care about).
+        for keyword in ["auto-replied", "auto-generated", "auto-notified"] {
+            let (flag, raw) = classify_auto_submitted_header(Some(keyword));
+            assert!(
+                flag,
+                "expected `{keyword}` to be classified as auto-submitted",
+            );
+            assert_eq!(raw.as_deref(), Some(keyword));
+        }
+
+        // RFC 3834 §5 allows `;`-separated parameters after the token;
+        // we must only inspect the leading token.
+        let (flag, raw) = classify_auto_submitted_header(Some("auto-replied; foo=bar"));
+        assert!(flag);
+        assert_eq!(raw.as_deref(), Some("auto-replied; foo=bar"));
+
+        // Whitespace-tolerant.
+        let (flag, _) = classify_auto_submitted_header(Some("  auto-replied  "));
+        assert!(flag);
+    }
+
+    #[test]
+    fn parse_rfc822_message_extracts_auto_submitted_marker_for_outlook_ooo() {
+        use super::parse_rfc822_message;
+        // Realistic Outlook OoO synthetic mail: RFC 3834
+        // Auto-Submitted plus the Outlook X-Auto-Response-Suppress
+        // defense-in-depth header. Subject is German on purpose to
+        // make sure we are NOT relying on string matching.
+        let raw = b"From: jill@example.org\r\n\
+            To: yoda@example.org\r\n\
+            Subject: =?utf-8?B?QXV0b21hdGlzY2hlIEFudHdvcnQ6IGFsbGVz?=\r\n\
+            Date: Mon, 27 Apr 2026 09:00:00 +0000\r\n\
+            Message-ID: <ooo-1@example.org>\r\n\
+            Auto-Submitted: auto-replied\r\n\
+            X-Auto-Response-Suppress: All\r\n\
+            Content-Type: text/plain; charset=utf-8\r\n\
+            \r\n\
+            Bin im Urlaub bis 2026-05-12.\r\n";
+        let parsed = parse_rfc822_message(raw).expect("parse OoO mail");
+        assert!(parsed.auto_submitted, "Auto-Submitted: auto-replied");
+        assert_eq!(parsed.auto_submitted_value.as_deref(), Some("auto-replied"));
+        assert!(
+            parsed.auto_response_suppress,
+            "X-Auto-Response-Suppress present"
+        );
+    }
+
+    #[test]
+    fn parse_rfc822_message_does_not_flag_human_reply_as_auto_submitted() {
+        use super::parse_rfc822_message;
+        let raw = b"From: jill@example.org\r\n\
+            To: yoda@example.org\r\n\
+            Subject: Re: REM Capital next steps\r\n\
+            Date: Mon, 27 Apr 2026 09:00:00 +0000\r\n\
+            Message-ID: <human-1@example.org>\r\n\
+            Content-Type: text/plain; charset=utf-8\r\n\
+            \r\n\
+            Danke fuer den Status!\r\n";
+        let parsed = parse_rfc822_message(raw).expect("parse human mail");
+        assert!(!parsed.auto_submitted);
+        assert_eq!(parsed.auto_submitted_value, None);
+        assert!(!parsed.auto_response_suppress);
+    }
+
+    #[test]
+    fn parse_rfc822_message_treats_explicit_no_marker_as_human_reply() {
+        use super::parse_rfc822_message;
+        let raw = b"From: jill@example.org\r\n\
+            To: yoda@example.org\r\n\
+            Subject: Re: REM Capital next steps\r\n\
+            Date: Mon, 27 Apr 2026 09:00:00 +0000\r\n\
+            Message-ID: <human-2@example.org>\r\n\
+            Auto-Submitted: no\r\n\
+            Content-Type: text/plain; charset=utf-8\r\n\
+            \r\n\
+            Habe ich gelesen.\r\n";
+        let parsed = parse_rfc822_message(raw).expect("parse no-marker");
+        assert!(!parsed.auto_submitted);
+        assert_eq!(parsed.auto_submitted_value.as_deref(), Some("no"));
     }
 }

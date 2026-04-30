@@ -5892,6 +5892,27 @@ fn repair_stalled_founder_communications(
         if !is_founder_or_owner_inbound_message(settings, &message) {
             continue;
         }
+        // Bug #1+#2: Auto-submitted inbound (RFC 3834 Auto-Submitted /
+        // X-Auto-Response-Suppress) is not actionable founder content.
+        // Treat as terminal-handled with a structured NO-SEND verdict
+        // so the loop never repromotes it into review_rework.
+        if channels::metadata_marks_auto_submitted(&message.metadata) {
+            let _ = channels::record_terminal_no_send_verdict(
+                root,
+                &message.message_key,
+                "service-loop",
+                "auto-submitted reply (RFC 3834): no founder-action expected",
+            );
+            continue;
+        }
+        // Bug #3: respect a previously recorded NO-SEND verdict — do
+        // not re-spawn rework for an inbound that has been adjudicated
+        // as terminally non-actionable.
+        if channels::inbound_message_has_terminal_no_send(root, &message.message_key)
+            .unwrap_or(false)
+        {
+            continue;
+        }
         if founder_thread_has_later_reviewed_send(root, &message)? {
             repaired += channels::ack_leased_messages(
                 root,
@@ -5925,6 +5946,35 @@ fn repair_stalled_founder_communications(
     let candidates = channels::list_stalled_inbound_messages(root, 64)?;
     for message in candidates {
         if !is_founder_or_owner_inbound_message(settings, &message) {
+            continue;
+        }
+        // Bug #1: auto-submitted founder mails (out-of-office, server
+        // auto-replies) are not actionable; ack as handled and persist
+        // a NO-SEND verdict so future passes don't re-promote them.
+        if channels::metadata_marks_auto_submitted(&message.metadata) {
+            let _ = channels::record_terminal_no_send_verdict(
+                root,
+                &message.message_key,
+                "service-loop",
+                "auto-submitted reply (RFC 3834): no founder-action expected",
+            );
+            let _ = channels::ack_leased_messages(
+                root,
+                std::slice::from_ref(&message.message_key),
+                "handled",
+            );
+            repaired += 1;
+            continue;
+        }
+        // Bug #3: structured NO-SEND verdict is sticky.
+        if channels::inbound_message_has_terminal_no_send(root, &message.message_key)
+            .unwrap_or(false)
+        {
+            let _ = channels::ack_leased_messages(
+                root,
+                std::slice::from_ref(&message.message_key),
+                "handled",
+            );
             continue;
         }
         if channels::founder_reply_sent_after_review_for_message(root, &message.message_key)? {
@@ -6194,6 +6244,17 @@ fn ensure_founder_communication_rework_runnable(
     message: &channels::RoutedInboundMessage,
     reason: &str,
 ) -> Result<bool> {
+    // Bug #3: a structured terminal NO-SEND verdict on this inbound is
+    // sticky for the lifetime of the inbound message_key. Never spawn
+    // a fresh rework that would overwrite the prior NO-SEND review.
+    if channels::inbound_message_has_terminal_no_send(root, &message.message_key).unwrap_or(false) {
+        return Ok(false);
+    }
+    // Bug #1: structurally non-actionable inbound (RFC 3834
+    // auto-submitted) must not trigger founder-communication rework.
+    if channels::metadata_marks_auto_submitted(&message.metadata) {
+        return Ok(false);
+    }
     if open_founder_communication_rework_for_inbound(root, &message.message_key)? {
         let _ =
             normalize_open_founder_communication_rework_queue_metadata(root, &message.message_key)?;
@@ -14565,5 +14626,245 @@ Was jetzt zu tun ist:\n\
         assert!(events
             .iter()
             .any(|event| event.mechanism_id == "review_rewrite_threshold"));
+    }
+
+    /// Bug #1: an inbound founder mail flagged via the structured
+    /// RFC 3834 Auto-Submitted marker must NOT be promoted into
+    /// `review_rework`. The repair pass should record a structured
+    /// NO-SEND verdict and leave the routing state alone.
+    #[test]
+    fn auto_submitted_founder_mail_is_not_classified_as_founder_reply() {
+        let root = temp_root("ctox-auto-submitted-no-rework");
+        let mut settings = BTreeMap::new();
+        settings.insert(
+            "CTOX_OWNER_EMAIL_ADDRESS".to_string(),
+            "michael.welsch@metric-space.ai".to_string(),
+        );
+        settings.insert(
+            "CTOX_FOUNDER_EMAIL_ADDRESSES".to_string(),
+            "j.cakmak@remcapital.de".to_string(),
+        );
+        runtime_env::save_runtime_env_map(&root, &settings)
+            .expect("failed to persist owner setting");
+
+        let inbound_key = "email:cto1@metric-space.ai::INBOX::ooo-jill";
+        let db_path = root.join("runtime/ctox.sqlite3");
+        let conn = channels::open_channel_db(&db_path).expect("failed to open channel db");
+        // Subject in German, identical to a real human reply, on
+        // purpose: only the structured Auto-Submitted metadata field
+        // should determine classification. No string scraping.
+        conn.execute(
+            r#"INSERT INTO communication_messages (
+                message_key, channel, account_key, thread_key, remote_id, direction, folder_hint,
+                sender_display, sender_address, recipient_addresses_json, cc_addresses_json,
+                bcc_addresses_json, subject, preview, body_text, body_html, raw_payload_ref,
+                trust_level, status, seen, has_attachments, external_created_at, observed_at,
+                metadata_json
+            ) VALUES (
+                ?1, 'email', 'email:cto1@metric-space.ai', 'thread-ooo-1',
+                'remote-ooo-1', 'inbound', 'INBOX', 'Jill Cakmak',
+                'j.cakmak@remcapital.de', '[]', '[]', '[]',
+                'Re: REM Capital Förderanträge',
+                'Bin im Urlaub.',
+                'Bin im Urlaub bis 2026-05-12.',
+                '', '', 'high', 'received', 0, 0,
+                '2026-04-27T09:00:00Z', '2026-04-27T09:00:00Z',
+                '{"autoSubmitted": true, "autoSubmittedValue": "auto-replied"}'
+            )"#,
+            rusqlite::params![inbound_key],
+        )
+        .expect("failed to insert auto-submitted founder inbound");
+        conn.execute(
+            r#"INSERT INTO communication_routing_state (
+                message_key, route_status, lease_owner, leased_at, acked_at, last_error, updated_at
+            ) VALUES (?1, 'failed', NULL, NULL, NULL, NULL, '2026-04-27T09:00:00Z')"#,
+            rusqlite::params![inbound_key],
+        )
+        .expect("failed to insert routing state");
+        drop(conn);
+
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        let _ = repair_stalled_founder_communications(&root, &state, &settings)
+            .expect("repair pass should run");
+
+        // No founder-communication rework queue task spawned.
+        let tasks =
+            channels::list_queue_tasks(&root, &["pending".to_string(), "leased".to_string()], 10)
+                .expect("failed to list queue tasks");
+        let founder_rework_count = tasks
+            .iter()
+            .filter(|task| task.title.starts_with("Founder communication rework:"))
+            .count();
+        assert_eq!(
+            founder_rework_count, 0,
+            "auto-submitted inbound must not spawn founder rework"
+        );
+        // A structured NO-SEND verdict must have been persisted.
+        assert!(
+            channels::inbound_message_has_terminal_no_send(&root, inbound_key)
+                .expect("verdict lookup")
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Bug #2: once an inbound founder mail (one that does not require
+    /// a reviewed reply, e.g. auto-submitted) is acked into `handled`,
+    /// further iterations of the repair loop must NOT pull it back into
+    /// `review_rework`.
+    #[test]
+    fn handled_route_status_is_sticky_for_auto_submitted_inbound() {
+        let root = temp_root("ctox-handled-sticky");
+        let mut settings = BTreeMap::new();
+        settings.insert(
+            "CTOX_OWNER_EMAIL_ADDRESS".to_string(),
+            "michael.welsch@metric-space.ai".to_string(),
+        );
+        settings.insert(
+            "CTOX_FOUNDER_EMAIL_ADDRESSES".to_string(),
+            "d.lottes@remcapital.de".to_string(),
+        );
+        runtime_env::save_runtime_env_map(&root, &settings)
+            .expect("failed to persist owner setting");
+
+        let inbound_key = "email:cto1@metric-space.ai::INBOX::ooo-dom";
+        let db_path = root.join("runtime/ctox.sqlite3");
+        let conn = channels::open_channel_db(&db_path).expect("failed to open channel db");
+        conn.execute(
+            r#"INSERT INTO communication_messages (
+                message_key, channel, account_key, thread_key, remote_id, direction, folder_hint,
+                sender_display, sender_address, recipient_addresses_json, cc_addresses_json,
+                bcc_addresses_json, subject, preview, body_text, body_html, raw_payload_ref,
+                trust_level, status, seen, has_attachments, external_created_at, observed_at,
+                metadata_json
+            ) VALUES (
+                ?1, 'email', 'email:cto1@metric-space.ai', 'thread-ooo-2',
+                'remote-ooo-2', 'inbound', 'INBOX', 'Dominic Lottes',
+                'd.lottes@remcapital.de', '[]', '[]', '[]',
+                'Re: REM Capital Förderanträge', 'Out of office.', 'Bin out of office bis 2026-05-12.',
+                '', '', 'high', 'received', 0, 0,
+                '2026-04-27T10:00:00Z', '2026-04-27T10:00:00Z',
+                '{"autoSubmitted": true, "autoSubmittedValue": "auto-replied"}'
+            )"#,
+            rusqlite::params![inbound_key],
+        )
+        .expect("failed to insert founder inbound");
+        // Pre-existing handled state with no acked_at (the operator
+        // ack path leaves a `handled` row that's missing a reviewed
+        // reply).
+        conn.execute(
+            r#"INSERT INTO communication_routing_state (
+                message_key, route_status, lease_owner, leased_at, acked_at, last_error, updated_at
+            ) VALUES (?1, 'handled', NULL, NULL, '2026-04-27T11:00:00Z', NULL, '2026-04-27T11:00:00Z')"#,
+            rusqlite::params![inbound_key],
+        )
+        .expect("failed to insert handled state");
+        drop(conn);
+
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        // Run the repair pass twice — the second iteration must be a
+        // no-op for this inbound (Bug #2 was: each iteration flipped
+        // back into review_rework).
+        for _ in 0..2 {
+            let _ = repair_stalled_founder_communications(&root, &state, &settings)
+                .expect("repair pass should run");
+        }
+
+        let conn = channels::open_channel_db(&db_path).expect("reopen channel db");
+        let route_status: String = conn
+            .query_row(
+                "SELECT route_status FROM communication_routing_state WHERE message_key = ?1",
+                rusqlite::params![inbound_key],
+                |row| row.get(0),
+            )
+            .expect("failed to load route status");
+        assert_eq!(
+            route_status, "handled",
+            "handled state must be sticky for auto-submitted founder inbound"
+        );
+        // No rework queue task created.
+        let tasks =
+            channels::list_queue_tasks(&root, &["pending".to_string(), "leased".to_string()], 10)
+                .expect("failed to list queue tasks");
+        assert!(tasks
+            .iter()
+            .all(|task| !task.title.starts_with("Founder communication rework:")));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Bug #3: once a NO-SEND verdict has been recorded for an inbound
+    /// message_key, no later pass may spawn a founder-communication
+    /// rework that would functionally overwrite that verdict.
+    #[test]
+    fn rework_spawn_is_blocked_when_terminal_no_send_verdict_exists() {
+        let root = temp_root("ctox-no-send-blocks-rework");
+        let inbound_key = "email:cto1@metric-space.ai::INBOX::no-send-keep";
+        // First, persist the inbound message and a NO-SEND verdict.
+        let db_path = root.join("runtime/ctox.sqlite3");
+        let conn = channels::open_channel_db(&db_path).expect("failed to open channel db");
+        conn.execute(
+            r#"INSERT INTO communication_messages (
+                message_key, channel, account_key, thread_key, remote_id, direction, folder_hint,
+                sender_display, sender_address, recipient_addresses_json, cc_addresses_json,
+                bcc_addresses_json, subject, preview, body_text, body_html, raw_payload_ref,
+                trust_level, status, seen, has_attachments, external_created_at, observed_at,
+                metadata_json
+            ) VALUES (
+                ?1, 'email', 'email:cto1@metric-space.ai', 'thread-no-send',
+                'remote-no-send', 'inbound', 'INBOX', 'Jill Cakmak',
+                'j.cakmak@remcapital.de', '[]', '[]', '[]',
+                'Re: Förderanträge', 'preview', 'irrelevant body text',
+                '', '', 'high', 'received', 0, 0,
+                '2026-04-27T09:00:00Z', '2026-04-27T09:00:00Z',
+                '{"autoSubmitted": true}'
+            )"#,
+            rusqlite::params![inbound_key],
+        )
+        .expect("failed to insert founder inbound");
+        drop(conn);
+        channels::record_terminal_no_send_verdict(
+            &root,
+            inbound_key,
+            "external-review",
+            "Jill's April 27, 2026 message is only an out-of-office auto-reply, so this thread should remain unanswered until there is a substantive founder reply.",
+        )
+        .expect("failed to record NO-SEND verdict");
+
+        let routed = channels::RoutedInboundMessage {
+            message_key: inbound_key.to_string(),
+            channel: "email".to_string(),
+            account_key: "email:cto1@metric-space.ai".to_string(),
+            thread_key: "thread-no-send".to_string(),
+            sender_display: "Jill Cakmak".to_string(),
+            sender_address: "j.cakmak@remcapital.de".to_string(),
+            subject: "Re: Förderanträge".to_string(),
+            preview: "preview".to_string(),
+            body_text: "irrelevant body text".to_string(),
+            external_created_at: "2026-04-27T09:00:00Z".to_string(),
+            workspace_root: None,
+            metadata: serde_json::json!({}),
+            preferred_reply_modality: None,
+        };
+        let changed = ensure_founder_communication_rework_runnable(
+            &root,
+            &routed,
+            "Founder communication is stalled without a reviewed sent reply; restore the existing rework",
+        )
+        .expect("rework runnable check should not error");
+        assert!(
+            !changed,
+            "NO-SEND verdict must veto the rework spawn (Bug #3)"
+        );
+
+        // No queue task created.
+        let tasks =
+            channels::list_queue_tasks(&root, &["pending".to_string(), "leased".to_string()], 10)
+                .expect("failed to list queue tasks");
+        assert!(
+            tasks
+                .iter()
+                .all(|task| !task.title.starts_with("Founder communication rework:")),
+            "no founder rework should have been enqueued"
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 }
