@@ -1460,6 +1460,25 @@ sql_escape() {
   printf "%s" "$1" | sed "s/'/''/g"
 }
 
+run_sqlite_script() {
+  local db_path="$1"
+  local label="$2"
+  local sql_file="$3"
+  local attempts="${4:-6}"
+  local delay="${5:-2}"
+  local attempt
+  for ((attempt = 1; attempt <= attempts; attempt++)); do
+    if sqlite3 -cmd ".timeout 60000" "$db_path" < "$sql_file"; then
+      return 0
+    fi
+    if [[ "$attempt" -lt "$attempts" ]]; then
+      tui_note "${label}: sqlite busy, retry ${attempt}/${attempts}"
+      sleep "$delay"
+    fi
+  done
+  return 1
+}
+
 azure_foundry_responses_base_url() {
   local endpoint="${1:-}"
   endpoint="${endpoint%"${endpoint##*[![:space:]]}"}"
@@ -1535,8 +1554,12 @@ write_runtime_sqlite_config() {
     tts_model="speaches-ai/piper-en_US-lessac-medium [CPU EN]"
   fi
 
-  sqlite3 "$db_path" <<SQL
+  local sql_file
+  sql_file="$(mktemp)"
+  cat > "$sql_file" <<SQL
+.timeout 60000
 PRAGMA journal_mode=WAL;
+PRAGMA busy_timeout=60000;
 CREATE TABLE IF NOT EXISTS runtime_env_kv (
   env_key TEXT PRIMARY KEY,
   env_value TEXT NOT NULL
@@ -1607,6 +1630,10 @@ INSERT INTO runtime_env_kv(env_key, env_value) VALUES
 ('CTOX_WEB_SEARCH_PAGE_CACHE_TTL_SECS', '259200');
 COMMIT;
 SQL
+  run_sqlite_script "$db_path" "runtime sqlite config" "$sql_file"
+  local rc=$?
+  rm -f "$sql_file"
+  return "$rc"
 }
 
 # ── Rebuild mode (called by `ctox update apply`) ────────────────────────────
@@ -1633,7 +1660,7 @@ run_rebuild() {
 
   # Keep the web stack operational after source upgrades, not only after first
   # install. These are idempotent and leave existing runtime config untouched.
-  ensure_web_runtime_defaults "$STATE_ROOT"
+  ensure_web_runtime_defaults "$STATE_ROOT" || tui_note "web runtime defaults could not be refreshed during rebuild; keeping existing runtime config"
   setup_browser_runtime "$root" || true
   build_google_fetch_helper "$root" || true
 
@@ -1658,8 +1685,12 @@ ensure_web_runtime_defaults() {
   command -v sqlite3 >/dev/null 2>&1 || return 0
   mkdir -p "$state_root"
   local db_path="$state_root/ctox.sqlite3"
-  sqlite3 "$db_path" <<SQL
+  local sql_file
+  sql_file="$(mktemp)"
+  cat > "$sql_file" <<SQL
+.timeout 60000
 PRAGMA journal_mode=WAL;
+PRAGMA busy_timeout=60000;
 CREATE TABLE IF NOT EXISTS runtime_env_kv (
   env_key TEXT PRIMARY KEY,
   env_value TEXT NOT NULL
@@ -1673,6 +1704,10 @@ INSERT OR IGNORE INTO runtime_env_kv(env_key, env_value) VALUES
 ('CTOX_WEB_SEARCH_CACHE_TTL_SECS', '86400'),
 ('CTOX_WEB_SEARCH_PAGE_CACHE_TTL_SECS', '259200');
 SQL
+  run_sqlite_script "$db_path" "web runtime defaults" "$sql_file"
+  local rc=$?
+  rm -f "$sql_file"
+  return "$rc"
 }
 
 # Auto-detect without interactivity (for rebuild / non-interactive)
