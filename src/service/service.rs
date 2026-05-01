@@ -7647,8 +7647,16 @@ fn queue_ticket_self_work_item(
     root: &Path,
     item: &tickets::TicketSelfWorkItemView,
 ) -> Result<Option<channels::QueueTaskView>> {
+    queue_ticket_self_work_item_ignoring(root, item, &[])
+}
+
+fn queue_ticket_self_work_item_ignoring(
+    root: &Path,
+    item: &tickets::TicketSelfWorkItemView,
+    ignored_message_keys: &[String],
+) -> Result<Option<channels::QueueTaskView>> {
     let thread_key = ticket_self_work_thread_key(item);
-    if runnable_thread_task_exists(root, &thread_key)? {
+    if runnable_thread_task_exists_ignoring(root, &thread_key, ignored_message_keys)? {
         return Ok(None);
     }
     let mut extra_metadata = serde_json::json!({
@@ -7689,9 +7697,22 @@ fn find_runnable_thread_task(
     root: &Path,
     thread_key: &str,
 ) -> Result<Option<channels::QueueTaskView>> {
+    find_runnable_thread_task_ignoring(root, thread_key, &[])
+}
+
+fn find_runnable_thread_task_ignoring(
+    root: &Path,
+    thread_key: &str,
+    ignored_message_keys: &[String],
+) -> Result<Option<channels::QueueTaskView>> {
     let tasks =
         channels::list_queue_tasks(root, &["pending".to_string(), "leased".to_string()], 64)?;
-    Ok(tasks.into_iter().find(|task| task.thread_key == thread_key))
+    Ok(tasks.into_iter().find(|task| {
+        task.thread_key == thread_key
+            && !ignored_message_keys
+                .iter()
+                .any(|key| key == &task.message_key)
+    }))
 }
 
 fn requeue_review_rejected_self_work(
@@ -7826,6 +7847,14 @@ fn create_self_work_backed_queue_task(
     root: &Path,
     request: DurableSelfWorkQueueRequest,
 ) -> Result<channels::QueueTaskView> {
+    create_self_work_backed_queue_task_ignoring(root, request, &[])
+}
+
+fn create_self_work_backed_queue_task_ignoring(
+    root: &Path,
+    request: DurableSelfWorkQueueRequest,
+    ignored_message_keys: &[String],
+) -> Result<channels::QueueTaskView> {
     let DurableSelfWorkQueueRequest {
         kind,
         title,
@@ -7866,11 +7895,15 @@ fn create_self_work_backed_queue_task(
             Some("durable complex follow-up for CTOX"),
         );
     }
-    if let Some(view) = queue_ticket_self_work_item(root, &item)? {
+    if let Some(view) = queue_ticket_self_work_item_ignoring(root, &item, ignored_message_keys)? {
         return Ok(view);
     }
-    find_runnable_thread_task(root, &ticket_self_work_thread_key(&item))?
-        .context("failed to queue durable self-work follow-up")
+    find_runnable_thread_task_ignoring(
+        root,
+        &ticket_self_work_thread_key(&item),
+        ignored_message_keys,
+    )?
+    .context("failed to queue durable self-work follow-up")
 }
 
 fn close_ticket_self_work_item(root: &Path, work_id: &str, note: &str) {
@@ -8412,7 +8445,7 @@ fn maybe_enqueue_timeout_continuation(
             "existing continuation reused: {existing_title}"
         )));
     }
-    let created = create_self_work_backed_queue_task(
+    let created = create_self_work_backed_queue_task_ignoring(
         root,
         DurableSelfWorkQueueRequest {
             kind: "timeout-continuation".to_string(),
@@ -8436,6 +8469,7 @@ fn maybe_enqueue_timeout_continuation(
                 "origin_source_label": job.source_label,
             }),
         },
+        &job.leased_message_keys,
     )?;
     let _ = governance::record_event(
         root,
@@ -8497,9 +8531,22 @@ fn render_timeout_continue_prompt(
 }
 
 fn runnable_thread_task_exists(root: &Path, thread_key: &str) -> Result<bool> {
+    runnable_thread_task_exists_ignoring(root, thread_key, &[])
+}
+
+fn runnable_thread_task_exists_ignoring(
+    root: &Path,
+    thread_key: &str,
+    ignored_message_keys: &[String],
+) -> Result<bool> {
     let tasks =
         channels::list_queue_tasks(root, &["pending".to_string(), "leased".to_string()], 64)?;
-    Ok(tasks.into_iter().any(|task| task.thread_key == thread_key))
+    Ok(tasks.into_iter().any(|task| {
+        task.thread_key == thread_key
+            && !ignored_message_keys
+                .iter()
+                .any(|key| key == &task.message_key)
+    }))
 }
 
 fn runnable_queue_work_exists(root: &Path) -> Result<bool> {
@@ -11577,6 +11624,73 @@ mod tests {
         assert!(events
             .iter()
             .any(|event| event.mechanism_id == "turn_timeout_continuation"));
+    }
+
+    #[test]
+    fn timeout_blocker_does_not_reuse_current_leased_message_as_continuation() {
+        let root = std::env::temp_dir().join(format!(
+            "ctox-timeout-followup-current-lease-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).expect("failed to create temp root");
+        let current = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Review rework: CRM live login".to_string(),
+                prompt: "Fix the currently leased CRM review rework.".to_string(),
+                thread_key: "kunstmen-crm-p0-slices".to_string(),
+                workspace_root: Some("/tmp/ctox-timeout-current-lease-test".to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("stateful-product-from-scratch".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to seed current queue task");
+        channels::update_queue_task(
+            &root,
+            channels::QueueTaskUpdateRequest {
+                message_key: current.message_key.clone(),
+                route_status: Some("leased".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("failed to mark current task leased");
+        let job = QueuedPrompt {
+            prompt: current.prompt.clone(),
+            goal: current.title.clone(),
+            preview: current.title.clone(),
+            source_label: "queue".to_string(),
+            suggested_skill: current.suggested_skill.clone(),
+            leased_message_keys: vec![current.message_key.clone()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some(current.thread_key.clone()),
+            workspace_root: current.workspace_root.clone(),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let created =
+            maybe_enqueue_timeout_continuation(&root, &job, "direct session timeout after 900s")
+                .expect("timeout continuation should succeed");
+
+        assert!(created
+            .as_deref()
+            .is_some_and(|title| title.contains("after timeout")));
+        let pending = channels::list_queue_tasks(&root, &["pending".to_string()], 10)
+            .expect("failed to list pending queue tasks");
+        assert_eq!(pending.len(), 1);
+        assert_ne!(pending[0].message_key, current.message_key);
+        assert_eq!(pending[0].thread_key, current.thread_key);
+        assert!(pending[0].title.contains("after timeout"));
+        let leased = channels::list_queue_tasks(&root, &["leased".to_string()], 10)
+            .expect("failed to list leased queue tasks");
+        assert_eq!(leased.len(), 1);
+        assert_eq!(leased[0].message_key, current.message_key);
     }
 
     #[test]
