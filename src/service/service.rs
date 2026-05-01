@@ -11650,15 +11650,8 @@ mod tests {
             },
         )
         .expect("failed to seed current queue task");
-        channels::update_queue_task(
-            &root,
-            channels::QueueTaskUpdateRequest {
-                message_key: current.message_key.clone(),
-                route_status: Some("leased".to_string()),
-                ..Default::default()
-            },
-        )
-        .expect("failed to mark current task leased");
+        channels::lease_queue_task(&root, &current.message_key, "ctox-service-test")
+            .expect("failed to mark current task leased");
         let job = QueuedPrompt {
             prompt: current.prompt.clone(),
             goal: current.title.clone(),
