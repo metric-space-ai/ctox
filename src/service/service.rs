@@ -3618,50 +3618,8 @@ fn run_completion_review(
             },
         };
     }
-    let active_plan_has_work = if actionable_rejection {
-        plan::has_active_goal_with_pending_step(root).unwrap_or(false)
-    } else {
-        false
-    };
     if actionable_rejection {
-        if let Some(work_id) = resolve_review_rejection_target_self_work_id(root, job) {
-            push_event(
-                state,
-                format!(
-                    "Review fail for {} will resume durable self-work {} instead of nesting review-rework",
-                    job.source_label, work_id
-                ),
-            );
-            return CompletionReviewDisposition::RequeueSelfWork {
-                work_id,
-                summary: outcome.summary.clone(),
-            };
-        }
-        if active_plan_has_work {
-            push_event(
-                state,
-                format!(
-                    "Review fail persisted for {} without review-rework enqueue because runnable plan work already exists",
-                    job.source_label
-                ),
-            );
-        } else {
-            match enqueue_review_rework(root, job, &outcome) {
-                Ok(rework_title) => {
-                    push_event(state, format!("Review rework enqueued: {rework_title}"))
-                }
-                Err(err) => push_event(
-                    state,
-                    format!(
-                        "Review rework enqueue failed for {}: {}",
-                        job.source_label, err
-                    ),
-                ),
-            }
-        }
-        return CompletionReviewDisposition::Hold {
-            summary: outcome.summary.clone(),
-        };
+        return handle_actionable_completion_review_rejection(root, state, job, &outcome);
     }
     match outcome.verdict {
         review::ReviewVerdict::Pass => CompletionReviewDisposition::Approved,
@@ -3923,6 +3881,40 @@ or prove the review wrong with stronger evidence.",
         },
     )?;
     Ok(view.title)
+}
+
+fn handle_actionable_completion_review_rejection(
+    root: &Path,
+    state: &Arc<Mutex<SharedState>>,
+    job: &QueuedPrompt,
+    outcome: &review::ReviewOutcome,
+) -> CompletionReviewDisposition {
+    if let Some(work_id) = resolve_review_rejection_target_self_work_id(root, job) {
+        push_event(
+            state,
+            format!(
+                "Review fail for {} will resume durable self-work {} instead of nesting review-rework",
+                job.source_label, work_id
+            ),
+        );
+        return CompletionReviewDisposition::RequeueSelfWork {
+            work_id,
+            summary: outcome.summary.clone(),
+        };
+    }
+    match enqueue_review_rework(root, job, outcome) {
+        Ok(rework_title) => push_event(state, format!("Review rework enqueued: {rework_title}")),
+        Err(err) => push_event(
+            state,
+            format!(
+                "Review rework enqueue failed for {}: {}",
+                job.source_label, err
+            ),
+        ),
+    }
+    CompletionReviewDisposition::Hold {
+        summary: outcome.summary.clone(),
+    }
 }
 
 fn render_review_feedback_block(items: &[String], fallback: &str, limit: usize) -> String {
@@ -11990,6 +11982,82 @@ mod tests {
     }
 
     #[test]
+    fn unrelated_active_plan_does_not_swallow_review_rework() {
+        let root = temp_root("ctox-review-rework-active-plan");
+        plan::ingest_goal(
+            &root,
+            plan::PlanIngestRequest {
+                title: "Unrelated active maintenance plan".to_string(),
+                prompt: "Inspect an unrelated service. Then summarize the result.".to_string(),
+                thread_key: Some("ops/unrelated".to_string()),
+                skill: Some("reliability-ops".to_string()),
+                auto_advance: true,
+                emit_now: false,
+            },
+        )
+        .expect("failed to seed unrelated active plan");
+        assert!(
+            plan::has_active_goal_with_pending_step(&root).expect("failed to inspect plan state"),
+            "fixture should contain unrelated runnable plan work"
+        );
+
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        let job = QueuedPrompt {
+            prompt: "Repair the Kunstmen CRM tasks workflow.".to_string(),
+            goal: "Make CRM tasks usable".to_string(),
+            preview: "CRM task workflow".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: Some("stateful-product-from-scratch".to_string()),
+            leased_message_keys: vec!["queue-key-1".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("kunstmen-crm-p0-slices".to_string()),
+            workspace_root: Some("/home/ubuntu/workspace/kunstmen".to_string()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+        let outcome = review::ReviewOutcome {
+            required: true,
+            verdict: review::ReviewVerdict::Fail,
+            mission_state: "UNHEALTHY".to_string(),
+            score: 6,
+            summary:
+                "The implementation has evidence but the runtime mission contract remains open."
+                    .to_string(),
+            report: "report".to_string(),
+            reasons: vec!["Runtime mission contract still open".to_string()],
+            failed_gates: vec!["Closure readiness".to_string()],
+            semantic_findings: vec![
+                "Do the remaining rework instead of closing the queue item.".to_string()
+            ],
+            categorized_findings: Vec::new(),
+            open_items: vec!["Persist the missing closure evidence.".to_string()],
+            evidence: vec!["review artifact".to_string()],
+            handoff: None,
+        };
+
+        let disposition =
+            handle_actionable_completion_review_rejection(&root, &state, &job, &outcome);
+
+        assert!(matches!(
+            disposition,
+            CompletionReviewDisposition::Hold { .. }
+        ));
+        let tasks = channels::list_queue_tasks(&root, &["pending".to_string()], 10)
+            .expect("failed to list queue tasks");
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].thread_key, "kunstmen-crm-p0-slices");
+        assert_eq!(
+            tasks[0].suggested_skill.as_deref(),
+            Some("stateful-product-from-scratch")
+        );
+        let self_work = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
+            .expect("failed to list self-work");
+        assert_eq!(self_work.len(), 1);
+        assert_eq!(self_work[0].kind, "review-rework");
+    }
+
+    #[test]
     fn review_rejection_resolves_parent_self_work_for_nested_review_rework() {
         let root = temp_root("ctox-review-parent-self-work");
         let parent = tickets::put_ticket_self_work_item(
@@ -12575,7 +12643,10 @@ mod tests {
             channels::list_queue_tasks(&root, &["pending".to_string(), "leased".to_string()], 10)
                 .expect("failed to list queue tasks");
         assert_eq!(tasks.len(), 1);
-        assert_eq!(tasks[0].title, "CRM P0 slice: ship tasks workflow under /internal/crm");
+        assert_eq!(
+            tasks[0].title,
+            "CRM P0 slice: ship tasks workflow under /internal/crm"
+        );
 
         let items = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
             .expect("failed to list self-work");
