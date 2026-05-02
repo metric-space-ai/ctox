@@ -55,7 +55,6 @@ use std::sync::Mutex;
 use std::sync::Once;
 use std::thread;
 use std::time::Duration;
-use std::time::SystemTime;
 #[cfg(not(unix))]
 use tiny_http::Header;
 #[cfg(not(unix))]
@@ -96,8 +95,7 @@ const SERVICE_SOCKET_RELATIVE_PATH: &str = "runtime/ctox_service.sock";
 const SYSTEMD_USER_UNIT_NAME: &str = "ctox.service";
 const CHANNEL_ROUTER_POLL_SECS: u64 = 8;
 const CHANNEL_SYNC_POLL_SECS: u64 = 60;
-const MISSION_WATCHER_POLL_SECS: u64 = 15;
-const CTO_OPERATING_WATCHER_POLL_SECS: u64 = 60;
+const MISSION_MAINTENANCE_POLL_SECS: u64 = 15;
 const HARNESS_AUDIT_TICK_SECS: u64 = 300;
 const CHANNEL_ROUTER_LEASE_OWNER: &str = "ctox-service";
 const QUEUE_PRESSURE_GUARD_THRESHOLD: usize = 20;
@@ -106,11 +104,10 @@ const PLATFORM_EXPERTISE_KIND: &str = "platform-expertise-pass";
 const PLATFORM_IMPLEMENTATION_KIND: &str = "platform-implementation";
 const STRATEGIC_DIRECTION_KIND: &str = "strategic-direction-pass";
 const FOUNDER_COMMUNICATION_REWORK_KIND: &str = "founder-communication-rework";
-const FOUNDER_REWORK_REQUEUE_BLOCK_THRESHOLD: usize = 3;
+const FOUNDER_REWORK_REQUEUE_BLOCK_THRESHOLD: usize = 2;
 const SERVICE_SHUTDOWN_TIMEOUT_SECS: u64 = 15;
 const SERVICE_SHUTDOWN_POLL_MILLIS: u64 = 150;
 const SYSTEMCTL_USER_TIMEOUT_SECS: u64 = 5;
-const CTO_DRIFT_THREAD_KEY: &str = "ctox-cto-operating";
 const CTO_DRIFT_KIND: &str = "cto-drift-correction";
 
 static SERVICE_PANIC_HOOK: Once = Once::new();
@@ -141,6 +138,8 @@ pub struct ServiceStatus {
     /// or when the row predates the schema upgrade.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_agent_outcome: Option<String>,
+    #[serde(default)]
+    pub work_hours: crate::service::working_hours::WorkHoursSnapshot,
 }
 
 #[cfg(any(test, not(unix)))]
@@ -165,6 +164,7 @@ struct ServiceStatusWire {
     monitor_alerts: Vec<String>,
     monitor_last_error: Option<String>,
     last_agent_outcome: Option<String>,
+    work_hours: crate::service::working_hours::WorkHoursSnapshot,
 }
 
 impl ServiceStatus {
@@ -194,6 +194,7 @@ impl ServiceStatus {
             monitor_alerts: Vec::new(),
             monitor_last_error: None,
             last_agent_outcome: None,
+            work_hours: crate::service::working_hours::snapshot(root),
         }
     }
 }
@@ -229,6 +230,7 @@ fn parse_service_status(body: &str, root: &Path) -> Result<ServiceStatus> {
         monitor_alerts: wire.monitor_alerts,
         monitor_last_error: wire.monitor_last_error,
         last_agent_outcome: wire.last_agent_outcome,
+        work_hours: wire.work_hours,
     })
 }
 
@@ -310,37 +312,6 @@ struct SharedState {
     last_completed_at: Option<String>,
     last_reply_chars: Option<usize>,
     last_progress_epoch_secs: u64,
-}
-
-#[derive(Debug, Clone, Default)]
-struct OperatingHealthSnapshot {
-    snapshot_id: String,
-    created_at: String,
-    mission_open_count: i64,
-    active_goal_count: i64,
-    pending_plan_step_count: i64,
-    ticket_items: i64,
-    ticket_cases: i64,
-    ticket_sync_runs: i64,
-    ticket_dry_runs: i64,
-    ticket_knowledge_loads: i64,
-    ticket_self_work_items: i64,
-    ticket_self_work_active: i64,
-    review_rework_active: i64,
-    ticket_knowledge_entries: i64,
-    knowledge_main_skills: i64,
-    knowledge_skillbooks: i64,
-    knowledge_runbooks: i64,
-    knowledge_runbook_items: i64,
-    knowledge_embeddings: i64,
-    verification_runs: i64,
-    local_tickets: i64,
-    local_ticket_events: i64,
-    active_source_label: String,
-    current_goal_preview: String,
-    drift_score: i64,
-    drift_reasons: Vec<String>,
-    intervention_recommended: bool,
 }
 
 impl Default for SharedState {
@@ -441,6 +412,10 @@ enum CompletionReviewDisposition {
         work_id: String,
         summary: String,
     },
+    ContinueSelfWork {
+        work_id: String,
+        summary: String,
+    },
     /// Lightweight in-process body fix triggered when every reviewer finding
     /// is structurally tagged `rewrite`. The post-turn handler synthesises a
     /// new `QueuedPrompt` with `source_label = "review-rewrite"` that
@@ -491,6 +466,79 @@ fn classify_findings(findings: &[review::CategorizedFinding]) -> ReviewRoutingCl
     }
 }
 
+fn review_outcome_is_terminal_no_send(outcome: &review::ReviewOutcome) -> bool {
+    let mut text = outcome.summary.to_ascii_lowercase();
+    for value in outcome
+        .failed_gates
+        .iter()
+        .chain(outcome.semantic_findings.iter())
+        .chain(outcome.open_items.iter())
+        .chain(outcome.evidence.iter())
+    {
+        text.push('\n');
+        text.push_str(&value.to_ascii_lowercase());
+    }
+    for finding in &outcome.categorized_findings {
+        text.push('\n');
+        text.push_str(&finding.evidence.to_ascii_lowercase());
+        text.push('\n');
+        text.push_str(&finding.corrective_action.to_ascii_lowercase());
+    }
+
+    let says_no_send = contains_any(
+        &text,
+        &[
+            "no-send",
+            "no send",
+            "do not send",
+            "nicht senden",
+            "keine weitere founder-mail",
+            "keine weitere mail",
+            "no further founder",
+            "no founder reply",
+            "no immediate founder reply",
+            "should not be sent",
+            "sollte nicht gesendet",
+        ],
+    );
+    let says_wait = contains_any(
+        &text,
+        &[
+            "wait mode",
+            "wait until",
+            "warte",
+            "warten",
+            "until the founders provide",
+            "until marco",
+            "until michael",
+            "until olaf",
+            "await",
+            "konkrete inputs",
+            "technical inputs",
+            "crm/tool",
+            "sync scope",
+        ],
+    );
+    let says_missing_work = contains_any(
+        &text,
+        &[
+            "missing deliverable",
+            "missing required",
+            "fehlende fachliche arbeit",
+            "must be done before",
+            "muss erledigt werden",
+            "send a corrected",
+            "respond directly",
+        ],
+    );
+
+    says_no_send && says_wait && !says_missing_work
+}
+
+fn contains_any(haystack: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| haystack.contains(needle))
+}
+
 /// Source label applied to lightweight rewrite-only post-turn prompts. Kept
 /// distinct from `tui` / `queue` / `plan` / `ticket:local` so the dispatcher
 /// can identify them in logs and the pipeline status surface.
@@ -498,7 +546,7 @@ const REVIEW_REWRITE_SOURCE_LABEL: &str = "review-rewrite";
 
 /// Default convergence threshold for consecutive rewrite-only iterations.
 /// Overridable via the `CTOX_MISSION_REWRITE_FAILURE_THRESHOLD` env var.
-const DEFAULT_REWRITE_FAILURE_THRESHOLD: i64 = 3;
+const DEFAULT_REWRITE_FAILURE_THRESHOLD: i64 = 1;
 
 fn completion_review_disposition_label(disposition: &CompletionReviewDisposition) -> &'static str {
     match disposition {
@@ -507,6 +555,7 @@ fn completion_review_disposition_label(disposition: &CompletionReviewDisposition
         CompletionReviewDisposition::Hold { .. } => "hold",
         CompletionReviewDisposition::NoSend { .. } => "no-send",
         CompletionReviewDisposition::RequeueSelfWork { .. } => "requeue-self-work",
+        CompletionReviewDisposition::ContinueSelfWork { .. } => "continue-self-work",
         CompletionReviewDisposition::RewriteOnly { .. } => REVIEW_REWRITE_SOURCE_LABEL,
     }
 }
@@ -522,6 +571,10 @@ impl Drop for ServiceExitGuard {
 }
 
 pub fn run_foreground(root: &Path) -> Result<()> {
+    if let Some(reason) = crate::service::working_hours::hold_reason(root) {
+        eprintln!("ctox service not started: {reason}");
+        return Ok(());
+    }
     let runtime_dir = root.join("runtime");
     std::fs::create_dir_all(&runtime_dir)
         .with_context(|| format!("failed to create runtime dir {}", runtime_dir.display()))?;
@@ -555,9 +608,9 @@ pub fn run_foreground(root: &Path) -> Result<()> {
     push_event(&state, format!("Loop ready on {}", listen_addr));
     start_channel_router(root.to_path_buf(), state.clone());
     start_channel_syncer(root.to_path_buf());
-    start_mission_watcher(root.to_path_buf(), state.clone());
-    start_cto_operating_watcher(root.to_path_buf(), state.clone());
+    start_mission_maintenance_loop(root.to_path_buf(), state.clone());
     start_harness_audit_watcher(root.to_path_buf(), state.clone());
+    start_work_hours_dispatcher(root.to_path_buf(), state.clone());
     // Keep the service control plane idle-cheap. Managed runtimes are started
     // on demand by agent turns; boot-time prewarm is opt-in because a local
     // model supervisor can consume CPU even when there is no queued work.
@@ -1133,6 +1186,30 @@ fn is_non_work_tui_probe(prompt: &str) -> bool {
     )
 }
 
+fn start_work_hours_dispatcher(root: PathBuf, state: Arc<Mutex<SharedState>>) {
+    thread::spawn(move || loop {
+        thread::sleep(Duration::from_secs(60));
+        if !crate::service::working_hours::accepts_work(&root) {
+            continue;
+        }
+        let next_prompt = {
+            let mut shared = lock_shared_state(&state);
+            if shared.busy || runtime_blocker_backoff_remaining_secs(&shared).is_some() {
+                None
+            } else {
+                maybe_start_next_queued_prompt_locked(&root, &mut shared)
+            }
+        };
+        if let Some(queued) = next_prompt {
+            push_event(
+                &state,
+                "Working-hours window open; resuming queued work".to_string(),
+            );
+            start_prompt_worker(root.clone(), state.clone(), queued);
+        }
+    });
+}
+
 fn run_plan_routing_repair(root: &Path, state: &Arc<Mutex<SharedState>>, phase: &str) {
     match plan::repair_stale_step_routing_state(root) {
         Ok(repaired) if repaired > 0 => {
@@ -1184,6 +1261,9 @@ fn normalize_state_token(value: &str) -> String {
 }
 
 pub fn start_background(root: &Path) -> Result<String> {
+    if let Some(reason) = crate::service::working_hours::hold_reason(root) {
+        return Ok(format!("CTOX service not started: {reason}"));
+    }
     if let Some(systemd) = systemd_unit_status(root)? {
         if systemd.active {
             return Ok(format!(
@@ -1649,7 +1729,31 @@ fn handle_service_ipc_request(
             let workspace_root = channels::legacy_workspace_root_from_prompt(&prompt);
             let queued = {
                 let mut shared = lock_shared_state(&state);
-                if shared.busy || runtime_blocker_backoff_remaining_secs(&shared).is_some() {
+                if let Some(reason) = crate::service::working_hours::hold_reason(root) {
+                    insert_pending_prompt_ordered(
+                        &mut shared.pending_prompts,
+                        QueuedPrompt {
+                            preview: preview_text(&prompt),
+                            source_label: "tui".to_string(),
+                            goal: prompt.clone(),
+                            prompt: prompt.clone(),
+                            suggested_skill: suggested_skill.clone(),
+                            leased_message_keys: Vec::new(),
+                            leased_ticket_event_keys: Vec::new(),
+                            thread_key: thread_key.clone(),
+                            workspace_root: workspace_root.clone(),
+                            ticket_self_work_id: None,
+                            outbound_email: outbound_email.clone(),
+                            outbound_anchor: outbound_anchor.clone(),
+                        },
+                    );
+                    let pending = shared.pending_prompts.len();
+                    push_event_locked(
+                        &mut shared,
+                        format!("Queued prompt outside working hours (queue #{pending}): {reason}"),
+                    );
+                    true
+                } else if shared.busy || runtime_blocker_backoff_remaining_secs(&shared).is_some() {
                     insert_pending_prompt_ordered(
                         &mut shared.pending_prompts,
                         QueuedPrompt {
@@ -1793,7 +1897,31 @@ fn handle_request(
             let workspace_root = channels::legacy_workspace_root_from_prompt(&prompt);
             let queued = {
                 let mut shared = lock_shared_state(&state);
-                if shared.busy || runtime_blocker_backoff_remaining_secs(&shared).is_some() {
+                if let Some(reason) = crate::service::working_hours::hold_reason(root) {
+                    insert_pending_prompt_ordered(
+                        &mut shared.pending_prompts,
+                        QueuedPrompt {
+                            preview: preview_text(&prompt),
+                            source_label: "tui".to_string(),
+                            goal: prompt.clone(),
+                            prompt: prompt.clone(),
+                            suggested_skill: suggested_skill.clone(),
+                            leased_message_keys: Vec::new(),
+                            leased_ticket_event_keys: Vec::new(),
+                            thread_key: payload.thread_key.clone(),
+                            workspace_root: workspace_root.clone(),
+                            ticket_self_work_id: None,
+                            outbound_email: payload.outbound_email.clone(),
+                            outbound_anchor: payload.outbound_anchor.clone(),
+                        },
+                    );
+                    let pending = shared.pending_prompts.len();
+                    push_event_locked(
+                        &mut shared,
+                        format!("Queued prompt outside working hours (queue #{pending}): {reason}"),
+                    );
+                    true
+                } else if shared.busy || runtime_blocker_backoff_remaining_secs(&shared).is_some() {
                     insert_pending_prompt_ordered(
                         &mut shared.pending_prompts,
                         QueuedPrompt {
@@ -2074,6 +2202,7 @@ fn status_from_shared_state(root: &Path, state: &Arc<Mutex<SharedState>>) -> Res
         monitor_alerts: runtime_lifecycle_alerts(root, pid, true)?,
         monitor_last_error: None,
         last_agent_outcome,
+        work_hours: crate::service::working_hours::snapshot(root),
     })
 }
 
@@ -2466,6 +2595,22 @@ fn start_prompt_worker(
     job: QueuedPrompt,
 ) {
     thread::spawn(move || {
+        if let Some(reason) = crate::service::working_hours::hold_reason(&root) {
+            let mut shared = lock_shared_state(&state);
+            shared.busy = false;
+            shared.current_goal_preview = None;
+            shared.active_source_label = None;
+            shared.last_progress_epoch_secs = current_epoch_secs();
+            insert_pending_prompt_ordered(&mut shared.pending_prompts, job.clone());
+            push_event_locked(
+                &mut shared,
+                format!(
+                    "Held {} prompt outside working hours: {}",
+                    job.source_label, reason
+                ),
+            );
+            return;
+        }
         match maybe_skip_superseded_self_work_prompt(&root, &state, &job) {
             Ok(true) => {
                 eprintln!(
@@ -2481,6 +2626,26 @@ fn start_prompt_worker(
                     &state,
                     format!(
                         "Failed to evaluate self-work supersession for {}: {}",
+                        job.source_label, err
+                    ),
+                );
+            }
+        }
+        match maybe_redirect_owner_visible_work_to_strategy_setup(&root, &state, &job) {
+            Ok(true) => {
+                eprintln!(
+                    "ctox prompt worker rerouted-to-strategy source={} preview={}",
+                    job.source_label,
+                    clip_text(&job.preview, 120)
+                );
+                return;
+            }
+            Ok(false) => {}
+            Err(err) => {
+                push_event(
+                    &state,
+                    format!(
+                        "Failed to evaluate strategic direction routing for {}: {}",
                         job.source_label, err
                     ),
                 );
@@ -2546,9 +2711,9 @@ fn start_prompt_worker(
             };
             // F3: classify the turn outcome explicitly. The structured value
             // is persisted on the assistant row in `messages.agent_outcome`
-            // so downstream consumers (mission watchdog, founder-send
-            // pipeline, status snapshots) can branch on a typed enum
-            // instead of scraping reply text.
+            // so downstream consumers (founder-send pipeline, status
+            // snapshots) can branch on a typed enum instead of scraping
+            // reply text.
             let agent_outcome = match &result {
                 Ok(_) => lcm::AgentOutcome::Success,
                 Err(err) => classify_agent_failure(&err.to_string()),
@@ -2572,9 +2737,8 @@ fn start_prompt_worker(
             }
             // F2: feed the structured outcome into the per-mission
             // agent-failure counter. Successful turns reset the counter;
-            // non-success outcomes increment it. The watchdog reads the
-            // updated count on its next tick and defers when it crosses
-            // the configured threshold.
+            // non-success outcomes increment it for status and explicit
+            // mission-governance decisions.
             if let Ok(engine) = lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default()) {
                 if agent_outcome.is_agent_failure() {
                     let _ = engine.increment_mission_agent_failure_count(conversation_id);
@@ -2619,14 +2783,27 @@ fn start_prompt_worker(
                         reply_text.chars().count()
                     ),
                 );
-                let disposition = run_completion_review(
-                    &root,
-                    &state,
-                    &job,
-                    reply_text,
-                    conversation_id,
-                    mission_sync_outcome.as_ref(),
-                );
+                let disposition = if let Some(work_id) =
+                    continuation_self_work_requested(&job, reply_text)
+                {
+                    let summary = format!(
+                            "Agentic work is not finished; the last turn explicitly requested continuation with concrete next steps. Last reply: {}",
+                            clip_text(reply_text, 260)
+                        );
+                    CompletionReviewDisposition::ContinueSelfWork {
+                        work_id: work_id.to_string(),
+                        summary,
+                    }
+                } else {
+                    run_completion_review(
+                        &root,
+                        &state,
+                        &job,
+                        reply_text,
+                        conversation_id,
+                        mission_sync_outcome.as_ref(),
+                    )
+                };
                 push_event(
                     &state,
                     format!(
@@ -2704,6 +2881,7 @@ fn start_prompt_worker(
                                 | CompletionReviewDisposition::Hold { .. }
                                 | CompletionReviewDisposition::NoSend { .. }
                                 | CompletionReviewDisposition::RequeueSelfWork { .. }
+                                | CompletionReviewDisposition::ContinueSelfWork { .. }
                                 | CompletionReviewDisposition::RewriteOnly { .. } => false,
                             }
                         } else if let (Some(anchor_key), Some(action)) = (
@@ -2726,6 +2904,7 @@ fn start_prompt_worker(
                                 | CompletionReviewDisposition::Hold { .. }
                                 | CompletionReviewDisposition::NoSend { .. }
                                 | CompletionReviewDisposition::RequeueSelfWork { .. }
+                                | CompletionReviewDisposition::ContinueSelfWork { .. }
                                 | CompletionReviewDisposition::RewriteOnly { .. } => false,
                             }
                         } else {
@@ -2804,6 +2983,36 @@ fn start_prompt_worker(
                                         ),
                                     );
                                 }
+                                CompletionReviewDisposition::ContinueSelfWork {
+                                    work_id: target_work_id,
+                                    summary,
+                                } => match requeue_continue_requested_self_work(
+                                    &root,
+                                    target_work_id,
+                                    summary,
+                                ) {
+                                    Ok(Some(queued)) => push_event_locked(
+                                        &mut shared,
+                                        format!(
+                                            "Agent requested continuation; requeued durable self-work {} via {}",
+                                            target_work_id, queued.title
+                                        ),
+                                    ),
+                                    Ok(None) => push_event_locked(
+                                        &mut shared,
+                                        format!(
+                                            "Agent requested continuation for {}, but no queue item was created",
+                                            target_work_id
+                                        ),
+                                    ),
+                                    Err(err) => push_event_locked(
+                                        &mut shared,
+                                        format!(
+                                            "Agent continuation requeue failed for {}: {}",
+                                            target_work_id, err
+                                        ),
+                                    ),
+                                },
                                 CompletionReviewDisposition::Approved
                                 | CompletionReviewDisposition::None => {
                                     if founder_send_error.is_none() {
@@ -3079,7 +3288,7 @@ fn start_prompt_worker(
                         );
                     }
                 } else {
-                    next_prompt = maybe_start_next_queued_prompt_locked(&mut shared);
+                    next_prompt = maybe_start_next_queued_prompt_locked(&root, &mut shared);
                 }
             }
             if let Some((work_id, summary)) = review_requeue {
@@ -3160,7 +3369,7 @@ fn start_prompt_worker(
                         );
                     }
                 } else {
-                    next_prompt = maybe_start_next_queued_prompt_locked(&mut shared);
+                    next_prompt = maybe_start_next_queued_prompt_locked(&root, &mut shared);
                 }
             }
             if let Some(queued) = next_prompt {
@@ -3376,11 +3585,11 @@ fn run_completion_review(
                 CompletionReviewDisposition::Approved
             }
             review::ReviewVerdict::Fail if actionable_rejection => {
-                if outcome.disposition == review::ReviewDisposition::NoSend {
+                if review_outcome_is_terminal_no_send(&outcome) {
                     push_event(
                         state,
                         format!(
-                            "Founder review closed {} without sending because the reviewer set DISPOSITION: NO_SEND: {}",
+                            "Founder review closed {} without sending because the correct action is to wait: {}",
                             job.source_label,
                             clip_text(&outcome.summary, 180)
                         ),
@@ -3539,10 +3748,75 @@ fn run_completion_review(
     }
 }
 
-/// Background-driven slices (watchdog, timeout continuation, queue-pressure
-/// guard, cron) are not directly owner-visible. The owner_visible flag feeds
-/// the review-trigger heuristic, so we err on the side of conservative review:
-/// foreground sources (TUI, queue, ticket channels, email) are owner-visible.
+fn continuation_self_work_requested<'a>(
+    job: &'a QueuedPrompt,
+    reply_text: &str,
+) -> Option<&'a str> {
+    let work_id = job.ticket_self_work_id.as_deref()?;
+    if is_founder_or_owner_email_job(job)
+        || job.outbound_email.is_some()
+        || job.source_label == REVIEW_REWRITE_SOURCE_LABEL
+    {
+        return None;
+    }
+    let lowered = reply_text.to_ascii_lowercase();
+    let explicit_continue = contains_any(
+        &lowered,
+        &[
+            "mach weiter",
+            "weiter machen",
+            "weiterarbeiten",
+            "continue",
+            "i can continue",
+            "ich kann weiter",
+            "next step",
+            "next steps",
+            "next slice",
+            "nächster schritt",
+            "naechster schritt",
+        ],
+    );
+    if !explicit_continue {
+        return None;
+    }
+    let has_open_work = contains_any(
+        &lowered,
+        &[
+            "noch offen",
+            "offene nächste",
+            "offene naechste",
+            "remaining",
+            "pending",
+            "not finished",
+            "nicht fertig",
+            "next smallest",
+            "nächste konkrete",
+            "naechste konkrete",
+        ],
+    );
+    let claims_done = contains_any(
+        &lowered,
+        &[
+            "fertig",
+            "completed",
+            "done",
+            "abgeschlossen",
+            "keine offenen",
+            "no open",
+        ],
+    );
+    if has_open_work || !claims_done {
+        Some(work_id)
+    } else {
+        None
+    }
+}
+
+/// Background-driven slices (timeout continuation, queue-pressure guard, cron,
+/// and legacy watchdog items) are not directly owner-visible. The
+/// owner_visible flag feeds the review-trigger heuristic, so we err on the
+/// side of conservative review: foreground sources (TUI, queue, ticket
+/// channels, email) are owner-visible.
 fn derive_owner_visible_for_review(source_label: &str) -> bool {
     let lowered = source_label.to_ascii_lowercase();
     if lowered == QUEUE_GUARD_SOURCE_LABEL {
@@ -4037,7 +4311,7 @@ fn channel_sync_poll_secs(settings: &BTreeMap<String, String>) -> u64 {
         .unwrap_or(CHANNEL_SYNC_POLL_SECS)
 }
 
-fn start_mission_watcher(root: std::path::PathBuf, state: Arc<Mutex<SharedState>>) {
+fn start_mission_maintenance_loop(root: std::path::PathBuf, state: Arc<Mutex<SharedState>>) {
     thread::spawn(move || {
         loop {
             // Emit any due plan steps first so auto-advancing plans keep moving
@@ -4088,41 +4362,8 @@ fn start_mission_watcher(root: std::path::PathBuf, state: Arc<Mutex<SharedState>
                     Err(err) => push_event(&state, format!("Approval nag sweep failed: {err}")),
                 }
             }
-            if let Err(err) = monitor_mission_continuity(&root, &state) {
-                push_event(&state, format!("Mission watcher failed: {err}"));
-            }
-            thread::sleep(Duration::from_secs(MISSION_WATCHER_POLL_SECS));
+            thread::sleep(Duration::from_secs(MISSION_MAINTENANCE_POLL_SECS));
         }
-    });
-}
-
-fn start_cto_operating_watcher(root: std::path::PathBuf, state: Arc<Mutex<SharedState>>) {
-    thread::spawn(move || loop {
-        match capture_operating_health_snapshot(&root, &state) {
-            Ok(snapshot) => {
-                if snapshot.intervention_recommended {
-                    match maybe_enqueue_cto_drift_intervention(&root, &state, &snapshot) {
-                        Ok(true) => push_event(
-                            &state,
-                            format!(
-                                "CTO operating drift intervention enqueued from snapshot {} (score={})",
-                                snapshot.snapshot_id, snapshot.drift_score
-                            ),
-                        ),
-                        Ok(false) => {}
-                        Err(err) => push_event(
-                            &state,
-                            format!(
-                                "CTO operating drift intervention failed for {}: {}",
-                                snapshot.snapshot_id, err
-                            ),
-                        ),
-                    }
-                }
-            }
-            Err(err) => push_event(&state, format!("CTO operating watcher failed: {err}")),
-        }
-        thread::sleep(Duration::from_secs(CTO_OPERATING_WATCHER_POLL_SECS));
     });
 }
 
@@ -4133,7 +4374,7 @@ fn start_harness_audit_watcher(root: std::path::PathBuf, state: Arc<Mutex<Shared
     // a failure here cannot poison the runtime store.
     thread::spawn(move || {
         // Initial offset so the first tick does not collide with the boot
-        // burst (channel router + mission watcher + supervisor are all
+        // burst (channel router + mission maintenance + supervisor are all
         // hammering the DB in the first 30s).
         thread::sleep(Duration::from_secs(60));
         loop {
@@ -4179,415 +4420,6 @@ fn harness_audit_tick_once(root: &Path) -> Result<HarnessAuditTickSummary> {
     })
 }
 
-fn capture_operating_health_snapshot(
-    root: &Path,
-    state: &Arc<Mutex<SharedState>>,
-) -> Result<OperatingHealthSnapshot> {
-    let db_path = root.join("runtime/ctox.sqlite3");
-    let conn = Connection::open(&db_path)
-        .with_context(|| format!("failed to open runtime db {}", db_path.display()))?;
-    ensure_operating_health_schema(&conn)?;
-
-    let (active_source_label, current_goal_preview) = {
-        let shared = lock_shared_state(state);
-        (
-            shared.active_source_label.clone().unwrap_or_default(),
-            shared.current_goal_preview.clone().unwrap_or_default(),
-        )
-    };
-
-    let mut snapshot = OperatingHealthSnapshot {
-        snapshot_id: format!("opsnap-{}", current_epoch_millis()),
-        created_at: now_iso_string(),
-        mission_open_count: query_count(&conn, "SELECT COUNT(*) FROM mission_states WHERE is_open = 1")?,
-        active_goal_count: query_count(&conn, "SELECT COUNT(*) FROM planned_goals WHERE status = 'active'")?,
-        pending_plan_step_count: query_count(
-            &conn,
-            "SELECT COUNT(*) FROM planned_steps WHERE status IN ('pending','queued')",
-        )?,
-        ticket_items: query_count(&conn, "SELECT COUNT(*) FROM ticket_items")?,
-        ticket_cases: query_count(&conn, "SELECT COUNT(*) FROM ticket_cases")?,
-        ticket_sync_runs: query_count(&conn, "SELECT COUNT(*) FROM ticket_sync_runs")?,
-        ticket_dry_runs: query_count(&conn, "SELECT COUNT(*) FROM ticket_dry_runs")?,
-        ticket_knowledge_loads: query_count(&conn, "SELECT COUNT(*) FROM ticket_knowledge_loads")?,
-        ticket_self_work_items: query_count(&conn, "SELECT COUNT(*) FROM ticket_self_work_items")?,
-        ticket_self_work_active: query_count(
-            &conn,
-            "SELECT COUNT(*) FROM ticket_self_work_items WHERE state IN ('open','queued','blocked')",
-        )?,
-        review_rework_active: query_count(
-            &conn,
-            "SELECT COUNT(*) FROM ticket_self_work_items WHERE kind = 'review-rework' AND state IN ('open','queued','blocked')",
-        )?,
-        ticket_knowledge_entries: query_count(&conn, "SELECT COUNT(*) FROM ticket_knowledge_entries")?,
-        knowledge_main_skills: query_count(&conn, "SELECT COUNT(*) FROM knowledge_main_skills")?,
-        knowledge_skillbooks: query_count(&conn, "SELECT COUNT(*) FROM knowledge_skillbooks")?,
-        knowledge_runbooks: query_count(&conn, "SELECT COUNT(*) FROM knowledge_runbooks")?,
-        knowledge_runbook_items: query_count(&conn, "SELECT COUNT(*) FROM knowledge_runbook_items")?,
-        knowledge_embeddings: query_count(&conn, "SELECT COUNT(*) FROM knowledge_embeddings")?,
-        verification_runs: query_count(&conn, "SELECT COUNT(*) FROM verification_runs")?,
-        local_tickets: query_count(&conn, "SELECT COUNT(*) FROM local_tickets")?,
-        local_ticket_events: query_count(&conn, "SELECT COUNT(*) FROM local_ticket_events")?,
-        active_source_label,
-        current_goal_preview,
-        ..OperatingHealthSnapshot::default()
-    };
-    let (score, reasons) = evaluate_operating_drift(&snapshot);
-    snapshot.drift_score = score;
-    snapshot.drift_reasons = reasons;
-    snapshot.intervention_recommended = score >= 7
-        && (snapshot.mission_open_count > 0
-            || snapshot.active_goal_count > 0
-            || snapshot.pending_plan_step_count > 0);
-    persist_operating_health_snapshot(&conn, &snapshot)?;
-    Ok(snapshot)
-}
-
-fn ensure_operating_health_schema(conn: &Connection) -> Result<()> {
-    conn.execute_batch(
-        r#"
-        CREATE TABLE IF NOT EXISTS operating_health_snapshots (
-            snapshot_id TEXT PRIMARY KEY,
-            created_at TEXT NOT NULL,
-            mission_open_count INTEGER NOT NULL,
-            active_goal_count INTEGER NOT NULL,
-            pending_plan_step_count INTEGER NOT NULL,
-            ticket_items INTEGER NOT NULL,
-            ticket_cases INTEGER NOT NULL,
-            ticket_sync_runs INTEGER NOT NULL,
-            ticket_dry_runs INTEGER NOT NULL,
-            ticket_knowledge_loads INTEGER NOT NULL,
-            ticket_self_work_items INTEGER NOT NULL,
-            ticket_self_work_active INTEGER NOT NULL,
-            review_rework_active INTEGER NOT NULL,
-            ticket_knowledge_entries INTEGER NOT NULL,
-            knowledge_main_skills INTEGER NOT NULL,
-            knowledge_skillbooks INTEGER NOT NULL,
-            knowledge_runbooks INTEGER NOT NULL,
-            knowledge_runbook_items INTEGER NOT NULL,
-            knowledge_embeddings INTEGER NOT NULL,
-            verification_runs INTEGER NOT NULL,
-            local_tickets INTEGER NOT NULL,
-            local_ticket_events INTEGER NOT NULL,
-            active_source_label TEXT NOT NULL,
-            current_goal_preview TEXT NOT NULL,
-            drift_score INTEGER NOT NULL,
-            drift_reasons_json TEXT NOT NULL,
-            intervention_recommended INTEGER NOT NULL,
-            intervention_enqueued INTEGER NOT NULL DEFAULT 0
-        );
-        CREATE INDEX IF NOT EXISTS idx_operating_health_snapshots_created
-            ON operating_health_snapshots(created_at DESC);
-        "#,
-    )?;
-    Ok(())
-}
-
-fn query_count(conn: &Connection, sql: &str) -> Result<i64> {
-    Ok(conn.query_row(sql, [], |row| row.get(0))?)
-}
-
-fn evaluate_operating_drift(snapshot: &OperatingHealthSnapshot) -> (i64, Vec<String>) {
-    let mut score = 0i64;
-    let mut reasons = Vec::new();
-    let goal_preview = snapshot.current_goal_preview.to_ascii_lowercase();
-    let active_source = snapshot.active_source_label.to_ascii_lowercase();
-
-    if snapshot.ticket_items == 0 && snapshot.local_tickets > 0 {
-        score += 3;
-        reasons.push("canonical ticket mirror inactive while local tickets exist".to_string());
-    }
-    if snapshot.ticket_sync_runs == 0 && snapshot.local_tickets > 0 {
-        score += 2;
-        reasons.push("ticket sync never ran for an active local ticket source".to_string());
-    }
-    if snapshot.ticket_self_work_items >= 10 && snapshot.ticket_items == 0 {
-        score += 2;
-        reasons.push("self-work dominates while canonical tickets remain empty".to_string());
-    }
-    if snapshot.review_rework_active >= 3 {
-        score += 3;
-        reasons.push("review-rework backlog is crowding the active mission".to_string());
-    }
-    if snapshot.ticket_knowledge_entries > 0 && snapshot.ticket_knowledge_loads == 0 {
-        score += 2;
-        reasons.push("knowledge entries exist without ticket knowledge loads".to_string());
-    }
-    if snapshot.knowledge_main_skills == 0
-        && snapshot.knowledge_skillbooks == 0
-        && snapshot.knowledge_runbooks == 0
-    {
-        score += 2;
-        reasons.push("ticket knowledge hierarchy is still uninitialized".to_string());
-    }
-    if snapshot.verification_runs >= 25 && snapshot.review_rework_active > 0 {
-        score += 1;
-        reasons.push("verification activity is high while delivery remains blocked".to_string());
-    }
-    if active_source == "queue"
-        && (goal_preview.contains("review rework")
-            || goal_preview.contains("monitor ")
-            || goal_preview.contains("approval"))
-    {
-        score += 2;
-        reasons.push("active work is still centered on review/monitoring loops".to_string());
-    }
-
-    (score, reasons)
-}
-
-fn persist_operating_health_snapshot(
-    conn: &Connection,
-    snapshot: &OperatingHealthSnapshot,
-) -> Result<()> {
-    conn.execute(
-        r#"
-        INSERT INTO operating_health_snapshots (
-            snapshot_id,
-            created_at,
-            mission_open_count,
-            active_goal_count,
-            pending_plan_step_count,
-            ticket_items,
-            ticket_cases,
-            ticket_sync_runs,
-            ticket_dry_runs,
-            ticket_knowledge_loads,
-            ticket_self_work_items,
-            ticket_self_work_active,
-            review_rework_active,
-            ticket_knowledge_entries,
-            knowledge_main_skills,
-            knowledge_skillbooks,
-            knowledge_runbooks,
-            knowledge_runbook_items,
-            knowledge_embeddings,
-            verification_runs,
-            local_tickets,
-            local_ticket_events,
-            active_source_label,
-            current_goal_preview,
-            drift_score,
-            drift_reasons_json,
-            intervention_recommended
-        ) VALUES (
-            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
-            ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20,
-            ?21, ?22, ?23, ?24, ?25, ?26, ?27
-        )
-        "#,
-        params![
-            snapshot.snapshot_id,
-            snapshot.created_at,
-            snapshot.mission_open_count,
-            snapshot.active_goal_count,
-            snapshot.pending_plan_step_count,
-            snapshot.ticket_items,
-            snapshot.ticket_cases,
-            snapshot.ticket_sync_runs,
-            snapshot.ticket_dry_runs,
-            snapshot.ticket_knowledge_loads,
-            snapshot.ticket_self_work_items,
-            snapshot.ticket_self_work_active,
-            snapshot.review_rework_active,
-            snapshot.ticket_knowledge_entries,
-            snapshot.knowledge_main_skills,
-            snapshot.knowledge_skillbooks,
-            snapshot.knowledge_runbooks,
-            snapshot.knowledge_runbook_items,
-            snapshot.knowledge_embeddings,
-            snapshot.verification_runs,
-            snapshot.local_tickets,
-            snapshot.local_ticket_events,
-            snapshot.active_source_label,
-            snapshot.current_goal_preview,
-            snapshot.drift_score,
-            serde_json::to_string(&snapshot.drift_reasons)?,
-            if snapshot.intervention_recommended {
-                1
-            } else {
-                0
-            },
-        ],
-    )?;
-    Ok(())
-}
-
-fn maybe_enqueue_cto_drift_intervention(
-    root: &Path,
-    state: &Arc<Mutex<SharedState>>,
-    snapshot: &OperatingHealthSnapshot,
-) -> Result<bool> {
-    let shared = lock_shared_state(state);
-    let current_goal = shared.current_goal_preview.clone().unwrap_or_default();
-    let active_source = shared.active_source_label.clone().unwrap_or_default();
-    let busy = shared.busy;
-    drop(shared);
-
-    if active_source == "queue"
-        && current_goal
-            .to_ascii_lowercase()
-            .contains("cto operating drift detected")
-    {
-        return Ok(false);
-    }
-
-    let existing = tickets::list_ticket_self_work_items(root, Some("local"), None, 256)?;
-    if existing.iter().any(|item| {
-        item.kind == CTO_DRIFT_KIND && matches!(item.state.as_str(), "open" | "queued" | "blocked")
-    }) {
-        return Ok(false);
-    }
-
-    if busy
-        && active_source == "queue"
-        && !current_goal.to_ascii_lowercase().contains("review rework")
-    {
-        return Ok(false);
-    }
-
-    let prompt = format!(
-        "CTO operating drift detected from runtime telemetry snapshot {}.\n\n\
-Observed SQLite metrics:\n\
-- mission_open_count = {}\n\
-- active_goal_count = {}\n\
-- pending_plan_step_count = {}\n\
-- ticket_items = {}\n\
-- ticket_cases = {}\n\
-- ticket_sync_runs = {}\n\
-- ticket_dry_runs = {}\n\
-- ticket_knowledge_loads = {}\n\
-- ticket_self_work_items = {}\n\
-- ticket_self_work_active = {}\n\
-- review_rework_active = {}\n\
-- ticket_knowledge_entries = {}\n\
-- knowledge_main_skills = {}\n\
-- knowledge_skillbooks = {}\n\
-- knowledge_runbooks = {}\n\
-- knowledge_runbook_items = {}\n\
-- knowledge_embeddings = {}\n\
-- verification_runs = {}\n\
-- local_tickets = {}\n\
-- local_ticket_events = {}\n\
-- active_source_label = {}\n\
-- current_goal_preview = {}\n\
-\n\
-Drift assessment:\n\
-{}\n\
-\n\
-Required actions in this slice:\n\
-1. Inspect the snapshot row in `operating_health_snapshots` for `{}`.\n\
-2. Explain the mission-health problem using these stats rather than generic prose.\n\
-3. Persist any new CTO knowledge only in SQLite-backed stores. Valid targets are continuity commits, ticket_knowledge_entries, planned_goals/planned_steps, local_tickets, or other runtime DB records. A markdown file in the workspace does not count as knowledge.\n\
-4. If a strategic insight is important, write it into the runtime system rather than a standalone artifact file.\n\
-5. Name which currently active loops are low-leverage and should be deprioritized.\n\
-6. Create or update exactly one highest-leverage, ticket-backed next slice for the mission.\n\
-\n\
-Do not spend this slice on generic queue janitor work. Do not repeat stale approval monitoring unless there is fresh evidence that approval is the real blocker.",
-        snapshot.snapshot_id,
-        snapshot.mission_open_count,
-        snapshot.active_goal_count,
-        snapshot.pending_plan_step_count,
-        snapshot.ticket_items,
-        snapshot.ticket_cases,
-        snapshot.ticket_sync_runs,
-        snapshot.ticket_dry_runs,
-        snapshot.ticket_knowledge_loads,
-        snapshot.ticket_self_work_items,
-        snapshot.ticket_self_work_active,
-        snapshot.review_rework_active,
-        snapshot.ticket_knowledge_entries,
-        snapshot.knowledge_main_skills,
-        snapshot.knowledge_skillbooks,
-        snapshot.knowledge_runbooks,
-        snapshot.knowledge_runbook_items,
-        snapshot.knowledge_embeddings,
-        snapshot.verification_runs,
-        snapshot.local_tickets,
-        snapshot.local_ticket_events,
-        if snapshot.active_source_label.is_empty() {
-            "(none)"
-        } else {
-            snapshot.active_source_label.as_str()
-        },
-        if snapshot.current_goal_preview.is_empty() {
-            "(none)"
-        } else {
-            snapshot.current_goal_preview.as_str()
-        },
-        if snapshot.drift_reasons.is_empty() {
-            "- no explicit reasons recorded".to_string()
-        } else {
-            snapshot
-                .drift_reasons
-                .iter()
-                .map(|reason| format!("- {reason}"))
-                .collect::<Vec<_>>()
-                .join("\n")
-        },
-        snapshot.snapshot_id,
-    );
-
-    if active_self_work_exists_for_thread(root, CTO_DRIFT_KIND, CTO_DRIFT_THREAD_KEY)? {
-        let conn = Connection::open(root.join("runtime/ctox.sqlite3"))?;
-        let _ = conn.execute(
-            "UPDATE operating_health_snapshots SET intervention_enqueued = 1 WHERE snapshot_id = ?1",
-            params![snapshot.snapshot_id],
-        );
-        return Ok(false);
-    }
-
-    let created = create_self_work_backed_queue_task(
-        root,
-        DurableSelfWorkQueueRequest {
-            kind: CTO_DRIFT_KIND.to_string(),
-            title: "CTO operating drift correction".to_string(),
-            prompt,
-            thread_key: CTO_DRIFT_THREAD_KEY.to_string(),
-            workspace_root: None,
-            priority: "urgent".to_string(),
-            suggested_skill: Some("follow-up-orchestrator".to_string()),
-            parent_message_key: None,
-            metadata: serde_json::json!({
-                "snapshot_id": snapshot.snapshot_id,
-                "dedupe_key": format!("cto-drift:{}", snapshot.snapshot_id),
-                "drift_score": snapshot.drift_score,
-            }),
-        },
-    )?;
-    let conn = Connection::open(root.join("runtime/ctox.sqlite3"))?;
-    let _ = conn.execute(
-        "UPDATE operating_health_snapshots SET intervention_enqueued = 1 WHERE snapshot_id = ?1",
-        params![snapshot.snapshot_id],
-    );
-    let _ = governance::record_event(
-        root,
-        governance::GovernanceEventRequest {
-            mechanism_id: "cto_operating_watchdog",
-            conversation_id: None,
-            severity: "warning",
-            reason: "operating telemetry indicates mission drift into low-leverage loops",
-            action_taken: "queued an urgent CTO operating drift correction slice",
-            details: serde_json::json!({
-                "snapshot_id": snapshot.snapshot_id,
-                "drift_score": snapshot.drift_score,
-                "thread_key": created.thread_key,
-                "title": created.title,
-                "reasons": snapshot.drift_reasons,
-            }),
-            idempotence_key: Some(&format!("cto-drift:{}", snapshot.snapshot_id)),
-        },
-    );
-    Ok(true)
-}
-
-fn current_epoch_millis() -> u128 {
-    SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
-}
-
 /// Close every open `approval-gate` self-work item. Runs only when the
 /// active autonomy level is `progressive` for unattended continuous
 /// operation. Returns the count of items closed so callers can log it.
@@ -4603,261 +4435,6 @@ fn auto_close_pending_approval_gates(root: &Path) -> Result<usize> {
         }
     }
     Ok(closed)
-}
-
-fn monitor_mission_continuity(root: &Path, state: &Arc<Mutex<SharedState>>) -> Result<()> {
-    if mission_watcher_disabled(root) {
-        return Ok(());
-    }
-    let (last_progress_epoch_secs, last_error) = {
-        let shared = lock_shared_state(state);
-        if shared.busy || !shared.pending_prompts.is_empty() {
-            return Ok(());
-        }
-        (shared.last_progress_epoch_secs, shared.last_error.clone())
-    };
-    if runnable_queue_work_exists(root)? {
-        return Ok(());
-    }
-    if founder_communication_rework_backlog_active(root)? {
-        return Ok(());
-    }
-
-    let db_path = root.join("runtime/ctox.sqlite3");
-    let engine = lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default())?;
-    let active_plan_has_work = plan::has_active_goal_with_pending_step(root).unwrap_or(false);
-    let chat_mission =
-        engine.sync_mission_state_from_continuity(turn_loop::CHAT_CONVERSATION_ID)?;
-    let mut missions = engine.list_mission_states(true)?;
-    if (chat_mission.is_open || active_plan_has_work)
-        && !missions
-            .iter()
-            .any(|mission| mission.conversation_id == chat_mission.conversation_id)
-    {
-        missions.push(chat_mission.clone());
-    }
-    if missions.is_empty() && !active_plan_has_work {
-        return Ok(());
-    }
-
-    let idle_secs = current_epoch_secs().saturating_sub(last_progress_epoch_secs);
-    if let Some(error) = last_error.as_deref() {
-        if let Some(cooldown_secs) = turn_loop::hard_runtime_blocker_retry_cooldown_secs(error) {
-            if idle_secs < cooldown_secs {
-                return Ok(());
-            }
-        }
-    }
-    // F2: agent-failure backoff — any mission whose consecutive agent
-    // failures crossed the operator-configured threshold is escalated to
-    // `deferred` here (idempotent) and excluded from continuation
-    // re-spawning. The operator must explicitly resume the mission to
-    // re-arm continuation.
-    let agent_failure_threshold = mission_agent_failure_threshold(root);
-    for mission in &missions {
-        if mission.mission_status == "deferred"
-            || mission.agent_failure_count < agent_failure_threshold
-        {
-            continue;
-        }
-        let conversation_id = mission.conversation_id;
-        let failure_count = mission.agent_failure_count;
-        let mission_label = if mission.mission.trim().is_empty() {
-            format!("conversation {conversation_id}")
-        } else {
-            clip_text(&mission.mission, 80)
-        };
-        match engine.defer_mission_for_reason(conversation_id, "agent_failure_threshold") {
-            Ok(_) => {
-                let event_key = format!("mission-agent-failure-backoff:{conversation_id}");
-                let _ = governance::record_event(
-                    root,
-                    governance::GovernanceEventRequest {
-                        mechanism_id: "mission_agent_failure_backoff",
-                        conversation_id: Some(conversation_id),
-                        severity: "warning",
-                        reason: "agent failure threshold reached; deferring mission continuation",
-                        action_taken:
-                            "set mission_status=deferred and stopped continuation respawn",
-                        details: serde_json::json!({
-                            "conversation_id": conversation_id,
-                            "agent_failure_count": failure_count,
-                            "threshold": agent_failure_threshold,
-                            "mission": mission_label,
-                            "deferred_reason": "agent_failure_threshold",
-                        }),
-                        idempotence_key: Some(&event_key),
-                    },
-                );
-                push_event(
-                    state,
-                    format!(
-                        "Mission watchdog backoff: deferring mission {conversation_id} after {failure_count} agent failures (threshold {agent_failure_threshold})"
-                    ),
-                );
-            }
-            Err(err) => {
-                push_event(
-                    state,
-                    format!(
-                        "Mission watchdog backoff failed to defer mission {conversation_id}: {err}"
-                    ),
-                );
-            }
-        }
-    }
-
-    let candidate = missions.into_iter().find(|mission| {
-        let plan_keeps_open =
-            mission.conversation_id == turn_loop::CHAT_CONVERSATION_ID && active_plan_has_work;
-        if mission.mission_status == "deferred" {
-            return false;
-        }
-        if mission.agent_failure_count >= agent_failure_threshold {
-            return false;
-        }
-        if (!mission.is_open || mission.allow_idle) && !plan_keeps_open {
-            return false;
-        }
-        if mission_waits_for_external_approval(mission) {
-            return false;
-        }
-        if mission_is_internal_harness_or_forensics(mission) {
-            return false;
-        }
-        if mission_watchdog_terminal_follow_up_exists(root, mission).unwrap_or(true) {
-            return false;
-        }
-        if idle_secs < mission_idle_tolerance_secs(mission) {
-            return false;
-        }
-        let thread_key = mission_thread_key(mission.conversation_id);
-        !runnable_thread_task_exists(root, &thread_key).unwrap_or(true)
-    });
-    let Some(mission) = candidate else {
-        return Ok(());
-    };
-
-    let title = if mission.mission.trim().is_empty() {
-        format!("Continue mission {}", mission.conversation_id)
-    } else {
-        format!("Continue mission {}", clip_text(&mission.mission, 48))
-    };
-    let thread_key = mission_thread_key(mission.conversation_id);
-    let created = create_self_work_backed_queue_task(
-        root,
-        DurableSelfWorkQueueRequest {
-            kind: "mission-follow-up".to_string(),
-            title,
-            prompt: render_mission_continuation_prompt(&mission, idle_secs),
-            thread_key,
-            workspace_root: None,
-            priority: mission_task_priority(&mission).to_string(),
-            suggested_skill: Some("follow-up-orchestrator".to_string()),
-            parent_message_key: None,
-            metadata: serde_json::json!({
-                "conversation_id": mission.conversation_id,
-                "dedupe_key": mission_watchdog_dedupe_key(&mission),
-            }),
-        },
-    )?;
-    let triggered_at = now_iso_string();
-    let _ = engine.note_mission_watcher_triggered(mission.conversation_id, &triggered_at)?;
-    let event_key = format!("mission-watchdog:{}", mission.conversation_id);
-    let _ = governance::record_event(
-        root,
-        governance::GovernanceEventRequest {
-            mechanism_id: "mission_idle_watchdog",
-            conversation_id: Some(mission.conversation_id),
-            severity: "warning",
-            reason: "open mission stayed idle beyond the tolerated window",
-            action_taken: "queued a ticket-backed mission continuation slice",
-            details: serde_json::json!({
-                "conversation_id": mission.conversation_id,
-                "idle_secs": idle_secs,
-                "thread_key": created.thread_key.clone(),
-                "title": created.title.clone(),
-            }),
-            idempotence_key: Some(&event_key),
-        },
-    );
-    push_event(
-        state,
-        format!(
-            "Mission watcher re-triggered open mission after {}s idle: {}",
-            idle_secs, created.title
-        ),
-    );
-    Ok(())
-}
-
-fn mission_waits_for_external_approval(mission: &lcm::MissionStateRecord) -> bool {
-    let blocker = mission.blocker.to_ascii_lowercase();
-    let next_slice = mission.next_slice.to_ascii_lowercase();
-    let mission_text = mission.mission.to_ascii_lowercase();
-    let done_gate = mission.done_gate.to_ascii_lowercase();
-    let combined = format!("{blocker}\n{next_slice}\n{mission_text}\n{done_gate}");
-    let waits_for_external_input = [
-        "approval",
-        "blocked_on_user",
-        "owner approval",
-        "access-grant",
-        "access grant",
-        "grant confirmation",
-        "approval visibility",
-        "approval signal",
-        "waiting for explicit inbound",
-        "waiting for explicit owner",
-        "reply in tui",
-        "missing input",
-    ]
-    .iter()
-    .any(|needle| combined.contains(needle));
-    let monitor_only = [
-        "monitor inbound",
-        "non-queue channels",
-        "jami",
-        "email",
-        "approval evidence",
-        "wait for vercel approval",
-        "wait for approval visibility",
-        "approval appears",
-        "retry deploy",
-        "retry production deploy",
-        "live html verification",
-        "live verification",
-        "do not retry production deploy",
-    ]
-    .iter()
-    .any(|needle| combined.contains(needle));
-    waits_for_external_input && monitor_only
-}
-
-fn mission_watcher_disabled(root: &Path) -> bool {
-    let value = runtime_env::env_or_config(root, "CTOX_DISABLE_MISSION_WATCHDOG")
-        .unwrap_or_default()
-        .trim()
-        .to_ascii_lowercase();
-    matches!(value.as_str(), "1" | "true" | "yes" | "on")
-}
-
-/// F2: configurable consecutive-agent-failure threshold at which the
-/// mission watchdog stops spawning continuation self-work and defers the
-/// mission. Default is 3. Operators tune via
-/// `CTOX_MISSION_AGENT_FAILURE_THRESHOLD`.
-pub(crate) const DEFAULT_MISSION_AGENT_FAILURE_THRESHOLD: i64 = 3;
-
-pub(crate) fn mission_agent_failure_threshold(root: &Path) -> i64 {
-    let raw = runtime_env::env_or_config(root, "CTOX_MISSION_AGENT_FAILURE_THRESHOLD")
-        .unwrap_or_default();
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return DEFAULT_MISSION_AGENT_FAILURE_THRESHOLD;
-    }
-    match trimmed.parse::<i64>() {
-        Ok(value) if value >= 1 => value,
-        _ => DEFAULT_MISSION_AGENT_FAILURE_THRESHOLD,
-    }
 }
 
 fn live_service_settings(root: &Path) -> BTreeMap<String, String> {
@@ -4891,6 +4468,13 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
     }
     route_assigned_ticket_self_work(root, state)?;
     let settings = live_service_settings(root);
+    let ticket_preflight_issues = run_ticket_dispatch_preflight(root, state, &settings);
+    let ticket_dispatch_allowed = ticket_preflight_issues
+        .iter()
+        .all(|issue| issue.severity != "error");
+    if let Err(err) = reconcile_ticket_runtime_state(root, state) {
+        push_event(state, format!("Ticket reconciliation failed: {err}"));
+    }
     let repaired_founder_messages = repair_stalled_founder_communications(root, state, &settings)?;
     if repaired_founder_messages > 0 {
         push_event(
@@ -4908,7 +4492,11 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
             format!("Scheduled {} cron task(s)", scheduled.emitted_count),
         );
     }
-    sync_configured_tickets(root, &settings);
+    let ticket_sync_allowed_sources = if ticket_dispatch_allowed {
+        sync_configured_tickets(root, state, &settings)
+    } else {
+        HashSet::new()
+    };
     let bot_name = settings
         .get("CTO_MEETING_BOT_NAME")
         .cloned()
@@ -5106,7 +4694,9 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
                 prompt,
                 suggested_skill: suggested_skill_from_message(&message),
                 leased_message_keys,
-                leased_ticket_event_keys: Vec::new(),
+                leased_ticket_event_keys: ticket_event_key_from_metadata(&message.metadata)
+                    .into_iter()
+                    .collect(),
                 thread_key: Some(execution_thread_key_for_inbound_message(
                     &settings, &message,
                 )),
@@ -5141,12 +4731,146 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
     if !deferred_for_founder_rework.is_empty() {
         let _ = channels::ack_leased_messages(root, &deferred_for_founder_rework, "review_rework");
     }
-    route_ticket_events(root, state)?;
+    if ticket_dispatch_allowed && !ticket_sync_allowed_sources.is_empty() {
+        route_ticket_events(root, state, &ticket_sync_allowed_sources)?;
+    }
+    Ok(())
+}
+
+fn run_ticket_dispatch_preflight(
+    root: &Path,
+    state: &Arc<Mutex<SharedState>>,
+    settings: &BTreeMap<String, String>,
+) -> Vec<tickets::TicketDispatchPreflightIssue> {
+    let issues = tickets::preflight_configured_ticket_systems(root, settings);
+    for issue in &issues {
+        let idempotence_key = format!("ticket-preflight:{}:{}", issue.system, issue.code);
+        let system = issue.system.clone();
+        let code = issue.code.clone();
+        let _ = governance::record_event(
+            root,
+            governance::GovernanceEventRequest {
+                mechanism_id: "ticket_dispatch_preflight",
+                conversation_id: None,
+                severity: &issue.severity,
+                reason: &issue.reason,
+                action_taken: "skipped ticket sync and ticket event dispatch for this router cycle",
+                details: serde_json::json!({
+                    "system": system,
+                    "code": code,
+                }),
+                idempotence_key: Some(&idempotence_key),
+            },
+        );
+        push_event(
+            state,
+            format!(
+                "Ticket dispatch preflight blocked {} [{}]: {}",
+                issue.system, issue.code, issue.reason
+            ),
+        );
+    }
+    issues
+}
+
+fn reconcile_ticket_runtime_state(root: &Path, state: &Arc<Mutex<SharedState>>) -> Result<()> {
+    let active_keys = {
+        let shared = lock_shared_state(state);
+        shared.leased_message_keys_inflight.clone()
+    };
+    let released_queue_leases =
+        channels::release_stale_queue_task_leases(root, CHANNEL_ROUTER_LEASE_OWNER, &active_keys)?;
+    if !released_queue_leases.is_empty() {
+        let released_count = released_queue_leases.len();
+        let idempotence_key = format!(
+            "ticket-reconcile:released-queue:{}",
+            normalize_token(&released_queue_leases.join(","))
+        );
+        let _ = governance::record_event(
+            root,
+            governance::GovernanceEventRequest {
+                mechanism_id: "ticket_reconciliation",
+                conversation_id: None,
+                severity: "info",
+                reason: "leased ticket-backed queue tasks had no active in-process worker or queued prompt",
+                action_taken: "released stale queue task leases back to pending",
+                details: serde_json::json!({
+                    "released_message_keys": released_queue_leases.clone(),
+                }),
+                idempotence_key: Some(&idempotence_key),
+            },
+        );
+        push_event(
+            state,
+            format!("Released {released_count} stale queue task lease(s)"),
+        );
+    }
+    let released_leases =
+        tickets::release_stale_ticket_event_leases(root, CHANNEL_ROUTER_LEASE_OWNER, &active_keys)?;
+    if !released_leases.is_empty() {
+        let released_count = released_leases.len();
+        let idempotence_key = format!(
+            "ticket-reconcile:released-leases:{}",
+            normalize_token(&released_leases.join(","))
+        );
+        let _ = governance::record_event(
+            root,
+            governance::GovernanceEventRequest {
+                mechanism_id: "ticket_reconciliation",
+                conversation_id: None,
+                severity: "info",
+                reason: "leased ticket events had no active in-process worker or queued prompt",
+                action_taken: "released stale ticket event leases back to pending",
+                details: serde_json::json!({
+                    "released_event_keys": released_leases.clone(),
+                }),
+                idempotence_key: Some(&idempotence_key),
+            },
+        );
+        push_event(
+            state,
+            format!("Released {released_count} stale ticket event lease(s)"),
+        );
+    }
+
+    let released_blocked = tickets::release_ready_blocked_ticket_events(root, 64)?;
+    if !released_blocked.is_empty() {
+        let released_count = released_blocked.len();
+        let idempotence_key = format!(
+            "ticket-reconcile:released-blocked:{}",
+            normalize_token(&released_blocked.join(","))
+        );
+        let _ = governance::record_event(
+            root,
+            governance::GovernanceEventRequest {
+                mechanism_id: "ticket_reconciliation",
+                conversation_id: None,
+                severity: "info",
+                reason:
+                    "blocked ticket events became preparable after knowledge/control state changed",
+                action_taken: "released blocked ticket events back to pending",
+                details: serde_json::json!({
+                    "released_event_keys": released_blocked.clone(),
+                }),
+                idempotence_key: Some(&idempotence_key),
+            },
+        );
+        push_event(
+            state,
+            format!("Released {released_count} previously blocked ticket event(s)"),
+        );
+    }
     Ok(())
 }
 
 fn route_assigned_ticket_self_work(root: &Path, state: &Arc<Mutex<SharedState>>) -> Result<()> {
-    let items = tickets::list_ticket_self_work_items(root, None, Some("published"), 128)?;
+    let mut items = tickets::list_ticket_self_work_items(root, None, Some("published"), 128)?;
+    items.extend(tickets::list_ticket_self_work_items(
+        root,
+        None,
+        Some("queued"),
+        128,
+    )?);
     for item in items {
         if item.assigned_to.as_deref() != Some("self") {
             continue;
@@ -5182,8 +4906,17 @@ fn route_assigned_ticket_self_work(root: &Path, state: &Arc<Mutex<SharedState>>)
     Ok(())
 }
 
-fn route_ticket_events(root: &Path, state: &Arc<Mutex<SharedState>>) -> Result<()> {
-    let leased = tickets::lease_pending_ticket_events(root, 16, CHANNEL_ROUTER_LEASE_OWNER)?;
+fn route_ticket_events(
+    root: &Path,
+    state: &Arc<Mutex<SharedState>>,
+    allowed_sources: &HashSet<String>,
+) -> Result<()> {
+    let leased = tickets::lease_pending_ticket_events_for_sources(
+        root,
+        16,
+        CHANNEL_ROUTER_LEASE_OWNER,
+        Some(allowed_sources),
+    )?;
     if leased.is_empty() {
         return Ok(());
     }
@@ -5241,6 +4974,42 @@ fn route_ticket_events(root: &Path, state: &Arc<Mutex<SharedState>>) -> Result<(
             continue;
         }
         duplicates.push(duplicate_key);
+        let suggested_skill =
+            tickets::suggested_skill_for_live_ticket_source(root, &prepared).unwrap_or(None);
+        let queue_task = channels::create_queue_task_with_metadata(
+            root,
+            channels::QueueTaskCreateRequest {
+                title: format!(
+                    "Ticket {} event {}",
+                    prepared.ticket_key, prepared.event_type
+                ),
+                prompt: prompt.clone(),
+                thread_key: prepared.thread_key.clone(),
+                workspace_root: None,
+                priority: "high".to_string(),
+                suggested_skill: suggested_skill.clone(),
+                parent_message_key: None,
+                extra_metadata: Some(serde_json::json!({
+                    "origin_source_label": format!("ticket:{}", prepared.source_system),
+                    "source_system": prepared.source_system.clone(),
+                    "ticket_key": prepared.ticket_key.clone(),
+                    "ticket_event_key": prepared.event_key.clone(),
+                    "ticket_remote_event_id": prepared.remote_event_id.clone(),
+                    "ticket_case_id": prepared.case_id.clone(),
+                    "ticket_dry_run_id": prepared.dry_run_id.clone(),
+                    "ticket_label": prepared.label.clone(),
+                    "ticket_bundle_label": prepared.bundle_label.clone(),
+                    "ticket_bundle_version": prepared.bundle_version,
+                    "ticket_approval_mode": prepared.approval_mode.clone(),
+                    "ticket_autonomy_level": prepared.autonomy_level.clone(),
+                    "ticket_support_mode": prepared.support_mode.clone(),
+                    "ticket_risk_level": prepared.risk_level.clone(),
+                    "dedupe_key": format!("ticket-event:{}", prepared.event_key),
+                })),
+            },
+        )?;
+        let queue_task =
+            channels::lease_queue_task(root, &queue_task.message_key, CHANNEL_ROUTER_LEASE_OWNER)?;
         enqueue_prompt(
             root,
             state,
@@ -5249,9 +5018,8 @@ fn route_ticket_events(root: &Path, state: &Arc<Mutex<SharedState>>) -> Result<(
                 source_label: format!("ticket:{}", prepared.source_system),
                 goal: prepared.summary.clone(),
                 prompt,
-                suggested_skill: tickets::suggested_skill_for_live_ticket_source(root, &prepared)
-                    .unwrap_or(None),
-                leased_message_keys: Vec::new(),
+                suggested_skill,
+                leased_message_keys: vec![queue_task.message_key],
                 leased_ticket_event_keys: vec![prepared.event_key.clone()],
                 thread_key: Some(prepared.thread_key.clone()),
                 workspace_root: None,
@@ -5286,7 +5054,15 @@ fn enqueue_prompt(
             &prompt.leased_ticket_event_keys,
         );
         let runtime_backoff_remaining = runtime_blocker_backoff_remaining_secs(&shared);
-        if shared.busy || runtime_backoff_remaining.is_some() {
+        if let Some(reason) = crate::service::working_hours::hold_reason(root) {
+            insert_pending_prompt_ordered(&mut shared.pending_prompts, prompt.clone());
+            let pending = shared.pending_prompts.len();
+            push_event_locked(
+                &mut shared,
+                format!("{event} (queue #{pending}, outside working hours: {reason})"),
+            );
+            true
+        } else if shared.busy || runtime_backoff_remaining.is_some() {
             insert_pending_prompt_ordered(&mut shared.pending_prompts, prompt.clone());
             let pending = shared.pending_prompts.len();
             if let Some(remaining_secs) = runtime_backoff_remaining {
@@ -5419,7 +5195,19 @@ fn decorate_service_event_with_skill(event: &str, suggested_skill: Option<&str>)
     format!("{event} [skill {skill}]")
 }
 
-fn maybe_start_next_queued_prompt_locked(shared: &mut SharedState) -> Option<QueuedPrompt> {
+fn maybe_start_next_queued_prompt_locked(
+    root: &Path,
+    shared: &mut SharedState,
+) -> Option<QueuedPrompt> {
+    if let Some(reason) = crate::service::working_hours::hold_reason(root) {
+        if !shared.pending_prompts.is_empty() {
+            push_event_locked(
+                shared,
+                format!("Deferred queued prompt dispatch outside working hours: {reason}"),
+            );
+        }
+        return None;
+    }
     let queued = shared.pending_prompts.pop_front()?;
     shared.busy = true;
     shared.current_goal_preview = Some(queued.preview.clone());
@@ -5543,6 +5331,14 @@ fn metadata_string(metadata: &Value, key: &str) -> Option<String> {
 
 fn ticket_self_work_id_from_metadata(metadata: &Value) -> Option<String> {
     metadata_string(metadata, "ticket_self_work_id")
+}
+
+fn ticket_event_key_from_metadata(metadata: &Value) -> Option<String> {
+    metadata_string(metadata, "ticket_event_key")
+}
+
+fn ticket_self_work_dedupe_key(item: &tickets::TicketSelfWorkItemView) -> Option<String> {
+    metadata_string(&item.metadata, "dedupe_key")
 }
 
 fn ticket_self_work_thread_key(item: &tickets::TicketSelfWorkItemView) -> String {
@@ -6615,44 +6411,299 @@ fn founder_commitment_guard_outcome(
                 .collect()
         },
         handoff: None,
-        disposition: review::ReviewDisposition::Send,
     })
 }
 
-fn founder_communication_rework_backlog_active(root: &Path) -> Result<bool> {
+fn is_owner_visible_strategic_job(job: &QueuedPrompt) -> bool {
+    if !derive_owner_visible_for_review(&job.source_label) {
+        return false;
+    }
+    if is_founder_or_owner_email_job(job) {
+        return false;
+    }
+    if is_internal_harness_or_forensics_job(job) {
+        return false;
+    }
+    if is_bounded_stateful_product_execution_job(job) {
+        return false;
+    }
+    let haystack = format!(
+        "{}\n{}\n{}\n{}\n{}",
+        job.prompt,
+        job.goal,
+        job.preview,
+        job.thread_key.clone().unwrap_or_default(),
+        job.workspace_root.clone().unwrap_or_default()
+    )
+    .to_ascii_lowercase();
+    haystack.contains("homepage")
+        || haystack.contains("landing")
+        || haystack.contains("website")
+        || haystack.contains("product")
+        || haystack.contains("platform")
+        || haystack.contains("marketplace")
+        || haystack.contains("public")
+        || haystack.contains("founder")
+        || haystack.contains("buyer")
+        || haystack.contains("customer")
+}
+
+fn is_bounded_stateful_product_execution_job(job: &QueuedPrompt) -> bool {
+    job.workspace_root.is_some()
+        && job.suggested_skill.as_deref() == Some("stateful-product-from-scratch")
+        && !job.leased_message_keys.iter().any(|key| {
+            key.starts_with("email:") || key.starts_with("jami:") || key.starts_with("meeting:")
+        })
+}
+
+fn is_internal_harness_or_forensics_job(job: &QueuedPrompt) -> bool {
+    let thread_key = job
+        .thread_key
+        .as_deref()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    if thread_key.starts_with("codex/")
+        || thread_key.starts_with("internal/")
+        || thread_key.contains("harness")
+        || thread_key.contains("process-mining")
+    {
+        return true;
+    }
+    let haystack = format!("{}\n{}\n{}", job.prompt, job.goal, job.preview).to_ascii_lowercase();
+    (haystack.contains("harness-smoke") || haystack.contains("process-mining"))
+        && (haystack.contains("keine externe kommunikation")
+            || haystack.contains("no external communication"))
+}
+
+fn queue_strategy_direction_pass(
+    root: &Path,
+    thread_key: &str,
+    workspace_root: Option<&str>,
+    resume_prompt: &str,
+    resume_goal: &str,
+    resume_preview: &str,
+    resume_skill: Option<&str>,
+) -> Result<channels::QueueTaskView> {
+    let conversation_id = turn_loop::conversation_id_for_thread_key(Some(thread_key));
+    let deferred_target = compact_deferred_target(resume_prompt);
+    let deferred_goal = compact_deferred_metadata(resume_goal);
+    let deferred_preview = compact_deferred_metadata(resume_preview);
+    create_self_work_backed_queue_task(
+        root,
+        DurableSelfWorkQueueRequest {
+            kind: STRATEGIC_DIRECTION_KIND.to_string(),
+            title: "Strategic direction setup".to_string(),
+            prompt: format!(
+                "Before further strategic or owner-visible execution, establish canonical runtime direction in SQLite.\n\n\
+Required outputs:\n\
+- create or revise an active Vision record in SQLite-backed runtime state\n\
+- create or revise an active Mission record in SQLite-backed runtime state\n\
+- if founder or CEO guidance changed the direction, persist that revision with the decision reason\n\
+- do not treat markdown files or chat text as canonical knowledge\n\
+\n\
+Required strategy scope for every strategy command in this slice:\n\
+- `--conversation-id {}`\n\
+- `--thread-key {}`\n\
+- Never write global directives without these scope flags.\n\
+\n\
+Use `ctox strategy show --conversation-id {} --thread-key {}` first.\n\
+When creating or revising canonical direction, use `ctox strategy set --conversation-id {} --thread-key {}` or `ctox strategy propose --conversation-id {} --thread-key {}`.\n\
+The authoritative Vision and Mission must live in runtime SQLite state before implementation continues.\n\
+\n\
+After direction is canonical, the deferred execution target is:\n{}",
+                conversation_id,
+                thread_key,
+                conversation_id,
+                thread_key,
+                conversation_id,
+                thread_key,
+                conversation_id,
+                thread_key,
+                deferred_target
+            ),
+            thread_key: thread_key.to_string(),
+            workspace_root: workspace_root.map(ToOwned::to_owned),
+            priority: "urgent".to_string(),
+            suggested_skill: Some(
+                resume_skill
+                    .filter(|value| !value.trim().is_empty())
+                    .unwrap_or("plan-orchestrator")
+                    .to_string(),
+            ),
+            parent_message_key: None,
+            metadata: serde_json::json!({
+                "thread_key": thread_key,
+                "workspace_root": workspace_root,
+                "priority": "urgent",
+                "skill": resume_skill,
+                "resume_prompt": deferred_target,
+                "resume_goal": deferred_goal,
+                "resume_preview": deferred_preview,
+                "resume_skill": resume_skill,
+                "dedupe_key": format!("strategy-direction:{}", thread_key),
+            }),
+        },
+    )
+}
+
+fn cancel_runnable_thread_tasks_for_strategy(
+    root: &Path,
+    thread_key: &str,
+    except_message_keys: &[String],
+) -> Result<usize> {
+    let tasks =
+        channels::list_queue_tasks(root, &["pending".to_string(), "leased".to_string()], 128)?;
+    let note = "Cancelled because canonical Vision and Mission must be established in SQLite before strategic work on this thread can continue.";
+    let mut cancelled = 0usize;
+    for task in tasks.into_iter().filter(|task| {
+        task.thread_key == thread_key
+            && !except_message_keys
+                .iter()
+                .any(|key| key == &task.message_key)
+    }) {
+        channels::update_queue_task(
+            root,
+            channels::QueueTaskUpdateRequest {
+                message_key: task.message_key.clone(),
+                route_status: Some("cancelled".to_string()),
+                status_note: Some(note.to_string()),
+                ..Default::default()
+            },
+        )?;
+        if let Some(work_id) = task.ticket_self_work_id.as_deref() {
+            supersede_ticket_self_work_item(root, work_id, note);
+        }
+        cancelled += 1;
+    }
+    Ok(cancelled)
+}
+
+fn has_runnable_founder_or_owner_email(root: &Path) -> Result<bool> {
+    let settings = live_service_settings(root);
     let db_path = root.join("runtime/ctox.sqlite3");
     let conn = channels::open_channel_db(&db_path)?;
-    let active_self_work: i64 = conn.query_row(
+    let mut statement = conn.prepare(
         r#"
-        SELECT COUNT(*)
-        FROM ticket_self_work_items
-        WHERE kind = ?1
-          AND state IN ('open', 'published', 'queued', 'blocked', 'restored')
-        "#,
-        params![FOUNDER_COMMUNICATION_REWORK_KIND],
-        |row| row.get(0),
-    )?;
-    if active_self_work > 0 {
-        return Ok(true);
-    }
-
-    let held_queue: i64 = conn.query_row(
-        r#"
-        SELECT COUNT(*)
+        SELECT m.sender_address
         FROM communication_messages m
-        JOIN communication_routing_state r ON r.message_key = m.message_key
-        WHERE m.channel = 'queue'
+        LEFT JOIN communication_routing_state r ON r.message_key = m.message_key
+        WHERE m.channel = 'email'
           AND m.direction = 'inbound'
-          AND r.route_status = 'review_rework'
-          AND (
-                json_extract(m.metadata_json, '$.ticket_self_work_kind') = ?1
-             OR m.subject LIKE 'Founder communication rework:%'
-          )
+          AND COALESCE(r.route_status, 'pending') IN ('pending', 'leased')
         "#,
-        params![FOUNDER_COMMUNICATION_REWORK_KIND],
-        |row| row.get(0),
     )?;
-    Ok(held_queue > 0)
+    let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+    for sender in rows {
+        let sender = sender?;
+        let role = channels::classify_email_sender(&settings, &sender).role;
+        if matches!(role.as_str(), "owner" | "founder" | "admin") {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+const DEFERRED_TARGET_MAX_CHARS: usize = 4_000;
+const DEFERRED_METADATA_MAX_CHARS: usize = 4_000;
+
+fn compact_deferred_target(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return "reconstruct the deferred target from durable queue, ticket, and continuity state"
+            .to_string();
+    }
+    clip_text(trimmed, DEFERRED_TARGET_MAX_CHARS)
+}
+
+fn compact_deferred_metadata(value: &str) -> String {
+    clip_text(value.trim(), DEFERRED_METADATA_MAX_CHARS)
+}
+
+fn maybe_redirect_owner_visible_work_to_strategy_setup(
+    root: &Path,
+    state: &Arc<Mutex<SharedState>>,
+    job: &QueuedPrompt,
+) -> Result<bool> {
+    if !is_owner_visible_strategic_job(job) {
+        return Ok(false);
+    }
+    if has_runnable_founder_or_owner_email(root)? {
+        return Ok(false);
+    }
+    let current_item = job.ticket_self_work_id.as_deref().and_then(|work_id| {
+        tickets::load_ticket_self_work_item(root, work_id)
+            .ok()
+            .flatten()
+    });
+    if current_item.as_ref().map(|item| item.kind.as_str()) == Some(STRATEGIC_DIRECTION_KIND) {
+        return Ok(false);
+    }
+    let thread_key = job
+        .thread_key
+        .clone()
+        .unwrap_or_else(|| default_follow_up_thread_key(&job.goal));
+    let conversation_id = turn_loop::conversation_id_for_thread_key(Some(thread_key.as_str()));
+    let db_path = root.join("runtime/ctox.sqlite3");
+    let engine = lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default())?;
+    let strategy = engine.active_strategy_snapshot(conversation_id, Some(thread_key.as_str()))?;
+    if strategy.active_vision.is_some() && strategy.active_mission.is_some() {
+        return Ok(false);
+    }
+    let cancelled_thread_tasks =
+        cancel_runnable_thread_tasks_for_strategy(root, &thread_key, &job.leased_message_keys)?;
+    if !job.leased_message_keys.is_empty() {
+        let _ = channels::ack_leased_messages(root, &job.leased_message_keys, "cancelled");
+    }
+    if !job.leased_ticket_event_keys.is_empty() {
+        let _ = tickets::ack_leased_ticket_events(root, &job.leased_ticket_event_keys, "blocked");
+    }
+    if let Some(work_id) = job.ticket_self_work_id.as_deref() {
+        supersede_ticket_self_work_item(
+            root,
+            work_id,
+            "Closed without execution because canonical Vision and Mission must be established in SQLite before strategic work continues.",
+        );
+    }
+    let created = queue_strategy_direction_pass(
+        root,
+        &thread_key,
+        job.workspace_root.as_deref(),
+        &job.prompt,
+        &job.goal,
+        &job.preview,
+        job.suggested_skill.as_deref(),
+    )?;
+    let mut next_prompt = None;
+    {
+        let mut shared = lock_shared_state(state);
+        shared.busy = false;
+        shared.current_goal_preview = None;
+        shared.active_source_label = None;
+        shared.last_completed_at = Some(now_iso_string());
+        shared.last_progress_epoch_secs = current_epoch_secs();
+        shared.last_reply_chars = None;
+        shared.last_error = None;
+        release_leased_keys_locked(
+            &mut shared,
+            &job.leased_message_keys,
+            &job.leased_ticket_event_keys,
+        );
+        push_event_locked(
+            &mut shared,
+            format!(
+                "Rerouted strategic work to canonical direction setup: {} (cancelled {} competing runnable task(s) on the thread)",
+                created.title, cancelled_thread_tasks
+            ),
+        );
+        if runtime_blocker_backoff_remaining_secs(&shared).is_none() {
+            next_prompt = maybe_start_next_queued_prompt_locked(root, &mut shared);
+        }
+    }
+    if let Some(queued) = next_prompt {
+        start_prompt_worker(root.to_path_buf(), state.clone(), queued);
+    }
+    Ok(true)
 }
 
 fn is_owner_visible_platform_reset_job(job: &QueuedPrompt) -> bool {
@@ -6765,6 +6816,9 @@ fn queue_platform_expertise_pass(
     resume_skill: Option<&str>,
 ) -> Result<channels::QueueTaskView> {
     let conversation_id = turn_loop::conversation_id_for_thread_key(Some(thread_key));
+    let deferred_target = compact_deferred_target(resume_prompt);
+    let deferred_goal = compact_deferred_metadata(resume_goal);
+    let deferred_preview = compact_deferred_metadata(resume_preview);
     create_self_work_backed_queue_task(
         root,
         DurableSelfWorkQueueRequest {
@@ -6782,7 +6836,7 @@ Required outputs:\n\
 \n\
 Discipline to resolve now: {}\n\
 Future implementation target after all passes complete:\n{}",
-                spec.display_name, conversation_id, spec.display_name, resume_prompt
+                spec.display_name, conversation_id, spec.display_name, deferred_target
             ),
             thread_key: thread_key.to_string(),
             workspace_root: workspace_root.map(ToOwned::to_owned),
@@ -6795,9 +6849,9 @@ Future implementation target after all passes complete:\n{}",
                 "priority": "urgent",
                 "skill": spec.suggested_skill,
                 "pass_kind": spec.pass_kind,
-                "resume_prompt": resume_prompt,
-                "resume_goal": resume_goal,
-                "resume_preview": resume_preview,
+                "resume_prompt": deferred_target,
+                "resume_goal": deferred_goal,
+                "resume_preview": deferred_preview,
                 "resume_skill": resume_skill,
                 "dedupe_key": format!("platform-pass:{}:{}", thread_key, spec.pass_kind),
             }),
@@ -6815,6 +6869,9 @@ fn queue_platform_implementation_resume(
     resume_skill: Option<&str>,
 ) -> Result<Option<channels::QueueTaskView>> {
     let conversation_id = turn_loop::conversation_id_for_thread_key(Some(thread_key));
+    let deferred_target = compact_deferred_target(resume_prompt);
+    let deferred_goal = compact_deferred_metadata(resume_goal);
+    let deferred_preview = compact_deferred_metadata(resume_preview);
     let items = list_platform_expertise_scope_items(root, thread_key, workspace_root)?;
     if items.iter().any(|item| {
         item.kind == PLATFORM_IMPLEMENTATION_KIND
@@ -6844,7 +6901,7 @@ No prompt leakage, no source-code leakage, no operator/admin language.\n\
 Persist any completion claim or durable design artifact into the canonical CTOX runtime DB with `ctox verification claim-set --conversation-id {} --kind design_artifact --status verified --subject <subject> --summary <summary> --evidence <evidence>`.\n\
 Do not treat `<workspace>/runtime/ctox.sqlite3` as canonical state.\n\n\
 Implementation objective:\n{}",
-                conversation_id, resume_prompt
+                conversation_id, deferred_target
             ),
             thread_key: thread_key.to_string(),
             workspace_root: workspace_root.map(ToOwned::to_owned),
@@ -6861,9 +6918,9 @@ Implementation objective:\n{}",
                 "workspace_root": workspace_root,
                 "priority": "urgent",
                 "skill": resume_skill,
-                "resume_prompt": resume_prompt,
-                "resume_goal": resume_goal,
-                "resume_preview": resume_preview,
+                "resume_prompt": deferred_target,
+                "resume_goal": deferred_goal,
+                "resume_preview": deferred_preview,
                 "resume_skill": resume_skill,
                 "dedupe_key": format!("platform-implementation:{}", thread_key),
             }),
@@ -7001,7 +7058,7 @@ fn maybe_redirect_platform_work_to_expertise_passes(
             ),
         );
         if runtime_blocker_backoff_remaining_secs(&shared).is_none() {
-            next_prompt = maybe_start_next_queued_prompt_locked(&mut shared);
+            next_prompt = maybe_start_next_queued_prompt_locked(root, &mut shared);
         }
     }
     if let Some(queued) = next_prompt {
@@ -7269,7 +7326,7 @@ fn maybe_skip_superseded_self_work_prompt(
             ),
         );
         if runtime_blocker_backoff_remaining_secs(&shared).is_none() {
-            next_prompt = maybe_start_next_queued_prompt_locked(&mut shared);
+            next_prompt = maybe_start_next_queued_prompt_locked(root, &mut shared);
         }
     }
     if let Some(queued) = next_prompt {
@@ -7291,6 +7348,10 @@ fn queue_ticket_self_work_item_ignoring(
     ignored_message_keys: &[String],
 ) -> Result<Option<channels::QueueTaskView>> {
     let thread_key = ticket_self_work_thread_key(item);
+    if let Some(existing) = find_runnable_self_work_task_ignoring(root, item, ignored_message_keys)?
+    {
+        return Ok(Some(existing));
+    }
     if runnable_thread_task_exists_ignoring(root, &thread_key, ignored_message_keys)? {
         return Ok(None);
     }
@@ -7328,11 +7389,53 @@ fn queue_ticket_self_work_item_ignoring(
     Ok(Some(queue_task))
 }
 
-fn find_runnable_thread_task(
+fn find_runnable_self_work_task_ignoring(
     root: &Path,
-    thread_key: &str,
+    item: &tickets::TicketSelfWorkItemView,
+    ignored_message_keys: &[String],
 ) -> Result<Option<channels::QueueTaskView>> {
-    find_runnable_thread_task_ignoring(root, thread_key, &[])
+    let dedupe_key = ticket_self_work_dedupe_key(item);
+    let db_path = root.join("runtime").join("ctox.sqlite3");
+    let conn = channels::open_channel_db(&db_path)?;
+    let mut statement = conn.prepare(
+        r#"
+        SELECT m.message_key
+        FROM communication_messages m
+        LEFT JOIN communication_routing_state r ON r.message_key = m.message_key
+        WHERE m.channel = 'queue'
+          AND m.direction = 'inbound'
+          AND lower(COALESCE(r.route_status, 'pending')) IN ('pending', 'leased')
+          AND (
+                json_extract(m.metadata_json, '$.ticket_self_work_id') = ?1
+             OR (?2 IS NOT NULL AND json_extract(m.metadata_json, '$.dedupe_key') = ?2)
+          )
+        ORDER BY
+            CASE COALESCE(r.route_status, 'pending')
+                WHEN 'pending' THEN 0
+                WHEN 'leased' THEN 1
+                ELSE 9
+            END ASC,
+            m.external_created_at ASC,
+            m.observed_at ASC
+        LIMIT 16
+        "#,
+    )?;
+    let rows = statement.query_map(
+        params![item.work_id.as_str(), dedupe_key.as_deref()],
+        |row| row.get::<_, String>(0),
+    )?;
+    let message_keys = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(statement);
+    drop(conn);
+    for message_key in message_keys {
+        if ignored_message_keys.iter().any(|key| key == &message_key) {
+            continue;
+        }
+        if let Some(task) = channels::load_queue_task(root, &message_key)? {
+            return Ok(Some(task));
+        }
+    }
+    Ok(None)
 }
 
 fn find_runnable_thread_task_ignoring(
@@ -7357,7 +7460,9 @@ fn requeue_review_rejected_self_work(
 ) -> Result<Option<channels::QueueTaskView>> {
     if let Some(note) = founder_rework_review_loop_block_note(root, work_id, summary)? {
         block_founder_rework_queue_tasks_for_work(root, work_id, &note)?;
-        block_ticket_self_work_item(root, work_id, &note);
+        if !founder_rework_loop_block_already_active(root, work_id)? {
+            block_ticket_self_work_item(root, work_id, &note);
+        }
         return Ok(None);
     }
     let note = format!(
@@ -7385,6 +7490,34 @@ fn requeue_review_rejected_self_work(
     queue_ticket_self_work_item(root, &item)
 }
 
+fn requeue_continue_requested_self_work(
+    root: &Path,
+    work_id: &str,
+    summary: &str,
+) -> Result<Option<channels::QueueTaskView>> {
+    let note = format!(
+        "Die letzte Ausfuehrung ist noch nicht fertig und hat konkrete naechste Schritte genannt. Setze genau diese Arbeit fort. Wenn danach fertig, liefere eine abgeschlossene Zusammenfassung; schlage nur dann erneut Fortsetzung vor, wenn konkrete Pflichtpunkte offen bleiben. Kontext: {}",
+        clip_text(summary, 420)
+    );
+    let item = tickets::transition_ticket_self_work_item(
+        root,
+        work_id,
+        "queued",
+        "ctox-continuation",
+        Some(&note),
+        "internal",
+    )?;
+    if let Some(reason) = suppress_self_work_reason(root, &item)? {
+        supersede_ticket_self_work_item(
+            root,
+            work_id,
+            &format!("Closed instead of auto-continuing because the work was superseded: {reason}"),
+        );
+        return Ok(None);
+    }
+    queue_ticket_self_work_item(root, &item)
+}
+
 fn founder_rework_review_loop_block_note(
     root: &Path,
     work_id: &str,
@@ -7404,6 +7537,29 @@ fn founder_rework_review_loop_block_note(
         "Diese Founder-Antwort wurde {active_attempts} Mal ohne neue belastbare Grundlage erneut vom Review zurueckgewiesen. Stoppe diese Kommunikationsschleife jetzt: arbeite zuerst die fachliche Grundlage ab, sammle neue Evidenz und erstelle danach eine frische Antwort im selben Thread. Letzter Review-Hinweis: {}",
         clip_text(summary, 220)
     )))
+}
+
+fn founder_rework_loop_block_already_active(root: &Path, work_id: &str) -> Result<bool> {
+    let Some(item) = tickets::load_ticket_self_work_item(root, work_id)? else {
+        return Ok(false);
+    };
+    if item.state != "blocked" {
+        return Ok(false);
+    }
+    let db_path = root.join("runtime").join("ctox.sqlite3");
+    let conn = channels::open_channel_db(&db_path)?;
+    let exists: i64 = conn.query_row(
+        r#"
+        SELECT COUNT(*)
+        FROM ticket_self_work_notes
+        WHERE work_id = ?1
+          AND body_text LIKE 'Diese Founder-Antwort wurde % ohne neue belastbare Grundlage erneut vom Review zurueckgewiesen.%'
+        LIMIT 1
+        "#,
+        params![work_id],
+        |row| row.get(0),
+    )?;
+    Ok(exists > 0)
 }
 
 fn founder_rework_queue_attempt_count(root: &Path, work_id: &str) -> Result<usize> {
@@ -7770,8 +7926,47 @@ fn sync_configured_channels(root: &Path, settings: &BTreeMap<String, String>) {
     let _ = communication_adapters::teams().service_sync(root, settings);
 }
 
-fn sync_configured_tickets(root: &Path, settings: &BTreeMap<String, String>) {
-    tickets::sync_configured_ticket_systems(root, settings);
+fn sync_configured_tickets(
+    root: &Path,
+    state: &Arc<Mutex<SharedState>>,
+    settings: &BTreeMap<String, String>,
+) -> HashSet<String> {
+    let mut ok_sources = HashSet::new();
+    for result in tickets::sync_configured_ticket_systems(root, settings) {
+        if result.ok {
+            ok_sources.insert(result.system);
+            continue;
+        }
+        let system = result.system.clone();
+        let error = result
+            .error
+            .as_deref()
+            .unwrap_or("unknown ticket sync error");
+        let idempotence_key = format!(
+            "ticket-sync-failed:{}:{}",
+            system,
+            normalize_token(&clip_text(error, 96))
+        );
+        let _ = governance::record_event(
+            root,
+            governance::GovernanceEventRequest {
+                mechanism_id: "ticket_adapter_sync",
+                conversation_id: None,
+                severity: "warning",
+                reason: error,
+                action_taken: "recorded ticket sync failure and skipped dispatch from this source for this cycle",
+                details: serde_json::json!({
+                    "system": system.clone(),
+                }),
+                idempotence_key: Some(&idempotence_key),
+            },
+        );
+        push_event(
+            state,
+            format!("Ticket sync failed for {system}: {}", clip_text(error, 180)),
+        );
+    }
+    ok_sources
 }
 
 fn render_ticket_prompt(root: &Path, event: &tickets::RoutedTicketEvent) -> String {
@@ -8165,10 +8360,6 @@ fn render_timeout_continue_prompt(
     prepend_workspace_contract(&prompt, workspace_root)
 }
 
-fn runnable_thread_task_exists(root: &Path, thread_key: &str) -> Result<bool> {
-    runnable_thread_task_exists_ignoring(root, thread_key, &[])
-}
-
 fn runnable_thread_task_exists_ignoring(
     root: &Path,
     thread_key: &str,
@@ -8182,156 +8373,6 @@ fn runnable_thread_task_exists_ignoring(
                 .iter()
                 .any(|key| key == &task.message_key)
     }))
-}
-
-fn runnable_queue_work_exists(root: &Path) -> Result<bool> {
-    let tasks =
-        channels::list_queue_tasks(root, &["pending".to_string(), "leased".to_string()], 64)?;
-    if !tasks.is_empty() {
-        return Ok(true);
-    }
-    // Pending inbound messages (including plan-emitted steps that are
-    // waiting to be leased by the queue picker) also count as runnable work.
-    // Without this check the mission watchdog creates redundant
-    // continuation tasks and starves the actual queued step.
-    channels::has_runnable_inbound_message(root)
-}
-
-fn active_self_work_exists_for_thread(root: &Path, kind: &str, thread_key: &str) -> Result<bool> {
-    for state in ["open", "queued", "published"] {
-        let items = tickets::list_ticket_self_work_items(root, None, Some(state), 256)?;
-        if items.into_iter().any(|item| {
-            item.kind == kind
-                && ticket_self_work_thread_key(&item) == thread_key
-                && item.assigned_to.as_deref().unwrap_or("self") == "self"
-        }) {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
-fn mission_thread_key(conversation_id: i64) -> String {
-    format!("queue/mission-{conversation_id}")
-}
-
-fn mission_idle_tolerance_secs(mission: &lcm::MissionStateRecord) -> u64 {
-    match normalize_token(&mission.trigger_intensity).as_str() {
-        "hot" => 45,
-        "warm" => 180,
-        "cold" => 900,
-        "archive" => 3_600,
-        _ => match normalize_token(&mission.continuation_mode).as_str() {
-            "continuous" => 45,
-            "maintenance" => 180,
-            "scheduled" => 900,
-            "dormant" | "closed" => 3_600,
-            _ => 120,
-        },
-    }
-}
-
-fn mission_is_internal_harness_or_forensics(mission: &lcm::MissionStateRecord) -> bool {
-    let haystack = format!(
-        "{}\n{}\n{}\n{}",
-        mission.mission, mission.blocker, mission.next_slice, mission.done_gate
-    )
-    .to_ascii_lowercase();
-    let internal_harness = (haystack.contains("harness")
-        || haystack.contains("forensics")
-        || haystack.contains("process-mining")
-        || haystack.contains("smoke")
-        || haystack.contains("smoke-test")
-        || haystack.contains("smoke compliance"))
-        && (haystack.contains("codex")
-            || haystack.contains("internal")
-            || haystack.contains("interner")
-            || haystack.contains("knowledge-put")
-            || haystack.contains("harness_forensics"));
-    let recursive_strategy_gate =
-        haystack.contains("continue mission") && haystack.contains("strategic direction setup");
-    internal_harness || recursive_strategy_gate
-}
-
-fn mission_watchdog_terminal_follow_up_exists(
-    root: &Path,
-    mission: &lcm::MissionStateRecord,
-) -> Result<bool> {
-    let dedupe_key = mission_watchdog_dedupe_key(mission);
-    let items = tickets::list_ticket_self_work_items(root, Some("local"), None, 512)?;
-    Ok(items.into_iter().any(|item| {
-        item.kind == "mission-follow-up"
-            && item
-                .metadata
-                .get("dedupe_key")
-                .and_then(Value::as_str)
-                .map(|value| value == dedupe_key)
-                .unwrap_or(false)
-            && (matches!(
-                item.state.as_str(),
-                "blocked" | "cancelled" | "closed" | "superseded"
-            ) || self_work_has_explicit_supersession(&item))
-    }))
-}
-
-fn mission_task_priority(mission: &lcm::MissionStateRecord) -> &'static str {
-    match normalize_token(&mission.trigger_intensity).as_str() {
-        "hot" => "high",
-        "warm" => "normal",
-        "cold" | "archive" => "low",
-        _ => "high",
-    }
-}
-
-fn mission_watchdog_dedupe_key(mission: &lcm::MissionStateRecord) -> String {
-    let signature = [
-        mission.conversation_id.to_string(),
-        clip_text(&mission.mission, 240),
-        clip_text(&mission.mission_status, 80),
-        clip_text(&mission.continuation_mode, 80),
-        clip_text(&mission.trigger_intensity, 80),
-        clip_text(&mission.blocker, 240),
-        clip_text(&mission.next_slice, 240),
-        clip_text(&mission.done_gate, 240),
-    ]
-    .join("|");
-    let digest = {
-        use sha2::Digest;
-        let bytes = sha2::Sha256::digest(signature.as_bytes());
-        let hex = format!("{bytes:x}");
-        hex[..12].to_string()
-    };
-    format!("mission-watchdog:{}:{digest}", mission.conversation_id)
-}
-
-fn render_mission_continuation_prompt(mission: &lcm::MissionStateRecord, idle_secs: u64) -> String {
-    let mission_label = if mission.mission.trim().is_empty() {
-        "Keep the active mission alive from the latest durable continuity."
-    } else {
-        mission.mission.trim()
-    };
-    format!(
-        "Mission continuity watchdog: the mission was idle for {idle_secs}s.\n\nMission: {mission_label}\nState: {mission_status}\nMode: {continuation_mode}\nIntensity: {trigger_intensity}\nBlocker: {blocker}\nNext step: {next_slice}\nTask is complete only when: {done_gate}\nClosure confidence: {closure_confidence}\n\nRequired actions:\n- re-check repo, runtime, queue, progress artifacts, and continuity\n- decide whether the mission is complete, safely handed off, or still open\n- if still open, do the next concrete step\n- if more than one turn remains, leave exactly one open CTOX plan or queue item\n- a sentence in the reply does not count as open work\n- do not let sidequests replace the mission\n- do not end in idle while the mission is still open",
-        mission_status = clip_text(fallback_text(&mission.mission_status, "active"), 64),
-        continuation_mode = clip_text(fallback_text(&mission.continuation_mode, "continuous"), 64),
-        trigger_intensity = clip_text(fallback_text(&mission.trigger_intensity, "hot"), 64),
-        blocker = clip_text(fallback_text(&mission.blocker, "none"), 180),
-        next_slice = clip_text(
-            fallback_text(
-                &mission.next_slice,
-                "reconstruct the next concrete slice from continuity",
-            ),
-            180,
-        ),
-        done_gate = clip_text(
-            fallback_text(
-                &mission.done_gate,
-                "only close the mission when current evidence clearly satisfies the gate",
-            ),
-            180,
-        ),
-        closure_confidence = clip_text(fallback_text(&mission.closure_confidence, "low"), 64),
-    )
 }
 
 fn summarize_follow_up_goal(goal: &str) -> String {
@@ -8728,20 +8769,23 @@ mod tests {
     }
 
     #[test]
-    fn review_no_send_disposition_is_terminal() {
+    fn review_no_send_wait_is_terminal() {
         let mut outcome = review_outcome_for_no_send_test(
             "Do not send a founder reply yet. The CRM thread is in wait mode until Marco provides the CRM/tool and sync scope.",
         );
         outcome.failed_gates.push(
             "No-send: wait until the founders provide concrete technical inputs.".to_string(),
         );
-        outcome.disposition = review::ReviewDisposition::NoSend;
+        outcome.evidence.push(
+            "Michael's latest thread says CTO1 should support technically after the decision."
+                .to_string(),
+        );
 
-        assert_eq!(outcome.disposition, review::ReviewDisposition::NoSend);
+        assert!(review_outcome_is_terminal_no_send(&outcome));
     }
 
     #[test]
-    fn review_missing_founder_work_keeps_send_disposition() {
+    fn review_missing_founder_work_is_not_terminal_no_send() {
         let mut outcome = review_outcome_for_no_send_test(
             "Do not send the current mail because missing deliverables must be done before contacting the founders.",
         );
@@ -8749,9 +8793,8 @@ mod tests {
             "Missing required dashboard link and evidence; send a corrected reply after rework."
                 .to_string(),
         );
-        // Reviewer did NOT emit DISPOSITION: NO_SEND, so default is Send and
-        // the dispatcher must run the rework path instead of closing the slice.
-        assert_eq!(outcome.disposition, review::ReviewDisposition::Send);
+
+        assert!(!review_outcome_is_terminal_no_send(&outcome));
     }
 
     fn upsert_test_inbound_message(
@@ -9478,7 +9521,12 @@ mod tests {
             shared.busy = true;
         }
 
-        route_ticket_events(&root, &state).expect("ticket routing should succeed");
+        route_ticket_events(
+            &root,
+            &state,
+            &std::collections::HashSet::from(["local".to_string()]),
+        )
+        .expect("ticket routing should succeed");
 
         let shared = state.lock().expect("state poisoned");
         assert_eq!(shared.pending_prompts.len(), 1);
@@ -9522,7 +9570,12 @@ mod tests {
         tickets::sync_ticket_system(&root, "local").expect("failed to resync local tickets");
         let state = Arc::new(Mutex::new(SharedState::default()));
 
-        route_ticket_events(&root, &state).expect("ticket routing should succeed");
+        route_ticket_events(
+            &root,
+            &state,
+            &std::collections::HashSet::from(["local".to_string()]),
+        )
+        .expect("ticket routing should succeed");
 
         let shared = state.lock().expect("state poisoned");
         assert!(shared.pending_prompts.is_empty());
@@ -9626,6 +9679,7 @@ mod tests {
 
     #[test]
     fn starting_queued_prompt_preserves_skill_in_recent_events() {
+        let root = temp_root("ctox-starting-queued-prompt-skill");
         let mut shared = SharedState::default();
         shared.pending_prompts.push_back(QueuedPrompt {
             preview: "review onboarding".to_string(),
@@ -9642,7 +9696,7 @@ mod tests {
             outbound_anchor: None,
         });
 
-        let next = maybe_start_next_queued_prompt_locked(&mut shared)
+        let next = maybe_start_next_queued_prompt_locked(&root, &mut shared)
             .expect("queued prompt should be started");
 
         assert_eq!(next.suggested_skill.as_deref(), Some("system-onboarding"));
@@ -9651,6 +9705,7 @@ mod tests {
         assert!(shared.recent_events.iter().any(|event| {
             event.contains("Started queued ticket:zammad prompt [skill system-onboarding]")
         }));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -9718,7 +9773,12 @@ mod tests {
             shared.busy = true;
         }
 
-        route_ticket_events(&root, &state).expect("ticket routing should succeed");
+        route_ticket_events(
+            &root,
+            &state,
+            &std::collections::HashSet::from(["local".to_string()]),
+        )
+        .expect("ticket routing should succeed");
 
         let shared = state.lock().expect("state poisoned");
         assert_eq!(shared.pending_prompts.len(), 1);
@@ -9776,7 +9836,12 @@ mod tests {
             shared.busy = true;
         }
 
-        route_ticket_events(&root, &state).expect("ticket routing should succeed");
+        route_ticket_events(
+            &root,
+            &state,
+            &std::collections::HashSet::from(["local".to_string()]),
+        )
+        .expect("ticket routing should succeed");
 
         let shared = state.lock().expect("state poisoned");
         assert_eq!(shared.pending_prompts.len(), 1);
@@ -9911,7 +9976,12 @@ mod tests {
             shared.busy = true;
         }
 
-        route_ticket_events(&root, &state).expect("ticket routing should succeed");
+        route_ticket_events(
+            &root,
+            &state,
+            &std::collections::HashSet::from(["local".to_string()]),
+        )
+        .expect("ticket routing should succeed");
 
         let shared = state.lock().expect("state poisoned");
         assert_eq!(shared.pending_prompts.len(), 1);
@@ -10129,6 +10199,7 @@ mod tests {
             monitor_alerts: Vec::new(),
             monitor_last_error: None,
             last_agent_outcome: None,
+            work_hours: crate::service::working_hours::snapshot(&root),
         }))
         .unwrap();
         let handle = std::thread::spawn(move || {
@@ -10223,6 +10294,7 @@ mod tests {
             monitor_alerts: Vec::new(),
             monitor_last_error: None,
             last_agent_outcome: None,
+            work_hours: crate::service::working_hours::snapshot(&root),
         }))
         .unwrap();
         let handle = std::thread::spawn(move || {
@@ -10327,128 +10399,6 @@ mod tests {
         assert!(timeout_prompt
             .contains("Work only inside this workspace:\n/tmp/ctox-workspace-contract"));
         assert!(timeout_prompt.contains("Slice goal:\nShip the next implementation slice."));
-    }
-
-    #[test]
-    fn mission_continuation_prompt_stays_compact() {
-        let mission = lcm::MissionStateRecord {
-            conversation_id: 1,
-            mission: "Keep the active mission alive from the latest durable continuity."
-                .to_string(),
-            mission_status: "active".to_string(),
-            continuation_mode: "continuous".to_string(),
-            trigger_intensity: "hot".to_string(),
-            blocker: "goal: reconstruct the next concrete slice from continuity".to_string(),
-            next_slice: "inspect repo state and continue the smallest pending slice".to_string(),
-            done_gate: "only close when current evidence satisfies the gate".to_string(),
-            closure_confidence: "low".to_string(),
-            is_open: true,
-            allow_idle: false,
-            focus_head_commit_id: "focus-1".to_string(),
-            last_synced_at: "2026-04-06T00:00:00Z".to_string(),
-            watcher_last_triggered_at: None,
-            watcher_trigger_count: 0,
-            agent_failure_count: 0,
-            deferred_reason: None,
-            rewrite_failure_count: 0,
-        };
-        let prompt = render_mission_continuation_prompt(&mission, 45);
-        assert!(prompt.contains("Mission continuity watchdog: the mission was idle for 45s."));
-        assert!(prompt.contains("Required actions:"));
-        assert!(prompt.len() < 900, "prompt too large: {}", prompt.len());
-    }
-
-    #[test]
-    fn mission_watchdog_dedupe_key_tracks_mission_semantics() {
-        let base = lcm::MissionStateRecord {
-            conversation_id: 1,
-            mission: "Rebuild public front door into real platform portal".to_string(),
-            mission_status: "active".to_string(),
-            continuation_mode: "continuous".to_string(),
-            trigger_intensity: "hot".to_string(),
-            blocker: "none".to_string(),
-            next_slice: "Ship the buyer search slice.".to_string(),
-            done_gate: "Live buyer gates are healthy.".to_string(),
-            closure_confidence: "low".to_string(),
-            is_open: true,
-            allow_idle: false,
-            focus_head_commit_id: "focus-1".to_string(),
-            last_synced_at: "2026-04-26T00:00:00Z".to_string(),
-            watcher_last_triggered_at: None,
-            watcher_trigger_count: 0,
-            agent_failure_count: 0,
-            deferred_reason: None,
-            rewrite_failure_count: 0,
-        };
-        let same_key = mission_watchdog_dedupe_key(&base);
-        let mut changed = base.clone();
-        changed.mission = "Expose ticket knowledge-put for harness forensics".to_string();
-        changed.next_slice = "Persist one harness_forensics note.".to_string();
-
-        assert_eq!(same_key, mission_watchdog_dedupe_key(&base));
-        assert_ne!(same_key, mission_watchdog_dedupe_key(&changed));
-    }
-
-    #[test]
-    fn mission_waits_for_external_approval_detects_visibility_gated_deploy_retry() {
-        let mission = lcm::MissionStateRecord {
-            conversation_id: 1,
-            mission: "Bearbeite das veroeffentlichte CTOX-Self-Work fuer local.".to_string(),
-            mission_status: "active".to_string(),
-            continuation_mode: "continuous".to_string(),
-            trigger_intensity: "hot".to_string(),
-            blocker:
-                "visible inbound Vercel approval or access-grant confirmation for kunstmen-com / kunstmen.com is still missing."
-                    .to_string(),
-            next_slice:
-                "wait for approval visibility, then retry deploy and live HTML verification."
-                    .to_string(),
-            done_gate:
-                "mission is only done after approval visibility plus successful deploy and live verification."
-                    .to_string(),
-            closure_confidence: "low".to_string(),
-            is_open: true,
-            allow_idle: false,
-            focus_head_commit_id: "focus-1".to_string(),
-            last_synced_at: "2026-04-24T00:00:00Z".to_string(),
-            watcher_last_triggered_at: None,
-            watcher_trigger_count: 0,
-            agent_failure_count: 0,
-            deferred_reason: None,
-            rewrite_failure_count: 0,
-        };
-
-        assert!(mission_waits_for_external_approval(&mission));
-    }
-
-    #[test]
-    fn mission_waits_for_external_approval_keeps_real_product_work_runnable() {
-        let mission = lcm::MissionStateRecord {
-            conversation_id: 1639653903753735835,
-            mission: "Rebuild public front door into real platform portal".to_string(),
-            mission_status: "active".to_string(),
-            continuation_mode: "continuous".to_string(),
-            trigger_intensity: "hot".to_string(),
-            blocker: "none".to_string(),
-            next_slice:
-                "Continue platform-forward delivery from roster -> profile -> interview -> hire with quality hardening."
-                    .to_string(),
-            done_gate:
-                "Mission runtime stays aligned with active strategic directives and live buyer gates remain healthy."
-                    .to_string(),
-            closure_confidence: "high".to_string(),
-            is_open: true,
-            allow_idle: false,
-            focus_head_commit_id: "focus-2".to_string(),
-            last_synced_at: "2026-04-24T00:00:00Z".to_string(),
-            watcher_last_triggered_at: None,
-            watcher_trigger_count: 0,
-            agent_failure_count: 0,
-            deferred_reason: None,
-            rewrite_failure_count: 0,
-        };
-
-        assert!(!mission_waits_for_external_approval(&mission));
     }
 
     #[test]
@@ -11320,351 +11270,6 @@ mod tests {
     }
 
     #[test]
-    fn mission_watcher_enqueues_continuation_for_open_idle_mission() {
-        let root = temp_root("ctox-mission-watcher-open");
-        std::fs::create_dir_all(root.join("runtime")).expect("failed to create runtime dir");
-        let engine = lcm::LcmEngine::open(
-            &root.join("runtime/ctox.sqlite3"),
-            lcm::LcmConfig::default(),
-        )
-        .expect("failed to open lcm");
-        let _ = engine
-            .continuity_init_documents(turn_loop::CHAT_CONVERSATION_ID)
-            .expect("failed to init continuity");
-        engine
-            .continuity_apply_diff(
-                turn_loop::CHAT_CONVERSATION_ID,
-                lcm::ContinuityKind::Focus,
-                "## Status\n+ Mission: Build and operate the Airbnb clone.\n+ Mission state: active\n+ Continuation mode: continuous\n+ Trigger intensity: hot\n## Blocker\n+ Current blocker: none\n## Next\n+ Next slice: implement the host onboarding flow\n## Done / Gate\n+ Done gate: do not close while the capability audit is still open\n+ Closure confidence: low\n",
-            )
-            .expect("failed to update focus");
-        let state = Arc::new(Mutex::new(SharedState::default()));
-        {
-            let mut shared = state.lock().expect("service state poisoned");
-            shared.last_progress_epoch_secs = current_epoch_secs().saturating_sub(90);
-        }
-
-        monitor_mission_continuity(&root, &state).expect("mission watcher should succeed");
-        monitor_mission_continuity(&root, &state).expect("duplicate mission watcher should no-op");
-
-        let tasks = channels::list_queue_tasks(&root, &["pending".to_string()], 10)
-            .expect("failed to list queue tasks");
-        assert_eq!(tasks.len(), 1);
-        assert_eq!(
-            tasks[0].thread_key,
-            mission_thread_key(turn_loop::CHAT_CONVERSATION_ID)
-        );
-        assert!(tasks[0].prompt.contains("Mission continuity watchdog"));
-        let self_work = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
-            .expect("failed to list mission self-work");
-        assert_eq!(self_work.len(), 1);
-        assert_eq!(self_work[0].kind, "mission-follow-up");
-        assert_eq!(self_work[0].state, "queued");
-        let events = governance::list_recent_events(&root, turn_loop::CHAT_CONVERSATION_ID, 8)
-            .expect("failed to list governance events");
-        assert!(events
-            .iter()
-            .any(|event| event.mechanism_id == "mission_idle_watchdog"));
-    }
-
-    #[test]
-    fn mission_watcher_does_not_reopen_terminal_follow_up() {
-        let root = temp_root("ctox-mission-watcher-terminal-follow-up");
-        std::fs::create_dir_all(root.join("runtime")).expect("failed to create runtime dir");
-        let engine = lcm::LcmEngine::open(
-            &root.join("runtime/ctox.sqlite3"),
-            lcm::LcmConfig::default(),
-        )
-        .expect("failed to open lcm");
-        let _ = engine
-            .continuity_init_documents(turn_loop::CHAT_CONVERSATION_ID)
-            .expect("failed to init continuity");
-        engine
-            .continuity_apply_diff(
-                turn_loop::CHAT_CONVERSATION_ID,
-                lcm::ContinuityKind::Focus,
-                "## Status\n+ Mission: Build and operate the Airbnb clone.\n+ Mission state: active\n+ Continuation mode: continuous\n+ Trigger intensity: hot\n## Blocker\n+ Current blocker: none\n## Next\n+ Next slice: implement the host onboarding flow\n## Done / Gate\n+ Done gate: do not close while the capability audit is still open\n+ Closure confidence: low\n",
-            )
-            .expect("failed to update focus");
-        let state = Arc::new(Mutex::new(SharedState::default()));
-        {
-            let mut shared = state.lock().expect("service state poisoned");
-            shared.last_progress_epoch_secs = current_epoch_secs().saturating_sub(90);
-        }
-
-        monitor_mission_continuity(&root, &state).expect("mission watcher should enqueue once");
-        let tasks = channels::list_queue_tasks(&root, &["pending".to_string()], 10)
-            .expect("failed to list queue tasks");
-        assert_eq!(tasks.len(), 1);
-        channels::set_queue_task_route_status(&root, &tasks[0].message_key, "cancelled")
-            .expect("failed to cancel queued task");
-        let self_work = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
-            .expect("failed to list mission self-work");
-        assert_eq!(self_work.len(), 1);
-        supersede_ticket_self_work_item(
-            &root,
-            &self_work[0].work_id,
-            "superseded by canonical mission conversation",
-        );
-
-        {
-            let mut shared = state.lock().expect("service state poisoned");
-            shared.last_progress_epoch_secs = current_epoch_secs().saturating_sub(90);
-        }
-        monitor_mission_continuity(&root, &state)
-            .expect("mission watcher should skip terminal follow-up");
-
-        let tasks = channels::list_queue_tasks(&root, &["pending".to_string()], 10)
-            .expect("failed to list queue tasks");
-        assert!(tasks.is_empty());
-        let self_work = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
-            .expect("failed to list mission self-work");
-        assert_eq!(self_work.len(), 1);
-        assert_eq!(self_work[0].state, "closed");
-    }
-
-    #[test]
-    fn mission_watcher_retriggers_non_chat_open_mission() {
-        let root = temp_root("ctox-mission-watcher-secondary-open");
-        std::fs::create_dir_all(root.join("runtime")).expect("failed to create runtime dir");
-        let engine = lcm::LcmEngine::open(
-            &root.join("runtime/ctox.sqlite3"),
-            lcm::LcmConfig::default(),
-        )
-        .expect("failed to open lcm");
-        let secondary_conversation_id = 4242;
-        let _ = engine
-            .continuity_init_documents(secondary_conversation_id)
-            .expect("failed to init secondary continuity");
-        engine
-            .continuity_apply_diff(
-                secondary_conversation_id,
-                lcm::ContinuityKind::Focus,
-                "## Status\n+ Mission: Repair review-rework continuity.\n+ Mission state: active\n+ Continuation mode: continuous\n+ Trigger intensity: hot\n## Blocker\n+ Current blocker: none\n## Next\n+ Next slice: finish the readiness rework\n## Done / Gate\n+ Done gate: close only after the readiness evidence is repaired\n+ Closure confidence: low\n",
-            )
-            .expect("failed to update secondary focus");
-        engine
-            .sync_mission_state_from_continuity(secondary_conversation_id)
-            .expect("failed to sync secondary mission");
-
-        let state = Arc::new(Mutex::new(SharedState::default()));
-        {
-            let mut shared = state.lock().expect("service state poisoned");
-            shared.last_progress_epoch_secs = current_epoch_secs().saturating_sub(90);
-        }
-
-        monitor_mission_continuity(&root, &state).expect("mission watcher should succeed");
-
-        let tasks = channels::list_queue_tasks(&root, &["pending".to_string()], 10)
-            .expect("failed to list queue tasks");
-        assert_eq!(tasks.len(), 1);
-        assert_eq!(
-            tasks[0].thread_key,
-            mission_thread_key(secondary_conversation_id)
-        );
-        let self_work = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
-            .expect("failed to list mission self-work");
-        assert_eq!(self_work.len(), 1);
-        assert_eq!(self_work[0].kind, "mission-follow-up");
-        assert_eq!(self_work[0].state, "queued");
-    }
-
-    #[test]
-    fn mission_watcher_skips_closed_mission() {
-        let root = temp_root("ctox-mission-watcher-closed");
-        std::fs::create_dir_all(root.join("runtime")).expect("failed to create runtime dir");
-        let engine = lcm::LcmEngine::open(
-            &root.join("runtime/ctox.sqlite3"),
-            lcm::LcmConfig::default(),
-        )
-        .expect("failed to open lcm");
-        let _ = engine
-            .continuity_init_documents(turn_loop::CHAT_CONVERSATION_ID)
-            .expect("failed to init continuity");
-        engine
-            .continuity_apply_diff(
-                turn_loop::CHAT_CONVERSATION_ID,
-                lcm::ContinuityKind::Focus,
-                "## Status\n+ Mission: Build and operate the Airbnb clone.\n+ Mission state: done\n+ Continuation mode: closed\n+ Trigger intensity: archive\n## Blocker\n+ Current blocker: none\n## Next\n+ Next slice: none\n## Done / Gate\n+ Done gate: capability audit closed and automation stable\n+ Closure confidence: complete\n",
-            )
-            .expect("failed to update focus");
-        let state = Arc::new(Mutex::new(SharedState::default()));
-        {
-            let mut shared = state.lock().expect("service state poisoned");
-            shared.last_progress_epoch_secs = current_epoch_secs().saturating_sub(90);
-        }
-
-        monitor_mission_continuity(&root, &state).expect("mission watcher should succeed");
-
-        let tasks = channels::list_queue_tasks(&root, &["pending".to_string()], 10)
-            .expect("failed to list queue tasks");
-        assert!(tasks.is_empty());
-    }
-
-    #[test]
-    fn mission_watcher_respects_hard_runtime_blocker_cooldown() {
-        let root = temp_root("ctox-mission-watcher-backoff");
-        std::fs::create_dir_all(root.join("runtime")).expect("failed to create runtime dir");
-        let engine = lcm::LcmEngine::open(
-            &root.join("runtime/ctox.sqlite3"),
-            lcm::LcmConfig::default(),
-        )
-        .expect("failed to open lcm");
-        let _ = engine
-            .continuity_init_documents(turn_loop::CHAT_CONVERSATION_ID)
-            .expect("failed to init continuity");
-        engine
-            .continuity_apply_diff(
-                turn_loop::CHAT_CONVERSATION_ID,
-                lcm::ContinuityKind::Focus,
-                "## Status\n+ Mission: Build and operate the Airbnb clone.\n+ Mission state: active\n+ Continuation mode: continuous\n+ Trigger intensity: hot\n## Blocker\n+ Current blocker: OPENAI quota exhausted.\n## Next\n+ Next slice: resume the marketplace core once inference is available again.\n## Done / Gate\n+ Done gate: do not close while the mission remains open.\n+ Closure confidence: low\n",
-            )
-            .expect("failed to update focus");
-        let state = Arc::new(Mutex::new(SharedState::default()));
-        {
-            let mut shared = state.lock().expect("service state poisoned");
-            shared.last_progress_epoch_secs = current_epoch_secs().saturating_sub(120);
-            shared.last_error = Some(
-                "CTOX chat could not continue because the configured OpenAI API quota is exhausted or billing is unavailable for the selected model.".to_string(),
-            );
-        }
-
-        monitor_mission_continuity(&root, &state).expect("mission watcher should succeed");
-
-        let tasks = channels::list_queue_tasks(&root, &["pending".to_string()], 10)
-            .expect("failed to list queue tasks");
-        assert!(tasks.is_empty());
-    }
-
-    #[test]
-    fn mission_watcher_skips_external_approval_monitor_loops() {
-        let root = temp_root("ctox-mission-watcher-approval-monitor");
-        std::fs::create_dir_all(root.join("runtime")).expect("failed to create runtime dir");
-        let engine = lcm::LcmEngine::open(
-            &root.join("runtime/ctox.sqlite3"),
-            lcm::LcmConfig::default(),
-        )
-        .expect("failed to open lcm");
-        let _ = engine
-            .continuity_init_documents(turn_loop::CHAT_CONVERSATION_ID)
-            .expect("failed to init continuity");
-        engine
-            .continuity_apply_diff(
-                turn_loop::CHAT_CONVERSATION_ID,
-                lcm::ContinuityKind::Focus,
-                "## Status\n+ Mission: Monitor inbound non-queue channels for explicit owner approval/access-grant confirmation for Vercel team/project access.\n+ Mission state: active\n+ Continuation mode: continuous\n+ Trigger intensity: hot\n## Blocker\n+ Current blocker: blocked_on_user | waiting for explicit inbound owner approval evidence.\n## Next\n+ Next slice: continue monitoring inbound non-queue channels (jami/email) for approval evidence.\n## Done / Gate\n+ Done gate: explicit approval evidence is visible before deploy retry.\n+ Closure confidence: low\n",
-            )
-            .expect("failed to update focus");
-        let state = Arc::new(Mutex::new(SharedState::default()));
-        {
-            let mut shared = state.lock().expect("service state poisoned");
-            shared.last_progress_epoch_secs = current_epoch_secs().saturating_sub(120);
-        }
-
-        monitor_mission_continuity(&root, &state).expect("mission watcher should succeed");
-
-        let tasks = channels::list_queue_tasks(&root, &["pending".to_string()], 10)
-            .expect("failed to list queue tasks");
-        assert!(tasks.is_empty());
-    }
-
-    #[test]
-    fn mission_watcher_skips_internal_harness_forensics_missions() {
-        let root = temp_root("ctox-mission-watcher-internal-harness");
-        std::fs::create_dir_all(root.join("runtime")).expect("failed to create runtime dir");
-        let engine = lcm::LcmEngine::open(
-            &root.join("runtime/ctox.sqlite3"),
-            lcm::LcmConfig::default(),
-        )
-        .expect("failed to open lcm");
-        let _ = engine
-            .continuity_init_documents(turn_loop::CHAT_CONVERSATION_ID)
-            .expect("failed to init continuity");
-        engine
-            .continuity_apply_diff(
-                turn_loop::CHAT_CONVERSATION_ID,
-                lcm::ContinuityKind::Focus,
-                "## Status\n+ Mission: Interner Codex harness smoke for process-mining forensics.\n+ Mission state: active\n+ Continuation mode: continuous\n+ Trigger intensity: hot\n## Blocker\n+ Current blocker: Pending explicit smoke-compliance persistence confirmation.\n## Next\n+ Next slice: persist one harness_forensics knowledge-put note.\n## Done / Gate\n+ Done gate: harness_forensics knowledge-put note exists.\n+ Closure confidence: low\n",
-            )
-            .expect("failed to update focus");
-        let state = Arc::new(Mutex::new(SharedState::default()));
-        {
-            let mut shared = state.lock().expect("service state poisoned");
-            shared.last_progress_epoch_secs = current_epoch_secs().saturating_sub(120);
-        }
-
-        monitor_mission_continuity(&root, &state).expect("mission watcher should succeed");
-
-        let tasks = channels::list_queue_tasks(&root, &["pending".to_string()], 10)
-            .expect("failed to list queue tasks");
-        assert!(tasks.is_empty());
-    }
-
-    #[test]
-    fn mission_watcher_skips_codex_noop_smoke_missions() {
-        let root = temp_root("ctox-mission-watcher-codex-noop-smoke");
-        std::fs::create_dir_all(root.join("runtime")).expect("failed to create runtime dir");
-        let engine = lcm::LcmEngine::open(
-            &root.join("runtime/ctox.sqlite3"),
-            lcm::LcmConfig::default(),
-        )
-        .expect("failed to open lcm");
-        let _ = engine
-            .continuity_init_documents(turn_loop::CHAT_CONVERSATION_ID)
-            .expect("failed to init continuity");
-        engine
-            .continuity_apply_diff(
-                turn_loop::CHAT_CONVERSATION_ID,
-                lcm::ContinuityKind::Focus,
-                "## Status\n+ Mission: Codex internal no-op smoke after watchdog fix\n+ Mission state: active\n+ Continuation mode: continuous\n+ Trigger intensity: hot\n## Blocker\n+ Current blocker: none\n## Next\n+ Next slice: Codex internal no-op smoke after watchdog fix\n## Done / Gate\n+ Done gate: only close the mission when current evidence clearly satisfies the gate\n+ Closure confidence: low\n",
-            )
-            .expect("failed to update focus");
-        let state = Arc::new(Mutex::new(SharedState::default()));
-        {
-            let mut shared = state.lock().expect("service state poisoned");
-            shared.last_progress_epoch_secs = current_epoch_secs().saturating_sub(120);
-        }
-
-        monitor_mission_continuity(&root, &state).expect("mission watcher should succeed");
-
-        let tasks = channels::list_queue_tasks(&root, &["pending".to_string()], 10)
-            .expect("failed to list queue tasks");
-        assert!(tasks.is_empty());
-    }
-
-    #[test]
-    fn mission_watcher_skips_recursive_strategy_direction_gate() {
-        let root = temp_root("ctox-mission-watcher-recursive-strategy-gate");
-        std::fs::create_dir_all(root.join("runtime")).expect("failed to create runtime dir");
-        let engine = lcm::LcmEngine::open(
-            &root.join("runtime/ctox.sqlite3"),
-            lcm::LcmConfig::default(),
-        )
-        .expect("failed to open lcm");
-        let _ = engine
-            .continuity_init_documents(turn_loop::CHAT_CONVERSATION_ID)
-            .expect("failed to init continuity");
-        engine
-            .continuity_apply_diff(
-                turn_loop::CHAT_CONVERSATION_ID,
-                lcm::ContinuityKind::Focus,
-                "## Status\n+ Mission: Continue mission Strategic direction setup\n+ Mission state: active\n+ Continuation mode: continuous\n+ Trigger intensity: hot\n## Blocker\n+ Current blocker: none\n## Next\n+ Next slice: reconstruct the next concrete slice from continuity\n## Done / Gate\n+ Done gate: only close the mission when current evidence clearly satisfies the gate\n+ Closure confidence: low\n",
-            )
-            .expect("failed to update focus");
-        let state = Arc::new(Mutex::new(SharedState::default()));
-        {
-            let mut shared = state.lock().expect("service state poisoned");
-            shared.last_progress_epoch_secs = current_epoch_secs().saturating_sub(120);
-        }
-
-        monitor_mission_continuity(&root, &state).expect("mission watcher should succeed");
-
-        let tasks = channels::list_queue_tasks(&root, &["pending".to_string()], 10)
-            .expect("failed to list queue tasks");
-        assert!(tasks.is_empty());
-    }
-
-    #[test]
     fn review_rework_is_suppressed_when_same_scope_corrective_task_exists() {
         let root = temp_root("ctox-review-rework-suppressed");
         channels::create_queue_task(
@@ -11710,7 +11315,6 @@ mod tests {
             open_items: vec!["Introduce clear roster and hire flow.".to_string()],
             evidence: vec!["GET / => static shell".to_string()],
             handoff: None,
-            disposition: review::ReviewDisposition::Send,
         };
 
         let err = enqueue_review_rework(&root, &job, &outcome).expect_err("should suppress");
@@ -11775,7 +11379,6 @@ mod tests {
             open_items: vec!["Persist the missing closure evidence.".to_string()],
             evidence: vec!["review artifact".to_string()],
             handoff: None,
-            disposition: review::ReviewDisposition::Send,
         };
 
         let disposition =
@@ -11918,6 +11521,51 @@ mod tests {
         let items = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
             .expect("failed to list self-work");
         assert_eq!(items.len(), 1);
+    }
+
+    #[test]
+    fn requeue_reuses_existing_runnable_self_work_slice() {
+        let root = temp_root("ctox-self-work-runnable-dedupe");
+        let item = tickets::put_ticket_self_work_item(
+            &root,
+            tickets::TicketSelfWorkUpsertInput {
+                source_system: "local".to_string(),
+                kind: "mission-follow-up".to_string(),
+                title: "Continue mission without duplicating queue work".to_string(),
+                body_text: "Keep using the existing runnable slice for this durable work item."
+                    .to_string(),
+                state: "open".to_string(),
+                metadata: serde_json::json!({
+                    "thread_key": "queue/mission-dedupe",
+                    "priority": "high",
+                    "skill": "follow-up-orchestrator",
+                    "dedupe_key": "mission-follow-up:dedupe-test",
+                }),
+            },
+            false,
+        )
+        .expect("failed to create self-work");
+        let first = queue_ticket_self_work_item(&root, &item)
+            .expect("failed to queue self-work")
+            .expect("expected initial queue task");
+
+        let reused = requeue_review_rejected_self_work(
+            &root,
+            &item.work_id,
+            "Review rejected the slice while the original queue task is still runnable.",
+        )
+        .expect("failed to requeue self-work")
+        .expect("expected existing runnable queue task to be reused");
+
+        assert_eq!(reused.message_key, first.message_key);
+        let tasks =
+            channels::list_queue_tasks(&root, &["pending".to_string(), "leased".to_string()], 10)
+                .expect("failed to list queue tasks");
+        let matching = tasks
+            .iter()
+            .filter(|task| task.ticket_self_work_id.as_deref() == Some(item.work_id.as_str()))
+            .count();
+        assert_eq!(matching, 1);
     }
 
     #[test]
@@ -12252,77 +11900,178 @@ mod tests {
         );
     }
 
-    /// PR #16 eviction guard: a TUI operator prompt that contains keywords
-    /// the old `is_owner_visible_strategic_job` heuristic used to scrape
-    /// (`founder`, `homepage`, etc.) must NOT be rerouted into a synthetic
-    /// `Strategic direction setup` task by the service core. Strategy passes
-    /// are now agent-driven via the plan-orchestrator skill — the core only
-    /// dispatches the prompt verbatim.
     #[test]
-    fn evicted_strategic_heuristic_does_not_intercept_tui_operator_prompt() {
-        let root = temp_root("ctox-evicted-strategic-heuristic-tui");
+    fn missing_strategy_reroutes_owner_visible_work_into_strategic_direction_pass() {
+        let root = temp_root("ctox-strategy-reroute");
+        let queue_task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Kunstmen platform homepage reset".to_string(),
+                prompt: "Reset kunstmen.com so it behaves like a platform.".to_string(),
+                thread_key: "kunstmen-supervisor".to_string(),
+                workspace_root: Some("/home/ubuntu/workspace/kunstmen".to_string()),
+                priority: "urgent".to_string(),
+                suggested_skill: Some("follow-up-orchestrator".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to seed active queue task");
+        let stale_task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Repair Stripe runtime and rerun Kunstmen live gates".to_string(),
+                prompt: "Legacy Stripe recheck that should be superseded by strategy setup."
+                    .to_string(),
+                thread_key: "kunstmen-supervisor".to_string(),
+                workspace_root: Some("/home/ubuntu/workspace/kunstmen".to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("service-deployment".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to seed stale competing queue task");
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        {
+            let mut shared = lock_shared_state(&state);
+            shared.busy = true;
+            shared.current_goal_preview = Some("Kunstmen platform homepage reset".to_string());
+            shared.active_source_label = Some("queue".to_string());
+            track_leased_keys_locked(
+                &mut shared,
+                std::slice::from_ref(&queue_task.message_key),
+                &[],
+            );
+        }
+        let job = QueuedPrompt {
+            prompt: "Reset kunstmen.com so it behaves like a platform for hiring AI employees."
+                .to_string(),
+            goal: "Kunstmen platform homepage reset".to_string(),
+            preview: "Kunstmen platform homepage reset".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: Some("follow-up-orchestrator".to_string()),
+            leased_message_keys: vec![queue_task.message_key.clone()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("kunstmen-supervisor".to_string()),
+            workspace_root: Some("/home/ubuntu/workspace/kunstmen".to_string()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let redirected = maybe_redirect_owner_visible_work_to_strategy_setup(&root, &state, &job)
+            .expect("strategy reroute should succeed");
+        assert!(redirected);
+
+        let stale = channels::load_queue_task(&root, &stale_task.message_key)
+            .expect("failed to reload stale queue task")
+            .expect("missing stale queue task");
+        assert_eq!(stale.route_status, "cancelled");
+
+        let tasks =
+            channels::list_queue_tasks(&root, &["pending".to_string(), "leased".to_string()], 10)
+                .expect("failed to list queue tasks");
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].title, "Strategic direction setup");
+
+        let items = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
+            .expect("failed to list self-work");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].kind, STRATEGIC_DIRECTION_KIND);
+        assert_eq!(
+            items[0].suggested_skill.as_deref(),
+            Some("follow-up-orchestrator")
+        );
+        assert!(items[0]
+            .body_text
+            .contains("Use `ctox strategy show --conversation-id"));
+        assert!(items[0]
+            .body_text
+            .contains("--thread-key kunstmen-supervisor"));
+    }
+
+    #[test]
+    fn scoped_stateful_product_execution_does_not_reroute_to_strategy_setup() {
+        let root = temp_root("ctox-scoped-stateful-product-no-strategy-reroute");
+        let queue_task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "CRM P0 slice: ship tasks workflow under /internal/crm".to_string(),
+                prompt: "Work only in /home/ubuntu/workspace/kunstmen. Next smallest coherent slice: make Tasks a real founder-usable workflow under /internal/crm with create/edit/delete/status changes linked to CRM records."
+                    .to_string(),
+                thread_key: "kunstmen-crm-p0".to_string(),
+                workspace_root: Some("/home/ubuntu/workspace/kunstmen".to_string()),
+                priority: "urgent".to_string(),
+                suggested_skill: Some("stateful-product-from-scratch".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to seed scoped CRM queue task");
         let state = Arc::new(Mutex::new(SharedState::default()));
         let job = QueuedPrompt {
-            prompt: "Schreibe jetzt die Tag-Proposal-Mail an Julia (TO j.kienzler@remcapital.de) zum Founder-Onboarding mit homepage-Link.".to_string(),
-            goal: "Founder onboarding mail".to_string(),
-            preview: "Tag proposal mail to Julia".to_string(),
+            prompt: queue_task.prompt.clone(),
+            goal: queue_task.title.clone(),
+            preview: queue_task.title.clone(),
+            source_label: "queue".to_string(),
+            suggested_skill: Some("stateful-product-from-scratch".to_string()),
+            leased_message_keys: vec![queue_task.message_key.clone()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("kunstmen-crm-p0".to_string()),
+            workspace_root: Some("/home/ubuntu/workspace/kunstmen".to_string()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let redirected = maybe_redirect_owner_visible_work_to_strategy_setup(&root, &state, &job)
+            .expect("strategy evaluation should succeed");
+        assert!(!redirected);
+
+        let tasks =
+            channels::list_queue_tasks(&root, &["pending".to_string(), "leased".to_string()], 10)
+                .expect("failed to list queue tasks");
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(
+            tasks[0].title,
+            "CRM P0 slice: ship tasks workflow under /internal/crm"
+        );
+
+        let items = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
+            .expect("failed to list self-work");
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn proactive_founder_outbound_does_not_reroute_to_strategy_setup() {
+        let root = temp_root("ctox-proactive-founder-outbound-no-strategy-reroute");
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        let job = QueuedPrompt {
+            prompt: "Write the honest Kunstmen CRM interim update for the founders.".to_string(),
+            goal: "Kunstmen CRM founder interim mail".to_string(),
+            preview: "Founder outbound mail about Kunstmen CRM".to_string(),
             source_label: "tui".to_string(),
             suggested_skill: None,
             leased_message_keys: Vec::new(),
             leased_ticket_event_keys: Vec::new(),
-            thread_key: Some("tui-operator".to_string()),
+            thread_key: Some("chat-outbound".to_string()),
             workspace_root: None,
             ticket_self_work_id: None,
-            outbound_email: None,
-            outbound_anchor: None,
+            outbound_email: Some(channels::FounderOutboundAction {
+                account_key: "email:cto1@example.test".to_string(),
+                thread_key: "chat-outbound".to_string(),
+                subject: "Kunstmen CRM: ehrlicher Zwischenstand".to_string(),
+                to: vec!["founder@example.test".to_string()],
+                cc: Vec::new(),
+                attachments: Vec::new(),
+            }),
+            outbound_anchor: Some("tui-outbound:test".to_string()),
         };
-        // The platform-reroute path is now the only remaining auto-reroute
-        // and it must also not fire for a non-Kunstmen TUI prompt.
-        let redirected = maybe_redirect_platform_work_to_expertise_passes(&root, &state, &job)
-            .expect("platform reroute check should succeed");
-        assert!(!redirected);
-        let items = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
-            .expect("failed to list self-work");
-        assert!(
-            items.is_empty(),
-            "core must not auto-create any self-work for a TUI operator prompt; agent drives strategy via skills"
-        );
-        let _ = std::fs::remove_dir_all(root);
-    }
 
-    /// PR #16 eviction guard: an internal harness/forensics prompt
-    /// (`thread_key=codex/...`, `process-mining`) used to be intercepted by
-    /// the deleted `is_internal_harness_or_forensics_job` heuristic to skip
-    /// the strategy reroute. After eviction the harness path is just a
-    /// regular queue job — the core does not branch on string content.
-    #[test]
-    fn evicted_harness_heuristic_does_not_intercept_internal_smoke_job() {
-        let root = temp_root("ctox-evicted-harness-heuristic");
-        let state = Arc::new(Mutex::new(SharedState::default()));
-        let job = QueuedPrompt {
-            prompt: "Interner CTOX-Harness-Smoke-Test. Keine externe Kommunikation. Pruefe Process-Mining-Selbstdiagnose.".to_string(),
-            goal: "Process-mining harness smoke".to_string(),
-            preview: "Codex harness smoke: process mining and no external communication".to_string(),
-            source_label: "queue".to_string(),
-            suggested_skill: None,
-            leased_message_keys: vec!["queue:system::smoke".to_string()],
-            leased_ticket_event_keys: Vec::new(),
-            thread_key: Some("codex/harness-live-smoke-20260426".to_string()),
-            workspace_root: None,
-            ticket_self_work_id: None,
-            outbound_email: None,
-            outbound_anchor: None,
-        };
-        let redirected = maybe_redirect_platform_work_to_expertise_passes(&root, &state, &job)
-            .expect("platform reroute check should succeed");
+        let redirected = maybe_redirect_owner_visible_work_to_strategy_setup(&root, &state, &job)
+            .expect("proactive founder outbound should not fail reroute check");
         assert!(!redirected);
-        let items = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
-            .expect("failed to list self-work");
-        assert!(
-            items.is_empty(),
-            "core must not synthesise self-work for an internal harness job"
-        );
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -12373,6 +12122,30 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].kind, STRATEGIC_DIRECTION_KIND);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn internal_harness_smoke_does_not_reroute_to_strategy_setup() {
+        let root = temp_root("ctox-internal-harness-smoke-no-strategy-reroute");
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        let job = QueuedPrompt {
+            prompt: "Interner CTOX-Harness-Smoke-Test. Keine externe Kommunikation. Pruefe Process-Mining-Selbstdiagnose und Founder review warnings.".to_string(),
+            goal: "Process-mining harness smoke".to_string(),
+            preview: "Codex harness smoke: process mining and no external communication".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: None,
+            leased_message_keys: vec!["queue:system::smoke".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("codex/harness-live-smoke-20260426".to_string()),
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let redirected = maybe_redirect_owner_visible_work_to_strategy_setup(&root, &state, &job)
+            .expect("internal harness smoke should not fail reroute check");
+        assert!(!redirected);
     }
 
     #[test]
@@ -12477,6 +12250,143 @@ mod tests {
     }
 
     #[test]
+    fn open_founder_inbound_blocks_strategy_reroute_for_queue_work() {
+        let root = temp_root("ctox-open-founder-blocks-strategy-reroute");
+        let mut runtime_settings = BTreeMap::new();
+        runtime_settings.insert(
+            "CTOX_OWNER_EMAIL_ADDRESS".to_string(),
+            "michael.welsch@metric-space.ai".to_string(),
+        );
+        runtime_env::save_runtime_env_map(&root, &runtime_settings)
+            .expect("failed to persist owner setting");
+        let db_path = root.join("runtime/ctox.sqlite3");
+        let conn = channels::open_channel_db(&db_path).expect("failed to open channel db");
+        conn.execute(
+            r#"INSERT INTO communication_messages (
+                message_key, channel, account_key, thread_key, remote_id, direction, folder_hint,
+                sender_display, sender_address, recipient_addresses_json, cc_addresses_json,
+                bcc_addresses_json, subject, preview, body_text, body_html, raw_payload_ref,
+                trust_level, status, seen, has_attachments, external_created_at, observed_at,
+                metadata_json
+            ) VALUES (
+                ?1, 'email', 'email:cto1@metric-space.ai', '<founder-thread@example.com>',
+                'remote-founder-1', 'inbound', 'INBOX', 'Michael Welsch',
+                'michael.welsch@metric-space.ai', '[]', '[]', '[]', 'Founder input',
+                'Founder input', 'Please answer me before doing anything else.', '', '',
+                'normal', 'received', 0, 0, '2026-04-24T18:55:00Z', '2026-04-24T18:55:00Z', '{}'
+            )"#,
+            rusqlite::params!["email:cto1@metric-space.ai::INBOX::91"],
+        )
+        .expect("failed to insert founder inbound");
+        conn.execute(
+            r#"INSERT INTO communication_routing_state (
+                message_key, route_status, lease_owner, leased_at, acked_at, last_error, updated_at
+            ) VALUES (?1, 'pending', NULL, NULL, NULL, NULL, '2026-04-24T18:55:00Z')"#,
+            rusqlite::params!["email:cto1@metric-space.ai::INBOX::91"],
+        )
+        .expect("failed to insert founder routing state");
+
+        let queue_task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Platform homepage work".to_string(),
+                prompt: "Reset kunstmen.com so it behaves like a platform for hiring AI employees."
+                    .to_string(),
+                thread_key: "kunstmen-supervisor".to_string(),
+                workspace_root: Some("/home/ubuntu/workspace/kunstmen".to_string()),
+                priority: "urgent".to_string(),
+                suggested_skill: Some("follow-up-orchestrator".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to seed queue task");
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        let job = QueuedPrompt {
+            prompt: "Reset kunstmen.com so it behaves like a platform for hiring AI employees."
+                .to_string(),
+            goal: "Kunstmen platform homepage reset".to_string(),
+            preview: "Kunstmen platform homepage reset".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: Some("follow-up-orchestrator".to_string()),
+            leased_message_keys: vec![queue_task.message_key.clone()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("kunstmen-supervisor".to_string()),
+            workspace_root: Some("/home/ubuntu/workspace/kunstmen".to_string()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let redirected = maybe_redirect_owner_visible_work_to_strategy_setup(&root, &state, &job)
+            .expect("strategy evaluation should succeed");
+        assert!(!redirected);
+
+        let tasks =
+            channels::list_queue_tasks(&root, &["pending".to_string(), "leased".to_string()], 10)
+                .expect("failed to list queue tasks");
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].title, "Platform homepage work");
+    }
+
+    #[test]
+    fn founder_email_thread_is_not_rerouted_into_strategy_setup() {
+        let root = temp_root("ctox-founder-email-no-strategy-reroute");
+        let queue_task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Founder inbound".to_string(),
+                prompt: "[E-Mail eingegangen]\nSender: founder@example.com\nBetreff: Homepage\nPlease fix the public platform flow and answer me clearly."
+                    .to_string(),
+                thread_key: "<founder-thread@example.com>".to_string(),
+                workspace_root: Some("/home/ubuntu/workspace/kunstmen".to_string()),
+                priority: "urgent".to_string(),
+                suggested_skill: Some("frontend-skill".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to seed founder queue task");
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        {
+            let mut shared = lock_shared_state(&state);
+            shared.busy = true;
+            shared.current_goal_preview = Some("Founder inbound".to_string());
+            shared.active_source_label = Some("email:founder".to_string());
+            track_leased_keys_locked(
+                &mut shared,
+                std::slice::from_ref(&queue_task.message_key),
+                &[],
+            );
+        }
+        let job = QueuedPrompt {
+            prompt: "[E-Mail eingegangen]\nSender: founder@example.com\nBetreff: Homepage\nPlease fix the public platform flow and answer me clearly."
+                .to_string(),
+            goal: "Reply to founder".to_string(),
+            preview: "Founder mail about homepage".to_string(),
+            source_label: "email:founder".to_string(),
+            suggested_skill: Some("frontend-skill".to_string()),
+            leased_message_keys: vec![queue_task.message_key.clone()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("<founder-thread@example.com>".to_string()),
+            workspace_root: Some("/home/ubuntu/workspace/kunstmen".to_string()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let redirected = maybe_redirect_owner_visible_work_to_strategy_setup(&root, &state, &job)
+            .expect("strategy evaluation should succeed");
+        assert!(!redirected);
+
+        let tasks =
+            channels::list_queue_tasks(&root, &["pending".to_string(), "leased".to_string()], 10)
+                .expect("failed to list queue tasks");
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].title, "Founder inbound");
+    }
+
+    #[test]
     fn founder_email_thread_is_not_rerouted_into_platform_passes() {
         let root = temp_root("ctox-founder-email-no-platform-reroute");
         let queue_task = channels::create_queue_task(
@@ -12563,7 +12473,6 @@ mod tests {
             open_items: vec!["Generate or retrieve the Jami QR code.".to_string()],
             evidence: vec!["owner mail explicitly asks for QR code".to_string()],
             handoff: None,
-            disposition: review::ReviewDisposition::Send,
         };
 
         let title = enqueue_founder_communication_rework(
@@ -12770,6 +12679,31 @@ mod tests {
             .as_deref()
             .unwrap_or("")
             .contains("neue belastbare Grundlage")));
+
+        let note_count_after_first_block: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM ticket_self_work_notes WHERE work_id = ?1",
+                params![item.work_id],
+                |row| row.get(0),
+            )
+            .expect("failed to count notes after first block");
+        assert_eq!(note_count_after_first_block, 1);
+
+        let queued = requeue_review_rejected_self_work(
+            &root,
+            &item.work_id,
+            "The reply is still only a rewrite without new CRM evidence.",
+        )
+        .expect("repeated loop block should be idempotent");
+        assert!(queued.is_none());
+        let note_count_after_second_block: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM ticket_self_work_notes WHERE work_id = ?1",
+                params![item.work_id],
+                |row| row.get(0),
+            )
+            .expect("failed to count notes after second block");
+        assert_eq!(note_count_after_second_block, note_count_after_first_block);
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -13693,6 +13627,41 @@ Was jetzt zu tun ist:\n\
     }
 
     #[test]
+    fn platform_passes_do_not_embed_full_prior_prompts() {
+        let root = temp_root("ctox-platform-pass-compacts-resume");
+        let long_prompt = "This prior prompt must not be copied wholesale. ".repeat(20_000);
+        queue_platform_expertise_pass(
+            &root,
+            "kunstmen-supervisor",
+            Some("/home/ubuntu/workspace/kunstmen"),
+            PLATFORM_EXPERTISE_PASSES[0],
+            &long_prompt,
+            &long_prompt,
+            &long_prompt,
+            Some("frontend-skill"),
+        )
+        .expect("failed to queue compacted platform pass");
+
+        let items = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
+            .expect("failed to list self-work");
+        let item = items
+            .iter()
+            .find(|entry| entry.kind == PLATFORM_EXPERTISE_KIND)
+            .expect("missing platform expertise self-work");
+        assert!(
+            item.body_text.chars().count() < 6_000,
+            "body_text should be compact, got {} chars",
+            item.body_text.chars().count()
+        );
+        let resume_prompt = platform_expertise_resume_prompt(item).unwrap_or_default();
+        assert!(
+            resume_prompt.chars().count() <= DEFERRED_METADATA_MAX_CHARS + 1,
+            "resume metadata should be compact, got {} chars",
+            resume_prompt.chars().count()
+        );
+    }
+
+    #[test]
     fn review_requeue_closes_superseded_platform_work_instead_of_looping() {
         let root = temp_root("ctox-platform-review-requeue-suppressed");
         channels::create_queue_task(
@@ -13742,88 +13711,6 @@ Was jetzt zu tun ist:\n\
             .expect("failed to reload self-work")
             .expect("missing self-work");
         assert_eq!(closed.state, "closed");
-    }
-
-    #[test]
-    fn cto_drift_watchdog_does_not_duplicate_active_thread_work() {
-        let root = temp_root("ctox-drift-dedupes-active-thread");
-        std::fs::create_dir_all(root.join("runtime")).expect("failed to create runtime dir");
-        let conn =
-            Connection::open(root.join("runtime/ctox.sqlite3")).expect("failed to open runtime db");
-        ensure_operating_health_schema(&conn).expect("failed to init operating health schema");
-        let existing = tickets::put_ticket_self_work_item(
-            &root,
-            tickets::TicketSelfWorkUpsertInput {
-                source_system: "local".to_string(),
-                kind: CTO_DRIFT_KIND.to_string(),
-                title: "CTO operating drift correction".to_string(),
-                body_text: "Existing drift correction".to_string(),
-                state: "open".to_string(),
-                metadata: serde_json::json!({
-                    "thread_key": CTO_DRIFT_THREAD_KEY,
-                    "priority": "urgent",
-                    "skill": "follow-up-orchestrator",
-                    "dedupe_key": "cto-drift:existing",
-                }),
-            },
-            true,
-        )
-        .expect("failed to seed drift self-work");
-        tickets::assign_ticket_self_work_item(&root, &existing.work_id, "self", "ctox", None)
-            .expect("failed to assign drift self-work");
-
-        let snapshot = OperatingHealthSnapshot {
-            snapshot_id: "opsnap-test".to_string(),
-            mission_open_count: 10,
-            active_goal_count: 0,
-            pending_plan_step_count: 0,
-            ticket_items: 0,
-            ticket_cases: 0,
-            ticket_sync_runs: 0,
-            ticket_dry_runs: 0,
-            ticket_knowledge_loads: 0,
-            ticket_self_work_items: 5,
-            ticket_self_work_active: 2,
-            review_rework_active: 3,
-            ticket_knowledge_entries: 1,
-            knowledge_main_skills: 0,
-            knowledge_skillbooks: 0,
-            knowledge_runbooks: 0,
-            knowledge_runbook_items: 0,
-            knowledge_embeddings: 0,
-            verification_runs: 30,
-            local_tickets: 4,
-            local_ticket_events: 20,
-            active_source_label: "queue".to_string(),
-            current_goal_preview: "Review rework".to_string(),
-            drift_score: 17,
-            drift_reasons: vec!["review-rework backlog is crowding the active mission".to_string()],
-            intervention_recommended: true,
-            created_at: now_iso_string(),
-        };
-        persist_operating_health_snapshot(&conn, &snapshot).expect("failed to persist snapshot");
-
-        let state = Arc::new(Mutex::new(SharedState::default()));
-        let enqueued = maybe_enqueue_cto_drift_intervention(&root, &state, &snapshot)
-            .expect("watchdog should succeed");
-        assert!(!enqueued);
-
-        let open = tickets::list_ticket_self_work_items(&root, Some("local"), None, 20)
-            .expect("failed to list self-work");
-        let drift_items = open
-            .into_iter()
-            .filter(|item| item.kind == CTO_DRIFT_KIND)
-            .collect::<Vec<_>>();
-        assert_eq!(drift_items.len(), 1);
-
-        let enqueued: i64 = conn
-            .query_row(
-                "SELECT intervention_enqueued FROM operating_health_snapshots WHERE snapshot_id = ?1",
-                params![snapshot.snapshot_id],
-                |row| row.get(0),
-            )
-            .expect("failed to read snapshot");
-        assert_eq!(enqueued, 1);
     }
 
     #[test]
@@ -14366,48 +14253,6 @@ Was jetzt zu tun ist:\n\
         );
     }
 
-    // F2: env knob honours operator overrides; default is 3.
-    #[test]
-    fn mission_agent_failure_threshold_default_is_three() {
-        let root = temp_root("agent-failure-threshold-default");
-        assert_eq!(
-            mission_agent_failure_threshold(&root),
-            DEFAULT_MISSION_AGENT_FAILURE_THRESHOLD
-        );
-    }
-
-    #[test]
-    fn mission_agent_failure_threshold_respects_env_override() {
-        let root = temp_root("agent-failure-threshold-env");
-        let mut env_map = std::collections::BTreeMap::new();
-        env_map.insert(
-            "CTOX_MISSION_AGENT_FAILURE_THRESHOLD".to_string(),
-            "7".to_string(),
-        );
-        runtime_env::save_runtime_env_map(&root, &env_map).expect("save env");
-        assert_eq!(mission_agent_failure_threshold(&root), 7);
-
-        env_map.insert(
-            "CTOX_MISSION_AGENT_FAILURE_THRESHOLD".to_string(),
-            "garbage".to_string(),
-        );
-        runtime_env::save_runtime_env_map(&root, &env_map).expect("save env");
-        assert_eq!(
-            mission_agent_failure_threshold(&root),
-            DEFAULT_MISSION_AGENT_FAILURE_THRESHOLD
-        );
-
-        env_map.insert(
-            "CTOX_MISSION_AGENT_FAILURE_THRESHOLD".to_string(),
-            "0".to_string(),
-        );
-        runtime_env::save_runtime_env_map(&root, &env_map).expect("save env");
-        assert_eq!(
-            mission_agent_failure_threshold(&root),
-            DEFAULT_MISSION_AGENT_FAILURE_THRESHOLD
-        );
-    }
-
     // F2: lcm helpers manage the per-mission failure counter and deferral.
     #[test]
     fn mission_failure_counter_increments_resets_and_defers() {
@@ -14475,6 +14320,44 @@ Was jetzt zu tun ist:\n\
             outbound_email: None,
             outbound_anchor: Some("email:cto1@example.com:msg-1".to_string()),
         }
+    }
+
+    fn self_work_job() -> QueuedPrompt {
+        QueuedPrompt {
+            prompt: "work on CRM".to_string(),
+            goal: "finish CRM integration".to_string(),
+            preview: "CRM integration".to_string(),
+            source_label: "ticket:self-work".to_string(),
+            suggested_skill: Some("software-from-scratch".to_string()),
+            leased_message_keys: Vec::new(),
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("ticket:crm".to_string()),
+            workspace_root: Some("/srv/kunstmen".to_string()),
+            ticket_self_work_id: Some("self-work:local:crm".to_string()),
+            outbound_email: None,
+            outbound_anchor: None,
+        }
+    }
+
+    #[test]
+    fn self_work_can_continue_before_completion_review_when_agent_requests_it() {
+        let job = self_work_job();
+        let work_id = continuation_self_work_requested(
+            &job,
+            "Ich habe den ersten Teil umgesetzt. Noch offen: Browser-QA und DB-Smoke-Test. Mach weiter mit dem naechsten konkreten Schritt.",
+        );
+        assert_eq!(work_id, Some("self-work:local:crm"));
+    }
+
+    #[test]
+    fn founder_mail_never_uses_continue_shortcut_before_review() {
+        let mut job = parent_outbound_job();
+        job.ticket_self_work_id = Some("self-work:local:mail".to_string());
+        let work_id = continuation_self_work_requested(
+            &job,
+            "Noch offen: die Antwort sauber formulieren. Mach weiter.",
+        );
+        assert_eq!(work_id, None);
     }
 
     #[test]

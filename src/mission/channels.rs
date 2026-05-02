@@ -19,6 +19,7 @@ use sha2::Digest;
 use sha2::Sha256;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
@@ -1711,6 +1712,55 @@ pub fn lease_queue_task(
     )?;
     refresh_thread(&mut conn, &current.thread_key)?;
     load_queue_task_from_conn(&conn, message_key)?.context("failed to load leased queue task")
+}
+
+pub fn release_stale_queue_task_leases(
+    root: &Path,
+    lease_owner: &str,
+    active_message_keys: &HashSet<String>,
+) -> Result<Vec<String>> {
+    let db_path = resolve_db_path(root, None);
+    let conn = open_channel_db(&db_path)?;
+    let mut statement = conn.prepare(
+        r#"
+        SELECT m.message_key
+        FROM communication_messages m
+        JOIN communication_routing_state r ON r.message_key = m.message_key
+        WHERE m.channel = 'queue'
+          AND m.direction = 'inbound'
+          AND r.route_status = 'leased'
+          AND r.lease_owner = ?1
+        ORDER BY r.leased_at ASC, r.updated_at ASC
+        LIMIT 128
+        "#,
+    )?;
+    let rows = statement.query_map(params![lease_owner], |row| row.get::<_, String>(0))?;
+    let candidates = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(statement);
+
+    let now = now_iso_string();
+    let mut released = Vec::new();
+    for message_key in candidates {
+        if active_message_keys.contains(&message_key) {
+            continue;
+        }
+        conn.execute(
+            r#"
+            UPDATE communication_routing_state
+            SET route_status='pending',
+                lease_owner=NULL,
+                leased_at=NULL,
+                acked_at=NULL,
+                last_error=NULL,
+                updated_at=?2
+            WHERE message_key = ?1
+              AND route_status = 'leased'
+            "#,
+            params![message_key, now],
+        )?;
+        released.push(message_key);
+    }
+    Ok(released)
 }
 
 pub fn ingest_cron_message(
@@ -3884,6 +3934,9 @@ fn ensure_schema(conn: &Connection) -> Result<()> {
             updated_at TEXT NOT NULL
         );
 
+        CREATE INDEX IF NOT EXISTS idx_communication_routing_status_owner
+            ON communication_routing_state(route_status, lease_owner, leased_at, updated_at);
+
         CREATE TABLE IF NOT EXISTS communication_founder_reply_reviews (
             approval_key TEXT PRIMARY KEY,
             inbound_message_key TEXT NOT NULL,
@@ -6031,6 +6084,46 @@ mod tests {
             .expect("failed to list blocked queue tasks");
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].message_key, created.message_key);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn stale_queue_task_lease_releases_to_pending() {
+        let root = std::env::temp_dir().join(format!(
+            "ctox-queue-stale-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("failed to create temp test root");
+
+        let created = create_queue_task(
+            &root,
+            QueueTaskCreateRequest {
+                title: "stale lease".to_string(),
+                prompt: "Release this stale queue lease.".to_string(),
+                thread_key: "queue/stale".to_string(),
+                workspace_root: None,
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create queue task");
+        lease_queue_task(&root, &created.message_key, "ctox-service")
+            .expect("failed to lease queue task");
+
+        let released = release_stale_queue_task_leases(&root, "ctox-service", &HashSet::new())
+            .expect("failed to release stale queue lease");
+        assert_eq!(released, vec![created.message_key.clone()]);
+        let reloaded = load_queue_task(&root, &created.message_key)
+            .expect("failed to load queue task")
+            .expect("missing queue task");
+        assert_eq!(reloaded.route_status, "pending");
+        assert!(reloaded.lease_owner.is_none());
 
         let _ = fs::remove_dir_all(&root);
     }

@@ -15,6 +15,7 @@ use sha2::Sha256;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::collections::HashSet;
 use std::io::BufRead;
 use std::io::BufReader;
 use std::io::Write;
@@ -29,6 +30,7 @@ use crate::inference::model_registry;
 use crate::inference::runtime_kernel;
 use crate::inference::supervisor;
 use crate::mission::ticket_adapters;
+use crate::mission::ticket_gateway;
 use crate::mission::ticket_protocol;
 use crate::mission::ticket_translation;
 use crate::service::core_state_machine::{
@@ -391,6 +393,21 @@ pub struct TicketSourceSkillNoteReviewView {
     pub findings: Vec<TicketSourceSkillNoteReviewFinding>,
     pub note_guidance: Option<String>,
     pub operator_summary: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub(crate) struct TicketDispatchPreflightIssue {
+    pub system: String,
+    pub code: String,
+    pub severity: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub(crate) struct TicketConfiguredSyncResult {
+    pub system: String,
+    pub ok: bool,
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1261,21 +1278,121 @@ pub(crate) fn sync_ticket_system(root: &Path, system: &str) -> Result<Value> {
     }))
 }
 
-pub(crate) fn sync_configured_ticket_systems(
-    root: &Path,
+pub(crate) fn configured_ticket_systems(
     settings: &std::collections::BTreeMap<String, String>,
-) {
-    let systems = settings
+) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    settings
         .get("CTOX_TICKET_SYSTEMS")
         .map(String::as_str)
         .unwrap_or("")
         .split(',')
         .map(str::trim)
         .filter(|item| !item.is_empty())
-        .collect::<Vec<_>>();
-    for system in systems {
-        let _ = sync_ticket_system(root, system);
+        .filter_map(|item| {
+            let normalized = item.to_ascii_lowercase();
+            seen.insert(normalized.clone()).then_some(normalized)
+        })
+        .collect()
+}
+
+pub(crate) fn preflight_configured_ticket_systems(
+    root: &Path,
+    settings: &std::collections::BTreeMap<String, String>,
+) -> Vec<TicketDispatchPreflightIssue> {
+    let mut issues = Vec::new();
+    for system in configured_ticket_systems(settings) {
+        let Some(adapter) = ticket_adapters::adapter_for_system(&system) else {
+            issues.push(TicketDispatchPreflightIssue {
+                system,
+                code: "unsupported_ticket_system".to_string(),
+                severity: "error".to_string(),
+                reason: "configured ticket system has no CTOX adapter".to_string(),
+            });
+            continue;
+        };
+        let capabilities = adapter.capabilities();
+        if !capabilities.can_sync {
+            issues.push(TicketDispatchPreflightIssue {
+                system: system.clone(),
+                code: "sync_not_supported".to_string(),
+                severity: "error".to_string(),
+                reason: "adapter does not declare ticket sync capability".to_string(),
+            });
+        }
+        if system == "zammad" {
+            let runtime = ticket_gateway::runtime_settings_from_settings(
+                root,
+                ticket_gateway::TicketAdapterKind::Zammad,
+                settings,
+            );
+            let has_base_url = runtime
+                .get("CTO_ZAMMAD_BASE_URL")
+                .map(String::as_str)
+                .map(str::trim)
+                .is_some_and(|value| !value.is_empty());
+            let has_token = runtime
+                .get("CTO_ZAMMAD_TOKEN")
+                .map(String::as_str)
+                .map(str::trim)
+                .is_some_and(|value| !value.is_empty());
+            let has_basic = runtime
+                .get("CTO_ZAMMAD_USER")
+                .map(String::as_str)
+                .map(str::trim)
+                .is_some_and(|value| !value.is_empty())
+                && runtime
+                    .get("CTO_ZAMMAD_PASSWORD")
+                    .map(String::as_str)
+                    .map(str::trim)
+                    .is_some_and(|value| !value.is_empty());
+            if !has_base_url {
+                issues.push(TicketDispatchPreflightIssue {
+                    system: system.clone(),
+                    code: "missing_zammad_base_url".to_string(),
+                    severity: "error".to_string(),
+                    reason: "missing CTO_ZAMMAD_BASE_URL".to_string(),
+                });
+            }
+            if !has_token && !has_basic {
+                issues.push(TicketDispatchPreflightIssue {
+                    system: system.clone(),
+                    code: "missing_zammad_auth".to_string(),
+                    severity: "error".to_string(),
+                    reason:
+                        "missing Zammad auth: set CTO_ZAMMAD_TOKEN or CTO_ZAMMAD_USER + CTO_ZAMMAD_PASSWORD"
+                            .to_string(),
+                });
+            }
+        }
     }
+    issues
+}
+
+pub(crate) fn sync_configured_ticket_systems(
+    root: &Path,
+    settings: &std::collections::BTreeMap<String, String>,
+) -> Vec<TicketConfiguredSyncResult> {
+    let mut results = Vec::new();
+    for system in configured_ticket_systems(settings) {
+        match sync_ticket_system(root, &system) {
+            Ok(_) => results.push(TicketConfiguredSyncResult {
+                system,
+                ok: true,
+                error: None,
+            }),
+            Err(err) => {
+                let error = err.to_string();
+                let _ = record_ticket_sync_failure(root, &system, &error);
+                results.push(TicketConfiguredSyncResult {
+                    system,
+                    ok: false,
+                    error: Some(error),
+                });
+            }
+        }
+    }
+    results
 }
 
 fn test_ticket_system(root: &Path, system: &str) -> Result<Value> {
@@ -3172,10 +3289,30 @@ pub(crate) fn lease_pending_ticket_events(
     limit: usize,
     lease_owner: &str,
 ) -> Result<Vec<TicketEventView>> {
+    lease_pending_ticket_events_for_sources(root, limit, lease_owner, None)
+}
+
+pub(crate) fn lease_pending_ticket_events_for_sources(
+    root: &Path,
+    limit: usize,
+    lease_owner: &str,
+    allowed_sources: Option<&HashSet<String>>,
+) -> Result<Vec<TicketEventView>> {
     let conn = open_ticket_db(root)?;
     ensure_ticket_event_routing_rows(&conn)?;
-    let mut statement = conn.prepare(
-        r#"
+    let allowed = allowed_sources
+        .map(|sources| {
+            sources
+                .iter()
+                .map(|source| source.trim().to_ascii_lowercase())
+                .filter(|source| !source.is_empty())
+                .collect::<BTreeSet<_>>()
+        })
+        .filter(|sources| !sources.is_empty());
+    if allowed_sources.is_some() && allowed.is_none() {
+        return Ok(Vec::new());
+    }
+    let mut sql = r#"
         SELECT e.event_key, e.ticket_key, e.source_system, e.remote_event_id, e.direction,
                e.event_type, e.summary, e.body_text, e.metadata_json, e.external_created_at, e.observed_at
         FROM ticket_events e
@@ -3185,8 +3322,22 @@ pub(crate) fn lease_pending_ticket_events(
           AND (r.lease_owner IS NULL OR r.lease_owner = '' OR r.lease_owner = ?1)
         ORDER BY e.external_created_at ASC, e.observed_at ASC
         LIMIT ?2
-        "#,
-    )?;
+        "#
+    .to_string();
+    if let Some(sources) = allowed.as_ref() {
+        let source_list = sources
+            .iter()
+            .map(|source| format!("'{}'", source.replace('\'', "''")))
+            .collect::<Vec<_>>()
+            .join(",");
+        sql = sql.replace(
+            "ORDER BY e.external_created_at ASC, e.observed_at ASC",
+            &format!(
+                "AND lower(e.source_system) IN ({source_list})\n        ORDER BY e.external_created_at ASC, e.observed_at ASC"
+            ),
+        );
+    }
+    let mut statement = conn.prepare(&sql)?;
     let rows = statement.query_map(params![lease_owner, limit as i64], map_ticket_event_row)?;
     let events = rows.collect::<rusqlite::Result<Vec<_>>>()?;
     drop(statement);
@@ -3245,6 +3396,116 @@ pub(crate) fn ack_leased_ticket_events(
     }
     tx.commit()?;
     Ok(updated)
+}
+
+pub(crate) fn release_stale_ticket_event_leases(
+    root: &Path,
+    lease_owner: &str,
+    active_event_keys: &HashSet<String>,
+) -> Result<Vec<String>> {
+    let conn = open_ticket_db(root)?;
+    let mut statement = conn.prepare(
+        r#"
+        SELECT event_key
+        FROM ticket_event_routing_state
+        WHERE route_status = 'leased'
+          AND lease_owner = ?1
+        ORDER BY leased_at ASC, updated_at ASC
+        LIMIT 128
+        "#,
+    )?;
+    let rows = statement.query_map(params![lease_owner], |row| row.get::<_, String>(0))?;
+    let candidates = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(statement);
+
+    let now = now_iso_string();
+    let mut released = Vec::new();
+    for event_key in candidates {
+        if active_event_keys.contains(&event_key) {
+            continue;
+        }
+        conn.execute(
+            r#"
+            UPDATE ticket_event_routing_state
+            SET route_status='pending',
+                lease_owner=NULL,
+                leased_at=NULL,
+                acked_at=NULL,
+                updated_at=?2
+            WHERE event_key = ?1
+              AND route_status = 'leased'
+            "#,
+            params![event_key, now],
+        )?;
+        released.push(event_key);
+    }
+    Ok(released)
+}
+
+pub(crate) fn release_ready_blocked_ticket_events(
+    root: &Path,
+    limit: usize,
+) -> Result<Vec<String>> {
+    let conn = open_ticket_db(root)?;
+    let mut statement = conn.prepare(
+        r#"
+        SELECT e.event_key, e.ticket_key, e.source_system, e.remote_event_id, e.direction,
+               e.event_type, e.summary, e.body_text, e.metadata_json, e.external_created_at, e.observed_at
+        FROM ticket_events e
+        JOIN ticket_event_routing_state r ON r.event_key = e.event_key
+        WHERE e.direction = 'inbound'
+          AND r.route_status = 'blocked'
+        ORDER BY e.external_created_at ASC, e.observed_at ASC
+        LIMIT ?1
+        "#,
+    )?;
+    let rows = statement.query_map(params![limit as i64], map_ticket_event_row)?;
+    let candidates = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(statement);
+
+    let now = now_iso_string();
+    let mut released = Vec::new();
+    for event in candidates {
+        if ticket_event_ready_for_preparation(root, &event).is_err() {
+            continue;
+        }
+        conn.execute(
+            r#"
+            UPDATE ticket_event_routing_state
+            SET route_status='pending',
+                lease_owner=NULL,
+                leased_at=NULL,
+                acked_at=NULL,
+                updated_at=?2
+            WHERE event_key = ?1
+              AND route_status = 'blocked'
+            "#,
+            params![event.event_key, now],
+        )?;
+        released.push(event.event_key);
+    }
+    Ok(released)
+}
+
+fn ticket_event_ready_for_preparation(root: &Path, event: &TicketEventView) -> Result<()> {
+    let ticket = load_ticket(root, &event.ticket_key)?.context("ticket not found for event")?;
+    let conn = open_ticket_db(root)?;
+    let mut missing = Vec::new();
+    for domain in REQUIRED_KNOWLEDGE_DOMAINS {
+        if load_preferred_ticket_knowledge_entry(&conn, &ticket.source_system, domain)?.is_none() {
+            missing.push((*domain).to_string());
+        }
+    }
+    if !missing.is_empty() {
+        anyhow::bail!(
+            "ticket knowledge gate: missing required knowledge domains for {}: {}",
+            event.ticket_key,
+            missing.join(", ")
+        );
+    }
+    drop(conn);
+    let _ = resolve_ticket_control(root, &event.ticket_key)?;
+    Ok(())
 }
 
 fn load_ticket_self_work_item_for_ticket_key(
@@ -4862,6 +5123,22 @@ pub(crate) fn record_ticket_sync_run(
     Ok(())
 }
 
+pub(crate) fn record_ticket_sync_failure(root: &Path, system: &str, error: &str) -> Result<()> {
+    let conn = open_ticket_db(root)?;
+    let now = now_iso_string();
+    let run_id = format!("ticket-sync:{}:{}", system, stable_digest(&now));
+    conn.execute(
+        r#"
+        INSERT INTO ticket_sync_runs (
+            run_id, source_system, fetched_count, stored_ticket_count, stored_event_count,
+            status, error_text, created_at
+        ) VALUES (?1, ?2, 0, 0, 0, 'failed', ?3, ?4)
+        "#,
+        params![run_id, system, collapse_inline(error, 1000), now],
+    )?;
+    Ok(())
+}
+
 fn list_tickets(root: &Path, system: Option<&str>, limit: usize) -> Result<Vec<TicketItemView>> {
     let conn = open_ticket_db(root)?;
     let sql = if system.is_some() {
@@ -5784,16 +6061,36 @@ fn writeback_comment(
             ticket.source_system
         );
     }
-    let result = adapter.writeback_comment(
+    let result = match adapter.writeback_comment(
         root,
         ticket_protocol::TicketCommentWritebackRequest {
             remote_ticket_id: &ticket.remote_ticket_id,
             body,
             internal,
         },
-    )?;
-    let _ = sync_ticket_system(root, &ticket.source_system)?;
+    ) {
+        Ok(result) => result,
+        Err(err) => {
+            let error = err.to_string();
+            record_failed_writeback(
+                &mut conn,
+                &case,
+                "comment",
+                json!({
+                    "body": body.trim(),
+                    "internal": internal,
+                    "remote_ticket_id": ticket.remote_ticket_id.clone(),
+                    "source_system": ticket.source_system.clone(),
+                }),
+                &error,
+            )?;
+            anyhow::bail!("{}", error);
+        }
+    };
     mark_remote_events_outbound(root, &ticket.source_system, &result.remote_event_ids)?;
+    if let Err(err) = sync_ticket_system(root, &ticket.source_system) {
+        let _ = record_ticket_sync_failure(root, &ticket.source_system, &err.to_string());
+    }
     let now = now_iso_string();
     conn.execute(
         r#"
@@ -5874,7 +6171,7 @@ fn writeback_transition(
         );
     }
     enforce_ticket_case_close_transition(&conn, &case, "writeback_engine")?;
-    let result = adapter.writeback_transition(
+    let result = match adapter.writeback_transition(
         root,
         ticket_protocol::TicketTransitionWritebackRequest {
             remote_ticket_id: &ticket.remote_ticket_id,
@@ -5883,9 +6180,30 @@ fn writeback_transition(
             internal_note,
             control_note: None,
         },
-    )?;
-    let _ = sync_ticket_system(root, &ticket.source_system)?;
+    ) {
+        Ok(result) => result,
+        Err(err) => {
+            let error = err.to_string();
+            record_failed_writeback(
+                &mut conn,
+                &case,
+                "transition",
+                json!({
+                    "state": state.trim(),
+                    "note_body": note_body.map(str::trim),
+                    "internal_note": internal_note,
+                    "remote_ticket_id": ticket.remote_ticket_id.clone(),
+                    "source_system": ticket.source_system.clone(),
+                }),
+                &error,
+            )?;
+            anyhow::bail!("{}", error);
+        }
+    };
     mark_remote_events_outbound(root, &ticket.source_system, &result.remote_event_ids)?;
+    if let Err(err) = sync_ticket_system(root, &ticket.source_system) {
+        let _ = record_ticket_sync_failure(root, &ticket.source_system, &err.to_string());
+    }
     let now = now_iso_string();
     conn.execute(
         r#"
@@ -6301,6 +6619,54 @@ fn ensure_case_ready_for_writeback(case: &TicketCaseView) -> Result<()> {
     }
 }
 
+fn record_failed_writeback(
+    conn: &mut Connection,
+    case: &TicketCaseView,
+    operation: &str,
+    payload: Value,
+    error: &str,
+) -> Result<()> {
+    let now = now_iso_string();
+    conn.execute(
+        r#"
+        INSERT INTO ticket_writebacks (
+            writeback_id, case_id, ticket_key, operation, payload_json, status, created_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, 'failed', ?6)
+        "#,
+        params![
+            format!(
+                "writeback-failed:{}:{}",
+                case.case_id,
+                stable_digest(&(operation.to_string() + error + &now))
+            ),
+            case.case_id,
+            case.ticket_key,
+            operation,
+            serde_json::to_string(&json!({
+                "payload": payload,
+                "error": collapse_inline(error, 1000),
+            }))?,
+            now,
+        ],
+    )?;
+    record_audit(
+        conn,
+        AuditRequest {
+            ticket_key: &case.ticket_key,
+            case_id: Some(&case.case_id),
+            actor_type: "writeback_engine",
+            action_type: "writeback_failed",
+            label: Some(&case.label),
+            bundle_label: Some(&case.bundle_label),
+            bundle_version: Some(case.bundle_version),
+            details: json!({
+                "operation": operation,
+                "error": collapse_inline(error, 1000),
+            }),
+        },
+    )
+}
+
 struct AuditRequest<'a> {
     ticket_key: &'a str,
     case_id: Option<&'a str>,
@@ -6404,6 +6770,9 @@ fn ensure_schema(conn: &Connection) -> Result<()> {
             acked_at TEXT,
             updated_at TEXT NOT NULL
         );
+
+        CREATE INDEX IF NOT EXISTS idx_ticket_event_routing_status_owner
+            ON ticket_event_routing_state(route_status, lease_owner, leased_at, updated_at);
 
         CREATE TABLE IF NOT EXISTS ticket_outbound_event_marks (
             source_system TEXT NOT NULL,
@@ -7472,6 +7841,104 @@ mod tests {
                 .unwrap_or_default()
                 .as_nanos()
         ))
+    }
+
+    #[test]
+    fn ticket_preflight_reports_missing_zammad_runtime() {
+        let root = temp_root("preflight-zammad-missing");
+        let mut settings = BTreeMap::new();
+        settings.insert(
+            "CTOX_TICKET_SYSTEMS".to_string(),
+            "local,zammad".to_string(),
+        );
+
+        let issues = preflight_configured_ticket_systems(&root, &settings);
+
+        assert!(issues
+            .iter()
+            .any(|issue| issue.system == "zammad" && issue.code == "missing_zammad_base_url"));
+        assert!(issues
+            .iter()
+            .any(|issue| issue.system == "zammad" && issue.code == "missing_zammad_auth"));
+        assert!(!issues.iter().any(|issue| issue.system == "local"));
+    }
+
+    #[test]
+    fn stale_ticket_event_lease_releases_to_pending() -> Result<()> {
+        let root = temp_root("stale-ticket-lease");
+        let remote = ticket_local_native::create_local_ticket(
+            &root,
+            "Lease me",
+            "Initial baseline",
+            Some("open"),
+            Some("normal"),
+        )?;
+        sync_ticket_system(&root, "local")?;
+        ticket_local_native::add_local_comment(&root, &remote.ticket_id, "Fresh update")?;
+        sync_ticket_system(&root, "local")?;
+
+        let leased = lease_pending_ticket_events(&root, 1, "ctox-service")?;
+        assert_eq!(leased.len(), 1);
+        let released = release_stale_ticket_event_leases(&root, "ctox-service", &HashSet::new())?;
+
+        assert_eq!(released, vec![leased[0].event_key.clone()]);
+        let leased_again = lease_pending_ticket_events(&root, 1, "ctox-service")?;
+        assert_eq!(leased_again[0].event_key, leased[0].event_key);
+        Ok(())
+    }
+
+    #[test]
+    fn blocked_ticket_event_releases_after_knowledge_and_control_are_ready() -> Result<()> {
+        let root = temp_root("blocked-ticket-release");
+        let remote = ticket_local_native::create_local_ticket(
+            &root,
+            "Blocked until controls exist",
+            "Initial baseline",
+            Some("open"),
+            Some("normal"),
+        )?;
+        sync_ticket_system(&root, "local")?;
+        ticket_local_native::add_local_comment(&root, &remote.ticket_id, "Fresh update")?;
+        sync_ticket_system(&root, "local")?;
+        let ticket_key = format!("local:{}", remote.ticket_id);
+        let leased = lease_pending_ticket_events(&root, 1, "ctox-service")?;
+        assert_eq!(leased.len(), 1);
+        ack_leased_ticket_events(&root, &[leased[0].event_key.clone()], "blocked")?;
+
+        let still_blocked = release_ready_blocked_ticket_events(&root, 10)?;
+        assert!(still_blocked.is_empty());
+
+        refresh_observed_ticket_knowledge(&root, "local")?;
+        set_ticket_label(
+            &root,
+            &ticket_key,
+            "support/general",
+            "test",
+            None,
+            json!({}),
+        )?;
+        put_control_bundle(
+            &root,
+            ControlBundleInput {
+                label: "support/general".to_string(),
+                runbook_id: "rb-general".to_string(),
+                runbook_version: "v1".to_string(),
+                policy_id: "pol-general".to_string(),
+                policy_version: "v1".to_string(),
+                approval_mode: "human_approval_required".to_string(),
+                autonomy_level: "A0".to_string(),
+                verification_profile_id: "verify-general".to_string(),
+                writeback_profile_id: "writeback-general".to_string(),
+                support_mode: "support_case".to_string(),
+                default_risk_level: "low".to_string(),
+                execution_actions: default_execution_actions(),
+                notes: None,
+            },
+        )?;
+
+        let released = release_ready_blocked_ticket_events(&root, 10)?;
+        assert_eq!(released, vec![leased[0].event_key.clone()]);
+        Ok(())
     }
 
     fn write_reply_bundle(bundle_dir: &std::path::Path, items: &[Value]) -> Result<()> {
