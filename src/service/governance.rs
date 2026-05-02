@@ -99,14 +99,6 @@ const DEFAULT_MECHANISMS: &[DefaultMechanism] = &[
         description: "Preserves continuity when a turn hits the runtime time budget by creating an explicit continuation slice instead of dropping progress.",
     },
     DefaultMechanism {
-        mechanism_id: "mission_idle_watchdog",
-        mechanism_class: "survival",
-        autonomy: "autonomous_mission_retrigger",
-        prompt_visibility: "prompt_visible",
-        module_hint: "src/service.rs",
-        description: "Re-triggers an open mission if CTOX goes idle without runnable work while the mission still claims to be open.",
-    },
-    DefaultMechanism {
         mechanism_id: "sender_authority_boundary",
         mechanism_class: "safety",
         autonomy: "autonomous_input_block",
@@ -185,6 +177,38 @@ const DEFAULT_MECHANISMS: &[DefaultMechanism] = &[
         prompt_visibility: "prompt_visible",
         module_hint: "src/mission/tickets.rs",
         description: "Prevents ticket work from entering the active loop unless label binding, dry-run controls, and bundle-gated execution state are all explicit and audit-ready.",
+    },
+    DefaultMechanism {
+        mechanism_id: "ticket_knowledge_gate",
+        mechanism_class: "safety",
+        autonomy: "autonomous_ticket_knowledge_gate",
+        prompt_visibility: "prompt_visible",
+        module_hint: "src/mission/tickets.rs",
+        description: "Prevents synchronized ticket work from entering the active loop until required source knowledge domains have been loaded.",
+    },
+    DefaultMechanism {
+        mechanism_id: "ticket_dispatch_preflight",
+        mechanism_class: "safety",
+        autonomy: "autonomous_ticket_dispatch_guard",
+        prompt_visibility: "prompt_visible",
+        module_hint: "src/service.rs",
+        description: "Checks configured ticket adapters and runtime prerequisites before synchronized ticket work is dispatched.",
+    },
+    DefaultMechanism {
+        mechanism_id: "ticket_adapter_sync",
+        mechanism_class: "recovery",
+        autonomy: "autonomous_ticket_sync_recording",
+        prompt_visibility: "prompt_visible",
+        module_hint: "src/mission/tickets.rs",
+        description: "Records adapter sync failures as durable governance and ticket sync state instead of hiding them in service logs.",
+    },
+    DefaultMechanism {
+        mechanism_id: "ticket_reconciliation",
+        mechanism_class: "recovery",
+        autonomy: "autonomous_ticket_reconciliation",
+        prompt_visibility: "prompt_visible",
+        module_hint: "src/service.rs",
+        description: "Reconciles stale ticket leases and previously blocked ticket events before new external routing.",
     },
     DefaultMechanism {
         mechanism_id: "plan_goal_superseded_for_duplicate_slice",
@@ -732,26 +756,26 @@ mod tests {
         let first = record_event(
             &root,
             GovernanceEventRequest {
-                mechanism_id: "mission_idle_watchdog",
+                mechanism_id: "queue_pressure_guard",
                 conversation_id: Some(1),
                 severity: "warning",
-                reason: "mission stayed idle beyond tolerance",
-                action_taken: "created mission continuation task",
-                details: json!({"idle_secs": 120}),
-                idempotence_key: Some("mission-1-idle"),
+                reason: "pending prompts crossed the guard threshold",
+                action_taken: "inserted queue guard prompt",
+                details: json!({"pending": 7, "threshold": 6}),
+                idempotence_key: Some("queue-guard-dedupe"),
             },
         )?
         .context("expected first event")?;
         let second = record_event(
             &root,
             GovernanceEventRequest {
-                mechanism_id: "mission_idle_watchdog",
+                mechanism_id: "queue_pressure_guard",
                 conversation_id: Some(1),
                 severity: "warning",
-                reason: "mission stayed idle beyond tolerance",
-                action_taken: "created mission continuation task",
-                details: json!({"idle_secs": 120}),
-                idempotence_key: Some("mission-1-idle"),
+                reason: "pending prompts crossed the guard threshold",
+                action_taken: "inserted queue guard prompt",
+                details: json!({"pending": 7, "threshold": 6}),
+                idempotence_key: Some("queue-guard-dedupe"),
             },
         )?
         .context("expected existing event")?;
