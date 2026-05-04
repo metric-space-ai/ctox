@@ -7,12 +7,16 @@ Current scope:
 
 - no inference framework process dependency;
 - Rust host/orchestration code in this crate;
-- vendored ggml for CPU, BLAS, and Metal kernels;
+- vendored ggml for CPU and Metal kernels;
 - GGUF metadata, tensor-name inspection, and tokenizer metadata loading;
 - Q4 GGUF encoder, adapter, decoder, KV cache, and greedy decode execution;
 - WAV/audio preprocessing aligned to the Voxtral realtime graph;
 - line-delimited JSON service hosted by the CTOX binary through
   `__native-voxtral-stt-service`.
+
+Linux defaults to ggml's native CPU kernels (`GGML_NATIVE=ON`) so quantized
+Q4 matmul stays on ggml's AVX/FMA/architecture-specific path. BLAS is available
+only as an explicit build-time experiment via `CTOX_VOXTRAL_GGML_BLAS=1`.
 
 Current state: the crate loads a ggml-compatible Q4 Voxtral GGUF and returns
 real transcripts. It does not use TrevorJS, Burn, WGPU, or an external

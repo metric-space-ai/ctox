@@ -1778,13 +1778,21 @@ fn init_cpu_backend_with_threads(threads: i32) -> ffi::ggml_backend_t {
 }
 
 fn init_blas_backend(threads: i32) -> ffi::ggml_backend_t {
-    let backend = unsafe { ffi::ggml_backend_blas_init() };
-    if !backend.is_null() {
-        unsafe {
-            ffi::ggml_backend_blas_set_n_threads(backend, threads);
+    #[cfg(ctox_ggml_blas)]
+    {
+        let backend = unsafe { ffi::ggml_backend_blas_init() };
+        if !backend.is_null() {
+            unsafe {
+                ffi::ggml_backend_blas_set_n_threads(backend, threads);
+            }
         }
+        backend
     }
-    backend
+    #[cfg(not(ctox_ggml_blas))]
+    {
+        let _ = threads;
+        ptr::null_mut()
+    }
 }
 
 unsafe fn causal_conv1d_graph(

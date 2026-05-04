@@ -5,6 +5,8 @@ use std::process::Command;
 fn main() {
     println!("cargo:rerun-if-env-changed=GGML_LIB_DIR");
     println!("cargo:rerun-if-env-changed=CTOX_VOXTRAL_BUILD_GGML");
+    println!("cargo:rerun-if-env-changed=CTOX_VOXTRAL_GGML_BLAS");
+    println!("cargo:rustc-check-cfg=cfg(ctox_ggml_blas)");
 
     if let Ok(dir) = env::var("GGML_LIB_DIR") {
         link_ggml(&PathBuf::from(dir));
@@ -40,9 +42,14 @@ fn build_vendored_ggml() {
         .arg("-DBUILD_SHARED_LIBS=OFF");
 
     #[cfg(target_os = "macos")]
-    configure.arg("-DGGML_METAL=ON").arg("-DGGML_BLAS=ON");
-    #[cfg(target_os = "linux")]
-    configure.arg("-DGGML_BLAS=ON");
+    configure.arg("-DGGML_METAL=ON");
+
+    let enable_blas = env_flag("CTOX_VOXTRAL_GGML_BLAS");
+    configure.arg(if enable_blas {
+        "-DGGML_BLAS=ON"
+    } else {
+        "-DGGML_BLAS=OFF"
+    });
 
     assert!(configure.status().expect("run cmake configure").success());
     assert!(Command::new("cmake")
@@ -72,6 +79,7 @@ fn link_ggml(base: &PathBuf) {
 
     let blas = base.join("ggml-blas");
     if blas.is_dir() {
+        println!("cargo:rustc-cfg=ctox_ggml_blas");
         println!("cargo:rustc-link-search=native={}", blas.display());
         println!("cargo:rustc-link-lib=static=ggml-blas");
         #[cfg(target_os = "linux")]
@@ -89,4 +97,13 @@ fn link_ggml(base: &PathBuf) {
         #[cfg(target_os = "macos")]
         println!("cargo:rustc-link-lib=framework=Accelerate");
     }
+}
+
+fn env_flag(name: &str) -> bool {
+    env::var(name)
+        .map(|value| {
+            let value = value.trim();
+            value == "1" || value.eq_ignore_ascii_case("true") || value.eq_ignore_ascii_case("yes")
+        })
+        .unwrap_or(false)
 }
