@@ -3,7 +3,6 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn main() {
-    println!("cargo:rerun-if-changed=vendor/reference/voxtral.cpp.commit");
     println!("cargo:rerun-if-env-changed=GGML_LIB_DIR");
     println!("cargo:rerun-if-env-changed=CTOX_VOXTRAL_BUILD_GGML");
 

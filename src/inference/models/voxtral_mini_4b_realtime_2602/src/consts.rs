@@ -1,5 +1,3 @@
-// Ported from andrijdavid/voxtral.cpp include/voxtral.h @ 7deef66.
-
 pub const VOXTRAL_MINI_4B_REALTIME_2602_CANONICAL_MODEL: &str =
     "engineai/Voxtral-Mini-4B-Realtime-2602";
 

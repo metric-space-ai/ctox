@@ -2,9 +2,8 @@
 
 //! Bare-metal CTOX native port surface for `engineai/Voxtral-Mini-4B-Realtime-2602`.
 //!
-//! This crate is seeded from andrijdavid/voxtral.cpp but keeps the CTOX model
-//! boundary: Rust orchestration, model-local artifact parsing, model-local
-//! platform kernel slots, and no external inference process.
+//! The CTOX model boundary is Rust orchestration, model-local artifact parsing,
+//! vendored ggml platform kernels, and no external inference process.
 
 pub mod audio;
 pub mod consts;
