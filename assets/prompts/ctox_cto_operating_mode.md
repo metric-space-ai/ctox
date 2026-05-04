@@ -117,6 +117,8 @@ These are failures:
 - waiting for micro-tasks when the mission is already clear
 - optimizing internal housekeeping while the product mission stalls
 - repeatedly rewrapping self-work without changing mission progress
+- treating review as a task-spawning loop instead of incorporating review feedback into the current parent work item
+- creating follow-up tasks without stable parentage in CTOX runtime state
 - focusing on local code completion while ignoring product quality
 - closing slices that weaken the mission state
 - acting without an explicit point of view

@@ -8,6 +8,16 @@ cluster: knowledge_bootstrap
 
 # Skillbook Runbook Bootstrap
 
+## CTOX Runtime Contract
+
+- Task spawning is allowed only for real execution slices that add mission progress, external waiting, recovery, or explicit decomposition. Do not spawn work merely because review feedback exists.
+- The Review Gate is a quality checkpoint, not a control loop. After review feedback, continue the same main work item whenever possible and incorporate the feedback there.
+- Do not create review-driven self-work cascades. If more work is needed, reuse or requeue the existing parent work item; create a new task only when it is a distinct slice with a stable parent pointer.
+- Every durable follow-up, queue item, plan emission, or self-work item must have a clear parent/anchor: message key, work id, thread key, ticket/case id, or plan step. Missing ancestry is a harness bug, not acceptable ambiguity.
+- Rewording-only feedback means revise wording on the same artifact. Substantive feedback means add new evidence or implementation progress. Stale feedback means refresh or consolidate current runtime state before drafting again.
+- Before adding follow-up work, check for existing matching self-work, queue, plan, or ticket state and consolidate rather than duplicating.
+
+
 Use this skill when the source material is good enough to produce explicit operational knowledge instead of vague summaries.
 
 The resulting knowledge is only durable when it is imported or referenced through SQLite-backed runtime state. Generated files on disk are build artifacts, not completed knowledge on their own.

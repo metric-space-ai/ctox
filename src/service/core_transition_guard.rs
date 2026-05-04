@@ -7,12 +7,36 @@ use chrono::Utc;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CoreTransitionProof {
     pub proof_id: String,
     pub accepted: bool,
     pub report: csm::CoreTransitionReport,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CoreSpawnRequest {
+    pub parent_entity_type: String,
+    pub parent_entity_id: String,
+    pub child_entity_type: String,
+    pub child_entity_id: String,
+    pub spawn_kind: String,
+    pub spawn_reason: String,
+    pub actor: String,
+    pub checkpoint_key: Option<String>,
+    pub budget_key: Option<String>,
+    pub max_attempts: Option<i64>,
+    pub metadata: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CoreSpawnProof {
+    pub edge_id: String,
+    pub accepted: bool,
+    pub violation_codes: Vec<String>,
+    pub message: String,
 }
 
 pub fn ensure_core_transition_guard_schema(conn: &Connection) -> Result<()> {
@@ -39,6 +63,35 @@ pub fn ensure_core_transition_guard_schema(conn: &Connection) -> Result<()> {
           ON ctox_core_transition_proofs(entity_type, entity_id, updated_at DESC);
         CREATE INDEX IF NOT EXISTS idx_ctox_core_transition_proofs_accepted
           ON ctox_core_transition_proofs(accepted, updated_at DESC);
+
+        CREATE TABLE IF NOT EXISTS ctox_core_spawn_edges (
+            edge_id TEXT PRIMARY KEY,
+            parent_entity_type TEXT NOT NULL,
+            parent_entity_id TEXT NOT NULL,
+            child_entity_type TEXT NOT NULL,
+            child_entity_id TEXT NOT NULL,
+            spawn_kind TEXT NOT NULL,
+            spawn_reason TEXT NOT NULL,
+            actor TEXT NOT NULL,
+            checkpoint_key TEXT,
+            budget_key TEXT,
+            max_attempts INTEGER,
+            accepted INTEGER NOT NULL,
+            violation_codes_json TEXT NOT NULL DEFAULT '[]',
+            request_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            terminal_reaped_at TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_ctox_core_spawn_edges_parent
+          ON ctox_core_spawn_edges(parent_entity_type, parent_entity_id, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_ctox_core_spawn_edges_child
+          ON ctox_core_spawn_edges(child_entity_type, child_entity_id, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_ctox_core_spawn_edges_budget
+          ON ctox_core_spawn_edges(budget_key, spawn_kind, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_ctox_core_spawn_edges_accepted
+          ON ctox_core_spawn_edges(accepted, updated_at DESC);
         "#,
     )?;
     Ok(())
@@ -133,11 +186,82 @@ pub fn enforce_core_transition(
     anyhow::bail!("{}", agent_recovery_message(&proof.report));
 }
 
+pub fn evaluate_core_spawn(
+    conn: &Connection,
+    request: &CoreSpawnRequest,
+) -> Result<CoreSpawnProof> {
+    ensure_core_transition_guard_schema(conn)?;
+
+    let request_json = serde_json::to_string(request)?;
+    let edge_id = deterministic_spawn_edge_id(&request_json);
+    let violation_codes = validate_core_spawn(conn, request, &edge_id)?;
+    let accepted = violation_codes.is_empty();
+    let message = core_spawn_message(&violation_codes);
+    let violation_codes_json = serde_json::to_string(&violation_codes)?;
+    let now = Utc::now().to_rfc3339();
+
+    conn.execute(
+        r#"
+        INSERT INTO ctox_core_spawn_edges (
+            edge_id, parent_entity_type, parent_entity_id, child_entity_type,
+            child_entity_id, spawn_kind, spawn_reason, actor, checkpoint_key,
+            budget_key, max_attempts, accepted, violation_codes_json,
+            request_json, created_at, updated_at
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?15)
+        ON CONFLICT(edge_id) DO UPDATE SET
+            accepted = excluded.accepted,
+            violation_codes_json = excluded.violation_codes_json,
+            request_json = excluded.request_json,
+            updated_at = excluded.updated_at
+        "#,
+        params![
+            &edge_id,
+            &request.parent_entity_type,
+            &request.parent_entity_id,
+            &request.child_entity_type,
+            &request.child_entity_id,
+            &request.spawn_kind,
+            &request.spawn_reason,
+            &request.actor,
+            request.checkpoint_key.as_deref(),
+            request.budget_key.as_deref(),
+            request.max_attempts,
+            if accepted { 1 } else { 0 },
+            violation_codes_json,
+            request_json,
+            now,
+        ],
+    )?;
+
+    Ok(CoreSpawnProof {
+        edge_id,
+        accepted,
+        violation_codes,
+        message,
+    })
+}
+
+pub fn enforce_core_spawn(conn: &Connection, request: &CoreSpawnRequest) -> Result<CoreSpawnProof> {
+    let proof = evaluate_core_spawn(conn, request)?;
+    if proof.accepted {
+        return Ok(proof);
+    }
+    anyhow::bail!("{}", proof.message);
+}
+
 fn deterministic_proof_id(request_json: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(b"ctox-core-transition-proof-v1");
     hasher.update(request_json.as_bytes());
     format!("ctp-{:x}", hasher.finalize())
+}
+
+fn deterministic_spawn_edge_id(request_json: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"ctox-core-spawn-edge-v1");
+    hasher.update(request_json.as_bytes());
+    format!("cse-{:x}", hasher.finalize())
 }
 
 fn noop_proof_id(request: &csm::CoreTransitionRequest) -> Result<String> {
@@ -146,6 +270,167 @@ fn noop_proof_id(request: &csm::CoreTransitionRequest) -> Result<String> {
     hasher.update(b"ctox-core-transition-proof-noop-v1");
     hasher.update(request_json.as_bytes());
     Ok(format!("ctp-noop-{:x}", hasher.finalize()))
+}
+
+fn validate_core_spawn(
+    conn: &Connection,
+    request: &CoreSpawnRequest,
+    edge_id: &str,
+) -> Result<Vec<String>> {
+    let mut violations = Vec::new();
+    if request.parent_entity_type.trim().is_empty()
+        || request.parent_entity_id.trim().is_empty()
+        || request.child_entity_type.trim().is_empty()
+        || request.child_entity_id.trim().is_empty()
+        || request.spawn_kind.trim().is_empty()
+        || request.actor.trim().is_empty()
+    {
+        violations.push("spawn_requires_stable_entity_ids".to_string());
+    }
+
+    let has_budget = request
+        .budget_key
+        .as_deref()
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
+        && request.max_attempts.unwrap_or_default() > 0;
+    if request.max_attempts.unwrap_or_default() > 64 {
+        violations.push("spawn_budget_too_large".to_string());
+    }
+    if looks_like_review_spawn(&request.spawn_kind) && !has_budget {
+        violations.push("review_spawn_requires_finite_budget".to_string());
+    }
+
+    let self_cycle = request.parent_entity_type == request.child_entity_type
+        && request.parent_entity_id == request.child_entity_id;
+    let graph_cycle = if self_cycle {
+        true
+    } else if violations
+        .iter()
+        .any(|code| code == "spawn_requires_stable_entity_ids")
+    {
+        false
+    } else {
+        path_exists(
+            conn,
+            &request.child_entity_type,
+            &request.child_entity_id,
+            &request.parent_entity_type,
+            &request.parent_entity_id,
+        )?
+    };
+    if graph_cycle && !has_budget {
+        violations.push("spawn_cycle_requires_finite_budget".to_string());
+    }
+
+    if let (Some(budget_key), Some(max_attempts)) =
+        (request.budget_key.as_deref(), request.max_attempts)
+    {
+        if !budget_key.trim().is_empty() && max_attempts > 0 {
+            let existing = accepted_spawn_budget_count(conn, budget_key, edge_id)?;
+            if existing >= max_attempts {
+                violations.push("spawn_budget_exhausted".to_string());
+            }
+        }
+    }
+
+    Ok(violations)
+}
+
+fn looks_like_review_spawn(spawn_kind: &str) -> bool {
+    let lowered = spawn_kind.to_ascii_lowercase();
+    lowered.contains("review")
+}
+
+fn accepted_spawn_budget_count(conn: &Connection, budget_key: &str, edge_id: &str) -> Result<i64> {
+    let count = conn.query_row(
+        r#"
+        SELECT COUNT(*)
+        FROM ctox_core_spawn_edges
+        WHERE accepted = 1
+          AND budget_key = ?1
+          AND edge_id <> ?2
+        "#,
+        params![budget_key, edge_id],
+        |row| row.get::<_, i64>(0),
+    )?;
+    Ok(count.max(0))
+}
+
+fn path_exists(
+    conn: &Connection,
+    from_entity_type: &str,
+    from_entity_id: &str,
+    to_entity_type: &str,
+    to_entity_id: &str,
+) -> Result<bool> {
+    let count = conn.query_row(
+        r#"
+        WITH RECURSIVE reachable(entity_type, entity_id) AS (
+            SELECT child_entity_type, child_entity_id
+            FROM ctox_core_spawn_edges
+            WHERE accepted = 1
+              AND parent_entity_type = ?1
+              AND parent_entity_id = ?2
+            UNION
+            SELECT e.child_entity_type, e.child_entity_id
+            FROM ctox_core_spawn_edges e
+            JOIN reachable r
+              ON e.parent_entity_type = r.entity_type
+             AND e.parent_entity_id = r.entity_id
+            WHERE e.accepted = 1
+        )
+        SELECT COUNT(*)
+        FROM reachable
+        WHERE entity_type = ?3
+          AND entity_id = ?4
+        LIMIT 1
+        "#,
+        params![
+            from_entity_type,
+            from_entity_id,
+            to_entity_type,
+            to_entity_id
+        ],
+        |row| row.get::<_, i64>(0),
+    )?;
+    Ok(count > 0)
+}
+
+fn core_spawn_message(violation_codes: &[String]) -> String {
+    if violation_codes.is_empty() {
+        return "Spawn accepted by the core process graph.".to_string();
+    }
+    let mut actions = Vec::new();
+    for code in violation_codes {
+        let action = match code.as_str() {
+            "spawn_requires_stable_entity_ids" => {
+                "Jeder Task-Spawn braucht stabile Parent- und Child-Entity-IDs, damit Process Mining und Cleanup die Kante nachvollziehen koennen."
+            }
+            "review_spawn_requires_finite_budget" => {
+                "Review darf nur als endlicher Checkpoint wirken. Verknuepfe die Nacharbeit mit dem bestehenden Haupt-Work-Item oder gib ein kleines Spawn-Budget an."
+            }
+            "spawn_cycle_requires_finite_budget" => {
+                "Diese Spawn-Kante wuerde einen Prozesszyklus erzeugen. Erlaube den Zyklus nur mit explizitem Budget und Counter."
+            }
+            "spawn_budget_too_large" => {
+                "Das angeforderte Spawn-Budget ist zu gross. Waehle eine enge obere Schranke, damit Liveness beweisbar bleibt."
+            }
+            "spawn_budget_exhausted" => {
+                "Das finite Spawn-Budget fuer diese Parent-Child-Klasse ist erschoepft. Konsolidiere die bestehende Arbeit statt weitere Self-Work-Kaskaden zu erzeugen."
+            }
+            _ => {
+                "Die geplante Spawn-Kante passt nicht zum abgesicherten Prozessmodell. Verknuepfe sie mit einer existierenden Parent-Entity oder einem endlichen Budget."
+            }
+        };
+        if !actions.iter().any(|existing| *existing == action) {
+            actions.push(action);
+        }
+    }
+    format!(
+        "Dieser Task-Spawn wurde vom Core-Prozessgraphen gestoppt. {}",
+        actions.join(" ")
+    )
 }
 
 fn agent_recovery_message(report: &csm::CoreTransitionReport) -> String {
@@ -308,6 +593,88 @@ mod tests {
         assert!(!message.contains("ctp-"));
         assert!(!message.contains("founder_send_requires_review_audit"));
         assert!(!message.contains("core transition guard rejected"));
+        Ok(())
+    }
+
+    fn spawn_request(parent: &str, child: &str, kind: &str) -> CoreSpawnRequest {
+        CoreSpawnRequest {
+            parent_entity_type: "WorkItem".to_string(),
+            parent_entity_id: parent.to_string(),
+            child_entity_type: "WorkItem".to_string(),
+            child_entity_id: child.to_string(),
+            spawn_kind: kind.to_string(),
+            spawn_reason: "test".to_string(),
+            actor: "ctox-test".to_string(),
+            checkpoint_key: None,
+            budget_key: None,
+            max_attempts: None,
+            metadata: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn core_spawn_accepts_and_persists_acyclic_edge() -> Result<()> {
+        let conn = Connection::open_in_memory()?;
+        let proof = enforce_core_spawn(&conn, &spawn_request("parent", "child", "repair"))?;
+
+        assert!(proof.accepted);
+        let accepted: i64 = conn.query_row(
+            "SELECT accepted FROM ctox_core_spawn_edges WHERE edge_id = ?1",
+            params![proof.edge_id],
+            |row| row.get(0),
+        )?;
+        assert_eq!(accepted, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn core_spawn_rejects_unbudgeted_graph_cycle() -> Result<()> {
+        let conn = Connection::open_in_memory()?;
+        enforce_core_spawn(&conn, &spawn_request("a", "b", "repair"))?;
+
+        let proof = evaluate_core_spawn(&conn, &spawn_request("b", "a", "repair"))?;
+
+        assert!(!proof.accepted);
+        assert!(proof
+            .violation_codes
+            .contains(&"spawn_cycle_requires_finite_budget".to_string()));
+        Ok(())
+    }
+
+    #[test]
+    fn core_spawn_allows_only_finite_budgeted_cycles() -> Result<()> {
+        let conn = Connection::open_in_memory()?;
+        enforce_core_spawn(&conn, &spawn_request("a", "b", "repair"))?;
+        let mut cycle = spawn_request("b", "a", "repair");
+        cycle.budget_key = Some("cycle-budget".to_string());
+        cycle.max_attempts = Some(1);
+        let accepted = enforce_core_spawn(&conn, &cycle)?;
+        assert!(accepted.accepted);
+
+        let mut exhausted = spawn_request("b", "a2", "repair");
+        exhausted.budget_key = Some("cycle-budget".to_string());
+        exhausted.max_attempts = Some(1);
+        let proof = evaluate_core_spawn(&conn, &exhausted)?;
+
+        assert!(!proof.accepted);
+        assert!(proof
+            .violation_codes
+            .contains(&"spawn_budget_exhausted".to_string()));
+        Ok(())
+    }
+
+    #[test]
+    fn core_spawn_review_children_require_finite_budget() -> Result<()> {
+        let conn = Connection::open_in_memory()?;
+        let proof = evaluate_core_spawn(
+            &conn,
+            &spawn_request("main", "review-rework-1", "review-rework"),
+        )?;
+
+        assert!(!proof.accepted);
+        assert!(proof
+            .violation_codes
+            .contains(&"review_spawn_requires_finite_budget".to_string()));
         Ok(())
     }
 }

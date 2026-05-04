@@ -6,6 +6,16 @@ cluster: security_access
 
 # Security Posture
 
+## CTOX Runtime Contract
+
+- Task spawning is allowed only for real execution slices that add mission progress, external waiting, recovery, or explicit decomposition. Do not spawn work merely because review feedback exists.
+- The Review Gate is a quality checkpoint, not a control loop. After review feedback, continue the same main work item whenever possible and incorporate the feedback there.
+- Do not create review-driven self-work cascades. If more work is needed, reuse or requeue the existing parent work item; create a new task only when it is a distinct slice with a stable parent pointer.
+- Every durable follow-up, queue item, plan emission, or self-work item must have a clear parent/anchor: message key, work id, thread key, ticket/case id, or plan step. Missing ancestry is a harness bug, not acceptable ambiguity.
+- Rewording-only feedback means revise wording on the same artifact. Substantive feedback means add new evidence or implementation progress. Stale feedback means refresh or consolidate current runtime state before drafting again.
+- Before adding follow-up work, check for existing matching self-work, queue, plan, or ticket state and consolidate rather than duplicating.
+
+
 For CTOX mission work, security findings become durable knowledge only when they are reflected in SQLite-backed runtime state, ticket knowledge, continuity, or verification records. Standalone notes do not count as durable knowledge by themselves.
 
 Use this skill for exposure, privilege, certificate, secret, firewall, and service-hardening questions.

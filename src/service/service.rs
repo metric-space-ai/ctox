@@ -85,7 +85,9 @@ use crate::secrets;
 use crate::service::core_state_machine::{
     CoreEntityType, CoreEvent, CoreEvidenceRefs, CoreState, CoreTransitionRequest, RuntimeLane,
 };
-use crate::service::core_transition_guard::enforce_core_transition;
+use crate::service::core_transition_guard::{
+    enforce_core_spawn, enforce_core_transition, CoreSpawnRequest,
+};
 use crate::state_invariants;
 use crate::verification;
 
@@ -7637,6 +7639,12 @@ fn queue_ticket_self_work_item_ignoring(
             extra_metadata: Some(extra_metadata),
         },
     )?;
+    enforce_queue_spawn_edge(root, item, &queue_task).with_context(|| {
+        format!(
+            "core spawn gate rejected queue task `{}` for self-work `{}`",
+            queue_task.message_key, item.work_id
+        )
+    })?;
     let note = format!(
         "Queued for active execution on thread `{}` as queue task `{}`.",
         thread_key, queue_task.title
@@ -7699,6 +7707,114 @@ fn find_runnable_self_work_task_ignoring(
         }
     }
     Ok(None)
+}
+
+fn enforce_self_work_spawn_edge(root: &Path, item: &tickets::TicketSelfWorkItemView) -> Result<()> {
+    let thread_key = ticket_self_work_thread_key(item);
+    let parent_message_key = ticket_self_work_parent_message_key(item);
+    let (parent_entity_type, parent_entity_id) =
+        spawn_parent_entity(parent_message_key.as_deref(), &thread_key);
+    let (budget_key, max_attempts) =
+        self_work_spawn_budget(&item.kind, &thread_key, &item.metadata);
+    let mut metadata = BTreeMap::new();
+    metadata.insert("thread_key".to_string(), thread_key);
+    metadata.insert("self_work_kind".to_string(), item.kind.clone());
+    if let Some(dedupe_key) = metadata_string(&item.metadata, "dedupe_key") {
+        metadata.insert("dedupe_key".to_string(), dedupe_key);
+    }
+
+    let conn = core_spawn_connection(root)?;
+    enforce_core_spawn(
+        &conn,
+        &CoreSpawnRequest {
+            parent_entity_type,
+            parent_entity_id,
+            child_entity_type: "WorkItem".to_string(),
+            child_entity_id: item.work_id.clone(),
+            spawn_kind: format!("self-work:{}", item.kind),
+            spawn_reason: "durable_self_work_queue_request".to_string(),
+            actor: "ctox-service".to_string(),
+            checkpoint_key: metadata_string(&item.metadata, "dedupe_key"),
+            budget_key,
+            max_attempts,
+            metadata,
+        },
+    )?;
+    Ok(())
+}
+
+fn enforce_queue_spawn_edge(
+    root: &Path,
+    item: &tickets::TicketSelfWorkItemView,
+    queue_task: &channels::QueueTaskView,
+) -> Result<()> {
+    let thread_key = ticket_self_work_thread_key(item);
+    let mut metadata = BTreeMap::new();
+    metadata.insert("thread_key".to_string(), thread_key);
+    metadata.insert("self_work_kind".to_string(), item.kind.clone());
+    metadata.insert("queue_title".to_string(), queue_task.title.clone());
+
+    let conn = core_spawn_connection(root)?;
+    enforce_core_spawn(
+        &conn,
+        &CoreSpawnRequest {
+            parent_entity_type: "WorkItem".to_string(),
+            parent_entity_id: item.work_id.clone(),
+            child_entity_type: "QueueTask".to_string(),
+            child_entity_id: queue_task.message_key.clone(),
+            spawn_kind: "self-work-queue-task".to_string(),
+            spawn_reason: "publish_self_work_for_execution".to_string(),
+            actor: "ctox-service".to_string(),
+            checkpoint_key: Some(item.work_id.clone()),
+            budget_key: Some(format!("self-work-queue:{}", item.work_id)),
+            max_attempts: Some(64),
+            metadata,
+        },
+    )?;
+    Ok(())
+}
+
+fn core_spawn_connection(root: &Path) -> Result<Connection> {
+    channels::open_channel_db(&root.join("runtime").join("ctox.sqlite3"))
+}
+
+fn spawn_parent_entity(parent_message_key: Option<&str>, thread_key: &str) -> (String, String) {
+    if let Some(parent_message_key) = parent_message_key
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return ("Message".to_string(), parent_message_key.to_string());
+    }
+    ("Thread".to_string(), thread_key.to_string())
+}
+
+fn self_work_spawn_budget(
+    kind: &str,
+    thread_key: &str,
+    metadata: &Value,
+) -> (Option<String>, Option<i64>) {
+    let lowered = kind.to_ascii_lowercase();
+    if lowered.contains("review") {
+        return (
+            Some(format!("review-spawn:{kind}:{thread_key}")),
+            Some(review_checkpoint_requeue_block_threshold() as i64),
+        );
+    }
+    if kind == FOUNDER_COMMUNICATION_REWORK_KIND {
+        let key = metadata_string(metadata, "inbound_message_key").unwrap_or_else(|| {
+            metadata_string(metadata, "parent_message_key")
+                .unwrap_or_else(|| thread_key.to_string())
+        });
+        return (
+            Some(format!("founder-rework-spawn:{key}")),
+            Some(FOUNDER_REWORK_REQUEUE_BLOCK_THRESHOLD as i64),
+        );
+    }
+    let key = metadata_string(metadata, "dedupe_key").unwrap_or_else(|| thread_key.to_string());
+    (
+        Some(format!("service-self-work-spawn:{kind}:{key}")),
+        Some(64),
+    )
 }
 
 fn find_runnable_thread_task_ignoring(
@@ -8054,6 +8170,16 @@ fn create_self_work_backed_queue_task_ignoring(
         },
         true,
     )?;
+    if let Err(err) = enforce_self_work_spawn_edge(root, &item) {
+        let note = format!("Core spawn gate rejected this service-created self-work: {err}");
+        block_ticket_self_work_item(root, &item.work_id, &note);
+        return Err(err).with_context(|| {
+            format!(
+                "core spawn gate rejected service self-work `{}` ({})",
+                item.work_id, item.kind
+            )
+        });
+    }
     if item.assigned_to.as_deref() != Some("self") {
         let _ = tickets::assign_ticket_self_work_item(
             root,
@@ -11790,6 +11916,116 @@ mod tests {
             .expect("failed to list self-work");
         assert_eq!(self_work.len(), 1);
         assert_eq!(self_work[0].kind, "review-rework");
+    }
+
+    #[test]
+    fn service_self_work_spawn_records_core_parent_child_edges() {
+        let root = temp_root("ctox-core-spawn-ledger");
+        let task = create_self_work_backed_queue_task(
+            &root,
+            DurableSelfWorkQueueRequest {
+                kind: "mission-follow-up".to_string(),
+                title: "Continue mission with modeled spawn".to_string(),
+                prompt: "Do the next durable slice.".to_string(),
+                thread_key: "queue/modeled-spawn".to_string(),
+                workspace_root: None,
+                priority: "high".to_string(),
+                suggested_skill: Some("follow-up-orchestrator".to_string()),
+                parent_message_key: None,
+                metadata: json!({
+                    "dedupe_key": "mission-follow-up:modeled-spawn",
+                }),
+            },
+        )
+        .expect("failed to create modeled self-work");
+        let work_id = task
+            .ticket_self_work_id
+            .clone()
+            .expect("queue task should point at durable self-work");
+        let conn = channels::open_channel_db(&root.join("runtime").join("ctox.sqlite3"))
+            .expect("failed to open runtime db");
+
+        let self_work_edge_count: i64 = conn
+            .query_row(
+                r#"
+                SELECT COUNT(*)
+                FROM ctox_core_spawn_edges
+                WHERE accepted = 1
+                  AND parent_entity_type = 'Thread'
+                  AND parent_entity_id = 'queue/modeled-spawn'
+                  AND child_entity_type = 'WorkItem'
+                  AND child_entity_id = ?1
+                "#,
+                params![work_id.as_str()],
+                |row| row.get(0),
+            )
+            .expect("failed to count self-work spawn edges");
+        assert_eq!(self_work_edge_count, 1);
+
+        let queue_edge_count: i64 = conn
+            .query_row(
+                r#"
+                SELECT COUNT(*)
+                FROM ctox_core_spawn_edges
+                WHERE accepted = 1
+                  AND parent_entity_type = 'WorkItem'
+                  AND parent_entity_id = ?1
+                  AND child_entity_type = 'QueueTask'
+                  AND child_entity_id = ?2
+                "#,
+                params![work_id.as_str(), task.message_key.as_str()],
+                |row| row.get(0),
+            )
+            .expect("failed to count queue spawn edges");
+        assert_eq!(queue_edge_count, 1);
+    }
+
+    #[test]
+    fn review_spawn_budget_blocks_unbounded_self_work_cascade() {
+        let root = temp_root("ctox-review-spawn-budget");
+        for attempt in 0..review_checkpoint_requeue_block_threshold() {
+            create_self_work_backed_queue_task(
+                &root,
+                DurableSelfWorkQueueRequest {
+                    kind: "review-rework".to_string(),
+                    title: format!("Review rework attempt {}", attempt + 1),
+                    prompt: "External review rejected the previous slice.".to_string(),
+                    thread_key: "queue/review-spawn-budget".to_string(),
+                    workspace_root: None,
+                    priority: "high".to_string(),
+                    suggested_skill: Some("follow-up-orchestrator".to_string()),
+                    parent_message_key: None,
+                    metadata: json!({
+                        "dedupe_key": format!("review-rework:queue/review-spawn-budget:{attempt}"),
+                    }),
+                },
+            )
+            .expect("budgeted review spawn should be accepted before threshold");
+        }
+
+        let err = create_self_work_backed_queue_task(
+            &root,
+            DurableSelfWorkQueueRequest {
+                kind: "review-rework".to_string(),
+                title: "Review rework over budget".to_string(),
+                prompt: "External review rejected the previous slice again.".to_string(),
+                thread_key: "queue/review-spawn-budget".to_string(),
+                workspace_root: None,
+                priority: "high".to_string(),
+                suggested_skill: Some("follow-up-orchestrator".to_string()),
+                parent_message_key: None,
+                metadata: json!({
+                    "dedupe_key": "review-rework:queue/review-spawn-budget:over-budget",
+                }),
+            },
+        )
+        .expect_err("review spawn over finite budget must be rejected");
+
+        assert!(err.to_string().contains("spawn gate rejected"));
+        let items = tickets::list_ticket_self_work_items(&root, Some("local"), Some("blocked"), 10)
+            .expect("failed to list blocked self-work");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].kind, "review-rework");
     }
 
     #[test]
