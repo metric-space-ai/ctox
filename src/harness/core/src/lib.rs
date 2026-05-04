@@ -45,6 +45,7 @@ mod file_watcher;
 mod flags;
 pub mod git_info;
 mod guardian;
+pub mod harness_spawn_liveness;
 pub mod instructions;
 pub mod landlock;
 mod local_responses_transport;

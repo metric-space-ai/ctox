@@ -766,19 +766,18 @@ fn test_build_specs_agent_job_worker_tools_enabled() {
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
-    assert_contains_tool_names(
-        &tools,
-        &[
-            "spawn_agent",
-            "send_input",
-            "list_agents",
-            "resume_agent",
-            "wait_agent",
-            "close_agent",
-            "spawn_agents_on_csv",
-            "report_agent_job_result",
-        ],
-    );
+    assert_contains_tool_names(&tools, &["report_agent_job_result"]);
+    for tool_name in [
+        "spawn_agent",
+        "send_input",
+        "list_agents",
+        "resume_agent",
+        "wait_agent",
+        "close_agent",
+        "spawn_agents_on_csv",
+    ] {
+        assert_lacks_tool_name(&tools, tool_name);
+    }
     assert_lacks_tool_name(&tools, "request_user_input");
 }
 

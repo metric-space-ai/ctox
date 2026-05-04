@@ -281,11 +281,13 @@ ctox update rollback
 cargo fmt --check
 cargo check
 cargo test
+cargo run -- process-mining spawn-liveness
 ```
 
 The repository contains platform-specific code paths for macOS, Linux, Windows,
 and optional local inference backends. Use the release workflow for production
-binaries.
+binaries. Release builds also gate on `ctox process-mining spawn-liveness`, which
+checks both runtime task-spawn contracts and harness subagent liveness.
 
 ## License
 

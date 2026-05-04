@@ -253,6 +253,15 @@ jobs:
       - name: Build CTOX
         run: cargo build --locked --release --target ${{ matrix.target }}
 
+      - name: Release harness spawn liveness proof (Unix)
+        if: runner.os != 'Windows'
+        run: target/${{ matrix.target }}/release/ctox process-mining spawn-liveness
+
+      - name: Release harness spawn liveness proof (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: target\${{ matrix.target }}\release\ctox.exe process-mining spawn-liveness
+
       - name: Package runtime bundle (Unix)
         if: runner.os != 'Windows'
         run: |

@@ -367,12 +367,14 @@ impl ToolsConfig {
         let include_js_repl = features.enabled(Feature::JsRepl);
         let include_js_repl_tools_only =
             include_js_repl && features.enabled(Feature::JsReplToolsOnly);
-        let thread_spawn_subagent = matches!(
+        let subagent_session = matches!(session_source, SessionSource::SubAgent(_));
+        let include_collab_tools = features.enabled(Feature::Collab) && !subagent_session;
+        let include_agent_jobs = features.enabled(Feature::SpawnCsv) && !subagent_session;
+        let include_agent_job_worker_tools = matches!(
             session_source,
-            SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. })
+            SessionSource::SubAgent(SubAgentSource::Other(label))
+                if label.starts_with("agent_job:")
         );
-        let include_collab_tools = features.enabled(Feature::Collab) && !thread_spawn_subagent;
-        let include_agent_jobs = features.enabled(Feature::SpawnCsv) && !thread_spawn_subagent;
         let include_request_user_input = !matches!(session_source, SessionSource::SubAgent(_));
         let include_default_mode_request_user_input =
             include_request_user_input && features.enabled(Feature::DefaultModeRequestUserInput);
@@ -426,12 +428,7 @@ impl ToolsConfig {
             }
         };
 
-        let agent_jobs_worker_tools = include_agent_jobs
-            && matches!(
-                session_source,
-                SessionSource::SubAgent(SubAgentSource::Other(label))
-                    if label.starts_with("agent_job:")
-            );
+        let agent_jobs_worker_tools = include_agent_job_worker_tools;
 
         Self {
             available_models: available_models_ref.to_vec(),
@@ -3983,15 +3980,16 @@ pub(crate) fn build_specs_with_discoverable_tools(
             config.code_mode_enabled,
         );
         builder.register_handler("spawn_agents_on_csv", agent_jobs_handler.clone());
-        if config.agent_jobs_worker_tools {
-            push_tool_spec(
-                &mut builder,
-                create_report_agent_job_result_tool(),
-                /*supports_parallel_tool_calls*/ false,
-                config.code_mode_enabled,
-            );
-            builder.register_handler("report_agent_job_result", agent_jobs_handler);
-        }
+    }
+    if config.agent_jobs_worker_tools {
+        let agent_jobs_handler = Arc::new(BatchJobHandler);
+        push_tool_spec(
+            &mut builder,
+            create_report_agent_job_result_tool(),
+            /*supports_parallel_tool_calls*/ false,
+            config.code_mode_enabled,
+        );
+        builder.register_handler("report_agent_job_result", agent_jobs_handler);
     }
 
     if let Some(mcp_tools) = mcp_tools {

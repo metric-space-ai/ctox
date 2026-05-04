@@ -940,9 +940,17 @@ pub fn handle_process_mining_command(root: &Path, args: &[String]) -> Result<()>
             Ok(())
         }
         Some("spawn-liveness") => {
-            let report = core_transition_guard::analyze_core_spawn_model();
+            let core_report = core_transition_guard::analyze_core_spawn_model();
+            let harness_report =
+                ctox_core::harness_spawn_liveness::analyze_harness_subagent_spawn_model();
+            let ok = core_report.ok && harness_report.ok;
+            let report = json!({
+                "ok": ok,
+                "core_spawn_liveness": core_report,
+                "harness_subagent_liveness": harness_report,
+            });
             println!("{}", serde_json::to_string_pretty(&report)?);
-            if !report.ok {
+            if !ok {
                 anyhow::bail!("core spawn model liveness check failed");
             }
             Ok(())
@@ -2098,6 +2106,24 @@ fn run_process_mining_self_diagnosis(conn: &Connection, limit: i64) -> Result<Va
         "Every internal task spawn must be registered, budgeted, parent-linked, and handled by a non-spawning intervention effect.",
         serde_json::to_value(&spawn_liveness)?,
         spawn_liveness
+            .violations
+            .iter()
+            .map(|violation| json!({ "finding": violation }))
+            .collect(),
+    );
+    let harness_spawn_liveness =
+        ctox_core::harness_spawn_liveness::analyze_harness_subagent_spawn_model();
+    push_subsystem(
+        &mut subsystems,
+        "harness_subagent_liveness",
+        if harness_spawn_liveness.ok {
+            "ok"
+        } else {
+            "critical"
+        },
+        "Every harness subagent path must be depth-bounded, count-bounded, leaf-only, and unable to spawn recursive worker trees.",
+        serde_json::to_value(&harness_spawn_liveness)?,
+        harness_spawn_liveness
             .violations
             .iter()
             .map(|violation| json!({ "finding": violation }))
