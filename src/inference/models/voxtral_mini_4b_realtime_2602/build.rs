@@ -65,6 +65,8 @@ fn link_ggml(base: &PathBuf) {
     println!("cargo:rustc-link-lib=c++");
     #[cfg(target_os = "linux")]
     println!("cargo:rustc-link-lib=stdc++");
+    #[cfg(target_os = "linux")]
+    println!("cargo:rustc-link-lib=dylib=gomp");
     println!("cargo:rustc-link-lib=static=ggml");
     println!("cargo:rustc-link-lib=static=ggml-base");
     println!("cargo:rustc-link-lib=static=ggml-cpu");
