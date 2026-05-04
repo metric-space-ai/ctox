@@ -136,6 +136,130 @@
 ╚════════════════════════════════════════════════════════════════════════════╝
 ```
 
+## Review-Gate, Spawner und Subagent-Liveness
+
+Der Harness wird als kontrollierte State Machine betrieben. Prompts duerfen die
+Arbeit beschreiben, aber Review, Rework, Task-Spawns, Subagents und Abschluss
+muessen durch durable State- und Prozesskanten erklaerbar bleiben.
+
+### Rollen
+
+- **Main Agent**: besitzt die user-sichtbare Aufgabe, das Ergebnis, die
+  Schlussfolgerung und den Abschluss. Review-Feedback ist Input fuer denselben
+  Parent-Task.
+- **Reviewer**: ist ein Quality Gate. Er klassifiziert den aktuellen Stand, darf
+  aber keine eigenstaendige Self-Work-Kaskade besitzen.
+- **Spawner**: erzeugt durable Child-Arbeit und muss als Parent-Child-Kante im
+  Core-Prozessgraphen registriert sein.
+- **Subagent**: ist ein paralleler Leaf-Worker. Subagents duerfen nicht zu
+  eigenen Review-/Rework-Orchestratoren werden.
+
+### Review als Kontrollpunkt
+
+Der Reviewer darf drei Arten von Findings zurueckgeben:
+
+- `wording`: inhaltlich richtig, aber sprachliche Ueberarbeitung noetig.
+- `substantive`: Inhalt, Evidenz, Implementierung oder Begruendung reicht nicht.
+- `stale`: Weltzustand oder Queue hat sich geaendert; Refresh, Obsolete oder
+  Consolidate ist noetig.
+
+Nach einem Review arbeitet der Main Agent weiter. Der Review-Loop darf nicht so
+modelliert werden, dass `review -> self-work -> review -> self-work` unbegrenzt
+neue Arbeit erzeugt.
+
+Jeder erneute Review-Durchlauf braucht einen Witness of Progress:
+
+- wording rework: neuer `body_hash`
+- substantive rework: neuer Substance-/Evidence-/Implementation-Pointer
+- stale rework: neuer World-Pointer, Queue-Konsolidierung oder terminale
+  No-Send/No-Action-Entscheidung
+
+Ohne Witness ist der Pfad kein Fortschritt, sondern ein Loop-Kandidat.
+
+### Spawner-Vertrag
+
+Jeder durable Spawn braucht einen Core-Spawner-Contract:
+
+- stabiler `spawn_kind`
+- erlaubte Parent-Entity-Typen
+- erlaubter Child-Entity-Typ
+- finite Budget-Pflicht
+- maximales Budget
+- Intervention-Skill
+- finite, nicht-spawnende Interventionseffekte
+
+Akzeptierte und abgelehnte Spawns werden in `ctox_core_spawn_edges`
+persistiert. Der Kernel lehnt unregistrierte, instabile, zyklische,
+budgetlose, ueberbudgetierte oder budget-erschoepfte Spawns ab.
+
+Aktuelle Contract-Familien:
+
+| Pattern | Parent | Child | Bound |
+|---|---|---|---|
+| `self-work:*` | ControlPlane/Message/QueueTask/Thread/WorkItem | WorkItem | <= 64 |
+| `self-work-queue-task` | WorkItem | QueueTask | <= 64 |
+| `queue-task` | ControlPlane/Message/Thread/WorkItem | QueueTask | <= 64 |
+| `plan-step-message` | PlanStep | Message | <= 8 |
+| `schedule-run-message` | ScheduleTask | Message | <= 64 |
+
+Alle Spawn-Arten, deren Name `review` enthaelt, brauchen ebenfalls ein finites
+Budget.
+
+### Subagents
+
+Subagents sind leaf-only:
+
+- alle `SessionSource::SubAgent(_)` verlieren rekursive Collaboration-/Spawn
+  Tools
+- Subagents erhalten kein `spawn_agents_on_csv`
+- Agent-Job-Worker erhalten nur `report_agent_job_result`
+- der Parent-Agent besitzt Review, Rework, Completion und owner-visible Claims
+- die Review-State-Machine sieht ein Parent-Ergebnis, nicht ein Review-Gate pro
+  Subagent
+
+Thread-Spawn-Subagents sind durch `agents.max_depth` und `agents.max_threads`
+begrenzt. Der Rank ist:
+
+```text
+depth_remaining = agents.max_depth - child_depth
+```
+
+Agent-Job-Worker sind durch eine finite persistierte Item-Tabelle und die
+Concurrency-Grenze begrenzt. Ihr Rank ist:
+
+```text
+pending_agent_job_items
+```
+
+### Mathematischer Proof
+
+Der ausfuehrbare Proof ist:
+
+```bash
+ctox process-mining spawn-liveness
+```
+
+Er prueft zwei Ebenen:
+
+- `core_spawn_liveness`: registrierte durable Spawner, Budgets,
+  Intervention-Skills und Graph-Zyklen
+- `harness_subagent_liveness`: Depth-/Count-Bounds und leaf-only Tool-Surfaces
+
+Das Kommando liefert nur dann `ok: true`, wenn beide Ebenen beweisbar bounded
+sind.
+
+Der Proof laeuft bewusst nicht bei jedem `rustc`-Compile via `build.rs`. Er ist
+ein Repository-Konformitaets- und Release-Safety-Check, kein Typcheck. Die
+richtigen Gates sind:
+
+- Unit-Test fuer normale Testlaeufe
+- CI-Gate fuer Pull-/Main-Aenderungen
+- Release-Gate mit gebauter Binary vor dem Packaging
+
+Wenn `ctox process-mining spawn-liveness` fehlschlaegt, darf das nicht mit
+Prompt-Text ueberdeckt werden. Dann muss der Prozessgraph, der Transition Guard
+oder die Tool-Surface korrigiert werden.
+
 ## Quellen im Code
 
 | Element | Datei |

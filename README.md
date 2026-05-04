@@ -242,6 +242,9 @@ Typical configuration is done in the TUI. Important runtime settings include:
 See the technical documentation for the current model/runtime details:
 <https://metric-space-ai.github.io/ctox/docs.html#configuration>
 
+The harness review, task-spawn, subagent, and liveness-proof model is documented
+in [HARNESS.md](HARNESS.md#review-gate-spawner-und-subagent-liveness).
+
 ## Desktop App
 
 The CTOX Desktop app is an optional management surface. It is useful when you

@@ -728,6 +728,7 @@
           <a href="#skills-tools">Skills & Tools</a>
           <a href="#verification">Verification</a>
           <a href="#state-model">State Model</a>
+          <a href="#harness-liveness">Harness Liveness</a>
           <a href="#process-mining">Process Mining</a>
           <a href="#work">Work Systems</a>
           <a href="#troubleshooting">Troubleshooting</a>
@@ -2063,6 +2064,43 @@ ctox process-mining state-audit --limit 50</code></pre>
             that a deployment is healthy. It constrains the CTOX runtime process:
             illegal transitions can be rejected, suspicious paths can be found,
             and closure can require durable evidence.
+          </p>
+        </section>
+
+        <section id="harness-liveness">
+          <p class="kicker">Harness Liveness</p>
+          <h2>Bounded review, spawning, and subagents</h2>
+          <p>
+            The harness treats review as a checkpoint owned by the parent task,
+            not as an independent work producer. A reviewer may return wording,
+            substantive, or stale findings, but the main agent remains
+            responsible for applying the feedback and continuing through the
+            state machine.
+          </p>
+          <div class="grid">
+            <div class="cell">
+              <b>Review gate</b>
+              <p>Rejected review needs a witness of progress before the same artifact can re-enter the same edge: changed body hash for wording, changed substance/evidence for substantive findings, or refreshed world/queue state for stale findings.</p>
+            </div>
+            <div class="cell">
+              <b>Spawner contracts</b>
+              <p>Durable child work must be registered as a parent-child process edge with stable entity types, a finite budget, a maximum bound, and a non-spawning intervention skill.</p>
+            </div>
+            <div class="cell">
+              <b>Subagent leaves</b>
+              <p>Subagents are bounded leaf workers. They do not receive recursive collaboration tools or <code>spawn_agents_on_csv</code>; agent-job workers keep only <code>report_agent_job_result</code>.</p>
+            </div>
+            <div class="cell">
+              <b>Executable proof</b>
+              <p><code>ctox process-mining spawn-liveness</code> checks the core spawn contracts and harness subagent liveness model. CI and release workflows block when it fails.</p>
+            </div>
+          </div>
+          <pre><code>ctox process-mining spawn-liveness</code></pre>
+          <p class="note">
+            The proof is a repository-conformance and release-safety gate, not a
+            <code>build.rs</code> compile-time type check. It runs in tests, CI,
+            and the release workflow so broken harness topology cannot be
+            packaged.
           </p>
         </section>
 
