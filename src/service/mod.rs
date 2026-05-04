@@ -11,6 +11,7 @@ pub mod mission_governor;
 pub mod process_mining;
 pub mod state_invariants;
 pub mod turn_ledger;
+pub mod working_hours;
 
 #[path = "service.rs"]
 mod service_loop;
