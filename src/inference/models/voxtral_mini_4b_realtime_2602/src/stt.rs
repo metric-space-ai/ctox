@@ -170,7 +170,9 @@ impl VoxtralQ4Runtime {
         let device = burn::backend::wgpu::WgpuDevice::default();
         let start = Instant::now();
         let mut loader = voxtral_mini_realtime::gguf::loader::Q4ModelLoader::from_file(gguf_path)?;
-        let model = loader.load(&device)?;
+        let parts = loader.load_deferred(&device)?;
+        drop(loader);
+        let model = parts.finalize(&device)?;
         let tokenizer =
             voxtral_mini_realtime::tokenizer::VoxtralTokenizer::from_file(tokenizer_path)?;
         let elapsed = start.elapsed();
