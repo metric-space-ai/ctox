@@ -69,7 +69,9 @@ pub enum FlowBranchKind {
     TicketSource,
     QueueReload,
     Guard,
+    StateMachine,
     Verification,
+    ProcessMining,
     HarnessLedger,
 }
 
@@ -414,9 +416,9 @@ fn build_flow(
         }
         blocks.push(MainBlock {
             kind: FlowBlockKind::Attempt,
-            title: "ATTEMPT 2".to_string(),
+            title: "ATTEMPT 2 / REWORK".to_string(),
             lines: attempt_lines(
-                "CTOX resumes from durable rework and continues the same task.",
+                "CTOX resumes from durable rework with the prior review attached.",
                 reload_message.as_ref().unwrap_or(&message),
                 Some(work),
             ),
@@ -433,8 +435,10 @@ fn build_flow(
             review_approval.as_ref(),
         ),
         branches: vec![
+            state_machine_branch(&conn)?,
             guard_branch(proofs.as_slice(), violations.as_slice()),
             verification_branch(&conn, work_for_attempt_2.as_ref())?,
+            process_mining_branch(&conn)?,
         ],
     });
 
@@ -689,6 +693,8 @@ fn review_rework_branch(related_work: &[SelfWorkRow]) -> SupportBranch {
         title: "REVIEW".to_string(),
         lines: vec![
             "Result: not finished; durable rework exists.".to_string(),
+            "Communication rework is capped: at most two substantive reworks, then one wording-only rewrite.".to_string(),
+            "The next review must compare against the previous review context, not start from a blank slate.".to_string(),
             format!("Rework item: {}", clip(&first.title, 76)),
             format!("Reason/work requested: {}", clip(&first.body_text, 76)),
         ],
@@ -877,6 +883,34 @@ fn guard_branch(proofs: &[CoreProofRow], violations: &[StateViolationRow]) -> Su
     }
 }
 
+fn state_machine_branch(conn: &Connection) -> Result<SupportBranch> {
+    let open_rework = optional_count(
+        conn,
+        "SELECT COUNT(*) FROM ticket_self_work_items
+         WHERE state IN ('open', 'assigned', 'in_progress')
+           AND kind LIKE '%rework%'",
+    )?;
+    let rewrite_holds = optional_count(
+        conn,
+        "SELECT COUNT(*) FROM ctox_pm_state_violations
+         WHERE violation_code LIKE '%review%'
+            OR violation_code LIKE '%rewrite%'
+            OR violation_code LIKE '%rework%'",
+    )?;
+    Ok(SupportBranch {
+        kind: FlowBranchKind::StateMachine,
+        title: "HARNESS STATE MACHINE".to_string(),
+        lines: vec![
+            "Founder/owner mail: never send without a persisted review approval.".to_string(),
+            "Communication re-review keeps the prior review context attached.".to_string(),
+            "Limit: two substantive communication reworks, then one wording-only rewrite/hold.".to_string(),
+            "Non-communication self-work can continue without review only when it asks for concrete next steps.".to_string(),
+            format!("Open rework items: {open_rework} · review/rework violations: {rewrite_holds}"),
+        ],
+        returns_to_spine: true,
+    })
+}
+
 fn verification_branch(conn: &Connection, work: Option<&SelfWorkRow>) -> Result<SupportBranch> {
     let count = optional_count(conn, "SELECT COUNT(*) FROM verification_runs")?;
     let mut lines = vec![format!("Verification runs in runtime: {}", count)];
@@ -897,6 +931,27 @@ fn verification_branch(conn: &Connection, work: Option<&SelfWorkRow>) -> Result<
         kind: FlowBranchKind::Verification,
         title: "VERIFICATION".to_string(),
         lines,
+        returns_to_spine: true,
+    })
+}
+
+fn process_mining_branch(conn: &Connection) -> Result<SupportBranch> {
+    let total_events = optional_count(conn, "SELECT COUNT(*) FROM ctox_process_events")?;
+    let sqlite_access_events = optional_count(
+        conn,
+        "SELECT COUNT(*) FROM ctox_process_events WHERE case_id LIKE 'sqlite-access:%'",
+    )?;
+    Ok(SupportBranch {
+        kind: FlowBranchKind::ProcessMining,
+        title: "PROCESS MINING".to_string(),
+        lines: vec![
+            "Records compact command/state evidence, not full message bodies.".to_string(),
+            "SQLite READ events are off by default; write/transition evidence remains active."
+                .to_string(),
+            "sqlite-access debug data is pruned as a sliding window, not kept forever.".to_string(),
+            "Manual cleanup: ctox process-mining prune --sqlite-access-window 200000".to_string(),
+            format!("Current events: {total_events} · sqlite-access: {sqlite_access_events}"),
+        ],
         returns_to_spine: true,
     })
 }

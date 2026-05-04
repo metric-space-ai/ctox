@@ -681,8 +681,11 @@ impl InProcessAppServerClient {
         // and getting aborted with the runtime still attached.
         drop(event_rx);
         let (response_tx, response_rx) = oneshot::channel();
-        match timeout(SHUTDOWN_TIMEOUT, command_tx.send(ClientCommand::Shutdown { response_tx }))
-            .await
+        match timeout(
+            SHUTDOWN_TIMEOUT,
+            command_tx.send(ClientCommand::Shutdown { response_tx }),
+        )
+        .await
         {
             Ok(Ok(())) => {
                 if let Ok(command_result) = timeout(SHUTDOWN_TIMEOUT, response_rx).await {

@@ -38,3 +38,4 @@ pub(crate) use memories::stage1_output_ref_from_parts;
 pub(crate) use thread_metadata::ThreadRow;
 pub(crate) use thread_metadata::anchor_from_item;
 pub(crate) use thread_metadata::datetime_to_epoch_seconds;
+pub(crate) use thread_metadata::subagent_forensics_from_source;

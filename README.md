@@ -99,6 +99,21 @@ Supported API provider choices are `openai`, `anthropic`, `openrouter`,
 TUI or `ctox secret`; normal shell exports are not the recommended
 configuration path.
 
+### Example: OpenAI model with Codex subscription auth
+
+Use this when CTOX should use the Codex/ChatGPT OAuth credentials already
+stored by Codex instead of an `OPENAI_API_KEY`:
+
+```text
+API Provider: openai
+OpenAI Auth: chatgpt_subscription
+Chat Model: gpt-5.4-mini
+```
+
+In this mode CTOX ignores `OPENAI_API_KEY` for OpenAI direct sessions and does
+not record those turns as OpenAI API spend. Other API providers still require
+their provider tokens in the CTOX secret store.
+
 For Azure Foundry, choose `azure_foundry` and enter:
 
 ```text
@@ -177,6 +192,8 @@ What these commands do:
 - `ctox` opens the TUI for configuration and operation.
 - `ctox start` starts the persistent daemon.
 - `ctox status` shows the current service state.
+- `ctox work-hours set 08:00 18:00` lets the daemon accept and start work only
+  inside that local-time window; `ctox work-hours off` disables the guard.
 - `ctox chat <instruction>` submits a small first check to the daemon.
 
 Most users should start in the TUI, configure the model backend and credentials
@@ -215,6 +232,7 @@ Typical configuration is done in the TUI. Important runtime settings include:
 
 - chat source: `api` or `local`
 - API provider: `openai`, `anthropic`, `openrouter`, or `minimax`
+- OpenAI auth mode: `api_key` or `chatgpt_subscription`
 - provider credentials, stored through the TUI or CTOX secret store
 - local runtime
 - active chat model

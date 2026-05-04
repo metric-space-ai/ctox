@@ -67,6 +67,7 @@ use tiny_http::Server;
 use tiny_http::StatusCode;
 
 use crate::channels;
+use crate::communication::adapters as communication_adapters;
 use crate::context_health;
 use crate::governance;
 use crate::inference::runtime_control;
@@ -75,13 +76,16 @@ use crate::inference::runtime_kernel;
 use crate::inference::supervisor;
 use crate::inference::turn_loop;
 use crate::lcm;
-use crate::mission::communication_adapters;
 use crate::mission::plan;
 use crate::mission::tickets;
 use crate::review;
 use crate::schedule;
 use crate::scrape;
 use crate::secrets;
+use crate::service::core_state_machine::{
+    CoreEntityType, CoreEvent, CoreEvidenceRefs, CoreState, CoreTransitionRequest, RuntimeLane,
+};
+use crate::service::core_transition_guard::enforce_core_transition;
 use crate::state_invariants;
 use crate::verification;
 
@@ -105,6 +109,8 @@ const PLATFORM_IMPLEMENTATION_KIND: &str = "platform-implementation";
 const STRATEGIC_DIRECTION_KIND: &str = "strategic-direction-pass";
 const FOUNDER_COMMUNICATION_REWORK_KIND: &str = "founder-communication-rework";
 const FOUNDER_REWORK_REQUEUE_BLOCK_THRESHOLD: usize = 2;
+const REVIEW_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD: usize = 2;
+const MAX_REVIEW_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD: usize = 10;
 const SERVICE_SHUTDOWN_TIMEOUT_SECS: u64 = 15;
 const SERVICE_SHUTDOWN_POLL_MILLIS: u64 = 150;
 const SYSTEMCTL_USER_TIMEOUT_SECS: u64 = 5;
@@ -449,6 +455,7 @@ pub(crate) struct RewriteFinding {
 enum ReviewRoutingClass {
     Approved,
     RewriteOnly,
+    Stale,
     Substantive,
 }
 
@@ -461,6 +468,8 @@ fn classify_findings(findings: &[review::CategorizedFinding]) -> ReviewRoutingCl
         .all(|f| f.category == review::FindingCategory::Rewrite)
     {
         ReviewRoutingClass::RewriteOnly
+    } else if findings.iter().any(|f| f.category.is_stale()) {
+        ReviewRoutingClass::Stale
     } else {
         ReviewRoutingClass::Substantive
     }
@@ -547,6 +556,7 @@ const REVIEW_REWRITE_SOURCE_LABEL: &str = "review-rewrite";
 /// Default convergence threshold for consecutive rewrite-only iterations.
 /// Overridable via the `CTOX_MISSION_REWRITE_FAILURE_THRESHOLD` env var.
 const DEFAULT_REWRITE_FAILURE_THRESHOLD: i64 = 1;
+const MAX_REWRITE_FAILURE_THRESHOLD: i64 = 10;
 
 fn completion_review_disposition_label(disposition: &CompletionReviewDisposition) -> &'static str {
     match disposition {
@@ -604,6 +614,7 @@ pub fn run_foreground(root: &Path) -> Result<()> {
     write_pid_file(root, std::process::id())?;
     let state = Arc::new(Mutex::new(SharedState::default()));
     run_boot_state_invariant_check(root, &state);
+    run_boot_auto_submitted_reclassifier(root, &state);
     release_stale_service_communication_leases_on_boot(root, &state);
     push_event(&state, format!("Loop ready on {}", listen_addr));
     start_channel_router(root.to_path_buf(), state.clone());
@@ -835,6 +846,20 @@ fn run_boot_state_invariant_check(root: &Path, state: &Arc<Mutex<SharedState>>) 
                 },
             );
         }
+    }
+}
+
+fn run_boot_auto_submitted_reclassifier(root: &Path, state: &Arc<Mutex<SharedState>>) {
+    match channels::reclassify_historical_auto_submitted_inbounds(root) {
+        Ok(count) if count > 0 => push_event(
+            state,
+            format!("Boot reclassified {count} historical auto-submitted inbound(s) as terminal NO-SEND"),
+        ),
+        Ok(_) => {}
+        Err(err) => push_event(
+            state,
+            format!("Boot auto-submitted reclassifier failed: {err}"),
+        ),
     }
 }
 
@@ -3598,6 +3623,27 @@ fn run_completion_review(
                         summary: outcome.summary.clone(),
                     };
                 }
+                if let Some(disposition) = no_cascade_review_block(root, job, &outcome) {
+                    return disposition;
+                }
+                if matches!(routing_class, ReviewRoutingClass::Stale) {
+                    match enqueue_review_stale_refresh(root, job, &outcome) {
+                        Ok(title) => push_event(
+                            state,
+                            format!("Founder review stale refresh enqueued: {title}"),
+                        ),
+                        Err(err) => push_event(
+                            state,
+                            format!(
+                                "Founder review stale refresh enqueue failed for {}: {}",
+                                job.source_label, err
+                            ),
+                        ),
+                    }
+                    return CompletionReviewDisposition::Hold {
+                        summary: outcome.summary.clone(),
+                    };
+                }
                 if matches!(routing_class, ReviewRoutingClass::RewriteOnly) {
                     let findings = rewrite_findings_from(&outcome.categorized_findings);
                     push_event(
@@ -3695,6 +3741,27 @@ fn run_completion_review(
             review::ReviewVerdict::Fail | review::ReviewVerdict::Partial
                 if actionable_rejection =>
             {
+                if let Some(disposition) = no_cascade_review_block(root, job, &outcome) {
+                    return disposition;
+                }
+                if matches!(routing_class, ReviewRoutingClass::Stale) {
+                    match enqueue_review_stale_refresh(root, job, &outcome) {
+                        Ok(title) => push_event(
+                            state,
+                            format!("Founder outbound stale refresh enqueued: {title}"),
+                        ),
+                        Err(err) => push_event(
+                            state,
+                            format!(
+                                "Founder outbound stale refresh enqueue failed for {}: {}",
+                                job.source_label, err
+                            ),
+                        ),
+                    }
+                    return CompletionReviewDisposition::Hold {
+                        summary: outcome.summary.clone(),
+                    };
+                }
                 if matches!(routing_class, ReviewRoutingClass::RewriteOnly) {
                     let findings = rewrite_findings_from(&outcome.categorized_findings);
                     push_event(
@@ -3735,6 +3802,24 @@ fn run_completion_review(
         };
     }
     if actionable_rejection {
+        if let Some(disposition) = no_cascade_review_block(root, job, &outcome) {
+            return disposition;
+        }
+        if matches!(routing_class, ReviewRoutingClass::Stale) {
+            match enqueue_review_stale_refresh(root, job, &outcome) {
+                Ok(title) => push_event(state, format!("Review stale refresh enqueued: {title}")),
+                Err(err) => push_event(
+                    state,
+                    format!(
+                        "Review stale refresh enqueue failed for {}: {}",
+                        job.source_label, err
+                    ),
+                ),
+            }
+            return CompletionReviewDisposition::Hold {
+                summary: outcome.summary.clone(),
+            };
+        }
         return handle_actionable_completion_review_rejection(root, state, job, &outcome);
     }
     match outcome.verdict {
@@ -3870,14 +3955,106 @@ fn rewrite_findings_from(findings: &[review::CategorizedFinding]) -> Vec<Rewrite
         .collect()
 }
 
+fn no_cascade_review_block(
+    root: &Path,
+    job: &QueuedPrompt,
+    outcome: &review::ReviewOutcome,
+) -> Option<CompletionReviewDisposition> {
+    let work_id = job.ticket_self_work_id.as_deref()?;
+    let target_work_id = resolve_review_rejection_target_self_work_id(root, job)
+        .unwrap_or_else(|| work_id.to_string());
+    let item = tickets::load_ticket_self_work_item(root, work_id)
+        .ok()
+        .flatten();
+    let kind = item
+        .as_ref()
+        .map(|item| item.kind.as_str())
+        .unwrap_or("unknown");
+    let checkpoint_proof =
+        match enforce_review_checkpoint_feedback_transition(root, &target_work_id, outcome) {
+            Ok(proof_id) => proof_id,
+            Err(err) => {
+                return Some(CompletionReviewDisposition::Hold {
+                    summary: format!(
+                        "Review checkpoint rejected by core state machine for `{}`: {}",
+                        target_work_id, err
+                    ),
+                });
+            }
+        };
+    Some(CompletionReviewDisposition::RequeueSelfWork {
+        work_id: target_work_id,
+        summary: format!(
+            "Review failed for durable self-work kind `{}`. Core checkpoint proof `{}` accepted. Feed this review back into the same main-agent work item; do not spawn review-owned rework: {}",
+            kind,
+            checkpoint_proof,
+            outcome.summary
+        ),
+    })
+}
+
+fn enforce_review_checkpoint_feedback_transition(
+    root: &Path,
+    work_id: &str,
+    outcome: &review::ReviewOutcome,
+) -> Result<String> {
+    let db_path = root.join("runtime/ctox.sqlite3");
+    let conn = channels::open_channel_db(&db_path)?;
+    let mut metadata = BTreeMap::new();
+    metadata.insert("review_checkpoint".to_string(), "true".to_string());
+    metadata.insert("feedback_owner".to_string(), "main_agent".to_string());
+    metadata.insert("feedback_target_entity_id".to_string(), work_id.to_string());
+    metadata.insert("spawns_review_owned_work".to_string(), "false".to_string());
+    metadata.insert(
+        "review_verdict".to_string(),
+        outcome.verdict.as_gate_label().to_string(),
+    );
+
+    let proof = enforce_core_transition(
+        &conn,
+        &CoreTransitionRequest {
+            entity_type: CoreEntityType::WorkItem,
+            entity_id: work_id.to_string(),
+            lane: RuntimeLane::P2MissionDelivery,
+            from_state: CoreState::AwaitingReview,
+            to_state: CoreState::ReworkRequired,
+            event: CoreEvent::RequireRework,
+            actor: "ctox-completion-review".to_string(),
+            evidence: CoreEvidenceRefs {
+                review_audit_key: Some(review_checkpoint_audit_key(work_id, outcome)),
+                ..CoreEvidenceRefs::default()
+            },
+            metadata,
+        },
+    )?;
+    Ok(proof.proof_id)
+}
+
+fn review_checkpoint_audit_key(work_id: &str, outcome: &review::ReviewOutcome) -> String {
+    use sha2::Digest;
+
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(b"ctox-review-checkpoint-v1");
+    hasher.update(work_id.as_bytes());
+    hasher.update(outcome.verdict.as_gate_label().as_bytes());
+    hasher.update(outcome.summary.as_bytes());
+    hasher.update(outcome.report.as_bytes());
+    for gate in &outcome.failed_gates {
+        hasher.update(gate.as_bytes());
+        hasher.update(b"\0");
+    }
+    format!("review-checkpoint-{:x}", hasher.finalize())
+}
+
 /// Convergence threshold for the lightweight rewrite-only loop. Defaults to
-/// `DEFAULT_REWRITE_FAILURE_THRESHOLD` (3) and is overridable via the
+/// `DEFAULT_REWRITE_FAILURE_THRESHOLD` and is overridable via the
 /// `CTOX_MISSION_REWRITE_FAILURE_THRESHOLD` env var. Non-numeric or
-/// non-positive overrides fall back to the default.
+/// non-positive overrides fall back to the default; oversized values are
+/// capped so the safety proof stays operationally meaningful.
 fn mission_rewrite_failure_threshold() -> i64 {
     match std::env::var("CTOX_MISSION_REWRITE_FAILURE_THRESHOLD") {
         Ok(value) => match value.trim().parse::<i64>() {
-            Ok(parsed) if parsed > 0 => parsed,
+            Ok(parsed) if parsed > 0 => parsed.min(MAX_REWRITE_FAILURE_THRESHOLD),
             _ => DEFAULT_REWRITE_FAILURE_THRESHOLD,
         },
         Err(_) => DEFAULT_REWRITE_FAILURE_THRESHOLD,
@@ -4196,6 +4373,93 @@ fn looks_like_internal_label(text: &str) -> bool {
     ];
     let lowered = trimmed.to_ascii_lowercase();
     codeish.iter().any(|needle| lowered.contains(needle))
+}
+
+fn enqueue_review_stale_refresh(
+    root: &Path,
+    job: &QueuedPrompt,
+    outcome: &review::ReviewOutcome,
+) -> Result<String> {
+    if let Some(existing) = find_superseding_corrective_queue_task(
+        root,
+        job.thread_key.as_deref(),
+        job.workspace_root.as_deref(),
+        &["stale refresh", "stale consolidate", "review stale"],
+    )? {
+        anyhow::bail!(
+            "superseded by runnable stale-refresh work already in queue: {} ({})",
+            existing.title,
+            existing.message_key
+        );
+    }
+    let summary_line = clip_text(&outcome.summary, 220);
+    let preview = clip_text(&job.preview, 80);
+    let stale_categories = outcome
+        .categorized_findings
+        .iter()
+        .filter(|finding| finding.category.is_stale())
+        .map(|finding| {
+            format!(
+                "- {}: {} -> {}",
+                finding.category.as_str(),
+                clip_text(&finding.evidence, 160),
+                clip_text(&finding.corrective_action, 160)
+            )
+        })
+        .collect::<Vec<_>>();
+    let stale_block = if stale_categories.is_empty() {
+        "- stale context changed; reload the current thread and queue state before continuing"
+            .to_string()
+    } else {
+        stale_categories.join("\n")
+    };
+    let thread_key = job
+        .thread_key
+        .clone()
+        .filter(|t| !t.trim().is_empty())
+        .unwrap_or_else(|| format!("review-stale:{}", job.source_label));
+    let title = format!(
+        "Review stale refresh: {}",
+        if preview.is_empty() {
+            "(no preview)"
+        } else {
+            preview.as_str()
+        }
+    );
+    let prompt = format!(
+        "An external CTOX review found that the previous slice is stale rather than merely wrong.\n\n\
+Review summary: {summary_line}\n\n\
+Stale findings:\n\
+{stale_block}\n\n\
+Reload the current thread, inbound messages, queue rows, and active mission/strategy before drafting or closing anything. \
+If the prior draft is obsolete, cancel or supersede it. If multiple queue items now describe the same changed world state, consolidate them. \
+Only produce a new draft after the current state is reflected in durable runtime records."
+    );
+    let view = create_self_work_backed_queue_task(
+        root,
+        DurableSelfWorkQueueRequest {
+            kind: "review-stale-refresh".to_string(),
+            title,
+            prompt,
+            thread_key,
+            workspace_root: job.workspace_root.clone(),
+            priority: "high".to_string(),
+            suggested_skill: job
+                .suggested_skill
+                .clone()
+                .or_else(|| Some("follow-up-orchestrator".to_string())),
+            parent_message_key: job.leased_message_keys.first().cloned(),
+            metadata: serde_json::json!({
+                "dedupe_key": format!(
+                    "review-stale-refresh:{}:{}",
+                    job.thread_key.as_deref().unwrap_or(job.source_label.as_str()),
+                    clip_text(&summary_line, 80),
+                ),
+                "origin_source_label": job.source_label,
+            }),
+        },
+    )?;
+    Ok(view.title)
 }
 
 fn enqueue_founder_communication_rework(
@@ -4577,8 +4841,7 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
             } else {
                 ""
             };
-            let meeting_urls =
-                crate::mission::communication_meeting_native::extract_meeting_urls(body);
+            let meeting_urls = crate::communication::meeting_native::extract_meeting_urls(body);
             if !meeting_urls.is_empty() {
                 if let Some(reason) = meeting_auto_join_policy_block(&settings, &message) {
                     push_event(
@@ -4590,13 +4853,12 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
                         ),
                     );
                 } else {
-                    let result =
-                        crate::mission::communication_meeting_native::process_email_for_meetings(
-                            root,
-                            message.subject.trim(),
-                            body,
-                            &bot_name,
-                        );
+                    let result = crate::communication::meeting_native::process_email_for_meetings(
+                        root,
+                        message.subject.trim(),
+                        body,
+                        &bot_name,
+                    );
                     if let Ok(ref val) = result {
                         if val.get("action").and_then(serde_json::Value::as_str)
                             == Some("processed")
@@ -7459,6 +7721,13 @@ fn requeue_review_rejected_self_work(
     work_id: &str,
     summary: &str,
 ) -> Result<Option<channels::QueueTaskView>> {
+    if let Some(note) = review_checkpoint_loop_block_note(root, work_id, summary)? {
+        block_self_work_queue_tasks_for_work(root, work_id, &note)?;
+        if !review_checkpoint_loop_block_already_active(root, work_id)? {
+            block_ticket_self_work_item(root, work_id, &note);
+        }
+        return Ok(None);
+    }
     if let Some(note) = founder_rework_review_loop_block_note(root, work_id, summary)? {
         block_founder_rework_queue_tasks_for_work(root, work_id, &note)?;
         if !founder_rework_loop_block_already_active(root, work_id)? {
@@ -7489,6 +7758,76 @@ fn requeue_review_rejected_self_work(
         return Ok(None);
     }
     queue_ticket_self_work_item(root, &item)
+}
+
+fn review_checkpoint_requeue_block_threshold() -> usize {
+    match std::env::var("CTOX_REVIEW_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD") {
+        Ok(value) => match value.trim().parse::<usize>() {
+            Ok(parsed) if parsed > 0 => parsed.min(MAX_REVIEW_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD),
+            _ => REVIEW_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD,
+        },
+        Err(_) => REVIEW_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD,
+    }
+}
+
+fn review_checkpoint_loop_block_note(
+    root: &Path,
+    work_id: &str,
+    summary: &str,
+) -> Result<Option<String>> {
+    let Some(item) = tickets::load_ticket_self_work_item(root, work_id)? else {
+        return Ok(None);
+    };
+    let attempts = review_checkpoint_requeue_attempt_count(root, work_id)?;
+    let threshold = review_checkpoint_requeue_block_threshold();
+    if attempts < threshold {
+        return Ok(None);
+    }
+    Ok(Some(format!(
+        "Dieses Work Item `{}` ({}) wurde {attempts} Mal vom Review-Checkpoint zur Nacharbeit zurueckgegeben. Die Requeue-Schranke ({threshold}) ist erreicht; der Harness blockt weitere automatische Review-Requeues, damit kein unendlicher Self-Rework-Loop entstehen kann. Fuehre erst neue belastbare Arbeit oder Evidenz in einem separaten fachlichen Task zu. Letzter Review-Hinweis: {}",
+        item.work_id,
+        item.kind,
+        clip_text(summary, 220)
+    )))
+}
+
+fn review_checkpoint_loop_block_already_active(root: &Path, work_id: &str) -> Result<bool> {
+    let Some(item) = tickets::load_ticket_self_work_item(root, work_id)? else {
+        return Ok(false);
+    };
+    if item.state != "blocked" {
+        return Ok(false);
+    }
+    let db_path = root.join("runtime").join("ctox.sqlite3");
+    let conn = channels::open_channel_db(&db_path)?;
+    let exists: i64 = conn.query_row(
+        r#"
+        SELECT COUNT(*)
+        FROM ticket_self_work_notes
+        WHERE work_id = ?1
+          AND body_text LIKE 'Dieses Work Item `% wurde % Mal vom Review-Checkpoint zur Nacharbeit zurueckgegeben.%'
+        LIMIT 1
+        "#,
+        params![work_id],
+        |row| row.get(0),
+    )?;
+    Ok(exists > 0)
+}
+
+fn review_checkpoint_requeue_attempt_count(root: &Path, work_id: &str) -> Result<usize> {
+    let db_path = root.join("runtime").join("ctox.sqlite3");
+    let conn = channels::open_channel_db(&db_path)?;
+    let count: i64 = conn.query_row(
+        r#"
+        SELECT COUNT(*)
+        FROM ticket_self_work_notes
+        WHERE work_id = ?1
+          AND body_text LIKE 'External review rejected the last slice.%'
+        "#,
+        params![work_id],
+        |row| row.get(0),
+    )?;
+    Ok(count.max(0) as usize)
 }
 
 fn requeue_continue_requested_self_work(
@@ -7615,6 +7954,43 @@ fn block_founder_rework_queue_tasks_for_work(
     let rows = statement.query_map(params![work_id, FOUNDER_COMMUNICATION_REWORK_KIND], |row| {
         row.get::<_, String>(0)
     })?;
+    let message_keys = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(statement);
+    drop(conn);
+
+    let mut blocked = 0usize;
+    for message_key in message_keys {
+        channels::update_queue_task(
+            root,
+            channels::QueueTaskUpdateRequest {
+                message_key,
+                route_status: Some("blocked".to_string()),
+                status_note: Some(note.to_string()),
+                ..Default::default()
+            },
+        )?;
+        blocked += 1;
+    }
+    Ok(blocked)
+}
+
+fn block_self_work_queue_tasks_for_work(root: &Path, work_id: &str, note: &str) -> Result<usize> {
+    let db_path = root.join("runtime").join("ctox.sqlite3");
+    let conn = channels::open_channel_db(&db_path)?;
+    let mut statement = conn.prepare(
+        r#"
+        SELECT m.message_key
+        FROM communication_messages m
+        LEFT JOIN communication_routing_state r ON r.message_key = m.message_key
+        WHERE m.channel = 'queue'
+          AND m.direction = 'inbound'
+          AND json_extract(m.metadata_json, '$.ticket_self_work_id') = ?1
+          AND lower(COALESCE(r.route_status, 'pending')) IN (
+                'pending', 'leased', 'review_rework'
+          )
+        "#,
+    )?;
+    let rows = statement.query_map(params![work_id], |row| row.get::<_, String>(0))?;
     let message_keys = rows.collect::<rusqlite::Result<Vec<_>>>()?;
     drop(statement);
     drop(conn);
@@ -7825,6 +8201,16 @@ fn enrich_inbound_prompt(
             prepend_workspace_contract(prompt_body, message.workspace_root.as_deref())
         );
     }
+    if message.channel == "whatsapp" {
+        let sender = display_inbound_sender(message);
+        return format!(
+            "[WhatsApp-Nachricht eingegangen]\nSender: {sender}\nThread: {}\nWenn du antwortest, nutze `ctox channel send --channel whatsapp --account-key {} --thread-key '{}' --body \"<deine Antwort>\"` [--attach-file <pfad>].... Antworte auf diesem Kanal kurz und direkt; wenn ein konkreter Anhang verlangt ist, sende ihn als echte Datei ueber `--attach-file`.\n\n{}",
+            message.thread_key,
+            message.account_key,
+            message.thread_key,
+            prepend_workspace_contract(prompt_body, message.workspace_root.as_deref())
+        );
+    }
     if message.channel == "meeting" {
         let sender = display_inbound_sender(message);
         let session_id = &message.thread_key; // thread_key == session_id
@@ -7834,7 +8220,7 @@ fn enrich_inbound_prompt(
             .and_then(serde_json::Value::as_str)
             .unwrap_or("unknown");
         let is_mention =
-            crate::mission::communication_meeting_native::MeetingSession::is_mention(prompt_body);
+            crate::communication::meeting_native::MeetingSession::is_mention(prompt_body);
         let mention_hint = if is_mention {
             format!(
                 " Du wurdest per @CTOX erwaehnt — antworte im Meeting-Chat.\n\
@@ -7925,6 +8311,7 @@ fn sync_configured_channels(root: &Path, settings: &BTreeMap<String, String>) {
     let _ = communication_adapters::jami().service_sync(root, settings);
     let _ = communication_adapters::meeting().service_sync(root, settings);
     let _ = communication_adapters::teams().service_sync(root, settings);
+    let _ = communication_adapters::whatsapp().service_sync(root, settings);
 }
 
 fn sync_configured_tickets(
@@ -11572,6 +11959,136 @@ mod tests {
     }
 
     #[test]
+    fn generic_review_requeue_blocks_after_finite_checkpoint_threshold() {
+        let root = temp_root("ctox-generic-review-requeue-threshold");
+        let item = tickets::put_ticket_self_work_item(
+            &root,
+            tickets::TicketSelfWorkUpsertInput {
+                source_system: "local".to_string(),
+                kind: "mission-follow-up".to_string(),
+                title: "Continue mission with bounded review requeues".to_string(),
+                body_text: "Repeated review failures must not loop forever.".to_string(),
+                state: "open".to_string(),
+                metadata: serde_json::json!({
+                    "thread_key": "queue/bounded-review",
+                    "priority": "high",
+                    "skill": "follow-up-orchestrator",
+                    "dedupe_key": "mission-follow-up:bounded-review",
+                }),
+            },
+            false,
+        )
+        .expect("failed to create self-work");
+
+        let first = requeue_review_rejected_self_work(&root, &item.work_id, "first rejection")
+            .expect("first requeue should succeed")
+            .expect("first requeue should create queue task");
+        channels::update_queue_task(
+            &root,
+            channels::QueueTaskUpdateRequest {
+                message_key: first.message_key,
+                route_status: Some("handled".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("failed to mark first task handled");
+
+        let second = requeue_review_rejected_self_work(&root, &item.work_id, "second rejection")
+            .expect("second requeue should succeed")
+            .expect("second requeue should create queue task");
+
+        let blocked = requeue_review_rejected_self_work(&root, &item.work_id, "third rejection")
+            .expect("threshold block should be handled");
+        assert!(blocked.is_none());
+
+        let reloaded = tickets::load_ticket_self_work_item(&root, &item.work_id)
+            .expect("failed to reload self-work")
+            .expect("missing self-work");
+        assert_eq!(reloaded.state, "blocked");
+
+        let blocked_tasks = channels::list_queue_tasks(&root, &["blocked".to_string()], 10)
+            .expect("failed to list blocked queue tasks");
+        assert!(blocked_tasks
+            .iter()
+            .any(|task| task.message_key == second.message_key));
+    }
+
+    #[test]
+    fn review_gate_worst_case_model_has_strictly_finite_variant() {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        enum AbstractRoute {
+            RewriteOnly,
+            SpawnedRework,
+            SameWorkCheckpoint,
+            Terminal,
+        }
+
+        fn next(
+            route: AbstractRoute,
+            rewrite_budget: usize,
+            requeue_budget: usize,
+        ) -> AbstractRoute {
+            match route {
+                AbstractRoute::RewriteOnly if rewrite_budget > 0 => AbstractRoute::RewriteOnly,
+                AbstractRoute::RewriteOnly => AbstractRoute::Terminal,
+                AbstractRoute::SpawnedRework => AbstractRoute::SameWorkCheckpoint,
+                AbstractRoute::SameWorkCheckpoint if requeue_budget > 0 => {
+                    AbstractRoute::SameWorkCheckpoint
+                }
+                AbstractRoute::SameWorkCheckpoint | AbstractRoute::Terminal => {
+                    AbstractRoute::Terminal
+                }
+            }
+        }
+        fn route_weight(route: AbstractRoute) -> usize {
+            match route {
+                AbstractRoute::SpawnedRework => 2,
+                AbstractRoute::RewriteOnly | AbstractRoute::SameWorkCheckpoint => 1,
+                AbstractRoute::Terminal => 0,
+            }
+        }
+
+        for start in [
+            AbstractRoute::RewriteOnly,
+            AbstractRoute::SpawnedRework,
+            AbstractRoute::SameWorkCheckpoint,
+            AbstractRoute::Terminal,
+        ] {
+            let mut route = start;
+            let mut rewrite_budget = mission_rewrite_failure_threshold().max(0) as usize;
+            let mut requeue_budget = review_checkpoint_requeue_block_threshold();
+            let mut variant = rewrite_budget + requeue_budget + route_weight(route);
+
+            for _ in 0..16 {
+                let previous_variant = variant;
+                route = next(route, rewrite_budget, requeue_budget);
+                match route {
+                    AbstractRoute::RewriteOnly => {
+                        rewrite_budget = rewrite_budget.saturating_sub(1);
+                    }
+                    AbstractRoute::SameWorkCheckpoint => {
+                        requeue_budget = requeue_budget.saturating_sub(1);
+                    }
+                    AbstractRoute::SpawnedRework | AbstractRoute::Terminal => {}
+                }
+                variant = rewrite_budget + requeue_budget + route_weight(route);
+                assert!(
+                    route == AbstractRoute::Terminal || variant < previous_variant,
+                    "route={route:?} variant={variant} previous={previous_variant}"
+                );
+                if route == AbstractRoute::Terminal {
+                    break;
+                }
+            }
+            assert_eq!(
+                route,
+                AbstractRoute::Terminal,
+                "{start:?} did not terminate"
+            );
+        }
+    }
+
+    #[test]
     fn published_review_rework_is_blocked_when_same_scope_corrective_task_exists() {
         let root = temp_root("ctox-review-rework-route-suppressed");
         channels::create_queue_task(
@@ -13711,10 +14228,10 @@ Was jetzt zu tun ist:\n\
         .expect("review requeue should succeed");
         assert!(queued.is_none());
 
-        let closed = tickets::load_ticket_self_work_item(&root, &item.work_id)
+        let superseded = tickets::load_ticket_self_work_item(&root, &item.work_id)
             .expect("failed to reload self-work")
             .expect("missing self-work");
-        assert_eq!(closed.state, "closed");
+        assert_eq!(superseded.state, "superseded");
     }
 
     #[test]
@@ -14309,6 +14826,15 @@ Was jetzt zu tun ist:\n\
         }
     }
 
+    fn stale_finding(id: &str) -> review::CategorizedFinding {
+        review::CategorizedFinding {
+            id: id.to_string(),
+            category: review::FindingCategory::StaleRefresh,
+            evidence: format!("new inbound changed the thread for {id}"),
+            corrective_action: format!("refresh current world state for {id}"),
+        }
+    }
+
     fn parent_outbound_job() -> QueuedPrompt {
         QueuedPrompt {
             prompt: "draft founder reply".to_string(),
@@ -14382,6 +14908,67 @@ Was jetzt zu tun ist:\n\
             classify_findings(&only_rework),
             ReviewRoutingClass::Substantive
         );
+    }
+
+    #[test]
+    fn dispatcher_routes_stale_findings_to_stale_refresh() {
+        let only_stale = vec![stale_finding("f1")];
+        assert_eq!(classify_findings(&only_stale), ReviewRoutingClass::Stale);
+        let mixed_stale = vec![rewrite_finding("f1"), stale_finding("f2")];
+        assert_eq!(classify_findings(&mixed_stale), ReviewRoutingClass::Stale);
+    }
+
+    #[test]
+    fn review_failure_for_self_work_requeues_same_main_work_without_cascade() {
+        let root = temp_root("ctox-review-no-cascade");
+        let item = tickets::put_ticket_self_work_item(
+            &root,
+            tickets::TicketSelfWorkUpsertInput {
+                source_system: "local".to_string(),
+                kind: "mission-follow-up".to_string(),
+                title: "Finish durable mission work".to_string(),
+                body_text: "Do the durable work once.".to_string(),
+                state: "open".to_string(),
+                metadata: serde_json::json!({
+                    "thread_key": "ticket:no-cascade",
+                    "priority": "high",
+                }),
+            },
+            false,
+        )
+        .expect("failed to create self-work");
+        let mut job = self_work_job();
+        job.ticket_self_work_id = Some(item.work_id.clone());
+        let mut outcome = review::ReviewOutcome::skipped("still insufficient");
+        outcome.verdict = review::ReviewVerdict::Fail;
+        outcome.required = true;
+
+        let disposition = no_cascade_review_block(&root, &job, &outcome)
+            .expect("self-work review failure should be fed back into main work");
+
+        assert!(matches!(
+            disposition,
+            CompletionReviewDisposition::RequeueSelfWork { .. }
+        ));
+
+        let conn = channels::open_channel_db(&root.join("runtime/ctox.sqlite3"))
+            .expect("failed to open channel db");
+        let accepted_count: i64 = conn
+            .query_row(
+                r#"
+                SELECT COUNT(*)
+                FROM ctox_core_transition_proofs
+                WHERE entity_type = 'WorkItem'
+                  AND entity_id = ?1
+                  AND from_state = 'AwaitingReview'
+                  AND to_state = 'ReworkRequired'
+                  AND accepted = 1
+                "#,
+                params![item.work_id],
+                |row| row.get(0),
+            )
+            .expect("failed to count checkpoint proofs");
+        assert_eq!(accepted_count, 1);
     }
 
     #[test]

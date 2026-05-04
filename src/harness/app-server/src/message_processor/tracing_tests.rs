@@ -230,7 +230,7 @@ fn build_test_processor(
     MessageProcessor,
     mpsc::Receiver<crate::outgoing_message::OutgoingEnvelope>,
 ) {
-    let (outgoing_tx, outgoing_rx) = mpsc::channel(16);
+    let (outgoing_tx, outgoing_rx) = mpsc::channel(1024);
     let outgoing = Arc::new(OutgoingMessageSender::new(outgoing_tx));
     let processor = MessageProcessor::new(MessageProcessorArgs {
         outgoing,

@@ -36,8 +36,8 @@ use crate::api_bridge::map_api_error;
 use crate::auth::UnauthorizedRecovery;
 use crate::auth_env_telemetry::AuthEnvTelemetry;
 use crate::auth_env_telemetry::collect_auth_env_telemetry;
-use ctox_api::CompactClient as ApiCompactClient;
 use ctox_api::AuthProvider as ApiAuthProvider;
+use ctox_api::CompactClient as ApiCompactClient;
 use ctox_api::CompactionInput as ApiCompactionInput;
 use ctox_api::MemoriesClient as ApiMemoriesClient;
 use ctox_api::MemorySummarizeInput as ApiMemorySummarizeInput;
@@ -246,6 +246,7 @@ struct LastResponse {
 struct WebsocketSession {
     connection: Option<ApiWebSocketConnection>,
     last_request: Option<ResponsesApiRequest>,
+    last_response: Option<LastResponse>,
     last_response_rx: Option<oneshot::Receiver<LastResponse>>,
     connection_reused: StdMutex<bool>,
 }
@@ -705,6 +706,7 @@ impl ModelClientSession {
     fn reset_websocket_session(&mut self) {
         self.websocket_session.connection = None;
         self.websocket_session.last_request = None;
+        self.websocket_session.last_response = None;
         self.websocket_session.last_response_rx = None;
         self.websocket_session
             .set_connection_reused(/*connection_reused*/ false);
@@ -763,6 +765,7 @@ impl ModelClientSession {
         let request = ResponsesApiRequest {
             model: model_info.slug.clone(),
             instructions: instructions.clone(),
+            previous_response_id: None,
             input,
             tools,
             tool_choice: "auto".to_string(),
@@ -825,8 +828,10 @@ impl ModelClientSession {
         let previous_request = self.websocket_session.last_request.as_ref()?;
         let mut previous_without_input = previous_request.clone();
         previous_without_input.input.clear();
+        previous_without_input.previous_response_id = None;
         let mut request_without_input = request.clone();
         request_without_input.input.clear();
+        request_without_input.previous_response_id = None;
         if previous_without_input != request_without_input {
             trace!(
                 "incremental request failed, properties didn't match {previous_without_input:?} != {request_without_input:?}"
@@ -850,14 +855,47 @@ impl ModelClientSession {
         }
     }
 
+    fn prepare_http_request(&mut self, request: &ResponsesApiRequest) -> ResponsesApiRequest {
+        let Some(last_response) = self.get_last_response() else {
+            return request.clone();
+        };
+        let Some(incremental_items) = self.get_incremental_items(
+            request,
+            Some(&last_response),
+            /*allow_empty_delta*/ true,
+        ) else {
+            return request.clone();
+        };
+
+        if last_response.response_id.is_empty() {
+            trace!("incremental request failed, no previous response id");
+            return request.clone();
+        }
+
+        ResponsesApiRequest {
+            previous_response_id: Some(last_response.response_id),
+            input: incremental_items,
+            ..request.clone()
+        }
+    }
+
     fn get_last_response(&mut self) -> Option<LastResponse> {
-        self.websocket_session
-            .last_response_rx
-            .take()
-            .and_then(|mut receiver| match receiver.try_recv() {
-                Ok(last_response) => Some(last_response),
-                Err(TryRecvError::Closed) | Err(TryRecvError::Empty) => None,
-            })
+        if let Some(last_response) = self.websocket_session.last_response.clone() {
+            return Some(last_response);
+        }
+
+        let mut receiver = self.websocket_session.last_response_rx.take()?;
+        match receiver.try_recv() {
+            Ok(last_response) => {
+                self.websocket_session.last_response = Some(last_response.clone());
+                Some(last_response)
+            }
+            Err(TryRecvError::Empty) => {
+                self.websocket_session.last_response_rx = Some(receiver);
+                None
+            }
+            Err(TryRecvError::Closed) => None,
+        }
     }
 
     fn prepare_websocket_request(
@@ -963,6 +1001,7 @@ impl ModelClientSession {
 
         if needs_new {
             self.websocket_session.last_request = None;
+            self.websocket_session.last_response = None;
             self.websocket_session.last_response_rx = None;
             let turn_state = options
                 .turn_state
@@ -1187,7 +1226,7 @@ impl ModelClientSession {
         )
     )]
     async fn stream_responses_api(
-        &self,
+        &mut self,
         prompt: &Prompt,
         model_info: &ModelInfo,
         session_telemetry: &SessionTelemetry,
@@ -1237,17 +1276,22 @@ impl ModelClientSession {
                 summary,
                 service_tier,
             )?;
+            let wire_request = self.prepare_http_request(&request);
             let client = ApiResponsesClient::new(
                 transport,
                 client_setup.api_provider,
                 client_setup.api_auth,
             )
             .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
-            let stream_result = client.stream_request(request, options).await;
+            let stream_result = client.stream_request(wire_request, options).await;
 
             match stream_result {
                 Ok(stream) => {
-                    let (stream, _) = map_response_stream(stream, session_telemetry.clone());
+                    self.websocket_session.last_request = Some(request);
+                    self.websocket_session.last_response = None;
+                    let (stream, last_response_rx) =
+                        map_response_stream(stream, session_telemetry.clone());
+                    self.websocket_session.last_response_rx = Some(last_response_rx);
                     return Ok(stream);
                 }
                 Err(ApiError::Transport(
@@ -1316,8 +1360,9 @@ impl ModelClientSession {
             .execute(request)
             .await
             .map_err(|err| map_api_error(ApiError::Transport(err)))?;
-        let payload: Value = serde_json::from_slice(&response.body)
-            .map_err(|err| CodexErr::Stream(format!("failed to parse Anthropic response: {err}"), None))?;
+        let payload: Value = serde_json::from_slice(&response.body).map_err(|err| {
+            CodexErr::Stream(format!("failed to parse Anthropic response: {err}"), None)
+        })?;
         build_anthropic_response_stream(payload).await
     }
 
@@ -1428,6 +1473,7 @@ impl ModelClientSession {
                 .map_err(map_api_error)?;
             let (stream, last_request_rx) =
                 map_response_stream(stream_result, session_telemetry.clone());
+            self.websocket_session.last_response = None;
             self.websocket_session.last_response_rx = Some(last_request_rx);
             return Ok(WebsocketStreamOutcome::Stream(stream));
         }
@@ -2295,7 +2341,10 @@ fn build_anthropic_messages_request(request: &ResponsesApiRequest) -> Result<Val
         Value::from(request.max_output_tokens.unwrap_or(4096)),
     );
     if !system_parts.is_empty() {
-        body.insert("system".to_string(), Value::String(system_parts.join("\n\n")));
+        body.insert(
+            "system".to_string(),
+            Value::String(system_parts.join("\n\n")),
+        );
     }
     let tools = request
         .tools
@@ -2448,7 +2497,11 @@ async fn build_anthropic_response_stream(payload: Value) -> Result<ResponseStrea
     let mut output_items = Vec::new();
     if let Some(content) = payload.get("content").and_then(Value::as_array) {
         for block in content {
-            match block.get("type").and_then(Value::as_str).unwrap_or_default() {
+            match block
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+            {
                 "text" => {
                     if let Some(text) = block.get("text").and_then(Value::as_str) {
                         if !text.trim().is_empty() {
@@ -2516,7 +2569,9 @@ async fn build_anthropic_response_stream(payload: Value) -> Result<ResponseStrea
     });
     let _ = tx_event.send(Ok(ResponseEvent::Created)).await;
     for text in text_parts {
-        let _ = tx_event.send(Ok(ResponseEvent::OutputTextDelta(text))).await;
+        let _ = tx_event
+            .send(Ok(ResponseEvent::OutputTextDelta(text)))
+            .await;
     }
     for item in output_items {
         let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;

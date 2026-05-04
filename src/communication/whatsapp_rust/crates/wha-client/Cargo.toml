@@ -1,0 +1,33 @@
+[package]
+name = "wha-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+wha-types  = { workspace = true }
+wha-binary = { workspace = true }
+wha-crypto = { workspace = true }
+wha-proto  = { workspace = true }
+wha-socket = { workspace = true }
+wha-store  = { workspace = true }
+wha-appstate = { workspace = true }
+wha-signal = { workspace = true }
+thiserror  = { workspace = true }
+async-trait = { workspace = true }
+tokio      = { workspace = true }
+tokio-tungstenite = { workspace = true }
+futures    = { workspace = true }
+tracing    = { workspace = true }
+prost      = { workspace = true }
+parking_lot = { workspace = true }
+uuid       = { workspace = true }
+hex        = { workspace = true }
+base64     = { workspace = true }
+rand       = { workspace = true }
+sha2       = { workspace = true }
+hmac       = { workspace = true }
+md-5       = { workspace = true }
+reqwest    = { workspace = true }
+wha-media  = { workspace = true }
+flate2     = { workspace = true }

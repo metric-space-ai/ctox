@@ -6,11 +6,11 @@ use rusqlite::OptionalExtension;
 use serde_json::json;
 use std::path::Path;
 
+use crate::communication::gateway as communication_gateway;
 use crate::execution::agent::turn_loop;
 use crate::governance;
 use crate::lcm;
 use crate::mission::channels;
-use crate::mission::communication_gateway;
 
 const DEFAULT_HISTORY_LIMIT: usize = 20;
 

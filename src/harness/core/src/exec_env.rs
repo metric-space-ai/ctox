@@ -6,6 +6,10 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 
 pub const CODEX_THREAD_ID_ENV_VAR: &str = "CODEX_THREAD_ID";
+pub const CODEX_AGENT_ID_ENV_VAR: &str = "CODEX_AGENT_ID";
+pub const CTOX_AGENT_ID_ENV_VAR: &str = "CTOX_AGENT_ID";
+pub const CODEX_TURN_ID_ENV_VAR: &str = "CODEX_TURN_ID";
+pub const CTOX_TURN_ID_ENV_VAR: &str = "CTOX_TURN_ID";
 
 /// Construct an environment map based on the rules in the specified policy. The
 /// resulting map can be passed directly to `Command::envs()` after calling
@@ -15,8 +19,8 @@ pub const CODEX_THREAD_ID_ENV_VAR: &str = "CODEX_THREAD_ID";
 /// The derivation follows the algorithm documented in the struct-level comment
 /// for [`ShellEnvironmentPolicy`].
 ///
-/// `CODEX_THREAD_ID` is injected when a thread id is provided, even when
-/// `include_only` is set.
+/// Internal thread/agent/turn identifiers are injected when a thread id is provided, even when
+/// `include_only` is set. Existing explicit values are preserved for turn/agent variables.
 pub fn create_env(
     policy: &ShellEnvironmentPolicy,
     thread_id: Option<ThreadId>,
@@ -87,7 +91,20 @@ where
 
     // Step 6 – Populate the thread ID environment variable when provided.
     if let Some(thread_id) = thread_id {
-        env_map.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
+        let thread_id = thread_id.to_string();
+        env_map.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.clone());
+        env_map
+            .entry(CODEX_AGENT_ID_ENV_VAR.to_string())
+            .or_insert_with(|| thread_id.clone());
+        env_map
+            .entry(CTOX_AGENT_ID_ENV_VAR.to_string())
+            .or_insert_with(|| thread_id.clone());
+        env_map
+            .entry(CODEX_TURN_ID_ENV_VAR.to_string())
+            .or_insert_with(|| thread_id.clone());
+        env_map
+            .entry(CTOX_TURN_ID_ENV_VAR.to_string())
+            .or_insert(thread_id);
     }
 
     env_map

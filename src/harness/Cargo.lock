@@ -366,6 +366,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
+name = "app_test_support"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "core_test_support",
+ "serde_json",
+ "toml 0.9.12+spec-1.1.0",
+ "wiremock",
+]
+
+[[package]]
 name = "arbitrary"
 version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1538,6 +1549,7 @@ name = "ctox-app-server"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "app_test_support",
  "async-trait",
  "axum",
  "base64 0.22.1",
@@ -1560,7 +1572,11 @@ dependencies = [
  "ctox-utils-json-to-toml",
  "ctox-utils-pty",
  "futures",
+ "opentelemetry",
+ "opentelemetry_sdk",
  "owo-colors",
+ "pretty_assertions",
+ "rmcp",
  "serde",
  "serde_json",
  "tempfile",
@@ -1570,9 +1586,11 @@ dependencies = [
  "tokio-util",
  "toml 0.9.12+spec-1.1.0",
  "tracing",
+ "tracing-opentelemetry",
  "tracing-subscriber",
  "uuid",
  "walkdir",
+ "wiremock",
 ]
 
 [[package]]
@@ -2177,6 +2195,7 @@ dependencies = [
  "dirs",
  "log",
  "owo-colors",
+ "pretty_assertions",
  "serde",
  "serde_json",
  "sqlx",

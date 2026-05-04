@@ -36,6 +36,7 @@ use self::text_editor::EditorAction;
 use self::text_editor::ExitReason;
 use self::text_editor::TextEditor;
 use crate::channels;
+use crate::communication::adapters as communication_adapters;
 use crate::context_health;
 use crate::execution::models::vision_preprocessor;
 use crate::governance;
@@ -52,7 +53,6 @@ use crate::inference::supervisor;
 use crate::inference::turn_loop;
 use crate::lcm;
 use crate::live_context;
-use crate::mission::communication_adapters;
 use crate::secrets;
 use crate::service;
 
@@ -61,6 +61,10 @@ mod text_editor;
 
 const DEFAULT_CHAT_SOURCE: &str = "local";
 const DEFAULT_API_PROVIDER: &str = "local";
+const OPENAI_AUTH_MODE_KEY: &str = "CTOX_OPENAI_AUTH_MODE";
+const DEFAULT_OPENAI_AUTH_MODE: &str = "api_key";
+const OPENAI_AUTH_MODE_CHOICES: &[&str] = &["api_key", "chatgpt_subscription"];
+const WORK_HOURS_CHOICES: &[&str] = &["off", "on"];
 const DEFAULT_LOCAL_RUNTIME: &str = "candle";
 const DEFAULT_CHAT_PRESET: &str = "Quality";
 const DEFAULT_CHAT_SKILL_PRESET: &str = "Standard";
@@ -84,7 +88,7 @@ const AZURE_FOUNDRY_TOKEN_KEY: &str = "AZURE_FOUNDRY_API_KEY";
 const LOCAL_RUNTIME_CHOICES: &[&str] = &["candle"];
 const NO_GPU_LOCAL_CHAT_MODEL_CHOICES: &[&str] = &[];
 const NO_GPU_LOCAL_CHAT_FAMILY_CHOICES: &[&str] = &[];
-const COMMUNICATION_PATH_CHOICES: &[&str] = &["tui", "email", "jami", "teams"];
+const COMMUNICATION_PATH_CHOICES: &[&str] = &["tui", "email", "jami", "teams", "whatsapp"];
 const DEFAULT_REMOTE_BRIDGE_MODE: &str = "disabled";
 const REMOTE_BRIDGE_MODE_CHOICES: &[&str] = &["disabled", "remote-webrtc"];
 const EMAIL_PROVIDER_CHOICES: &[&str] = &["imap", "graph", "ews"];
@@ -250,6 +254,23 @@ fn api_key_configured(env_map: &BTreeMap<String, String>, provider: &str) -> boo
         .unwrap_or(false)
 }
 
+fn openai_subscription_auth_enabled(env_map: &BTreeMap<String, String>) -> bool {
+    env_map
+        .get(OPENAI_AUTH_MODE_KEY)
+        .map(|value| value.trim().to_ascii_lowercase())
+        .is_some_and(|value| {
+            matches!(
+                value.as_str(),
+                "chatgpt_subscription" | "subscription" | "codex_subscription" | "chatgpt"
+            )
+        })
+}
+
+fn provider_auth_configured(env_map: &BTreeMap<String, String>, provider: &str) -> bool {
+    api_key_configured(env_map, provider)
+        || (provider.eq_ignore_ascii_case("openai") && openai_subscription_auth_enabled(env_map))
+}
+
 fn infer_chat_source(env_map: &BTreeMap<String, String>) -> String {
     if env_map
         .get("CTOX_CHAT_SOURCE")
@@ -347,7 +368,7 @@ fn supported_api_chat_model_choices(env_map: &BTreeMap<String, String>) -> Vec<&
         .map(|model| engine::api_provider_supports_model(&provider, model))
         .unwrap_or(false);
     if !provider.eq_ignore_ascii_case("local")
-        && (api_key_configured(env_map, &provider)
+        && (provider_auth_configured(env_map, &provider)
             || explicit_api_source
             || selected_provider_model)
     {
@@ -421,6 +442,7 @@ fn default_compaction_min_tokens(context_tokens: usize) -> usize {
 enum Page {
     Chat,
     Skills,
+    Costs,
     Settings,
 }
 
@@ -431,6 +453,7 @@ enum SettingsView {
     Secrets,
     Paths,
     Update,
+    BusinessOs,
     HarnessMining,
     HarnessFlow,
 }
@@ -503,6 +526,9 @@ struct HeaderState {
     last_input_tokens: Option<u64>,
     last_output_tokens: Option<u64>,
     last_total_tokens: Option<u64>,
+    today_api_cost_microusd: i64,
+    today_api_cost_events: u64,
+    today_api_unpriced_events: u64,
     gpu_cards: Vec<GpuCardState>,
     gpu_loading_cards: Vec<GpuCardState>,
     gpu_error_cards: Vec<GpuCardState>,
@@ -536,6 +562,9 @@ impl Default for HeaderState {
             last_input_tokens: None,
             last_output_tokens: None,
             last_total_tokens: None,
+            today_api_cost_microusd: 0,
+            today_api_cost_events: 0,
+            today_api_unpriced_events: 0,
             gpu_cards: Vec::new(),
             gpu_loading_cards: Vec::new(),
             gpu_error_cards: Vec::new(),
@@ -935,7 +964,16 @@ pub fn run_tui_smoke(root: &Path, page_name: &str, width: u16, height: u16) -> R
     match page_name {
         "chat" => app.page = Page::Chat,
         "skills" => app.page = Page::Skills,
+        "cost" | "costs" => {
+            app.page = Page::Costs;
+            skip_initial_refresh = true;
+        }
         "settings" => app.page = Page::Settings,
+        "business-os" | "settings-business-os" => {
+            app.page = Page::Settings;
+            app.switch_settings_view(SettingsView::BusinessOs);
+            skip_initial_refresh = true;
+        }
         "harness-flow" | "settings-harness-flow" => {
             app.page = Page::Settings;
             app.switch_settings_view(SettingsView::HarnessFlow);
@@ -943,7 +981,9 @@ pub fn run_tui_smoke(root: &Path, page_name: &str, width: u16, height: u16) -> R
             skip_initial_refresh = true;
         }
         other => {
-            anyhow::bail!("unknown page: {other} (expected chat, skills, settings, harness-flow)")
+            anyhow::bail!(
+                "unknown page: {other} (expected chat, skills, costs, settings, business-os, harness-flow)"
+            )
         }
     }
     if !skip_initial_refresh {
@@ -987,6 +1027,7 @@ pub fn run_tui_inject(
     match page_name {
         "chat" => app.page = Page::Chat,
         "skills" => app.page = Page::Skills,
+        "cost" | "costs" => app.page = Page::Costs,
         "settings" => app.page = Page::Settings,
         other => anyhow::bail!("unknown page: {other}"),
     }
@@ -1041,7 +1082,7 @@ impl App {
                 monitor_alerts: Vec::new(),
                 monitor_last_error: None,
                 last_agent_outcome: None,
-                work_hours: Default::default(),
+                work_hours: service::working_hours::snapshot(&root),
             });
         let mut app = Self {
             root: root.clone(),
@@ -1142,6 +1183,7 @@ impl App {
                 }
             }
             Page::Skills => {}
+            Page::Costs => {}
             Page::Settings => {
                 if let Some(item) = self.settings_items.get_mut(self.settings_selected) {
                     item.value.push_str(text);
@@ -1278,7 +1320,8 @@ impl App {
                 self.settings_menu_open = false;
                 match self.page {
                     Page::Chat => self.page = Page::Skills,
-                    Page::Skills => {
+                    Page::Skills => self.page = Page::Costs,
+                    Page::Costs => {
                         self.page = Page::Settings;
                         self.switch_settings_view(SettingsView::Model);
                     }
@@ -1301,9 +1344,10 @@ impl App {
                         self.switch_settings_view(SettingsView::HarnessFlow);
                     }
                     Page::Skills => self.page = Page::Chat,
+                    Page::Costs => self.page = Page::Skills,
                     Page::Settings => {
                         if self.settings_view == SettingsView::Model {
-                            self.page = Page::Skills;
+                            self.page = Page::Costs;
                         } else {
                             self.switch_settings_view(previous_settings_view(self.settings_view));
                         }
@@ -1317,6 +1361,7 @@ impl App {
         match self.page {
             Page::Chat => self.handle_chat_key(key_event)?,
             Page::Skills => self.handle_skills_key(key_event),
+            Page::Costs => {}
             Page::Settings => self.handle_settings_key(key_event)?,
         }
 
@@ -1682,7 +1727,7 @@ impl App {
                 monitor_alerts: Vec::new(),
                 monitor_last_error: None,
                 last_agent_outcome: None,
-                work_hours: Default::default(),
+                work_hours: service::working_hours::snapshot(&self.root),
             }
         });
         self.request_in_flight = self.service_status.running && self.service_status.busy;
@@ -1722,6 +1767,17 @@ impl App {
             "autostart off"
         };
         if self.service_status.running {
+            if self.service_status.work_hours.enabled
+                && !self.service_status.work_hours.inside_window
+            {
+                return format!(
+                    "paused outside {}-{} ({}, {})",
+                    self.service_status.work_hours.start,
+                    self.service_status.work_hours.end,
+                    self.service_status.manager,
+                    persist
+                );
+            }
             let degraded = self.runtime_health.degraded_components();
             if !degraded.is_empty() {
                 format!(
@@ -1853,7 +1909,11 @@ impl App {
             SettingsView::Model => matches!(
                 item.key,
                 "CTOX_SERVICE_TOGGLE"
+                    | "CTOX_WORK_HOURS_ENABLED"
+                    | "CTOX_WORK_HOURS_START"
+                    | "CTOX_WORK_HOURS_END"
                     | "CTOX_API_PROVIDER"
+                    | "CTOX_OPENAI_AUTH_MODE"
                     | "CTOX_AZURE_FOUNDRY_ENDPOINT"
                     | "CTOX_AZURE_FOUNDRY_DEPLOYMENT_ID"
                     | "AZURE_FOUNDRY_API_KEY"
@@ -1907,6 +1967,9 @@ impl App {
                     | "CTO_EMAIL_EWS_USERNAME"
                     | "CTO_JAMI_ACCOUNT_ID"
                     | "CTO_JAMI_PROFILE_NAME"
+                    | "CTO_WHATSAPP_DEVICE_DB"
+                    | "CTO_WHATSAPP_PUSH_NAME"
+                    | "CTO_WHATSAPP_SYNC_TIMEOUT_SECONDS"
                     | "CTO_TEAMS_USERNAME"
                     | "CTO_TEAMS_PASSWORD"
                     | "CTO_TEAMS_TENANT_ID"
@@ -1926,6 +1989,7 @@ impl App {
                     | "CTOX_DEPENDENCIES_ROOT"
             ),
             SettingsView::Update => false,
+            SettingsView::BusinessOs => false,
             SettingsView::HarnessMining => false,
             SettingsView::HarnessFlow => false,
         }
@@ -1945,6 +2009,7 @@ impl App {
             .unwrap_or(DEFAULT_LOCAL_RUNTIME)
             .eq_ignore_ascii_case("candle");
         match item.key {
+            "CTOX_WORK_HOURS_ENABLED" | "CTOX_WORK_HOURS_START" | "CTOX_WORK_HOURS_END" => true,
             "CTOX_CHAT_MODEL_BOOST"
             | "CTOX_BOOST_DEFAULT_MINUTES"
             | "CTOX_EMBEDDING_MODEL"
@@ -1968,7 +2033,14 @@ impl App {
                 .unwrap_or(DEFAULT_REMOTE_BRIDGE_MODE)
                 .eq_ignore_ascii_case("remote-webrtc"),
             "CTOX_API_PROVIDER" => true,
-            "OPENAI_API_KEY" => api_provider.eq_ignore_ascii_case("openai"),
+            "CTOX_OPENAI_AUTH_MODE" => api_provider.eq_ignore_ascii_case("openai"),
+            "OPENAI_API_KEY" => {
+                api_provider.eq_ignore_ascii_case("openai")
+                    && !self
+                        .value_for_setting(OPENAI_AUTH_MODE_KEY)
+                        .unwrap_or(DEFAULT_OPENAI_AUTH_MODE)
+                        .eq_ignore_ascii_case("chatgpt_subscription")
+            }
             "ANTHROPIC_API_KEY" => api_provider.eq_ignore_ascii_case("anthropic"),
             "OPENROUTER_API_KEY" => api_provider.eq_ignore_ascii_case("openrouter"),
             "AZURE_FOUNDRY_API_KEY"
@@ -2022,6 +2094,12 @@ impl App {
             // Jami fields are always visible so the QR code can be used to add
             // the agent as a contact regardless of the preferred reply channel.
             "CTO_JAMI_ACCOUNT_ID" | "CTO_JAMI_PROFILE_NAME" => true,
+            "CTO_WHATSAPP_DEVICE_DB"
+            | "CTO_WHATSAPP_PUSH_NAME"
+            | "CTO_WHATSAPP_SYNC_TIMEOUT_SECONDS" => self
+                .value_for_setting("CTOX_OWNER_PREFERRED_CHANNEL")
+                .unwrap_or(DEFAULT_COMMUNICATION_PATH)
+                .eq_ignore_ascii_case("whatsapp"),
             "CTO_TEAMS_USERNAME"
             | "CTO_TEAMS_PASSWORD"
             | "CTO_TEAMS_TENANT_ID"
@@ -2286,6 +2364,18 @@ impl App {
                 }
                 "CTOX_API_PROVIDER" => {
                     item.choices = API_PROVIDER_CHOICES.to_vec();
+                    if !item.choices.is_empty() && !choice_contains(&item.choices, &item.value) {
+                        item.value = item.choices[0].to_string();
+                    }
+                }
+                "CTOX_WORK_HOURS_ENABLED" => {
+                    item.choices = WORK_HOURS_CHOICES.to_vec();
+                    if !item.choices.is_empty() && !choice_contains(&item.choices, &item.value) {
+                        item.value = item.choices[0].to_string();
+                    }
+                }
+                "CTOX_OPENAI_AUTH_MODE" => {
+                    item.choices = OPENAI_AUTH_MODE_CHOICES.to_vec();
                     if !item.choices.is_empty() && !choice_contains(&item.choices, &item.value) {
                         item.value = item.choices[0].to_string();
                     }
@@ -2870,6 +2960,8 @@ impl App {
             compute_compaction_threshold(effective_context, compact_percent, compact_min_tokens);
         let current_tokens = current_context_tokens(&self.db_path, effective_context).unwrap_or(0);
         self.record_runtime_model_sample(runtime_telemetry.as_ref());
+        let today_api_cost =
+            crate::api_costs::summary_for_day(&self.root, &crate::api_costs::today_day()).ok();
         let avg_tokens_per_second = if estimate_mode {
             selected_bundle
                 .as_ref()
@@ -2933,6 +3025,18 @@ impl App {
             last_total_tokens: runtime_telemetry
                 .as_ref()
                 .and_then(|value| value.last_total_tokens),
+            today_api_cost_microusd: today_api_cost
+                .as_ref()
+                .map(|summary| summary.total_cost_microusd)
+                .unwrap_or(0),
+            today_api_cost_events: today_api_cost
+                .as_ref()
+                .map(|summary| summary.events)
+                .unwrap_or(0),
+            today_api_unpriced_events: today_api_cost
+                .as_ref()
+                .map(|summary| summary.unpriced_events)
+                .unwrap_or(0),
             gpu_cards,
             gpu_loading_cards,
             gpu_error_cards,
@@ -3080,6 +3184,8 @@ impl App {
             }
         }
         operator_env_map.retain(|key, _| !is_secret_backed_runtime_setting(key));
+        let work_hours_config = service::working_hours::config_from_map(&operator_env_map);
+        service::working_hours::validate_config(&work_hours_config)?;
 
         let mut selection_env_map = operator_env_map.clone();
         if let Some(source) = self.value_for_setting("CTOX_CHAT_SOURCE") {
@@ -3253,7 +3359,7 @@ impl App {
                 .unwrap_or_else(|| "-".to_string()),
         );
         let usage_line = format!(
-            "used {} / {}   compact {}   live {}   io {}/{}/{}",
+            "used {} / {}   compact {}   live {}   io {}/{}/{}   api {}{}",
             self.header.current_tokens,
             self.header.max_context,
             self.header.compact_at,
@@ -3270,6 +3376,12 @@ impl App {
                 .last_total_tokens
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "-".to_string()),
+            crate::api_costs::format_usd_micros(self.header.today_api_cost_microusd),
+            if self.header.today_api_unpriced_events > 0 {
+                " + unpriced"
+            } else {
+                ""
+            },
         );
         let preview_line = truncate_for_ui(&self.header_preview_line(), width);
         let status_line = truncate_for_ui(&self.status_line, width);
@@ -3795,6 +3907,54 @@ fn load_settings_items(root: &Path) -> Vec<SettingItem> {
             kind: SettingKind::ServiceToggle,
         },
         SettingItem {
+            key: service::working_hours::ENABLED_KEY,
+            label: "Work Hours",
+            value: env_map
+                .get(service::working_hours::ENABLED_KEY)
+                .cloned()
+                .unwrap_or_else(|| "off".to_string()),
+            saved_value: env_map
+                .get(service::working_hours::ENABLED_KEY)
+                .cloned()
+                .unwrap_or_else(|| "off".to_string()),
+            secret: false,
+            choices: WORK_HOURS_CHOICES.to_vec(),
+            help: "When on, CTOX only accepts and starts work inside the configured local-time window.",
+            kind: SettingKind::Env,
+        },
+        SettingItem {
+            key: service::working_hours::START_KEY,
+            label: "Work Start",
+            value: env_map
+                .get(service::working_hours::START_KEY)
+                .cloned()
+                .unwrap_or_else(|| service::working_hours::DEFAULT_START.to_string()),
+            saved_value: env_map
+                .get(service::working_hours::START_KEY)
+                .cloned()
+                .unwrap_or_else(|| service::working_hours::DEFAULT_START.to_string()),
+            secret: false,
+            choices: Vec::new(),
+            help: "Local start time in HH:MM, for example 08:00.",
+            kind: SettingKind::Env,
+        },
+        SettingItem {
+            key: service::working_hours::END_KEY,
+            label: "Work End",
+            value: env_map
+                .get(service::working_hours::END_KEY)
+                .cloned()
+                .unwrap_or_else(|| service::working_hours::DEFAULT_END.to_string()),
+            saved_value: env_map
+                .get(service::working_hours::END_KEY)
+                .cloned()
+                .unwrap_or_else(|| service::working_hours::DEFAULT_END.to_string()),
+            secret: false,
+            choices: Vec::new(),
+            help: "Local end time in HH:MM, for example 18:00. Overnight windows like 22:00-06:00 are valid.",
+            kind: SettingKind::Env,
+        },
+        SettingItem {
             key: "CTOX_API_PROVIDER",
             label: "Provider",
             value: inferred_api_provider.clone(),
@@ -3802,6 +3962,22 @@ fn load_settings_items(root: &Path) -> Vec<SettingItem> {
             secret: false,
             choices: API_PROVIDER_CHOICES.to_vec(),
             help: "Choose whether the base model should come from the local runtime or a remote API provider.",
+            kind: SettingKind::Env,
+        },
+        SettingItem {
+            key: OPENAI_AUTH_MODE_KEY,
+            label: "OpenAI Auth",
+            value: env_map
+                .get(OPENAI_AUTH_MODE_KEY)
+                .cloned()
+                .unwrap_or_else(|| DEFAULT_OPENAI_AUTH_MODE.to_string()),
+            saved_value: env_map
+                .get(OPENAI_AUTH_MODE_KEY)
+                .cloned()
+                .unwrap_or_else(|| DEFAULT_OPENAI_AUTH_MODE.to_string()),
+            secret: false,
+            choices: OPENAI_AUTH_MODE_CHOICES.to_vec(),
+            help: "Choose api_key for billed OpenAI API credentials or chatgpt_subscription for Codex/ChatGPT OAuth credentials stored by Codex.",
             kind: SettingKind::Env,
         },
         SettingItem {
@@ -4563,6 +4739,54 @@ fn load_settings_items(root: &Path) -> Vec<SettingItem> {
             kind: SettingKind::Env,
         },
         SettingItem {
+            key: "CTO_WHATSAPP_DEVICE_DB",
+            label: "WA Device DB",
+            value: env_map
+                .get("CTO_WHATSAPP_DEVICE_DB")
+                .cloned()
+                .unwrap_or_default(),
+            saved_value: env_map
+                .get("CTO_WHATSAPP_DEVICE_DB")
+                .cloned()
+                .unwrap_or_default(),
+            secret: false,
+            choices: Vec::new(),
+            help: "SQLite device store for WhatsApp linked-device pairing.",
+            kind: SettingKind::Env,
+        },
+        SettingItem {
+            key: "CTO_WHATSAPP_PUSH_NAME",
+            label: "WA Push Name",
+            value: env_map
+                .get("CTO_WHATSAPP_PUSH_NAME")
+                .cloned()
+                .unwrap_or_else(|| "CTOX".to_string()),
+            saved_value: env_map
+                .get("CTO_WHATSAPP_PUSH_NAME")
+                .cloned()
+                .unwrap_or_else(|| "CTOX".to_string()),
+            secret: false,
+            choices: Vec::new(),
+            help: "Display name advertised by the WhatsApp linked device.",
+            kind: SettingKind::Env,
+        },
+        SettingItem {
+            key: "CTO_WHATSAPP_SYNC_TIMEOUT_SECONDS",
+            label: "WA Sync Sec",
+            value: env_map
+                .get("CTO_WHATSAPP_SYNC_TIMEOUT_SECONDS")
+                .cloned()
+                .unwrap_or_else(|| "8".to_string()),
+            saved_value: env_map
+                .get("CTO_WHATSAPP_SYNC_TIMEOUT_SECONDS")
+                .cloned()
+                .unwrap_or_else(|| "8".to_string()),
+            secret: false,
+            choices: Vec::new(),
+            help: "Seconds a WhatsApp sync call listens for inbound events.",
+            kind: SettingKind::Env,
+        },
+        SettingItem {
             key: "CTO_TEAMS_USERNAME",
             label: "Teams User",
             value: env_map
@@ -4890,6 +5114,7 @@ fn relevant_header_estimate_setting(key: &str) -> bool {
         "CTOX_CHAT_SOURCE"
             | "CTOX_LOCAL_RUNTIME"
             | "CTOX_API_PROVIDER"
+            | "CTOX_OPENAI_AUTH_MODE"
             | "CTOX_AZURE_FOUNDRY_ENDPOINT"
             | "CTOX_AZURE_FOUNDRY_DEPLOYMENT_ID"
             | "AZURE_FOUNDRY_API_KEY"
@@ -4953,6 +5178,7 @@ fn is_model_runtime_setting(key: &str) -> bool {
         "CTOX_CHAT_SOURCE"
             | "CTOX_LOCAL_RUNTIME"
             | "CTOX_API_PROVIDER"
+            | "CTOX_OPENAI_AUTH_MODE"
             | "CTOX_AZURE_FOUNDRY_ENDPOINT"
             | "CTOX_AZURE_FOUNDRY_DEPLOYMENT_ID"
             | "AZURE_FOUNDRY_API_KEY"
@@ -6049,7 +6275,8 @@ fn previous_settings_view(view: SettingsView) -> SettingsView {
         SettingsView::Secrets => SettingsView::Communication,
         SettingsView::Paths => SettingsView::Secrets,
         SettingsView::Update => SettingsView::Paths,
-        SettingsView::HarnessMining => SettingsView::Update,
+        SettingsView::BusinessOs => SettingsView::Update,
+        SettingsView::HarnessMining => SettingsView::BusinessOs,
         SettingsView::HarnessFlow => SettingsView::HarnessMining,
     }
 }
@@ -6060,7 +6287,8 @@ fn next_settings_view(view: SettingsView) -> SettingsView {
         SettingsView::Communication => SettingsView::Secrets,
         SettingsView::Secrets => SettingsView::Paths,
         SettingsView::Paths => SettingsView::Update,
-        SettingsView::Update => SettingsView::HarnessMining,
+        SettingsView::Update => SettingsView::BusinessOs,
+        SettingsView::BusinessOs => SettingsView::HarnessMining,
         SettingsView::HarnessMining => SettingsView::HarnessFlow,
         SettingsView::HarnessFlow => SettingsView::Model,
     }
@@ -6503,6 +6731,17 @@ mod tests {
         assert!(with_openai.contains(&"gpt-5.4-mini"));
         assert!(with_openai.contains(&"gpt-5.4"));
 
+        let mut openai_subscription = BTreeMap::new();
+        openai_subscription.insert("CTOX_API_PROVIDER".to_string(), "openai".to_string());
+        openai_subscription.insert(
+            "CTOX_OPENAI_AUTH_MODE".to_string(),
+            "chatgpt_subscription".to_string(),
+        );
+        let with_subscription =
+            supported_chat_model_choices_with_gpu(&root, &openai_subscription, true);
+        assert!(with_subscription.contains(&"gpt-5.4-mini"));
+        assert!(with_subscription.contains(&"gpt-5.4"));
+
         let mut anthropic_api = BTreeMap::new();
         anthropic_api.insert("CTOX_API_PROVIDER".to_string(), "anthropic".to_string());
         anthropic_api.insert("ANTHROPIC_API_KEY".to_string(), "sk-ant-test".to_string());
@@ -6659,6 +6898,7 @@ mod tests {
         assert!(keys.contains(&"CTOX_CHAT_MODEL_BOOST"));
         assert!(keys.contains(&"CTOX_BOOST_DEFAULT_MINUTES"));
         assert!(keys.contains(&"CTOX_API_PROVIDER"));
+        assert!(keys.contains(&"CTOX_OPENAI_AUTH_MODE"));
         assert!(keys.contains(&"CTOX_LOCAL_RUNTIME"));
         assert!(keys.contains(&"OPENAI_API_KEY"));
         assert!(keys.contains(&"ANTHROPIC_API_KEY"));
@@ -6693,6 +6933,36 @@ mod tests {
         let app = App::new(root.clone(), db_path);
         assert_eq!(app.settings_view, SettingsView::Model);
 
+        let openai_key_row = app
+            .settings_items
+            .iter()
+            .find(|item| item.key == "OPENAI_API_KEY")
+            .unwrap()
+            .clone();
+        assert!(!app.setting_visible(&openai_key_row));
+
+        let openai_auth_row = app
+            .settings_items
+            .iter()
+            .find(|item| item.key == "CTOX_OPENAI_AUTH_MODE")
+            .unwrap()
+            .clone();
+        assert!(!app.setting_visible(&openai_auth_row));
+
+        let mut app = App::new(root.clone(), root.join("runtime/test-subscription.sqlite3"));
+        let provider_idx = app
+            .settings_items
+            .iter()
+            .position(|item| item.key == "CTOX_API_PROVIDER")
+            .unwrap();
+        let auth_idx = app
+            .settings_items
+            .iter()
+            .position(|item| item.key == "CTOX_OPENAI_AUTH_MODE")
+            .unwrap();
+        app.settings_items[provider_idx].value = "openai".to_string();
+        app.settings_items[auth_idx].value = "chatgpt_subscription".to_string();
+        app.refresh_dynamic_setting_choices();
         let openai_key_row = app
             .settings_items
             .iter()
@@ -6749,6 +7019,10 @@ mod tests {
 
         app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
             .unwrap();
+        assert_eq!(app.page, Page::Costs);
+
+        app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
+            .unwrap();
         assert_eq!(app.page, Page::Settings);
         assert_eq!(app.settings_view, SettingsView::Model);
 
@@ -6775,6 +7049,11 @@ mod tests {
         app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
             .unwrap();
         assert_eq!(app.page, Page::Settings);
+        assert_eq!(app.settings_view, SettingsView::BusinessOs);
+
+        app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
+            .unwrap();
+        assert_eq!(app.page, Page::Settings);
         assert_eq!(app.settings_view, SettingsView::HarnessMining);
 
         app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
@@ -6791,6 +7070,16 @@ mod tests {
             .unwrap();
         assert_eq!(app.page, Page::Settings);
         assert_eq!(app.settings_view, SettingsView::HarnessFlow);
+
+        app.handle_key_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT))
+            .unwrap();
+        assert_eq!(app.page, Page::Settings);
+        assert_eq!(app.settings_view, SettingsView::HarnessMining);
+
+        app.handle_key_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT))
+            .unwrap();
+        assert_eq!(app.page, Page::Settings);
+        assert_eq!(app.settings_view, SettingsView::BusinessOs);
     }
 
     #[test]
@@ -6850,6 +7139,7 @@ mod tests {
             vec![
                 "CTOX_SERVICE_TOGGLE",
                 "CTOX_API_PROVIDER",
+                "CTOX_OPENAI_AUTH_MODE",
                 "CTOX_LOCAL_RUNTIME",
                 "OPENAI_API_KEY",
                 "CTOX_CHAT_MODEL",
@@ -6883,6 +7173,7 @@ mod tests {
             vec![
                 "CTOX_SERVICE_TOGGLE",
                 "CTOX_API_PROVIDER",
+                "CTOX_OPENAI_AUTH_MODE",
                 "OPENAI_API_KEY",
                 "CTOX_CHAT_MODEL",
                 "CTOX_CHAT_SKILL_PRESET",
@@ -7378,6 +7669,9 @@ mod tests {
         assert_eq!(app.page, Page::Skills);
         app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
             .unwrap();
+        assert_eq!(app.page, Page::Costs);
+        app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
+            .unwrap();
         assert_eq!(app.page, Page::Settings);
         assert_eq!(app.settings_view, SettingsView::Model);
         app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
@@ -7392,6 +7686,22 @@ mod tests {
             .unwrap();
         assert_eq!(app.page, Page::Settings);
         assert_eq!(app.settings_view, SettingsView::Paths);
+        app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
+            .unwrap();
+        assert_eq!(app.page, Page::Settings);
+        assert_eq!(app.settings_view, SettingsView::Update);
+        app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
+            .unwrap();
+        assert_eq!(app.page, Page::Settings);
+        assert_eq!(app.settings_view, SettingsView::BusinessOs);
+        app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
+            .unwrap();
+        assert_eq!(app.page, Page::Settings);
+        assert_eq!(app.settings_view, SettingsView::HarnessMining);
+        app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
+            .unwrap();
+        assert_eq!(app.page, Page::Settings);
+        assert_eq!(app.settings_view, SettingsView::HarnessFlow);
         app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
             .unwrap();
         assert_eq!(app.page, Page::Chat);

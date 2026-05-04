@@ -1,0 +1,24 @@
+[package]
+name = "wha-appstate"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+wha-crypto = { workspace = true }
+wha-proto  = { workspace = true }
+wha-store  = { workspace = true }
+wha-binary = { workspace = true }
+wha-types  = { workspace = true }
+prost      = { workspace = true }
+hkdf       = { workspace = true }
+sha2       = { workspace = true }
+hmac       = { workspace = true }
+thiserror  = { workspace = true }
+tokio      = { workspace = true }
+async-trait = { workspace = true }
+parking_lot = { workspace = true }
+rand        = { workspace = true }
+
+[dev-dependencies]
+tokio      = { workspace = true }

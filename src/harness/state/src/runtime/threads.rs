@@ -12,6 +12,9 @@ SELECT
     source,
     agent_nickname,
     agent_role,
+    subagent_parent_thread_id,
+    subagent_depth,
+    agent_path,
     model_provider,
     model,
     reasoning_effort,
@@ -126,6 +129,9 @@ SELECT
     source,
     agent_nickname,
     agent_role,
+    subagent_parent_thread_id,
+    subagent_depth,
+    agent_path,
     model_provider,
     model,
     reasoning_effort,
@@ -226,6 +232,9 @@ INSERT INTO threads (
     source,
     agent_nickname,
     agent_role,
+    subagent_parent_thread_id,
+    subagent_depth,
+    agent_path,
     model_provider,
     model,
     reasoning_effort,
@@ -242,7 +251,7 @@ INSERT INTO threads (
     git_branch,
     git_origin_url,
     memory_mode
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO NOTHING
             "#,
         )
@@ -253,6 +262,9 @@ ON CONFLICT(id) DO NOTHING
         .bind(metadata.source.as_str())
         .bind(metadata.agent_nickname.as_deref())
         .bind(metadata.agent_role.as_deref())
+        .bind(metadata.subagent_parent_thread_id.as_deref())
+        .bind(metadata.subagent_depth)
+        .bind(metadata.agent_path.as_deref())
         .bind(metadata.model_provider.as_str())
         .bind(metadata.model.as_deref())
         .bind(
@@ -349,6 +361,9 @@ INSERT INTO threads (
     source,
     agent_nickname,
     agent_role,
+    subagent_parent_thread_id,
+    subagent_depth,
+    agent_path,
     model_provider,
     model,
     reasoning_effort,
@@ -365,7 +380,7 @@ INSERT INTO threads (
     git_branch,
     git_origin_url,
     memory_mode
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
     rollout_path = excluded.rollout_path,
     created_at = excluded.created_at,
@@ -373,6 +388,9 @@ ON CONFLICT(id) DO UPDATE SET
     source = excluded.source,
     agent_nickname = excluded.agent_nickname,
     agent_role = excluded.agent_role,
+    subagent_parent_thread_id = excluded.subagent_parent_thread_id,
+    subagent_depth = excluded.subagent_depth,
+    agent_path = excluded.agent_path,
     model_provider = excluded.model_provider,
     model = excluded.model,
     reasoning_effort = excluded.reasoning_effort,
@@ -397,6 +415,9 @@ ON CONFLICT(id) DO UPDATE SET
         .bind(metadata.source.as_str())
         .bind(metadata.agent_nickname.as_deref())
         .bind(metadata.agent_role.as_deref())
+        .bind(metadata.subagent_parent_thread_id.as_deref())
+        .bind(metadata.subagent_depth)
+        .bind(metadata.agent_path.as_deref())
         .bind(metadata.model_provider.as_str())
         .bind(metadata.model.as_deref())
         .bind(
@@ -687,6 +708,7 @@ mod tests {
     use ctox_protocol::protocol::SessionMeta;
     use ctox_protocol::protocol::SessionMetaLine;
     use ctox_protocol::protocol::SessionSource;
+    use ctox_protocol::protocol::SubAgentSource;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
 
@@ -726,6 +748,55 @@ mod tests {
                 .await
                 .expect("memory mode should remain readable");
         assert_eq!(memory_mode, "disabled");
+    }
+
+    #[tokio::test]
+    async fn upsert_thread_persists_thread_spawn_forensics() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+            .await
+            .expect("state db should initialize");
+        let parent_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000001").expect("thread id");
+        let child_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000002").expect("thread id");
+        let source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id,
+            depth: 2,
+            agent_path: Some(ctox_protocol::AgentPath::try_from("/root/atlas").unwrap()),
+            agent_nickname: Some("Atlas".to_string()),
+            agent_role: Some("explorer".to_string()),
+        });
+        let mut builder = ThreadMetadataBuilder::new(
+            child_thread_id,
+            codex_home.join("rollout-child.jsonl"),
+            DateTime::<Utc>::from_timestamp(1_700_000_000, 0).expect("timestamp"),
+            source,
+        );
+        builder.agent_nickname = Some("Atlas".to_string());
+        builder.agent_role = Some("explorer".to_string());
+        builder.cwd = codex_home.clone();
+        let mut metadata = builder.build("test-provider");
+        metadata.first_user_message = Some("inspect shard".to_string());
+
+        runtime
+            .upsert_thread(&metadata)
+            .await
+            .expect("upsert should persist sub-agent metadata");
+
+        let loaded = runtime
+            .get_thread(child_thread_id)
+            .await
+            .expect("thread should load")
+            .expect("thread should exist");
+        assert_eq!(
+            loaded.subagent_parent_thread_id.as_deref(),
+            Some(parent_thread_id.to_string().as_str())
+        );
+        assert_eq!(loaded.subagent_depth, Some(2));
+        assert_eq!(loaded.agent_path.as_deref(), Some("/root/atlas"));
+        assert_eq!(loaded.agent_nickname.as_deref(), Some("Atlas"));
+        assert_eq!(loaded.agent_role.as_deref(), Some("explorer"));
     }
 
     #[tokio::test]

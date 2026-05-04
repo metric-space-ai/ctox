@@ -1,5 +1,4 @@
 use super::*;
-use crate::AuthManager;
 use crate::CodexAuth;
 use crate::ThreadManager;
 use crate::built_in_model_providers;
@@ -18,12 +17,8 @@ use crate::protocol::SubAgentSource;
 use crate::tools::context::ToolOutput;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use ctox_protocol::ThreadId;
-use ctox_protocol::models::ContentItem;
 use ctox_protocol::models::FunctionCallOutputBody;
 use ctox_protocol::models::ResponseInputItem;
-use ctox_protocol::models::ResponseItem;
-use ctox_protocol::protocol::InitialHistory;
-use ctox_protocol::protocol::RolloutItem;
 use pretty_assertions::assert_eq;
 use serde::Deserialize;
 use serde_json::json;
@@ -878,25 +873,19 @@ async fn resume_agent_restores_closed_agent_and_accepts_send_input() {
     let manager = thread_manager();
     session.services.agent_control = manager.agent_control();
     let config = turn.config.as_ref().clone();
-    let thread = manager
-        .resume_thread_with_history(
-            config,
-            InitialHistory::Forked(vec![RolloutItem::ResponseItem(ResponseItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: "materialized".to_string(),
-                }],
-                end_turn: None,
-                phase: None,
-            })]),
-            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy")),
-            false,
-            None,
-        )
-        .await
-        .expect("start thread");
+    let thread = start_child_thread(&manager, config, session.conversation_id).await;
     let agent_id = thread.thread_id;
+    thread
+        .thread
+        .inject_user_message_without_turn("materialized".to_string())
+        .await;
+    thread
+        .thread
+        .codex
+        .session
+        .ensure_rollout_materialized()
+        .await;
+    thread.thread.codex.session.flush_rollout().await;
     let _ = manager
         .agent_control()
         .shutdown_agent(agent_id)
@@ -1082,6 +1071,37 @@ async fn wait_agent_times_out_when_status_is_not_final() {
     let config = turn.config.as_ref().clone();
     let thread = start_child_thread(&manager, config, session.conversation_id).await;
     let agent_id = thread.thread_id;
+    thread
+        .thread
+        .inject_user_message_without_turn("materialized".to_string())
+        .await;
+    thread
+        .thread
+        .codex
+        .session
+        .ensure_rollout_materialized()
+        .await;
+    thread.thread.codex.session.flush_rollout().await;
+    let _ = manager
+        .agent_control()
+        .shutdown_agent(agent_id)
+        .await
+        .expect("shutdown agent before pending resume");
+    manager
+        .agent_control()
+        .resume_agent_from_rollout(
+            turn.config.as_ref().clone(),
+            agent_id,
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: session.conversation_id,
+                depth: 1,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: None,
+            }),
+        )
+        .await
+        .expect("resume child without input");
     let invocation = invocation(
         Arc::new(session),
         Arc::new(turn),
@@ -1107,9 +1127,9 @@ async fn wait_agent_times_out_when_status_is_not_final() {
     );
     assert_eq!(success, None);
 
-    let _ = thread
-        .thread
-        .submit(Op::Shutdown {})
+    let _ = manager
+        .agent_control()
+        .shutdown_agent(agent_id)
         .await
         .expect("shutdown should submit");
 }
@@ -1360,6 +1380,7 @@ async fn build_agent_resume_config_clears_base_instructions() {
     expected.model_reasoning_summary = Some(turn.reasoning_summary);
     expected.developer_instructions = config.developer_instructions.clone();
     expected.compact_prompt = config.compact_prompt.clone();
+    apply_spawn_agent_overrides(&mut expected, 0);
     expected.permissions.shell_environment_policy = turn.shell_environment_policy.clone();
     expected.ctox_linux_sandbox_exe = turn.ctox_linux_sandbox_exe.clone();
     expected.cwd = turn.cwd.clone();

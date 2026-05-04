@@ -48,6 +48,8 @@ ctox-cloud-requirements  = { path = "src/harness/cloud-requirements" }
 ctox-utils-absolute-path = { path = "src/harness/utils/absolute-path" }
 toml = "0.9"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+rustls = { version = "0.23", features = ["ring"] }
+whatsapp = { path = "src/communication/whatsapp_rust/crates/whatsapp" }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [

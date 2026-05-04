@@ -11,7 +11,7 @@ use rusqlite::Connection;
 use serde_json::{json, Value};
 use sha2::Digest;
 use sha2::Sha256;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -44,9 +44,15 @@ const PROCESS_MINING_USAGE: &str = "usage:
   ctox process-mining state-audit [--limit <n>]
   ctox process-mining coverage [--limit <n>]
   ctox process-mining violations [--limit <n>]
+  ctox process-mining prune [--sqlite-access-window <n>]
   ctox process-mining scan-violations";
 static SQLITE_ACCESS_BUFFER: OnceLock<Mutex<Vec<SqliteAccessRecord>>> = OnceLock::new();
 static SQLITE_ACCESS_SEQ: AtomicU64 = AtomicU64::new(1);
+static SQLITE_ACCESS_RETENTION_FLUSHES: AtomicU64 = AtomicU64::new(0);
+const SQLITE_ACCESS_READS_ENV: &str = "CTOX_PROCESS_MINING_RECORD_SQLITE_READS";
+const SQLITE_ACCESS_MAX_EVENTS_PER_COMMAND: usize = 512;
+const SQLITE_ACCESS_RETENTION_WINDOW: i64 = 200_000;
+const SQLITE_ACCESS_RETENTION_INTERVAL_FLUSHES: u64 = 128;
 
 #[derive(Debug, Clone)]
 struct TableInfo {
@@ -329,6 +335,39 @@ pub fn attach_sqlite_access_recorder(conn: &Connection, db_path: &Path) {
     }));
 }
 
+fn sqlite_access_read_recording_enabled() -> bool {
+    std::env::var(SQLITE_ACCESS_READS_ENV)
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn compact_sqlite_access_records(records: Vec<SqliteAccessRecord>) -> Vec<SqliteAccessRecord> {
+    let mut seen = BTreeSet::new();
+    let mut compacted = Vec::new();
+    for record in records {
+        let key = (
+            record.operation.clone(),
+            record.table_name.clone(),
+            record.column_name.clone(),
+            record.action.clone(),
+            record.database_name.clone(),
+            record.accessor.clone(),
+        );
+        if seen.insert(key) {
+            compacted.push(record);
+        }
+        if compacted.len() >= SQLITE_ACCESS_MAX_EVENTS_PER_COMMAND {
+            break;
+        }
+    }
+    compacted
+}
+
 pub fn flush_sqlite_access_events(
     conn: &Connection,
     db_path: &Path,
@@ -350,6 +389,8 @@ pub fn flush_sqlite_access_events(
         }
         *guard = retained;
     }
+
+    records = compact_sqlite_access_records(records);
 
     if records.is_empty() {
         return Ok(0);
@@ -442,7 +483,33 @@ pub fn flush_sqlite_access_events(
         )?;
         inserted += 1;
     }
+    maybe_prune_sqlite_access_process_events(conn)?;
     Ok(inserted)
+}
+
+fn maybe_prune_sqlite_access_process_events(conn: &Connection) -> Result<usize> {
+    let flushes = SQLITE_ACCESS_RETENTION_FLUSHES.fetch_add(1, Ordering::Relaxed) + 1;
+    if flushes % SQLITE_ACCESS_RETENTION_INTERVAL_FLUSHES != 0 {
+        return Ok(0);
+    }
+    prune_sqlite_access_process_events(conn, SQLITE_ACCESS_RETENTION_WINDOW)
+}
+
+fn prune_sqlite_access_process_events(conn: &Connection, keep_window: i64) -> Result<usize> {
+    let keep_window = keep_window.max(1);
+    let deleted = conn.execute(
+        r#"
+        DELETE FROM ctox_process_events
+        WHERE case_id LIKE 'sqlite-access:%'
+          AND event_seq <= COALESCE((
+            SELECT MAX(event_seq) - ?1
+            FROM ctox_process_events
+            WHERE case_id LIKE 'sqlite-access:%'
+          ), -1)
+        "#,
+        params![keep_window],
+    )?;
+    Ok(deleted)
 }
 
 pub fn activate_command_context(
@@ -1240,6 +1307,23 @@ pub fn handle_process_mining_command(root: &Path, args: &[String]) -> Result<()>
             );
             Ok(())
         }
+        Some("prune") => {
+            ensure_process_mining_schema(&conn, &db_path)?;
+            let sqlite_access_window = find_flag_value(args, "--sqlite-access-window")
+                .and_then(|value| value.parse::<i64>().ok())
+                .unwrap_or(SQLITE_ACCESS_RETENTION_WINDOW)
+                .clamp(1, 5_000_000);
+            let deleted = prune_sqlite_access_process_events(&conn, sqlite_access_window)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json!({
+                    "ok": true,
+                    "deleted_sqlite_access_events": deleted,
+                    "sqlite_access_window": sqlite_access_window
+                }))?
+            );
+            Ok(())
+        }
         Some("scan-violations") => {
             ensure_process_mining_schema(&conn, &db_path)?;
             let detected_at = now_expr_value();
@@ -1449,6 +1533,9 @@ fn sqlite_access_record_from_auth_context(
             table_name,
             column_name,
         } => {
+            if !sqlite_access_read_recording_enabled() {
+                return None;
+            }
             if is_ignored_access_table(table_name) {
                 return None;
             }
@@ -5130,7 +5217,7 @@ mod tests {
     }
 
     #[test]
-    fn sqlite_authorizer_flushes_read_events() -> Result<()> {
+    fn sqlite_authorizer_skips_read_events_by_default() -> Result<()> {
         let dir = tempdir()?;
         let db_path = dir.path().join("ctox.sqlite3");
         let conn = Connection::open(&db_path)?;
@@ -5169,8 +5256,49 @@ mod tests {
             [],
             |row| row.get(0),
         )?;
-        assert!(flushed > 0);
-        assert!(read_count > 0);
+        assert_eq!(flushed, 0);
+        assert_eq!(read_count, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn sqlite_access_prune_keeps_recent_debug_window() -> Result<()> {
+        let dir = tempdir()?;
+        let db_path = dir.path().join("ctox.sqlite3");
+        let conn = Connection::open(&db_path)?;
+        ensure_process_mining_schema(&conn, &db_path)?;
+        for idx in 0..5 {
+            conn.execute(
+                r#"
+                INSERT INTO ctox_process_events (
+                    event_id, observed_at, case_id, activity, lifecycle_transition,
+                    entity_type, entity_id, table_name, operation, from_state, to_state,
+                    primary_key_json, row_before_json, row_after_json, changed_columns_json,
+                    turn_id, command_id, actor_key, source, command_name, db_path, metadata_json
+                )
+                VALUES (
+                    ?1, ?2, 'sqlite-access:/tmp/test:knowledge_notes', 'knowledge_notes.READ',
+                    'access', 'knowledge', ?3, 'knowledge_notes', 'READ', NULL, NULL,
+                    json_object(), json_object(), json_object(), json_array(),
+                    'turn', 'cmd', 'agent', 'test', 'read', ?4, json_object()
+                )
+                "#,
+                params![
+                    format!("sqlite-access-test-{idx}"),
+                    format!("2026-05-01T00:00:0{idx}Z"),
+                    format!("entity-{idx}"),
+                    db_path.to_string_lossy().to_string(),
+                ],
+            )?;
+        }
+        let deleted = prune_sqlite_access_process_events(&conn, 2)?;
+        let remaining: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM ctox_process_events WHERE case_id LIKE 'sqlite-access:%'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(deleted, 3);
+        assert_eq!(remaining, 2);
         Ok(())
     }
 

@@ -39,6 +39,15 @@ impl ToolHandler for Handler {
                 "ids must be non-empty".to_owned(),
             ));
         }
+        let timeout_ms = args.timeout_ms.unwrap_or(DEFAULT_WAIT_TIMEOUT_MS);
+        let timeout_ms = match timeout_ms {
+            ms if ms <= 0 => {
+                return Err(FunctionCallError::RespondToModel(
+                    "timeout_ms must be greater than zero".to_owned(),
+                ));
+            }
+            ms => ms.clamp(MIN_WAIT_TIMEOUT_MS, MAX_WAIT_TIMEOUT_MS),
+        };
         let receiver_thread_ids = args
             .ids
             .iter()
@@ -61,16 +70,6 @@ impl ToolHandler for Handler {
                 agent_role,
             });
         }
-
-        let timeout_ms = args.timeout_ms.unwrap_or(DEFAULT_WAIT_TIMEOUT_MS);
-        let timeout_ms = match timeout_ms {
-            ms if ms <= 0 => {
-                return Err(FunctionCallError::RespondToModel(
-                    "timeout_ms must be greater than zero".to_owned(),
-                ));
-            }
-            ms => ms.clamp(MIN_WAIT_TIMEOUT_MS, MAX_WAIT_TIMEOUT_MS),
-        };
 
         session
             .send_event(

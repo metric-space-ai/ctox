@@ -50,6 +50,7 @@ pub(super) fn draw(frame: &mut Frame, app: &App) {
     match app.page {
         Page::Chat => render_chat(frame, app, layout[2]),
         Page::Skills => render_skills(frame, app, layout[2]),
+        Page::Costs => render_costs(frame, app, layout[2]),
         Page::Settings => render_settings(frame, app, layout[2]),
     }
     render_status(frame, app, layout[3]);
@@ -82,9 +83,10 @@ fn render_tabs(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     let selected = match app.page {
         Page::Chat => 0,
         Page::Skills => 1,
-        Page::Settings => 2,
+        Page::Costs => 2,
+        Page::Settings => 3,
     };
-    let titles = ["Chat", "Skills", "Settings"]
+    let titles = ["Chat", "Skills", "Costs", "Settings"]
         .into_iter()
         .map(Line::from)
         .collect::<Vec<_>>();
@@ -258,6 +260,448 @@ fn render_skills(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     frame.render_widget(details, body[1]);
 }
 
+fn render_costs(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
+    let today = crate::api_costs::today_day();
+    let summary = match crate::api_costs::summary_for_day(&app.root, &today) {
+        Ok(summary) => summary,
+        Err(err) => {
+            let widget = Paragraph::new(vec![
+                Line::from(Span::styled(
+                    "Cost view unavailable",
+                    Style::default()
+                        .fg(Color::LightRed)
+                        .add_modifier(Modifier::BOLD),
+                )),
+                Line::from(String::new()),
+                Line::from(truncate_line(
+                    &err.to_string(),
+                    area.width.saturating_sub(4) as usize,
+                )),
+            ])
+            .block(
+                pane_block().borders(Borders::TOP).title(Span::styled(
+                    " api costs ",
+                    Style::default()
+                        .fg(Color::LightRed)
+                        .add_modifier(Modifier::BOLD),
+                )),
+            )
+            .style(Style::default().fg(Color::Gray))
+            .wrap(Wrap { trim: false });
+            frame.render_widget(widget, area);
+            return;
+        }
+    };
+    let week_summary =
+        crate::api_costs::summary_for_current_week(&app.root).unwrap_or_else(|_| summary.clone());
+    let month_summary =
+        crate::api_costs::summary_for_current_month(&app.root).unwrap_or_else(|_| summary.clone());
+    let recent = crate::api_costs::summaries_for_recent_days(&app.root, 7).unwrap_or_default();
+
+    if area.width < 96 {
+        render_costs_narrow(
+            frame,
+            &summary,
+            &week_summary,
+            &month_summary,
+            &recent,
+            area,
+        );
+        return;
+    }
+
+    let outer = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(7), Constraint::Min(8)])
+        .split(area);
+    let metrics = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(25),
+            Constraint::Percentage(25),
+            Constraint::Percentage(25),
+            Constraint::Percentage(25),
+        ])
+        .split(outer[0]);
+
+    let pricing_note = if summary.unpriced_events > 0 {
+        format!("{} call(s) need prices", summary.unpriced_events)
+    } else if summary.events > 0 {
+        "All calls priced".to_string()
+    } else {
+        "Waiting for API calls".to_string()
+    };
+    let pricing_value = if summary.unpriced_events > 0 {
+        "Needs price"
+    } else if summary.events > 0 {
+        "Complete"
+    } else {
+        "No data"
+    };
+
+    render_metric_card(
+        frame,
+        metrics[0],
+        " Today spend ",
+        &crate::api_costs::format_usd_micros(summary.total_cost_microusd),
+        &format!(
+            "{} call(s), {}",
+            summary.events,
+            compact_u64(summary.total_tokens)
+        ),
+        Color::LightGreen,
+    );
+    render_metric_card(
+        frame,
+        metrics[1],
+        " This week ",
+        &crate::api_costs::format_usd_micros(week_summary.total_cost_microusd),
+        &format!(
+            "{} call(s), {}",
+            week_summary.events,
+            compact_u64(week_summary.total_tokens)
+        ),
+        Color::LightCyan,
+    );
+    render_metric_card(
+        frame,
+        metrics[2],
+        " This month ",
+        &crate::api_costs::format_usd_micros(month_summary.total_cost_microusd),
+        &format!(
+            "{} call(s), {}",
+            month_summary.events,
+            compact_u64(month_summary.total_tokens)
+        ),
+        Color::LightYellow,
+    );
+    render_metric_card(
+        frame,
+        metrics[3],
+        " Pricing ",
+        pricing_value,
+        &pricing_note,
+        if summary.unpriced_events > 0 {
+            Color::LightRed
+        } else {
+            Color::LightBlue
+        },
+    );
+
+    let lower = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(66), Constraint::Percentage(34)])
+        .split(outer[1]);
+
+    let model_lines = cost_model_lines(
+        &summary,
+        lower[0].width.saturating_sub(4) as usize,
+        lower[0].height.saturating_sub(2) as usize,
+    );
+    frame.render_widget(
+        Paragraph::new(model_lines)
+            .block(
+                pane_block().borders(Borders::TOP).title(Span::styled(
+                    " by model ",
+                    Style::default()
+                        .fg(Color::LightCyan)
+                        .add_modifier(Modifier::BOLD),
+                )),
+            )
+            .style(Style::default().fg(Color::White))
+            .wrap(Wrap { trim: false }),
+        lower[0],
+    );
+
+    let period_lines = cost_period_lines(
+        &summary,
+        &week_summary,
+        &month_summary,
+        &recent,
+        lower[1].width.saturating_sub(4) as usize,
+        lower[1].height.saturating_sub(2) as usize,
+    );
+    frame.render_widget(
+        Paragraph::new(period_lines)
+            .block(
+                sidebar_block().borders(Borders::TOP).title(Span::styled(
+                    " periods ",
+                    Style::default()
+                        .fg(Color::LightBlue)
+                        .add_modifier(Modifier::BOLD),
+                )),
+            )
+            .style(Style::default().fg(Color::Gray))
+            .wrap(Wrap { trim: false }),
+        lower[1],
+    );
+}
+
+fn render_costs_narrow(
+    frame: &mut Frame,
+    summary: &crate::api_costs::ApiCostSummary,
+    week_summary: &crate::api_costs::ApiCostSummary,
+    month_summary: &crate::api_costs::ApiCostSummary,
+    recent: &[crate::api_costs::ApiCostSummary],
+    area: ratatui::layout::Rect,
+) {
+    let split = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(9), Constraint::Min(8)])
+        .split(area);
+    let overview_lines = vec![
+        Line::from(vec![
+            Span::styled(
+                "Today spend ",
+                Style::default()
+                    .fg(Color::Gray)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                crate::api_costs::format_usd_micros(summary.total_cost_microusd),
+                Style::default()
+                    .fg(Color::LightGreen)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(format!(
+            "Today calls {}  Tokens {}",
+            summary.events,
+            compact_u64(summary.total_tokens)
+        )),
+        Line::from(format!(
+            "Week {}  Month {}",
+            crate::api_costs::format_usd_micros(week_summary.total_cost_microusd),
+            crate::api_costs::format_usd_micros(month_summary.total_cost_microusd)
+        )),
+        Line::from(if summary.unpriced_events > 0 {
+            format!("Pricing needed for {} call(s)", summary.unpriced_events)
+        } else if summary.events > 0 {
+            "All recorded calls have pricing".to_string()
+        } else {
+            "No API calls recorded today".to_string()
+        }),
+        Line::from("CLI: ctox cost today | ctox cost week | ctox cost month"),
+    ];
+    frame.render_widget(
+        Paragraph::new(overview_lines)
+            .block(
+                pane_block().borders(Borders::TOP).title(Span::styled(
+                    " api costs ",
+                    Style::default()
+                        .fg(Color::LightCyan)
+                        .add_modifier(Modifier::BOLD),
+                )),
+            )
+            .style(Style::default().fg(Color::White))
+            .wrap(Wrap { trim: false }),
+        split[0],
+    );
+
+    let lines = if area.height > 24 {
+        cost_model_lines(
+            summary,
+            split[1].width.saturating_sub(4) as usize,
+            split[1].height.saturating_sub(2) as usize,
+        )
+    } else {
+        cost_period_lines(
+            summary,
+            week_summary,
+            month_summary,
+            recent,
+            split[1].width.saturating_sub(4) as usize,
+            split[1].height.saturating_sub(2) as usize,
+        )
+    };
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(
+                sidebar_block().borders(Borders::TOP).title(Span::styled(
+                    " details ",
+                    Style::default()
+                        .fg(Color::LightBlue)
+                        .add_modifier(Modifier::BOLD),
+                )),
+            )
+            .style(Style::default().fg(Color::Gray))
+            .wrap(Wrap { trim: false }),
+        split[1],
+    );
+}
+
+fn render_metric_card(
+    frame: &mut Frame,
+    area: ratatui::layout::Rect,
+    title: &'static str,
+    value: &str,
+    note: &str,
+    color: Color,
+) {
+    let lines = vec![
+        Line::from(Span::styled(
+            truncate_line(value, area.width.saturating_sub(4) as usize),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            truncate_line(note, area.width.saturating_sub(4) as usize),
+            Style::default().fg(Color::Gray),
+        )),
+    ];
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(pane_block().borders(Borders::TOP).title(Span::styled(
+                title,
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            )))
+            .style(Style::default().fg(Color::White))
+            .wrap(Wrap { trim: false }),
+        area,
+    );
+}
+
+fn cost_model_lines(
+    summary: &crate::api_costs::ApiCostSummary,
+    width: usize,
+    height: usize,
+) -> Vec<Line<'static>> {
+    if height == 0 {
+        return Vec::new();
+    }
+    if summary.by_model.is_empty() {
+        return vec![
+            Line::from(Span::styled(
+                "No API costs recorded today.",
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(String::new()),
+            Line::from("Remote model calls will appear here with provider, model, tokens and spend."),
+            Line::from("Set prices with: ctox cost set-price --provider <provider> --model <model> --input <usd_per_1m> --output <usd_per_1m>"),
+        ]
+        .into_iter()
+        .take(height)
+        .collect();
+    }
+
+    let name_width = width.saturating_sub(44).clamp(18, 44);
+    let mut lines = vec![Line::from(Span::styled(
+        format!(
+            "{:<name_width$} {:>12} {:>6} {:>10} {}",
+            "Provider / model", "Spend", "Calls", "Tokens", "Status"
+        ),
+        Style::default().fg(Color::DarkGray),
+    ))];
+    for model in summary.by_model.iter().take(height.saturating_sub(1)) {
+        let name = truncate_line(&format!("{} / {}", model.provider, model.model), name_width);
+        let status = if model.unpriced_events > 0 {
+            "needs price"
+        } else {
+            "priced"
+        };
+        let style = if model.unpriced_events > 0 {
+            Style::default().fg(Color::LightRed)
+        } else {
+            Style::default().fg(Color::White)
+        };
+        lines.push(Line::from(Span::styled(
+            format!(
+                "{:<name_width$} {:>12} {:>6} {:>10} {}",
+                name,
+                crate::api_costs::format_usd_micros(model.total_cost_microusd),
+                model.events,
+                compact_u64(model.total_tokens),
+                status
+            ),
+            style,
+        )));
+    }
+    lines
+}
+
+fn cost_period_lines(
+    today: &crate::api_costs::ApiCostSummary,
+    week: &crate::api_costs::ApiCostSummary,
+    month: &crate::api_costs::ApiCostSummary,
+    recent: &[crate::api_costs::ApiCostSummary],
+    width: usize,
+    height: usize,
+) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::from(Span::styled(
+        format!(
+            "{:<10} {:>12} {:>6} {}",
+            "Period", "Spend", "Calls", "Pricing"
+        ),
+        Style::default().fg(Color::DarkGray),
+    ))];
+    for (label, summary) in [("Today", today), ("This week", week), ("This month", month)] {
+        lines.push(period_summary_line(label, summary));
+    }
+    if lines.len() + 2 < height {
+        lines.push(Line::from(String::new()));
+        lines.push(Line::from(Span::styled(
+            "Recent days",
+            Style::default()
+                .fg(Color::Gray)
+                .add_modifier(Modifier::BOLD),
+        )));
+        for day in recent
+            .iter()
+            .filter(|day| day.day != today.day)
+            .take(height.saturating_sub(lines.len() + 1))
+        {
+            lines.push(period_summary_line(&day.day, day));
+        }
+    }
+    if lines.len() < height {
+        lines.push(Line::from(String::new()));
+        lines.push(Line::from(Span::styled(
+            truncate_line(
+                "CLI: ctox cost today | ctox cost week | ctox cost month",
+                width,
+            ),
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+    lines.into_iter().take(height).collect()
+}
+
+fn period_summary_line(label: &str, summary: &crate::api_costs::ApiCostSummary) -> Line<'static> {
+    let pricing = if summary.unpriced_events > 0 {
+        "needs price"
+    } else if summary.events > 0 {
+        "priced"
+    } else {
+        "no data"
+    };
+    let style = if summary.unpriced_events > 0 {
+        Style::default().fg(Color::LightRed)
+    } else {
+        Style::default().fg(Color::White)
+    };
+    Line::from(Span::styled(
+        format!(
+            "{:<10} {:>12} {:>6} {}",
+            truncate_line(label, 10),
+            crate::api_costs::format_usd_micros(summary.total_cost_microusd),
+            summary.events,
+            pricing
+        ),
+        style,
+    ))
+}
+
+fn compact_u64(value: u64) -> String {
+    if value >= 1_000_000 {
+        format!("{:.1}M", value as f64 / 1_000_000.0)
+    } else if value >= 1_000 {
+        format!("{:.1}k", value as f64 / 1_000.0)
+    } else {
+        value.to_string()
+    }
+}
+
 fn render_settings(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     if area.width < 96 {
         render_settings_narrow(frame, app, area);
@@ -270,6 +714,10 @@ fn render_settings(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     render_settings_view_tabs(frame, app, outer[0]);
     if app.settings_view == SettingsView::Update {
         render_settings_update(frame, app, outer[1]);
+        return;
+    }
+    if app.settings_view == SettingsView::BusinessOs {
+        render_settings_business_os(frame, app, outer[1]);
         return;
     }
     if app.settings_view == SettingsView::HarnessMining {
@@ -456,6 +904,53 @@ fn render_settings_update(frame: &mut Frame, app: &App, area: ratatui::layout::R
     frame.render_widget(
         Paragraph::new(Span::styled(footer, Style::default().fg(Color::DarkGray))),
         split[3],
+    );
+}
+
+fn render_settings_business_os(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
+    let body = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(56), Constraint::Percentage(44)])
+        .split(area);
+
+    let status = crate::service::business_os::business_os_status_text(&app.root);
+    frame.render_widget(
+        Paragraph::new(status)
+            .block(
+                pane_block().borders(Borders::TOP).title(Span::styled(
+                    " business os installer ",
+                    Style::default()
+                        .fg(Color::LightCyan)
+                        .add_modifier(Modifier::BOLD),
+                )),
+            )
+            .wrap(Wrap { trim: false }),
+        body[0],
+    );
+
+    let contract = "What CTOX knows here:\n\n\
+      - CTOX Business OS is a skill-owned product template, not generic app code.\n\
+      - Installation creates a separate customer-owned repository.\n\
+      - The generated repo can be operated, deployed, modified, and upgraded by CTOX through normal code changes.\n\
+      - Public website code stays independent; deployments decide whether website login can open Business OS.\n\n\
+      Typical flow:\n\
+        1. Run the dry-run command.\n\
+        2. Install into an empty target directory.\n\
+        3. Configure Postgres and deployment env.\n\
+        4. Let CTOX customize modules through the business-stack skill.\n";
+    frame.render_widget(
+        Paragraph::new(contract)
+            .block(
+                sidebar_block().borders(Borders::TOP).title(Span::styled(
+                    " contract ",
+                    Style::default()
+                        .fg(Color::LightBlue)
+                        .add_modifier(Modifier::BOLD),
+                )),
+            )
+            .style(Style::default().fg(Color::Gray))
+            .wrap(Wrap { trim: false }),
+        body[1],
     );
 }
 
@@ -904,6 +1399,10 @@ fn render_settings_narrow(frame: &mut Frame, app: &App, area: ratatui::layout::R
     render_settings_view_tabs(frame, app, outer[0]);
     if app.settings_view == SettingsView::Update {
         render_settings_update(frame, app, outer[1]);
+        return;
+    }
+    if app.settings_view == SettingsView::BusinessOs {
+        render_settings_business_os(frame, app, outer[1]);
         return;
     }
     if app.settings_view == SettingsView::HarnessMining {
@@ -1850,6 +2349,7 @@ fn settings_snapshot_text(app: &App, width: usize, height: usize) -> String {
     }
     match item.key {
         "CTOX_API_PROVIDER"
+        | "CTOX_OPENAI_AUTH_MODE"
         | "OPENAI_API_KEY"
         | "OPENROUTER_API_KEY"
         | "AZURE_FOUNDRY_API_KEY"
@@ -2001,6 +2501,16 @@ fn append_provider_details(lines: &mut Vec<String>, app: &App, width: usize) {
         .find(|item| item.key == "OPENAI_API_KEY")
         .map(|item| !item.value.trim().is_empty())
         .unwrap_or(false);
+    let openai_subscription_auth = app
+        .settings_items
+        .iter()
+        .find(|item| item.key == "CTOX_OPENAI_AUTH_MODE")
+        .map(|item| {
+            item.value
+                .trim()
+                .eq_ignore_ascii_case("chatgpt_subscription")
+        })
+        .unwrap_or(false);
     let openrouter_token_present = app
         .settings_items
         .iter()
@@ -2022,10 +2532,12 @@ fn append_provider_details(lines: &mut Vec<String>, app: &App, width: usize) {
     lines.push(format!("local    {local_pool} models"));
     lines.push(format!(
         "openai   {}",
-        if openai_token_present {
+        if openai_subscription_auth {
+            format!("{api_pool} models via Codex subscription auth")
+        } else if openai_token_present {
             format!("{api_pool} models unlocked")
         } else {
-            format!("{api_pool} models locked until token is saved")
+            format!("{api_pool} models locked until token or subscription auth is configured")
         }
     ));
     lines.push(format!(
@@ -2572,6 +3084,9 @@ fn signed_delta(delta: i64) -> String {
 }
 
 fn header_lines(app: &App, width: usize) -> Vec<Line<'static>> {
+    if app.page == Page::Costs {
+        return cost_header_lines(app, width);
+    }
     let allocation_line = combined_gpu_allocation_line(app, width);
     let has_allocation_line = allocation_line
         .spans
@@ -2591,6 +3106,99 @@ fn header_lines(app: &App, width: usize) -> Vec<Line<'static>> {
         lines.push(context_debug_line(app, width));
     }
     lines
+}
+
+fn cost_header_lines(app: &App, width: usize) -> Vec<Line<'static>> {
+    let today = crate::api_costs::today_day();
+    match crate::api_costs::summary_for_day(&app.root, &today) {
+        Ok(summary) => {
+            let week_summary = crate::api_costs::summary_for_current_week(&app.root)
+                .unwrap_or_else(|_| summary.clone());
+            let month_summary = crate::api_costs::summary_for_current_month(&app.root)
+                .unwrap_or_else(|_| summary.clone());
+            let pricing_line = if summary.unpriced_events > 0 {
+                format!(
+                    "Pricing needed for {} call(s). Totals exclude unpriced usage.",
+                    summary.unpriced_events
+                )
+            } else if summary.events > 0 {
+                "All recorded API calls have configured pricing.".to_string()
+            } else {
+                "No remote API calls recorded today.".to_string()
+            };
+            let top_model = summary
+                .by_model
+                .iter()
+                .max_by_key(|model| model.total_cost_microusd)
+                .map(|model| {
+                    format!(
+                        "Highest spend {} / {}  {} calls  {} tokens",
+                        model.provider,
+                        model.model,
+                        model.events,
+                        compact_u64(model.total_tokens)
+                    )
+                });
+            vec![
+                Line::from(vec![
+                    Span::styled(
+                        "API cost dashboard",
+                        Style::default()
+                            .fg(Color::LightCyan)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw(format!("   Today {today}")),
+                ]),
+                Line::from(vec![
+                    Span::raw("Spend "),
+                    Span::styled(
+                        crate::api_costs::format_usd_micros(summary.total_cost_microusd),
+                        Style::default()
+                            .fg(Color::LightGreen)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw(format!(
+                        "   Week {}   Month {}",
+                        crate::api_costs::format_usd_micros(week_summary.total_cost_microusd),
+                        crate::api_costs::format_usd_micros(month_summary.total_cost_microusd)
+                    )),
+                ]),
+                Line::from(format!(
+                    "Calls {}   Tokens {}   Models {}",
+                    summary.events,
+                    compact_u64(summary.total_tokens),
+                    summary.model_count
+                )),
+                Line::from(truncate_line(&pricing_line, width)),
+                Line::from(truncate_line(
+                    top_model.as_deref().unwrap_or(
+                        "Start a remote model turn and this page will show the daily cost.",
+                    ),
+                    width,
+                )),
+                Line::from(Span::styled(
+                    truncate_line(
+                        "CLI: ctox cost today | ctox cost week | ctox cost month | ctox cost prices",
+                        width,
+                    ),
+                    Style::default().fg(Color::DarkGray),
+                )),
+            ]
+        }
+        Err(err) => vec![
+            Line::from(Span::styled(
+                "API cost dashboard",
+                Style::default()
+                    .fg(Color::LightCyan)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(Span::styled(
+                "Cost data could not be loaded.",
+                Style::default().fg(Color::LightRed),
+            )),
+            Line::from(truncate_line(&err.to_string(), width)),
+        ],
+    }
 }
 
 fn configured_aux_count(app: &App) -> usize {
@@ -2642,6 +3250,15 @@ fn model_mode_line(app: &App, width: usize) -> Line<'static> {
     } else if let Some(boost_model) = boost_model {
         text.push_str(&format!("  boost {boost_model} idle"));
     }
+    if app.header.today_api_cost_events > 0 {
+        text.push_str(&format!(
+            "  cost today {}",
+            crate::api_costs::format_usd_micros(app.header.today_api_cost_microusd)
+        ));
+        if app.header.today_api_unpriced_events > 0 {
+            text.push_str(" + unpriced");
+        }
+    }
     Line::from(truncate_line(&text, width))
 }
 
@@ -2652,8 +3269,9 @@ fn render_settings_view_tabs(frame: &mut Frame, app: &App, area: ratatui::layout
         SettingsView::Secrets => 2,
         SettingsView::Paths => 3,
         SettingsView::Update => 4,
-        SettingsView::HarnessMining => 5,
-        SettingsView::HarnessFlow => 6,
+        SettingsView::BusinessOs => 5,
+        SettingsView::HarnessMining => 6,
+        SettingsView::HarnessFlow => 7,
     };
     let titles = [
         "Model",
@@ -2661,6 +3279,7 @@ fn render_settings_view_tabs(frame: &mut Frame, app: &App, area: ratatui::layout
         "Secrets",
         "Paths",
         "Update",
+        "Business OS",
         "Harness",
         "Flow",
     ]
@@ -3283,6 +3902,7 @@ fn setting_row_style(key: &str, _value: &str) -> Style {
     let color = match key {
         "CTOX_CHAT_SOURCE"
         | "CTOX_API_PROVIDER"
+        | "CTOX_OPENAI_AUTH_MODE"
         | "CTOX_CHAT_MODEL"
         | "CTOX_CHAT_LOCAL_PRESET"
         | "CTOX_CHAT_SKILL_PRESET" => role_color("chat"),
@@ -3303,6 +3923,9 @@ fn setting_row_style(key: &str, _value: &str) -> Style {
         | "CTO_EMAIL_EWS_USERNAME"
         | "CTO_JAMI_PROFILE_NAME"
         | "CTO_JAMI_ACCOUNT_ID"
+        | "CTO_WHATSAPP_DEVICE_DB"
+        | "CTO_WHATSAPP_PUSH_NAME"
+        | "CTO_WHATSAPP_SYNC_TIMEOUT_SECONDS"
         | "CTO_TEAMS_USERNAME"
         | "CTO_TEAMS_PASSWORD"
         | "CTO_TEAMS_TENANT_ID"

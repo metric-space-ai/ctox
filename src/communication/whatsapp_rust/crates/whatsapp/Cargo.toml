@@ -1,0 +1,59 @@
+[package]
+name = "whatsapp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+wha-types  = { workspace = true }
+wha-binary = { workspace = true }
+wha-crypto = { workspace = true }
+wha-proto  = { workspace = true }
+wha-socket = { workspace = true }
+wha-store  = { workspace = true }
+wha-store-sqlite = { workspace = true }
+wha-signal = { workspace = true }
+wha-client = { workspace = true }
+wha-appstate = { workspace = true }
+
+tokio = { workspace = true, features = ["rt", "macros", "sync", "time"] }
+parking_lot = { workspace = true }
+prost = { workspace = true }
+rand = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[[example]]
+name = "encode_iq"
+path = "examples/encode_iq.rs"
+
+[[example]]
+name = "pair_live"
+path = "examples/pair_live.rs"
+
+[[example]]
+name = "echo_bot"
+path = "examples/echo_bot.rs"
+
+[[example]]
+name = "dump_payload"
+path = "examples/dump_payload.rs"
+
+[dev-dependencies]
+tokio  = { workspace = true }
+base64 = { workspace = true }
+sha2   = { workspace = true }
+rand   = { workspace = true }
+qrcode = { workspace = true }
+parking_lot = { workspace = true }
+rustls = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing = { workspace = true }
+prost = { workspace = true }
+md-5 = { workspace = true }
+wha-crypto = { workspace = true }
+wha-client = { workspace = true }
+wha-store = { workspace = true }
+wha-media = { workspace = true }
+serde_json = { workspace = true }
+serde = { workspace = true }

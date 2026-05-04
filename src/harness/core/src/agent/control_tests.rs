@@ -1143,6 +1143,10 @@ async fn resume_thread_subagent_restores_stored_nickname_and_role() {
         .session_source
         .get_nickname()
         .expect("spawned sub-agent should have a nickname");
+    let original_agent_path = original_snapshot
+        .session_source
+        .get_agent_path()
+        .expect("spawned sub-agent should have an agent path");
     let state_db = child_thread
         .state_db()
         .expect("sqlite state db should be available for nickname resume test");
@@ -1193,7 +1197,7 @@ async fn resume_thread_subagent_restores_stored_nickname_and_role() {
     let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
         parent_thread_id: resumed_parent_thread_id,
         depth: resumed_depth,
-        agent_path: None,
+        agent_path: resumed_agent_path,
         agent_nickname: resumed_nickname,
         agent_role: resumed_role,
     }) = resumed_snapshot.session_source
@@ -1202,6 +1206,7 @@ async fn resume_thread_subagent_restores_stored_nickname_and_role() {
     };
     assert_eq!(resumed_parent_thread_id, parent_thread_id);
     assert_eq!(resumed_depth, 1);
+    assert_eq!(resumed_agent_path, Some(original_agent_path));
     assert_eq!(resumed_nickname, Some(original_nickname));
     assert_eq!(resumed_role, Some("explorer".to_string()));
 

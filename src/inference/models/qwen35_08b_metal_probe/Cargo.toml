@@ -1,0 +1,48 @@
+[package]
+name = "ctox-qwen35-08b-metal-probe"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+license = "Apache-2.0"
+description = "Self-contained CTOX research probe for Qwen3.5-0.8B Metal decode optimization."
+build = "build.rs"
+
+# Keep this crate self-contained like the other curated model crates. The
+# parent CTOX Cargo.toml may depend on production-ready model crates, but this
+# research crate is intentionally not part of the root dependency graph yet.
+[workspace]
+
+[lib]
+name = "ctox_qwen35_08b_metal_probe"
+path = "src/lib.rs"
+
+[[bin]]
+name = "qwen35-08b-metal-research"
+path = "src/bin/research.rs"
+
+[features]
+default = []
+metal = []
+ane = []
+
+[dependencies]
+half = "2"
+serde_json = "1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.5"
+objc2-foundation = { version = "0.2", features = ["NSString", "NSURL"] }
+objc2-metal = { version = "0.2", features = [
+    "MTLBlitCommandEncoder",
+    "MTLBuffer",
+    "MTLCommandBuffer",
+    "MTLCommandEncoder",
+    "MTLCommandQueue",
+    "MTLComputeCommandEncoder",
+    "MTLComputePipeline",
+    "MTLCounters",
+    "MTLDevice",
+    "MTLLibrary",
+    "MTLResource",
+    "MTLTypes",
+] }

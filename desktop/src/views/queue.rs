@@ -26,6 +26,7 @@ fn channel_icon(channel: &str) -> &'static str {
         "email" => "E",
         "teams" => "T",
         "tui" => "C",
+        "whatsapp" => "W",
         _ => "?",
     }
 }
@@ -35,6 +36,7 @@ fn channel_color(channel: &str) -> Color32 {
         "email" => Color32::from_rgb(130, 170, 210),
         "teams" => Color32::from_rgb(120, 100, 200),
         "tui" => Color32::from_rgb(120, 210, 170),
+        "whatsapp" => Color32::from_rgb(80, 190, 120),
         _ => Color32::from_gray(130),
     }
 }

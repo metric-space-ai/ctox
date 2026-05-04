@@ -71,7 +71,7 @@ FAILED_GATES:
 FINDINGS:
 - <semantic finding or "none">
 CATEGORIZED_FINDINGS:
-- id: <id> | category: rewrite|rework | evidence: "<evidence>" | corrective_action: "<corrective action>"
+- id: <id> | category: rewrite|rework|stale_refresh|stale_obsolete|stale_consolidate | evidence: "<evidence>" | corrective_action: "<corrective action>"
 - <or "none">
 OPEN_ITEMS:
 - <concrete rework item>
@@ -160,12 +160,16 @@ impl ReviewDisposition {
 /// `Rewrite` means the slice can be repaired by editing the prior outbound
 /// body without mutating durable state. `Rework` means the finding requires
 /// a substantive change (durable record, fresh research, structural artefact)
-/// and must run on the heavy review-rework path. The dispatcher routes on
-/// this enum directly — no string scraping in core.
+/// and must run on the heavy review-rework path. `Stale*` findings mean the
+/// world changed underneath the draft and the queue/thread state must be
+/// refreshed, obsoleted, or consolidated before any send/closure.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum FindingCategory {
     Rewrite,
     Rework,
+    StaleRefresh,
+    StaleObsolete,
+    StaleConsolidate,
 }
 
 impl FindingCategory {
@@ -173,6 +177,9 @@ impl FindingCategory {
         match self {
             Self::Rewrite => "rewrite",
             Self::Rework => "rework",
+            Self::StaleRefresh => "stale_refresh",
+            Self::StaleObsolete => "stale_obsolete",
+            Self::StaleConsolidate => "stale_consolidate",
         }
     }
 
@@ -183,8 +190,18 @@ impl FindingCategory {
         match token.trim().to_ascii_lowercase().as_str() {
             "rewrite" => Some(Self::Rewrite),
             "rework" => Some(Self::Rework),
+            "stale_refresh" | "stale-refresh" => Some(Self::StaleRefresh),
+            "stale_obsolete" | "stale-obsolete" => Some(Self::StaleObsolete),
+            "stale_consolidate" | "stale-consolidate" => Some(Self::StaleConsolidate),
             _ => None,
         }
+    }
+
+    pub fn is_stale(self) -> bool {
+        matches!(
+            self,
+            Self::StaleRefresh | Self::StaleObsolete | Self::StaleConsolidate
+        )
     }
 }
 
@@ -716,7 +733,7 @@ FAILED_GATES:\n\
 FINDINGS:\n\
 - <semantic finding or \"none\">\n\
 CATEGORIZED_FINDINGS:\n\
-- id: <id> | category: rewrite|rework | evidence: \"<evidence>\" | corrective_action: \"<corrective action>\"\n\
+- id: <id> | category: rewrite|rework|stale_refresh|stale_obsolete|stale_consolidate | evidence: \"<evidence>\" | corrective_action: \"<corrective action>\"\n\
 - <or \"none\">\n\
 OPEN_ITEMS:\n\
 - <concrete rework item>\n\
@@ -726,7 +743,7 @@ HANDOFF:\n\
 - <only when another review run should continue; otherwise write \"none\">\n\
 DISPOSITION: SEND|NO_SEND\n\
 \n\
-The CATEGORIZED_FINDINGS block is the structural input the dispatcher uses to choose between the lightweight rewrite path (body wording / subject / tonality fixes) and the heavy rework loop (durable state changes, missing artefacts, evidence gaps). Read the review skill section on Finding categories before assigning.\n\
+The CATEGORIZED_FINDINGS block is the structural input the dispatcher uses to choose between the lightweight rewrite path (body wording / subject / tonality fixes), the heavy rework loop (durable state changes, missing artefacts, evidence gaps), and stale refresh handling (new inbound/world state made the prior draft obsolete or in need of consolidation). Read the review skill section on Finding categories before assigning.\n\
 \n\
 DISPOSITION is the structural terminal flag: emit `NO_SEND` only when the slice is closed without sending anything (the correct action is to wait for external inputs, the user already received the answer elsewhere, the slice was a duplicate, etc.). Default is `SEND` — used for every PASS verdict and for FAIL verdicts that should drive a rewrite or rework loop. The dispatcher reads this enum directly; do not encode the no-send signal as free-text in the summary or findings.\n",
         conversation_id = request.conversation_id,
@@ -1238,6 +1255,18 @@ mod tests {
             outcome.categorized_findings[1].category,
             FindingCategory::Rework
         );
+    }
+
+    #[test]
+    fn parses_stale_categorized_findings() {
+        let report = "VERDICT: FAIL\nSUMMARY: world changed.\nCATEGORIZED_FINDINGS:\n- id: f1 | category: stale_refresh | evidence: \"new inbound arrived\" | corrective_action: \"reload thread\"\nOPEN_ITEMS:\n- reload thread\n";
+        let outcome = parse_review_report(3, vec![], report);
+        assert_eq!(outcome.categorized_findings.len(), 1);
+        assert_eq!(
+            outcome.categorized_findings[0].category,
+            FindingCategory::StaleRefresh
+        );
+        assert!(outcome.categorized_findings[0].category.is_stale());
     }
 
     #[test]

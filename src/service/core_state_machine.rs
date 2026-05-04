@@ -357,6 +357,83 @@ fn validate_review_gate(
             ));
         }
     }
+
+    validate_review_checkpoint(request, violations);
+}
+
+fn validate_review_checkpoint(
+    request: &CoreTransitionRequest,
+    violations: &mut Vec<CoreTransitionViolation>,
+) {
+    if !metadata_bool(request, "review_checkpoint") {
+        return;
+    }
+
+    if request
+        .evidence
+        .review_audit_key
+        .as_deref()
+        .unwrap_or("")
+        .is_empty()
+    {
+        violations.push(violation(
+            "review_checkpoint_requires_audit",
+            "review checkpoints require a durable review audit key",
+        ));
+    }
+
+    if request.to_state != CoreState::ReworkRequired {
+        return;
+    }
+
+    if !matches!(
+        request.entity_type,
+        CoreEntityType::Ticket | CoreEntityType::WorkItem
+    ) || request.from_state != CoreState::AwaitingReview
+        || request.event != CoreEvent::RequireRework
+    {
+        violations.push(violation(
+            "review_checkpoint_invalid_feedback_transition",
+            "review checkpoint feedback must be AwaitingReview -> ReworkRequired on the reviewed ticket/self-work",
+        ));
+    }
+
+    if metadata_bool(request, "spawns_review_owned_work")
+        || request
+            .metadata
+            .get("spawned_work_kind")
+            .map(|kind| kind.starts_with("review-"))
+            .unwrap_or(false)
+    {
+        violations.push(violation(
+            "review_checkpoint_cannot_spawn_rework",
+            "review checkpoints may feed findings back to the main work item but may not spawn review-owned rework",
+        ));
+    }
+
+    let feedback_target = request
+        .metadata
+        .get("feedback_target_entity_id")
+        .map(|value| value.trim())
+        .unwrap_or("");
+    if feedback_target != request.entity_id {
+        violations.push(violation(
+            "review_checkpoint_feedback_target_mismatch",
+            "review checkpoint feedback must target the same entity that was reviewed",
+        ));
+    }
+
+    let feedback_owner = request
+        .metadata
+        .get("feedback_owner")
+        .map(|value| value.trim())
+        .unwrap_or("");
+    if feedback_owner != "main_agent" {
+        violations.push(violation(
+            "review_checkpoint_requires_main_agent_feedback",
+            "review checkpoint feedback must resume the main agent instead of becoming review-owned work",
+        ));
+    }
 }
 
 fn validate_ticket_closure(
@@ -551,6 +628,14 @@ fn is_founder_protected(request: &CoreTransitionRequest) -> bool {
             .get("protected_party")
             .map(|value| matches!(value.as_str(), "founder" | "owner" | "admin"))
             .unwrap_or(false)
+}
+
+fn metadata_bool(request: &CoreTransitionRequest, key: &str) -> bool {
+    request
+        .metadata
+        .get(key)
+        .map(|value| value == "true")
+        .unwrap_or(false)
 }
 
 fn is_allowed_transition(
@@ -958,6 +1043,95 @@ mod tests {
         let report = validate_transition(&request);
 
         assert!(report.accepted, "{:?}", report.violations);
+    }
+
+    fn review_checkpoint_feedback_request() -> CoreTransitionRequest {
+        let mut metadata = BTreeMap::new();
+        metadata.insert("review_checkpoint".to_string(), "true".to_string());
+        metadata.insert("feedback_owner".to_string(), "main_agent".to_string());
+        metadata.insert(
+            "feedback_target_entity_id".to_string(),
+            "self-work:1".to_string(),
+        );
+        metadata.insert("spawns_review_owned_work".to_string(), "false".to_string());
+
+        CoreTransitionRequest {
+            entity_type: CoreEntityType::WorkItem,
+            entity_id: "self-work:1".to_string(),
+            lane: RuntimeLane::P2MissionDelivery,
+            from_state: CoreState::AwaitingReview,
+            to_state: CoreState::ReworkRequired,
+            event: CoreEvent::RequireRework,
+            actor: "ctox-completion-review".to_string(),
+            evidence: CoreEvidenceRefs {
+                review_audit_key: Some("review-checkpoint-1".to_string()),
+                ..CoreEvidenceRefs::default()
+            },
+            metadata,
+        }
+    }
+
+    #[test]
+    fn allows_review_checkpoint_feedback_to_same_main_work_item() {
+        let report = validate_transition(&review_checkpoint_feedback_request());
+
+        assert!(report.accepted, "{:?}", report.violations);
+    }
+
+    #[test]
+    fn blocks_review_checkpoint_without_audit_key() {
+        let mut request = review_checkpoint_feedback_request();
+        request.evidence.review_audit_key = None;
+
+        let report = validate_transition(&request);
+
+        assert!(!report.accepted);
+        assert!(report
+            .violations
+            .iter()
+            .any(|violation| violation.code == "review_checkpoint_requires_audit"));
+    }
+
+    #[test]
+    fn blocks_review_checkpoint_that_targets_review_owned_rework() {
+        let mut request = review_checkpoint_feedback_request();
+        request
+            .metadata
+            .insert("spawns_review_owned_work".to_string(), "true".to_string());
+        request
+            .metadata
+            .insert("spawned_work_kind".to_string(), "review-rework".to_string());
+        request
+            .metadata
+            .insert("feedback_owner".to_string(), "review_agent".to_string());
+
+        let report = validate_transition(&request);
+
+        assert!(!report.accepted);
+        assert!(report
+            .violations
+            .iter()
+            .any(|violation| violation.code == "review_checkpoint_cannot_spawn_rework"));
+        assert!(report.violations.iter().any(|violation| {
+            violation.code == "review_checkpoint_requires_main_agent_feedback"
+        }));
+    }
+
+    #[test]
+    fn blocks_review_checkpoint_feedback_to_different_work_item() {
+        let mut request = review_checkpoint_feedback_request();
+        request.metadata.insert(
+            "feedback_target_entity_id".to_string(),
+            "self-work:other".to_string(),
+        );
+
+        let report = validate_transition(&request);
+
+        assert!(!report.accepted);
+        assert!(report
+            .violations
+            .iter()
+            .any(|violation| { violation.code == "review_checkpoint_feedback_target_mismatch" }));
     }
 
     #[test]

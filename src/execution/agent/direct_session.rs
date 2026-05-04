@@ -35,11 +35,38 @@ use ctox_protocol::protocol::{AskForApproval, EventMsg, SandboxPolicy, SessionSo
 use ctox_protocol::user_input::UserInput;
 use ctox_utils_absolute_path::AbsolutePathBuf;
 
+use crate::api_costs::{self, ApiTokenUsage};
 use crate::context::compact::{CompactDecision, CompactMode, CompactPolicy, CompactTrigger};
 use crate::inference::engine;
 use crate::inference::runtime_kernel;
 use crate::inference::runtime_state;
 use crate::secrets;
+
+const OPENAI_AUTH_MODE_KEY: &str = "CTOX_OPENAI_AUTH_MODE";
+const OPENAI_AUTH_MODE_CHATGPT_SUBSCRIPTION: &str = "chatgpt_subscription";
+
+fn openai_chatgpt_subscription_auth_enabled(settings: &BTreeMap<String, String>) -> bool {
+    settings
+        .get(OPENAI_AUTH_MODE_KEY)
+        .map(|value| value.trim().to_ascii_lowercase())
+        .is_some_and(|value| {
+            matches!(
+                value.as_str(),
+                OPENAI_AUTH_MODE_CHATGPT_SUBSCRIPTION
+                    | "subscription"
+                    | "codex_subscription"
+                    | "chatgpt"
+            )
+        })
+}
+
+fn use_openai_chatgpt_subscription_auth(
+    settings: &BTreeMap<String, String>,
+    selected_api_provider: Option<&str>,
+) -> bool {
+    selected_api_provider.is_some_and(|provider| provider.eq_ignore_ascii_case("openai"))
+        && openai_chatgpt_subscription_auth_enabled(settings)
+}
 
 // ---------------------------------------------------------------------------
 // PersistentSession — lives across turns within a mission-turn-loop iteration
@@ -58,6 +85,7 @@ pub(crate) struct PersistentSession {
     cwd: PathBuf,
     model: String,
     model_provider: Option<String>,
+    api_provider: Option<String>,
     policy: CompactPolicy,
     ctx_log: ContextLogger,
     root: PathBuf,
@@ -86,9 +114,10 @@ impl PersistentSession {
             .build()
             .context("failed to start tokio runtime")?;
 
-        let (client, thread_id, cwd, seq, model, model_provider) = rt.block_on(async {
-            Self::start_client_and_thread(root, settings, base_instructions).await
-        })?;
+        let (client, thread_id, cwd, seq, model, model_provider, api_provider) =
+            rt.block_on(async {
+                Self::start_client_and_thread(root, settings, base_instructions).await
+            })?;
 
         let mut policy = CompactPolicy::from_settings(
             settings.get("CTOX_COMPACT_TRIGGER").map(String::as_str),
@@ -137,6 +166,7 @@ impl PersistentSession {
             cwd,
             model,
             model_provider,
+            api_provider,
             policy,
             ctx_log,
             root: root.to_path_buf(),
@@ -161,6 +191,7 @@ impl PersistentSession {
         let cwd = self.cwd.clone();
         let model = self.model.clone();
         let model_provider = self.model_provider.clone();
+        let api_provider = self.api_provider.clone();
         let prompt = prompt.to_string();
         let root = self.root.clone();
 
@@ -180,6 +211,7 @@ impl PersistentSession {
                 &cwd,
                 &model,
                 model_provider.as_deref(),
+                api_provider.as_deref(),
                 &root,
                 &prompt,
                 timeout,
@@ -210,6 +242,7 @@ impl PersistentSession {
         PathBuf,
         RequestIdSeq,
         String,
+        Option<String>,
         Option<String>,
     )> {
         let resolved_runtime = runtime_kernel::InferenceRuntimeKernel::resolve(root).ok();
@@ -257,23 +290,28 @@ impl PersistentSession {
 
         let codex_home =
             find_codex_home().map_err(|err| anyhow::anyhow!("find_codex_home: {err}"))?;
+        let use_chatgpt_subscription_auth =
+            use_openai_chatgpt_subscription_auth(settings, selected_api_provider.as_deref());
 
         let selected_api_key_name = selected_api_provider
             .as_deref()
             .map(runtime_state::api_key_env_var_for_provider);
         let api_key = match selected_api_key_name {
+            Some(key)
+                if use_chatgpt_subscription_auth && key.eq_ignore_ascii_case("OPENAI_API_KEY") =>
+            {
+                None
+            }
             Some(key) => settings
                 .get(key)
                 .cloned()
                 .or_else(|| secrets::get_credential(root, key)),
             None => settings
-                .get("OPENAI_API_KEY")
-                .or_else(|| settings.get("OPENROUTER_API_KEY"))
+                .get("OPENROUTER_API_KEY")
                 .or_else(|| settings.get("ANTHROPIC_API_KEY"))
                 .or_else(|| settings.get("MINIMAX_API_KEY"))
                 .or_else(|| settings.get("AZURE_FOUNDRY_API_KEY"))
                 .cloned()
-                .or_else(|| secrets::get_credential(root, "OPENAI_API_KEY"))
                 .or_else(|| secrets::get_credential(root, "OPENROUTER_API_KEY"))
                 .or_else(|| secrets::get_credential(root, "ANTHROPIC_API_KEY"))
                 .or_else(|| secrets::get_credential(root, "MINIMAX_API_KEY"))
@@ -299,6 +337,11 @@ impl PersistentSession {
                 config_toml.cli_auth_credentials_store.unwrap_or_default(),
             )
         };
+        if use_chatgpt_subscription_auth {
+            eprintln!(
+                "[ctox direct-session] OpenAI auth mode=chatgpt_subscription; OPENAI_API_KEY ignored and API cost tracking disabled"
+            );
+        }
         let cloud_requirements = cloud_requirements_loader(
             auth_manager.clone(),
             config_toml
@@ -338,6 +381,14 @@ impl PersistentSession {
                     .as_ref()
                     .map(|provider| provider.provider_id.to_string())
             });
+        let tracking_api_provider = if use_chatgpt_subscription_auth {
+            None
+        } else {
+            local_provider
+                .is_none()
+                .then(|| selected_api_provider.clone())
+                .flatten()
+        };
         let overrides = ConfigOverrides {
             model: Some(model.clone()),
             model_provider: selected_provider_id.clone(),
@@ -394,7 +445,7 @@ impl PersistentSession {
             feedback: CodexFeedback::new(),
             config_warnings: vec![],
             session_source: SessionSource::Exec,
-            enable_ctox_api_key_env: true,
+            enable_ctox_api_key_env: false,
             client_name: "ctox-direct".to_string(),
             client_version: env!("CTOX_BUILD_VERSION").to_string(),
             experimental_api: true,
@@ -429,7 +480,15 @@ impl PersistentSession {
         let thread_id = thread_resp.thread.id.clone();
         eprintln!("[ctox direct-session] thread started: {}", thread_id);
 
-        Ok((client, thread_id, cwd, seq, model, selected_provider_id))
+        Ok((
+            client,
+            thread_id,
+            cwd,
+            seq,
+            model,
+            selected_provider_id,
+            tracking_api_provider,
+        ))
     }
 
     async fn run_turn_async(
@@ -438,6 +497,7 @@ impl PersistentSession {
         cwd: &Path,
         model: &str,
         model_provider: Option<&str>,
+        api_provider: Option<&str>,
         root: &Path,
         prompt: &str,
         timeout: Option<Duration>,
@@ -516,6 +576,27 @@ impl PersistentSession {
                 InProcessServerEvent::LegacyNotification(notif) => {
                     if let Some(msg) = try_extract_event_msg(&notif) {
                         ctx_log.observe(&msg);
+                        if let (Some(provider), EventMsg::TokenCount(tc)) = (api_provider, &msg) {
+                            if let Some(info) = tc.info.as_ref() {
+                                let usage = &info.last_token_usage;
+                                let result = api_costs::record_api_model_usage(
+                                    root,
+                                    provider,
+                                    model,
+                                    Some(&turn_id),
+                                    ApiTokenUsage {
+                                        input_tokens: usage.input_tokens,
+                                        cached_input_tokens: usage.cached_input_tokens,
+                                        output_tokens: usage.output_tokens,
+                                        reasoning_output_tokens: usage.reasoning_output_tokens,
+                                        total_tokens: usage.total_tokens,
+                                    },
+                                );
+                                if let Err(err) = result {
+                                    eprintln!("[ctox direct-session] cost tracking failed: {err}");
+                                }
+                            }
+                        }
 
                         if let CompactDecision::Compact { reason } = policy.evaluate(&msg) {
                             eprintln!(
@@ -643,6 +724,48 @@ impl PersistentSession {
             Ok(final_message.unwrap_or_default())
         } else {
             final_message.ok_or_else(|| anyhow::anyhow!("turn completed without assistant message"))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn openai_subscription_auth_only_applies_to_openai_provider() {
+        let mut settings = BTreeMap::new();
+        settings.insert(
+            OPENAI_AUTH_MODE_KEY.to_string(),
+            OPENAI_AUTH_MODE_CHATGPT_SUBSCRIPTION.to_string(),
+        );
+
+        assert!(use_openai_chatgpt_subscription_auth(
+            &settings,
+            Some("openai")
+        ));
+        assert!(!use_openai_chatgpt_subscription_auth(
+            &settings,
+            Some("anthropic")
+        ));
+        assert!(!use_openai_chatgpt_subscription_auth(&settings, None));
+    }
+
+    #[test]
+    fn openai_subscription_auth_accepts_compatibility_aliases() {
+        for value in [
+            "subscription",
+            "codex_subscription",
+            "chatgpt",
+            "chatgpt_subscription",
+            " CHATGPT_SUBSCRIPTION ",
+        ] {
+            let mut settings = BTreeMap::new();
+            settings.insert(OPENAI_AUTH_MODE_KEY.to_string(), value.to_string());
+            assert!(
+                openai_chatgpt_subscription_auth_enabled(&settings),
+                "{value}"
+            );
         }
     }
 }

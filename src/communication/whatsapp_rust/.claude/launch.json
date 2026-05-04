@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "pair_live",
+      "runtimeExecutable": "cargo",
+      "runtimeArgs": ["run", "--example", "pair_live", "-p", "whatsapp"],
+      "port": 9090
+    }
+  ]
+}

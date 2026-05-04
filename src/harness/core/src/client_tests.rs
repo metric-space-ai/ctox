@@ -1,4 +1,5 @@
 use super::AuthRequestTelemetryContext;
+use super::LastResponse;
 use super::ModelClient;
 use super::PendingUnauthorizedRetry;
 use super::UnauthorizedRecoveryExecution;
@@ -16,6 +17,7 @@ use ctox_protocol::protocol::SubAgentSource;
 use pretty_assertions::assert_eq;
 use rusqlite::{Connection, params};
 use serde_json::json;
+use tokio::sync::oneshot;
 
 fn persist_runtime_state_json(root: &std::path::Path, raw_json: &str) {
     let db_path = root.join("runtime/ctox.sqlite3");
@@ -134,6 +136,137 @@ fn test_session_telemetry() -> SessionTelemetry {
     )
 }
 
+fn test_user_message(text: &str) -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: text.to_string(),
+        }],
+        end_turn: None,
+        phase: None,
+    }
+}
+
+fn test_assistant_message(text: &str) -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: "assistant".to_string(),
+        content: vec![ContentItem::OutputText {
+            text: text.to_string(),
+        }],
+        end_turn: Some(true),
+        phase: None,
+    }
+}
+
+fn test_responses_request(input: Vec<ResponseItem>) -> ResponsesApiRequest {
+    ResponsesApiRequest {
+        model: "gpt-test".to_string(),
+        instructions: "test instructions".to_string(),
+        previous_response_id: None,
+        input,
+        tools: Vec::new(),
+        tool_choice: "auto".to_string(),
+        parallel_tool_calls: true,
+        reasoning: None,
+        max_output_tokens: None,
+        store: false,
+        stream: true,
+        include: Vec::new(),
+        service_tier: None,
+        prompt_cache_key: Some("thread-1".to_string()),
+        text: None,
+    }
+}
+
+#[test]
+fn http_request_uses_previous_response_id_for_incremental_delta() {
+    let client = test_model_client(SessionSource::Cli);
+    let mut session = client.new_session();
+    let initial_user = test_user_message("initial");
+    let assistant = test_assistant_message("done");
+    let next_user = test_user_message("next");
+    let previous_request = test_responses_request(vec![initial_user.clone()]);
+    let next_request =
+        test_responses_request(vec![initial_user, assistant.clone(), next_user.clone()]);
+    let (tx, rx) = oneshot::channel();
+    tx.send(LastResponse {
+        response_id: "resp_previous".to_string(),
+        items_added: vec![assistant],
+    })
+    .expect("last response receiver should be open");
+    session.websocket_session.last_request = Some(previous_request);
+    session.websocket_session.last_response_rx = Some(rx);
+
+    let wire_request = session.prepare_http_request(&next_request);
+
+    assert_eq!(
+        wire_request.previous_response_id.as_deref(),
+        Some("resp_previous")
+    );
+    assert_eq!(wire_request.input, vec![next_user]);
+}
+
+#[test]
+fn http_request_can_reuse_previous_response_id_after_preparation() {
+    let client = test_model_client(SessionSource::Cli);
+    let mut session = client.new_session();
+    let initial_user = test_user_message("initial");
+    let assistant = test_assistant_message("done");
+    let next_user = test_user_message("next");
+    let previous_request = test_responses_request(vec![initial_user.clone()]);
+    let next_request =
+        test_responses_request(vec![initial_user, assistant.clone(), next_user.clone()]);
+    let (tx, rx) = oneshot::channel();
+    tx.send(LastResponse {
+        response_id: "resp_previous".to_string(),
+        items_added: vec![assistant],
+    })
+    .expect("last response receiver should be open");
+    session.websocket_session.last_request = Some(previous_request);
+    session.websocket_session.last_response_rx = Some(rx);
+
+    let first_wire_request = session.prepare_http_request(&next_request);
+    let second_wire_request = session.prepare_http_request(&next_request);
+
+    assert_eq!(
+        first_wire_request.previous_response_id.as_deref(),
+        Some("resp_previous")
+    );
+    assert_eq!(
+        second_wire_request.previous_response_id.as_deref(),
+        Some("resp_previous")
+    );
+    assert_eq!(second_wire_request.input, vec![next_user]);
+}
+
+#[test]
+fn http_request_keeps_full_input_when_request_shape_changes() {
+    let client = test_model_client(SessionSource::Cli);
+    let mut session = client.new_session();
+    let initial_user = test_user_message("initial");
+    let assistant = test_assistant_message("done");
+    let next_user = test_user_message("next");
+    let previous_request = test_responses_request(vec![initial_user.clone()]);
+    let mut next_request =
+        test_responses_request(vec![initial_user, assistant.clone(), next_user.clone()]);
+    next_request.instructions = "changed instructions".to_string();
+    let (tx, rx) = oneshot::channel();
+    tx.send(LastResponse {
+        response_id: "resp_previous".to_string(),
+        items_added: vec![assistant],
+    })
+    .expect("last response receiver should be open");
+    session.websocket_session.last_request = Some(previous_request);
+    session.websocket_session.last_response_rx = Some(rx);
+
+    let wire_request = session.prepare_http_request(&next_request);
+
+    assert_eq!(wire_request.previous_response_id, None);
+    assert_eq!(wire_request.input, next_request.input);
+}
+
 #[test]
 fn build_subagent_headers_sets_other_subagent_label() {
     let client = test_model_client(SessionSource::SubAgent(SubAgentSource::Other(
@@ -183,6 +316,7 @@ fn local_ipc_request_omits_native_web_search_tools() {
     let request = ResponsesApiRequest {
         model: "gpt-test".to_string(),
         instructions: "test instructions".to_string(),
+        previous_response_id: None,
         input: Vec::new(),
         tools: vec![json!({
             "type": "web_search",
@@ -210,6 +344,7 @@ fn local_ipc_request_preserves_function_tools_including_spawn_agent() {
     let request = ResponsesApiRequest {
         model: "gpt-test".to_string(),
         instructions: "test instructions".to_string(),
+        previous_response_id: None,
         input: Vec::new(),
         tools: vec![json!({
             "type": "function",
@@ -267,6 +402,7 @@ fn local_ipc_request_forces_parallel_tool_calls_on() {
     let request = ResponsesApiRequest {
         model: "gpt-test".to_string(),
         instructions: "test instructions".to_string(),
+        previous_response_id: None,
         input: Vec::new(),
         tools: Vec::new(),
         tool_choice: "auto".to_string(),
@@ -480,6 +616,7 @@ fn local_ipc_request_collapses_non_user_image_messages_to_text() {
     let request = ResponsesApiRequest {
         model: "gpt-test".to_string(),
         instructions: "test instructions".to_string(),
+        previous_response_id: None,
         input: vec![ResponseItem::Message {
             id: None,
             role: "developer".to_string(),
@@ -518,6 +655,7 @@ fn local_ipc_request_collapses_non_user_multipart_messages_to_text() {
     let request = ResponsesApiRequest {
         model: "gpt-test".to_string(),
         instructions: "test instructions".to_string(),
+        previous_response_id: None,
         input: vec![ResponseItem::Message {
             id: None,
             role: "developer".to_string(),

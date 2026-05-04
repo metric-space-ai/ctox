@@ -1,0 +1,19 @@
+[package]
+name = "wha-store-sqlite"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+wha-types  = { workspace = true }
+wha-crypto = { workspace = true }
+wha-store  = { workspace = true }
+async-trait = { workspace = true }
+parking_lot = { workspace = true }
+rand       = { workspace = true }
+rusqlite   = { workspace = true }
+thiserror  = { workspace = true }
+tokio      = { workspace = true }
+
+[dev-dependencies]
+tokio      = { workspace = true }

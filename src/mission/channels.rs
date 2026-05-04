@@ -23,11 +23,14 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Mutex;
+use std::sync::MutexGuard;
+use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::mission::communication_adapters;
-use crate::mission::communication_adapters::CommunicationTransportAdapter;
-use crate::mission::communication_gateway;
+use crate::communication::adapters as communication_adapters;
+use crate::communication::adapters::CommunicationTransportAdapter;
+use crate::communication::gateway as communication_gateway;
 use crate::secrets;
 use crate::service::core_state_machine::{
     CoreEntityType, CoreEvent, CoreEvidenceRefs, CoreState, CoreTransitionRequest, RuntimeLane,
@@ -45,6 +48,7 @@ const QUEUE_ACCOUNT_ADDRESS: &str = "ctox queue";
 const QUEUE_PROVIDER: &str = "system";
 const QUEUE_SENDER_DISPLAY: &str = "CTOX queue";
 const QUEUE_SENDER_ADDRESS: &str = "queue:system";
+static REVIEWED_FOUNDER_SEND_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 #[derive(Debug, Clone, Serialize)]
 pub struct QueueTaskView {
@@ -408,6 +412,19 @@ pub fn load_prompt_identity(
                     channels.insert(format!("- teams: {}", bot_id));
                 }
             }
+            "whatsapp" => {
+                let parsed =
+                    serde_json::from_str::<Value>(&profile_json).unwrap_or_else(|_| json!({}));
+                let jid = parsed
+                    .get("jid")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or(address.trim());
+                if !jid.is_empty() {
+                    channels.insert(format!("- whatsapp: {}", jid));
+                }
+            }
             "cron" | "plan" | "queue" => {}
             other => {
                 if !address.trim().is_empty() {
@@ -477,6 +494,195 @@ pub fn metadata_marks_auto_submitted(metadata: &Value) -> bool {
         }
     }
     false
+}
+
+pub fn reclassify_historical_auto_submitted_inbounds(root: &Path) -> Result<usize> {
+    #[derive(Debug)]
+    struct Candidate {
+        message_key: String,
+        subject: String,
+        sender_address: String,
+        body_text: String,
+        metadata: Value,
+    }
+
+    let db_path = resolve_db_path(root, None);
+    let conn = open_channel_db(&db_path)?;
+    let mut stmt = conn.prepare(
+        r#"
+        SELECT
+            m.message_key,
+            m.subject,
+            m.sender_address,
+            m.body_text,
+            m.metadata_json
+        FROM communication_messages m
+        LEFT JOIN communication_routing_state r ON r.message_key = m.message_key
+        WHERE m.direction = 'inbound'
+          AND m.status = 'received'
+          AND m.channel = 'email'
+          AND COALESCE(r.route_status, 'pending') IN ('pending','leased','failed','review_rework','handled')
+          AND NOT EXISTS (
+              SELECT 1
+              FROM communication_founder_reply_reviews review
+              WHERE review.inbound_message_key = m.message_key
+                AND review.terminal_no_send = 1
+          )
+        "#,
+    )?;
+    let candidates = stmt
+        .query_map([], |row| {
+            let metadata_raw: String = row.get(4)?;
+            Ok(Candidate {
+                message_key: row.get(0)?,
+                subject: row.get(1)?,
+                sender_address: row.get(2)?,
+                body_text: row.get(3)?,
+                metadata: serde_json::from_str(&metadata_raw).unwrap_or_else(|_| json!({})),
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    let mut reclassified = 0usize;
+    for mut candidate in candidates {
+        if metadata_marks_auto_submitted(&candidate.metadata) {
+            continue;
+        }
+        let Some(reason) = historical_auto_submitted_reason(
+            &candidate.subject,
+            &candidate.sender_address,
+            &candidate.body_text,
+        ) else {
+            continue;
+        };
+        let now = now_iso_string();
+        if let Some(object) = candidate.metadata.as_object_mut() {
+            object.insert("autoSubmitted".to_string(), Value::Bool(true));
+            object.insert(
+                "autoSubmittedValue".to_string(),
+                Value::String("historical-reclassifier".to_string()),
+            );
+            object.insert("terminalNoSend".to_string(), Value::Bool(true));
+            object.insert(
+                "terminalNoSendReason".to_string(),
+                Value::String(reason.clone()),
+            );
+            object.insert("reclassifiedAt".to_string(), Value::String(now.clone()));
+        }
+        conn.execute(
+            r#"
+            UPDATE communication_messages
+            SET metadata_json = ?2
+            WHERE message_key = ?1
+            "#,
+            params![
+                candidate.message_key,
+                serde_json::to_string(&candidate.metadata)?
+            ],
+        )?;
+        record_terminal_no_send_verdict(
+            root,
+            &candidate.message_key,
+            "boot-reclassifier",
+            &reason,
+        )?;
+        conn.execute(
+            r#"
+            INSERT INTO communication_routing_state (
+                message_key, route_status, lease_owner, leased_at, acked_at, last_error, updated_at
+            )
+            VALUES (?1, 'handled', NULL, NULL, ?2, NULL, ?2)
+            ON CONFLICT(message_key) DO UPDATE SET
+                route_status='handled',
+                lease_owner=NULL,
+                leased_at=NULL,
+                acked_at=?2,
+                last_error=NULL,
+                updated_at=?2
+            "#,
+            params![candidate.message_key, now],
+        )?;
+        reclassified += 1;
+    }
+    Ok(reclassified)
+}
+
+fn historical_auto_submitted_reason(
+    subject: &str,
+    sender_address: &str,
+    body_text: &str,
+) -> Option<String> {
+    let subject = subject.trim().to_ascii_lowercase();
+    if [
+        "automatische antwort:",
+        "auto-reply:",
+        "out of office:",
+        "automatic reply:",
+    ]
+    .iter()
+    .any(|prefix| subject.starts_with(prefix))
+    {
+        return Some("historical auto-reply subject: terminal NO-SEND".to_string());
+    }
+
+    let sender = normalize_email_address(sender_address);
+    let local_part = sender.split('@').next().unwrap_or("");
+    if matches!(
+        local_part,
+        "noreply" | "no-reply" | "donotreply" | "do-not-reply" | "notification" | "notifications"
+    ) {
+        return Some("historical notification sender: terminal NO-SEND".to_string());
+    }
+
+    if body_is_only_teams_meeting_link(body_text) {
+        return Some(
+            "historical Teams meeting-link notification without human content: terminal NO-SEND"
+                .to_string(),
+        );
+    }
+    None
+}
+
+fn body_is_only_teams_meeting_link(body_text: &str) -> bool {
+    let lowered = body_text.to_ascii_lowercase();
+    if !(lowered.contains("teams.microsoft.com/l/meetup-join")
+        || lowered.contains("teams.live.com/meet")
+        || lowered.contains("join.microsoft.com/meet"))
+    {
+        return false;
+    }
+    let mut remainder = lowered.as_str();
+    let mut cleaned = String::new();
+    while let Some(start) = remainder.find("http") {
+        cleaned.push_str(&remainder[..start]);
+        let after_start = &remainder[start..];
+        let end = after_start
+            .find(char::is_whitespace)
+            .unwrap_or(after_start.len());
+        remainder = &after_start[end..];
+    }
+    cleaned.push_str(remainder);
+    for phrase in [
+        "microsoft teams",
+        "join the meeting",
+        "meeting id",
+        "passcode",
+        "dial in",
+        "privacy and security",
+        "learn more",
+        "need help",
+        "besprechungs-id",
+        "kenncode",
+        "an besprechung teilnehmen",
+        "teilnehmen",
+    ] {
+        cleaned = cleaned.replace(phrase, " ");
+    }
+    let meaningful = cleaned
+        .chars()
+        .filter(|ch| ch.is_alphanumeric())
+        .collect::<String>();
+    meaningful.len() <= 40
 }
 
 /// Terminal route states that are sticky against further re-routing.
@@ -1151,7 +1357,7 @@ pub fn handle_channel_command(root: &Path, args: &[String]) -> Result<()> {
         }
         _ => {
             anyhow::bail!(
-                "usage:\n  ctox channel init [--db <path>]\n  ctox channel sync --channel <email|jami|teams|meeting> [--db <path>] [adapter flags]\n  ctox channel take [--db <path>] [--channel <name>] [--limit <n>] [--lease-owner <owner>]\n  ctox channel ack [--db <path>] [--status <status>] <message-key>...\n  ctox channel send --channel <tui|email|jami|teams|meeting> --account-key <key> --thread-key <key> --body <text> [--subject <text>] [--to <addr>]... [--cc <addr>]... [--attach-file <path>]... [--send-voice] [--reviewed-founder-send]\n  ctox channel founder-reply --message-key <inbound-email-key> --body <text>\n  ctox channel test --channel <tui|email|jami|teams> [--db <path>] [--account-key <key>]\n  ctox channel ingest-tui --account-key <key> --thread-key <key> --body <text> [--sender-display <name>] [--sender-address <addr>] [--subject <text>]\n  ctox channel list [--db <path>] [--channel <name>] [--limit <n>]\n  ctox channel history --thread-key <key> [--db <path>] [--limit <n>]\n  ctox channel search --query <text> [--db <path>] [--channel <name>] [--sender <addr>] [--limit <n>]\n  ctox channel context --thread-key <key> [--db <path>] [--query <text>] [--sender <addr>] [--limit <n>]\n  ctox channel pipeline-status [--thread-key <key>] [--limit <n>]"
+                "usage:\n  ctox channel init [--db <path>]\n  ctox channel sync --channel <email|jami|teams|meeting|whatsapp> [--db <path>] [adapter flags]\n  ctox channel take [--db <path>] [--channel <name>] [--limit <n>] [--lease-owner <owner>]\n  ctox channel ack [--db <path>] [--status <status>] <message-key>...\n  ctox channel send --channel <tui|email|jami|teams|meeting|whatsapp> --account-key <key> --thread-key <key> --body <text> [--subject <text>] [--to <addr>]... [--cc <addr>]... [--attach-file <path>]... [--send-voice] [--reviewed-founder-send]\n  ctox channel founder-reply --message-key <inbound-email-key> --body <text>\n  ctox channel test --channel <tui|email|jami|teams|whatsapp> [--db <path>] [--account-key <key>]\n  ctox channel ingest-tui --account-key <key> --thread-key <key> --body <text> [--sender-display <name>] [--sender-address <addr>] [--subject <text>]\n  ctox channel list [--db <path>] [--channel <name>] [--limit <n>]\n  ctox channel history --thread-key <key> [--db <path>] [--limit <n>]\n  ctox channel search --query <text> [--db <path>] [--channel <name>] [--sender <addr>] [--limit <n>]\n  ctox channel context --thread-key <key> [--db <path>] [--query <text>] [--sender <addr>] [--limit <n>]\n  ctox channel pipeline-status [--thread-key <key>] [--limit <n>]"
             )
         }
     }
@@ -2089,6 +2295,23 @@ fn sync_channel(root: &Path, db_path: &Path, channel: &str, args: &[String]) -> 
                 "adapter_result": adapter_json,
             }))
         }
+        Some(communication_adapters::ExternalCommunicationAdapter::Whatsapp(adapter)) => {
+            let adapter_json = adapter.sync_cli(
+                root,
+                &communication_adapters::AdapterSyncCommandRequest {
+                    db_path,
+                    passthrough_args: args,
+                    skip_flags: &["--db", "--channel"],
+                },
+            )?;
+            ensure_routing_rows_for_inbound(&conn)?;
+            Ok(json!({
+                "ok": true,
+                "channel": adapter.channel_name(),
+                "db_path": db_path,
+                "adapter_result": adapter_json,
+            }))
+        }
         None => anyhow::bail!("unsupported channel sync target: {channel}"),
     }
 }
@@ -2113,45 +2336,7 @@ fn send_message(root: &Path, db_path: &Path, request: ChannelSendRequest) -> Res
                 communication_gateway::CommunicationAdapterKind::Email,
             );
             validate_founder_outbound_email(&settings, &request)?;
-            let adapter = communication_adapters::email();
-            let sender_email = request
-                .sender_address
-                .clone()
-                .unwrap_or_else(|| email_address_from_account_key(&request.account_key));
-            let account_config = load_account_config(&conn, &request.account_key)?;
-            let adapter_json = adapter.send_cli(
-                root,
-                &communication_adapters::EmailSendCommandRequest {
-                    db_path,
-                    sender_email: &sender_email,
-                    provider: account_config
-                        .as_ref()
-                        .map(|config| config.provider.as_str()),
-                    profile_json: account_config.as_ref().map(|config| &config.profile_json),
-                    thread_key: &request.thread_key,
-                    to: &request.to,
-                    cc: &request.cc,
-                    sender_display: request.sender_display.as_deref(),
-                    subject: &request.subject,
-                    body: &request.body,
-                    attachments: &request.attachments,
-                },
-            )?;
-            Ok(json!({
-                "ok": true,
-                "channel": "email",
-                "db_path": db_path,
-                "status": adapter_json
-                    .get("status")
-                    .and_then(Value::as_str)
-                    .unwrap_or("accepted"),
-                "delivery_confirmed": adapter_json
-                    .get("delivery")
-                    .and_then(|value| value.get("confirmed"))
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false),
-                "adapter_result": adapter_json,
-            }))
+            send_email_message(root, &conn, db_path, &request, None)
         }
         "jami" => {
             let adapter = communication_adapters::jami();
@@ -2209,6 +2394,36 @@ fn send_message(root: &Path, db_path: &Path, request: ChannelSendRequest) -> Res
             Ok(json!({
                 "ok": true,
                 "channel": "teams",
+                "db_path": db_path,
+                "status": adapter_json
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .unwrap_or("sent"),
+                "delivery_confirmed": adapter_json
+                    .get("delivery")
+                    .and_then(|value| value.get("confirmed"))
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                "adapter_result": adapter_json,
+            }))
+        }
+        "whatsapp" => {
+            let adapter = communication_adapters::whatsapp();
+            let adapter_json = adapter.send_cli(
+                root,
+                &communication_adapters::WhatsappSendCommandRequest {
+                    db_path,
+                    account_key: &request.account_key,
+                    thread_key: &request.thread_key,
+                    to: &request.to,
+                    sender_display: request.sender_display.as_deref(),
+                    body: &request.body,
+                    attachments: &request.attachments,
+                },
+            )?;
+            Ok(json!({
+                "ok": true,
+                "channel": "whatsapp",
                 "db_path": db_path,
                 "status": adapter_json
                     .get("status")
@@ -2716,6 +2931,7 @@ fn send_email_message(
     conn: &Connection,
     db_path: &Path,
     request: &ChannelSendRequest,
+    reviewed_context: Option<ReviewedFounderSendContext<'_>>,
 ) -> Result<Value> {
     let adapter = communication_adapters::email();
     let sender_email = request
@@ -2723,7 +2939,8 @@ fn send_email_message(
         .clone()
         .unwrap_or_else(|| email_address_from_account_key(&request.account_key));
     let account_config = load_account_config(conn, &request.account_key)?;
-    let adapter_json = adapter.send_cli(
+    let pending_message_key = record_outbound_pending_send(conn, request, &sender_email)?;
+    let adapter_json = match adapter.send_cli(
         root,
         &communication_adapters::EmailSendCommandRequest {
             db_path,
@@ -2740,15 +2957,33 @@ fn send_email_message(
             body: &request.body,
             attachments: &request.attachments,
         },
-    )?;
+    ) {
+        Ok(value) => value,
+        Err(err) => {
+            let _ = mark_outbound_send_failed(conn, &pending_message_key, &err.to_string());
+            if let Some(context) = reviewed_context {
+                let _ = enforce_reviewed_founder_send_failed_core_transition(
+                    conn,
+                    context.entity_id,
+                    context.approval_key,
+                    request,
+                    &err.to_string(),
+                );
+            }
+            return Err(err);
+        }
+    };
+    let status = adapter_json
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("accepted");
+    mark_outbound_send_accepted(conn, &pending_message_key, status, &adapter_json)?;
     Ok(json!({
         "ok": true,
         "channel": "email",
         "db_path": db_path,
-        "status": adapter_json
-            .get("status")
-            .and_then(Value::as_str)
-            .unwrap_or("accepted"),
+        "message_key": pending_message_key,
+        "status": status,
         "delivery_confirmed": adapter_json
             .get("delivery")
             .and_then(|value| value.get("confirmed"))
@@ -2756,6 +2991,120 @@ fn send_email_message(
             .unwrap_or(false),
         "adapter_result": adapter_json,
     }))
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ReviewedFounderSendContext<'a> {
+    entity_id: &'a str,
+    approval_key: &'a str,
+}
+
+fn record_outbound_pending_send(
+    conn: &Connection,
+    request: &ChannelSendRequest,
+    sender_email: &str,
+) -> Result<String> {
+    let observed_at = now_iso_string();
+    let remote_id = format!(
+        "pending-send-{}",
+        stable_digest(&format!(
+            "{}:{}:{}:{}:{}",
+            request.account_key, request.thread_key, request.subject, request.body, observed_at
+        ))
+    );
+    let message_key = format!("{}::{remote_id}", request.account_key);
+    let metadata_json = serde_json::to_string(&json!({
+        "source": "ctox-send-durability",
+        "pendingSend": true,
+        "reviewedFounderSend": request.reviewed_founder_send,
+        "attachments": request.attachments,
+    }))?;
+    conn.execute(
+        r#"
+        INSERT INTO communication_messages (
+            message_key, channel, account_key, thread_key, remote_id, direction, folder_hint,
+            sender_display, sender_address, recipient_addresses_json, cc_addresses_json, bcc_addresses_json,
+            subject, preview, body_text, body_html, raw_payload_ref, trust_level, status, seen,
+            has_attachments, external_created_at, observed_at, metadata_json
+        ) VALUES (
+            ?1, 'email', ?2, ?3, ?4, 'outbound', 'outbox',
+            ?5, ?6, ?7, ?8, '[]',
+            ?9, ?10, ?11, '', ?12, 'high', 'draft_pending_send', 1,
+            ?13, ?14, ?14, ?15
+        )
+        ON CONFLICT(message_key) DO UPDATE SET
+            folder_hint='outbox',
+            status='draft_pending_send',
+            body_text=excluded.body_text,
+            metadata_json=excluded.metadata_json,
+            observed_at=excluded.observed_at
+        "#,
+        params![
+            message_key,
+            request.account_key,
+            request.thread_key,
+            remote_id,
+            request.sender_display.as_deref().unwrap_or(""),
+            sender_email,
+            serde_json::to_string(&request.to)?,
+            serde_json::to_string(&request.cc)?,
+            request.subject,
+            preview_text(&request.body, &request.subject),
+            request.body,
+            request.attachments.join("\n"),
+            if request.attachments.is_empty() { 0 } else { 1 },
+            observed_at,
+            metadata_json,
+        ],
+    )?;
+    Ok(message_key)
+}
+
+fn mark_outbound_send_accepted(
+    conn: &Connection,
+    message_key: &str,
+    status: &str,
+    adapter_json: &Value,
+) -> Result<()> {
+    conn.execute(
+        r#"
+        UPDATE communication_messages
+        SET status = ?2,
+            folder_hint = 'sent',
+            metadata_json = json_set(
+                json_set(metadata_json, '$.pendingSend', false),
+                '$.adapterResult',
+                json(?3)
+            ),
+            observed_at = ?4
+        WHERE message_key = ?1
+        "#,
+        params![
+            message_key,
+            status,
+            serde_json::to_string(adapter_json)?,
+            now_iso_string()
+        ],
+    )?;
+    Ok(())
+}
+
+fn mark_outbound_send_failed(conn: &Connection, message_key: &str, error: &str) -> Result<()> {
+    conn.execute(
+        r#"
+        UPDATE communication_messages
+        SET status = 'send_failed',
+            metadata_json = json_set(
+                json_set(metadata_json, '$.pendingSend', false),
+                '$.sendError',
+                ?2
+            ),
+            observed_at = ?3
+        WHERE message_key = ?1
+        "#,
+        params![message_key, error, now_iso_string()],
+    )?;
+    Ok(())
 }
 
 pub(crate) fn prepare_reviewed_founder_reply(
@@ -3330,6 +3679,7 @@ pub fn send_reviewed_founder_reply(
     inbound_message_key: &str,
     body: &str,
 ) -> Result<Value> {
+    let _send_guard = acquire_reviewed_founder_send_lock()?;
     let db_path = resolve_db_path(root, None);
     let conn = open_channel_db(&db_path)?;
     let inbound = load_message_from_conn(&conn, inbound_message_key)?
@@ -3380,7 +3730,17 @@ pub fn send_reviewed_founder_reply(
         &approval_key,
         &request,
     )?;
-    let send_result = send_email_message(root, &conn, &db_path, &request)?;
+    let entity_id = format!("founder-reply:{inbound_message_key}");
+    let send_result = send_email_message(
+        root,
+        &conn,
+        &db_path,
+        &request,
+        Some(ReviewedFounderSendContext {
+            entity_id: &entity_id,
+            approval_key: &approval_key,
+        }),
+    )?;
     mark_founder_reply_review_sent(&conn, &approval_key, &send_result)?;
     Ok(send_result)
 }
@@ -3391,6 +3751,7 @@ pub(crate) fn send_reviewed_founder_outbound(
     action: &FounderOutboundAction,
     body: &str,
 ) -> Result<Value> {
+    let _send_guard = acquire_reviewed_founder_send_lock()?;
     let db_path = resolve_db_path(root, None);
     let conn = open_channel_db(&db_path)?;
     let request = resolve_outbound_subject(
@@ -3432,7 +3793,17 @@ pub(crate) fn send_reviewed_founder_outbound(
         &approval_key,
         &request,
     )?;
-    let send_result = send_email_message(root, &conn, &db_path, &request)?;
+    let entity_id = format!("founder-outbound:{anchor_message_key}");
+    let send_result = send_email_message(
+        root,
+        &conn,
+        &db_path,
+        &request,
+        Some(ReviewedFounderSendContext {
+            entity_id: &entity_id,
+            approval_key: &approval_key,
+        }),
+    )?;
     mark_founder_reply_review_sent(&conn, &approval_key, &send_result)?;
     Ok(send_result)
 }
@@ -3473,6 +3844,61 @@ fn enforce_reviewed_founder_send_core_transition(
         },
     )?;
     Ok(())
+}
+
+fn acquire_reviewed_founder_send_lock() -> Result<MutexGuard<'static, ()>> {
+    REVIEWED_FOUNDER_SEND_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|err| anyhow::anyhow!("reviewed founder send lock poisoned: {err}"))
+}
+
+fn enforce_reviewed_founder_send_failed_core_transition(
+    conn: &Connection,
+    entity_id: &str,
+    approval_key: &str,
+    request: &ChannelSendRequest,
+    error: &str,
+) -> Result<()> {
+    let body_sha256 = sha256_hex(request.body.trim().as_bytes());
+    let recipient_set_sha256 = founder_send_recipient_set_sha256(request);
+    let mut metadata = BTreeMap::new();
+    metadata.insert("protected_party".to_string(), "founder".to_string());
+    metadata.insert("thread_key".to_string(), request.thread_key.clone());
+    metadata.insert("subject".to_string(), request.subject.clone());
+    metadata.insert("account_key".to_string(), request.account_key.clone());
+    metadata.insert("send_error".to_string(), clip_metadata_value(error, 400));
+
+    enforce_core_transition(
+        conn,
+        &CoreTransitionRequest {
+            entity_type: CoreEntityType::FounderCommunication,
+            entity_id: entity_id.to_string(),
+            lane: RuntimeLane::P0FounderCommunication,
+            from_state: CoreState::Sending,
+            to_state: CoreState::SendFailed,
+            event: CoreEvent::Fail,
+            actor: "ctox-reviewed-founder-send".to_string(),
+            evidence: CoreEvidenceRefs {
+                review_audit_key: Some(approval_key.to_string()),
+                approved_body_sha256: Some(body_sha256.clone()),
+                outgoing_body_sha256: Some(body_sha256),
+                approved_recipient_set_sha256: Some(recipient_set_sha256.clone()),
+                outgoing_recipient_set_sha256: Some(recipient_set_sha256),
+                ..CoreEvidenceRefs::default()
+            },
+            metadata,
+        },
+    )?;
+    Ok(())
+}
+
+fn clip_metadata_value(value: &str, max_chars: usize) -> String {
+    let mut clipped = value.chars().take(max_chars).collect::<String>();
+    if value.chars().count() > max_chars {
+        clipped.push_str("...");
+    }
+    clipped
 }
 
 fn founder_send_recipient_set_sha256(request: &ChannelSendRequest) -> String {
@@ -3602,6 +4028,25 @@ fn test_channel(
                 "adapter_result": adapter_json,
             }))
         }
+        "whatsapp" => {
+            let conn = open_channel_db(db_path)?;
+            let resolved_account_key = resolve_account_key(&conn, "whatsapp", account_key).ok();
+            let adapter = communication_adapters::whatsapp();
+            let adapter_json = adapter.test_cli(
+                root,
+                &communication_adapters::WhatsappTestCommandRequest {
+                    db_path,
+                    account_key: resolved_account_key.as_deref().or(account_key),
+                },
+            )?;
+            Ok(json!({
+                "ok": adapter_json.get("ok").and_then(Value::as_bool).unwrap_or(false),
+                "channel": "whatsapp",
+                "account_key": resolved_account_key,
+                "db_path": db_path,
+                "adapter_result": adapter_json,
+            }))
+        }
         other => anyhow::bail!("unsupported channel test target: {other}"),
     }
 }
@@ -3687,11 +4132,16 @@ fn parse_send_request(args: &[String]) -> Result<ChannelSendRequest> {
         .map(ToOwned::to_owned)
         .unwrap_or_default();
     let to = collect_flag_values(args, "--to");
-    // "tui", "teams", and "meeting" don't require ad hoc recipients here:
+    // "tui", "teams", "meeting", and WhatsApp thread replies don't require ad hoc recipients here:
     // tui is local, teams targets the configured Graph chat/channel or the
-    // stored Teams thread key, and meeting broadcasts through the active
-    // Playwright session. Email and Jami still need explicit remote targets.
-    if !matches!(channel.as_str(), "tui" | "teams" | "meeting") && to.is_empty() {
+    // stored Teams thread key, meeting broadcasts through the active
+    // Playwright session, and WhatsApp replies target the chat encoded in
+    // thread_key. Email and Jami still need explicit remote targets.
+    let whatsapp_thread_reply = channel == "whatsapp" && thread_key.contains("::chat::");
+    if !matches!(channel.as_str(), "tui" | "teams" | "meeting")
+        && !whatsapp_thread_reply
+        && to.is_empty()
+    {
         anyhow::bail!("channel send for {channel} requires at least one --to value");
     }
     Ok(ChannelSendRequest {
@@ -6405,9 +6855,9 @@ mod tests {
                 .to_string(),
         );
         assert_eq!(
-            crate::mission::communication_gateway::runtime_settings_from_settings(
+            crate::communication::gateway::runtime_settings_from_settings(
                 &root,
-                crate::mission::communication_gateway::CommunicationAdapterKind::Email,
+                crate::communication::gateway::CommunicationAdapterKind::Email,
                 &email_settings,
             )
             .get("CTO_EMAIL_RAW_DIR"),
@@ -6426,9 +6876,9 @@ mod tests {
                 .to_string(),
         );
         assert_eq!(
-            crate::mission::communication_gateway::runtime_settings_from_settings(
+            crate::communication::gateway::runtime_settings_from_settings(
                 &root,
-                crate::mission::communication_gateway::CommunicationAdapterKind::Jami,
+                crate::communication::gateway::CommunicationAdapterKind::Jami,
                 &jami_settings,
             )
             .get("CTO_JAMI_INBOX_DIR"),

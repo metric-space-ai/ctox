@@ -9,6 +9,15 @@ fn make_vars(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
         .collect()
 }
 
+fn insert_internal_thread_env(expected: &mut HashMap<String, String>, thread_id: ThreadId) {
+    let thread_id = thread_id.to_string();
+    expected.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.clone());
+    expected.insert(CODEX_AGENT_ID_ENV_VAR.to_string(), thread_id.clone());
+    expected.insert(CTOX_AGENT_ID_ENV_VAR.to_string(), thread_id.clone());
+    expected.insert(CODEX_TURN_ID_ENV_VAR.to_string(), thread_id.clone());
+    expected.insert(CTOX_TURN_ID_ENV_VAR.to_string(), thread_id);
+}
+
 #[test]
 fn test_core_inherit_defaults_keep_sensitive_vars() {
     let vars = make_vars(&[
@@ -28,7 +37,7 @@ fn test_core_inherit_defaults_keep_sensitive_vars() {
         "API_KEY".to_string() => "secret".to_string(),
         "SECRET_TOKEN".to_string() => "t".to_string(),
     };
-    expected.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
+    insert_internal_thread_env(&mut expected, thread_id);
 
     assert_eq!(result, expected);
 }
@@ -53,7 +62,7 @@ fn test_core_inherit_with_default_excludes_enabled() {
         "PATH".to_string() => "/usr/bin".to_string(),
         "HOME".to_string() => "/home/user".to_string(),
     };
-    expected.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
+    insert_internal_thread_env(&mut expected, thread_id);
 
     assert_eq!(result, expected);
 }
@@ -75,7 +84,7 @@ fn test_include_only() {
     let mut expected: HashMap<String, String> = hashmap! {
         "PATH".to_string() => "/usr/bin".to_string(),
     };
-    expected.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
+    insert_internal_thread_env(&mut expected, thread_id);
 
     assert_eq!(result, expected);
 }
@@ -97,7 +106,7 @@ fn test_set_overrides() {
         "PATH".to_string() => "/usr/bin".to_string(),
         "NEW_VAR".to_string() => "42".to_string(),
     };
-    expected.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
+    insert_internal_thread_env(&mut expected, thread_id);
 
     assert_eq!(result, expected);
 }
@@ -112,7 +121,7 @@ fn populate_env_inserts_thread_id() {
     let mut expected: HashMap<String, String> = hashmap! {
         "PATH".to_string() => "/usr/bin".to_string(),
     };
-    expected.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
+    insert_internal_thread_env(&mut expected, thread_id);
 
     assert_eq!(result, expected);
 }
@@ -131,6 +140,41 @@ fn populate_env_omits_thread_id_when_missing() {
 }
 
 #[test]
+fn populate_env_preserves_explicit_turn_and_agent_ids() {
+    let vars = make_vars(&[
+        ("PATH", "/usr/bin"),
+        (CODEX_AGENT_ID_ENV_VAR, "agent-from-env"),
+        (CTOX_AGENT_ID_ENV_VAR, "ctox-agent-from-env"),
+        (CODEX_TURN_ID_ENV_VAR, "turn-from-env"),
+        (CTOX_TURN_ID_ENV_VAR, "ctox-turn-from-env"),
+    ]);
+    let policy = ShellEnvironmentPolicy::default();
+    let thread_id = ThreadId::new();
+    let result = populate_env(vars, &policy, Some(thread_id));
+
+    assert_eq!(
+        result.get(CODEX_THREAD_ID_ENV_VAR),
+        Some(&thread_id.to_string())
+    );
+    assert_eq!(
+        result.get(CODEX_AGENT_ID_ENV_VAR).map(String::as_str),
+        Some("agent-from-env")
+    );
+    assert_eq!(
+        result.get(CTOX_AGENT_ID_ENV_VAR).map(String::as_str),
+        Some("ctox-agent-from-env")
+    );
+    assert_eq!(
+        result.get(CODEX_TURN_ID_ENV_VAR).map(String::as_str),
+        Some("turn-from-env")
+    );
+    assert_eq!(
+        result.get(CTOX_TURN_ID_ENV_VAR).map(String::as_str),
+        Some("ctox-turn-from-env")
+    );
+}
+
+#[test]
 fn test_inherit_all() {
     let vars = make_vars(&[("PATH", "/usr/bin"), ("FOO", "bar")]);
 
@@ -143,7 +187,7 @@ fn test_inherit_all() {
     let thread_id = ThreadId::new();
     let result = populate_env(vars.clone(), &policy, Some(thread_id));
     let mut expected: HashMap<String, String> = vars.into_iter().collect();
-    expected.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
+    insert_internal_thread_env(&mut expected, thread_id);
     assert_eq!(result, expected);
 }
 
@@ -162,7 +206,7 @@ fn test_inherit_all_with_default_excludes() {
     let mut expected: HashMap<String, String> = hashmap! {
         "PATH".to_string() => "/usr/bin".to_string(),
     };
-    expected.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
+    insert_internal_thread_env(&mut expected, thread_id);
     assert_eq!(result, expected);
 }
 
@@ -187,7 +231,7 @@ fn test_core_inherit_respects_case_insensitive_names_on_windows() {
         "Path".to_string() => "C:\\Windows\\System32".to_string(),
         "TEMP".to_string() => "C:\\Temp".to_string(),
     };
-    expected.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
+    insert_internal_thread_env(&mut expected, thread_id);
 
     assert_eq!(result, expected);
 }
@@ -210,6 +254,6 @@ fn test_inherit_none() {
     let mut expected: HashMap<String, String> = hashmap! {
         "ONLY_VAR".to_string() => "yes".to_string(),
     };
-    expected.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
+    insert_internal_thread_env(&mut expected, thread_id);
     assert_eq!(result, expected);
 }

@@ -1,0 +1,18 @@
+[package]
+name = "wha-socket"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+wha-types  = { workspace = true }
+wha-crypto = { workspace = true }
+thiserror  = { workspace = true }
+bytes      = { workspace = true }
+async-trait = { workspace = true }
+tokio      = { workspace = true }
+tokio-tungstenite = { workspace = true }
+futures    = { workspace = true }
+tracing    = { workspace = true }
+url        = { workspace = true }
+sha2       = { workspace = true }

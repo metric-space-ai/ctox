@@ -50,6 +50,11 @@ fn apply_session_meta_from_item(metadata: &mut ThreadMetadata, meta_line: &Sessi
     metadata.source = enum_to_string(&meta_line.meta.source);
     metadata.agent_nickname = meta_line.meta.agent_nickname.clone();
     metadata.agent_role = meta_line.meta.agent_role.clone();
+    (
+        metadata.subagent_parent_thread_id,
+        metadata.subagent_depth,
+        metadata.agent_path,
+    ) = crate::model::subagent_forensics_from_source(&meta_line.meta.source);
     if let Some(provider) = meta_line.meta.model_provider.as_deref() {
         metadata.model_provider = provider.to_string();
     }
@@ -404,6 +409,9 @@ mod tests {
             source: "cli".to_string(),
             agent_nickname: None,
             agent_role: None,
+            subagent_parent_thread_id: None,
+            subagent_depth: None,
+            agent_path: None,
             model_provider: "openai".to_string(),
             model: None,
             reasoning_effort: None,

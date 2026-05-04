@@ -8075,7 +8075,7 @@ mod tests {
             serde_json::to_string(&SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id: ThreadId::from_string("ad7f0408-99b8-4f6e-a46f-bd0eec433370")?,
                 depth: 1,
-                agent_path: None,
+                agent_path: Some(ctox_protocol::AgentPath::try_from("/root/atlas").unwrap()),
                 agent_nickname: None,
                 agent_role: None,
             }))?;
@@ -8101,6 +8101,24 @@ mod tests {
 
         assert_eq!(thread.agent_nickname, Some("atlas".to_string()));
         assert_eq!(thread.agent_role, Some("explorer".to_string()));
+        let ctox_app_server_protocol::SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            agent_path,
+            parent_thread_id,
+            depth,
+            ..
+        }) = thread.source
+        else {
+            panic!("expected thread-spawn sub-agent source");
+        };
+        assert_eq!(
+            parent_thread_id,
+            ThreadId::from_string("ad7f0408-99b8-4f6e-a46f-bd0eec433370")?
+        );
+        assert_eq!(depth, 1);
+        assert_eq!(
+            agent_path,
+            Some(ctox_protocol::AgentPath::try_from("/root/atlas").unwrap())
+        );
         Ok(())
     }
 

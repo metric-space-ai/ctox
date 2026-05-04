@@ -7,6 +7,7 @@ use ctox_protocol::openai_models::ReasoningEffort;
 use ctox_protocol::protocol::AskForApproval;
 use ctox_protocol::protocol::SandboxPolicy;
 use ctox_protocol::protocol::SessionSource;
+use ctox_protocol::protocol::SubAgentSource;
 use sqlx::Row;
 use sqlx::sqlite::SqliteRow;
 use std::path::PathBuf;
@@ -69,6 +70,12 @@ pub struct ThreadMetadata {
     pub agent_nickname: Option<String>,
     /// Optional role (agent_role) assigned to an AgentControl-spawned sub-agent.
     pub agent_role: Option<String>,
+    /// Parent thread id for AgentControl-spawned sub-agents.
+    pub subagent_parent_thread_id: Option<String>,
+    /// Depth in the AgentControl sub-agent tree.
+    pub subagent_depth: Option<i64>,
+    /// Absolute AgentControl path for this sub-agent.
+    pub agent_path: Option<String>,
     /// The model provider identifier.
     pub model_provider: String,
     /// The latest observed model for the thread.
@@ -169,6 +176,8 @@ impl ThreadMetadataBuilder {
         let source = crate::extract::enum_to_string(&self.source);
         let sandbox_policy = crate::extract::enum_to_string(&self.sandbox_policy);
         let approval_mode = crate::extract::enum_to_string(&self.approval_mode);
+        let (subagent_parent_thread_id, subagent_depth, agent_path) =
+            subagent_forensics_from_source(&self.source);
         let created_at = canonicalize_datetime(self.created_at);
         let updated_at = self
             .updated_at
@@ -182,6 +191,9 @@ impl ThreadMetadataBuilder {
             source,
             agent_nickname: self.agent_nickname.clone(),
             agent_role: self.agent_role.clone(),
+            subagent_parent_thread_id,
+            subagent_depth,
+            agent_path,
             model_provider: self
                 .model_provider
                 .clone()
@@ -241,6 +253,15 @@ impl ThreadMetadata {
         if self.agent_role != other.agent_role {
             diffs.push("agent_role");
         }
+        if self.subagent_parent_thread_id != other.subagent_parent_thread_id {
+            diffs.push("subagent_parent_thread_id");
+        }
+        if self.subagent_depth != other.subagent_depth {
+            diffs.push("subagent_depth");
+        }
+        if self.agent_path != other.agent_path {
+            diffs.push("agent_path");
+        }
         if self.model_provider != other.model_provider {
             diffs.push("model_provider");
         }
@@ -291,6 +312,29 @@ fn canonicalize_datetime(dt: DateTime<Utc>) -> DateTime<Utc> {
     dt.with_nanosecond(0).unwrap_or(dt)
 }
 
+pub fn subagent_forensics_from_source(
+    source: &SessionSource,
+) -> (Option<String>, Option<i64>, Option<String>) {
+    match source {
+        SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id,
+            depth,
+            agent_path,
+            ..
+        }) => (
+            Some(parent_thread_id.to_string()),
+            Some(i64::from(*depth)),
+            agent_path.as_ref().map(|path| path.to_string()),
+        ),
+        SessionSource::SubAgent(SubAgentSource::MemoryConsolidation) => (
+            None,
+            None,
+            Some(ctox_protocol::AgentPath::morpheus().to_string()),
+        ),
+        _ => (None, None, None),
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct ThreadRow {
     id: String,
@@ -300,6 +344,9 @@ pub(crate) struct ThreadRow {
     source: String,
     agent_nickname: Option<String>,
     agent_role: Option<String>,
+    subagent_parent_thread_id: Option<String>,
+    subagent_depth: Option<i64>,
+    agent_path: Option<String>,
     model_provider: String,
     model: Option<String>,
     reasoning_effort: Option<String>,
@@ -326,6 +373,9 @@ impl ThreadRow {
             source: row.try_get("source")?,
             agent_nickname: row.try_get("agent_nickname")?,
             agent_role: row.try_get("agent_role")?,
+            subagent_parent_thread_id: row.try_get("subagent_parent_thread_id")?,
+            subagent_depth: row.try_get("subagent_depth")?,
+            agent_path: row.try_get("agent_path")?,
             model_provider: row.try_get("model_provider")?,
             model: row.try_get("model")?,
             reasoning_effort: row.try_get("reasoning_effort")?,
@@ -356,6 +406,9 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             source,
             agent_nickname,
             agent_role,
+            subagent_parent_thread_id,
+            subagent_depth,
+            agent_path,
             model_provider,
             model,
             reasoning_effort,
@@ -379,6 +432,9 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             source,
             agent_nickname,
             agent_role,
+            subagent_parent_thread_id,
+            subagent_depth,
+            agent_path,
             model_provider,
             model,
             reasoning_effort: reasoning_effort
@@ -447,6 +503,9 @@ mod tests {
             source: "cli".to_string(),
             agent_nickname: None,
             agent_role: None,
+            subagent_parent_thread_id: None,
+            subagent_depth: None,
+            agent_path: None,
             model_provider: "openai".to_string(),
             model: Some("gpt-5".to_string()),
             reasoning_effort: reasoning_effort.map(str::to_string),
@@ -474,6 +533,9 @@ mod tests {
             source: "cli".to_string(),
             agent_nickname: None,
             agent_role: None,
+            subagent_parent_thread_id: None,
+            subagent_depth: None,
+            agent_path: None,
             model_provider: "openai".to_string(),
             model: Some("gpt-5".to_string()),
             reasoning_effort,

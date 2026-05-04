@@ -1,0 +1,15 @@
+[package]
+name = "wha-signal"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+wha-types  = { workspace = true }
+wha-crypto = { workspace = true }
+thiserror  = { workspace = true }
+sha2       = { workspace = true }
+hmac       = { workspace = true }
+aes        = { workspace = true }
+cbc        = { workspace = true }
+rand       = { workspace = true }

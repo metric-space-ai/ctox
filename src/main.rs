@@ -1,8 +1,10 @@
 use anyhow::Context;
 use std::path::{Path, PathBuf};
 
+mod api_costs;
 mod autonomy;
 mod capabilities;
+mod communication;
 mod context;
 mod doc_stack;
 mod execution;
@@ -92,6 +94,9 @@ EVERYDAY
   ctox start                     start the persistent mission loop (systemd service)
   ctox stop                      stop the mission loop
   ctox status                    show service status (JSON)
+  ctox work-hours set 08:00 18:00
+                                 restrict CTOX work loop to local hours
+  ctox work-hours off            disable working-hours restriction
   ctox chat <instruction>        submit a prompt to the running service
                                  add --wait to block until the slice completes
                                  add --to <addr> (repeatable), --cc <addr> (repeatable),
@@ -99,6 +104,8 @@ EVERYDAY
                                  owner/founder outbound email; the reply is
                                  routed through the reviewed-send pipeline
   ctox tui                       open the TUI
+  ctox cost today|daily|week|month
+                                 show API model costs by period
   ctox version                   print the version string
 
 INSTALL / UPGRADE
@@ -109,6 +116,9 @@ INSTALL / UPGRADE
   ctox update apply --source <path> [--release <name>]
   ctox update rollback           revert to the previous release slot
   ctox update status             dump install layout + manifest + update state
+  ctox business-os status        show bundled Business OS template/install state
+  ctox business-os install --target <empty-dir> [--init-git]
+                                 create a separate customer-owned Business OS repo
 
 ENGINE / GPU
   ctox doctor                    health check — update available? hints
@@ -130,6 +140,7 @@ GOVERNANCE / MISSION
   ctox follow-up <subcmd>        blocked-task follow-ups
   ctox ticket <subcmd>           ticket integrations
   ctox secret <subcmd>           credential storage
+  ctox cost <subcmd>             API model token/cost accounting
   ctox state-invariants [--conversation-id <id>]
   ctox turn status|end           inspect or close the current CLI turn ledger
   ctox harness-flow              render the current harness work flow as ASCII
@@ -344,6 +355,7 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
             Ok(())
         }
         Some("chat") => handle_chat(root, &args[1..]),
+        Some("cost") => api_costs::handle_cost_command(root, &args[1..]),
         Some("start") => {
             println!("{}", service::start_background(root)?);
             Ok(())
@@ -359,7 +371,11 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
             );
             Ok(())
         }
+        Some("work-hours") => service::working_hours::handle_work_hours_command(root, &args[1..]),
         Some("tui") => tui::run_tui(root),
+        Some("business-os") | Some("business") => {
+            service::business_os::handle_business_os_command(root, &args[1..])
+        }
         Some("turn") => service::turn_ledger::handle_turn_command(root, &args[1..]),
         Some("harness-flow") => service::harness_flow::handle_harness_flow_command(root, &args[1..]),
         Some("process-mining") => {
@@ -380,10 +396,10 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
         Some("follow-up") => follow_up::handle_follow_up_command(&args[1..]),
         Some("governance") => governance::handle_governance_command(&root, &args[1..]),
         Some("jami-daemon") => {
-            mission::communication_jami_native::handle_daemon_command(&root, &args[1..])
+            communication::jami_native::handle_daemon_command(&root, &args[1..])
         }
         Some("meeting") => {
-            mission::communication_meeting_native::handle_meeting_command(&root, &args[1..])
+            communication::meeting_native::handle_meeting_command(&root, &args[1..])
         }
         Some("plan") => plan::handle_plan_command(&root, &args[1..]),
         Some("queue") => queue::handle_queue_command(&root, &args[1..]),
