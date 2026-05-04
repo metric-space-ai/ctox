@@ -437,6 +437,15 @@ enum CompletionReviewDisposition {
         anchor_message_key: Option<String>,
         review_summary: String,
     },
+    /// In-process continuation after a substantive review finding. The
+    /// reviewer remains a quality gate: it explains what is wrong, but it
+    /// does not spawn durable work or perform the task. The same executor
+    /// receives the feedback as the next prompt with the original outbound
+    /// metadata preserved.
+    FeedbackRetry {
+        feedback_prompt: String,
+        review_summary: String,
+    },
 }
 
 /// Pure-data finding consumed by the lightweight rewrite path. Mirrors the
@@ -570,6 +579,7 @@ fn completion_review_disposition_label(disposition: &CompletionReviewDisposition
         CompletionReviewDisposition::RequeueSelfWork { .. } => "requeue-self-work",
         CompletionReviewDisposition::ContinueSelfWork { .. } => "continue-self-work",
         CompletionReviewDisposition::RewriteOnly { .. } => REVIEW_REWRITE_SOURCE_LABEL,
+        CompletionReviewDisposition::FeedbackRetry { .. } => "feedback-retry",
     }
 }
 
@@ -2894,7 +2904,13 @@ fn start_prompt_worker(
                                 Vec::new()
                             }
                         };
-                        let outcome_witness_error = if terminal_no_send {
+                        let outcome_witness_allowed = matches!(
+                            &review_disposition,
+                            CompletionReviewDisposition::Approved
+                                | CompletionReviewDisposition::None
+                        );
+                        let outcome_witness_error = if terminal_no_send || !outcome_witness_allowed
+                        {
                             None
                         } else {
                             enforce_job_outcome_witness(
@@ -3111,6 +3127,18 @@ fn start_prompt_worker(
                                         ),
                                     );
                                 }
+                                CompletionReviewDisposition::FeedbackRetry {
+                                    review_summary,
+                                    ..
+                                } => {
+                                    push_event_locked(
+                                        &mut shared,
+                                        format!(
+                                            "Review fed back substantive guidance without spawning rework: {}",
+                                            clip_text(review_summary, 180)
+                                        ),
+                                    );
+                                }
                             }
                         }
                         push_event_locked(
@@ -3317,6 +3345,32 @@ fn start_prompt_worker(
                             ),
                         }
                     }
+                } else if let CompletionReviewDisposition::FeedbackRetry {
+                    feedback_prompt,
+                    review_summary,
+                } = &review_disposition
+                {
+                    shared.pending_prompts.push_front(QueuedPrompt {
+                        prompt: feedback_prompt.clone(),
+                        goal: format!("Address review feedback for {}", job.goal),
+                        preview: clip_text(review_summary, 180),
+                        source_label: "review-feedback".to_string(),
+                        suggested_skill: job.suggested_skill.clone(),
+                        leased_message_keys: Vec::new(),
+                        leased_ticket_event_keys: Vec::new(),
+                        thread_key: job.thread_key.clone(),
+                        workspace_root: job.workspace_root.clone(),
+                        ticket_self_work_id: None,
+                        outbound_email: job.outbound_email.clone(),
+                        outbound_anchor: job.outbound_anchor.clone(),
+                    });
+                    push_event_locked(
+                        &mut shared,
+                        format!(
+                            "Queued in-process review feedback retry for {}",
+                            job.source_label
+                        ),
+                    );
                 } else if matches!(&review_disposition, CompletionReviewDisposition::Approved) {
                     // Successful approval clears the rewrite-only failure
                     // counter so a future regression starts from zero.
@@ -3778,21 +3832,11 @@ fn run_completion_review(
                     return disposition;
                 }
                 if matches!(routing_class, ReviewRoutingClass::Stale) {
-                    match enqueue_review_stale_refresh(root, job, &outcome) {
-                        Ok(title) => push_event(
-                            state,
-                            format!("Founder outbound stale refresh enqueued: {title}"),
+                    return CompletionReviewDisposition::FeedbackRetry {
+                        feedback_prompt: build_review_feedback_retry_prompt(
+                            job, &outcome, reply_text,
                         ),
-                        Err(err) => push_event(
-                            state,
-                            format!(
-                                "Founder outbound stale refresh enqueue failed for {}: {}",
-                                job.source_label, err
-                            ),
-                        ),
-                    }
-                    return CompletionReviewDisposition::Hold {
-                        summary: outcome.summary.clone(),
+                        review_summary: outcome.summary.clone(),
                     };
                 }
                 if matches!(routing_class, ReviewRoutingClass::RewriteOnly) {
@@ -3812,21 +3856,9 @@ fn run_completion_review(
                         review_summary: outcome.summary.clone(),
                     };
                 }
-                match enqueue_review_rework(root, job, &outcome) {
-                    Ok(title) => push_event(
-                        state,
-                        format!("Founder outbound review rework enqueued: {title}"),
-                    ),
-                    Err(err) => push_event(
-                        state,
-                        format!(
-                            "Founder outbound review rework enqueue failed for {}: {}",
-                            job.source_label, err
-                        ),
-                    ),
-                }
-                CompletionReviewDisposition::Hold {
-                    summary: outcome.summary.clone(),
+                CompletionReviewDisposition::FeedbackRetry {
+                    feedback_prompt: build_review_feedback_retry_prompt(job, &outcome, reply_text),
+                    review_summary: outcome.summary.clone(),
                 }
             }
             _ => CompletionReviewDisposition::Hold {
@@ -4399,6 +4431,62 @@ Reply: nur der korrigierte Body. Keine eigenen \"An:\", \"Betreff:\" oder \"From
         anchor_note = anchor_note,
         prior_body = prior_body.trim(),
         numbered = numbered.trim_end(),
+    )
+}
+
+fn build_review_feedback_retry_prompt(
+    job: &QueuedPrompt,
+    outcome: &review::ReviewOutcome,
+    prior_reply: &str,
+) -> String {
+    let failed_gates_block = render_review_feedback_block(
+        &outcome.failed_gates,
+        "The result is not ready yet. Use the review evidence below to fix the actual missing outcome before finishing.",
+        6,
+    );
+    let findings_block = render_review_feedback_block(
+        &outcome.semantic_findings,
+        "The review did not provide a clean finding sentence. Re-read the current task, current thread, and expected artifact before continuing.",
+        8,
+    );
+    let open_items_block = render_review_feedback_block(
+        &outcome.open_items,
+        "Fix the missing work, then submit the corrected result through the same reviewed path.",
+        8,
+    );
+    let evidence_block = render_review_feedback_block(
+        &outcome.evidence,
+        "No extra evidence was provided by the review. Reconstruct the evidence from CTOX state before finishing.",
+        8,
+    );
+    let send_instruction = if job.outbound_email.is_some() {
+        "\nFor this owner/founder email task, the Review Gate only checks and records approval. It does not send the email. After your corrected draft is approved, you must run the reviewed send command yourself and verify that CTOX has an outbound email artifact with status `accepted`. Do not mark the task complete until that durable accepted artifact exists.\n"
+    } else {
+        ""
+    };
+    format!(
+        "The external CTOX Review Gate checked your last result and found that it is not complete yet. Continue the same task now; do not create a subtask, queue task, or self-rework item.\n\n\
+Review summary: {}\n\n\
+What is wrong:\n\
+{}\n\n\
+Evidence:\n\
+{}\n\n\
+Required next actions:\n\
+{}\n\n\
+Additional findings:\n\
+{}\n\
+{send_instruction}\n\
+Your previous result is below. Treat it as a draft, not as proof of completion.\n\
+==== previous result ====\n\
+{}\n\
+==== end previous result ====\n\n\
+Now continue the task. Produce the corrected artifact or perform the required CTOX command yourself. Do not describe completion unless the durable artifact exists.",
+        clip_text(&outcome.summary, 280),
+        failed_gates_block,
+        evidence_block,
+        open_items_block,
+        findings_block,
+        prior_reply.trim(),
     )
 }
 
@@ -6967,6 +7055,10 @@ fn founder_commitment_guard_outcome(
 
 fn is_owner_visible_strategic_job(job: &QueuedPrompt) -> bool {
     if !derive_owner_visible_for_review(&job.source_label) {
+        return false;
+    }
+    let source = job.source_label.to_ascii_lowercase();
+    if source == "review-feedback" || source == "outcome-witness-recovery" {
         return false;
     }
     if is_founder_or_owner_email_job(job) {
