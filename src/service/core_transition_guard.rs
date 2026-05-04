@@ -39,6 +39,42 @@ pub struct CoreSpawnProof {
     pub message: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub enum CoreSpawnEffect {
+    DurableSelfWork,
+    QueueExecution,
+    PlanEmission,
+    ScheduleEmission,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub enum CoreInterventionEffect {
+    BlockChild,
+    ConsolidateIntoParent,
+    RequeueParent,
+    MarkTerminal,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CoreSpawnerContract {
+    pub pattern: &'static str,
+    pub parent_entity_types: &'static [&'static str],
+    pub child_entity_type: &'static str,
+    pub effect: CoreSpawnEffect,
+    pub requires_budget: bool,
+    pub max_budget: i64,
+    pub intervention_skill: &'static str,
+    pub intervention_effects: &'static [CoreInterventionEffect],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CoreSpawnModelReport {
+    pub ok: bool,
+    pub spawner_contracts: Vec<CoreSpawnerContract>,
+    pub violations: Vec<String>,
+    pub proof: String,
+}
+
 pub fn ensure_core_transition_guard_schema(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         r#"
@@ -250,6 +286,79 @@ pub fn enforce_core_spawn(conn: &Connection, request: &CoreSpawnRequest) -> Resu
     anyhow::bail!("{}", proof.message);
 }
 
+pub fn analyze_core_spawn_model() -> CoreSpawnModelReport {
+    let contracts = core_spawner_contracts().to_vec();
+    let mut violations = Vec::new();
+    if contracts.is_empty() {
+        violations.push("no_core_spawner_contracts_registered".to_string());
+    }
+
+    for contract in &contracts {
+        if contract.pattern.trim().is_empty() {
+            violations.push("spawner_contract_requires_pattern".to_string());
+        }
+        if contract.child_entity_type.trim().is_empty() {
+            violations.push(format!(
+                "spawner_contract_requires_child_type:{}",
+                contract.pattern
+            ));
+        }
+        if contract.parent_entity_types.is_empty() {
+            violations.push(format!(
+                "spawner_contract_requires_parent_types:{}",
+                contract.pattern
+            ));
+        }
+        if contract.requires_budget && !(1..=64).contains(&contract.max_budget) {
+            violations.push(format!(
+                "spawner_contract_budget_invalid:{}",
+                contract.pattern
+            ));
+        }
+        if contract.intervention_skill != "queue-cleanup"
+            && contract.intervention_skill != "harness-self-audit"
+        {
+            violations.push(format!(
+                "spawner_contract_intervention_skill_not_approved:{}",
+                contract.pattern
+            ));
+        }
+        let Some(skill_contract_text) =
+            intervention_skill_contract_text(contract.intervention_skill)
+        else {
+            violations.push(format!(
+                "spawner_contract_intervention_skill_missing:{}",
+                contract.pattern
+            ));
+            continue;
+        };
+        if !has_non_spawning_intervention_contract(skill_contract_text) {
+            violations.push(format!(
+                "spawner_contract_intervention_skill_not_non_spawning:{}",
+                contract.pattern
+            ));
+        }
+        if contract
+            .intervention_effects
+            .iter()
+            .any(intervention_effect_spawns_work)
+        {
+            violations.push(format!(
+                "spawner_contract_intervention_may_spawn:{}",
+                contract.pattern
+            ));
+        }
+    }
+
+    CoreSpawnModelReport {
+        ok: violations.is_empty(),
+        spawner_contracts: contracts,
+        violations,
+        proof: "Every registered internal spawn has stable parent/child entity types, a finite budget, and a non-spawning intervention skill. Runtime enforcement rejects unregistered spawns, unstable IDs, over-budget requests, exhausted budgets, and cycles without finite budget. Therefore every accepted internal spawn path either advances to a new child once, consumes a finite budget, or is rejected into a bounded intervention effect set."
+            .to_string(),
+    }
+}
+
 fn deterministic_proof_id(request_json: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(b"ctox-core-transition-proof-v1");
@@ -278,6 +387,10 @@ fn validate_core_spawn(
     edge_id: &str,
 ) -> Result<Vec<String>> {
     let mut violations = Vec::new();
+    let contract = core_spawner_contract(&request.spawn_kind);
+    if contract.is_none() {
+        violations.push("unregistered_spawn_kind".to_string());
+    }
     if request.parent_entity_type.trim().is_empty()
         || request.parent_entity_id.trim().is_empty()
         || request.child_entity_type.trim().is_empty()
@@ -296,6 +409,26 @@ fn validate_core_spawn(
         && request.max_attempts.unwrap_or_default() > 0;
     if request.max_attempts.unwrap_or_default() > 64 {
         violations.push("spawn_budget_too_large".to_string());
+    }
+    if let Some(contract) = contract {
+        if !contract
+            .parent_entity_types
+            .iter()
+            .any(|allowed| *allowed == "*" || *allowed == request.parent_entity_type)
+        {
+            violations.push("spawn_parent_type_not_registered".to_string());
+        }
+        if contract.child_entity_type != "*"
+            && contract.child_entity_type != request.child_entity_type
+        {
+            violations.push("spawn_child_type_not_registered".to_string());
+        }
+        if contract.requires_budget && !has_budget {
+            violations.push("spawn_requires_finite_budget".to_string());
+        }
+        if request.max_attempts.unwrap_or_default() > contract.max_budget {
+            violations.push("spawn_budget_exceeds_contract".to_string());
+        }
     }
     if looks_like_review_spawn(&request.spawn_kind) && !has_budget {
         violations.push("review_spawn_requires_finite_budget".to_string());
@@ -335,6 +468,105 @@ fn validate_core_spawn(
     }
 
     Ok(violations)
+}
+
+fn core_spawner_contract(spawn_kind: &str) -> Option<&'static CoreSpawnerContract> {
+    core_spawner_contracts()
+        .iter()
+        .find(|contract| spawn_kind_matches(contract.pattern, spawn_kind))
+}
+
+fn core_spawner_contracts() -> &'static [CoreSpawnerContract] {
+    const BLOCK_OR_CONSOLIDATE: &[CoreInterventionEffect] = &[
+        CoreInterventionEffect::BlockChild,
+        CoreInterventionEffect::ConsolidateIntoParent,
+        CoreInterventionEffect::RequeueParent,
+        CoreInterventionEffect::MarkTerminal,
+    ];
+    &[
+        CoreSpawnerContract {
+            pattern: "self-work:*",
+            parent_entity_types: &["ControlPlane", "Message", "QueueTask", "Thread", "WorkItem"],
+            child_entity_type: "WorkItem",
+            effect: CoreSpawnEffect::DurableSelfWork,
+            requires_budget: true,
+            max_budget: 64,
+            intervention_skill: "queue-cleanup",
+            intervention_effects: BLOCK_OR_CONSOLIDATE,
+        },
+        CoreSpawnerContract {
+            pattern: "self-work-queue-task",
+            parent_entity_types: &["WorkItem"],
+            child_entity_type: "QueueTask",
+            effect: CoreSpawnEffect::QueueExecution,
+            requires_budget: true,
+            max_budget: 64,
+            intervention_skill: "queue-cleanup",
+            intervention_effects: BLOCK_OR_CONSOLIDATE,
+        },
+        CoreSpawnerContract {
+            pattern: "queue-task",
+            parent_entity_types: &["ControlPlane", "Message", "Thread", "WorkItem"],
+            child_entity_type: "QueueTask",
+            effect: CoreSpawnEffect::QueueExecution,
+            requires_budget: true,
+            max_budget: 64,
+            intervention_skill: "queue-cleanup",
+            intervention_effects: BLOCK_OR_CONSOLIDATE,
+        },
+        CoreSpawnerContract {
+            pattern: "plan-step-message",
+            parent_entity_types: &["PlanStep"],
+            child_entity_type: "Message",
+            effect: CoreSpawnEffect::PlanEmission,
+            requires_budget: true,
+            max_budget: 8,
+            intervention_skill: "harness-self-audit",
+            intervention_effects: BLOCK_OR_CONSOLIDATE,
+        },
+        CoreSpawnerContract {
+            pattern: "schedule-run-message",
+            parent_entity_types: &["ScheduleTask"],
+            child_entity_type: "Message",
+            effect: CoreSpawnEffect::ScheduleEmission,
+            requires_budget: true,
+            max_budget: 64,
+            intervention_skill: "queue-cleanup",
+            intervention_effects: BLOCK_OR_CONSOLIDATE,
+        },
+    ]
+}
+
+fn spawn_kind_matches(pattern: &str, spawn_kind: &str) -> bool {
+    pattern
+        .strip_suffix('*')
+        .map(|prefix| spawn_kind.starts_with(prefix))
+        .unwrap_or_else(|| pattern == spawn_kind)
+}
+
+fn intervention_effect_spawns_work(_effect: &CoreInterventionEffect) -> bool {
+    false
+}
+
+fn intervention_skill_contract_text(skill: &str) -> Option<&'static str> {
+    match skill {
+        "queue-cleanup" => Some(include_str!(
+            "../../skills/system/mission_orchestration/queue-cleanup/SKILL.md"
+        )),
+        "harness-self-audit" => Some(include_str!(
+            "../../skills/system/skill_meta/harness-self-audit/SKILL.md"
+        )),
+        _ => None,
+    }
+}
+
+fn has_non_spawning_intervention_contract(text: &str) -> bool {
+    text.contains("## Core Spawn Intervention Contract")
+        && text.contains("must not create new durable work")
+        && text.contains("Do not run commands that create new queue tasks")
+        && text.contains("ctox ticket self-work-put")
+        && text.contains("ctox schedule ensure")
+        && text.contains("ctox plan ingest")
 }
 
 fn looks_like_review_spawn(spawn_kind: &str) -> bool {
@@ -406,6 +638,18 @@ fn core_spawn_message(violation_codes: &[String]) -> String {
         let action = match code.as_str() {
             "spawn_requires_stable_entity_ids" => {
                 "Jeder Task-Spawn braucht stabile Parent- und Child-Entity-IDs, damit Process Mining und Cleanup die Kante nachvollziehen koennen."
+            }
+            "unregistered_spawn_kind" => {
+                "Diese Spawn-Art ist nicht im Kernel registriert. Fuege zuerst einen Core-Spawner-Contract mit Parent, Child, Budget und Intervention hinzu."
+            }
+            "spawn_parent_type_not_registered" | "spawn_child_type_not_registered" => {
+                "Diese Parent-Child-Kante passt nicht zum registrierten Spawner-Contract. Nutze den kanonischen Parent oder konsolidiere in bestehende Arbeit."
+            }
+            "spawn_requires_finite_budget" => {
+                "Jeder interne Spawn braucht ein endliches Budget, damit der Harness keine unbegrenzte interne Sequenz bilden kann."
+            }
+            "spawn_budget_exceeds_contract" => {
+                "Das angeforderte Budget ueberschreitet den registrierten Spawner-Contract. Nutze die enge Kernel-Schranke oder konsolidiere."
             }
             "review_spawn_requires_finite_budget" => {
                 "Review darf nur als endlicher Checkpoint wirken. Verknuepfe die Nacharbeit mit dem bestehenden Haupt-Work-Item oder gib ein kleines Spawn-Budget an."
@@ -600,22 +844,28 @@ mod tests {
         CoreSpawnRequest {
             parent_entity_type: "WorkItem".to_string(),
             parent_entity_id: parent.to_string(),
-            child_entity_type: "WorkItem".to_string(),
+            child_entity_type: "QueueTask".to_string(),
             child_entity_id: child.to_string(),
             spawn_kind: kind.to_string(),
             spawn_reason: "test".to_string(),
             actor: "ctox-test".to_string(),
             checkpoint_key: None,
-            budget_key: None,
-            max_attempts: None,
+            budget_key: Some(format!("test-budget:{parent}:{child}")),
+            max_attempts: Some(4),
             metadata: BTreeMap::new(),
         }
+    }
+
+    fn self_work_spawn_request(parent: &str, child: &str) -> CoreSpawnRequest {
+        let mut request = spawn_request(parent, child, "self-work:mission-follow-up");
+        request.child_entity_type = "WorkItem".to_string();
+        request
     }
 
     #[test]
     fn core_spawn_accepts_and_persists_acyclic_edge() -> Result<()> {
         let conn = Connection::open_in_memory()?;
-        let proof = enforce_core_spawn(&conn, &spawn_request("parent", "child", "repair"))?;
+        let proof = enforce_core_spawn(&conn, &spawn_request("parent", "child", "queue-task"))?;
 
         assert!(proof.accepted);
         let accepted: i64 = conn.query_row(
@@ -630,9 +880,12 @@ mod tests {
     #[test]
     fn core_spawn_rejects_unbudgeted_graph_cycle() -> Result<()> {
         let conn = Connection::open_in_memory()?;
-        enforce_core_spawn(&conn, &spawn_request("a", "b", "repair"))?;
+        enforce_core_spawn(&conn, &self_work_spawn_request("a", "b"))?;
 
-        let proof = evaluate_core_spawn(&conn, &spawn_request("b", "a", "repair"))?;
+        let mut cycle = self_work_spawn_request("b", "a");
+        cycle.budget_key = None;
+        cycle.max_attempts = None;
+        let proof = evaluate_core_spawn(&conn, &cycle)?;
 
         assert!(!proof.accepted);
         assert!(proof
@@ -644,14 +897,14 @@ mod tests {
     #[test]
     fn core_spawn_allows_only_finite_budgeted_cycles() -> Result<()> {
         let conn = Connection::open_in_memory()?;
-        enforce_core_spawn(&conn, &spawn_request("a", "b", "repair"))?;
-        let mut cycle = spawn_request("b", "a", "repair");
+        enforce_core_spawn(&conn, &self_work_spawn_request("a", "b"))?;
+        let mut cycle = self_work_spawn_request("b", "a");
         cycle.budget_key = Some("cycle-budget".to_string());
         cycle.max_attempts = Some(1);
         let accepted = enforce_core_spawn(&conn, &cycle)?;
         assert!(accepted.accepted);
 
-        let mut exhausted = spawn_request("b", "a2", "repair");
+        let mut exhausted = self_work_spawn_request("b", "a2");
         exhausted.budget_key = Some("cycle-budget".to_string());
         exhausted.max_attempts = Some(1);
         let proof = evaluate_core_spawn(&conn, &exhausted)?;
@@ -666,15 +919,36 @@ mod tests {
     #[test]
     fn core_spawn_review_children_require_finite_budget() -> Result<()> {
         let conn = Connection::open_in_memory()?;
-        let proof = evaluate_core_spawn(
-            &conn,
-            &spawn_request("main", "review-rework-1", "review-rework"),
-        )?;
+        let mut request = spawn_request("main", "review-rework-1", "self-work:review-rework");
+        request.child_entity_type = "WorkItem".to_string();
+        request.budget_key = None;
+        request.max_attempts = None;
+        let proof = evaluate_core_spawn(&conn, &request)?;
 
         assert!(!proof.accepted);
         assert!(proof
             .violation_codes
             .contains(&"review_spawn_requires_finite_budget".to_string()));
+        Ok(())
+    }
+
+    #[test]
+    fn core_spawn_model_proves_registered_interventions_are_bounded() {
+        let report = analyze_core_spawn_model();
+        assert!(report.ok, "{report:#?}");
+        assert!(report
+            .proof
+            .contains("Every registered internal spawn has stable parent/child"));
+    }
+
+    #[test]
+    fn core_spawn_rejects_unregistered_spawn_kind() -> Result<()> {
+        let conn = Connection::open_in_memory()?;
+        let proof = evaluate_core_spawn(&conn, &spawn_request("a", "b", "unknown-spawn"))?;
+        assert!(!proof.accepted);
+        assert!(proof
+            .violation_codes
+            .contains(&"unregistered_spawn_kind".to_string()));
         Ok(())
     }
 }

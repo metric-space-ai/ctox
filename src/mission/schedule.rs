@@ -828,6 +828,23 @@ mod tests {
             .contains("Preferred skill/tooling: universal-scraping"));
         assert!(row.3.contains("\"skill\":\"universal-scraping\""));
         assert!(row.3.contains("\"source\":\"ctox-schedule\""));
+        let spawn_edge_count: i64 = db
+            .query_row(
+                r#"
+                SELECT COUNT(*)
+                FROM ctox_core_spawn_edges
+                WHERE child_entity_type = 'Message'
+                  AND child_entity_id = ?1
+                  AND spawn_kind = 'schedule-run-message'
+                  AND parent_entity_type = 'ScheduleTask'
+                  AND parent_entity_id = ?2
+                  AND accepted = 1
+                "#,
+                params![&run.message_key, &task.name],
+                |row| row.get(0),
+            )
+            .expect("load schedule spawn edge count");
+        assert_eq!(spawn_edge_count, 1);
 
         let _ = std::fs::remove_dir_all(root);
     }

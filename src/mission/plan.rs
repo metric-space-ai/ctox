@@ -1844,6 +1844,21 @@ mod tests {
             created.goal.goal_id, created.steps[0].step_id
         );
         let conn = open_plan_db(&root)?;
+        let spawn_edge_count: i64 = conn.query_row(
+            r#"
+            SELECT COUNT(*)
+            FROM ctox_core_spawn_edges
+            WHERE child_entity_type = 'Message'
+              AND child_entity_id = ?1
+              AND spawn_kind = 'plan-step-message'
+              AND parent_entity_type = 'PlanStep'
+              AND parent_entity_id = ?2
+              AND accepted = 1
+            "#,
+            params![&emitted, &created.steps[0].step_id],
+            |row| row.get(0),
+        )?;
+        assert_eq!(spawn_edge_count, 1);
         conn.execute(
             "UPDATE communication_routing_state SET route_status = 'leased', lease_owner = 'test-reviewer', leased_at = ?2 WHERE message_key = ?1",
             params![emitted, now_iso_string()],

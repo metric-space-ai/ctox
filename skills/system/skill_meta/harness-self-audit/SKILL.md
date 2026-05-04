@@ -17,6 +17,19 @@ cluster: skill_meta
 - Rewording-only feedback means revise wording on the same artifact. Substantive feedback means add new evidence or implementation progress. Stale feedback means refresh or consolidate current runtime state before drafting again.
 - Before adding follow-up work, check for existing matching self-work, queue, plan, or ticket state and consolidate rather than duplicating.
 
+## Core Spawn Intervention Contract
+
+When this skill is invoked because the Core Spawn Gate rejected a spawn or detected a loop, it must act as a bounded intervention and must not create new durable work.
+
+Allowed intervention effects:
+
+- acknowledge or mitigate an existing finding
+- block the rejected child item with evidence
+- consolidate evidence into the existing parent item
+- mark redundant work terminal with a clear reason
+
+Do not run commands that create new queue tasks, ticket self-work, schedules, plans, or published spills while handling a Core Spawn Gate intervention. In particular, do not use `ctox queue spill --publish`, `ctox ticket self-work-put`, `ctox schedule ensure`, or `ctox plan ingest` for the intervention path. If new work seems necessary, mark the current finding/action blocked and let the parent work item or operator decide.
+
 
 Use this skill to read CTOX's own harness-mining findings and decide what
 to do about them — before any high-stakes action and after any incident.

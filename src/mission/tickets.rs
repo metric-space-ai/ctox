@@ -36,7 +36,9 @@ use crate::mission::ticket_translation;
 use crate::service::core_state_machine::{
     CoreEntityType, CoreEvent, CoreEvidenceRefs, CoreState, CoreTransitionRequest, RuntimeLane,
 };
-use crate::service::core_transition_guard::enforce_core_transition;
+use crate::service::core_transition_guard::{
+    enforce_core_spawn, enforce_core_transition, CoreSpawnRequest,
+};
 use crate::service::harness_flow::{
     record_harness_flow_event_lossy, RecordHarnessFlowEventRequest,
 };
@@ -2424,11 +2426,114 @@ pub(crate) fn put_ticket_self_work_item(
             }),
         },
     );
+    if let Err(err) = enforce_ticket_self_work_spawn(&conn, &item) {
+        let now = Utc::now().to_rfc3339();
+        let _ = conn.execute(
+            r#"
+            UPDATE ticket_self_work_items
+            SET state = 'blocked', updated_at = ?2
+            WHERE work_id = ?1
+            "#,
+            params![&item.work_id, now],
+        );
+        anyhow::bail!(
+            "core spawn gate rejected ticket self-work `{}` ({}): {}",
+            item.work_id,
+            item.kind,
+            err
+        );
+    }
     if publish {
         publish_ticket_self_work_item(root, &item.work_id)
     } else {
         Ok(item)
     }
+}
+
+fn enforce_ticket_self_work_spawn(conn: &Connection, item: &TicketSelfWorkItemView) -> Result<()> {
+    let thread_key = metadata_string_value(&item.metadata, "thread_key")
+        .or_else(|| metadata_string_value(&item.metadata, "queue_thread_key"))
+        .unwrap_or_else(|| item.source_system.clone());
+    let (parent_entity_type, parent_entity_id) = if let Some(parent_work_id) =
+        metadata_string_value(&item.metadata, "parent_work_id")
+            .or_else(|| metadata_string_value(&item.metadata, "ticket_self_work_id"))
+    {
+        ("WorkItem".to_string(), parent_work_id)
+    } else if let Some(queue_message_key) =
+        metadata_string_value(&item.metadata, "queue_message_key")
+    {
+        ("QueueTask".to_string(), queue_message_key)
+    } else if let Some(parent_message_key) =
+        metadata_string_value(&item.metadata, "parent_message_key")
+            .or_else(|| metadata_string_value(&item.metadata, "inbound_message_key"))
+    {
+        ("Message".to_string(), parent_message_key)
+    } else if !thread_key.trim().is_empty() {
+        ("Thread".to_string(), thread_key.clone())
+    } else {
+        ("ControlPlane".to_string(), "ticket-self-work".to_string())
+    };
+    let (budget_key, max_attempts) =
+        ticket_self_work_spawn_budget(&item.kind, &thread_key, &item.metadata);
+    let mut edge_metadata = BTreeMap::new();
+    edge_metadata.insert("thread_key".to_string(), thread_key);
+    edge_metadata.insert("self_work_kind".to_string(), item.kind.clone());
+    edge_metadata.insert("source_system".to_string(), item.source_system.clone());
+    if let Some(dedupe_key) = metadata_string_value(&item.metadata, "dedupe_key") {
+        edge_metadata.insert("dedupe_key".to_string(), dedupe_key);
+    }
+
+    enforce_core_spawn(
+        conn,
+        &CoreSpawnRequest {
+            parent_entity_type,
+            parent_entity_id,
+            child_entity_type: "WorkItem".to_string(),
+            child_entity_id: item.work_id.clone(),
+            spawn_kind: format!("self-work:{}", item.kind),
+            spawn_reason: "ticket_self_work_put".to_string(),
+            actor: "ctox-ticket".to_string(),
+            checkpoint_key: metadata_string_value(&item.metadata, "dedupe_key"),
+            budget_key: Some(budget_key),
+            max_attempts: Some(max_attempts),
+            metadata: edge_metadata,
+        },
+    )?;
+    Ok(())
+}
+
+fn ticket_self_work_spawn_budget(kind: &str, thread_key: &str, metadata: &Value) -> (String, i64) {
+    let lowered = kind.to_ascii_lowercase();
+    if lowered.contains("review") {
+        return (format!("review-spawn:{kind}:{thread_key}"), 2);
+    }
+    if kind == "founder-communication-rework" {
+        let key = metadata_string_value(metadata, "inbound_message_key")
+            .or_else(|| metadata_string_value(metadata, "parent_message_key"))
+            .unwrap_or_else(|| thread_key.to_string());
+        return (format!("founder-rework-spawn:{key}"), 2);
+    }
+    let key = metadata_string_value(metadata, "dedupe_key").unwrap_or_else(|| {
+        format!(
+            "{}:{}",
+            thread_key,
+            item_title_budget_component(metadata).unwrap_or_default()
+        )
+    });
+    (format!("service-self-work-spawn:{kind}:{key}"), 64)
+}
+
+fn item_title_budget_component(metadata: &Value) -> Option<String> {
+    metadata_string_value(metadata, "title").map(|value| value.chars().take(80).collect())
+}
+
+fn metadata_string_value(metadata: &Value, key: &str) -> Option<String> {
+    metadata
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 pub(crate) fn publish_ticket_self_work_item(
@@ -8610,6 +8715,35 @@ mod tests {
         )?;
 
         assert_ne!(first.work_id, second.work_id);
+        let conn = open_ticket_db(&root)?;
+        let first_spawn_count: i64 = conn.query_row(
+            r#"
+            SELECT COUNT(*)
+            FROM ctox_core_spawn_edges
+            WHERE child_entity_type = 'WorkItem'
+              AND child_entity_id = ?1
+              AND spawn_kind = 'self-work:queue-overflow'
+              AND parent_entity_type = 'QueueTask'
+              AND accepted = 1
+            "#,
+            params![&first.work_id],
+            |row| row.get(0),
+        )?;
+        let second_spawn_count: i64 = conn.query_row(
+            r#"
+            SELECT COUNT(*)
+            FROM ctox_core_spawn_edges
+            WHERE child_entity_type = 'WorkItem'
+              AND child_entity_id = ?1
+              AND spawn_kind = 'self-work:queue-overflow'
+              AND parent_entity_type = 'QueueTask'
+              AND accepted = 1
+            "#,
+            params![&second.work_id],
+            |row| row.get(0),
+        )?;
+        assert_eq!(first_spawn_count, 1);
+        assert_eq!(second_spawn_count, 1);
         let listed = list_ticket_self_work_items(&root, Some("internal"), None, 10)?;
         let overflow_count = listed
             .iter()

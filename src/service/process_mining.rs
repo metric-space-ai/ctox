@@ -33,6 +33,7 @@ const PROCESS_MINING_USAGE: &str = "usage:
   ctox process-mining transitions [--limit <n>]
   ctox process-mining dfg [--limit <n>]
   ctox process-mining core-liveness
+  ctox process-mining spawn-liveness
   ctox process-mining explain-case <case-id> [--limit <n>]
   ctox process-mining deadlocks [--limit <n>]
   ctox process-mining mapping-rules [--limit <n>]
@@ -935,6 +936,14 @@ pub fn handle_process_mining_command(root: &Path, args: &[String]) -> Result<()>
             println!("{}", serde_json::to_string_pretty(&report)?);
             if !report.ok {
                 anyhow::bail!("core state machine liveness check failed");
+            }
+            Ok(())
+        }
+        Some("spawn-liveness") => {
+            let report = core_transition_guard::analyze_core_spawn_model();
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            if !report.ok {
+                anyhow::bail!("core spawn model liveness check failed");
             }
             Ok(())
         }
@@ -2080,6 +2089,19 @@ fn run_process_mining_self_diagnosis(conn: &Connection, limit: i64) -> Result<Va
         "Every modeled harness entity must have reachable states and a terminal path.",
         serde_json::to_value(&liveness)?,
         liveness_findings(&liveness),
+    );
+    let spawn_liveness = core_transition_guard::analyze_core_spawn_model();
+    push_subsystem(
+        &mut subsystems,
+        "core_spawn_liveness",
+        if spawn_liveness.ok { "ok" } else { "critical" },
+        "Every internal task spawn must be registered, budgeted, parent-linked, and handled by a non-spawning intervention effect.",
+        serde_json::to_value(&spawn_liveness)?,
+        spawn_liveness
+            .violations
+            .iter()
+            .map(|violation| json!({ "finding": violation }))
+            .collect(),
     );
 
     subsystems.push(diagnose_knowledge(conn)?);

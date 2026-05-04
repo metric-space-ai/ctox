@@ -35,7 +35,9 @@ use crate::secrets;
 use crate::service::core_state_machine::{
     CoreEntityType, CoreEvent, CoreEvidenceRefs, CoreState, CoreTransitionRequest, RuntimeLane,
 };
-use crate::service::core_transition_guard::enforce_core_transition;
+use crate::service::core_transition_guard::{
+    enforce_core_spawn, enforce_core_transition, CoreSpawnRequest,
+};
 use crate::service::harness_flow::{
     record_harness_flow_event_lossy, RecordHarnessFlowEventRequest,
 };
@@ -1700,6 +1702,14 @@ pub fn create_queue_task_with_metadata(
     if let Some(extra) = request.extra_metadata {
         merge_object_metadata(&mut metadata, extra);
     }
+    enforce_queue_task_spawn(
+        &conn,
+        &metadata,
+        request.parent_message_key.as_deref(),
+        request.thread_key.trim(),
+        &message_key,
+        title,
+    )?;
     upsert_communication_message(
         &mut conn,
         UpsertMessage {
@@ -1732,6 +1742,83 @@ pub fn create_queue_task_with_metadata(
     refresh_thread(&mut conn, request.thread_key.trim())?;
     ensure_routing_rows_for_inbound(&conn)?;
     load_queue_task_from_conn(&conn, &message_key)?.context("failed to load created queue task")
+}
+
+fn enforce_queue_task_spawn(
+    conn: &Connection,
+    metadata: &Value,
+    parent_message_key: Option<&str>,
+    thread_key: &str,
+    message_key: &str,
+    title: &str,
+) -> Result<()> {
+    let ticket_self_work_id = metadata_string_value(metadata, "ticket_self_work_id");
+    let ticket_self_work_kind = metadata_string_value(metadata, "ticket_self_work_kind");
+    let (parent_entity_type, parent_entity_id, spawn_kind, spawn_reason, budget_key, max_attempts) =
+        if let Some(work_id) = ticket_self_work_id.clone() {
+            (
+                "WorkItem".to_string(),
+                work_id.clone(),
+                "self-work-queue-task".to_string(),
+                "publish_self_work_for_execution".to_string(),
+                format!("self-work-queue:{work_id}"),
+                64,
+            )
+        } else if let Some(parent_message_key) = parent_message_key
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            (
+                "Message".to_string(),
+                parent_message_key.to_string(),
+                "queue-task".to_string(),
+                "create_queue_task".to_string(),
+                format!("queue-task:message:{parent_message_key}"),
+                64,
+            )
+        } else {
+            (
+                "Thread".to_string(),
+                thread_key.to_string(),
+                "queue-task".to_string(),
+                "create_queue_task".to_string(),
+                format!("queue-task:thread:{thread_key}"),
+                64,
+            )
+        };
+    let mut edge_metadata = BTreeMap::new();
+    edge_metadata.insert("thread_key".to_string(), thread_key.to_string());
+    edge_metadata.insert("queue_title".to_string(), title.to_string());
+    if let Some(kind) = ticket_self_work_kind {
+        edge_metadata.insert("self_work_kind".to_string(), kind);
+    }
+
+    enforce_core_spawn(
+        conn,
+        &CoreSpawnRequest {
+            parent_entity_type,
+            parent_entity_id,
+            child_entity_type: "QueueTask".to_string(),
+            child_entity_id: message_key.to_string(),
+            spawn_kind,
+            spawn_reason,
+            actor: "ctox-queue".to_string(),
+            checkpoint_key: Some(message_key.to_string()),
+            budget_key: Some(budget_key),
+            max_attempts: Some(max_attempts),
+            metadata: edge_metadata,
+        },
+    )?;
+    Ok(())
+}
+
+fn metadata_string_value(metadata: &Value, key: &str) -> Option<String> {
+    metadata
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 fn merge_object_metadata(target: &mut Value, extra: Value) {
@@ -1998,6 +2085,26 @@ pub fn ingest_cron_message(
         "scheduled_for": scheduled_for,
         "run_id": run_id,
     });
+    let mut edge_metadata = BTreeMap::new();
+    edge_metadata.insert("thread_key".to_string(), thread_key.to_string());
+    edge_metadata.insert("task_name".to_string(), task_name.to_string());
+    edge_metadata.insert("scheduled_for".to_string(), scheduled_for.to_string());
+    enforce_core_spawn(
+        &conn,
+        &CoreSpawnRequest {
+            parent_entity_type: "ScheduleTask".to_string(),
+            parent_entity_id: task_name.to_string(),
+            child_entity_type: "Message".to_string(),
+            child_entity_id: message_key.clone(),
+            spawn_kind: "schedule-run-message".to_string(),
+            spawn_reason: "emit_due_schedule".to_string(),
+            actor: "ctox-schedule".to_string(),
+            checkpoint_key: Some(run_id.to_string()),
+            budget_key: Some(format!("schedule-run:{task_name}:{scheduled_for}")),
+            max_attempts: Some(64),
+            metadata: edge_metadata,
+        },
+    )?;
     upsert_communication_message(
         &mut conn,
         UpsertMessage {
@@ -2067,6 +2174,27 @@ pub fn ingest_plan_message(
         "step_order": step_order,
         "total_steps": total_steps,
     });
+    let mut edge_metadata = BTreeMap::new();
+    edge_metadata.insert("thread_key".to_string(), thread_key.to_string());
+    edge_metadata.insert("goal_id".to_string(), goal_id.to_string());
+    edge_metadata.insert("goal_title".to_string(), goal_title.to_string());
+    edge_metadata.insert("step_title".to_string(), step_title.to_string());
+    enforce_core_spawn(
+        &conn,
+        &CoreSpawnRequest {
+            parent_entity_type: "PlanStep".to_string(),
+            parent_entity_id: step_id.to_string(),
+            child_entity_type: "Message".to_string(),
+            child_entity_id: message_key.clone(),
+            spawn_kind: "plan-step-message".to_string(),
+            spawn_reason: "emit_plan_step".to_string(),
+            actor: "ctox-plan".to_string(),
+            checkpoint_key: Some(step_id.to_string()),
+            budget_key: Some(format!("plan-step:{step_id}")),
+            max_attempts: Some(8),
+            metadata: edge_metadata,
+        },
+    )?;
     upsert_communication_message(
         &mut conn,
         UpsertMessage {
@@ -6662,6 +6790,24 @@ mod tests {
             created.suggested_skill.as_deref(),
             Some("queue-orchestrator")
         );
+        let conn = open_channel_db(&root.join(DEFAULT_DB_RELATIVE_PATH))
+            .expect("failed to open channel db");
+        let spawn_edge_count: i64 = conn
+            .query_row(
+                r#"
+                SELECT COUNT(*)
+                FROM ctox_core_spawn_edges
+                WHERE child_entity_type = 'QueueTask'
+                  AND child_entity_id = ?1
+                  AND spawn_kind = 'queue-task'
+                  AND parent_entity_type = 'Thread'
+                  AND accepted = 1
+                "#,
+                params![&created.message_key],
+                |row| row.get(0),
+            )
+            .expect("failed to count queue spawn edge");
+        assert_eq!(spawn_edge_count, 1);
 
         let updated = update_queue_task(
             &root,
