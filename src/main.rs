@@ -186,6 +186,10 @@ fn main() -> anyhow::Result<()> {
     service::db_migration::run_if_needed(&root)
         .context("failed to consolidate legacy databases into runtime/ctox.sqlite3")?;
 
+    if skips_cli_turn_ledger(&args) {
+        return dispatch_command(&root, &args);
+    }
+
     let mut cli_ledger = service::turn_ledger::CliCommandLedger::start(&root, &args)
         .context("failed to start CTOX CLI turn ledger")?;
     let result = dispatch_command(&root, &args);
@@ -193,6 +197,23 @@ fn main() -> anyhow::Result<()> {
         .finish(&result)
         .context("failed to finish CTOX CLI turn ledger")?;
     result
+}
+
+fn skips_cli_turn_ledger(args: &[String]) -> bool {
+    matches!(
+        args,
+        [command, subcommand, ..]
+            if command == "runtime"
+                && matches!(
+                    subcommand.as_str(),
+                    "embedding-doctor"
+                        | "embedding-smoke"
+                        | "stt-doctor"
+                        | "stt-smoke"
+                        | "tts-doctor"
+                        | "tts-smoke"
+                )
+    )
 }
 
 fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
