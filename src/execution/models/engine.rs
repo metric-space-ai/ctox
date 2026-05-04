@@ -1659,7 +1659,7 @@ mod tests {
             "engineai/Voxtral-Mini-4B-Realtime-2602 [GPU]"
         );
         assert_eq!(stt_gpu.compute_target, ComputeTarget::Gpu);
-        assert_eq!(stt_gpu.backend_kind, AuxiliaryBackendKind::MistralRs);
+        assert_eq!(stt_gpu.backend_kind, AuxiliaryBackendKind::NativeCtox);
         assert_eq!(stt_gpu.gpu_reserve_mb(), 4200);
 
         let legacy_stt = auxiliary_model_selection(AuxiliaryRole::Stt, Some("legacy-stt-model"));

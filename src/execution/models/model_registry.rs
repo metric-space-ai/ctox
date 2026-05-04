@@ -1444,7 +1444,7 @@ const AUXILIARY_SELECTION_REGISTRY: &[AuxiliarySelectionEntry] = &[
         choice: "engineai/Voxtral-Mini-4B-Realtime-2602 [GPU]",
         request_model: "engineai/Voxtral-Mini-4B-Realtime-2602",
         aliases: &[],
-        backend_kind: engine::AuxiliaryBackendKind::MistralRs,
+        backend_kind: engine::AuxiliaryBackendKind::NativeCtox,
         compute_target: engine::ComputeTarget::Gpu,
         default_port: 1238,
         default_for_role: true,

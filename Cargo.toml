@@ -10,6 +10,7 @@ chrono = { version = "0.4", default-features = false, features = ["std"] }
 ctox-doc-stack = { path = "tools/doc-stack" }
 ctox-pdf-parse = { path = "tools/pdf-parse" }
 ctox-qwen3-embedding-0-6b = { path = "src/inference/models/qwen3_embedding_0_6b" }
+ctox-voxtral-mini-4b-realtime-2602 = { path = "src/inference/models/voxtral_mini_4b_realtime_2602" }
 ctox-voxtral-4b-tts-2603 = { path = "src/inference/models/voxtral_4b_tts_2603" }
 ctox-web-stack = { path = "tools/web-stack" }
 crossterm = "0.28"

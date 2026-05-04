@@ -51,6 +51,7 @@ pub mod inference {
     pub use crate::execution::models::model_manifest;
     pub use crate::execution::models::model_registry;
     pub use crate::execution::models::native_embedding;
+    pub use crate::execution::models::native_stt;
     pub use crate::execution::models::native_tts;
     pub use crate::execution::models::resource_state;
     pub use crate::execution::models::runtime_contract;
@@ -71,6 +72,7 @@ use crate::inference::engine;
 use crate::inference::gateway;
 use crate::inference::model_registry;
 use crate::inference::native_embedding;
+use crate::inference::native_stt;
 use crate::inference::native_tts;
 use crate::inference::runtime_control;
 use crate::inference::runtime_env;
@@ -127,6 +129,8 @@ RUN / EXEC
   ctox runtime switch <model> <quality|performance> [--context 32k|64k|128k|256k] [--timeout <secs>]
   ctox runtime embedding-doctor
   ctox runtime embedding-smoke [--token-id <id>]
+  ctox runtime stt-doctor
+  ctox runtime stt-smoke <wav-path>
   ctox runtime tts-doctor
   ctox runtime tts-smoke [--text <text>]
 
@@ -172,6 +176,9 @@ fn main() -> anyhow::Result<()> {
     let root = resolve_workspace_root()?;
     if args.first().map(String::as_str) == Some("__native-qwen3-embedding-service") {
         return handle_native_qwen3_embedding_service(&args[1..]);
+    }
+    if args.first().map(String::as_str) == Some("__native-voxtral-stt-service") {
+        return handle_native_voxtral_stt_service(&args[1..], &root);
     }
     if args.first().map(String::as_str) == Some("__native-voxtral-tts-service") {
         return handle_native_voxtral_tts_service(&args[1..], &root);
@@ -243,6 +250,21 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
                 );
                 Ok(())
             }
+            Some("stt-doctor") => {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&native_stt::doctor_json(&root))?
+                );
+                Ok(())
+            }
+            Some("stt-smoke") => {
+                let audio_path = native_stt::parse_stt_smoke_audio_path(&args[2..])?;
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&native_stt::stt_smoke_json(&root, &audio_path))?
+                );
+                Ok(())
+            }
             Some("tts-doctor") => {
                 println!(
                     "{}",
@@ -297,7 +319,7 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
                 Ok(())
             }
             _ => anyhow::bail!(
-                "usage: ctox runtime switch <model> <quality|performance> [--context 32k|64k|128k|256k] [--timeout <secs>] | ctox runtime embedding-doctor | ctox runtime embedding-smoke [--token-id <id>] | ctox runtime tts-doctor | ctox runtime tts-smoke [--text <text>]"
+                "usage: ctox runtime switch <model> <quality|performance> [--context 32k|64k|128k|256k] [--timeout <secs>] | ctox runtime embedding-doctor | ctox runtime embedding-smoke [--token-id <id>] | ctox runtime stt-doctor | ctox runtime stt-smoke <wav-path> | ctox runtime tts-doctor | ctox runtime tts-smoke [--text <text>]"
             ),
         },
         Some("boost") => match args.get(1).map(String::as_str) {
@@ -1072,6 +1094,22 @@ fn handle_native_qwen3_embedding_service(args: &[String]) -> anyhow::Result<()> 
     native_embedding::serve_socket(native_embedding::NativeEmbeddingLaunch {
         transport: inference::local_transport::LocalTransport::from_ipc_endpoint_string(transport),
         compute_target,
+    })
+}
+
+fn handle_native_voxtral_stt_service(args: &[String], root: &Path) -> anyhow::Result<()> {
+    let transport = find_flag_value(args, "--transport").context(
+        "usage: ctox __native-voxtral-stt-service --transport <ipc-endpoint> [--compute-target gpu|cpu] [--model-path <path>]",
+    )?;
+    let compute_target =
+        parse_compute_target_value(find_flag_value(args, "--compute-target").unwrap_or("gpu"))?;
+    let model_path = find_flag_value(args, "--model-path")
+        .map(PathBuf::from)
+        .or_else(|| native_stt::configured_or_default_model_path(root));
+    native_stt::serve_socket(native_stt::NativeSttLaunch {
+        transport: inference::local_transport::LocalTransport::from_ipc_endpoint_string(transport),
+        compute_target,
+        model_path,
     })
 }
 

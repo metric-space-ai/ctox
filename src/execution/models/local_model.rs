@@ -6,7 +6,8 @@
 //! and the CLI args needed to spawn it.
 //!
 //! Scope today: curated self-contained model servers, starting with the
-//! Qwen3.5-27B Q4_K_M + DFlash-draft pair and native Voxtral TTS.
+//! Qwen3.5-27B Q4_K_M + DFlash-draft pair, native Voxtral STT,
+//! and native Voxtral TTS.
 //! Adding a second curated model means appending one entry to
 //! [`resolve_local_model_backend`] plus any new SQLite runtime-config
 //! keys for weight/tokenizer paths.
@@ -75,6 +76,12 @@ pub fn resolve_local_model_backend(req: LocalModelRequest<'_>) -> Option<LocalMo
             req.transport_endpoint,
         ));
     }
+    if is_voxtral_mini_4b_realtime(model) {
+        return Some(voxtral_mini_4b_realtime_backend(
+            req.root,
+            req.transport_endpoint,
+        ));
+    }
     if is_voxtral_4b_tts(model) {
         return Some(voxtral_4b_tts_backend(req.root, req.transport_endpoint));
     }
@@ -96,6 +103,12 @@ pub fn is_voxtral_4b_tts(model: &str) -> bool {
     model == "engineai/Voxtral-4B-TTS-2603"
         || model.eq_ignore_ascii_case("engineai/voxtral-4b-tts-2603")
         || model.eq_ignore_ascii_case("voxtral-4b-tts-2603")
+}
+
+pub fn is_voxtral_mini_4b_realtime(model: &str) -> bool {
+    model == "engineai/Voxtral-Mini-4B-Realtime-2602"
+        || model.eq_ignore_ascii_case("engineai/voxtral-mini-4b-realtime-2602")
+        || model.eq_ignore_ascii_case("voxtral-mini-4b-realtime-2602")
 }
 
 fn qwen35_27b_q4km_dflash_backend(
@@ -207,6 +220,44 @@ fn voxtral_4b_tts_backend(root: &Path, transport_endpoint: Option<&str>) -> Loca
     }
 }
 
+fn voxtral_mini_4b_realtime_backend(
+    root: &Path,
+    transport_endpoint: Option<&str>,
+) -> LocalModelBackend {
+    let binary = std::env::current_exe().unwrap_or_else(|_| root.join("target/release/ctox"));
+    let socket = match transport_endpoint {
+        Some(ep) => PathBuf::from(ep),
+        None => root.join("runtime/sockets/transcription.sock"),
+    };
+    let model_path = config_path_optional(root, "CTOX_VOXTRAL_STT_GGUF")
+        .or_else(|| config_path_optional(root, "CTOX_STT_MODEL_PATH"))
+        .or_else(|| {
+            config_path_optional(root, "CTOX_VOXTRAL_STT_MODEL_DIR")
+                .or_else(|| config_path_optional(root, "CTOX_STT_MODEL_DIR"))
+                .map(|dir| dir.join("voxtral.gguf"))
+        });
+
+    let mut args: Vec<OsString> = Vec::new();
+    args.push("__native-voxtral-stt-service".into());
+    args.push("--transport".into());
+    args.push(socket.into());
+    args.push("--compute-target".into());
+    args.push("gpu".into());
+    if let Some(model_path) = model_path {
+        args.push("--model-path".into());
+        args.push(model_path.into());
+    }
+    args.push("--request-model-alias".into());
+    args.push("engineai/Voxtral-Mini-4B-Realtime-2602".into());
+
+    LocalModelBackend {
+        binary,
+        args,
+        env: Vec::new(),
+        model_id: "voxtral-mini-4b-realtime-2602",
+    }
+}
+
 /// Resolve a filesystem path: sqlite runtime-config first, then
 /// caller-supplied fallback. No process env fallback.
 fn config_path_or(root: &Path, key: &str, fallback: PathBuf) -> PathBuf {
@@ -269,6 +320,40 @@ mod tests {
         assert!(is_voxtral_4b_tts("engineai/voxtral-4b-tts-2603"));
         assert!(is_voxtral_4b_tts("voxtral-4b-tts-2603"));
         assert!(!is_voxtral_4b_tts("engineai/Voxtral-Mini-4B-Realtime-2602"));
+    }
+
+    #[test]
+    fn voxtral_stt_aliases_resolve() {
+        assert!(is_voxtral_mini_4b_realtime(
+            "engineai/Voxtral-Mini-4B-Realtime-2602"
+        ));
+        assert!(is_voxtral_mini_4b_realtime(
+            "engineai/voxtral-mini-4b-realtime-2602"
+        ));
+        assert!(is_voxtral_mini_4b_realtime("voxtral-mini-4b-realtime-2602"));
+        assert!(!is_voxtral_mini_4b_realtime("engineai/Voxtral-4B-TTS-2603"));
+    }
+
+    #[test]
+    fn voxtral_stt_backend_assembles_hidden_service_cli() {
+        let root = Path::new("/tmp/ctoxroot");
+        let backend = resolve_local_model_backend(LocalModelRequest {
+            request_model: "engineai/Voxtral-Mini-4B-Realtime-2602",
+            transport_endpoint: Some("/tmp/ctoxroot/runtime/sockets/transcription.sock"),
+            root,
+        })
+        .expect("voxtral stt backend must resolve");
+        let joined: String = backend
+            .args
+            .iter()
+            .map(|s| s.to_string_lossy().to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(joined.contains("__native-voxtral-stt-service"));
+        assert!(joined.contains("--transport"));
+        assert!(joined.contains("transcription.sock"));
+        assert!(joined.contains("--request-model-alias engineai/Voxtral-Mini-4B-Realtime-2602"));
+        assert_eq!(backend.model_id, "voxtral-mini-4b-realtime-2602");
     }
 
     #[test]

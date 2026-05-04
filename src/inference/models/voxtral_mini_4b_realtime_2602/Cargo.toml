@@ -1,0 +1,23 @@
+[package]
+name = "ctox-voxtral-mini-4b-realtime-2602"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+license = "Apache-2.0"
+description = "Bare-metal CTOX native port scaffold for engineai/Voxtral-Mini-4B-Realtime-2602 STT."
+build = "build.rs"
+
+[workspace]
+
+[lib]
+name = "ctox_voxtral_mini_4b_realtime_2602"
+path = "src/lib.rs"
+
+[features]
+default = []
+cuda = []
+metal = []
+wgsl = []
+
+[dependencies]
+rustfft = "6.4"
