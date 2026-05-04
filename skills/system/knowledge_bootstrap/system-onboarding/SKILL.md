@@ -10,9 +10,9 @@ cluster: knowledge_bootstrap
 
 ## CTOX Runtime Contract
 
-- Task spawning is allowed only for real execution slices that add mission progress, external waiting, recovery, or explicit decomposition. Do not spawn work merely because review feedback exists.
+- Task spawning is allowed only for real bounded work steps that add mission progress, external waiting, recovery, or explicit decomposition. Do not spawn work merely because review feedback exists.
 - The Review Gate is a quality checkpoint, not a control loop. After review feedback, continue the same main work item whenever possible and incorporate the feedback there.
-- Do not create review-driven self-work cascades. If more work is needed, reuse or requeue the existing parent work item; create a new task only when it is a distinct slice with a stable parent pointer.
+- Do not create review-driven self-work cascades. If more work is needed, reuse or requeue the existing parent work item; create a new task only when it is a distinct bounded work step with a stable parent pointer.
 - Every durable follow-up, queue item, plan emission, or self-work item must have a clear parent/anchor: message key, work id, thread key, ticket/case id, or plan step. Missing ancestry is a harness bug, not acceptable ambiguity.
 - Rewording-only feedback means revise wording on the same artifact. Substantive feedback means add new evidence or implementation progress. Stale feedback means refresh or consolidate current runtime state before drafting again.
 - Before adding follow-up work, check for existing matching self-work, queue, plan, or ticket state and consolidate rather than duplicating.
@@ -24,7 +24,7 @@ Use this skill whenever CTOX is operating against an external system and needs t
 
 The kernel provides storage, references, self-work CRUD, publishing, and audit. This skill owns the onboarding behavior.
 
-SQLite-backed runtime state is the only durable knowledge plane. Ticket knowledge entries, continuity commits, ticket/source bindings, skillbooks, runbooks, verifications, communication records, and other runtime DB state count. Markdown files or workspace artifacts do not count as knowledge by themselves.
+The CTOX runtime store is the only durable knowledge plane. Ticket knowledge entries, continuity commits, ticket/source bindings, skillbooks, runbooks, verifications, communication records, and other runtime DB state count. Markdown files or workspace artifacts do not count as knowledge by themselves.
 
 Read the phase guide in [references/onboarding-phases.md](references/onboarding-phases.md).
 Read the deterministic stage plan in [references/onboarding-plan.md](references/onboarding-plan.md).
@@ -47,7 +47,7 @@ Do not expect prebuilt onboarding tickets from `ctox ticket sync`.
 
 Create only the self-work items that are justified by the observed source knowledge and current gaps.
 
-The remote ticket system is only a communication and review surface. SQLite in CTOX remains the source of truth.
+The remote ticket system is only a communication and review surface. CTOX runtime knowledge remains the source of truth.
 
 When onboarding reveals missing access rights, credentials, or monitoring blind spots, do not improvise around them. Create explicit CTOX work or requests through the ticket and secret primitives.
 
@@ -63,11 +63,11 @@ Do not leave remote work items hanging without ownership, notes, or an end state
 
 When you need remote ticket work, you must go through the `ctox ticket self-work-*` and `ctox ticket access-request-put` primitives.
 
-Do not use raw HTTP calls, `curl`, ad hoc browser actions, or direct remote API writes to create or update ticket work during onboarding. If the generic ticket primitives are insufficient, stop and state the missing primitive instead of bypassing SQLite truth.
+Do not use raw HTTP calls, `curl`, ad hoc browser actions, or direct remote API writes to create or update ticket work during onboarding. If the generic ticket primitives are insufficient, stop and state the missing primitive instead of bypassing CTOX truth.
 
 ## Knowledge System Integration — Mandatory
 
-Onboarding is incomplete unless the SQLite knowledge plane is populated. Workspace markdown, plan steps, conversation history, and reply prose are not knowledge.
+Onboarding is incomplete unless the CTOX knowledge store is populated. Workspace markdown, plan steps, conversation history, and reply prose are not knowledge.
 
 - Every onboarding phase starts with a knowledge inventory:
 
@@ -81,7 +81,7 @@ Onboarding is incomplete unless the SQLite knowledge plane is populated. Workspa
   ctox ticket knowledge-load --ticket-key "<ticket-key>" --domains "vendor_api,operational,data_model"
   ```
 
-- Skillbooks (`knowledge_skillbooks`) and runbooks (`knowledge_runbooks`) are mandatory outputs of onboarding, not optional polish. If `knowledge_count` for the system is `0` at the end of a slice, onboarding is incomplete and the slice may not be closed.
+- Skillbooks (`knowledge_skillbooks`) and runbooks (`knowledge_runbooks`) are mandatory outputs of onboarding, not optional polish. If `knowledge_count` for the system is `0` at the end of a work step, onboarding is incomplete and the work step may not be closed.
 - Learning is real work: produce a self-work item and a knowledge entry for each meaningful fact. Knowledge that lives only in chat history, plan steps, or workspace files does not count.
 - Sync-driven onboarding triggers (`ctox ticket sync` / `ticket_source_controls`) only fire for genuine Kanban ticket systems. For CRMs, APIs, platforms, codebases, and other non-Kanban software, you start onboarding yourself — but the knowledge-population requirements above are identical.
 - Once a source-specific operating skill is justified, bind it on the source so live work routes to it:
@@ -115,7 +115,7 @@ ctox secret show --scope "<scope>" --name "<name>"
 
 ## Primitive Used For New Work
 
-Create a self-work item in SQLite:
+Create a self-work item in CTOX runtime state:
 
 ```sh
 ctox ticket self-work-put --system "<system>" --kind "<kind>" --title "<title>" --body "<text>" --metadata-json '<json>'
@@ -183,7 +183,7 @@ python3 skills/system/knowledge_bootstrap/system-onboarding/scripts/bootstrap_ti
 
 This tool will:
 
-1. export canonical ticket history from the SQLite mirror
+1. export canonical ticket history from the CTOX mirror
 2. build the operating-model skill from that exported history
 3. run the generated-skill evaluation against the same exported history
 4. activate the generated skill for the source with `ctox ticket source-skill-set`
@@ -226,12 +226,12 @@ Manual building blocks remain available when the operator asks for an adjustment
 4. Publish them only when the remote review surface is useful.
 5. When published, immediately assign the work to CTOX if supported and leave an initial internal note with the concrete next step or blocker.
 6. Work the item through notes and transitions instead of spawning more tickets than necessary.
-7. Keep the remote ticket concise, human, and operator-facing; keep the real model in SQLite.
+7. Keep the remote ticket concise, human, and operator-facing; keep the real model in CTOX runtime state.
 8. When rights or secrets are missing, create an explicit access request and use mail or Jami if the decision cannot be closed inside the ticket surface.
 9. Ingest monitoring observations into the knowledge plane instead of leaving them as free-form ticket prose.
 10. Once the source has enough history, build a desk-specific operating skill and bind it to the source with `ctox ticket source-skill-set`.
 11. Re-run the onboarding guide step after new evidence appears. The guide should loosen as active source skills, confirmed runbooks, and real assigned work accumulate.
-12. Do not treat a workspace analysis document as onboarding completion. Onboarding is incomplete until the relevant source controls, mirrored tickets, knowledge entries, bindings, and higher knowledge hierarchy are visible in SQLite.
+12. Do not treat a workspace analysis document as onboarding completion. Onboarding is incomplete until the relevant source controls, mirrored tickets, knowledge entries, bindings, and higher knowledge hierarchy are visible in CTOX runtime state.
 
 ## Skill Activation Check
 
@@ -280,7 +280,7 @@ Good remote note shape:
 
 Never write remote notes that mention:
 
-- SQLite
+- CTOX runtime knowledge
 - database tables
 - metadata blobs
 - case IDs, bundle versions, or control schemas unless an operator truly needs them

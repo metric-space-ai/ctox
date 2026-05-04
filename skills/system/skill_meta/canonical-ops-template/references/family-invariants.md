@@ -4,7 +4,7 @@ These invariants are the stable contract for the CTOX ops skill family.
 
 ## Persistence
 
-- one shared SQLite kernel
+- one shared CTOX knowledge store
 - same five tables for all family skills
 - separation via `skill_key`
 - no parallel per-skill table families without explicit approval

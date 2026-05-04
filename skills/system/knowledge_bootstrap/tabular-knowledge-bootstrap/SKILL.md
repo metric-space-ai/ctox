@@ -1,6 +1,6 @@
 ---
 name: tabular-knowledge-bootstrap
-description: Build reusable knowledge from tabular or record-shaped source systems such as ticket exports, CMDB tables, monitoring inventories, CSV/XLSX sheets, SQL query results, or JSON arrays by first normalizing them into the shared SQLite discovery kernel and only then projecting them into domain-specific knowledge planes.
+description: Build reusable knowledge from tabular or record-shaped source systems such as ticket exports, CMDB tables, monitoring inventories, CSV/XLSX sheets, SQL query results, or JSON arrays by first normalizing them into the shared CTOX discovery store and only then projecting them into domain-specific knowledge planes.
 metadata:
   short-description: Normalize tabular source systems into reusable discovery knowledge
 cluster: knowledge_bootstrap
@@ -10,9 +10,9 @@ cluster: knowledge_bootstrap
 
 ## CTOX Runtime Contract
 
-- Task spawning is allowed only for real execution slices that add mission progress, external waiting, recovery, or explicit decomposition. Do not spawn work merely because review feedback exists.
+- Task spawning is allowed only for real bounded work steps that add mission progress, external waiting, recovery, or explicit decomposition. Do not spawn work merely because review feedback exists.
 - The Review Gate is a quality checkpoint, not a control loop. After review feedback, continue the same main work item whenever possible and incorporate the feedback there.
-- Do not create review-driven self-work cascades. If more work is needed, reuse or requeue the existing parent work item; create a new task only when it is a distinct slice with a stable parent pointer.
+- Do not create review-driven self-work cascades. If more work is needed, reuse or requeue the existing parent work item; create a new task only when it is a distinct bounded work step with a stable parent pointer.
 - Every durable follow-up, queue item, plan emission, or self-work item must have a clear parent/anchor: message key, work id, thread key, ticket/case id, or plan step. Missing ancestry is a harness bug, not acceptable ambiguity.
 - Rewording-only feedback means revise wording on the same artifact. Substantive feedback means add new evidence or implementation progress. Stale feedback means refresh or consolidate current runtime state before drafting again.
 - Before adding follow-up work, check for existing matching self-work, queue, plan, or ticket state and consolidate rather than duplicating.
@@ -20,7 +20,7 @@ cluster: knowledge_bootstrap
 
 Use this skill when CTOX is dealing with a source whose reality is primarily exposed as rows, records, worksheets, exports, query results, or list endpoints.
 
-SQLite-backed discovery and downstream knowledge planes are the only durable target. CSVs, workbooks, and generated markdown summaries are source or build artifacts, not durable knowledge by themselves.
+CTOX discovery and downstream knowledge planes are the only durable target. CSVs, workbooks, and generated markdown summaries are source or build artifacts, not durable knowledge by themselves.
 
 Examples:
 
@@ -66,7 +66,7 @@ Do not use this skill when the source of truth is primarily:
 
 ## Core Architecture
 
-This skill reuses the existing shared discovery SQLite kernel:
+This skill reuses the existing shared CTOX discovery store:
 
 - `discovery_run`
 - `discovery_capture`

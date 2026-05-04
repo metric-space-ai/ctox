@@ -10,10 +10,10 @@ Use them because they save time and reduce repetition. Do not treat them as mand
   - raw command capture helper
   - good default for single collectors or direct inspection
 - `capture_run.py`
-  - convenience wrapper for a full raw sweep
+  - helper script for a full raw sweep
   - good default when you want one persisted `run_id` quickly
 - `discovery_store.py`
-  - SQLite persistence helper
+  - CTOX persistence helper
   - use for schema init, raw capture storage, and normalized graph storage
 - `discovery_query.py`
   - summary and export helper

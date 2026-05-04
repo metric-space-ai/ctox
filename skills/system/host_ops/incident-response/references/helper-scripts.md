@@ -5,9 +5,9 @@ These scripts are open helper resources, not hidden authorities.
 - `scripts/incident_collect.py`
   - captures raw incident evidence
 - `scripts/incident_capture_run.py`
-  - convenience wrapper that captures and persists one incident run
+  - helper script that captures and persists one incident run
 - `scripts/incident_store.py`
-  - persists raw captures or an agent-authored graph into the shared SQLite kernel
+  - persists raw captures or an agent-authored graph into CTOX durable knowledge
 - `scripts/incident_query.py`
   - summarizes or exports incident_response state from the shared kernel
 - `scripts/incident_bootstrap.py`

@@ -5,9 +5,9 @@ These scripts are open helper resources.
 - `scripts/security_collect.py`
   - captures accounts, listeners, firewall, certificate, permission, and hardening evidence
 - `scripts/security_capture_run.py`
-  - convenience wrapper that captures and persists one security review run
+  - helper script that captures and persists one security review run
 - `scripts/security_store.py`
-  - persists raw captures or an agent-authored graph into the shared SQLite kernel
+  - persists raw captures or an agent-authored graph into CTOX durable knowledge
 - `scripts/security_query.py`
   - summarizes or exports security_posture state
 - `scripts/security_bootstrap.py`

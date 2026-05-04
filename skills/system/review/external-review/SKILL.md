@@ -21,7 +21,7 @@ Use this skill for a standalone review run.
 Treat the review assignment as target metadata only.
 Gather everything else yourself.
 
-Only SQLite-backed runtime state, live surfaces, repo state, and direct read-only verification count as durable evidence. Standalone markdown artifacts or workspace notes do not count as knowledge unless their facts are also reflected in SQLite-backed runtime state or directly verified live.
+Only CTOX runtime store, live surfaces, repo state, and direct read-only verification count as durable evidence. Standalone markdown artifacts or workspace notes do not count as knowledge unless their facts are also reflected in the CTOX runtime store or directly verified live.
 
 ## Core Contract
 
@@ -41,7 +41,7 @@ The review run:
 4. Ticket/self-work state
 5. Relevant communication facts
 6. Service/runtime/log state
-7. Active strategic directives (Vision and Mission) stored in SQLite runtime state
+7. Active strategic directives (Vision and Mission) stored in CTOX runtime state
 
 ## Suggested Workflow
 

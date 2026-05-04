@@ -8,15 +8,15 @@ cluster: host_ops
 
 ## CTOX Runtime Contract
 
-- Task spawning is allowed only for real execution slices that add mission progress, external waiting, recovery, or explicit decomposition. Do not spawn work merely because review feedback exists.
+- Task spawning is allowed only for real bounded work steps that add mission progress, external waiting, recovery, or explicit decomposition. Do not spawn work merely because review feedback exists.
 - The Review Gate is a quality checkpoint, not a control loop. After review feedback, continue the same main work item whenever possible and incorporate the feedback there.
-- Do not create review-driven self-work cascades. If more work is needed, reuse or requeue the existing parent work item; create a new task only when it is a distinct slice with a stable parent pointer.
+- Do not create review-driven self-work cascades. If more work is needed, reuse or requeue the existing parent work item; create a new task only when it is a distinct bounded work step with a stable parent pointer.
 - Every durable follow-up, queue item, plan emission, or self-work item must have a clear parent/anchor: message key, work id, thread key, ticket/case id, or plan step. Missing ancestry is a harness bug, not acceptable ambiguity.
 - Rewording-only feedback means revise wording on the same artifact. Substantive feedback means add new evidence or implementation progress. Stale feedback means refresh or consolidate current runtime state before drafting again.
 - Before adding follow-up work, check for existing matching self-work, queue, plan, or ticket state and consolidate rather than duplicating.
 
 
-Only SQLite-backed runtime state and direct live verification count as durable operational knowledge. Workspace notes, temporary files, or prose-only summaries do not count as durable knowledge by themselves.
+Only CTOX runtime store and direct live verification count as durable operational knowledge. Workspace notes, temporary files, or prose-only summaries do not count as durable knowledge by themselves.
 
 Use this skill when the job is a deliberate state change or a dry-run change plan.
 
@@ -26,7 +26,7 @@ Do not use it as the first choice for scope discovery or generic health review:
 - use `reliability_ops` when the main question is health
 - use `incident_response` when fast stabilization matters more than a planned rollout
 
-This skill uses the shared SQLite kernel via `skill_key=change_lifecycle`.
+This skill uses the shared CTOX knowledge store via `skill_key=change_lifecycle`.
 
 ## Operating Model
 
@@ -73,7 +73,7 @@ Read `chi_squared_activity.drift_detected` and `top_drift_activities[]`.
   do not alarm.
 - If `drift_detected: true` and the top drift activities are unrelated to
   your change scope: that is a side effect. Treat the change as `blocked`
-  and create a recovery slice — even if the primary success condition is met.
+  and create a recovery work step — even if the primary success condition is met.
 
 Run drift detection both **before** the change (baseline) and **after** the
 change has produced ≥1000 fresh events (verification). The pre/post pair is
@@ -88,7 +88,7 @@ the change's behaviour-stability evidence.
 4. Gather dry-run evidence with `change_collect.py` or `change_capture_run.py`.
 5. Read the raw output, especially diffs, service state, and verification output.
 6. Persist captures first, then persist a `change_request`, `config_snapshot`, `change_plan`, `rollback_bundle`, and only an executed `change_result` if a change really happened.
-7. Keep the change slice narrow.
+7. Keep the change work step narrow.
 8. If rollback is unclear, stop before mutation.
 9. Post-change: rerun `harness-mining drift` once ≥1000 fresh events have
    accumulated. Attach the diff to `change_result.verification`.
@@ -125,7 +125,7 @@ Do not finish the reply until all of the following are true:
 - all seven headings are present
 - `State` explicitly reflects whether the system changed
 - if `State` is `executed`, post-change verification is stated in `Current Findings`
-- if the change is incomplete, a durable next slice or rollback step exists in queue or plan state
+- if the change is incomplete, a durable next work step or rollback step exists in queue or plan state
 - if no safe continuation exists yet, the reply stays `blocked`
 
 ## Guardrails
@@ -133,7 +133,7 @@ Do not finish the reply until all of the following are true:
 - Default to dry-run.
 - No broad restarts or package changes without a rollback path.
 - Do not claim execution if only a plan was produced.
-- Hand unresolved follow-up slices to queue or plan, not prose.
+- Hand unresolved follow-up work steps to queue or plan, not prose.
 
 ## Resources
 

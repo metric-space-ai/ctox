@@ -1,6 +1,6 @@
 ---
 name: discovery-graph
-description: Build or refresh a concrete infrastructure inventory from real host, network, service, storage, runtime, journal, and repo discovery commands. Use when CTOX needs to inspect a machine or repo, gather raw discovery evidence, translate it into the shared SQLite discovery model, and leave behind explicit entities, relations, evidence, and rerunnable discovery runs instead of ad hoc shell output.
+description: Build or refresh a concrete infrastructure inventory from real host, network, service, storage, runtime, journal, and repo discovery commands. Use when CTOX needs to inspect a machine or repo, gather raw discovery evidence, translate it into the shared CTOX discovery model, and leave behind explicit entities, relations, evidence, and rerunnable discovery runs instead of ad hoc shell output.
 cluster: knowledge_bootstrap
 ---
 
@@ -8,17 +8,17 @@ cluster: knowledge_bootstrap
 
 ## CTOX Runtime Contract
 
-- Task spawning is allowed only for real execution slices that add mission progress, external waiting, recovery, or explicit decomposition. Do not spawn work merely because review feedback exists.
+- Task spawning is allowed only for real bounded work steps that add mission progress, external waiting, recovery, or explicit decomposition. Do not spawn work merely because review feedback exists.
 - The Review Gate is a quality checkpoint, not a control loop. After review feedback, continue the same main work item whenever possible and incorporate the feedback there.
-- Do not create review-driven self-work cascades. If more work is needed, reuse or requeue the existing parent work item; create a new task only when it is a distinct slice with a stable parent pointer.
+- Do not create review-driven self-work cascades. If more work is needed, reuse or requeue the existing parent work item; create a new task only when it is a distinct bounded work step with a stable parent pointer.
 - Every durable follow-up, queue item, plan emission, or self-work item must have a clear parent/anchor: message key, work id, thread key, ticket/case id, or plan step. Missing ancestry is a harness bug, not acceptable ambiguity.
 - Rewording-only feedback means revise wording on the same artifact. Substantive feedback means add new evidence or implementation progress. Stale feedback means refresh or consolidate current runtime state before drafting again.
 - Before adding follow-up work, check for existing matching self-work, queue, plan, or ticket state and consolidate rather than duplicating.
 
 
-Use this skill to inspect a host or repo, gather raw discovery evidence, and persist a normalized discovery model in SQLite.
+Use this skill to inspect a host or repo, gather raw discovery evidence, and persist a normalized discovery model in CTOX runtime state.
 
-SQLite-backed discovery state is the durable knowledge plane. Discovery captures, entities, relations, evidence, continuity, ticket knowledge, and other runtime DB state count as knowledge. Workspace notes or exported summaries do not count as durable knowledge by themselves.
+CTOX discovery state is the durable knowledge plane. Discovery captures, entities, relations, evidence, continuity, ticket knowledge, and other runtime DB state count as knowledge. Workspace notes or exported summaries do not count as durable knowledge by themselves.
 
 The important rule is:
 
@@ -47,14 +47,14 @@ Treat this skill as three layers:
 The canonical capabilities are:
 
 - capture raw discovery evidence
-- persist raw captures into SQLite
+- persist raw captures into CTOX runtime state
 - translate evidence into `graph.json`
 - persist normalized entities, relations, and evidence
 - query or export the stored graph
 
 The Python files in `scripts/` are open helper resources that implement these capabilities locally. They are preferred helpers, not opaque black-box tools.
 
-This skill uses the shared SQLite kernel with `skill_key=discovery_graph`.
+This skill uses the shared CTOX knowledge store with `skill_key=discovery_graph`.
 
 If a helper script behaves incorrectly or is too rigid for the current case:
 
@@ -75,13 +75,13 @@ These are the preferred local helper scripts. They are all inspectable under `sc
   - runs real discovery commands
   - returns structured raw capture JSON
 - `scripts/capture_run.py`
-  - convenience wrapper for a full raw sweep
+  - helper script for a full raw sweep
   - runs collectors and persists captures immediately
 
 ### Persistence Helpers
 
 - `scripts/discovery_store.py`
-  - initializes the SQLite schema
+  - initializes the CTOX discovery schema
   - stores raw captures
   - stores normalized graph facts
 
@@ -159,10 +159,10 @@ Think in these capability contracts, regardless of which helper script you use:
   - returns raw command output plus metadata
 - `discovery.store_capture`
   - persist-only
-  - writes raw capture JSON into SQLite
+  - writes raw capture JSON into CTOX runtime state
 - `discovery.store_graph`
   - persist-only
-  - writes agent-authored `graph.json` into SQLite
+  - writes agent-authored `graph.json` into CTOX runtime state
 - `discovery.query`
   - read-only
   - summarizes or exports the stored graph
@@ -175,7 +175,7 @@ The helper scripts under `scripts/` are current local implementations of these c
 ## Workflow
 
 1. Define scope.
-   State which host, repo, runtime, or narrow environment slice is being inspected.
+   State which host, repo, runtime, or narrow environment area is being inspected.
 2. Inspect the available helpers.
    Read the helper script that best matches the task before relying on it in a nontrivial case.
 3. Choose the capture path.
@@ -246,7 +246,7 @@ Use these exact headings:
 
 For discovery work, a successful sweep is usually `prepared` unless it also activated or changed live behavior.
 
-If the scope remains unclear or the sweep is partial, say that explicitly and queue the next discovery slice instead of implying the inventory is finished.
+If the scope remains unclear or the sweep is partial, say that explicitly and queue the next discovery work step instead of implying the inventory is finished.
 
 ## Guardrails
 

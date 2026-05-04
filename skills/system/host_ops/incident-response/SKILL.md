@@ -8,15 +8,15 @@ cluster: host_ops
 
 ## CTOX Runtime Contract
 
-- Task spawning is allowed only for real execution slices that add mission progress, external waiting, recovery, or explicit decomposition. Do not spawn work merely because review feedback exists.
+- Task spawning is allowed only for real bounded work steps that add mission progress, external waiting, recovery, or explicit decomposition. Do not spawn work merely because review feedback exists.
 - The Review Gate is a quality checkpoint, not a control loop. After review feedback, continue the same main work item whenever possible and incorporate the feedback there.
-- Do not create review-driven self-work cascades. If more work is needed, reuse or requeue the existing parent work item; create a new task only when it is a distinct slice with a stable parent pointer.
+- Do not create review-driven self-work cascades. If more work is needed, reuse or requeue the existing parent work item; create a new task only when it is a distinct bounded work step with a stable parent pointer.
 - Every durable follow-up, queue item, plan emission, or self-work item must have a clear parent/anchor: message key, work id, thread key, ticket/case id, or plan step. Missing ancestry is a harness bug, not acceptable ambiguity.
 - Rewording-only feedback means revise wording on the same artifact. Substantive feedback means add new evidence or implementation progress. Stale feedback means refresh or consolidate current runtime state before drafting again.
 - Before adding follow-up work, check for existing matching self-work, queue, plan, or ticket state and consolidate rather than duplicating.
 
 
-Only SQLite-backed runtime state, ticket state, communication records, verification state, and direct live evidence count as durable incident knowledge. Ad hoc notes or markdown files do not count as durable knowledge by themselves.
+Only CTOX runtime store, ticket state, communication records, verification state, and direct live evidence count as durable incident knowledge. Ad hoc notes or markdown files do not count as durable knowledge by themselves.
 
 Use this skill when there is a live user-visible or operator-visible failure that needs explicit stabilization work.
 
@@ -26,7 +26,7 @@ Do not use it for broad scope discovery or routine health review:
 - use `reliability_ops` for health analysis without urgent containment
 - use `change_lifecycle` when the task is a planned rollback or controlled change
 
-This skill uses the shared SQLite kernel via `skill_key=incident_response`.
+This skill uses the shared CTOX knowledge store via `skill_key=incident_response`.
 
 ## Operating Model
 
@@ -88,11 +88,11 @@ mitigation. Below that, treat it as a working theory only.
 5. Persist an `incident_case`, `hypothesis_set`, `mitigation_action`, and `status_update`.
    Include the top three predecessor activities from `causal` (with their
    lift) inside `hypothesis_set` evidence.
-6. If a real mutation is needed, hand the next slice to `change_lifecycle`.
+6. If a real mutation is needed, hand the next work step to `change_lifecycle`.
 
 ## Operator Feedback Contract
 
-Answer for the operator first, not for SQLite.
+Answer for the operator first, not for persistence details.
 
 Use these exact headings:
 
@@ -120,15 +120,15 @@ Do not finish the reply until all of the following are true:
 - all seven headings are present
 - `State` is explicit
 - mitigation and evidence are clearly separated
-- if the incident remains open, a durable next slice exists in queue or plan state
-- if no durable next slice exists yet, the reply stays `blocked`
+- if the incident remains open, a durable next work step exists in queue or plan state
+- if no durable next work step exists yet, the reply stays `blocked`
 
 ## Guardrails
 
 - Do not claim root cause from one symptom.
 - Keep mitigations narrow.
 - Record evidence and action sequence.
-- If the incident is not resolved, leave an explicit next slice.
+- If the incident is not resolved, leave an explicit next work step.
 
 ## Resources
 

@@ -10,9 +10,9 @@ cluster: communication
 
 ## CTOX Runtime Contract
 
-- Task spawning is allowed only for real execution slices that add mission progress, external waiting, recovery, or explicit decomposition. Do not spawn work merely because review feedback exists.
+- Task spawning is allowed only for real bounded work steps that add mission progress, external waiting, recovery, or explicit decomposition. Do not spawn work merely because review feedback exists.
 - The Review Gate is a quality checkpoint, not a control loop. After review feedback, continue the same main work item whenever possible and incorporate the feedback there.
-- Do not create review-driven self-work cascades. If more work is needed, reuse or requeue the existing parent work item; create a new task only when it is a distinct slice with a stable parent pointer.
+- Do not create review-driven self-work cascades. If more work is needed, reuse or requeue the existing parent work item; create a new task only when it is a distinct bounded work step with a stable parent pointer.
 - Every durable follow-up, queue item, plan emission, or self-work item must have a clear parent/anchor: message key, work id, thread key, ticket/case id, or plan step. Missing ancestry is a harness bug, not acceptable ambiguity.
 - Rewording-only feedback means revise wording on the same artifact. Substantive feedback means add new evidence or implementation progress. Stale feedback means refresh or consolidate current runtime state before drafting again.
 - Before adding follow-up work, check for existing matching self-work, queue, plan, or ticket state and consolidate rather than duplicating.
@@ -20,7 +20,7 @@ cluster: communication
 
 Use this skill whenever CTOX needs to interpret, continue, or initiate communication with the owner.
 
-For CTOX mission work, only SQLite-backed runtime communication state counts as durable communication knowledge. Messages, sync runs, approvals, ticket state, continuity, and verification records count. Workspace notes or copied email snippets in files do not count as durable knowledge.
+For CTOX mission work, only CTOX communication runtime state counts as durable communication knowledge. Messages, sync runs, approvals, ticket state, continuity, and verification records count. Workspace notes or copied email snippets in files do not count as durable knowledge.
 
 ## Audience Register
 
@@ -103,7 +103,7 @@ This check prevents "unanchored proactive resends" — the reviewer treats those
   - the most recent messages of the same thread
   - the most relevant owner communication across channels and recent operator turns
 - Answer in the context of the whole recent communication state, not only the newest line or the current thread in isolation.
-- Do not rely only on a wrapper that pasted older messages into the prompt. Use the communication tools actively:
+- Do not rely only on older messages that were pasted into the prompt. Use the communication tools actively:
   - `ctox channel context --thread-key <key> --query <text> --sender <addr> --limit <n>`
   - `ctox channel history --thread-key <key> --limit <n>`
   - `ctox channel search --query <text> --limit <n>`
@@ -153,7 +153,7 @@ This check prevents "unanchored proactive resends" — the reviewer treats those
 - Treat email `accepted` as weaker than email `confirmed`.
 - Treat Jami `queued` as not yet delivered.
 - Do not leak secrets, passwords, root auth material, or BIOS-protected state into outbound channels unless the owner explicitly requests it and the channel choice is justified.
-- If a blocker, approval, or commitment is only present in a workspace artifact or free-form note, treat the communication state as incomplete until it is visible in the SQLite-backed communication or ticket state.
+- If a blocker, approval, or commitment is only present in a workspace artifact or free-form note, treat the communication state as incomplete until it is visible in the CTOX communication or ticket state.
 
 ## Communication Shapes
 
@@ -207,7 +207,7 @@ CTOX core does **not** scan the outbound body for "internal vocabulary" — body
 
 - **Storage and runtime layout**: `sqlite`, `runtime/ctox.sqlite3`, `/home/...`, `runtime_env_kv`, host paths, VPS paths.
 - **Queue and orchestration internals**: `queue`, `queue:`, `self-work`, `mission-follow-up`, `lease_owner`, `route_status`, `thread_key`, `conversation_id`, `dedupe_key`, `claim_key`.
-- **Mission machinery and review pipeline names**: `strategic direction setup`, `review rework`, `mission watchdog`, `continuation slice`, `agent_outcome`, `approval_key`.
+- **Mission machinery and review pipeline names**: internal mission/review labels, runtime field names, approval keys, or queue labels.
 - **Tool / technical scaffolding**: `ctox channel send`, `ctox lcm-grep`, `governance::record_event`, table names, column names.
 - **Generic infrastructure naming that the recipient did not ask about**: "public server", "öffentlicher Link", QR-server URLs (`api.qrserver.com`), JSON shapes, headers, env keys.
 

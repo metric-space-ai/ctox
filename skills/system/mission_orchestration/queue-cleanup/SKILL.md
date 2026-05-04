@@ -39,7 +39,7 @@ If the issue is about normal durable work decomposition, use `queue-orchestrator
 
 Stabilize the queue first.
 
-Queue cleanup must preserve durable SQLite-backed knowledge and work state. Queue text, spilled prompts, or workspace notes do not replace continuity, ticket state, verification state, or ticket knowledge.
+Queue cleanup must preserve durable CTOX knowledge and work state. Queue text, spilled prompts, or workspace notes do not replace continuity, ticket state, verification state, or ticket knowledge.
 
 The next work step should:
 

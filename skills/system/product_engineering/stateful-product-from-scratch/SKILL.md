@@ -9,9 +9,9 @@ metadata:
 
 ## CTOX Runtime Contract
 
-- Task spawning is allowed only for real execution slices that add mission progress, external waiting, recovery, or explicit decomposition. Do not spawn work merely because review feedback exists.
+- Task spawning is allowed only for real bounded work steps that add mission progress, external waiting, recovery, or explicit decomposition. Do not spawn work merely because review feedback exists.
 - The Review Gate is a quality checkpoint, not a control loop. After review feedback, continue the same main work item whenever possible and incorporate the feedback there.
-- Do not create review-driven self-work cascades. If more work is needed, reuse or requeue the existing parent work item; create a new task only when it is a distinct slice with a stable parent pointer.
+- Do not create review-driven self-work cascades. If more work is needed, reuse or requeue the existing parent work item; create a new task only when it is a distinct bounded work step with a stable parent pointer.
 - Every durable follow-up, queue item, plan emission, or self-work item must have a clear parent/anchor: message key, work id, thread key, ticket/case id, or plan step. Missing ancestry is a harness bug, not acceptable ambiguity.
 - Rewording-only feedback means revise wording on the same artifact. Substantive feedback means add new evidence or implementation progress. Stale feedback means refresh or consolidate current runtime state before drafting again.
 - Before adding follow-up work, check for existing matching self-work, queue, plan, or ticket state and consolidate rather than duplicating.
@@ -88,7 +88,7 @@ object reaches state B or blocks/fails with evidence
 
 ## Review Workflow
 
-When reviewing a slice that claims a stateful product feature, fail it unless there is evidence for all relevant gates:
+When reviewing a work step that claims a stateful product feature, fail it unless there is evidence for all relevant gates:
 
 1. Durable model exists for the central object, states, gates, transitions, and transition runs.
 2. UI reads from durable state, not frontend arrays or disconnected demo state.
@@ -129,6 +129,6 @@ A feature is not done until:
 Read [references/stateful-product-checklist.md](references/stateful-product-checklist.md) when:
 
 - starting a greenfield product
-- reviewing a product slice with UI+DB+AI automation
+- reviewing a product work step with UI+DB+AI automation
 - a task looks like it is drifting into mockup/demo-state
 - a reviewer needs a concrete checklist for fail/pass evidence

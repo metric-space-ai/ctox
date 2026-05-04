@@ -23,7 +23,7 @@ Validate the generated skill against these questions:
 
 - Does the generated `SKILL.md` avoid internal field names such as ``triage_focus`` or ``handling_steps`` in operator-facing instructions?
 - Does it avoid wording that assumes source code, schema, parser, or JSON knowledge?
-- Do the main work steps read like natural operator guidance instead of an artifact wrapper?
+- Do the main work steps read like natural operator guidance instead of an artifact container?
 - Are references and helper scripts supportive rather than the main content of the skill?
 
 ## Minimal Structural Checks

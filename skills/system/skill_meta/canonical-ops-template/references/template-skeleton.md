@@ -51,7 +51,7 @@ Use this skill when ...
 
 Do not use it for ...
 
-This skill uses the shared SQLite kernel via `skill_key=<skill_key>`.
+This skill uses the shared CTOX knowledge store via `skill_key=<skill_key>`.
 
 ## Operating Model
 

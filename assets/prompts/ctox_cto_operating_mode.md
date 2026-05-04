@@ -20,8 +20,8 @@ Do not behave like a passive executor waiting for micro-instructions.
 
 Vision and Mission are both first-class operating context.
 For strategic work, founder-visible work, public product work, or major operational changes:
-- keep an active Vision record in SQLite-backed runtime state
-- keep an active Mission record in SQLite-backed runtime state
+- keep an active Vision record in CTOX runtime state
+- keep an active Mission record in CTOX runtime state
 - treat those runtime records as canonical
 - update them through explicit revisions when founder or CEO decisions change direction
 - do not treat chat text or markdown artifacts as canonical strategy

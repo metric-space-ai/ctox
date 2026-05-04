@@ -8,15 +8,15 @@ cluster: security_access
 
 ## CTOX Runtime Contract
 
-- Task spawning is allowed only for real execution slices that add mission progress, external waiting, recovery, or explicit decomposition. Do not spawn work merely because review feedback exists.
+- Task spawning is allowed only for real bounded work steps that add mission progress, external waiting, recovery, or explicit decomposition. Do not spawn work merely because review feedback exists.
 - The Review Gate is a quality checkpoint, not a control loop. After review feedback, continue the same main work item whenever possible and incorporate the feedback there.
-- Do not create review-driven self-work cascades. If more work is needed, reuse or requeue the existing parent work item; create a new task only when it is a distinct slice with a stable parent pointer.
+- Do not create review-driven self-work cascades. If more work is needed, reuse or requeue the existing parent work item; create a new task only when it is a distinct bounded work step with a stable parent pointer.
 - Every durable follow-up, queue item, plan emission, or self-work item must have a clear parent/anchor: message key, work id, thread key, ticket/case id, or plan step. Missing ancestry is a harness bug, not acceptable ambiguity.
 - Rewording-only feedback means revise wording on the same artifact. Substantive feedback means add new evidence or implementation progress. Stale feedback means refresh or consolidate current runtime state before drafting again.
 - Before adding follow-up work, check for existing matching self-work, queue, plan, or ticket state and consolidate rather than duplicating.
 
 
-For CTOX mission work, security findings become durable knowledge only when they are reflected in SQLite-backed runtime state, ticket knowledge, continuity, or verification records. Standalone notes do not count as durable knowledge by themselves.
+For CTOX mission work, security findings become durable knowledge only when they are reflected in the CTOX runtime store, ticket knowledge, continuity, or verification records. Standalone notes do not count as durable knowledge by themselves.
 
 Use this skill for exposure, privilege, certificate, secret, firewall, and service-hardening questions.
 
@@ -26,7 +26,7 @@ Do not use it for generic health review or broad inventory:
 - use `reliability_ops` for health and saturation
 - use `change_lifecycle` for actual remediation that mutates auth, firewall, TLS, or config state
 
-This skill uses the shared SQLite kernel via `skill_key=security_posture`.
+This skill uses the shared CTOX knowledge store via `skill_key=security_posture`.
 
 ## Operating Model
 
@@ -67,7 +67,7 @@ What to read for findings:
   required audit evidence. Tie it to the affected `entity_type` and
   capture the ratio as evidence.
 - `constraint_coverage[].dominant_violation_code`: per (entity, lane,
-  from→to) the most frequent violation code. `founder_send_body_hash_mismatch`
+  from->to) the most frequent violation class, for example a founder-send body mismatch
   or `founder_send_requires_review_audit` appearing in any lane with
   `rejected > 0` is a posture finding, not a one-off bug — the audit
   contract is being missed at scale.
@@ -121,7 +121,7 @@ Do not finish the reply until all of the following are true:
 - all seven headings are present
 - every live finding in `Current Findings` is tied to concrete evidence
 - any mutation request is clearly separated into `Escalation` or handed off to `change_lifecycle`
-- if remediation work remains open, a durable next slice exists instead of vague prose
+- if remediation work remains open, a durable next work step exists instead of vague prose
 
 ## Guardrails
 

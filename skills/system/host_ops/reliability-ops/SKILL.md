@@ -8,15 +8,15 @@ cluster: host_ops
 
 ## CTOX Runtime Contract
 
-- Task spawning is allowed only for real execution slices that add mission progress, external waiting, recovery, or explicit decomposition. Do not spawn work merely because review feedback exists.
+- Task spawning is allowed only for real bounded work steps that add mission progress, external waiting, recovery, or explicit decomposition. Do not spawn work merely because review feedback exists.
 - The Review Gate is a quality checkpoint, not a control loop. After review feedback, continue the same main work item whenever possible and incorporate the feedback there.
-- Do not create review-driven self-work cascades. If more work is needed, reuse or requeue the existing parent work item; create a new task only when it is a distinct slice with a stable parent pointer.
+- Do not create review-driven self-work cascades. If more work is needed, reuse or requeue the existing parent work item; create a new task only when it is a distinct bounded work step with a stable parent pointer.
 - Every durable follow-up, queue item, plan emission, or self-work item must have a clear parent/anchor: message key, work id, thread key, ticket/case id, or plan step. Missing ancestry is a harness bug, not acceptable ambiguity.
 - Rewording-only feedback means revise wording on the same artifact. Substantive feedback means add new evidence or implementation progress. Stale feedback means refresh or consolidate current runtime state before drafting again.
 - Before adding follow-up work, check for existing matching self-work, queue, plan, or ticket state and consolidate rather than duplicating.
 
 
-For CTOX mission work, reliability findings become durable knowledge only when they are recorded in SQLite-backed runtime state such as ticket knowledge, verification state, continuity, or communication records. Standalone notes do not count as durable knowledge by themselves.
+For CTOX mission work, reliability findings become durable knowledge only when they are recorded in the the CTOX runtime store, such as ticket knowledge, verification state, continuity, or communication records. Standalone notes do not count as durable knowledge by themselves.
 
 Use this skill to turn a known or mostly-known technical scope into a concrete health assessment, anomaly list, and next safe action.
 
@@ -24,7 +24,7 @@ Use `discovery_graph` first when the technical scope is still unclear. Use `reli
 
 ## Operating Model
 
-This skill uses the same SQLite persistence kernel as `discovery_graph`.
+This skill uses the same CTOX persistence store as `discovery_graph`.
 
 The shared kernel stays:
 
@@ -39,7 +39,7 @@ The separation is done through `skill_key`:
 - `discovery_graph`
 - `reliability_ops`
 
-This keeps one SQLite source of truth while letting each skill add its own collectors, entities, and relations.
+This keeps one CTOX source of truth while letting each skill add its own collectors, entities, and relations.
 
 ## Preferred Helpers
 
@@ -68,11 +68,11 @@ Read them when the case is nontrivial. Use them when they fit. Patch or bypass t
 6. Prefer evidence over theory.
    Quote exact processes, ports, units, devices, error strings, or counters that justify the assessment.
 7. Persist the run in the shared kernel.
-   `reliability_ops` writes to the same SQLite kernel as `discovery_graph`, but with `skill_key=reliability_ops`.
+   `reliability_ops` writes to the same CTOX knowledge store as `discovery_graph`, but with `skill_key=reliability_ops`.
 8. Bootstrap only when useful.
    `reliability_bootstrap.py` may help produce a conservative first `graph.json`, but it is not the authority.
 9. Keep remediation narrow.
-   If a low-risk fix is obvious, state it explicitly. If not, queue or plan the next slice instead of improvising a broad change.
+   If a low-risk fix is obvious, state it explicitly. If not, queue or plan the next work step instead of improvising a broad change.
 
 ## Operator Feedback Contract
 
@@ -125,7 +125,7 @@ Do not finish a user-facing reply until all of the following are true:
 - the reply contains all seven required headings
 - `State` explicitly says `proposed`, `prepared`, `executed`, or `blocked`
 - the reply explicitly says whether monitoring is active or not active when the task is about setup or activation
-- if the work remains open, a durable next slice exists in queue or plan state instead of vague prose
+- if the work remains open, a durable next work step exists in queue or plan state instead of vague prose
 - persistence details, if included at all, come after the operator-facing outcome
 
 ## Tool Contracts
@@ -180,8 +180,8 @@ reads only one half is incomplete.
 
 - For recurring health checks, use `ctox schedule add --skill "reliability-ops"`.
 - For unresolved concrete follow-up work, use `ctox queue add --skill "reliability-ops"`.
-- If the scope itself is still unclear, hand the next slice to `discovery-graph`.
-- If a health issue becomes user-visible or high-risk, hand the next slice to `incident-response`.
+- If the scope itself is still unclear, hand the next work step to `discovery-graph`.
+- If a health issue becomes user-visible or high-risk, hand the next work step to `incident-response`.
 
 ## Guardrails
 

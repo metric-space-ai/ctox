@@ -16,7 +16,7 @@ cluster: mission_orchestration
 - Before adding follow-up work, check for existing matching self-work, queue, plan, or ticket state and consolidate rather than duplicating.
 
 
-Automation design and operating assumptions count as durable knowledge only when they are reflected in SQLite-backed runtime state. Workspace plans or notes do not count as durable knowledge by themselves.
+Automation design and operating assumptions count as durable knowledge only when they are reflected in the the CTOX runtime store. Workspace plans or notes do not count as durable knowledge by themselves.
 
 Use this skill when repeated operational work should become a repo script, queued work step, or scheduled CTOX task.
 
@@ -26,7 +26,7 @@ Do not use it for live incident handling or one-off system changes:
 - use `change_lifecycle` for deliberate state changes
 - use `ops_insight` for reporting that does not yet justify automation
 
-This skill uses the shared SQLite kernel via `skill_key=automation_engineering`.
+This skill uses the shared CTOX knowledge store via `skill_key=automation_engineering`.
 
 ## Operating Model
 

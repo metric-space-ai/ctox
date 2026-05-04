@@ -1,6 +1,6 @@
 ---
 name: canonical-ops-template
-description: Canonical template and refinement policy for CTOX operational system skills. Use when creating, updating, or refining the shared ops skill family so discovery, reliability, incident, change, security, recovery, automation, and insight remain compatible through one SQLite evidence kernel, open helper resources, and consistent escalation boundaries.
+description: Canonical template and refinement policy for CTOX operational system skills. Use when creating, updating, or refining the shared ops skill family so discovery, reliability, incident, change, security, recovery, automation, and insight remain compatible through one CTOX evidence store, open helper resources, and consistent escalation boundaries.
 cluster: skill_meta
 ---
 
@@ -8,15 +8,15 @@ cluster: skill_meta
 
 ## CTOX Runtime Contract
 
-- Task spawning is allowed only for real execution slices that add mission progress, external waiting, recovery, or explicit decomposition. Do not spawn work merely because review feedback exists.
+- Task spawning is allowed only for real bounded work steps that add mission progress, external waiting, recovery, or explicit decomposition. Do not spawn work merely because review feedback exists.
 - The Review Gate is a quality checkpoint, not a control loop. After review feedback, continue the same main work item whenever possible and incorporate the feedback there.
-- Do not create review-driven self-work cascades. If more work is needed, reuse or requeue the existing parent work item; create a new task only when it is a distinct slice with a stable parent pointer.
+- Do not create review-driven self-work cascades. If more work is needed, reuse or requeue the existing parent work item; create a new task only when it is a distinct bounded work step with a stable parent pointer.
 - Every durable follow-up, queue item, plan emission, or self-work item must have a clear parent/anchor: message key, work id, thread key, ticket/case id, or plan step. Missing ancestry is a harness bug, not acceptable ambiguity.
 - Rewording-only feedback means revise wording on the same artifact. Substantive feedback means add new evidence or implementation progress. Stale feedback means refresh or consolidate current runtime state before drafting again.
 - Before adding follow-up work, check for existing matching self-work, queue, plan, or ticket state and consolidate rather than duplicating.
 
 
-Any generated operational guidance for CTOX mission work must assume that only SQLite-backed runtime state counts as durable knowledge. Workspace artifacts alone do not count as durable knowledge.
+Any generated operational guidance for CTOX mission work must assume that only records in the CTOX runtime store count as durable knowledge. Workspace artifacts alone do not count as durable knowledge.
 
 Use this skill when you are defining or changing a CTOX ops skill in the shared family:
 
@@ -40,7 +40,7 @@ The family must stay:
 
 - operationally useful
 - skill-separated
-- SQLite-compatible
+- CTOX-store-compatible
 - inspectable by the agent
 - refineable without drifting into eight unrelated mini-systems
 
@@ -50,7 +50,7 @@ Use this template before changing a family skill.
 
 These invariants are locked unless an outer governance decision explicitly changes them.
 
-1. One shared SQLite evidence kernel.
+1. One shared CTOX evidence store.
    The family persists into the same 5-table kernel:
    - `discovery_run`
    - `discovery_capture`
@@ -105,7 +105,7 @@ For this family, the default section policy is:
 - frontmatter `description`
 - skill purpose
 - skill boundaries against other family skills
-- shared SQLite kernel commitment
+- shared CTOX knowledge store commitment
 - no-hidden-loop rule
 - guardrails that define mutation authority or autonomy level
 
@@ -197,7 +197,7 @@ The default response order for family skills is:
 5. escalations required or triggered
 6. next recommended operator step
 
-If a skill starts a high-impact or multi-step task and does not finish it in the same slice, the answer must also:
+If a skill starts a high-impact or multi-step task and does not finish it in the same work step, the answer must also:
 
 - say that the work is still open
 - state whether the work is `prepared` or `blocked`

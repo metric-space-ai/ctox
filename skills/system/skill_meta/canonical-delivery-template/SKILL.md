@@ -1,6 +1,6 @@
 ---
 name: canonical-delivery-template
-description: Canonical template and escalation policy for CTOX delivery skills. Use when creating or refining install, provisioning, configuration, migration, and secret-handling skills so they stay compatible with the shared SQLite evidence kernel and the operator-facing completion contract.
+description: Canonical template and escalation policy for CTOX delivery skills. Use when creating or refining install, provisioning, configuration, migration, and secret-handling skills so they stay compatible with the shared CTOX evidence store and the operator-facing completion contract.
 cluster: skill_meta
 ---
 
@@ -8,15 +8,15 @@ cluster: skill_meta
 
 ## CTOX Runtime Contract
 
-- Task spawning is allowed only for real execution slices that add mission progress, external waiting, recovery, or explicit decomposition. Do not spawn work merely because review feedback exists.
+- Task spawning is allowed only for real bounded work steps that add mission progress, external waiting, recovery, or explicit decomposition. Do not spawn work merely because review feedback exists.
 - The Review Gate is a quality checkpoint, not a control loop. After review feedback, continue the same main work item whenever possible and incorporate the feedback there.
-- Do not create review-driven self-work cascades. If more work is needed, reuse or requeue the existing parent work item; create a new task only when it is a distinct slice with a stable parent pointer.
+- Do not create review-driven self-work cascades. If more work is needed, reuse or requeue the existing parent work item; create a new task only when it is a distinct bounded work step with a stable parent pointer.
 - Every durable follow-up, queue item, plan emission, or self-work item must have a clear parent/anchor: message key, work id, thread key, ticket/case id, or plan step. Missing ancestry is a harness bug, not acceptable ambiguity.
 - Rewording-only feedback means revise wording on the same artifact. Substantive feedback means add new evidence or implementation progress. Stale feedback means refresh or consolidate current runtime state before drafting again.
 - Before adding follow-up work, check for existing matching self-work, queue, plan, or ticket state and consolidate rather than duplicating.
 
 
-Any generated delivery guidance for CTOX mission work must assume that only SQLite-backed runtime state counts as durable knowledge. Workspace artifacts alone do not count as durable knowledge.
+Any generated delivery guidance for CTOX mission work must assume that only records in the CTOX runtime store count as durable knowledge. Workspace artifacts alone do not count as durable knowledge.
 
 Use this skill when you are defining or changing the CTOX delivery-skill family.
 
@@ -33,7 +33,7 @@ This is not a host execution skill. It is the canonical template for delivery wo
 
 ## Family Invariants
 
-1. Delivery work uses the same shared SQLite kernel as ops work:
+1. Delivery work uses the same shared CTOX knowledge store as ops work:
    - `discovery_run`
    - `discovery_capture`
    - `discovery_entity`
@@ -66,7 +66,7 @@ Locked by default:
 
 - frontmatter `name`
 - family invariants
-- shared SQLite commitment
+- shared CTOX evidence-store commitment
 - no-hidden-authority rule
 - operator completion contract
 

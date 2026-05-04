@@ -8,9 +8,9 @@ cluster: host_ops
 
 ## CTOX Runtime Contract
 
-- Task spawning is allowed only for real execution slices that add mission progress, external waiting, recovery, or explicit decomposition. Do not spawn work merely because review feedback exists.
+- Task spawning is allowed only for real bounded work steps that add mission progress, external waiting, recovery, or explicit decomposition. Do not spawn work merely because review feedback exists.
 - The Review Gate is a quality checkpoint, not a control loop. After review feedback, continue the same main work item whenever possible and incorporate the feedback there.
-- Do not create review-driven self-work cascades. If more work is needed, reuse or requeue the existing parent work item; create a new task only when it is a distinct slice with a stable parent pointer.
+- Do not create review-driven self-work cascades. If more work is needed, reuse or requeue the existing parent work item; create a new task only when it is a distinct bounded work step with a stable parent pointer.
 - Every durable follow-up, queue item, plan emission, or self-work item must have a clear parent/anchor: message key, work id, thread key, ticket/case id, or plan step. Missing ancestry is a harness bug, not acceptable ambiguity.
 - Rewording-only feedback means revise wording on the same artifact. Substantive feedback means add new evidence or implementation progress. Stale feedback means refresh or consolidate current runtime state before drafting again.
 - Before adding follow-up work, check for existing matching self-work, queue, plan, or ticket state and consolidate rather than duplicating.
@@ -26,9 +26,9 @@ Do not use it for:
 - generic post-install verification by itself: use `acceptance-verification`
 - generic narrow config changes without a deployment target: use `change_lifecycle`
 
-This skill uses the shared SQLite kernel via `skill_key=service_deployment`.
+This skill uses the shared CTOX knowledge store via `skill_key=service_deployment`.
 
-For CTOX mission work, only SQLite-backed runtime state counts as durable deployment knowledge. Continuity commits, ticket knowledge, verification runs, communication records, and ticket/self-work state count. Workspace markdown files or ad hoc notes do not count as durable knowledge on their own.
+For CTOX mission work, only records in the CTOX runtime store count as durable deployment knowledge. Continuity commits, ticket knowledge, verification runs, communication records, and ticket/self-work state count. Workspace markdown files or ad hoc notes do not count as durable knowledge on their own.
 
 ## Operating Model
 
@@ -37,7 +37,7 @@ Treat this skill as:
 1. preflight evidence capture
 2. explicit deployment-shape classification
 3. secret classification
-4. bounded execution slices
+4. bounded execution work steps
 5. verification and handoff
 
 This skill is responsible for getting the service into a deployable state.
@@ -80,7 +80,7 @@ They are inspectable helpers, not hidden authority. Read or patch them when the 
    - external reference
 5. Generate and store local admin credentials when CTOX can safely own them.
 6. Ask the owner only for values CTOX truly cannot derive or generate.
-7. Execute the install or rollout in bounded slices, verifying each slice before continuing.
+7. Execute the install or rollout in bounded work steps, verifying each step before continuing.
 8. Persist the resulting deployment, blocker, or verification state.
 9. If the service starts but the acceptance check is still failing, do not report `executed`. Report `needs_repair` or `blocked` with the exact failing verification layer.
 10. When the deployment is owner-visible, ticket-bearing, or depends on prior operational knowledge, inspect the active ticket/knowledge plane first. If the source system, source skills, or knowledge domains are absent, treat that as an explicit maturity gap instead of silently substituting workspace notes for durable knowledge.
@@ -139,7 +139,7 @@ Do not finish the reply until all of the following are true:
 - No owner credential request unless `secret-management` says the value is truly owner-supplied.
 - No vague "I need variables" blocker messages.
 - No silent continuation of multi-step installs.
-- No claim that a deployment is operationally understood when the only written record is a workspace file rather than SQLite-backed runtime state.
+- No claim that a deployment is operationally understood when the only written record is a workspace file rather than the CTOX runtime store.
 
 ## Resources
 

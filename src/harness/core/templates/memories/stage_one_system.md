@@ -563,7 +563,7 @@ WORKFLOW
 1. Triage outcome using the common rules.
 2. Read the rollout carefully (do not miss user messages/tool calls/outputs).
 3. Return `rollout_summary`, `rollout_slug`, and `raw_memory`, valid JSON only.
-   No markdown wrapper, no prose outside JSON.
+   No markdown container, no prose outside JSON.
 
 - Do not be terse in task sections. Include validation signal, failure mode, reusable procedure,
   and sufficiently concrete preference evidence per task when available.
