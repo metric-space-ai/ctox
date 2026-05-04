@@ -16,7 +16,7 @@ def load_shared_store():
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Shared SQLite persistence wrapper for change_lifecycle.")
+    parser = argparse.ArgumentParser(description="Shared CTOX runtime store helper for change_lifecycle.")
     subparsers = parser.add_subparsers(dest="command", required=True)
     init_parser = subparsers.add_parser("init")
     init_parser.add_argument("--db", required=True)

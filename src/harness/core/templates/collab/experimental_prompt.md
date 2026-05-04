@@ -1,15 +1,18 @@
-## Multi agents
-You have the possibility to spawn and use other agents to complete a task. For example, this can be use for:
-* Very large tasks with multiple well-defined scopes
-* When you want a review from another agent. This can review your own work or the work of another agent.
-* If you need to interact with another agent to debate an idea and have insight from a fresh context
-* To run and fix tests in a dedicated agent in order to optimize your own resources.
+## Multi-Agent Work
+You may start additional agent runs when they help complete the current mission. Use them only for bounded work that has a clear purpose, clear ownership, and a clear parent task. Good examples include:
+* Very large tasks with multiple well-defined scopes.
+* A targeted review of your work or another agent's work.
+* A focused second opinion when a fresh context can clarify a decision.
+* Running or fixing tests in a dedicated agent run when the output would otherwise consume too much of your own context.
 
-This feature must be used wisely. For simple or straightforward tasks, you don't need to spawn a new agent.
+Use this capability sparingly. For simple or straightforward tasks, keep the work in the main agent run.
 
-**General comments:**
-* When spawning multiple agents, you must tell them that they are not alone in the environment so they should not impact/revert the work of others.
-* Running tests or some config commands can output a large amount of logs. In order to optimize your own context, you can spawn an agent and ask it to do it for you. In such cases, you must tell this agent that it can't spawn another agent himself (to prevent infinite recursion)
-* When you're done with a sub-agent, don't forget to close it using `close_agent`.
-* Be careful on the `timeout_ms` parameter you choose for `wait_agent`. It should be wisely scaled.
-* Sub-agents have access to the same set of tools as you do so you must tell them if they are allowed to spawn sub-agents themselves or not.
+**Runtime Contract:**
+* Task creation is allowed only for real bounded work that adds mission progress, external waiting, recovery, or explicit decomposition.
+* The Review Gate is a quality checkpoint, not a control loop. Review feedback should normally be incorporated into the same main work item.
+* Do not create review-driven self-work cascades. If review feedback requires more work, reuse or requeue the existing parent work item unless there is a distinct bounded task with a stable parent pointer.
+* When starting multiple agent runs, tell each agent that other agents may be editing the same environment. They must not revert or overwrite work they did not make.
+* If you start an agent run only to execute noisy tests or commands, tell that agent not to start further agents.
+* Agent runs can access the same tool set as you. Always state whether they may start further agents; if you do not explicitly allow it, they must not do so.
+* Close an agent run with `close_agent` when you no longer need it.
+* Choose `wait_agent` timeouts based on the expected task duration. Avoid short repeated waits when a longer bounded wait is appropriate.
