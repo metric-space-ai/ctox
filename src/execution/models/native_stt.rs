@@ -2,14 +2,16 @@ use anyhow::{Context, Result};
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
 use ctox_voxtral_mini_4b_realtime_2602::{
-    TranscriptionRequest, VoxtralSttBackend, VoxtralSttConfig, VoxtralSttModel,
-    VOXTRAL_MINI_4B_REALTIME_2602_CANONICAL_MODEL,
+    TranscriptionRequest, TranscriptionResponse, VoxtralSttBackend, VoxtralSttConfig,
+    VoxtralSttModel, VOXTRAL_MINI_4B_REALTIME_2602_CANONICAL_MODEL,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::inference::engine;
 use crate::inference::local_transport::LocalTransport;
@@ -20,6 +22,29 @@ pub struct NativeSttLaunch {
     pub transport: LocalTransport,
     pub compute_target: engine::ComputeTarget,
     pub model_path: Option<PathBuf>,
+    pub root: PathBuf,
+}
+
+const MISTRAL_STT_DEFAULT_MODEL: &str = "voxtral-mini-latest";
+const MISTRAL_STT_DEFAULT_ENDPOINT: &str = "https://api.mistral.ai/v1/audio/transcriptions";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SttEngineKind {
+    Local,
+    MistralApi,
+}
+
+#[derive(Debug, Clone)]
+struct MistralSttClient {
+    endpoint: String,
+    model: String,
+    api_key: String,
+}
+
+#[derive(Clone)]
+enum SttRuntime {
+    Local(VoxtralSttModel),
+    MistralApi(MistralSttClient),
 }
 
 #[derive(Debug, Deserialize)]
@@ -80,6 +105,8 @@ pub fn configured_or_default_model_path(root: &Path) -> Option<PathBuf> {
 pub fn doctor_json(root: &Path) -> serde_json::Value {
     let model_root = root.join("src/inference/models/voxtral_mini_4b_realtime_2602");
     let model_path = configured_or_default_model_path(root);
+    let engine_kind = configured_stt_engine(root);
+    let mistral_config = MistralSttClient::configured(root);
     let inspection = model_path
         .as_ref()
         .and_then(|path| ctox_voxtral_mini_4b_realtime_2602::inspect_gguf(path).ok());
@@ -87,9 +114,18 @@ pub fn doctor_json(root: &Path) -> serde_json::Value {
         .as_ref()
         .map(|value| value.required_tensors_present)
         .unwrap_or(false);
+    let api_ready = engine_kind == SttEngineKind::MistralApi && mistral_config.is_ok();
     json!({
-        "ok": artifacts_ready,
+        "ok": artifacts_ready || api_ready,
         "model": VOXTRAL_MINI_4B_REALTIME_2602_CANONICAL_MODEL,
+        "engine": engine_kind.label(),
+        "mistral_api": {
+            "configured": engine_kind == SttEngineKind::MistralApi,
+            "endpoint": configured_mistral_endpoint(root),
+            "model": configured_mistral_model(root),
+            "api_key_present": configured_mistral_api_key(root).is_some(),
+            "usable": api_ready
+        },
         "native_ctox": {
             "crate_linked": true,
             "cpu_reference_ops": true,
@@ -130,22 +166,34 @@ pub fn stt_smoke_json(root: &Path, audio_path: &Path) -> serde_json::Value {
             })
         }
     };
-    let backend = smoke_backend_for_host();
-    let model = configured_or_default_model_path(root)
-        .as_ref()
-        .and_then(|path| VoxtralSttModel::from_gguf(path, backend).ok())
-        .unwrap_or_else(|| VoxtralSttModel::new(VoxtralSttConfig::default(), backend));
-    match model.transcribe(&TranscriptionRequest {
+    let runtime = match stt_runtime_for_smoke(root) {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            return json!({
+                "ok": false,
+                "model": VOXTRAL_MINI_4B_REALTIME_2602_CANONICAL_MODEL,
+                "engine": configured_stt_engine(root).label(),
+                "error": err.to_string()
+            })
+        }
+    };
+    match runtime.transcribe(&TranscriptionRequest {
         audio_bytes: &audio,
         response_format: "json",
         max_tokens: None,
     }) {
-        Ok(output) => json!({"ok": true, "model": output.model, "text": output.text}),
+        Ok(output) => json!({
+            "ok": true,
+            "model": output.model,
+            "engine": runtime.engine_label(),
+            "text": output.text
+        }),
         Err(err) => json!({
             "ok": false,
             "model": VOXTRAL_MINI_4B_REALTIME_2602_CANONICAL_MODEL,
+            "engine": runtime.engine_label(),
             "error": err.to_string(),
-            "transcription_graph_wired": model.transcription_graph_wired()
+            "transcription_graph_wired": runtime.transcription_graph_wired()
         }),
     }
 }
@@ -159,25 +207,33 @@ fn smoke_backend_for_host() -> VoxtralSttBackend {
 }
 
 pub fn serve_socket(launch: NativeSttLaunch) -> Result<()> {
-    let backend = default_backend_for_host(launch.compute_target);
-    let model = launch
-        .model_path
-        .as_ref()
-        .and_then(|path| VoxtralSttModel::from_gguf(path, backend).ok())
-        .unwrap_or_else(|| VoxtralSttModel::new(VoxtralSttConfig::default(), backend));
+    let runtime = match configured_stt_engine(&launch.root) {
+        SttEngineKind::Local => {
+            let backend = default_backend_for_host(launch.compute_target);
+            let model = launch
+                .model_path
+                .as_ref()
+                .and_then(|path| VoxtralSttModel::from_gguf(path, backend).ok())
+                .unwrap_or_else(|| VoxtralSttModel::new(VoxtralSttConfig::default(), backend));
+            SttRuntime::Local(model)
+        }
+        SttEngineKind::MistralApi => {
+            SttRuntime::MistralApi(MistralSttClient::configured(&launch.root)?)
+        }
+    };
     let mut listener = launch.transport.bind()?;
     loop {
         let stream = listener.accept()?;
-        let model = model.clone();
+        let runtime = runtime.clone();
         std::thread::spawn(move || {
-            let _ = handle_connection(stream, model);
+            let _ = handle_connection(stream, runtime);
         });
     }
 }
 
 fn handle_connection(
     mut stream: crate::inference::local_transport::LocalStream,
-    model: VoxtralSttModel,
+    runtime: SttRuntime,
 ) -> Result<()> {
     stream.set_read_timeout(Some(Duration::from_secs(30)))?;
     stream.set_write_timeout(Some(Duration::from_secs(30)))?;
@@ -188,16 +244,16 @@ fn handle_connection(
     }
     let response = match serde_json::from_str::<LocalSttRequest>(line.trim()) {
         Ok(LocalSttRequest::RuntimeHealth) => LocalSttResponse::RuntimeHealth {
-            healthy: model.transcription_graph_wired(),
-            default_model: Some(model.config().model.clone()),
-            loaded_models: if model.artifacts_loaded() {
-                vec![model.config().model.clone()]
+            healthy: runtime.transcription_graph_wired(),
+            default_model: Some(runtime.default_model()),
+            loaded_models: if runtime.artifacts_loaded() {
+                vec![runtime.default_model()]
             } else {
                 Vec::new()
             },
-            backend: model.backend().label().to_string(),
-            artifacts_loaded: model.artifacts_loaded(),
-            transcription_graph_wired: model.transcription_graph_wired(),
+            backend: runtime.backend_label(),
+            artifacts_loaded: runtime.artifacts_loaded(),
+            transcription_graph_wired: runtime.transcription_graph_wired(),
         },
         Ok(LocalSttRequest::TranscriptionCreate {
             model: request_model,
@@ -209,16 +265,16 @@ fn handle_connection(
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .unwrap_or(VOXTRAL_MINI_4B_REALTIME_2602_CANONICAL_MODEL);
-            if request_model != VOXTRAL_MINI_4B_REALTIME_2602_CANONICAL_MODEL {
+            if !runtime.supports_request_model(request_model) {
                 LocalSttResponse::Error {
                     code: "unsupported_model".to_string(),
                     message: format!(
-                        "native STT service only supports {VOXTRAL_MINI_4B_REALTIME_2602_CANONICAL_MODEL}"
+                        "STT service only supports {VOXTRAL_MINI_4B_REALTIME_2602_CANONICAL_MODEL}"
                     ),
                 }
             } else {
                 match BASE64_STANDARD.decode(file_base64.as_bytes()) {
-                    Ok(audio) => match model.transcribe(&TranscriptionRequest {
+                    Ok(audio) => match runtime.transcribe(&TranscriptionRequest {
                         audio_bytes: &audio,
                         response_format: response_format.as_deref().unwrap_or("json"),
                         max_tokens: None,
@@ -228,7 +284,7 @@ fn handle_connection(
                             text: output.text,
                         },
                         Err(err) => LocalSttResponse::Error {
-                            code: if model.transcription_graph_wired() {
+                            code: if runtime.transcription_graph_wired() {
                                 "transcription_failed".to_string()
                             } else {
                                 "backend_not_wired".to_string()
@@ -253,6 +309,210 @@ fn handle_connection(
     stream.write_all(b"\n")?;
     stream.flush()?;
     Ok(())
+}
+
+fn stt_runtime_for_smoke(root: &Path) -> Result<SttRuntime> {
+    match configured_stt_engine(root) {
+        SttEngineKind::Local => {
+            let backend = smoke_backend_for_host();
+            let model = configured_or_default_model_path(root)
+                .as_ref()
+                .and_then(|path| VoxtralSttModel::from_gguf(path, backend).ok())
+                .unwrap_or_else(|| VoxtralSttModel::new(VoxtralSttConfig::default(), backend));
+            Ok(SttRuntime::Local(model))
+        }
+        SttEngineKind::MistralApi => {
+            Ok(SttRuntime::MistralApi(MistralSttClient::configured(root)?))
+        }
+    }
+}
+
+fn configured_stt_engine(root: &Path) -> SttEngineKind {
+    process_env_or_config(root, "CTOX_VOXTRAL_STT_ENGINE")
+        .or_else(|| process_env_or_config(root, "CTOX_STT_ENGINE"))
+        .as_deref()
+        .map(parse_stt_engine_kind)
+        .unwrap_or(SttEngineKind::Local)
+}
+
+fn parse_stt_engine_kind(value: &str) -> SttEngineKind {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "api" | "mistral" | "mistral-api" | "mistral_api" | "voxtral-api" | "voxtral_api" => {
+            SttEngineKind::MistralApi
+        }
+        _ => SttEngineKind::Local,
+    }
+}
+
+fn configured_mistral_api_key(root: &Path) -> Option<String> {
+    process_env_or_config(root, "CTOX_MISTRAL_API_KEY")
+        .or_else(|| process_env_or_config(root, "MISTRAL_API_KEY"))
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn configured_mistral_model(root: &Path) -> String {
+    process_env_or_config(root, "CTOX_MISTRAL_STT_MODEL")
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| MISTRAL_STT_DEFAULT_MODEL.to_string())
+}
+
+fn configured_mistral_endpoint(root: &Path) -> String {
+    process_env_or_config(root, "CTOX_MISTRAL_STT_ENDPOINT")
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| MISTRAL_STT_DEFAULT_ENDPOINT.to_string())
+}
+
+fn process_env_or_config(root: &Path, key: &str) -> Option<String> {
+    std::env::var(key)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .or_else(|| runtime_env::env_or_config(root, key))
+}
+
+impl SttEngineKind {
+    fn label(self) -> &'static str {
+        match self {
+            SttEngineKind::Local => "local-ggml",
+            SttEngineKind::MistralApi => "mistral-api",
+        }
+    }
+}
+
+impl MistralSttClient {
+    fn configured(root: &Path) -> Result<Self> {
+        let api_key = configured_mistral_api_key(root)
+            .context("missing Mistral API key; set CTOX_MISTRAL_API_KEY or MISTRAL_API_KEY")?;
+        Ok(Self {
+            endpoint: configured_mistral_endpoint(root),
+            model: configured_mistral_model(root),
+            api_key,
+        })
+    }
+
+    fn transcribe(&self, audio_bytes: &[u8]) -> Result<TranscriptionResponse> {
+        let boundary = format!(
+            "----ctox-mistral-stt-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|value| value.as_nanos().to_string())
+                .unwrap_or_else(|_| "fallback".to_string())
+        );
+        let body = mistral_stt_multipart_body(&boundary, &self.model, audio_bytes);
+        let mut headers = BTreeMap::new();
+        headers.insert(
+            "authorization".to_string(),
+            format!("Bearer {}", self.api_key),
+        );
+        headers.insert(
+            "content-type".to_string(),
+            format!("multipart/form-data; boundary={boundary}"),
+        );
+        let response = crate::communication::email_native::http_request(
+            "POST",
+            &self.endpoint,
+            &headers,
+            Some(&body),
+        )?;
+        if !(200..300).contains(&response.status) {
+            anyhow::bail!(
+                "Mistral transcription returned HTTP {}: {}",
+                response.status,
+                String::from_utf8_lossy(&response.body)
+            );
+        }
+        let parsed = serde_json::from_slice::<Value>(&response.body)
+            .context("failed to parse Mistral transcription response")?;
+        let text = parsed
+            .get("text")
+            .and_then(Value::as_str)
+            .or_else(|| parsed.get("transcript").and_then(Value::as_str))
+            .context("Mistral transcription response did not contain text")?;
+        let model = parsed
+            .get("model")
+            .and_then(Value::as_str)
+            .unwrap_or(&self.model);
+        Ok(TranscriptionResponse {
+            model: model.to_string(),
+            text: text.trim().to_string(),
+        })
+    }
+}
+
+fn mistral_stt_multipart_body(boundary: &str, model: &str, audio_bytes: &[u8]) -> Vec<u8> {
+    let mut body = Vec::new();
+    body.extend_from_slice(format!("--{}\r\n", boundary).as_bytes());
+    body.extend_from_slice(b"Content-Disposition: form-data; name=\"model\"\r\n\r\n");
+    body.extend_from_slice(model.trim().as_bytes());
+    body.extend_from_slice(b"\r\n");
+    body.extend_from_slice(format!("--{}\r\n", boundary).as_bytes());
+    body.extend_from_slice(
+        b"Content-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\n",
+    );
+    body.extend_from_slice(b"Content-Type: audio/wav\r\n\r\n");
+    body.extend_from_slice(audio_bytes);
+    body.extend_from_slice(b"\r\n");
+    body.extend_from_slice(format!("--{}--\r\n", boundary).as_bytes());
+    body
+}
+
+impl SttRuntime {
+    fn transcribe(&self, request: &TranscriptionRequest<'_>) -> Result<TranscriptionResponse> {
+        match self {
+            SttRuntime::Local(model) => Ok(model.transcribe(request)?),
+            SttRuntime::MistralApi(client) => client.transcribe(request.audio_bytes),
+        }
+    }
+
+    fn transcription_graph_wired(&self) -> bool {
+        match self {
+            SttRuntime::Local(model) => model.transcription_graph_wired(),
+            SttRuntime::MistralApi(_) => true,
+        }
+    }
+
+    fn artifacts_loaded(&self) -> bool {
+        match self {
+            SttRuntime::Local(model) => model.artifacts_loaded(),
+            SttRuntime::MistralApi(_) => true,
+        }
+    }
+
+    fn default_model(&self) -> String {
+        match self {
+            SttRuntime::Local(model) => model.config().model.clone(),
+            SttRuntime::MistralApi(client) => client.model.clone(),
+        }
+    }
+
+    fn backend_label(&self) -> String {
+        match self {
+            SttRuntime::Local(model) => model.backend().label().to_string(),
+            SttRuntime::MistralApi(_) => "mistral-api".to_string(),
+        }
+    }
+
+    fn engine_label(&self) -> &'static str {
+        match self {
+            SttRuntime::Local(_) => "local-ggml",
+            SttRuntime::MistralApi(_) => "mistral-api",
+        }
+    }
+
+    fn supports_request_model(&self, request_model: &str) -> bool {
+        let request_model = request_model.trim();
+        request_model.eq_ignore_ascii_case(VOXTRAL_MINI_4B_REALTIME_2602_CANONICAL_MODEL)
+            || match self {
+                SttRuntime::Local(_) => false,
+                SttRuntime::MistralApi(client) => {
+                    request_model.eq_ignore_ascii_case(&client.model)
+                        || request_model.eq_ignore_ascii_case("voxtral-mini-latest")
+                }
+            }
+    }
 }
 
 fn default_backend_for_host(compute_target: engine::ComputeTarget) -> VoxtralSttBackend {
@@ -314,5 +574,27 @@ mod tests {
             Some(true)
         );
         assert_eq!(status["ok"].as_bool(), Some(false));
+    }
+
+    #[test]
+    fn stt_engine_parser_accepts_mistral_api_aliases() {
+        assert_eq!(
+            parse_stt_engine_kind("mistral-api"),
+            SttEngineKind::MistralApi
+        );
+        assert_eq!(parse_stt_engine_kind("api"), SttEngineKind::MistralApi);
+        assert_eq!(parse_stt_engine_kind("local"), SttEngineKind::Local);
+        assert_eq!(parse_stt_engine_kind("ggml"), SttEngineKind::Local);
+    }
+
+    #[test]
+    fn mistral_multipart_body_sends_model_and_wav_file() {
+        let body = mistral_stt_multipart_body("boundary", "voxtral-mini-latest", b"RIFFdata");
+        let rendered = String::from_utf8_lossy(&body);
+        assert!(rendered.contains("name=\"model\""));
+        assert!(rendered.contains("voxtral-mini-latest"));
+        assert!(rendered.contains("name=\"file\"; filename=\"audio.wav\""));
+        assert!(rendered.contains("Content-Type: audio/wav"));
+        assert!(body.ends_with(b"--boundary--\r\n"));
     }
 }

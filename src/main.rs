@@ -1110,6 +1110,7 @@ fn handle_native_voxtral_stt_service(args: &[String], root: &Path) -> anyhow::Re
         transport: inference::local_transport::LocalTransport::from_ipc_endpoint_string(transport),
         compute_target,
         model_path,
+        root: root.to_path_buf(),
     })
 }
 
