@@ -2747,6 +2747,14 @@ fn start_prompt_worker(
                     .flatten(),
                 _ => None,
             };
+            let runtime_retry_outcome = match &result {
+                Err(err) if timeout_follow_up_outcome.is_none() => {
+                    maybe_enqueue_runtime_retry_continuation(&root, &job, &err.to_string())
+                        .ok()
+                        .flatten()
+                }
+                _ => None,
+            };
             // F3: classify the turn outcome explicitly. The structured value
             // is persisted on the assistant row in `messages.agent_outcome`
             // so downstream consumers (founder-send pipeline, status
@@ -3164,8 +3172,11 @@ fn start_prompt_worker(
                         let compact_error = turn_loop::summarize_runtime_error(&err_text);
                         let retry_founder_message =
                             founder_email_worker_error_is_retryable(&job, &err_text);
+                        let retry_runtime_message =
+                            runtime_error_is_transient_api_failure(&err_text);
+                        let retry_worker_message = retry_founder_message || retry_runtime_message;
                         if !job.leased_message_keys.is_empty() {
-                            let route_status = if retry_founder_message {
+                            let route_status = if retry_worker_message {
                                 "pending"
                             } else {
                                 "failed"
@@ -3187,15 +3198,15 @@ fn start_prompt_worker(
                             failure_reply.as_ref().map(|reply| reply.chars().count());
                         shared.last_error = Some(compact_error.clone());
                         if let Some(work_id) = job.ticket_self_work_id.as_deref() {
-                            if retry_founder_message {
+                            if retry_worker_message {
                                 let note = format!(
-                                    "Execution slice hit retryable SQLite contention and was left pending for retry: {}",
+                                    "The agent run was interrupted by a retryable runtime error and this work was left pending for retry. The agent must resume the original task, perform the required action itself, and only finish after the durable outcome exists. Error: {}",
                                     compact_error
                                 );
                                 push_event_locked(
                                     &mut shared,
                                     format!(
-                                        "Retryable founder mail worker error; kept {} pending instead of failing it",
+                                        "Retryable runtime worker error; kept {} pending instead of failing it",
                                         job.leased_message_keys.join(", ")
                                     ),
                                 );
@@ -3217,11 +3228,11 @@ fn start_prompt_worker(
                                 block_ticket_self_work_item(&root, work_id, &note);
                             }
                         }
-                        if retry_founder_message {
+                        if retry_worker_message {
                             push_event_locked(
                                 &mut shared,
                                 format!(
-                                    "{} prompt hit retryable SQLite contention and will retry: {compact_error}",
+                                    "{} prompt hit a retryable runtime error and will retry: {compact_error}",
                                     job.source_label
                                 ),
                             );
@@ -3235,6 +3246,12 @@ fn start_prompt_worker(
                             push_event_locked(
                                 &mut shared,
                                 format!("Created timeout continuation task: {title}"),
+                            );
+                        }
+                        if let Some(title) = &runtime_retry_outcome {
+                            push_event_locked(
+                                &mut shared,
+                                format!("Created runtime retry task after transient API failure: {title}"),
                             );
                         }
                     }
@@ -5340,8 +5357,8 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
                 )),
                 workspace_root: message.workspace_root.clone(),
                 ticket_self_work_id: ticket_self_work_id_from_metadata(&message.metadata),
-                outbound_email: None,
-                outbound_anchor: None,
+                outbound_email: founder_outbound_action_from_metadata(&message.metadata),
+                outbound_anchor: metadata_string(&message.metadata, "outbound_anchor"),
             },
             format!(
                 "Queued {} inbound from {}",
@@ -5971,6 +5988,15 @@ fn ticket_self_work_id_from_metadata(metadata: &Value) -> Option<String> {
     metadata_string(metadata, "ticket_self_work_id")
 }
 
+fn founder_outbound_action_from_metadata(
+    metadata: &Value,
+) -> Option<channels::FounderOutboundAction> {
+    metadata
+        .get("outbound_email")
+        .cloned()
+        .and_then(|value| serde_json::from_value(value).ok())
+}
+
 fn ticket_event_key_from_metadata(metadata: &Value) -> Option<String> {
     metadata_string(metadata, "ticket_event_key")
 }
@@ -6016,9 +6042,16 @@ fn ticket_self_work_queue_metadata(item: &tickets::TicketSelfWorkItemView) -> Va
         "dedupe_key",
         "origin_source_label",
         "repair_reason",
+        "runtime_retry_reason",
+        "outbound_anchor",
     ] {
         if let Some(value) = metadata_string(&item.metadata, key) {
             map.insert(key.to_string(), Value::String(value));
+        }
+    }
+    for key in ["runtime_retry", "outbound_email"] {
+        if let Some(value) = item.metadata.get(key) {
+            map.insert(key.to_string(), value.clone());
         }
     }
     if item.kind == FOUNDER_COMMUNICATION_REWORK_KIND {
@@ -6904,10 +6937,38 @@ fn founder_email_worker_error_is_retryable(job: &QueuedPrompt, error: &str) -> b
         return false;
     }
     let normalized = error.to_ascii_lowercase();
-    normalized.contains("database is locked")
+    runtime_error_is_transient_api_failure(error)
+        || normalized.contains("database is locked")
         || normalized.contains("database is busy")
         || normalized.contains("sqlite_busy")
         || normalized.contains("sqlite locked")
+}
+
+fn runtime_error_is_transient_api_failure(error: &str) -> bool {
+    if turn_loop::hard_runtime_blocker_retry_cooldown_secs(error).is_none() {
+        return false;
+    }
+    let normalized = error.to_ascii_lowercase();
+    normalized.contains("too many requests")
+        || normalized.contains("rate limit")
+        || normalized.contains("rate_limit")
+        || normalized.contains("http 429")
+        || normalized.contains("status 429")
+        || normalized.contains("status code 429")
+        || normalized.contains("temporarily unavailable")
+        || normalized.contains("server overloaded")
+        || normalized.contains("bad gateway")
+        || normalized.contains("gateway timeout")
+        || normalized.contains("service unavailable")
+        || normalized.contains("http 502")
+        || normalized.contains("http 503")
+        || normalized.contains("http 504")
+        || normalized.contains("status 502")
+        || normalized.contains("status 503")
+        || normalized.contains("status 504")
+        || normalized.contains("status code 502")
+        || normalized.contains("status code 503")
+        || normalized.contains("status code 504")
 }
 
 fn founder_email_reply_message_key(job: &QueuedPrompt) -> Option<&str> {
@@ -9089,6 +9150,102 @@ fn maybe_enqueue_timeout_continuation(
     Ok(Some(created.title))
 }
 
+fn maybe_enqueue_runtime_retry_continuation(
+    root: &Path,
+    job: &QueuedPrompt,
+    error_text: &str,
+) -> Result<Option<String>> {
+    if !runtime_error_is_transient_api_failure(error_text) {
+        return Ok(None);
+    }
+    if !job.leased_message_keys.is_empty() || job.ticket_self_work_id.is_some() {
+        return Ok(None);
+    }
+    let thread_key = job
+        .thread_key
+        .clone()
+        .unwrap_or_else(|| default_follow_up_thread_key(&job.goal));
+    let title = format!("Retry {} after API failure", clip_text(&job.goal, 52));
+    let event_key = format!("runtime-api-retry:{thread_key}:{title}");
+    if let Some(existing_title) = existing_timeout_continuation(
+        root,
+        &thread_key,
+        job.workspace_root.as_deref(),
+        &job.leased_message_keys,
+        &title,
+    )? {
+        let _ = governance::record_event(
+            root,
+            governance::GovernanceEventRequest {
+                mechanism_id: "runtime_api_retry_continuation",
+                conversation_id: Some(turn_loop::CHAT_CONVERSATION_ID),
+                severity: "warning",
+                reason: "the previous agent run hit a retryable model API failure",
+                action_taken: "reused an existing open runtime retry task",
+                details: serde_json::json!({
+                    "source_label": job.source_label,
+                    "thread_key": thread_key,
+                    "title": title,
+                    "existing_title": existing_title,
+                    "error": clip_text(error_text, 220),
+                    "has_outbound_email": job.outbound_email.is_some(),
+                    "outbound_anchor": job.outbound_anchor.clone(),
+                }),
+                idempotence_key: Some(&event_key),
+            },
+        );
+        return Ok(Some(format!(
+            "existing runtime retry reused: {existing_title}"
+        )));
+    }
+    let created = create_self_work_backed_queue_task_ignoring(
+        root,
+        DurableSelfWorkQueueRequest {
+            kind: "runtime-api-retry".to_string(),
+            title: title.clone(),
+            prompt: render_runtime_retry_prompt(job, error_text),
+            thread_key,
+            workspace_root: job.workspace_root.clone(),
+            priority: "high".to_string(),
+            suggested_skill: job.suggested_skill.clone(),
+            parent_message_key: job.leased_message_keys.first().cloned(),
+            metadata: serde_json::json!({
+                "dedupe_key": format!(
+                    "runtime-api-retry:{}:{}",
+                    job.thread_key.as_deref().unwrap_or(job.goal.as_str()),
+                    clip_text(&title, 80),
+                ),
+                "origin_source_label": job.source_label,
+                "runtime_retry": true,
+                "runtime_retry_reason": "transient_model_api_failure",
+                "outbound_email": job.outbound_email.clone(),
+                "outbound_anchor": job.outbound_anchor.clone(),
+            }),
+        },
+        &job.leased_message_keys,
+    )?;
+    let _ = governance::record_event(
+        root,
+        governance::GovernanceEventRequest {
+            mechanism_id: "runtime_api_retry_continuation",
+            conversation_id: Some(turn_loop::CHAT_CONVERSATION_ID),
+            severity: "warning",
+            reason: "the previous agent run hit a retryable model API failure",
+            action_taken: "queued a durable runtime retry task",
+            details: serde_json::json!({
+                "source_label": job.source_label,
+                "thread_key": created.thread_key.clone(),
+                "title": created.title.clone(),
+                "error": clip_text(error_text, 220),
+                "has_outbound_email": job.outbound_email.is_some(),
+                "outbound_anchor": job.outbound_anchor.clone(),
+            }),
+            idempotence_key: Some(&event_key),
+        },
+    );
+    Ok(Some(created.title))
+}
+
 fn is_turn_timeout_blocker(value: &str) -> bool {
     let lowered = value.to_ascii_lowercase();
     lowered.contains("timed out after")
@@ -9126,6 +9283,31 @@ fn render_timeout_continue_prompt(
         clip_text(blocker.trim(), 220)
     );
     prepend_workspace_contract(&prompt, workspace_root)
+}
+
+fn render_runtime_retry_prompt(job: &QueuedPrompt, error_text: &str) -> String {
+    let mut required_actions = vec![
+        "re-check durable state before retrying; do not trust the previous reply text as proof",
+        "preserve work that already exists and avoid duplicate queue tasks",
+        "retry only the smallest step interrupted by the transient API failure",
+        "finish only after the real durable outcome exists in the state machine",
+        "if the API is still unavailable, leave this work pending for another retry instead of claiming completion",
+    ];
+    if job.outbound_email.is_some() {
+        required_actions.push(
+            "for an email task, the agent must run the reviewed send itself; the harness and reviewer only validate the result",
+        );
+        required_actions.push(
+            "do not say the email was sent unless an outbound email row reached the accepted terminal state",
+        );
+    }
+    let prompt = format!(
+        "Retry the interrupted task from the latest saved state.\n\nCurrent task:\n{}\n\nRuntime failure:\n{}\n\nRequired actions:\n- {}",
+        summarize_follow_up_goal(&job.goal),
+        clip_text(error_text.trim(), 220),
+        required_actions.join("\n- ")
+    );
+    prepend_workspace_contract(&prompt, job.workspace_root.as_deref())
 }
 
 fn runnable_thread_task_exists_ignoring(
@@ -13202,6 +13384,84 @@ mod tests {
             &job,
             "database is locked"
         ));
+    }
+
+    #[test]
+    fn runtime_rate_limit_error_is_retryable_api_failure() {
+        let error = "stream disconnected before completion: HTTP status 429 Too Many Requests";
+        assert_eq!(
+            turn_loop::hard_runtime_blocker_retry_cooldown_secs(error),
+            Some(300)
+        );
+        assert!(runtime_error_is_transient_api_failure(error));
+    }
+
+    #[test]
+    fn runtime_rate_limit_queues_durable_retry_with_outbound_metadata() {
+        let root = temp_root("runtime-rate-limit-retry");
+        let outbound = channels::FounderOutboundAction {
+            account_key: "email:cto1@metric-space.ai".to_string(),
+            thread_key: "<founder-thread@example.com>".to_string(),
+            subject: "Tag proposal".to_string(),
+            to: vec!["j.kienzler@remcapital.de".to_string()],
+            cc: Vec::new(),
+            attachments: Vec::new(),
+        };
+        let job = QueuedPrompt {
+            prompt: "Send the reviewed founder email.".to_string(),
+            goal: "Send the reviewed founder email to Julia".to_string(),
+            preview: "reviewed-founder-send Julia".to_string(),
+            source_label: "tui-outbound".to_string(),
+            suggested_skill: Some("owner-communication".to_string()),
+            leased_message_keys: Vec::new(),
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("founder-outbound:julia-tag-proposal".to_string()),
+            workspace_root: Some("/home/ubuntu/workspace/kunstmen".to_string()),
+            ticket_self_work_id: None,
+            outbound_email: Some(outbound.clone()),
+            outbound_anchor: Some("tui-outbound:julia-tag-proposal".to_string()),
+        };
+
+        let created = maybe_enqueue_runtime_retry_continuation(
+            &root,
+            &job,
+            "model call failed: status 429 Too Many Requests",
+        )
+        .expect("runtime retry should not fail");
+        assert!(created.is_some());
+
+        let tasks = channels::list_queue_tasks(&root, &["pending".to_string()], 10)
+            .expect("queue task should be listed");
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(
+            tasks[0].suggested_skill.as_deref(),
+            Some("owner-communication")
+        );
+        assert!(
+            tasks[0]
+                .prompt
+                .contains("the agent must run the reviewed send itself"),
+            "retry prompt must make the send responsibility explicit"
+        );
+
+        let conn =
+            channels::open_channel_db(&root.join("runtime/ctox.sqlite3")).expect("open channel db");
+        let metadata_json: String = conn
+            .query_row(
+                "SELECT metadata_json FROM communication_messages WHERE message_key = ?1",
+                params![tasks[0].message_key],
+                |row| row.get(0),
+            )
+            .expect("metadata row exists");
+        let metadata: Value = serde_json::from_str(&metadata_json).expect("metadata json");
+        assert_eq!(
+            metadata.get("outbound_anchor").and_then(Value::as_str),
+            Some("tui-outbound:julia-tag-proposal")
+        );
+        let restored =
+            founder_outbound_action_from_metadata(&metadata).expect("outbound action restored");
+        assert_eq!(restored.to, outbound.to);
+        assert_eq!(restored.subject, outbound.subject);
     }
 
     #[test]

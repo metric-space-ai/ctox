@@ -971,6 +971,32 @@ pub fn synthesize_failure_reply(content: &str) -> String {
 
 pub fn hard_runtime_blocker_retry_cooldown_secs(content: &str) -> Option<u64> {
     let lower = content.to_ascii_lowercase();
+    if let Some(secs) = parse_retry_after_seconds(&lower) {
+        return Some(secs.clamp(30, 1_800));
+    }
+    if lower.contains("too many requests")
+        || lower.contains("rate limit")
+        || lower.contains("rate_limit")
+        || lower.contains("http 429")
+        || lower.contains("status 429")
+        || lower.contains(" 429")
+    {
+        return Some(300);
+    }
+    if lower.contains("temporarily unavailable")
+        || lower.contains("server overloaded")
+        || lower.contains("bad gateway")
+        || lower.contains("gateway timeout")
+        || lower.contains("service unavailable")
+        || lower.contains("http 502")
+        || lower.contains("http 503")
+        || lower.contains("http 504")
+        || lower.contains("status 502")
+        || lower.contains("status 503")
+        || lower.contains("status 504")
+    {
+        return Some(180);
+    }
     if lower.contains("quota exceeded")
         || lower.contains("billing details")
         || lower.contains("openai api quota is exhausted")
@@ -986,8 +1012,54 @@ pub fn hard_runtime_blocker_retry_cooldown_secs(content: &str) -> Option<u64> {
     None
 }
 
+fn parse_retry_after_seconds(lower: &str) -> Option<u64> {
+    for marker in ["retry-after:", "retry after "] {
+        let Some(rest) = lower.split(marker).nth(1) else {
+            continue;
+        };
+        let digits = rest
+            .trim_start()
+            .chars()
+            .take_while(|ch| ch.is_ascii_digit())
+            .collect::<String>();
+        if let Ok(secs) = digits.parse::<u64>() {
+            return Some(secs);
+        }
+    }
+    None
+}
+
 fn summarize_known_infra_error(content: &str) -> Option<String> {
     let lower = content.to_ascii_lowercase();
+    if lower.contains("too many requests")
+        || lower.contains("rate limit")
+        || lower.contains("rate_limit")
+        || lower.contains("http 429")
+        || lower.contains("status 429")
+        || lower.contains(" 429")
+    {
+        return Some(
+            "CTOX chat could not continue because the model API is rate-limited. The task must stay open and retry after cooldown."
+                .to_string(),
+        );
+    }
+    if lower.contains("temporarily unavailable")
+        || lower.contains("server overloaded")
+        || lower.contains("bad gateway")
+        || lower.contains("gateway timeout")
+        || lower.contains("service unavailable")
+        || lower.contains("http 502")
+        || lower.contains("http 503")
+        || lower.contains("http 504")
+        || lower.contains("status 502")
+        || lower.contains("status 503")
+        || lower.contains("status 504")
+    {
+        return Some(
+            "CTOX chat could not continue because the model API is temporarily unavailable. The task must stay open and retry after cooldown."
+                .to_string(),
+        );
+    }
     if lower.contains("quota exceeded") || lower.contains("billing details") {
         return Some(
             "CTOX chat could not continue because the configured OpenAI API quota is exhausted or billing is unavailable for the selected model.".to_string(),
