@@ -21,3 +21,7 @@ pub use stt::{
     inspect_gguf, shape_contract, TranscriptionRequest, TranscriptionResponse,
     VoxtralSttArtifactInspection, VoxtralSttConfig, VoxtralSttModel,
 };
+
+pub const GGML_BLAS_ENABLED: bool = cfg!(ctox_ggml_blas);
+pub const GGML_CPU_ENABLED: bool = true;
+pub const GGML_METAL_ENABLED: bool = cfg!(target_os = "macos");
