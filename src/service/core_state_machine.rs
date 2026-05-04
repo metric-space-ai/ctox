@@ -201,6 +201,22 @@ pub enum CoreEvent {
     MarkRestored,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArtifactKind {
+    OutboundEmail,
+    TicketClosure,
+    KnowledgeEntry,
+    VerificationRun,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArtifactRef {
+    pub kind: ArtifactKind,
+    pub primary_key: String,
+    pub expected_terminal_state: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CoreEvidenceRefs {
@@ -216,6 +232,8 @@ pub struct CoreEvidenceRefs {
     pub knowledge_entry_id: Option<String>,
     pub incident_id: Option<String>,
     pub canonical_hot_path: Vec<String>,
+    pub expected_artifact_refs: Vec<ArtifactRef>,
+    pub delivered_artifact_refs: Vec<ArtifactRef>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -298,12 +316,57 @@ pub fn validate_transition(request: &CoreTransitionRequest) -> CoreTransitionRep
     validate_schedule_backing(request, &mut violations);
     validate_repair(request, &mut violations);
     validate_knowledge_capture(request, &mut violations);
+    validate_outcome_witness(request, &mut violations);
 
     if violations.is_empty() {
         CoreTransitionReport::accepted()
     } else {
         CoreTransitionReport::rejected(violations)
     }
+}
+
+fn validate_outcome_witness(
+    request: &CoreTransitionRequest,
+    violations: &mut Vec<CoreTransitionViolation>,
+) {
+    if request.evidence.expected_artifact_refs.is_empty() {
+        return;
+    }
+    if !is_outcome_terminal_transition(request) {
+        return;
+    }
+
+    for expected in &request.evidence.expected_artifact_refs {
+        let matching_delivery = request
+            .evidence
+            .delivered_artifact_refs
+            .iter()
+            .find(|delivered| artifact_ref_satisfies(expected, delivered));
+        if matching_delivery.is_none() {
+            violations.push(violation(
+                "WP-Outcome-Missing",
+                format!(
+                    "terminal work transition requires delivered {:?} artifact `{}` in `{}`",
+                    expected.kind, expected.primary_key, expected.expected_terminal_state
+                ),
+            ));
+        }
+    }
+}
+
+fn artifact_ref_satisfies(expected: &ArtifactRef, delivered: &ArtifactRef) -> bool {
+    expected.kind == delivered.kind
+        && expected.expected_terminal_state == delivered.expected_terminal_state
+        && (expected.primary_key == delivered.primary_key
+            || expected.primary_key == "*"
+            || expected.primary_key.starts_with("thread:"))
+}
+
+fn is_outcome_terminal_transition(request: &CoreTransitionRequest) -> bool {
+    matches!(
+        request.to_state,
+        CoreState::Completed | CoreState::Closed | CoreState::Sent | CoreState::Done
+    )
 }
 
 fn validate_founder_communication(
@@ -1072,6 +1135,90 @@ mod tests {
     }
 
     #[test]
+    fn work_item_terminal_transition_rejects_missing_outcome_witness() {
+        let request = CoreTransitionRequest {
+            entity_type: CoreEntityType::WorkItem,
+            entity_id: "self-work:local:send-mail".to_string(),
+            lane: RuntimeLane::P0FounderCommunication,
+            from_state: CoreState::Verified,
+            to_state: CoreState::Closed,
+            event: CoreEvent::Close,
+            actor: "ctox-service".to_string(),
+            evidence: CoreEvidenceRefs {
+                verification_id: Some("verification-1".to_string()),
+                expected_artifact_refs: vec![ArtifactRef {
+                    kind: ArtifactKind::OutboundEmail,
+                    primary_key: "thread:founder-mail".to_string(),
+                    expected_terminal_state: "accepted".to_string(),
+                }],
+                ..CoreEvidenceRefs::default()
+            },
+            metadata: BTreeMap::new(),
+        };
+
+        let report = validate_transition(&request);
+
+        assert!(!report.accepted);
+        assert!(report
+            .violations
+            .iter()
+            .any(|violation| violation.code == "WP-Outcome-Missing"));
+    }
+
+    #[test]
+    fn work_item_without_expected_artifact_can_close_with_verification() {
+        let request = CoreTransitionRequest {
+            entity_type: CoreEntityType::WorkItem,
+            entity_id: "self-work:local:research".to_string(),
+            lane: RuntimeLane::P2MissionDelivery,
+            from_state: CoreState::Verified,
+            to_state: CoreState::Closed,
+            event: CoreEvent::Close,
+            actor: "ctox-service".to_string(),
+            evidence: CoreEvidenceRefs {
+                verification_id: Some("verification-1".to_string()),
+                ..CoreEvidenceRefs::default()
+            },
+            metadata: BTreeMap::new(),
+        };
+
+        let report = validate_transition(&request);
+
+        assert!(report.accepted, "{:?}", report.violations);
+    }
+
+    #[test]
+    fn queue_item_terminal_transition_accepts_delivered_outcome_witness() {
+        let request = CoreTransitionRequest {
+            entity_type: CoreEntityType::QueueItem,
+            entity_id: "queue:mail".to_string(),
+            lane: RuntimeLane::P0FounderCommunication,
+            from_state: CoreState::Running,
+            to_state: CoreState::Completed,
+            event: CoreEvent::Complete,
+            actor: "ctox-service".to_string(),
+            evidence: CoreEvidenceRefs {
+                expected_artifact_refs: vec![ArtifactRef {
+                    kind: ArtifactKind::OutboundEmail,
+                    primary_key: "thread:founder-mail".to_string(),
+                    expected_terminal_state: "accepted".to_string(),
+                }],
+                delivered_artifact_refs: vec![ArtifactRef {
+                    kind: ArtifactKind::OutboundEmail,
+                    primary_key: "email:cto@example.test::pending_send::abc".to_string(),
+                    expected_terminal_state: "accepted".to_string(),
+                }],
+                ..CoreEvidenceRefs::default()
+            },
+            metadata: BTreeMap::new(),
+        };
+
+        let report = validate_transition(&request);
+
+        assert!(report.accepted, "{:?}", report.violations);
+    }
+
+    #[test]
     fn allows_review_checkpoint_feedback_to_same_main_work_item() {
         let report = validate_transition(&review_checkpoint_feedback_request());
 
@@ -1204,6 +1351,7 @@ mod tests {
                         knowledge_entry_id: Some("knowledge-1".to_string()),
                         incident_id: Some("incident-1".to_string()),
                         canonical_hot_path: vec!["test".to_string()],
+                        ..CoreEvidenceRefs::default()
                     },
                     metadata: BTreeMap::new(),
                 };

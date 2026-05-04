@@ -14,6 +14,8 @@ cluster: communication
 - The Review Gate is a quality checkpoint, not a control loop. After review feedback, continue the same main work item whenever possible and incorporate the feedback there.
 - Do not create review-driven self-work cascades. If more work is needed, reuse or requeue the existing parent work item; create a new task only when it is a distinct bounded work step with a stable parent pointer.
 - Every durable follow-up, queue item, plan emission, or self-work item must have a clear parent/anchor: message key, work id, thread key, ticket/case id, or plan step. Missing ancestry is a harness bug, not acceptable ambiguity.
+- If the task is supposed to produce a durable artifact, completion requires that artifact to exist in CTOX runtime state in its expected final state. For outbound email, that means an outbound email row exists with status `accepted`; prose claiming that a mail was sent is not evidence.
+- Do not report a communication task as finished until the communication store shows the required message state. If the send failed or no outbound row exists, keep the task open and report the blocker.
 - Rewording-only feedback means revise wording on the same artifact. Substantive feedback means add new evidence or implementation progress. Stale feedback means refresh or consolidate current runtime state before drafting again.
 - Before adding follow-up work, check for existing matching self-work, queue, plan, or ticket state and consolidate rather than duplicating.
 
@@ -200,6 +202,8 @@ Agent responsibilities for such a job:
 - Produce the email body as the turn reply, in mandantengerechter Sprache.
 - Do **not** invoke `ctox channel send` yourself; the service routes the send.
 - The reply you produce **is** the email body; the service uses recipients/subject from the job metadata.
+- After the service routes the send, the task may be considered complete only when CTOX has recorded the outbound message as `accepted`. If there is no accepted outbound message row, state that the mail is not sent and leave the work open.
+- For queue tasks that ask for an owner/founder/admin mail, the queue metadata must carry explicit outbound-email intent. A free-form instruction such as "send an email" is not enough for completion; it must be backed by the reviewed outbound pipeline and the recorded outbound message.
 
 ### Anti-pattern: internal vocabulary in mandantengerechter Sprache
 

@@ -5013,6 +5013,7 @@ fn evidence_from_row(row: &Value) -> csm::CoreEvidenceRefs {
         knowledge_entry_id: json_string(row, &["knowledge_entry_id", "knowledge_id"]),
         incident_id: json_string(row, &["incident_id", "root_incident_id"]),
         canonical_hot_path: json_string_array(row, &["canonical_hot_path", "hot_path"]),
+        ..csm::CoreEvidenceRefs::default()
     }
 }
 

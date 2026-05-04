@@ -4,7 +4,7 @@
 use crate::service::core_state_machine as csm;
 use anyhow::Result;
 use chrono::Utc;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -159,7 +159,8 @@ pub fn evaluate_core_transition(
         });
     }
 
-    let report = csm::validate_transition(request);
+    let mut report = csm::validate_transition(request);
+    validate_outcome_artifact_state(conn, request, &mut report)?;
     let request_json = serde_json::to_string(request)?;
     let report_json = serde_json::to_string(&report)?;
     let violation_codes = report
@@ -208,6 +209,171 @@ pub fn evaluate_core_transition(
         accepted: report.accepted,
         report,
     })
+}
+
+fn validate_outcome_artifact_state(
+    conn: &Connection,
+    request: &csm::CoreTransitionRequest,
+    report: &mut csm::CoreTransitionReport,
+) -> Result<()> {
+    if !report.accepted || request.evidence.expected_artifact_refs.is_empty() {
+        return Ok(());
+    }
+
+    for expected in &request.evidence.expected_artifact_refs {
+        if !request
+            .evidence
+            .delivered_artifact_refs
+            .iter()
+            .any(|delivered| artifact_ref_satisfies(expected, delivered))
+        {
+            report.violations.push(csm::CoreTransitionViolation {
+                code: "WP-Outcome-Missing".to_string(),
+                message: format!(
+                    "terminal work transition requires delivered {:?} artifact `{}` in `{}`",
+                    expected.kind, expected.primary_key, expected.expected_terminal_state
+                ),
+            });
+            continue;
+        }
+    }
+
+    for delivered in &request.evidence.delivered_artifact_refs {
+        if let Some(expected) = request
+            .evidence
+            .expected_artifact_refs
+            .iter()
+            .find(|expected| artifact_ref_satisfies(expected, delivered))
+        {
+            if let Some(thread_key) = expected.primary_key.strip_prefix("thread:") {
+                if delivered.kind == csm::ArtifactKind::OutboundEmail
+                    && delivered.primary_key != expected.primary_key
+                    && !outbound_email_belongs_to_thread(conn, &delivered.primary_key, thread_key)?
+                {
+                    report.violations.push(csm::CoreTransitionViolation {
+                        code: "WP-Outcome-Wrong-State".to_string(),
+                        message: format!(
+                            "delivered outbound email artifact `{}` does not belong to required thread `{}`",
+                            delivered.primary_key, thread_key
+                        ),
+                    });
+                    continue;
+                }
+            }
+            if let Some(actual_state) = load_artifact_terminal_state(conn, delivered)? {
+                if actual_state != expected.expected_terminal_state {
+                    report.violations.push(csm::CoreTransitionViolation {
+                        code: "WP-Outcome-Wrong-State".to_string(),
+                        message: format!(
+                            "delivered {:?} artifact `{}` is in `{}` but `{}` was required",
+                            delivered.kind,
+                            delivered.primary_key,
+                            actual_state,
+                            expected.expected_terminal_state
+                        ),
+                    });
+                }
+            } else {
+                report.violations.push(csm::CoreTransitionViolation {
+                    code: "WP-Outcome-Missing".to_string(),
+                    message: format!(
+                        "delivered {:?} artifact `{}` is not present in durable runtime state",
+                        delivered.kind, delivered.primary_key
+                    ),
+                });
+            }
+        }
+    }
+
+    report.accepted = report.violations.is_empty();
+    Ok(())
+}
+
+fn outbound_email_belongs_to_thread(
+    conn: &Connection,
+    message_key: &str,
+    thread_key: &str,
+) -> Result<bool> {
+    let count: i64 = conn.query_row(
+        r#"
+        SELECT COUNT(*)
+        FROM communication_messages
+        WHERE message_key = ?1
+          AND direction = 'outbound'
+          AND channel = 'email'
+          AND thread_key = ?2
+        "#,
+        params![message_key, thread_key],
+        |row| row.get(0),
+    )?;
+    Ok(count > 0)
+}
+
+fn artifact_ref_satisfies(expected: &csm::ArtifactRef, delivered: &csm::ArtifactRef) -> bool {
+    expected.kind == delivered.kind
+        && expected.expected_terminal_state == delivered.expected_terminal_state
+        && (expected.primary_key == delivered.primary_key
+            || expected.primary_key == "*"
+            || expected.primary_key.starts_with("thread:"))
+}
+
+fn load_artifact_terminal_state(
+    conn: &Connection,
+    artifact: &csm::ArtifactRef,
+) -> Result<Option<String>> {
+    match artifact.kind {
+        csm::ArtifactKind::OutboundEmail => {
+            if let Some(thread_key) = artifact.primary_key.strip_prefix("thread:") {
+                conn.query_row(
+                    r#"
+                    SELECT status
+                    FROM communication_messages
+                    WHERE direction = 'outbound'
+                      AND channel = 'email'
+                      AND thread_key = ?1
+                    ORDER BY observed_at DESC, rowid DESC
+                    LIMIT 1
+                    "#,
+                    params![thread_key],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(anyhow::Error::from)
+            } else {
+                conn.query_row(
+                    "SELECT status FROM communication_messages WHERE message_key = ?1 LIMIT 1",
+                    params![artifact.primary_key],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(anyhow::Error::from)
+            }
+        }
+        csm::ArtifactKind::TicketClosure => conn
+            .query_row(
+                "SELECT state FROM ticket_self_work_items WHERE work_id = ?1 LIMIT 1",
+                params![artifact.primary_key],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(anyhow::Error::from),
+        csm::ArtifactKind::KnowledgeEntry => conn
+            .query_row(
+                "SELECT status FROM ticket_knowledge_entries WHERE entry_id = ?1 LIMIT 1",
+                params![artifact.primary_key],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(anyhow::Error::from),
+        csm::ArtifactKind::VerificationRun => conn
+            .query_row(
+                "SELECT status FROM slice_verification_runs WHERE run_id = ?1 LIMIT 1",
+                params![artifact.primary_key],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(anyhow::Error::from),
+    }
 }
 
 pub fn enforce_core_transition(
@@ -699,6 +865,12 @@ fn agent_recovery_message(report: &csm::CoreTransitionReport) -> String {
             "founder_send_recipient_hash_mismatch" => {
                 "Die Empfaenger oder CC-Liste entsprechen nicht der freigegebenen Fassung. Stoppe den Versand, pruefe To/CC gegen den Mail-Thread-Kontext und lasse die finale Empfaengerliste erneut freigeben."
             }
+            "WP-Outcome-Missing" => {
+                "Markiere die Aufgabe nicht als erledigt. Erzeuge zuerst das erwartete dauerhafte Ergebnis-Artefakt und verknuepfe dessen stabile Referenz mit dem Abschluss."
+            }
+            "WP-Outcome-Wrong-State" => {
+                "Markiere die Aufgabe nicht als erledigt. Das Ergebnis-Artefakt existiert, ist aber noch nicht im geforderten Endzustand; repariere oder wiederhole die konkrete Ausfuehrung."
+            }
             "commitment_requires_backing_schedule" => {
                 "Lege kein Versprechen ohne Absicherung ab. Erstelle zuerst eine konkrete Termin- oder Queue-Absicherung, damit die Zusage rechtzeitig bearbeitet wird."
             }
@@ -821,6 +993,121 @@ mod tests {
             |row| row.get(0),
         )?;
         assert_eq!(accepted, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn outcome_witness_rejects_delivered_email_in_wrong_state() -> Result<()> {
+        let conn = Connection::open_in_memory()?;
+        conn.execute_batch(
+            r#"
+            CREATE TABLE communication_messages (
+                message_key TEXT PRIMARY KEY,
+                direction TEXT,
+                channel TEXT,
+                thread_key TEXT,
+                status TEXT,
+                observed_at TEXT
+            );
+            INSERT INTO communication_messages (
+                message_key, direction, channel, thread_key, status, observed_at
+            ) VALUES (
+                'email:cto@example.test::pending_send::abc',
+                'outbound',
+                'email',
+                'founder-thread',
+                'send_failed',
+                '2026-05-04T18:00:00Z'
+            );
+            "#,
+        )?;
+        let request = CoreTransitionRequest {
+            entity_type: CoreEntityType::QueueItem,
+            entity_id: "queue:send-mail".to_string(),
+            lane: RuntimeLane::P0FounderCommunication,
+            from_state: CoreState::Running,
+            to_state: CoreState::Completed,
+            event: CoreEvent::Complete,
+            actor: "ctox-service".to_string(),
+            evidence: CoreEvidenceRefs {
+                expected_artifact_refs: vec![csm::ArtifactRef {
+                    kind: csm::ArtifactKind::OutboundEmail,
+                    primary_key: "thread:founder-thread".to_string(),
+                    expected_terminal_state: "accepted".to_string(),
+                }],
+                delivered_artifact_refs: vec![csm::ArtifactRef {
+                    kind: csm::ArtifactKind::OutboundEmail,
+                    primary_key: "email:cto@example.test::pending_send::abc".to_string(),
+                    expected_terminal_state: "accepted".to_string(),
+                }],
+                ..CoreEvidenceRefs::default()
+            },
+            metadata: BTreeMap::new(),
+        };
+
+        let proof = evaluate_core_transition(&conn, &request)?;
+
+        assert!(!proof.accepted);
+        assert!(proof
+            .report
+            .violations
+            .iter()
+            .any(|violation| violation.code == "WP-Outcome-Wrong-State"));
+        Ok(())
+    }
+
+    #[test]
+    fn outcome_witness_accepts_delivered_email_in_expected_state() -> Result<()> {
+        let conn = Connection::open_in_memory()?;
+        conn.execute_batch(
+            r#"
+            CREATE TABLE communication_messages (
+                message_key TEXT PRIMARY KEY,
+                direction TEXT,
+                channel TEXT,
+                thread_key TEXT,
+                status TEXT,
+                observed_at TEXT
+            );
+            INSERT INTO communication_messages (
+                message_key, direction, channel, thread_key, status, observed_at
+            ) VALUES (
+                'email:cto@example.test::pending_send::abc',
+                'outbound',
+                'email',
+                'founder-thread',
+                'accepted',
+                '2026-05-04T18:00:00Z'
+            );
+            "#,
+        )?;
+        let request = CoreTransitionRequest {
+            entity_type: CoreEntityType::QueueItem,
+            entity_id: "queue:send-mail".to_string(),
+            lane: RuntimeLane::P0FounderCommunication,
+            from_state: CoreState::Running,
+            to_state: CoreState::Completed,
+            event: CoreEvent::Complete,
+            actor: "ctox-service".to_string(),
+            evidence: CoreEvidenceRefs {
+                expected_artifact_refs: vec![csm::ArtifactRef {
+                    kind: csm::ArtifactKind::OutboundEmail,
+                    primary_key: "thread:founder-thread".to_string(),
+                    expected_terminal_state: "accepted".to_string(),
+                }],
+                delivered_artifact_refs: vec![csm::ArtifactRef {
+                    kind: csm::ArtifactKind::OutboundEmail,
+                    primary_key: "email:cto@example.test::pending_send::abc".to_string(),
+                    expected_terminal_state: "accepted".to_string(),
+                }],
+                ..CoreEvidenceRefs::default()
+            },
+            metadata: BTreeMap::new(),
+        };
+
+        let proof = evaluate_core_transition(&conn, &request)?;
+
+        assert!(proof.accepted, "{:?}", proof.report.violations);
         Ok(())
     }
 

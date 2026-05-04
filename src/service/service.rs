@@ -83,7 +83,8 @@ use crate::schedule;
 use crate::scrape;
 use crate::secrets;
 use crate::service::core_state_machine::{
-    CoreEntityType, CoreEvent, CoreEvidenceRefs, CoreState, CoreTransitionRequest, RuntimeLane,
+    ArtifactKind, ArtifactRef, CoreEntityType, CoreEvent, CoreEvidenceRefs, CoreState,
+    CoreTransitionRequest, RuntimeLane,
 };
 use crate::service::core_transition_guard::enforce_core_transition;
 use crate::state_invariants;
@@ -2873,72 +2874,113 @@ fn start_prompt_worker(
                                 channels::prepare_reviewed_founder_reply(&root, message_key).ok()
                             });
                         let mut founder_send_error: Option<String> = None;
-                        let should_handle_messages = if let Some(message_key) = &founder_reply_key {
-                            match &review_disposition {
-                                CompletionReviewDisposition::Approved => {
-                                    match channels::ensure_founder_reply_deliverables_present(
-                                        &root,
-                                        message_key,
-                                        &reply,
-                                        founder_reply_action
-                                            .as_ref()
-                                            .map(|action| action.attachments.as_slice())
-                                            .unwrap_or(&[]),
-                                    ) {
-                                        Ok(_) => match channels::send_reviewed_founder_reply(
+                        let mut delivered_artifact_refs = Vec::new();
+                        let mut should_handle_messages =
+                            if let Some(message_key) = &founder_reply_key {
+                                match &review_disposition {
+                                    CompletionReviewDisposition::Approved => {
+                                        match channels::ensure_founder_reply_deliverables_present(
                                             &root,
                                             message_key,
                                             &reply,
+                                            founder_reply_action
+                                                .as_ref()
+                                                .map(|action| action.attachments.as_slice())
+                                                .unwrap_or(&[]),
                                         ) {
-                                            Ok(_) => true,
+                                            Ok(_) => match channels::send_reviewed_founder_reply(
+                                                &root,
+                                                message_key,
+                                                &reply,
+                                            ) {
+                                                Ok(send_result) => {
+                                                    if let Some(artifact) =
+                                                        outbound_email_artifact_from_send_result(
+                                                            &send_result,
+                                                            "accepted",
+                                                        )
+                                                    {
+                                                        delivered_artifact_refs.push(artifact);
+                                                    }
+                                                    true
+                                                }
+                                                Err(err) => {
+                                                    founder_send_error = Some(err.to_string());
+                                                    false
+                                                }
+                                            },
                                             Err(err) => {
                                                 founder_send_error = Some(err.to_string());
                                                 false
                                             }
-                                        },
-                                        Err(err) => {
-                                            founder_send_error = Some(err.to_string());
-                                            false
                                         }
                                     }
+                                    CompletionReviewDisposition::None
+                                    | CompletionReviewDisposition::Hold { .. }
+                                    | CompletionReviewDisposition::NoSend { .. }
+                                    | CompletionReviewDisposition::RequeueSelfWork { .. }
+                                    | CompletionReviewDisposition::ContinueSelfWork { .. }
+                                    | CompletionReviewDisposition::RewriteOnly { .. } => false,
                                 }
-                                CompletionReviewDisposition::None
-                                | CompletionReviewDisposition::Hold { .. }
-                                | CompletionReviewDisposition::NoSend { .. }
-                                | CompletionReviewDisposition::RequeueSelfWork { .. }
-                                | CompletionReviewDisposition::ContinueSelfWork { .. }
-                                | CompletionReviewDisposition::RewriteOnly { .. } => false,
-                            }
-                        } else if let (Some(anchor_key), Some(action)) = (
-                            proactive_founder_anchor.as_deref(),
-                            proactive_founder_action.as_ref(),
-                        ) {
-                            match &review_disposition {
-                                CompletionReviewDisposition::Approved => {
-                                    match channels::send_reviewed_founder_outbound(
-                                        &root, anchor_key, action, &reply,
-                                    ) {
-                                        Ok(_) => true,
-                                        Err(err) => {
-                                            founder_send_error = Some(err.to_string());
-                                            false
+                            } else if let (Some(anchor_key), Some(action)) = (
+                                proactive_founder_anchor.as_deref(),
+                                proactive_founder_action.as_ref(),
+                            ) {
+                                match &review_disposition {
+                                    CompletionReviewDisposition::Approved => {
+                                        match channels::send_reviewed_founder_outbound(
+                                            &root, anchor_key, action, &reply,
+                                        ) {
+                                            Ok(send_result) => {
+                                                if let Some(artifact) =
+                                                    outbound_email_artifact_from_send_result(
+                                                        &send_result,
+                                                        "accepted",
+                                                    )
+                                                {
+                                                    delivered_artifact_refs.push(artifact);
+                                                }
+                                                true
+                                            }
+                                            Err(err) => {
+                                                founder_send_error = Some(err.to_string());
+                                                false
+                                            }
                                         }
                                     }
+                                    CompletionReviewDisposition::None
+                                    | CompletionReviewDisposition::Hold { .. }
+                                    | CompletionReviewDisposition::NoSend { .. }
+                                    | CompletionReviewDisposition::RequeueSelfWork { .. }
+                                    | CompletionReviewDisposition::ContinueSelfWork { .. }
+                                    | CompletionReviewDisposition::RewriteOnly { .. } => false,
                                 }
-                                CompletionReviewDisposition::None
-                                | CompletionReviewDisposition::Hold { .. }
-                                | CompletionReviewDisposition::NoSend { .. }
-                                | CompletionReviewDisposition::RequeueSelfWork { .. }
-                                | CompletionReviewDisposition::ContinueSelfWork { .. }
-                                | CompletionReviewDisposition::RewriteOnly { .. } => false,
-                            }
-                        } else {
-                            true
-                        };
+                            } else {
+                                true
+                            };
                         let terminal_no_send = matches!(
                             &review_disposition,
                             CompletionReviewDisposition::NoSend { .. }
                         );
+                        let expected_artifact_refs = expected_outcome_artifacts_for_job(&job);
+                        let outcome_witness_error = if terminal_no_send {
+                            None
+                        } else {
+                            enforce_job_outcome_witness(
+                                &root,
+                                &job,
+                                expected_artifact_refs,
+                                delivered_artifact_refs,
+                            )
+                            .err()
+                            .map(|err| err.to_string())
+                        };
+                        if let Some(err) = outcome_witness_error.as_ref() {
+                            should_handle_messages = false;
+                            if founder_send_error.is_none() {
+                                founder_send_error = Some(err.clone());
+                            }
+                        }
                         if founder_send_error.is_none() && !terminal_no_send {
                             if let Some(message_key) = founder_reply_key.as_deref() {
                                 let _ = close_open_founder_communication_self_work_for_inbound(
@@ -2972,7 +3014,9 @@ fn start_prompt_worker(
                             let held_founder_review = founder_reply_key.is_some()
                                 || proactive_founder_action.is_some()
                                 || is_founder_or_owner_email_job(&job);
-                            let retry_status = if held_founder_review {
+                            let retry_status = if outcome_witness_error.is_some() {
+                                outcome_witness_retry_route_status(&root, &job)
+                            } else if held_founder_review {
                                 "review_rework"
                             } else {
                                 "pending"
@@ -3040,7 +3084,7 @@ fn start_prompt_worker(
                                 },
                                 CompletionReviewDisposition::Approved
                                 | CompletionReviewDisposition::None => {
-                                    if founder_send_error.is_none() {
+                                    if outcome_witness_error.is_none() && founder_send_error.is_none() {
                                         let note = format!(
                                             "Execution slice completed successfully. Reply summary: {}",
                                             clip_text(&reply, 220)
@@ -3052,6 +3096,21 @@ fn start_prompt_worker(
                                             )
                                             .ok()
                                             .flatten();
+                                    } else if let Some(err) = outcome_witness_error.as_ref() {
+                                        review_requeue = Some((
+                                            work_id.to_string(),
+                                            format!(
+                                                "Outcome witness rejected terminal completion. The required durable artifact is missing or not in its expected final state: {}",
+                                                clip_text(err, 300)
+                                            ),
+                                        ));
+                                        push_event_locked(
+                                            &mut shared,
+                                            format!(
+                                                "Outcome witness rejected closure for {}; preserving durable self-work {}",
+                                                job.source_label, work_id
+                                            ),
+                                        );
                                     }
                                 }
                                 CompletionReviewDisposition::NoSend { summary } => {
@@ -3991,6 +4050,149 @@ fn no_cascade_review_block(
             outcome.summary
         ),
     })
+}
+
+fn outbound_email_artifact_from_send_result(
+    send_result: &Value,
+    expected_terminal_state: &str,
+) -> Option<ArtifactRef> {
+    let message_key = send_result
+        .get("message_key")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    Some(ArtifactRef {
+        kind: ArtifactKind::OutboundEmail,
+        primary_key: message_key.to_string(),
+        expected_terminal_state: expected_terminal_state.to_string(),
+    })
+}
+
+fn expected_outcome_artifacts_for_job(job: &QueuedPrompt) -> Vec<ArtifactRef> {
+    let mut refs = Vec::new();
+    if let Some(action) = job.outbound_email.as_ref() {
+        refs.push(ArtifactRef {
+            kind: ArtifactKind::OutboundEmail,
+            primary_key: outcome_thread_artifact_key(&action.thread_key),
+            expected_terminal_state: "accepted".to_string(),
+        });
+    } else if prompt_declares_reviewed_founder_send(&job.prompt) {
+        refs.push(ArtifactRef {
+            kind: ArtifactKind::OutboundEmail,
+            primary_key: job
+                .thread_key
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(outcome_thread_artifact_key)
+                .unwrap_or_else(|| "*".to_string()),
+            expected_terminal_state: "accepted".to_string(),
+        });
+    }
+    refs
+}
+
+fn outcome_thread_artifact_key(thread_key: &str) -> String {
+    format!("thread:{}", thread_key.trim())
+}
+
+fn prompt_declares_reviewed_founder_send(prompt: &str) -> bool {
+    let lowered = prompt.to_ascii_lowercase();
+    lowered.contains("reviewed-founder-send")
+        || lowered.contains("reviewed founder send")
+        || lowered.contains("founder-outbound")
+        || lowered.contains("owner/founder/admin-targeted outbound email")
+}
+
+fn enforce_job_outcome_witness(
+    root: &Path,
+    job: &QueuedPrompt,
+    expected_artifact_refs: Vec<ArtifactRef>,
+    delivered_artifact_refs: Vec<ArtifactRef>,
+) -> Result<Option<String>> {
+    if expected_artifact_refs.is_empty() {
+        return Ok(None);
+    }
+
+    let db_path = root.join("runtime/ctox.sqlite3");
+    let conn = channels::open_channel_db(&db_path)?;
+    let entity_id = job_outcome_entity_id(job);
+    let (entity_type, from_state, to_state, event) = if job.ticket_self_work_id.is_some() {
+        (
+            CoreEntityType::WorkItem,
+            CoreState::Verified,
+            CoreState::Closed,
+            CoreEvent::Close,
+        )
+    } else {
+        (
+            CoreEntityType::QueueItem,
+            CoreState::Running,
+            CoreState::Completed,
+            CoreEvent::Complete,
+        )
+    };
+
+    let proof = enforce_core_transition(
+        &conn,
+        &CoreTransitionRequest {
+            entity_type,
+            entity_id,
+            lane: RuntimeLane::P0FounderCommunication,
+            from_state,
+            to_state,
+            event,
+            actor: "ctox-outcome-witness".to_string(),
+            evidence: CoreEvidenceRefs {
+                verification_id: Some(format!(
+                    "outcome-witness:{}",
+                    channels::stable_digest(&job.source_label)
+                )),
+                expected_artifact_refs,
+                delivered_artifact_refs,
+                ..CoreEvidenceRefs::default()
+            },
+            metadata: BTreeMap::from([
+                ("outcome_witness".to_string(), "true".to_string()),
+                ("source_label".to_string(), job.source_label.clone()),
+            ]),
+        },
+    )?;
+    Ok(Some(proof.proof_id))
+}
+
+fn job_outcome_entity_id(job: &QueuedPrompt) -> String {
+    job.ticket_self_work_id
+        .clone()
+        .or_else(|| job.leased_message_keys.first().cloned())
+        .unwrap_or_else(|| format!("job:{}", channels::stable_digest(&job.source_label)))
+}
+
+fn outcome_witness_retry_route_status(root: &Path, job: &QueuedPrompt) -> &'static str {
+    match outcome_witness_rejection_count(root, job) {
+        Ok(count) if count >= review_checkpoint_requeue_block_threshold() => "blocked",
+        Ok(_) | Err(_) => "review_rework",
+    }
+}
+
+fn outcome_witness_rejection_count(root: &Path, job: &QueuedPrompt) -> Result<usize> {
+    let conn = channels::open_channel_db(&root.join("runtime/ctox.sqlite3"))?;
+    let entity_id = job_outcome_entity_id(job);
+    let count: i64 = conn.query_row(
+        r#"
+        SELECT COUNT(*)
+        FROM ctox_core_transition_proofs
+        WHERE entity_id = ?1
+          AND accepted = 0
+          AND (
+            violation_codes_json LIKE '%WP-Outcome-Missing%'
+            OR violation_codes_json LIKE '%WP-Outcome-Wrong-State%'
+          )
+        "#,
+        params![entity_id],
+        |row| row.get(0),
+    )?;
+    Ok(count.max(0) as usize)
 }
 
 fn enforce_review_checkpoint_feedback_transition(
@@ -14845,6 +15047,148 @@ Was jetzt zu tun ist:\n\
         assert_eq!(action.subject, "Update");
         assert_eq!(action.to, vec!["d.lottes@example.test".to_string()]);
         assert_eq!(action.cc, vec!["j.kienzler@example.test".to_string()]);
+    }
+
+    #[test]
+    fn reviewed_founder_send_prompt_declares_outcome_artifact() {
+        let job = QueuedPrompt {
+            prompt:
+                "Schreibe und sende per reviewed-founder-send eine Mail an j.kienzler@example.test."
+                    .to_string(),
+            goal: "send mail".to_string(),
+            preview: "send mail".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: None,
+            leased_message_keys: vec!["queue:send-mail".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("thread:julia".to_string()),
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let refs = expected_outcome_artifacts_for_job(&job);
+
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].kind, ArtifactKind::OutboundEmail);
+        assert_eq!(refs[0].primary_key, "thread:thread:julia");
+        assert_eq!(refs[0].expected_terminal_state, "accepted");
+    }
+
+    #[test]
+    fn outcome_witness_blocks_claimed_mail_completion_without_delivery_ref() {
+        let root = temp_root("outcome-witness-missing-delivery");
+        let job = QueuedPrompt {
+            prompt:
+                "Schreibe und sende per reviewed-founder-send eine Mail an j.kienzler@example.test."
+                    .to_string(),
+            goal: "send mail".to_string(),
+            preview: "send mail".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: None,
+            leased_message_keys: vec!["queue:send-mail".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("thread:julia".to_string()),
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let err = enforce_job_outcome_witness(
+            &root,
+            &job,
+            expected_outcome_artifacts_for_job(&job),
+            Vec::new(),
+        )
+        .expect_err("missing outbound artifact must block completion");
+
+        assert!(err.to_string().contains("dauerhafte Ergebnis-Artefakt"));
+        let conn = channels::open_channel_db(&root.join("runtime/ctox.sqlite3"))
+            .expect("failed to open channel db");
+        let rejected_count: i64 = conn
+            .query_row(
+                r#"
+                SELECT COUNT(*)
+                FROM ctox_core_transition_proofs
+                WHERE entity_type = 'QueueItem'
+                  AND entity_id = 'queue:send-mail'
+                  AND to_state = 'Completed'
+                  AND accepted = 0
+                  AND violation_codes_json LIKE '%WP-Outcome-Missing%'
+                "#,
+                [],
+                |row| row.get(0),
+            )
+            .expect("failed to count rejected outcome proof");
+        assert_eq!(rejected_count, 1);
+    }
+
+    #[test]
+    fn outcome_witness_accepts_delivered_mail_artifact() {
+        let root = temp_root("outcome-witness-accepted-delivery");
+        let conn = channels::open_channel_db(&root.join("runtime/ctox.sqlite3"))
+            .expect("failed to open channel db");
+        conn.execute(
+            r#"
+            INSERT INTO communication_messages (
+                message_key, channel, account_key, thread_key, remote_id,
+                direction, folder_hint, sender_display, sender_address,
+                recipient_addresses_json, cc_addresses_json, bcc_addresses_json,
+                subject, preview, body_text, body_html, raw_payload_ref,
+                trust_level, status, seen, has_attachments, external_created_at,
+                observed_at, metadata_json
+            ) VALUES (
+                ?1, 'email', 'email:cto@example.test', 'thread:julia', 'remote-1',
+                'outbound', 'outbox', '', 'cto@example.test',
+                '[]', '[]', '[]',
+                'Subject', 'Preview', 'Body', '', '',
+                'high', 'accepted', 1, 0, '2026-05-04T18:00:00Z',
+                '2026-05-04T18:00:00Z', '{}'
+            )
+            "#,
+            params!["email:cto@example.test::pending_send::abc"],
+        )
+        .expect("failed to insert accepted outbound row");
+        drop(conn);
+        let job = QueuedPrompt {
+            prompt: "Schreibe den finalen Body.".to_string(),
+            goal: "send mail".to_string(),
+            preview: "send mail".to_string(),
+            source_label: "tui".to_string(),
+            suggested_skill: None,
+            leased_message_keys: Vec::new(),
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("thread:julia".to_string()),
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: Some(channels::FounderOutboundAction {
+                account_key: "email:cto@example.test".to_string(),
+                thread_key: "thread:julia".to_string(),
+                subject: "Subject".to_string(),
+                to: vec!["j.kienzler@example.test".to_string()],
+                cc: Vec::new(),
+                attachments: Vec::new(),
+            }),
+            outbound_anchor: Some("tui-outbound:test".to_string()),
+        };
+        let delivered = vec![ArtifactRef {
+            kind: ArtifactKind::OutboundEmail,
+            primary_key: "email:cto@example.test::pending_send::abc".to_string(),
+            expected_terminal_state: "accepted".to_string(),
+        }];
+
+        let proof_id = enforce_job_outcome_witness(
+            &root,
+            &job,
+            expected_outcome_artifacts_for_job(&job),
+            delivered,
+        )
+        .expect("accepted outbound artifact should satisfy outcome witness")
+        .expect("proof id should be returned");
+
+        assert!(proof_id.starts_with("ctp-"));
     }
 
     // F3: classify_agent_failure must produce stable, structured outcomes.
