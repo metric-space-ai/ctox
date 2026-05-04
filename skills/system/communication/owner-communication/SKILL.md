@@ -188,9 +188,9 @@ Examples include:
 
 ## Owner / Founder Outbound Email
 
-Outbound email to owner, founder, or admin recipients (configured via `CTOX_FOUNDER_EMAIL_ADDRESSES` and `CTOX_OWNER_EMAIL_ADDRESS`) is **only** sent through the reviewed founder-outbound pipeline (`send_reviewed_founder_outbound`). The agent does **not** call `ctox channel send` for these recipients — that command is structurally blocked.
+Outbound email to owner, founder, or admin recipients (configured via `CTOX_FOUNDER_EMAIL_ADDRESSES` and `CTOX_OWNER_EMAIL_ADDRESS`) is **only** sent through the reviewed founder-send path. The Review Gate checks and records approval; it does not send the mail for you. The active agent run must execute the final send command itself after review approval exists.
 
-The send is triggered automatically after the agent's turn completes successfully **if** the job carries explicit outbound-email intent and at least one recipient is owner/founder/admin per the configured policy.
+The send is allowed only after the exact body, recipients, CC list, subject, and attachments have a matching review approval. If any of those fields change, the send is blocked and the draft must be reviewed again.
 
 How to give a job the outbound-email intent (operator-side):
 
@@ -199,10 +199,10 @@ How to give a job the outbound-email intent (operator-side):
 
 Agent responsibilities for such a job:
 
-- Produce the email body as the turn reply, in mandantengerechter Sprache.
-- Do **not** invoke `ctox channel send` yourself; the service routes the send.
-- The reply you produce **is** the email body; the service uses recipients/subject from the job metadata.
-- After the service routes the send, the task may be considered complete only when CTOX has recorded the outbound message as `accepted`. If there is no accepted outbound message row, state that the mail is not sent and leave the work open.
+- Produce the email body in mandantengerechter Sprache.
+- After the Review Gate approves the exact draft, execute the send yourself with `ctox channel send --channel email ... --reviewed-founder-send --body <approved body>`.
+- Use the exact reviewed body and the exact job metadata for recipients, CC, subject, account, thread, and attachments. Do not “improve” the text after review approval; that invalidates the approval.
+- The task may be considered complete only when CTOX has recorded the outbound message as `accepted`. If there is no accepted outbound message row, state that the mail is not sent and keep the work open.
 - For queue tasks that ask for an owner/founder/admin mail, the queue metadata must carry explicit outbound-email intent. A free-form instruction such as "send an email" is not enough for completion; it must be backed by the reviewed outbound pipeline and the recorded outbound message.
 
 ### Anti-pattern: internal vocabulary in mandantengerechter Sprache

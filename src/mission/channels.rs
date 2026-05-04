@@ -2463,6 +2463,10 @@ fn send_message(root: &Path, db_path: &Path, request: ChannelSendRequest) -> Res
                 root,
                 communication_gateway::CommunicationAdapterKind::Email,
             );
+            let protected = protected_recipient_policies(&settings, &request);
+            if request.reviewed_founder_send && !protected.is_empty() {
+                return send_reviewed_founder_outbound_request(root, &conn, db_path, &request);
+            }
             validate_founder_outbound_email(&settings, &request)?;
             send_email_message(root, &conn, db_path, &request, None)
         }
@@ -3641,30 +3645,30 @@ fn require_unconsumed_founder_reply_review(
     })
 }
 
-fn require_unconsumed_founder_outbound_review(
+fn require_any_unconsumed_founder_outbound_review(
     conn: &Connection,
-    anchor_message_key: &str,
     action: &FounderOutboundAction,
     body: &str,
-) -> Result<String> {
+) -> Result<(String, String)> {
     let (action_digest, _, _) = founder_outbound_review_digest(action, body);
-    let approval_key = conn
+    let approval = conn
         .query_row(
             r#"
-            SELECT approval_key
+            SELECT approval_key, inbound_message_key
             FROM communication_founder_reply_reviews
-            WHERE inbound_message_key = ?1
-              AND action_digest = ?2
+            WHERE action_digest = ?1
               AND sent_at IS NULL
+              AND terminal_no_send = 0
+            ORDER BY approved_at DESC
             LIMIT 1
             "#,
-            params![anchor_message_key, action_digest],
-            |row| row.get::<_, String>(0),
+            params![action_digest],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
         )
         .optional()
         .context("failed to load founder outbound review approval")?;
-    approval_key.with_context(|| {
-        "reviewed founder outbound has no matching unconsumed review approval for the exact body, recipients, cc, subject, and attachments"
+    approval.with_context(|| {
+        "reviewed founder outbound has no matching unconsumed review approval for the exact body, recipients, cc, subject, and attachments. Run completion review first, then send exactly the approved body with the same recipients and subject."
             .to_string()
     })
 }
@@ -3879,61 +3883,46 @@ pub fn send_reviewed_founder_reply(
     Ok(send_result)
 }
 
-pub(crate) fn send_reviewed_founder_outbound(
+fn send_reviewed_founder_outbound_request(
     root: &Path,
-    anchor_message_key: &str,
-    action: &FounderOutboundAction,
-    body: &str,
+    conn: &Connection,
+    db_path: &Path,
+    request: &ChannelSendRequest,
 ) -> Result<Value> {
     let _send_guard = acquire_reviewed_founder_send_lock()?;
-    let db_path = resolve_db_path(root, None);
-    let conn = open_channel_db(&db_path)?;
-    let request = resolve_outbound_subject(
-        &conn,
-        ChannelSendRequest {
-            channel: "email".to_string(),
-            account_key: action.account_key.clone(),
-            thread_key: action.thread_key.clone(),
-            body: body.trim().to_string(),
-            subject: action.subject.clone(),
-            to: action.to.clone(),
-            cc: action.cc.clone(),
-            attachments: action.attachments.clone(),
-            sender_display: None,
-            sender_address: None,
-            send_voice: false,
-            reviewed_founder_send: true,
-        },
-    )?;
     let settings = runtime_settings_with_owner_profiles(
         root,
         communication_gateway::CommunicationAdapterKind::Email,
     );
-    let protected = protected_recipient_policies(&settings, &request);
+    let protected = protected_recipient_policies(&settings, request);
     anyhow::ensure!(
         !protected.is_empty(),
         "reviewed founder outbound requires founder/owner/admin recipient"
     );
-    let approval_key = require_unconsumed_founder_outbound_review(
-        &conn,
-        anchor_message_key,
-        action,
-        &request.body,
-    )?;
-    ensure_founder_outbound_body_clean(&request)?;
+    let action = FounderOutboundAction {
+        account_key: request.account_key.clone(),
+        thread_key: request.thread_key.clone(),
+        subject: request.subject.clone(),
+        to: request.to.clone(),
+        cc: request.cc.clone(),
+        attachments: request.attachments.clone(),
+    };
+    let (approval_key, anchor_message_key) =
+        require_any_unconsumed_founder_outbound_review(conn, &action, &request.body)?;
+    ensure_founder_outbound_body_clean(request)?;
     let entity_id = format!("founder-outbound:{anchor_message_key}");
-    enforce_reviewed_founder_send_core_transition(&conn, &entity_id, &approval_key, &request)?;
+    enforce_reviewed_founder_send_core_transition(conn, &entity_id, &approval_key, request)?;
     let send_result = send_email_message(
         root,
-        &conn,
-        &db_path,
-        &request,
+        conn,
+        db_path,
+        request,
         Some(ReviewedFounderSendContext {
             entity_id: &entity_id,
             approval_key: &approval_key,
         }),
     )?;
-    mark_founder_reply_review_sent(&conn, &approval_key, &send_result)?;
+    mark_founder_reply_review_sent(conn, &approval_key, &send_result)?;
     Ok(send_result)
 }
 
@@ -8835,6 +8824,51 @@ mod tests {
         );
 
         let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[test]
+    fn reviewed_founder_send_cli_path_requires_exact_unconsumed_review() {
+        let root = unique_root("ctox-reviewed-send-cli-approval");
+        fs::create_dir_all(root.join("runtime")).expect("failed to create runtime dir");
+        let body = "Hallo Julia,\n\nhier ist der freigegebene Vorschlag.\n\nViele Gruesse";
+        let action = FounderOutboundAction {
+            account_key: "email:cto1@metric-space.ai".to_string(),
+            thread_key: "salesforce-tags".to_string(),
+            subject: "Vorschlag Tag-System fuer Lead-Funnel".to_string(),
+            to: vec!["j.kienzler@remcapital.de".to_string()],
+            cc: vec!["j.cakmak@remcapital.de".to_string()],
+            attachments: Vec::new(),
+        };
+
+        record_founder_outbound_review_approval(
+            &root,
+            "tui-outbound:test",
+            &action,
+            body,
+            "PASS: send-ready",
+        )
+        .expect("approval should persist");
+        let conn = open_channel_db(&resolve_db_path(&root, None)).expect("failed to open db");
+
+        let (approval_key, anchor) =
+            require_any_unconsumed_founder_outbound_review(&conn, &action, body)
+                .expect("exact reviewed send should find approval");
+        assert!(approval_key.starts_with("founder-outbound-review:tui-outbound:test:"));
+        assert_eq!(anchor, "tui-outbound:test");
+
+        let err = require_any_unconsumed_founder_outbound_review(
+            &conn,
+            &action,
+            "Hallo Julia,\n\nleicht geaenderter Text.",
+        )
+        .expect_err("changed body must not match review approval");
+        assert!(
+            err.to_string()
+                .contains("no matching unconsumed review approval"),
+            "unexpected error: {err}"
+        );
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

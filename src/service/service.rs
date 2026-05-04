@@ -342,10 +342,12 @@ impl Default for SharedState {
 ///
 /// `outbound_email` carries explicit operator intent that this job is an
 /// owner/founder/admin-targeted outbound email. When set, the post-turn
-/// review pipeline routes the agent's reply through `send_reviewed_founder_outbound`
-/// instead of letting the agent invoke `ctox channel send` directly. The field
-/// is the *only* signal used for that routing — there is no text-scraping or
-/// keyword-based fallback in core. Recipient eligibility is still gated by
+/// review pipeline can approve the draft and the outcome gate can require an
+/// accepted outbound artifact. The service does not send the mail for the
+/// agent; the active agent run must execute the reviewed send command itself
+/// after approval. The field is the *only* signal used for that routing —
+/// there is no text-scraping or keyword-based fallback in core. Recipient
+/// eligibility is still gated by
 /// the deterministic `protected_recipient_policies` check against the
 /// configured founder/owner/admin address lists.
 #[derive(Debug, Clone)]
@@ -2843,6 +2845,7 @@ fn start_prompt_worker(
                 CompletionReviewDisposition::None
             };
             let mut review_requeue: Option<(String, String)> = None;
+            let mut outcome_recovery_prompt: Option<QueuedPrompt> = None;
             let mut platform_pipeline_event: Option<String> = None;
             let mut next_prompt = None;
             {
@@ -2866,103 +2869,31 @@ fn start_prompt_worker(
                         } else {
                             None
                         };
-                        let proactive_founder_anchor = proactive_founder_action
-                            .as_ref()
-                            .and_then(|_| founder_outbound_anchor_key(&job).map(ToOwned::to_owned));
-                        let founder_reply_action =
-                            founder_reply_key.as_ref().and_then(|message_key| {
-                                channels::prepare_reviewed_founder_reply(&root, message_key).ok()
-                            });
                         let mut founder_send_error: Option<String> = None;
-                        let mut delivered_artifact_refs = Vec::new();
-                        let mut should_handle_messages =
-                            if let Some(message_key) = &founder_reply_key {
-                                match &review_disposition {
-                                    CompletionReviewDisposition::Approved => {
-                                        match channels::ensure_founder_reply_deliverables_present(
-                                            &root,
-                                            message_key,
-                                            &reply,
-                                            founder_reply_action
-                                                .as_ref()
-                                                .map(|action| action.attachments.as_slice())
-                                                .unwrap_or(&[]),
-                                        ) {
-                                            Ok(_) => match channels::send_reviewed_founder_reply(
-                                                &root,
-                                                message_key,
-                                                &reply,
-                                            ) {
-                                                Ok(send_result) => {
-                                                    if let Some(artifact) =
-                                                        outbound_email_artifact_from_send_result(
-                                                            &send_result,
-                                                            "accepted",
-                                                        )
-                                                    {
-                                                        delivered_artifact_refs.push(artifact);
-                                                    }
-                                                    true
-                                                }
-                                                Err(err) => {
-                                                    founder_send_error = Some(err.to_string());
-                                                    false
-                                                }
-                                            },
-                                            Err(err) => {
-                                                founder_send_error = Some(err.to_string());
-                                                false
-                                            }
-                                        }
-                                    }
-                                    CompletionReviewDisposition::None
-                                    | CompletionReviewDisposition::Hold { .. }
-                                    | CompletionReviewDisposition::NoSend { .. }
-                                    | CompletionReviewDisposition::RequeueSelfWork { .. }
-                                    | CompletionReviewDisposition::ContinueSelfWork { .. }
-                                    | CompletionReviewDisposition::RewriteOnly { .. } => false,
-                                }
-                            } else if let (Some(anchor_key), Some(action)) = (
-                                proactive_founder_anchor.as_deref(),
-                                proactive_founder_action.as_ref(),
-                            ) {
-                                match &review_disposition {
-                                    CompletionReviewDisposition::Approved => {
-                                        match channels::send_reviewed_founder_outbound(
-                                            &root, anchor_key, action, &reply,
-                                        ) {
-                                            Ok(send_result) => {
-                                                if let Some(artifact) =
-                                                    outbound_email_artifact_from_send_result(
-                                                        &send_result,
-                                                        "accepted",
-                                                    )
-                                                {
-                                                    delivered_artifact_refs.push(artifact);
-                                                }
-                                                true
-                                            }
-                                            Err(err) => {
-                                                founder_send_error = Some(err.to_string());
-                                                false
-                                            }
-                                        }
-                                    }
-                                    CompletionReviewDisposition::None
-                                    | CompletionReviewDisposition::Hold { .. }
-                                    | CompletionReviewDisposition::NoSend { .. }
-                                    | CompletionReviewDisposition::RequeueSelfWork { .. }
-                                    | CompletionReviewDisposition::ContinueSelfWork { .. }
-                                    | CompletionReviewDisposition::RewriteOnly { .. } => false,
-                                }
-                            } else {
-                                true
-                            };
+                        let mut should_handle_messages = matches!(
+                            &review_disposition,
+                            CompletionReviewDisposition::Approved
+                                | CompletionReviewDisposition::None
+                        );
                         let terminal_no_send = matches!(
                             &review_disposition,
                             CompletionReviewDisposition::NoSend { .. }
                         );
                         let expected_artifact_refs = expected_outcome_artifacts_for_job(&job);
+                        let delivered_artifact_refs = match delivered_outcome_artifacts_for_job(
+                            &root,
+                            &job,
+                            &expected_artifact_refs,
+                        ) {
+                            Ok(refs) => refs,
+                            Err(err) => {
+                                founder_send_error = Some(format!(
+                                    "Der Ergebnisnachweis konnte nicht gelesen werden: {}",
+                                    err
+                                ));
+                                Vec::new()
+                            }
+                        };
                         let outcome_witness_error = if terminal_no_send {
                             None
                         } else {
@@ -2978,7 +2909,39 @@ fn start_prompt_worker(
                         if let Some(err) = outcome_witness_error.as_ref() {
                             should_handle_messages = false;
                             if founder_send_error.is_none() {
-                                founder_send_error = Some(err.clone());
+                                founder_send_error =
+                                    Some(outcome_witness_recovery_message(&job, &reply, err));
+                            }
+                            if job.ticket_self_work_id.is_none()
+                                && job.leased_message_keys.is_empty()
+                                && job.outbound_email.is_some()
+                                && outcome_witness_rejection_count(&root, &job)
+                                    .map(|count| {
+                                        count < review_checkpoint_requeue_block_threshold()
+                                    })
+                                    .unwrap_or(true)
+                            {
+                                let recovery =
+                                    founder_send_error.as_ref().cloned().unwrap_or_else(|| {
+                                        outcome_witness_recovery_message(&job, &reply, err)
+                                    });
+                                outcome_recovery_prompt = Some(QueuedPrompt {
+                                    prompt: recovery.clone(),
+                                    goal: format!(
+                                        "Complete reviewed send for {}",
+                                        job.source_label
+                                    ),
+                                    preview: clip_text(&recovery, 180),
+                                    source_label: "outcome-witness-recovery".to_string(),
+                                    suggested_skill: job.suggested_skill.clone(),
+                                    leased_message_keys: Vec::new(),
+                                    leased_ticket_event_keys: Vec::new(),
+                                    thread_key: job.thread_key.clone(),
+                                    workspace_root: job.workspace_root.clone(),
+                                    ticket_self_work_id: None,
+                                    outbound_email: job.outbound_email.clone(),
+                                    outbound_anchor: job.outbound_anchor.clone(),
+                                });
                             }
                         }
                         if founder_send_error.is_none() && !terminal_no_send {
@@ -3097,13 +3060,13 @@ fn start_prompt_worker(
                                             .ok()
                                             .flatten();
                                     } else if let Some(err) = outcome_witness_error.as_ref() {
-                                        review_requeue = Some((
-                                            work_id.to_string(),
-                                            format!(
-                                                "Outcome witness rejected terminal completion. The required durable artifact is missing or not in its expected final state: {}",
-                                                clip_text(err, 300)
-                                            ),
-                                        ));
+                                        let recovery = founder_send_error
+                                            .as_ref()
+                                            .cloned()
+                                            .unwrap_or_else(|| {
+                                                outcome_witness_recovery_message(&job, &reply, err)
+                                            });
+                                        review_requeue = Some((work_id.to_string(), recovery));
                                         push_event_locked(
                                             &mut shared,
                                             format!(
@@ -3400,8 +3363,19 @@ fn start_prompt_worker(
                     ),
                 }
             }
-            if let Some(queued) = next_prompt {
-                start_prompt_worker(root.clone(), state.clone(), queued);
+            let queued_outcome_recovery = outcome_recovery_prompt.is_some();
+            if let Some(queued) = outcome_recovery_prompt {
+                enqueue_prompt(
+                    &root,
+                    &state,
+                    queued,
+                    "Queued outcome-witness recovery for reviewed send".to_string(),
+                );
+            }
+            if !queued_outcome_recovery {
+                if let Some(queued) = next_prompt {
+                    start_prompt_worker(root.clone(), state.clone(), queued);
+                }
             }
             match &latest_runtime_error {
                 Some(error) => eprintln!(
@@ -4052,28 +4026,24 @@ fn no_cascade_review_block(
     })
 }
 
-fn outbound_email_artifact_from_send_result(
-    send_result: &Value,
-    expected_terminal_state: &str,
-) -> Option<ArtifactRef> {
-    let message_key = send_result
-        .get("message_key")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())?;
-    Some(ArtifactRef {
-        kind: ArtifactKind::OutboundEmail,
-        primary_key: message_key.to_string(),
-        expected_terminal_state: expected_terminal_state.to_string(),
-    })
-}
-
 fn expected_outcome_artifacts_for_job(job: &QueuedPrompt) -> Vec<ArtifactRef> {
     let mut refs = Vec::new();
     if let Some(action) = job.outbound_email.as_ref() {
         refs.push(ArtifactRef {
             kind: ArtifactKind::OutboundEmail,
             primary_key: outcome_thread_artifact_key(&action.thread_key),
+            expected_terminal_state: "accepted".to_string(),
+        });
+    } else if is_founder_or_owner_email_job(job) {
+        refs.push(ArtifactRef {
+            kind: ArtifactKind::OutboundEmail,
+            primary_key: job
+                .thread_key
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(outcome_thread_artifact_key)
+                .unwrap_or_else(|| "*".to_string()),
             expected_terminal_state: "accepted".to_string(),
         });
     } else if prompt_declares_reviewed_founder_send(&job.prompt) {
@@ -4090,6 +4060,79 @@ fn expected_outcome_artifacts_for_job(job: &QueuedPrompt) -> Vec<ArtifactRef> {
         });
     }
     refs
+}
+
+fn delivered_outcome_artifacts_for_job(
+    root: &Path,
+    _job: &QueuedPrompt,
+    expected_artifact_refs: &[ArtifactRef],
+) -> Result<Vec<ArtifactRef>> {
+    if expected_artifact_refs.is_empty() {
+        return Ok(Vec::new());
+    }
+    let conn = channels::open_channel_db(&root.join("runtime/ctox.sqlite3"))?;
+    let mut delivered = Vec::new();
+    for expected in expected_artifact_refs {
+        if expected.kind != ArtifactKind::OutboundEmail {
+            continue;
+        }
+        let message_key = if let Some(thread_key) = expected.primary_key.strip_prefix("thread:") {
+            conn.query_row(
+                r#"
+                SELECT message_key
+                FROM communication_messages
+                WHERE channel = 'email'
+                  AND direction = 'outbound'
+                  AND thread_key = ?1
+                  AND status = ?2
+                ORDER BY observed_at DESC
+                LIMIT 1
+                "#,
+                params![thread_key, expected.expected_terminal_state.as_str()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+        } else if expected.primary_key == "*" {
+            conn.query_row(
+                r#"
+                SELECT message_key
+                FROM communication_messages
+                WHERE channel = 'email'
+                  AND direction = 'outbound'
+                  AND status = ?1
+                ORDER BY observed_at DESC
+                LIMIT 1
+                "#,
+                params![expected.expected_terminal_state.as_str()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+        } else {
+            conn.query_row(
+                r#"
+                SELECT message_key
+                FROM communication_messages
+                WHERE message_key = ?1
+                  AND status = ?2
+                LIMIT 1
+                "#,
+                params![
+                    expected.primary_key.as_str(),
+                    expected.expected_terminal_state.as_str()
+                ],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+        };
+        if let Some(message_key) = message_key {
+            delivered.push(ArtifactRef {
+                kind: ArtifactKind::OutboundEmail,
+                primary_key: message_key,
+                expected_terminal_state: expected.expected_terminal_state.clone(),
+            });
+        }
+    }
+    Ok(delivered)
 }
 
 fn outcome_thread_artifact_key(thread_key: &str) -> String {
@@ -4159,6 +4202,49 @@ fn enforce_job_outcome_witness(
         },
     )?;
     Ok(Some(proof.proof_id))
+}
+
+fn outcome_witness_recovery_message(job: &QueuedPrompt, approved_body: &str, err: &str) -> String {
+    let mut message = format!(
+        "Der Review hat den Entwurf nicht selbst versendet. Die Aufgabe bleibt offen, weil noch kein akzeptiertes Outbound-E-Mail-Artefakt existiert: {}",
+        clip_text(err, 240)
+    );
+    if let Some(inbound_key) = founder_email_reply_message_key(job) {
+        message.push_str(&format!(
+            "\n\nNaechster Schritt fuer den Agent-Run: Sende die freigegebene Antwort selbst mit `ctox channel founder-reply --message-key {}` und exakt dem bereits freigegebenen Mailtext als `--body`. Aendere To, CC, Betreff und Body nicht, sonst passt die Review-Freigabe nicht mehr. Danach pruefe, dass `communication_messages` fuer diesen Mail-Thread eine outbound email mit `status='accepted'` enthaelt.",
+            inbound_key
+        ));
+    } else if let Some(action) = job.outbound_email.as_ref() {
+        let to_flags = action
+            .to
+            .iter()
+            .map(|value| format!(" --to {}", shell_quote(value)))
+            .collect::<String>();
+        let cc_flags = action
+            .cc
+            .iter()
+            .map(|value| format!(" --cc {}", shell_quote(value)))
+            .collect::<String>();
+        message.push_str(&format!(
+            "\n\nNaechster Schritt fuer den Agent-Run: Sende die freigegebene Mail selbst ueber den review-gebundenen Versandbefehl. Verwende exakt diese Metadaten und exakt den freigegebenen Body:\nctox channel send --channel email --account-key {} --thread-key {} --subject {}{}{} --reviewed-founder-send --body <freigegebener Mailtext>\nDer freigegebene Mailtext beginnt mit: {}\nAendere Body, Empfaenger, CC oder Betreff nicht. Danach pruefe, dass `communication_messages` fuer thread_key `{}` eine outbound email mit `status='accepted'` enthaelt.",
+            shell_quote(&action.account_key),
+            shell_quote(&action.thread_key),
+            shell_quote(&action.subject),
+            to_flags,
+            cc_flags,
+            clip_text(approved_body, 220),
+            action.thread_key
+        ));
+    } else {
+        message.push_str(
+            "\n\nNaechster Schritt fuer den Agent-Run: Fuehre den verlangten reviewed-founder-send selbst aus. Nutze den passenden `ctox channel send --channel email ... --reviewed-founder-send --body <freigegebener Mailtext>` Befehl mit den Empfaengern und dem Betreff aus der Aufgabe. Danach pruefe, dass `communication_messages` eine outbound email mit `status='accepted'` enthaelt.",
+        );
+    }
+    message
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 fn job_outcome_entity_id(job: &QueuedPrompt) -> String {
@@ -4266,9 +4352,9 @@ fn mission_rewrite_failure_threshold() -> i64 {
 /// Build the lightweight rewrite-only prompt body. The agent receives the
 /// prior outbound body verbatim (between fenced markers), the structured
 /// list of rewrite findings with corrective actions, and a strict
-/// "reply-with-body-only" instruction so the post-turn auto-send pipeline
-/// can splice the corrected body into the same outbound action without
-/// re-deriving recipients/subjects from scratch.
+/// "reply-with-body-only" instruction so the review checkpoint can approve
+/// the corrected body against the same outbound action without re-deriving
+/// recipients/subjects from scratch.
 fn build_review_rewrite_prompt(
     prior_body: &str,
     findings: &[RewriteFinding],

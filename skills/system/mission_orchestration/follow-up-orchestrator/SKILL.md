@@ -16,6 +16,7 @@ cluster: mission_orchestration
 - Every durable follow-up, queue item, plan emission, or self-work item must have a clear parent/anchor: message key, work id, thread key, ticket/case id, or plan step. Missing ancestry is a harness bug, not acceptable ambiguity.
 - If the task is supposed to produce a durable artifact, completion requires that artifact to exist in CTOX runtime state in its expected final state. Examples: an outbound email must have an outbound message row with status `accepted`; a ticket closure must have the ticket state closed; a knowledge task must have the knowledge entry recorded and active.
 - Do not claim that an artifact was delivered based only on prose in your reply. If the artifact is missing or still failed/pending, report the blocker and keep the work open.
+- For owner/founder/admin email, the Review Gate approves or rejects the draft but does not send it. After approval, the active agent run must execute the reviewed send command itself and then verify the accepted outbound row.
 - Rewording-only feedback means revise wording on the same artifact. Substantive feedback means add new evidence or implementation progress. Stale feedback means refresh or consolidate current runtime state before drafting again.
 - Before adding follow-up work, check for existing matching self-work, queue, plan, or ticket state and consolidate rather than duplicating.
 
