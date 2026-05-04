@@ -30,9 +30,8 @@ pub fn parse_wav(data: &[u8]) -> Result<WavData> {
 
     while pos + 8 <= data.len() {
         let id = &data[pos..pos + 4];
-        let size =
-            u32::from_le_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]])
-                as usize;
+        let size = u32::from_le_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]])
+            as usize;
         pos += 8;
         if pos + size > data.len() {
             return Err(Error::InvalidFormat("WAV chunk exceeds file"));
@@ -44,9 +43,12 @@ pub fn parse_wav(data: &[u8]) -> Result<WavData> {
                 }
                 audio_format = u16::from_le_bytes([data[pos], data[pos + 1]]) as usize;
                 channels = u16::from_le_bytes([data[pos + 2], data[pos + 3]]) as usize;
-                sample_rate =
-                    u32::from_le_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]])
-                        as usize;
+                sample_rate = u32::from_le_bytes([
+                    data[pos + 4],
+                    data[pos + 5],
+                    data[pos + 6],
+                    data[pos + 7],
+                ]) as usize;
                 bits_per_sample = u16::from_le_bytes([data[pos + 14], data[pos + 15]]) as usize;
             }
             b"data" => data_chunk = Some(&data[pos..pos + size]),
@@ -79,7 +81,9 @@ pub fn parse_wav(data: &[u8]) -> Result<WavData> {
 
 fn pcm16_to_mono(data: &[u8], channels: usize) -> Result<Vec<f32>> {
     if data.len() % (2 * channels) != 0 {
-        return Err(Error::InvalidFormat("PCM16 data length is not frame aligned"));
+        return Err(Error::InvalidFormat(
+            "PCM16 data length is not frame aligned",
+        ));
     }
     let frames = data.len() / (2 * channels);
     let mut mono = Vec::with_capacity(frames);
@@ -96,7 +100,9 @@ fn pcm16_to_mono(data: &[u8], channels: usize) -> Result<Vec<f32>> {
 
 fn f32_to_mono(data: &[u8], channels: usize) -> Result<Vec<f32>> {
     if data.len() % (4 * channels) != 0 {
-        return Err(Error::InvalidFormat("float32 data length is not frame aligned"));
+        return Err(Error::InvalidFormat(
+            "float32 data length is not frame aligned",
+        ));
     }
     let frames = data.len() / (4 * channels);
     let mut mono = Vec::with_capacity(frames);
@@ -115,9 +121,8 @@ pub fn linear_resample(input: &[f32], src_rate: usize, dst_rate: usize) -> Vec<f
     if input.is_empty() || src_rate == dst_rate {
         return input.to_vec();
     }
-    let out_len =
-        ((input.len() as u128 * dst_rate as u128 + src_rate as u128 / 2) / src_rate as u128)
-            as usize;
+    let out_len = ((input.len() as u128 * dst_rate as u128 + src_rate as u128 / 2)
+        / src_rate as u128) as usize;
     let scale = src_rate as f64 / dst_rate as f64;
     let mut out = Vec::with_capacity(out_len);
     for i in 0..out_len {
@@ -201,7 +206,12 @@ impl MelSpectrogramPlan {
     }
 
     pub fn compute(&self, samples: &[f32]) -> Vec<f32> {
-        compute_mel_spectrogram_with_plan(samples, &self.sparse_mel_filters, &self.window, &self.fft)
+        compute_mel_spectrogram_with_plan(
+            samples,
+            &self.sparse_mel_filters,
+            &self.window,
+            &self.fft,
+        )
     }
 }
 
@@ -218,10 +228,16 @@ fn compute_mel_spectrogram_with_plan(
 ) -> Vec<f32> {
     let n_fft = VOX_WINDOW_SIZE;
     let n_freq = VOX_WINDOW_SIZE / 2 + 1;
-    let frames = samples.len() / VOX_HOP_LENGTH + 1;
+    let frames = samples.len() / VOX_HOP_LENGTH;
     let mut out = vec![0.0f32; VOX_NUM_MEL_BINS * frames];
     let mut padded = vec![0.0f32; samples.len() + n_fft];
-    padded[n_fft / 2..n_fft / 2 + samples.len()].copy_from_slice(samples);
+    let pad = n_fft / 2;
+    if !samples.is_empty() {
+        for (i, sample) in padded.iter_mut().enumerate() {
+            let src = i as isize - pad as isize;
+            *sample = samples[reflect_index(src, samples.len())];
+        }
+    }
     let mut power = vec![0.0f32; n_freq];
     let mut mel_accum = vec![0.0f32; VOX_NUM_MEL_BINS];
     let mut spectrum = vec![Complex32::new(0.0, 0.0); n_fft];
@@ -252,6 +268,21 @@ fn compute_mel_spectrogram_with_plan(
         }
     }
     out
+}
+
+fn reflect_index(mut idx: isize, len: usize) -> usize {
+    if len <= 1 {
+        return 0;
+    }
+    let len = len as isize;
+    while idx < 0 || idx >= len {
+        if idx < 0 {
+            idx = -idx;
+        } else {
+            idx = 2 * len - 2 - idx;
+        }
+    }
+    idx as usize
 }
 
 fn sparse_mel_filters(mel_filters: &[f32]) -> Vec<Vec<(usize, f32)>> {

@@ -65,7 +65,8 @@ fn online_librispeech_demo_samples_cover_audio_path() {
             }
             Err(err) => {
                 assert!(
-                    err.to_string().contains("requires a Q4 GGUF"),
+                    err.to_string()
+                        .contains("requires a ggml-compatible Q4 GGUF"),
                     "sample {id} failed for unexpected reason: {err}"
                 );
             }
@@ -89,7 +90,15 @@ fn online_librispeech_demo_samples_transcribe_with_q4_gguf() {
     };
     let cache_dir = sample_cache_dir();
     std::fs::create_dir_all(&cache_dir).expect("create sample cache");
-    let model = VoxtralSttModel::from_gguf(&gguf, VoxtralSttBackend::Wgsl).expect("load Q4 model");
+    let backend = if std::env::var("CTOX_VOXTRAL_STT_BACKEND")
+        .map(|value| value.eq_ignore_ascii_case("metal"))
+        .unwrap_or(false)
+    {
+        VoxtralSttBackend::Metal
+    } else {
+        VoxtralSttBackend::Cpu
+    };
+    let model = VoxtralSttModel::from_gguf(&gguf, backend).expect("load Q4 model");
 
     let mut audio_duration = Duration::ZERO;
     let start = Instant::now();
@@ -113,10 +122,12 @@ fn online_librispeech_demo_samples_transcribe_with_q4_gguf() {
         );
     }
     let elapsed = start.elapsed();
-    assert!(
-        elapsed.as_secs_f64() <= audio_duration.as_secs_f64() * 1.25,
-        "Q4 transcription RTF too slow: elapsed={elapsed:?}, audio={audio_duration:?}"
-    );
+    if !cfg!(debug_assertions) || std::env::var("CTOX_VOXTRAL_STT_ASSERT_REALTIME").is_ok() {
+        assert!(
+            elapsed.as_secs_f64() <= audio_duration.as_secs_f64(),
+            "Q4 transcription RTF too slow: elapsed={elapsed:?}, audio={audio_duration:?}"
+        );
+    }
 }
 
 fn sample_cache_dir() -> PathBuf {

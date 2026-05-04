@@ -85,7 +85,7 @@ pub fn doctor_json(root: &Path) -> serde_json::Value {
         .and_then(|path| ctox_voxtral_mini_4b_realtime_2602::inspect_gguf(path).ok());
     let artifacts_ready = inspection
         .as_ref()
-        .map(|value| value.required_tensors_present && value.tokenizer_path.is_some())
+        .map(|value| value.required_tensors_present)
         .unwrap_or(false);
     json!({
         "ok": artifacts_ready,
@@ -93,10 +93,11 @@ pub fn doctor_json(root: &Path) -> serde_json::Value {
         "native_ctox": {
             "crate_linked": true,
             "cpu_reference_ops": true,
-            "reference_source": "TrevorS/voxtral-mini-realtime-rs@2930e95d60f8584b5326d90d3c5ec9a152d0d322 plus andrijdavid/voxtral.cpp@7deef66c8ee473d3ceffc57fb0cd17977eeebca9 for graph comparison",
-            "metal_kernel_seed_present": model_root.join("vendor/metal/kernels/ctox_voxtral_stt_glue.metal").is_file(),
-            "cuda_kernel_seed_present": model_root.join("vendor/cuda/kernels/ctox_voxtral_stt_glue.cu").is_file(),
-            "wgsl_kernel_seed_present": model_root.join("vendor/wgsl/kernels/ctox_voxtral_stt_glue.wgsl").is_file(),
+            "reference_source": "andrijdavid/voxtral.cpp@7deef66c8ee473d3ceffc57fb0cd17977eeebca9",
+            "ggml_vendor_present": model_root.join("vendor/ggml/include/ggml.h").is_file(),
+            "ggml_cpu_backend": true,
+            "ggml_metal_backend": cfg!(target_os = "macos"),
+            "ggml_blas_backend": cfg!(any(target_os = "macos", target_os = "linux")),
             "model_artifacts_present": inspection.is_some(),
             "model_artifact_root": inspection.as_ref().map(|value| value.root.display().to_string()),
             "model_artifact_gguf": inspection.as_ref().map(|value| value.gguf_path.display().to_string()).or_else(|| model_path.as_ref().map(|path| path.display().to_string())),
@@ -129,7 +130,7 @@ pub fn stt_smoke_json(root: &Path, audio_path: &Path) -> serde_json::Value {
             })
         }
     };
-    let backend = default_backend_for_host(engine::ComputeTarget::Cpu);
+    let backend = smoke_backend_for_host();
     let model = configured_or_default_model_path(root)
         .as_ref()
         .and_then(|path| VoxtralSttModel::from_gguf(path, backend).ok())
@@ -146,6 +147,14 @@ pub fn stt_smoke_json(root: &Path, audio_path: &Path) -> serde_json::Value {
             "error": err.to_string(),
             "transcription_graph_wired": model.transcription_graph_wired()
         }),
+    }
+}
+
+fn smoke_backend_for_host() -> VoxtralSttBackend {
+    match std::env::var("CTOX_VOXTRAL_STT_BACKEND") {
+        Ok(value) if value.eq_ignore_ascii_case("metal") => VoxtralSttBackend::Metal,
+        Ok(value) if value.eq_ignore_ascii_case("cpu") => VoxtralSttBackend::Cpu,
+        _ => default_backend_for_host(engine::ComputeTarget::Cpu),
     }
 }
 

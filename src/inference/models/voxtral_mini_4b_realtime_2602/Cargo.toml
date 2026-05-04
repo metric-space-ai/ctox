@@ -21,6 +21,5 @@ wgsl = []
 
 [dependencies]
 anyhow = "1"
-burn = { version = "0.20", default-features = false, features = ["std", "autodiff", "template", "autotune", "wgpu"] }
+libc = "0.2"
 rustfft = "6.4"
-voxtral-mini-realtime = { git = "https://github.com/TrevorS/voxtral-mini-realtime-rs", rev = "2930e95d60f8584b5326d90d3c5ec9a152d0d322", default-features = false, features = ["wgpu"] }

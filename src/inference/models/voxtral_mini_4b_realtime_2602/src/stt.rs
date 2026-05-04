@@ -4,14 +4,12 @@ use crate::consts::{
     VOX_DEC_HIDDEN, VOX_DEC_KV_HEADS, VOX_DEC_LAYERS, VOX_ENC_DIM, VOX_ENC_HEADS, VOX_ENC_HEAD_DIM,
     VOX_ENC_HIDDEN, VOX_ENC_KV_HEADS, VOX_ENC_LAYERS, VOX_NUM_MEL_BINS,
 };
+use crate::ggml_runtime::GgmlVoxtralRuntime;
 use crate::gguf;
 use crate::kernels::VoxtralSttBackend;
 use crate::{Error, Result};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
-
-type WgpuBackend = burn::backend::Wgpu;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VoxtralSttConfig {
@@ -62,9 +60,7 @@ pub struct TranscriptionResponse {
 }
 
 struct VoxtralQ4Runtime {
-    model: voxtral_mini_realtime::gguf::model::Q4VoxtralModel,
-    tokenizer: voxtral_mini_realtime::tokenizer::VoxtralTokenizer,
-    device: <WgpuBackend as burn::tensor::backend::Backend>::Device,
+    runtime: GgmlVoxtralRuntime,
 }
 
 impl std::fmt::Debug for VoxtralSttModel {
@@ -107,11 +103,7 @@ impl VoxtralSttModel {
                 inspection.missing_required_tensors.join(", ")
             )));
         }
-        let tokenizer_path = inspection
-            .tokenizer_path
-            .clone()
-            .ok_or_else(|| Error::Parse("missing tekken.json next to Voxtral GGUF".to_string()))?;
-        let runtime = VoxtralQ4Runtime::load(&inspection.gguf_path, &tokenizer_path)?;
+        let runtime = VoxtralQ4Runtime::load(&inspection.gguf_path, backend)?;
         Ok(Self {
             config: VoxtralSttConfig::default(),
             backend,
@@ -152,7 +144,7 @@ impl VoxtralSttModel {
         let wav = audio::parse_wav(request.audio_bytes)?;
         let _ = request.max_tokens;
         let runtime = self.runtime.as_ref().ok_or(Error::Unsupported(
-            "native Voxtral STT requires a Q4 GGUF model and tekken.json",
+            "native Voxtral STT requires a ggml-compatible Q4 GGUF model",
         ))?;
         let mut runtime = runtime
             .lock()
@@ -166,71 +158,13 @@ impl VoxtralSttModel {
 }
 
 impl VoxtralQ4Runtime {
-    fn load(gguf_path: &Path, tokenizer_path: &Path) -> Result<Self> {
-        let device = burn::backend::wgpu::WgpuDevice::default();
-        let start = Instant::now();
-        let mut loader = voxtral_mini_realtime::gguf::loader::Q4ModelLoader::from_file(gguf_path)?;
-        let parts = loader.load_deferred(&device)?;
-        drop(loader);
-        let model = parts.finalize(&device)?;
-        let tokenizer =
-            voxtral_mini_realtime::tokenizer::VoxtralTokenizer::from_file(tokenizer_path)?;
-        let elapsed = start.elapsed();
-        eprintln!(
-            "ctox_voxtral_stt: loaded Q4 GGUF from {} in {:.2}s",
-            gguf_path.display(),
-            elapsed.as_secs_f64()
-        );
-        Ok(Self {
-            model,
-            tokenizer,
-            device,
-        })
+    fn load(gguf_path: &Path, backend: VoxtralSttBackend) -> Result<Self> {
+        let runtime = GgmlVoxtralRuntime::load(gguf_path, backend)?;
+        Ok(Self { runtime })
     }
 
     fn transcribe_samples(&mut self, samples: Vec<f32>, sample_rate: u32) -> Result<String> {
-        let mut audio = voxtral_mini_realtime::audio::AudioBuffer::new(samples, sample_rate);
-        if audio.sample_rate != 16_000 {
-            audio = voxtral_mini_realtime::audio::resample_to_16k(&audio)?;
-        }
-        audio.peak_normalize(0.95);
-
-        let pad_config = voxtral_mini_realtime::audio::PadConfig::voxtral();
-        let padded = voxtral_mini_realtime::audio::pad_audio(&audio, &pad_config);
-        let mel_extractor = voxtral_mini_realtime::audio::MelSpectrogram::new(
-            voxtral_mini_realtime::audio::MelConfig::voxtral(),
-        );
-        let mel = mel_extractor.compute_log(&padded.samples);
-        let n_frames = mel.len();
-        let n_mels = mel.first().map_or(0, Vec::len);
-        if n_frames == 0 || n_mels == 0 {
-            return Err(Error::InvalidFormat(
-                "audio too short to produce mel frames",
-            ));
-        }
-
-        let mut mel_transposed = vec![vec![0.0f32; n_frames]; n_mels];
-        for (frame_idx, frame) in mel.iter().enumerate() {
-            for (mel_idx, &value) in frame.iter().enumerate() {
-                mel_transposed[mel_idx][frame_idx] = value;
-            }
-        }
-        let mel_flat: Vec<f32> = mel_transposed.into_iter().flatten().collect();
-        let mel_tensor = burn::tensor::Tensor::<WgpuBackend, 3>::from_data(
-            burn::tensor::TensorData::new(mel_flat, [1, n_mels, n_frames]),
-            &self.device,
-        );
-
-        let time_embed = voxtral_mini_realtime::models::time_embedding::TimeEmbedding::new(3072);
-        let t_embed = time_embed.embed::<WgpuBackend>(6.0, &self.device);
-        let generated = self.model.transcribe_streaming(mel_tensor, t_embed);
-        let text_tokens = generated
-            .iter()
-            .filter(|&&token| token >= 1000)
-            .map(|&token| token as u32)
-            .collect::<Vec<_>>();
-        let text = self.tokenizer.decode(&text_tokens)?;
-        Ok(text.trim().to_string())
+        self.runtime.transcribe_samples(samples, sample_rate)
     }
 }
 
@@ -265,41 +199,41 @@ pub fn inspect_gguf(path: impl AsRef<Path>) -> Result<VoxtralSttArtifactInspecti
 
 pub fn required_tensors() -> Vec<&'static str> {
     let mut out = vec![
-        "mm_streams_embeddings.embedding_module.whisper_encoder.conv_layers.0.conv.weight",
-        "mm_streams_embeddings.embedding_module.whisper_encoder.conv_layers.0.conv.bias",
-        "mm_streams_embeddings.embedding_module.whisper_encoder.conv_layers.1.conv.weight",
-        "mm_streams_embeddings.embedding_module.whisper_encoder.conv_layers.1.conv.bias",
-        "mm_streams_embeddings.embedding_module.whisper_encoder.transformer.norm.weight",
-        "mm_streams_embeddings.embedding_module.audio_language_projection.0.weight",
-        "mm_streams_embeddings.embedding_module.audio_language_projection.2.weight",
-        "mm_streams_embeddings.embedding_module.tok_embeddings.weight",
+        "enc.conv0.weight",
+        "enc.conv0.bias",
+        "enc.conv1.weight",
+        "enc.conv1.bias",
+        "enc.norm.weight",
+        "adapter.0.weight",
+        "adapter.2.weight",
+        "tok_embeddings.weight",
         "norm.weight",
     ];
     out.extend([
-        "mm_streams_embeddings.embedding_module.whisper_encoder.transformer.layers.0.attention_norm.weight",
-        "mm_streams_embeddings.embedding_module.whisper_encoder.transformer.layers.0.attention.wq.weight",
-        "mm_streams_embeddings.embedding_module.whisper_encoder.transformer.layers.0.attention.wq.bias",
-        "mm_streams_embeddings.embedding_module.whisper_encoder.transformer.layers.0.attention.wk.weight",
-        "mm_streams_embeddings.embedding_module.whisper_encoder.transformer.layers.0.attention.wv.weight",
-        "mm_streams_embeddings.embedding_module.whisper_encoder.transformer.layers.0.attention.wv.bias",
-        "mm_streams_embeddings.embedding_module.whisper_encoder.transformer.layers.0.attention.wo.weight",
-        "mm_streams_embeddings.embedding_module.whisper_encoder.transformer.layers.0.attention.wo.bias",
-        "mm_streams_embeddings.embedding_module.whisper_encoder.transformer.layers.0.ffn_norm.weight",
-        "mm_streams_embeddings.embedding_module.whisper_encoder.transformer.layers.0.feed_forward.w1.weight",
-        "mm_streams_embeddings.embedding_module.whisper_encoder.transformer.layers.0.feed_forward.w2.weight",
-        "mm_streams_embeddings.embedding_module.whisper_encoder.transformer.layers.0.feed_forward.w2.bias",
-        "mm_streams_embeddings.embedding_module.whisper_encoder.transformer.layers.0.feed_forward.w3.weight",
-        "layers.0.ada_rms_norm_t_cond.0.weight",
-        "layers.0.ada_rms_norm_t_cond.2.weight",
-        "layers.0.attention_norm.weight",
-        "layers.0.attention.wq.weight",
-        "layers.0.attention.wk.weight",
-        "layers.0.attention.wv.weight",
-        "layers.0.attention.wo.weight",
-        "layers.0.ffn_norm.weight",
-        "layers.0.feed_forward.w1.weight",
-        "layers.0.feed_forward.w2.weight",
-        "layers.0.feed_forward.w3.weight",
+        "enc.blk.0.attn_norm.weight",
+        "enc.blk.0.attn_q.weight",
+        "enc.blk.0.attn_q.bias",
+        "enc.blk.0.attn_k.weight",
+        "enc.blk.0.attn_v.weight",
+        "enc.blk.0.attn_v.bias",
+        "enc.blk.0.attn_o.weight",
+        "enc.blk.0.attn_o.bias",
+        "enc.blk.0.ffn_norm.weight",
+        "enc.blk.0.ffn_w1.weight",
+        "enc.blk.0.ffn_w2.weight",
+        "enc.blk.0.ffn_w2.bias",
+        "enc.blk.0.ffn_w3.weight",
+        "dec.blk.0.ada0.weight",
+        "dec.blk.0.ada2.weight",
+        "dec.blk.0.attn_norm.weight",
+        "dec.blk.0.attn_q.weight",
+        "dec.blk.0.attn_k.weight",
+        "dec.blk.0.attn_v.weight",
+        "dec.blk.0.attn_o.weight",
+        "dec.blk.0.ffn_norm.weight",
+        "dec.blk.0.ffn_w1.weight",
+        "dec.blk.0.ffn_w2.weight",
+        "dec.blk.0.ffn_w3.weight",
     ]);
     out
 }
@@ -344,7 +278,9 @@ mod tests {
                 max_tokens: None,
             })
             .expect_err("STT graph should not be faked");
-        assert!(err.to_string().contains("requires a Q4 GGUF"));
+        assert!(err
+            .to_string()
+            .contains("requires a ggml-compatible Q4 GGUF"));
     }
 
     fn tiny_wav() -> Vec<u8> {

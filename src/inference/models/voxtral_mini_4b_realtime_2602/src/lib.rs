@@ -9,6 +9,8 @@
 pub mod audio;
 pub mod consts;
 pub mod error;
+pub(crate) mod ffi;
+mod ggml_runtime;
 pub mod gguf;
 pub mod kernels;
 pub mod stt;
