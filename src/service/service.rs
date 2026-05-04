@@ -3175,12 +3175,22 @@ fn start_prompt_worker(
                         let retry_runtime_message =
                             runtime_error_is_transient_api_failure(&err_text);
                         let retry_worker_message = retry_founder_message || retry_runtime_message;
+                        let runtime_retry_not_before =
+                            retry_runtime_message.then(|| runtime_retry_not_before_iso(&err_text));
                         if !job.leased_message_keys.is_empty() {
                             let route_status = if retry_worker_message {
                                 "pending"
                             } else {
                                 "failed"
                             };
+                            if let Some(not_before) = runtime_retry_not_before.as_deref() {
+                                let _ = channels::defer_messages_until(
+                                    &root,
+                                    &job.leased_message_keys,
+                                    not_before,
+                                    "retryable runtime/API failure",
+                                );
+                            }
                             let _ = channels::ack_leased_messages(
                                 &root,
                                 &job.leased_message_keys,
@@ -6043,6 +6053,7 @@ fn ticket_self_work_queue_metadata(item: &tickets::TicketSelfWorkItemView) -> Va
         "origin_source_label",
         "repair_reason",
         "runtime_retry_reason",
+        "not_before",
         "outbound_anchor",
     ] {
         if let Some(value) = metadata_string(&item.metadata, key) {
@@ -9167,6 +9178,7 @@ fn maybe_enqueue_runtime_retry_continuation(
         .unwrap_or_else(|| default_follow_up_thread_key(&job.goal));
     let title = format!("Retry {} after API failure", clip_text(&job.goal, 52));
     let event_key = format!("runtime-api-retry:{thread_key}:{title}");
+    let not_before = runtime_retry_not_before_iso(error_text);
     if let Some(existing_title) = existing_timeout_continuation(
         root,
         &thread_key,
@@ -9190,6 +9202,7 @@ fn maybe_enqueue_runtime_retry_continuation(
                     "error": clip_text(error_text, 220),
                     "has_outbound_email": job.outbound_email.is_some(),
                     "outbound_anchor": job.outbound_anchor.clone(),
+                    "not_before": not_before,
                 }),
                 idempotence_key: Some(&event_key),
             },
@@ -9218,6 +9231,7 @@ fn maybe_enqueue_runtime_retry_continuation(
                 "origin_source_label": job.source_label,
                 "runtime_retry": true,
                 "runtime_retry_reason": "transient_model_api_failure",
+                "not_before": not_before,
                 "outbound_email": job.outbound_email.clone(),
                 "outbound_anchor": job.outbound_anchor.clone(),
             }),
@@ -9239,11 +9253,19 @@ fn maybe_enqueue_runtime_retry_continuation(
                 "error": clip_text(error_text, 220),
                 "has_outbound_email": job.outbound_email.is_some(),
                 "outbound_anchor": job.outbound_anchor.clone(),
+                "not_before": not_before,
             }),
             idempotence_key: Some(&event_key),
         },
     );
     Ok(Some(created.title))
+}
+
+fn runtime_retry_not_before_iso(error_text: &str) -> String {
+    let cooldown_secs = turn_loop::hard_runtime_blocker_retry_cooldown_secs(error_text)
+        .unwrap_or(300)
+        .clamp(30, 1_800);
+    chrono_like_iso(current_epoch_secs().saturating_add(cooldown_secs))
 }
 
 fn is_turn_timeout_blocker(value: &str) -> bool {

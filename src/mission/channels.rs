@@ -4996,6 +4996,11 @@ fn take_messages(
               AND m.channel = ?1
               AND r.route_status IN ('pending', 'leased')
               AND (
+                    json_extract(m.metadata_json, '$.not_before') IS NULL
+                 OR json_extract(m.metadata_json, '$.not_before') = ''
+                 OR json_extract(m.metadata_json, '$.not_before') <= strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+              )
+              AND (
                     r.route_status = 'pending'
                     OR r.lease_owner IS NULL
                     OR r.lease_owner = ''
@@ -5073,6 +5078,11 @@ fn take_messages(
             WHERE m.direction = 'inbound'
               AND r.route_status IN ('pending', 'leased')
               AND (
+                    json_extract(m.metadata_json, '$.not_before') IS NULL
+                 OR json_extract(m.metadata_json, '$.not_before') = ''
+                 OR json_extract(m.metadata_json, '$.not_before') <= strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+              )
+              AND (
                     r.route_status = 'pending'
                     OR r.lease_owner IS NULL
                     OR r.lease_owner = ''
@@ -5147,6 +5157,32 @@ fn take_messages(
     }
     tx.commit()?;
     Ok(taken)
+}
+
+pub fn defer_messages_until(
+    root: &Path,
+    message_keys: &[String],
+    not_before: &str,
+    reason: &str,
+) -> Result<usize> {
+    let db_path = resolve_db_path(root, None);
+    let conn = open_channel_db(&db_path)?;
+    let mut updated = 0usize;
+    for message_key in message_keys {
+        updated += conn.execute(
+            r#"
+            UPDATE communication_messages
+            SET metadata_json = json_set(
+                json_set(metadata_json, '$.not_before', ?2),
+                '$.defer_reason',
+                ?3
+            )
+            WHERE message_key = ?1
+            "#,
+            params![message_key, not_before, reason],
+        )?;
+    }
+    Ok(updated)
 }
 
 fn ack_messages(conn: &mut Connection, message_keys: &[String], status: &str) -> Result<usize> {
