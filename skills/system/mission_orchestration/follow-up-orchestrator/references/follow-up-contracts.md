@@ -4,7 +4,7 @@ This document defines the boundary between end-of-turn evaluation and actual nex
 
 ## Evaluation Contract
 
-- Follow-up evaluation happens after a meaningful execution slice.
+- Follow-up evaluation happens after a meaningful bounded work step.
 - The tool must return only a compact structured decision.
 - Internal reasoning about why the decision was made must not be persisted as durable context by default.
 
@@ -49,6 +49,6 @@ If the caller decides the follow-up should really run later, the caller should p
 ## Completion Contract
 
 - Return `done` only if the active scope is actually closed.
-- If there is a real next slice, prefer `needs_followup`.
-- If the next slice is unclear, prefer `needs_replan` or an explicit blocker over guessing.
-- If the next slice will require durable tracking across turns, do not leave it only as a plain queue item. Persist ticket self-work as the system of record.
+- If there is a real next work step, prefer `needs_followup`.
+- If the next work step is unclear, prefer `needs_replan` or an explicit blocker over guessing.
+- If the next work step will require durable tracking across turns, do not leave it only as a plain queue item. Persist ticket self-work as the system of record.

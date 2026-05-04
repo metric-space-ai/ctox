@@ -26,7 +26,7 @@ This document defines the explicit queue substrate that Codex can inspect and mo
 - `leased` means the service already pulled the queue item into execution.
 - `blocked` means further work should stop until the blocker is cleared.
 - `failed` means the queue item attempted execution and still needs an explicit next decision.
-- `handled` means the current queue item is complete for its intended slice.
+- `handled` means the current queue item is complete for its intended work step.
 - `cancelled` means the queue item should no longer run.
 
 ## Follow-up Contract
@@ -37,5 +37,5 @@ This document defines the explicit queue substrate that Codex can inspect and mo
 ## Planning Contract
 
 - Use `ctox plan draft` when a task first needs decomposition.
-- Only enqueue the concrete execution slices that should really enter the queue.
+- Only enqueue the concrete bounded work steps that should really enter the queue.
 - Do not dump raw planning traces into queue prompts.

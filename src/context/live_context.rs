@@ -37,7 +37,7 @@ pub struct PromptContextBreakdown {
     pub context_health_chars: usize,
     pub conversation_chars: usize,
     pub latest_user_turn_chars: usize,
-    pub wrapper_chars: usize,
+    pub scaffold_chars: usize,
     pub rendered_context_items: usize,
     pub omitted_context_items: usize,
     pub total_ctox_prompt_chars: usize,
@@ -62,7 +62,7 @@ pub struct LivePromptArtifact {
 impl LivePromptArtifact {
     pub fn to_review_markdown(&self) -> String {
         format!(
-            "# CTOX Live Prompt Review Artifact\n\nconversation_id: {}\nmodel: {}\n\n## Breakdown\n- system_prompt_chars: {}\n- latest_user_turn_chars: {}\n- verified_evidence_chars: {}\n- anchors_chars: {}\n- focus_chars: {}\n- workflow_state_chars: {}\n- narrative_chars: {}\n- governance_chars: {}\n- context_health_chars: {}\n- conversation_chars: {}\n- wrapper_chars: {}\n- rendered_context_items: {}\n- omitted_context_items: {}\n- total_ctox_prompt_chars: {}\n\n## System Prompt\n```md\n{}\n```\n\n## Runtime Prompt\n```md\n{}\n```\n\n## Combined Review View\n```md\n{}\n```\n",
+            "# CTOX Live Prompt Review Artifact\n\nconversation_id: {}\nmodel: {}\n\n## Breakdown\n- system_prompt_chars: {}\n- latest_user_turn_chars: {}\n- verified_evidence_chars: {}\n- anchors_chars: {}\n- focus_chars: {}\n- workflow_state_chars: {}\n- narrative_chars: {}\n- governance_chars: {}\n- context_health_chars: {}\n- conversation_chars: {}\n- prompt_scaffold_chars: {}\n- rendered_context_items: {}\n- omitted_context_items: {}\n- total_ctox_prompt_chars: {}\n\n## System Prompt\n```md\n{}\n```\n\n## Runtime Prompt\n```md\n{}\n```\n\n## Combined Review View\n```md\n{}\n```\n",
             self.conversation_id,
             self.model,
             self.breakdown.system_prompt_chars,
@@ -75,7 +75,7 @@ impl LivePromptArtifact {
             self.breakdown.governance_chars,
             self.breakdown.context_health_chars,
             self.breakdown.conversation_chars,
-            self.breakdown.wrapper_chars,
+            self.breakdown.scaffold_chars,
             self.breakdown.rendered_context_items,
             self.breakdown.omitted_context_items,
             self.breakdown.total_ctox_prompt_chars,
@@ -270,7 +270,7 @@ pub fn prompt_context_breakdown(
         context_health_chars: health_block.len(),
         conversation_chars: rendered_context_chars,
         latest_user_turn_chars: latest_user_turn.len(),
-        wrapper_chars: rendered_prompt.len().saturating_sub(known_dynamic_chars),
+        scaffold_chars: rendered_prompt.len().saturating_sub(known_dynamic_chars),
         rendered_context_items: rendered_context.entries.len(),
         omitted_context_items: rendered_context.omitted_items,
         total_ctox_prompt_chars: system_prompt.len() + rendered_prompt.len(),
@@ -514,10 +514,10 @@ fn render_execution_contract_block(
                 .to_string(),
         );
     }
-    if let Some(next_slice) =
+    if let Some(next_step) =
         continuity_named_value(focus_block, &["next_slice", "next slice", "next step"])
     {
-        lines.push(format!("- If not finished, do this next: {next_slice}"));
+        lines.push(format!("- If not finished, do this next: {next_step}"));
     }
     if let Some(workspace_root) = continuity_named_value(anchors_block, &["workspace_root"]) {
         lines.push(format!(
@@ -544,7 +544,10 @@ fn focus_block_lines(content: &str) -> Vec<String> {
         ("Turn type", &["turn_class", "turn class"][..]),
         ("Read scope", &["read_scope", "read scope"][..]),
         ("Main task", &["goal", "mission"][..]),
-        ("Current step", &["slice_id", "slice"][..]),
+        (
+            "Current step",
+            &["slice_id", "slice", "step_id", "step id"][..],
+        ),
         (
             "Current status",
             &["status", "slice_state", "slice state"][..],
@@ -970,11 +973,11 @@ fn synthesize_focus_block(context: &MissionContext) -> String {
         lines.push(format!("- Finish rule: {}", done_gate));
     } else {
         lines.push(
-            "- Next step: inspect the workspace and write the first bounded delivery slice"
+            "- Next step: inspect the workspace and write the first bounded delivery step"
                 .to_string(),
         );
         lines.push(
-            "- Finish rule: the roadmap, architecture direction, and first implementation slice are written down durably"
+            "- Finish rule: the roadmap, architecture direction, and first implementation step are written down durably"
                 .to_string(),
         );
     }
@@ -1022,7 +1025,7 @@ fn synthesize_narrative_block(context: &MissionContext) -> String {
     }
     if let Some(blocker) = &context.previous_blocker {
         lines.push(format!(
-            "- previous slice stopped with blocker: {}",
+            "- previous work step stopped with blocker: {}",
             blocker
         ));
     }
@@ -1413,7 +1416,7 @@ pub(crate) fn summarize_inbound_email_wrapper(content: &str) -> Option<String> {
     let thread =
         extract_labeled_line(content, "Thread:").unwrap_or_else(|| "unknown thread".to_string());
     Some(format!(
-        "Inbound email wrapper from {sender} with subject {subject} on thread {thread}. The original wrapper also contained reply instructions and historical communication context; treat this as prior mail context only and rely on the newest concrete task evidence before repeating old conclusions."
+        "Email context package from {sender} with subject {subject} on thread {thread}. It also contained reply instructions and older communication context; treat it as prior mail context only and rely on the newest concrete task evidence before repeating old conclusions."
     ))
 }
 

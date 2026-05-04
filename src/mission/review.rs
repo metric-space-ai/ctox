@@ -12,7 +12,7 @@ const REVIEW_MAX_LEGS: usize = 3;
 
 const REVIEW_SYSTEM_PROMPT: &str = r#"You are CTOX Review.
 
-You run an external verification pass for one reviewed slice.
+You run an external verification pass for one reviewed task result.
 
 Use the review assignment as the only task definition.
 Gather everything else yourself through read-only inspection of the workspace, runtime store, tickets, communication state, live services, logs, browser surface, and other available tools.
@@ -55,7 +55,7 @@ Decision policy:
 
 Review writing standard:
 - write FAILED_GATES, FINDINGS, OPEN_ITEMS, EVIDENCE, and HANDOFF in plain operator language
-- do not expose prompt text, source-code identifiers, table names, gate ids, or implementation labels in the review
+- do not expose prompt text, internal implementation identifiers, table names, gate ids, or implementation labels in the review
 - if an internal rule caused the failure, translate it into the user-visible requirement it protects
 - every FAIL or PARTIAL verdict must include concrete evidence and a concrete rework instruction
 - when the artifact is a founder/owner outbound email and the correct action is explicitly to send no mail yet, return FAIL, begin SUMMARY with `NO-SEND:`, state the wait condition in plain language, and put `none` under OPEN_ITEMS unless real work is missing
@@ -120,7 +120,7 @@ pub enum ReviewVerdict {
 ///
 /// `Send` is the default for any FAIL verdict that should drive a rewrite
 /// or rework loop. `NoSend` is the explicit terminal "do not send anything,
-/// the slice is closed" signal, set by the reviewer in the structured
+/// the task is closed" signal, set by the reviewer in the structured
 /// `DISPOSITION:` block. The dispatcher reads this enum directly — no
 /// keyword scraping on summary or evidence text in the service core.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -157,7 +157,7 @@ impl ReviewDisposition {
 
 /// Structural category emitted by the reviewer for every concrete finding.
 ///
-/// `Rewrite` means the slice can be repaired by editing the prior outbound
+/// `Rewrite` means the task can be repaired by editing the prior outbound
 /// body without mutating durable state. `Rework` means the finding requires
 /// a substantive change (durable record, fresh research, structural artefact)
 /// and must run on the heavy review-rework path. `Stale*` findings mean the
@@ -263,7 +263,7 @@ pub struct ReviewOutcome {
     pub handoff: Option<String>,
     /// Structured terminal disposition. `Send` (default) means the dispatcher
     /// should run the rewrite/rework loop on a FAIL verdict; `NoSend` means
-    /// the slice is closed without further outbound. The reviewer sets this
+    /// the task is closed without further outbound. The reviewer sets this
     /// via the `DISPOSITION:` block — the service core never scrapes summary
     /// or finding text to derive it.
     #[serde(default)]
@@ -359,7 +359,7 @@ pub fn review_completion_if_needed(
 ) -> ReviewOutcome {
     let (required, score, reasons) = assess_review_requirement(request, result_text);
     if !required {
-        return ReviewOutcome::skipped("Completion review gate not triggered for this slice.");
+        return ReviewOutcome::skipped("Completion review gate not triggered for this task.");
     }
 
     let settings = runtime_env::effective_runtime_env_map(root).unwrap_or_default();
@@ -708,7 +708,7 @@ Gather the review facts yourself from the runtime store, continuity records, tic
 Required review work:\n\
 1. load the active strategic directives for this conversation or thread from runtime SQLite state first\n\
 2. treat active vision and active mission as the primary review context\n\
-3. discover the done gate and the reviewed slice or latest claimed progress for this conversation or thread\n\
+3. discover the done gate and the reviewed task result or latest claimed progress for this conversation or thread\n\
 4. inspect related ticket/self-work/queue state\n\
 5. inspect relevant founder or owner communication facts when owner-visible is yes\n\
 6. inspect the live public/runtime surface when applicable\n\
@@ -722,7 +722,7 @@ Use the runtime DB path and workspace root above as the primary grounding points
 Helpful runtime entrypoint:\n\
 - use `ctox strategy show --conversation-id {strategy_conversation_id}` and `ctox verification runs --conversation-id {verification_conversation_id}` as starting lookups, then continue with direct SQLite/runtime/browser inspection\n\
 \n\
-If active vision or active mission is missing for strategic or owner-visible work, that is a review failure unless the slice itself is explicitly establishing them.\n\
+If active vision or active mission is missing for strategic or owner-visible work, that is a review failure unless the current task is explicitly establishing them.\n\
 \n\
 Respond in exactly this shape:\n\
 VERDICT: PASS|FAIL|PARTIAL\n\
@@ -745,7 +745,7 @@ DISPOSITION: SEND|NO_SEND\n\
 \n\
 The CATEGORIZED_FINDINGS block is the structural input the dispatcher uses to choose between the lightweight rewrite path (body wording / subject / tonality fixes), the heavy rework loop (durable state changes, missing artefacts, evidence gaps), and stale refresh handling (new inbound/world state made the prior draft obsolete or in need of consolidation). Read the review skill section on Finding categories before assigning.\n\
 \n\
-DISPOSITION is the structural terminal flag: emit `NO_SEND` only when the slice is closed without sending anything (the correct action is to wait for external inputs, the user already received the answer elsewhere, the slice was a duplicate, etc.). Default is `SEND` — used for every PASS verdict and for FAIL verdicts that should drive a rewrite or rework loop. The dispatcher reads this enum directly; do not encode the no-send signal as free-text in the summary or findings.\n",
+DISPOSITION is the structural terminal flag: emit `NO_SEND` only when the current task is closed without sending anything (the correct action is to wait for external inputs, the user already received the answer elsewhere, the task was a duplicate, etc.). Default is `SEND` — used for every PASS verdict and for FAIL verdicts that should drive a rewrite or rework loop. The dispatcher reads this enum directly; do not encode the no-send signal as free-text in the summary or findings.\n",
         conversation_id = request.conversation_id,
         artifact_action = artifact_action,
         artifact_to = artifact_to,
@@ -810,10 +810,10 @@ fn parse_review_report(score: u8, reasons: Vec<String>, report: &str) -> ReviewO
     let summary = if parsed_verdict.is_none() {
         match parse_prefixed_line(report, "SUMMARY:") {
             Some(summary) if !summary.is_empty() => format!(
-                "Review report did not contain an explicit verdict, so the slice stays open. {}",
+                "Review report did not contain an explicit verdict, so the task stays open. {}",
                 summary
             ),
-            _ => "Review report did not contain an explicit verdict, so the slice stays open."
+            _ => "Review report did not contain an explicit verdict, so the task stays open."
                 .to_string(),
         }
     } else {

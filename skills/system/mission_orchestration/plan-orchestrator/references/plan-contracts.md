@@ -36,7 +36,7 @@ This document defines the contract between Codex and the explicit CTOX plan laye
 - Use plan ingestion when the owner request is long-running, staged, or interruption-prone.
 - Preserve the owner's original request in the goal prompt; do not replace it with an abstract rewrite.
 - If the request is ambiguous, the first plan step may be a clarification or inspection step, but that must be explicit.
-- If the next executable slice should survive beyond the current turn, create it explicitly in the queue rather than assuming the plan itself will run.
+- If the next executable work step should survive beyond the current turn, create it explicitly in the queue rather than assuming the plan itself will run.
 
 ## Blocker Contract
 

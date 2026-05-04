@@ -2,7 +2,7 @@
 
 Keep this skill narrow:
 
-- use `automation_engineering` when repeated operational work should become a repo script, queued slice, or scheduled CTOX task
+- use `automation_engineering` when repeated operational work should become a repo script, queued work step, or scheduled CTOX task
 - use `change_lifecycle` for the actual rollout of a new automation artifact
 - use `ops_insight` when the task is only a report, not an automation candidate
 

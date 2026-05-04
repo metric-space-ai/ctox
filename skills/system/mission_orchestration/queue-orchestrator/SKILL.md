@@ -10,9 +10,9 @@ cluster: mission_orchestration
 
 ## CTOX Runtime Contract
 
-- Task spawning is allowed only for real execution slices that add mission progress, external waiting, recovery, or explicit decomposition. Do not spawn work merely because review feedback exists.
+- Task spawning is allowed only for real bounded work steps that add mission progress, external waiting, recovery, or explicit decomposition. Do not spawn work merely because review feedback exists.
 - The Review Gate is a quality checkpoint, not a control loop. After review feedback, continue the same main work item whenever possible and incorporate the feedback there.
-- Do not create review-driven self-work cascades. If more work is needed, reuse or requeue the existing parent work item; create a new task only when it is a distinct slice with a stable parent pointer.
+- Do not create review-driven self-work cascades. If more work is needed, reuse or requeue the existing parent work item; create a new task only when it is a distinct bounded work step with a stable parent pointer.
 - Every durable follow-up, queue item, plan emission, or self-work item must have a clear parent/anchor: message key, work id, thread key, ticket/case id, or plan step. Missing ancestry is a harness bug, not acceptable ambiguity.
 - Rewording-only feedback means revise wording on the same artifact. Substantive feedback means add new evidence or implementation progress. Stale feedback means refresh or consolidate current runtime state before drafting again.
 - Before adding follow-up work, check for existing matching self-work, queue, plan, or ticket state and consolidate rather than duplicating.
@@ -24,7 +24,7 @@ Use this skill when Codex should work with durable queued tasks instead of keepi
 
 The queue is explicit shared state. If you want future work to survive beyond the current turn, use `ctox queue ...`.
 
-Do not assume an external wrapper will decide the next task for you.
+Do not assume an external process will decide the next task for you.
 
 Queue state is not the full knowledge plane. Durable knowledge lives in SQLite-backed continuity, ticket state, verification state, communication records, and ticket knowledge. Standalone markdown files or workspace notes do not become durable knowledge just because a queue item references them.
 
@@ -95,8 +95,8 @@ What to look at:
    reprioritize, or reorder live items, first run `ctox harness-mining stuck-cases`
    to make sure none of the candidates are hot retry-loops.
 2. Add follow-up work explicitly with `ctox queue add`.
-3. If a task should be decomposed first, use `ctox plan draft` and then enqueue only the concrete slices that should really execute.
-4. Prefer one coherent queue task per execution slice.
+3. If a task should be decomposed first, use `ctox plan draft` and then enqueue only the concrete bounded work steps that should really execute.
+4. Prefer one coherent queue task per bounded work step.
 5. Use `--parent-message-key` when a follow-up task clearly descends from an earlier queue item.
 6. When queueing ticket-bearing or owner-visible work, first inspect whether the ticket and knowledge subsystems are actually populated. If `ticket_items`, `ticket_cases`, source skills, or knowledge domains are still absent, phrase the queue task as onboarding / correction work rather than normal mature execution.
 7. Do not use queue text as a substitute for durable knowledge persistence. If the mission understanding needs to survive, ensure it also lands in SQLite-backed continuity or ticket knowledge.

@@ -3627,7 +3627,7 @@ fn context_debug_line(app: &App, width: usize) -> Line<'static> {
             "user {}",
             compact_debug_size(breakdown.latest_user_turn_chars)
         ),
-        format!("wrap {}", compact_debug_size(breakdown.wrapper_chars)),
+        format!("scaffold {}", compact_debug_size(breakdown.scaffold_chars)),
         format!(
             "ctox {}",
             compact_debug_size(breakdown.total_ctox_prompt_chars)

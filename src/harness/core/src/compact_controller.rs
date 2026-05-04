@@ -88,7 +88,7 @@ struct PromptBlock<'a> {
     id: &'a str,
     title: &'a str,
     chars: usize,
-    bucket: &'a str,
+    destination: &'a str,
     text: &'a str,
 }
 
@@ -107,7 +107,8 @@ struct DecisionStageResponse {
 #[derive(Debug, Deserialize)]
 struct ProgressStageResponse {
     summary: String,
-    school_grade: u8,
+    #[serde(alias = "school_grade")]
+    progress_score: u8,
     rationale: String,
 }
 
@@ -115,7 +116,8 @@ struct ProgressStageResponse {
 struct BlockDecision {
     id: String,
     action: String,
-    bucket: String,
+    #[serde(alias = "bucket")]
+    destination: String,
     reason: String,
     revised_text: String,
 }
@@ -143,7 +145,8 @@ struct ReprioritizationStageResponse {
     priority_reason: String,
     next_action: String,
     completed_tasks: Vec<String>,
-    spawned_tasks: Vec<TaskSpawn>,
+    #[serde(alias = "spawned_tasks")]
+    follow_up_tasks: Vec<TaskSpawn>,
     mutated_tasks: Vec<TaskMutation>,
     priority_order: Vec<String>,
 }
@@ -174,15 +177,15 @@ struct ReprioritizationEnvelope {
     priority_reason: String,
     next_action: String,
     completed_tasks: Vec<String>,
-    spawned_tasks: Vec<TaskSpawn>,
+    follow_up_tasks: Vec<TaskSpawn>,
     mutated_tasks: Vec<TaskMutation>,
     priority_order: Vec<String>,
-    wrapper_update: WrapperUpdate,
+    task_context_update: TaskContextUpdate,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct WrapperUpdate {
+struct TaskContextUpdate {
     controller: &'static str,
     mode: &'static str,
     next_action: String,
@@ -190,7 +193,7 @@ struct WrapperUpdate {
     task_packet: Vec<String>,
     priority_reason: String,
     completed_tasks: Vec<String>,
-    spawned_tasks: Vec<TaskSpawn>,
+    follow_up_tasks: Vec<TaskSpawn>,
     mutated_tasks: Vec<TaskMutation>,
     priority_order: Vec<String>,
     interrupt_triggered: bool,
@@ -199,7 +202,7 @@ struct WrapperUpdate {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ProgressReviewEnvelope {
-    school_grade: u8,
+    progress_score: u8,
     label: &'static str,
     summary: String,
     rationale: String,
@@ -219,8 +222,8 @@ struct ModelRoutingEnvelope {
 struct TaskSpawn {
     title: String,
     detail: String,
-    #[serde(alias = "priorityBucket")]
-    priority_bucket: String,
+    #[serde(alias = "priority_bucket", alias = "priorityBucket")]
+    priority: String,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -258,7 +261,7 @@ pub(crate) async fn run_compaction_controller(
     let progress_review = if blocks.is_empty() {
         ProgressStageResponse {
             summary: "No usable context available.".to_string(),
-            school_grade: 4,
+            progress_score: 4,
             rationale: "Without usable history, progress can only be rated as adequate."
                 .to_string(),
         }
@@ -284,7 +287,7 @@ pub(crate) async fn run_compaction_controller(
     };
     let model_routing = select_model_routing(
         &turn_context.model_info.slug,
-        progress_review.school_grade,
+        progress_review.progress_score,
         available_models(sess),
     );
 
@@ -305,7 +308,7 @@ pub(crate) async fn run_compaction_controller(
             .await
             {
                 Ok(screen_result) => {
-                    apply_decisions(&mut blocks, &screen_result.decisions, "Grobfilter");
+                    apply_decisions(&mut blocks, &screen_result.decisions, "Initial filter");
                     break;
                 }
                 Err(CodexErr::ContextWindowExceeded) if blocks.len() > 1 => {
@@ -410,8 +413,8 @@ pub(crate) async fn run_compaction_controller(
         trigger: trigger.as_str(),
         task_hint,
         progress_review: ProgressReviewEnvelope {
-            school_grade: progress_review.school_grade,
-            label: grade_label(progress_review.school_grade),
+            progress_score: progress_review.progress_score,
+            label: progress_score_label(progress_review.progress_score),
             summary: normalize_text(&progress_review.summary),
             rationale: normalize_text(&progress_review.rationale),
         },
@@ -427,10 +430,10 @@ pub(crate) async fn run_compaction_controller(
             priority_reason: normalize_text(&reprioritization.priority_reason),
             next_action: normalize_next_action(&reprioritization.next_action),
             completed_tasks: normalize_string_list(&reprioritization.completed_tasks),
-            spawned_tasks: normalize_spawned_tasks(&reprioritization.spawned_tasks),
+            follow_up_tasks: normalize_follow_up_tasks(&reprioritization.follow_up_tasks),
             mutated_tasks: normalize_mutated_tasks(&reprioritization.mutated_tasks),
             priority_order: normalize_string_list(&reprioritization.priority_order),
-            wrapper_update: WrapperUpdate {
+            task_context_update: TaskContextUpdate {
                 controller: "compact_controller",
                 mode,
                 next_action: normalize_next_action(&reprioritization.next_action),
@@ -438,7 +441,7 @@ pub(crate) async fn run_compaction_controller(
                 task_packet: normalize_string_list(&reprioritization.task_packet),
                 priority_reason: normalize_text(&reprioritization.priority_reason),
                 completed_tasks: normalize_string_list(&reprioritization.completed_tasks),
-                spawned_tasks: normalize_spawned_tasks(&reprioritization.spawned_tasks),
+                follow_up_tasks: normalize_follow_up_tasks(&reprioritization.follow_up_tasks),
                 mutated_tasks: normalize_mutated_tasks(&reprioritization.mutated_tasks),
                 priority_order: normalize_string_list(&reprioritization.priority_order),
                 interrupt_triggered: trigger == CompactionTrigger::Interrupt,
@@ -467,10 +470,10 @@ pub(crate) async fn run_compaction_controller(
 }
 
 fn sanitize_progress_review(result: ProgressStageResponse) -> ProgressStageResponse {
-    let school_grade = result.school_grade.clamp(1, 6);
+    let progress_score = result.progress_score.clamp(1, 6);
     ProgressStageResponse {
         summary: normalize_text(&result.summary),
-        school_grade,
+        progress_score,
         rationale: normalize_text(&result.rationale),
     }
 }
@@ -752,13 +755,13 @@ fn normalize_string_list(values: &[String]) -> Vec<String> {
         .collect()
 }
 
-fn normalize_spawned_tasks(values: &[TaskSpawn]) -> Vec<TaskSpawn> {
+fn normalize_follow_up_tasks(values: &[TaskSpawn]) -> Vec<TaskSpawn> {
     values
         .iter()
         .map(|task| TaskSpawn {
             title: normalize_text(&task.title),
             detail: normalize_text(&task.detail),
-            priority_bucket: normalize_priority_bucket(&task.priority_bucket),
+            priority: normalize_priority(&task.priority),
         })
         .filter(|task| !task.title.is_empty())
         .collect()
@@ -787,7 +790,7 @@ fn normalize_next_action(value: &str) -> String {
     }
 }
 
-fn normalize_priority_bucket(value: &str) -> String {
+fn normalize_priority(value: &str) -> String {
     match normalize_text(value).as_str() {
         "now" => "now".to_string(),
         "later" => "later".to_string(),
@@ -806,8 +809,8 @@ fn normalize_task_action(value: &str) -> String {
     }
 }
 
-fn grade_label(grade: u8) -> &'static str {
-    match grade {
+fn progress_score_label(score: u8) -> &'static str {
+    match score {
         1 => "excellent",
         2 => "good",
         3 => "satisfactory",
@@ -819,10 +822,10 @@ fn grade_label(grade: u8) -> &'static str {
 
 fn select_model_routing(
     current_model: &str,
-    school_grade: u8,
+    progress_score: u8,
     available_models: Vec<String>,
 ) -> ModelRoutingDecision {
-    let (tier, candidates): (&'static str, Vec<String>) = match school_grade {
+    let (tier, candidates): (&'static str, Vec<String>) = match progress_score {
         1 | 2 => (
             "simple",
             vec![
@@ -1020,7 +1023,7 @@ fn push_block(
 
     let id = format!("B{:02}", *global_index);
     let title = if local_index > 1 {
-        format!("{section_heading} / Teil {local_index}")
+        format!("{section_heading} / Part {local_index}")
     } else {
         section_heading.to_string()
     };
@@ -1031,7 +1034,7 @@ fn push_block(
         action: "keep".to_string(),
         bucket: "all".to_string(),
         dropped: false,
-        reason: "Noch nicht bewertet.".to_string(),
+        reason: "Not reviewed yet.".to_string(),
         history: Vec::new(),
     });
     *global_index += 1;
@@ -1044,7 +1047,7 @@ fn serialize_blocks_for_prompt(blocks: &[CompactionBlock]) -> Vec<PromptBlock<'_
             id: &block.id,
             title: &block.title,
             chars: count_chars(&block.current_text),
-            bucket: &block.bucket,
+            destination: &block.bucket,
             text: &block.current_text,
         })
         .collect()
@@ -1067,13 +1070,13 @@ fn build_screen_prompt(
         "Product 2: continuity anchors.".to_string(),
         "These are hard facts that must not get washed out: IDs, scripts, hosts, artifacts, gates, invariants, prohibitions, and verification paths.".to_string(),
         "Product 3: active focus.".to_string(),
-        "This is only the current work edge: status, blocker, next step, and done or gate conditions.".to_string(),
+        "This is only the current task state: status, blocker, next step, and finish conditions.".to_string(),
         "Process each block exactly once.".to_string(),
         "action:".to_string(),
         "- keep = preserve unchanged".to_string(),
         "- compress = preserve the meaning, but shorten".to_string(),
         "- drop = safely discard".to_string(),
-        "bucket/route:".to_string(),
+        "where to keep the block:".to_string(),
         "- story = narrative only".to_string(),
         "- anchor = anchors only".to_string(),
         "- focus = focus only".to_string(),
@@ -1087,10 +1090,10 @@ fn build_screen_prompt(
         "2. If losing something later would be expensive, it belongs in story or anchor more than in discard.".to_string(),
         "3. Chat noise, UI noise, status spam, trivial intermediate updates, and repeated wording may be dropped.".to_string(),
         "4. If a block carries the main thread but is too wide, use compress instead of drop.".to_string(),
-        "5. Fill revised_text only for compress. Otherwise leave it empty.".to_string(),
-        "6. If action is drop, set bucket to discard.".to_string(),
+        "5. Fill revised_text only when you shorten a block. Otherwise leave it empty.".to_string(),
+        "6. If action is drop, route the block to discard.".to_string(),
         format!(
-            "7. After this phase, the reservoir should shrink to roughly {reservoir_target_chars} characters or less without losing causality or recovery anchors."
+            "7. After this phase, the retained context should shrink to roughly {reservoir_target_chars} characters or less without losing cause-and-effect history or recovery facts."
         ),
         format!(
             "8. The final three products together should later fit into roughly {final_target_chars} characters."
@@ -1121,15 +1124,15 @@ fn build_progress_prompt(
             CodexErr::InvalidRequest(format!("failed to serialize progress blocks: {err}"))
         })?;
     Ok([
-        "Evaluate the agent's progress so far for this work context using a strict 1-6 school-style grade.".to_string(),
-        "Grade 1 = excellent, clear progress with substantial forward movement.".to_string(),
-        "Grade 6 = insufficient, no effective movement, looping, dead end, or chaotic state.".to_string(),
-        "Grade hard and conservatively.".to_string(),
+        "Evaluate the agent's progress so far for this work context using a strict 1-6 progress score.".to_string(),
+        "Score 1 = excellent, clear progress with substantial forward movement.".to_string(),
+        "Score 6 = insufficient, no effective movement, looping, dead end, or chaotic state.".to_string(),
+        "Score hard and conservatively.".to_string(),
         "Rules:".to_string(),
         "1. Do not invent facts.".to_string(),
-        "2. Give good grades only for real movement: decisions, verified partial progress, resolved blockers, or a clean next step.".to_string(),
-        "3. Loops, repetition, diffuse state, lack of effectiveness, or growing confusion make the grade worse.".to_string(),
-        "4. Keep summary short. Use rationale for the main reason behind the grade.".to_string(),
+        "2. Give good scores only for real movement: decisions, verified partial progress, resolved blockers, or a clean next step.".to_string(),
+        "3. Loops, repetition, diffuse state, lack of effectiveness, or growing confusion make the score worse.".to_string(),
+        "4. Keep summary short. Use rationale for the main reason behind the score.".to_string(),
         String::new(),
         "<CURRENT_MODEL>".to_string(),
         current_model.to_string(),
@@ -1162,10 +1165,10 @@ fn build_iteration_prompt(
             CodexErr::InvalidRequest(format!("failed to serialize iteration blocks: {err}"))
         })?;
     Ok([
-        "You are refining an already prefiltered context reservoir for three products: continuity narrative, continuity anchors, and active focus.".to_string(),
+        "You are refining an already prefiltered retained-context set for three products: continuity narrative, continuity anchors, and active focus.".to_string(),
         format!("Current iteration: {iteration_index}."),
         format!(
-            "The reservoir currently contains about {current_chars} characters. The target is about {reservoir_target_chars} characters or less without causing expensive knowledge loss later."
+            "The retained context currently contains about {current_chars} characters. The target is about {reservoir_target_chars} characters or less without causing expensive knowledge loss later."
         ),
         "Process each block exactly once.".to_string(),
         "Rules:".to_string(),
@@ -1174,7 +1177,7 @@ fn build_iteration_prompt(
         "3. You may move a block between story, anchor, focus, and combination routes if that improves separation.".to_string(),
         "4. For duplicates, only the stronger or more compact version should survive.".to_string(),
         "5. compress may only condense locally. No new claims.".to_string(),
-        "6. If action is drop, bucket must be discard.".to_string(),
+        "6. If action is drop, route the block to discard.".to_string(),
         "7. Keep turning points and cause-effect structure in story, and hard IDs, artifacts, and gates in anchors.".to_string(),
         "8. If the target is already nearly reached, prioritize clarity and clean routing over blind extra shrinking.".to_string(),
         String::new(),
@@ -1222,12 +1225,12 @@ fn build_output_prompt(
         "1. Do not invent facts.".to_string(),
         "2. story should be a short, robust progress narrative so the main thread survives later recompaction.".to_string(),
         "3. anchor should contain dense hard anchors: IDs, scripts, hosts, artifacts, invariants, gates, and verification paths.".to_string(),
-        "4. focus should contain only the immediately active work edge: status, blocker, next, done.".to_string(),
+        "4. focus should contain only the immediately active task state: status, blocker, next step, and finish condition.".to_string(),
         "5. If something appears in multiple outputs, keep duplication small.".to_string(),
         format!(
             "6. All three outputs together should be about {final_target_chars} characters or less."
         ),
-        "7. story may use clear prose. anchor may be denser and more list-like. focus should stay brutally compact.".to_string(),
+        "7. story may use clear prose. anchor may be denser and more list-like. focus should stay short and direct.".to_string(),
         "8. No Markdown code fences.".to_string(),
         String::new(),
         "<NEXT_STEP>".to_string(),
@@ -1263,18 +1266,18 @@ fn build_reprioritization_prompt(
         CodexErr::InvalidRequest(format!("failed to serialize recent user messages: {err}"))
     })?;
     Ok([
-        "After context compaction, review task prioritization for a lightweight wrapper.".to_string(),
-        "Do not build a competing agent loop. The wrapper only needs to know what should continue with priority now.".to_string(),
+        "After context compaction, choose what the same agent run should continue now.".to_string(),
+        "Do not build a competing agent loop. This step only preserves the current task state and priority.".to_string(),
         "If an interrupt triggered this compaction, treat that as a reprioritization signal.".to_string(),
-        "In this core path, an interrupt does not always include concrete extra details. Do not invent interrupt contents; use only the signal that reprioritization may be needed plus the visible context.".to_string(),
+        "An interrupt does not always include concrete extra details. Do not invent interrupt contents; use only the signal that priority may have changed plus the visible context.".to_string(),
         "Rules:".to_string(),
         "1. Do not invent facts.".to_string(),
-        "2. active_task must name exactly the task or task packet that is currently in front.".to_string(),
+        "2. active_task must name exactly the task or small task group that is currently in front.".to_string(),
         "3. task_packet must stay small and concrete. No broad roadmap.".to_string(),
-        "4. completed_tasks lists tasks that should now be mirrored into the wrapper as done.".to_string(),
-        "5. spawned_tasks are new small follow-up tasks with title, detail, and priority_bucket(now|next|later).".to_string(),
+        "4. completed_tasks lists tasks that are now done.".to_string(),
+        "5. follow_up_tasks lists only distinct bounded follow-up work that should already exist or be created by the parent task later; do not create review-driven work cascades.".to_string(),
         "6. mutated_tasks adjust existing tasks. action must be one of complete, revise, split, drop, defer.".to_string(),
-        "7. priority_order ranks the most important tasks or task packets in order.".to_string(),
+        "7. priority_order ranks the most important tasks or small task groups in order.".to_string(),
         "8. If prioritization must be rechecked because of an interrupt or a changed situation, set should_reprioritize to true.".to_string(),
         "9. next_action must be one of four labels: continue_current_task, reprioritize, switch_task, park_current_task.".to_string(),
         "10. interrupts_reviewed is true if you accounted for the interrupt signal in your assessment.".to_string(),
@@ -1323,10 +1326,10 @@ fn progress_schema() -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
-        "required": ["summary", "school_grade", "rationale"],
+        "required": ["summary", "progress_score", "rationale"],
         "properties": {
             "summary": {"type": "string"},
-            "school_grade": {"type": "integer", "minimum": 1, "maximum": 6},
+            "progress_score": {"type": "integer", "minimum": 1, "maximum": 6},
             "rationale": {"type": "string"}
         }
     })
@@ -1344,11 +1347,11 @@ fn decision_stage_schema() -> Value {
                 "items": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["id", "action", "bucket", "reason", "revised_text"],
+                    "required": ["id", "action", "destination", "reason", "revised_text"],
                     "properties": {
                         "id": {"type": "string"},
                         "action": {"type": "string", "enum": ["keep", "compress", "drop"]},
-                        "bucket": {"type": "string", "enum": ROUTE_VALUES},
+                        "destination": {"type": "string", "enum": ROUTE_VALUES},
                         "reason": {"type": "string"},
                         "revised_text": {"type": "string"}
                     }
@@ -1394,7 +1397,7 @@ fn reprioritization_schema() -> Value {
             "priority_reason",
             "next_action",
             "completed_tasks",
-            "spawned_tasks",
+            "follow_up_tasks",
             "mutated_tasks",
             "priority_order"
         ],
@@ -1421,16 +1424,16 @@ fn reprioritization_schema() -> Value {
                 "type": "array",
                 "items": {"type": "string"}
             },
-            "spawned_tasks": {
+            "follow_up_tasks": {
                 "type": "array",
                 "items": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["title", "detail", "priority_bucket"],
+                    "required": ["title", "detail", "priority"],
                     "properties": {
                         "title": {"type": "string"},
                         "detail": {"type": "string"},
-                        "priority_bucket": {
+                        "priority": {
                             "type": "string",
                             "enum": ["now", "next", "later"]
                         }
@@ -1566,7 +1569,7 @@ fn apply_decisions(
         let bucket = normalize_bucket(
             action,
             incoming
-                .map(|item| item.bucket.as_str())
+                .map(|item| item.destination.as_str())
                 .unwrap_or(block.bucket.as_str()),
             &block.bucket,
         );
@@ -1756,7 +1759,7 @@ mod tests {
             .iter()
             .map(|block| block.title.as_str())
             .collect::<Vec<_>>();
-        assert_eq!(titles, vec!["One / Teil 1", "One / Teil 2", "Two"]);
+        assert_eq!(titles, vec!["One", "One / Part 2", "Two"]);
     }
 
     #[test]
@@ -1774,7 +1777,7 @@ mod tests {
         let decisions = vec![BlockDecision {
             id: "B01".to_string(),
             action: "drop".to_string(),
-            bucket: "story".to_string(),
+            destination: "story".to_string(),
             reason: "noise".to_string(),
             revised_text: String::new(),
         }];
@@ -1813,10 +1816,10 @@ mod tests {
             "priority_reason": "Public surface is still broken.",
             "next_action": "reprioritize",
             "completed_tasks": [],
-            "spawned_tasks": [{
+            "follow_up_tasks": [{
                 "title": "Public surface verification pass",
                 "detail": "Re-check nav and homepage.",
-                "priority_bucket": "now"
+                "priority": "now"
             }],
             "mutated_tasks": [{
                 "target": "homepage",
@@ -1831,8 +1834,8 @@ mod tests {
         let parsed: ReprioritizationStageResponse =
             serde_json::from_value(payload).expect("snake_case payload should parse");
 
-        assert_eq!(parsed.spawned_tasks.len(), 1);
-        assert_eq!(parsed.spawned_tasks[0].priority_bucket, "now");
+        assert_eq!(parsed.follow_up_tasks.len(), 1);
+        assert_eq!(parsed.follow_up_tasks[0].priority, "now");
         assert_eq!(parsed.mutated_tasks.len(), 1);
         assert_eq!(
             parsed.mutated_tasks[0].revised_title,
@@ -1848,7 +1851,7 @@ mod tests {
             "priorityBucket": "later"
         }))
         .expect("legacy camelCase task spawn should still parse");
-        assert_eq!(spawn.priority_bucket, "later");
+        assert_eq!(spawn.priority, "later");
 
         let mutation: TaskMutation = serde_json::from_value(serde_json::json!({
             "target": "catalog",

@@ -6,7 +6,7 @@ Use these patterns to automate repeated admin work without building a second con
 
 - repo script plus explicit invocation
 - `ctox schedule add` for recurring checks or maintenance
-- `ctox queue add` for deferred execution slices
+- `ctox queue add` for deferred bounded work steps
 - `ctox plan draft` for multi-step automation rollouts
 
 ## Commands

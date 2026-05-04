@@ -10,9 +10,9 @@ cluster: mission_orchestration
 
 ## CTOX Runtime Contract
 
-- Task spawning is allowed only for real execution slices that add mission progress, external waiting, recovery, or explicit decomposition. Do not spawn work merely because review feedback exists.
+- Task spawning is allowed only for real bounded work steps that add mission progress, external waiting, recovery, or explicit decomposition. Do not spawn work merely because review feedback exists.
 - The Review Gate is a quality checkpoint, not a control loop. After review feedback, continue the same main work item whenever possible and incorporate the feedback there.
-- Do not create review-driven self-work cascades. If more work is needed, reuse or requeue the existing parent work item; create a new task only when it is a distinct slice with a stable parent pointer.
+- Do not create review-driven self-work cascades. If more work is needed, reuse or requeue the existing parent work item; create a new task only when it is a distinct bounded work step with a stable parent pointer.
 - Every durable follow-up, queue item, plan emission, or self-work item must have a clear parent/anchor: message key, work id, thread key, ticket/case id, or plan step. Missing ancestry is a harness bug, not acceptable ambiguity.
 - Rewording-only feedback means revise wording on the same artifact. Substantive feedback means add new evidence or implementation progress. Stale feedback means refresh or consolidate current runtime state before drafting again.
 - Before adding follow-up work, check for existing matching self-work, queue, plan, or ticket state and consolidate rather than duplicating.
@@ -35,7 +35,7 @@ ctox follow-up evaluate --goal "<goal>" --result "<latest result>" [--step-title
 ## Output Meaning
 
 - `done`: current scope is complete
-- `needs_followup`: the work advanced but a concrete next slice still exists
+- `needs_followup`: the work advanced but a concrete next work step still exists
 - `blocked_on_user`: the owner must answer or approve something
 - `blocked_on_external`: an external dependency blocks progress
 - `needs_replan`: assumptions or requirements changed enough that the existing path is no longer reliable
@@ -56,7 +56,7 @@ while leaving a hot retry-loop downstream is misclassified by definition.
 
 ## Workflow
 
-1. Finish the meaningful execution slice first.
+1. Finish the meaningful bounded work step first.
 2. Summarize the latest concrete result compactly.
 3. If there are explicit remaining items, pass them via repeated `--open-item`.
 4. If the problem is now blocked, pass `--blocker`.
@@ -66,7 +66,7 @@ while leaving a hot retry-loop downstream is misclassified by definition.
    - queue-only for tiny atomic follow-up
    - ticket self-work plus queue or plan for multi-turn, review, approval, blocker, or recovery work
 8. If the work is high-impact, externally visible, owner-facing, or likely to span multiple turns, do not merely promise a "next step". Create the explicit self-work or review task before you end the turn.
-9. If execution started but did not reach a safe verified end state, record a review or recovery slice immediately. Prefer ticket self-work over queue-only when the recovery may need tracking, approval, or repeated follow-up.
+9. If execution started but did not reach a safe verified end state, record a review or recovery work step immediately. Prefer ticket self-work over queue-only when the recovery may need tracking, approval, or repeated follow-up.
 10. If the blocker depends on owner input, enumerate the exact missing values, credentials, approvals, or decisions in the owner-facing status. Do not send vague blocker summaries.
 11. For owner-visible blocked work, prefer a durable review schedule over waiting in the active turn.
 12. Do not create repeat owner-facing blocker communication unless there is a material delta since the last owner update. If nothing changed, keep the next review internal and durable.

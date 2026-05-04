@@ -1,3 +1,3 @@
-Optional compact task hint:
-- State the current next step or reprioritization question only if you need to override automatic task inference.
-- Otherwise leave this as-is; the staged compact controller will grade progress in school marks, segment context, screen/iterate blocks, emit continuity outputs, attach a reprioritization review for the wrapper, and route the next-model choice in the background.
+Optional compaction task hint:
+- If the current task changed, state the exact next task that should continue after compaction.
+- Otherwise leave this unchanged. CTOX will preserve compact durable context for the same parent task and will not turn compaction into a separate work loop.

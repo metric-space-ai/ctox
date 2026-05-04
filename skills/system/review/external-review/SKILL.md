@@ -1,6 +1,6 @@
 ---
 name: external-review
-description: Run an external, read-only verification pass for a CTOX slice by gathering mission, ticket, communication, runtime, and live-surface evidence directly from tools instead of relying on executor-provided context.
+description: Run an external, read-only verification pass for a CTOX task result by gathering mission, ticket, communication, runtime, and live-surface evidence directly from tools instead of relying on executor-provided context.
 cluster: review
 ---
 
@@ -8,9 +8,9 @@ cluster: review
 
 ## CTOX Runtime Contract
 
-- Task spawning is allowed only for real execution slices that add mission progress, external waiting, recovery, or explicit decomposition. Do not spawn work merely because review feedback exists.
+- Task spawning is allowed only for real bounded work steps that add mission progress, external waiting, recovery, or explicit decomposition. Do not spawn work merely because review feedback exists.
 - The Review Gate is a quality checkpoint, not a control loop. After review feedback, continue the same main work item whenever possible and incorporate the feedback there.
-- Do not create review-driven self-work cascades. If more work is needed, reuse or requeue the existing parent work item; create a new task only when it is a distinct slice with a stable parent pointer.
+- Do not create review-driven self-work cascades. If more work is needed, reuse or requeue the existing parent work item; create a new task only when it is a distinct bounded work step with a stable parent pointer.
 - Every durable follow-up, queue item, plan emission, or self-work item must have a clear parent/anchor: message key, work id, thread key, ticket/case id, or plan step. Missing ancestry is a harness bug, not acceptable ambiguity.
 - Rewording-only feedback means revise wording on the same artifact. Substantive feedback means add new evidence or implementation progress. Stale feedback means refresh or consolidate current runtime state before drafting again.
 - Before adding follow-up work, check for existing matching self-work, queue, plan, or ticket state and consolidate rather than duplicating.
@@ -29,7 +29,7 @@ The review run:
 
 - uses read-only inspection only
 - rebuilds its own understanding from the runtime store and live surfaces
-- evaluates the reviewed slice against mission state, done gates, claims, and public-surface quality
+- evaluates the reviewed task result against mission state, done gates, claims, and public-surface quality
 - returns a verdict, failed gates, open items, evidence, and when needed a handoff for another review run
 - for founder/owner outbound email drafts, treats “do not send yet; wait for specific founder input” as a terminal review result: return `VERDICT: FAIL`, begin `SUMMARY:` with `NO-SEND:`, state the wait condition, and put `none` under `OPEN_ITEMS` unless real work is missing
 
@@ -51,7 +51,7 @@ The review run:
    - active vision
    - active mission
    - done gate
-   - latest claimed slice/result
+   - latest claimed task result
    - current blockers
    - active/open related work
 4. Inspect related ticket/self-work state.
@@ -79,7 +79,7 @@ ctox continuity-show runtime/ctox.sqlite3 <conversation-id> narrative
 
 ```bash
 sqlite3 runtime/ctox.sqlite3 "
-SELECT conversation_id, mission, mission_status, blocker, done_gate, next_slice, is_open
+SELECT conversation_id, mission, mission_status, blocker, done_gate AS finish_rule, next_slice AS next_step, is_open
 FROM mission_states
 WHERE conversation_id = <conversation-id>
 ORDER BY updated_at DESC;
@@ -153,7 +153,7 @@ What to read for the verdict:
 - `conformance.trigger.failing_buckets[]`: each row names an out-of-catalog
   transition (e.g. `ticket: queued → closed` skipping `verified`). Treat
   this as a `FAILED_GATES` entry — it is a Spec-vs-Reality drift the
-  reviewed slice has either caused or inherited.
+  reviewed task result has either caused or inherited.
 - `multiperspective.evidence_presence`: per evidence-key presence ratio
   across recent proofs. A `review_audit_key` presence ratio < 1.0 on any
   protected entity type is a critical gate failure for owner-visible work.
@@ -182,7 +182,7 @@ Every concrete finding the review run produces must be tagged with one of:
   - missing recipient anchor for proactive outbound (no inbound reply, no clear new purpose, recent overlapping mail to same recipients)
   - body asserts something not supported by evidence the reviewer was able to gather
   - audience misrouted (recipient classification doesn't match content)
-  - mission contract incomplete (`done_gate`, `next_slice` missing while the slice claims completion-readiness)
+  - mission contract incomplete: the finish rule or next step is missing while the task claims completion-readiness
 
 If a finding could plausibly be either, default to `rework`.
 
@@ -204,7 +204,7 @@ Return FAIL when any of these are true:
 
 ## Stateful Product Failure Conditions
 
-When the reviewed slice claims a product with UI, database-backed workflow, or AI/agent automation, apply the `stateful-product-from-scratch` review contract. Return FAIL when any of these are true:
+When the reviewed task result claims a product with UI, database-backed workflow, or AI/agent automation, apply the `stateful-product-from-scratch` review contract. Return FAIL when any of these are true:
 
 - the central object, states, gates, or transitions are not modeled durably
 - UI state is backed mainly by frontend arrays or demo fixtures
@@ -220,12 +220,12 @@ Default classification for these findings is `rework`, not `rewrite`.
 
 ## System Integration Failure Conditions
 
-Return FAIL when the reviewed slice touches an external system and any of these are true:
+Return FAIL when the reviewed task result touches an external system and any of these are true:
 
 - (a) A new `ticket_source_control` row (a Kanban source) exists without an active `source-skill-binding` and without an open `system-onboarding` self-work item.
 - (b) A non-Kanban system (CRM, API, platform, codebase, database) is referenced in the mission and live-touched, but `ctox ticket knowledge-list --system "<s>"` returns 0 entries.
 - (c) Live work against the system happened (outbound to external contacts, data mutation, connected-app or permission setup) without an open onboarding self-work item.
-- (d) The reviewed slice operationally touched a new system but produced no `ticket_knowledge_loads` and no new `ticket_knowledge_entries`.
+- (d) The reviewed task result operationally touched a new system but produced no `ticket_knowledge_loads` and no new `ticket_knowledge_entries`.
 
 Reviewer checks for these conditions:
 
