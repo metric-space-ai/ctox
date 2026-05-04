@@ -1,0 +1,8 @@
+{
+  "id": "operations",
+  "name": "Operations",
+  "defaultRoute": "/app/operations",
+  "records": ["projects", "work_items", "boards", "wiki_pages", "meetings", "documents"],
+  "ctoxSync": ["work_items", "wiki_pages", "project_events", "bug_reports"]
+}
+

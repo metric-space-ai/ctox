@@ -1,0 +1,8 @@
+{
+  "id": "business",
+  "name": "Business",
+  "defaultRoute": "/app/business",
+  "records": ["customers", "products", "invoices", "payments", "ledger_entries"],
+  "ctoxSync": ["invoice_tasks", "reporting_jobs", "bug_reports"]
+}
+

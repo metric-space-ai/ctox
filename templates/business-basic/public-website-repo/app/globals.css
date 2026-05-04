@@ -1,0 +1,135 @@
+:root {
+  color-scheme: light;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #f5f8f9;
+  color: #132229;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.site-shell {
+  min-height: 100vh;
+}
+
+.site-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid #d8e5ea;
+  background: #fff;
+  padding: 18px 28px;
+}
+
+.site-brand,
+.site-header a,
+button {
+  font-weight: 750;
+}
+
+.site-header nav {
+  display: flex;
+  gap: 10px;
+}
+
+.site-header nav a,
+button {
+  border: 1px solid #b8ced7;
+  border-radius: 8px;
+  background: #fff;
+  padding: 9px 12px;
+}
+
+.hero {
+  max-width: 940px;
+  padding: 70px 28px 34px;
+}
+
+.hero p,
+.hero span,
+article p,
+article small {
+  color: #627580;
+}
+
+.hero p,
+article span {
+  color: #0b7278;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.hero h1 {
+  max-width: 760px;
+  margin: 10px 0 14px;
+  font-size: clamp(44px, 7vw, 84px);
+  line-height: 0.95;
+}
+
+.hero span {
+  display: block;
+  max-width: 680px;
+  font-size: 20px;
+  line-height: 1.45;
+}
+
+.page-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 14px;
+  padding: 18px 28px 48px;
+}
+
+article {
+  border: 1px solid #d8e5ea;
+  border-radius: 8px;
+  background: #fff;
+  padding: 20px;
+}
+
+article h2 {
+  margin: 8px 0;
+}
+
+.login-shell {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: 24px;
+}
+
+.login-shell form {
+  display: grid;
+  width: min(420px, 100%);
+  gap: 14px;
+  border: 1px solid #d8e5ea;
+  border-radius: 8px;
+  background: #fff;
+  padding: 24px;
+}
+
+label {
+  display: grid;
+  gap: 6px;
+  color: #627580;
+  font-weight: 700;
+}
+
+input {
+  border: 1px solid #b8ced7;
+  border-radius: 8px;
+  padding: 11px 12px;
+  font: inherit;
+}

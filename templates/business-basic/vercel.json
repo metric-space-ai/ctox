@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/marketing/competitive-analysis/scheduled",
+      "schedule": "0 5 * * *"
+    }
+  ]
+}

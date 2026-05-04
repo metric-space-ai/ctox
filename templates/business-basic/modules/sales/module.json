@@ -1,0 +1,8 @@
+{
+  "id": "sales",
+  "name": "Sales",
+  "defaultRoute": "/app/sales",
+  "records": ["accounts", "contacts", "leads", "opportunities", "tasks"],
+  "ctoxSync": ["tasks", "timeline", "transition_runs", "bug_reports"]
+}
+

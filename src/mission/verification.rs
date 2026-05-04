@@ -638,6 +638,7 @@ mod tests {
             open_items: vec!["Repair the failing health endpoint.".to_string()],
             evidence: vec!["curl /health => 502".to_string()],
             handoff: None,
+            disposition: review::ReviewDisposition::Send,
         };
 
         let recorded = record_slice_assurance(
@@ -720,6 +721,7 @@ mod tests {
             open_items: vec!["Persist active strategy, then rework the buyer path.".to_string()],
             evidence: vec!["GET / => static shell".to_string()],
             handoff: None,
+            disposition: review::ReviewDisposition::Send,
         };
 
         let recorded = record_slice_assurance(

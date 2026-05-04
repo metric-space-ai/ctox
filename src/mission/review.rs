@@ -116,6 +116,45 @@ pub enum ReviewVerdict {
     Unavailable,
 }
 
+/// Structured terminal disposition emitted by the reviewer.
+///
+/// `Send` is the default for any FAIL verdict that should drive a rewrite
+/// or rework loop. `NoSend` is the explicit terminal "do not send anything,
+/// the slice is closed" signal, set by the reviewer in the structured
+/// `DISPOSITION:` block. The dispatcher reads this enum directly — no
+/// keyword scraping on summary or evidence text in the service core.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ReviewDisposition {
+    Send,
+    NoSend,
+}
+
+impl Default for ReviewDisposition {
+    fn default() -> Self {
+        Self::Send
+    }
+}
+
+impl ReviewDisposition {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Send => "SEND",
+            Self::NoSend => "NO_SEND",
+        }
+    }
+
+    /// Parse a single disposition token. Unknown tokens fall through to the
+    /// caller, which defaults to `Send` to preserve the existing rewrite /
+    /// rework loop behaviour.
+    pub fn parse(token: &str) -> Option<Self> {
+        match token.trim().to_ascii_uppercase().as_str() {
+            "SEND" => Some(Self::Send),
+            "NO_SEND" | "NO-SEND" | "NOSEND" => Some(Self::NoSend),
+            _ => None,
+        }
+    }
+}
+
 /// Structural category emitted by the reviewer for every concrete finding.
 ///
 /// `Rewrite` means the slice can be repaired by editing the prior outbound
@@ -205,6 +244,13 @@ pub struct ReviewOutcome {
     pub open_items: Vec<String>,
     pub evidence: Vec<String>,
     pub handoff: Option<String>,
+    /// Structured terminal disposition. `Send` (default) means the dispatcher
+    /// should run the rewrite/rework loop on a FAIL verdict; `NoSend` means
+    /// the slice is closed without further outbound. The reviewer sets this
+    /// via the `DISPOSITION:` block — the service core never scrapes summary
+    /// or finding text to derive it.
+    #[serde(default)]
+    pub disposition: ReviewDisposition,
 }
 
 impl ReviewOutcome {
@@ -223,6 +269,7 @@ impl ReviewOutcome {
             open_items: Vec::new(),
             evidence: Vec::new(),
             handoff: None,
+            disposition: ReviewDisposition::Send,
         }
     }
 
@@ -269,6 +316,7 @@ impl ReviewOutcome {
             }
             _ => rendered.push("- none".to_string()),
         }
+        rendered.push(format!("DISPOSITION: {}", self.disposition.as_str()));
         rendered.join("\n")
     }
 }
@@ -318,6 +366,7 @@ pub fn review_completion_if_needed(
             open_items: Vec::new(),
             evidence: Vec::new(),
             handoff: None,
+            disposition: ReviewDisposition::Send,
         },
     }
 }
@@ -675,8 +724,11 @@ EVIDENCE:\n\
 - <check> => <observed result>\n\
 HANDOFF:\n\
 - <only when another review run should continue; otherwise write \"none\">\n\
+DISPOSITION: SEND|NO_SEND\n\
 \n\
-The CATEGORIZED_FINDINGS block is the structural input the dispatcher uses to choose between the lightweight rewrite path (body wording / subject / tonality fixes) and the heavy rework loop (durable state changes, missing artefacts, evidence gaps). Read the review skill section on Finding categories before assigning.\n",
+The CATEGORIZED_FINDINGS block is the structural input the dispatcher uses to choose between the lightweight rewrite path (body wording / subject / tonality fixes) and the heavy rework loop (durable state changes, missing artefacts, evidence gaps). Read the review skill section on Finding categories before assigning.\n\
+\n\
+DISPOSITION is the structural terminal flag: emit `NO_SEND` only when the slice is closed without sending anything (the correct action is to wait for external inputs, the user already received the answer elsewhere, the slice was a duplicate, etc.). Default is `SEND` — used for every PASS verdict and for FAIL verdicts that should drive a rewrite or rework loop. The dispatcher reads this enum directly; do not encode the no-send signal as free-text in the summary or findings.\n",
         conversation_id = request.conversation_id,
         artifact_action = artifact_action,
         artifact_to = artifact_to,
@@ -766,7 +818,19 @@ fn parse_review_report(score: u8, reasons: Vec<String>, report: &str) -> ReviewO
         open_items: parse_section_items(report, "OPEN_ITEMS:"),
         evidence: parse_section_items(report, "EVIDENCE:"),
         handoff: parse_handoff_block(report),
+        disposition: parse_disposition(report).unwrap_or_default(),
     }
+}
+
+fn parse_disposition(report: &str) -> Option<ReviewDisposition> {
+    for line in report.lines() {
+        let trimmed = line.trim();
+        let Some(rest) = trimmed.strip_prefix("DISPOSITION:") else {
+            continue;
+        };
+        return ReviewDisposition::parse(rest);
+    }
+    None
 }
 
 fn parse_verdict(report: &str) -> Option<ReviewVerdict> {
@@ -820,6 +884,7 @@ fn parse_handoff_block(report: &str) -> Option<String> {
                 || trimmed.starts_with("OPEN_ITEMS:")
                 || trimmed.starts_with("EVIDENCE:")
                 || trimmed.starts_with("CATEGORIZED_FINDINGS:")
+                || trimmed.starts_with("DISPOSITION:")
             {
                 break;
             }
@@ -861,6 +926,7 @@ fn parse_section_items(report: &str, header: &str) -> Vec<String> {
                     | "OPEN_ITEMS:"
                     | "EVIDENCE:"
                     | "HANDOFF:"
+                    | "DISPOSITION:"
             ) {
                 break;
             }
@@ -1189,5 +1255,35 @@ mod tests {
         let outcome = parse_review_report(3, vec![], report);
         assert_eq!(outcome.categorized_findings.len(), 1);
         assert_eq!(outcome.categorized_findings[0].id, "f3");
+    }
+
+    #[test]
+    fn parses_no_send_disposition_block() {
+        let report =
+            "VERDICT: FAIL\nSUMMARY: wait for inputs.\nOPEN_ITEMS:\n- none\nDISPOSITION: NO_SEND\n";
+        let outcome = parse_review_report(3, vec![], report);
+        assert_eq!(outcome.disposition, ReviewDisposition::NoSend);
+    }
+
+    #[test]
+    fn defaults_to_send_disposition_when_block_missing() {
+        let report =
+            "VERDICT: FAIL\nSUMMARY: rewrite the body.\nOPEN_ITEMS:\n- correct the salutation\n";
+        let outcome = parse_review_report(3, vec![], report);
+        assert_eq!(outcome.disposition, ReviewDisposition::Send);
+    }
+
+    #[test]
+    fn parses_send_disposition_block_explicitly() {
+        let report = "VERDICT: PASS\nSUMMARY: looks good.\nDISPOSITION: SEND\n";
+        let outcome = parse_review_report(0, vec![], report);
+        assert_eq!(outcome.disposition, ReviewDisposition::Send);
+    }
+
+    #[test]
+    fn unknown_disposition_token_falls_back_to_send() {
+        let report = "VERDICT: FAIL\nSUMMARY: weird.\nDISPOSITION: MAYBE\n";
+        let outcome = parse_review_report(0, vec![], report);
+        assert_eq!(outcome.disposition, ReviewDisposition::Send);
     }
 }

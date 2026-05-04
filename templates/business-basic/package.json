@@ -1,0 +1,28 @@
+{
+  "name": "ctox-business-basic",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@10.33.0",
+  "engines": {
+    "node": ">=20.9.0"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @ctox-business/web dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "test:business-stack": "pnpm --filter @ctox-business/web test:business-stack",
+    "test:operations": "pnpm --filter @ctox-business/web test:operations",
+    "test:ui-contract": "pnpm --filter @ctox-business/web test:ui-contract",
+    "test:all": "pnpm -r typecheck && pnpm test:ui-contract && pnpm test:operations && pnpm test:business-stack && pnpm build",
+    "db:generate": "pnpm --filter @ctox-business/db generate",
+    "db:migrate": "pnpm --filter @ctox-business/db migrate"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "modules/*"
+  ],
+  "devDependencies": {
+    "typescript": "^6.0.3"
+  }
+}

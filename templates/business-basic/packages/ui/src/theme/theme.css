@@ -1,0 +1,49 @@
+:root {
+  color-scheme: light;
+  --background: #f7f9fb;
+  --surface: #ffffff;
+  --surface-muted: #eef3f5;
+  --border: #d8e1e5;
+  --text: #172126;
+  --muted: #64747c;
+  --accent: #23665f;
+  --radius-control: 6px;
+  --radius-card: 8px;
+  --page-x: 28px;
+  --page-y: 28px;
+  --gap: 16px;
+  --module-accent: var(--accent);
+  --module-surface: var(--surface);
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+  --background: #101416;
+  --surface: #171d20;
+  --surface-muted: #20282c;
+  --border: #303b40;
+  --text: #eef4f6;
+  --muted: #9aa8ae;
+  --accent: #6cb8aa;
+  --module-surface: var(--surface);
+}
+
+[data-module="sales"] {
+  --module-accent: #23665f;
+}
+
+[data-module="marketing"] {
+  --module-accent: #5b6b2f;
+}
+
+[data-module="operations"] {
+  --module-accent: #455f73;
+}
+
+[data-module="business"] {
+  --module-accent: #6d5b33;
+}
+
+[data-module="ctox"] {
+  --module-accent: #5d5f68;
+}

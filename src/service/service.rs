@@ -6411,6 +6411,7 @@ fn founder_commitment_guard_outcome(
                 .collect()
         },
         handoff: None,
+        disposition: review::ReviewDisposition::Send,
     })
 }
 
@@ -11315,6 +11316,7 @@ mod tests {
             open_items: vec!["Introduce clear roster and hire flow.".to_string()],
             evidence: vec!["GET / => static shell".to_string()],
             handoff: None,
+            disposition: review::ReviewDisposition::Send,
         };
 
         let err = enqueue_review_rework(&root, &job, &outcome).expect_err("should suppress");
@@ -11379,6 +11381,7 @@ mod tests {
             open_items: vec!["Persist the missing closure evidence.".to_string()],
             evidence: vec!["review artifact".to_string()],
             handoff: None,
+            disposition: review::ReviewDisposition::Send,
         };
 
         let disposition =
@@ -12473,6 +12476,7 @@ mod tests {
             open_items: vec!["Generate or retrieve the Jami QR code.".to_string()],
             evidence: vec!["owner mail explicitly asks for QR code".to_string()],
             handoff: None,
+            disposition: review::ReviewDisposition::Send,
         };
 
         let title = enqueue_founder_communication_rework(

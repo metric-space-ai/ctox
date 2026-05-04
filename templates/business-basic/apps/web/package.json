@@ -1,0 +1,41 @@
+{
+  "name": "@ctox-business/web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "test:business-stack": "node scripts/business-stack-smoke.mjs",
+    "test:operations": "node scripts/operations-smoke.mjs",
+    "test:ui-contract": "node scripts/ui-contract-smoke.mjs",
+    "test:all": "pnpm typecheck && pnpm test:ui-contract && pnpm test:operations && pnpm test:business-stack && pnpm build",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@ctox-business/ctox-bridge": "workspace:*",
+    "@ctox-business/db": "workspace:*",
+    "@ctox-business/ui": "workspace:*",
+    "@lexical/code": "0.44.0",
+    "@lexical/history": "0.44.0",
+    "@lexical/html": "0.44.0",
+    "@lexical/link": "0.44.0",
+    "@lexical/list": "0.44.0",
+    "@lexical/react": "0.44.0",
+    "@lexical/rich-text": "0.44.0",
+    "@lexical/selection": "0.44.0",
+    "@lexical/utils": "0.44.0",
+    "@svar-ui/react-gantt": "2.6.1",
+    "lexical": "0.44.0",
+    "next": "^16.2.4",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.3",
+    "typescript": "^6.0.3"
+  }
+}
