@@ -3374,13 +3374,39 @@ pub fn send_reviewed_founder_reply(
         &request.body,
         &request.attachments,
     )?;
+    let entity_id = format!("founder-reply:{inbound_message_key}");
     enforce_reviewed_founder_send_core_transition(
         &conn,
-        &format!("founder-reply:{inbound_message_key}"),
+        &entity_id,
         &approval_key,
         &request,
     )?;
-    let send_result = send_email_message(root, &conn, &db_path, &request)?;
+    let body_sha256 = sha256_hex(request.body.trim().as_bytes());
+    let pending_message_key =
+        record_outbound_pending_send(&conn, &request, &approval_key, &body_sha256)?;
+    let send_result = match send_email_message(root, &conn, &db_path, &request) {
+        Ok(value) => {
+            update_pending_send_to_accepted(&conn, &pending_message_key, &value)?;
+            value
+        }
+        Err(send_err) => {
+            let error_text = format!("{send_err:#}");
+            // Best-effort: never let a row-update failure mask the original send error.
+            let _ = update_pending_send_to_failed(&conn, &pending_message_key, &error_text);
+            let _ = emit_reviewed_founder_send_failed_transition(
+                &conn,
+                &entity_id,
+                &approval_key,
+                &request,
+                &pending_message_key,
+                &error_text,
+            );
+            return Err(send_err.context(format!(
+                "founder reply send failed; body preserved as {} for retry",
+                pending_message_key
+            )));
+        }
+    };
     mark_founder_reply_review_sent(&conn, &approval_key, &send_result)?;
     Ok(send_result)
 }
@@ -3426,13 +3452,38 @@ pub(crate) fn send_reviewed_founder_outbound(
         &request.body,
     )?;
     ensure_founder_outbound_body_clean(&request)?;
+    let entity_id = format!("founder-outbound:{anchor_message_key}");
     enforce_reviewed_founder_send_core_transition(
         &conn,
-        &format!("founder-outbound:{anchor_message_key}"),
+        &entity_id,
         &approval_key,
         &request,
     )?;
-    let send_result = send_email_message(root, &conn, &db_path, &request)?;
+    let body_sha256 = sha256_hex(request.body.trim().as_bytes());
+    let pending_message_key =
+        record_outbound_pending_send(&conn, &request, &approval_key, &body_sha256)?;
+    let send_result = match send_email_message(root, &conn, &db_path, &request) {
+        Ok(value) => {
+            update_pending_send_to_accepted(&conn, &pending_message_key, &value)?;
+            value
+        }
+        Err(send_err) => {
+            let error_text = format!("{send_err:#}");
+            let _ = update_pending_send_to_failed(&conn, &pending_message_key, &error_text);
+            let _ = emit_reviewed_founder_send_failed_transition(
+                &conn,
+                &entity_id,
+                &approval_key,
+                &request,
+                &pending_message_key,
+                &error_text,
+            );
+            return Err(send_err.context(format!(
+                "founder outbound send failed; body preserved as {} for retry",
+                pending_message_key
+            )));
+        }
+    };
     mark_founder_reply_review_sent(&conn, &approval_key, &send_result)?;
     Ok(send_result)
 }
@@ -3473,6 +3524,275 @@ fn enforce_reviewed_founder_send_core_transition(
         },
     )?;
     Ok(())
+}
+
+/// Compute the deterministic `message_key` for a pending-send durable
+/// outbound row. Stable for identical (account_key, thread_key, subject,
+/// recipient set, body) tuples — this is the retry-binding key the
+/// operator uses to resume after a provider failure (RFC 0001 §5.1).
+fn pending_send_message_key(request: &ChannelSendRequest, body_sha256: &str) -> String {
+    let recipient_set_sha256 = founder_send_recipient_set_sha256(request);
+    let payload = format!(
+        "{}|{}|{}|{}",
+        request.account_key.trim(),
+        request.thread_key.trim(),
+        recipient_set_sha256,
+        body_sha256
+    );
+    let digest = sha256_hex(payload.as_bytes());
+    format!(
+        "{}::pending_send::{}",
+        request.account_key.trim(),
+        digest
+    )
+}
+
+/// Persist the outbound body durably *before* the provider call so that
+/// a provider failure cannot lose the body. RFC 0001 §5.1 (Phase 1).
+///
+/// Status starts at `draft_pending_send`; subsequent `update_pending_send_to_accepted`
+/// or `update_pending_send_to_failed` flip it terminally. Returns the
+/// synthesized `message_key` so callers can bind the retry path to it.
+fn record_outbound_pending_send(
+    conn: &Connection,
+    request: &ChannelSendRequest,
+    approval_key: &str,
+    body_sha256: &str,
+) -> Result<String> {
+    let message_key = pending_send_message_key(request, body_sha256);
+    let recipient_set_sha256 = founder_send_recipient_set_sha256(request);
+    let recipient_addresses_json = serde_json::to_string(&request.to)
+        .unwrap_or_else(|_| "[]".to_string());
+    let cc_addresses_json = serde_json::to_string(&request.cc)
+        .unwrap_or_else(|_| "[]".to_string());
+    let metadata_json = json!({
+        "approval_key": approval_key,
+        "body_sha256": body_sha256,
+        "recipient_set_sha256": recipient_set_sha256,
+        "pending_send": true,
+        "phase": "phase1_body_durability",
+    })
+    .to_string();
+    let now = now_iso_string();
+    let preview = preview_text(&request.body, &request.subject);
+    let has_attachments = !request.attachments.is_empty();
+    let sender_address = request
+        .sender_address
+        .clone()
+        .unwrap_or_else(|| email_address_from_account_key(&request.account_key));
+    let sender_display = request
+        .sender_display
+        .clone()
+        .unwrap_or_default();
+    conn.execute(
+        r#"
+        INSERT INTO communication_messages (
+            message_key, channel, account_key, thread_key, remote_id, direction, folder_hint,
+            sender_display, sender_address, recipient_addresses_json, cc_addresses_json, bcc_addresses_json,
+            subject, preview, body_text, body_html, raw_payload_ref, trust_level, status, seen,
+            has_attachments, external_created_at, observed_at, metadata_json
+        ) VALUES (
+            ?1, ?2, ?3, ?4, ?5, 'outbound', '',
+            ?6, ?7, ?8, ?9, '[]',
+            ?10, ?11, ?12, '', '', 'normal', 'draft_pending_send', 1,
+            ?13, ?14, ?14, ?15
+        )
+        ON CONFLICT(message_key) DO UPDATE SET
+            body_text=excluded.body_text,
+            subject=excluded.subject,
+            recipient_addresses_json=excluded.recipient_addresses_json,
+            cc_addresses_json=excluded.cc_addresses_json,
+            preview=excluded.preview,
+            has_attachments=excluded.has_attachments,
+            metadata_json=excluded.metadata_json,
+            observed_at=excluded.observed_at
+        "#,
+        params![
+            message_key,
+            request.channel,
+            request.account_key,
+            request.thread_key,
+            "", // remote_id unknown until provider accepts
+            sender_display,
+            sender_address,
+            recipient_addresses_json,
+            cc_addresses_json,
+            request.subject,
+            preview,
+            request.body,
+            if has_attachments { 1 } else { 0 },
+            now,
+            metadata_json,
+        ],
+    )
+    .context("failed to persist outbound body before send")?;
+    Ok(message_key)
+}
+
+/// Flip a `draft_pending_send` row to `accepted` after a successful
+/// provider call. The CAS on `status` is defensive: a concurrent failure-
+/// path update would cause this to be a noop, which is safer than
+/// silently overwriting.
+fn update_pending_send_to_accepted(
+    conn: &Connection,
+    pending_message_key: &str,
+    adapter_result: &Value,
+) -> Result<()> {
+    let prior_metadata = load_metadata_for_message(conn, pending_message_key)?;
+    let mut metadata = prior_metadata
+        .as_object()
+        .cloned()
+        .unwrap_or_else(serde_json::Map::new);
+    metadata.insert("pending_send".to_string(), Value::Bool(false));
+    metadata.insert(
+        "transitioned_to".to_string(),
+        Value::String("accepted".to_string()),
+    );
+    metadata.insert("adapter_result".to_string(), adapter_result.clone());
+    let metadata_json = Value::Object(metadata).to_string();
+    let now = now_iso_string();
+    let updated = conn
+        .execute(
+            r#"
+            UPDATE communication_messages
+            SET status = 'accepted',
+                metadata_json = ?2,
+                observed_at = ?3
+            WHERE message_key = ?1
+              AND status = 'draft_pending_send'
+            "#,
+            params![pending_message_key, metadata_json, now],
+        )
+        .context("failed to mark outbound body as accepted")?;
+    if updated == 0 {
+        anyhow::bail!(
+            "outbound durability row {} was not in draft_pending_send when accepted-update was attempted",
+            pending_message_key
+        );
+    }
+    Ok(())
+}
+
+/// Flip a `draft_pending_send` row to `send_failed` after a provider
+/// failure. Body and recipients stay; the provider error is recorded in
+/// `metadata_json` so the operator/retry path can read it.
+fn update_pending_send_to_failed(
+    conn: &Connection,
+    pending_message_key: &str,
+    error_text: &str,
+) -> Result<()> {
+    let prior_metadata = load_metadata_for_message(conn, pending_message_key)?;
+    let mut metadata = prior_metadata
+        .as_object()
+        .cloned()
+        .unwrap_or_else(serde_json::Map::new);
+    metadata.insert("pending_send".to_string(), Value::Bool(false));
+    metadata.insert(
+        "transitioned_to".to_string(),
+        Value::String("send_failed".to_string()),
+    );
+    metadata.insert(
+        "provider_error".to_string(),
+        Value::String(clip_error_text(error_text, 2000)),
+    );
+    let metadata_json = Value::Object(metadata).to_string();
+    let now = now_iso_string();
+    let updated = conn
+        .execute(
+            r#"
+            UPDATE communication_messages
+            SET status = 'send_failed',
+                metadata_json = ?2,
+                observed_at = ?3
+            WHERE message_key = ?1
+              AND status = 'draft_pending_send'
+            "#,
+            params![pending_message_key, metadata_json, now],
+        )
+        .context("failed to mark outbound body as send_failed")?;
+    if updated == 0 {
+        anyhow::bail!(
+            "outbound durability row {} was not in draft_pending_send when send_failed-update was attempted",
+            pending_message_key
+        );
+    }
+    Ok(())
+}
+
+fn load_metadata_for_message(conn: &Connection, message_key: &str) -> Result<Value> {
+    let raw: Option<String> = conn
+        .query_row(
+            "SELECT metadata_json FROM communication_messages WHERE message_key = ?1",
+            params![message_key],
+            |row| row.get(0),
+        )
+        .optional()
+        .context("failed to load metadata_json for outbound durability row")?;
+    match raw {
+        Some(json) => Ok(serde_json::from_str::<Value>(&json).unwrap_or(Value::Null)),
+        None => Ok(Value::Null),
+    }
+}
+
+/// Emit the `Sending → SendFailed` core transition after a provider
+/// failure. RFC 0001 §5.1 (Phase 1) — the kernel must witness every
+/// founder-send failure; production left no audit row before this fix.
+fn emit_reviewed_founder_send_failed_transition(
+    conn: &Connection,
+    entity_id: &str,
+    approval_key: &str,
+    request: &ChannelSendRequest,
+    pending_message_key: &str,
+    provider_error: &str,
+) -> Result<()> {
+    let body_sha256 = sha256_hex(request.body.trim().as_bytes());
+    let recipient_set_sha256 = founder_send_recipient_set_sha256(request);
+    let mut metadata = BTreeMap::new();
+    metadata.insert("protected_party".to_string(), "founder".to_string());
+    metadata.insert("thread_key".to_string(), request.thread_key.clone());
+    metadata.insert("subject".to_string(), request.subject.clone());
+    metadata.insert("account_key".to_string(), request.account_key.clone());
+    metadata.insert(
+        "pending_message_key".to_string(),
+        pending_message_key.to_string(),
+    );
+    metadata.insert(
+        "provider_error".to_string(),
+        clip_error_text(provider_error, 500),
+    );
+
+    enforce_core_transition(
+        conn,
+        &CoreTransitionRequest {
+            entity_type: CoreEntityType::FounderCommunication,
+            entity_id: entity_id.to_string(),
+            lane: RuntimeLane::P0FounderCommunication,
+            from_state: CoreState::Sending,
+            to_state: CoreState::SendFailed,
+            event: CoreEvent::Fail,
+            actor: "ctox-reviewed-founder-send".to_string(),
+            evidence: CoreEvidenceRefs {
+                review_audit_key: Some(approval_key.to_string()),
+                approved_body_sha256: Some(body_sha256.clone()),
+                outgoing_body_sha256: Some(body_sha256),
+                approved_recipient_set_sha256: Some(recipient_set_sha256.clone()),
+                outgoing_recipient_set_sha256: Some(recipient_set_sha256),
+                ..CoreEvidenceRefs::default()
+            },
+            metadata,
+        },
+    )?;
+    Ok(())
+}
+
+fn clip_error_text(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        text.to_string()
+    } else {
+        let mut clipped: String = text.chars().take(max).collect();
+        clipped.push_str("…");
+        clipped
+    }
 }
 
 fn founder_send_recipient_set_sha256(request: &ChannelSendRequest) -> String {
@@ -8002,5 +8322,273 @@ mod tests {
 
         let _ = fs::remove_dir_all(&root);
         Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // RFC 0001 Phase 1 — body durability before Sending + SendFailed transition.
+    //
+    // These tests cover the helper functions added to harden the
+    // `send_reviewed_founder_*` paths against provider failure. Helper-level
+    // tests are used because the full `send_reviewed_founder_*` paths require
+    // account configs, identity profiles, settings, and a live email adapter
+    // — wiring all of that for an injected mock would be a larger refactor
+    // than Phase 1 is scoped for. The helpers are the load-bearing surface:
+    // if they round-trip correctly, the wiring in `send_reviewed_founder_*`
+    // (a `match` over `send_email_message` with the same helper calls) is a
+    // small, locally-auditable change.
+    // -----------------------------------------------------------------------
+
+    fn phase1_test_request(body: &str) -> ChannelSendRequest {
+        ChannelSendRequest {
+            channel: "email".to_string(),
+            account_key: "email:cto1@metric-space.ai".to_string(),
+            thread_key: "<phase1-thread@example.com>".to_string(),
+            body: body.to_string(),
+            subject: "Vorschlag Tag-System fuer Lead-Funnel".to_string(),
+            to: vec!["j.kienzler@remcapital.de".to_string()],
+            cc: vec![
+                "j.cakmak@remcapital.de".to_string(),
+                "d.lottes@remcapital.de".to_string(),
+            ],
+            attachments: Vec::new(),
+            sender_display: None,
+            sender_address: None,
+            send_voice: false,
+            reviewed_founder_send: true,
+        }
+    }
+
+    #[test]
+    fn phase1_record_outbound_pending_send_persists_body_with_draft_pending_send_status() {
+        let db_path = unique_test_db_path("ctox-phase1-pending-send");
+        let conn = open_channel_db(&db_path).expect("failed to open db");
+        let request =
+            phase1_test_request("Hallo Jill,\n\nVorschlag fuer Tag-System: ...\n\nGruesse, Yoda");
+        let body_sha256 = sha256_hex(request.body.trim().as_bytes());
+
+        let message_key =
+            record_outbound_pending_send(&conn, &request, "founder-review:phase1", &body_sha256)
+                .expect("pending send must persist");
+
+        let (status, body_text, direction, subject, recipients_json, metadata_json): (
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+        ) = conn
+            .query_row(
+                "SELECT status, body_text, direction, subject, recipient_addresses_json, metadata_json
+                 FROM communication_messages WHERE message_key = ?1",
+                params![message_key],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
+            )
+            .expect("row must exist");
+        assert_eq!(status, "draft_pending_send");
+        assert_eq!(direction, "outbound");
+        assert_eq!(body_text, request.body);
+        assert_eq!(subject, request.subject);
+        assert!(recipients_json.contains("j.kienzler@remcapital.de"));
+        let metadata: Value = serde_json::from_str(&metadata_json).expect("valid json");
+        assert_eq!(metadata.get("approval_key").and_then(Value::as_str), Some("founder-review:phase1"));
+        assert_eq!(metadata.get("body_sha256").and_then(Value::as_str), Some(body_sha256.as_str()));
+        assert_eq!(metadata.get("pending_send").and_then(Value::as_bool), Some(true));
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[test]
+    fn phase1_pending_send_message_key_is_stable_for_same_request() {
+        let request = phase1_test_request("Konsistente Anfrage");
+        let body_sha256 = sha256_hex(request.body.trim().as_bytes());
+        let key_a = pending_send_message_key(&request, &body_sha256);
+        let key_b = pending_send_message_key(&request, &body_sha256);
+        assert_eq!(
+            key_a, key_b,
+            "same request inputs must yield the same message_key — retry binding"
+        );
+
+        let mut request_changed = phase1_test_request("Konsistente Anfrage");
+        request_changed.body = "Andere Nachricht".to_string();
+        let other_sha = sha256_hex(request_changed.body.trim().as_bytes());
+        let key_c = pending_send_message_key(&request_changed, &other_sha);
+        assert_ne!(
+            key_a, key_c,
+            "different body must yield a different durable message_key"
+        );
+    }
+
+    #[test]
+    fn phase1_update_pending_send_to_accepted_flips_status_and_records_adapter_result() {
+        let db_path = unique_test_db_path("ctox-phase1-accepted");
+        let conn = open_channel_db(&db_path).expect("failed to open db");
+        let request = phase1_test_request("Body fuer Erfolg");
+        let body_sha256 = sha256_hex(request.body.trim().as_bytes());
+        let message_key =
+            record_outbound_pending_send(&conn, &request, "founder-review:phase1", &body_sha256)
+                .expect("pending send must persist");
+
+        update_pending_send_to_accepted(
+            &conn,
+            &message_key,
+            &json!({
+                "ok": true,
+                "channel": "email",
+                "status": "accepted",
+                "remote_id": "smtp-msg-123",
+            }),
+        )
+        .expect("accepted update must succeed");
+
+        let (status, metadata_json): (String, String) = conn
+            .query_row(
+                "SELECT status, metadata_json FROM communication_messages WHERE message_key = ?1",
+                params![message_key],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("row must exist");
+        assert_eq!(status, "accepted");
+        let metadata: Value = serde_json::from_str(&metadata_json).expect("valid json");
+        assert_eq!(metadata.get("pending_send").and_then(Value::as_bool), Some(false));
+        assert_eq!(metadata.get("transitioned_to").and_then(Value::as_str), Some("accepted"));
+        assert_eq!(
+            metadata
+                .get("adapter_result")
+                .and_then(|value| value.get("remote_id"))
+                .and_then(Value::as_str),
+            Some("smtp-msg-123")
+        );
+
+        // Idempotence guard: a second accepted-update on a non-pending row
+        // must error rather than silently overwrite.
+        let err = update_pending_send_to_accepted(&conn, &message_key, &json!({}))
+            .expect_err("second accepted-update must fail because row is no longer pending");
+        assert!(err.to_string().contains("not in draft_pending_send"));
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[test]
+    fn phase1_update_pending_send_to_failed_preserves_body_and_records_provider_error() {
+        let db_path = unique_test_db_path("ctox-phase1-failed");
+        let conn = open_channel_db(&db_path).expect("failed to open db");
+        let request = phase1_test_request(
+            "Body fuer Provider-Fehler-Pfad: muss nach dem Failure noch da sein.",
+        );
+        let body_sha256 = sha256_hex(request.body.trim().as_bytes());
+        let message_key =
+            record_outbound_pending_send(&conn, &request, "founder-review:phase1", &body_sha256)
+                .expect("pending send must persist");
+
+        update_pending_send_to_failed(
+            &conn,
+            &message_key,
+            "smtp authentication failed: 535 5.7.0 outdated endpoint",
+        )
+        .expect("send-failed update must succeed");
+
+        let (status, body_text, metadata_json): (String, String, String) = conn
+            .query_row(
+                "SELECT status, body_text, metadata_json FROM communication_messages WHERE message_key = ?1",
+                params![message_key],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("row must exist");
+        assert_eq!(status, "send_failed");
+        assert_eq!(
+            body_text, request.body,
+            "body must survive provider failure for retry"
+        );
+        let metadata: Value = serde_json::from_str(&metadata_json).expect("valid json");
+        assert_eq!(metadata.get("transitioned_to").and_then(Value::as_str), Some("send_failed"));
+        assert!(metadata
+            .get("provider_error")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .contains("smtp authentication failed"));
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[test]
+    fn phase1_emit_send_failed_transition_records_kernel_proof() {
+        let db_path = unique_test_db_path("ctox-phase1-sendfailed-kernel");
+        let conn = open_channel_db(&db_path).expect("failed to open db");
+        let request = phase1_test_request("Body fuer Kernel-Transition");
+        let body_sha256 = sha256_hex(request.body.trim().as_bytes());
+        let pending_message_key =
+            record_outbound_pending_send(&conn, &request, "founder-review:phase1", &body_sha256)
+                .expect("pending send must persist");
+
+        // First the Approved → Sending proof (precondition for SendFailed):
+        enforce_reviewed_founder_send_core_transition(
+            &conn,
+            "founder-outbound:phase1-anchor",
+            "founder-review:phase1",
+            &request,
+        )
+        .expect("Approved->Sending must be accepted");
+
+        // Now the failure path:
+        emit_reviewed_founder_send_failed_transition(
+            &conn,
+            "founder-outbound:phase1-anchor",
+            "founder-review:phase1",
+            &request,
+            &pending_message_key,
+            "smtp 535 outdated endpoint",
+        )
+        .expect("Sending->SendFailed must be accepted by kernel");
+
+        let send_failed: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM ctox_core_transition_proofs
+                 WHERE entity_type = 'FounderCommunication'
+                   AND lane = 'P0FounderCommunication'
+                   AND from_state = 'Sending'
+                   AND to_state = 'SendFailed'
+                   AND core_event = 'Fail'
+                   AND accepted = 1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("kernel proof query must run");
+        assert_eq!(
+            send_failed, 1,
+            "the Sending->SendFailed transition must be witnessed by the kernel"
+        );
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[test]
+    fn phase1_record_outbound_pending_send_is_idempotent_for_retry() {
+        let db_path = unique_test_db_path("ctox-phase1-retry-idempotent");
+        let conn = open_channel_db(&db_path).expect("failed to open db");
+        let request = phase1_test_request("Wiederholung");
+        let body_sha256 = sha256_hex(request.body.trim().as_bytes());
+
+        let key_first =
+            record_outbound_pending_send(&conn, &request, "founder-review:phase1", &body_sha256)
+                .expect("first persist");
+        let key_second =
+            record_outbound_pending_send(&conn, &request, "founder-review:phase1", &body_sha256)
+                .expect("second persist (retry-style) must not crash");
+        assert_eq!(
+            key_first, key_second,
+            "retrying record_outbound_pending_send must yield the same key (idempotent upsert)"
+        );
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM communication_messages WHERE message_key = ?1",
+                params![key_first],
+                |row| row.get(0),
+            )
+            .expect("count query");
+        assert_eq!(count, 1, "exactly one durable row must exist for the retry-bound key");
+
+        let _ = std::fs::remove_file(&db_path);
     }
 }
