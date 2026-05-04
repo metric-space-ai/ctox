@@ -44,17 +44,29 @@ This RFC defines the target outbound state machine such that:
 ## 2. Target Shape (operator-confirmed)
 
 Every protected outbound deliverable passes through review. Review can raise
-exactly one of three orthogonal critique classes per finding:
+critique findings that fall into three top-level classes — and the
+**Staleness** class itself splits into three operationally distinct
+sub-classes, because "the world moved" can mean very different things:
 
-| Class            | Reviewer means                                 | Worker action                                                                                            |
-|------------------|------------------------------------------------|----------------------------------------------------------------------------------------------------------|
-| **Substantive**  | content / strategy / evidence is wrong         | re-draft with **new substance**: change `substance_pointer` (mission state ref, strategy refs, evidence) |
-| **Wording**      | content is fine, language/tone/format is off   | rewrite-only convergence: same `substance_pointer`, new `body_hash`                                      |
-| **Staleness**    | the world moved while the draft sat            | refresh: integrate the new world facts, fresh `world_pointer`, body may or may not change                |
+| Top class       | Reviewer means                                  | Worker pathway                                                                                                                                |
+|-----------------|-------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------|
+| **Wording**     | content is fine, language/tone/format is off    | **straight-forward in-process rewrite**: same `substance_pointer`, new `body_hash`. No new task, no new review run; converge body and resubmit. |
+| **Substantive** | content / strategy / evidence is wrong          | **real rework task**, not "compose the same email differently". Worker enters an Evidence-Work phase (research, ticket investigation, mission-state update, strategy clarification), produces a *new* `substance_pointer`, only **then** drafts. Better wording cannot fix this class. |
+| **Staleness**   | the world moved while the draft sat             | one of three sub-pathways depending on **what** moved (see below).                                                                            |
 
-A finding is one of these three classes. A reviewer report is the union of
-findings; routing is determined by the *highest* class present
-(`Substantive > Staleness > Wording`).
+Staleness sub-classes:
+
+| Sub-class               | Reviewer means                                                         | Worker pathway                                                                                                                              |
+|-------------------------|------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------|
+| **Stale-Refresh**       | new facts arrived on the relevant axes; integrate and resend           | update `world_pointer`, integrate new facts into body, send.                                                                                 |
+| **Stale-Obsolete**      | the cause for sending is gone (recipient already answered, workstream parked, mission updated) | **drop the draft**. Transition thread to `Discarded`/`Done` with a durable obsolescence reference. No send. |
+| **Stale-Consolidate**   | multiple drafts/threads must be handled together (same recipient, related topics, queue/ticket overlap) | **reorganize Queue and Tickets first** — merge threads, close superseded items, open consolidating ones — *then* compose a single consolidated draft from the new world. The right output here is **not** another mail but a queue/ticket reorg followed by one mail. |
+
+A reviewer report is the union of findings; routing is determined by the
+*highest* class present (`Substantive > Stale-* > Wording`). Among the
+Stale sub-classes, `Consolidate > Obsolete > Refresh` (consolidation
+implies refresh; obsolescence implies the recipient is no longer the
+right target without further analysis).
 
 ## 3. Anchor in the Existing Kernel
 
@@ -130,23 +142,34 @@ call:
 Effect: the body survives provider failure. Retry paths (5.4) reference the
 row by `outbound_revision_id`, not by free-form recompose.
 
-### 5.2 New finding class: `Stale`
+### 5.2 Finding classes and routing
 
-Extend the reviewer's `FindingCategory`:
+Extend the reviewer's `FindingCategory` with the operator-aligned shape:
 
 ```rust
-enum FindingCategory { Rework, Rewrite, Stale }
+enum FindingCategory {
+    Rework,            // substantive: content/strategy/evidence wrong
+    Rewrite,           // wording: language/tone/format only
+    StaleRefresh,      // staleness: new facts arrived, integrate
+    StaleObsolete,     // staleness: cause is gone, drop the draft
+    StaleConsolidate,  // staleness: must merge with other threads/queue/tickets
+}
 ```
 
-Reviewer prompt asks for explicit classification. Routing is the max class
-present:
+Reviewer prompt asks for explicit classification per finding, with the
+required evidence pointer (see §5.5 witness invariants). Routing is the
+highest class present, ordered:
 
 ```
-Substantive  := any finding has category=Rework
-Stale        := no Rework, but ≥1 Stale
-WordingOnly  := all findings are Rewrite
-Approved     := no findings
+Substantive       := any finding has Rework
+StaleConsolidate  := no Rework, any StaleConsolidate
+StaleObsolete     := no Rework, no StaleConsolidate, any StaleObsolete
+StaleRefresh      := no Rework, no StaleConsolidate, no StaleObsolete, any StaleRefresh
+WordingOnly       := all findings are Rewrite
+Approved          := no findings
 ```
+
+Each routing class has its own worker pathway (§5.4).
 
 ### 5.3 Draft revision lineage
 
@@ -161,7 +184,10 @@ CREATE TABLE outbound_draft_revisions (
   body_text TEXT NOT NULL,                 -- full body for retry/diff
   substance_pointer_json TEXT NOT NULL,    -- {mission_state_id, strategy_pointer_ids[], evidence_record_ids[]}
   world_pointer_json TEXT NOT NULL,        -- {thread_last_inbound_message_key, thread_inbound_count, mission_state_id, linked_ticket_state_hashes, active_strategic_directive_ids}
-  finding_class TEXT,                      -- the class that produced this revision: 'initial' | 'substantive' | 'wording' | 'stale'
+  finding_class TEXT,                      -- 'initial' | 'substantive' | 'wording' | 'stale_refresh' | 'stale_consolidate'
+                                           -- (stale_obsolete does not produce a revision; it terminates the chain)
+  consolidated_from_revision_ids_json TEXT,-- non-NULL only for stale_consolidate revisions; lists predecessor revisions across threads being merged
+  evidence_work_audit_keys_json TEXT,      -- non-NULL only for substantive revisions; lists evidence/verification records that justify the new substance_pointer
   predecessor_review_audit_key TEXT,       -- the review whose finding triggered this revision
   committed_at TEXT NOT NULL,
   superseded_at TEXT,
@@ -177,27 +203,141 @@ Every `Drafting → DraftReady` writes a new revision row, parented to the
 predecessor if any. `body_sha256`, `substance_pointer`, and `world_pointer`
 are computed deterministically and recorded.
 
-### 5.4 Drift gate at `Approved → Sending`
+### 5.4 Class-specific worker pathways
 
-Precondition added to
+Each finding class triggers a distinct sequence of state transitions. The
+*key point* is that not every class returns to `Drafting`. Some terminate
+the thread; some go through a Repair lane first.
+
+#### 5.4.1 Wording (in-process, no new task)
+
+```text
+Reviewing[WordingOnly] → Drafting → DraftReady → Reviewing
+```
+
+Implemented as the existing `RewriteOnly` synthesised in-process turn (see
+`service::ReviewRoutingClass::RewriteOnly`). No queue task, no self-work,
+no founder-rework spawn. The drafter receives the prior body and the
+findings inline, returns a converged body, the new revision is committed.
+This is the cheap path; it must remain cheap.
+
+#### 5.4.2 Substantive (real rework with explicit Evidence Work)
+
+```text
+Reviewing[Substantive] → ReworkRequired → EvidenceWork → Drafting → DraftReady → Reviewing
+```
+
+Substantive findings cannot be fixed by re-wording. The transition kernel
+forbids `Reviewing[Substantive] → Drafting` directly; the chain must pass
+through `EvidenceWork`. EvidenceWork is satisfied by **at least one** of:
+
+- a new evidence/verification record (`ticket_verifications`,
+  `ticket_execution_actions`) committed since the previous review,
+- a mission-state transition (`MissionState` entity),
+- a strategic-directive update (`strategy_pointer_ids` change),
+- explicit operator input recorded in the thread.
+
+The new revision **must** reference the audit keys of the satisfying
+evidence (`evidence_work_audit_keys_json`). Without it, the
+`Drafting → DraftReady` transition is rejected (WP-Substantive-Evidence,
+§5.5).
+
+This is the "echte Rework-Aufgabe" the operator described — not "compose
+the same email differently".
+
+#### 5.4.3 Stale-Refresh (integrate new world facts)
+
+```text
+Reviewing[StaleRefresh] → Drafting → DraftReady → Reviewing
+                          ^
+                          new world_pointer captured at draft commit
+```
+
+The drafter receives a diff against the prior `world_pointer` and
+integrates it. The new revision's `world_pointer` must differ from the
+predecessor's on at least one fact axis tied to the finding (WP-Stale,
+§5.5). This **does not** count toward the substantive rework counter
+(WP-Drift-Reset).
+
+#### 5.4.4 Stale-Obsolete (cause is gone, drop)
+
+```text
+Reviewing[StaleObsolete] → Discarded
+```
+
+The thread terminates without sending. The transition records:
+
+- the obsolescence trigger (e.g. inbound message key that resolved the
+  cause; mission-state ID that parked the workstream),
+- a durable reason note,
+- cleanup actions per §5.7.
+
+There is no further drafting. Subsequent inbound on the same thread
+re-enters at `InboundObserved` with a fresh classification — the
+discarded thread is part of context but does not resurrect the prior
+draft.
+
+#### 5.4.5 Stale-Consolidate (queue/ticket reorg, then one mail)
+
+This is the most operationally significant case and the one the operator
+emphasised: "im Zweifel die Queue und Tickets überarbeiten".
+
+```text
+Reviewing[StaleConsolidate] → RepairPlanning → RepairPlanReviewed →
+                              ApplyingDeterministicActions →
+                              RepairVerification → Restored →
+                              Drafting (consolidating revision) →
+                              DraftReady → Reviewing
+```
+
+The consolidation lane uses the existing `Repair` entity type and event
+vocabulary. The reorganization plan is itself a reviewable artifact. Its
+deliverables must include:
+
+- thread merges (which threads are joined, which closed),
+- queue-task reassignments (which tasks become children of which
+  consolidated thread, which are superseded),
+- ticket updates (split, merge, close, open),
+- the resulting list of consolidated threads that still need outbound.
+
+Only after `Restored`, the worker drafts. The new revision references all
+predecessor revisions across the merged threads
+(`consolidated_from_revision_ids_json`). The predecessors transition to
+`Superseded` with the consolidating revision as
+`superseded_by_revision_id`.
+
+#### 5.4.6 Drift gate at `Approved → Sending`
+
+The drift gate runs as a precondition to
 `enforce_reviewed_founder_send_core_transition`:
 
 ```text
 let approved_world_pointer = revision_at_approval.world_pointer
-let current_world_pointer = compute_world_pointer(thread_key, ...)
-if drift(approved_world_pointer, current_world_pointer) is non-empty:
-    reject Approved → Sending
-    emit transition Approved → Reviewing with finding_class='stale'
-                                            staleness_diff_json=<diff>
-    do not call provider
+let current_world_pointer  = compute_world_pointer(thread_key, ...)
+let drift_kind = classify_drift(approved_world_pointer, current_world_pointer, thread_key)
+match drift_kind:
+    None:           proceed → Sending
+    Refresh:        reject; Approved → Reviewing with finding_class=StaleRefresh
+    Obsolete:       reject; Approved → Reviewing with finding_class=StaleObsolete
+    Consolidate:    reject; Approved → Reviewing with finding_class=StaleConsolidate
 ```
 
-`drift` is a pure function over the world_pointer fields. New inbound on the
-same thread, mission state change, or any linked-ticket state change since
-approval are non-empty drifts. Unrelated thread updates are not.
+`classify_drift` is a pure function. Its rules:
 
-This is the only mechanism by which a stale draft is prevented from going
-out, and it is enforced in the transition kernel — not in agent prompts.
+- new inbound on the same thread that addresses the draft's question →
+  `Obsolete` candidate (drafter+reviewer confirm by classification);
+- new inbound on a parallel thread to the same recipient on a topic that
+  shares mission/strategy pointer with this draft → `Consolidate` candidate;
+- mission-state or strategy-pointer change touching the draft's
+  substance_pointer → `Obsolete` if workstream parked, else `Refresh`;
+- new evidence/ticket-state on linked tickets → `Refresh`.
+
+The classifier is conservative: ambiguous drifts default to `Refresh`,
+and the reviewer is responsible for re-classifying upward to `Obsolete`
+or `Consolidate` if needed.
+
+This drift detection is enforced in the transition kernel — not in agent
+prompts.
 
 ### 5.5 Witness-of-progress invariants
 
@@ -206,17 +346,22 @@ otherwise (recorded in `core_invariant_violations`):
 
 | Invariant | Statement |
 |-----------|-----------|
-| **WP-Substantive** | A `Reviewing → Drafting` transition with `finding_class=Rework` requires the next `Drafting → DraftReady` to commit a revision whose `substance_pointer ≠ predecessor.substance_pointer`. |
-| **WP-Wording** | A `Reviewing → Drafting` with `finding_class=Rewrite` requires `body_sha256 ≠ predecessor.body_sha256` and `substance_pointer = predecessor.substance_pointer`. |
-| **WP-Stale** | A `Reviewing → Drafting` with `finding_class=Stale` requires `world_pointer ≠ predecessor.world_pointer` (refresh integrated). |
-| **WP-Drift-Reset** | `Stale` revisions do not increment the substantive-rework counter. |
+| **WP-Wording**             | A wording-class chain of revisions on the same thread must each have `body_sha256 ≠ predecessor.body_sha256` and `substance_pointer = predecessor.substance_pointer`. |
+| **WP-Substantive**         | A `Reviewing → ReworkRequired → EvidenceWork → Drafting → DraftReady` chain requires the new revision's `substance_pointer ≠ predecessor.substance_pointer`. Direct `Reviewing → Drafting` with `finding_class=Rework` is rejected — must pass through EvidenceWork. |
+| **WP-Substantive-Evidence**| The new substantive revision's `evidence_work_audit_keys_json` must list at least one evidence/verification/mission-state/strategy/operator-input record committed *between* the prior review and the new revision. Empty list is rejected. |
+| **WP-StaleRefresh**        | A `Reviewing → Drafting` with `finding_class=StaleRefresh` requires `world_pointer ≠ predecessor.world_pointer` on at least one axis named in the finding. |
+| **WP-StaleObsolete**       | A `* → Discarded` with `finding_class=StaleObsolete` requires a durable obsolescence reference (inbound message key, mission-state ID, or operator note). Empty reason is rejected. |
+| **WP-StaleConsolidate**    | A `Reviewing → RepairPlanning` with `finding_class=StaleConsolidate` requires the resulting `Restored → Drafting` revision to list ≥2 predecessor revision IDs in `consolidated_from_revision_ids_json` across distinct thread keys. |
+| **WP-Drift-Reset**         | Stale-class revisions (Refresh, Consolidate) do not increment the substantive-rework counter. StaleObsolete terminates the chain entirely. |
+| **WP-Cleanup**             | Each terminal transition (`Sent`, `Discarded`, `Superseded`, `Escalated`) must apply the reap actions in §5.7 in the same transaction. Detection of orphaned child rework/queue rows after the transaction is an invariant violation. |
 
-The counters live in the revision chain (count of non-`Stale` parents per
-thread), not in a separate state. With WP-Substantive in place, a substantive
-counter of `N` implies `N` distinct `substance_pointer` values along the
-chain. The state space of meaningful substance pointers is bounded by the
-durable mission/strategy/evidence sets, so the chain is finite by
-construction.
+Counter accounting: substantive and wording counters live as derived facts
+on the revision chain, not as separate stored state. With WP-Substantive
+and WP-Substantive-Evidence in place, a substantive counter of `N` implies
+`N` distinct `substance_pointer` values along the chain, each backed by
+distinct evidence work — by construction. The state space of meaningful
+substance pointers is bounded by the durable mission/strategy/evidence
+sets, so the chain is finite.
 
 ### 5.6 Bounded-cycle gate
 
@@ -231,6 +376,11 @@ A hard ceiling complements the witness invariants:
   substance is a reviewer convergence failure.
 - `OUTBOUND_STALE_REFRESH_CEILING = 4`. Beyond this, escalate — the world is
   moving faster than we draft and the operator must decide.
+- `OUTBOUND_STALE_CONSOLIDATE_CEILING = 2`. A second consolidation pass on
+  the same surviving thread without intervening Approve/Sent suggests the
+  consolidation plan itself is wrong; escalate to operator instead of
+  re-attempting.
+- StaleObsolete has no ceiling — it is itself a terminal transition.
 
 These ceilings exist as a defense-in-depth guard, not as the primary
 loop-freedom argument.
@@ -259,26 +409,48 @@ class-specific ceilings in 5.6, applied uniformly.
 
 ## 6. Loop-Freedom Proof Sketch
 
-Claim: under the rules of §5, no outbound thread can stay in
-`{Drafting, DraftReady, Reviewing}` without bound.
+Claim: under the rules of §5, no outbound thread can stay in the
+non-terminal set `{Drafting, DraftReady, Reviewing, ReworkRequired,
+EvidenceWork, RepairPlanning, RepairPlanReviewed,
+ApplyingDeterministicActions, RepairVerification, Restored}` without
+bound.
 
-1. Every `Reviewing → Drafting` carries a `finding_class`.
-2. By WP-Substantive, WP-Wording, WP-Stale, the new revision differs from its
-   parent on at least one of `(substance_pointer, body_sha256, world_pointer)`
-   — and on an axis specifically tied to the finding class.
-3. The product space of `(substance_pointer × world_pointer)` is bounded by
-   the durable runtime state at observation time. `body_sha256` is an
-   unbounded set in principle, but the wording ceiling (5.6) bounds wording
-   chains.
-4. Substantive ceiling (5.6) terminates the substantive chain at `N=3`.
-5. Stale ceiling (5.6) terminates the stale chain at `N=4`.
-6. Therefore every chain reaches one of `{Sent, Escalated, Superseded,
-   Discarded}` in bounded steps. ∎
+1. Every transition out of `Reviewing` carries a `finding_class` (or is
+   `Approve` → `Approved`, which leaves the non-terminal set).
+2. The class determines the lane:
+   - `WordingOnly` → in-process rewrite lane (5.4.1)
+   - `Substantive` → EvidenceWork lane (5.4.2)
+   - `StaleRefresh` → refresh lane (5.4.3)
+   - `StaleObsolete` → terminates with `Discarded` (5.4.4) — leaves the set
+   - `StaleConsolidate` → Repair lane (5.4.5)
+3. Each lane has a witness-of-progress invariant (§5.5):
+   - Wording: `body_sha256 ≠ predecessor`, `substance_pointer = predecessor`
+   - Substantive: `substance_pointer ≠ predecessor`, plus non-empty
+     `evidence_work_audit_keys_json` proven by referenced records that
+     were committed *between* the prior review and this revision
+   - StaleRefresh: `world_pointer ≠ predecessor` on a finding-named axis
+   - StaleConsolidate: ≥2 distinct predecessor revision IDs from distinct
+     thread keys
+4. The class-specific ceilings (§5.6) bound each lane:
+   - Substantive: ≤3 substantive revisions before `Reviewing → Escalated`
+   - Wording: ≤5 wording revisions before forced escalation
+   - StaleRefresh: ≤4 refreshes before operator escalation
+   - StaleConsolidate: ≤2 consolidation passes before escalation
+5. The product space of `(substance_pointer × world_pointer)` is bounded
+   by durable runtime state at observation time. Even without ceilings,
+   the witness invariants ensure each lane traverses *new* points in this
+   bounded space; with ceilings as defense-in-depth, the chain
+   terminates in `O(N_substantive · N_refresh · N_consolidate)` steps.
+6. Therefore every chain reaches one of the terminal states
+   `{Sent, Escalated, Superseded, Discarded}` in bounded steps. ∎
 
-This is a finite-state liveness argument over the *revision graph*, not over
-the in-memory turn loop. The turn loop can spin all it wants — without a
-revision-chain advance, no transition is accepted, and the bounded-cycle
-gate fires.
+This is a finite-state liveness argument over the *revision graph*, not
+over the in-memory turn loop. The turn loop can spin all it wants —
+without a revision-chain advance witnessed by §5.5 invariants, no
+transition is accepted, and the bounded-cycle gate fires. The
+process-mining runtime gate (§7) catches reviewer-side convergence
+failures that would otherwise consume budget legitimately while making
+no real progress.
 
 ## 7. Process-Mining Detection
 
@@ -319,15 +491,26 @@ in `docs/core_runtime_state_machine.md`.
 
 To be added to the existing matrix in `docs/core_runtime_state_machine.md`:
 
-| Scenario                                                                | Expected result                                                       |
-|-------------------------------------------------------------------------|-----------------------------------------------------------------------|
-| Provider call fails after `Approved`                                    | `Sending → SendFailed`, body row preserved, retry path bound to revision |
-| Reviewer issues `Substantive` finding without changed substance pointer on next draft | invariant violation WP-Substantive, transition rejected |
-| New inbound on thread between `Approved` and `Sending`                  | drift gate fires, `Approved → Reviewing` with `Stale` class, no send |
-| 4 substantive reworks on same thread                                    | ceiling triggers `Reviewing → Escalated`                              |
-| Reviewer re-issues identical finding on already-superseded revision     | process-mining detects cycle, reviewer is asked to escalate           |
-| Outbound non-founder thread without revision row                        | `Approved → Sending` rejected (unified gate)                          |
-| Cleanup-on-Sent: child review-rework self-work still open               | cleanup invariant violation                                           |
+| Scenario                                                                                              | Expected result                                                                                  |
+|-------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------|
+| Provider call fails after `Approved`                                                                  | `Sending → SendFailed`, body row preserved, retry bound to `outbound_revision_id`                |
+| Wording-only finding, drafter changes body but not substance                                          | `RewriteOnly` lane accepted; new revision committed; same `substance_pointer`                    |
+| Wording-only finding, drafter changes substance                                                       | invariant violation WP-Wording — substance must remain identical on a wording rework             |
+| Substantive finding, drafter attempts direct `Reviewing → Drafting`                                   | rejected — must pass through `EvidenceWork`                                                      |
+| Substantive rework with empty `evidence_work_audit_keys_json`                                         | invariant violation WP-Substantive-Evidence                                                      |
+| Substantive rework citing an evidence record committed *before* the prior review                      | invariant violation WP-Substantive-Evidence (must be between prior review and new revision)      |
+| New inbound on same thread between `Approved` and `Sending` that resolves the draft's question        | drift gate fires; `Approved → Reviewing[StaleObsolete]` candidate; reviewer confirms; `Discarded`|
+| New inbound on parallel thread to same recipient on related topic                                     | drift gate fires; `Approved → Reviewing[StaleConsolidate]`; Repair lane planned                  |
+| StaleRefresh integration: drafter updates `world_pointer` correctly                                   | accepted, substantive counter not incremented (WP-Drift-Reset)                                   |
+| StaleObsolete with empty obsolescence reference                                                       | invariant violation WP-StaleObsolete                                                             |
+| StaleConsolidate revision with only one predecessor revision_id                                       | invariant violation WP-StaleConsolidate (need ≥2 across distinct threads)                        |
+| StaleConsolidate via Repair lane: queue/ticket reorg plan reviewed and applied, then single mail drafted | accepted; predecessor revisions transition to `Superseded`                                    |
+| 3 substantive reworks on same thread                                                                  | ceiling triggers `Reviewing → Escalated`; operator self-work created                             |
+| 5 wording revisions on same substance                                                                 | ceiling triggers force-escalation to substantive review                                          |
+| Reviewer re-issues identical finding on already-superseded revision                                   | process-mining detects cycle; reviewer asked to escalate, not re-issue                           |
+| Outbound non-founder thread without revision row                                                      | `Approved → Sending` rejected (unified gate; §5.8)                                               |
+| Cleanup-on-Sent: child review-rework self-work still open after transition                            | invariant violation WP-Cleanup; transaction rolled back                                          |
+| Discarded thread receives new inbound later                                                           | enters `InboundObserved` fresh; the discarded revision does not resurrect                        |
 
 ## 10. Out of Scope
 
@@ -340,12 +523,27 @@ To be added to the existing matrix in `docs/core_runtime_state_machine.md`:
 ## 11. Open Questions
 
 1. `substance_pointer` content: should `evidence_record_ids` reference
-   verification rows, ticket knowledge entries, or both? Probably both, with
-   a stable hash over the union.
-2. World-pointer scope for `Stale` detection: do operator TUI prompts on the
-   same thread count as world-drift? Default: yes — operator input is
+   verification rows, ticket knowledge entries, or both? Probably both,
+   with a stable hash over the union.
+2. World-pointer scope for `Stale` detection: do operator TUI prompts on
+   the same thread count as world-drift? Default: yes — operator input is
    first-class world state.
 3. Reviewer-side: should the reviewer be required to attach
-   `evidence_record_ids` to a `Stale` finding (i.e. point to the new
-   inbound or new mission-state), or is the diff sufficient? Default:
-   reviewer must point — opaque "things changed" is not acceptable.
+   `evidence_record_ids` to a Stale finding (i.e. point to the new inbound
+   or new mission-state), or is the diff sufficient? Default: reviewer
+   must point — opaque "things changed" is not acceptable.
+4. `classify_drift` (§5.4.6) ambiguity: a parallel-thread inbound to the
+   same recipient *might* warrant Consolidate or might be unrelated. How
+   does the kernel decide vs. defer to reviewer? Default: kernel emits
+   `Refresh` with a `consolidate_candidate=true` flag; reviewer
+   re-classifies upward if the topics are tied.
+5. StaleConsolidate Repair plan reviewability: is the queue/ticket reorg
+   plan itself a `FounderCommunication`-class artifact (because the
+   downstream mail is) or a `Repair`-class artifact? Default: `Repair`,
+   reviewed under the existing `RepairPlanning → RepairPlanReviewed` gate.
+6. Backwards compatibility for existing in-flight threads at migration:
+   do they retroactively get a synthetic initial revision, or are they
+   grandfathered into a legacy code path until they reach a terminal
+   state? Default: synthetic initial revision with
+   `parent_revision_id=NULL`, `finding_class='migration_synthetic'`,
+   `world_pointer` snapshotted at migration time.
