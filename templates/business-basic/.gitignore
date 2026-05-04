@@ -1,0 +1,12 @@
+node_modules/
+.next/
+.next*/
+.vercel/
+.env
+.env.*
+!.env.example
+dist/
+coverage/
+*.tsbuildinfo
+apps/web/next-env.d.ts
+public-website-repo/next-env.d.ts

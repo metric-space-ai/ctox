@@ -1,0 +1,8 @@
+{
+  "id": "marketing",
+  "name": "Marketing",
+  "defaultRoute": "/app/marketing",
+  "records": ["pages", "assets", "campaigns", "research_items", "products"],
+  "ctoxSync": ["campaign_tasks", "research_findings", "content_reviews", "bug_reports"]
+}
+

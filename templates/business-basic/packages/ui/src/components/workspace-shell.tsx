@@ -1,0 +1,151 @@
+import type { ReactNode } from "react";
+import { localeRegistry, resolveLocale, withLocale } from "../i18n/locales";
+import { shellT as translateShell } from "../i18n/messages";
+import { businessModules, type BusinessModuleId } from "../navigation/model";
+import { resolveThemeMode, themeModes, withThemeMode } from "../theme/modes";
+
+export type WorkspaceShellLinkComponent = (props: {
+  href: string;
+  className?: string;
+  children: ReactNode;
+}) => ReactNode;
+
+export function WorkspaceShell({
+  children,
+  currentHref,
+  brandName,
+  moduleId,
+  submoduleId,
+  locale,
+  theme,
+  LinkComponent
+}: {
+  children: ReactNode;
+  currentHref?: string;
+  brandName?: string;
+  moduleId?: BusinessModuleId;
+  submoduleId?: string;
+  locale?: string;
+  theme?: string;
+  LinkComponent: WorkspaceShellLinkComponent;
+}) {
+  const activeModule = businessModules.find((module) => module.id === moduleId);
+  const activeSubmodule = activeModule?.submodules.find((submodule) => submodule.id === submoduleId);
+  const Link = LinkComponent;
+  const activeLocale = resolveLocale(locale);
+  const activeTheme = resolveThemeMode(theme);
+  const activeHref = currentHref ?? activeSubmodule?.href ?? activeModule?.href ?? "/app";
+  const moduleLabel = (id: string, fallback: string) => navLabels[activeLocale]?.modules[id] ?? fallback;
+  const submoduleLabel = (id: string, fallback: string) => navLabels[activeLocale]?.submodules[id] ?? fallback;
+
+  return (
+    <div className="app-shell" data-module={moduleId ?? "workspace"} data-theme={activeTheme}>
+      <header className="workspace-header">
+        <div className="workspace-top-row">
+          <Link className="brand" href={withThemeMode(withLocale("/app", activeLocale), activeTheme)}>
+            {brandName ?? translateShell(activeLocale, "brand")}
+          </Link>
+          <nav className="module-nav" aria-label="Business modules">
+            {businessModules.map((module) => (
+              <Link
+                className={module.id === moduleId ? "active" : ""}
+                href={withThemeMode(withLocale(module.href, activeLocale), activeTheme)}
+                key={module.id}
+              >
+                {moduleLabel(module.id, module.label)}
+              </Link>
+            ))}
+          </nav>
+          <div className="language-switcher" aria-label={translateShell(activeLocale, "language")}>
+            {localeRegistry.map((entry) => (
+              <Link
+                className={entry.code === activeLocale ? "active" : ""}
+                href={withThemeMode(withLocale(activeHref, entry.code), activeTheme)}
+                key={entry.code}
+              >
+                {entry.code.toUpperCase()}
+              </Link>
+            ))}
+          </div>
+          <div className="theme-switcher" aria-label="Theme">
+            {themeModes.map((entry) => (
+              <Link
+              className={entry.id === activeTheme ? "active" : ""}
+              href={withThemeMode(withLocale(activeHref, activeLocale), entry.id)}
+              key={entry.id}
+            >
+                {activeLocale === "de" ? themeLabelsDe[entry.id] ?? entry.label : entry.label}
+              </Link>
+            ))}
+          </div>
+        </div>
+        <nav className="submodule-nav" aria-label="Module sections">
+          {(activeModule?.submodules ?? []).map((submodule) => (
+            <Link
+              className={submodule.id === submoduleId ? "active" : ""}
+              href={withThemeMode(withLocale(submodule.href, activeLocale), activeTheme)}
+              key={submodule.id}
+            >
+              {submoduleLabel(submodule.id, submodule.label)}
+            </Link>
+          ))}
+        </nav>
+      </header>
+      <main className="main">{children}</main>
+    </div>
+  );
+}
+
+const themeLabelsDe: Record<string, string> = {
+  light: "Hell",
+  dark: "Dunkel"
+};
+
+const navLabels: Record<string, {
+  modules: Record<string, string>;
+  submodules: Record<string, string>;
+}> = {
+  de: {
+    modules: {
+      sales: "Vertrieb",
+      marketing: "Marketing",
+      operations: "Betrieb",
+      business: "Geschäft",
+      ctox: "CTOX"
+    },
+    submodules: {
+      pipeline: "Pipeline",
+      accounts: "Konten",
+      contacts: "Kontakte",
+      leads: "Leads",
+      offers: "Angebote",
+      tasks: "Aufgaben",
+      website: "Webseite",
+      assets: "Materialien",
+      campaigns: "Kampagnen",
+      "competitive-analysis": "Wettbewerbsanalyse",
+      research: "Recherche",
+      commerce: "Commerce",
+      projects: "Projekte",
+      "work-items": "Arbeitsobjekte",
+      boards: "Boards",
+      wiki: "Wiki",
+      meetings: "Meetings",
+      customers: "Kunden",
+      products: "Produkte",
+      invoices: "Rechnungen",
+      bookkeeping: "Buchhaltung",
+      reports: "Berichte",
+      runs: "Läufe",
+      queue: "Queue",
+      knowledge: "Wissen",
+      bugs: "Fehler",
+      sync: "Sync",
+      settings: "Settings"
+    }
+  },
+  en: {
+    modules: {},
+    submodules: {}
+  }
+};

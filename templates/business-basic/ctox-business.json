@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "templateId": "ctox-business-basic",
+  "displayName": "CTOX Business Basic",
+  "stack": {
+    "web": "nextjs",
+    "database": "postgres",
+    "orm": "drizzle",
+    "deployment": ["vercel", "self-hosted"]
+  },
+  "ctoxIntegration": {
+    "skill": "product_engineering/business-stack",
+    "installer": "skills/system/product_engineering/business-stack/scripts/install_business_stack.py",
+    "cli": {
+      "status": "ctox business-os status",
+      "install": "ctox business-os install --target <empty-dir> --init-git"
+    },
+    "tui": {
+      "settingsView": "Business OS",
+      "smokePage": "business-os"
+    },
+    "publicWebsite": {
+      "repository": "public-website-repo",
+      "deploymentModes": ["local", "hybrid", "website"],
+      "businessOsAccessRole": "business_os_user",
+      "customerAccessPolicy": "public_website_only"
+    }
+  },
+  "modules": ["sales", "marketing", "operations", "business"],
+  "contracts": {
+    "publicEntry": "/",
+    "internalEntry": "/app",
+    "loginEntry": "/login",
+    "navigationApi": "/api/ctox/navigation",
+    "localesApi": "/api/ctox/locales",
+    "deepLinkApi": "/api/ctox/links",
+    "queueTaskApi": "/api/ctox/queue-tasks",
+    "deepLinkRoutePattern": "/app/{module}/{submodule}?recordId={recordId}&panel=record&drawer=right&locale=en&theme=light",
+    "ctoxBridge": "packages/ctox-bridge",
+    "installManifest": ".ctox-business-install.json",
+    "repositoryOwnership": "customer-owned",
+    "coreUpgradePolicy": "never_overwrite_generated_repo",
+    "upgradePolicy": "branch_and_diff_only"
+  }
+}
