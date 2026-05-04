@@ -1,13 +1,17 @@
 use crate::audio;
 use crate::consts::{
-    VOX_DEC_DIM, VOX_DEC_HEAD_DIM, VOX_DEC_HEADS, VOX_DEC_HIDDEN, VOX_DEC_KV_HEADS,
-    VOX_DEC_LAYERS, VOX_ENC_DIM, VOX_ENC_HEAD_DIM, VOX_ENC_HEADS, VOX_ENC_HIDDEN,
-    VOX_ENC_KV_HEADS, VOX_ENC_LAYERS, VOX_NUM_MEL_BINS, VOXTRAL_MINI_4B_REALTIME_2602_CANONICAL_MODEL,
+    VOXTRAL_MINI_4B_REALTIME_2602_CANONICAL_MODEL, VOX_DEC_DIM, VOX_DEC_HEADS, VOX_DEC_HEAD_DIM,
+    VOX_DEC_HIDDEN, VOX_DEC_KV_HEADS, VOX_DEC_LAYERS, VOX_ENC_DIM, VOX_ENC_HEADS, VOX_ENC_HEAD_DIM,
+    VOX_ENC_HIDDEN, VOX_ENC_KV_HEADS, VOX_ENC_LAYERS, VOX_NUM_MEL_BINS,
 };
 use crate::gguf;
 use crate::kernels::VoxtralSttBackend;
 use crate::{Error, Result};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
+
+type WgpuBackend = burn::backend::Wgpu;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VoxtralSttConfig {
@@ -30,18 +34,18 @@ impl Default for VoxtralSttConfig {
 pub struct VoxtralSttArtifactInspection {
     pub root: PathBuf,
     pub gguf_path: PathBuf,
+    pub tokenizer_path: Option<PathBuf>,
     pub tensor_count: usize,
     pub architecture: Option<String>,
     pub required_tensors_present: bool,
     pub missing_required_tensors: Vec<String>,
 }
 
-#[derive(Debug, Clone)]
 pub struct VoxtralSttModel {
     config: VoxtralSttConfig,
     backend: VoxtralSttBackend,
     inspection: Option<VoxtralSttArtifactInspection>,
-    preprocess: audio::MelSpectrogramPlan,
+    runtime: Option<Arc<Mutex<VoxtralQ4Runtime>>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,13 +61,41 @@ pub struct TranscriptionResponse {
     pub text: String,
 }
 
+struct VoxtralQ4Runtime {
+    model: voxtral_mini_realtime::gguf::model::Q4VoxtralModel,
+    tokenizer: voxtral_mini_realtime::tokenizer::VoxtralTokenizer,
+    device: <WgpuBackend as burn::tensor::backend::Backend>::Device,
+}
+
+impl std::fmt::Debug for VoxtralSttModel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VoxtralSttModel")
+            .field("config", &self.config)
+            .field("backend", &self.backend)
+            .field("inspection", &self.inspection)
+            .field("runtime_loaded", &self.runtime.is_some())
+            .finish()
+    }
+}
+
+impl Clone for VoxtralSttModel {
+    fn clone(&self) -> Self {
+        Self {
+            config: self.config.clone(),
+            backend: self.backend,
+            inspection: self.inspection.clone(),
+            runtime: self.runtime.clone(),
+        }
+    }
+}
+
 impl VoxtralSttModel {
     pub fn new(config: VoxtralSttConfig, backend: VoxtralSttBackend) -> Self {
         Self {
             config,
             backend,
             inspection: None,
-            preprocess: audio::MelSpectrogramPlan::default(),
+            runtime: None,
         }
     }
 
@@ -75,11 +107,16 @@ impl VoxtralSttModel {
                 inspection.missing_required_tensors.join(", ")
             )));
         }
+        let tokenizer_path = inspection
+            .tokenizer_path
+            .clone()
+            .ok_or_else(|| Error::Parse("missing tekken.json next to Voxtral GGUF".to_string()))?;
+        let runtime = VoxtralQ4Runtime::load(&inspection.gguf_path, &tokenizer_path)?;
         Ok(Self {
             config: VoxtralSttConfig::default(),
             backend,
             inspection: Some(inspection),
-            preprocess: audio::MelSpectrogramPlan::default(),
+            runtime: Some(Arc::new(Mutex::new(runtime))),
         })
     }
 
@@ -93,6 +130,10 @@ impl VoxtralSttModel {
 
     pub fn artifacts_loaded(&self) -> bool {
         self.inspection.is_some()
+    }
+
+    pub fn transcription_graph_wired(&self) -> bool {
+        self.runtime.is_some()
     }
 
     pub fn inspection(&self) -> Option<&VoxtralSttArtifactInspection> {
@@ -109,12 +150,85 @@ impl VoxtralSttModel {
             ));
         }
         let wav = audio::parse_wav(request.audio_bytes)?;
-        let padded = audio::pad_audio_streaming(&wav.samples, 32, 17);
-        let _mel = self.preprocess.compute(&padded);
         let _ = request.max_tokens;
-        Err(Error::Unsupported(
-            "native Voxtral STT encoder/adapter/decoder graph is not wired yet",
-        ))
+        let runtime = self.runtime.as_ref().ok_or(Error::Unsupported(
+            "native Voxtral STT requires a Q4 GGUF model and tekken.json",
+        ))?;
+        let mut runtime = runtime
+            .lock()
+            .map_err(|_| Error::Runtime("native Voxtral STT runtime lock poisoned".to_string()))?;
+        let text = runtime.transcribe_samples(wav.samples, wav.sample_rate as u32)?;
+        Ok(TranscriptionResponse {
+            model: self.config.model.clone(),
+            text,
+        })
+    }
+}
+
+impl VoxtralQ4Runtime {
+    fn load(gguf_path: &Path, tokenizer_path: &Path) -> Result<Self> {
+        let device = burn::backend::wgpu::WgpuDevice::default();
+        let start = Instant::now();
+        let mut loader = voxtral_mini_realtime::gguf::loader::Q4ModelLoader::from_file(gguf_path)?;
+        let model = loader.load(&device)?;
+        let tokenizer =
+            voxtral_mini_realtime::tokenizer::VoxtralTokenizer::from_file(tokenizer_path)?;
+        let elapsed = start.elapsed();
+        eprintln!(
+            "ctox_voxtral_stt: loaded Q4 GGUF from {} in {:.2}s",
+            gguf_path.display(),
+            elapsed.as_secs_f64()
+        );
+        Ok(Self {
+            model,
+            tokenizer,
+            device,
+        })
+    }
+
+    fn transcribe_samples(&mut self, samples: Vec<f32>, sample_rate: u32) -> Result<String> {
+        let mut audio = voxtral_mini_realtime::audio::AudioBuffer::new(samples, sample_rate);
+        if audio.sample_rate != 16_000 {
+            audio = voxtral_mini_realtime::audio::resample_to_16k(&audio)?;
+        }
+        audio.peak_normalize(0.95);
+
+        let pad_config = voxtral_mini_realtime::audio::PadConfig::voxtral();
+        let padded = voxtral_mini_realtime::audio::pad_audio(&audio, &pad_config);
+        let mel_extractor = voxtral_mini_realtime::audio::MelSpectrogram::new(
+            voxtral_mini_realtime::audio::MelConfig::voxtral(),
+        );
+        let mel = mel_extractor.compute_log(&padded.samples);
+        let n_frames = mel.len();
+        let n_mels = mel.first().map_or(0, Vec::len);
+        if n_frames == 0 || n_mels == 0 {
+            return Err(Error::InvalidFormat(
+                "audio too short to produce mel frames",
+            ));
+        }
+
+        let mut mel_transposed = vec![vec![0.0f32; n_frames]; n_mels];
+        for (frame_idx, frame) in mel.iter().enumerate() {
+            for (mel_idx, &value) in frame.iter().enumerate() {
+                mel_transposed[mel_idx][frame_idx] = value;
+            }
+        }
+        let mel_flat: Vec<f32> = mel_transposed.into_iter().flatten().collect();
+        let mel_tensor = burn::tensor::Tensor::<WgpuBackend, 3>::from_data(
+            burn::tensor::TensorData::new(mel_flat, [1, n_mels, n_frames]),
+            &self.device,
+        );
+
+        let time_embed = voxtral_mini_realtime::models::time_embedding::TimeEmbedding::new(3072);
+        let t_embed = time_embed.embed::<WgpuBackend>(6.0, &self.device);
+        let generated = self.model.transcribe_streaming(mel_tensor, t_embed);
+        let text_tokens = generated
+            .iter()
+            .filter(|&&token| token >= 1000)
+            .map(|&token| token as u32)
+            .collect::<Vec<_>>();
+        let text = self.tokenizer.decode(&text_tokens)?;
+        Ok(text.trim().to_string())
     }
 }
 
@@ -133,9 +247,13 @@ pub fn inspect_gguf(path: impl AsRef<Path>) -> Result<VoxtralSttArtifactInspecti
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
+    let tokenizer_path = [root.join("tekken.json"), root.join("tokenizer.json")]
+        .into_iter()
+        .find(|path| path.is_file());
     Ok(VoxtralSttArtifactInspection {
         root,
         gguf_path,
+        tokenizer_path,
         tensor_count: inspected.tensors.len(),
         architecture: inspected.architecture,
         required_tensors_present: missing_required_tensors.is_empty(),
@@ -145,36 +263,41 @@ pub fn inspect_gguf(path: impl AsRef<Path>) -> Result<VoxtralSttArtifactInspecti
 
 pub fn required_tensors() -> Vec<&'static str> {
     let mut out = vec![
-        "enc.conv0.weight",
-        "enc.conv0.bias",
-        "enc.conv1.weight",
-        "enc.conv1.bias",
-        "enc.norm.weight",
-        "adapter.0.weight",
-        "adapter.2.weight",
-        "tok_embeddings.weight",
-        "dec.norm.weight",
-        "audio.mel_filters",
+        "mm_streams_embeddings.embedding_module.whisper_encoder.conv_layers.0.conv.weight",
+        "mm_streams_embeddings.embedding_module.whisper_encoder.conv_layers.0.conv.bias",
+        "mm_streams_embeddings.embedding_module.whisper_encoder.conv_layers.1.conv.weight",
+        "mm_streams_embeddings.embedding_module.whisper_encoder.conv_layers.1.conv.bias",
+        "mm_streams_embeddings.embedding_module.whisper_encoder.transformer.norm.weight",
+        "mm_streams_embeddings.embedding_module.audio_language_projection.0.weight",
+        "mm_streams_embeddings.embedding_module.audio_language_projection.2.weight",
+        "mm_streams_embeddings.embedding_module.tok_embeddings.weight",
+        "norm.weight",
     ];
     out.extend([
-        "enc.layers.0.attn_norm.weight",
-        "enc.layers.0.attn.q.weight",
-        "enc.layers.0.attn.k.weight",
-        "enc.layers.0.attn.v.weight",
-        "enc.layers.0.attn.o.weight",
-        "enc.layers.0.ffn_norm.weight",
-        "enc.layers.0.ffn.w1.weight",
-        "enc.layers.0.ffn.w2.weight",
-        "enc.layers.0.ffn.w3.weight",
-        "dec.layers.0.attn_norm.weight",
-        "dec.layers.0.attn.q.weight",
-        "dec.layers.0.attn.k.weight",
-        "dec.layers.0.attn.v.weight",
-        "dec.layers.0.attn.o.weight",
-        "dec.layers.0.ffn_norm.weight",
-        "dec.layers.0.ffn.w1.weight",
-        "dec.layers.0.ffn.w2.weight",
-        "dec.layers.0.ffn.w3.weight",
+        "mm_streams_embeddings.embedding_module.whisper_encoder.transformer.layers.0.attention_norm.weight",
+        "mm_streams_embeddings.embedding_module.whisper_encoder.transformer.layers.0.attention.wq.weight",
+        "mm_streams_embeddings.embedding_module.whisper_encoder.transformer.layers.0.attention.wq.bias",
+        "mm_streams_embeddings.embedding_module.whisper_encoder.transformer.layers.0.attention.wk.weight",
+        "mm_streams_embeddings.embedding_module.whisper_encoder.transformer.layers.0.attention.wv.weight",
+        "mm_streams_embeddings.embedding_module.whisper_encoder.transformer.layers.0.attention.wv.bias",
+        "mm_streams_embeddings.embedding_module.whisper_encoder.transformer.layers.0.attention.wo.weight",
+        "mm_streams_embeddings.embedding_module.whisper_encoder.transformer.layers.0.attention.wo.bias",
+        "mm_streams_embeddings.embedding_module.whisper_encoder.transformer.layers.0.ffn_norm.weight",
+        "mm_streams_embeddings.embedding_module.whisper_encoder.transformer.layers.0.feed_forward.w1.weight",
+        "mm_streams_embeddings.embedding_module.whisper_encoder.transformer.layers.0.feed_forward.w2.weight",
+        "mm_streams_embeddings.embedding_module.whisper_encoder.transformer.layers.0.feed_forward.w2.bias",
+        "mm_streams_embeddings.embedding_module.whisper_encoder.transformer.layers.0.feed_forward.w3.weight",
+        "layers.0.ada_rms_norm_t_cond.0.weight",
+        "layers.0.ada_rms_norm_t_cond.2.weight",
+        "layers.0.attention_norm.weight",
+        "layers.0.attention.wq.weight",
+        "layers.0.attention.wk.weight",
+        "layers.0.attention.wv.weight",
+        "layers.0.attention.wo.weight",
+        "layers.0.ffn_norm.weight",
+        "layers.0.feed_forward.w1.weight",
+        "layers.0.feed_forward.w2.weight",
+        "layers.0.feed_forward.w3.weight",
     ]);
     out
 }
@@ -219,7 +342,7 @@ mod tests {
                 max_tokens: None,
             })
             .expect_err("STT graph should not be faked");
-        assert!(err.to_string().contains("not wired"));
+        assert!(err.to_string().contains("requires a Q4 GGUF"));
     }
 
     fn tiny_wav() -> Vec<u8> {

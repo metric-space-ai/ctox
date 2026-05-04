@@ -10,6 +10,7 @@ pub enum Error {
     Parse(String),
     MissingTensor(String),
     Unsupported(&'static str),
+    Runtime(String),
 }
 
 impl fmt::Display for Error {
@@ -21,6 +22,7 @@ impl fmt::Display for Error {
             Self::Parse(msg) => write!(f, "{msg}"),
             Self::MissingTensor(name) => write!(f, "missing tensor `{name}`"),
             Self::Unsupported(msg) => write!(f, "{msg}"),
+            Self::Runtime(msg) => write!(f, "{msg}"),
         }
     }
 }
@@ -36,5 +38,11 @@ impl From<std::io::Error> for Error {
 impl From<std::str::Utf8Error> for Error {
     fn from(value: std::str::Utf8Error) -> Self {
         Self::Utf8(value)
+    }
+}
+
+impl From<anyhow::Error> for Error {
+    fn from(value: anyhow::Error) -> Self {
+        Self::Runtime(value.to_string())
     }
 }

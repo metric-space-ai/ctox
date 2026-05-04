@@ -65,7 +65,7 @@ fn online_librispeech_demo_samples_cover_audio_path() {
             }
             Err(err) => {
                 assert!(
-                    err.to_string().contains("not wired"),
+                    err.to_string().contains("requires a Q4 GGUF"),
                     "sample {id} failed for unexpected reason: {err}"
                 );
             }
@@ -74,6 +74,48 @@ fn online_librispeech_demo_samples_cover_audio_path() {
     assert!(
         preprocessing_elapsed < Duration::from_secs(5),
         "online sample preprocessing took {preprocessing_elapsed:?}; this is too slow for meeting STT"
+    );
+}
+
+#[test]
+#[ignore = "loads the 2.3GB Q4 GGUF and runs full Voxtral inference"]
+fn online_librispeech_demo_samples_transcribe_with_q4_gguf() {
+    let gguf = match std::env::var("CTOX_VOXTRAL_STT_GGUF") {
+        Ok(value) if !value.trim().is_empty() => PathBuf::from(value),
+        _ => {
+            eprintln!("Skipping: set CTOX_VOXTRAL_STT_GGUF to a Q4 Voxtral GGUF");
+            return;
+        }
+    };
+    let cache_dir = sample_cache_dir();
+    std::fs::create_dir_all(&cache_dir).expect("create sample cache");
+    let model = VoxtralSttModel::from_gguf(&gguf, VoxtralSttBackend::Wgsl).expect("load Q4 model");
+
+    let mut audio_duration = Duration::ZERO;
+    let start = Instant::now();
+    for (id, expected) in SAMPLES {
+        let wav_path = ensure_sample(&cache_dir, id, "wav");
+        let audio_bytes = std::fs::read(&wav_path).expect("read wav sample");
+        let wav = audio::parse_wav(&audio_bytes).expect("parse wav sample");
+        audio_duration += Duration::from_secs_f64(wav.samples.len() as f64 / 16_000.0);
+
+        let output = model
+            .transcribe(&TranscriptionRequest {
+                audio_bytes: &audio_bytes,
+                response_format: "json",
+                max_tokens: Some(128),
+            })
+            .expect("transcribe sample");
+        assert_eq!(
+            normalize_words(&output.text),
+            normalize_words(expected),
+            "sample {id} transcript mismatch"
+        );
+    }
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed.as_secs_f64() <= audio_duration.as_secs_f64() * 1.25,
+        "Q4 transcription RTF too slow: elapsed={elapsed:?}, audio={audio_duration:?}"
     );
 }
 
@@ -112,4 +154,12 @@ fn normalize_transcript(text: &str) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn normalize_words(text: &str) -> String {
+    normalize_transcript(text)
+        .replace("YOU'VE", "YOU HAVE")
+        .replace("WE'VE", "WE HAVE")
+        .replace("I'VE", "I HAVE")
+        .replace("THEY'VE", "THEY HAVE")
 }

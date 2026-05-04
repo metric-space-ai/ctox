@@ -83,25 +83,30 @@ pub fn doctor_json(root: &Path) -> serde_json::Value {
     let inspection = model_path
         .as_ref()
         .and_then(|path| ctox_voxtral_mini_4b_realtime_2602::inspect_gguf(path).ok());
+    let artifacts_ready = inspection
+        .as_ref()
+        .map(|value| value.required_tensors_present && value.tokenizer_path.is_some())
+        .unwrap_or(false);
     json!({
-        "ok": false,
+        "ok": artifacts_ready,
         "model": VOXTRAL_MINI_4B_REALTIME_2602_CANONICAL_MODEL,
         "native_ctox": {
             "crate_linked": true,
             "cpu_reference_ops": true,
-            "reference_source": "andrijdavid/voxtral.cpp@7deef66c8ee473d3ceffc57fb0cd17977eeebca9",
+            "reference_source": "TrevorS/voxtral-mini-realtime-rs@2930e95d60f8584b5326d90d3c5ec9a152d0d322 plus andrijdavid/voxtral.cpp@7deef66c8ee473d3ceffc57fb0cd17977eeebca9 for graph comparison",
             "metal_kernel_seed_present": model_root.join("vendor/metal/kernels/ctox_voxtral_stt_glue.metal").is_file(),
             "cuda_kernel_seed_present": model_root.join("vendor/cuda/kernels/ctox_voxtral_stt_glue.cu").is_file(),
             "wgsl_kernel_seed_present": model_root.join("vendor/wgsl/kernels/ctox_voxtral_stt_glue.wgsl").is_file(),
             "model_artifacts_present": inspection.is_some(),
             "model_artifact_root": inspection.as_ref().map(|value| value.root.display().to_string()),
             "model_artifact_gguf": inspection.as_ref().map(|value| value.gguf_path.display().to_string()).or_else(|| model_path.as_ref().map(|path| path.display().to_string())),
+            "model_artifact_tokenizer": inspection.as_ref().and_then(|value| value.tokenizer_path.as_ref()).map(|path| path.display().to_string()),
             "model_artifact_tensor_count": inspection.as_ref().map(|value| value.tensor_count).unwrap_or(0),
             "model_artifact_architecture": inspection.as_ref().and_then(|value| value.architecture.clone()),
             "model_artifact_required_tensors_present": inspection.as_ref().map(|value| value.required_tensors_present).unwrap_or(false),
             "model_artifact_missing_required_tensors": inspection.as_ref().map(|value| value.missing_required_tensors.clone()).unwrap_or_default(),
             "shape_contract": ctox_voxtral_mini_4b_realtime_2602::shape_contract(),
-            "transcription_graph_wired": false,
+            "transcription_graph_wired": true,
             "returns_fake_text": false
         }
     })
@@ -139,7 +144,7 @@ pub fn stt_smoke_json(root: &Path, audio_path: &Path) -> serde_json::Value {
             "ok": false,
             "model": VOXTRAL_MINI_4B_REALTIME_2602_CANONICAL_MODEL,
             "error": err.to_string(),
-            "transcription_graph_wired": false
+            "transcription_graph_wired": model.transcription_graph_wired()
         }),
     }
 }
@@ -174,7 +179,7 @@ fn handle_connection(
     }
     let response = match serde_json::from_str::<LocalSttRequest>(line.trim()) {
         Ok(LocalSttRequest::RuntimeHealth) => LocalSttResponse::RuntimeHealth {
-            healthy: false,
+            healthy: model.transcription_graph_wired(),
             default_model: Some(model.config().model.clone()),
             loaded_models: if model.artifacts_loaded() {
                 vec![model.config().model.clone()]
@@ -183,7 +188,7 @@ fn handle_connection(
             },
             backend: model.backend().label().to_string(),
             artifacts_loaded: model.artifacts_loaded(),
-            transcription_graph_wired: false,
+            transcription_graph_wired: model.transcription_graph_wired(),
         },
         Ok(LocalSttRequest::TranscriptionCreate {
             model: request_model,
@@ -214,7 +219,11 @@ fn handle_connection(
                             text: output.text,
                         },
                         Err(err) => LocalSttResponse::Error {
-                            code: "backend_not_wired".to_string(),
+                            code: if model.transcription_graph_wired() {
+                                "transcription_failed".to_string()
+                            } else {
+                                "backend_not_wired".to_string()
+                            },
                             message: err.to_string(),
                         },
                     },
@@ -293,7 +302,8 @@ mod tests {
         );
         assert_eq!(
             status["native_ctox"]["transcription_graph_wired"].as_bool(),
-            Some(false)
+            Some(true)
         );
+        assert_eq!(status["ok"].as_bool(), Some(false));
     }
 }
