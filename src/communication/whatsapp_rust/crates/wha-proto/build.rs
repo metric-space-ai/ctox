@@ -13,11 +13,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .to_path_buf();
     let proto_root = workspace_root.join("_upstream/whatsmeow/proto");
 
+    // Tell rustc that `wha_proto_stubbed` is a recognised cfg flag whether
+    // we set it or not — silences `unexpected cfg` warnings in lib.rs.
+    println!("cargo:rustc-check-cfg=cfg(wha_proto_stubbed)");
+
     if !proto_root.exists() {
         println!(
             "cargo:warning=upstream proto tree not found at {} — wha-proto will be empty",
             proto_root.display()
         );
+        // Tell lib.rs (via cfg gate) that the upstream-derived types it
+        // would otherwise reference (e.g. `MessageApplication`) are absent.
+        // Without this signal, compile fails on `pub type EncryptedMessage =
+        // MessageApplication;` even though the build script "succeeds" by
+        // writing empty stubs.
+        println!("cargo:rustc-cfg=wha_proto_stubbed");
         // Emit empty stubs so `include!(OUT_DIR)` still works.
         let out = std::env::var("OUT_DIR")?;
         for stub in [

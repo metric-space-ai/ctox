@@ -138,6 +138,13 @@ pub mod messenger {
     /// User-facing alias matching the type referenced by the
     /// `send_fb_message` API. Maps to upstream's `MessageApplication`
     /// envelope (`waMsgApplication.MessageApplication`).
+    ///
+    /// Only available when the upstream `_upstream/whatsmeow/proto`
+    /// tree is present. When proto sources are missing, the build
+    /// emits empty stubs and sets the `wha_proto_stubbed` cfg flag —
+    /// in that mode the alias is omitted because the underlying
+    /// `MessageApplication` type does not exist.
+    #[cfg(not(wha_proto_stubbed))]
     pub type EncryptedMessage = MessageApplication;
 }
 
