@@ -3375,12 +3375,7 @@ pub fn send_reviewed_founder_reply(
         &request.attachments,
     )?;
     let entity_id = format!("founder-reply:{inbound_message_key}");
-    enforce_reviewed_founder_send_core_transition(
-        &conn,
-        &entity_id,
-        &approval_key,
-        &request,
-    )?;
+    enforce_reviewed_founder_send_core_transition(&conn, &entity_id, &approval_key, &request)?;
     let body_sha256 = sha256_hex(request.body.trim().as_bytes());
     let pending_message_key =
         record_outbound_pending_send(&conn, &request, &approval_key, &body_sha256)?;
@@ -3453,12 +3448,7 @@ pub(crate) fn send_reviewed_founder_outbound(
     )?;
     ensure_founder_outbound_body_clean(&request)?;
     let entity_id = format!("founder-outbound:{anchor_message_key}");
-    enforce_reviewed_founder_send_core_transition(
-        &conn,
-        &entity_id,
-        &approval_key,
-        &request,
-    )?;
+    enforce_reviewed_founder_send_core_transition(&conn, &entity_id, &approval_key, &request)?;
     let body_sha256 = sha256_hex(request.body.trim().as_bytes());
     let pending_message_key =
         record_outbound_pending_send(&conn, &request, &approval_key, &body_sha256)?;
@@ -3540,11 +3530,7 @@ fn pending_send_message_key(request: &ChannelSendRequest, body_sha256: &str) -> 
         body_sha256
     );
     let digest = sha256_hex(payload.as_bytes());
-    format!(
-        "{}::pending_send::{}",
-        request.account_key.trim(),
-        digest
-    )
+    format!("{}::pending_send::{}", request.account_key.trim(), digest)
 }
 
 /// Persist the outbound body durably *before* the provider call so that
@@ -3561,10 +3547,9 @@ fn record_outbound_pending_send(
 ) -> Result<String> {
     let message_key = pending_send_message_key(request, body_sha256);
     let recipient_set_sha256 = founder_send_recipient_set_sha256(request);
-    let recipient_addresses_json = serde_json::to_string(&request.to)
-        .unwrap_or_else(|_| "[]".to_string());
-    let cc_addresses_json = serde_json::to_string(&request.cc)
-        .unwrap_or_else(|_| "[]".to_string());
+    let recipient_addresses_json =
+        serde_json::to_string(&request.to).unwrap_or_else(|_| "[]".to_string());
+    let cc_addresses_json = serde_json::to_string(&request.cc).unwrap_or_else(|_| "[]".to_string());
     let metadata_json = json!({
         "approval_key": approval_key,
         "body_sha256": body_sha256,
@@ -3580,10 +3565,7 @@ fn record_outbound_pending_send(
         .sender_address
         .clone()
         .unwrap_or_else(|| email_address_from_account_key(&request.account_key));
-    let sender_display = request
-        .sender_display
-        .clone()
-        .unwrap_or_default();
+    let sender_display = request.sender_display.clone().unwrap_or_default();
     conn.execute(
         r#"
         INSERT INTO communication_messages (
@@ -8391,9 +8373,18 @@ mod tests {
         assert_eq!(subject, request.subject);
         assert!(recipients_json.contains("j.kienzler@remcapital.de"));
         let metadata: Value = serde_json::from_str(&metadata_json).expect("valid json");
-        assert_eq!(metadata.get("approval_key").and_then(Value::as_str), Some("founder-review:phase1"));
-        assert_eq!(metadata.get("body_sha256").and_then(Value::as_str), Some(body_sha256.as_str()));
-        assert_eq!(metadata.get("pending_send").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            metadata.get("approval_key").and_then(Value::as_str),
+            Some("founder-review:phase1")
+        );
+        assert_eq!(
+            metadata.get("body_sha256").and_then(Value::as_str),
+            Some(body_sha256.as_str())
+        );
+        assert_eq!(
+            metadata.get("pending_send").and_then(Value::as_bool),
+            Some(true)
+        );
 
         let _ = std::fs::remove_file(&db_path);
     }
@@ -8450,8 +8441,14 @@ mod tests {
             .expect("row must exist");
         assert_eq!(status, "accepted");
         let metadata: Value = serde_json::from_str(&metadata_json).expect("valid json");
-        assert_eq!(metadata.get("pending_send").and_then(Value::as_bool), Some(false));
-        assert_eq!(metadata.get("transitioned_to").and_then(Value::as_str), Some("accepted"));
+        assert_eq!(
+            metadata.get("pending_send").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            metadata.get("transitioned_to").and_then(Value::as_str),
+            Some("accepted")
+        );
         assert_eq!(
             metadata
                 .get("adapter_result")
@@ -8501,7 +8498,10 @@ mod tests {
             "body must survive provider failure for retry"
         );
         let metadata: Value = serde_json::from_str(&metadata_json).expect("valid json");
-        assert_eq!(metadata.get("transitioned_to").and_then(Value::as_str), Some("send_failed"));
+        assert_eq!(
+            metadata.get("transitioned_to").and_then(Value::as_str),
+            Some("send_failed")
+        );
         assert!(metadata
             .get("provider_error")
             .and_then(Value::as_str)
@@ -8587,7 +8587,10 @@ mod tests {
                 |row| row.get(0),
             )
             .expect("count query");
-        assert_eq!(count, 1, "exactly one durable row must exist for the retry-bound key");
+        assert_eq!(
+            count, 1,
+            "exactly one durable row must exist for the retry-bound key"
+        );
 
         let _ = std::fs::remove_file(&db_path);
     }
