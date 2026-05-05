@@ -7614,6 +7614,9 @@ fn is_owner_visible_strategic_job(job: &QueuedPrompt) -> bool {
     if is_bounded_stateful_product_execution_job(job) {
         return false;
     }
+    if is_bounded_benchmark_or_runtime_execution_job(job) {
+        return false;
+    }
     let haystack = format!(
         "{}\n{}\n{}\n{}\n{}",
         job.prompt,
@@ -7641,6 +7644,34 @@ fn is_bounded_stateful_product_execution_job(job: &QueuedPrompt) -> bool {
         && !job.leased_message_keys.iter().any(|key| {
             key.starts_with("email:") || key.starts_with("jami:") || key.starts_with("meeting:")
         })
+}
+
+fn is_bounded_benchmark_or_runtime_execution_job(job: &QueuedPrompt) -> bool {
+    if job.workspace_root.is_none() {
+        return false;
+    }
+    let haystack = format!(
+        "{}\n{}\n{}\n{}",
+        job.prompt,
+        job.goal,
+        job.preview,
+        job.thread_key.clone().unwrap_or_default()
+    )
+    .to_ascii_lowercase();
+    let benchmark_scope = haystack.contains("terminal-bench")
+        || haystack.contains("terminal bench")
+        || (haystack.contains("benchmark")
+            && (haystack.contains("runner")
+                || haystack.contains("results.jsonl")
+                || haystack.contains("run-log.md")));
+    let concrete_execution = haystack.contains("run_dir=")
+        || haystack.contains("required output artifacts")
+        || haystack.contains("write these exact files")
+        || haystack.contains("use shell/tools")
+        || haystack.contains("local ipc")
+        || haystack.contains("context_window")
+        || haystack.contains("verify runtime/context");
+    benchmark_scope && concrete_execution
 }
 
 fn is_internal_harness_or_forensics_job(job: &QueuedPrompt) -> bool {
@@ -13962,6 +13993,60 @@ mod tests {
             tasks[0].title,
             "CRM P0 slice: ship tasks workflow under /internal/crm"
         );
+
+        let items = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
+            .expect("failed to list self-work");
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn terminal_bench_controller_does_not_reroute_to_strategy_setup() {
+        let root = temp_root("ctox-terminal-bench-no-strategy-reroute");
+        let queue_task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Terminal-Bench 2 controller Qwen3.6 128k".to_string(),
+                prompt: "You are CTOX running the Terminal-Bench 2 evaluation project.\n\
+Use the configured local harness model through CTOX local IPC only.\n\
+REQUIRED OUTPUT ARTIFACTS\n\
+Write these exact files under RUN_DIR=/home/metricspace/CTOX/runtime/terminal-bench-2/runs/run-1:\n\
+- controller.json\n- ticket-map.jsonl\n- run-log.md\n- results.jsonl\n- summary.md\n\
+Start now by using shell/tools to create RUN_DIR artifacts and verify runtime/context."
+                    .to_string(),
+                thread_key: "tb2-qwen36-128k-controller".to_string(),
+                workspace_root: Some("/home/metricspace".to_string()),
+                priority: "urgent".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to seed Terminal-Bench queue task");
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        let job = QueuedPrompt {
+            prompt: queue_task.prompt.clone(),
+            goal: queue_task.title.clone(),
+            preview: queue_task.title.clone(),
+            source_label: "queue".to_string(),
+            suggested_skill: None,
+            leased_message_keys: vec![queue_task.message_key.clone()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("tb2-qwen36-128k-controller".to_string()),
+            workspace_root: Some("/home/metricspace".to_string()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let redirected = maybe_redirect_owner_visible_work_to_strategy_setup(&root, &state, &job)
+            .expect("strategy evaluation should succeed");
+        assert!(!redirected);
+
+        let tasks =
+            channels::list_queue_tasks(&root, &["pending".to_string(), "leased".to_string()], 10)
+                .expect("failed to list queue tasks");
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].title, "Terminal-Bench 2 controller Qwen3.6 128k");
 
         let items = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
             .expect("failed to list self-work");
