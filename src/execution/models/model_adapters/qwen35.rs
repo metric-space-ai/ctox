@@ -425,7 +425,7 @@ fn render_xml_tool_call(name: &str, raw_arguments: &str) -> String {
     for (key, value) in arguments {
         rendered.push_str("<parameter=");
         rendered.push_str(key.trim());
-        rendered.push('>');
+        rendered.push_str(">\n");
         let value_text = value
             .as_str()
             .map(str::trim)
@@ -433,7 +433,7 @@ fn render_xml_tool_call(name: &str, raw_arguments: &str) -> String {
             .map(ToOwned::to_owned)
             .unwrap_or_else(|| value.to_string());
         rendered.push_str(&value_text);
-        rendered.push_str("</parameter>\n");
+        rendered.push_str("\n</parameter>\n");
     }
     rendered.push_str("</function>\n</tool_call>\n");
     rendered
