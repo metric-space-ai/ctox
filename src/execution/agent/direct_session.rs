@@ -46,6 +46,8 @@ use crate::secrets;
 
 const OPENAI_AUTH_MODE_KEY: &str = "CTOX_OPENAI_AUTH_MODE";
 const OPENAI_AUTH_MODE_CHATGPT_SUBSCRIPTION: &str = "chatgpt_subscription";
+const DIRECT_SESSION_CONTROL_REQUEST_TIMEOUT_SECS: u64 = 5;
+const DIRECT_SESSION_INTERRUPT_TIMEOUT_SECS: u64 = 2;
 const CTOX_DIRECT_SESSION_BASE_INSTRUCTIONS: &str = r#"You are an agent working inside CTOX.
 
 Complete a work step only when the required durable outcome exists in CTOX runtime state. A final answer, summary, note file, or statement such as "sent", "done", or "closed" is not evidence by itself.
@@ -127,6 +129,21 @@ fn direct_session_reasoning_effort(
 fn is_gpt_54_mini_model(model: &str) -> bool {
     let normalized = model.trim().to_ascii_lowercase();
     normalized == "gpt-5.4-mini" || normalized.ends_with("/gpt-5.4-mini")
+}
+
+fn direct_session_control_request_timeout(deadline: Option<tokio::time::Instant>) -> Duration {
+    let default = Duration::from_secs(DIRECT_SESSION_CONTROL_REQUEST_TIMEOUT_SECS);
+    let Some(deadline) = deadline else {
+        return default;
+    };
+    let remaining = deadline
+        .checked_duration_since(tokio::time::Instant::now())
+        .unwrap_or_else(|| Duration::from_millis(1));
+    if remaining.is_zero() {
+        Duration::from_millis(1)
+    } else {
+        remaining.min(default)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -653,14 +670,16 @@ impl PersistentSession {
                 Some(d) => tokio::select! {
                     ev = client.next_event() => ev,
                     _ = tokio::time::sleep_until(d) => {
-                        let _ = client.request_typed::<TurnInterruptResponse>(
-                            ClientRequest::TurnInterrupt {
-                                request_id: seq.next(),
-                                params: TurnInterruptParams {
-                                    thread_id: thread_id.to_string(),
-                                    turn_id: turn_id.to_string(),
-                                },
+                        let interrupt_req = ClientRequest::TurnInterrupt {
+                            request_id: seq.next(),
+                            params: TurnInterruptParams {
+                                thread_id: thread_id.to_string(),
+                                turn_id: turn_id.to_string(),
                             },
+                        };
+                        let _ = tokio::time::timeout(
+                            Duration::from_secs(DIRECT_SESSION_INTERRUPT_TIMEOUT_SECS),
+                            client.request_typed::<TurnInterruptResponse>(interrupt_req),
                         ).await;
                         anyhow::bail!("direct session timeout after {:?}", timeout.unwrap());
                     }
@@ -742,11 +761,17 @@ impl PersistentSession {
                                             thread_id: thread_id.to_string(),
                                         },
                                     };
-                                    match client
-                                        .request_typed::<ThreadCompactStartResponse>(compact_req)
-                                        .await
+                                    let compact_timeout =
+                                        direct_session_control_request_timeout(deadline);
+                                    match tokio::time::timeout(
+                                        compact_timeout,
+                                        client.request_typed::<ThreadCompactStartResponse>(
+                                            compact_req,
+                                        ),
+                                    )
+                                    .await
                                     {
-                                        Ok(_) => {
+                                        Ok(Ok(_)) => {
                                             ctx_log.log_compact_decision(
                                                 "compact_ok",
                                                 &reason,
@@ -754,12 +779,24 @@ impl PersistentSession {
                                             );
                                             policy.note_compacted();
                                         }
-                                        Err(err) => {
+                                        Ok(Err(err)) => {
                                             eprintln!(
                                                 "[ctox direct-session] compact failed: {err}"
                                             );
                                             ctx_log.log_compact_decision(
                                                 &format!("compact_fail:{err}"),
+                                                &reason,
+                                                policy,
+                                            );
+                                            policy.note_compacted();
+                                        }
+                                        Err(_) => {
+                                            eprintln!(
+                                                "[ctox direct-session] compact request timed out after {:?}; continuing turn",
+                                                compact_timeout
+                                            );
+                                            ctx_log.log_compact_decision(
+                                                "compact_timeout",
                                                 &reason,
                                                 policy,
                                             );
@@ -774,9 +811,12 @@ impl PersistentSession {
                                             thread_id: thread_id.to_string(),
                                         },
                                     };
-                                    let _ = client
-                                        .request_typed::<ThreadUnsubscribeResponse>(unsub_req)
-                                        .await;
+                                    let _ = tokio::time::timeout(
+                                        direct_session_control_request_timeout(deadline),
+                                        client
+                                            .request_typed::<ThreadUnsubscribeResponse>(unsub_req),
+                                    )
+                                    .await;
                                     let signal = root.join("runtime/compact-followup-requested");
                                     let _ =
                                         std::fs::create_dir_all(signal.parent().unwrap_or(root));
@@ -966,6 +1006,33 @@ mod tests {
             direct_session_reasoning_effort(&settings, "gpt-5.4-mini", None),
             None
         );
+    }
+
+    #[test]
+    fn control_request_timeout_defaults_without_deadline() {
+        assert_eq!(
+            direct_session_control_request_timeout(None),
+            Duration::from_secs(DIRECT_SESSION_CONTROL_REQUEST_TIMEOUT_SECS)
+        );
+    }
+
+    #[test]
+    fn control_request_timeout_is_capped_by_default() {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+
+        assert_eq!(
+            direct_session_control_request_timeout(Some(deadline)),
+            Duration::from_secs(DIRECT_SESSION_CONTROL_REQUEST_TIMEOUT_SECS)
+        );
+    }
+
+    #[test]
+    fn control_request_timeout_honors_near_deadline() {
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(50);
+        let timeout = direct_session_control_request_timeout(Some(deadline));
+
+        assert!(timeout > Duration::from_millis(0));
+        assert!(timeout <= Duration::from_millis(50));
     }
 }
 
