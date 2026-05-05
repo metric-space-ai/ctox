@@ -16,6 +16,7 @@ management, verification, process evidence, communication, and continuation.
 - Project page: <https://metric-space-ai.github.io/ctox/>
 - Technical documentation: <https://metric-space-ai.github.io/ctox/docs.html>
 - CLI reference: <https://metric-space-ai.github.io/ctox/cli.html>
+- Harness guide: [HARNESS.md](HARNESS.md)
 - Releases and binaries: <https://github.com/metric-space-ai/ctox/releases>
 
 ## Quick Introduction
@@ -243,7 +244,7 @@ See the technical documentation for the current model/runtime details:
 <https://metric-space-ai.github.io/ctox/docs.html#configuration>
 
 The harness review, task-spawn, subagent, and liveness-proof model is documented
-in [HARNESS.md](HARNESS.md#review-gate-spawner-und-subagent-liveness).
+in [HARNESS.md](HARNESS.md#review-gate-spawner-and-subagent-liveness).
 
 ## Desktop App
 
