@@ -34,6 +34,7 @@ const PROCESS_MINING_USAGE: &str = "usage:
   ctox process-mining dfg [--limit <n>]
   ctox process-mining core-liveness
   ctox process-mining spawn-liveness
+  ctox process-mining spawn-edges [--limit <n>]
   ctox process-mining explain-case <case-id> [--limit <n>]
   ctox process-mining deadlocks [--limit <n>]
   ctox process-mining mapping-rules [--limit <n>]
@@ -955,6 +956,51 @@ pub fn handle_process_mining_command(root: &Path, args: &[String]) -> Result<()>
             }
             Ok(())
         }
+        Some("spawn-edges") => {
+            ensure_process_mining_schema(&conn, &db_path)?;
+            let limit = process_mining_limit(args, 50, 500);
+            let mut stmt = conn.prepare(
+                r#"
+                SELECT edge_id, parent_entity_type, parent_entity_id,
+                       child_entity_type, child_entity_id, spawn_kind,
+                       spawn_reason, actor, checkpoint_key, budget_key,
+                       max_attempts, accepted, violation_codes_json,
+                       request_json, created_at, updated_at, terminal_reaped_at
+                FROM ctox_core_spawn_edges
+                ORDER BY updated_at DESC
+                LIMIT ?1
+                "#,
+            )?;
+            let rows = stmt
+                .query_map(params![limit], |row| {
+                    let request_json = row.get::<_, String>(13)?;
+                    Ok(json!({
+                        "edge_id": row.get::<_, String>(0)?,
+                        "parent_entity_type": row.get::<_, String>(1)?,
+                        "parent_entity_id": row.get::<_, String>(2)?,
+                        "child_entity_type": row.get::<_, String>(3)?,
+                        "child_entity_id": row.get::<_, String>(4)?,
+                        "spawn_kind": row.get::<_, String>(5)?,
+                        "spawn_reason": row.get::<_, String>(6)?,
+                        "actor": row.get::<_, String>(7)?,
+                        "checkpoint_key": row.get::<_, Option<String>>(8)?,
+                        "budget_key": row.get::<_, Option<String>>(9)?,
+                        "max_attempts": row.get::<_, Option<i64>>(10)?,
+                        "accepted": row.get::<_, i64>(11)? != 0,
+                        "violation_codes_json": row.get::<_, String>(12)?,
+                        "request_summary": spawn_request_summary(&request_json),
+                        "created_at": row.get::<_, String>(14)?,
+                        "updated_at": row.get::<_, String>(15)?,
+                        "terminal_reaped_at": row.get::<_, Option<String>>(16)?,
+                    }))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json!({"ok": true, "spawn_edges": rows}))?
+            );
+            Ok(())
+        }
         Some("explain-case") => {
             ensure_process_mining_schema(&conn, &db_path)?;
             let case_id = args.get(1).context("missing <case-id>")?;
@@ -1126,7 +1172,7 @@ pub fn handle_process_mining_command(root: &Path, args: &[String]) -> Result<()>
                 r#"
                 SELECT proof_id, entity_type, entity_id, lane, from_state, to_state,
                        core_event, actor, accepted, violation_codes_json,
-                       created_at, updated_at
+                       request_json, report_json, created_at, updated_at
                 FROM ctox_core_transition_proofs
                 ORDER BY updated_at DESC
                 LIMIT ?1
@@ -1145,8 +1191,10 @@ pub fn handle_process_mining_command(root: &Path, args: &[String]) -> Result<()>
                         "actor": row.get::<_, String>(7)?,
                         "accepted": row.get::<_, i64>(8)? != 0,
                         "violation_codes_json": row.get::<_, String>(9)?,
-                        "created_at": row.get::<_, String>(10)?,
-                        "updated_at": row.get::<_, String>(11)?,
+                        "evidence_summary": proof_evidence_summary(&row.get::<_, String>(10)?),
+                        "report_summary": proof_report_summary(&row.get::<_, String>(11)?),
+                        "created_at": row.get::<_, String>(12)?,
+                        "updated_at": row.get::<_, String>(13)?,
                     }))
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -1983,6 +2031,85 @@ fn process_mining_limit(args: &[String], default: i64, max: i64) -> i64 {
         .and_then(|value| value.parse::<i64>().ok())
         .unwrap_or(default)
         .clamp(1, max)
+}
+
+fn proof_evidence_summary(request_json: &str) -> Value {
+    let Ok(value) = serde_json::from_str::<Value>(request_json) else {
+        return json!({
+            "parse_error": true,
+            "expected_artifact_ref_count": 0,
+            "delivered_artifact_ref_count": 0,
+        });
+    };
+    let evidence = value.get("evidence").unwrap_or(&Value::Null);
+    let expected = evidence
+        .get("expected_artifact_refs")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let delivered = evidence
+        .get("delivered_artifact_refs")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    json!({
+        "review_audit_key": evidence.get("review_audit_key").and_then(Value::as_str),
+        "approved_body_sha256": evidence.get("approved_body_sha256").and_then(Value::as_str),
+        "outgoing_body_sha256": evidence.get("outgoing_body_sha256").and_then(Value::as_str),
+        "approved_recipient_set_sha256": evidence.get("approved_recipient_set_sha256").and_then(Value::as_str),
+        "outgoing_recipient_set_sha256": evidence.get("outgoing_recipient_set_sha256").and_then(Value::as_str),
+        "verification_id": evidence.get("verification_id").and_then(Value::as_str),
+        "schedule_task_id": evidence.get("schedule_task_id").and_then(Value::as_str),
+        "replacement_schedule_task_id": evidence.get("replacement_schedule_task_id").and_then(Value::as_str),
+        "escalation_id": evidence.get("escalation_id").and_then(Value::as_str),
+        "knowledge_entry_id": evidence.get("knowledge_entry_id").and_then(Value::as_str),
+        "incident_id": evidence.get("incident_id").and_then(Value::as_str),
+        "canonical_hot_path": evidence.get("canonical_hot_path").cloned().unwrap_or_else(|| json!([])),
+        "expected_artifact_ref_count": expected.len(),
+        "delivered_artifact_ref_count": delivered.len(),
+        "expected_artifact_refs": expected,
+        "delivered_artifact_refs": delivered,
+    })
+}
+
+fn proof_report_summary(report_json: &str) -> Value {
+    let Ok(value) = serde_json::from_str::<Value>(report_json) else {
+        return json!({"parse_error": true});
+    };
+    let violations = value
+        .get("violations")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let violation_codes = violations
+        .iter()
+        .filter_map(|violation| violation.get("code").and_then(Value::as_str))
+        .collect::<Vec<_>>();
+    json!({
+        "accepted": value.get("accepted").and_then(Value::as_bool),
+        "violation_count": violations.len(),
+        "violation_codes": violation_codes,
+    })
+}
+
+fn spawn_request_summary(request_json: &str) -> Value {
+    let Ok(value) = serde_json::from_str::<Value>(request_json) else {
+        return json!({"parse_error": true});
+    };
+    json!({
+        "parent": {
+            "entity_type": value.get("parent_entity_type").and_then(Value::as_str),
+            "entity_id": value.get("parent_entity_id").and_then(Value::as_str),
+        },
+        "child": {
+            "entity_type": value.get("child_entity_type").and_then(Value::as_str),
+            "entity_id": value.get("child_entity_id").and_then(Value::as_str),
+        },
+        "spawn_kind": value.get("spawn_kind").and_then(Value::as_str),
+        "checkpoint_key": value.get("checkpoint_key").and_then(Value::as_str),
+        "budget_key": value.get("budget_key").and_then(Value::as_str),
+        "max_attempts": value.get("max_attempts").and_then(Value::as_i64),
+    })
 }
 
 fn json_usize(value: &Value, key: &str) -> usize {
@@ -6601,5 +6728,48 @@ mod tests {
         assert!(!message.contains("\"summary\""));
         assert!(!message.contains("row_after_json"));
         Ok(())
+    }
+
+    #[test]
+    fn proof_evidence_summary_surfaces_outcome_witness_refs() {
+        let summary = proof_evidence_summary(
+            r#"{
+                "evidence": {
+                    "review_audit_key": "review-1",
+                    "expected_artifact_refs": [{
+                        "kind": "OutboundEmail",
+                        "primary_key": "thread:queue/final-mail",
+                        "expected_terminal_state": "accepted"
+                    }],
+                    "delivered_artifact_refs": [{
+                        "kind": "OutboundEmail",
+                        "primary_key": "msg-accepted-1",
+                        "expected_terminal_state": "accepted"
+                    }]
+                }
+            }"#,
+        );
+        assert_eq!(summary["review_audit_key"], "review-1");
+        assert_eq!(summary["expected_artifact_ref_count"], 1);
+        assert_eq!(summary["delivered_artifact_ref_count"], 1);
+        assert_eq!(
+            summary["expected_artifact_refs"][0]["primary_key"],
+            "thread:queue/final-mail"
+        );
+    }
+
+    #[test]
+    fn proof_report_summary_surfaces_outcome_violation_codes() {
+        let summary = proof_report_summary(
+            r#"{
+                "accepted": false,
+                "violations": [
+                    {"code": "WP-Outcome-Missing", "message": "missing artifact"}
+                ]
+            }"#,
+        );
+        assert_eq!(summary["accepted"], false);
+        assert_eq!(summary["violation_count"], 1);
+        assert_eq!(summary["violation_codes"][0], "WP-Outcome-Missing");
     }
 }

@@ -283,7 +283,13 @@ const EVIDENCE_KEYS: &[&str] = &[
     "outgoing_recipient_set_sha256",
     "verification_id",
     "schedule_task_id",
+    "replacement_schedule_task_id",
+    "escalation_id",
+    "knowledge_entry_id",
+    "incident_id",
     "canonical_hot_path",
+    "expected_artifact_refs",
+    "delivered_artifact_refs",
 ];
 
 fn value_is_present(v: Option<&Value>) -> bool {
@@ -439,7 +445,7 @@ mod tests {
                 (proof_id, entity_type, entity_id, lane, from_state, to_state,
                  core_event, actor, accepted, request_json, created_at, updated_at)
                VALUES ('p1', 'FounderCommunication', 'e', 'L', 'A', 'B', 'X', 'u', 1,
-                       '{"evidence":{"review_audit_key":"abc","approved_body_sha256":"x"}}',
+                       '{"evidence":{"review_audit_key":"abc","approved_body_sha256":"x","expected_artifact_refs":[{"kind":"OutboundEmail","primary_key":"thread:t","expected_terminal_state":"accepted"}],"delivered_artifact_refs":[{"kind":"OutboundEmail","primary_key":"msg-1","expected_terminal_state":"accepted"}]}}',
                        '2026-04-26T01:00:00Z', '2026-04-26T01:00:00Z')"#,
             [],
         )
@@ -462,5 +468,10 @@ mod tests {
             .find(|k| k["evidence_key"] == "review_audit_key")
             .unwrap();
         assert_eq!(review["present_count"], 1); // only the accepted one had a non-null
+        let delivered = keys
+            .iter()
+            .find(|k| k["evidence_key"] == "delivered_artifact_refs")
+            .unwrap();
+        assert_eq!(delivered["present_count"], 1);
     }
 }
