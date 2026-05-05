@@ -1968,6 +1968,7 @@ impl CodexMessageProcessor {
     ) -> ConfigOverrides {
         ConfigOverrides {
             model,
+            model_context_window: self.config.model_context_window,
             model_provider,
             service_tier,
             cwd: cwd.map(PathBuf::from),
