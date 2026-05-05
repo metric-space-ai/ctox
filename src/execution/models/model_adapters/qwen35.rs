@@ -7,6 +7,18 @@ use serde_json::Value;
 use super::ResponsesTransportKind;
 
 const LOCAL_COMPACT_INSTRUCTIONS: &str = "You are Codex running through CTOX on a local responses-backed runtime. Be concise and tool-accurate. Emit either one tool call or one final answer per turn. Prefer exec_command for shell work and apply_patch for file edits. Do not restate instructions. If the task requires creating or modifying files, running builds or tests, or proving a result inside a workspace, your next completion must be a tool call, not a final answer. You must not claim success, emit an exact marker, or give a final answer until tool output has verified the required result. When the user asks for an exact marker or short final answer, return only that required text after any needed tool calls and verification.";
+const QWEN_TOOL_PROTOCOL_INSTRUCTIONS: &str = r#"Local CTOX tool-call protocol:
+- Available tools: {tool_names}
+- If the next action requires a command, filesystem change, runtime inspection, benchmark run, ticket/state update, or artifact verification, your entire assistant message must be exactly one tool call and no prose.
+- Emit tool calls in this XML format:
+<tool_call>
+<function=exec_command>
+<parameter=cmd>printf hello</parameter>
+</function>
+</tool_call>
+- Use the real tool name from the available tools list. Use parameter names from the tool schema, for example cmd for exec_command.
+- Do not use Markdown fences for tool calls. Do not describe the command instead of calling the tool.
+- After tool output is returned, either call another tool or give the final answer only when the requested durable result has been verified."#;
 
 pub fn adapter_id() -> &'static str {
     "qwen3_5"
@@ -71,6 +83,7 @@ pub fn rewrite_request(raw: &[u8]) -> anyhow::Result<Vec<u8>> {
         instructions.as_deref(),
     );
     let (messages, tools) = build_request_parts(&payload, messages);
+    let messages = inject_tool_protocol_message(messages, &tools);
 
     let mut request = serde_json::Map::new();
     request.insert("model".to_string(), Value::String(model));
@@ -222,6 +235,66 @@ fn build_request_parts(payload: &Value, messages: Vec<Value>) -> (Vec<Value>, Ve
         })
         .unwrap_or_default();
     (messages, tools)
+}
+
+fn inject_tool_protocol_message(mut messages: Vec<Value>, tools: &[Value]) -> Vec<Value> {
+    if tools.is_empty() {
+        return messages;
+    }
+    let tool_names = tool_names(tools);
+    let tool_names = if tool_names.is_empty() {
+        "exec_command".to_string()
+    } else {
+        tool_names.join(", ")
+    };
+    let instructions = QWEN_TOOL_PROTOCOL_INSTRUCTIONS.replace("{tool_names}", &tool_names);
+
+    if let Some(system) = messages
+        .iter_mut()
+        .find(|message| message.get("role").and_then(Value::as_str) == Some("system"))
+    {
+        let existing = system
+            .get("content")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim();
+        let merged = if existing.is_empty() {
+            instructions
+        } else {
+            format!("{existing}\n\n{instructions}")
+        };
+        if let Some(object) = system.as_object_mut() {
+            object.insert("content".to_string(), Value::String(merged));
+        }
+    } else {
+        messages.insert(
+            0,
+            json!({
+                "role": "system",
+                "content": instructions,
+            }),
+        );
+    }
+    messages
+}
+
+fn tool_names(tools: &[Value]) -> Vec<String> {
+    let mut names = Vec::new();
+    for tool in tools {
+        let name = tool
+            .get("function")
+            .and_then(|function| function.get("name"))
+            .or_else(|| tool.get("name"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|name| !name.is_empty());
+        if let Some(name) = name {
+            if !names.iter().any(|existing| existing == name) {
+                names.push(name.to_string());
+            }
+        }
+    }
+    names
 }
 
 fn build_chat_messages(items: &[Value], instructions: Option<&str>) -> Vec<Value> {
@@ -429,10 +502,10 @@ struct XmlToolCall {
 
 fn parse_xml_tool_calls(text: &str) -> (Option<String>, Vec<XmlToolCall>) {
     let tool_call_re = Regex::new(
-        r"(?s)<tool_call>\s*<function=([A-Za-z0-9_-]+)>\s*(.*?)\s*</function>\s*</tool_call>",
+        r"(?s)<tool_call>\s*<function=([A-Za-z0-9_.-]+)>\s*(.*?)\s*</function>\s*</tool_call>",
     )
     .expect("valid Qwen tool call regex");
-    let param_re = Regex::new(r"(?s)<parameter=([A-Za-z0-9_-]+)>\s*(.*?)\s*</parameter>")
+    let param_re = Regex::new(r"(?s)<parameter=([A-Za-z0-9_.-]+)>\s*(.*?)\s*</parameter>")
         .expect("valid parameter regex");
     let mut tool_calls = Vec::new();
     let mut plain_text = String::new();
@@ -478,4 +551,62 @@ fn parse_xml_tool_calls(text: &str) -> (Option<String>, Vec<XmlToolCall>) {
         },
         tool_calls,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn request_with_tools_injects_local_tool_protocol() {
+        let payload = json!({
+            "model": "Qwen/Qwen3.6-35B-A3B",
+            "tools": [{
+                "type": "function",
+                "function": {
+                    "name": "exec_command",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"cmd": {"type": "string"}},
+                        "required": ["cmd"]
+                    }
+                }
+            }],
+            "input": [{
+                "type": "message",
+                "role": "user",
+                "content": [{"type":"input_text", "text":"Create REQUIRED ARTIFACT x.txt"}]
+            }]
+        });
+
+        let rewritten = rewrite_request(&serde_json::to_vec(&payload).unwrap()).unwrap();
+        let request: Value = serde_json::from_slice(&rewritten).unwrap();
+        let system = request["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|message| message["role"] == "system")
+            .and_then(|message| message["content"].as_str())
+            .unwrap();
+
+        assert!(system.contains("Local CTOX tool-call protocol"));
+        assert!(system.contains("Available tools: exec_command"));
+        assert!(system.contains("<function=exec_command>"));
+        assert!(system.contains("<parameter=cmd>"));
+    }
+
+    #[test]
+    fn parses_qwen_xml_tool_call_with_dotted_tool_name() {
+        let text = r#"<tool_call>
+<function=namespace.exec_command>
+<parameter=cmd>printf CTOX_OK</parameter>
+</function>
+</tool_call>"#;
+        let (plain, calls) = parse_xml_tool_calls(text);
+
+        assert_eq!(plain, None);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "namespace.exec_command");
+        assert_eq!(calls[0].arguments, json!({"cmd":"printf CTOX_OK"}).to_string());
+    }
 }
