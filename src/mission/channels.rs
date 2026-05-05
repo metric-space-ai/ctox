@@ -3436,6 +3436,42 @@ pub(crate) fn default_email_account_key(root: &Path) -> Result<String> {
     resolve_account_key(&conn, "email", None)
 }
 
+pub(crate) fn terminal_founder_outbound_artifact_count(
+    root: &Path,
+    action: &FounderOutboundAction,
+) -> Result<i64> {
+    let db_path = resolve_db_path(root, None);
+    let conn = open_channel_db(&db_path)?;
+    let to_json = serde_json::to_string(&action.to)?;
+    let cc_json = serde_json::to_string(&action.cc)?;
+    let attachments = action.attachments.join("\n");
+    conn.query_row(
+        r#"
+        SELECT COUNT(*)
+        FROM communication_messages
+        WHERE channel = 'email'
+          AND direction = 'outbound'
+          AND status IN ('accepted', 'sent')
+          AND lower(account_key) = lower(?1)
+          AND thread_key = ?2
+          AND subject = ?3
+          AND recipient_addresses_json = ?4
+          AND cc_addresses_json = ?5
+          AND raw_payload_ref = ?6
+        "#,
+        params![
+            action.account_key,
+            action.thread_key,
+            action.subject,
+            to_json,
+            cc_json,
+            attachments
+        ],
+        |row| row.get(0),
+    )
+    .context("failed to count terminal founder outbound artifacts")
+}
+
 pub(crate) fn record_founder_outbound_review_approval(
     root: &Path,
     anchor_message_key: &str,
@@ -8982,6 +9018,53 @@ mod tests {
         assert!(err.to_string().contains("not in draft_pending_send"));
 
         let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[test]
+    fn terminal_founder_outbound_artifact_count_requires_terminal_send_row() {
+        let root = unique_root("ctox-terminal-outbound-artifact-count");
+        fs::create_dir_all(root.join("runtime")).expect("failed to create runtime dir");
+        let db_path = resolve_db_path(&root, None);
+        let conn = open_channel_db(&db_path).expect("failed to open db");
+        let request = phase1_test_request("Body fuer Outcome-Gate");
+        let action = FounderOutboundAction {
+            account_key: request.account_key.to_ascii_uppercase(),
+            thread_key: request.thread_key.clone(),
+            subject: request.subject.clone(),
+            to: request.to.clone(),
+            cc: request.cc.clone(),
+            attachments: request.attachments.clone(),
+        };
+        let body_sha256 = sha256_hex(request.body.trim().as_bytes());
+        let message_key =
+            record_outbound_pending_send(&conn, &request, "founder-review:phase1", &body_sha256)
+                .expect("pending send must persist");
+
+        assert_eq!(
+            terminal_founder_outbound_artifact_count(&root, &action)
+                .expect("count pending artifact"),
+            0,
+            "draft_pending_send is not a delivered outcome"
+        );
+
+        update_pending_send_to_accepted(
+            &conn,
+            &message_key,
+            &json!({
+                "ok": true,
+                "channel": "email",
+                "status": "accepted",
+            }),
+        )
+        .expect("accepted update must succeed");
+
+        assert_eq!(
+            terminal_founder_outbound_artifact_count(&root, &action)
+                .expect("count accepted artifact"),
+            1
+        );
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

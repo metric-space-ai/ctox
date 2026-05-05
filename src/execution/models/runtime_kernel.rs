@@ -165,10 +165,16 @@ impl InferenceRuntimeKernel {
         let ownership = runtime_contract::load_runtime_ownership_state(root).unwrap_or_default();
 
         let primary_generation = resolve_primary_generation(root, &state);
-        let embedding = resolve_auxiliary(root, engine::AuxiliaryRole::Embedding, &state);
-        let transcription = resolve_auxiliary(root, engine::AuxiliaryRole::Stt, &state);
-        let speech = resolve_auxiliary(root, engine::AuxiliaryRole::Tts, &state);
-        let vision = resolve_auxiliary(root, engine::AuxiliaryRole::Vision, &state);
+        let (embedding, transcription, speech, vision) = if state.source.is_local() {
+            (
+                resolve_auxiliary(root, engine::AuxiliaryRole::Embedding, &state),
+                resolve_auxiliary(root, engine::AuxiliaryRole::Stt, &state),
+                resolve_auxiliary(root, engine::AuxiliaryRole::Tts, &state),
+                resolve_auxiliary(root, engine::AuxiliaryRole::Vision, &state),
+            )
+        } else {
+            (None, None, None, None)
+        };
 
         let upstream_base_url = primary_generation
             .as_ref()
@@ -442,6 +448,7 @@ mod tests {
     #[test]
     fn resolves_api_runtime_without_primary_generation_backend() {
         let root = make_temp_root();
+        runtime_env::save_runtime_env_map(&root, &BTreeMap::new()).unwrap();
         runtime_state::persist_runtime_state(
             &root,
             &runtime_state::InferenceRuntimeState {
@@ -459,16 +466,44 @@ mod tests {
                 local_preset: None,
                 boost: runtime_state::BoostRuntimeState::default(),
                 adapter_tuning: runtime_state::AdapterRuntimeTuning::default(),
-                embedding: runtime_state::AuxiliaryRuntimeState::default(),
-                transcription: runtime_state::AuxiliaryRuntimeState::default(),
-                speech: runtime_state::AuxiliaryRuntimeState::default(),
-                vision: runtime_state::AuxiliaryRuntimeState::default(),
+                embedding: runtime_state::AuxiliaryRuntimeState {
+                    enabled: true,
+                    configured_model: Some("Qwen/Qwen3-Embedding-0.6B [CPU]".to_string()),
+                    port: Some(2237),
+                    base_url: None,
+                },
+                transcription: runtime_state::AuxiliaryRuntimeState {
+                    enabled: true,
+                    configured_model: Some(
+                        "engineai/Voxtral-Mini-4B-Realtime-2602 [GPU]".to_string(),
+                    ),
+                    port: Some(2238),
+                    base_url: None,
+                },
+                speech: runtime_state::AuxiliaryRuntimeState {
+                    enabled: true,
+                    configured_model: Some(
+                        "speaches-ai/piper-en_US-lessac-medium [CPU EN]".to_string(),
+                    ),
+                    port: Some(2239),
+                    base_url: None,
+                },
+                vision: runtime_state::AuxiliaryRuntimeState {
+                    enabled: true,
+                    configured_model: Some("Qwen/Qwen3-VL-2B-Instruct [GPU]".to_string()),
+                    port: Some(2240),
+                    base_url: None,
+                },
             },
         )
         .unwrap();
 
         let resolved = InferenceRuntimeKernel::resolve(&root).unwrap();
         assert!(resolved.primary_generation.is_none());
+        assert!(resolved.embedding.is_none());
+        assert!(resolved.transcription.is_none());
+        assert!(resolved.speech.is_none());
+        assert!(resolved.vision.is_none());
         assert_eq!(
             resolved.internal_responses_base_url(),
             "https://api.openai.com/v1"

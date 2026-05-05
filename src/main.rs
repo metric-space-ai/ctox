@@ -1034,6 +1034,15 @@ fn handle_chat(root: &Path, args: &[String]) -> anyhow::Result<()> {
             attachments: Vec::new(),
         })
     };
+    let outbound_email_for_wait = outbound_email.clone();
+    let outbound_terminal_count_before = outbound_email_for_wait
+        .as_ref()
+        .map(|intent| {
+            let action = channels::FounderOutboundAction::from(intent.clone());
+            channels::terminal_founder_outbound_artifact_count(root, &action)
+        })
+        .transpose()?;
+    let last_completed_before_submit = status.last_completed_at.clone();
 
     service::submit_chat_prompt_with_intent(root, &prompt, thread_key.as_deref(), outbound_email)?;
 
@@ -1058,6 +1067,29 @@ fn handle_chat(root: &Path, args: &[String]) -> anyhow::Result<()> {
                 );
             }
             std::thread::sleep(std::time::Duration::from_millis(250));
+        }
+        let completed_after_submit = final_status
+            .as_ref()
+            .and_then(|status| status.last_completed_at.as_ref())
+            .is_some_and(|completed| Some(completed) != last_completed_before_submit.as_ref());
+        if !completed_after_submit {
+            anyhow::bail!(
+                "CTOX service became idle before this chat request reported a completed turn"
+            );
+        }
+        if let (Some(intent), Some(before_count)) = (
+            outbound_email_for_wait.as_ref(),
+            outbound_terminal_count_before,
+        ) {
+            let action = channels::FounderOutboundAction::from(intent.clone());
+            let after_count = channels::terminal_founder_outbound_artifact_count(root, &action)?;
+            if after_count <= before_count {
+                anyhow::bail!(
+                    "CTOX chat finished without a new accepted outbound email artifact for subject {:?} to {:?}; the agent must run the reviewed send itself before the task can complete",
+                    action.subject,
+                    action.to
+                );
+            }
         }
     }
 

@@ -7340,17 +7340,26 @@ fn maybe_redirect_owner_visible_work_to_strategy_setup(
     state: &Arc<Mutex<SharedState>>,
     job: &QueuedPrompt,
 ) -> Result<bool> {
+    let current_item = job.ticket_self_work_id.as_deref().and_then(|work_id| {
+        tickets::load_ticket_self_work_item(root, work_id)
+            .ok()
+            .flatten()
+    });
+    if matches!(
+        current_item.as_ref().map(|item| item.kind.as_str()),
+        Some("timeout-continuation" | "runtime-api-retry")
+    ) {
+        return Ok(false);
+    }
+    if job.outbound_email.is_some() || job.outbound_anchor.is_some() {
+        return Ok(false);
+    }
     if !is_owner_visible_strategic_job(job) {
         return Ok(false);
     }
     if has_runnable_founder_or_owner_email(root)? {
         return Ok(false);
     }
-    let current_item = job.ticket_self_work_id.as_deref().and_then(|work_id| {
-        tickets::load_ticket_self_work_item(root, work_id)
-            .ok()
-            .flatten()
-    });
     if current_item.as_ref().map(|item| item.kind.as_str()) == Some(STRATEGIC_DIRECTION_KIND) {
         return Ok(false);
     }
@@ -9137,6 +9146,9 @@ fn maybe_enqueue_timeout_continuation(
                     clip_text(&title, 80),
                 ),
                 "origin_source_label": job.source_label,
+                "timeout_continuation": true,
+                "outbound_email": job.outbound_email.clone(),
+                "outbound_anchor": job.outbound_anchor.clone(),
             }),
         },
         &job.leased_message_keys,
@@ -12176,9 +12188,106 @@ mod tests {
         assert_eq!(self_work[0].state, "queued");
         let events = governance::list_recent_events(&root, turn_loop::CHAT_CONVERSATION_ID, 8)
             .expect("failed to list governance events");
-        assert!(events
-            .iter()
-            .any(|event| event.mechanism_id == "turn_timeout_continuation"));
+        assert!(
+            events
+                .iter()
+                .any(|event| event.mechanism_id == "turn_timeout_continuation")
+        );
+    }
+
+    #[test]
+    fn timeout_continuation_preserves_outbound_send_intent_and_skips_strategy_reroute() {
+        let root = temp_root("ctox-timeout-outbound-intent");
+        let outbound = channels::FounderOutboundAction {
+            account_key: "email:cto1@metric-space.ai".to_string(),
+            thread_key: "founder-outbound:julia-tag-proposal".to_string(),
+            subject: "Vorschlag Tag-System fuer Lead-Funnel in Salesforce".to_string(),
+            to: vec!["j.kienzler@remcapital.de".to_string()],
+            cc: Vec::new(),
+            attachments: Vec::new(),
+        };
+        let job = QueuedPrompt {
+            prompt: "Schreibe und sende per reviewed-founder-send eine Mail an Julia.".to_string(),
+            goal: "Tag-Proposal-Mail an Julia final senden".to_string(),
+            preview: "reviewed-founder-send Julia".to_string(),
+            source_label: "tui-outbound".to_string(),
+            suggested_skill: Some("owner-communication".to_string()),
+            leased_message_keys: Vec::new(),
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("founder-outbound:julia-tag-proposal".to_string()),
+            workspace_root: Some("/home/ubuntu/workspace/kunstmen".to_string()),
+            ticket_self_work_id: None,
+            outbound_email: Some(outbound.clone()),
+            outbound_anchor: Some("tui-outbound:julia-tag-proposal".to_string()),
+        };
+
+        maybe_enqueue_timeout_continuation(&root, &job, "direct session timeout after 300s")
+            .expect("timeout continuation should persist outbound intent");
+
+        let tasks = channels::list_queue_tasks(&root, &["pending".to_string()], 10)
+            .expect("failed to list queue tasks");
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(
+            tasks[0].suggested_skill.as_deref(),
+            Some("owner-communication")
+        );
+
+        let self_work = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
+            .expect("failed to list self-work items");
+        assert_eq!(self_work.len(), 1);
+        assert_eq!(self_work[0].kind, "timeout-continuation");
+        assert_eq!(
+            metadata_string(&self_work[0].metadata, "outbound_anchor").as_deref(),
+            Some("tui-outbound:julia-tag-proposal")
+        );
+        let self_work_outbound = founder_outbound_action_from_metadata(&self_work[0].metadata)
+            .expect("self-work metadata must retain outbound action");
+        assert_eq!(self_work_outbound.subject, outbound.subject);
+        assert_eq!(self_work_outbound.to, outbound.to);
+
+        let conn =
+            channels::open_channel_db(&root.join("runtime/ctox.sqlite3")).expect("open channel db");
+        let metadata_json: String = conn
+            .query_row(
+                "SELECT metadata_json FROM communication_messages WHERE message_key = ?1",
+                params![tasks[0].message_key],
+                |row| row.get(0),
+            )
+            .expect("queue metadata row exists");
+        let metadata: Value = serde_json::from_str(&metadata_json).expect("queue metadata json");
+        let queued_outbound = founder_outbound_action_from_metadata(&metadata)
+            .expect("queued timeout continuation must retain outbound action");
+        assert_eq!(queued_outbound.subject, outbound.subject);
+        assert_eq!(
+            metadata.get("outbound_anchor").and_then(Value::as_str),
+            Some("tui-outbound:julia-tag-proposal")
+        );
+
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        let queued_job = QueuedPrompt {
+            prompt: tasks[0].prompt.clone(),
+            goal: tasks[0].title.clone(),
+            preview: tasks[0].title.clone(),
+            source_label: "queue".to_string(),
+            suggested_skill: tasks[0].suggested_skill.clone(),
+            leased_message_keys: vec![tasks[0].message_key.clone()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some(tasks[0].thread_key.clone()),
+            workspace_root: tasks[0].workspace_root.clone(),
+            ticket_self_work_id: ticket_self_work_id_from_metadata(&metadata),
+            outbound_email: Some(queued_outbound),
+            outbound_anchor: metadata_string(&metadata, "outbound_anchor"),
+        };
+
+        let redirected =
+            maybe_redirect_owner_visible_work_to_strategy_setup(&root, &state, &queued_job)
+                .expect("reroute check should succeed");
+        assert!(!redirected);
+
+        let items = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
+            .expect("failed to list self-work after reroute check");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].kind, "timeout-continuation");
     }
 
     #[test]
