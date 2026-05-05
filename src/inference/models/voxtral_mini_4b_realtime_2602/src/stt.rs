@@ -4,6 +4,7 @@ use crate::consts::{
     VOX_DEC_HIDDEN, VOX_DEC_KV_HEADS, VOX_DEC_LAYERS, VOX_ENC_DIM, VOX_ENC_HEADS, VOX_ENC_HEAD_DIM,
     VOX_ENC_HIDDEN, VOX_ENC_KV_HEADS, VOX_ENC_LAYERS, VOX_NUM_MEL_BINS,
 };
+#[cfg(not(ctox_ggml_unavailable))]
 use crate::ggml_runtime::GgmlVoxtralRuntime;
 use crate::gguf;
 use crate::kernels::VoxtralSttBackend;
@@ -59,9 +60,13 @@ pub struct TranscriptionResponse {
     pub text: String,
 }
 
+#[cfg(not(ctox_ggml_unavailable))]
 struct VoxtralQ4Runtime {
     runtime: GgmlVoxtralRuntime,
 }
+
+#[cfg(ctox_ggml_unavailable)]
+struct VoxtralQ4Runtime;
 
 impl std::fmt::Debug for VoxtralSttModel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -158,13 +163,31 @@ impl VoxtralSttModel {
 }
 
 impl VoxtralQ4Runtime {
+    #[cfg(not(ctox_ggml_unavailable))]
     fn load(gguf_path: &Path, backend: VoxtralSttBackend) -> Result<Self> {
         let runtime = GgmlVoxtralRuntime::load(gguf_path, backend)?;
         Ok(Self { runtime })
     }
 
+    #[cfg(ctox_ggml_unavailable)]
+    fn load(gguf_path: &Path, backend: VoxtralSttBackend) -> Result<Self> {
+        let _ = (gguf_path, backend);
+        Err(Error::Unsupported(
+            "native Voxtral STT ggml runtime is not linked on this target",
+        ))
+    }
+
+    #[cfg(not(ctox_ggml_unavailable))]
     fn transcribe_samples(&mut self, samples: Vec<f32>, sample_rate: u32) -> Result<String> {
         self.runtime.transcribe_samples(samples, sample_rate)
+    }
+
+    #[cfg(ctox_ggml_unavailable)]
+    fn transcribe_samples(&mut self, samples: Vec<f32>, sample_rate: u32) -> Result<String> {
+        let _ = (samples, sample_rate);
+        Err(Error::Unsupported(
+            "native Voxtral STT ggml runtime is not linked on this target",
+        ))
     }
 }
 

@@ -8,7 +8,9 @@
 pub mod audio;
 pub mod consts;
 pub mod error;
+#[cfg(not(ctox_ggml_unavailable))]
 pub(crate) mod ffi;
+#[cfg(not(ctox_ggml_unavailable))]
 mod ggml_runtime;
 pub mod gguf;
 pub mod kernels;
@@ -23,5 +25,5 @@ pub use stt::{
 };
 
 pub const GGML_BLAS_ENABLED: bool = cfg!(ctox_ggml_blas);
-pub const GGML_CPU_ENABLED: bool = true;
-pub const GGML_METAL_ENABLED: bool = cfg!(target_os = "macos");
+pub const GGML_CPU_ENABLED: bool = !cfg!(ctox_ggml_unavailable);
+pub const GGML_METAL_ENABLED: bool = !cfg!(ctox_ggml_unavailable) && cfg!(target_os = "macos");

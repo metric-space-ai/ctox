@@ -7,20 +7,33 @@ fn main() {
     println!("cargo:rerun-if-env-changed=CTOX_VOXTRAL_BUILD_GGML");
     println!("cargo:rerun-if-env-changed=CTOX_VOXTRAL_GGML_BLAS");
     println!("cargo:rustc-check-cfg=cfg(ctox_ggml_blas)");
+    println!("cargo:rustc-check-cfg=cfg(ctox_ggml_unavailable)");
 
     if let Ok(dir) = env::var("GGML_LIB_DIR") {
         link_ggml(&PathBuf::from(dir));
         return;
     }
 
+    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    if target_os == "windows" {
+        disable_ggml_runtime(
+            "vendored ggml runtime is disabled on Windows release targets unless GGML_LIB_DIR is set",
+        );
+        return;
+    }
+
     if env::var("CTOX_VOXTRAL_BUILD_GGML").as_deref() == Ok("0") {
-        println!(
-            "cargo:warning=ctox-voxtral-mini-4b-realtime-2602: GGML_LIB_DIR unset; \
-             vendored ggml build disabled by CTOX_VOXTRAL_BUILD_GGML=0"
+        disable_ggml_runtime(
+            "GGML_LIB_DIR unset; vendored ggml build disabled by CTOX_VOXTRAL_BUILD_GGML=0",
         );
     } else {
         build_vendored_ggml();
     }
+}
+
+fn disable_ggml_runtime(reason: &str) {
+    println!("cargo:rustc-cfg=ctox_ggml_unavailable");
+    println!("cargo:warning=ctox-voxtral-mini-4b-realtime-2602: {reason}");
 }
 
 fn build_vendored_ggml() {
