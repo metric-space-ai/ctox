@@ -720,7 +720,7 @@ ensure_linux_browser_prereqs() {
   command -v apt-get >/dev/null 2>&1 || return 0
   can_sudo || return 0
   local packages=()
-  for pkg in nodejs npm; do
+  for pkg in nodejs npm ffmpeg pulseaudio pulseaudio-utils xvfb; do
     apt_package_installed "$pkg" || packages+=("$pkg")
   done
   [[ "${#packages[@]}" -eq 0 ]] && return 0

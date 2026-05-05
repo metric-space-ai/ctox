@@ -511,6 +511,17 @@ fn spawn_meeting_join(
     command
         .current_dir(root)
         .env("CTOX_ROOT", root)
+        .env(
+            "DISPLAY",
+            std::env::var("DISPLAY").unwrap_or_else(|_| ":99".to_string()),
+        )
+        .env(
+            "XDG_RUNTIME_DIR",
+            std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| {
+                let uid = unsafe { libc::geteuid() };
+                format!("/run/user/{uid}")
+            }),
+        )
         .arg("meeting")
         .arg("join")
         .arg(payload.url.trim())

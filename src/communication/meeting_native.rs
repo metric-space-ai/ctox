@@ -3028,6 +3028,7 @@ if (provider === "microsoft" && process.platform !== "darwin") {
   const { spawn } = await import("node:child_process");
   const outputPath = path.join(tempDir, "recording.mp4");
   const display = process.env.DISPLAY || ":99";
+  const runtimeDir = process.env.XDG_RUNTIME_DIR || (typeof process.getuid === "function" ? `/run/user/${process.getuid()}` : undefined);
   const ffmpegArgs = [
     "-y", "-loglevel", "info",
     "-f", "x11grab", "-video_size", "1280x720", "-framerate", "25",
@@ -3042,7 +3043,11 @@ if (provider === "microsoft" && process.platform !== "darwin") {
   ];
   const ffmpeg = spawn("ffmpeg", ffmpegArgs, {
     stdio: ["pipe", "pipe", "pipe"],
-    env: { ...process.env, XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR || "/run/user/1001", DISPLAY: display },
+    env: { ...process.env, ...(runtimeDir ? { XDG_RUNTIME_DIR: runtimeDir } : {}), DISPLAY: display },
+  });
+  ffmpeg.on("error", (err) => {
+    emit({ type: "ffmpeg_error", text: err.message || String(err) });
+    window.ctoxMeetingEnd?.("ffmpeg_error");
   });
   ffmpeg.stderr.on("data", (d) => {
     const s = d.toString();
