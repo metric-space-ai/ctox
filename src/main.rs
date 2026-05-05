@@ -1085,7 +1085,7 @@ fn handle_chat(root: &Path, args: &[String]) -> anyhow::Result<()> {
             let after_count = channels::terminal_founder_outbound_artifact_count(root, &action)?;
             if after_count <= before_count {
                 anyhow::bail!(
-                    "CTOX chat finished without a new accepted outbound email artifact for subject {:?} to {:?}; the agent must run the reviewed send itself before the task can complete",
+                    "CTOX chat finished without a new accepted outbound email artifact for subject {:?} to {:?}; the agent did not complete the reviewed send after review approval",
                     action.subject,
                     action.to
                 );

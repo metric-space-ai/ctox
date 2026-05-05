@@ -53,7 +53,7 @@ const CTOX_DIRECT_SESSION_BASE_INSTRUCTIONS: &str = r#"You are an agent working 
 
 Complete a work step only when the required durable outcome exists in CTOX runtime state. A final answer, summary, note file, or statement such as "sent", "done", or "closed" is not evidence by itself.
 
-If the work requires an artifact, verify the artifact before finishing. For outbound email, the required artifact is an outbound email row in CTOX runtime state with status accepted. The Review Gate can approve or reject a draft, but it never sends email for you. After approval, you must run the reviewed send command yourself and verify the accepted outbound row.
+If the work requires an artifact, verify the artifact before finishing. For proactive outbound email, produce the final send-ready body first and do not run reviewed-send before review feedback. When a reviewed-send continuation prompt provides the exact approved body and command, execute only that command and verify the accepted outbound row. Do not create review rows or approval digests manually.
 
 If an API, provider, tool, or runtime call fails or is rate-limited, do not claim completion. Retry only when appropriate; otherwise keep the work open with the blocker recorded.
 
@@ -987,8 +987,8 @@ mod tests {
     fn base_instructions_include_durable_outcome_contract() {
         let instructions = compose_base_instructions(None);
         assert!(instructions.contains("required durable outcome exists"));
-        assert!(instructions.contains("Review Gate can approve or reject"));
-        assert!(instructions.contains("it never sends email for you"));
+        assert!(instructions.contains("do not run reviewed-send before review feedback"));
+        assert!(instructions.contains("Do not create review rows or approval digests manually"));
         assert!(instructions.contains("accepted outbound row"));
         assert!(instructions.contains("Do not create review-driven self-work"));
     }

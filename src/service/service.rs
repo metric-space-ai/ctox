@@ -2777,7 +2777,44 @@ fn start_prompt_worker(
                 }
                 _ => None,
             };
-            // F3: classify the turn outcome explicitly. The structured value
+            #[test]
+    fn outbound_recovery_prompt_gives_agent_exact_reviewed_send_step() {
+        let approved_body =
+            "Hallo Julia,\n\ndas ist der freigegebene Text.\n\nViele Gruesse\nINF Yoda";
+        let job = QueuedPrompt {
+            prompt: "Schreibe eine Mail an Julia.".to_string(),
+            goal: "send mail".to_string(),
+            preview: "send mail".to_string(),
+            source_label: "tui".to_string(),
+            suggested_skill: None,
+            leased_message_keys: Vec::new(),
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("julia-meeting-notetaker-report-20260505".to_string()),
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: Some(channels::FounderOutboundAction {
+                account_key: "email:INF.Yoda@remcapital.de".to_string(),
+                thread_key: "julia-meeting-notetaker-report-20260505".to_string(),
+                subject: "Erste Meeting-Teilnahme als INF Yoda Notetaker".to_string(),
+                to: vec!["j.kienzler@remcapital.de".to_string()],
+                cc: Vec::new(),
+                attachments: Vec::new(),
+            }),
+            outbound_anchor: Some("tui-outbound:test".to_string()),
+        };
+
+        let prompt = outcome_witness_recovery_message(&job, approved_body, "missing artifact");
+
+        assert!(prompt.contains("Die Review-Freigabe"));
+        assert!(prompt.contains("Fuehre keine DB- oder Code-Forensik aus"));
+        assert!(prompt.contains("BODY=$(cat <<'CTOX_REVIEWED_BODY'"));
+        assert!(prompt.contains(approved_body));
+        assert!(prompt.contains("ctox channel send --channel email"));
+        assert!(prompt.contains("--reviewed-founder-send --body \"$BODY\""));
+        assert!(!prompt.contains("<freigegebener Mailtext>"));
+    }
+
+    // F3: classify the turn outcome explicitly. The structured value
             // is persisted on the assistant row in `messages.agent_outcome`
             // so downstream consumers (founder-send pipeline, status
             // snapshots) can branch on a typed enum instead of scraping
@@ -4383,14 +4420,15 @@ fn outcome_witness_recovery_message(job: &QueuedPrompt, approved_body: &str, err
             .iter()
             .map(|value| format!(" --cc {}", shell_quote(value)))
             .collect::<String>();
+        let approved_body_block = approved_body.trim();
         message.push_str(&format!(
-            "\n\nNaechster Schritt fuer den Agent-Run: Sende die freigegebene Mail selbst ueber den review-gebundenen Versandbefehl. Verwende exakt diese Metadaten und exakt den freigegebenen Body:\nctox channel send --channel email --account-key {} --thread-key {} --subject {}{}{} --reviewed-founder-send --body <freigegebener Mailtext>\nDer freigegebene Mailtext beginnt mit: {}\nAendere Body, Empfaenger, CC oder Betreff nicht. Danach pruefe, dass `communication_messages` fuer thread_key `{}` eine outbound email mit `status='accepted'` enthaelt.",
+            "\n\nNaechster Schritt fuer den Worker: Die Review-Freigabe fuer exakt diesen Body und diese Empfaenger ist bereits persistiert. Fuehre keine DB- oder Code-Forensik aus und erstelle keine Review-Zeilen manuell. Sende genau den freigegebenen Text mit genau diesem Befehl:\n\nBODY=$(cat <<'CTOX_REVIEWED_BODY'\n{}\nCTOX_REVIEWED_BODY\n)\nctox channel send --channel email --account-key {} --thread-key {} --subject {}{}{} --reviewed-founder-send --body \"$BODY\"\n\nAendere Body, Empfaenger, CC oder Betreff nicht. Wenn der Befehl fehlschlaegt, melde exakt die Fehlermeldung und stoppe. Wenn er erfolgreich ist, pruefe, dass `communication_messages` fuer thread_key `{}` eine outbound email mit `status='accepted'` enthaelt.",
+            approved_body_block,
             shell_quote(&action.account_key),
             shell_quote(&action.thread_key),
             shell_quote(&action.subject),
             to_flags,
             cc_flags,
-            clip_text(approved_body, 220),
             action.thread_key
         ));
     } else {
@@ -9525,7 +9563,7 @@ fn render_runtime_retry_prompt(job: &QueuedPrompt, error_text: &str) -> String {
     ];
     if job.outbound_email.is_some() {
         required_actions.push(
-            "for an email task, the agent must run the reviewed send itself; the harness and reviewer only validate the result",
+            "for a proactive outbound email task, produce the final send-ready body first; after review approval, continue only from the exact reviewed-send continuation prompt",
         );
         required_actions.push(
             "do not say the email was sent unless an outbound email row reached the accepted terminal state",
