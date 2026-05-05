@@ -2635,6 +2635,26 @@ fn start_prompt_worker(
     job: QueuedPrompt,
 ) {
     thread::spawn(move || {
+        match maybe_suppress_fatal_harness_prompt_before_execution(&root, &state, &job) {
+            Ok(true) => {
+                eprintln!(
+                    "ctox prompt worker suppressed-fatal-harness source={} preview={}",
+                    job.source_label,
+                    clip_text(&job.preview, 120)
+                );
+                return;
+            }
+            Ok(false) => {}
+            Err(err) => {
+                push_event(
+                    &state,
+                    format!(
+                        "Failed to evaluate fatal harness prompt guard for {}: {}",
+                        job.source_label, err
+                    ),
+                );
+            }
+        }
         if let Some(reason) = crate::service::working_hours::hold_reason(&root) {
             let mut shared = lock_shared_state(&state);
             shared.busy = false;
@@ -3221,24 +3241,23 @@ fn start_prompt_worker(
                             runtime_error_is_transient_api_failure(&err_text);
                         let timeout_worker_message =
                             matches!(agent_outcome, lcm::AgentOutcome::TurnTimeout);
-                        let retry_worker_message = retry_founder_message
-                            || retry_runtime_message
-                            || timeout_worker_message;
+                        let timeout_retry_message =
+                            timeout_worker_message && timeout_auto_retry_enabled();
+                        let retry_worker_message =
+                            retry_founder_message || retry_runtime_message || timeout_retry_message;
                         let retry_not_before = if retry_runtime_message {
                             Some(runtime_retry_not_before_iso(&err_text))
-                        } else if timeout_worker_message && !agent_failure_threshold_hit {
+                        } else if timeout_retry_message && !agent_failure_threshold_hit {
                             Some(timeout_retry_not_before_iso(agent_failure_count_after_turn))
                         } else {
                             None
                         };
                         if !job.leased_message_keys.is_empty() {
-                            let route_status = if agent_failure_threshold_hit {
-                                "blocked"
-                            } else if retry_worker_message {
-                                "pending"
-                            } else {
-                                "failed"
-                            };
+                            let route_status = failed_worker_route_status(
+                                agent_failure_threshold_hit,
+                                timeout_worker_message,
+                                retry_worker_message,
+                            );
                             if let Some(not_before) = retry_not_before.as_deref() {
                                 let _ = channels::defer_messages_until(
                                     &root,
@@ -3271,6 +3290,12 @@ fn start_prompt_worker(
                             if agent_failure_threshold_hit {
                                 let note = format!(
                                     "Execution slice repeatedly failed or timed out. The mission was deferred by the agent-failure threshold and automatic retries were stopped. Last error: {}",
+                                    compact_error
+                                );
+                                block_ticket_self_work_item(&root, work_id, &note);
+                            } else if timeout_worker_message && !timeout_retry_message {
+                                let note = format!(
+                                    "Execution slice hit the turn time budget. Automatic same-prompt retry was blocked because repeating an interrupted multi-turn can restart work and burn tokens. Resume requires a compacted continuation checkpoint or an explicit operator retry. Error: {}",
                                     compact_error
                                 );
                                 block_ticket_self_work_item(&root, work_id, &note);
@@ -3309,6 +3334,14 @@ fn start_prompt_worker(
                                 &mut shared,
                                 format!(
                                     "{} prompt hit a retryable runtime error and will retry: {compact_error}",
+                                    job.source_label
+                                ),
+                            );
+                        } else if timeout_worker_message {
+                            push_event_locked(
+                                &mut shared,
+                                format!(
+                                    "{} prompt hit the turn time budget and automatic same-prompt retry was blocked: {compact_error}",
                                     job.source_label
                                 ),
                             );
@@ -4481,6 +4514,35 @@ fn mission_agent_failure_threshold() -> i64 {
             _ => DEFAULT_AGENT_FAILURE_THRESHOLD,
         },
         Err(_) => DEFAULT_AGENT_FAILURE_THRESHOLD,
+    }
+}
+
+fn timeout_auto_retry_enabled() -> bool {
+    std::env::var("CTOX_TIMEOUT_AUTO_RETRY")
+        .ok()
+        .and_then(|value| parse_boolish(&value))
+        .unwrap_or(false)
+}
+
+fn failed_worker_route_status(
+    agent_failure_threshold_hit: bool,
+    timeout_worker_message: bool,
+    retry_worker_message: bool,
+) -> &'static str {
+    if agent_failure_threshold_hit || (timeout_worker_message && !retry_worker_message) {
+        "blocked"
+    } else if retry_worker_message {
+        "pending"
+    } else {
+        "failed"
+    }
+}
+
+fn parse_boolish(value: &str) -> Option<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
     }
 }
 
@@ -9209,6 +9271,98 @@ fn maybe_enqueue_timeout_continuation(
     Ok(None)
 }
 
+fn maybe_suppress_fatal_harness_prompt_before_execution(
+    root: &Path,
+    state: &Arc<Mutex<SharedState>>,
+    job: &QueuedPrompt,
+) -> Result<bool> {
+    if !is_legacy_timeout_continuation_job(job) {
+        return Ok(false);
+    }
+
+    let reason =
+        "legacy timeout continuation jobs are forbidden because they can recursively restart timed-out harness turns";
+    let action =
+        "cancelled fatal harness continuation before starting an agent turn; no model tokens spent";
+    let details = serde_json::json!({
+        "source_label": job.source_label,
+        "thread_key": job.thread_key.clone(),
+        "ticket_self_work_id": job.ticket_self_work_id.clone(),
+        "leased_message_keys": job.leased_message_keys.clone(),
+        "leased_ticket_event_keys": job.leased_ticket_event_keys.clone(),
+        "goal": clip_text(&job.goal, 180),
+        "preview": clip_text(&job.preview, 180),
+    });
+    let _ = governance::record_event(
+        root,
+        governance::GovernanceEventRequest {
+            mechanism_id: "fatal_harness_loop_guard",
+            conversation_id: Some(turn_loop::CHAT_CONVERSATION_ID),
+            severity: "critical",
+            reason,
+            action_taken: action,
+            details,
+            idempotence_key: Some(&format!(
+                "fatal-harness-loop-guard:{}:{}",
+                job.thread_key
+                    .as_deref()
+                    .unwrap_or(job.source_label.as_str()),
+                job.leased_message_keys
+                    .first()
+                    .map(String::as_str)
+                    .or(job.ticket_self_work_id.as_deref())
+                    .unwrap_or(job.goal.as_str())
+            )),
+        },
+    );
+
+    if !job.leased_message_keys.is_empty() {
+        channels::ack_leased_messages(root, &job.leased_message_keys, "cancelled")?;
+    }
+    if !job.leased_ticket_event_keys.is_empty() {
+        let _ = tickets::ack_leased_ticket_events(root, &job.leased_ticket_event_keys, "failed");
+    }
+    if let Some(work_id) = job.ticket_self_work_id.as_deref() {
+        block_ticket_self_work_item(root, work_id, reason);
+    }
+
+    let mut shared = lock_shared_state(state);
+    release_leased_keys_locked(
+        &mut shared,
+        &job.leased_message_keys,
+        &job.leased_ticket_event_keys,
+    );
+    shared.busy = false;
+    shared.current_goal_preview = None;
+    shared.active_source_label = None;
+    shared.last_error = Some("fatal harness timeout continuation suppressed".to_string());
+    shared.last_progress_epoch_secs = current_epoch_secs();
+    push_event_locked(
+        &mut shared,
+        format!(
+            "Suppressed fatal harness continuation before model execution: {}",
+            clip_text(&job.goal, 120)
+        ),
+    );
+
+    Ok(true)
+}
+
+fn is_legacy_timeout_continuation_job(job: &QueuedPrompt) -> bool {
+    let prompt = normalize_token(&job.prompt);
+    let goal = normalize_token(&job.goal);
+    let preview = normalize_token(&job.preview);
+
+    prompt.contains("art: timeout-continuation")
+        || prompt.contains("durable continuation:")
+        || (goal.starts_with("continue ")
+            && goal.contains(" after timeout")
+            && (prompt.contains("runtime stop:") || prompt.contains("direct session timeout")))
+        || (preview.starts_with("continue ")
+            && preview.contains(" after timeout")
+            && (prompt.contains("runtime stop:") || prompt.contains("direct session timeout")))
+}
+
 fn maybe_enqueue_runtime_retry_continuation(
     root: &Path,
     job: &QueuedPrompt,
@@ -12342,6 +12496,87 @@ mod tests {
         let tasks = channels::list_queue_tasks(&root, &["pending".to_string()], 10)
             .expect("failed to list pending queue tasks");
         assert!(tasks.is_empty());
+    }
+
+    #[test]
+    fn fatal_harness_guard_cancels_legacy_timeout_continuation_before_agent_turn() {
+        let root = temp_root("ctox-fatal-harness-guard");
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Continue send mail after timeout".to_string(),
+                prompt: "Bearbeite das veroeffentlichte CTOX-Self-Work fuer local.\nTitel: Continue send mail after timeout\nArt: timeout-continuation\nWork-ID: self-work:local:loop\n\nRuntime stop:\ndirect session timeout after 300s"
+                    .to_string(),
+                thread_key: "julia-meeting-notetaker-report-20260505".to_string(),
+                workspace_root: None,
+                priority: "high".to_string(),
+                suggested_skill: Some("follow-up-orchestrator".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to seed legacy timeout continuation");
+        channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
+            .expect("failed to lease legacy timeout continuation");
+        let job = QueuedPrompt {
+            prompt: task.prompt.clone(),
+            goal: task.title.clone(),
+            preview: task.title.clone(),
+            source_label: "queue".to_string(),
+            suggested_skill: task.suggested_skill.clone(),
+            leased_message_keys: vec![task.message_key.clone()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some(task.thread_key.clone()),
+            workspace_root: None,
+            ticket_self_work_id: Some("self-work:local:loop".to_string()),
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        {
+            let mut shared = state.lock().expect("state poisoned");
+            shared.busy = true;
+            shared.active_source_label = Some("queue".to_string());
+            shared
+                .leased_message_keys_inflight
+                .insert(task.message_key.clone());
+        }
+
+        let suppressed = maybe_suppress_fatal_harness_prompt_before_execution(&root, &state, &job)
+            .expect("fatal harness guard should succeed");
+
+        assert!(suppressed);
+        assert_eq!(route_status_for(&root, &task.message_key), "cancelled");
+        let open =
+            channels::list_queue_tasks(&root, &["pending".to_string(), "leased".to_string()], 10)
+                .expect("failed to list queue");
+        assert!(open.is_empty());
+        let shared = state.lock().expect("state poisoned");
+        assert!(!shared.busy);
+        assert!(shared.active_source_label.is_none());
+        assert!(!shared
+            .leased_message_keys_inflight
+            .contains(&task.message_key));
+        assert!(shared
+            .recent_events
+            .iter()
+            .any(|event| event
+                .contains("Suppressed fatal harness continuation before model execution")));
+        drop(shared);
+        let events = governance::list_recent_events(&root, turn_loop::CHAT_CONVERSATION_ID, 8)
+            .expect("failed to list governance events");
+        assert!(events
+            .iter()
+            .any(|event| event.mechanism_id == "fatal_harness_loop_guard"));
+    }
+
+    #[test]
+    fn timeout_without_explicit_auto_retry_blocks_instead_of_requeueing() {
+        assert_eq!(failed_worker_route_status(false, true, false), "blocked");
+        assert_eq!(failed_worker_route_status(false, true, true), "pending");
+        assert_eq!(failed_worker_route_status(true, true, true), "blocked");
+        assert_eq!(failed_worker_route_status(false, false, true), "pending");
+        assert_eq!(failed_worker_route_status(false, false, false), "failed");
     }
 
     #[test]
