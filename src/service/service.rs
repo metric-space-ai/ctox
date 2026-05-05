@@ -2778,43 +2778,44 @@ fn start_prompt_worker(
                 _ => None,
             };
             #[test]
-    fn outbound_recovery_prompt_gives_agent_exact_reviewed_send_step() {
-        let approved_body =
-            "Hallo Julia,\n\ndas ist der freigegebene Text.\n\nViele Gruesse\nINF Yoda";
-        let job = QueuedPrompt {
-            prompt: "Schreibe eine Mail an Julia.".to_string(),
-            goal: "send mail".to_string(),
-            preview: "send mail".to_string(),
-            source_label: "tui".to_string(),
-            suggested_skill: None,
-            leased_message_keys: Vec::new(),
-            leased_ticket_event_keys: Vec::new(),
-            thread_key: Some("julia-meeting-notetaker-report-20260505".to_string()),
-            workspace_root: None,
-            ticket_self_work_id: None,
-            outbound_email: Some(channels::FounderOutboundAction {
-                account_key: "email:INF.Yoda@remcapital.de".to_string(),
-                thread_key: "julia-meeting-notetaker-report-20260505".to_string(),
-                subject: "Erste Meeting-Teilnahme als INF Yoda Notetaker".to_string(),
-                to: vec!["j.kienzler@remcapital.de".to_string()],
-                cc: Vec::new(),
-                attachments: Vec::new(),
-            }),
-            outbound_anchor: Some("tui-outbound:test".to_string()),
-        };
+            fn outbound_recovery_prompt_gives_agent_exact_reviewed_send_step() {
+                let approved_body =
+                    "Hallo Julia,\n\ndas ist der freigegebene Text.\n\nViele Gruesse\nINF Yoda";
+                let job = QueuedPrompt {
+                    prompt: "Schreibe eine Mail an Julia.".to_string(),
+                    goal: "send mail".to_string(),
+                    preview: "send mail".to_string(),
+                    source_label: "tui".to_string(),
+                    suggested_skill: None,
+                    leased_message_keys: Vec::new(),
+                    leased_ticket_event_keys: Vec::new(),
+                    thread_key: Some("julia-meeting-notetaker-report-20260505".to_string()),
+                    workspace_root: None,
+                    ticket_self_work_id: None,
+                    outbound_email: Some(channels::FounderOutboundAction {
+                        account_key: "email:INF.Yoda@remcapital.de".to_string(),
+                        thread_key: "julia-meeting-notetaker-report-20260505".to_string(),
+                        subject: "Erste Meeting-Teilnahme als INF Yoda Notetaker".to_string(),
+                        to: vec!["j.kienzler@remcapital.de".to_string()],
+                        cc: Vec::new(),
+                        attachments: Vec::new(),
+                    }),
+                    outbound_anchor: Some("tui-outbound:test".to_string()),
+                };
 
-        let prompt = outcome_witness_recovery_message(&job, approved_body, "missing artifact");
+                let prompt =
+                    outcome_witness_recovery_message(&job, approved_body, "missing artifact");
 
-        assert!(prompt.contains("Die Review-Freigabe"));
-        assert!(prompt.contains("Fuehre keine DB- oder Code-Forensik aus"));
-        assert!(prompt.contains("BODY=$(cat <<'CTOX_REVIEWED_BODY'"));
-        assert!(prompt.contains(approved_body));
-        assert!(prompt.contains("ctox channel send --channel email"));
-        assert!(prompt.contains("--reviewed-founder-send --body \"$BODY\""));
-        assert!(!prompt.contains("<freigegebener Mailtext>"));
-    }
+                assert!(prompt.contains("Die Review-Freigabe"));
+                assert!(prompt.contains("Fuehre keine DB- oder Code-Forensik aus"));
+                assert!(prompt.contains("BODY=$(cat <<'CTOX_REVIEWED_BODY'"));
+                assert!(prompt.contains(approved_body));
+                assert!(prompt.contains("ctox channel send --channel email"));
+                assert!(prompt.contains("--reviewed-founder-send --body \"$BODY\""));
+                assert!(!prompt.contains("<freigegebener Mailtext>"));
+            }
 
-    // F3: classify the turn outcome explicitly. The structured value
+            // F3: classify the turn outcome explicitly. The structured value
             // is persisted on the assistant row in `messages.agent_outcome`
             // so downstream consumers (founder-send pipeline, status
             // snapshots) can branch on a typed enum instead of scraping
@@ -4713,13 +4714,17 @@ fn outcome_witness_recovery_message(job: &QueuedPrompt, approved_body: &str, err
             );
         } else {
             message.push_str(
-                "\n\nHARNESS FEEDBACK\nProblem: Du hast die Aufgabe als fertig behandelt, aber der Harness konnte die erwarteten Datei-Artefakte nicht finden.\n\nREQUIRED ARTIFACTS\nDiese Pfade muessen als Dateien existieren, bevor du Abschluss behauptest:",
+                "\n\nHARNESS FEEDBACK\nProblem: Du hast die Aufgabe als fertig behandelt, aber der Harness konnte die erwarteten Datei-Artefakte nicht finden. Eine Textantwort, ein Plan oder ein Codeblock reicht hier nicht.\n\nREQUIRED ARTIFACTS\nDiese Pfade muessen als Dateien existieren, bevor du Abschluss behauptest:",
             );
             for path in file_refs {
                 message.push_str(&format!("\n- {}", path));
             }
             message.push_str(
-                "\n\nNEXT ACTION\n1. Erzeuge oder aktualisiere genau diese Artefakte.\n2. Pruefe jeden Pfad mit `test -f '<pfad>'`.\n3. Wenn ein Artefakt absichtlich leer sein darf, ist Existenz genug; sonst schreibe den geforderten Inhalt hinein.\n4. Antworte erst danach mit einer kurzen Ergebniszusammenfassung.\n\nEXIT GATE\nDu darfst diese Aufgabe erst als erledigt behandeln, wenn alle oben genannten `test -f` Pruefungen erfolgreich sind.",
+                "\n\nNEXT ACTION\n1. Fuehre jetzt einen Terminal-/Shell-Toolcall aus. Schreibe nicht nur, was du tun wuerdest.\n2. Erzeuge oder aktualisiere genau diese Artefakte.\n3. Pruefe jeden Pfad mit `test -f '<pfad>'`.\n4. Wenn ein Artefakt absichtlich leer sein darf, ist Existenz genug; sonst schreibe den geforderten Inhalt hinein.\n5. Antworte erst danach mit einer kurzen Ergebniszusammenfassung.\n\nORIGINAL TASK\nDer urspruengliche Auftrag bleibt aktiv und ist weiterhin der fachliche Inhalt fuer die Artefakte:\n",
+            );
+            message.push_str(&clip_text(&job.prompt, 6000));
+            message.push_str(
+                "\n\nEXIT GATE\nDu darfst diese Aufgabe erst als erledigt behandeln, wenn alle oben genannten `test -f` Pruefungen erfolgreich sind.",
             );
         }
     }
@@ -9222,7 +9227,9 @@ fn prepend_workspace_contract(prompt: &str, workspace_root: Option<&str>) -> Str
     if prompt.contains("Work only inside this workspace:") {
         return prompt.to_string();
     }
-    format!("Work only inside this workspace:\n{workspace_root}\n\n{prompt}")
+    format!(
+        "Work only inside this workspace:\n{workspace_root}\n\nExecution contract: If this request asks for files, commands, runtime state, tickets, benchmarks, or verification, do the work with the available terminal/shell tools. A plan, code block, or status sentence is not execution.\n\n{prompt}"
+    )
 }
 
 fn render_email_context_contract(root: &Path, message: &channels::RoutedInboundMessage) -> String {
