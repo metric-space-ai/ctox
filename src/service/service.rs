@@ -4447,6 +4447,10 @@ fn declared_workspace_file_artifacts_for_job(job: &QueuedPrompt) -> Vec<String> 
     if !prompt_declares_workspace_file_artifact(prompt) {
         return Vec::new();
     }
+    let explicit_only = extract_only_required_durable_file_paths(prompt);
+    if !explicit_only.is_empty() {
+        return explicit_only;
+    }
 
     let mut refs = Vec::new();
     let mut base_dirs = extract_declared_artifact_base_dirs(prompt);
@@ -4470,6 +4474,48 @@ fn declared_workspace_file_artifacts_for_job(job: &QueuedPrompt) -> Vec<String> 
                 &mut refs,
                 Path::new(base).join(&name).to_string_lossy().into_owned(),
             );
+        }
+    }
+    refs
+}
+
+fn extract_only_required_durable_file_paths(prompt: &str) -> Vec<String> {
+    let mut refs = Vec::new();
+    let mut in_section = false;
+    for line in prompt.lines() {
+        let lowered = line.to_ascii_lowercase();
+        if lowered.contains("only required durable files")
+            || lowered.contains("only required durable file")
+            || lowered.contains("exact files")
+            || lowered.contains("these exact files")
+        {
+            in_section = true;
+            continue;
+        }
+        if !in_section {
+            continue;
+        }
+        if line.trim().is_empty() {
+            if !refs.is_empty() {
+                break;
+            }
+            continue;
+        }
+        if !refs.is_empty()
+            && (lowered.ends_with(':')
+                || lowered.starts_with("initial ")
+                || lowered.starts_with("completion ")
+                || lowered.starts_with("success ")
+                || lowered.starts_with("start "))
+        {
+            break;
+        }
+        let paths = extract_absolute_workspace_file_paths(line);
+        if paths.is_empty() && !refs.is_empty() && !line.trim_start().starts_with('-') {
+            break;
+        }
+        for path in paths {
+            push_unique_string(&mut refs, path);
         }
     }
     refs
@@ -16454,6 +16500,58 @@ Was jetzt zu tun ist:\n\
                 && artifact.primary_key == "/tmp/ctox-smoke/required-smoke.json"
                 && artifact.expected_terminal_state == "present"
         }));
+    }
+
+    #[test]
+    fn only_required_durable_files_section_limits_workspace_artifacts() {
+        let run_dir = "/tmp/ctox-tb2-run";
+        let job = QueuedPrompt {
+            prompt: format!(
+                "Runtime requirements:\n- record context_window in summary.md.\n\n\
+Only required durable files for this controller turn:\n\
+- {run_dir}/controller.json\n\
+- {run_dir}/ticket-map.jsonl\n\
+- {run_dir}/run-log.md\n\
+- {run_dir}/results.jsonl\n\
+- {run_dir}/summary.md\n\n\
+Initial completion criteria:\n\
+- controller.json records the model.\n\
+- ticket-map.jsonl contains preparation tickets.\n\
+- run-log.md records planning.\n\
+- results.jsonl records outcomes.\n\
+- summary.md states next action.\n\
+- helper files like controller-prompt.md and runtime-switch.json may exist but are not required durable files."
+            ),
+            goal: "Terminal-Bench 2 controller".to_string(),
+            preview: "Terminal-Bench 2 controller".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: None,
+            leased_message_keys: vec!["queue:tb2-controller".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: None,
+            workspace_root: Some("/tmp".to_string()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let refs = expected_outcome_artifacts_for_job(&job);
+        let paths = refs
+            .iter()
+            .filter(|artifact| artifact.kind == ArtifactKind::WorkspaceFile)
+            .map(|artifact| artifact.primary_key.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            paths,
+            vec![
+                "/tmp/ctox-tb2-run/controller.json",
+                "/tmp/ctox-tb2-run/ticket-map.jsonl",
+                "/tmp/ctox-tb2-run/run-log.md",
+                "/tmp/ctox-tb2-run/results.jsonl",
+                "/tmp/ctox-tb2-run/summary.md",
+            ]
+        );
     }
 
     #[test]
