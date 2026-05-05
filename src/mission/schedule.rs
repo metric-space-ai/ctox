@@ -766,10 +766,10 @@ mod tests {
 
     #[test]
     fn meeting_join_payload_is_detected_from_schedule_prompt() {
-        let prompt = r#"CTOX_MEETING_JOIN: {"url":"https://meet.google.com/abc-defg-hij","bot_name":"CTOX Notetaker"}"#;
+        let prompt = r#"CTOX_MEETING_JOIN: {"url":"https://meet.google.com/abc-defg-hij","bot_name":"INF Yoda Notetaker"}"#;
         let payload = meeting_join_payload(prompt).expect("meeting join payload");
         assert_eq!(payload.url, "https://meet.google.com/abc-defg-hij");
-        assert_eq!(payload.bot_name.as_deref(), Some("CTOX Notetaker"));
+        assert_eq!(payload.bot_name.as_deref(), Some("INF Yoda Notetaker"));
     }
 
     #[test]

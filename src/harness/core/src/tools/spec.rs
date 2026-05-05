@@ -1363,7 +1363,7 @@ fn create_meeting_send_chat_tool() -> ToolSpec {
             JsonSchema::String {
                 description: Some(
                     "The text message to send in the meeting chat. Keep it concise and professional. \
-                     The message will appear as coming from CTOX Notetaker."
+                     The message will appear as coming from INF Yoda Notetaker."
                         .to_string(),
                 ),
             },

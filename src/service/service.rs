@@ -5167,7 +5167,7 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
     let bot_name = settings
         .get("CTO_MEETING_BOT_NAME")
         .cloned()
-        .unwrap_or_else(|| "CTOX Notetaker".to_string());
+        .unwrap_or_else(|| "INF Yoda Notetaker".to_string());
     let mut leased =
         channels::lease_pending_inbound_messages(root, 16, CHANNEL_ROUTER_LEASE_OWNER)?;
     leased.sort_by_key(|message| {

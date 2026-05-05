@@ -272,7 +272,7 @@ pub(crate) fn send(
             remote_id: &message_key,
             direction: "outbound",
             folder_hint: "sent",
-            sender_display: "CTOX Notetaker",
+            sender_display: "INF Yoda Notetaker",
             sender_address: "ctox@local",
             recipient_addresses_json: "[]",
             cc_addresses_json: "[]",
@@ -325,7 +325,7 @@ fn session_value_is_own_message(session: &Value, sender: &str, text: &str) -> bo
     let bot_name = session
         .get("bot_name")
         .and_then(Value::as_str)
-        .unwrap_or("CTOX Notetaker");
+        .unwrap_or("INF Yoda Notetaker");
     let outbound = session
         .get("outbound_chat_texts")
         .and_then(Value::as_array)
@@ -407,7 +407,7 @@ fn record_meeting_outbound_message(
             remote_id: &message_key,
             direction: "outbound",
             folder_hint: "sent",
-            sender_display: "CTOX Notetaker",
+            sender_display: "INF Yoda Notetaker",
             sender_address: "ctox@local",
             recipient_addresses_json: "[]",
             cc_addresses_json: "[]",
@@ -731,13 +731,13 @@ pub fn handle_meeting_command(root: &Path, args: &[String]) -> Result<()> {
             let url = args
                 .get(1)
                 .context("usage: ctox meeting join <url> [--name <bot-name>]")?;
-            let bot_name = find_flag_value(args, "--name").unwrap_or("CTOX Notetaker");
+            let bot_name = find_flag_value(args, "--name").unwrap_or("INF Yoda Notetaker");
             let runtime = crate::communication::gateway::runtime_settings_from_root(
                 root,
                 crate::communication::gateway::CommunicationAdapterKind::Meeting,
             );
             let mut config = MeetingSessionConfig::from_runtime(root, url, &runtime)?;
-            if bot_name != "CTOX Notetaker" {
+            if bot_name != "INF Yoda Notetaker" {
                 config.bot_name = bot_name.to_string();
             }
             let result = run_meeting_session(root, &config)?;
@@ -749,7 +749,7 @@ pub fn handle_meeting_command(root: &Path, args: &[String]) -> Result<()> {
                 .get(1)
                 .context("usage: ctox meeting schedule <url> --time <ISO-8601>")?;
             let time = find_flag_value(args, "--time").context("--time <ISO-8601> is required")?;
-            let bot_name = find_flag_value(args, "--name").unwrap_or("CTOX Notetaker");
+            let bot_name = find_flag_value(args, "--name").unwrap_or("INF Yoda Notetaker");
             let result = schedule_meeting_join(root, url, time, bot_name)?;
             println!("{}", serde_json::to_string_pretty(&result)?);
             Ok(())
@@ -868,7 +868,7 @@ fn simulate_meeting_session(root: &Path, args: &[String]) -> Result<Value> {
             MeetingProvider::MicrosoftTeams => "https://teams.microsoft.com/meet/demo".to_string(),
             MeetingProvider::Zoom => "https://zoom.us/j/123456789".to_string(),
         });
-    let bot_name = find_flag_value(args, "--name").unwrap_or("CTOX Notetaker");
+    let bot_name = find_flag_value(args, "--name").unwrap_or("INF Yoda Notetaker");
     let config = MeetingSessionConfig {
         root: root.to_path_buf(),
         meeting_url,
@@ -1668,7 +1668,7 @@ impl MeetingSessionConfig {
         let provider = MeetingProvider::detect(meeting_url)
             .context("cannot detect meeting provider from URL")?;
         let bot_name = runtime_setting_or_env(runtime, "CTO_MEETING_BOT_NAME")
-            .unwrap_or_else(|| "CTOX Notetaker".to_string());
+            .unwrap_or_else(|| "INF Yoda Notetaker".to_string());
         let max_duration_minutes =
             runtime_setting_or_env(runtime, "CTO_MEETING_MAX_DURATION_MINUTES")
                 .and_then(|v| v.parse().ok())
@@ -1997,26 +1997,27 @@ impl MeetingSession {
             .join("\n")
     }
 
-    /// Check if a chat message mentions @CTOX.
-    /// Returns true if "@ctox" appears with a word boundary on both sides
-    /// (so "@ctoxbar" doesn't match, but "@CTOX Notetaker" or "@ctox!" do).
+    /// Check if a chat message mentions the meeting bot.
+    /// Returns true if a known bot mention appears with a word boundary on both sides
+    /// (so "@ctoxbar" doesn't match, but "@INF Yoda Notetaker" or "@ctox!" do).
     pub(crate) fn is_mention(text: &str) -> bool {
         let lower = text.to_lowercase();
-        let needle = "@ctox";
-        let mut search_from = 0;
-        while let Some(pos) = lower[search_from..].find(needle) {
-            let abs_pos = search_from + pos;
-            let after = abs_pos + needle.len();
-            // Word boundary check: char after must be non-alphanumeric (or end of string)
-            let bounded = lower[after..]
-                .chars()
-                .next()
-                .map(|c| !c.is_ascii_alphanumeric())
-                .unwrap_or(true);
-            if bounded {
-                return true;
+        for needle in ["@ctox", "@inf yoda", "@inf yoda notetaker"] {
+            let mut search_from = 0;
+            while let Some(pos) = lower[search_from..].find(needle) {
+                let abs_pos = search_from + pos;
+                let after = abs_pos + needle.len();
+                // Word boundary check: char after must be non-alphanumeric (or end of string)
+                let bounded = lower[after..]
+                    .chars()
+                    .next()
+                    .map(|c| !c.is_ascii_alphanumeric())
+                    .unwrap_or(true);
+                if bounded {
+                    return true;
+                }
+                search_from = after;
             }
-            search_from = after;
         }
         false
     }
@@ -5096,7 +5097,7 @@ mod tests {
     fn mention_detection_respects_word_boundary() {
         // Bot's full display name in chat headers should still match
         assert!(MeetingSession::is_mention(
-            "@CTOX Notetaker hat geantwortet"
+            "@INF Yoda Notetaker hat geantwortet"
         ));
         assert!(MeetingSession::is_mention("@ctox notetaker"));
         // But unrelated tokens that contain "ctox" as a substring should not
@@ -5147,7 +5148,7 @@ mod tests {
             root: PathBuf::from("/tmp"),
             meeting_url: "https://zoom.us/j/123".to_string(),
             provider: MeetingProvider::Zoom,
-            bot_name: "CTOX Notetaker".to_string(),
+            bot_name: "INF Yoda Notetaker".to_string(),
             max_duration_minutes: 60,
             audio_chunk_seconds: 30,
             stt_model: String::new(),
@@ -5155,8 +5156,8 @@ mod tests {
         let mut session = MeetingSession::new(&config);
 
         // Sender contains bot name → own message
-        assert!(session.is_own_message("CTOX Notetaker", "hello"));
-        assert!(session.is_own_message("CTOX Notetaker (Host)", "hello"));
+        assert!(session.is_own_message("INF Yoda Notetaker", "hello"));
+        assert!(session.is_own_message("INF Yoda Notetaker (Host)", "hello"));
         assert!(session.is_own_message("ctox notetaker", "hello"));
 
         // Real participants are not filtered
@@ -5164,8 +5165,8 @@ mod tests {
         assert!(!session.is_own_message("Participant", "regular message"));
 
         // Sender misattributed to "Participant" but text starts with bot name + colon
-        assert!(session.is_own_message("Participant", "CTOX Notetaker: I heard you"));
-        assert!(session.is_own_message("Participant", "CTOX Notetaker To everyone: hi"));
+        assert!(session.is_own_message("Participant", "INF Yoda Notetaker: I heard you"));
+        assert!(session.is_own_message("Participant", "INF Yoda Notetaker To everyone: hi"));
         session
             .outbound_chat_texts
             .push("CTOX Test: Chat-Bridge aktiv.".to_string());
@@ -5173,7 +5174,7 @@ mod tests {
         assert!(session.is_own_message("Participant", "You20:35CNCTOX Test: Chat-Bridge aktiv."));
 
         // Text mentions bot name but doesn't start with it (real user message)
-        assert!(!session.is_own_message("Michael", "Hey @CTOX Notetaker what do you think?"));
+        assert!(!session.is_own_message("Michael", "Hey @INF Yoda Notetaker what do you think?"));
     }
 
     #[test]
@@ -5182,7 +5183,7 @@ mod tests {
             root: PathBuf::from("/tmp/test"),
             meeting_url: "https://meet.google.com/abc".to_string(),
             provider: MeetingProvider::GoogleMeet,
-            bot_name: "CTOX Notetaker".to_string(),
+            bot_name: "INF Yoda Notetaker".to_string(),
             max_duration_minutes: 180,
             audio_chunk_seconds: 30,
             stt_model: String::new(),
@@ -5191,7 +5192,7 @@ mod tests {
         let json = session.to_json();
         assert_eq!(json["provider"], "google");
         assert_eq!(json["status"], "joining");
-        assert_eq!(json["bot_name"], "CTOX Notetaker");
+        assert_eq!(json["bot_name"], "INF Yoda Notetaker");
         assert_eq!(json["transcript_segment_count"], 0);
         assert_eq!(json["speaker_signal_count"], 0);
     }
@@ -5226,7 +5227,7 @@ mod tests {
             root: PathBuf::from("/tmp/test"),
             meeting_url: "https://meet.google.com/abc".to_string(),
             provider: MeetingProvider::GoogleMeet,
-            bot_name: "CTOX Notetaker".to_string(),
+            bot_name: "INF Yoda Notetaker".to_string(),
             max_duration_minutes: 180,
             audio_chunk_seconds: 30,
             stt_model: DEFAULT_MEETING_STT_MODEL.to_string(),
@@ -5256,7 +5257,7 @@ mod tests {
             root: PathBuf::from("/tmp/test"),
             meeting_url: "https://zoom.us/j/123456".to_string(),
             provider: MeetingProvider::Zoom,
-            bot_name: "CTOX Notetaker".to_string(),
+            bot_name: "INF Yoda Notetaker".to_string(),
             max_duration_minutes: 180,
             audio_chunk_seconds: 30,
             stt_model: DEFAULT_MEETING_STT_MODEL.to_string(),
@@ -5376,7 +5377,7 @@ mod tests {
             &root,
             "Meeting invitation",
             "Join here: https://meet.google.com/abc-defg-hij",
-            "CTOX Notetaker",
+            "INF Yoda Notetaker",
         )
         .expect("meeting parse result");
         assert_eq!(result["action"], "needs_review");
@@ -5392,7 +5393,7 @@ mod tests {
             &root,
             "Invitation: Platform Review",
             body,
-            "CTOX Notetaker",
+            "INF Yoda Notetaker",
         )
         .expect("schedule result");
         assert_eq!(result["action"], "processed");
@@ -5417,8 +5418,13 @@ mod tests {
     fn process_email_cancel_removes_uid_based_schedule() {
         let root = temp_root("schedule-cancel");
         let request_body = "BEGIN:VCALENDAR\nMETHOD:REQUEST\nUID:uid-cancel-1@example.com\nDTSTART:20260428T130000Z\nDESCRIPTION:Join https://zoom.us/j/123456789\nEND:VCALENDAR";
-        process_email_for_meetings(&root, "Invitation: Standup", request_body, "CTOX Notetaker")
-            .expect("schedule result");
+        process_email_for_meetings(
+            &root,
+            "Invitation: Standup",
+            request_body,
+            "INF Yoda Notetaker",
+        )
+        .expect("schedule result");
         assert_eq!(
             crate::mission::schedule::list_tasks(&root)
                 .expect("scheduled tasks")
@@ -5431,7 +5437,7 @@ mod tests {
             &root,
             "Meeting cancelled: Standup",
             cancel_body,
-            "CTOX Notetaker",
+            "INF Yoda Notetaker",
         )
         .expect("cancel result");
         assert_eq!(cancel["action"], "processed");
@@ -5542,7 +5548,7 @@ mod tests {
             serde_json::to_string_pretty(&json!({
                 "session_id": "session-service",
                 "provider": "zoom",
-                "bot_name": "CTOX Notetaker",
+                "bot_name": "INF Yoda Notetaker",
                 "status": "active",
                 "stdin_pipe": stdin_path.display().to_string(),
                 "chat_messages": [{
@@ -5583,11 +5589,11 @@ mod tests {
             serde_json::to_string_pretty(&json!({
                 "session_id": "session-own",
                 "provider": "zoom",
-                "bot_name": "CTOX Notetaker",
+                "bot_name": "INF Yoda Notetaker",
                 "status": "active",
                 "outbound_chat_texts": ["Ich pruefe das."],
                 "chat_messages": [
-                    {"sender": "CTOX Notetaker", "text": "Ich pruefe das.", "timestamp": "2026-04-28T12:00:00Z"},
+                    {"sender": "INF Yoda Notetaker", "text": "Ich pruefe das.", "timestamp": "2026-04-28T12:00:00Z"},
                     {"sender": "Participant", "text": "You20:35CNCIch pruefe das.", "timestamp": "2026-04-28T12:00:01Z"}
                 ]
             }))
@@ -5707,7 +5713,7 @@ mod tests {
             root: root.clone(),
             meeting_url: "https://meet.google.com/abc-defg-hij".to_string(),
             provider: MeetingProvider::GoogleMeet,
-            bot_name: "CTOX Notetaker".to_string(),
+            bot_name: "INF Yoda Notetaker".to_string(),
             max_duration_minutes: 60,
             audio_chunk_seconds: 30,
             stt_model: String::new(),
@@ -5790,7 +5796,7 @@ mod tests {
             root: PathBuf::from("/tmp"),
             meeting_url: "https://meet.google.com/abc".to_string(),
             provider: MeetingProvider::GoogleMeet,
-            bot_name: "CTOX Notetaker".to_string(),
+            bot_name: "INF Yoda Notetaker".to_string(),
             max_duration_minutes: 60,
             audio_chunk_seconds: 30,
             stt_model: String::new(),
@@ -5889,7 +5895,7 @@ mod tests {
             root: PathBuf::from("/tmp"),
             meeting_url: "https://meet.google.com/abc".to_string(),
             provider: MeetingProvider::GoogleMeet,
-            bot_name: "CTOX Notetaker".to_string(),
+            bot_name: "INF Yoda Notetaker".to_string(),
             max_duration_minutes: 60,
             audio_chunk_seconds: 30,
             stt_model: String::new(),
