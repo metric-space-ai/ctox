@@ -1084,6 +1084,9 @@ pub(crate) fn run_meeting_session(root: &Path, config: &MeetingSessionConfig) ->
                         eprintln!("[meeting] transcript: {}...", &text[..text.len().min(80)]);
                         session.push_stt_transcript(text, last_speaker_signal.as_ref());
                         session.save(root)?;
+                        if let Some(p) = persisted_path.as_ref() {
+                            let _ = fs::remove_file(p);
+                        }
                     }
                     Ok(_) => {
                         // Empty transcript (silence) — drop the chunk, it's useless
@@ -1535,6 +1538,7 @@ fn retry_pending_audio_chunks(
         match transcribe_audio_chunk(&config.root, Path::new(&chunk_path), &config.stt_model) {
             Ok(text) if !text.is_empty() => {
                 session.push_stt_transcript(text, None);
+                let _ = fs::remove_file(&chunk_path);
                 succeeded += 1;
             }
             Ok(_) => {
