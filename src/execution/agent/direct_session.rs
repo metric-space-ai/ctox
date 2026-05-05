@@ -505,6 +505,10 @@ impl PersistentSession {
         };
         let overrides = ConfigOverrides {
             model: Some(model.clone()),
+            model_context_window: resolved_runtime
+                .as_ref()
+                .map(|runtime| runtime.turn_context_tokens())
+                .filter(|value| *value > 0),
             model_provider: selected_provider_id.clone(),
             cwd: Some(cwd.clone()),
             approval_policy: Some(AskForApproval::Never),
