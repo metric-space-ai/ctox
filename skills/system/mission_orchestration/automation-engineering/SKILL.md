@@ -16,7 +16,7 @@ cluster: mission_orchestration
 - Before adding follow-up work, check for existing matching self-work, queue, plan, or ticket state and consolidate rather than duplicating.
 
 
-Automation design and operating assumptions count as durable knowledge only when they are reflected in the the CTOX runtime store. Workspace plans or notes do not count as durable knowledge by themselves.
+Automation design and operating assumptions count as durable mission state only when they are reflected in the CTOX runtime store. Reusable operating procedure must be promoted into source skills, skillbooks, runbooks, or runbook items. Workspace plans or notes do not count as durable knowledge by themselves.
 
 Use this skill when repeated operational work should become a repo script, queued work step, or scheduled CTOX task.
 

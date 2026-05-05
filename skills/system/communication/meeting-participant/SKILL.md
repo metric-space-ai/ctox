@@ -18,7 +18,7 @@ cluster: communication
 - Before adding follow-up work, check for existing matching self-work, queue, plan, or ticket state and consolidate rather than duplicating.
 
 
-For CTOX mission work, meeting outcomes only count as durable knowledge when the relevant decisions, blockers, or commitments are reflected in the the CTOX runtime store. Standalone notes or recap files do not count as durable knowledge by themselves.
+For CTOX mission work, meeting outcomes count as durable meeting state only when the relevant decisions, blockers, commitments, summaries, tickets, or continuity updates are reflected in the CTOX runtime store. They become reusable operational knowledge only when the meeting produced a repeatable procedure that is promoted into source skills, skillbooks, runbooks, or runbook items. Standalone notes or recap files do not count as durable knowledge by themselves.
 
 CTOX joins video meetings (Google Meet, Microsoft Teams, Zoom) as a silent notetaker.
 It captures audio for transcription, monitors the meeting chat, and responds when
@@ -91,16 +91,21 @@ Extract these categories:
 - "We still need to figure out..." / "Let's discuss next week"
 - These become follow-up topics.
 
-**Knowledge** -- Technical facts, status updates, or decisions that should be recorded.
+**Runtime context** -- Technical facts, status updates, or decisions that should be recorded.
 - "The service is running on v2.3" / "We migrated to the new cluster last week"
-- These become context entries.
+- These become meeting summaries, tickets, continuity updates, or ticket fact/context entries.
+
+**Runbook candidates** -- Repeatable operational procedures learned in the meeting.
+- "When Teams external invite testing fails, first check..." / "The SharePoint app-catalog upload procedure is..."
+- These become source-skill, Skillbook, Runbook, or Runbook-Item updates only when they describe a reusable how-to. One-off meeting decisions are not runbook knowledge.
 
 ### Step 3: Create outputs
 
 For each extracted item, use the appropriate tool:
 
 - **Tickets** (for action items): Create via the ticket system with clear title, description, and assignee.
-- **Knowledge entries** (for decisions and facts): Create context entries so CTOX remembers these facts.
+- **Runtime context entries** (for decisions and facts): Create context entries, tickets, or continuity updates so CTOX remembers these facts.
+- **Skillbook/Runbook updates** (for reusable procedures): Create or update source-skill, Skillbook, Runbook, or Runbook-Item records. Do not use ticket fact/context rows as the final store for reusable procedure.
 - **Follow-up tasks** (for open questions): Create queue tasks to address unresolved topics.
 - **Summary message** (always): Send a brief meeting summary to the appropriate channel (email or chat) listing decisions and action items.
 

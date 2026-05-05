@@ -23,6 +23,8 @@ Gather everything else yourself.
 
 Only CTOX runtime store, live surfaces, repo state, and direct read-only verification count as durable evidence. Standalone markdown artifacts or workspace notes do not count as knowledge unless their facts are also reflected in the CTOX runtime store or directly verified live.
 
+Recent meeting outcomes are time-sensitive runtime evidence. For communication reviews and artifact reviews, inspect the latest relevant meeting summaries before verdict. Prefer same-thread meetings first, then recent cross-thread meeting summaries that mention the reviewed system, recipient, deliverable, project, or artifact. Treat the last 7 days as high-priority context, 30-day-old meetings as supporting context, and older meeting notes as stale unless reinforced by current runtime state.
+
 ## Core Contract
 
 The review run:
@@ -55,11 +57,12 @@ The review run:
    - current blockers
    - active/open related work
 4. Inspect related ticket/self-work state.
-5. Inspect relevant communication facts if the work is owner-visible.
-6. Inspect the live surface and critical routes.
-7. Inspect the relevant files/runtime/logs needed to settle the claims.
-8. Decide PASS / FAIL / PARTIAL from evidence.
-9. If the ticket+knowledge subsystem is not operationalized end-to-end, treat that as part of the mission-state finding rather than assuming missing knowledge does not matter.
+5. Inspect recent relevant meeting outcomes, especially before owner/founder communication or artifact-readiness verdicts.
+6. Inspect relevant communication facts if the work is owner-visible.
+7. Inspect the live surface and critical routes.
+8. Inspect the relevant files/runtime/logs needed to settle the claims.
+9. Decide PASS / FAIL / PARTIAL from evidence.
+10. If the ticket+knowledge subsystem is not operationalized end-to-end, treat that as part of the mission-state finding rather than assuming missing knowledge does not matter.
 
 ## Canonical Read-Only Commands
 
@@ -126,6 +129,25 @@ ORDER BY created_at DESC
 LIMIT 12;
 "
 ```
+
+### Recent meeting outcomes
+
+```bash
+sqlite3 runtime/ctox.sqlite3 "
+SELECT observed_at, thread_key, subject, substr(body_text,1,1200)
+FROM communication_messages
+WHERE channel = 'meeting'
+  AND (
+    body_text LIKE '%Meeting Summary%'
+    OR subject LIKE '%meeting%'
+    OR subject LIKE '%Meeting%'
+  )
+ORDER BY observed_at DESC
+LIMIT 12;
+"
+```
+
+For same-thread review context, add `AND thread_key = '<thread-key>'` first. If same-thread results are empty, search recent meeting summaries globally and keep only entries that mention the artifact, reviewed system, recipient, project, or deliverable. Do not let an old meeting override a newer ticket, continuity, communication, or verification record.
 
 ### Live/public verification
 
@@ -226,6 +248,7 @@ Return FAIL when the reviewed task result touches an external system and any of 
 - (b) A non-Kanban system (CRM, API, platform, codebase, database) is referenced in the mission and live-touched, but `ctox ticket knowledge-list --system "<s>"` returns 0 entries.
 - (c) Live work against the system happened (outbound to external contacts, data mutation, connected-app or permission setup) without an open onboarding self-work item.
 - (d) The reviewed task result operationally touched a new system but produced no `ticket_knowledge_loads` and no new `ticket_knowledge_entries`.
+- (e) The reviewed task claims CTOX learned a reusable procedure, but no source skill, skillbook, runbook, or runbook item was created or updated.
 
 Reviewer checks for these conditions:
 

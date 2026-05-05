@@ -2370,13 +2370,16 @@ fn guidance_action_for_finding(subsystem: &str, code: &str) -> &'static str {
             "Repariere den Core-State-Graphen: jeder erreichbare Zustand braucht einen erlaubten Pfad zu einem Terminalzustand."
         }
         "no_knowledge_entries" => {
-            "Baue Knowledge aus der aktuellen Arbeit auf: Vorfall oder Erkenntnis speichern, Evidenz verknuepfen und spaeter wieder laden."
+            "Speichere die Erkenntnis korrekt: Fakten/Entscheidungen als Ticket-Kontext, wiederverwendbare Prozeduren als Skillbook/Runbook/Runbook-Item, jeweils mit Evidenz verknuepft."
         }
         "knowledge_not_loaded" => {
-            "Lade vorhandenes Knowledge aktiv in die naechste Arbeitseinheit, bevor du weiter entscheidest."
+            "Lade vorhandenen Ticket-Kontext oder passende Skillbook/Runbook-Eintraege aktiv in die naechste Arbeitseinheit, bevor du weiter entscheidest."
+        }
+        "no_operational_knowledge_hierarchy" => {
+            "Pruefe, ob aktuelle Erkenntnisse nur Fakten sind oder als wiederverwendbare Prozedur in Skillbook/Runbook/Runbook-Item gehoeren. Ticket-Kontext allein ist kein Skill."
         }
         "no_recent_knowledge_activity" => {
-            "Pruefe nach Abschluss der aktuellen Arbeit, ob eine neue Knowledge-Notiz oder Runbook-Ergaenzung dauerhaft gespeichert werden muss."
+            "Pruefe nach Abschluss der aktuellen Arbeit, ob Ticket-Kontext, Continuity oder eine echte Runbook-Ergaenzung dauerhaft gespeichert werden muss."
         }
         "missing_lcm_continuity" => {
             "Repariere Continuity: aktueller Kontext muss als LCM-Dokument und Commit dauerhaft vorhanden sein."
@@ -2589,20 +2592,31 @@ fn liveness_findings(report: &csm::CoreLivenessReport) -> Vec<Value> {
 fn diagnose_knowledge(conn: &Connection) -> Result<Value> {
     let entries = table_count(conn, "ticket_knowledge_entries")?;
     let loads = table_count(conn, "ticket_knowledge_loads")?;
+    let main_skills = table_count(conn, "knowledge_main_skills")?;
+    let skillbooks = table_count(conn, "knowledge_skillbooks")?;
+    let runbooks = table_count(conn, "knowledge_runbooks")?;
+    let runbook_items = table_count(conn, "knowledge_runbook_items")?;
     let recent_events = recent_table_event_count(conn, "%knowledge%")?;
     let mut findings = Vec::new();
-    if entries == 0 {
+    if entries == 0 && main_skills == 0 && skillbooks == 0 && runbooks == 0 && runbook_items == 0 {
         findings.push(json!({
             "severity": "critical",
             "code": "no_knowledge_entries",
-            "message": "The SQLite knowledge subsystem has no durable ticket knowledge entries."
+            "message": "The SQLite knowledge subsystem has no ticket fact/context entries and no Skillbook/Runbook hierarchy records."
         }));
     }
     if entries > 0 && loads == 0 {
         findings.push(json!({
             "severity": "warning",
             "code": "knowledge_not_loaded",
-            "message": "Knowledge exists but no ticket knowledge load is recorded."
+            "message": "Ticket fact/context entries exist but no ticket knowledge load is recorded."
+        }));
+    }
+    if entries > 0 && main_skills == 0 && skillbooks == 0 && runbooks == 0 && runbook_items == 0 {
+        findings.push(json!({
+            "severity": "warning",
+            "code": "no_operational_knowledge_hierarchy",
+            "message": "Ticket fact/context entries exist, but no source-skill, Skillbook, Runbook, or Runbook-Item record exists. Do not treat ticket facts as learned operational procedure."
         }));
     }
     if recent_events == 0 {
@@ -2616,10 +2630,14 @@ fn diagnose_knowledge(conn: &Connection) -> Result<Value> {
     Ok(subsystem_json(
         "knowledge",
         status,
-        "Knowledge must accumulate as durable SQLite records and must be loaded back into work.",
+        "Facts and decisions must accumulate as durable ticket/context records; reusable procedure must be promoted into Skillbook/Runbook records and loaded back into work.",
         json!({
             "ticket_knowledge_entries": entries,
             "ticket_knowledge_loads": loads,
+            "knowledge_main_skills": main_skills,
+            "knowledge_skillbooks": skillbooks,
+            "knowledge_runbooks": runbooks,
+            "knowledge_runbook_items": runbook_items,
             "recent_process_events": recent_events,
         }),
         findings,

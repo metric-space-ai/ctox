@@ -207,7 +207,9 @@ fn handle_connection(
             if request_model != QWEN3_EMBEDDING_0_6B_CANONICAL_MODEL {
                 LocalEmbeddingResponse::Error {
                     code: "unsupported_model".to_string(),
-                    message: format!("native embedding service only supports {QWEN3_EMBEDDING_0_6B_CANONICAL_MODEL}"),
+                    message: format!(
+                        "native embedding service only supports {QWEN3_EMBEDDING_0_6B_CANONICAL_MODEL}"
+                    ),
                 }
             } else {
                 match model.embed_batch(&EmbedBatchRequest { inputs: &inputs }) {

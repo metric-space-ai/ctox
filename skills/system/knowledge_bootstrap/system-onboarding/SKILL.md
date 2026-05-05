@@ -24,7 +24,7 @@ Use this skill whenever CTOX is operating against an external system and needs t
 
 The kernel provides storage, references, self-work CRUD, publishing, and audit. This skill owns the onboarding behavior.
 
-The CTOX runtime store is the only durable knowledge plane. Ticket knowledge entries, continuity commits, ticket/source bindings, skillbooks, runbooks, verifications, communication records, and other runtime DB state count. Markdown files or workspace artifacts do not count as knowledge by themselves.
+The CTOX runtime store is the only durable state plane. Ticket knowledge entries are fact/context records. Continuity commits, ticket/source bindings, verifications, communication records, and other runtime DB rows are durable mission evidence. Reusable operational knowledge requires the higher hierarchy: source skills, skillbooks, runbooks, and runbook items. Markdown files or workspace artifacts do not count as durable state by themselves.
 
 Read the phase guide in [references/onboarding-phases.md](references/onboarding-phases.md).
 Read the deterministic stage plan in [references/onboarding-plan.md](references/onboarding-plan.md).
@@ -67,7 +67,7 @@ Do not use raw HTTP calls, `curl`, ad hoc browser actions, or direct remote API 
 
 ## Knowledge System Integration — Mandatory
 
-Onboarding is incomplete unless the CTOX knowledge store is populated. Workspace markdown, plan steps, conversation history, and reply prose are not knowledge.
+Onboarding is incomplete unless CTOX has both the needed fact/context registry and the reusable operating procedure for the system. Workspace markdown, plan steps, conversation history, and reply prose are not knowledge.
 
 - Every onboarding phase starts with a knowledge inventory:
 
@@ -75,14 +75,14 @@ Onboarding is incomplete unless the CTOX knowledge store is populated. Workspace
   ctox ticket knowledge-list --system "<system>"
   ```
 
-- Every fact you learn about the system must be registered as a durable `ticket_knowledge_entries` row — either directly via `ctox ticket knowledge-load` or through the bootstrap skills (`tabular-knowledge-bootstrap`, `dataset-skill-creator`, `skillbook-runbook-bootstrap`). Example:
+- Every verified fact you learn about the system must be registered as a durable `ticket_knowledge_entries` row or loaded into the ticket fact/context registry through the bootstrap skills (`tabular-knowledge-bootstrap`, `dataset-skill-creator`, `skillbook-runbook-bootstrap`). Example:
 
   ```sh
   ctox ticket knowledge-load --ticket-key "<ticket-key>" --domains "vendor_api,operational,data_model"
   ```
 
-- Skillbooks (`knowledge_skillbooks`) and runbooks (`knowledge_runbooks`) are mandatory outputs of onboarding, not optional polish. If `knowledge_count` for the system is `0` at the end of a work step, onboarding is incomplete and the work step may not be closed.
-- Learning is real work: produce a self-work item and a knowledge entry for each meaningful fact. Knowledge that lives only in chat history, plan steps, or workspace files does not count.
+- Skillbooks (`knowledge_skillbooks`), runbooks (`knowledge_runbooks`), and runbook items (`knowledge_runbook_items`) are mandatory outputs when onboarding discovers reusable operating procedure, not optional polish. A nonzero `ticket_knowledge_entries` count is not enough to claim that CTOX learned a skill.
+- Learning is real work: produce a self-work item and a fact/context entry for each meaningful verified fact; when the fact changes how future work should be performed, promote it into the Skillbook/Runbook hierarchy. Knowledge that lives only in chat history, plan steps, or workspace files does not count.
 - Sync-driven onboarding triggers (`ctox ticket sync` / `ticket_source_controls`) only fire for genuine Kanban ticket systems. For CRMs, APIs, platforms, codebases, and other non-Kanban software, you start onboarding yourself — but the knowledge-population requirements above are identical.
 - Once a source-specific operating skill is justified, bind it on the source so live work routes to it:
 
@@ -231,7 +231,7 @@ Manual building blocks remain available when the operator asks for an adjustment
 9. Ingest monitoring observations into the knowledge plane instead of leaving them as free-form ticket prose.
 10. Once the source has enough history, build a desk-specific operating skill and bind it to the source with `ctox ticket source-skill-set`.
 11. Re-run the onboarding guide step after new evidence appears. The guide should loosen as active source skills, confirmed runbooks, and real assigned work accumulate.
-12. Do not treat a workspace analysis document as onboarding completion. Onboarding is incomplete until the relevant source controls, mirrored tickets, knowledge entries, bindings, and higher knowledge hierarchy are visible in CTOX runtime state.
+12. Do not treat a workspace analysis document as onboarding completion. Onboarding is incomplete until the relevant source controls, mirrored tickets, ticket fact/context entries, bindings, and applicable Skillbook/Runbook hierarchy are visible in CTOX runtime state.
 
 ## Skill Activation Check
 

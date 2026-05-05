@@ -32,7 +32,7 @@ The knowledge plane stays local in CTOX.
 
 The remote ticket system is only the visible collaboration surface.
 
-Only CTOX ticket knowledge, source bindings, ticket state, verifications, and related runtime records count as durable knowledge. Workspace markdown files or copied summaries do not count as completed knowledge on their own.
+Only CTOX ticket fact/context entries, source bindings, ticket state, verifications, and related runtime records count as durable ticket state. Workspace markdown files or copied summaries do not count as completed knowledge on their own. When maintenance changes how future cases should be handled, promote the learning into the source-skill, Skillbook, Runbook, and Runbook-Item hierarchy.
 
 When work needs to be visible to operators, create durable internal CTOX work, assign it to CTOX, and maintain a human note trail until the work is done or blocked.
 

@@ -26,7 +26,7 @@ No ticket should be handled operationally without loading the relevant ticket kn
 
 The ticket system is only the communication surface. CTOX runtime knowledge is the source of truth.
 
-Only CTOX ticket knowledge counts as durable knowledge. Workspace markdown files, copied ticket notes, or ad hoc analysis documents do not count as knowledge unless the same facts are present in the runtime store.
+Only CTOX runtime records count as durable ticket context. `ticket_knowledge_entries` are fact/context records used for ticket handling; they are not a substitute for source skills, skillbooks, runbooks, or runbook items when reusable operational knowledge is claimed. Workspace markdown files, copied ticket notes, or ad hoc analysis documents do not count unless the same facts are present in the runtime store.
 
 ## Commands
 
@@ -78,4 +78,4 @@ ctox ticket self-work-list [--system "<system>"] [--state "<state>"] [--limit "<
 - Do not skip knowledge load just because the ticket looks familiar.
 - Do not leak raw secrets into ticket knowledge or ticket self-work metadata.
 - Do not write internal storage or tool mechanics into remote ticket notes.
-- Do not call a markdown file or workspace artifact "knowledge". If it is not in CTOX runtime knowledge, it is not durable ticket knowledge.
+- Do not call a markdown file or workspace artifact "knowledge". If it is not in CTOX runtime state, it is not durable ticket context; if it is not in the Skillbook/Runbook hierarchy, it is not reusable operational knowledge.

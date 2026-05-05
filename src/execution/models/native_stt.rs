@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::inference::engine;
 use crate::inference::local_transport::LocalTransport;
@@ -27,6 +27,7 @@ pub struct NativeSttLaunch {
 
 const MISTRAL_STT_DEFAULT_MODEL: &str = "voxtral-mini-latest";
 const MISTRAL_STT_DEFAULT_ENDPOINT: &str = "https://api.mistral.ai/v1/audio/transcriptions";
+const STT_REALTIME_PROOF_FILENAME: &str = "stt-live-realtime-proof.json";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SttEngineKind {
@@ -72,6 +73,7 @@ enum LocalSttResponse {
         backend: String,
         artifacts_loaded: bool,
         transcription_graph_wired: bool,
+        live_transcription: Value,
     },
     Error {
         code: String,
@@ -115,10 +117,12 @@ pub fn doctor_json(root: &Path) -> serde_json::Value {
         .map(|value| value.required_tensors_present)
         .unwrap_or(false);
     let api_ready = engine_kind == SttEngineKind::MistralApi && mistral_config.is_ok();
+    let live_transcription = live_transcription_status_json(root);
     json!({
         "ok": artifacts_ready || api_ready,
         "model": VOXTRAL_MINI_4B_REALTIME_2602_CANONICAL_MODEL,
         "engine": engine_kind.label(),
+        "live_transcription": live_transcription,
         "mistral_api": {
             "configured": engine_kind == SttEngineKind::MistralApi,
             "endpoint": configured_mistral_endpoint(root),
@@ -155,6 +159,158 @@ pub fn parse_stt_smoke_audio_path(args: &[String]) -> Result<PathBuf> {
         .context("usage: ctox runtime stt-smoke <wav-path>")
 }
 
+pub fn stt_realtime_smoke_json(root: &Path, audio_path: &Path) -> serde_json::Value {
+    let audio = match std::fs::read(audio_path) {
+        Ok(audio) => audio,
+        Err(err) => {
+            return json!({
+                "ok": false,
+                "live_capable": false,
+                "model": VOXTRAL_MINI_4B_REALTIME_2602_CANONICAL_MODEL,
+                "error": format!("failed to read {}: {err}", audio_path.display())
+            });
+        }
+    };
+    let audio_duration_seconds = match wav_duration_seconds(&audio) {
+        Ok(duration) => duration,
+        Err(err) => {
+            return json!({
+                "ok": false,
+                "live_capable": false,
+                "model": VOXTRAL_MINI_4B_REALTIME_2602_CANONICAL_MODEL,
+                "audio_path": audio_path.display().to_string(),
+                "error": format!("failed to read WAV duration: {err}")
+            });
+        }
+    };
+    let runtime = match stt_runtime_for_smoke(root) {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            return json!({
+                "ok": false,
+                "live_capable": false,
+                "model": VOXTRAL_MINI_4B_REALTIME_2602_CANONICAL_MODEL,
+                "engine": configured_stt_engine(root).label(),
+                "audio_duration_seconds": audio_duration_seconds,
+                "error": err.to_string()
+            });
+        }
+    };
+    let started = Instant::now();
+    let result = runtime.transcribe(&TranscriptionRequest {
+        audio_bytes: &audio,
+        response_format: "json",
+        max_tokens: None,
+    });
+    let elapsed_seconds = started.elapsed().as_secs_f64();
+    let realtime_factor = if audio_duration_seconds > 0.0 {
+        elapsed_seconds / audio_duration_seconds
+    } else {
+        f64::INFINITY
+    };
+    let batch_realtime_capable = realtime_factor <= 1.0;
+    let streaming_supported = runtime.streaming_supported();
+    let live_capable = streaming_supported && batch_realtime_capable;
+    match result {
+        Ok(output) => {
+            let proof = json!({
+                "engine": runtime.engine_label(),
+                "backend": runtime.backend_label(),
+                "model": output.model,
+                "audio_path": audio_path.display().to_string(),
+                "audio_duration_seconds": audio_duration_seconds,
+                "elapsed_seconds": elapsed_seconds,
+                "realtime_factor": realtime_factor,
+                "batch_realtime_capable": batch_realtime_capable,
+                "streaming_supported": streaming_supported,
+                "live_capable": live_capable,
+                "measured_at": now_unix_seconds()
+            });
+            let proof_write_error = if batch_realtime_capable {
+                write_realtime_proof(root, &proof)
+                    .err()
+                    .map(|err| err.to_string())
+            } else {
+                None
+            };
+            json!({
+                "ok": true,
+                "live_capable": live_capable,
+                "batch_realtime_capable": batch_realtime_capable,
+                "streaming_supported": streaming_supported,
+                "model": output.model,
+                "engine": runtime.engine_label(),
+                "backend": runtime.backend_label(),
+                "audio_duration_seconds": audio_duration_seconds,
+                "elapsed_seconds": elapsed_seconds,
+                "realtime_factor": realtime_factor,
+                "proof_path": realtime_proof_path(root).display().to_string(),
+                "proof_write_error": proof_write_error,
+                "text": output.text
+            })
+        }
+        Err(err) => json!({
+            "ok": false,
+            "live_capable": false,
+            "batch_realtime_capable": batch_realtime_capable,
+            "streaming_supported": streaming_supported,
+            "model": VOXTRAL_MINI_4B_REALTIME_2602_CANONICAL_MODEL,
+            "engine": runtime.engine_label(),
+            "backend": runtime.backend_label(),
+            "audio_duration_seconds": audio_duration_seconds,
+            "elapsed_seconds": elapsed_seconds,
+            "realtime_factor": realtime_factor,
+            "error": err.to_string(),
+            "transcription_graph_wired": runtime.transcription_graph_wired()
+        }),
+    }
+}
+
+pub fn live_transcription_status_json(root: &Path) -> serde_json::Value {
+    let engine_kind = configured_stt_engine(root);
+    let proof = read_realtime_proof(root);
+    let proof_batch_realtime = proof
+        .as_ref()
+        .and_then(|value| value.get("batch_realtime_capable"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let proof_streaming_supported = proof
+        .as_ref()
+        .and_then(|value| value.get("streaming_supported"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let streaming_supported = configured_streaming_supported(root, engine_kind);
+    let local_enabled_for_live_meetings =
+        engine_kind == SttEngineKind::Local && streaming_supported && proof_batch_realtime;
+    json!({
+        "required_for_chat_reactivity": true,
+        "engine": engine_kind.label(),
+        "streaming_supported": streaming_supported,
+        "batch_file_api_only": !streaming_supported,
+        "realtime_proof_required_for_local": engine_kind == SttEngineKind::Local,
+        "realtime_proof_path": realtime_proof_path(root).display().to_string(),
+        "realtime_proof_present": proof.is_some(),
+        "realtime_proof_batch_realtime": proof_batch_realtime,
+        "realtime_proof_streaming_supported": proof_streaming_supported,
+        "local_enabled_for_live_meetings": local_enabled_for_live_meetings,
+        "local_live_disabled_reason": local_live_disabled_reason(
+            engine_kind,
+            streaming_supported,
+            proof_batch_realtime
+        ),
+        "api_live_enabled": engine_kind == SttEngineKind::MistralApi && streaming_supported,
+        "proof": proof
+    })
+}
+
+pub fn local_live_transcription_ready(root: &Path) -> bool {
+    let status = live_transcription_status_json(root);
+    status
+        .get("local_enabled_for_live_meetings")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
 pub fn stt_smoke_json(root: &Path, audio_path: &Path) -> serde_json::Value {
     let audio = match std::fs::read(audio_path) {
         Ok(audio) => audio,
@@ -163,7 +319,7 @@ pub fn stt_smoke_json(root: &Path, audio_path: &Path) -> serde_json::Value {
                 "ok": false,
                 "model": VOXTRAL_MINI_4B_REALTIME_2602_CANONICAL_MODEL,
                 "error": format!("failed to read {}: {err}", audio_path.display())
-            })
+            });
         }
     };
     let runtime = match stt_runtime_for_smoke(root) {
@@ -174,7 +330,7 @@ pub fn stt_smoke_json(root: &Path, audio_path: &Path) -> serde_json::Value {
                 "model": VOXTRAL_MINI_4B_REALTIME_2602_CANONICAL_MODEL,
                 "engine": configured_stt_engine(root).label(),
                 "error": err.to_string()
-            })
+            });
         }
     };
     match runtime.transcribe(&TranscriptionRequest {
@@ -254,6 +410,10 @@ fn handle_connection(
             backend: runtime.backend_label(),
             artifacts_loaded: runtime.artifacts_loaded(),
             transcription_graph_wired: runtime.transcription_graph_wired(),
+            live_transcription: json!({
+                "streaming_supported": runtime.streaming_supported(),
+                "batch_file_api_only": !runtime.streaming_supported()
+            }),
         },
         Ok(LocalSttRequest::TranscriptionCreate {
             model: request_model,
@@ -365,12 +525,83 @@ fn configured_mistral_endpoint(root: &Path) -> String {
         .unwrap_or_else(|| MISTRAL_STT_DEFAULT_ENDPOINT.to_string())
 }
 
+fn configured_streaming_supported(root: &Path, engine_kind: SttEngineKind) -> bool {
+    match engine_kind {
+        SttEngineKind::Local => {
+            bool_env_or_config(root, "CTOX_STT_LOCAL_STREAMING_SUPPORTED").unwrap_or(false)
+        }
+        SttEngineKind::MistralApi => bool_env_or_config(root, "CTOX_MISTRAL_STT_REALTIME_ENABLED")
+            .or_else(|| bool_env_or_config(root, "CTOX_STT_REALTIME_API_ENABLED"))
+            .unwrap_or(false),
+    }
+}
+
+fn bool_env_or_config(root: &Path, key: &str) -> Option<bool> {
+    process_env_or_config(root, key).and_then(|value| {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" => Some(true),
+            "0" | "false" | "no" | "off" => Some(false),
+            _ => None,
+        }
+    })
+}
+
 fn process_env_or_config(root: &Path, key: &str) -> Option<String> {
     std::env::var(key)
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .or_else(|| runtime_env::env_or_config(root, key))
+}
+
+fn wav_duration_seconds(audio: &[u8]) -> Result<f64> {
+    let wav = ctox_voxtral_mini_4b_realtime_2602::audio::parse_wav(audio)
+        .map_err(|err| anyhow::anyhow!(err.to_string()))?;
+    Ok(wav.samples.len() as f64 / wav.sample_rate as f64)
+}
+
+fn realtime_proof_path(root: &Path) -> PathBuf {
+    root.join("runtime").join(STT_REALTIME_PROOF_FILENAME)
+}
+
+fn read_realtime_proof(root: &Path) -> Option<Value> {
+    std::fs::read(realtime_proof_path(root))
+        .ok()
+        .and_then(|raw| serde_json::from_slice::<Value>(&raw).ok())
+}
+
+fn write_realtime_proof(root: &Path, proof: &Value) -> Result<()> {
+    let path = realtime_proof_path(root);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    let encoded = serde_json::to_vec_pretty(proof)?;
+    std::fs::write(&path, encoded).with_context(|| format!("failed to write {}", path.display()))
+}
+
+fn local_live_disabled_reason(
+    engine_kind: SttEngineKind,
+    streaming_supported: bool,
+    proof_batch_realtime: bool,
+) -> Option<&'static str> {
+    if engine_kind != SttEngineKind::Local {
+        return Some("not_using_local_engine");
+    }
+    if !streaming_supported {
+        return Some("streaming_inference_not_wired");
+    }
+    if !proof_batch_realtime {
+        return Some("missing_realtime_proof");
+    }
+    None
+}
+
+fn now_unix_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|value| value.as_secs())
+        .unwrap_or(0)
 }
 
 impl SttEngineKind {
@@ -502,6 +733,10 @@ impl SttRuntime {
         }
     }
 
+    fn streaming_supported(&self) -> bool {
+        false
+    }
+
     fn supports_request_model(&self, request_model: &str) -> bool {
         let request_model = request_model.trim();
         request_model.eq_ignore_ascii_case(VOXTRAL_MINI_4B_REALTIME_2602_CANONICAL_MODEL)
@@ -585,6 +820,73 @@ mod tests {
         assert_eq!(parse_stt_engine_kind("api"), SttEngineKind::MistralApi);
         assert_eq!(parse_stt_engine_kind("local"), SttEngineKind::Local);
         assert_eq!(parse_stt_engine_kind("ggml"), SttEngineKind::Local);
+    }
+
+    #[test]
+    fn live_transcription_defaults_to_batch_only_until_streaming_is_wired() {
+        let root = std::env::temp_dir().join(format!(
+            "ctox-voxtral-live-status-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(root.join("runtime")).unwrap();
+
+        let status = live_transcription_status_json(&root);
+        assert_eq!(
+            status["streaming_supported"].as_bool(),
+            Some(false),
+            "{status}"
+        );
+        assert_eq!(
+            status["local_enabled_for_live_meetings"].as_bool(),
+            Some(false),
+            "{status}"
+        );
+        assert_eq!(
+            status["local_live_disabled_reason"].as_str(),
+            Some("streaming_inference_not_wired"),
+            "{status}"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn realtime_proof_alone_does_not_unlock_local_live_streaming() {
+        let root = std::env::temp_dir().join(format!(
+            "ctox-voxtral-live-proof-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(root.join("runtime")).unwrap();
+        write_realtime_proof(
+            &root,
+            &json!({
+                "engine": "local-ggml",
+                "backend": "cpu",
+                "model": VOXTRAL_MINI_4B_REALTIME_2602_CANONICAL_MODEL,
+                "batch_realtime_capable": true,
+                "streaming_supported": false,
+                "live_capable": false
+            }),
+        )
+        .unwrap();
+
+        let status = live_transcription_status_json(&root);
+        assert_eq!(status["realtime_proof_present"].as_bool(), Some(true));
+        assert_eq!(
+            status["realtime_proof_batch_realtime"].as_bool(),
+            Some(true)
+        );
+        assert_eq!(
+            status["local_enabled_for_live_meetings"].as_bool(),
+            Some(false),
+            "{status}"
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

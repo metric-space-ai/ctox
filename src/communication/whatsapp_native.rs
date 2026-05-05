@@ -298,7 +298,9 @@ async fn execute_send_async(
         .context("failed to open WhatsApp account store")?
         .with_push_name(options.push_name.clone());
     if !account.is_paired().await? {
-        bail!("WhatsApp account is not paired yet; run `ctox channel sync --channel whatsapp` and scan the QR code first");
+        bail!(
+            "WhatsApp account is not paired yet; run `ctox channel sync --channel whatsapp` and scan the QR code first"
+        );
     }
     let mut _events = account.connect().await?;
     let own_jid = account

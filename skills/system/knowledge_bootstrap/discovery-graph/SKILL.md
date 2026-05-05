@@ -18,7 +18,7 @@ cluster: knowledge_bootstrap
 
 Use this skill to inspect a host or repo, gather raw discovery evidence, and persist a normalized discovery model in CTOX runtime state.
 
-CTOX discovery state is the durable knowledge plane. Discovery captures, entities, relations, evidence, continuity, ticket knowledge, and other runtime DB state count as knowledge. Workspace notes or exported summaries do not count as durable knowledge by themselves.
+CTOX discovery state is a durable evidence plane. Discovery captures, entities, relations, evidence, continuity, ticket fact/context records, and other runtime DB state count as mission evidence. Reusable operational knowledge must be promoted into source skills, skillbooks, runbooks, or runbook items. Workspace notes or exported summaries do not count as durable knowledge by themselves.
 
 The important rule is:
 

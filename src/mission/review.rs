@@ -23,6 +23,7 @@ Use multiple tool turns as needed.
 
 Verification standard:
 - active vision and active mission are the primary strategic context
+- recent meeting outcomes are time-sensitive runtime evidence; for communication reviews and artifact reviews, inspect the latest relevant meeting summaries, meeting chat, and transcript-derived outputs before deciding
 - explicit done gates
 - reviewed claims
 - resulting mission state
@@ -32,6 +33,7 @@ Verification standard:
 
 Runtime evidence taxonomy:
 - treat runtime SQLite records as canonical durable state
+- meeting summaries are durable meeting state when stored in runtime communication/continuity/ticket records; they have a half-life, so recent relevant meetings outweigh stale assumptions while old meetings only support a verdict when still reinforced by current state
 - durable procedural knowledge requires Skillbook/Runbook-backed records, such as main skills, skillbooks, runbooks, and runbook items
 - ticket knowledge entries are ticket-scoped fact and context records; they can support evidence, but they do not prove that a reusable skill or runbook was learned
 - continuity commits, plan state, local ticket state, verification records, communication records, and other runtime DB facts count as durable mission state or evidence, not as substitutes for Skillbook/Runbook knowledge
@@ -667,6 +669,7 @@ Founder/owner communication gate:\n\
 - if the correct outcome is no outbound mail yet because the thread is waiting on specific founder input, return FAIL, begin SUMMARY with `NO-SEND:`, and state the wait condition; do not invent rework\n\
 - treat every listed required deliverable as mandatory; if a required deliverable is missing, the mail must fail review and be reworked first\n\
 - treat every listed future promise, dated commitment, or deadline promise as mandatory review context; if a promise is not backed by a concrete CTOX schedule or open follow-up, the mail must fail review and be reworked first\n\
+- inspect recent relevant meeting outcomes before judging the draft; if the latest meeting changed decisions, blockers, commitments, names, recipients, or proof expectations, the draft must reflect that newer context\n\
 - compare the draft against observed runtime facts and completed work; fail the review when the mail contradicts verified actions, hides completed verification, or says work still needs to be set up after it was already installed/tested\n\
 - when a founder explicitly requests setup, access, credentials, links, or next operational steps, require the draft to state the exact verified state and the exact remaining blocker or access path; vague option lists are not enough\n\
 - fail the review when the draft does not answer the latest founder mail, dodges the requested deliverable, promises future work instead of delivering, or leaks internal/system language\n\
@@ -712,10 +715,11 @@ Required review work:\n\
 2. treat active vision and active mission as the primary review context\n\
 3. discover the done gate and the reviewed task result or latest claimed progress for this conversation or thread\n\
 4. inspect related ticket/self-work/queue state\n\
-5. inspect relevant founder or owner communication facts when owner-visible is yes\n\
-6. inspect the live public/runtime surface when applicable\n\
-7. decide whether this specific artifact is ready to send/release/close, or whether real rework is required first\n\
-8. produce a verdict from evidence\n\
+5. inspect recent relevant meeting outcomes before communication or artifact verdicts; prioritize meeting summaries from the last 7 days, treat 30-day-old meeting outcomes as supporting context, and ignore stale meeting notes when contradicted by newer runtime state\n\
+6. inspect relevant founder or owner communication facts when owner-visible is yes\n\
+7. inspect the live public/runtime surface when applicable\n\
+8. decide whether this specific artifact is ready to send/release/close, or whether real rework is required first\n\
+9. produce a verdict from evidence\n\
 \n\
 Use the runtime DB path and workspace root above as the primary grounding points.\n\
 \n\
@@ -723,6 +727,7 @@ Use the runtime DB path and workspace root above as the primary grounding points
 \n\
 Helpful runtime entrypoint:\n\
 - use `ctox strategy show --conversation-id {strategy_conversation_id}` and `ctox verification runs --conversation-id {verification_conversation_id}` as starting lookups, then continue with direct SQLite/runtime/browser inspection\n\
+- for recent meeting outcomes, query `communication_messages` for `channel='meeting'` and bodies or subjects containing `Meeting Summary`, then inspect same-thread entries first and recent cross-thread entries when they mention the reviewed artifact, system, recipient, or deliverable\n\
 \n\
 If active vision or active mission is missing for strategic or owner-visible work, that is a review failure unless the current task is explicitly establishing them.\n\
 \n\
@@ -1156,6 +1161,9 @@ mod tests {
         assert!(rendered.contains("Open the review skill first and follow it."));
         assert!(rendered.contains("Artifact under review:"));
         assert!(rendered.contains("Patched rollout artifact"));
+        assert!(rendered.contains("inspect recent relevant meeting outcomes"));
+        assert!(rendered.contains("channel='meeting'"));
+        assert!(rendered.contains("Meeting Summary"));
     }
 
     #[test]
@@ -1202,6 +1210,8 @@ mod tests {
         assert!(rendered.contains("judge the full mail action, not just the prose"));
         assert!(rendered.contains("treat every listed required deliverable as mandatory"));
         assert!(rendered.contains("future promise, dated commitment, or deadline promise"));
+        assert!(rendered.contains("inspect recent relevant meeting outcomes"));
+        assert!(rendered.contains("latest meeting changed decisions"));
         assert!(rendered.contains("contradicts verified actions"));
         assert!(rendered.contains("setup, access, credentials, links, or next operational steps"));
         assert!(rendered.contains("does not answer the latest founder mail"));

@@ -131,6 +131,7 @@ RUN / EXEC
   ctox runtime embedding-smoke [--token-id <id>]
   ctox runtime stt-doctor
   ctox runtime stt-smoke <wav-path>
+  ctox runtime stt-realtime-smoke <wav-path>
   ctox runtime tts-doctor
   ctox runtime tts-smoke [--text <text>]
 
@@ -210,6 +211,7 @@ fn skips_cli_turn_ledger(args: &[String]) -> bool {
                         | "embedding-smoke"
                         | "stt-doctor"
                         | "stt-smoke"
+                        | "stt-realtime-smoke"
                         | "tts-doctor"
                         | "tts-smoke"
                 )
@@ -286,6 +288,16 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
                 );
                 Ok(())
             }
+            Some("stt-realtime-smoke") => {
+                let audio_path = native_stt::parse_stt_smoke_audio_path(&args[2..])?;
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&native_stt::stt_realtime_smoke_json(
+                        &root, &audio_path
+                    ))?
+                );
+                Ok(())
+            }
             Some("tts-doctor") => {
                 println!(
                     "{}",
@@ -340,7 +352,7 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
                 Ok(())
             }
             _ => anyhow::bail!(
-                "usage: ctox runtime switch <model> <quality|performance> [--context 128k|256k] [--timeout <secs>] | ctox runtime embedding-doctor | ctox runtime embedding-smoke [--token-id <id>] | ctox runtime stt-doctor | ctox runtime stt-smoke <wav-path> | ctox runtime tts-doctor | ctox runtime tts-smoke [--text <text>]"
+                "usage: ctox runtime switch <model> <quality|performance> [--context 128k|256k] [--timeout <secs>] | ctox runtime embedding-doctor | ctox runtime embedding-smoke [--token-id <id>] | ctox runtime stt-doctor | ctox runtime stt-smoke <wav-path> | ctox runtime stt-realtime-smoke <wav-path> | ctox runtime tts-doctor | ctox runtime tts-smoke [--text <text>]"
             ),
         },
         Some("boost") => match args.get(1).map(String::as_str) {

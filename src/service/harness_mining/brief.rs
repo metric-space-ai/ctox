@@ -261,8 +261,7 @@ fn top_signal_and_next(
                 preventive * 100.0,
                 trigger * 100.0
             ),
-            "ctox harness-mining conformance --window 2000 --fitness-threshold 0.95"
-                .to_string(),
+            "ctox harness-mining conformance --window 2000 --fitness-threshold 0.95".to_string(),
         );
     }
     if stuck_count > 0 {

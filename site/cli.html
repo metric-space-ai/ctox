@@ -647,7 +647,7 @@ ctox process-mining case case-OPS-204 --limit 200</code></pre>
                 <tr>
                   <td><code>ctox runtime switch &lt;model&gt; &lt;quality|performance&gt;</code></td>
                   <td>Switch the active model/runtime profile.</td>
-                  <td><code>--context 32k|64k|128k|256k</code>, <code>--timeout &lt;secs&gt;</code>.</td>
+                  <td><code>--context 128k|256k</code>, <code>--timeout &lt;secs&gt;</code>.</td>
                 </tr>
                 <tr>
                   <td><code>ctox doctor</code>, <code>ctox version</code></td>
@@ -1050,7 +1050,7 @@ ctox queue reprioritize --message-key &lt;key&gt; --priority &lt;urgent|high|nor
 ctox queue restore --message-key &lt;key&gt; [--priority &lt;urgent|high|normal|low&gt;] [--note &lt;text&gt;]
 ctox queue show --message-key &lt;key&gt;
 ctox queue spill --message-key &lt;key&gt; [--ticket-system &lt;name&gt;] [--reason &lt;text&gt;] [--skill &lt;name&gt;] [--publish]
-ctox runtime switch &lt;model&gt; &lt;quality|performance&gt; [--context 32k|64k|128k|256k] [--timeout &lt;secs&gt;]
+ctox runtime switch &lt;model&gt; &lt;quality|performance&gt; [--context 128k|256k] [--timeout &lt;secs&gt;]
 ctox schedule add --name &lt;label&gt; --cron '&lt;expr&gt;' --prompt &lt;text&gt;
 ctox schedule pause --task-id &lt;id&gt;
 ctox schedule remove --task-id &lt;id&gt;

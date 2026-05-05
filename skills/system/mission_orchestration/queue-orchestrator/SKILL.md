@@ -26,7 +26,7 @@ The queue is explicit shared state. If you want future work to survive beyond th
 
 Do not assume an external process will decide the next task for you.
 
-Queue state is not the full knowledge plane. Durable knowledge lives in CTOX continuity state, ticket state, verification state, communication records, and ticket knowledge. Standalone markdown files or workspace notes do not become durable knowledge just because a queue item references them.
+Queue state is not the full knowledge plane. Durable mission state lives in CTOX continuity state, ticket state, verification state, communication records, and ticket fact/context records. Reusable operational knowledge lives in source skills, skillbooks, runbooks, and runbook items. Standalone markdown files or workspace notes do not become durable knowledge just because a queue item references them.
 
 ## Commands
 
@@ -99,7 +99,7 @@ What to look at:
 4. Prefer one coherent queue task per bounded work step.
 5. Use `--parent-message-key` when a follow-up task clearly descends from an earlier queue item.
 6. When queueing ticket-bearing or owner-visible work, first inspect whether the ticket and knowledge subsystems are actually populated. If `ticket_items`, `ticket_cases`, source skills, or knowledge domains are still absent, phrase the queue task as onboarding / correction work rather than normal mature execution.
-7. Do not use queue text as a substitute for durable knowledge persistence. If the mission understanding needs to survive, ensure it also lands in CTOX continuity state or ticket knowledge.
+7. Do not use queue text as a substitute for durable persistence. If the mission understanding needs to survive, ensure it also lands in CTOX continuity state or ticket fact/context records; if it teaches future procedure, promote it into Skillbook/Runbook knowledge.
 
 ## Important Boundaries
 

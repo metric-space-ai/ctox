@@ -18,7 +18,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::communication::adapters::{AdapterSyncCommandRequest, MeetingSendCommandRequest};
 use crate::communication::runtime as communication_runtime;
-use crate::inference::{engine, runtime_env, supervisor};
+use crate::inference::{engine, native_stt, runtime_env, supervisor};
 use crate::mission::channels::{
     ensure_routing_rows_for_inbound, open_channel_db, refresh_thread, upsert_communication_message,
     UpsertMessage,
@@ -973,7 +973,14 @@ pub(crate) fn run_meeting_session(root: &Path, config: &MeetingSessionConfig) ->
     // for the meeting, the guard tears it back down after finalization.
     let mut stt_guard = MeetingSttRuntimeGuard::ensure_for_meeting(&config.root);
     let engine_reachable = check_engine_reachable(&config.root);
+    let live_transcription_status = native_stt::live_transcription_status_json(&config.root);
+    let local_live_ready = live_transcription_status
+        .get("local_enabled_for_live_meetings")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     session.engine_was_reachable_at_start = engine_reachable;
+    session.live_transcription_ready_at_start = local_live_ready;
+    session.live_transcription_status_at_start = Some(live_transcription_status.clone());
     if engine_reachable {
         eprintln!("[meeting] STT runtime reachable via managed transport");
     } else {
@@ -984,6 +991,17 @@ pub(crate) fn run_meeting_session(root: &Path, config: &MeetingSessionConfig) ->
         }
         eprintln!(
             "[meeting] Unsent chunks will be retried at meeting end if the engine becomes available."
+        );
+    }
+    if local_live_ready {
+        eprintln!("[meeting] local live STT enabled; realtime streaming proof is present");
+    } else {
+        let reason = live_transcription_status
+            .get("local_live_disabled_reason")
+            .and_then(Value::as_str)
+            .unwrap_or("not_live_ready");
+        eprintln!(
+            "[meeting] local live STT disabled ({reason}); chat replies will use platform captions and completed STT chunks only"
         );
     }
 
@@ -1348,19 +1366,28 @@ fn finalize_meeting(
          1. **Decisions** -- What was agreed upon? By whom?\n\
          2. **Action items** -- Who committed to doing what? By when?\n\
          3. **Open questions** -- What was discussed but not resolved?\n\
-         4. **Knowledge** -- Technical facts, status updates, numbers that CTOX should remember.\n\
+         4. **Reusable operational knowledge candidates** -- Only extract items that can become a \
+         durable Skillbook/Runbook/Runbook-Item. Meeting facts, status notes, and one-off decisions are \
+         not knowledge by themselves; keep those in the summary or tickets.\n\
          \n\
          ### What to create\n\
          \n\
          - For each **action item**: Create a ticket with clear title, assignee, and deadline.\n\
-         - For each **decision/fact**: Create a knowledge context entry.\n\
+         - For each **reusable operational knowledge candidate**: create or update a Skillbook/Runbook \
+         bundle via `ctox ticket source-skill-import-bundle`. The durable knowledge artifact must land in \
+         `knowledge_main_skills`, `knowledge_skillbooks`, `knowledge_runbooks`, and \
+         `knowledge_runbook_items`. Do not use `ticket_knowledge_entries` as the final knowledge store.\n\
+         - If the meeting produced only facts, decisions, or follow-up work and no reusable procedure, \
+         do not create a knowledge artifact; keep the facts in the meeting summary and tickets.\n\
          - For **open questions**: Create a follow-up queue task.\n\
          - **Always**: Send a meeting summary to the relevant communication channel.\n\
          \n\
          ### Structured extraction contract\n\
          \n\
          Start by producing a compact JSON object with keys `decisions`, `action_items`, \
-         `open_questions`, `knowledge`, and `tickets_to_create`. Then perform the durable writes. \
+         `open_questions`, `runbook_candidates`, and `tickets_to_create`. Then perform the durable writes. \
+         Each `runbook_candidates` item must name the target skillbook/runbook and explain why it is \
+         reusable operational procedure rather than a meeting note. \
          Every ticket candidate must include `title`, `body`, `source_session_id`, and \
          `dedupe_rationale`.\n\
          \n\
@@ -1734,6 +1761,9 @@ pub(crate) struct MeetingSession {
     pub pending_audio_chunks: Vec<String>,
     /// Whether the STT engine was reachable when the session started.
     pub engine_was_reachable_at_start: bool,
+    /// Whether local STT was proven suitable for live meeting transcripts.
+    pub live_transcription_ready_at_start: bool,
+    pub live_transcription_status_at_start: Option<Value>,
 }
 
 #[derive(Debug, Clone)]
@@ -1913,6 +1943,8 @@ impl MeetingSession {
             stdin_pipe: None,
             pending_audio_chunks: Vec::new(),
             engine_was_reachable_at_start: false,
+            live_transcription_ready_at_start: false,
+            live_transcription_status_at_start: None,
         }
     }
 
@@ -1942,6 +1974,8 @@ impl MeetingSession {
             "stdin_pipe": self.stdin_pipe,
             "pending_audio_chunks": self.pending_audio_chunks,
             "engine_was_reachable_at_start": self.engine_was_reachable_at_start,
+            "live_transcription_ready_at_start": self.live_transcription_ready_at_start,
+            "live_transcription_status_at_start": self.live_transcription_status_at_start,
         })
     }
 
@@ -4679,7 +4713,9 @@ fn schedule_meeting_join_with_metadata(
          Join the {provider} meeting at {url} as \"{bot_name}\". \
          Capture audio transcript and monitor chat. \
          If no other participants join within 15 minutes, leave the meeting. \
-         After the meeting ends, summarize the transcript and create knowledge entries and tickets.",
+         After the meeting ends, summarize the transcript and create tickets. \
+         Create durable knowledge only when the meeting produced reusable operational procedure; \
+         durable knowledge must be a Skillbook/Runbook/Runbook-Item, not a ticket_knowledge_entries note.",
         provider = provider.as_str(),
         url = meeting_url,
         bot_name = bot_name,

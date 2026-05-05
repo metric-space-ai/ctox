@@ -27,7 +27,7 @@ Use this skill near the end of a non-trivial turn when you need an explicit comp
 
 Do not silently abandon unfinished work. If the current turn materially advanced the task but did not close it, use the follow-up tool to return a compact structured judgment.
 
-Durable mission understanding lives in the the CTOX runtime store. CTOX continuity state, ticket state, plan state, communication records, verification runs, and ticket knowledge count as durable knowledge. Standalone markdown notes or workspace files do not count as knowledge by themselves.
+Durable mission understanding lives in the CTOX runtime store. CTOX continuity state, ticket state, plan state, communication records, verification runs, and ticket fact/context entries count as durable mission state. Reusable operational knowledge must be represented by source skills, skillbooks, runbooks, or runbook items. Standalone markdown notes or workspace files do not count as knowledge by themselves.
 
 ## Command
 
@@ -79,7 +79,7 @@ while leaving a hot retry-loop downstream is misclassified by definition.
    - `ctox ticket source-skills`
    - `ctox ticket knowledge-list --system "<system>" --limit 20`
    - `ctox ticket self-work-list --system "<system>" --limit 20`
-   If the full ticket+knowledge pipeline is not active, state that plainly in the follow-up instead of pretending durable knowledge already exists.
+   If the full ticket+knowledge pipeline is not active, state that plainly in the follow-up instead of pretending durable ticket context or Skillbook/Runbook knowledge already exists.
 15. If the only persisted artifact is a workspace note or markdown file, treat the knowledge task as still open. Persist the mission understanding into the CTOX runtime store before calling the work durable.
 
 ## Important Separation
