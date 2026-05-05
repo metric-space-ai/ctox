@@ -13,7 +13,9 @@ const QWEN_TOOL_PROTOCOL_INSTRUCTIONS: &str = r#"Local CTOX tool-call protocol:
 - Emit tool calls in this XML format:
 <tool_call>
 <function=exec_command>
-<parameter=cmd>printf hello</parameter>
+<parameter=cmd>
+printf hello
+</parameter>
 </function>
 </tool_call>
 - Use the real tool name from the available tools list. Use parameter names from the tool schema, for example cmd for exec_command.
@@ -592,14 +594,16 @@ mod tests {
         assert!(system.contains("Local CTOX tool-call protocol"));
         assert!(system.contains("Available tools: exec_command"));
         assert!(system.contains("<function=exec_command>"));
-        assert!(system.contains("<parameter=cmd>"));
+        assert!(system.contains("<parameter=cmd>\nprintf hello\n</parameter>"));
     }
 
     #[test]
     fn parses_qwen_xml_tool_call_with_dotted_tool_name() {
         let text = r#"<tool_call>
 <function=namespace.exec_command>
-<parameter=cmd>printf CTOX_OK</parameter>
+<parameter=cmd>
+printf CTOX_OK
+</parameter>
 </function>
 </tool_call>"#;
         let (plain, calls) = parse_xml_tool_calls(text);
