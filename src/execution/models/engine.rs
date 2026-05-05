@@ -1930,6 +1930,7 @@ mod tests {
         assert!(!uses_ctox_responses_adapter_model("openai/gpt-oss-120b"));
         assert!(!uses_ctox_responses_adapter_model("Qwen/Qwen3.5-4B"));
         assert!(uses_ctox_responses_adapter_model("Qwen/Qwen3.5-27B"));
+        assert!(uses_ctox_responses_adapter_model("Qwen/Qwen3.6-35B-A3B"));
         assert!(!uses_ctox_responses_adapter_model("not-a-real-model"));
     }
 

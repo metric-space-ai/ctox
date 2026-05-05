@@ -5577,14 +5577,13 @@ fn build_continuity_prompt_text(
     let kind_str = kind.as_str();
     let mut prompt = vec![
         format!(
-            "You are updating the CTOX continuity document for conversation {}.",
-            conversation_id
-        ),
-        format!("Document: {kind_str}."),
+        "You are updating durable memory for CTOX conversation {}.",
+        conversation_id
+    ),
+        format!("Memory document: {kind_str}."),
         kind_expectations.to_string(),
         String::new(),
-        "You MUST apply the update by invoking the `ctox continuity-update` CLI via your shell tool. \
-         Do NOT emit a diff as text in your reply. Reply text is ignored; only the CLI call counts.".to_string(),
+        "IMPORTANT: Your reply text does not update memory. You must call `ctox continuity-update` with a shell command. If no update is needed, make no CLI call and reply exactly `noop`.".to_string(),
         String::new(),
         "Three modes are available. Pick the smallest one that fits your change.".to_string(),
         String::new(),
@@ -5608,7 +5607,7 @@ fn build_continuity_prompt_text(
         ),
         "  Use only when you have several coordinated changes across the same document.".to_string(),
         String::new(),
-        "Content rules (apply to all three modes):".to_string(),
+        "CONTENT RULES".to_string(),
         "- Keep the existing `##` section names. Do not invent new headings.".to_string(),
         "- Do not invent facts not supported by recent messages or summaries.".to_string(),
         "- If recent work failed or repeated, keep the failed tactic / blocker / retry condition.".to_string(),
@@ -5626,10 +5625,7 @@ fn build_continuity_prompt_text(
         );
     }
     prompt.push(String::new());
-    prompt.push(
-        "If no update is needed, make no CLI call and reply with the single word `noop`."
-            .to_string(),
-    );
+    prompt.push("EXIT GATE: memory is updated only after the CLI command succeeds.".to_string());
     prompt.push(String::new());
     prompt.push(format!("<DOCUMENT_KIND>\n{}\n</DOCUMENT_KIND>", kind_label));
     prompt.push(String::new());
@@ -5686,8 +5682,7 @@ fn build_continuity_prompt_text(
     ));
     prompt.push(String::new());
     prompt.push(
-        "Reminder: apply the update by calling `ctox continuity-update` via your shell tool. \
-         Reply text alone does not update the document."
+        "Reminder: call `ctox continuity-update` to save changes. Replying with a diff or summary does not save anything."
             .to_string(),
     );
     prompt.join("\n")

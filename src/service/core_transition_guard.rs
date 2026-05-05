@@ -8,6 +8,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
+use std::path::Path;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CoreTransitionProof {
@@ -347,6 +348,14 @@ fn load_artifact_terminal_state(
                 )
                 .optional()
                 .map_err(anyhow::Error::from)
+            }
+        }
+        csm::ArtifactKind::WorkspaceFile => {
+            let path = Path::new(&artifact.primary_key);
+            if path.is_file() {
+                Ok(Some("present".to_string()))
+            } else {
+                Ok(None)
             }
         }
         csm::ArtifactKind::TicketClosure => conn
@@ -883,7 +892,9 @@ fn agent_recovery_message(report: &csm::CoreTransitionReport) -> String {
             "active_knowledge_requires_incident" => {
                 "Lege Knowledge nicht direkt als aktiv ab. Halte zuerst den beobachteten Vorfall fest, formuliere die Lehre, pruefe sie und aktiviere sie erst nach Evidenz."
             }
-            _ => "Die geplante Aktion passt noch nicht zum gesicherten Harness-Zustand. Pruefe den naechsten erlaubten Arbeitsschritt, halte Evidenz fest und versuche erst danach erneut fortzufahren.",
+            _ => {
+                "Die geplante Aktion passt noch nicht zum gesicherten Harness-Zustand. Pruefe den naechsten erlaubten Arbeitsschritt, halte Evidenz fest und versuche erst danach erneut fortzufahren."
+            }
         };
         if !actions.iter().any(|existing| *existing == action) {
             actions.push(action);
@@ -1100,6 +1111,83 @@ mod tests {
                     primary_key: "email:cto@example.test::pending_send::abc".to_string(),
                     expected_terminal_state: "accepted".to_string(),
                 }],
+                ..CoreEvidenceRefs::default()
+            },
+            metadata: BTreeMap::new(),
+        };
+
+        let proof = evaluate_core_transition(&conn, &request)?;
+
+        assert!(proof.accepted, "{:?}", proof.report.violations);
+        Ok(())
+    }
+
+    #[test]
+    fn outcome_witness_rejects_missing_workspace_file() -> Result<()> {
+        let conn = Connection::open_in_memory()?;
+        let path = std::env::temp_dir()
+            .join("ctox-missing-workspace-artifact")
+            .join("logbook.md");
+        let request = CoreTransitionRequest {
+            entity_type: CoreEntityType::QueueItem,
+            entity_id: "queue:tb2-bootstrap".to_string(),
+            lane: RuntimeLane::P2MissionDelivery,
+            from_state: CoreState::Running,
+            to_state: CoreState::Completed,
+            event: CoreEvent::Complete,
+            actor: "ctox-service".to_string(),
+            evidence: CoreEvidenceRefs {
+                expected_artifact_refs: vec![csm::ArtifactRef {
+                    kind: csm::ArtifactKind::WorkspaceFile,
+                    primary_key: path.display().to_string(),
+                    expected_terminal_state: "present".to_string(),
+                }],
+                delivered_artifact_refs: Vec::new(),
+                ..CoreEvidenceRefs::default()
+            },
+            metadata: BTreeMap::new(),
+        };
+
+        let proof = evaluate_core_transition(&conn, &request)?;
+
+        assert!(!proof.accepted);
+        assert!(proof
+            .report
+            .violations
+            .iter()
+            .any(|violation| violation.code == "WP-Outcome-Missing"));
+        Ok(())
+    }
+
+    #[test]
+    fn outcome_witness_accepts_present_workspace_file() -> Result<()> {
+        let conn = Connection::open_in_memory()?;
+        let dir = std::env::temp_dir().join(format!(
+            "ctox-present-workspace-artifact-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir)?;
+        let path = dir.join("logbook.md");
+        std::fs::write(&path, "# log\n")?;
+        let artifact = csm::ArtifactRef {
+            kind: csm::ArtifactKind::WorkspaceFile,
+            primary_key: path.display().to_string(),
+            expected_terminal_state: "present".to_string(),
+        };
+        let request = CoreTransitionRequest {
+            entity_type: CoreEntityType::QueueItem,
+            entity_id: "queue:tb2-bootstrap".to_string(),
+            lane: RuntimeLane::P2MissionDelivery,
+            from_state: CoreState::Running,
+            to_state: CoreState::Completed,
+            event: CoreEvent::Complete,
+            actor: "ctox-service".to_string(),
+            evidence: CoreEvidenceRefs {
+                expected_artifact_refs: vec![artifact.clone()],
+                delivered_artifact_refs: vec![artifact],
                 ..CoreEvidenceRefs::default()
             },
             metadata: BTreeMap::new(),

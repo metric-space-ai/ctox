@@ -30,10 +30,12 @@ Verification standard:
 - commercial credibility and buyer-path integrity for launch work
 - SQLite-backed runtime evidence over ad hoc workspace notes or standalone markdown artifacts
 
-Knowledge evidence rule:
-- treat runtime SQLite records as canonical durable knowledge
-- continuity commits, ticket knowledge, plan state, local ticket state, verification records, communication records, and other runtime DB facts count as durable knowledge
-- standalone workspace files may support a claim, but they do not count as durable mission knowledge unless the same insight is also persisted in SQLite-backed runtime state
+Runtime evidence taxonomy:
+- treat runtime SQLite records as canonical durable state
+- durable procedural knowledge requires Skillbook/Runbook-backed records, such as main skills, skillbooks, runbooks, and runbook items
+- ticket knowledge entries are ticket-scoped fact and context records; they can support evidence, but they do not prove that a reusable skill or runbook was learned
+- continuity commits, plan state, local ticket state, verification records, communication records, and other runtime DB facts count as durable mission state or evidence, not as substitutes for Skillbook/Runbook knowledge
+- standalone workspace files may support a claim, but they do not count as durable mission state unless the same insight is also persisted in SQLite-backed runtime state
 
 Public-surface failures include:
 - internal instruction leakage

@@ -545,7 +545,7 @@ fn knowledge_branch(conn: &Connection) -> Result<SupportBranch> {
     let skills = optional_count(conn, "SELECT COUNT(*) FROM knowledge_main_skills")?;
     let mut lines = Vec::new();
     lines.push(format!(
-        "Loaded knowledge runs: {} · entries: {} · main skills: {}",
+        "Ticket fact loads: {} · fact/context entries: {} · main skills: {}",
         loads, entries, skills
     ));
     let latest = optional_string(
@@ -554,7 +554,10 @@ fn knowledge_branch(conn: &Connection) -> Result<SupportBranch> {
         [],
     )?;
     if let Some(title) = latest.filter(|s| !s.trim().is_empty()) {
-        lines.push(format!("Latest captured lesson: {}", clip(&title, 72)));
+        lines.push(format!(
+            "Latest ticket fact/context entry: {}",
+            clip(&title, 72)
+        ));
     } else {
         lines.push("No task-specific knowledge capture observed yet.".to_string());
     }
@@ -890,22 +893,48 @@ fn state_machine_branch(conn: &Connection) -> Result<SupportBranch> {
          WHERE state IN ('open', 'assigned', 'in_progress')
            AND kind LIKE '%rework%'",
     )?;
-    let rewrite_holds = optional_count(
+    let review_checkpoint_blocks = optional_count(
+        conn,
+        "SELECT COUNT(*) FROM ctox_core_transition_proofs
+         WHERE accepted = 0
+           AND violation_codes_json LIKE '%review_checkpoint%'",
+    )?;
+    let outcome_blocks = optional_count(
+        conn,
+        "SELECT COUNT(*) FROM ctox_core_transition_proofs
+         WHERE accepted = 0
+           AND (
+             violation_codes_json LIKE '%WP-Outcome-Missing%'
+             OR violation_codes_json LIKE '%WP-Outcome-Wrong-State%'
+           )",
+    )?;
+    let accepted_spawns = optional_count(
+        conn,
+        "SELECT COUNT(*) FROM ctox_core_spawn_edges WHERE accepted = 1",
+    )?;
+    let rejected_spawns = optional_count(
+        conn,
+        "SELECT COUNT(*) FROM ctox_core_spawn_edges WHERE accepted = 0",
+    )?;
+    let process_blocks = optional_count(
         conn,
         "SELECT COUNT(*) FROM ctox_pm_state_violations
          WHERE violation_code LIKE '%review%'
             OR violation_code LIKE '%rewrite%'
-            OR violation_code LIKE '%rework%'",
+            OR violation_code LIKE '%rework%'
+            OR violation_code LIKE '%outcome%'
+            OR violation_code LIKE '%spawn%'",
     )?;
     Ok(SupportBranch {
         kind: FlowBranchKind::StateMachine,
         title: "HARNESS STATE MACHINE".to_string(),
         lines: vec![
-            "Founder/owner mail: never send without a persisted review approval.".to_string(),
-            "Communication re-review keeps the prior review context attached.".to_string(),
-            "Limit: two substantive communication reworks, then one wording-only rewrite/hold.".to_string(),
-            "Non-communication self-work can continue without review only when it asks for concrete next steps.".to_string(),
-            format!("Open rework items: {open_rework} · review/rework violations: {rewrite_holds}"),
+            "Review Gate is a checkpoint: it gives feedback to the same main work item; it must not spawn review-work cascades.".to_string(),
+            "Terminal work needs an outcome witness: text like sent/done is not evidence without the durable artifact.".to_string(),
+            "Task spawning is allowed only through modeled parent -> child edges with checkpoint and budget discipline.".to_string(),
+            "If the kernel rejects review, outcome, or spawn evidence, the agent resumes the original work and creates the missing artifact itself.".to_string(),
+            format!("Open rework: {open_rework} · review checkpoint blocks: {review_checkpoint_blocks} · outcome blocks: {outcome_blocks}"),
+            format!("Spawn edges accepted: {accepted_spawns} · rejected: {rejected_spawns} · process blocks: {process_blocks}"),
         ],
         returns_to_spine: true,
     })

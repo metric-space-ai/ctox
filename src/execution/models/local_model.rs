@@ -32,6 +32,8 @@
 //! | `CTOX_QWEN35_DRAFT_SAFETENSORS`  | `$HOME/dflash-ref/dflash/models/draft/model.safetensors`         |
 //! | `CTOX_QWEN35_TOKENIZER`          | _discovered by the server bin from the HF cache_                 |
 //! | `CTOX_QWEN35_GGML_LIB_DIR`        | `$HOME/dflash-ref/dflash/build/deps/llama.cpp/ggml/src`          |
+//! | `CTOX_QWEN36_GGUF`                | `$HOME/.cache/ctox/models/qwen36-35b-a3b/gguf/Qwen3.6-35B-A3B-Q4_K_M.gguf` |
+//! | `CTOX_QWEN36_LLAMA_CLI`           | `$HOME/.cache/ctox/llama.cpp/build-cuda/bin/llama-completion`    |
 //!
 //! Set via either the TUI's runtime-settings page or
 //! `ctox secret set <key> <value>` (the runtime-env store persists
@@ -76,6 +78,12 @@ pub fn resolve_local_model_backend(req: LocalModelRequest<'_>) -> Option<LocalMo
             req.transport_endpoint,
         ));
     }
+    if is_qwen36_35b_a3b(model) {
+        return Some(qwen36_35b_a3b_ggml_backend(
+            req.root,
+            req.transport_endpoint,
+        ));
+    }
     if is_voxtral_mini_4b_realtime(model) {
         return Some(voxtral_mini_4b_realtime_backend(
             req.root,
@@ -86,6 +94,14 @@ pub fn resolve_local_model_backend(req: LocalModelRequest<'_>) -> Option<LocalMo
         return Some(voxtral_4b_tts_backend(req.root, req.transport_endpoint));
     }
     None
+}
+
+/// Is `model` handled by the Qwen3.6-35B-A3B ggml/CUDA server?
+pub fn is_qwen36_35b_a3b(model: &str) -> bool {
+    model == "Qwen/Qwen3.6-35B-A3B"
+        || model.eq_ignore_ascii_case("qwen3.6-35b-a3b")
+        || model.eq_ignore_ascii_case("qwen36-35b-a3b")
+        || model.eq_ignore_ascii_case("qwen36-35b-a3b-ggml")
 }
 
 /// Is `model` handled by the Qwen3.5-27B Q4_K_M + DFlash server?
@@ -189,6 +205,67 @@ fn qwen35_27b_q4km_dflash_backend(
     }
 }
 
+fn qwen36_35b_a3b_ggml_backend(root: &Path, transport_endpoint: Option<&str>) -> LocalModelBackend {
+    let binary = root
+        .join("src/inference/models/qwen36_35b_a3b_ggml/target/release")
+        .join("qwen36-35b-a3b-ggml-server");
+
+    let model = config_path_or(root, "CTOX_QWEN36_GGUF", default_qwen36_gguf(root));
+    let llama_cli = config_path_or(
+        root,
+        "CTOX_QWEN36_LLAMA_CLI",
+        default_qwen36_llama_cli(root),
+    );
+    let ctx = config_u32_or(
+        root,
+        &[
+            "CTOX_QWEN36_CONTEXT_TOKENS",
+            "CTOX_ENGINE_MAX_SEQ_LEN",
+            "CTOX_CHAT_MODEL_MAX_CONTEXT",
+            "CTOX_ENGINE_REALIZED_MAX_SEQ_LEN",
+            "CTOX_CHAT_MODEL_REALIZED_CONTEXT",
+        ],
+        131_072,
+    );
+    let socket = match transport_endpoint {
+        Some(ep) => PathBuf::from(ep),
+        None => root.join("runtime/sockets/primary_generation.sock"),
+    };
+
+    let mut args: Vec<OsString> = Vec::new();
+    args.push("--model".into());
+    args.push(model.into());
+    args.push("--llama-cli".into());
+    args.push(llama_cli.into());
+    args.push("--socket".into());
+    args.push(socket.into());
+    args.push("--model-id".into());
+    args.push("Qwen/Qwen3.6-35B-A3B".into());
+    args.push("--ctx".into());
+    args.push(ctx.to_string().into());
+    args.push("--gpu-layers".into());
+    args.push("99".into());
+    args.push("--split-mode".into());
+    args.push("layer".into());
+    args.push("--tensor-split".into());
+    args.push("1,1,1,1".into());
+    args.push("--threads".into());
+    args.push("16".into());
+    args.push("--batch".into());
+    args.push("2048".into());
+    args.push("--ubatch".into());
+    args.push("512".into());
+    args.push("--request-model-alias".into());
+    args.push("Qwen/Qwen3.6-35B-A3B".into());
+
+    LocalModelBackend {
+        binary,
+        args,
+        env: Vec::new(),
+        model_id: "Qwen/Qwen3.6-35B-A3B",
+    }
+}
+
 fn voxtral_4b_tts_backend(root: &Path, transport_endpoint: Option<&str>) -> LocalModelBackend {
     let binary = std::env::current_exe().unwrap_or_else(|_| root.join("target/release/ctox"));
     let socket = match transport_endpoint {
@@ -275,6 +352,16 @@ fn config_path_optional(root: &Path, key: &str) -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+fn config_u32_or(root: &Path, keys: &[&str], fallback: u32) -> u32 {
+    keys.iter()
+        .find_map(|key| {
+            runtime_env::env_or_config(root, key)
+                .and_then(|value| value.trim().parse::<u32>().ok())
+                .filter(|value| *value > 0)
+        })
+        .unwrap_or(fallback)
+}
+
 /// Home-dir resolution — uses `$HOME` purely as an OS-level POSIX
 /// hint (same pattern as `src/main.rs::home_dir`, not a CTOX
 /// runtime-state toggle). Falls back to `/` so the rest of the
@@ -300,6 +387,15 @@ fn default_qwen35_ggml_lib(root: &Path) -> PathBuf {
     resolve_home_dir(root).join("dflash-ref/dflash/build/deps/llama.cpp/ggml/src")
 }
 
+fn default_qwen36_gguf(root: &Path) -> PathBuf {
+    resolve_home_dir(root)
+        .join(".cache/ctox/models/qwen36-35b-a3b/gguf/Qwen3.6-35B-A3B-Q4_K_M.gguf")
+}
+
+fn default_qwen36_llama_cli(root: &Path) -> PathBuf {
+    resolve_home_dir(root).join(".cache/ctox/llama.cpp/build-cuda/bin/llama-completion")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -312,6 +408,14 @@ mod tests {
         assert!(is_qwen35_27b("unsloth/Qwen3.5-27B-GGUF"));
         assert!(!is_qwen35_27b("Qwen/Qwen3-4B"));
         assert!(!is_qwen35_27b("anthropic/claude-sonnet-4.7"));
+    }
+
+    #[test]
+    fn qwen36_aliases_resolve() {
+        assert!(is_qwen36_35b_a3b("Qwen/Qwen3.6-35B-A3B"));
+        assert!(is_qwen36_35b_a3b("qwen3.6-35b-a3b"));
+        assert!(is_qwen36_35b_a3b("qwen36-35b-a3b-ggml"));
+        assert!(!is_qwen36_35b_a3b("Qwen/Qwen3.5-35B-A3B"));
     }
 
     #[test]
@@ -410,6 +514,35 @@ mod tests {
         assert!(backend
             .binary
             .ends_with("src/inference/models/qwen35_27b_q4km_dflash/target/release/qwen35-27b-q4km-dflash-server"));
+    }
+
+    #[test]
+    fn qwen36_backend_assembles_expected_cli() {
+        let root = Path::new("/tmp/ctoxroot");
+        let backend = resolve_local_model_backend(LocalModelRequest {
+            request_model: "Qwen/Qwen3.6-35B-A3B",
+            transport_endpoint: Some("/tmp/ctoxroot/runtime/sockets/primary_generation.sock"),
+            root,
+        })
+        .expect("qwen36 backend must resolve");
+        let joined: String = backend
+            .args
+            .iter()
+            .map(|s| s.to_string_lossy().to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(joined.contains("--model"));
+        assert!(joined.contains("Qwen3.6-35B-A3B-Q4_K_M.gguf"));
+        assert!(joined.contains("--llama-cli"));
+        assert!(joined.contains("--socket"));
+        assert!(joined.contains("primary_generation.sock"));
+        assert!(joined.contains("--model-id Qwen/Qwen3.6-35B-A3B"));
+        assert!(joined.contains("--ctx 131072"));
+        assert!(joined.contains("--tensor-split 1,1,1,1"));
+        assert_eq!(backend.model_id, "Qwen/Qwen3.6-35B-A3B");
+        assert!(backend.binary.ends_with(
+            "src/inference/models/qwen36_35b_a3b_ggml/target/release/qwen36-35b-a3b-ggml-server"
+        ));
     }
 
     #[test]

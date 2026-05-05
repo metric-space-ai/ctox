@@ -2,7 +2,7 @@ use crate::inference::engine;
 
 pub const DEFAULT_LOCAL_CHAT_FAMILY: engine::LocalModelFamily =
     engine::LocalModelFamily::Qwen35Vision;
-pub const SUPPORTED_LOCAL_CHAT_MODELS: &[&str] = &["Qwen/Qwen3.5-27B"];
+pub const SUPPORTED_LOCAL_CHAT_MODELS: &[&str] = &["Qwen/Qwen3.5-27B", "Qwen/Qwen3.6-35B-A3B"];
 
 pub const SUPPORTED_OPENAI_API_CHAT_MODELS: &[&str] =
     &["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano"];
@@ -57,6 +57,7 @@ pub const SUPPORTED_CHAT_MODELS: &[&str] = &[
     "Qwen/Qwen3.5-9B",
     "Qwen/Qwen3.5-27B",
     "Qwen/Qwen3.5-35B-A3B",
+    "Qwen/Qwen3.6-35B-A3B",
     "google/gemma-4-E2B-it",
     "google/gemma-4-E4B-it",
     "google/gemma-4-26B-A4B-it",
@@ -767,6 +768,36 @@ const LOCAL_MODEL_REGISTRY: &[LocalModelCatalogEntry] = &[
             disable_nccl: true,
             target_world_size: None,
             preferred_gpu_count: Some(3),
+        },
+        family: engine::LocalModelFamily::Qwen35Vision,
+    },
+    LocalModelCatalogEntry {
+        canonical_model: "Qwen/Qwen3.6-35B-A3B",
+        aliases: &["Qwen3.6-35B-A3B", "qwen36-35b-a3b", "qwen36-35b-a3b-ggml"],
+        chat_family: Some(engine::ChatModelFamily::Qwen35),
+        runtime_manifest_slug: Some("qwen3_6_35b_a3b"),
+        auxiliary_manifest_slug: None,
+        runtime: StaticRuntimeConfig {
+            port: 1235,
+            max_seq_len: Some(262_144),
+            max_seqs: 1,
+            max_batch_size: 1,
+        },
+        profile: StaticFamilyProfile {
+            launcher_mode: "chat",
+            arch: None,
+            paged_attn: "auto",
+            pa_cache_type: None,
+            pa_memory_fraction: Some("0.80"),
+            pa_context_len: None,
+            max_seq_len: 262_144,
+            max_batch_size: 1,
+            max_seqs: 1,
+            isq: Some("Q4K"),
+            tensor_parallel_backend: None,
+            disable_nccl: true,
+            target_world_size: None,
+            preferred_gpu_count: Some(4),
         },
         family: engine::LocalModelFamily::Qwen35Vision,
     },
@@ -1608,6 +1639,18 @@ const MODEL_OPS_METADATA_REGISTRY: &[ModelOpsMetadataEntry] = &[
         startup_wait_secs: 1_500,
         default_tokens_per_second: Some(38.0),
         estimated_chat_base_memory_mb: Some(20_500),
+        gpu_short_label: None,
+    },
+    ModelOpsMetadataEntry {
+        canonical_model: "Qwen/Qwen3.6-35B-A3B",
+        process_aliases: &[
+            "Qwen/Qwen3.6-35B-A3B",
+            "Qwen3.6-35B-A3B",
+            "qwen36-35b-a3b-ggml",
+        ],
+        startup_wait_secs: 1_500,
+        default_tokens_per_second: Some(121.0),
+        estimated_chat_base_memory_mb: Some(21_000),
         gpu_short_label: None,
     },
     ModelOpsMetadataEntry {

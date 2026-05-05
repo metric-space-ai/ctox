@@ -397,8 +397,11 @@ pub(crate) fn render_chat_prompt(
     suggested_skill: Option<&str>,
 ) -> String {
     let mut lines = vec![
-        "Latest user turn:".to_string(),
-        format!("content: {}", sanitize_context_message(latest_user_prompt)),
+        "CURRENT REQUEST".to_string(),
+        format!(
+            "- User asked: {}",
+            sanitize_context_message(latest_user_prompt)
+        ),
         String::new(),
         runtime_blocks.verified_evidence.clone(),
         String::new(),
@@ -422,7 +425,7 @@ pub(crate) fn render_chat_prompt(
         String::new(),
         context_health::render_prompt_block(health),
         String::new(),
-        "Conversation:".to_string(),
+        "RECENT CONVERSATION EVIDENCE".to_string(),
     ];
     if let Some(skill_block) = render_skill_dispatch_block(suggested_skill) {
         lines.splice(3..3, [skill_block, String::new()]);
@@ -500,17 +503,20 @@ fn render_execution_contract_block(
     anchors_block: &str,
     workflow_state_block: &str,
 ) -> String {
-    let mut lines = vec!["What to do this turn:".to_string()];
+    let mut lines = vec![
+        "EXECUTION CONTRACT".to_string(),
+        "- Treat this block as the plain-language exit gate for the current turn.".to_string(),
+    ];
     if let Some(goal) = continuity_named_value(focus_block, &["goal", "mission", "main task"]) {
-        lines.push(format!("- Task: {goal}"));
+        lines.push(format!("- Current task: {goal}"));
     }
     if let Some(done_gate) =
         continuity_named_value(focus_block, &["done_gate", "done gate", "finish rule"])
     {
-        lines.push(format!("- Finish only when: {done_gate}"));
+        lines.push(format!("- You may finish only when: {done_gate}"));
     } else {
         lines.push(
-            "- Finish only when: the required files are correct and the runtime state is correct"
+            "- You may finish only when: required durable artifacts exist and verification has actually been run"
                 .to_string(),
         );
     }
@@ -521,20 +527,24 @@ fn render_execution_contract_block(
     }
     if let Some(workspace_root) = continuity_named_value(anchors_block, &["workspace_root"]) {
         lines.push(format!(
-            "- Only files under {workspace_root} count for this turn"
+            "- Files count only if they are under this workspace: {workspace_root}"
         ));
     }
     if workflow_state_has_open_runtime_work(workflow_state_block) {
         lines.push(
-            "- Open CTOX work already exists below. Keep it accurate. Do not replace it with a sentence in the reply or a note file."
+            "- Open runtime work already exists below. Keep that state accurate; do not replace it with prose in your reply."
                 .to_string(),
         );
     } else {
         lines.push(
-            "- If work remains after this turn, create exactly one open CTOX plan or queue item before you finish. A reply or file note does not count as open work."
+            "- If work remains, create exactly one open CTOX plan, queue item, self-work item, follow-up, or schedule before you finish."
                 .to_string(),
         );
     }
+    lines.push(
+        "- If a required artifact or verification is missing, say what is missing and continue or persist the next work item; do not claim completion."
+            .to_string(),
+    );
     lines.join("\n")
 }
 

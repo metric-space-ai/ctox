@@ -26,7 +26,7 @@ use crate::persistence;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
-const MIN_SUPPORTED_CHAT_CONTEXT: u32 = 32_768;
+const MIN_SUPPORTED_CHAT_CONTEXT: u32 = 131_072;
 const DEFAULT_CHAT_CONTEXT: u32 = 131_072;
 const MAX_SUPPORTED_CHAT_CONTEXT: u32 = 262_144;
 #[cfg(test)]
@@ -48,12 +48,7 @@ pub enum ChatPreset {
     Performance,
 }
 
-const SUPPORTED_CHAT_CONTEXT_CHOICES: &[(&str, u32)] = &[
-    ("32k", 32_768),
-    ("64k", 65_536),
-    ("128k", 131_072),
-    ("256k", 262_144),
-];
+const SUPPORTED_CHAT_CONTEXT_CHOICES: &[(&str, u32)] = &[("128k", 131_072), ("256k", 262_144)];
 
 pub fn supported_chat_context_choices() -> Vec<&'static str> {
     SUPPORTED_CHAT_CONTEXT_CHOICES
@@ -284,7 +279,7 @@ pub fn resolve_moe_arch_info(canonical_model: &str) -> Option<MoeArchInfo> {
     match canonical_model {
         // Source: https://huggingface.co/Qwen/Qwen3.5-35B-A3B/raw/main/config.json
         // Verified against the engine's `qwen3_5_moe::TextConfig` expectations.
-        "Qwen/Qwen3.5-35B-A3B" => Some(MoeArchInfo {
+        "Qwen/Qwen3.5-35B-A3B" | "Qwen/Qwen3.6-35B-A3B" => Some(MoeArchInfo {
             hidden_size: 2048,
             num_hidden_layers: 40,
             num_experts: 256,
@@ -4272,10 +4267,8 @@ fn estimate_tok_s(
     } else {
         1.0
     };
-    let context_penalty = if context > 65_536 {
+    let context_penalty = if context > DEFAULT_CHAT_CONTEXT {
         0.90
-    } else if context > 32_768 {
-        0.95
     } else {
         1.0
     };
@@ -4790,7 +4783,7 @@ fn inspect_hardware_profile(root: &Path) -> Result<HardwareProfile> {
     ) {
         Ok(output) => output,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(detect_apple_metal_hardware_profile().unwrap_or_else(empty_profile))
+            return Ok(detect_apple_metal_hardware_profile().unwrap_or_else(empty_profile));
         }
         Err(err) => return Err(err).context("failed to run nvidia-smi for hardware planner"),
     };
@@ -6016,7 +6009,7 @@ fn default_nemotron_cascade2_manifest() -> model_manifest::RuntimeModelManifest 
                     1,
                     1,
                     1000,
-                    Some(65_536),
+                    Some(131_072),
                     MIN_SUPPORTED_CHAT_CONTEXT,
                     768,
                 ),
@@ -6026,7 +6019,7 @@ fn default_nemotron_cascade2_manifest() -> model_manifest::RuntimeModelManifest 
                     1,
                     1,
                     1000,
-                    Some(65_536),
+                    Some(131_072),
                     MIN_SUPPORTED_CHAT_CONTEXT,
                     512,
                 ),
@@ -6036,7 +6029,7 @@ fn default_nemotron_cascade2_manifest() -> model_manifest::RuntimeModelManifest 
                     1,
                     1,
                     1000,
-                    Some(65_536),
+                    Some(131_072),
                     MIN_SUPPORTED_CHAT_CONTEXT,
                     0,
                 ),
@@ -6051,7 +6044,7 @@ fn default_nemotron_cascade2_manifest() -> model_manifest::RuntimeModelManifest 
                     2,
                     2,
                     1000,
-                    Some(32_768),
+                    Some(131_072),
                     MIN_SUPPORTED_CHAT_CONTEXT,
                     512,
                 ),
@@ -6061,7 +6054,7 @@ fn default_nemotron_cascade2_manifest() -> model_manifest::RuntimeModelManifest 
                     1,
                     1,
                     1000,
-                    Some(65_536),
+                    Some(131_072),
                     MIN_SUPPORTED_CHAT_CONTEXT,
                     768,
                 ),
@@ -6114,7 +6107,7 @@ fn default_glm47_flash_manifest() -> model_manifest::RuntimeModelManifest {
                     1,
                     1,
                     1000,
-                    Some(65_536),
+                    Some(131_072),
                     MIN_SUPPORTED_CHAT_CONTEXT,
                     768,
                 ),
@@ -6124,7 +6117,7 @@ fn default_glm47_flash_manifest() -> model_manifest::RuntimeModelManifest {
                     1,
                     1,
                     1000,
-                    Some(65_536),
+                    Some(131_072),
                     MIN_SUPPORTED_CHAT_CONTEXT,
                     768,
                 ),
@@ -6139,7 +6132,7 @@ fn default_glm47_flash_manifest() -> model_manifest::RuntimeModelManifest {
                     1,
                     1,
                     1000,
-                    Some(65_536),
+                    Some(131_072),
                     MIN_SUPPORTED_CHAT_CONTEXT,
                     768,
                 ),
@@ -6149,7 +6142,7 @@ fn default_glm47_flash_manifest() -> model_manifest::RuntimeModelManifest {
                     1,
                     1,
                     1000,
-                    Some(65_536),
+                    Some(131_072),
                     MIN_SUPPORTED_CHAT_CONTEXT,
                     768,
                 ),
@@ -6369,7 +6362,7 @@ fn plan_glm47_flash() -> ModelHarness {
             kv_mb_per_1k_tokens_q4: 275,
             base_toks_per_sec_q4: 48.0,
             repeating_layers: 47,
-            context_cap: 65_536,
+            context_cap: 131_072,
         },
         runtime: ModelRuntimeHarness {
             paged_attn: "auto",
@@ -7168,15 +7161,15 @@ mod tests {
     }
 
     #[test]
-    fn chat_context_parser_accepts_32k_variants() {
-        assert_eq!(parse_chat_context_tokens("32k"), Some(32_768));
-        assert_eq!(parse_chat_context_tokens("32768"), Some(32_768));
-        assert_eq!(
-            supported_chat_context_choices(),
-            vec!["32k", "64k", "128k", "256k"]
-        );
-        assert_eq!(format_chat_context_choice(32_768), "32k");
-        assert_eq!(minimum_supported_chat_context(), 32_768);
+    fn chat_context_parser_accepts_supported_long_context_variants() {
+        assert_eq!(parse_chat_context_tokens("32k"), None);
+        assert_eq!(parse_chat_context_tokens("64k"), None);
+        assert_eq!(parse_chat_context_tokens("32768"), None);
+        assert_eq!(parse_chat_context_tokens("128k"), Some(131_072));
+        assert_eq!(parse_chat_context_tokens("131072"), Some(131_072));
+        assert_eq!(supported_chat_context_choices(), vec!["128k", "256k"]);
+        assert_eq!(format_chat_context_choice(131_072), "128k");
+        assert_eq!(minimum_supported_chat_context(), 131_072);
     }
 
     #[test]
@@ -7594,7 +7587,7 @@ mod tests {
     }
 
     #[test]
-    fn qwen35_35b_a3b_manifest_accepts_32k_floor() {
+    fn qwen35_35b_a3b_manifest_uses_128k_policy_floor() {
         let manifest = default_qwen35_35b_a3b_manifest();
         assert_eq!(
             required_context_floor_for_manifest(&manifest),
@@ -7611,7 +7604,7 @@ mod tests {
     fn qwen35_35b_a3b_targets_requested_context_variants_on_large_hosts() {
         let root = temp_root("qwen35-context-variants");
         write_platform_contract(&root, 4, 81_920, false);
-        for requested_context in [32_768, 65_536, 131_072, 262_144] {
+        for requested_context in [131_072, 262_144] {
             let mut env_map = BTreeMap::new();
             env_map.insert(
                 "CTOX_CHAT_MODEL_MAX_CONTEXT".to_string(),
@@ -7636,7 +7629,7 @@ mod tests {
 
     #[test]
     fn gpt_oss_targets_requested_context_variants_on_large_hosts() {
-        for requested_context in [32_768, 65_536, 131_072] {
+        for requested_context in [131_072, 262_144] {
             let mut env_map = BTreeMap::new();
             env_map.insert(
                 "CTOX_CHAT_MODEL_MAX_CONTEXT".to_string(),
@@ -8670,7 +8663,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&unique);
 
         assert_eq!(result.model, "nvidia/Nemotron-Cascade-2-30B-A3B");
-        assert!(result.max_seq_len >= 65_536, "{result:?}");
+        assert!(result.max_seq_len >= 131_072, "{result:?}");
     }
 
     #[test]
@@ -8757,7 +8750,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&unique);
 
         assert_eq!(result.model, "nvidia/Nemotron-Cascade-2-30B-A3B");
-        assert_eq!(result.max_seq_len, 65_536, "{result:?}");
+        assert_eq!(result.max_seq_len, 131_072, "{result:?}");
         assert_ne!(result.max_seq_len, stale_plan.max_seq_len);
     }
 
@@ -8790,7 +8783,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&unique);
 
         assert_eq!(result.model, "zai-org/GLM-4.7-Flash");
-        assert_eq!(result.max_seq_len, 65_536);
+        assert_eq!(result.max_seq_len, 131_072);
         assert_eq!(result.quantization, "Q4K");
     }
 

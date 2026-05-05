@@ -690,9 +690,12 @@ fn derive_runtime_state(
                     default_api_upstream_base_url_for_provider(&api_provider).to_string()
                 }
             });
-            let configured_context_tokens = env_map
-                .get("CTOX_CHAT_MODEL_MAX_CONTEXT")
-                .and_then(|value| runtime_plan::parse_chat_context_tokens(value));
+            let configured_context_tokens =
+                env_map.get("CTOX_CHAT_MODEL_MAX_CONTEXT").map(|value| {
+                    runtime_plan::parse_chat_context_tokens(value)
+                        .unwrap_or_else(runtime_plan::default_chat_context_tokens)
+                        .max(runtime_plan::default_chat_context_tokens())
+                });
             (
                 active_model,
                 None,
@@ -1161,6 +1164,24 @@ mod tests {
                 .map(|runtime| runtime.port)
         );
         assert_eq!(state.realized_context_tokens, Some(131_072));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn api_runtime_state_clamps_stale_short_context_to_default() {
+        let root = make_temp_root();
+        let mut env_map = BTreeMap::new();
+        env_map.insert("CTOX_CHAT_SOURCE".to_string(), "api".to_string());
+        env_map.insert("CTOX_CHAT_MODEL".to_string(), "gpt-5.4".to_string());
+        env_map.insert(
+            "CTOX_CHAT_MODEL_MAX_CONTEXT".to_string(),
+            "32768".to_string(),
+        );
+
+        let state = sync_runtime_state_from_env_map(&root, &env_map).unwrap();
+
+        assert_eq!(state.source, InferenceSource::Api);
+        assert_eq!(state.configured_context_tokens, Some(131_072));
         std::fs::remove_dir_all(root).unwrap();
     }
 

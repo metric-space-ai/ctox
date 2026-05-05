@@ -2823,6 +2823,11 @@ fn start_prompt_worker(
                 Ok(_) => lcm::AgentOutcome::Success,
                 Err(err) => classify_agent_failure(&err.to_string()),
             };
+            let retryable_runtime_failure = result
+                .as_ref()
+                .err()
+                .map(|err| runtime_error_is_transient_api_failure(&err.to_string()))
+                .unwrap_or(false);
             // F3: when the turn failed, persist a structured outcome with a
             // neutral, non-leaking body. The legacy "Status: `blocked`" /
             // "Status: `deferred`" prose is no longer how downstream
@@ -2847,7 +2852,7 @@ fn start_prompt_worker(
             let mut agent_failure_count_after_turn = 0_i64;
             let mut agent_failure_threshold_hit = false;
             if let Ok(engine) = lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default()) {
-                if agent_outcome.is_agent_failure() {
+                if agent_outcome.is_agent_failure() && !retryable_runtime_failure {
                     match engine.increment_mission_agent_failure_count(conversation_id) {
                         Ok(record) => {
                             agent_failure_count_after_turn = record.agent_failure_count;
@@ -3014,25 +3019,66 @@ fn start_prompt_worker(
                                 Vec::new()
                             }
                         };
+                        if !expected_artifact_refs.is_empty() {
+                            push_event_locked(
+                                &mut shared,
+                                format!(
+                                    "Outcome witness checking {} expected artifact(s), {} delivered artifact(s) for {}",
+                                    expected_artifact_refs.len(),
+                                    delivered_artifact_refs.len(),
+                                    job_outcome_entity_id(&job)
+                                ),
+                            );
+                        }
                         let outcome_witness_allowed = matches!(
                             &review_disposition,
                             CompletionReviewDisposition::Approved
                                 | CompletionReviewDisposition::None
                         );
-                        let outcome_witness_error = if terminal_no_send || !outcome_witness_allowed
-                        {
-                            None
-                        } else {
-                            enforce_job_outcome_witness(
+                        let mut outcome_witness_proof_id: Option<String> = None;
+                        let mut outcome_witness_error: Option<String> = None;
+                        if !terminal_no_send && outcome_witness_allowed {
+                            match enforce_job_outcome_witness(
                                 &root,
                                 &job,
-                                expected_artifact_refs,
-                                delivered_artifact_refs,
-                            )
-                            .err()
-                            .map(|err| err.to_string())
-                        };
+                                expected_artifact_refs.clone(),
+                                delivered_artifact_refs.clone(),
+                            ) {
+                                Ok(proof_id) => {
+                                    outcome_witness_proof_id = proof_id;
+                                }
+                                Err(err) => {
+                                    outcome_witness_error = Some(err.to_string());
+                                }
+                            }
+                        }
+                        if !expected_artifact_refs.is_empty() && outcome_witness_error.is_none() {
+                            if let Some(proof_id) = outcome_witness_proof_id.as_deref() {
+                                push_event_locked(
+                                    &mut shared,
+                                    format!(
+                                        "Outcome witness accepted proof {} for {}",
+                                        proof_id,
+                                        job_outcome_entity_id(&job)
+                                    ),
+                                );
+                            } else if !terminal_no_send && outcome_witness_allowed {
+                                outcome_witness_error = Some(format!(
+                                    "Harness invariant violation: {} expected durable outcome artifact(s), but no core transition proof was recorded for {}.",
+                                    expected_artifact_refs.len(),
+                                    job_outcome_entity_id(&job)
+                                ));
+                            }
+                        }
                         if let Some(err) = outcome_witness_error.as_ref() {
+                            push_event_locked(
+                                &mut shared,
+                                format!(
+                                    "Outcome witness rejected {}: {}",
+                                    job_outcome_entity_id(&job),
+                                    clip_text(err, 220)
+                                ),
+                            );
                             should_handle_messages = false;
                             if founder_send_error.is_none() {
                                 founder_send_error =
@@ -3066,6 +3112,35 @@ fn start_prompt_worker(
                                     workspace_root: job.workspace_root.clone(),
                                     ticket_self_work_id: None,
                                     outbound_email: job.outbound_email.clone(),
+                                    outbound_anchor: job.outbound_anchor.clone(),
+                                });
+                            }
+                            if job.ticket_self_work_id.is_none()
+                                && !job.leased_message_keys.is_empty()
+                                && job.outbound_email.is_none()
+                                && !declared_workspace_file_artifacts_for_job(&job).is_empty()
+                                && outcome_witness_rejection_count(&root, &job)
+                                    .map(|count| {
+                                        count < review_checkpoint_requeue_block_threshold()
+                                    })
+                                    .unwrap_or(true)
+                            {
+                                let recovery =
+                                    founder_send_error.as_ref().cloned().unwrap_or_else(|| {
+                                        outcome_witness_recovery_message(&job, &reply, err)
+                                    });
+                                outcome_recovery_prompt = Some(QueuedPrompt {
+                                    prompt: recovery.clone(),
+                                    goal: format!("Complete required artifacts for {}", job.goal),
+                                    preview: clip_text(&recovery, 180),
+                                    source_label: "outcome-witness-recovery".to_string(),
+                                    suggested_skill: job.suggested_skill.clone(),
+                                    leased_message_keys: job.leased_message_keys.clone(),
+                                    leased_ticket_event_keys: job.leased_ticket_event_keys.clone(),
+                                    thread_key: job.thread_key.clone(),
+                                    workspace_root: job.workspace_root.clone(),
+                                    ticket_self_work_id: None,
+                                    outbound_email: None,
                                     outbound_anchor: job.outbound_anchor.clone(),
                                 });
                             }
@@ -3341,20 +3416,38 @@ fn start_prompt_worker(
                                     "The agent run was interrupted and this same work item was left pending for retry without spawning a continuation task. The agent must resume the original task, perform the required action itself, and only finish after the durable outcome exists. Error: {}",
                                     compact_error
                                 );
-                                push_event_locked(
-                                    &mut shared,
-                                    format!(
-                                        "Retryable worker error; kept {} pending instead of spawning a continuation",
-                                        job.leased_message_keys.join(", ")
+                                match requeue_runtime_failed_self_work(&root, work_id, &note) {
+                                    Ok(Some(queued)) => push_event_locked(
+                                        &mut shared,
+                                        format!(
+                                            "Retryable worker error; requeued durable self-work {} via {}",
+                                            work_id, queued.title
+                                        ),
                                     ),
-                                );
-                                let _ = tickets::append_ticket_self_work_note(
-                                    &root,
-                                    work_id,
-                                    &note,
-                                    "ctox-service",
-                                    "internal",
-                                );
+                                    Ok(None) => push_event_locked(
+                                        &mut shared,
+                                        format!(
+                                            "Retryable worker error; kept durable self-work {} queued/pending",
+                                            work_id
+                                        ),
+                                    ),
+                                    Err(requeue_err) => {
+                                        push_event_locked(
+                                            &mut shared,
+                                            format!(
+                                                "Retryable worker error; failed to requeue durable self-work {}: {}",
+                                                work_id, requeue_err
+                                            ),
+                                        );
+                                        let _ = tickets::append_ticket_self_work_note(
+                                            &root,
+                                            work_id,
+                                            &note,
+                                            "ctox-service",
+                                            "internal",
+                                        );
+                                    }
+                                }
                             } else if let Some(title) = &timeout_follow_up_outcome {
                                 let note = format!(
                                     "Execution slice hit the turn time budget. Durable continuation: {}",
@@ -4254,6 +4347,18 @@ fn expected_outcome_artifacts_for_job(job: &QueuedPrompt) -> Vec<ArtifactRef> {
             expected_terminal_state: "accepted".to_string(),
         });
     }
+    for path in declared_workspace_file_artifacts_for_job(job) {
+        if refs.iter().any(|existing| {
+            existing.kind == ArtifactKind::WorkspaceFile && existing.primary_key == path
+        }) {
+            continue;
+        }
+        refs.push(ArtifactRef {
+            kind: ArtifactKind::WorkspaceFile,
+            primary_key: path,
+            expected_terminal_state: "present".to_string(),
+        });
+    }
     refs
 }
 
@@ -4268,6 +4373,12 @@ fn delivered_outcome_artifacts_for_job(
     let conn = channels::open_channel_db(&root.join("runtime/ctox.sqlite3"))?;
     let mut delivered = Vec::new();
     for expected in expected_artifact_refs {
+        if expected.kind == ArtifactKind::WorkspaceFile {
+            if Path::new(&expected.primary_key).is_file() {
+                delivered.push(expected.clone());
+            }
+            continue;
+        }
         if expected.kind != ArtifactKind::OutboundEmail {
             continue;
         }
@@ -4328,6 +4439,158 @@ fn delivered_outcome_artifacts_for_job(
         }
     }
     Ok(delivered)
+}
+
+fn declared_workspace_file_artifacts_for_job(job: &QueuedPrompt) -> Vec<String> {
+    let prompt = job.prompt.as_str();
+    if !prompt_declares_workspace_file_artifact(prompt) {
+        return Vec::new();
+    }
+
+    let mut refs = Vec::new();
+    let mut base_dirs = extract_declared_artifact_base_dirs(prompt);
+    if base_dirs.is_empty() {
+        if let Some(root) = job
+            .workspace_root
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+        {
+            base_dirs.push(root.to_string());
+        }
+    }
+
+    for path in extract_absolute_workspace_file_paths(prompt) {
+        push_unique_string(&mut refs, path);
+    }
+    for name in extract_relative_artifact_file_names(prompt) {
+        for base in &base_dirs {
+            push_unique_string(
+                &mut refs,
+                Path::new(base).join(&name).to_string_lossy().into_owned(),
+            );
+        }
+    }
+    refs
+}
+
+fn prompt_declares_workspace_file_artifact(prompt: &str) -> bool {
+    let lowered = prompt.to_ascii_lowercase();
+    let artifact_words = [
+        "artefakt",
+        "artifact",
+        "datei",
+        "file",
+        "schreiben",
+        "speichern",
+        "initialisieren",
+        "initialise",
+        "initialize",
+        "write",
+        "create",
+        "append",
+    ];
+    artifact_words.iter().any(|word| lowered.contains(word))
+}
+
+fn extract_declared_artifact_base_dirs(prompt: &str) -> Vec<String> {
+    let mut dirs = Vec::new();
+    for line in prompt.lines() {
+        let lowered = line.to_ascii_lowercase();
+        if !(lowered.contains("run_dir")
+            || lowered.contains("workspace")
+            || lowered.contains("arbeitsordner"))
+        {
+            continue;
+        }
+        for path in extract_absolute_paths_from_text(line) {
+            push_unique_string(&mut dirs, path);
+        }
+    }
+    dirs
+}
+
+fn extract_absolute_workspace_file_paths(prompt: &str) -> Vec<String> {
+    extract_absolute_paths_from_text(prompt)
+        .into_iter()
+        .filter(|path| artifact_file_name(path))
+        .collect()
+}
+
+fn extract_absolute_paths_from_text(text: &str) -> Vec<String> {
+    let mut paths = Vec::new();
+    let mut current = String::new();
+    for ch in text.chars().chain(std::iter::once(' ')) {
+        if current.is_empty() {
+            if ch == '/' {
+                current.push(ch);
+            }
+            continue;
+        }
+        if is_path_char(ch) {
+            current.push(ch);
+        } else {
+            let trimmed = current
+                .trim_matches(|c: char| {
+                    matches!(
+                        c,
+                        '"' | '\'' | '`' | ')' | ']' | '}' | '.' | ',' | ';' | ':'
+                    )
+                })
+                .to_string();
+            if !trimmed.is_empty() {
+                push_unique_string(&mut paths, trimmed);
+            }
+            current.clear();
+        }
+    }
+    paths
+}
+
+fn extract_relative_artifact_file_names(prompt: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    for token in prompt.split(|ch: char| !is_relative_artifact_token_char(ch)) {
+        let trimmed =
+            token.trim_matches(|c: char| matches!(c, '"' | '\'' | '`' | ',' | ';' | ':' | '.'));
+        if trimmed.is_empty()
+            || trimmed.starts_with('/')
+            || trimmed.contains("://")
+            || trimmed.contains('$')
+        {
+            continue;
+        }
+        if artifact_file_name(trimmed) {
+            push_unique_string(&mut names, trimmed.to_string());
+        }
+    }
+    names
+}
+
+fn artifact_file_name(path: &str) -> bool {
+    let Some(name) = Path::new(path).file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    let lowered = name.to_ascii_lowercase();
+    [
+        ".md", ".json", ".jsonl", ".txt", ".csv", ".tsv", ".log", ".yaml", ".yml", ".toml",
+        ".sqlite", ".sqlite3",
+    ]
+    .iter()
+    .any(|suffix| lowered.ends_with(suffix))
+}
+
+fn is_path_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || matches!(ch, '/' | '_' | '-' | '.' | ':' | '=')
+}
+
+fn is_relative_artifact_token_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | '/')
+}
+
+fn push_unique_string(values: &mut Vec<String>, value: String) {
+    if !values.iter().any(|existing| existing == &value) {
+        values.push(value);
+    }
 }
 
 fn outcome_thread_artifact_key(thread_key: &str) -> String {
@@ -4400,10 +4663,22 @@ fn enforce_job_outcome_witness(
 }
 
 fn outcome_witness_recovery_message(job: &QueuedPrompt, approved_body: &str, err: &str) -> String {
-    let mut message = format!(
-        "Der Review hat den Entwurf nicht selbst versendet. Die Aufgabe bleibt offen, weil noch kein akzeptiertes Outbound-E-Mail-Artefakt existiert: {}",
-        clip_text(err, 240)
-    );
+    let file_refs = declared_workspace_file_artifacts_for_job(job);
+    let mut message = if !file_refs.is_empty()
+        && job.outbound_email.is_none()
+        && founder_email_reply_message_key(job).is_none()
+        && !is_founder_or_owner_email_job(job)
+    {
+        format!(
+            "Die Aufgabe bleibt offen, weil erwartete dauerhafte Datei-Artefakte fehlen oder nicht nachweisbar sind: {}",
+            clip_text(err, 240)
+        )
+    } else {
+        format!(
+            "Der Review hat den Entwurf nicht selbst versendet. Die Aufgabe bleibt offen, weil noch kein akzeptiertes Outbound-E-Mail-Artefakt existiert: {}",
+            clip_text(err, 240)
+        )
+    };
     if let Some(inbound_key) = founder_email_reply_message_key(job) {
         message.push_str(&format!(
             "\n\nNaechster Schritt fuer den Agent-Run: Sende die freigegebene Antwort selbst mit `ctox channel founder-reply --message-key {}` und exakt dem bereits freigegebenen Mailtext als `--body`. Aendere To, CC, Betreff und Body nicht, sonst passt die Review-Freigabe nicht mehr. Danach pruefe, dass `communication_messages` fuer diesen Mail-Thread eine outbound email mit `status='accepted'` enthaelt.",
@@ -4432,9 +4707,21 @@ fn outcome_witness_recovery_message(job: &QueuedPrompt, approved_body: &str, err
             action.thread_key
         ));
     } else {
-        message.push_str(
-            "\n\nNaechster Schritt fuer den Agent-Run: Fuehre den verlangten reviewed-founder-send selbst aus. Nutze den passenden `ctox channel send --channel email ... --reviewed-founder-send --body <freigegebener Mailtext>` Befehl mit den Empfaengern und dem Betreff aus der Aufgabe. Danach pruefe, dass `communication_messages` eine outbound email mit `status='accepted'` enthaelt.",
-        );
+        if file_refs.is_empty() {
+            message.push_str(
+                "\n\nNaechster Schritt fuer den Agent-Run: Fuehre die verlangte Aktion selbst aus und speichere das Ergebnis als dauerhaftes Artefakt. Danach pruefe das Artefakt explizit, bevor du die Aufgabe als abgeschlossen meldest.",
+            );
+        } else {
+            message.push_str(
+                "\n\nHARNESS FEEDBACK\nProblem: Du hast die Aufgabe als fertig behandelt, aber der Harness konnte die erwarteten Datei-Artefakte nicht finden.\n\nREQUIRED ARTIFACTS\nDiese Pfade muessen als Dateien existieren, bevor du Abschluss behauptest:",
+            );
+            for path in file_refs {
+                message.push_str(&format!("\n- {}", path));
+            }
+            message.push_str(
+                "\n\nNEXT ACTION\n1. Erzeuge oder aktualisiere genau diese Artefakte.\n2. Pruefe jeden Pfad mit `test -f '<pfad>'`.\n3. Wenn ein Artefakt absichtlich leer sein darf, ist Existenz genug; sonst schreibe den geforderten Inhalt hinein.\n4. Antworte erst danach mit einer kurzen Ergebniszusammenfassung.\n\nEXIT GATE\nDu darfst diese Aufgabe erst als erledigt behandeln, wenn alle oben genannten `test -f` Pruefungen erfolgreich sind.",
+            );
+        }
     }
     message
 }
@@ -7136,7 +7423,11 @@ fn runtime_error_is_transient_api_failure(error: &str) -> bool {
         return false;
     }
     let normalized = error.to_ascii_lowercase();
-    normalized.contains("too many requests")
+    normalized.contains("turn completed without assistant message")
+        || normalized.contains("completed without assistant message")
+        || normalized.contains("no assistant message")
+        || normalized.contains("empty assistant message")
+        || normalized.contains("too many requests")
         || normalized.contains("rate limit")
         || normalized.contains("rate_limit")
         || normalized.contains("http 429")
@@ -7731,7 +8022,7 @@ Required outputs:\n\
 - persist the result into canonical CTOX runtime state via `ctox` CLI commands\n\
 - do not write durable claims into `<workspace>/runtime/ctox.sqlite3`\n\
 - if this pass produces a durable finding or design deliverable, record it with `ctox verification claim-set --conversation-id {} --kind design_artifact --status verified --subject <subject> --summary <summary> --evidence <evidence>`\n\
-- a markdown file in the workspace does not count as durable knowledge\n\
+- a markdown file in the workspace does not count as durable state; reusable procedure must be in source-skill, Skillbook, Runbook, or Runbook-Item records\n\
 - leave the implementation pass with concrete, structured guidance for what to build next\n\
 \n\
 Discipline to resolve now: {}\n\
@@ -7999,13 +8290,16 @@ fn merge_metadata_value(target: &mut Value, extra: Value) {
 
 fn render_ticket_self_work_prompt(root: &Path, item: &tickets::TicketSelfWorkItemView) -> String {
     let mut prompt_lines = vec![
-        format!(
-            "Bearbeite das veroeffentlichte CTOX-Self-Work fuer {}.",
-            item.source_system
-        ),
-        format!("Titel: {}", item.title.trim()),
-        format!("Art: {}", item.kind.trim()),
-        format!("Work-ID: {}", item.work_id.trim()),
+        "SELF-WORK TASK".to_string(),
+        format!("- Source system: {}", item.source_system),
+        format!("- Title: {}", item.title.trim()),
+        format!("- Work id: {}", item.work_id.trim()),
+        format!("- Work type: {}", item.kind.trim()),
+        String::new(),
+        "CONTRACT".to_string(),
+        "- Work on this parent task, not on a new unrelated task.".to_string(),
+        "- If review notes are listed below, fix the underlying issue they describe.".to_string(),
+        "- If the work is not finished by the end of the turn, persist exactly one next runtime item.".to_string(),
         String::new(),
         item.body_text.trim().to_string(),
     ];
@@ -8503,6 +8797,30 @@ fn requeue_continue_requested_self_work(
             root,
             work_id,
             &format!("Closed instead of auto-continuing because the work was superseded: {reason}"),
+        );
+        return Ok(None);
+    }
+    queue_ticket_self_work_item(root, &item)
+}
+
+fn requeue_runtime_failed_self_work(
+    root: &Path,
+    work_id: &str,
+    note: &str,
+) -> Result<Option<channels::QueueTaskView>> {
+    let item = tickets::transition_ticket_self_work_item(
+        root,
+        work_id,
+        "queued",
+        "ctox-service",
+        Some(note),
+        "internal",
+    )?;
+    if let Some(reason) = suppress_self_work_reason(root, &item)? {
+        supersede_ticket_self_work_item(
+            root,
+            work_id,
+            &format!("Closed instead of runtime retry because the work was superseded: {reason}"),
         );
         return Ok(None);
     }
@@ -9521,6 +9839,13 @@ fn is_turn_timeout_blocker(value: &str) -> bool {
         || lowered.contains("session timeout")
 }
 
+fn is_compaction_blocker(value: &str) -> bool {
+    let lowered = value.to_ascii_lowercase();
+    lowered.contains("mid-task compaction timeout")
+        || lowered.contains("compaction timeout")
+        || lowered.contains("compact_followup")
+}
+
 /// F3: classify a harness-error string into a structured `AgentOutcome`.
 /// The error text comes from the harness/turn-loop itself (we own its
 /// format), not from free-form prompt content. Keep the matchers narrow
@@ -9528,6 +9853,9 @@ fn is_turn_timeout_blocker(value: &str) -> bool {
 pub(crate) fn classify_agent_failure(error_text: &str) -> lcm::AgentOutcome {
     if is_turn_timeout_blocker(error_text) {
         return lcm::AgentOutcome::TurnTimeout;
+    }
+    if is_compaction_blocker(error_text) {
+        return lcm::AgentOutcome::Aborted;
     }
     let lowered = error_text.to_ascii_lowercase();
     if lowered.contains("cancelled") || lowered.contains("canceled") {
@@ -9546,7 +9874,7 @@ fn render_timeout_continue_prompt(
 ) -> String {
     let summarized_goal = summarize_follow_up_goal(goal);
     let prompt = format!(
-        "Continue the interrupted task from the latest saved state.\n\nCurrent task:\n{}\n\nRuntime stop:\n{}\n\nRequired actions:\n- re-check repo, runtime, queue, progress artifacts, and continuity\n- preserve any work that already landed\n- continue with the next smallest concrete step\n- if more than one turn is still needed, leave exactly one open CTOX plan or queue item before the turn ends\n- a sentence in the reply does not count as open work\n- ask the owner only if the real blocker is external",
+        "HARNESS FEEDBACK\nProblem: The previous turn stopped before the task reached a verified finish.\n\nCURRENT TASK\n{}\n\nSTOP REASON\n{}\n\nREQUIRED ACTIONS\n- Re-check durable runtime state, queue state, progress artifacts, and repository/runtime state before continuing.\n- Preserve work that already exists; do not restart from scratch unless state proves it is necessary.\n- Continue with the next smallest concrete step.\n- If more than one turn is still needed, leave exactly one open CTOX plan, queue item, self-work item, follow-up, or schedule before this turn ends.\n- A sentence in the reply does not count as open work.\n- Ask the owner only if the real blocker is external.\n\nEXIT GATE\nFinish only after the real durable outcome exists, or after exact next work has been persisted in CTOX runtime state.",
         summarized_goal,
         clip_text(blocker.trim(), 220)
     );
@@ -9570,7 +9898,7 @@ fn render_runtime_retry_prompt(job: &QueuedPrompt, error_text: &str) -> String {
         );
     }
     let prompt = format!(
-        "Retry the interrupted task from the latest saved state.\n\nCurrent task:\n{}\n\nRuntime failure:\n{}\n\nRequired actions:\n- {}",
+        "HARNESS FEEDBACK\nProblem: The previous turn was interrupted by a retryable runtime failure. The task is not complete yet.\n\nCURRENT TASK\n{}\n\nRUNTIME FAILURE\n{}\n\nREQUIRED ACTIONS\n- {}\n\nEXIT GATE\nFinish only after the durable outcome exists in runtime state. If the runtime is still unavailable, keep the work pending instead of claiming completion.",
         summarize_follow_up_goal(&job.goal),
         clip_text(error_text.trim(), 220),
         required_actions.join("\n- ")
@@ -13795,6 +14123,20 @@ mod tests {
     }
 
     #[test]
+    fn no_assistant_message_error_is_retryable_runtime_failure() {
+        let error = "turn completed without assistant message";
+        assert_eq!(
+            turn_loop::hard_runtime_blocker_retry_cooldown_secs(error),
+            Some(60)
+        );
+        assert!(runtime_error_is_transient_api_failure(error));
+        assert_eq!(
+            classify_agent_failure(error),
+            crate::lcm::AgentOutcome::ExecutionError
+        );
+    }
+
+    #[test]
     fn runtime_rate_limit_queues_durable_retry_with_outbound_metadata() {
         let root = temp_root("runtime-rate-limit-retry");
         let outbound = channels::FounderOutboundAction {
@@ -13838,8 +14180,10 @@ mod tests {
         assert!(
             tasks[0]
                 .prompt
-                .contains("the agent must run the reviewed send itself"),
-            "retry prompt must make the send responsibility explicit"
+                .contains(
+                    "after review approval, continue only from the exact reviewed-send continuation prompt",
+                ),
+            "retry prompt must keep execution on the agent while preserving review control"
         );
 
         let conn =
@@ -15962,6 +16306,178 @@ Was jetzt zu tun ist:\n\
     }
 
     #[test]
+    fn queue_prompt_declares_required_workspace_file_artifacts() {
+        let job = QueuedPrompt {
+            prompt: "RUN_DIR=\"/tmp/ctox-tb2-run\"\nInitialisiere die Dateien logbook.md, controller.json, results.jsonl und blogpost-notes.md.".to_string(),
+            goal: "bootstrap artifacts".to_string(),
+            preview: "bootstrap artifacts".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: None,
+            leased_message_keys: vec!["queue:tb2-bootstrap".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: None,
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let refs = expected_outcome_artifacts_for_job(&job);
+        let paths = refs
+            .iter()
+            .filter(|artifact| artifact.kind == ArtifactKind::WorkspaceFile)
+            .map(|artifact| artifact.primary_key.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(paths.contains(&"/tmp/ctox-tb2-run/logbook.md"));
+        assert!(paths.contains(&"/tmp/ctox-tb2-run/controller.json"));
+        assert!(paths.contains(&"/tmp/ctox-tb2-run/results.jsonl"));
+        assert!(paths.contains(&"/tmp/ctox-tb2-run/blogpost-notes.md"));
+        assert!(refs
+            .iter()
+            .all(|artifact| artifact.expected_terminal_state == "present"));
+    }
+
+    #[test]
+    fn queue_prompt_declares_smoke_workspace_file_artifact() {
+        let job = QueuedPrompt {
+            prompt: "RUN_DIR=\"/tmp/ctox-smoke\". Initialisiere die Datei required-smoke.json."
+                .to_string(),
+            goal: "smoke artifact".to_string(),
+            preview: "smoke artifact".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: None,
+            leased_message_keys: vec!["queue:smoke-artifact".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: None,
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let refs = expected_outcome_artifacts_for_job(&job);
+        assert!(refs.iter().any(|artifact| {
+            artifact.kind == ArtifactKind::WorkspaceFile
+                && artifact.primary_key == "/tmp/ctox-smoke/required-smoke.json"
+                && artifact.expected_terminal_state == "present"
+        }));
+    }
+
+    #[test]
+    fn outcome_witness_blocks_queue_completion_without_workspace_file_artifact() {
+        let root = temp_root("outcome-witness-missing-workspace-file");
+        let run_dir = root.join("tb2-run");
+        let job = QueuedPrompt {
+            prompt: format!(
+                "RUN_DIR=\"{}\"\nInitialisiere die Dateien logbook.md und controller.json.",
+                run_dir.display()
+            ),
+            goal: "bootstrap artifacts".to_string(),
+            preview: "bootstrap artifacts".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: None,
+            leased_message_keys: vec!["queue:tb2-bootstrap".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: None,
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let err = enforce_job_outcome_witness(
+            &root,
+            &job,
+            expected_outcome_artifacts_for_job(&job),
+            Vec::new(),
+        )
+        .expect_err("missing workspace file artifact must block queue completion");
+
+        assert!(err.to_string().contains("dauerhafte Ergebnis-Artefakt"));
+        let conn = channels::open_channel_db(&root.join("runtime/ctox.sqlite3"))
+            .expect("failed to open channel db");
+        let rejected_count: i64 = conn
+            .query_row(
+                r#"
+                SELECT COUNT(*)
+                FROM ctox_core_transition_proofs
+                WHERE entity_type = 'QueueItem'
+                  AND entity_id = 'queue:tb2-bootstrap'
+                  AND to_state = 'Completed'
+                  AND accepted = 0
+                  AND violation_codes_json LIKE '%WP-Outcome-Missing%'
+                "#,
+                [],
+                |row| row.get(0),
+            )
+            .expect("failed to count rejected outcome proof");
+        assert_eq!(rejected_count, 1);
+    }
+
+    #[test]
+    fn outcome_witness_accepts_present_workspace_file_artifacts() {
+        let root = temp_root("outcome-witness-present-workspace-file");
+        let run_dir = root.join("tb2-run");
+        std::fs::create_dir_all(&run_dir).expect("failed to create run dir");
+        std::fs::write(run_dir.join("logbook.md"), "# log\n").expect("failed to write logbook");
+        std::fs::write(run_dir.join("controller.json"), "{}\n")
+            .expect("failed to write controller");
+        let job = QueuedPrompt {
+            prompt: format!(
+                "RUN_DIR=\"{}\"\nInitialisiere die Dateien logbook.md und controller.json.",
+                run_dir.display()
+            ),
+            goal: "bootstrap artifacts".to_string(),
+            preview: "bootstrap artifacts".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: None,
+            leased_message_keys: vec!["queue:tb2-bootstrap".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: None,
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+        let expected = expected_outcome_artifacts_for_job(&job);
+        let delivered = delivered_outcome_artifacts_for_job(&root, &job, &expected)
+            .expect("failed to read delivered artifacts");
+
+        let proof_id = enforce_job_outcome_witness(&root, &job, expected, delivered)
+            .expect("present file artifacts should satisfy witness")
+            .expect("proof id should be returned");
+
+        assert!(proof_id.starts_with("ctp-"));
+    }
+
+    #[test]
+    fn workspace_file_recovery_prompt_names_missing_paths() {
+        let job = QueuedPrompt {
+            prompt: "RUN_DIR=\"/tmp/ctox-tb2-run\"\nInitialisiere die Dateien logbook.md und controller.json.".to_string(),
+            goal: "bootstrap artifacts".to_string(),
+            preview: "bootstrap artifacts".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: None,
+            leased_message_keys: vec!["queue:tb2-bootstrap".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: None,
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let prompt = outcome_witness_recovery_message(&job, "done", "missing artifact");
+
+        assert!(prompt.contains("Datei-Artefakte fehlen"));
+        assert!(prompt.contains("test -f"));
+        assert!(prompt.contains("/tmp/ctox-tb2-run/logbook.md"));
+        assert!(prompt.contains("/tmp/ctox-tb2-run/controller.json"));
+        assert!(!prompt.contains("reviewed-founder-send"));
+    }
+
+    #[test]
     fn outcome_witness_accepts_delivered_mail_artifact() {
         let root = temp_root("outcome-witness-accepted-delivery");
         let conn = channels::open_channel_db(&root.join("runtime/ctox.sqlite3"))
@@ -16027,6 +16543,43 @@ Was jetzt zu tun ist:\n\
         assert!(proof_id.starts_with("ctp-"));
     }
 
+    #[test]
+    fn outbound_recovery_prompt_gives_agent_exact_reviewed_send_step() {
+        let approved_body =
+            "Hallo Julia,\n\ndas ist der freigegebene Text.\n\nViele Gruesse\nINF Yoda";
+        let job = QueuedPrompt {
+            prompt: "Schreibe eine Mail an Julia.".to_string(),
+            goal: "send mail".to_string(),
+            preview: "send mail".to_string(),
+            source_label: "tui".to_string(),
+            suggested_skill: None,
+            leased_message_keys: Vec::new(),
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("julia-meeting-notetaker-report-20260505".to_string()),
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: Some(channels::FounderOutboundAction {
+                account_key: "email:INF.Yoda@remcapital.de".to_string(),
+                thread_key: "julia-meeting-notetaker-report-20260505".to_string(),
+                subject: "Erste Meeting-Teilnahme als INF Yoda Notetaker".to_string(),
+                to: vec!["j.kienzler@remcapital.de".to_string()],
+                cc: Vec::new(),
+                attachments: Vec::new(),
+            }),
+            outbound_anchor: Some("tui-outbound:test".to_string()),
+        };
+
+        let prompt = outcome_witness_recovery_message(&job, approved_body, "missing artifact");
+
+        assert!(prompt.contains("Die Review-Freigabe"));
+        assert!(prompt.contains("Fuehre keine DB- oder Code-Forensik aus"));
+        assert!(prompt.contains("BODY=$(cat <<'CTOX_REVIEWED_BODY'"));
+        assert!(prompt.contains(approved_body));
+        assert!(prompt.contains("ctox channel send --channel email"));
+        assert!(prompt.contains("--reviewed-founder-send --body \"$BODY\""));
+        assert!(!prompt.contains("<freigegebener Mailtext>"));
+    }
+
     // F3: classify_agent_failure must produce stable, structured outcomes.
     #[test]
     fn classify_agent_failure_recognises_turn_timeout() {
@@ -16052,6 +16605,10 @@ Was jetzt zu tun ist:\n\
         );
         assert_eq!(
             classify_agent_failure("invariant violated, aborted"),
+            crate::lcm::AgentOutcome::Aborted
+        );
+        assert_eq!(
+            classify_agent_failure("mid-task compaction timeout after 120s"),
             crate::lcm::AgentOutcome::Aborted
         );
     }

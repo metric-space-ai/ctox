@@ -38,7 +38,9 @@ pub fn uses_ctox_web_stack() -> bool {
 
 pub fn compact_limit(model: &str, realized_context: usize) -> usize {
     match model {
-        "Qwen/Qwen3.5-35B-A3B" => 1_536.min(realized_context.saturating_sub(256)).max(1_024),
+        "Qwen/Qwen3.5-35B-A3B" | "Qwen/Qwen3.6-35B-A3B" => {
+            1_536.min(realized_context.saturating_sub(256)).max(1_024)
+        }
         _ => ((realized_context as f64) * 3.0 / 4.0).round() as usize,
     }
 }

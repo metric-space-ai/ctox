@@ -4,9 +4,10 @@
 // Compact policy: two-layer compaction control for CTOX sessions.
 //
 // LAYER 1 — Emergency compaction (hard limit)
-//   When the actual per-call input tokens approach the 128K context window
-//   (default: >= 100_000 tokens), compact IMMEDIATELY. This is a safety net
-//   to prevent context overflow. Non-negotiable.
+//   This is only valid for clean-break follow-up compaction. Mid-task
+//   compaction must not fire merely because a turn read a lot of context:
+//   that is exactly what tool-heavy work is supposed to do, and a post-call
+//   token event is too late to prevent the already-sent call from overflowing.
 //
 // LAYER 2 — Adaptive compaction (context-drift signal)
 //   Ratio of model-generated output tokens to tool-loaded input tokens.
@@ -23,6 +24,7 @@ use ctox_protocol::protocol::EventMsg;
 /// immediately. This leaves 25% headroom for the current turn to finish.
 /// Works at any window size (128K, 256K, etc.).
 const DEFAULT_EMERGENCY_FILL_RATIO: f64 = 0.75;
+const DEFAULT_ADAPTIVE_MIN_OUTPUT_TOKENS: i64 = 4_096;
 
 /// How to compact.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,6 +97,9 @@ pub struct CompactPolicy {
     /// Cumulative input tokens loaded from tool results.
     /// Approximated as: total_input - first_call_input (baseline prompt).
     cum_tool_input_tokens: i64,
+    /// Approximate input tokens returned by tools during this turn. This is
+    /// the read side of the adaptive "writes instead of reads" signal.
+    observed_tool_input_tokens: i64,
     /// The input tokens from the very first call (baseline prompt size).
     baseline_input: Option<i64>,
     /// Guard: suppress ALL compact decisions until next TurnComplete.
@@ -113,6 +118,7 @@ impl CompactPolicy {
             last_call_input_tokens: 0,
             cum_output_tokens: 0,
             cum_tool_input_tokens: 0,
+            observed_tool_input_tokens: 0,
             baseline_input: None,
             suppressed_until_turn_end: false,
         }
@@ -177,6 +183,9 @@ impl CompactPolicy {
         match event {
             EventMsg::TokenCount(tc) => {
                 if let Some(info) = tc.info.as_ref() {
+                    if let Some(window) = info.model_context_window.filter(|value| *value > 0) {
+                        self.context_window = window;
+                    }
                     let last_input = info.last_token_usage.input_tokens;
                     self.last_call_input_tokens = last_input;
                     // For the adaptive self-output ratio, count only visible
@@ -204,7 +213,9 @@ impl CompactPolicy {
                     return CompactDecision::Continue;
                 }
                 // Layer 1: Emergency — per-call input approaching window.
-                if self.context_window > 0 {
+                // Mid-task compaction is deliberately excluded. Its adaptive
+                // trigger is output-vs-read drift, not raw input pressure.
+                if self.mode != CompactMode::MidTask && self.context_window > 0 {
                     let fill = (self.last_call_input_tokens as f64) / (self.context_window as f64);
                     if fill >= self.emergency_fill_ratio {
                         return CompactDecision::Compact {
@@ -218,6 +229,37 @@ impl CompactPolicy {
                 }
                 // Layer 2: Adaptive self-output ratio.
                 self.check_self_output_ratio()
+            }
+            EventMsg::ExecCommandEnd(ev) => {
+                let text = if ev.formatted_output.is_empty() {
+                    format!("{}{}", ev.stdout, ev.stderr)
+                } else {
+                    ev.formatted_output.clone()
+                };
+                self.observed_tool_input_tokens = self
+                    .observed_tool_input_tokens
+                    .saturating_add(approx_tokens(&text));
+                CompactDecision::Continue
+            }
+            EventMsg::McpToolCallEnd(ev) => {
+                let text = match &ev.result {
+                    Ok(result) => serde_json::to_string(result).unwrap_or_default(),
+                    Err(err) => err.clone(),
+                };
+                self.observed_tool_input_tokens = self
+                    .observed_tool_input_tokens
+                    .saturating_add(approx_tokens(&text));
+                CompactDecision::Continue
+            }
+            EventMsg::DynamicToolCallResponse(ev) => {
+                let mut text = serde_json::to_string(&ev.content_items).unwrap_or_default();
+                if let Some(err) = &ev.error {
+                    text.push_str(err);
+                }
+                self.observed_tool_input_tokens = self
+                    .observed_tool_input_tokens
+                    .saturating_add(approx_tokens(&text));
+                CompactDecision::Continue
             }
             EventMsg::TurnComplete(_) => {
                 self.turns_since_last_compact = self.turns_since_last_compact.saturating_add(1);
@@ -241,17 +283,21 @@ impl CompactPolicy {
         else {
             return CompactDecision::Continue;
         };
-        if self.last_call_input_tokens <= 0 {
+        if self.cum_output_tokens < DEFAULT_ADAPTIVE_MIN_OUTPUT_TOKENS {
             return CompactDecision::Continue;
         }
-        // Integer arithmetic: (output * 100) / input >= threshold_pct.
+        let read_input_tokens = self
+            .observed_tool_input_tokens
+            .max(self.cum_tool_input_tokens)
+            .max(1);
+        // Integer arithmetic: (output * 100) / read_input >= threshold_pct.
         // No floating point, no ratio conversion, no ambiguity.
-        let actual_pct = ((self.cum_output_tokens * 100) / self.last_call_input_tokens) as u32;
+        let actual_pct = ((self.cum_output_tokens * 100) / read_input_tokens) as u32;
         if actual_pct >= threshold_pct {
             CompactDecision::Compact {
                 reason: CompactReason::SelfOutputRatio {
                     output_tokens: self.cum_output_tokens,
-                    total_context_tokens: self.last_call_input_tokens,
+                    total_context_tokens: read_input_tokens,
                     actual_pct,
                     threshold_pct,
                 },
@@ -279,6 +325,10 @@ impl CompactPolicy {
             CompactDecision::Continue
         }
     }
+}
+
+fn approx_tokens(text: &str) -> i64 {
+    ((text.chars().count() as i64) / 4).max(0)
 }
 
 impl CompactReason {
@@ -348,7 +398,7 @@ mod tests {
 
     #[test]
     fn emergency_fires_at_fill_ratio() {
-        let mut p = CompactPolicy::new(CompactTrigger::Off, CompactMode::MidTask);
+        let mut p = CompactPolicy::new(CompactTrigger::Off, CompactMode::ForcedFollowup);
         // emergency_fill_ratio = 0.75 default. 75% of 131072 = 98304.
         // First call sets baseline (small input → no fire)
         assert_eq!(
@@ -367,7 +417,7 @@ mod tests {
 
     #[test]
     fn emergency_does_not_refire_while_in_flight() {
-        let mut p = CompactPolicy::new(CompactTrigger::Off, CompactMode::MidTask);
+        let mut p = CompactPolicy::new(CompactTrigger::Off, CompactMode::ForcedFollowup);
         p.evaluate(&token_event(10000, 500, 10000, 500, 131072)); // baseline
         let _ = p.evaluate(&token_event(200000, 5000, 100000, 500, 131072)); // fires
         p.note_compacted();
@@ -376,12 +426,43 @@ mod tests {
             p.evaluate(&token_event(210000, 5500, 100000, 500, 131072)),
             CompactDecision::Continue
         );
-        // Drops to 50K → guard clears, no re-fire (below threshold)
+        // Drops to 50K → still suppressed until turn end, so no re-fire.
         assert_eq!(
             p.evaluate(&token_event(260000, 6000, 50000, 500, 131072)),
             CompactDecision::Continue
         );
+        assert!(p.suppressed_until_turn_end);
+        assert_eq!(
+            p.evaluate(&EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: "t".into(),
+                last_agent_message: None,
+            })),
+            CompactDecision::Continue
+        );
         assert!(!p.suppressed_until_turn_end);
+    }
+
+    #[test]
+    fn midtask_does_not_compact_only_because_input_exceeds_fallback_window() {
+        let mut p = CompactPolicy::new(CompactTrigger::Off, CompactMode::MidTask);
+        p.context_window = 32_768;
+
+        assert_eq!(
+            p.evaluate(&token_event(37_404, 300, 37_404, 300, 32_768)),
+            CompactDecision::Continue
+        );
+    }
+
+    #[test]
+    fn emergency_uses_model_reported_context_window_over_settings_fallback() {
+        let mut p = CompactPolicy::new(CompactTrigger::Off, CompactMode::ForcedFollowup);
+        p.context_window = 32_768;
+
+        assert_eq!(
+            p.evaluate(&token_event(37_404, 300, 37_404, 300, 272_000)),
+            CompactDecision::Continue
+        );
+        assert_eq!(p.context_window, 272_000);
     }
 
     #[test]
@@ -403,8 +484,8 @@ mod tests {
             p.evaluate(&token_event(30000, 2000, 20000, 1500, 131072)),
             CompactDecision::Continue
         );
-        // cum_out=5000, call_input=25K → 5000*100/25000=20% >= 15% → FIRE
-        let dec = p.evaluate(&token_event(55000, 5000, 25000, 3000, 131072));
+        // cum_out=5000, read_input=20K → 5000*100/20000=25% >= 15% → FIRE
+        let dec = p.evaluate(&token_event(30000, 5000, 25000, 3000, 131072));
         assert!(matches!(
             dec,
             CompactDecision::Compact {

@@ -21,7 +21,8 @@ pub fn handle_strategy_command(root: &Path, args: &[String]) -> Result<()> {
     match command {
         "show" => {
             let (conversation_id, thread_key) = resolve_scope(args)?;
-            let snapshot = engine.active_strategy_snapshot(conversation_id, thread_key.as_deref())?;
+            let snapshot =
+                engine.active_strategy_snapshot(conversation_id, thread_key.as_deref())?;
             println!("{}", serde_json::to_string_pretty(&snapshot)?);
             Ok(())
         }
@@ -64,9 +65,7 @@ pub fn handle_strategy_command(root: &Path, args: &[String]) -> Result<()> {
             // invocations remain unchanged.
             let status = find_flag_value(args, "--status").unwrap_or("active");
             if !matches!(status, "active" | "proposed") {
-                anyhow::bail!(
-                    "--status must be `active` or `proposed`; got `{status}`"
-                );
+                anyhow::bail!("--status must be `active` or `proposed`; got `{status}`");
             }
             let triggered_by_inbound = find_flag_value(args, "--triggered-by-inbound");
             if let Some(message_key) = triggered_by_inbound {

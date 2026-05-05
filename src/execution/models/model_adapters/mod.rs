@@ -501,9 +501,12 @@ mod tests {
     fn local_exec_policy_keeps_model_specific_compact_limits_in_adapter_layer() {
         let qwen = LocalCodexExecPolicy::resolve("Qwen/Qwen3.5-35B-A3B")
             .expect("qwen local exec policy should resolve");
+        let qwen36 = LocalCodexExecPolicy::resolve("Qwen/Qwen3.6-35B-A3B")
+            .expect("qwen3.6 local exec policy should resolve");
         let glm = LocalCodexExecPolicy::resolve("zai-org/GLM-4.7-Flash")
             .expect("glm local exec policy should resolve");
         assert_eq!(qwen.compact_limit(131_072), 1_536);
+        assert_eq!(qwen36.compact_limit(32_768), 1_536);
         assert_eq!(glm.compact_limit(131_072), 1_280);
     }
 }

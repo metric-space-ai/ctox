@@ -768,6 +768,11 @@ fn runtime_process_matches_local_backend(
     if command.is_empty() || !command.contains(&root.display().to_string()) {
         return false;
     }
+    if let Some(transport) = transport {
+        if command.contains(active_model) && command.contains(&transport.endpoint_string()) {
+            return true;
+        }
+    }
     if !command.contains("ctox-engine") {
         return false;
     }
@@ -1120,7 +1125,12 @@ fn build_selected_runtime_state(
     next_state.requested_model = Some(requested_model.to_string());
     next_state.active_model = Some(requested_model.to_string());
     next_state.local_preset = preset.map(ToOwned::to_owned);
-    next_state.configured_context_tokens = Some(configured_context_tokens);
+    next_state.configured_context_tokens = Some(match source {
+        runtime_state::InferenceSource::Api => {
+            configured_context_tokens.max(runtime_plan::default_chat_context_tokens())
+        }
+        runtime_state::InferenceSource::Local => configured_context_tokens,
+    });
     next_state.boost.active_until_epoch = None;
     next_state.boost.reason = None;
     next_state.adapter_tuning = runtime_state::AdapterRuntimeTuning::default();
@@ -2780,11 +2790,18 @@ mod tests {
             change.next_state.upstream_base_url,
             runtime_state::default_api_upstream_base_url()
         );
+        assert_eq!(change.next_state.configured_context_tokens, Some(131_072));
 
         let persisted = runtime_env::load_runtime_env_map(&root).unwrap();
         assert_eq!(
             persisted.get("CTOX_UPSTREAM_BASE_URL").map(String::as_str),
             Some(runtime_state::default_api_upstream_base_url())
+        );
+        assert_eq!(
+            persisted
+                .get("CTOX_CHAT_MODEL_MAX_CONTEXT")
+                .map(String::as_str),
+            Some("131072")
         );
         assert!(!persisted.contains_key("CTOX_ENGINE_MODEL"));
         assert!(!persisted.contains_key("CTOX_CHAT_RUNTIME_PLAN_ACTIVE"));

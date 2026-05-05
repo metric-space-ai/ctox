@@ -126,7 +126,7 @@ ENGINE / GPU
   ctox doctor                    health check — update available? hints
 
 RUN / EXEC
-  ctox runtime switch <model> <quality|performance> [--context 32k|64k|128k|256k] [--timeout <secs>]
+  ctox runtime switch <model> <quality|performance> [--context 128k|256k] [--timeout <secs>]
   ctox runtime embedding-doctor
   ctox runtime embedding-smoke [--token-id <id>]
   ctox runtime stt-doctor
@@ -305,12 +305,12 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
                 let model = args
                     .get(2)
                     .context(
-                        "usage: ctox runtime switch <model> <quality|performance> [--context 32k|64k|128k|256k] [--timeout <secs>]",
+                        "usage: ctox runtime switch <model> <quality|performance> [--context 128k|256k] [--timeout <secs>]",
                     )?;
                 let preset = args
                     .get(3)
                     .context(
-                        "usage: ctox runtime switch <model> <quality|performance> [--context 32k|64k|128k|256k] [--timeout <secs>]",
+                        "usage: ctox runtime switch <model> <quality|performance> [--context 128k|256k] [--timeout <secs>]",
                     )?;
                 let context = find_flag_value(&args[4..], "--context");
                 let timeout = find_flag_value(&args[4..], "--timeout");
@@ -340,7 +340,7 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
                 Ok(())
             }
             _ => anyhow::bail!(
-                "usage: ctox runtime switch <model> <quality|performance> [--context 32k|64k|128k|256k] [--timeout <secs>] | ctox runtime embedding-doctor | ctox runtime embedding-smoke [--token-id <id>] | ctox runtime stt-doctor | ctox runtime stt-smoke <wav-path> | ctox runtime tts-doctor | ctox runtime tts-smoke [--text <text>]"
+                "usage: ctox runtime switch <model> <quality|performance> [--context 128k|256k] [--timeout <secs>] | ctox runtime embedding-doctor | ctox runtime embedding-smoke [--token-id <id>] | ctox runtime stt-doctor | ctox runtime stt-smoke <wav-path> | ctox runtime tts-doctor | ctox runtime tts-smoke [--text <text>]"
             ),
         },
         Some("boost") => match args.get(1).map(String::as_str) {

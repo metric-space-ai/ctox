@@ -555,7 +555,9 @@ fn render_confirmed_harness_findings_block(root: &Path) -> String {
     if findings.is_empty() {
         return String::new();
     }
-    let mut out = String::from("\nConfirmed harness-mining findings (mitigate or acknowledge before resuming protected work):\n");
+    let mut out = String::from(
+        "\nConfirmed harness-mining findings (mitigate or acknowledge before resuming protected work):\n",
+    );
     for f in &findings {
         let id = f
             .get("finding_id")

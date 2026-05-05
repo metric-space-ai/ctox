@@ -974,6 +974,13 @@ pub fn hard_runtime_blocker_retry_cooldown_secs(content: &str) -> Option<u64> {
     if let Some(secs) = parse_retry_after_seconds(&lower) {
         return Some(secs.clamp(30, 1_800));
     }
+    if lower.contains("turn completed without assistant message")
+        || lower.contains("completed without assistant message")
+        || lower.contains("no assistant message")
+        || lower.contains("empty assistant message")
+    {
+        return Some(60);
+    }
     if lower.contains("too many requests")
         || lower.contains("rate limit")
         || lower.contains("rate_limit")
