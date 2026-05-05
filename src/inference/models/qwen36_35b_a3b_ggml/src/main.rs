@@ -19,6 +19,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::Parser;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
@@ -28,6 +29,29 @@ use tracing::{debug, error, info, warn};
 const MAX_REQUEST_BYTES: usize = 64 * 1024 * 1024;
 const IDLE_TIMEOUT: Duration = Duration::from_secs(900);
 const DEFAULT_MAX_OUTPUT_TOKENS: usize = 2048;
+const QWEN_TOOL_PROTOCOL_INSTRUCTIONS: &str = r#"# Tools
+
+You may call one or more functions to assist with the user query.
+
+You are provided with function signatures within <tools></tools> XML tags:
+<tools>
+{tools}
+</tools>
+
+For each function call, return a JSON object with function name and arguments within <tool_call></tool_call> XML tags:
+<tool_call>
+<function=exec_command>
+<parameter=cmd>
+printf hello
+</parameter>
+</function>
+</tool_call>
+
+Local CTOX requirements:
+- If the next action requires a command, filesystem change, runtime inspection, benchmark run, ticket/state update, or artifact verification, your entire assistant message must be exactly one tool call and no prose.
+- Use the exact tool name from the available tools.
+- Do not use Markdown fences for tool calls.
+- After tool output is returned, either call another tool or give the final answer only when the requested durable result has been verified."#;
 
 #[derive(Parser, Debug, Clone)]
 #[command(
@@ -424,6 +448,10 @@ struct ParsedToolCall {
 }
 
 fn parse_qwen_tool_code(text: &str) -> Option<ParsedToolCall> {
+    if let Some(tool_call) = parse_qwen_xml_tool_call(text) {
+        return Some(tool_call);
+    }
+
     let marker = "<|tool_code_";
     let after_marker = if let Some(marker_pos) = text.find(marker) {
         &text[marker_pos..]
@@ -463,6 +491,33 @@ fn parse_qwen_tool_code(text: &str) -> Option<ParsedToolCall> {
         call_id: format!("call_{suffix}"),
         name: "exec_command".to_string(),
         arguments,
+    })
+}
+
+fn parse_qwen_xml_tool_call(text: &str) -> Option<ParsedToolCall> {
+    let tool_re = Regex::new(r"(?s)<tool_call>\s*(.*?)\s*</tool_call>").ok()?;
+    let fn_re = Regex::new(r"(?s)<function=([A-Za-z0-9_.-]+)>\s*(.*?)\s*</function>").ok()?;
+    let param_re =
+        Regex::new(r"(?s)<parameter=([A-Za-z0-9_.-]+)>\s*(.*?)\s*</parameter>").ok()?;
+    let tool_body = tool_re.captures(text)?.get(1)?.as_str();
+    let fn_caps = fn_re.captures(tool_body)?;
+    let name = fn_caps.get(1)?.as_str().trim().to_string();
+    let params_body = fn_caps.get(2)?.as_str();
+    let mut params = serde_json::Map::new();
+    for caps in param_re.captures_iter(params_body) {
+        let key = caps.get(1)?.as_str().trim();
+        if key.is_empty() {
+            continue;
+        }
+        let value = caps.get(2).map(|m| m.as_str()).unwrap_or("").trim();
+        params.insert(key.to_string(), Value::String(value.to_string()));
+    }
+    let suffix = uuid::Uuid::new_v4().simple().to_string();
+    Some(ParsedToolCall {
+        id: format!("fc_{suffix}"),
+        call_id: format!("call_{suffix}"),
+        name,
+        arguments: Value::Object(params).to_string(),
     })
 }
 
@@ -529,8 +584,9 @@ fn write_prompt_file(prompt: &str) -> Result<PathBuf> {
 
 fn render_chat_prompt(req: &ResponsesCreateRequest) -> String {
     let mut turns = Vec::new();
-    if !req.instructions.trim().is_empty() {
-        turns.push(("system".to_string(), req.instructions.clone()));
+    let system_text = render_system_prompt(req);
+    if !system_text.trim().is_empty() {
+        turns.push(("system".to_string(), system_text));
     }
     for item in &req.input {
         if let Some((role, text)) = input_item_to_turn(item) {
@@ -563,23 +619,135 @@ fn render_chat_prompt(req: &ResponsesCreateRequest) -> String {
     out
 }
 
+fn render_system_prompt(req: &ResponsesCreateRequest) -> String {
+    let mut parts = Vec::new();
+    if !req.instructions.trim().is_empty() {
+        parts.push(req.instructions.trim().to_string());
+    }
+    if !req.tools.is_empty() {
+        parts.push(render_tool_protocol(&req.tools));
+    }
+    parts.join("\n\n")
+}
+
+fn render_tool_protocol(tools: &[Value]) -> String {
+    let mut rendered_tools = Vec::new();
+    for tool in tools {
+        let Some(name) = tool_name(tool) else {
+            continue;
+        };
+        let description = tool_description(tool).unwrap_or_default();
+        let parameters = tool_parameters(tool)
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "{}".to_string());
+        rendered_tools.push(format!(
+            "<function>\n<name>{name}</name>\n<description>{description}</description>\n<parameters>{parameters}</parameters>\n</function>"
+        ));
+    }
+    let tools = if rendered_tools.is_empty() {
+        "<function>\n<name>exec_command</name>\n<parameters>{\"type\":\"object\",\"properties\":{\"cmd\":{\"type\":\"string\"}},\"required\":[\"cmd\"]}</parameters>\n</function>".to_string()
+    } else {
+        rendered_tools.join("\n")
+    };
+    QWEN_TOOL_PROTOCOL_INSTRUCTIONS.replace("{tools}", &tools)
+}
+
+fn tool_name(tool: &Value) -> Option<String> {
+    tool.get("function")
+        .and_then(|function| function.get("name"))
+        .or_else(|| tool.get("name"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn tool_description(tool: &Value) -> Option<String> {
+    tool.get("function")
+        .and_then(|function| function.get("description"))
+        .or_else(|| tool.get("description"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|description| !description.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn tool_parameters(tool: &Value) -> Option<&Value> {
+    tool.get("function")
+        .and_then(|function| function.get("parameters"))
+        .or_else(|| tool.get("parameters"))
+}
+
 fn input_item_to_turn(item: &Value) -> Option<(String, String)> {
     let obj = item.as_object()?;
     let ty = obj.get("type").and_then(Value::as_str).unwrap_or("message");
-    if ty != "message" {
-        return None;
+    match ty {
+        "message" => {
+            let role = obj
+                .get("role")
+                .and_then(Value::as_str)
+                .unwrap_or("user")
+                .to_string();
+            let text = match obj.get("content") {
+                Some(Value::String(s)) => s.clone(),
+                Some(Value::Array(parts)) => flatten_content_parts(parts),
+                _ => String::new(),
+            };
+            Some((role, text))
+        }
+        "function_call" => {
+            let name = obj.get("name").and_then(Value::as_str).unwrap_or_default();
+            let arguments = obj
+                .get("arguments")
+                .and_then(Value::as_str)
+                .unwrap_or("{}");
+            Some(("assistant".to_string(), render_xml_tool_call(name, arguments)))
+        }
+        "function_call_output" => {
+            let output = extract_function_output_text(obj.get("output"));
+            Some((
+                "user".to_string(),
+                format!("<tool_response>\n{}\n</tool_response>", output.trim_end()),
+            ))
+        }
+        _ => None,
     }
-    let role = obj
-        .get("role")
-        .and_then(Value::as_str)
-        .unwrap_or("user")
-        .to_string();
-    let text = match obj.get("content") {
-        Some(Value::String(s)) => s.clone(),
+}
+
+fn render_xml_tool_call(name: &str, raw_arguments: &str) -> String {
+    let arguments = serde_json::from_str::<Value>(raw_arguments)
+        .ok()
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    let mut rendered = String::new();
+    rendered.push_str("<tool_call>\n");
+    rendered.push_str("<function=");
+    rendered.push_str(name.trim());
+    rendered.push_str(">\n");
+    for (key, value) in arguments {
+        rendered.push_str("<parameter=");
+        rendered.push_str(key.trim());
+        rendered.push_str(">\n");
+        let value_text = value
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| value.to_string());
+        rendered.push_str(&value_text);
+        rendered.push_str("\n</parameter>\n");
+    }
+    rendered.push_str("</function>\n</tool_call>");
+    rendered
+}
+
+fn extract_function_output_text(output: Option<&Value>) -> String {
+    match output {
+        Some(Value::String(text)) => text.clone(),
         Some(Value::Array(parts)) => flatten_content_parts(parts),
-        _ => String::new(),
-    };
-    Some((role, text))
+        Some(value) => value.to_string(),
+        None => String::new(),
+    }
 }
 
 fn flatten_content_parts(parts: &[Value]) -> String {
@@ -948,4 +1116,96 @@ async fn write_json_line<T: Serialize, W: AsyncWriteExt + Unpin>(
         .await
         .context("write response frame")?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn test_request() -> ResponsesCreateRequest {
+        ResponsesCreateRequest {
+            model: "Qwen/Qwen3.6-35B-A3B".to_string(),
+            instructions: "System rules".to_string(),
+            input: vec![json!({
+                "type": "message",
+                "role": "user",
+                "content": "Create the artifact."
+            })],
+            tools: vec![json!({
+                "type": "function",
+                "function": {
+                    "name": "exec_command",
+                    "description": "Run a shell command.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"cmd": {"type": "string"}},
+                        "required": ["cmd"]
+                    }
+                }
+            })],
+            tool_choice: "auto".to_string(),
+            parallel_tool_calls: true,
+            reasoning: None,
+            max_output_tokens: None,
+            store: false,
+            stream: true,
+            include: Vec::new(),
+            service_tier: None,
+            prompt_cache_key: None,
+            text: None,
+        }
+    }
+
+    #[test]
+    fn render_prompt_injects_qwen_xml_tool_protocol() {
+        let prompt = render_chat_prompt(&test_request());
+
+        assert!(prompt.contains("# Tools"));
+        assert!(prompt.contains("<name>exec_command</name>"));
+        assert!(prompt.contains("<tool_call>\n<function=exec_command>"));
+        assert!(prompt.contains("<parameter=cmd>\nprintf hello\n</parameter>"));
+        assert!(prompt.contains("/no_think"));
+        assert!(prompt.contains("<think>\n\n</think>"));
+    }
+
+    #[test]
+    fn parses_qwen_xml_tool_call_to_responses_function_call() {
+        let parsed = parse_qwen_tool_code(
+            r#"<tool_call>
+<function=exec_command>
+<parameter=cmd>
+printf CTOX_QWEN_TOOL_OK
+</parameter>
+</function>
+</tool_call>"#,
+        )
+        .unwrap();
+
+        assert_eq!(parsed.name, "exec_command");
+        assert_eq!(
+            parsed.arguments,
+            json!({"cmd":"printf CTOX_QWEN_TOOL_OK"}).to_string()
+        );
+    }
+
+    #[test]
+    fn function_history_renders_as_qwen_xml_and_tool_response() {
+        let call = input_item_to_turn(&json!({
+            "type": "function_call",
+            "name": "exec_command",
+            "arguments": "{\"cmd\":\"pwd\"}"
+        }))
+        .unwrap();
+        assert_eq!(call.0, "assistant");
+        assert!(call.1.contains("<parameter=cmd>\npwd\n</parameter>"));
+
+        let output = input_item_to_turn(&json!({
+            "type": "function_call_output",
+            "output": "ok"
+        }))
+        .unwrap();
+        assert_eq!(output.0, "user");
+        assert_eq!(output.1, "<tool_response>\nok\n</tool_response>");
+    }
 }
