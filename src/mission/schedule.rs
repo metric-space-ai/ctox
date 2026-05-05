@@ -515,19 +515,18 @@ fn spawn_meeting_join(
             "DISPLAY",
             std::env::var("DISPLAY").unwrap_or_else(|_| ":99".to_string()),
         )
-        .env(
-            "XDG_RUNTIME_DIR",
-            std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| {
-                let uid = unsafe { libc::geteuid() };
-                format!("/run/user/{uid}")
-            }),
-        )
         .arg("meeting")
         .arg("join")
         .arg(payload.url.trim())
         .stdin(Stdio::null())
         .stdout(Stdio::from(log_file))
         .stderr(Stdio::from(stderr));
+    if let Some(xdg_runtime_dir) = std::env::var("XDG_RUNTIME_DIR")
+        .ok()
+        .or_else(default_xdg_runtime_dir)
+    {
+        command.env("XDG_RUNTIME_DIR", xdg_runtime_dir);
+    }
     if let Some(bot_name) = payload
         .bot_name
         .as_deref()
@@ -543,6 +542,18 @@ fn spawn_meeting_join(
         )
     })?;
     Ok(child.id())
+}
+
+fn default_xdg_runtime_dir() -> Option<String> {
+    #[cfg(unix)]
+    {
+        let uid = unsafe { libc::geteuid() };
+        Some(format!("/run/user/{uid}"))
+    }
+    #[cfg(not(unix))]
+    {
+        None
+    }
 }
 
 fn render_scheduled_prompt(task: &ScheduledTaskView, scheduled_for: &str) -> String {
