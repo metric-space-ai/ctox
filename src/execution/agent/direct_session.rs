@@ -23,12 +23,12 @@ use ctox_app_server_protocol::{
 };
 use ctox_arg0::Arg0DispatchPaths;
 use ctox_cloud_requirements::cloud_requirements_loader;
-use ctox_core::config::{
-    find_codex_home, load_config_as_toml_with_cli_overrides, ConfigBuilder, ConfigOverrides,
-};
-use ctox_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use ctox_core::AuthManager;
 use ctox_core::ThreadManager;
+use ctox_core::config::{
+    ConfigBuilder, ConfigOverrides, find_codex_home, load_config_as_toml_with_cli_overrides,
+};
+use ctox_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use ctox_feedback::CodexFeedback;
 use ctox_protocol::config_types::SandboxMode;
 use ctox_protocol::protocol::{AskForApproval, EventMsg, SandboxPolicy, SessionSource};
@@ -44,6 +44,24 @@ use crate::secrets;
 
 const OPENAI_AUTH_MODE_KEY: &str = "CTOX_OPENAI_AUTH_MODE";
 const OPENAI_AUTH_MODE_CHATGPT_SUBSCRIPTION: &str = "chatgpt_subscription";
+const CTOX_DIRECT_SESSION_BASE_INSTRUCTIONS: &str = r#"You are an agent working inside CTOX.
+
+Complete a work step only when the required durable outcome exists in CTOX runtime state. A final answer, summary, note file, or statement such as "sent", "done", or "closed" is not evidence by itself.
+
+If the work requires an artifact, verify the artifact before finishing. For outbound email, the required artifact is an outbound email row in CTOX runtime state with status accepted. The Review Gate can approve or reject a draft, but it never sends email for you. After approval, you must run the reviewed send command yourself and verify the accepted outbound row.
+
+If an API, provider, tool, or runtime call fails or is rate-limited, do not claim completion. Retry only when appropriate; otherwise keep the work open with the blocker recorded.
+
+When review feedback is returned, continue the same main work step whenever possible. Do not create review-driven self-work or subtask cascades. Spawn a new task only for a distinct bounded work step, and include a clear parent or thread anchor.
+
+Use plain English in your own reasoning and replies. Do not expose internal source-code labels when a normal phrase is clearer; for example, say "work step" or "agent run" instead of "slice"."#;
+
+fn compose_base_instructions(extra: Option<&str>) -> String {
+    match extra.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(extra) => format!("{CTOX_DIRECT_SESSION_BASE_INSTRUCTIONS}\n\n{extra}"),
+        None => CTOX_DIRECT_SESSION_BASE_INSTRUCTIONS.to_string(),
+    }
+}
 
 fn openai_chatgpt_subscription_auth_enabled(settings: &BTreeMap<String, String>) -> bool {
     settings
@@ -89,6 +107,7 @@ pub(crate) struct PersistentSession {
     policy: CompactPolicy,
     ctx_log: ContextLogger,
     root: PathBuf,
+    base_instructions: String,
 }
 
 impl PersistentSession {
@@ -114,10 +133,12 @@ impl PersistentSession {
             .build()
             .context("failed to start tokio runtime")?;
 
-        let (client, thread_id, cwd, seq, model, model_provider, api_provider) =
-            rt.block_on(async {
-                Self::start_client_and_thread(root, settings, base_instructions).await
-            })?;
+        let composed_base_instructions = compose_base_instructions(base_instructions);
+        let (client, thread_id, cwd, seq, model, model_provider, api_provider) = rt.block_on(
+            async {
+                Self::start_client_and_thread(root, settings, &composed_base_instructions).await
+            },
+        )?;
 
         let mut policy = CompactPolicy::from_settings(
             settings.get("CTOX_COMPACT_TRIGGER").map(String::as_str),
@@ -170,6 +191,7 @@ impl PersistentSession {
             policy,
             ctx_log,
             root: root.to_path_buf(),
+            base_instructions: composed_base_instructions,
         })
     }
 
@@ -194,6 +216,7 @@ impl PersistentSession {
         let api_provider = self.api_provider.clone();
         let prompt = prompt.to_string();
         let root = self.root.clone();
+        let base_instructions = self.base_instructions.clone();
 
         self.ctx_log.log(
             "turn_request",
@@ -214,6 +237,7 @@ impl PersistentSession {
                 api_provider.as_deref(),
                 &root,
                 &prompt,
+                &base_instructions,
                 timeout,
                 &mut self.seq,
                 &mut self.policy,
@@ -235,7 +259,7 @@ impl PersistentSession {
     async fn start_client_and_thread(
         root: &Path,
         settings: &BTreeMap<String, String>,
-        base_instructions: Option<&str>,
+        base_instructions: &str,
     ) -> Result<(
         InProcessAppServerClient,
         String,
@@ -469,7 +493,7 @@ impl PersistentSession {
                     cwd: Some(cwd.to_string_lossy().to_string()),
                     approval_policy: Some(AskForApproval::Never.into()),
                     sandbox: Some(ctox_app_server_protocol::SandboxMode::DangerFullAccess),
-                    base_instructions: base_instructions.map(ToOwned::to_owned),
+                    base_instructions: Some(base_instructions.to_string()),
                     ephemeral: Some(true),
                     ..ThreadStartParams::default()
                 },
@@ -500,6 +524,7 @@ impl PersistentSession {
         api_provider: Option<&str>,
         root: &Path,
         prompt: &str,
+        base_instructions: &str,
         timeout: Option<Duration>,
         seq: &mut RequestIdSeq,
         policy: &mut CompactPolicy,
@@ -517,6 +542,7 @@ impl PersistentSession {
                     cwd: Some(cwd.to_string_lossy().to_string()),
                     approval_policy: Some(AskForApproval::Never.into()),
                     sandbox: Some(ctox_app_server_protocol::SandboxMode::DangerFullAccess),
+                    base_instructions: Some(base_instructions.to_string()),
                     ephemeral: Some(true),
                     ..ThreadStartParams::default()
                 },
@@ -767,6 +793,23 @@ mod tests {
                 "{value}"
             );
         }
+    }
+
+    #[test]
+    fn base_instructions_include_durable_outcome_contract() {
+        let instructions = compose_base_instructions(None);
+        assert!(instructions.contains("required durable outcome exists"));
+        assert!(instructions.contains("Review Gate can approve or reject"));
+        assert!(instructions.contains("it never sends email for you"));
+        assert!(instructions.contains("accepted outbound row"));
+        assert!(instructions.contains("Do not create review-driven self-work"));
+    }
+
+    #[test]
+    fn base_instructions_preserve_extra_review_prompt() {
+        let instructions = compose_base_instructions(Some("Act as the external reviewer."));
+        assert!(instructions.contains("required durable outcome exists"));
+        assert!(instructions.contains("Act as the external reviewer."));
     }
 }
 
