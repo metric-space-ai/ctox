@@ -6,13 +6,21 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ApiTokenUsage {
     pub input_tokens: i64,
     pub cached_input_tokens: i64,
     pub output_tokens: i64,
     pub reasoning_output_tokens: i64,
     pub total_tokens: i64,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ApiCallTelemetry {
+    pub elapsed_ms: Option<i64>,
+    pub turn_elapsed_ms: Option<i64>,
+    pub output_tokens_per_second: Option<f64>,
+    pub total_tokens_per_second: Option<f64>,
 }
 
 impl ApiTokenUsage {
@@ -40,6 +48,11 @@ pub struct ApiCostSummary {
     pub output_tokens: u64,
     pub reasoning_output_tokens: u64,
     pub total_tokens: u64,
+    pub timed_events: u64,
+    pub elapsed_ms: u64,
+    pub max_elapsed_ms: u64,
+    pub output_tokens_per_second: Option<f64>,
+    pub total_tokens_per_second: Option<f64>,
     pub priced_events: u64,
     pub unpriced_events: u64,
     pub total_cost_microusd: i64,
@@ -62,6 +75,11 @@ impl ApiCostSummary {
             output_tokens: 0,
             reasoning_output_tokens: 0,
             total_tokens: 0,
+            timed_events: 0,
+            elapsed_ms: 0,
+            max_elapsed_ms: 0,
+            output_tokens_per_second: None,
+            total_tokens_per_second: None,
             priced_events: 0,
             unpriced_events: 0,
             total_cost_microusd: 0,
@@ -80,6 +98,11 @@ pub struct ApiCostModelSummary {
     pub output_tokens: u64,
     pub reasoning_output_tokens: u64,
     pub total_tokens: u64,
+    pub timed_events: u64,
+    pub elapsed_ms: u64,
+    pub max_elapsed_ms: u64,
+    pub output_tokens_per_second: Option<f64>,
+    pub total_tokens_per_second: Option<f64>,
     pub priced_events: u64,
     pub unpriced_events: u64,
     pub total_cost_microusd: i64,
@@ -95,6 +118,24 @@ pub struct ApiPriceRate {
     pub output_usd_per_million: f64,
     pub effective_from_day: String,
     pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ApiCostHotspot {
+    pub source: String,
+    pub turn_id: Option<String>,
+    pub provider: String,
+    pub model: String,
+    pub events: u64,
+    pub input_tokens: u64,
+    pub cached_input_tokens: u64,
+    pub output_tokens: u64,
+    pub reasoning_output_tokens: u64,
+    pub total_tokens: u64,
+    pub timed_events: u64,
+    pub elapsed_ms: u64,
+    pub max_elapsed_ms: u64,
+    pub output_tokens_per_second: Option<f64>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -120,6 +161,17 @@ pub fn record_api_model_usage(
     turn_id: Option<&str>,
     usage: ApiTokenUsage,
 ) -> Result<()> {
+    record_api_model_usage_with_telemetry(root, provider, model, turn_id, usage, None)
+}
+
+pub fn record_api_model_usage_with_telemetry(
+    root: &Path,
+    provider: &str,
+    model: &str,
+    turn_id: Option<&str>,
+    usage: ApiTokenUsage,
+    telemetry: Option<ApiCallTelemetry>,
+) -> Result<()> {
     if provider.trim().is_empty() || model.trim().is_empty() || usage.is_zero() {
         return Ok(());
     }
@@ -129,13 +181,16 @@ pub fn record_api_model_usage(
     let created_at = now.to_rfc3339();
     let day = now.format("%Y-%m-%d").to_string();
     let provider = normalize_provider(provider);
+    let telemetry = telemetry.unwrap_or_default();
     conn.execute(
         "INSERT INTO api_model_cost_events (
              created_at, day, provider, model, source, turn_id,
              input_tokens, cached_input_tokens, output_tokens,
-             reasoning_output_tokens, total_tokens
+             reasoning_output_tokens, total_tokens,
+             elapsed_ms, turn_elapsed_ms,
+             output_tokens_per_second, total_tokens_per_second
          )
-         VALUES (?1, ?2, ?3, ?4, 'direct_session', ?5, ?6, ?7, ?8, ?9, ?10)",
+         VALUES (?1, ?2, ?3, ?4, 'direct_session', ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
         params![
             created_at,
             day,
@@ -147,6 +202,10 @@ pub fn record_api_model_usage(
             clamp_i64(usage.output_tokens),
             clamp_i64(usage.reasoning_output_tokens),
             clamp_i64(usage.total_tokens),
+            telemetry.elapsed_ms.map(clamp_i64),
+            telemetry.turn_elapsed_ms.map(clamp_i64),
+            telemetry.output_tokens_per_second.filter(|v| v.is_finite()),
+            telemetry.total_tokens_per_second.filter(|v| v.is_finite()),
         ],
     )
     .context("failed to record API model cost event")?;
@@ -194,7 +253,8 @@ pub fn summary_for_range(
     let mut stmt = conn.prepare(
         "SELECT day, provider, model,
                 input_tokens, cached_input_tokens, output_tokens,
-                reasoning_output_tokens, total_tokens
+                reasoning_output_tokens, total_tokens,
+                elapsed_ms, output_tokens_per_second, total_tokens_per_second
          FROM api_model_cost_events
          WHERE day >= ?1 AND day <= ?2
          ORDER BY day, provider, model, id",
@@ -211,6 +271,9 @@ pub fn summary_for_range(
                 reasoning_output_tokens: row.get(6)?,
                 total_tokens: row.get(7)?,
             },
+            row.get::<_, Option<i64>>(8)?,
+            row.get::<_, Option<f64>>(9)?,
+            row.get::<_, Option<f64>>(10)?,
         ))
     })?;
 
@@ -225,7 +288,7 @@ pub fn summary_for_range(
     let mut models = BTreeMap::<String, ()>::new();
 
     for row in rows {
-        let (event_day, provider, model, usage) = row?;
+        let (event_day, provider, model, usage, elapsed_ms, output_tps, total_tps) = row?;
         let provider = normalize_provider(&provider);
         providers.insert(provider.clone(), ());
         models.insert(format!("{provider}/{model}").to_ascii_lowercase(), ());
@@ -239,6 +302,17 @@ pub fn summary_for_range(
             &mut summary.reasoning_output_tokens,
             &mut summary.total_tokens,
             usage,
+        );
+        add_telemetry_to_summary(
+            &mut summary.timed_events,
+            &mut summary.elapsed_ms,
+            &mut summary.max_elapsed_ms,
+            &mut summary.output_tokens_per_second,
+            &mut summary.total_tokens_per_second,
+            usage,
+            elapsed_ms,
+            output_tps,
+            total_tps,
         );
         summary.events += 1;
         match estimate {
@@ -260,6 +334,11 @@ pub fn summary_for_range(
                 output_tokens: 0,
                 reasoning_output_tokens: 0,
                 total_tokens: 0,
+                timed_events: 0,
+                elapsed_ms: 0,
+                max_elapsed_ms: 0,
+                output_tokens_per_second: None,
+                total_tokens_per_second: None,
                 priced_events: 0,
                 unpriced_events: 0,
                 total_cost_microusd: 0,
@@ -272,6 +351,17 @@ pub fn summary_for_range(
             &mut entry.reasoning_output_tokens,
             &mut entry.total_tokens,
             usage,
+        );
+        add_telemetry_to_summary(
+            &mut entry.timed_events,
+            &mut entry.elapsed_ms,
+            &mut entry.max_elapsed_ms,
+            &mut entry.output_tokens_per_second,
+            &mut entry.total_tokens_per_second,
+            usage,
+            elapsed_ms,
+            output_tps,
+            total_tps,
         );
         entry.events += 1;
         match estimate {
@@ -344,6 +434,60 @@ pub fn summaries_for_recent_months(root: &Path, months: usize) -> Result<Vec<Api
         }
     }
     Ok(summaries)
+}
+
+pub fn hotspots_for_day(root: &Path, day: &str, limit: usize) -> Result<Vec<ApiCostHotspot>> {
+    validate_day(day)?;
+    let conn = open_cost_db(root)?;
+    ensure_schema(&conn)?;
+    let mut stmt = conn.prepare(
+        "SELECT source, turn_id, provider, model,
+                COUNT(*) AS events,
+                SUM(input_tokens), SUM(cached_input_tokens), SUM(output_tokens),
+                SUM(reasoning_output_tokens), SUM(total_tokens),
+                COUNT(elapsed_ms), COALESCE(SUM(elapsed_ms), 0), COALESCE(MAX(elapsed_ms), 0),
+                SUM(CASE
+                    WHEN output_tokens_per_second IS NOT NULL AND output_tokens > 0
+                    THEN output_tokens
+                    ELSE 0
+                END),
+                SUM(CASE
+                    WHEN output_tokens_per_second IS NOT NULL AND output_tokens > 0
+                    THEN output_tokens / output_tokens_per_second
+                    ELSE 0
+                END)
+         FROM api_model_cost_events
+         WHERE day = ?1
+         GROUP BY source, turn_id, provider, model
+         ORDER BY SUM(total_tokens) DESC
+         LIMIT ?2",
+    )?;
+    let rows = stmt.query_map(params![day, limit.max(1) as i64], |row| {
+        let output_tokens_for_rate = row.get::<_, Option<f64>>(13)?.unwrap_or(0.0);
+        let output_seconds = row.get::<_, Option<f64>>(14)?.unwrap_or(0.0);
+        Ok(ApiCostHotspot {
+            source: row.get(0)?,
+            turn_id: row.get(1)?,
+            provider: row.get(2)?,
+            model: row.get(3)?,
+            events: row.get::<_, i64>(4)?.max(0) as u64,
+            input_tokens: row.get::<_, Option<i64>>(5)?.unwrap_or(0).max(0) as u64,
+            cached_input_tokens: row.get::<_, Option<i64>>(6)?.unwrap_or(0).max(0) as u64,
+            output_tokens: row.get::<_, Option<i64>>(7)?.unwrap_or(0).max(0) as u64,
+            reasoning_output_tokens: row.get::<_, Option<i64>>(8)?.unwrap_or(0).max(0) as u64,
+            total_tokens: row.get::<_, Option<i64>>(9)?.unwrap_or(0).max(0) as u64,
+            timed_events: row.get::<_, i64>(10)?.max(0) as u64,
+            elapsed_ms: row.get::<_, i64>(11)?.max(0) as u64,
+            max_elapsed_ms: row.get::<_, i64>(12)?.max(0) as u64,
+            output_tokens_per_second: if output_tokens_for_rate > 0.0 && output_seconds > 0.0 {
+                Some(output_tokens_for_rate / output_seconds)
+            } else {
+                None
+            },
+        })
+    })?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .context("failed to list API model cost hotspots")
 }
 
 pub fn list_prices(root: &Path) -> Result<Vec<ApiPriceRate>> {
@@ -505,7 +649,9 @@ pub fn handle_cost_command(root: &Path, args: &[String]) -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&prices)?);
             } else if prices.is_empty() {
                 println!("No API model prices configured.");
-                println!("Set one with: ctox cost set-price --provider <provider> --model <model> --input <usd_per_1m> --output <usd_per_1m> [--cached-input <usd_per_1m>]");
+                println!(
+                    "Set one with: ctox cost set-price --provider <provider> --model <model> --input <usd_per_1m> --output <usd_per_1m> [--cached-input <usd_per_1m>]"
+                );
             } else {
                 for price in prices {
                     println!(
@@ -519,6 +665,43 @@ pub fn handle_cost_command(root: &Path, args: &[String]) -> Result<()> {
                             .map(|value| format!("${value:.6}/1M"))
                             .unwrap_or_else(|| "same-as-input".to_string()),
                         price.output_usd_per_million
+                    );
+                }
+            }
+            Ok(())
+        }
+        Some("hotspots") => {
+            let json = has_flag(args, "--json");
+            let day = find_flag_value(args, "--day").unwrap_or_else(|| today_day());
+            let limit = find_flag_value(args, "--limit")
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(20);
+            let hotspots = hotspots_for_day(root, &day, limit)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&hotspots)?);
+            } else if hotspots.is_empty() {
+                println!("No API model cost events recorded for {day}.");
+            } else {
+                println!("API model token hotspots for {day}:");
+                for hotspot in hotspots {
+                    let turn = hotspot.turn_id.as_deref().unwrap_or("-");
+                    let perf = hotspot
+                        .output_tokens_per_second
+                        .map(|value| format!(", {:.2} out tok/s", value))
+                        .unwrap_or_default();
+                    println!(
+                        "  {} {} source={} turn={}: {} event(s), {} in ({} cached), {} out, {} reasoning, {} total{}",
+                        hotspot.provider,
+                        hotspot.model,
+                        hotspot.source,
+                        turn,
+                        hotspot.events,
+                        hotspot.input_tokens,
+                        hotspot.cached_input_tokens,
+                        hotspot.output_tokens,
+                        hotspot.reasoning_output_tokens,
+                        hotspot.total_tokens,
+                        perf,
                     );
                 }
             }
@@ -538,7 +721,11 @@ pub fn handle_cost_command(root: &Path, args: &[String]) -> Result<()> {
                 .parse::<f64>()
                 .context("failed to parse --output price")?;
             let cached_input = find_flag_value(args, "--cached-input")
-                .map(|value| value.parse::<f64>().context("failed to parse --cached-input price"))
+                .map(|value| {
+                    value
+                        .parse::<f64>()
+                        .context("failed to parse --cached-input price")
+                })
                 .transpose()?;
             let effective_from = find_flag_value(args, "--effective-from");
             set_price_rate(
@@ -559,7 +746,7 @@ pub fn handle_cost_command(root: &Path, args: &[String]) -> Result<()> {
             Ok(())
         }
         _ => anyhow::bail!(
-            "usage:\n  ctox cost today [--day <YYYY-MM-DD>] [--json]\n  ctox cost daily [--days <n>] [--json]\n  ctox cost week [--week <YYYY-Www>] [--json]\n  ctox cost weekly [--weeks <n>] [--json]\n  ctox cost month [--month <YYYY-MM>] [--json]\n  ctox cost monthly [--months <n>] [--json]\n  ctox cost prices [--json]\n  ctox cost set-price --provider <provider> --model <model> --input <usd_per_1m> --output <usd_per_1m> [--cached-input <usd_per_1m>] [--effective-from <YYYY-MM-DD>]"
+            "usage:\n  ctox cost today [--day <YYYY-MM-DD>] [--json]\n  ctox cost daily [--days <n>] [--json]\n  ctox cost week [--week <YYYY-Www>] [--json]\n  ctox cost weekly [--weeks <n>] [--json]\n  ctox cost month [--month <YYYY-MM>] [--json]\n  ctox cost monthly [--months <n>] [--json]\n  ctox cost hotspots [--day <YYYY-MM-DD>] [--limit <n>] [--json]\n  ctox cost prices [--json]\n  ctox cost set-price --provider <provider> --model <model> --input <usd_per_1m> --output <usd_per_1m> [--cached-input <usd_per_1m>] [--effective-from <YYYY-MM-DD>]"
         ),
     }
 }
@@ -589,8 +776,12 @@ fn print_summary(summary: &ApiCostSummary, json: bool) -> Result<()> {
         );
     }
     for model in &summary.by_model {
+        let perf = model
+            .output_tokens_per_second
+            .map(|value| format!(", {:.2} out tok/s", value))
+            .unwrap_or_default();
         println!(
-            "  {} {}: {} event(s), {} in ({} cached), {} out, {} total, {}{}",
+            "  {} {}: {} event(s), {} in ({} cached), {} out, {} total, {}{}{}",
             model.provider,
             model.model,
             model.events,
@@ -603,7 +794,8 @@ fn print_summary(summary: &ApiCostSummary, json: bool) -> Result<()> {
                 " + unpriced"
             } else {
                 ""
-            }
+            },
+            perf
         );
     }
     Ok(())
@@ -635,6 +827,43 @@ fn add_usage_to_summary(
     *reasoning_output_tokens =
         reasoning_output_tokens.saturating_add(clamp_i64(usage.reasoning_output_tokens) as u64);
     *total_tokens = total_tokens.saturating_add(clamp_i64(usage.total_tokens) as u64);
+}
+
+fn add_telemetry_to_summary(
+    timed_events: &mut u64,
+    elapsed_ms_total: &mut u64,
+    max_elapsed_ms: &mut u64,
+    output_tokens_per_second: &mut Option<f64>,
+    total_tokens_per_second: &mut Option<f64>,
+    usage: ApiTokenUsage,
+    elapsed_ms: Option<i64>,
+    _event_output_tokens_per_second: Option<f64>,
+    _event_total_tokens_per_second: Option<f64>,
+) {
+    let Some(elapsed_ms) = elapsed_ms.map(clamp_i64).filter(|value| *value > 0) else {
+        return;
+    };
+    let previous_elapsed_ms = *elapsed_ms_total;
+    let previous_output_tokens = output_tokens_per_second
+        .map(|rate| rate * previous_elapsed_ms as f64 / 1000.0)
+        .unwrap_or(0.0);
+    let previous_total_tokens = total_tokens_per_second
+        .map(|rate| rate * previous_elapsed_ms as f64 / 1000.0)
+        .unwrap_or(0.0);
+
+    *timed_events += 1;
+    let elapsed_ms = elapsed_ms as u64;
+    *elapsed_ms_total = elapsed_ms_total.saturating_add(elapsed_ms);
+    *max_elapsed_ms = (*max_elapsed_ms).max(elapsed_ms);
+
+    let elapsed_seconds = *elapsed_ms_total as f64 / 1000.0;
+    if elapsed_seconds > 0.0 {
+        *output_tokens_per_second = Some(
+            (previous_output_tokens + clamp_i64(usage.output_tokens) as f64) / elapsed_seconds,
+        );
+        *total_tokens_per_second =
+            Some((previous_total_tokens + clamp_i64(usage.total_tokens) as f64) / elapsed_seconds);
+    }
 }
 
 fn estimate_event_cost(
@@ -722,7 +951,11 @@ fn ensure_schema(conn: &Connection) -> Result<()> {
              cached_input_tokens INTEGER NOT NULL DEFAULT 0,
              output_tokens INTEGER NOT NULL DEFAULT 0,
              reasoning_output_tokens INTEGER NOT NULL DEFAULT 0,
-             total_tokens INTEGER NOT NULL DEFAULT 0
+             total_tokens INTEGER NOT NULL DEFAULT 0,
+             elapsed_ms INTEGER,
+             turn_elapsed_ms INTEGER,
+             output_tokens_per_second REAL,
+             total_tokens_per_second REAL
          );
          CREATE INDEX IF NOT EXISTS idx_api_model_cost_events_day
              ON api_model_cost_events(day);
@@ -740,7 +973,28 @@ fn ensure_schema(conn: &Connection) -> Result<()> {
              PRIMARY KEY(provider, model, effective_from_day)
          );",
     )
-    .context("failed to initialize API model cost schema")
+    .context("failed to initialize API model cost schema")?;
+    ensure_cost_event_column(conn, "elapsed_ms", "INTEGER")?;
+    ensure_cost_event_column(conn, "turn_elapsed_ms", "INTEGER")?;
+    ensure_cost_event_column(conn, "output_tokens_per_second", "REAL")?;
+    ensure_cost_event_column(conn, "total_tokens_per_second", "REAL")?;
+    Ok(())
+}
+
+fn ensure_cost_event_column(conn: &Connection, name: &str, ty: &str) -> Result<()> {
+    let mut stmt = conn.prepare("PRAGMA table_info(api_model_cost_events)")?;
+    let columns = stmt.query_map([], |row| row.get::<_, String>(1))?;
+    for column in columns {
+        if column?.eq_ignore_ascii_case(name) {
+            return Ok(());
+        }
+    }
+    conn.execute(
+        &format!("ALTER TABLE api_model_cost_events ADD COLUMN {name} {ty}"),
+        [],
+    )
+    .with_context(|| format!("failed to add api_model_cost_events.{name}"))?;
+    Ok(())
 }
 
 fn normalize_provider(provider: &str) -> String {
@@ -890,6 +1144,43 @@ mod tests {
         assert_eq!(summary.events, 1);
         assert_eq!(summary.unpriced_events, 1);
         assert_eq!(summary.total_cost_microusd, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn daily_summary_includes_api_perf_telemetry() -> Result<()> {
+        let tmp = TempDir::new()?;
+        record_api_model_usage_with_telemetry(
+            tmp.path(),
+            "openai",
+            "gpt-test",
+            Some("turn-perf"),
+            ApiTokenUsage {
+                input_tokens: 100,
+                cached_input_tokens: 0,
+                output_tokens: 40,
+                reasoning_output_tokens: 10,
+                total_tokens: 140,
+            },
+            Some(ApiCallTelemetry {
+                elapsed_ms: Some(2_000),
+                turn_elapsed_ms: Some(3_000),
+                output_tokens_per_second: Some(20.0),
+                total_tokens_per_second: Some(70.0),
+            }),
+        )?;
+
+        let summary = summary_for_day(tmp.path(), &today_day())?;
+        assert_eq!(summary.timed_events, 1);
+        assert_eq!(summary.elapsed_ms, 2_000);
+        assert_eq!(summary.max_elapsed_ms, 2_000);
+        assert_eq!(summary.output_tokens_per_second, Some(20.0));
+        assert_eq!(summary.total_tokens_per_second, Some(70.0));
+
+        let hotspots = hotspots_for_day(tmp.path(), &today_day(), 10)?;
+        assert_eq!(hotspots.len(), 1);
+        assert_eq!(hotspots[0].turn_id.as_deref(), Some("turn-perf"));
+        assert_eq!(hotspots[0].output_tokens_per_second, Some(20.0));
         Ok(())
     }
 

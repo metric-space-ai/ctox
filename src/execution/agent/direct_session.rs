@@ -19,23 +19,25 @@ use ctox_app_server_client::{
 use ctox_app_server_protocol::{
     ClientRequest, JSONRPCNotification, RequestId, ThreadCompactStartParams,
     ThreadCompactStartResponse, ThreadStartParams, ThreadStartResponse, ThreadUnsubscribeParams,
-    ThreadUnsubscribeResponse, TurnStartParams, TurnStartResponse,
+    ThreadUnsubscribeResponse, TurnInterruptParams, TurnInterruptResponse, TurnStartParams,
+    TurnStartResponse,
 };
 use ctox_arg0::Arg0DispatchPaths;
 use ctox_cloud_requirements::cloud_requirements_loader;
-use ctox_core::AuthManager;
-use ctox_core::ThreadManager;
 use ctox_core::config::{
-    ConfigBuilder, ConfigOverrides, find_codex_home, load_config_as_toml_with_cli_overrides,
+    find_codex_home, load_config_as_toml_with_cli_overrides, ConfigBuilder, ConfigOverrides,
 };
 use ctox_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
+use ctox_core::AuthManager;
+use ctox_core::ThreadManager;
 use ctox_feedback::CodexFeedback;
 use ctox_protocol::config_types::SandboxMode;
+use ctox_protocol::openai_models::ReasoningEffort;
 use ctox_protocol::protocol::{AskForApproval, EventMsg, SandboxPolicy, SessionSource};
 use ctox_protocol::user_input::UserInput;
 use ctox_utils_absolute_path::AbsolutePathBuf;
 
-use crate::api_costs::{self, ApiTokenUsage};
+use crate::api_costs::{self, ApiCallTelemetry, ApiTokenUsage};
 use crate::context::compact::{CompactDecision, CompactMode, CompactPolicy, CompactTrigger};
 use crate::inference::engine;
 use crate::inference::runtime_kernel;
@@ -86,6 +88,47 @@ fn use_openai_chatgpt_subscription_auth(
         && openai_chatgpt_subscription_auth_enabled(settings)
 }
 
+fn direct_session_reasoning_effort(
+    settings: &BTreeMap<String, String>,
+    model: &str,
+    runtime_local_preset: Option<&str>,
+) -> Option<ReasoningEffort> {
+    for key in [
+        "CTOX_CHAT_REASONING_EFFORT",
+        "CTOX_MODEL_REASONING_EFFORT",
+        "CODEX_MODEL_REASONING_EFFORT",
+        "MODEL_REASONING_EFFORT",
+    ] {
+        if let Some(effort) = settings
+            .get(key)
+            .map(String::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .and_then(|value| value.parse::<ReasoningEffort>().ok())
+        {
+            return Some(effort);
+        }
+    }
+
+    let preset = settings
+        .get("CTOX_CHAT_LOCAL_PRESET")
+        .map(String::as_str)
+        .or(runtime_local_preset)
+        .map(str::trim);
+    if preset.is_some_and(|value| value.eq_ignore_ascii_case("performance"))
+        && is_gpt_54_mini_model(model)
+    {
+        return Some(ReasoningEffort::Low);
+    }
+
+    None
+}
+
+fn is_gpt_54_mini_model(model: &str) -> bool {
+    let normalized = model.trim().to_ascii_lowercase();
+    normalized == "gpt-5.4-mini" || normalized.ends_with("/gpt-5.4-mini")
+}
+
 // ---------------------------------------------------------------------------
 // PersistentSession — lives across turns within a mission-turn-loop iteration
 // ---------------------------------------------------------------------------
@@ -104,6 +147,7 @@ pub(crate) struct PersistentSession {
     model: String,
     model_provider: Option<String>,
     api_provider: Option<String>,
+    reasoning_effort: Option<ReasoningEffort>,
     policy: CompactPolicy,
     ctx_log: ContextLogger,
     root: PathBuf,
@@ -134,11 +178,10 @@ impl PersistentSession {
             .context("failed to start tokio runtime")?;
 
         let composed_base_instructions = compose_base_instructions(base_instructions);
-        let (client, thread_id, cwd, seq, model, model_provider, api_provider) = rt.block_on(
-            async {
+        let (client, thread_id, cwd, seq, model, model_provider, api_provider, reasoning_effort) =
+            rt.block_on(async {
                 Self::start_client_and_thread(root, settings, &composed_base_instructions).await
-            },
-        )?;
+            })?;
 
         let mut policy = CompactPolicy::from_settings(
             settings.get("CTOX_COMPACT_TRIGGER").map(String::as_str),
@@ -188,6 +231,7 @@ impl PersistentSession {
             model,
             model_provider,
             api_provider,
+            reasoning_effort,
             policy,
             ctx_log,
             root: root.to_path_buf(),
@@ -214,6 +258,7 @@ impl PersistentSession {
         let model = self.model.clone();
         let model_provider = self.model_provider.clone();
         let api_provider = self.api_provider.clone();
+        let reasoning_effort = self.reasoning_effort;
         let prompt = prompt.to_string();
         let root = self.root.clone();
         let base_instructions = self.base_instructions.clone();
@@ -235,6 +280,7 @@ impl PersistentSession {
                 &model,
                 model_provider.as_deref(),
                 api_provider.as_deref(),
+                reasoning_effort,
                 &root,
                 &prompt,
                 &base_instructions,
@@ -268,8 +314,12 @@ impl PersistentSession {
         String,
         Option<String>,
         Option<String>,
+        Option<ReasoningEffort>,
     )> {
         let resolved_runtime = runtime_kernel::InferenceRuntimeKernel::resolve(root).ok();
+        let runtime_local_preset = resolved_runtime
+            .as_ref()
+            .and_then(|runtime| runtime.state.local_preset.clone());
         let runtime_model = resolved_runtime.as_ref().and_then(|runtime| {
             runtime
                 .state
@@ -284,6 +334,8 @@ impl PersistentSession {
             .cloned()
             .or(runtime_model)
             .unwrap_or_else(|| "gpt-5.4-mini".to_string());
+        let reasoning_effort =
+            direct_session_reasoning_effort(settings, &model, runtime_local_preset.as_deref());
         let runtime_api_provider = resolved_runtime
             .as_ref()
             .filter(|runtime| !runtime.state.source.is_local())
@@ -364,6 +416,12 @@ impl PersistentSession {
         if use_chatgpt_subscription_auth {
             eprintln!(
                 "[ctox direct-session] OpenAI auth mode=chatgpt_subscription; OPENAI_API_KEY ignored and API cost tracking disabled"
+            );
+        }
+        if let Some(effort) = reasoning_effort {
+            eprintln!(
+                "[ctox direct-session] reasoning effort override model={} effort={:?}",
+                model, effort
             );
         }
         let cloud_requirements = cloud_requirements_loader(
@@ -512,6 +570,7 @@ impl PersistentSession {
             model,
             selected_provider_id,
             tracking_api_provider,
+            reasoning_effort,
         ))
     }
 
@@ -522,6 +581,7 @@ impl PersistentSession {
         model: &str,
         model_provider: Option<&str>,
         api_provider: Option<&str>,
+        reasoning_effort: Option<ReasoningEffort>,
         root: &Path,
         prompt: &str,
         base_instructions: &str,
@@ -569,7 +629,7 @@ impl PersistentSession {
                     sandbox_policy: Some(SandboxPolicy::DangerFullAccess.into()),
                     model: None,
                     service_tier: None,
-                    effort: None,
+                    effort: reasoning_effort,
                     summary: None,
                     personality: None,
                     output_schema: None,
@@ -583,6 +643,9 @@ impl PersistentSession {
         // Event loop
         let mut final_message: Option<String> = None;
         let mut forced_followup_fired = false;
+        let turn_started_at = Instant::now();
+        let mut last_usage_event_at = turn_started_at;
+        let mut last_recorded_cumulative_usage: Option<ApiTokenUsage> = None;
         let deadline = timeout.map(|d| tokio::time::Instant::now() + d);
 
         loop {
@@ -590,6 +653,15 @@ impl PersistentSession {
                 Some(d) => tokio::select! {
                     ev = client.next_event() => ev,
                     _ = tokio::time::sleep_until(d) => {
+                        let _ = client.request_typed::<TurnInterruptResponse>(
+                            ClientRequest::TurnInterrupt {
+                                request_id: seq.next(),
+                                params: TurnInterruptParams {
+                                    thread_id: thread_id.to_string(),
+                                    turn_id: turn_id.to_string(),
+                                },
+                            },
+                        ).await;
                         anyhow::bail!("direct session timeout after {:?}", timeout.unwrap());
                     }
                 },
@@ -605,7 +677,26 @@ impl PersistentSession {
                         if let (Some(provider), EventMsg::TokenCount(tc)) = (api_provider, &msg) {
                             if let Some(info) = tc.info.as_ref() {
                                 let usage = &info.last_token_usage;
-                                let result = api_costs::record_api_model_usage(
+                                let cumulative_usage = ApiTokenUsage {
+                                    input_tokens: info.total_token_usage.input_tokens,
+                                    cached_input_tokens: info.total_token_usage.cached_input_tokens,
+                                    output_tokens: info.total_token_usage.output_tokens,
+                                    reasoning_output_tokens: info
+                                        .total_token_usage
+                                        .reasoning_output_tokens,
+                                    total_tokens: info.total_token_usage.total_tokens,
+                                };
+                                if last_recorded_cumulative_usage == Some(cumulative_usage) {
+                                    continue;
+                                }
+                                last_recorded_cumulative_usage = Some(cumulative_usage);
+                                let now = Instant::now();
+                                let elapsed_ms =
+                                    duration_millis_i64(now.duration_since(last_usage_event_at));
+                                let turn_elapsed_ms =
+                                    duration_millis_i64(now.duration_since(turn_started_at));
+                                last_usage_event_at = now;
+                                let result = api_costs::record_api_model_usage_with_telemetry(
                                     root,
                                     provider,
                                     model,
@@ -617,6 +708,18 @@ impl PersistentSession {
                                         reasoning_output_tokens: usage.reasoning_output_tokens,
                                         total_tokens: usage.total_tokens,
                                     },
+                                    Some(ApiCallTelemetry {
+                                        elapsed_ms: Some(elapsed_ms),
+                                        turn_elapsed_ms: Some(turn_elapsed_ms),
+                                        output_tokens_per_second: tokens_per_second(
+                                            usage.output_tokens,
+                                            elapsed_ms,
+                                        ),
+                                        total_tokens_per_second: tokens_per_second(
+                                            usage.total_tokens,
+                                            elapsed_ms,
+                                        ),
+                                    }),
                                 );
                                 if let Err(err) = result {
                                     eprintln!("[ctox direct-session] cost tracking failed: {err}");
@@ -811,6 +914,59 @@ mod tests {
         assert!(instructions.contains("required durable outcome exists"));
         assert!(instructions.contains("Act as the external reviewer."));
     }
+
+    #[test]
+    fn performance_preset_sets_low_reasoning_for_gpt_54_mini() {
+        let mut settings = BTreeMap::new();
+        settings.insert(
+            "CTOX_CHAT_LOCAL_PRESET".to_string(),
+            "Performance".to_string(),
+        );
+
+        assert_eq!(
+            direct_session_reasoning_effort(&settings, "gpt-5.4-mini", None),
+            Some(ReasoningEffort::Low)
+        );
+    }
+
+    #[test]
+    fn explicit_reasoning_effort_overrides_performance_default() {
+        let mut settings = BTreeMap::new();
+        settings.insert(
+            "CTOX_CHAT_LOCAL_PRESET".to_string(),
+            "Performance".to_string(),
+        );
+        settings.insert(
+            "CTOX_CHAT_REASONING_EFFORT".to_string(),
+            "minimal".to_string(),
+        );
+
+        assert_eq!(
+            direct_session_reasoning_effort(&settings, "gpt-5.4-mini", None),
+            Some(ReasoningEffort::Minimal)
+        );
+    }
+
+    #[test]
+    fn runtime_performance_preset_sets_low_reasoning_for_provider_prefixed_model() {
+        let settings = BTreeMap::new();
+
+        assert_eq!(
+            direct_session_reasoning_effort(&settings, "openai/gpt-5.4-mini", Some("performance")),
+            Some(ReasoningEffort::Low)
+        );
+    }
+
+    #[test]
+    fn quality_preset_does_not_force_low_reasoning() {
+        let mut settings = BTreeMap::new();
+        settings.insert("CTOX_CHAT_LOCAL_PRESET".to_string(), "Quality".to_string());
+
+        assert_eq!(
+            direct_session_reasoning_effort(&settings, "gpt-5.4-mini", None),
+            None
+        );
+    }
 }
 
 impl Drop for PersistentSession {
@@ -872,6 +1028,17 @@ fn try_extract_event_msg(notif: &JSONRPCNotification) -> Option<EventMsg> {
         map.insert("type".to_string(), serde_json::Value::String(method));
     }
     serde_json::from_value(payload).ok()
+}
+
+fn duration_millis_i64(duration: Duration) -> i64 {
+    duration.as_millis().min(i64::MAX as u128) as i64
+}
+
+fn tokens_per_second(tokens: i64, elapsed_ms: i64) -> Option<f64> {
+    if tokens <= 0 || elapsed_ms <= 0 {
+        return None;
+    }
+    Some(tokens as f64 / (elapsed_ms as f64 / 1000.0))
 }
 
 // ---------------------------------------------------------------------------

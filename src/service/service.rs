@@ -569,6 +569,8 @@ const REVIEW_REWRITE_SOURCE_LABEL: &str = "review-rewrite";
 /// Overridable via the `CTOX_MISSION_REWRITE_FAILURE_THRESHOLD` env var.
 const DEFAULT_REWRITE_FAILURE_THRESHOLD: i64 = 1;
 const MAX_REWRITE_FAILURE_THRESHOLD: i64 = 10;
+const DEFAULT_AGENT_FAILURE_THRESHOLD: i64 = 2;
+const MAX_AGENT_FAILURE_THRESHOLD: i64 = 6;
 
 fn completion_review_disposition_label(disposition: &CompletionReviewDisposition) -> &'static str {
     match disposition {
@@ -2785,9 +2787,52 @@ fn start_prompt_worker(
             // agent-failure counter. Successful turns reset the counter;
             // non-success outcomes increment it for status and explicit
             // mission-governance decisions.
+            let mut agent_failure_count_after_turn = 0_i64;
+            let mut agent_failure_threshold_hit = false;
             if let Ok(engine) = lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default()) {
                 if agent_outcome.is_agent_failure() {
-                    let _ = engine.increment_mission_agent_failure_count(conversation_id);
+                    match engine.increment_mission_agent_failure_count(conversation_id) {
+                        Ok(record) => {
+                            agent_failure_count_after_turn = record.agent_failure_count;
+                            let threshold = mission_agent_failure_threshold();
+                            if record.agent_failure_count >= threshold {
+                                agent_failure_threshold_hit = true;
+                                let _ = engine.defer_mission_for_reason(
+                                    conversation_id,
+                                    "agent_failure_threshold",
+                                );
+                                let _ = governance::record_event(
+                                    &root,
+                                    governance::GovernanceEventRequest {
+                                        mechanism_id: "agent_failure_threshold",
+                                        conversation_id: Some(conversation_id),
+                                        severity: "error",
+                                        reason: "agent turns repeatedly failed or timed out",
+                                        action_taken:
+                                            "deferred mission and stopped automatic retry loop",
+                                        details: serde_json::json!({
+                                            "agent_outcome": agent_outcome.as_str(),
+                                            "agent_failure_count": record.agent_failure_count,
+                                            "threshold": threshold,
+                                            "thread_key": job.thread_key.clone(),
+                                            "source_label": job.source_label.clone(),
+                                        }),
+                                        idempotence_key: Some(&format!(
+                                            "agent-failure-threshold:{}:{}",
+                                            conversation_id, record.agent_failure_count
+                                        )),
+                                    },
+                                );
+                            }
+                        }
+                        Err(err) => push_event(
+                            &state,
+                            format!(
+                                "agent_failure_count bump failed for conversation {}: {}",
+                                conversation_id, err
+                            ),
+                        ),
+                    }
                 } else {
                     let _ = engine.reset_mission_agent_failure_count(conversation_id);
                 }
@@ -3174,21 +3219,36 @@ fn start_prompt_worker(
                             founder_email_worker_error_is_retryable(&job, &err_text);
                         let retry_runtime_message =
                             runtime_error_is_transient_api_failure(&err_text);
-                        let retry_worker_message = retry_founder_message || retry_runtime_message;
-                        let runtime_retry_not_before =
-                            retry_runtime_message.then(|| runtime_retry_not_before_iso(&err_text));
+                        let timeout_worker_message =
+                            matches!(agent_outcome, lcm::AgentOutcome::TurnTimeout);
+                        let retry_worker_message = retry_founder_message
+                            || retry_runtime_message
+                            || timeout_worker_message;
+                        let retry_not_before = if retry_runtime_message {
+                            Some(runtime_retry_not_before_iso(&err_text))
+                        } else if timeout_worker_message && !agent_failure_threshold_hit {
+                            Some(timeout_retry_not_before_iso(agent_failure_count_after_turn))
+                        } else {
+                            None
+                        };
                         if !job.leased_message_keys.is_empty() {
-                            let route_status = if retry_worker_message {
+                            let route_status = if agent_failure_threshold_hit {
+                                "blocked"
+                            } else if retry_worker_message {
                                 "pending"
                             } else {
                                 "failed"
                             };
-                            if let Some(not_before) = runtime_retry_not_before.as_deref() {
+                            if let Some(not_before) = retry_not_before.as_deref() {
                                 let _ = channels::defer_messages_until(
                                     &root,
                                     &job.leased_message_keys,
                                     not_before,
-                                    "retryable runtime/API failure",
+                                    if timeout_worker_message {
+                                        "turn timeout retry backoff"
+                                    } else {
+                                        "retryable runtime/API failure"
+                                    },
                                 );
                             }
                             let _ = channels::ack_leased_messages(
@@ -3208,15 +3268,21 @@ fn start_prompt_worker(
                             failure_reply.as_ref().map(|reply| reply.chars().count());
                         shared.last_error = Some(compact_error.clone());
                         if let Some(work_id) = job.ticket_self_work_id.as_deref() {
-                            if retry_worker_message {
+                            if agent_failure_threshold_hit {
                                 let note = format!(
-                                    "The agent run was interrupted by a retryable runtime error and this work was left pending for retry. The agent must resume the original task, perform the required action itself, and only finish after the durable outcome exists. Error: {}",
+                                    "Execution slice repeatedly failed or timed out. The mission was deferred by the agent-failure threshold and automatic retries were stopped. Last error: {}",
+                                    compact_error
+                                );
+                                block_ticket_self_work_item(&root, work_id, &note);
+                            } else if retry_worker_message {
+                                let note = format!(
+                                    "The agent run was interrupted and this same work item was left pending for retry without spawning a continuation task. The agent must resume the original task, perform the required action itself, and only finish after the durable outcome exists. Error: {}",
                                     compact_error
                                 );
                                 push_event_locked(
                                     &mut shared,
                                     format!(
-                                        "Retryable runtime worker error; kept {} pending instead of failing it",
+                                        "Retryable worker error; kept {} pending instead of spawning a continuation",
                                         job.leased_message_keys.join(", ")
                                     ),
                                 );
@@ -4405,6 +4471,16 @@ fn mission_rewrite_failure_threshold() -> i64 {
             _ => DEFAULT_REWRITE_FAILURE_THRESHOLD,
         },
         Err(_) => DEFAULT_REWRITE_FAILURE_THRESHOLD,
+    }
+}
+
+fn mission_agent_failure_threshold() -> i64 {
+    match std::env::var("CTOX_MISSION_AGENT_FAILURE_THRESHOLD") {
+        Ok(value) => match value.trim().parse::<i64>() {
+            Ok(parsed) if parsed > 0 => parsed.min(MAX_AGENT_FAILURE_THRESHOLD),
+            _ => DEFAULT_AGENT_FAILURE_THRESHOLD,
+        },
+        Err(_) => DEFAULT_AGENT_FAILURE_THRESHOLD,
     }
 }
 
@@ -7879,11 +7955,25 @@ fn recent_ticket_self_work_notes_for_prompt(
     })?;
     let mut notes = rows.collect::<rusqlite::Result<Vec<_>>>()?;
     notes.reverse();
-    Ok(notes
-        .into_iter()
-        .map(|note| clip_text(note.trim(), 420))
-        .filter(|note| !note.is_empty())
-        .collect())
+    let mut rendered = Vec::new();
+    for note in notes {
+        let trimmed = note.trim();
+        if trimmed.is_empty() || is_internal_routing_note(trimmed) {
+            continue;
+        }
+        let clipped = clip_text(trimmed, 280);
+        if !rendered.iter().any(|existing| existing == &clipped) {
+            rendered.push(clipped);
+        }
+    }
+    Ok(rendered)
+}
+
+fn is_internal_routing_note(note: &str) -> bool {
+    let normalized = normalize_token(note);
+    normalized.starts_with("queued for active execution")
+        || normalized.starts_with("execution slice hit the turn time budget")
+        || normalized.contains("durable continuation")
 }
 
 fn task_matches_scope(
@@ -9089,88 +9179,34 @@ fn maybe_enqueue_timeout_continuation(
     if !is_turn_timeout_blocker(blocker) {
         return Ok(None);
     }
-    let thread_key = job
-        .thread_key
-        .clone()
-        .unwrap_or_else(|| default_follow_up_thread_key(&job.goal));
-    let title = format!("Continue {} after timeout", clip_text(&job.goal, 48));
-    let event_key = format!("timeout-continuation:{thread_key}:{title}");
-    if let Some(existing_title) = existing_timeout_continuation(
-        root,
-        &thread_key,
-        job.workspace_root.as_deref(),
-        &job.leased_message_keys,
-        &title,
-    )? {
-        let _ = governance::record_event(
-            root,
-            governance::GovernanceEventRequest {
-                mechanism_id: "turn_timeout_continuation",
-                conversation_id: Some(turn_loop::CHAT_CONVERSATION_ID),
-                severity: "warning",
-                reason: "the previous turn hit the runtime time budget",
-                action_taken: "reused an existing open continuation slice",
-                details: serde_json::json!({
-                    "source_label": job.source_label,
-                    "thread_key": thread_key,
-                    "title": title,
-                    "existing_title": existing_title,
-                    "blocker": clip_text(blocker, 180),
-                }),
-                idempotence_key: Some(&event_key),
-            },
-        );
-        return Ok(Some(format!(
-            "existing continuation reused: {existing_title}"
-        )));
-    }
-    let created = create_self_work_backed_queue_task_ignoring(
-        root,
-        DurableSelfWorkQueueRequest {
-            kind: "timeout-continuation".to_string(),
-            title: title.clone(),
-            prompt: render_timeout_continue_prompt(
-                &job.goal,
-                blocker,
-                job.workspace_root.as_deref(),
-            ),
-            thread_key,
-            workspace_root: job.workspace_root.clone(),
-            priority: "high".to_string(),
-            suggested_skill: job.suggested_skill.clone(),
-            parent_message_key: job.leased_message_keys.first().cloned(),
-            metadata: serde_json::json!({
-                "dedupe_key": format!(
-                    "timeout:{}:{}",
-                    job.thread_key.as_deref().unwrap_or(job.goal.as_str()),
-                    clip_text(&title, 80),
-                ),
-                "origin_source_label": job.source_label,
-                "timeout_continuation": true,
-                "outbound_email": job.outbound_email.clone(),
-                "outbound_anchor": job.outbound_anchor.clone(),
-            }),
-        },
-        &job.leased_message_keys,
-    )?;
     let _ = governance::record_event(
         root,
         governance::GovernanceEventRequest {
             mechanism_id: "turn_timeout_continuation",
             conversation_id: Some(turn_loop::CHAT_CONVERSATION_ID),
-            severity: "warning",
-            reason: "the previous turn hit the runtime time budget",
-            action_taken: "queued a timeout continuation slice",
+            severity: "error",
+            reason: "the agent turn hit the runtime time budget",
+            action_taken:
+                "suppressed timeout continuation spawn; original queue scope must retry or defer",
             details: serde_json::json!({
                 "source_label": job.source_label,
-                "thread_key": created.thread_key.clone(),
-                "title": created.title.clone(),
+                "thread_key": job.thread_key.clone(),
+                "ticket_self_work_id": job.ticket_self_work_id.clone(),
+                "leased_message_keys": job.leased_message_keys.clone(),
                 "blocker": clip_text(blocker, 180),
             }),
-            idempotence_key: Some(&event_key),
+            idempotence_key: Some(&format!(
+                "timeout-continuation-suppressed:{}:{}",
+                job.thread_key.as_deref().unwrap_or(job.goal.as_str()),
+                job.leased_message_keys
+                    .first()
+                    .map(String::as_str)
+                    .or(job.ticket_self_work_id.as_deref())
+                    .unwrap_or(job.goal.as_str()),
+            )),
         },
     );
-    Ok(Some(created.title))
+    Ok(None)
 }
 
 fn maybe_enqueue_runtime_retry_continuation(
@@ -9278,6 +9314,12 @@ fn runtime_retry_not_before_iso(error_text: &str) -> String {
         .unwrap_or(300)
         .clamp(30, 1_800);
     chrono_like_iso(current_epoch_secs().saturating_add(cooldown_secs))
+}
+
+fn timeout_retry_not_before_iso(agent_failure_count: i64) -> String {
+    let exponent = agent_failure_count.saturating_sub(1).clamp(0, 4) as u32;
+    let cooldown_secs = 300_u64.saturating_mul(2_u64.saturating_pow(exponent));
+    chrono_like_iso(current_epoch_secs().saturating_add(cooldown_secs.min(3_600)))
 }
 
 fn is_turn_timeout_blocker(value: &str) -> bool {
@@ -12073,10 +12115,7 @@ mod tests {
             maybe_enqueue_timeout_continuation(&root, &job, "execution timed out after 180s")
                 .expect("timeout continuation should succeed");
 
-        assert_eq!(
-            created.as_deref(),
-            Some("existing continuation reused: spill restore: Deferred documentation review")
-        );
+        assert_eq!(created, None);
         let tasks =
             channels::list_queue_tasks(&root, &["pending".to_string(), "leased".to_string()], 10)
                 .expect("failed to list queue tasks");
@@ -12128,10 +12167,7 @@ mod tests {
             maybe_enqueue_timeout_continuation(&root, &job, "execution timed out after 180s")
                 .expect("timeout continuation should succeed");
 
-        assert_eq!(
-            created.as_deref(),
-            Some("existing continuation reused: spill restore: Restore monitoring follow-up")
-        );
+        assert_eq!(created, None);
         let tasks =
             channels::list_queue_tasks(&root, &["pending".to_string(), "leased".to_string()], 10)
                 .expect("failed to list queue tasks");
@@ -12140,7 +12176,7 @@ mod tests {
     }
 
     #[test]
-    fn timeout_blocker_queues_continuation_and_records_governance_event() {
+    fn timeout_blocker_suppresses_continuation_and_records_governance_event() {
         let root = std::env::temp_dir().join(format!(
             "ctox-timeout-followup-test-{}",
             std::time::SystemTime::now()
@@ -12170,33 +12206,22 @@ mod tests {
             maybe_enqueue_timeout_continuation(&root, &job, "execution timed out after 180s")
                 .expect("timeout continuation should succeed");
 
-        assert!(created.is_some());
+        assert_eq!(created, None);
         let tasks = channels::list_queue_tasks(&root, &["pending".to_string()], 10)
             .expect("failed to list queue tasks");
-        assert_eq!(tasks.len(), 1);
-        assert_eq!(tasks[0].thread_key, "tui/main");
-        assert_eq!(
-            tasks[0].suggested_skill.as_deref(),
-            Some("change-lifecycle")
-        );
-        assert!(tasks[0].title.contains("after timeout"));
-        assert!(tasks[0].prompt.contains("Continue the interrupted task"));
+        assert!(tasks.is_empty());
         let self_work = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
             .expect("failed to list self-work items");
-        assert_eq!(self_work.len(), 1);
-        assert_eq!(self_work[0].kind, "timeout-continuation");
-        assert_eq!(self_work[0].state, "queued");
+        assert!(self_work.is_empty());
         let events = governance::list_recent_events(&root, turn_loop::CHAT_CONVERSATION_ID, 8)
             .expect("failed to list governance events");
-        assert!(
-            events
-                .iter()
-                .any(|event| event.mechanism_id == "turn_timeout_continuation")
-        );
+        assert!(events
+            .iter()
+            .any(|event| event.mechanism_id == "turn_timeout_continuation"));
     }
 
     #[test]
-    fn timeout_continuation_preserves_outbound_send_intent_and_skips_strategy_reroute() {
+    fn timeout_continuation_does_not_spawn_owner_visible_outbound_retry() {
         let root = temp_root("ctox-timeout-outbound-intent");
         let outbound = channels::FounderOutboundAction {
             account_key: "email:cto1@metric-space.ai".to_string(),
@@ -12221,73 +12246,18 @@ mod tests {
             outbound_anchor: Some("tui-outbound:julia-tag-proposal".to_string()),
         };
 
-        maybe_enqueue_timeout_continuation(&root, &job, "direct session timeout after 300s")
-            .expect("timeout continuation should persist outbound intent");
+        let created =
+            maybe_enqueue_timeout_continuation(&root, &job, "direct session timeout after 300s")
+                .expect("timeout continuation should persist outbound intent");
+        assert_eq!(created, None);
 
         let tasks = channels::list_queue_tasks(&root, &["pending".to_string()], 10)
             .expect("failed to list queue tasks");
-        assert_eq!(tasks.len(), 1);
-        assert_eq!(
-            tasks[0].suggested_skill.as_deref(),
-            Some("owner-communication")
-        );
+        assert!(tasks.is_empty());
 
         let self_work = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
             .expect("failed to list self-work items");
-        assert_eq!(self_work.len(), 1);
-        assert_eq!(self_work[0].kind, "timeout-continuation");
-        assert_eq!(
-            metadata_string(&self_work[0].metadata, "outbound_anchor").as_deref(),
-            Some("tui-outbound:julia-tag-proposal")
-        );
-        let self_work_outbound = founder_outbound_action_from_metadata(&self_work[0].metadata)
-            .expect("self-work metadata must retain outbound action");
-        assert_eq!(self_work_outbound.subject, outbound.subject);
-        assert_eq!(self_work_outbound.to, outbound.to);
-
-        let conn =
-            channels::open_channel_db(&root.join("runtime/ctox.sqlite3")).expect("open channel db");
-        let metadata_json: String = conn
-            .query_row(
-                "SELECT metadata_json FROM communication_messages WHERE message_key = ?1",
-                params![tasks[0].message_key],
-                |row| row.get(0),
-            )
-            .expect("queue metadata row exists");
-        let metadata: Value = serde_json::from_str(&metadata_json).expect("queue metadata json");
-        let queued_outbound = founder_outbound_action_from_metadata(&metadata)
-            .expect("queued timeout continuation must retain outbound action");
-        assert_eq!(queued_outbound.subject, outbound.subject);
-        assert_eq!(
-            metadata.get("outbound_anchor").and_then(Value::as_str),
-            Some("tui-outbound:julia-tag-proposal")
-        );
-
-        let state = Arc::new(Mutex::new(SharedState::default()));
-        let queued_job = QueuedPrompt {
-            prompt: tasks[0].prompt.clone(),
-            goal: tasks[0].title.clone(),
-            preview: tasks[0].title.clone(),
-            source_label: "queue".to_string(),
-            suggested_skill: tasks[0].suggested_skill.clone(),
-            leased_message_keys: vec![tasks[0].message_key.clone()],
-            leased_ticket_event_keys: Vec::new(),
-            thread_key: Some(tasks[0].thread_key.clone()),
-            workspace_root: tasks[0].workspace_root.clone(),
-            ticket_self_work_id: ticket_self_work_id_from_metadata(&metadata),
-            outbound_email: Some(queued_outbound),
-            outbound_anchor: metadata_string(&metadata, "outbound_anchor"),
-        };
-
-        let redirected =
-            maybe_redirect_owner_visible_work_to_strategy_setup(&root, &state, &queued_job)
-                .expect("reroute check should succeed");
-        assert!(!redirected);
-
-        let items = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
-            .expect("failed to list self-work after reroute check");
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0].kind, "timeout-continuation");
+        assert!(self_work.is_empty());
     }
 
     #[test]
@@ -12335,19 +12305,43 @@ mod tests {
             maybe_enqueue_timeout_continuation(&root, &job, "direct session timeout after 900s")
                 .expect("timeout continuation should succeed");
 
-        assert!(created
-            .as_deref()
-            .is_some_and(|title| title.contains("after timeout")));
+        assert_eq!(created, None);
         let pending = channels::list_queue_tasks(&root, &["pending".to_string()], 10)
             .expect("failed to list pending queue tasks");
-        assert_eq!(pending.len(), 1);
-        assert_ne!(pending[0].message_key, current.message_key);
-        assert_eq!(pending[0].thread_key, current.thread_key);
-        assert!(pending[0].title.contains("after timeout"));
+        assert!(pending.is_empty());
         let leased = channels::list_queue_tasks(&root, &["leased".to_string()], 10)
             .expect("failed to list leased queue tasks");
         assert_eq!(leased.len(), 1);
         assert_eq!(leased[0].message_key, current.message_key);
+    }
+
+    #[test]
+    fn timeout_blocker_suppresses_recursive_timeout_continuation() {
+        let root = temp_root("ctox-timeout-recursive-continuation");
+        let job = QueuedPrompt {
+            prompt: "Bearbeite das veroeffentlichte CTOX-Self-Work fuer local.\nTitel: Continue send mail after timeout\nArt: timeout-continuation\nWork-ID: self-work:local:loop\n\nContinue the interrupted task."
+                .to_string(),
+            goal: "Continue send mail after timeout".to_string(),
+            preview: "Continue send mail after timeout".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: Some("follow-up-orchestrator".to_string()),
+            leased_message_keys: vec!["queue:system::loop".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("julia-meeting-notetaker-report-20260505".to_string()),
+            workspace_root: None,
+            ticket_self_work_id: Some("self-work:local:loop".to_string()),
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let created =
+            maybe_enqueue_timeout_continuation(&root, &job, "direct session timeout after 300s")
+                .expect("recursive timeout suppression should succeed");
+
+        assert_eq!(created, None);
+        let tasks = channels::list_queue_tasks(&root, &["pending".to_string()], 10)
+            .expect("failed to list pending queue tasks");
+        assert!(tasks.is_empty());
     }
 
     #[test]
