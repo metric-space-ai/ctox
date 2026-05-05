@@ -1258,6 +1258,14 @@ build_ctox() {
     cp "$source_root/desktop/target/release/ctox-desktop-host" "$source_root/bin/" 2>/dev/null || true
   fi
 
+  # Qwen3.6 uses a dedicated Rust Unix-socket adapter over the local
+  # llama.cpp/ggml CUDA binary. It is not part of the top-level workspace, so
+  # build it explicitly when the source crate is present.
+  local qwen36_backend_dir="$source_root/src/inference/models/qwen36_35b_a3b_ggml"
+  if [[ -f "$qwen36_backend_dir/Cargo.toml" ]]; then
+    run_build_module "Qwen3.6 ggml backend" "$qwen36_backend_dir" "$cargo" build --release --bin qwen36-35b-a3b-ggml-server
+  fi
+
   # 2. If CUDA features requested, prepare build environment
   if [[ "$ENGINE_FEATURES" == *cuda* ]]; then
     # nvcc needs writable temp space. Use /tmp (the standard location).
