@@ -7,10 +7,12 @@ pub(crate) mod deepseek;
 pub(crate) mod gemma4;
 pub(crate) mod glm47;
 pub(crate) mod gpt_oss;
+pub(crate) mod hy3;
 pub(crate) mod kimi;
 pub(crate) mod minimax;
 pub(crate) mod mistral;
 pub(crate) mod nemotron_cascade2;
+pub(crate) mod openrouter_chat;
 pub(crate) mod qwen35;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,6 +33,7 @@ pub enum ResponsesModelAdapter {
     Mistral,
     Kimi,
     DeepSeek,
+    Hy3,
     Anthropic,
 }
 
@@ -75,6 +78,7 @@ impl ResponsesModelAdapter {
             engine::ChatModelFamily::Mistral => Some(Self::Mistral),
             engine::ChatModelFamily::Kimi => Some(Self::Kimi),
             engine::ChatModelFamily::DeepSeek => Some(Self::DeepSeek),
+            engine::ChatModelFamily::Hy3 => Some(Self::Hy3),
             engine::ChatModelFamily::Anthropic => Some(Self::Anthropic),
         }
     }
@@ -90,6 +94,7 @@ impl ResponsesModelAdapter {
             Self::Mistral => mistral::adapter_id(),
             Self::Kimi => kimi::adapter_id(),
             Self::DeepSeek => deepseek::adapter_id(),
+            Self::Hy3 => hy3::adapter_id(),
             Self::Anthropic => anthropic::adapter_id(),
         }
     }
@@ -105,6 +110,7 @@ impl ResponsesModelAdapter {
             Self::Mistral => mistral::transport_kind(),
             Self::Kimi => kimi::transport_kind(),
             Self::DeepSeek => deepseek::transport_kind(),
+            Self::Hy3 => hy3::transport_kind(),
             Self::Anthropic => anthropic::transport_kind(),
         }
     }
@@ -120,6 +126,7 @@ impl ResponsesModelAdapter {
             Self::Mistral => mistral::upstream_path(),
             Self::Kimi => kimi::upstream_path(),
             Self::DeepSeek => deepseek::upstream_path(),
+            Self::Hy3 => hy3::upstream_path(),
             Self::Anthropic => anthropic::upstream_path(),
         }
     }
@@ -173,6 +180,7 @@ impl ResponsesModelAdapter {
             Self::Mistral => mistral::rewrite_request(raw),
             Self::Kimi => kimi::rewrite_request(raw),
             Self::DeepSeek => deepseek::rewrite_request(raw),
+            Self::Hy3 => hy3::rewrite_request(raw),
             Self::Anthropic => anthropic::rewrite_request(raw),
         }
     }
@@ -215,6 +223,7 @@ impl ResponsesModelAdapter {
             Self::DeepSeek => {
                 deepseek::rewrite_success_response(raw, fallback_model, exact_text_override)
             }
+            Self::Hy3 => hy3::rewrite_success_response(raw, fallback_model, exact_text_override),
             Self::Anthropic => {
                 anthropic::rewrite_success_response(raw, fallback_model, exact_text_override)
             }
@@ -238,6 +247,7 @@ impl ResponsesModelAdapter {
             | Self::Mistral
             | Self::Kimi
             | Self::DeepSeek
+            | Self::Hy3
             | Self::Anthropic => Ok(None),
         }
     }
@@ -262,6 +272,7 @@ pub fn runtime_adapter_tuning_for_local_plan(
         Some(ResponsesModelAdapter::DeepSeek) => {
             deepseek::runtime_tuning(preset, max_output_tokens)
         }
+        Some(ResponsesModelAdapter::Hy3) => hy3::runtime_tuning(preset, max_output_tokens),
         Some(ResponsesModelAdapter::Anthropic) => {
             anthropic::runtime_tuning(preset, max_output_tokens)
         }
@@ -354,6 +365,7 @@ impl LocalCodexExecPolicy {
             ResponsesModelAdapter::Mistral => mistral::compact_instructions(),
             ResponsesModelAdapter::Kimi => kimi::compact_instructions(),
             ResponsesModelAdapter::DeepSeek => deepseek::compact_instructions(),
+            ResponsesModelAdapter::Hy3 => hy3::compact_instructions(),
             ResponsesModelAdapter::Anthropic => anthropic::compact_instructions(),
         }
     }
@@ -371,6 +383,7 @@ impl LocalCodexExecPolicy {
             ResponsesModelAdapter::Mistral => mistral::reasoning_effort_override(),
             ResponsesModelAdapter::Kimi => kimi::reasoning_effort_override(),
             ResponsesModelAdapter::DeepSeek => deepseek::reasoning_effort_override(),
+            ResponsesModelAdapter::Hy3 => hy3::reasoning_effort_override(),
             ResponsesModelAdapter::Anthropic => anthropic::reasoning_effort_override(),
         }
     }
@@ -386,6 +399,7 @@ impl LocalCodexExecPolicy {
             ResponsesModelAdapter::Mistral => mistral::unified_exec_enabled(),
             ResponsesModelAdapter::Kimi => kimi::unified_exec_enabled(),
             ResponsesModelAdapter::DeepSeek => deepseek::unified_exec_enabled(),
+            ResponsesModelAdapter::Hy3 => hy3::unified_exec_enabled(),
             ResponsesModelAdapter::Anthropic => anthropic::unified_exec_enabled(),
         }
     }
@@ -401,6 +415,7 @@ impl LocalCodexExecPolicy {
             ResponsesModelAdapter::Mistral => mistral::uses_ctox_web_stack(),
             ResponsesModelAdapter::Kimi => kimi::uses_ctox_web_stack(),
             ResponsesModelAdapter::DeepSeek => deepseek::uses_ctox_web_stack(),
+            ResponsesModelAdapter::Hy3 => hy3::uses_ctox_web_stack(),
             ResponsesModelAdapter::Anthropic => anthropic::uses_ctox_web_stack(),
         }
     }
@@ -434,6 +449,7 @@ impl LocalCodexExecPolicy {
             ResponsesModelAdapter::DeepSeek => {
                 deepseek::compact_limit(self.model.as_str(), realized_context)
             }
+            ResponsesModelAdapter::Hy3 => hy3::compact_limit(self.model.as_str(), realized_context),
             ResponsesModelAdapter::Anthropic => {
                 anthropic::compact_limit(self.model.as_str(), realized_context)
             }
@@ -523,6 +539,29 @@ mod tests {
         .expect("deepseek route should resolve");
         let plan = route.response_plan();
         assert_eq!(route.id(), "deepseek");
+        assert_eq!(route.upstream_path(), "/v1/chat/completions");
+        assert_eq!(
+            plan.transport_kind(),
+            ResponsesTransportKind::ChatCompletions
+        );
+    }
+
+    #[test]
+    fn hy3_route_uses_chat_completions_transport() {
+        let request = serde_json::json!({
+            "model": "tencent/hy3-preview:free",
+            "input": "hello",
+            "stream": false
+        });
+        let route = ResolvedResponsesAdapterRoute::resolve(
+            Some("tencent/hy3-preview:free"),
+            &serde_json::to_vec(&request).expect("request should encode"),
+            true,
+        )
+        .expect("route resolution should succeed")
+        .expect("hy3 route should resolve");
+        let plan = route.response_plan();
+        assert_eq!(route.id(), "hy3");
         assert_eq!(route.upstream_path(), "/v1/chat/completions");
         assert_eq!(
             plan.transport_kind(),

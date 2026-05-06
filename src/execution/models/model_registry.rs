@@ -349,6 +349,15 @@ const CHAT_FAMILY_REGISTRY: &[ChatFamilyCatalogEntry] = &[
         planning_variants: &["deepseek/deepseek-v4-flash"],
         supports_vision: false,
     },
+    ChatFamilyCatalogEntry {
+        family: engine::ChatModelFamily::Hy3,
+        label: "HY3",
+        selector: "hy3",
+        parse_aliases: &["hy3", "tencent", "tencent-hy3", "hy3-preview"],
+        variants: &["tencent/hy3-preview:free"],
+        planning_variants: &["tencent/hy3-preview:free"],
+        supports_vision: false,
+    },
 ];
 
 const LOCAL_FAMILY_REGISTRY: &[LocalFamilyCatalogEntry] = &[
@@ -1427,6 +1436,11 @@ const REMOTE_CHAT_FAMILY_REGISTRY: &[RemoteChatFamilyEntry] = &[
     RemoteChatFamilyEntry {
         model: "deepseek/deepseek-v4-flash",
         chat_family: engine::ChatModelFamily::DeepSeek,
+    },
+    // Tencent HY3 family
+    RemoteChatFamilyEntry {
+        model: "tencent/hy3-preview:free",
+        chat_family: engine::ChatModelFamily::Hy3,
     },
     // Gemma family (free tier aliases)
     RemoteChatFamilyEntry {

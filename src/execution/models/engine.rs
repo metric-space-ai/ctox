@@ -52,6 +52,7 @@ pub enum ChatModelFamily {
     Mistral,
     Kimi,
     DeepSeek,
+    Hy3,
     Anthropic,
 }
 
@@ -1955,7 +1956,7 @@ mod tests {
         );
         assert_eq!(
             chat_model_family_for_model("tencent/hy3-preview:free"),
-            None
+            Some(ChatModelFamily::Hy3)
         );
     }
 
