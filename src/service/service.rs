@@ -4715,7 +4715,9 @@ fn artifact_first_execution_prompt(job: &QueuedPrompt) -> String {
         return job.prompt.clone();
     }
 
-    if is_terminal_bench_controller_artifact_job(job) {
+    if is_terminal_bench_controller_artifact_job(job)
+        && terminal_bench_first_turn_preflight_applies(job, &file_refs)
+    {
         return terminal_bench_controller_artifact_preflight_prompt(job, &file_refs);
     }
 
@@ -4783,7 +4785,7 @@ fn terminal_bench_controller_artifact_preflight_prompt(
         prompt.push_str("Required preparation queue items:\n");
         prompt.push_str("- Inventory Terminal-Bench 2 tasks and create one durable benchmark ticket per task without opening solutions.\n");
         prompt.push_str("- Research public Terminal-Bench 2 reference results and safe task ordering without solution leakage.\n");
-        prompt.push_str("- Verify the local Qwen3.6 35B harness runtime, native IPC path, response adapter, and 131072 token context setting.\n");
+        prompt.push_str("- Verify the active harness runtime/model/provider, response adapter, and 131072 token context setting. If the runtime is local, record IPC/native/GPU facts; if it is remote/API-backed, record the provider/API path.\n");
         prompt.push_str("- Run an initial small set of likely-solvable Terminal-Bench 2 tasks under Harbor/Terminal-Bench tooling.\n");
         prompt.push_str(
             "- Update knowledge.md, results.jsonl, and logbook.md after each benchmark attempt.\n",
@@ -4876,11 +4878,64 @@ fn terminal_bench_preflight_spec_for_job(job: &QueuedPrompt) -> Option<TerminalB
         return None;
     }
     let file_refs = declared_workspace_file_artifacts_for_job(job);
+    if !terminal_bench_first_turn_preflight_applies(job, &file_refs) {
+        return None;
+    }
     let run_dir = terminal_bench_run_dir_from_artifact_paths(&file_refs)?;
     Some(TerminalBenchPreflightSpec {
         run_dir,
         required_files: file_refs,
         requires_runtime_refs: terminal_bench_controller_requires_runtime_refs(job),
+    })
+}
+
+fn terminal_bench_first_turn_preflight_applies(job: &QueuedPrompt, file_refs: &[String]) -> bool {
+    if file_refs.is_empty() || !is_terminal_bench_controller_artifact_job(job) {
+        return false;
+    }
+    if job.source_label == "review-feedback" || job.ticket_self_work_id.is_some() {
+        return false;
+    }
+    let lower_prompt = job.prompt.to_ascii_lowercase();
+    let explicit_first_turn_contract = [
+        "only required durable files for this controller turn",
+        "first action must be one shell",
+        "critical first-turn contract",
+        "harness terminal-bench preflight",
+        "harness terminal-bench preflight retry",
+    ]
+    .iter()
+    .any(|needle| lower_prompt.contains(needle));
+    if !explicit_first_turn_contract {
+        return false;
+    }
+    let requires_runtime_refs = terminal_bench_controller_requires_runtime_refs(job);
+    !terminal_bench_preflight_already_bootstrapped(file_refs, requires_runtime_refs)
+}
+
+fn terminal_bench_preflight_already_bootstrapped(
+    file_refs: &[String],
+    requires_runtime_refs: bool,
+) -> bool {
+    let Some(run_dir) = terminal_bench_run_dir_from_artifact_paths(file_refs) else {
+        return false;
+    };
+    let all_required_files_exist = file_refs.iter().all(|path| Path::new(path).is_file());
+    if !all_required_files_exist || !Path::new(&run_dir).join("tasks").is_dir() {
+        return false;
+    }
+    if !requires_runtime_refs {
+        return true;
+    }
+    terminal_bench_file_refs_contain_real_queue_refs(file_refs)
+}
+
+fn terminal_bench_file_refs_contain_real_queue_refs(file_refs: &[String]) -> bool {
+    file_refs.iter().any(|path| {
+        let Ok(content) = std::fs::read_to_string(path) else {
+            return false;
+        };
+        content.contains("queue:system::")
     })
 }
 
@@ -5269,7 +5324,7 @@ fn terminal_bench_controller_hold_feedback_prompt(
     prompt.push_str("- Before any open-ended discovery, runner probing, benchmark execution, or web research, write a checkpoint into controller.json, run-log.md, knowledge.md, and results.json that records the current phase, verified facts, blockers, and exact next action.\n");
     prompt.push_str("- If a tool call finds new runtime, task, runner, leaderboard, blocker, or result information, the next tool call must persist that information into the durable files before continuing exploration.\n");
     prompt.push_str("- Treat controller.phase=preparation and results.json with zero tasks as an unfinished state, not as completion.\n");
-    prompt.push_str("- Verify the runtime facts before benchmark execution: CTOX release is current, harness model is Qwen/Qwen3.6-35B-A3B, inference source is local, local runtime is ggml, effective context is 131072 tokens, the Qwen process uses --ctx 131072, CUDA devices 0,1,2,3 are active, and no HTTP inference path is used.\n");
+    prompt.push_str("- Verify the runtime facts before benchmark execution: CTOX release is current, active harness model/provider match this run, response adapter is correct, and effective context is 131072 tokens. If inference is local, record native runtime/IPC/GPU evidence; if inference is API-backed, record the provider/API evidence instead of inventing local-only facts.\n");
     prompt.push_str("- Verify Harbor and the Terminal-Bench 2 task source, then write one ticket per discovered benchmark task into ticket-map.jsonl.\n");
     prompt.push_str("- Research public Terminal-Bench references and leaderboards only for task selection and comparison context; do not read benchmark solutions.\n");
     prompt.push_str("- Start with tasks known to be solvable by other harnesses/models, update knowledge.md after each attempt, skip blocked tasks temporarily, and return later with accumulated learnings.\n");
@@ -10875,6 +10930,30 @@ fn maybe_enqueue_runtime_retry_continuation(
     if !runtime_error_is_transient_api_failure(error_text) {
         return Ok(None);
     }
+    if job.source_label == "review-feedback" && is_terminal_bench_preflight_violation(error_text) {
+        let _ = governance::record_event(
+            root,
+            governance::GovernanceEventRequest {
+                mechanism_id: "terminal_bench_review_feedback_guard",
+                conversation_id: Some(turn_loop::CHAT_CONVERSATION_ID),
+                severity: "warning",
+                reason: "review-feedback hit the first-turn Terminal-Bench preflight guard",
+                action_taken:
+                    "suppressed durable runtime retry self-work; the original controller/queue state must carry the feedback",
+                details: serde_json::json!({
+                    "source_label": job.source_label,
+                    "thread_key": job.thread_key.clone(),
+                    "workspace_root": job.workspace_root.clone(),
+                    "error": clip_text(error_text, 220),
+                }),
+                idempotence_key: Some(&format!(
+                    "tb2-review-feedback-preflight:{}",
+                    job.thread_key.as_deref().unwrap_or(job.goal.as_str())
+                )),
+            },
+        );
+        return Ok(None);
+    }
     if !job.leased_message_keys.is_empty() || job.ticket_self_work_id.is_some() {
         return Ok(None);
     }
@@ -15730,9 +15809,9 @@ Use shell tools to create or update these files through Harbor."
         assert!(feedback.contains("Do not recreate them from scratch"));
         assert!(feedback.contains("controller.phase=preparation"));
         assert!(feedback.contains("results.json with zero tasks"));
-        assert!(feedback.contains("Qwen/Qwen3.6-35B-A3B"));
+        assert!(feedback.contains("active harness model/provider"));
         assert!(feedback.contains("131072 tokens"));
-        assert!(feedback.contains("no HTTP inference path"));
+        assert!(feedback.contains("API-backed"));
         assert!(feedback.contains("Verify Harbor"));
         assert!(feedback.contains(&format!("{run_dir}/controller.json")));
         assert!(feedback.contains(&format!("{run_dir}/results.json")));
@@ -18661,6 +18740,107 @@ Create durable CTOX queue/ticket work and record message keys."
             .required_files
             .iter()
             .any(|path| path.contains(stale_run_dir)));
+    }
+
+    #[test]
+    fn terminal_bench_preflight_spec_stops_after_real_bootstrap_refs_exist() {
+        let root = temp_root("terminal-bench-bootstrap-refs-skip-first-guard");
+        let run_dir = root.join("terminal-bench-2/runs/run-with-real-refs");
+        std::fs::create_dir_all(run_dir.join("tasks")).expect("failed to create tasks dir");
+        let files = [
+            "controller.json",
+            "ticket-map.jsonl",
+            "preparation-tickets.jsonl",
+            "run-queue.jsonl",
+            "results.jsonl",
+            "knowledge.md",
+            "logbook.md",
+            "blogpost-notes.md",
+        ];
+        for file in files {
+            let content = match file {
+                "ticket-map.jsonl" | "preparation-tickets.jsonl" | "run-queue.jsonl" => {
+                    "{\"message_key\":\"queue:system::abc123\"}\n"
+                }
+                "results.jsonl" => "",
+                "controller.json" => "{\"status\":\"preflight\"}\n",
+                _ => "# status\n",
+            };
+            std::fs::write(run_dir.join(file), content).expect("failed to write artifact");
+        }
+        let run_dir = run_dir.to_string_lossy().into_owned();
+        let job = QueuedPrompt {
+            prompt: format!(
+                "Only required durable files for this controller turn:\n\
+- {run_dir}/controller.json\n\
+- {run_dir}/ticket-map.jsonl\n\
+- {run_dir}/preparation-tickets.jsonl\n\
+- {run_dir}/run-queue.jsonl\n\
+- {run_dir}/results.jsonl\n\
+- {run_dir}/knowledge.md\n\
+- {run_dir}/logbook.md\n\
+- {run_dir}/blogpost-notes.md\n\n\
+The controller must create preparation queue/tickets and record queue:system::* keys.\n\
+Continue by fixing results.jsonl."
+            ),
+            goal: "Terminal-Bench 2 controller".to_string(),
+            preview: "Terminal-Bench 2 controller".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: Some("benchmark-controller".to_string()),
+            leased_message_keys: vec!["queue:system::parent".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("terminal-bench-2/deepseek/run-with-real-refs/controller".to_string()),
+            workspace_root: Some(run_dir.clone()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        assert!(is_terminal_bench_controller_artifact_job(&job));
+        assert!(terminal_bench_preflight_spec_for_job(&job).is_none());
+        let prompt = artifact_first_execution_prompt(&job);
+        assert!(prompt.starts_with("HARNESS ARTIFACT CONTRACT"));
+        assert!(prompt.contains("ORIGINAL TASK"));
+        assert!(prompt.contains("Continue by fixing results.jsonl"));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn terminal_bench_review_feedback_does_not_reenter_first_turn_preflight() {
+        let run_dir = "/tmp/terminal-bench-2/runs/review-feedback-run";
+        let job = QueuedPrompt {
+            prompt: format!(
+                "HARNESS FEEDBACK\n\
+The previous controller turn is incomplete. Update these files now:\n\
+- {run_dir}/controller.json\n\
+- {run_dir}/ticket-map.jsonl\n\
+- {run_dir}/preparation-tickets.jsonl\n\
+- {run_dir}/run-queue.jsonl\n\
+- {run_dir}/results.jsonl\n\
+- {run_dir}/knowledge.md\n\
+- {run_dir}/logbook.md\n\
+- {run_dir}/blogpost-notes.md\n"
+            ),
+            goal: "Address Terminal-Bench review feedback".to_string(),
+            preview: "Terminal-Bench review feedback".to_string(),
+            source_label: "review-feedback".to_string(),
+            suggested_skill: Some("benchmark-controller".to_string()),
+            leased_message_keys: Vec::new(),
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("terminal-bench-2/review-feedback".to_string()),
+            workspace_root: Some(run_dir.to_string()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        assert!(is_terminal_bench_controller_artifact_job(&job));
+        assert!(terminal_bench_preflight_spec_for_job(&job).is_none());
+        let prompt = artifact_first_execution_prompt(&job);
+        assert!(!prompt.starts_with("HARNESS TERMINAL-BENCH PREFLIGHT"));
+        assert!(prompt.contains("ORIGINAL TASK"));
+        assert!(prompt.contains("The previous controller turn is incomplete"));
     }
 
     #[test]
