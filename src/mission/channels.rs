@@ -4312,19 +4312,25 @@ fn test_channel(
         "teams" => {
             bootstrap_channel_account(root, "teams")?;
             let conn = open_channel_db(db_path)?;
-            let resolved_account_key = resolve_account_key(&conn, "teams", account_key)?;
-            let account_config =
-                load_account_config(&conn, &resolved_account_key)?.ok_or_else(|| {
-                    anyhow::anyhow!("missing teams account config for {}", resolved_account_key)
-                })?;
             let adapter = communication_adapters::teams();
-            let resolved_tenant_id = teams_tenant_from_account_key(&resolved_account_key);
+            let resolved_account_key = resolve_account_key(&conn, "teams", account_key).ok();
+            let account_config = resolved_account_key
+                .as_deref()
+                .and_then(|key| load_account_config(&conn, key).ok().flatten());
+            let empty_profile = json!({});
+            let resolved_tenant_id = resolved_account_key
+                .as_deref()
+                .map(teams_tenant_from_account_key)
+                .unwrap_or_default();
             let adapter_json = adapter.test_cli(
                 root,
                 &communication_adapters::TeamsTestCommandRequest {
                     db_path,
                     tenant_id: &resolved_tenant_id,
-                    profile_json: &account_config.profile_json,
+                    profile_json: account_config
+                        .as_ref()
+                        .map(|config| &config.profile_json)
+                        .unwrap_or(&empty_profile),
                 },
             )?;
             Ok(json!({

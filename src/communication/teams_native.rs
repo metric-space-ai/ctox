@@ -23,6 +23,7 @@ const TEAMS_SYNC_LIMIT: usize = 50;
 #[derive(Clone, Debug)]
 struct TeamsOptions {
     db_path: std::path::PathBuf,
+    graph_access_token: String,
     tenant_id: String,
     client_id: String,
     client_secret: String,
@@ -34,6 +35,7 @@ struct TeamsOptions {
     channel_id: String,
     chat_id: String,
     limit: usize,
+    discovery_limit: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -71,8 +73,22 @@ struct GraphTeamsClient {
     base_url: String,
 }
 
+#[derive(Clone, Debug, Default)]
+struct TeamsSelfIdentity {
+    user_id: String,
+    user_principal_name: String,
+    mail: String,
+    display_name: String,
+}
+
 impl GraphTeamsClient {
     fn from_options(options: &TeamsOptions) -> Result<Self> {
+        if !options.graph_access_token.trim().is_empty() {
+            return Ok(Self {
+                access_token: options.graph_access_token.trim().to_string(),
+                base_url: options.graph_base_url.trim_end_matches('/').to_string(),
+            });
+        }
         let has_user_creds = !options.username.is_empty() && !options.password.is_empty();
         let has_client_creds = !options.client_id.is_empty() && !options.client_secret.is_empty();
         let access_token = if has_user_creds {
@@ -198,6 +214,72 @@ impl GraphTeamsClient {
             .unwrap_or_default())
     }
 
+    fn list_chats(&self, top: usize) -> Result<Vec<Value>> {
+        let value = self.request("GET", "/me/chats", &[("$top", top.to_string())], None)?;
+        Ok(value
+            .get("value")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    fn list_joined_teams(&self, top: usize) -> Result<Vec<Value>> {
+        let value = self.request("GET", "/me/joinedTeams", &[("$top", top.to_string())], None)?;
+        Ok(value
+            .get("value")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    fn list_team_channels(&self, team_id: &str, top: usize) -> Result<Vec<Value>> {
+        let value = self.request(
+            "GET",
+            &format!("/teams/{team_id}/channels"),
+            &[("$top", top.to_string())],
+            None,
+        )?;
+        Ok(value
+            .get("value")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    fn get_self_identity(&self) -> Result<TeamsSelfIdentity> {
+        let value = self.request(
+            "GET",
+            "/me",
+            &[(
+                "$select",
+                "id,displayName,userPrincipalName,mail".to_string(),
+            )],
+            None,
+        )?;
+        Ok(TeamsSelfIdentity {
+            user_id: value
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            user_principal_name: value
+                .get("userPrincipalName")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            mail: value
+                .get("mail")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            display_name: value
+                .get("displayName")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+        })
+    }
+
     fn send_channel_message(
         &self,
         team_id: &str,
@@ -294,28 +376,12 @@ pub(crate) fn service_sync(
         .get("CTOX_OWNER_PREFERRED_CHANNEL")
         .map(|value| value.trim())
         == Some("teams");
-    let has_username = settings
-        .get("CTO_TEAMS_USERNAME")
-        .map(|value| !value.trim().is_empty())
-        .unwrap_or(false);
-    let has_password = settings
-        .get("CTO_TEAMS_PASSWORD")
-        .map(|value| !value.trim().is_empty())
-        .unwrap_or(false);
-    let has_client = settings
-        .get("CTO_TEAMS_CLIENT_ID")
-        .map(|value| !value.trim().is_empty())
-        .unwrap_or(false)
-        && settings
-            .get("CTO_TEAMS_CLIENT_SECRET")
-            .map(|value| !value.trim().is_empty())
-            .unwrap_or(false);
-    let has_any_creds = (has_username && has_password) || has_client;
-    if !preferred_is_teams && !has_any_creds {
-        return Ok(None);
-    }
     let runtime = runtime_from_settings(root, settings);
     let db_path = root.join("runtime/ctox.sqlite3");
+    let options = base_options_from_runtime(root, &runtime, &db_path);
+    if !preferred_is_teams && !has_any_auth(&options) {
+        return Ok(None);
+    }
     let request = AdapterSyncCommandRequest {
         db_path: db_path.as_path(),
         passthrough_args: &["sync".to_string()],
@@ -325,6 +391,9 @@ pub(crate) fn service_sync(
 }
 
 fn has_any_auth(options: &TeamsOptions) -> bool {
+    if !options.graph_access_token.trim().is_empty() {
+        return true;
+    }
     let has_user = !options.username.is_empty() && !options.password.is_empty();
     let has_client = !options.client_id.is_empty() && !options.client_secret.is_empty();
     has_user || has_client
@@ -333,10 +402,11 @@ fn has_any_auth(options: &TeamsOptions) -> bool {
 fn execute_sync(options: &TeamsOptions) -> Result<Value> {
     if !has_any_auth(options) {
         bail!(
-            "Teams sync requires either CTO_TEAMS_USERNAME + CTO_TEAMS_PASSWORD, or CTO_TEAMS_CLIENT_ID + CTO_TEAMS_CLIENT_SECRET"
+            "Teams sync requires CTO_TEAMS_GRAPH_ACCESS_TOKEN, CTO_TEAMS_USERNAME + CTO_TEAMS_PASSWORD, CTO_TEAMS_CLIENT_ID + CTO_TEAMS_CLIENT_SECRET, or reusable CTO_EMAIL Graph credentials"
         );
     }
     let client = GraphTeamsClient::from_options(options)?;
+    let self_identity = client.get_self_identity().unwrap_or_default();
     let mut conn = open_channel_db(&options.db_path)?;
     let account_key = account_key_for_teams(options);
     ensure_account(
@@ -353,7 +423,7 @@ fn execute_sync(options: &TeamsOptions) -> Result<Value> {
 
     // Sync channel messages if team_id and channel_id are configured
     if !options.team_id.is_empty() && !options.channel_id.is_empty() {
-        match sync_channel_messages(&client, &mut conn, options, &account_key) {
+        match sync_channel_messages(&client, &mut conn, options, &account_key, &self_identity) {
             Ok(count) => total_synced += count,
             Err(error) => errors.push(format!("channel sync: {error}")),
         }
@@ -361,9 +431,20 @@ fn execute_sync(options: &TeamsOptions) -> Result<Value> {
 
     // Sync 1:1 chat messages if chat_id is configured
     if !options.chat_id.is_empty() {
-        match sync_chat_messages(&client, &mut conn, options, &account_key) {
+        match sync_chat_messages(&client, &mut conn, options, &account_key, &self_identity) {
             Ok(count) => total_synced += count,
             Err(error) => errors.push(format!("chat sync: {error}")),
+        }
+    }
+
+    if options.team_id.is_empty() && options.channel_id.is_empty() && options.chat_id.is_empty() {
+        match sync_discovered_chats(&client, &mut conn, options, &account_key, &self_identity) {
+            Ok(count) => total_synced += count,
+            Err(error) => errors.push(format!("chat discovery sync: {error}")),
+        }
+        match sync_discovered_channels(&client, &mut conn, options, &account_key, &self_identity) {
+            Ok(count) => total_synced += count,
+            Err(error) => errors.push(format!("channel discovery sync: {error}")),
         }
     }
 
@@ -401,14 +482,19 @@ fn sync_channel_messages(
     conn: &mut rusqlite::Connection,
     options: &TeamsOptions,
     account_key: &str,
+    self_identity: &TeamsSelfIdentity,
 ) -> Result<usize> {
     let messages =
         client.list_channel_messages(&options.team_id, &options.channel_id, options.limit)?;
     let mut count = 0;
     for msg in &messages {
-        if let Some(inbound) =
-            normalize_teams_message(msg, account_key, &options.team_id, &options.channel_id)
-        {
+        if let Some(inbound) = normalize_teams_message_for_sync(
+            msg,
+            account_key,
+            &options.team_id,
+            &options.channel_id,
+            self_identity,
+        ) {
             store_teams_message(conn, &inbound)?;
             count += 1;
         }
@@ -422,11 +508,12 @@ fn sync_channel_messages(
                 options.limit,
             ) {
                 for reply in &replies {
-                    if let Some(inbound) = normalize_teams_message(
+                    if let Some(inbound) = normalize_teams_message_for_sync(
                         reply,
                         account_key,
                         &options.team_id,
                         &options.channel_id,
+                        self_identity,
                     ) {
                         store_teams_message(conn, &inbound)?;
                         count += 1;
@@ -443,16 +530,161 @@ fn sync_chat_messages(
     conn: &mut rusqlite::Connection,
     options: &TeamsOptions,
     account_key: &str,
+    self_identity: &TeamsSelfIdentity,
 ) -> Result<usize> {
     let messages = client.list_chat_messages(&options.chat_id, options.limit)?;
     let mut count = 0;
     for msg in &messages {
-        if let Some(inbound) = normalize_teams_chat_message(msg, account_key, &options.chat_id) {
+        if let Some(inbound) =
+            normalize_teams_chat_message_for_sync(msg, account_key, &options.chat_id, self_identity)
+        {
             store_teams_message(conn, &inbound)?;
             count += 1;
         }
     }
     Ok(count)
+}
+
+fn sync_discovered_chats(
+    client: &GraphTeamsClient,
+    conn: &mut rusqlite::Connection,
+    options: &TeamsOptions,
+    account_key: &str,
+    self_identity: &TeamsSelfIdentity,
+) -> Result<usize> {
+    let chats = client.list_chats(options.discovery_limit)?;
+    let mut count = 0;
+    for chat in chats {
+        let Some(chat_id) = chat.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        let messages = client.list_chat_messages(chat_id, options.limit)?;
+        for msg in &messages {
+            if let Some(inbound) =
+                normalize_teams_chat_message_for_sync(msg, account_key, chat_id, self_identity)
+            {
+                store_teams_message(conn, &inbound)?;
+                count += 1;
+            }
+        }
+    }
+    Ok(count)
+}
+
+fn sync_discovered_channels(
+    client: &GraphTeamsClient,
+    conn: &mut rusqlite::Connection,
+    options: &TeamsOptions,
+    account_key: &str,
+    self_identity: &TeamsSelfIdentity,
+) -> Result<usize> {
+    let teams = client.list_joined_teams(options.discovery_limit)?;
+    let mut count = 0;
+    for team in teams {
+        let Some(team_id) = team.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        let channels = match client.list_team_channels(team_id, options.discovery_limit) {
+            Ok(channels) => channels,
+            Err(_) => continue,
+        };
+        for channel in channels {
+            let Some(channel_id) = channel.get("id").and_then(Value::as_str) else {
+                continue;
+            };
+            let messages = match client.list_channel_messages(team_id, channel_id, options.limit) {
+                Ok(messages) => messages,
+                Err(_) => continue,
+            };
+            for msg in &messages {
+                if let Some(inbound) = normalize_teams_message_for_sync(
+                    msg,
+                    account_key,
+                    team_id,
+                    channel_id,
+                    self_identity,
+                ) {
+                    store_teams_message(conn, &inbound)?;
+                    count += 1;
+                }
+                let msg_id = msg.get("id").and_then(Value::as_str).unwrap_or_default();
+                if msg_id.is_empty() {
+                    continue;
+                }
+                let replies = match client.list_channel_message_replies(
+                    team_id,
+                    channel_id,
+                    msg_id,
+                    options.limit,
+                ) {
+                    Ok(replies) => replies,
+                    Err(_) => continue,
+                };
+                for reply in &replies {
+                    if let Some(inbound) = normalize_teams_message_for_sync(
+                        reply,
+                        account_key,
+                        team_id,
+                        channel_id,
+                        self_identity,
+                    ) {
+                        store_teams_message(conn, &inbound)?;
+                        count += 1;
+                    }
+                }
+            }
+        }
+    }
+    Ok(count)
+}
+
+fn normalize_teams_message_for_sync(
+    msg: &Value,
+    account_key: &str,
+    team_id: &str,
+    channel_id: &str,
+    self_identity: &TeamsSelfIdentity,
+) -> Option<TeamsInboundMessage> {
+    if is_self_teams_message(msg, self_identity) {
+        return None;
+    }
+    normalize_teams_message(msg, account_key, team_id, channel_id)
+}
+
+fn normalize_teams_chat_message_for_sync(
+    msg: &Value,
+    account_key: &str,
+    chat_id: &str,
+    self_identity: &TeamsSelfIdentity,
+) -> Option<TeamsInboundMessage> {
+    if is_self_teams_message(msg, self_identity) {
+        return None;
+    }
+    normalize_teams_chat_message(msg, account_key, chat_id)
+}
+
+fn is_self_teams_message(msg: &Value, self_identity: &TeamsSelfIdentity) -> bool {
+    let user = msg
+        .get("from")
+        .and_then(|from| from.get("user"))
+        .unwrap_or(&Value::Null);
+    let sender_id = user.get("id").and_then(Value::as_str).unwrap_or_default();
+    let sender_upn = user
+        .get("userPrincipalName")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let sender_mail = user.get("mail").and_then(Value::as_str).unwrap_or_default();
+    let sender_display = user
+        .get("displayName")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let same = |left: &str, right: &str| {
+        !left.trim().is_empty() && !right.trim().is_empty() && left.eq_ignore_ascii_case(right)
+    };
+    same(sender_id, &self_identity.user_id)
+        || same(sender_upn, &self_identity.user_principal_name)
+        || same(sender_mail, &self_identity.mail)
+        || (sender_id.trim().is_empty() && same(sender_display, &self_identity.display_name))
 }
 
 fn normalize_teams_message(
@@ -750,7 +982,7 @@ fn execute_test(options: &TeamsOptions) -> Result<Value> {
     if !has_any_auth(options) {
         return Ok(json!({
             "ok": false,
-            "error": "missing credentials: set CTO_TEAMS_USERNAME + CTO_TEAMS_PASSWORD, or CTO_TEAMS_CLIENT_ID + CTO_TEAMS_CLIENT_SECRET",
+            "error": "missing credentials: set CTO_TEAMS_GRAPH_ACCESS_TOKEN, CTO_TEAMS_USERNAME + CTO_TEAMS_PASSWORD, CTO_TEAMS_CLIENT_ID + CTO_TEAMS_CLIENT_SECRET, or reusable CTO_EMAIL Graph credentials",
         }));
     }
     let client = match GraphTeamsClient::from_options(options) {
@@ -782,10 +1014,29 @@ fn execute_test(options: &TeamsOptions) -> Result<Value> {
                 "chat_id": options.chat_id,
             }))
         }
-        Err(error) => Ok(json!({
-            "ok": false,
-            "error": format!("Graph API test failed: {error}"),
-        })),
+        Err(org_error) => match client.get_self_identity() {
+            Ok(identity) => Ok(json!({
+                "ok": true,
+                "status": "connected",
+                "organization": "unknown",
+                "tenant_id": options.tenant_id,
+                "bot_id": options.bot_id,
+                "team_id": options.team_id,
+                "channel_id": options.channel_id,
+                "chat_id": options.chat_id,
+                "user": {
+                    "id": identity.user_id,
+                    "displayName": identity.display_name,
+                    "userPrincipalName": identity.user_principal_name,
+                    "mail": identity.mail,
+                },
+                "warning": format!("organization probe failed: {org_error}"),
+            })),
+            Err(me_error) => Ok(json!({
+                "ok": false,
+                "error": format!("Graph API test failed: organization probe: {org_error}; /me probe: {me_error}"),
+            })),
+        },
     }
 }
 
@@ -895,8 +1146,24 @@ fn setting(runtime: &BTreeMap<String, String>, key: &str) -> String {
         .unwrap_or_default()
 }
 
-fn non_empty_or_default(runtime: &BTreeMap<String, String>, key: &str, default: &str) -> String {
-    let value = setting(runtime, key);
+fn first_setting(runtime: &BTreeMap<String, String>, keys: &[&str]) -> String {
+    keys.iter()
+        .find_map(|key| {
+            runtime
+                .get(*key)
+                .map(|value| value.trim())
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        })
+        .unwrap_or_default()
+}
+
+fn first_setting_or_default(
+    runtime: &BTreeMap<String, String>,
+    keys: &[&str],
+    default: &str,
+) -> String {
+    let value = first_setting(runtime, keys);
     if value.is_empty() {
         default.to_string()
     } else {
@@ -911,21 +1178,56 @@ fn base_options_from_runtime(
 ) -> TeamsOptions {
     TeamsOptions {
         db_path: db_path.to_path_buf(),
-        username: setting(runtime, "CTO_TEAMS_USERNAME"),
-        password: setting(runtime, "CTO_TEAMS_PASSWORD"),
-        tenant_id: setting(runtime, "CTO_TEAMS_TENANT_ID"),
-        client_id: setting(runtime, "CTO_TEAMS_CLIENT_ID"),
-        client_secret: setting(runtime, "CTO_TEAMS_CLIENT_SECRET"),
-        bot_id: setting(runtime, "CTO_TEAMS_BOT_ID"),
-        graph_base_url: non_empty_or_default(
+        graph_access_token: first_setting(
             runtime,
-            "CTO_TEAMS_GRAPH_BASE_URL",
+            &[
+                "CTO_TEAMS_GRAPH_ACCESS_TOKEN",
+                "CTO_EMAIL_GRAPH_ACCESS_TOKEN",
+            ],
+        ),
+        username: first_setting(
+            runtime,
+            &[
+                "CTO_TEAMS_USERNAME",
+                "CTO_EMAIL_GRAPH_USERNAME",
+                "CTO_EMAIL_ADDRESS",
+            ],
+        ),
+        password: first_setting(
+            runtime,
+            &[
+                "CTO_TEAMS_PASSWORD",
+                "CTO_EMAIL_GRAPH_PASSWORD",
+                "CTO_EMAIL_PASSWORD",
+            ],
+        ),
+        tenant_id: first_setting(
+            runtime,
+            &["CTO_TEAMS_TENANT_ID", "CTO_EMAIL_GRAPH_TENANT_ID"],
+        ),
+        client_id: first_setting(
+            runtime,
+            &["CTO_TEAMS_CLIENT_ID", "CTO_EMAIL_GRAPH_CLIENT_ID"],
+        ),
+        client_secret: first_setting(
+            runtime,
+            &["CTO_TEAMS_CLIENT_SECRET", "CTO_EMAIL_GRAPH_CLIENT_SECRET"],
+        ),
+        bot_id: first_setting(runtime, &["CTO_TEAMS_BOT_ID", "CTO_EMAIL_ADDRESS"]),
+        graph_base_url: first_setting_or_default(
+            runtime,
+            &["CTO_TEAMS_GRAPH_BASE_URL", "CTO_EMAIL_GRAPH_BASE_URL"],
             GRAPH_DEFAULT_BASE_URL,
         ),
         team_id: setting(runtime, "CTO_TEAMS_TEAM_ID"),
         channel_id: setting(runtime, "CTO_TEAMS_CHANNEL_ID"),
         chat_id: setting(runtime, "CTO_TEAMS_CHAT_ID"),
-        limit: TEAMS_SYNC_LIMIT,
+        limit: setting(runtime, "CTO_TEAMS_LIMIT")
+            .parse()
+            .unwrap_or(TEAMS_SYNC_LIMIT),
+        discovery_limit: setting(runtime, "CTO_TEAMS_DISCOVERY_LIMIT")
+            .parse()
+            .unwrap_or(12),
     }
 }
 
@@ -1023,6 +1325,7 @@ mod tests {
     fn test_options(username: &str, bot_id: &str, tenant_id: &str) -> TeamsOptions {
         TeamsOptions {
             db_path: std::path::PathBuf::from("/tmp/test.db"),
+            graph_access_token: String::new(),
             username: username.to_string(),
             password: if username.is_empty() {
                 String::new()
@@ -1038,6 +1341,7 @@ mod tests {
             channel_id: String::new(),
             chat_id: String::new(),
             limit: 50,
+            discovery_limit: 12,
         }
     }
 
