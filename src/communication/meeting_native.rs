@@ -1205,6 +1205,19 @@ pub(crate) fn run_meeting_session(root: &Path, config: &MeetingSessionConfig) ->
                     &text[..text.len().min(80)]
                 );
             }
+            "recording_artifact" => {
+                let artifact_path = event.get("path").and_then(Value::as_str).unwrap_or("");
+                if artifact_path.is_empty() {
+                    continue;
+                }
+                match persist_recording_artifact(root, &session.session_id, artifact_path) {
+                    Some(path) => eprintln!("[meeting] recording artifact: {path}"),
+                    None => eprintln!(
+                        "[meeting] recording artifact persist failed: {}",
+                        &artifact_path[..artifact_path.len().min(160)]
+                    ),
+                }
+            }
             "ffmpeg_error" => {
                 let text = event.get("text").and_then(Value::as_str).unwrap_or("");
                 eprintln!("[meeting] ffmpeg error: {}", &text[..text.len().min(200)]);
@@ -1527,24 +1540,51 @@ fn finalize_meeting(
 }
 
 fn list_recording_artifacts(root: &Path, session_id: &str) -> Vec<String> {
+    let session_dir = meeting_sessions_dir(root);
+    let mut artifacts = Vec::new();
+    if let Ok(entries) = fs::read_dir(&session_dir) {
+        artifacts.extend(
+            entries
+                .filter_map(Result::ok)
+                .map(|entry| entry.path())
+                .filter(|path| path.is_file())
+                .filter(|path| {
+                    path.file_name()
+                        .and_then(|name| name.to_str())
+                        .map(|name| name.starts_with(session_id))
+                        .unwrap_or(false)
+                })
+                .filter(|path| is_recording_media_path(path))
+                .map(|path| path.display().to_string()),
+        );
+    }
+
     let artifact_dir = meeting_sessions_dir(root).join(format!("{session_id}-audio"));
-    let Ok(entries) = fs::read_dir(&artifact_dir) else {
-        return Vec::new();
-    };
-    let mut artifacts = entries
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| path.is_file())
-        .filter(|path| {
-            path.extension()
-                .and_then(|ext| ext.to_str())
-                .map(|ext| matches!(ext, "webm" | "mp4" | "wav" | "m4a" | "ogg"))
-                .unwrap_or(false)
-        })
-        .map(|path| path.display().to_string())
-        .collect::<Vec<_>>();
+    if let Ok(entries) = fs::read_dir(&artifact_dir) {
+        artifacts.extend(
+            entries
+                .filter_map(Result::ok)
+                .map(|entry| entry.path())
+                .filter(|path| path.is_file())
+                .filter(|path| is_recording_media_path(path))
+                .map(|path| path.display().to_string()),
+        );
+    }
     artifacts.sort();
+    artifacts.dedup();
     artifacts
+}
+
+fn is_recording_media_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| {
+            matches!(
+                ext.to_ascii_lowercase().as_str(),
+                "webm" | "mp4" | "wav" | "m4a" | "ogg"
+            )
+        })
+        .unwrap_or(false)
 }
 
 /// At finalize time, re-check if the STT engine is reachable. If it is and we
@@ -1616,6 +1656,24 @@ fn persist_audio_chunk(root: &Path, session_id: &str, source_path: &str) -> Opti
     }
     let filename = src.file_name()?;
     let dest = dest_dir.join(filename);
+    if fs::copy(src, &dest).is_ok() {
+        Some(dest.display().to_string())
+    } else {
+        None
+    }
+}
+
+fn persist_recording_artifact(root: &Path, session_id: &str, source_path: &str) -> Option<String> {
+    let src = Path::new(source_path);
+    if !src.exists() {
+        return None;
+    }
+    let ext = src
+        .extension()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("mp4");
+    let dest = meeting_sessions_dir(root).join(format!("{session_id}-recording.{ext}"));
     if fs::copy(src, &dest).is_ok() {
         Some(dest.display().to_string())
     } else {
@@ -2205,9 +2263,27 @@ const maxDurationMs = __MAX_DURATION_MS__;
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "ctox-meeting-"));
 const commandFile = process.env.CTOX_MEETING_COMMAND_FILE || "";
 let commandFileOffset = 0;
+let stdoutClosed = false;
+
+process.stdout.on("error", (err) => {
+  if (err && err.code === "EPIPE") {
+    stdoutClosed = true;
+    return;
+  }
+  console.error("[CTOX_MEETING_STDOUT_ERROR]", err?.stack || err);
+});
 
 const emit = (event) => {
-  process.stdout.write(JSON.stringify(event) + "\n");
+  if (stdoutClosed) return;
+  try {
+    process.stdout.write(JSON.stringify(event) + "\n");
+  } catch (err) {
+    if (err && err.code === "EPIPE") {
+      stdoutClosed = true;
+      return;
+    }
+    console.error("[CTOX_MEETING_EMIT_ERROR]", err?.stack || err);
+  }
 };
 
 const visibleMeetingText = async () => {
@@ -3209,6 +3285,7 @@ if (provider === "microsoft" && process.platform !== "darwin") {
 
   // Read the recording and emit as chunks
   if (fs.existsSync(outputPath)) {
+    emit({ type: "recording_artifact", path: outputPath, name: "screen-recording", extension: "mp4" });
     const buffer = fs.readFileSync(outputPath);
     let binary = "";
     const bytes = new Uint8Array(buffer);
@@ -6004,6 +6081,14 @@ mod tests {
             teams_script.contains("enableTeamsLiveCaptions"),
             "Teams should enable live captions"
         );
+        assert!(
+            teams_script.contains("stdoutClosed"),
+            "meeting runner should tolerate stdout EPIPE after host shutdown"
+        );
+        assert!(
+            teams_script.contains(r#"type: "recording_artifact""#),
+            "Teams should preserve the full ffmpeg recording as an artifact"
+        );
     }
 
     #[test]
@@ -6042,6 +6127,7 @@ mod tests {
         })
         .unwrap();
         assert!(teams_script.contains("ffmpeg"));
+        assert!(teams_script.contains("recording_artifact"));
         assert!(teams_script.contains(r#"extension: "mp4""#));
         assert!(teams_script.contains("x11grab"));
     }
