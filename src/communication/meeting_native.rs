@@ -1302,6 +1302,8 @@ pub(crate) fn run_meeting_session(root: &Path, config: &MeetingSessionConfig) ->
     // Lazy re-transcription: if the engine is now reachable and we have
     // pending chunks from failed STT attempts, retry them now.
     let retry_result = retry_pending_audio_chunks(root, &mut session, config);
+    let recording_transcript_result =
+        transcribe_full_recording_if_needed(root, &mut session, config);
 
     let finalization = finalize_meeting(root, &session, config)?;
 
@@ -1319,6 +1321,7 @@ pub(crate) fn run_meeting_session(root: &Path, config: &MeetingSessionConfig) ->
         "chat_messages": session.chat_messages.len(),
         "pending_audio_chunks": session.pending_audio_chunks.len(),
         "stt_retry": retry_result,
+        "recording_transcript": recording_transcript_result,
         "finalization": finalization,
     }))
 }
@@ -1585,6 +1588,90 @@ fn is_recording_media_path(path: &Path) -> bool {
             )
         })
         .unwrap_or(false)
+}
+
+fn is_full_meeting_recording_path(path: &Path, session_id: &str) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| {
+            name.starts_with(session_id)
+                && name.to_ascii_lowercase().contains("recording")
+                && is_recording_media_path(path)
+        })
+        .unwrap_or(false)
+}
+
+fn full_meeting_recording_candidates(root: &Path, session_id: &str) -> Vec<PathBuf> {
+    let mut candidates = list_recording_artifacts(root, session_id)
+        .into_iter()
+        .map(PathBuf::from)
+        .filter(|path| is_full_meeting_recording_path(path, session_id))
+        .collect::<Vec<_>>();
+    candidates.sort_by(|left, right| {
+        let left_len = fs::metadata(left).map(|meta| meta.len()).unwrap_or(0);
+        let right_len = fs::metadata(right).map(|meta| meta.len()).unwrap_or(0);
+        right_len.cmp(&left_len).then_with(|| left.cmp(right))
+    });
+    candidates
+}
+
+fn meeting_transcript_needs_recording_fallback(session: &MeetingSession) -> bool {
+    let has_stt_segment = session
+        .transcript_segments
+        .iter()
+        .any(|segment| segment.source.starts_with("stt"));
+    if has_stt_segment {
+        return false;
+    }
+    session.full_transcript().trim().chars().count() < 2_000
+}
+
+fn transcribe_full_recording_if_needed(
+    root: &Path,
+    session: &mut MeetingSession,
+    config: &MeetingSessionConfig,
+) -> Value {
+    if !meeting_transcript_needs_recording_fallback(session) {
+        return json!({"action": "skipped", "reason": "transcript already has usable STT or captions"});
+    }
+
+    let candidates = full_meeting_recording_candidates(root, &session.session_id);
+    let Some(recording_path) = candidates.first() else {
+        return json!({"action": "skipped", "reason": "no full recording artifact"});
+    };
+
+    eprintln!(
+        "[meeting] transcript is incomplete; transcribing full recording {}",
+        recording_path.display()
+    );
+    match transcribe_audio_chunk(&config.root, recording_path, &config.stt_model) {
+        Ok(text) if !text.trim().is_empty() => {
+            let text_chars = text.chars().count();
+            session.push_stt_transcript(text, None);
+            let _ = session.save(root);
+            json!({
+                "action": "transcribed_full_recording",
+                "recording_path": recording_path.display().to_string(),
+                "text_chars": text_chars,
+            })
+        }
+        Ok(_) => json!({
+            "action": "skipped",
+            "reason": "full recording transcription returned empty text",
+            "recording_path": recording_path.display().to_string(),
+        }),
+        Err(err) => {
+            eprintln!(
+                "[meeting] full recording transcription failed for {}: {err}",
+                recording_path.display()
+            );
+            json!({
+                "action": "failed",
+                "reason": err.to_string(),
+                "recording_path": recording_path.display().to_string(),
+            })
+        }
+    }
 }
 
 /// At finalize time, re-check if the STT engine is reachable. If it is and we
@@ -2110,14 +2197,9 @@ impl MeetingSession {
     /// Build the full transcript from all chunks.
     pub(crate) fn full_transcript(&self) -> String {
         if !self.transcript_segments.is_empty() {
-            let has_platform_captions = self
-                .transcript_segments
-                .iter()
-                .any(|segment| segment.source == "platform_caption");
             return self
                 .transcript_segments
                 .iter()
-                .filter(|segment| !has_platform_captions || segment.source == "platform_caption")
                 .map(TranscriptSegment::render_line)
                 .collect::<Vec<_>>()
                 .join("\n");
@@ -5474,6 +5556,99 @@ mod tests {
         );
         assert_eq!(session.transcript_segments[0].speaker_display, "Bob");
         assert!(session.full_transcript().contains("Bob: I can take"));
+    }
+
+    #[test]
+    fn full_transcript_keeps_stt_when_platform_captions_exist() {
+        let config = MeetingSessionConfig {
+            root: PathBuf::from("/tmp/test"),
+            meeting_url: "https://teams.microsoft.com/meet/demo".to_string(),
+            provider: MeetingProvider::MicrosoftTeams,
+            bot_name: "INF Yoda Notetaker".to_string(),
+            max_duration_minutes: 180,
+            audio_chunk_seconds: 30,
+            stt_model: DEFAULT_MEETING_STT_MODEL.to_string(),
+        };
+        let mut session = MeetingSession::new(&config);
+        session.push_platform_transcript(TranscriptSegment {
+            timestamp: "2026-04-28T12:00:00Z".to_string(),
+            speaker_display: "Teams".to_string(),
+            speaker_id: None,
+            source: "platform_caption".to_string(),
+            confidence: 0.8,
+            text: "Screen shared.".to_string(),
+        });
+        session.push_stt_transcript(
+            "A participant described the Salesforce assignment workflow.".to_string(),
+            None,
+        );
+
+        let transcript = session.full_transcript();
+        assert!(transcript.contains("Teams: Screen shared."));
+        assert!(transcript.contains("Salesforce assignment workflow"));
+        assert!(transcript.contains("source=stt"));
+    }
+
+    #[test]
+    fn recording_fallback_is_needed_only_without_usable_stt() {
+        let config = MeetingSessionConfig {
+            root: PathBuf::from("/tmp/test"),
+            meeting_url: "https://teams.microsoft.com/meet/demo".to_string(),
+            provider: MeetingProvider::MicrosoftTeams,
+            bot_name: "INF Yoda Notetaker".to_string(),
+            max_duration_minutes: 180,
+            audio_chunk_seconds: 30,
+            stt_model: DEFAULT_MEETING_STT_MODEL.to_string(),
+        };
+        let mut session = MeetingSession::new(&config);
+        session.push_platform_transcript(TranscriptSegment {
+            timestamp: "2026-04-28T12:00:00Z".to_string(),
+            speaker_display: "Teams".to_string(),
+            speaker_id: None,
+            source: "platform_caption".to_string(),
+            confidence: 0.8,
+            text: "You are screen sharing.".to_string(),
+        });
+        assert!(meeting_transcript_needs_recording_fallback(&session));
+
+        session.push_stt_transcript("A participant gave a real update.".to_string(), None);
+        assert!(!meeting_transcript_needs_recording_fallback(&session));
+    }
+
+    #[test]
+    fn full_recording_candidates_ignore_audio_chunks_and_prefer_largest() {
+        let root = temp_root("recording-candidates");
+        let session_id = "meeting-microsoft-recording-test";
+        let sessions_dir = meeting_sessions_dir(&root);
+        std::fs::create_dir_all(&sessions_dir).expect("sessions dir");
+        std::fs::write(
+            sessions_dir.join(format!("{session_id}-manual-recording.mp4")),
+            vec![0; 16],
+        )
+        .expect("manual recording");
+        std::fs::write(
+            sessions_dir.join(format!("{session_id}-recording.mp4")),
+            vec![0; 32],
+        )
+        .expect("recording");
+        let audio_dir = sessions_dir.join(format!("{session_id}-audio"));
+        std::fs::create_dir_all(&audio_dir).expect("audio dir");
+        std::fs::write(audio_dir.join("chunk-001.webm"), vec![0; 64]).expect("chunk");
+
+        let candidates = full_meeting_recording_candidates(&root, session_id);
+        assert_eq!(candidates.len(), 2);
+        assert!(candidates[0]
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap()
+            .ends_with("-recording.mp4"));
+        assert!(candidates.iter().all(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .map(|name| name.contains("recording"))
+                .unwrap_or(false)
+        }));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
