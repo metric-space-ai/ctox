@@ -4619,6 +4619,8 @@ fn terminal_bench_controller_hold_feedback_prompt(
     prompt.push_str(
         "- Preserve and update the same run directory and the same five durable files.\n",
     );
+    prompt.push_str("- Before any open-ended discovery, runner probing, benchmark execution, or web research, write a checkpoint into controller.json, run-log.md, knowledge.md, and results.json that records the current phase, verified facts, blockers, and exact next action.\n");
+    prompt.push_str("- If a tool call finds new runtime, task, runner, leaderboard, blocker, or result information, the next tool call must persist that information into the durable files before continuing exploration.\n");
     prompt.push_str("- Treat controller.phase=preparation and results.json with zero tasks as an unfinished state, not as completion.\n");
     prompt.push_str("- Verify the runtime facts before benchmark execution: CTOX release is current, harness model is Qwen/Qwen3.6-35B-A3B, inference source is local, local runtime is ggml, effective context is 131072 tokens, the Qwen process uses --ctx 131072, CUDA devices 0,1,2,3 are active, and no HTTP inference path is used.\n");
     prompt.push_str("- Verify Harbor and the Terminal-Bench 2 task source, then write one ticket per discovered benchmark task into ticket-map.jsonl.\n");
@@ -9912,8 +9914,13 @@ fn should_queue_durable_artifact_timeout_recovery(job: &QueuedPrompt) -> bool {
         || founder_email_reply_message_key(job).is_some()
         || is_founder_or_owner_email_job(job)
         || job.ticket_self_work_id.is_some()
-        || job.leased_message_keys.is_empty()
         || is_legacy_timeout_continuation_job(job)
+    {
+        return false;
+    }
+    if job.leased_message_keys.is_empty()
+        && !(job.source_label == "review-feedback"
+            && is_terminal_bench_controller_artifact_job(job))
     {
         return false;
     }
@@ -10326,6 +10333,11 @@ fn render_durable_artifact_timeout_recovery_prompt(job: &QueuedPrompt, blocker: 
     prompt.push_str(
         "\nREQUIRED ACTIONS\n- Inspect the workspace and the listed files first; preserve valid progress.\n- Continue the same controller run from the durable files instead of restarting from scratch.\n- Each listed path must be a regular file. A directory at a required file path is invalid and must be corrected before any completion claim.\n- Keep the logbook and summary truthful about attempted work, discovered tasks, blockers, and next actions.\n- If benchmark execution still needs another slice, persist exactly one concrete queue item or plan item before ending.\n\nEXIT GATE\nFinish only after the durable outcome exists in the listed files and the benchmark controller is either terminal or has exactly one persisted next action.",
     );
+    if is_terminal_bench_controller_artifact_job(job) {
+        prompt.push_str(
+            "\n\nTERMINAL-BENCH TIMEOUT RECOVERY ORDER\n1. Read the listed files and recent context only far enough to recover the current phase.\n2. Immediately write a checkpoint into controller.json, logbook.md or run-log.md, knowledge.md, and results.json before any further discovery.\n3. The checkpoint must include verified runtime facts, discovered task source, runner/container blocker status, no-solutions policy status, and the exact next action.\n4. After every further tool call that discovers facts or changes benchmark state, the next tool call must persist those facts into the durable files.\n5. Do not finish with a prose summary only. The durable files are the state.",
+        );
+    }
     prepend_workspace_contract(&prompt, job.workspace_root.as_deref())
 }
 
@@ -13249,6 +13261,76 @@ mod tests {
         let self_work = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
             .expect("failed to list self-work items");
         assert!(self_work.is_empty());
+    }
+
+    #[test]
+    fn timeout_blocker_queues_review_feedback_controller_recovery_without_lease() {
+        let root = temp_root("ctox-timeout-review-feedback-controller");
+        let workspace = root.join("terminal-bench-run");
+        std::fs::create_dir_all(&workspace).expect("failed to create workspace");
+        let controller = workspace.join("controller.json");
+        let logbook = workspace.join("logbook.md");
+        let knowledge = workspace.join("knowledge.md");
+        let results = workspace.join("results.jsonl");
+        let parent = QueuedPrompt {
+            prompt: format!(
+                "Run Terminal-Bench 2 controller.\n\nOnly required durable files for this controller turn:\n- {}\n- {}\n- {}\n- {}\n",
+                controller.display(),
+                logbook.display(),
+                knowledge.display(),
+                results.display()
+            ),
+            goal: "Terminal-Bench 2 Qwen3.6 128k clean".to_string(),
+            preview: "Terminal-Bench controller".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: Some("benchmark-controller".to_string()),
+            leased_message_keys: vec!["queue:system::parent".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("tb2-controller".to_string()),
+            workspace_root: Some(workspace.to_string_lossy().into_owned()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+        let feedback_prompt = terminal_bench_controller_hold_feedback_prompt(
+            &parent,
+            "review timed out before accepting initialized artifacts",
+        );
+        let job = QueuedPrompt {
+            prompt: feedback_prompt,
+            goal: "Continue Terminal-Bench controller for queue".to_string(),
+            preview: "HARNESS FEEDBACK Terminal-Bench controller continuation".to_string(),
+            source_label: "review-feedback".to_string(),
+            suggested_skill: parent.suggested_skill.clone(),
+            leased_message_keys: Vec::new(),
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: parent.thread_key.clone(),
+            workspace_root: parent.workspace_root.clone(),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let created =
+            maybe_enqueue_timeout_continuation(&root, &job, "direct session timeout after 900s")
+                .expect("review-feedback timeout recovery should succeed");
+
+        assert!(created
+            .as_deref()
+            .unwrap_or_default()
+            .starts_with("Recover interrupted Continue Terminal-Bench controller"));
+        let pending = channels::list_queue_tasks(&root, &["pending".to_string()], 10)
+            .expect("failed to list pending queue tasks");
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].thread_key, "tb2-controller");
+        assert!(pending[0]
+            .prompt
+            .contains("TERMINAL-BENCH TIMEOUT RECOVERY ORDER"));
+        assert!(pending[0]
+            .prompt
+            .contains("Immediately write a checkpoint into controller.json"));
+        assert!(pending[0].prompt.contains(controller.to_str().unwrap()));
+        assert!(pending[0].prompt.contains(results.to_str().unwrap()));
     }
 
     #[test]
