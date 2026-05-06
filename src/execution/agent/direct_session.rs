@@ -338,22 +338,30 @@ fn terminal_bench_first_preflight_command_violations(
 
 fn command_writes_empty_terminal_bench_artifacts(lower_command: &str) -> bool {
     [
-        "printf '' >",
-        "printf \"\" >",
-        "echo -n '' >",
-        "echo -n \"\" >",
-        "touch ",
+        "ticket-map.jsonl",
+        "preparation-tickets.jsonl",
+        "run-queue.jsonl",
+        "results.jsonl",
+        "tasks/index.jsonl",
     ]
     .iter()
-    .any(|needle| lower_command.contains(needle))
-        && [
-            "ticket-map.jsonl",
-            "preparation-tickets.jsonl",
-            "run-queue.jsonl",
-            "results.jsonl",
-        ]
-        .iter()
-        .any(|needle| lower_command.contains(needle))
+    .any(|artifact| command_writes_artifact_empty(lower_command, artifact))
+}
+
+fn command_writes_artifact_empty(lower_command: &str, artifact: &str) -> bool {
+    lower_command
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.contains(artifact))
+        .any(|line| {
+            line.starts_with("touch ")
+                || line.contains(" touch ")
+                || line.contains("printf '' >")
+                || line.contains("printf \"\" >")
+                || line.contains("echo -n '' >")
+                || line.contains("echo -n \"\" >")
+                || line.contains("> /dev/null")
+        })
 }
 
 fn terminal_bench_command_persists_runtime_refs(lower_command: &str) -> bool {
@@ -1526,6 +1534,37 @@ test -f \"$RUN_DIR/logbook.md\" && test -f \"$RUN_DIR/blogpost-notes.md\""
 
         let violation = guard.violation_for_first_exec(&command).unwrap();
         assert!(violation.contains("one complete artifact bootstrap script"));
+    }
+
+    #[test]
+    fn terminal_bench_preflight_guard_allows_nonempty_jsonl_after_unrelated_touch() {
+        let run_dir = "/home/metricspace/CTOX/runtime/terminal-bench-2/runs/test-run";
+        let prompt = format!(
+            "HARNESS TERMINAL-BENCH PREFLIGHT\n\
+Only required durable files for this controller turn:\n\
+- {run_dir}/logbook.md\n\
+- {run_dir}/knowledge.md\n\
+- {run_dir}/results.jsonl\n\
+- {run_dir}/tasks/index.jsonl\n\
+- {run_dir}/reports/preflight.md\n\
+The controller must create preparation queue/tickets and record queue:system::* keys."
+        );
+        let mut guard = TerminalBenchPreflightGuard::from_prompt(&prompt).unwrap();
+        let command = format!(
+            "RUN_DIR={run_dir}\n\
+mkdir -p \"$RUN_DIR/tasks\" \"$RUN_DIR/reports\"\n\
+touch \"$RUN_DIR/.lock\"\n\
+printf '# log\\nqueue:system::abc\\n' > \"$RUN_DIR/logbook.md\"\n\
+printf '# knowledge\\n' > \"$RUN_DIR/knowledge.md\"\n\
+printf '{{\"status\":\"preflight\",\"message_key\":\"queue:system::abc\"}}\\n' > \"$RUN_DIR/results.jsonl\"\n\
+printf '{{\"task_count\":0,\"message_key\":\"queue:system::abc\"}}\\n' > \"$RUN_DIR/tasks/index.jsonl\"\n\
+printf '# preflight\\nqueue:system::abc\\n' > \"$RUN_DIR/reports/preflight.md\"\n\
+ctox queue add --title prep-runtime --prompt x\n\
+test -f \"$RUN_DIR/logbook.md\" && test -f \"$RUN_DIR/knowledge.md\" && test -f \"$RUN_DIR/results.jsonl\" && \
+test -f \"$RUN_DIR/tasks/index.jsonl\" && test -f \"$RUN_DIR/reports/preflight.md\""
+        );
+
+        assert!(guard.violation_for_first_exec(&command).is_none());
     }
 
     #[test]
