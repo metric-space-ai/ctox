@@ -640,11 +640,17 @@ fn render_chat_prompt(req: &ResponsesCreateRequest) -> String {
     }
     let mut out = String::new();
     for (role, text) in turns {
-        out.push_str("<|im_start|>");
-        out.push_str(&role);
-        out.push('\n');
-        out.push_str(&text);
-        out.push_str("<|im_end|>\n");
+        if role == "tool" {
+            out.push_str("<|im_start|>user\n<tool_response>\n");
+            out.push_str(text.trim_end());
+            out.push_str("\n</tool_response><|im_end|>\n");
+        } else {
+            out.push_str("<|im_start|>");
+            out.push_str(&role);
+            out.push('\n');
+            out.push_str(&text);
+            out.push_str("<|im_end|>\n");
+        }
     }
     out.push_str("<|im_start|>assistant\n");
     if qwen_thinking_enabled(req) {
@@ -656,12 +662,22 @@ fn render_chat_prompt(req: &ResponsesCreateRequest) -> String {
 }
 
 fn qwen_thinking_enabled(req: &ResponsesCreateRequest) -> bool {
+    if req.input.iter().any(input_item_is_function_call_output) {
+        return false;
+    }
     req.reasoning
         .as_ref()
         .and_then(|reasoning| reasoning.get("effort"))
         .and_then(Value::as_str)
         .map(|effort| !matches!(effort, "none" | "off" | "disabled"))
         .unwrap_or(true)
+}
+
+fn input_item_is_function_call_output(item: &Value) -> bool {
+    item.as_object()
+        .and_then(|obj| obj.get("type"))
+        .and_then(Value::as_str)
+        .is_some_and(|ty| ty == "function_call_output")
 }
 
 fn render_system_prompt(req: &ResponsesCreateRequest) -> String {
@@ -750,10 +766,7 @@ fn input_item_to_turn(item: &Value) -> Option<(String, String)> {
         }
         "function_call_output" => {
             let output = extract_function_output_text(obj.get("output"));
-            Some((
-                "user".to_string(),
-                format!("<tool_response>\n{}\n</tool_response>", output.trim_end()),
-            ))
+            Some(("tool".to_string(), output.trim_end().to_string()))
         }
         _ => None,
     }
@@ -1287,7 +1300,26 @@ printf CTOX_QWEN_TOOL_OK
             "output": "ok"
         }))
         .unwrap();
-        assert_eq!(output.0, "user");
-        assert_eq!(output.1, "<tool_response>\nok\n</tool_response>");
+        assert_eq!(output.0, "tool");
+        assert_eq!(output.1, "ok");
+    }
+
+    #[test]
+    fn tool_output_turn_disables_thinking_and_uses_qwen_tool_role_template() {
+        let mut req = test_request();
+        req.input.push(json!({
+            "type": "function_call",
+            "name": "exec_command",
+            "arguments": "{\"cmd\":\"printf ok\"}"
+        }));
+        req.input.push(json!({
+            "type": "function_call_output",
+            "output": "ok"
+        }));
+
+        let prompt = render_chat_prompt(&req);
+
+        assert!(prompt.contains("<|im_start|>user\n<tool_response>\nok\n</tool_response><|im_end|>\n"));
+        assert!(prompt.ends_with("<|im_start|>assistant\n<think>\n\n</think>\n\n"));
     }
 }
