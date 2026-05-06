@@ -4318,9 +4318,11 @@ fn test_channel(
                 .as_deref()
                 .and_then(|key| load_account_config(&conn, key).ok().flatten());
             let empty_profile = json!({});
-            let resolved_tenant_id = resolved_account_key
-                .as_deref()
-                .map(teams_tenant_from_account_key)
+            let resolved_tenant_id = account_config
+                .as_ref()
+                .and_then(|config| config.profile_json.get("tenantId"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
                 .unwrap_or_default();
             let adapter_json = adapter.test_cli(
                 root,
