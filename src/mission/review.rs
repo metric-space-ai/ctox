@@ -20,6 +20,7 @@ Gather everything else yourself through read-only inspection of the workspace, r
 Operate in strict read-only verification mode.
 Use the same inspection tools as normal CTOX work.
 Use multiple tool turns as needed.
+Stay bounded: answer from the assignment, explicit artifact paths, the CTOX CLI, and directly relevant read-only evidence. Do not reverse-engineer CTOX internals, schemas, or source code unless a direct verification command fails and the missing fact is necessary for the verdict.
 
 Verification standard:
 - active vision and active mission are the primary strategic context
@@ -30,6 +31,7 @@ Verification standard:
 - public-surface quality for owner-visible or public work
 - commercial credibility and buyer-path integrity for launch work
 - SQLite-backed runtime evidence over ad hoc workspace notes or standalone markdown artifacts
+- for internal non-owner artifact jobs with explicit required file paths, the decisive question is whether the declared files exist and contain truthful current status or results; do not block completion merely because broader mission state is open or a nonessential runtime table is hard to inspect
 
 Runtime evidence taxonomy:
 - treat runtime SQLite records as canonical durable state
@@ -681,6 +683,19 @@ Founder/owner communication gate:\n\
         ""
     };
 
+    let artifact_review_work = if founder_artifact {
+        ""
+    } else {
+        "\
+Internal artifact review gate:\n\
+- if the assignment lists explicit durable file paths, inspect those paths first with read-only shell checks such as `test -f`, `wc -c`, `head`, `tail`, `jq`, or `sqlite3` only when the file itself is a SQLite database\n\
+- PASS when the explicit artifact contract is satisfied and the artifact content truthfully records current status, evidence, or next action\n\
+- FAIL when a required artifact is missing, is a directory instead of a file, is empty when it must carry status, or contradicts verified runtime/workspace evidence\n\
+- PARTIAL only when a specific required check cannot be completed within the review budget; include the exact remaining check in HANDOFF\n\
+- do not inspect CTOX source code or infer private table schemas for ordinary file-artifact review unless the artifact itself points there as the necessary evidence\n\
+"
+    };
+
     format!(
         "== REVIEW ASSIGNMENT ==\n\
 \n\
@@ -724,10 +739,12 @@ Required review work:\n\
 Use the runtime DB path and workspace root above as the primary grounding points.\n\
 \n\
 {founder_specific_work}\
+{artifact_review_work}\
 \n\
 Helpful runtime entrypoint:\n\
 - use `ctox strategy show --conversation-id {strategy_conversation_id}` and `ctox verification runs --conversation-id {verification_conversation_id}` as starting lookups, then continue with direct SQLite/runtime/browser inspection\n\
 - for recent meeting outcomes, query `communication_messages` for `channel='meeting'` and bodies or subjects containing `Meeting Summary`, then inspect same-thread entries first and recent cross-thread entries when they mention the reviewed artifact, system, recipient, or deliverable\n\
+- if a suggested SQLite query fails because a column or table is absent, do not spend the review budget on schema exploration unless that exact fact is decisive; use `PRAGMA table_info(<table>)` once, adapt the query, or record the missing evidence as an open item\n\
 \n\
 If active vision or active mission is missing for strategic or owner-visible work, that is a review failure unless the current task is explicitly establishing them.\n\
 \n\

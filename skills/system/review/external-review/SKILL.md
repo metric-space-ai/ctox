@@ -25,6 +25,10 @@ Only CTOX runtime store, live surfaces, repo state, and direct read-only verific
 
 Recent meeting outcomes are time-sensitive runtime evidence. For communication reviews and artifact reviews, inspect the latest relevant meeting summaries before verdict. Prefer same-thread meetings first, then recent cross-thread meeting summaries that mention the reviewed system, recipient, deliverable, project, or artifact. Treat the last 7 days as high-priority context, 30-day-old meetings as supporting context, and older meeting notes as stale unless reinforced by current runtime state.
 
+Stay bounded. Use the review assignment, explicit artifact paths, CTOX CLI output, and directly relevant read-only evidence first. Do not reverse-engineer CTOX source code or spend the review budget exploring schemas unless a direct check fails and that exact fact is necessary for the verdict.
+
+For internal non-owner artifact jobs with explicit required file paths, inspect those files first. PASS is allowed when the declared files exist and truthfully record current status, evidence, results, or the persisted next action. Do not fail only because broader mission state is still open or because a nonessential runtime table is hard to inspect.
+
 ## Core Contract
 
 The review run:
@@ -85,7 +89,7 @@ sqlite3 runtime/ctox.sqlite3 "
 SELECT conversation_id, mission, mission_status, blocker, done_gate AS finish_rule, next_slice AS next_step, is_open
 FROM mission_states
 WHERE conversation_id = <conversation-id>
-ORDER BY updated_at DESC;
+ORDER BY last_synced_at DESC;
 "
 ```
 
@@ -93,7 +97,7 @@ ORDER BY updated_at DESC;
 
 ```bash
 sqlite3 runtime/ctox.sqlite3 "
-SELECT message_id, role, created_at, substr(body,1,400)
+SELECT message_id, role, created_at, substr(content,1,400)
 FROM messages
 WHERE conversation_id = <conversation-id>
 ORDER BY message_id DESC
@@ -111,9 +115,10 @@ ctox ticket cases --limit 20
 
 ```bash
 sqlite3 runtime/ctox.sqlite3 "
-SELECT message_key, source_label, status, thread_key, priority, preview
-FROM queue_messages
-ORDER BY created_at DESC
+SELECT message_key, status, thread_key, preview, substr(body_text,1,500)
+FROM communication_messages
+WHERE channel = 'queue'
+ORDER BY observed_at DESC
 LIMIT 20;
 "
 ```
@@ -125,10 +130,12 @@ sqlite3 runtime/ctox.sqlite3 "
 SELECT channel, direction, sender_address, subject, substr(preview,1,220), created_at
 FROM communication_messages
 WHERE thread_key = '<thread-key>'
-ORDER BY created_at DESC
+ORDER BY observed_at DESC
 LIMIT 12;
 "
 ```
+
+If a suggested SQLite query fails because a column or table is absent, use `PRAGMA table_info(<table>)` once and adapt the query, or record the missing evidence as an open item. Do not keep probing unrelated schemas.
 
 ### Recent meeting outcomes
 

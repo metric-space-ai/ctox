@@ -4201,12 +4201,28 @@ fn run_completion_review(
     match outcome.verdict {
         review::ReviewVerdict::Pass => CompletionReviewDisposition::Approved,
         review::ReviewVerdict::Skipped => CompletionReviewDisposition::None,
-        review::ReviewVerdict::Fail
-        | review::ReviewVerdict::Partial
-        | review::ReviewVerdict::Unavailable => CompletionReviewDisposition::Hold {
-            summary: outcome.summary.clone(),
-        },
+        review::ReviewVerdict::Unavailable => {
+            completion_review_unavailable_disposition(job, &outcome.summary)
+        }
+        review::ReviewVerdict::Fail | review::ReviewVerdict::Partial => {
+            CompletionReviewDisposition::Hold {
+                summary: outcome.summary.clone(),
+            }
+        }
     }
+}
+
+fn completion_review_unavailable_disposition(
+    job: &QueuedPrompt,
+    summary: &str,
+) -> CompletionReviewDisposition {
+    if is_terminal_bench_controller_artifact_job(job) {
+        return CompletionReviewDisposition::Hold {
+            summary: summary.to_string(),
+        };
+    }
+
+    CompletionReviewDisposition::None
 }
 
 fn continuation_self_work_requested<'a>(
@@ -14702,6 +14718,70 @@ Use shell tools to create or update these files through Harbor."
     }
 
     #[test]
+    fn unavailable_review_does_not_requeue_generic_artifact_job() {
+        let job = QueuedPrompt {
+            prompt: "RUN_DIR=\"/tmp/ctox-smoke\". Initialisiere die Datei required-smoke.json."
+                .to_string(),
+            goal: "smoke artifact".to_string(),
+            preview: "smoke artifact".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: None,
+            leased_message_keys: vec!["queue:smoke-artifact".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: None,
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        assert!(!is_terminal_bench_controller_artifact_job(&job));
+        assert!(matches!(
+            completion_review_unavailable_disposition(
+                &job,
+                "completion review leg did not produce a verdict within 300s"
+            ),
+            CompletionReviewDisposition::None
+        ));
+    }
+
+    #[test]
+    fn unavailable_review_still_holds_terminal_bench_controller() {
+        let run_dir = "/home/metricspace/CTOX/runtime/terminal-bench-2/runs/run-hold-feedback";
+        let job = QueuedPrompt {
+            prompt: format!(
+                "Terminal-Bench 2 controller via Harbor.\n\n\
+Required artifacts. You must create and maintain exactly these durable files in this run directory:\n\
+- {run_dir}/controller.json\n\
+- {run_dir}/ticket-map.jsonl\n\
+- {run_dir}/run-log.md\n\
+- {run_dir}/knowledge.md\n\
+- {run_dir}/results.json\n"
+            ),
+            goal: "Terminal-Bench 2 controller Qwen3.6 128k".to_string(),
+            preview: "Terminal-Bench 2 controller Qwen3.6 128k".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: None,
+            leased_message_keys: vec!["queue:system::tb2".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("queue/tb2-qwen36-128k".to_string()),
+            workspace_root: Some("/home/metricspace/CTOX/runtime/terminal-bench-2".to_string()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        assert!(is_terminal_bench_controller_artifact_job(&job));
+        assert!(matches!(
+            completion_review_unavailable_disposition(
+                &job,
+                "completion review leg did not produce a verdict within 300s"
+            ),
+            CompletionReviewDisposition::Hold { .. }
+        ));
+    }
+
+    #[test]
     fn proactive_founder_outbound_does_not_reroute_to_strategy_setup() {
         let root = temp_root("ctox-proactive-founder-outbound-no-strategy-reroute");
         let state = Arc::new(Mutex::new(SharedState::default()));
@@ -14947,8 +15027,12 @@ Use shell tools to create or update these files through Harbor."
             .expect("load queue task")
             .expect("queue task exists");
         assert!(reloaded.prompt.contains("HARNESS FEEDBACK"));
-        assert!(reloaded.prompt.contains("without producing the required final assistant message"));
-        assert!(reloaded.prompt.contains("Create and verify the smoke artifact."));
+        assert!(reloaded
+            .prompt
+            .contains("without producing the required final assistant message"));
+        assert!(reloaded
+            .prompt
+            .contains("Create and verify the smoke artifact."));
         assert_eq!(route_status_for(&root, &task.message_key), "leased");
     }
 
