@@ -2871,7 +2871,11 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
             let retryable_runtime_failure = result
                 .as_ref()
                 .err()
-                .map(|err| runtime_error_is_transient_api_failure(&err.to_string()))
+                .map(|err| {
+                    let err_text = err.to_string();
+                    runtime_error_is_transient_api_failure(&err_text)
+                        && !terminal_bench_preflight_retry_loop_should_stop(&job, &err_text)
+                })
                 .unwrap_or(false);
             // F3: when the turn failed, persist a structured outcome with a
             // neutral, non-leaking body. The legacy "Status: `blocked`" /
@@ -3397,10 +3401,13 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
                     Err(err) => {
                         let err_text = err.to_string();
                         let compact_error = turn_loop::summarize_runtime_error(&err_text);
+                        let terminal_bench_preflight_loop_stop =
+                            terminal_bench_preflight_retry_loop_should_stop(&job, &err_text);
                         let retry_founder_message =
                             founder_email_worker_error_is_retryable(&job, &err_text);
                         let retry_runtime_message =
-                            runtime_error_is_transient_api_failure(&err_text);
+                            runtime_error_is_transient_api_failure(&err_text)
+                                && !terminal_bench_preflight_loop_stop;
                         let timeout_worker_message =
                             matches!(agent_outcome, lcm::AgentOutcome::TurnTimeout);
                         let timeout_retry_message =
@@ -3435,11 +3442,28 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
                                     ),
                                 }
                             }
-                            let route_status = failed_worker_route_status(
-                                agent_failure_threshold_hit,
-                                timeout_worker_message,
-                                retry_worker_message,
-                            );
+                            if terminal_bench_preflight_loop_stop {
+                                let note = terminal_bench_preflight_loop_stop_note(&err_text);
+                                for message_key in &job.leased_message_keys {
+                                    let _ = channels::update_queue_task(
+                                        &root,
+                                        channels::QueueTaskUpdateRequest {
+                                            message_key: message_key.clone(),
+                                            status_note: Some(note.clone()),
+                                            ..Default::default()
+                                        },
+                                    );
+                                }
+                            }
+                            let route_status = if terminal_bench_preflight_loop_stop {
+                                "blocked"
+                            } else {
+                                failed_worker_route_status(
+                                    agent_failure_threshold_hit,
+                                    timeout_worker_message,
+                                    retry_worker_message,
+                                )
+                            };
                             if let Some(not_before) = retry_not_before.as_deref() {
                                 let _ = channels::defer_messages_until(
                                     &root,
@@ -3529,7 +3553,15 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
                                 block_ticket_self_work_item(&root, work_id, &note);
                             }
                         }
-                        if retry_worker_message {
+                        if terminal_bench_preflight_loop_stop {
+                            push_event_locked(
+                                &mut shared,
+                                format!(
+                                    "{} prompt hit repeated Terminal-Bench preflight violations; automatic retry stopped: {compact_error}",
+                                    job.source_label
+                                ),
+                            );
+                        } else if retry_worker_message {
                             push_event_locked(
                                 &mut shared,
                                 format!(
@@ -11006,6 +11038,22 @@ fn is_terminal_bench_preflight_violation(value: &str) -> bool {
         .contains("terminal-bench preflight violation")
 }
 
+fn terminal_bench_preflight_retry_loop_should_stop(job: &QueuedPrompt, error_text: &str) -> bool {
+    if !is_terminal_bench_preflight_violation(error_text) {
+        return false;
+    }
+    job.prompt
+        .to_ascii_lowercase()
+        .contains("harness terminal-bench preflight retry")
+}
+
+fn terminal_bench_preflight_loop_stop_note(error_text: &str) -> String {
+    format!(
+        "Stopped automatic Terminal-Bench preflight retry loop. The worker repeated the preflight violation after explicit harness feedback; the model must be restarted with a clearer controller prompt or a stronger model. Last error: {}",
+        clip_text(error_text.trim(), 220)
+    )
+}
+
 /// F3: classify a harness-error string into a structured `AgentOutcome`.
 /// The error text comes from the harness/turn-loop itself (we own its
 /// format), not from free-form prompt content. Keep the matchers narrow
@@ -15990,6 +16038,44 @@ Required artifacts. You must create and maintain exactly these durable files in 
         assert!(prompt.contains("/tmp/tb/ticket-map.jsonl"));
         assert!(prompt.contains("/tmp/tb/preparation-tickets.jsonl"));
         assert!(prompt.contains("Do not satisfy this retry with substitute files"));
+    }
+
+    #[test]
+    fn terminal_bench_preflight_retry_loop_stops_after_feedback_retry() {
+        let error = "terminal-bench preflight violation: the first shell command did not create and verify the required current-run artifacts.";
+        let first_attempt = QueuedPrompt {
+            prompt:
+                "Only required durable files for this controller turn:\n- /tmp/tb/controller.json"
+                    .to_string(),
+            goal: "Terminal-Bench controller preflight".to_string(),
+            preview: "Terminal-Bench controller preflight".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: Some("benchmark-controller".to_string()),
+            leased_message_keys: Vec::new(),
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("tb2/preflight".to_string()),
+            workspace_root: Some("/tmp".to_string()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+        assert!(!terminal_bench_preflight_retry_loop_should_stop(
+            &first_attempt,
+            error
+        ));
+
+        let retry_attempt = QueuedPrompt {
+            prompt: format!(
+                "{}\n\nHARNESS TERMINAL-BENCH PREFLIGHT RETRY\nOnly required durable files for this controller turn:\n- /tmp/tb/controller.json",
+                first_attempt.prompt
+            ),
+            ..first_attempt
+        };
+        assert!(terminal_bench_preflight_retry_loop_should_stop(
+            &retry_attempt,
+            error
+        ));
+        assert!(terminal_bench_preflight_loop_stop_note(error).contains("Stopped automatic"));
     }
 
     #[test]
