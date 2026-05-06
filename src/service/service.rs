@@ -11052,6 +11052,7 @@ fn render_durable_artifact_timeout_recovery_prompt(job: &QueuedPrompt, blocker: 
 }
 
 fn render_runtime_retry_prompt(job: &QueuedPrompt, error_text: &str) -> String {
+    let terminal_bench_preflight_retry = is_terminal_bench_preflight_violation(error_text);
     let mut required_actions = vec![
         "inspect durable state and workspace artifacts before retrying; do not trust the previous reply text as proof",
         "preserve work that already exists and avoid duplicate queue tasks",
@@ -11059,7 +11060,7 @@ fn render_runtime_retry_prompt(job: &QueuedPrompt, error_text: &str) -> String {
         "finish only after the real durable outcome exists in the state machine",
         "if the runtime is still unavailable, leave this work pending for another retry instead of claiming completion",
     ];
-    let problem = if is_terminal_bench_preflight_violation(error_text) {
+    let problem = if terminal_bench_preflight_retry {
         required_actions.insert(
             0,
             "the previous first shell command violated the Terminal-Bench preflight gate; the next worker action must be a shell script that creates the current RUN_DIR, creates all required files as regular files, records real queue refs or an exact CLI blocker, and verifies every file with test -f before any discovery",
@@ -11086,12 +11087,28 @@ fn render_runtime_retry_prompt(job: &QueuedPrompt, error_text: &str) -> String {
             "do not say the email was sent unless an outbound email row reached the accepted terminal state",
         );
     }
-    let prompt = format!(
+    let mut prompt = format!(
         "HARNESS FEEDBACK\nProblem: {problem}\n\nCURRENT TASK\n{}\n\nRUNTIME FAILURE\n{}\n\nREQUIRED ACTIONS\n- {}\n\nEXIT GATE\nFinish only after the durable outcome exists in runtime state. If the runtime is still unavailable, keep the work pending instead of claiming completion.",
         runtime_retry_current_task_summary(job),
         clip_text(error_text.trim(), 220),
         required_actions.join("\n- ")
     );
+    if terminal_bench_preflight_retry {
+        let file_refs = declared_workspace_file_artifacts_for_job(job);
+        if !file_refs.is_empty() {
+            prompt.push_str(
+                "\n\nHARNESS TERMINAL-BENCH PREFLIGHT RETRY\nOnly required durable files for this controller turn:\n",
+            );
+            for path in &file_refs {
+                prompt.push_str("- ");
+                prompt.push_str(path);
+                prompt.push('\n');
+            }
+            prompt.push_str(
+                "The controller must create preparation queue/tickets and record real queue:system::* keys, or persist an exact blocker with the failed CLI command and stderr. Do not satisfy this retry with substitute files outside this list.\n",
+            );
+        }
+    }
     prepend_workspace_contract(&prompt, job.workspace_root.as_deref())
 }
 
@@ -15933,9 +15950,7 @@ Required artifacts. You must create and maintain exactly these durable files in 
         );
         assert!(runtime_error_is_transient_api_failure(error));
         let job = QueuedPrompt {
-            prompt:
-                "Only required durable files for this controller turn:\n- /tmp/tb/controller.json"
-                    .to_string(),
+            prompt: "Only required durable files for this controller turn:\n- /tmp/tb/controller.json\n- /tmp/tb/ticket-map.jsonl\n- /tmp/tb/preparation-tickets.jsonl".to_string(),
             goal: "Terminal-Bench controller preflight".to_string(),
             preview: "Terminal-Bench controller preflight".to_string(),
             source_label: "queue".to_string(),
@@ -15956,6 +15971,12 @@ Required artifacts. You must create and maintain exactly these durable files in 
         assert!(prompt.contains("creates the current RUN_DIR"));
         assert!(prompt.contains("do not inspect install trees"));
         assert!(prompt.contains("not work performed by the harness"));
+        assert!(prompt.contains("HARNESS TERMINAL-BENCH PREFLIGHT RETRY"));
+        assert!(prompt.contains("Only required durable files for this controller turn"));
+        assert!(prompt.contains("/tmp/tb/controller.json"));
+        assert!(prompt.contains("/tmp/tb/ticket-map.jsonl"));
+        assert!(prompt.contains("/tmp/tb/preparation-tickets.jsonl"));
+        assert!(prompt.contains("Do not satisfy this retry with substitute files"));
     }
 
     #[test]
