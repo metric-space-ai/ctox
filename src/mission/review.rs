@@ -478,6 +478,33 @@ fn assess_review_requirement(
     let lowered = combined.to_ascii_lowercase();
     let mut score = 0u8;
     let mut reasons = Vec::new();
+    let founder_or_owner_email = matches!(
+        request.source_label.to_ascii_lowercase().as_str(),
+        "email:owner" | "email:founder" | "email:admin"
+    ) || request
+        .artifact_action
+        .as_deref()
+        .map(|value| value.to_ascii_lowercase().contains("founder"))
+        .unwrap_or(false);
+    let internal_artifact_slice = !founder_or_owner_email
+        && !request.owner_visible
+        && request.artifact_action.is_none()
+        && contains_any(
+            &lowered,
+            &[
+                "required artifact",
+                "required artifacts",
+                "required file",
+                "required files",
+                "durable artifact",
+                "durable file",
+                "initialisiere die datei",
+                "create and verify the smoke artifact",
+            ],
+        );
+    if internal_artifact_slice {
+        push_unique_reason(&mut reasons, "internal_artifact_slice");
+    }
 
     let closure_claim = contains_any(
         &lowered,
@@ -555,18 +582,15 @@ fn assess_review_requirement(
     }
 
     if combined.chars().count() > 900 {
-        score = score.saturating_add(1);
-        push_unique_reason(&mut reasons, "long_complex_slice");
+        if internal_artifact_slice {
+            // Internal file-artifact slices are guarded by the outcome
+            // witness; length alone must not send them into external review.
+        } else {
+            score = score.saturating_add(1);
+            push_unique_reason(&mut reasons, "long_complex_slice");
+        }
     }
 
-    let founder_or_owner_email = matches!(
-        request.source_label.to_ascii_lowercase().as_str(),
-        "email:owner" | "email:founder" | "email:admin"
-    ) || request
-        .artifact_action
-        .as_deref()
-        .map(|value| value.to_ascii_lowercase().contains("founder"))
-        .unwrap_or(false);
     if founder_or_owner_email {
         score = score.saturating_add(3);
         push_unique_reason(&mut reasons, "founder_communication");
@@ -1136,6 +1160,42 @@ mod tests {
             "Explained the current queue backlog and highlighted the blocked task.",
         );
         assert!(!required);
+    }
+
+    #[test]
+    fn skips_review_for_internal_smoke_artifact_slice() {
+        let request = CompletionReviewRequest {
+            preview: "Qwen smoke".to_string(),
+            source_label: "queue".to_string(),
+            owner_visible: false,
+            ..CompletionReviewRequest::default()
+        };
+        let (required, score, reasons) = assess_review_requirement(
+            &request,
+            "Created and verified the smoke artifact. Required file exists and contains qwen36-local-tool-ok.",
+        );
+        assert!(!required);
+        assert!(score < 3);
+        assert!(reasons
+            .iter()
+            .any(|reason| reason == "internal_artifact_slice"));
+    }
+
+    #[test]
+    fn still_requires_review_for_owner_visible_internal_artifact_claim() {
+        let request = CompletionReviewRequest {
+            preview: "Production rollout".to_string(),
+            source_label: "queue".to_string(),
+            owner_visible: true,
+            ..CompletionReviewRequest::default()
+        };
+        let (required, score, reasons) = assess_review_requirement(
+            &request,
+            "Created and verified the required artifact after restarting the service.",
+        );
+        assert!(required);
+        assert!(score >= 3);
+        assert!(reasons.iter().any(|reason| reason == "owner_visible_claim"));
     }
 
     #[test]
