@@ -224,26 +224,25 @@ impl GraphTeamsClient {
     }
 
     fn list_joined_teams(&self, top: usize) -> Result<Vec<Value>> {
-        let value = self.request("GET", "/me/joinedTeams", &[("$top", top.to_string())], None)?;
-        Ok(value
+        let value = self.request("GET", "/me/joinedTeams", &[], None)?;
+        let mut teams = value
             .get("value")
             .and_then(Value::as_array)
             .cloned()
-            .unwrap_or_default())
+            .unwrap_or_default();
+        teams.truncate(top);
+        Ok(teams)
     }
 
     fn list_team_channels(&self, team_id: &str, top: usize) -> Result<Vec<Value>> {
-        let value = self.request(
-            "GET",
-            &format!("/teams/{team_id}/channels"),
-            &[("$top", top.to_string())],
-            None,
-        )?;
-        Ok(value
+        let value = self.request("GET", &format!("/teams/{team_id}/channels"), &[], None)?;
+        let mut channels = value
             .get("value")
             .and_then(Value::as_array)
             .cloned()
-            .unwrap_or_default())
+            .unwrap_or_default();
+        channels.truncate(top);
+        Ok(channels)
     }
 
     fn get_self_identity(&self) -> Result<TeamsSelfIdentity> {
