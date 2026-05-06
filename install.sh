@@ -240,6 +240,22 @@ prepare_cargo_target_cache() {
     "$C_BOLD" "$C_GREY" "$link_path" "$C_RESET" >&2
 }
 
+clean_stale_cmake_cache_dirs() {
+  local target_dir="$1"
+  local source_root="$2"
+  [[ -d "$target_dir" ]] || return 0
+  command -v grep >/dev/null 2>&1 || return 0
+
+  local cache_file
+  while IFS= read -r -d '' cache_file; do
+    if grep -Fq "$source_root" "$cache_file" 2>/dev/null; then
+      continue
+    fi
+    printf '  %b%bremoving stale CMake cache %s%b\n' "$C_BOLD" "$C_GREY" "$cache_file" "$C_RESET" >&2
+    rm -rf "$(dirname "$cache_file")"
+  done < <(find "$target_dir" -path '*/out/*/CMakeCache.txt' -print0 2>/dev/null)
+}
+
 # ── Interactive backend selector ─────────────────────────────────────────────
 tui_select_backend() {
   local detected_gpu="$1"     # "nvidia", "metal", "none"
@@ -1277,6 +1293,7 @@ build_ctox() {
   local source_root="$1"
   local cargo; cargo="$(resolve_cargo)"
   prepare_cargo_target_cache "$source_root/target" "ctox-main"
+  clean_stale_cmake_cache_dirs "$source_root/target" "$source_root"
 
   # 1. Build main CTOX binary
   run_build_module "ctox CLI" "$source_root" "$cargo" build --release --bin ctox
