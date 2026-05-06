@@ -7737,10 +7737,15 @@ fn is_bounded_benchmark_or_runtime_execution_job(job: &QueuedPrompt) -> bool {
                 || haystack.contains("run-log.md")));
     let concrete_execution = haystack.contains("run_dir=")
         || haystack.contains("required output artifacts")
+        || haystack.contains("durable artifact contract")
+        || haystack.contains("required durable files")
         || haystack.contains("write these exact files")
         || haystack.contains("use shell/tools")
         || haystack.contains("local ipc")
+        || haystack.contains("local ctox ipc")
         || haystack.contains("context_window")
+        || haystack.contains("context window")
+        || haystack.contains("backend evidence")
         || haystack.contains("verify runtime/context");
     benchmark_scope && concrete_execution
 }
@@ -14118,6 +14123,68 @@ Start now by using shell/tools to create RUN_DIR artifacts and verify runtime/co
                 .expect("failed to list queue tasks");
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0].title, "Terminal-Bench 2 controller Qwen3.6 128k");
+
+        let items = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
+            .expect("failed to list self-work");
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn terminal_bench_controller_with_artifact_contract_does_not_reroute_to_strategy_setup() {
+        let root = temp_root("ctox-terminal-bench-artifact-contract-no-strategy-reroute");
+        let queue_task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Terminal-Bench 2 controller Qwen3.6 128k clean".to_string(),
+                prompt: "You are CTOX running as the Terminal-Bench 2 benchmark controller.\n\
+RUNTIME CONTRACT\n\
+- The required context window is 128k tokens / 131072 tokens. Verify this from CTOX status/runtime evidence.\n\
+- Inference must stay on local CTOX IPC/native backend.\n\
+DURABLE ARTIFACT CONTRACT\n\
+Create these five files immediately, before open-ended discovery or research.\n\
+1. /home/metricspace/CTOX/runtime/terminal-bench-2/runs/run-1/controller.json\n\
+2. /home/metricspace/CTOX/runtime/terminal-bench-2/runs/run-1/ticket-map.jsonl\n\
+3. /home/metricspace/CTOX/runtime/terminal-bench-2/runs/run-1/run-log.md\n\
+4. /home/metricspace/CTOX/runtime/terminal-bench-2/runs/run-1/results.jsonl\n\
+5. /home/metricspace/CTOX/runtime/terminal-bench-2/runs/run-1/summary.md"
+                    .to_string(),
+                thread_key: "tb2-qwen36-128k-controller-artifact-contract".to_string(),
+                workspace_root: Some("/home/metricspace".to_string()),
+                priority: "urgent".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to seed Terminal-Bench queue task");
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        let job = QueuedPrompt {
+            prompt: queue_task.prompt.clone(),
+            goal: queue_task.title.clone(),
+            preview: queue_task.title.clone(),
+            source_label: "queue".to_string(),
+            suggested_skill: None,
+            leased_message_keys: vec![queue_task.message_key.clone()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("tb2-qwen36-128k-controller-artifact-contract".to_string()),
+            workspace_root: Some("/home/metricspace".to_string()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let redirected = maybe_redirect_owner_visible_work_to_strategy_setup(&root, &state, &job)
+            .expect("strategy evaluation should succeed");
+        assert!(!redirected);
+
+        let tasks =
+            channels::list_queue_tasks(&root, &["pending".to_string(), "leased".to_string()], 10)
+                .expect("failed to list queue tasks");
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(
+            tasks[0].title,
+            "Terminal-Bench 2 controller Qwen3.6 128k clean"
+        );
 
         let items = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
             .expect("failed to list self-work");
