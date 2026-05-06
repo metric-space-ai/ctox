@@ -16,53 +16,53 @@
 
 use std::path::{Path, PathBuf};
 
-pub fn runtime_dir(root: &Path) -> PathBuf {
+pub fn runtime_dir(root: impl AsRef<Path>) -> PathBuf {
     if let Some(state_root) = std::env::var_os("CTOX_STATE_ROOT")
         .map(PathBuf::from)
         .filter(|path| !path.as_os_str().is_empty())
     {
         return state_root;
     }
-    root.join("runtime")
+    root.as_ref().join("runtime")
 }
 
-pub fn backup_dir(root: &Path) -> PathBuf {
+pub fn backup_dir(root: impl AsRef<Path>) -> PathBuf {
     runtime_dir(root).join("backup")
 }
 
 /// The consolidated core state database.
-pub fn core_db(root: &Path) -> PathBuf {
+pub fn core_db(root: impl AsRef<Path>) -> PathBuf {
     runtime_dir(root).join("ctox.sqlite3")
 }
 
 /// Alias of [`core_db`] used by mission-side call sites for readability.
-pub fn mission_db(root: &Path) -> PathBuf {
+pub fn mission_db(root: impl AsRef<Path>) -> PathBuf {
     core_db(root)
 }
 
 /// Alias of [`core_db`] used by LCM-side call sites for readability.
-pub fn lcm_db(root: &Path) -> PathBuf {
+pub fn lcm_db(root: impl AsRef<Path>) -> PathBuf {
     core_db(root)
 }
 
 /// Legacy `runtime/cto_agent.db` — used only by the one-shot merge migration.
-pub fn legacy_mission_db(root: &Path) -> PathBuf {
+pub fn legacy_mission_db(root: impl AsRef<Path>) -> PathBuf {
     runtime_dir(root).join("cto_agent.db")
 }
 
 /// Legacy `runtime/ctox_lcm.db` — used only by the one-shot merge migration.
-pub fn legacy_lcm_db(root: &Path) -> PathBuf {
+pub fn legacy_lcm_db(root: impl AsRef<Path>) -> PathBuf {
     runtime_dir(root).join("ctox_lcm.db")
 }
 
 /// Tool-owned store for the scrape capability. Stays separate from the core
 /// consolidation by design (tools may keep their own sqlite files).
-pub fn scrape_db(root: &Path) -> PathBuf {
+pub fn scrape_db(root: impl AsRef<Path>) -> PathBuf {
     runtime_dir(root).join("ctox_scraping.db")
 }
 
 /// Tool-owned store for the local ticket adapter. Stays separate for the same
 /// reason as [`scrape_db`].
-pub fn ticket_local_db(root: &Path) -> PathBuf {
+pub fn ticket_local_db(root: impl AsRef<Path>) -> PathBuf {
     runtime_dir(root).join("ticket_local.db")
 }

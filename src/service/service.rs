@@ -626,7 +626,7 @@ pub fn run_foreground(root: &Path) -> Result<()> {
     if let Err(err) = crate::skill_store::bootstrap_embedded_system_skills(root) {
         eprintln!("ctox service: bootstrap_embedded_system_skills failed: {err:#}");
     }
-    let db_path = root.join("runtime/ctox.sqlite3");
+    let db_path = crate::paths::core_db(&root);
     let _ = crate::lcm::LcmEngine::open(&db_path, crate::lcm::LcmConfig::default())?;
     let listen_addr = service_listen_addr(root);
     write_pid_file(root, std::process::id())?;
@@ -950,7 +950,7 @@ fn attempt_state_invariant_repair(
     lcm::MissionStateRepairOutcome,
     state_invariants::RuntimeStateInvariantReport,
 )> {
-    let db_path = root.join("runtime/ctox.sqlite3");
+    let db_path = crate::paths::core_db(&root);
     let engine = lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default())?;
     let mut repair = engine.sync_mission_state_from_continuity_with_repair(conversation_id)?;
     let mut report = state_invariants::evaluate_runtime_state_invariants(root, conversation_id)?;
@@ -1196,7 +1196,7 @@ fn release_stale_service_communication_leases_on_boot(
 }
 
 fn release_stale_service_communication_leases(root: &Path) -> Result<usize> {
-    let db_path = root.join("runtime").join("ctox.sqlite3");
+    let db_path = crate::paths::core_db(&root);
     let conn = channels::open_channel_db(&db_path)?;
     let now = now_iso_string();
     let updated = conn.execute(
@@ -2218,7 +2218,7 @@ fn status_from_shared_state(root: &Path, state: &Arc<Mutex<SharedState>>) -> Res
     }
 
     let last_agent_outcome = {
-        let db_path = root.join("runtime/ctox.sqlite3");
+        let db_path = crate::paths::core_db(&root);
         lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default())
             .ok()
             .and_then(|engine| {
@@ -2751,7 +2751,7 @@ fn start_prompt_worker(
             clip_text(&job.preview, 120)
         );
         let panic_outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let db_path = root.join("runtime/ctox.sqlite3");
+            let db_path = crate::paths::core_db(&root);
             let event_state = state.clone();
             let event_source = job.source_label.clone();
             let workspace_root = job.workspace_root.as_deref().map(std::path::Path::new);
@@ -3901,7 +3901,7 @@ fn run_completion_review(
     _mission_state: Option<&lcm::MissionStateRecord>,
 ) -> CompletionReviewDisposition {
     let owner_visible = derive_owner_visible_for_review(&job.source_label);
-    let db_path = root.join("runtime/ctox.sqlite3");
+    let db_path = crate::paths::core_db(&root);
     let review_skill_path = root
         .join("skills/system/review/external-review/SKILL.md")
         .to_string_lossy()
@@ -4523,7 +4523,7 @@ fn delivered_outcome_artifacts_for_job(
     if expected_artifact_refs.is_empty() {
         return Ok(Vec::new());
     }
-    let conn = channels::open_channel_db(&root.join("runtime/ctox.sqlite3"))?;
+    let conn = channels::open_channel_db(&crate::paths::core_db(&root))?;
     let fresh_cutoff = workspace_artifact_fresh_cutoff_for_job(root, job);
     let mut delivered = Vec::new();
     for expected in expected_artifact_refs {
@@ -5547,7 +5547,7 @@ fn enforce_job_outcome_witness(
     }
     validate_terminal_bench_controller_runtime_refs(root, job, &expected_artifact_refs)?;
 
-    let db_path = root.join("runtime/ctox.sqlite3");
+    let db_path = crate::paths::core_db(&root);
     let conn = channels::open_channel_db(&db_path)?;
     let entity_id = job_outcome_entity_id(job);
     let (entity_type, from_state, to_state, event) = if job.ticket_self_work_id.is_some() {
@@ -5693,7 +5693,7 @@ fn outcome_witness_retry_route_status(root: &Path, job: &QueuedPrompt) -> &'stat
 }
 
 fn outcome_witness_rejection_count(root: &Path, job: &QueuedPrompt) -> Result<usize> {
-    let conn = channels::open_channel_db(&root.join("runtime/ctox.sqlite3"))?;
+    let conn = channels::open_channel_db(&crate::paths::core_db(&root))?;
     let entity_id = job_outcome_entity_id(job);
     let count: i64 = conn.query_row(
         r#"
@@ -5717,7 +5717,7 @@ fn enforce_review_checkpoint_feedback_transition(
     work_id: &str,
     outcome: &review::ReviewOutcome,
 ) -> Result<String> {
-    let db_path = root.join("runtime/ctox.sqlite3");
+    let db_path = crate::paths::core_db(&root);
     let conn = channels::open_channel_db(&db_path)?;
     let mut metadata = BTreeMap::new();
     metadata.insert("review_checkpoint".to_string(), "true".to_string());
@@ -6486,7 +6486,7 @@ struct HarnessAuditTickSummary {
 
 fn harness_audit_tick_once(root: &Path) -> Result<HarnessAuditTickSummary> {
     use crate::service::harness_mining::{brief, findings, now_iso_z};
-    let db_path = root.join("runtime/ctox.sqlite3");
+    let db_path = crate::paths::core_db(&root);
     let conn = Connection::open(&db_path)
         .with_context(|| format!("audit tick: open db {}", db_path.display()))?;
     let report = findings::run_audit_tick(&conn, &brief::Options::default(), &now_iso_z())?;
@@ -7709,7 +7709,7 @@ fn load_founder_inbound_context_for_rework(
     root: &Path,
     inbound_message_key: &str,
 ) -> Option<String> {
-    let db_path = root.join("runtime").join("ctox.sqlite3");
+    let db_path = crate::paths::core_db(&root);
     let conn = channels::open_channel_db(&db_path).ok()?;
     let mut stmt = conn
         .prepare(
@@ -7922,7 +7922,7 @@ fn founder_thread_has_later_reviewed_send(
     if message.thread_key.trim().is_empty() || message.external_created_at.trim().is_empty() {
         return Ok(false);
     }
-    let db_path = root.join("runtime").join("ctox.sqlite3");
+    let db_path = crate::paths::core_db(&root);
     let conn = channels::open_channel_db(&db_path)?;
     let exists: i64 = conn.query_row(
         r#"
@@ -7951,7 +7951,7 @@ fn founder_thread_has_newer_founder_or_owner_inbound(
     if message.thread_key.trim().is_empty() || message.external_created_at.trim().is_empty() {
         return Ok(false);
     }
-    let db_path = root.join("runtime").join("ctox.sqlite3");
+    let db_path = crate::paths::core_db(&root);
     let conn = channels::open_channel_db(&db_path)?;
     let mut statement = conn.prepare(
         r#"
@@ -7984,7 +7984,7 @@ fn cancel_open_founder_communication_rework_queue_for_inbound(
     inbound_key: &str,
     reason: &str,
 ) -> Result<usize> {
-    let db_path = root.join("runtime").join("ctox.sqlite3");
+    let db_path = crate::paths::core_db(&root);
     let conn = channels::open_channel_db(&db_path)?;
     let now = now_iso_string();
     let updated = conn.execute(
@@ -8084,7 +8084,7 @@ fn close_open_founder_communication_self_work_for_inbound(
 }
 
 fn communication_route_status(root: &Path, message_key: &str) -> Result<Option<String>> {
-    let db_path = root.join("runtime").join("ctox.sqlite3");
+    let db_path = crate::paths::core_db(&root);
     let conn = channels::open_channel_db(&db_path)?;
     conn.query_row(
         "SELECT route_status FROM communication_routing_state WHERE message_key = ?1",
@@ -8275,7 +8275,7 @@ Keine internen Notizen, keine Toolnamen, keine Host-Pfade, keine Prompt- oder So
 }
 
 fn open_founder_communication_rework_for_inbound(root: &Path, inbound_key: &str) -> Result<bool> {
-    let db_path = root.join("runtime").join("ctox.sqlite3");
+    let db_path = crate::paths::core_db(&root);
     let conn = channels::open_channel_db(&db_path)?;
     let exists: i64 = conn.query_row(
         r#"
@@ -8308,7 +8308,7 @@ fn normalize_open_founder_communication_rework_queue_metadata(
     root: &Path,
     inbound_key: &str,
 ) -> Result<usize> {
-    let db_path = root.join("runtime").join("ctox.sqlite3");
+    let db_path = crate::paths::core_db(&root);
     let conn = channels::open_channel_db(&db_path)?;
     let mut statement = conn.prepare(
         r#"
@@ -8372,7 +8372,7 @@ fn release_stalled_founder_communication_rework_queue_for_inbound(
     root: &Path,
     inbound_key: &str,
 ) -> Result<usize> {
-    let db_path = root.join("runtime").join("ctox.sqlite3");
+    let db_path = crate::paths::core_db(&root);
     let conn = channels::open_channel_db(&db_path)?;
     let now = now_iso_string();
     let updated = conn.execute(
@@ -8841,7 +8841,7 @@ fn cancel_runnable_thread_tasks_for_strategy(
 
 fn has_runnable_founder_or_owner_email(root: &Path) -> Result<bool> {
     let settings = live_service_settings(root);
-    let db_path = root.join("runtime/ctox.sqlite3");
+    let db_path = crate::paths::core_db(&root);
     let conn = channels::open_channel_db(&db_path)?;
     let mut statement = conn.prepare(
         r#"
@@ -8913,7 +8913,7 @@ fn maybe_redirect_owner_visible_work_to_strategy_setup(
         .clone()
         .unwrap_or_else(|| default_follow_up_thread_key(&job.goal));
     let conversation_id = turn_loop::conversation_id_for_thread_key(Some(thread_key.as_str()));
-    let db_path = root.join("runtime/ctox.sqlite3");
+    let db_path = crate::paths::core_db(&root);
     let engine = lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default())?;
     let strategy = engine.active_strategy_snapshot(conversation_id, Some(thread_key.as_str()))?;
     if strategy.active_vision.is_some() && strategy.active_mission.is_some() {
@@ -9410,7 +9410,7 @@ fn recent_ticket_self_work_notes_for_prompt(
     work_id: &str,
     limit: usize,
 ) -> Result<Vec<String>> {
-    let db_path = root.join("runtime").join("ctox.sqlite3");
+    let db_path = crate::paths::core_db(&root);
     let conn = channels::open_channel_db(&db_path)?;
     let mut statement = conn.prepare(
         r#"
@@ -9681,7 +9681,7 @@ fn find_runnable_self_work_task_ignoring(
     ignored_message_keys: &[String],
 ) -> Result<Option<channels::QueueTaskView>> {
     let dedupe_key = ticket_self_work_dedupe_key(item);
-    let db_path = root.join("runtime").join("ctox.sqlite3");
+    let db_path = crate::paths::core_db(&root);
     let conn = channels::open_channel_db(&db_path)?;
     let mut statement = conn.prepare(
         r#"
@@ -9821,7 +9821,7 @@ fn review_checkpoint_loop_block_already_active(root: &Path, work_id: &str) -> Re
     if item.state != "blocked" {
         return Ok(false);
     }
-    let db_path = root.join("runtime").join("ctox.sqlite3");
+    let db_path = crate::paths::core_db(&root);
     let conn = channels::open_channel_db(&db_path)?;
     let exists: i64 = conn.query_row(
         r#"
@@ -9838,7 +9838,7 @@ fn review_checkpoint_loop_block_already_active(root: &Path, work_id: &str) -> Re
 }
 
 fn review_checkpoint_requeue_attempt_count(root: &Path, work_id: &str) -> Result<usize> {
-    let db_path = root.join("runtime").join("ctox.sqlite3");
+    let db_path = crate::paths::core_db(&root);
     let conn = channels::open_channel_db(&db_path)?;
     let count: i64 = conn.query_row(
         r#"
@@ -9933,7 +9933,7 @@ fn founder_rework_loop_block_already_active(root: &Path, work_id: &str) -> Resul
     if item.state != "blocked" {
         return Ok(false);
     }
-    let db_path = root.join("runtime").join("ctox.sqlite3");
+    let db_path = crate::paths::core_db(&root);
     let conn = channels::open_channel_db(&db_path)?;
     let exists: i64 = conn.query_row(
         r#"
@@ -9950,7 +9950,7 @@ fn founder_rework_loop_block_already_active(root: &Path, work_id: &str) -> Resul
 }
 
 fn founder_rework_queue_attempt_count(root: &Path, work_id: &str) -> Result<usize> {
-    let db_path = root.join("runtime").join("ctox.sqlite3");
+    let db_path = crate::paths::core_db(&root);
     let conn = channels::open_channel_db(&db_path)?;
     let count: i64 = conn.query_row(
         r#"
@@ -9979,7 +9979,7 @@ fn block_founder_rework_queue_tasks_for_work(
     work_id: &str,
     note: &str,
 ) -> Result<usize> {
-    let db_path = root.join("runtime").join("ctox.sqlite3");
+    let db_path = crate::paths::core_db(&root);
     let conn = channels::open_channel_db(&db_path)?;
     let mut statement = conn.prepare(
         r#"
@@ -10022,7 +10022,7 @@ fn block_founder_rework_queue_tasks_for_work(
 }
 
 fn block_self_work_queue_tasks_for_work(root: &Path, work_id: &str, note: &str) -> Result<usize> {
-    let db_path = root.join("runtime").join("ctox.sqlite3");
+    let db_path = crate::paths::core_db(&root);
     let conn = channels::open_channel_db(&db_path)?;
     let mut statement = conn.prepare(
         r#"
@@ -10326,8 +10326,8 @@ fn render_email_context_contract(root: &Path, message: &channels::RoutedInboundM
     } else {
         format!("{sender} {}", query_parts.join(" "))
     };
-    let db_path = root.join("runtime/ctox.sqlite3");
-    let lcm_path = root.join("runtime/ctox.sqlite3");
+    let db_path = crate::paths::core_db(&root);
+    let lcm_path = crate::paths::core_db(&root);
     let lines = vec![
         "[Kommunikationskontext aktiv pruefen]".to_string(),
         "Vor einer Antwort nicht nur auf diese Mail-Huelle verlassen.".to_string(),
@@ -11727,7 +11727,7 @@ mod tests {
         body: &str,
         metadata: Value,
     ) {
-        let db_path = root.join("runtime/ctox.sqlite3");
+        let db_path = crate::paths::core_db(&root);
         let mut conn = channels::open_channel_db(&db_path).expect("open channel db");
         let observed_at = "2026-04-28T12:00:00Z";
         channels::upsert_communication_message(
@@ -11766,7 +11766,7 @@ mod tests {
 
     fn route_status_for(root: &Path, message_key: &str) -> String {
         let conn =
-            channels::open_channel_db(&root.join("runtime/ctox.sqlite3")).expect("open channel db");
+            channels::open_channel_db(&crate::paths::core_db(&root)).expect("open channel db");
         conn.query_row(
             "SELECT route_status FROM communication_routing_state WHERE message_key = ?1",
             params![message_key],
@@ -11887,7 +11887,7 @@ mod tests {
     fn boot_state_invariant_check_records_visible_violation_event() {
         let root = temp_root("boot-state-invariants");
         std::fs::create_dir_all(root.join("runtime")).unwrap();
-        let db_path = root.join("runtime/ctox.sqlite3");
+        let db_path = crate::paths::core_db(&root);
         let engine = LcmEngine::open(&db_path, LcmConfig::default()).unwrap();
         let _ = engine
             .continuity_init_documents(turn_loop::CHAT_CONVERSATION_ID)
@@ -11933,7 +11933,7 @@ mod tests {
     fn boot_state_invariant_check_repairs_partial_commit_focus_conflict() {
         let root = temp_root("boot-state-invariants-repair");
         std::fs::create_dir_all(root.join("runtime")).unwrap();
-        let db_path = root.join("runtime/ctox.sqlite3");
+        let db_path = crate::paths::core_db(&root);
         let engine = LcmEngine::open(&db_path, LcmConfig::default()).unwrap();
         let _ = engine
             .continuity_init_documents(turn_loop::CHAT_CONVERSATION_ID)
@@ -11986,7 +11986,7 @@ mod tests {
     fn boot_state_invariant_check_reopens_mission_when_runtime_work_is_still_open() {
         let root = temp_root("boot-state-runtime-open");
         std::fs::create_dir_all(root.join("runtime")).unwrap();
-        let db_path = root.join("runtime/ctox.sqlite3");
+        let db_path = crate::paths::core_db(&root);
         let engine = LcmEngine::open(&db_path, LcmConfig::default()).unwrap();
         let _ = engine
             .continuity_init_documents(turn_loop::CHAT_CONVERSATION_ID)
@@ -12063,7 +12063,7 @@ mod tests {
     fn turn_end_state_invariant_check_reopens_mission_when_runtime_work_is_still_open() {
         let root = temp_root("turn-state-runtime-open");
         std::fs::create_dir_all(root.join("runtime")).unwrap();
-        let db_path = root.join("runtime/ctox.sqlite3");
+        let db_path = crate::paths::core_db(&root);
         let engine = LcmEngine::open(&db_path, LcmConfig::default()).unwrap();
         let _ = engine
             .continuity_init_documents(turn_loop::CHAT_CONVERSATION_ID)
@@ -12147,7 +12147,7 @@ mod tests {
     fn turn_end_state_invariant_check_rebuilds_focus_after_refresh_skip() {
         let root = temp_root("turn-state-focus-refresh-skip");
         std::fs::create_dir_all(root.join("runtime")).unwrap();
-        let db_path = root.join("runtime/ctox.sqlite3");
+        let db_path = crate::paths::core_db(&root);
         let engine = LcmEngine::open(&db_path, LcmConfig::default()).unwrap();
         let _ = engine
             .continuity_init_documents(turn_loop::CHAT_CONVERSATION_ID)
@@ -12223,7 +12223,7 @@ mod tests {
     fn turn_end_state_invariant_check_hydrates_sparse_open_focus_from_runtime_title() {
         let root = temp_root("turn-state-sparse-open-focus");
         std::fs::create_dir_all(root.join("runtime")).unwrap();
-        let db_path = root.join("runtime/ctox.sqlite3");
+        let db_path = crate::paths::core_db(&root);
         let engine = LcmEngine::open(&db_path, LcmConfig::default()).unwrap();
         let _ = engine
             .continuity_init_documents(turn_loop::CHAT_CONVERSATION_ID)
@@ -12321,7 +12321,7 @@ mod tests {
     fn turn_end_state_invariant_check_repairs_partial_commit_focus_conflict() {
         let root = temp_root("turn-state-partial-commit");
         std::fs::create_dir_all(root.join("runtime")).unwrap();
-        let db_path = root.join("runtime/ctox.sqlite3");
+        let db_path = crate::paths::core_db(&root);
         let engine = LcmEngine::open(&db_path, LcmConfig::default()).unwrap();
         let _ = engine
             .continuity_init_documents(turn_loop::CHAT_CONVERSATION_ID)
@@ -14658,7 +14658,7 @@ mod tests {
             .ticket_self_work_id
             .clone()
             .expect("queue task should point at durable self-work");
-        let conn = channels::open_channel_db(&root.join("runtime").join("ctox.sqlite3"))
+        let conn = channels::open_channel_db(&crate::paths::core_db(&root))
             .expect("failed to open runtime db");
 
         let self_work_edge_count: i64 = conn
@@ -16296,7 +16296,7 @@ Required artifacts. You must create and maintain exactly these durable files in 
         );
 
         let conn =
-            channels::open_channel_db(&root.join("runtime/ctox.sqlite3")).expect("open channel db");
+            channels::open_channel_db(&crate::paths::core_db(&root)).expect("open channel db");
         let metadata_json: String = conn
             .query_row(
                 "SELECT metadata_json FROM communication_messages WHERE message_key = ?1",
@@ -16341,7 +16341,7 @@ Required artifacts. You must create and maintain exactly these durable files in 
             }),
         );
         let conn =
-            channels::open_channel_db(&root.join("runtime/ctox.sqlite3")).expect("open channel db");
+            channels::open_channel_db(&crate::paths::core_db(&root)).expect("open channel db");
         conn.execute(
             "UPDATE communication_routing_state SET route_status='leased', lease_owner=?2, leased_at='2026-04-28T20:00:00Z', acked_at=NULL WHERE message_key=?1",
             params!["queue:system::stale-founder-rework", CHANNEL_ROUTER_LEASE_OWNER],
@@ -16380,7 +16380,7 @@ Required artifacts. You must create and maintain exactly these durable files in 
         );
         runtime_env::save_runtime_env_map(&root, &runtime_settings)
             .expect("failed to persist owner setting");
-        let db_path = root.join("runtime/ctox.sqlite3");
+        let db_path = crate::paths::core_db(&root);
         let conn = channels::open_channel_db(&db_path).expect("failed to open channel db");
         conn.execute(
             r#"INSERT INTO communication_messages (
@@ -16632,7 +16632,7 @@ Required artifacts. You must create and maintain exactly these durable files in 
         runtime_env::save_runtime_env_map(&root, &settings)
             .expect("failed to persist owner setting");
         let inbound_key = "email:cto1@metric-space.ai::INBOX::99";
-        let db_path = root.join("runtime/ctox.sqlite3");
+        let db_path = crate::paths::core_db(&root);
         let conn = channels::open_channel_db(&db_path).expect("failed to open channel db");
         conn.execute(
             r#"INSERT INTO communication_messages (
@@ -16748,7 +16748,7 @@ Required artifacts. You must create and maintain exactly these durable files in 
         )
         .expect("failed to seed founder rework");
 
-        let db_path = root.join("runtime/ctox.sqlite3");
+        let db_path = crate::paths::core_db(&root);
         let conn = channels::open_channel_db(&db_path).expect("failed to open channel db");
         for attempt in 0..FOUNDER_REWORK_REQUEUE_BLOCK_THRESHOLD {
             let task = channels::create_queue_task(
@@ -17102,7 +17102,7 @@ Required artifacts. You must create and maintain exactly these durable files in 
         runtime_env::save_runtime_env_map(&root, &settings)
             .expect("failed to persist owner setting");
         let inbound_key = "email:cto1@metric-space.ai::INBOX::active-loop";
-        let db_path = root.join("runtime/ctox.sqlite3");
+        let db_path = crate::paths::core_db(&root);
         let conn = channels::open_channel_db(&db_path).expect("failed to open channel db");
         conn.execute(
             r#"INSERT INTO communication_messages (
@@ -17168,7 +17168,7 @@ Required artifacts. You must create and maintain exactly these durable files in 
             .expect("failed to persist owner setting");
         let inbound_key = "email:cto1@metric-space.ai::INBOX::94";
         let thread_key = "<founder-thread@example.com>";
-        let db_path = root.join("runtime/ctox.sqlite3");
+        let db_path = crate::paths::core_db(&root);
         let conn = channels::open_channel_db(&db_path).expect("failed to open channel db");
         conn.execute(
             r#"INSERT INTO communication_messages (
@@ -17249,7 +17249,7 @@ Required artifacts. You must create and maintain exactly these durable files in 
             .expect("failed to persist owner setting");
         let inbound_key = "email:cto1@metric-space.ai::INBOX::100";
         let thread_key = "<dashboard-thread@example.com>";
-        let db_path = root.join("runtime/ctox.sqlite3");
+        let db_path = crate::paths::core_db(&root);
         let conn = channels::open_channel_db(&db_path).expect("failed to open channel db");
         conn.execute(
             r#"INSERT INTO communication_messages (
@@ -17333,7 +17333,7 @@ Required artifacts. You must create and maintain exactly these durable files in 
         runtime_env::save_runtime_env_map(&root, &settings)
             .expect("failed to persist owner setting");
         let inbound_key = "email:cto1@metric-space.ai::INBOX::100";
-        let db_path = root.join("runtime/ctox.sqlite3");
+        let db_path = crate::paths::core_db(&root);
         let conn = channels::open_channel_db(&db_path).expect("failed to open channel db");
         conn.execute(
             r#"INSERT INTO communication_messages (
@@ -17389,7 +17389,7 @@ Required artifacts. You must create and maintain exactly these durable files in 
         runtime_env::save_runtime_env_map(&root, &settings)
             .expect("failed to persist owner setting");
         let inbound_key = "email:cto1@metric-space.ai::INBOX::96";
-        let db_path = root.join("runtime/ctox.sqlite3");
+        let db_path = crate::paths::core_db(&root);
         let conn = channels::open_channel_db(&db_path).expect("failed to open channel db");
         conn.execute(
             r#"INSERT INTO communication_messages (
@@ -17495,7 +17495,7 @@ Required artifacts. You must create and maintain exactly these durable files in 
         runtime_env::save_runtime_env_map(&root, &settings)
             .expect("failed to persist owner setting");
         let inbound_key = "email:cto1@metric-space.ai::INBOX::100";
-        let db_path = root.join("runtime/ctox.sqlite3");
+        let db_path = crate::paths::core_db(&root);
         let conn = channels::open_channel_db(&db_path).expect("failed to open channel db");
         conn.execute(
             r#"INSERT INTO communication_messages (
@@ -18394,7 +18394,7 @@ Was jetzt zu tun ist:\n\
         .expect_err("missing outbound artifact must block completion");
 
         assert!(err.to_string().contains("dauerhafte Ergebnis-Artefakt"));
-        let conn = channels::open_channel_db(&root.join("runtime/ctox.sqlite3"))
+        let conn = channels::open_channel_db(&crate::paths::core_db(&root))
             .expect("failed to open channel db");
         let rejected_count: i64 = conn
             .query_row(
@@ -18925,7 +18925,7 @@ Start by checking the local service status."
         .expect_err("missing workspace file artifact must block queue completion");
 
         assert!(err.to_string().contains("dauerhafte Ergebnis-Artefakt"));
-        let conn = channels::open_channel_db(&root.join("runtime/ctox.sqlite3"))
+        let conn = channels::open_channel_db(&crate::paths::core_db(&root))
             .expect("failed to open channel db");
         let rejected_count: i64 = conn
             .query_row(
@@ -19416,7 +19416,7 @@ Those are not durable artifact requirements."
     #[test]
     fn outcome_witness_accepts_delivered_mail_artifact() {
         let root = temp_root("outcome-witness-accepted-delivery");
-        let conn = channels::open_channel_db(&root.join("runtime/ctox.sqlite3"))
+        let conn = channels::open_channel_db(&crate::paths::core_db(&root))
             .expect("failed to open channel db");
         conn.execute(
             r#"
@@ -19734,7 +19734,7 @@ Those are not durable artifact requirements."
             CompletionReviewDisposition::RequeueSelfWork { .. }
         ));
 
-        let conn = channels::open_channel_db(&root.join("runtime/ctox.sqlite3"))
+        let conn = channels::open_channel_db(&crate::paths::core_db(&root))
             .expect("failed to open channel db");
         let accepted_count: i64 = conn
             .query_row(
@@ -19817,7 +19817,7 @@ Those are not durable artifact requirements."
     fn rewrite_failure_count_threshold_defers_mission() {
         let root = temp_root("rewrite-threshold-defer");
         std::fs::create_dir_all(root.join("runtime")).unwrap();
-        let db_path = root.join("runtime/ctox.sqlite3");
+        let db_path = crate::paths::core_db(&root);
         let engine = LcmEngine::open(&db_path, LcmConfig::default()).unwrap();
         // Seed an initial mission so the counter has somewhere to land.
         let _ = engine
@@ -19888,7 +19888,7 @@ Those are not durable artifact requirements."
             .expect("failed to persist owner setting");
 
         let inbound_key = "email:cto1@metric-space.ai::INBOX::ooo-jill";
-        let db_path = root.join("runtime/ctox.sqlite3");
+        let db_path = crate::paths::core_db(&root);
         let conn = channels::open_channel_db(&db_path).expect("failed to open channel db");
         // Subject in German, identical to a real human reply, on
         // purpose: only the structured Auto-Submitted metadata field
@@ -19967,7 +19967,7 @@ Those are not durable artifact requirements."
             .expect("failed to persist owner setting");
 
         let inbound_key = "email:cto1@metric-space.ai::INBOX::ooo-dom";
-        let db_path = root.join("runtime/ctox.sqlite3");
+        let db_path = crate::paths::core_db(&root);
         let conn = channels::open_channel_db(&db_path).expect("failed to open channel db");
         conn.execute(
             r#"INSERT INTO communication_messages (
@@ -20039,7 +20039,7 @@ Those are not durable artifact requirements."
         let root = temp_root("ctox-no-send-blocks-rework");
         let inbound_key = "email:cto1@metric-space.ai::INBOX::no-send-keep";
         // First, persist the inbound message and a NO-SEND verdict.
-        let db_path = root.join("runtime/ctox.sqlite3");
+        let db_path = crate::paths::core_db(&root);
         let conn = channels::open_channel_db(&db_path).expect("failed to open channel db");
         conn.execute(
             r#"INSERT INTO communication_messages (

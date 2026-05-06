@@ -518,7 +518,7 @@ fn build_queue_repair_prompt(root: &Path, dry_run: bool) -> String {
     } else {
         "(missing)".to_string()
     };
-    let runtime_db_path = root.join("runtime/ctox.sqlite3");
+    let runtime_db_path = crate::paths::core_db(&root);
     let harness_block = render_confirmed_harness_findings_block(root);
     format!(
         "== QUEUE REPAIR ASSIGNMENT ==\n\
@@ -552,7 +552,7 @@ fn render_confirmed_harness_findings_block(root: &Path) -> String {
     // If the audit-tick has not run yet (table missing) or the read fails
     // for any reason we silently skip the block — the agent then falls
     // back to gathering signals via `ctox harness-mining findings` itself.
-    let db_path = root.join("runtime/ctox.sqlite3");
+    let db_path = crate::paths::core_db(&root);
     let conn =
         match Connection::open_with_flags(&db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY) {
             Ok(c) => c,
@@ -627,7 +627,7 @@ fn build_queue_repair_verify_prompt(
     } else {
         "(missing)".to_string()
     };
-    let runtime_db_path = root.join("runtime/ctox.sqlite3");
+    let runtime_db_path = crate::paths::core_db(&root);
     let mut actions_rendered = String::new();
     if applied_actions.is_empty() {
         actions_rendered.push_str("- none\n");
@@ -1255,7 +1255,7 @@ fn render_queue_spill_body(task: &channels::QueueTaskView, reason: Option<&str>)
 }
 
 fn queue_bridge_db_path(root: &Path) -> std::path::PathBuf {
-    root.join("runtime/ctox.sqlite3")
+    crate::paths::core_db(&root)
 }
 
 fn open_queue_bridge_db(root: &Path) -> Result<Connection> {
@@ -1829,7 +1829,7 @@ mod tests {
             "plan:system::{}::{}",
             created.goal.goal_id, created.steps[0].step_id
         );
-        let conn = Connection::open(root.join("runtime/ctox.sqlite3"))?;
+        let conn = Connection::open(crate::paths::core_db(&root))?;
         conn.execute(
             "UPDATE communication_routing_state SET route_status = 'leased', lease_owner = 'test-reviewer', leased_at = ?2 WHERE message_key = ?1",
             params![emitted, chrono::Utc::now().to_rfc3339()],

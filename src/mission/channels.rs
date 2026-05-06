@@ -42,7 +42,6 @@ use crate::service::harness_flow::{
     record_harness_flow_event_lossy, RecordHarnessFlowEventRequest,
 };
 
-const DEFAULT_DB_RELATIVE_PATH: &str = "runtime/ctox.sqlite3";
 const DEFAULT_TAKE_LIMIT: usize = 10;
 const QUEUE_CHANNEL_NAME: &str = "queue";
 const QUEUE_ACCOUNT_KEY: &str = "queue:system";
@@ -6874,7 +6873,7 @@ fn resolve_account_key(conn: &Connection, channel: &str, explicit: Option<&str>)
 fn resolve_db_path(root: &Path, explicit: Option<&str>) -> PathBuf {
     explicit
         .map(PathBuf::from)
-        .unwrap_or_else(|| root.join(DEFAULT_DB_RELATIVE_PATH))
+        .unwrap_or_else(|| crate::paths::core_db(&root))
 }
 
 fn required_flag_value<'a>(args: &'a [String], flag: &str) -> Result<&'a str> {
@@ -7024,8 +7023,8 @@ mod tests {
             created.suggested_skill.as_deref(),
             Some("queue-orchestrator")
         );
-        let conn = open_channel_db(&root.join(DEFAULT_DB_RELATIVE_PATH))
-            .expect("failed to open channel db");
+        let conn =
+            open_channel_db(&crate::paths::core_db(&root)).expect("failed to open channel db");
         let spawn_edge_count: i64 = conn
             .query_row(
                 r#"
@@ -7859,7 +7858,7 @@ mod tests {
                 .as_nanos()
         ));
         fs::create_dir_all(root.join("runtime")).expect("failed to create runtime dir");
-        let db_path = root.join("runtime/ctox.sqlite3");
+        let db_path = crate::paths::core_db(&root);
         let mut conn = open_channel_db(&db_path).expect("failed to open db");
         upsert_communication_message(
             &mut conn,
@@ -7917,7 +7916,7 @@ mod tests {
                 .as_nanos()
         ));
         fs::create_dir_all(root.join("runtime")).expect("failed to create runtime dir");
-        let db_path = root.join(DEFAULT_DB_RELATIVE_PATH);
+        let db_path = crate::paths::core_db(&root);
         let conn = open_channel_db(&db_path).expect("failed to open channel db");
         let request = ChannelSendRequest {
             channel: "teams".to_string(),
@@ -7967,8 +7966,7 @@ mod tests {
             },
         )
         .expect("failed to create queue backing");
-        let conn =
-            open_channel_db(&root.join(DEFAULT_DB_RELATIVE_PATH)).expect("failed to reopen db");
+        let conn = open_channel_db(&crate::paths::core_db(&root)).expect("failed to reopen db");
         let request = ChannelSendRequest {
             channel: "teams".to_string(),
             account_key: "teams:inf.yoda@example.test".to_string(),
@@ -8021,7 +8019,7 @@ mod tests {
                 .as_nanos()
         ));
         fs::create_dir_all(root.join("runtime")).expect("failed to create runtime dir");
-        let db_path = root.join("runtime/ctox.sqlite3");
+        let db_path = crate::paths::core_db(&root);
         let mut conn = open_channel_db(&db_path).expect("failed to open db");
         let inbound_key = "email:cto1@metric-space.ai::INBOX::exact-review-1";
         upsert_communication_message(
@@ -8141,7 +8139,7 @@ mod tests {
         );
         crate::inference::runtime_env::save_runtime_env_map(&root, &runtime_settings)
             .expect("failed to persist owner setting");
-        let db_path = root.join("runtime/ctox.sqlite3");
+        let db_path = crate::paths::core_db(&root);
         let mut conn = open_channel_db(&db_path).expect("failed to open db");
         let inbound_key = "email:cto1@metric-space.ai::INBOX::handled-guard-1";
         upsert_communication_message(
@@ -8244,7 +8242,7 @@ mod tests {
                 .as_nanos()
         ));
         fs::create_dir_all(root.join("runtime")).expect("failed to create runtime dir");
-        let db_path = root.join("runtime/ctox.sqlite3");
+        let db_path = crate::paths::core_db(&root);
         let mut conn = open_channel_db(&db_path).expect("failed to open db");
         upsert_communication_message(
             &mut conn,
@@ -8319,7 +8317,7 @@ mod tests {
                 .as_nanos()
         ));
         fs::create_dir_all(root.join("runtime")).expect("failed to create runtime dir");
-        let db_path = root.join("runtime/ctox.sqlite3");
+        let db_path = crate::paths::core_db(&root);
         let mut conn = open_channel_db(&db_path).expect("failed to open db");
         upsert_communication_message(
             &mut conn,
@@ -8824,7 +8822,7 @@ mod tests {
         let thread_key = "pipeline-status-thread";
 
         // Seed the channel db with one outbound message and one routing row.
-        let db_path = root.join(DEFAULT_DB_RELATIVE_PATH);
+        let db_path = crate::paths::core_db(&root);
         let mut conn = open_channel_db(&db_path).expect("open channel db");
         upsert_communication_message(
             &mut conn,
