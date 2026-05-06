@@ -51,6 +51,7 @@ Local CTOX requirements:
 - If the next action requires a command, filesystem change, runtime inspection, benchmark run, ticket/state update, or artifact verification, your entire assistant message must be exactly one tool call and no prose.
 - Use the exact tool name from the available tools.
 - Do not use Markdown fences for tool calls.
+- Do not write a <think> block. Emit the tool call directly.
 - After tool output is returned, either call another tool or give the final answer only when the requested durable result has been verified."#;
 
 #[derive(Parser, Debug, Clone)]
@@ -497,9 +498,11 @@ fn parse_qwen_tool_code(text: &str) -> Option<ParsedToolCall> {
 fn parse_qwen_xml_tool_call(text: &str) -> Option<ParsedToolCall> {
     let tool_re = Regex::new(r"(?s)<tool_call>\s*(.*?)\s*</tool_call>").ok()?;
     let fn_re = Regex::new(r"(?s)<function=([A-Za-z0-9_.-]+)>\s*(.*?)\s*</function>").ok()?;
-    let param_re =
-        Regex::new(r"(?s)<parameter=([A-Za-z0-9_.-]+)>\s*(.*?)\s*</parameter>").ok()?;
+    let param_re = Regex::new(r"(?s)<parameter=([A-Za-z0-9_.-]+)>\s*(.*?)\s*</parameter>").ok()?;
     let tool_body = tool_re.captures(text)?.get(1)?.as_str();
+    if let Some(tool_call) = parse_qwen_json_tool_call(tool_body) {
+        return Some(tool_call);
+    }
     let fn_caps = fn_re.captures(tool_body)?;
     let name = fn_caps.get(1)?.as_str().trim().to_string();
     let params_body = fn_caps.get(2)?.as_str();
@@ -518,6 +521,40 @@ fn parse_qwen_xml_tool_call(text: &str) -> Option<ParsedToolCall> {
         call_id: format!("call_{suffix}"),
         name,
         arguments: Value::Object(params).to_string(),
+    })
+}
+
+fn parse_qwen_json_tool_call(tool_body: &str) -> Option<ParsedToolCall> {
+    let value: Value = serde_json::from_str(tool_body.trim()).ok()?;
+    let obj = value.as_object()?;
+    let name = obj
+        .get("name")
+        .or_else(|| {
+            obj.get("function")
+                .and_then(|function| function.get("name"))
+        })
+        .and_then(Value::as_str)?
+        .trim();
+    if name.is_empty() {
+        return None;
+    }
+    let arguments = obj
+        .get("arguments")
+        .or_else(|| obj.get("parameters"))
+        .cloned()
+        .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
+    let arguments = match arguments {
+        Value::String(raw) => serde_json::from_str::<Value>(&raw)
+            .unwrap_or(Value::String(raw))
+            .to_string(),
+        value => value.to_string(),
+    };
+    let suffix = uuid::Uuid::new_v4().simple().to_string();
+    Some(ParsedToolCall {
+        id: format!("fc_{suffix}"),
+        call_id: format!("call_{suffix}"),
+        name: name.to_string(),
+        arguments,
     })
 }
 
@@ -548,6 +585,14 @@ fn run_llama(args: &Args, prompt: &str, max_out: usize) -> Result<String> {
         .arg("on")
         .arg("--temp")
         .arg(args.temperature.to_string())
+        .arg("--top-p")
+        .arg("0.95")
+        .arg("--top-k")
+        .arg("20")
+        .arg("--presence-penalty")
+        .arg("0.0")
+        .arg("--repeat-penalty")
+        .arg("1.0")
         .arg("--no-display-prompt")
         .arg("--simple-io")
         .arg("-r")
@@ -593,17 +638,6 @@ fn render_chat_prompt(req: &ResponsesCreateRequest) -> String {
             turns.push((role, text));
         }
     }
-    if !reasoning_requested(req) {
-        if let Some((_, text)) = turns.iter_mut().rev().find(|(role, _)| role == "user") {
-            if !text.contains("/no_think") {
-                if !text.ends_with('\n') && !text.is_empty() {
-                    text.push('\n');
-                }
-                text.push_str("/no_think");
-            }
-        }
-    }
-
     let mut out = String::new();
     for (role, text) in turns {
         out.push_str("<|im_start|>");
@@ -613,9 +647,6 @@ fn render_chat_prompt(req: &ResponsesCreateRequest) -> String {
         out.push_str("<|im_end|>\n");
     }
     out.push_str("<|im_start|>assistant\n");
-    if !reasoning_requested(req) {
-        out.push_str("<think>\n\n</think>\n\n");
-    }
     out
 }
 
@@ -697,11 +728,11 @@ fn input_item_to_turn(item: &Value) -> Option<(String, String)> {
         }
         "function_call" => {
             let name = obj.get("name").and_then(Value::as_str).unwrap_or_default();
-            let arguments = obj
-                .get("arguments")
-                .and_then(Value::as_str)
-                .unwrap_or("{}");
-            Some(("assistant".to_string(), render_xml_tool_call(name, arguments)))
+            let arguments = obj.get("arguments").and_then(Value::as_str).unwrap_or("{}");
+            Some((
+                "assistant".to_string(),
+                render_xml_tool_call(name, arguments),
+            ))
         }
         "function_call_output" => {
             let output = extract_function_output_text(obj.get("output"));
@@ -768,18 +799,6 @@ fn flatten_content_parts(parts: &[Value]) -> String {
         }
     }
     out
-}
-
-fn reasoning_requested(req: &ResponsesCreateRequest) -> bool {
-    req.reasoning
-        .as_ref()
-        .and_then(|value| value.get("effort"))
-        .and_then(Value::as_str)
-        .map(|effort| {
-            let effort = effort.trim();
-            !effort.is_empty() && !effort.eq_ignore_ascii_case("none")
-        })
-        .unwrap_or(false)
 }
 
 fn strip_prompt_echo(text: &str, prompt: &str) -> String {
@@ -1165,8 +1184,9 @@ mod tests {
         assert!(prompt.contains("<name>exec_command</name>"));
         assert!(prompt.contains("<tool_call>\n<function=exec_command>"));
         assert!(prompt.contains("<parameter=cmd>\nprintf hello\n</parameter>"));
-        assert!(prompt.contains("/no_think"));
-        assert!(prompt.contains("<think>\n\n</think>"));
+        assert!(prompt.contains("Do not write a <think> block"));
+        assert!(!prompt.contains("/no_think"));
+        assert!(!prompt.contains("<think>\n\n</think>"));
     }
 
     #[test]
@@ -1186,6 +1206,22 @@ printf CTOX_QWEN_TOOL_OK
         assert_eq!(
             parsed.arguments,
             json!({"cmd":"printf CTOX_QWEN_TOOL_OK"}).to_string()
+        );
+    }
+
+    #[test]
+    fn parses_qwen_json_tool_call_to_responses_function_call() {
+        let parsed = parse_qwen_tool_code(
+            r#"<tool_call>
+{"name":"exec_command","arguments":{"cmd":"printf CTOX_QWEN_JSON_TOOL_OK"}}
+</tool_call>"#,
+        )
+        .unwrap();
+
+        assert_eq!(parsed.name, "exec_command");
+        assert_eq!(
+            parsed.arguments,
+            json!({"cmd":"printf CTOX_QWEN_JSON_TOOL_OK"}).to_string()
         );
     }
 
