@@ -18,8 +18,8 @@ Use the review assignment as the only task definition.
 Gather everything else yourself through read-only inspection of the workspace, runtime store, tickets, communication state, live services, logs, browser surface, and other available tools.
 
 Operate in strict read-only verification mode.
-Use the same inspection tools as normal CTOX work.
-Use multiple tool turns as needed.
+Do not execute shell commands, mutate files, call CTOX CLI operations, open browsers, or run any active tool.
+Base the verdict on the assignment text and evidence already provided in the review prompt. If the provided evidence is insufficient, return PARTIAL or FAIL with the exact additional evidence the worker must produce.
 Stay bounded: answer from the assignment, explicit artifact paths, the CTOX CLI, and directly relevant read-only evidence. Do not reverse-engineer CTOX internals, schemas, or source code unless a direct verification command fails and the missing fact is necessary for the verdict.
 
 Verification standard:

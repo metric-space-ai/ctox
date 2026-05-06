@@ -60,3 +60,14 @@ fn production_turn_loop_stays_model_agnostic() {
         );
     }
 }
+
+#[test]
+fn production_review_sessions_disable_active_tools() {
+    let production = production_source(include_str!("direct_session.rs"));
+
+    assert!(
+        production.contains("disable_active_tools")
+            && production.contains("dynamic_tools: disable_active_tools.then(Vec::new)"),
+        "review sessions must start with active execution tools disabled"
+    );
+}

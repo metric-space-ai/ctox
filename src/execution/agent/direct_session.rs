@@ -534,6 +534,7 @@ pub(crate) struct PersistentSession {
     ctx_log: ContextLogger,
     root: PathBuf,
     base_instructions: String,
+    disable_active_tools: bool,
 }
 
 impl PersistentSession {
@@ -545,13 +546,29 @@ impl PersistentSession {
 
     /// Start a persistent session with explicit base instructions and optional
     /// compaction disablement. Review runs use this to create an isolated
-    /// external-review thread with its own system prompt and without normal
-    /// long-run compaction behavior.
+    /// external-review thread with its own system prompt, without normal
+    /// long-run compaction behavior, and without active execution tools.
     pub fn start_with_instructions(
         root: &Path,
         settings: &BTreeMap<String, String>,
         base_instructions: Option<&str>,
         disable_compaction: bool,
+    ) -> Result<Self> {
+        Self::start_with_instructions_and_tool_mode(
+            root,
+            settings,
+            base_instructions,
+            disable_compaction,
+            disable_compaction,
+        )
+    }
+
+    fn start_with_instructions_and_tool_mode(
+        root: &Path,
+        settings: &BTreeMap<String, String>,
+        base_instructions: Option<&str>,
+        disable_compaction: bool,
+        disable_active_tools: bool,
     ) -> Result<Self> {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
@@ -562,7 +579,13 @@ impl PersistentSession {
         let composed_base_instructions = compose_base_instructions(base_instructions);
         let (client, thread_id, cwd, seq, model, model_provider, api_provider, reasoning_effort) =
             rt.block_on(async {
-                Self::start_client_and_thread(root, settings, &composed_base_instructions).await
+                Self::start_client_and_thread(
+                    root,
+                    settings,
+                    &composed_base_instructions,
+                    disable_active_tools,
+                )
+                .await
             })?;
 
         let mut policy = CompactPolicy::from_settings(
@@ -618,6 +641,7 @@ impl PersistentSession {
             ctx_log,
             root: root.to_path_buf(),
             base_instructions: composed_base_instructions,
+            disable_active_tools,
         })
     }
 
@@ -653,6 +677,7 @@ impl PersistentSession {
         let prompt = prompt.to_string();
         let root = self.root.clone();
         let base_instructions = self.base_instructions.clone();
+        let disable_active_tools = self.disable_active_tools;
         let terminal_bench_preflight_guard =
             terminal_bench_preflight.and_then(TerminalBenchPreflightGuard::from_spec);
 
@@ -681,6 +706,7 @@ impl PersistentSession {
                 &mut self.seq,
                 &mut self.policy,
                 &mut self.ctx_log,
+                disable_active_tools,
                 terminal_bench_preflight_guard,
             )
             .await
@@ -700,6 +726,7 @@ impl PersistentSession {
         root: &Path,
         settings: &BTreeMap<String, String>,
         base_instructions: &str,
+        disable_active_tools: bool,
     ) -> Result<(
         InProcessAppServerClient,
         String,
@@ -950,6 +977,7 @@ impl PersistentSession {
                     approval_policy: Some(AskForApproval::Never.into()),
                     sandbox: Some(ctox_app_server_protocol::SandboxMode::DangerFullAccess),
                     base_instructions: Some(base_instructions.to_string()),
+                    dynamic_tools: disable_active_tools.then(Vec::new),
                     ephemeral: Some(true),
                     ..ThreadStartParams::default()
                 },
@@ -987,6 +1015,7 @@ impl PersistentSession {
         seq: &mut RequestIdSeq,
         policy: &mut CompactPolicy,
         ctx_log: &mut ContextLogger,
+        disable_active_tools: bool,
         terminal_bench_preflight_guard: Option<TerminalBenchPreflightGuard>,
     ) -> Result<String> {
         // Create a fresh thread per turn — reuse the same CLIENT but not
@@ -1002,6 +1031,7 @@ impl PersistentSession {
                     approval_policy: Some(AskForApproval::Never.into()),
                     sandbox: Some(ctox_app_server_protocol::SandboxMode::DangerFullAccess),
                     base_instructions: Some(base_instructions.to_string()),
+                    dynamic_tools: disable_active_tools.then(Vec::new),
                     ephemeral: Some(true),
                     ..ThreadStartParams::default()
                 },
