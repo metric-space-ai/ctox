@@ -9,6 +9,7 @@ use std::sync::Mutex;
 
 // Re-export PersistentSession so callers (main.rs, service.rs) can hold one.
 pub(crate) use super::direct_session::PersistentSession;
+use super::direct_session::TerminalBenchPreflightSpec;
 use std::sync::OnceLock;
 use std::time::Duration;
 use toml::Value as TomlValue;
@@ -345,6 +346,35 @@ pub(crate) fn run_chat_turn_with_events_extended<F>(
     conversation_id: i64,
     suggested_skill: Option<&str>,
     force_continuity_refresh: bool,
+    session: Option<&mut PersistentSession>,
+    emit: F,
+) -> Result<String>
+where
+    F: FnMut(&str),
+{
+    run_chat_turn_with_events_extended_guarded(
+        root,
+        db_path,
+        prompt,
+        _workspace_root,
+        conversation_id,
+        suggested_skill,
+        force_continuity_refresh,
+        None,
+        session,
+        emit,
+    )
+}
+
+pub(crate) fn run_chat_turn_with_events_extended_guarded<F>(
+    root: &Path,
+    db_path: &Path,
+    prompt: &str,
+    _workspace_root: Option<&Path>,
+    conversation_id: i64,
+    suggested_skill: Option<&str>,
+    force_continuity_refresh: bool,
+    terminal_bench_preflight: Option<TerminalBenchPreflightSpec>,
     mut session: Option<&mut PersistentSession>,
     mut emit: F,
 ) -> Result<String>
@@ -460,22 +490,18 @@ where
     let turn_start_ts = current_rfc3339_timestamp();
     emit("invoke-model");
     let reply = match session.as_deref_mut() {
-        Some(sess) => sess.run_turn(
+        Some(sess) => sess.run_turn_with_terminal_bench_preflight(
             &rendered_prompt.prompt,
             Some(Duration::from_secs(config.turn_timeout_secs)),
-            None, // base_instructions
-            None, // include_apply_patch_tool
-            conversation_id,
+            terminal_bench_preflight.clone(),
         )?,
         None => owned_session
             .as_mut()
             .expect("owned persistent session should exist when no session was supplied")
-            .run_turn(
+            .run_turn_with_terminal_bench_preflight(
                 &rendered_prompt.prompt,
                 Some(Duration::from_secs(config.turn_timeout_secs)),
-                None, // base_instructions
-                None, // include_apply_patch_tool
-                conversation_id,
+                terminal_bench_preflight,
             )?,
     };
     emit("persist-assistant-turn");

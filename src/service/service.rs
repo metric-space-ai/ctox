@@ -71,6 +71,7 @@ use tiny_http::StatusCode;
 use crate::channels;
 use crate::communication::adapters as communication_adapters;
 use crate::context_health;
+use crate::execution::agent::direct_session::TerminalBenchPreflightSpec;
 use crate::governance;
 use crate::inference::runtime_control;
 use crate::inference::runtime_env;
@@ -2753,6 +2754,7 @@ fn start_prompt_worker(
                 .iter()
                 .any(|key| key.starts_with("plan:system::"));
             let mut execution_prompt = artifact_first_execution_prompt(&job);
+            let terminal_bench_preflight = terminal_bench_preflight_spec_for_job(&job);
             match maybe_terminal_bench_controller_runtime_ref_feedback(&root, &job) {
                 Ok(Some(note)) => {
                     push_event(
@@ -2780,7 +2782,7 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
                     execution_prompt = format!("{note}\n\n{execution_prompt}");
                 }
             }
-            let result = turn_loop::run_chat_turn_with_events_extended(
+            let result = turn_loop::run_chat_turn_with_events_extended_guarded(
                 &root,
                 &db_path,
                 &execution_prompt,
@@ -2788,6 +2790,7 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
                 conversation_id,
                 job.suggested_skill.as_deref(),
                 force_continuity_refresh,
+                terminal_bench_preflight,
                 None, // TUI service: per-turn clients (persistent session TODO)
                 |event| {
                     push_event(&event_state, format!("phase {} {}", event_source, event));
@@ -4812,6 +4815,19 @@ fn terminal_bench_controller_requires_runtime_refs(job: &QueuedPrompt) -> bool {
         || haystack.contains("preparation-tickets.jsonl")
         || haystack.contains("one benchmark ticket")
         || haystack.contains("message keys")
+}
+
+fn terminal_bench_preflight_spec_for_job(job: &QueuedPrompt) -> Option<TerminalBenchPreflightSpec> {
+    if !is_terminal_bench_controller_artifact_job(job) {
+        return None;
+    }
+    let file_refs = declared_workspace_file_artifacts_for_job(job);
+    let run_dir = terminal_bench_run_dir_from_artifact_paths(&file_refs)?;
+    Some(TerminalBenchPreflightSpec {
+        run_dir,
+        required_files: file_refs,
+        requires_runtime_refs: terminal_bench_controller_requires_runtime_refs(job),
+    })
 }
 
 fn validate_terminal_bench_controller_runtime_refs(
@@ -18188,6 +18204,52 @@ Start by discovering benchmark tasks."
         assert!(prompt.contains("Original controller task is intentionally withheld"));
         assert!(!prompt.contains("Start by discovering benchmark tasks"));
         assert!(!prompt.contains("ORIGINAL TASK"));
+    }
+
+    #[test]
+    fn terminal_bench_preflight_spec_uses_current_job_artifacts() {
+        let run_dir = "/tmp/terminal-bench-2/runs/20260506T122406Z-qwen36-128k-40965ff-clean2";
+        let stale_run_dir = "/tmp/terminal-bench-2/runs/20260506T120350Z-stale";
+        let job = QueuedPrompt {
+            prompt: format!(
+                "Only required durable files for this controller turn:\n\
+- {run_dir}/controller.json\n\
+- {run_dir}/ticket-map.jsonl\n\
+- {run_dir}/preparation-tickets.jsonl\n\
+- {run_dir}/run-queue.jsonl\n\
+- {run_dir}/results.jsonl\n\
+- {run_dir}/knowledge.md\n\
+- {run_dir}/logbook.md\n\
+- {run_dir}/blogpost-notes.md\n\n\
+Stale context may mention {stale_run_dir}/controller.json, but do not use it.\n\
+Create durable CTOX queue/ticket work and record message keys."
+            ),
+            goal: "Terminal-Bench 2 controller".to_string(),
+            preview: "Terminal-Bench 2 controller".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: None,
+            leased_message_keys: vec!["queue:tb2-controller".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: None,
+            workspace_root: Some("/tmp".to_string()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let spec = terminal_bench_preflight_spec_for_job(&job).unwrap();
+
+        assert_eq!(spec.run_dir, run_dir);
+        assert!(spec.requires_runtime_refs);
+        assert_eq!(spec.required_files.len(), 8);
+        assert!(spec
+            .required_files
+            .iter()
+            .all(|path| path.starts_with(run_dir)));
+        assert!(!spec
+            .required_files
+            .iter()
+            .any(|path| path.contains(stale_run_dir)));
     }
 
     #[test]

@@ -78,7 +78,38 @@ struct TerminalBenchPreflightGuard {
     first_exec_seen: bool,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct TerminalBenchPreflightSpec {
+    pub(crate) run_dir: String,
+    pub(crate) required_files: Vec<String>,
+    pub(crate) requires_runtime_refs: bool,
+}
+
 impl TerminalBenchPreflightGuard {
+    fn from_spec(spec: TerminalBenchPreflightSpec) -> Option<Self> {
+        let run_dir = spec.run_dir.trim().to_string();
+        let mut required_files = Vec::new();
+        for path in spec.required_files {
+            let path = path.trim();
+            if path.is_empty() || !path.contains(&run_dir) {
+                continue;
+            }
+            if required_files.iter().any(|existing| existing == path) {
+                continue;
+            }
+            required_files.push(path.to_string());
+        }
+        if run_dir.is_empty() || required_files.is_empty() {
+            return None;
+        }
+        Some(Self {
+            run_dir,
+            required_files,
+            requires_runtime_refs: spec.requires_runtime_refs,
+            first_exec_seen: false,
+        })
+    }
+
     fn from_prompt(prompt: &str) -> Option<Self> {
         let lower = prompt.to_ascii_lowercase();
         if !(lower.contains("terminal-bench")
@@ -434,6 +465,15 @@ impl PersistentSession {
         _include_apply_patch_tool: Option<bool>,
         _conversation_id: i64,
     ) -> Result<String> {
+        self.run_turn_with_terminal_bench_preflight(prompt, timeout, None)
+    }
+
+    pub(crate) fn run_turn_with_terminal_bench_preflight(
+        &mut self,
+        prompt: &str,
+        timeout: Option<Duration>,
+        terminal_bench_preflight: Option<TerminalBenchPreflightSpec>,
+    ) -> Result<String> {
         let client = self
             .client
             .as_mut()
@@ -447,6 +487,8 @@ impl PersistentSession {
         let prompt = prompt.to_string();
         let root = self.root.clone();
         let base_instructions = self.base_instructions.clone();
+        let terminal_bench_preflight_guard =
+            terminal_bench_preflight.and_then(TerminalBenchPreflightGuard::from_spec);
 
         self.ctx_log.log(
             "turn_request",
@@ -473,6 +515,7 @@ impl PersistentSession {
                 &mut self.seq,
                 &mut self.policy,
                 &mut self.ctx_log,
+                terminal_bench_preflight_guard,
             )
             .await
         });
@@ -778,6 +821,7 @@ impl PersistentSession {
         seq: &mut RequestIdSeq,
         policy: &mut CompactPolicy,
         ctx_log: &mut ContextLogger,
+        terminal_bench_preflight_guard: Option<TerminalBenchPreflightGuard>,
     ) -> Result<String> {
         // Create a fresh thread per turn — reuse the same CLIENT but not
         // the same thread. After TurnComplete, the thread may not accept
@@ -832,7 +876,8 @@ impl PersistentSession {
         // Event loop
         let mut final_message: Option<String> = None;
         let mut forced_followup_fired = false;
-        let mut terminal_bench_preflight_guard = TerminalBenchPreflightGuard::from_prompt(prompt);
+        let mut terminal_bench_preflight_guard = terminal_bench_preflight_guard
+            .or_else(|| TerminalBenchPreflightGuard::from_prompt(prompt));
         let turn_started_at = Instant::now();
         let mut last_usage_event_at = turn_started_at;
         let mut last_recorded_cumulative_usage: Option<ApiTokenUsage> = None;
@@ -1219,6 +1264,30 @@ The controller must create preparation queue/tickets and record queue:system::* 
         assert!(guard
             .violation_for_first_exec("ls -la /home/metricspace")
             .is_none());
+    }
+
+    #[test]
+    fn terminal_bench_preflight_guard_rejects_discovery_from_explicit_spec() {
+        let run_dir = "/home/metricspace/CTOX/runtime/terminal-bench-2/runs/current-run";
+        let mut guard = TerminalBenchPreflightGuard::from_spec(TerminalBenchPreflightSpec {
+            run_dir: run_dir.to_string(),
+            required_files: vec![
+                format!("{run_dir}/controller.json"),
+                format!("{run_dir}/ticket-map.jsonl"),
+                format!("{run_dir}/logbook.md"),
+            ],
+            requires_runtime_refs: true,
+        })
+        .unwrap();
+
+        let violation = guard.violation_for_first_exec(
+            "ls -la /home/metricspace/.local/share/ctox/install/current/runtime",
+        );
+
+        assert!(violation
+            .as_deref()
+            .unwrap_or_default()
+            .contains("terminal-bench preflight violation"));
     }
 
     #[test]
