@@ -5098,7 +5098,7 @@ fn terminal_bench_runtime_ref_feedback_note(
 These refs are real CTOX runtime objects already persisted in the run artifacts:\n\
 {}\n\n\
 Current RUN_DIR for this queue item: {}\n\
-Do not create duplicate preparation queue tasks. Read controller.json, ticket-map.jsonl, preparation-tickets.jsonl, run-queue.jsonl, knowledge.md, and logbook.md from this RUN_DIR first. Do not read or continue stale Terminal-Bench run directories. Continue by verifying the queued preparation work and updating the durable files with any new facts.",
+Do not create duplicate preparation queue tasks. The harness is only pointing out the state; it will not perform the work for you. Read controller.json, ticket-map.jsonl, preparation-tickets.jsonl, run-queue.jsonl, knowledge.md, and logbook.md from this RUN_DIR first. If you need CLI syntax, inspect `ctox help` and the relevant subcommand `--help` yourself. Do not read or continue stale Terminal-Bench run directories. Continue by verifying the queued preparation work and updating the durable files with any new facts.",
         refs.iter()
             .map(|value| format!("- {value}"))
             .collect::<Vec<_>>()
@@ -5124,6 +5124,8 @@ fn terminal_bench_controller_hold_feedback_prompt(
     prompt.push_str(&clip_text(review_summary, 500));
     prompt.push_str("\n\n");
     prompt.push_str("Required continuation behavior:\n");
+    prompt.push_str("- The harness is only giving feedback. It will not perform the benchmark work, create tickets, patch artifacts, or mark tasks complete for you. You must do the work yourself with shell tools and CTOX CLI commands.\n");
+    prompt.push_str("- If you are unsure about CTOX CLI syntax or available commands, inspect it yourself with `ctox help`, `ctox queue --help`, `ctox queue add --help`, and the relevant subcommand `--help` before acting.\n");
     prompt.push_str("- Read the existing controller.json, ticket-map.jsonl, run-log.md, knowledge.md, and results.json first. Do not recreate them from scratch.\n");
     prompt.push_str(
         "- Preserve and update the same run directory and the same five durable files.\n",
@@ -5146,7 +5148,7 @@ fn terminal_bench_controller_hold_feedback_prompt(
         }
         prompt.push('\n');
     }
-    prompt.push_str("Continue now from the persisted state. Use shell tools and direct file checks for evidence.");
+    prompt.push_str("Continue now from the persisted state. Use shell tools and direct file checks for evidence. Do not wait for the harness to do any work for you.");
     prompt
 }
 
@@ -8396,23 +8398,43 @@ fn is_bounded_stateful_product_execution_job(job: &QueuedPrompt) -> bool {
 }
 
 fn is_bounded_benchmark_or_runtime_execution_job(job: &QueuedPrompt) -> bool {
-    if job.workspace_root.is_none() {
-        return false;
-    }
     let haystack = format!(
-        "{}\n{}\n{}\n{}",
+        "{}\n{}\n{}\n{}\n{}",
         job.prompt,
         job.goal,
         job.preview,
-        job.thread_key.clone().unwrap_or_default()
+        job.thread_key.clone().unwrap_or_default(),
+        job.workspace_root.clone().unwrap_or_default()
     )
     .to_ascii_lowercase();
-    let benchmark_scope = haystack.contains("terminal-bench")
+    let terminal_bench_scope = haystack.contains("terminal-bench")
         || haystack.contains("terminal bench")
+        || haystack.contains("terminal_bench")
+        || haystack.contains("terminalbench")
+        || haystack.contains("tbench")
+        || haystack.contains("tb2");
+    let benchmark_scope = terminal_bench_scope
         || (haystack.contains("benchmark")
             && (haystack.contains("runner")
                 || haystack.contains("results.jsonl")
                 || haystack.contains("run-log.md")));
+    let terminal_bench_prep_or_control = terminal_bench_scope
+        && (haystack.contains("prep-")
+            || haystack.contains("preparation ticket")
+            || haystack.contains("preparation_tickets")
+            || haystack.contains("task inventory")
+            || haystack.contains("reference research")
+            || haystack.contains("leaderboard")
+            || haystack.contains("priority plan")
+            || haystack.contains("smoke")
+            || haystack.contains("controller")
+            || haystack.contains("ticket-map.jsonl")
+            || haystack.contains("run-queue.jsonl")
+            || haystack.contains("results.jsonl")
+            || haystack.contains("knowledge.md")
+            || haystack.contains("logbook.md")
+            || haystack.contains("harbor")
+            || haystack.contains("no solution"));
     let concrete_execution = haystack.contains("run_dir=")
         || haystack.contains("required output artifacts")
         || haystack.contains("required artifacts")
@@ -8430,7 +8452,7 @@ fn is_bounded_benchmark_or_runtime_execution_job(job: &QueuedPrompt) -> bool {
         || haystack.contains("context window")
         || haystack.contains("backend evidence")
         || haystack.contains("verify runtime/context");
-    benchmark_scope && concrete_execution
+    terminal_bench_prep_or_control || (benchmark_scope && concrete_execution)
 }
 
 fn is_internal_harness_or_forensics_job(job: &QueuedPrompt) -> bool {
@@ -15120,6 +15142,64 @@ Start now by using shell/tools to create RUN_DIR artifacts and verify runtime/co
                 .expect("failed to list queue tasks");
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0].title, "Terminal-Bench 2 controller Qwen3.6 128k");
+
+        let items = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
+            .expect("failed to list self-work");
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn terminal_bench_prep_ticket_without_workspace_root_does_not_reroute_to_strategy_setup() {
+        let root = temp_root("ctox-terminal-bench-prep-no-workspace-no-strategy-reroute");
+        let queue_task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "prep-priority-plan: choose first easy Terminal-Bench tasks".to_string(),
+                prompt: "Preparation ticket for the Terminal-Bench 2 controller.\n\
+Research public Terminal-Bench references and leaderboard/model result lists for task selection only; do not read solutions.\n\
+Pick initial benchmark tasks that other harnesses/models are known to solve, then update ticket-map.jsonl, run-queue.jsonl, knowledge.md, and logbook.md in the current RUN_DIR.\n\
+Use Harbor/Terminal-Bench runner evidence and keep the work bounded to benchmark preparation."
+                    .to_string(),
+                thread_key: "queue/prep-priority-plan-choose-first-easy-1be52fca49b0"
+                    .to_string(),
+                workspace_root: None,
+                priority: "urgent".to_string(),
+                suggested_skill: Some("benchmark-controller".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to seed Terminal-Bench prep queue task");
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        let job = QueuedPrompt {
+            prompt: queue_task.prompt.clone(),
+            goal: queue_task.title.clone(),
+            preview: queue_task.title.clone(),
+            source_label: "queue".to_string(),
+            suggested_skill: Some("benchmark-controller".to_string()),
+            leased_message_keys: vec![queue_task.message_key.clone()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("queue/prep-priority-plan-choose-first-easy-1be52fca49b0".to_string()),
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        assert!(is_bounded_benchmark_or_runtime_execution_job(&job));
+        assert!(!is_owner_visible_strategic_job(&job));
+        let redirected = maybe_redirect_owner_visible_work_to_strategy_setup(&root, &state, &job)
+            .expect("strategy evaluation should succeed");
+        assert!(!redirected);
+
+        let tasks =
+            channels::list_queue_tasks(&root, &["pending".to_string(), "leased".to_string()], 10)
+                .expect("failed to list queue tasks");
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(
+            tasks[0].title,
+            "prep-priority-plan: choose first easy Terminal-Bench tasks"
+        );
 
         let items = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
             .expect("failed to list self-work");
