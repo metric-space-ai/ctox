@@ -1,11 +1,12 @@
 use crate::inference::engine;
 use anyhow::Context;
-use serde_json::json;
 use serde_json::Value;
+use serde_json::json;
 
 use super::ResponsesTransportKind;
 
 const LOCAL_COMPACT_INSTRUCTIONS: &str = "You are Codex running through CTOX on a local responses-backed runtime. Be concise and tool-accurate. Emit either one tool call or one final answer per turn. Prefer exec_command for shell work and apply_patch for file edits. Do not restate instructions. If the task requires creating or modifying files, running builds or tests, or proving a result inside a workspace, your next completion must be a tool call, not a final answer. You must not claim success, emit an exact marker, or give a final answer until tool output has verified the required result. When the user asks for an exact marker or short final answer, return only that required text after any needed tool calls and verification.";
+const DEFAULT_MODEL: &str = "moonshotai/kimi-k2.6";
 
 pub fn adapter_id() -> &'static str {
     "kimi"
@@ -52,7 +53,7 @@ pub fn rewrite_request(raw: &[u8]) -> anyhow::Result<Vec<u8>> {
     let model = payload
         .get("model")
         .and_then(Value::as_str)
-        .unwrap_or("moonshotai/kimi-k2.5")
+        .unwrap_or(DEFAULT_MODEL)
         .to_string();
     let instructions = payload
         .get("instructions")
@@ -116,8 +117,7 @@ pub fn rewrite_success_response(
 ) -> anyhow::Result<Vec<u8>> {
     let payload: Value =
         serde_json::from_slice(raw).context("failed to parse chat completion response")?;
-    let mut builder =
-        engine::responses_turn_builder(&payload, fallback_model, "moonshotai/kimi-k2.5");
+    let mut builder = engine::responses_turn_builder(&payload, fallback_model, DEFAULT_MODEL);
     if let Some(choices) = payload.get("choices").and_then(Value::as_array) {
         for choice in choices {
             let message = choice.get("message").and_then(Value::as_object);

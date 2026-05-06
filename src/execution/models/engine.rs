@@ -1,8 +1,8 @@
 use anyhow::Context;
 use serde::Deserialize;
 use serde::Serialize;
-use serde_json::json;
 use serde_json::Value;
+use serde_json::json;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::path::PathBuf;
@@ -1612,18 +1612,21 @@ mod tests {
             &default_runtime_config(LocalModelFamily::Qwen3Embedding),
         );
         assert_eq!(embedding[4], "embedding");
-        assert!(embedding
-            .iter()
-            .any(|part| part == "Qwen/Qwen3-Embedding-0.6B"));
+        assert!(
+            embedding
+                .iter()
+                .any(|part| part == "Qwen/Qwen3-Embedding-0.6B")
+        );
 
         let stt = build_engine_command(
             &deps,
             &default_runtime_config(LocalModelFamily::VoxtralTranscription),
         );
         assert_eq!(stt[4], "vision");
-        assert!(stt
-            .iter()
-            .any(|part| part == "engineai/Voxtral-Mini-4B-Realtime-2602"));
+        assert!(
+            stt.iter()
+                .any(|part| part == "engineai/Voxtral-Mini-4B-Realtime-2602")
+        );
 
         let tts = build_engine_command(
             &deps,
@@ -1634,9 +1637,10 @@ mod tests {
         assert_eq!(tts[2], "-p");
         assert!(tts.iter().any(|part| part == "speech"));
         assert!(tts.windows(2).any(|pair| pair == ["--isq", "Q4K"]));
-        assert!(tts
-            .iter()
-            .any(|part| part == "engineai/Voxtral-4B-TTS-2603"));
+        assert!(
+            tts.iter()
+                .any(|part| part == "engineai/Voxtral-4B-TTS-2603")
+        );
     }
 
     #[test]
@@ -1921,6 +1925,28 @@ mod tests {
             "anthropic",
             "claude-sonnet-4-7"
         ));
+    }
+
+    #[test]
+    fn recognizes_new_openrouter_api_chat_models() {
+        assert!(is_openrouter_api_chat_model("moonshotai/kimi-k2.6"));
+        assert!(is_openrouter_api_chat_model("tencent/hy3-preview:free"));
+        assert_eq!(
+            default_api_provider_for_model("moonshotai/kimi-k2.6"),
+            "openrouter"
+        );
+        assert!(api_provider_supports_model(
+            "openrouter",
+            "tencent/hy3-preview:free"
+        ));
+        assert_eq!(
+            chat_model_family_for_model("moonshotai/kimi-k2.6"),
+            Some(ChatModelFamily::Kimi)
+        );
+        assert_eq!(
+            chat_model_family_for_model("tencent/hy3-preview:free"),
+            None
+        );
     }
 
     #[test]

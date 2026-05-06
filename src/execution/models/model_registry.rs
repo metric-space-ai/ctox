@@ -34,6 +34,8 @@ pub const SUPPORTED_OPENROUTER_API_CHAT_MODELS: &[&str] = &[
     "google/gemma-4-31b-it:free",
     "anthropic/claude-sonnet-4.6",
     "moonshotai/kimi-k2.5",
+    "moonshotai/kimi-k2.6",
+    "tencent/hy3-preview:free",
     "minimax/minimax-m2.7",
     "mistralai/mistral-small-2603",
     "x-ai/grok-4.20",
@@ -78,6 +80,8 @@ pub const SUPPORTED_CHAT_MODELS: &[&str] = &[
     "anthropic/claude-sonnet-4.6",
     "qwen/qwen3.5-397b-a17b",
     "moonshotai/kimi-k2.5",
+    "moonshotai/kimi-k2.6",
+    "tencent/hy3-preview:free",
 ];
 
 pub const SUPPORTED_LOCAL_CHAT_FAMILIES: &[engine::ChatModelFamily] =
@@ -323,6 +327,15 @@ const CHAT_FAMILY_REGISTRY: &[ChatFamilyCatalogEntry] = &[
             "claude-sonnet-4-7",
             "claude-sonnet-4-6",
         ],
+        supports_vision: true,
+    },
+    ChatFamilyCatalogEntry {
+        family: engine::ChatModelFamily::Kimi,
+        label: "Kimi",
+        selector: "kimi",
+        parse_aliases: &["kimi", "kimi-k2", "kimi k2", "moonshot"],
+        variants: &["moonshotai/kimi-k2.6", "moonshotai/kimi-k2.5"],
+        planning_variants: &["moonshotai/kimi-k2.6", "moonshotai/kimi-k2.5"],
         supports_vision: true,
     },
 ];
@@ -1393,6 +1406,10 @@ const REMOTE_CHAT_FAMILY_REGISTRY: &[RemoteChatFamilyEntry] = &[
     // Kimi family
     RemoteChatFamilyEntry {
         model: "moonshotai/kimi-k2.5",
+        chat_family: engine::ChatModelFamily::Kimi,
+    },
+    RemoteChatFamilyEntry {
+        model: "moonshotai/kimi-k2.6",
         chat_family: engine::ChatModelFamily::Kimi,
     },
     // Gemma family (free tier aliases)
