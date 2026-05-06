@@ -975,7 +975,7 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
     }
 }
 
-const CHAT_USAGE: &str = "usage: ctox chat \"<instruction>\" [--thread-key <key>] [--workspace <path>] [--wait] [--timeout-secs <n>] [--atif-out <path>] [--to <addr> ...] [--cc <addr> ...] [--subject <text>]";
+const CHAT_USAGE: &str = "usage: ctox chat \"<instruction>\" [--thread-key <key>] [--workspace <path>] [--wait] [--timeout-secs <n>] [--atif-out <path>] [--to <addr> ...] [--cc <addr> ...] [--subject <text>] [--attach-file <path> ...]";
 
 fn handle_chat(root: &Path, args: &[String]) -> anyhow::Result<()> {
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
@@ -1002,11 +1002,15 @@ fn handle_chat(root: &Path, args: &[String]) -> anyhow::Result<()> {
     let to_recipients: Vec<String> = collect_flag_values(args, "--to");
     let cc_recipients: Vec<String> = collect_flag_values(args, "--cc");
     let subject = find_flag_value(args, "--subject").map(str::to_owned);
+    let attachments = resolve_chat_attachment_paths(args)?;
     if !cc_recipients.is_empty() && to_recipients.is_empty() {
         anyhow::bail!("--cc requires at least one --to recipient");
     }
     if subject.is_some() && to_recipients.is_empty() {
         anyhow::bail!("--subject requires at least one --to recipient");
+    }
+    if !attachments.is_empty() && to_recipients.is_empty() {
+        anyhow::bail!("--attach-file requires at least one --to recipient");
     }
 
     let mut prompt_parts = Vec::new();
@@ -1015,7 +1019,7 @@ fn handle_chat(root: &Path, args: &[String]) -> anyhow::Result<()> {
         match args[idx].as_str() {
             "--wait" => idx += 1,
             "--thread-key" | "--workspace" | "--atif-out" | "--timeout-secs" | "--to" | "--cc"
-            | "--subject" => {
+            | "--subject" | "--attach-file" => {
                 idx += 2;
             }
             value => {
@@ -1054,7 +1058,7 @@ fn handle_chat(root: &Path, args: &[String]) -> anyhow::Result<()> {
             subject: intent_subject,
             to: to_recipients,
             cc: cc_recipients,
-            attachments: Vec::new(),
+            attachments,
         })
     };
     let outbound_email_for_wait = outbound_email.clone();
@@ -1348,6 +1352,31 @@ fn collect_flag_values(args: &[String], flag: &str) -> Vec<String> {
     values
 }
 
+fn resolve_chat_attachment_paths(args: &[String]) -> anyhow::Result<Vec<String>> {
+    let mut paths = Vec::new();
+    let mut idx = 0usize;
+    while idx < args.len() {
+        if args[idx] == "--attach-file" {
+            let value = args
+                .get(idx + 1)
+                .filter(|value| !value.trim().is_empty() && !value.starts_with("--"))
+                .with_context(|| "--attach-file requires a file path")?;
+            let canonical = std::fs::canonicalize(value)
+                .with_context(|| format!("failed to resolve --attach-file path `{value}`"))?;
+            anyhow::ensure!(
+                canonical.is_file(),
+                "--attach-file path is not a regular file: {}",
+                canonical.display()
+            );
+            paths.push(canonical.to_string_lossy().to_string());
+            idx += 2;
+            continue;
+        }
+        idx += 1;
+    }
+    Ok(paths)
+}
+
 fn persist_runtime_turn_timeout(root: &Path, timeout: Option<&str>) -> anyhow::Result<()> {
     let mut env_map = runtime_env::load_runtime_env_map(root)?;
     let value = timeout
@@ -1428,7 +1457,7 @@ fn resolve_systemd_user_ctox_root(home_dir: &Path) -> Option<PathBuf> {
 mod tests {
     use super::{
         find_ctox_root_from_ancestors, looks_like_ctox_root, persist_runtime_turn_timeout,
-        resolve_runtime_ctox_root, validated_workspace_root_override,
+        resolve_chat_attachment_paths, resolve_runtime_ctox_root, validated_workspace_root_override,
     };
     use crate::execution::models::runtime_env;
     use std::fs;
@@ -1559,6 +1588,42 @@ mod tests {
             .contains("`--timeout` must be a positive integer number of seconds"));
 
         cleanup_test_dir(&root);
+    }
+
+    #[test]
+    fn chat_attachment_paths_are_canonicalized_for_service_send() {
+        let root = unique_test_dir("chat-attachments");
+        fs::create_dir_all(&root).unwrap();
+        let file = root.join("report.xlsx");
+        fs::write(&file, b"xlsx").unwrap();
+
+        let args = vec![
+            "Mail".to_string(),
+            "--attach-file".to_string(),
+            file.to_string_lossy().to_string(),
+        ];
+
+        let attachments = resolve_chat_attachment_paths(&args).unwrap();
+        assert_eq!(
+            attachments,
+            vec![fs::canonicalize(&file).unwrap().to_string_lossy().to_string()]
+        );
+
+        cleanup_test_dir(&root);
+    }
+
+    #[test]
+    fn chat_attachment_paths_require_existing_files() {
+        let args = vec![
+            "Mail".to_string(),
+            "--attach-file".to_string(),
+            "/definitely/missing/report.xlsx".to_string(),
+        ];
+
+        let err = resolve_chat_attachment_paths(&args).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("failed to resolve --attach-file path"));
     }
 
     fn make_fake_ctox_root(name: &str) -> PathBuf {
