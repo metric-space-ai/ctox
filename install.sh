@@ -242,15 +242,11 @@ prepare_cargo_target_cache() {
 
 clean_stale_cmake_cache_dirs() {
   local target_dir="$1"
-  local source_root="$2"
+  local source_root="${2:-}"
   [[ -d "$target_dir" ]] || return 0
-  command -v grep >/dev/null 2>&1 || return 0
 
   local cache_file
   while IFS= read -r -d '' cache_file; do
-    if grep -Fq "$source_root" "$cache_file" 2>/dev/null; then
-      continue
-    fi
     printf '  %b%bremoving stale CMake cache %s%b\n' "$C_BOLD" "$C_GREY" "$cache_file" "$C_RESET" >&2
     rm -rf "$(dirname "$cache_file")"
   done < <(find "$target_dir" -name 'CMakeCache.txt' -print0 2>/dev/null)
