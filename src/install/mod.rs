@@ -17,6 +17,7 @@ use std::time::Instant;
 
 use crate::inference::engine;
 use crate::inference::runtime_env;
+use crate::secrets;
 use crate::service;
 
 const INSTALL_MANIFEST_FILE_NAME: &str = "install_manifest.json";
@@ -27,6 +28,26 @@ const DEFAULT_CACHE_ROOT_RELATIVE_PATH: &str = ".cache/ctox";
 const DEFAULT_GITHUB_API_BASE: &str = "https://api.github.com";
 const DEFAULT_GITHUB_TOKEN_ENV: &str = "CTOX_UPDATE_GITHUB_TOKEN";
 const DEFAULT_RELEASE_REPO: &str = "metric-space-ai/ctox";
+const UPGRADE_RUNTIME_ENV_INVARIANT_KEYS: &[&str] = &[
+    "CTOX_API_PROVIDER",
+    "CTOX_UPSTREAM_BASE_URL",
+    "CTOX_AZURE_FOUNDRY_ENDPOINT",
+    "CTOX_AZURE_FOUNDRY_DEPLOYMENT_ID",
+    "CTOX_CHAT_MODEL",
+    "CTOX_CHAT_MODEL_BASE",
+    "CTOX_ACTIVE_MODEL",
+    "CTOX_CHAT_MODEL_MAX_CONTEXT",
+    "CTOX_CHAT_TURN_TIMEOUT_SECS",
+];
+const UPGRADE_SECRET_INVARIANT_KEYS: &[&str] = &[
+    "AZURE_FOUNDRY_API_KEY",
+    "OPENAI_API_KEY",
+    "OPENROUTER_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "MINIMAX_API_KEY",
+    "CTOX_MISTRAL_API_KEY",
+    "MISTRAL_API_KEY",
+];
 static UPGRADE_PROGRESS_STEP: AtomicUsize = AtomicUsize::new(0);
 static UPGRADE_PROGRESS_STARTED: Mutex<Option<Instant>> = Mutex::new(None);
 
@@ -900,6 +921,7 @@ fn apply_update(
         });
     let backup_path = backup_state_root(&layout.state_root)?;
     progress_step(format!("state backup created: {}", backup_path.display()));
+    let runtime_invariants = RuntimeCredentialSnapshot::capture(&layout.state_root)?;
     persist_update_state(
         &layout.update_state_path(),
         &UpdateState {
@@ -1019,6 +1041,7 @@ fn apply_update(
             return Err(err);
         }
     }
+    runtime_invariants.verify_preserved(&layout.state_root)?;
     manifest.previous_release = previous_release.clone();
     manifest.current_release = Some(release.to_string());
     manifest.updated_at = now_rfc3339();
@@ -1994,7 +2017,14 @@ fn backup_state_root(state_root: &Path) -> Result<PathBuf> {
         }
         !matches!(
             path.extension().and_then(OsStr::to_str),
-            Some("db") | Some("json") | Some("env") | Some("md")
+            Some("db")
+                | Some("sqlite")
+                | Some("sqlite3")
+                | Some("sqlite3-wal")
+                | Some("sqlite3-shm")
+                | Some("json")
+                | Some("env")
+                | Some("md")
         )
     })?;
     let manifest_path = backup_root.join("backup_manifest.json");
@@ -2022,6 +2052,79 @@ fn state_root_has_files(state_root: &Path) -> Result<bool> {
     let mut entries = fs::read_dir(state_root)
         .with_context(|| format!("failed to inspect {}", state_root.display()))?;
     Ok(entries.next().transpose()?.is_some())
+}
+
+#[derive(Debug, Clone, Default)]
+struct RuntimeCredentialSnapshot {
+    env_values: Vec<(String, String)>,
+    secret_presence: Vec<String>,
+}
+
+impl RuntimeCredentialSnapshot {
+    fn capture(root: &Path) -> Result<Self> {
+        let env_map = runtime_env::effective_operator_env_map(root)
+            .with_context(|| format!("failed to read runtime env from {}", root.display()))?;
+        let env_values = UPGRADE_RUNTIME_ENV_INVARIANT_KEYS
+            .iter()
+            .filter_map(|key| {
+                env_map
+                    .get(*key)
+                    .filter(|value| !value.trim().is_empty())
+                    .map(|value| ((*key).to_string(), value.clone()))
+            })
+            .collect();
+        let secret_presence = UPGRADE_SECRET_INVARIANT_KEYS
+            .iter()
+            .filter(|key| {
+                secrets::get_credential(root, key).is_some_and(|value| !value.trim().is_empty())
+            })
+            .map(|key| (*key).to_string())
+            .collect();
+        Ok(Self {
+            env_values,
+            secret_presence,
+        })
+    }
+
+    fn verify_preserved(&self, root: &Path) -> Result<()> {
+        if self.env_values.is_empty() && self.secret_presence.is_empty() {
+            return Ok(());
+        }
+        let after = Self::capture(root)?;
+        let mut missing = Vec::new();
+        for (key, before_value) in &self.env_values {
+            match after
+                .env_values
+                .iter()
+                .find(|(candidate, _)| candidate == key)
+            {
+                Some((_, after_value)) if after_value == before_value => {}
+                Some(_) => missing.push(format!("{key} changed")),
+                None => missing.push(format!("{key} missing")),
+            }
+        }
+        for key in &self.secret_presence {
+            if !after
+                .secret_presence
+                .iter()
+                .any(|candidate| candidate == key)
+            {
+                missing.push(format!("{key} secret missing"));
+            }
+        }
+        if !missing.is_empty() {
+            anyhow::bail!(
+                "post-upgrade runtime credential invariant failed: {}",
+                missing.join(", ")
+            );
+        }
+        progress_info(format!(
+            "runtime credential invariants preserved ({} env keys, {} secrets)",
+            self.env_values.len(),
+            self.secret_presence.len()
+        ));
+        Ok(())
+    }
 }
 
 fn switch_current_release(current_link: &Path, release_root: &Path) -> Result<()> {
@@ -2571,6 +2674,57 @@ mod tests {
         assert_eq!(state.phase, "building");
         assert!(state.finished_at.is_none());
         assert!(state.last_error.is_none());
+    }
+
+    #[test]
+    fn runtime_credential_snapshot_detects_lost_azure_secret() {
+        let temp = tempdir().unwrap();
+        let mut env = std::collections::BTreeMap::new();
+        env.insert("CTOX_API_PROVIDER".to_string(), "azure_foundry".to_string());
+        env.insert(
+            "CTOX_UPSTREAM_BASE_URL".to_string(),
+            "https://example.openai.azure.com/openai/v1".to_string(),
+        );
+        env.insert(
+            "AZURE_FOUNDRY_API_KEY".to_string(),
+            "secret-value".to_string(),
+        );
+        runtime_env::save_runtime_env_map(temp.path(), &env).unwrap();
+
+        let snapshot = RuntimeCredentialSnapshot::capture(temp.path()).unwrap();
+        assert_eq!(snapshot.env_values.len(), 2);
+        assert_eq!(snapshot.secret_presence, vec!["AZURE_FOUNDRY_API_KEY"]);
+
+        secrets::delete_credential(temp.path(), "AZURE_FOUNDRY_API_KEY").unwrap();
+        let err = snapshot.verify_preserved(temp.path()).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("AZURE_FOUNDRY_API_KEY secret missing"));
+    }
+
+    #[test]
+    fn state_backup_includes_sqlite_runtime_state() {
+        let temp = tempdir().unwrap();
+        let state_root = temp.path().join("state");
+        ensure_dir(&state_root).unwrap();
+        fs::write(state_root.join("ctox.sqlite3"), "main").unwrap();
+        fs::write(state_root.join("ctox.sqlite3-wal"), "wal").unwrap();
+        fs::write(state_root.join("ctox.sqlite3-shm"), "shm").unwrap();
+
+        let backup = backup_state_root(&state_root).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(backup.join("ctox.sqlite3")).unwrap(),
+            "main"
+        );
+        assert_eq!(
+            fs::read_to_string(backup.join("ctox.sqlite3-wal")).unwrap(),
+            "wal"
+        );
+        assert_eq!(
+            fs::read_to_string(backup.join("ctox.sqlite3-shm")).unwrap(),
+            "shm"
+        );
     }
 
     #[test]
