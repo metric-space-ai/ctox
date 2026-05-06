@@ -4672,6 +4672,15 @@ fn artifact_first_execution_prompt(job: &QueuedPrompt) -> String {
     let mut prompt = String::new();
     prompt.push_str("HARNESS ARTIFACT CONTRACT\n");
     prompt.push_str("This task declares durable file artifacts. The harness will not accept a final answer, plan, or interim text as completion unless these files exist on disk.\n\n");
+    if is_terminal_bench_controller_artifact_job(job) {
+        if let Some(run_dir) = terminal_bench_run_dir_from_artifact_paths(&file_refs) {
+            prompt.push_str("CURRENT TERMINAL-BENCH RUN SCOPE\n");
+            prompt.push_str("Use exactly this RUN_DIR for this queue item:\n");
+            prompt.push_str(&run_dir);
+            prompt.push_str("\n\n");
+            prompt.push_str("Do not read, copy, or continue controller-prompt.md, controller.json, ticket-map.jsonl, preparation-tickets.jsonl, run-queue.jsonl, results.jsonl, knowledge.md, logbook.md, or blogpost-notes.md from any other Terminal-Bench run directory. Other directories under /home/metricspace/CTOX/runtime/terminal-bench-2/runs are stale context for this item. If a shell command or file path points at a different run id, that is a wrong-run error; stop that command sequence and write the blocker into the required files in the current RUN_DIR.\n\n");
+        }
+    }
     prompt.push_str("Required files:\n");
     for path in &file_refs {
         prompt.push_str("- ");
@@ -4687,6 +4696,25 @@ fn artifact_first_execution_prompt(job: &QueuedPrompt) -> String {
     prompt.push_str("ORIGINAL TASK\n");
     prompt.push_str(&job.prompt);
     prompt
+}
+
+fn terminal_bench_run_dir_from_artifact_paths(paths: &[String]) -> Option<String> {
+    for path in paths {
+        let marker = "/terminal-bench-2/runs/";
+        let Some(marker_start) = path.find(marker) else {
+            continue;
+        };
+        let run_id_start = marker_start + marker.len();
+        let rest = &path[run_id_start..];
+        let Some(run_id_len) = rest.find('/') else {
+            continue;
+        };
+        if run_id_len == 0 {
+            continue;
+        }
+        return Some(path[..run_id_start + run_id_len].to_string());
+    }
+    None
 }
 
 fn is_terminal_bench_controller_artifact_job(job: &QueuedPrompt) -> bool {
@@ -5001,6 +5029,13 @@ fn maybe_terminal_bench_controller_runtime_ref_feedback(
     if runtime_ref_paths.is_empty() {
         return Ok(None);
     }
+    let current_run_dir = terminal_bench_run_dir_from_artifact_paths(
+        &expected
+            .iter()
+            .filter(|artifact| artifact.kind == ArtifactKind::WorkspaceFile)
+            .map(|artifact| artifact.primary_key.clone())
+            .collect::<Vec<_>>(),
+    );
     let mut valid_refs = Vec::new();
     let mut synthetic_refs = Vec::new();
     for path in &runtime_ref_paths {
@@ -5019,6 +5054,7 @@ fn maybe_terminal_bench_controller_runtime_ref_feedback(
     if !valid_refs.is_empty() {
         return Ok(Some(terminal_bench_runtime_ref_feedback_note(
             &valid_refs,
+            current_run_dir.as_deref(),
             "The harness found existing real preparation queue refs.",
         )));
     }
@@ -5032,11 +5068,15 @@ fn maybe_terminal_bench_controller_runtime_ref_feedback(
     Ok(Some(format!(
         "HARNESS FEEDBACK\n\
 The Terminal-Bench controller requires real CTOX runtime queue/ticket refs, but none are currently recorded in ticket-map.jsonl, preparation-tickets.jsonl, or run-queue.jsonl.\n\
+Current RUN_DIR for this queue item: {}\n\
+Write only to files in this RUN_DIR. Do not inspect or reuse controller-prompt.md or durable files from older Terminal-Bench run directories.\n\
 Do not invent identifiers. Values like msg-prep-runtime-001, q1, ticket-1, or TODO are invalid.\n\
 If you are unsure about CTOX CLI syntax, inspect it yourself with `ctox help`, `ctox queue --help`, and `ctox queue add --help` before creating any tickets. Do not guess.\n\
 Your next shell action must create the preparation work yourself with `ctox queue add`, capture the real `queue:system::*` message_key values from stdout, verify each with `ctox queue show --message-key <key>`, and persist those exact keys in ticket-map.jsonl, preparation-tickets.jsonl, and run-queue.jsonl before any benchmark work.\n\
 {example}\n\
 If any `ctox queue add` command fails, persist a blocker in controller.json, logbook.md, and run-queue.jsonl with the exact failing command and stderr. Do not claim completion."
+        ,
+        current_run_dir.as_deref().unwrap_or("<declared artifact paths>")
     )))
 }
 
@@ -5047,17 +5087,24 @@ fn parent_queue_key_for_feedback(job: &QueuedPrompt) -> Option<String> {
         .cloned()
 }
 
-fn terminal_bench_runtime_ref_feedback_note(refs: &[String], action: &str) -> String {
+fn terminal_bench_runtime_ref_feedback_note(
+    refs: &[String],
+    current_run_dir: Option<&str>,
+    action: &str,
+) -> String {
     format!(
         "HARNESS FEEDBACK\n\
 {action}\n\
 These refs are real CTOX runtime objects already persisted in the run artifacts:\n\
 {}\n\n\
-Do not create duplicate preparation queue tasks. Read controller.json, ticket-map.jsonl, preparation-tickets.jsonl, run-queue.jsonl, knowledge.md, and logbook.md first. Continue by verifying the queued preparation work and updating the durable files with any new facts.",
+Current RUN_DIR for this queue item: {}\n\
+Do not create duplicate preparation queue tasks. Read controller.json, ticket-map.jsonl, preparation-tickets.jsonl, run-queue.jsonl, knowledge.md, and logbook.md from this RUN_DIR first. Do not read or continue stale Terminal-Bench run directories. Continue by verifying the queued preparation work and updating the durable files with any new facts.",
         refs.iter()
             .map(|value| format!("- {value}"))
             .collect::<Vec<_>>()
             .join("\n")
+            ,
+        current_run_dir.unwrap_or("<declared artifact paths>")
     )
 }
 
@@ -5406,6 +5453,14 @@ fn outcome_witness_recovery_message(job: &QueuedPrompt, approved_body: &str, err
             message.push_str(
                 "\n\nHARNESS FEEDBACK\nProblem: Du hast die Aufgabe als fertig behandelt, aber der Harness konnte die erwarteten Datei-Artefakte nicht finden. Eine Textantwort, ein Plan oder ein Codeblock reicht hier nicht.\n\nREQUIRED ARTIFACTS\nDiese Pfade muessen als Dateien existieren, bevor du Abschluss behauptest:",
             );
+            if is_terminal_bench_controller_artifact_job(job) {
+                if let Some(run_dir) = terminal_bench_run_dir_from_artifact_paths(&file_refs) {
+                    message.push_str(&format!(
+                        "\n\nCURRENT TERMINAL-BENCH RUN SCOPE\nDer einzige gueltige RUN_DIR fuer diesen Queue-Run ist:\n{}\n\nWenn du Dateien in einem anderen Terminal-Bench-Run-Ordner erzeugt oder gelesen hast, war das ein Wrong-Run-Fehler. Verwende keine controller-prompt.md oder durable Dateien aus alten Runs. Arbeite jetzt nur in diesem RUN_DIR weiter.",
+                        run_dir
+                    ));
+                }
+            }
             for path in file_refs {
                 message.push_str(&format!(
                     "\n- {} [{}]",
@@ -17909,7 +17964,7 @@ Write {run_dir}/controller.json as valid JSON after planning. Helper files like 
 
     #[test]
     fn artifact_first_prompt_front_loads_declared_workspace_files() {
-        let run_dir = "/tmp/ctox-tb2-run";
+        let run_dir = "/tmp/terminal-bench-2/runs/20260506T104258Z-qwen36-128k-worker-owned-queue";
         let job = QueuedPrompt {
             prompt: format!(
                 "Only required durable files for this controller turn:\n\
@@ -17933,8 +17988,13 @@ Start by discovering benchmark tasks."
         let prompt = artifact_first_execution_prompt(&job);
 
         assert!(prompt.starts_with("HARNESS ARTIFACT CONTRACT"));
-        assert!(prompt.contains("/tmp/ctox-tb2-run/controller.json"));
-        assert!(prompt.contains("/tmp/ctox-tb2-run/summary.md"));
+        assert!(prompt.contains("CURRENT TERMINAL-BENCH RUN SCOPE"));
+        assert!(prompt.contains("Use exactly this RUN_DIR"));
+        assert!(prompt.contains(run_dir));
+        assert!(prompt.contains("controller-prompt.md"));
+        assert!(prompt.contains("wrong-run error"));
+        assert!(prompt.contains(&format!("{run_dir}/controller.json")));
+        assert!(prompt.contains(&format!("{run_dir}/summary.md")));
         assert!(prompt.contains("Before open-ended research or exploratory loops"));
         assert!(prompt.contains("regular file"));
         assert!(prompt.contains("test -f"));
