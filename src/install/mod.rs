@@ -1971,13 +1971,19 @@ where
         if let Some(parent) = destination_path.parent() {
             ensure_dir(parent)?;
         }
-        fs::copy(&source_path, &destination_path).with_context(|| {
-            format!(
-                "failed to copy {} to {}",
-                source_path.display(),
-                destination_path.display()
-            )
-        })?;
+        match fs::copy(&source_path, &destination_path) {
+            Ok(_) => {}
+            Err(err) if err.kind() == ErrorKind::NotFound => continue,
+            Err(err) => {
+                return Err(err).with_context(|| {
+                    format!(
+                        "failed to copy {} to {}",
+                        source_path.display(),
+                        destination_path.display()
+                    )
+                });
+            }
+        }
     }
     Ok(())
 }
@@ -2725,6 +2731,24 @@ mod tests {
             fs::read_to_string(backup.join("ctox.sqlite3-shm")).unwrap(),
             "shm"
         );
+    }
+
+    #[test]
+    fn state_backup_tolerates_disappearing_sqlite_sidecars() {
+        let temp = tempdir().unwrap();
+        let state_root = temp.path().join("state");
+        ensure_dir(&state_root).unwrap();
+        fs::write(state_root.join("ctox.sqlite3"), "main").unwrap();
+        fs::write(state_root.join("ctox.sqlite3-wal"), "wal").unwrap();
+        fs::remove_file(state_root.join("ctox.sqlite3-wal")).unwrap();
+
+        let backup = backup_state_root(&state_root).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(backup.join("ctox.sqlite3")).unwrap(),
+            "main"
+        );
+        assert!(!backup.join("ctox.sqlite3-wal").exists());
     }
 
     #[test]
