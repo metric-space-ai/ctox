@@ -3031,7 +3031,7 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
             let mut review_requeue: Option<(String, String)> = None;
             let mut outcome_recovery_prompt: Option<QueuedPrompt> = None;
             let mut platform_pipeline_event: Option<String> = None;
-            let mut next_prompt = None;
+            let next_prompt;
             {
                 let mut shared = lock_shared_state(&state);
                 shared.busy = false;
@@ -3775,19 +3775,11 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
                         let _ = engine.reset_mission_rewrite_failure_count(conversation_id);
                     }
                 }
-                if let Some(remaining_secs) = runtime_blocker_backoff_remaining_secs(&shared) {
-                    if !shared.pending_prompts.is_empty() {
-                        push_event_locked(
-                            &mut shared,
-                            format!(
-                                "Deferred queued prompt dispatch for {}s due to hard runtime blocker",
-                                remaining_secs
-                            ),
-                        );
-                    }
-                } else {
-                    next_prompt = maybe_start_next_queued_prompt_locked(&root, &mut shared);
-                }
+                next_prompt = maybe_start_next_queued_prompt_after_recovery_locked(
+                    &root,
+                    &mut shared,
+                    outcome_recovery_prompt.is_some(),
+                );
             }
             if let Some((work_id, summary)) = review_requeue {
                 match requeue_review_rejected_self_work(&root, &work_id, &summary) {
@@ -7312,6 +7304,36 @@ fn maybe_start_next_queued_prompt_locked(
         ),
     );
     Some(queued)
+}
+
+fn maybe_start_next_queued_prompt_after_recovery_locked(
+    root: &Path,
+    shared: &mut SharedState,
+    outcome_recovery_pending: bool,
+) -> Option<QueuedPrompt> {
+    if outcome_recovery_pending {
+        if !shared.pending_prompts.is_empty() {
+            push_event_locked(
+                shared,
+                "Deferred queued prompt dispatch until outcome-witness recovery is queued"
+                    .to_string(),
+            );
+        }
+        return None;
+    }
+    if let Some(remaining_secs) = runtime_blocker_backoff_remaining_secs(shared) {
+        if !shared.pending_prompts.is_empty() {
+            push_event_locked(
+                shared,
+                format!(
+                    "Deferred queued prompt dispatch for {}s due to hard runtime blocker",
+                    remaining_secs
+                ),
+            );
+        }
+        return None;
+    }
+    maybe_start_next_queued_prompt_locked(root, shared)
 }
 
 fn suggested_skill_from_message(message: &channels::RoutedInboundMessage) -> Option<String> {
@@ -12428,6 +12450,40 @@ mod tests {
             .pending_prompts
             .iter()
             .all(|item| item.source_label != QUEUE_GUARD_SOURCE_LABEL));
+    }
+
+    #[test]
+    fn outcome_recovery_does_not_claim_next_queued_prompt_before_enqueue() {
+        let root = temp_root("outcome-recovery-next-prompt");
+        let mut shared = SharedState::default();
+        shared.pending_prompts.push_back(QueuedPrompt {
+            prompt: "next durable task".to_string(),
+            goal: "next durable task".to_string(),
+            preview: "next durable task".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: Some("benchmark-controller".to_string()),
+            leased_message_keys: vec!["queue:system::next".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("terminal-bench".to_string()),
+            workspace_root: Some(root.to_string_lossy().to_string()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        });
+
+        let next = maybe_start_next_queued_prompt_after_recovery_locked(&root, &mut shared, true);
+
+        assert!(next.is_none());
+        assert!(!shared.busy);
+        assert_eq!(shared.pending_prompts.len(), 1);
+        assert_eq!(
+            shared.pending_prompts.front().unwrap().leased_message_keys,
+            vec!["queue:system::next".to_string()]
+        );
+        assert!(shared
+            .recent_events
+            .iter()
+            .any(|event| event.contains("outcome-witness recovery")));
     }
 
     #[test]
