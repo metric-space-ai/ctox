@@ -4784,7 +4784,13 @@ pub(crate) fn ensure_routing_rows_for_inbound(conn: &Connection) -> Result<()> {
                 WHEN m.direction = 'outbound' THEN 'handled'
                 WHEN m.trust_level = 'system_probe' THEN 'handled'
                 WHEN m.channel IN ('queue', 'tui') THEN 'pending'
+                WHEN m.channel = 'teams'
+                     AND m.direction = 'inbound'
+                     AND a.created_at IS NOT NULL
+                     AND m.external_created_at <= a.created_at
+                     AND datetime(m.external_created_at) < datetime('now', '-24 hours') THEN 'handled'
                 WHEN m.direction = 'inbound'
+                     AND m.channel <> 'teams'
                      AND a.created_at IS NOT NULL
                      AND m.external_created_at <= a.created_at THEN 'handled'
                 ELSE 'pending'
@@ -4794,7 +4800,13 @@ pub(crate) fn ensure_routing_rows_for_inbound(conn: &Connection) -> Result<()> {
             CASE
                 WHEN m.direction = 'outbound' OR m.trust_level = 'system_probe' THEN m.observed_at
                 WHEN m.channel IN ('queue', 'tui') THEN NULL
+                WHEN m.channel = 'teams'
+                     AND m.direction = 'inbound'
+                     AND a.created_at IS NOT NULL
+                     AND m.external_created_at <= a.created_at
+                     AND datetime(m.external_created_at) < datetime('now', '-24 hours') THEN m.observed_at
                 WHEN m.direction = 'inbound'
+                     AND m.channel <> 'teams'
                      AND a.created_at IS NOT NULL
                      AND m.external_created_at <= a.created_at THEN m.observed_at
                 ELSE NULL
