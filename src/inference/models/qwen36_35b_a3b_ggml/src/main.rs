@@ -275,26 +275,6 @@ fn run_turn(engine: Arc<Engine>, req: ResponsesCreateRequest) -> Result<Vec<u8>>
             response: envelope.clone(),
             sequence_number: next_seq(),
         })?;
-        sink.send(&ResponsesStreamEvent::OutputItemAdded {
-            output_index: 0,
-            item: ResponseOutputItem::Message {
-                id: message_id.clone(),
-                status: ResponseStatus::InProgress,
-                role: "assistant",
-                content: Vec::new(),
-            },
-            sequence_number: next_seq(),
-        })?;
-        sink.send(&ResponsesStreamEvent::ContentPartAdded {
-            item_id: message_id.clone(),
-            output_index: 0,
-            content_index: 0,
-            part: ResponseContentPart::OutputText {
-                text: String::new(),
-                annotations: Vec::new(),
-            },
-            sequence_number: next_seq(),
-        })?;
     }
 
     let prompt = render_chat_prompt(&req);
@@ -329,6 +309,26 @@ fn run_turn(engine: Arc<Engine>, req: ResponsesCreateRequest) -> Result<Vec<u8>>
     let parsed_tool_call = parse_qwen_tool_code(&text);
 
     if req.stream && !text.is_empty() && parsed_tool_call.is_none() {
+        sink.send(&ResponsesStreamEvent::OutputItemAdded {
+            output_index: 0,
+            item: ResponseOutputItem::Message {
+                id: message_id.clone(),
+                status: ResponseStatus::InProgress,
+                role: "assistant",
+                content: Vec::new(),
+            },
+            sequence_number: next_seq(),
+        })?;
+        sink.send(&ResponsesStreamEvent::ContentPartAdded {
+            item_id: message_id.clone(),
+            output_index: 0,
+            content_index: 0,
+            part: ResponseContentPart::OutputText {
+                text: String::new(),
+                annotations: Vec::new(),
+            },
+            sequence_number: next_seq(),
+        })?;
         sink.send(&ResponsesStreamEvent::OutputTextDelta {
             item_id: message_id.clone(),
             output_index: 0,
@@ -367,7 +367,7 @@ fn run_turn(engine: Arc<Engine>, req: ResponsesCreateRequest) -> Result<Vec<u8>>
     } else if req.stream {
         if let Some(tool_call) = parsed_tool_call.clone() {
             sink.send(&ResponsesStreamEvent::OutputItemAdded {
-                output_index: 1,
+                output_index: 0,
                 item: ResponseOutputItem::FunctionCall {
                     id: tool_call.id.clone(),
                     call_id: tool_call.call_id.clone(),
@@ -379,18 +379,18 @@ fn run_turn(engine: Arc<Engine>, req: ResponsesCreateRequest) -> Result<Vec<u8>>
             })?;
             sink.send(&ResponsesStreamEvent::FunctionCallArgumentsDelta {
                 item_id: tool_call.id.clone(),
-                output_index: 1,
+                output_index: 0,
                 delta: tool_call.arguments.clone(),
                 sequence_number: next_seq(),
             })?;
             sink.send(&ResponsesStreamEvent::FunctionCallArgumentsDone {
                 item_id: tool_call.id.clone(),
-                output_index: 1,
+                output_index: 0,
                 arguments: tool_call.arguments.clone(),
                 sequence_number: next_seq(),
             })?;
             sink.send(&ResponsesStreamEvent::OutputItemDone {
-                output_index: 1,
+                output_index: 0,
                 item: ResponseOutputItem::FunctionCall {
                     id: tool_call.id,
                     call_id: tool_call.call_id,

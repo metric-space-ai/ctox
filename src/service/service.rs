@@ -3371,6 +3371,26 @@ fn start_prompt_worker(
                             None
                         };
                         if !job.leased_message_keys.is_empty() {
+                            if retry_runtime_message {
+                                match apply_runtime_retry_feedback_to_leased_queue(
+                                    &root, &job, &err_text,
+                                ) {
+                                    Ok(updated) if updated > 0 => push_event_locked(
+                                        &mut shared,
+                                        format!(
+                                            "Injected harness retry feedback into {updated} queued message(s)"
+                                        ),
+                                    ),
+                                    Ok(_) => {}
+                                    Err(update_err) => push_event_locked(
+                                        &mut shared,
+                                        format!(
+                                            "Failed to inject harness retry feedback into queued message: {}",
+                                            clip_text(&update_err.to_string(), 180)
+                                        ),
+                                    ),
+                                }
+                            }
                             let route_status = failed_worker_route_status(
                                 agent_failure_threshold_hit,
                                 timeout_worker_message,
@@ -10176,6 +10196,35 @@ fn maybe_enqueue_runtime_retry_continuation(
     Ok(Some(created.title))
 }
 
+fn apply_runtime_retry_feedback_to_leased_queue(
+    root: &Path,
+    job: &QueuedPrompt,
+    error_text: &str,
+) -> Result<usize> {
+    if !runtime_error_is_transient_api_failure(error_text) {
+        return Ok(0);
+    }
+    let feedback_prompt = render_runtime_retry_prompt(job, error_text);
+    let note = format!(
+        "Harness retry feedback injected after runtime failure: {}",
+        clip_text(error_text.trim(), 180)
+    );
+    let mut updated = 0usize;
+    for message_key in &job.leased_message_keys {
+        channels::update_queue_task(
+            root,
+            channels::QueueTaskUpdateRequest {
+                message_key: message_key.clone(),
+                prompt: Some(feedback_prompt.clone()),
+                status_note: Some(note.clone()),
+                ..Default::default()
+            },
+        )?;
+        updated += 1;
+    }
+    Ok(updated)
+}
+
 fn runtime_retry_not_before_iso(error_text: &str) -> String {
     let cooldown_secs = turn_loop::hard_runtime_blocker_retry_cooldown_secs(error_text)
         .unwrap_or(300)
@@ -10201,6 +10250,14 @@ fn is_compaction_blocker(value: &str) -> bool {
     lowered.contains("mid-task compaction timeout")
         || lowered.contains("compaction timeout")
         || lowered.contains("compact_followup")
+}
+
+fn is_no_assistant_message_blocker(value: &str) -> bool {
+    let lowered = value.to_ascii_lowercase();
+    lowered.contains("turn completed without assistant message")
+        || lowered.contains("completed without assistant message")
+        || lowered.contains("no assistant message")
+        || lowered.contains("empty assistant message")
 }
 
 /// F3: classify a harness-error string into a structured `AgentOutcome`.
@@ -10258,12 +10315,21 @@ fn render_durable_artifact_timeout_recovery_prompt(job: &QueuedPrompt, blocker: 
 
 fn render_runtime_retry_prompt(job: &QueuedPrompt, error_text: &str) -> String {
     let mut required_actions = vec![
-        "re-check durable state before retrying; do not trust the previous reply text as proof",
+        "inspect durable state and workspace artifacts before retrying; do not trust the previous reply text as proof",
         "preserve work that already exists and avoid duplicate queue tasks",
         "retry only the smallest step interrupted by the transient API failure",
         "finish only after the real durable outcome exists in the state machine",
         "if the API is still unavailable, leave this work pending for another retry instead of claiming completion",
     ];
+    let problem = if is_no_assistant_message_blocker(error_text) {
+        required_actions.insert(
+            0,
+            "the previous model turn executed at least one tool phase but ended without a final assistant message; continue after the tool phase instead of restarting blindly",
+        );
+        "The previous model turn ended after runtime/tool work without producing the required final assistant message. The task is not complete yet."
+    } else {
+        "The previous turn was interrupted by a retryable runtime failure. The task is not complete yet."
+    };
     if job.outbound_email.is_some() {
         required_actions.push(
             "for a proactive outbound email task, produce the final send-ready body first; after review approval, continue only from the exact reviewed-send continuation prompt",
@@ -10273,7 +10339,7 @@ fn render_runtime_retry_prompt(job: &QueuedPrompt, error_text: &str) -> String {
         );
     }
     let prompt = format!(
-        "HARNESS FEEDBACK\nProblem: The previous turn was interrupted by a retryable runtime failure. The task is not complete yet.\n\nCURRENT TASK\n{}\n\nRUNTIME FAILURE\n{}\n\nREQUIRED ACTIONS\n- {}\n\nEXIT GATE\nFinish only after the durable outcome exists in runtime state. If the runtime is still unavailable, keep the work pending instead of claiming completion.",
+        "HARNESS FEEDBACK\nProblem: {problem}\n\nCURRENT TASK\n{}\n\nRUNTIME FAILURE\n{}\n\nREQUIRED ACTIONS\n- {}\n\nEXIT GATE\nFinish only after the durable outcome exists in runtime state. If the runtime is still unavailable, keep the work pending instead of claiming completion.",
         summarize_follow_up_goal(&job.goal),
         clip_text(error_text.trim(), 220),
         required_actions.join("\n- ")
@@ -14808,6 +14874,82 @@ Use shell tools to create or update these files through Harbor."
             classify_agent_failure(error),
             crate::lcm::AgentOutcome::ExecutionError
         );
+    }
+
+    #[test]
+    fn no_assistant_retry_prompt_explains_missing_final_message() {
+        let job = QueuedPrompt {
+            prompt: "Create and verify /tmp/result.txt.".to_string(),
+            goal: "Create and verify /tmp/result.txt.".to_string(),
+            preview: "Create result artifact".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: None,
+            leased_message_keys: Vec::new(),
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("smoke".to_string()),
+            workspace_root: Some("/tmp".to_string()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let prompt = render_runtime_retry_prompt(&job, "turn completed without assistant message");
+
+        assert!(prompt.contains("HARNESS FEEDBACK"));
+        assert!(prompt.contains("without producing the required final assistant message"));
+        assert!(prompt.contains("continue after the tool phase"));
+        assert!(prompt.contains("EXIT GATE"));
+    }
+
+    #[test]
+    fn leased_queue_runtime_retry_gets_harness_feedback_prompt() {
+        let root = temp_root("leased-queue-runtime-retry-feedback");
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Qwen smoke".to_string(),
+                prompt: "Create and verify the smoke artifact.".to_string(),
+                thread_key: "smoke/qwen".to_string(),
+                workspace_root: Some("/tmp/qwen-smoke".to_string()),
+                priority: "high".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("create queue task");
+        channels::lease_queue_task(&root, &task.message_key, CHANNEL_ROUTER_LEASE_OWNER)
+            .expect("lease queue task");
+        let job = QueuedPrompt {
+            prompt: task.prompt.clone(),
+            goal: task.prompt.clone(),
+            preview: task.title.clone(),
+            source_label: "queue".to_string(),
+            suggested_skill: None,
+            leased_message_keys: vec![task.message_key.clone()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some(task.thread_key.clone()),
+            workspace_root: task.workspace_root.clone(),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let updated = apply_runtime_retry_feedback_to_leased_queue(
+            &root,
+            &job,
+            "turn completed without assistant message",
+        )
+        .expect("inject feedback");
+        assert_eq!(updated, 1);
+
+        let reloaded = channels::load_queue_task(&root, &task.message_key)
+            .expect("load queue task")
+            .expect("queue task exists");
+        assert!(reloaded.prompt.contains("HARNESS FEEDBACK"));
+        assert!(reloaded.prompt.contains("without producing the required final assistant message"));
+        assert!(reloaded.prompt.contains("Create and verify the smoke artifact."));
+        assert_eq!(route_status_for(&root, &task.message_key), "leased");
     }
 
     #[test]
