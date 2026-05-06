@@ -4990,7 +4990,11 @@ fn validate_terminal_bench_controller_runtime_refs(
     }
     let paths = terminal_bench_controller_runtime_ref_paths(expected_artifact_refs);
     if paths.is_empty() {
-        return Ok(());
+        anyhow::bail!(
+            "Terminal-Bench controller outcome requires real CTOX runtime ticket/queue refs, \
+but no declared durable artifact can carry those refs. Record queue:system::<id> refs in \
+reports/preflight.md, logbook.md, ticket-map.jsonl, preparation-tickets.jsonl, or run-queue.jsonl."
+        );
     }
 
     let mut valid_refs = Vec::new();
@@ -5019,10 +5023,12 @@ fn validate_terminal_bench_controller_runtime_refs(
 
     anyhow::bail!(
         "Terminal-Bench controller outcome is missing real CTOX runtime ticket/queue refs. \
-ticket-map.jsonl, preparation-tickets.jsonl, and run-queue.jsonl must reference existing \
+reports/preflight.md, logbook.md, ticket-map.jsonl, preparation-tickets.jsonl, or run-queue.jsonl must reference existing \
 CTOX queue message keys such as queue:system::<id> or existing ticket self-work IDs. \
 Synthetic refs like {} do not count. Create real CTOX queue tasks via `ctox queue add` \
-or persist an explicit blocker with the exact next command.",
+or persist an explicit blocker with the exact next command. A `ctox queue add` usage error \
+caused by unsupported flags or a missing `--prompt` is not an acceptable blocker; retry with \
+the documented syntax.",
         if synthetic_refs.is_empty() {
             "msg-prep-runtime-001".to_string()
         } else {
@@ -5050,7 +5056,11 @@ fn terminal_bench_controller_runtime_ref_paths(
         };
         if matches!(
             name,
-            "ticket-map.jsonl" | "preparation-tickets.jsonl" | "run-queue.jsonl"
+            "ticket-map.jsonl"
+                | "preparation-tickets.jsonl"
+                | "run-queue.jsonl"
+                | "preflight.md"
+                | "logbook.md"
         ) {
             paths.push(path.to_path_buf());
         }
@@ -5216,6 +5226,9 @@ fn terminal_bench_controller_has_explicit_blocker(expected_artifact_refs: &[Arti
             continue;
         };
         let lowered = text.to_ascii_lowercase();
+        if lowered.contains("usage: ctox queue add") {
+            return false;
+        }
         if path
             .file_name()
             .and_then(|value| value.to_str())
@@ -18968,6 +18981,176 @@ preparation queue/tickets and record message keys.",
         assert_eq!(delivered.len(), 4);
         let proof_id = enforce_job_outcome_witness(&root, &job, expected, delivered)
             .expect("real queue runtime refs should satisfy Terminal-Bench witness")
+            .expect("proof id should be returned");
+        assert!(proof_id.starts_with("ctp-"));
+    }
+
+    #[test]
+    fn terminal_bench_preflight_logbook_without_real_queue_refs_is_rejected() {
+        let root = temp_root("terminal-bench-five-file-missing-runtime-refs");
+        let run_dir = root.join("tb2-run");
+        let logbook = run_dir.join("logbook.md");
+        let knowledge = run_dir.join("knowledge.md");
+        let results = run_dir.join("results.jsonl");
+        let tasks = run_dir.join("tasks/index.jsonl");
+        let preflight = run_dir.join("reports/preflight.md");
+        let prompt = format!(
+            "You are the Terminal-Bench 2 controller.\n\
+Only required durable files for this controller turn:\n\
+- {}\n\
+- {}\n\
+- {}\n\
+- {}\n\
+- {}\n\n\
+Create durable CTOX queue/ticket work and record the actual queue message keys returned by ctox queue add.",
+            logbook.display(),
+            knowledge.display(),
+            results.display(),
+            tasks.display(),
+            preflight.display()
+        );
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Terminal-Bench 2 controller five files".to_string(),
+                prompt: prompt.clone(),
+                thread_key: "queue/tb2-five-file-missing-refs".to_string(),
+                workspace_root: Some(run_dir.to_string_lossy().into_owned()),
+                priority: "urgent".to_string(),
+                suggested_skill: Some("benchmark-controller".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create parent queue task");
+        let leased = channels::lease_queue_task(&root, &task.message_key, "test")
+            .expect("failed to lease parent queue task");
+        std::fs::create_dir_all(preflight.parent().unwrap()).expect("failed to create reports dir");
+        std::fs::create_dir_all(tasks.parent().unwrap()).expect("failed to create tasks dir");
+        std::fs::write(&logbook, "QUEUE-ADD-1 BLOCKER: usage: ctox queue add\n")
+            .expect("failed to write logbook");
+        std::fs::write(&knowledge, "# knowledge\n").expect("failed to write knowledge");
+        std::fs::write(&results, "{\"status\":\"pending\"}\n").expect("failed to write results");
+        std::fs::write(&tasks, "{\"status\":\"pending\"}\n").expect("failed to write tasks");
+        std::fs::write(&preflight, "# preflight\nNo queue refs recorded.\n")
+            .expect("failed to write preflight");
+        let job = QueuedPrompt {
+            prompt,
+            goal: "Terminal-Bench 2 controller".to_string(),
+            preview: "Terminal-Bench 2 controller".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: Some("benchmark-controller".to_string()),
+            leased_message_keys: vec![leased.message_key],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("queue/tb2-five-file-missing-refs".to_string()),
+            workspace_root: Some(run_dir.to_string_lossy().into_owned()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let expected = expected_outcome_artifacts_for_job(&job);
+        let delivered = delivered_outcome_artifacts_for_job(&root, &job, &expected)
+            .expect("failed to read delivered artifacts");
+
+        assert_eq!(delivered.len(), 5);
+        let err = enforce_job_outcome_witness(&root, &job, expected, delivered)
+            .expect_err("missing real queue refs must keep Terminal-Bench work open");
+        assert!(err
+            .to_string()
+            .contains("missing real CTOX runtime ticket/queue refs"));
+    }
+
+    #[test]
+    fn terminal_bench_preflight_accepts_real_queue_refs_in_preflight_report() {
+        let root = temp_root("terminal-bench-five-file-real-preflight-ref");
+        let run_dir = root.join("tb2-run");
+        let logbook = run_dir.join("logbook.md");
+        let knowledge = run_dir.join("knowledge.md");
+        let results = run_dir.join("results.jsonl");
+        let tasks = run_dir.join("tasks/index.jsonl");
+        let preflight = run_dir.join("reports/preflight.md");
+        let prompt = format!(
+            "You are the Terminal-Bench 2 controller.\n\
+Only required durable files for this controller turn:\n\
+- {}\n\
+- {}\n\
+- {}\n\
+- {}\n\
+- {}\n\n\
+Create durable CTOX queue/ticket work and record the actual queue message keys returned by ctox queue add.",
+            logbook.display(),
+            knowledge.display(),
+            results.display(),
+            tasks.display(),
+            preflight.display()
+        );
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Terminal-Bench 2 controller five files real ref".to_string(),
+                prompt: prompt.clone(),
+                thread_key: "queue/tb2-five-file-real-ref".to_string(),
+                workspace_root: Some(run_dir.to_string_lossy().into_owned()),
+                priority: "urgent".to_string(),
+                suggested_skill: Some("benchmark-controller".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create parent queue task");
+        let leased = channels::lease_queue_task(&root, &task.message_key, "test")
+            .expect("failed to lease parent queue task");
+        let child = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "tb2 prep".to_string(),
+                prompt: "inventory tasks".to_string(),
+                thread_key: "queue/tb2-five-file-real-ref/prep".to_string(),
+                workspace_root: Some(run_dir.to_string_lossy().into_owned()),
+                priority: "urgent".to_string(),
+                suggested_skill: Some("benchmark-controller".to_string()),
+                parent_message_key: Some(leased.message_key.clone()),
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create child queue task");
+        std::fs::create_dir_all(preflight.parent().unwrap()).expect("failed to create reports dir");
+        std::fs::create_dir_all(tasks.parent().unwrap()).expect("failed to create tasks dir");
+        std::fs::write(&logbook, "# logbook\n").expect("failed to write logbook");
+        std::fs::write(&knowledge, "# knowledge\n").expect("failed to write knowledge");
+        std::fs::write(&results, "{\"status\":\"pending\"}\n").expect("failed to write results");
+        std::fs::write(&tasks, "{\"status\":\"pending\"}\n").expect("failed to write tasks");
+        std::fs::write(
+            &preflight,
+            format!(
+                "# preflight\n{{\"message_key\":\"{}\",\"title\":\"tb2 prep\"}}\n",
+                child.message_key
+            ),
+        )
+        .expect("failed to write preflight");
+        let job = QueuedPrompt {
+            prompt,
+            goal: "Terminal-Bench 2 controller".to_string(),
+            preview: "Terminal-Bench 2 controller".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: Some("benchmark-controller".to_string()),
+            leased_message_keys: vec![leased.message_key],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("queue/tb2-five-file-real-ref".to_string()),
+            workspace_root: Some(run_dir.to_string_lossy().into_owned()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let expected = expected_outcome_artifacts_for_job(&job);
+        let delivered = delivered_outcome_artifacts_for_job(&root, &job, &expected)
+            .expect("failed to read delivered artifacts");
+
+        assert_eq!(delivered.len(), 5);
+        let proof_id = enforce_job_outcome_witness(&root, &job, expected, delivered)
+            .expect("real preflight queue ref should satisfy Terminal-Bench witness")
             .expect("proof id should be returned");
         assert!(proof_id.starts_with("ctp-"));
     }
