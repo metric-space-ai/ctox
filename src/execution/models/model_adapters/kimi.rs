@@ -47,6 +47,28 @@ pub fn runtime_tuning(
     crate::inference::runtime_state::AdapterRuntimeTuning::default()
 }
 
+fn enable_thinking_from_reasoning(payload: &Value) -> bool {
+    let Some(reasoning) = payload.get("reasoning") else {
+        return false;
+    };
+    if reasoning
+        .get("exclude")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return false;
+    }
+    let Some(effort) = reasoning
+        .get("effort")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return false;
+    };
+    !effort.eq_ignore_ascii_case("none")
+}
+
 pub fn rewrite_request(raw: &[u8]) -> anyhow::Result<Vec<u8>> {
     let payload: Value =
         serde_json::from_slice(raw).context("failed to parse responses request")?;
@@ -76,13 +98,10 @@ pub fn rewrite_request(raw: &[u8]) -> anyhow::Result<Vec<u8>> {
     if let Some(value) = payload.get("tool_choice") {
         request.insert("tool_choice".to_string(), value.clone());
     }
-    // Kimi M2.7 has mandatory reasoning — always enable thinking.
-    let enable_thinking = payload
-        .get("reasoning")
-        .and_then(|value| value.get("effort"))
-        .and_then(Value::as_str)
-        .is_some();
-    request.insert("enable_thinking".to_string(), Value::Bool(enable_thinking));
+    request.insert(
+        "enable_thinking".to_string(),
+        Value::Bool(enable_thinking_from_reasoning(&payload)),
+    );
     for key in [
         "temperature",
         "top_p",
@@ -329,5 +348,41 @@ fn rewrite_tool(tool: Value) -> Vec<Value> {
             })
             .unwrap_or_default(),
         _ => Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn openrouter_kimi_reasoning_none_disables_thinking() {
+        let raw = json!({
+            "model": "moonshotai/kimi-k2.6",
+            "instructions": "Use tools.",
+            "input": [{"type": "message", "role": "user", "content": "hi"}],
+            "reasoning": {"effort": "none", "exclude": true}
+        });
+
+        let rewritten = rewrite_request(raw.to_string().as_bytes()).expect("rewrite request");
+        let payload: Value =
+            serde_json::from_slice(&rewritten).expect("rewritten request should be JSON");
+
+        assert_eq!(payload.get("enable_thinking"), Some(&Value::Bool(false)));
+    }
+
+    #[test]
+    fn openrouter_kimi_non_none_reasoning_enables_thinking() {
+        let raw = json!({
+            "model": "moonshotai/kimi-k2.6",
+            "input": [{"type": "message", "role": "user", "content": "hi"}],
+            "reasoning": {"effort": "low"}
+        });
+
+        let rewritten = rewrite_request(raw.to_string().as_bytes()).expect("rewrite request");
+        let payload: Value =
+            serde_json::from_slice(&rewritten).expect("rewritten request should be JSON");
+
+        assert_eq!(payload.get("enable_thinking"), Some(&Value::Bool(true)));
     }
 }
