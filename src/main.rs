@@ -134,8 +134,17 @@ RUN / EXEC
   ctox runtime stt-realtime-smoke <wav-path>
   ctox runtime tts-doctor
   ctox runtime tts-smoke [--text <text>]
+  ctox boost status|start|stop   temporary model/runtime boost lease
+
+CAPABILITIES / WEB STACK
+  ctox browser <subcmd>          interactive browser automation
+  ctox web <subcmd>              web search/read tooling
+  ctox scrape <subcmd>           scraping and extraction helpers
+  ctox doc <subcmd>              document stack helpers
+  ctox verification <subcmd>     verification records and evidence checks
 
 GOVERNANCE / MISSION
+  ctox service --foreground      run the daemon loop in the foreground
   ctox governance <subcmd>       governance decisions and audits
   ctox channel <subcmd>          communication channels (email, jami, webrtc)
   ctox queue <subcmd>            inspect, repair, and manage the service queue
@@ -156,7 +165,9 @@ GOVERNANCE / MISSION
 
 CONTEXT / LCM (power-user)
   ctox lcm-init | lcm-add-message | lcm-compact | lcm-grep | lcm-dump
+  ctox lcm-describe | lcm-expand | lcm-refresh-continuity | lcm-show-continuity
   ctox continuity-init | continuity-show | continuity-apply | continuity-log
+  ctox continuity-forgotten | continuity-build-prompt | continuity-rebuild
   ctox context-health | context-retrieve | context-stress
   ctox chat-prompt-export
 
@@ -168,7 +179,7 @@ ENVIRONMENT
   CTOX_ROOT, CTOX_STATE_ROOT, CTOX_INSTALL_ROOT, CTOX_CACHE_ROOT, CTOX_BIN_DIR
   CTOX_UPDATE_GITHUB_REPO / _API_BASE / _TOKEN_ENV   (override release channel)
 
-Full reference: https://github.com/metric-space-ai/ctox"
+Full reference: https://metric-space-ai.github.io/ctox/cli.html"
     );
 }
 

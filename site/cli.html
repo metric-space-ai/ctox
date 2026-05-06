@@ -414,6 +414,8 @@
           <a href="#terms">Terms and IDs</a>
           <a href="#flows">Common Flows</a>
           <a href="#everyday">Everyday</a>
+          <a href="#business-os">Business OS</a>
+          <a href="#capabilities">Capabilities</a>
           <a href="#queue">Queue</a>
           <a href="#tickets">Tickets</a>
           <a href="#plans">Plans and Schedules</a>
@@ -642,7 +644,7 @@ ctox process-mining case case-OPS-204 --limit 200</code></pre>
                 <tr>
                   <td><code>ctox chat &lt;instruction&gt;</code></td>
                   <td>Submit work to the running daemon.</td>
-                  <td><code>--wait</code>, <code>--thread-key</code>, <code>--workspace</code>, <code>--timeout-secs</code>, <code>--atif-out</code>.</td>
+                  <td><code>--wait</code>, <code>--thread-key</code>, <code>--workspace</code>, <code>--timeout-secs</code>, <code>--atif-out</code>, <code>--to</code>, <code>--cc</code>, <code>--subject</code>.</td>
                 </tr>
                 <tr>
                   <td><code>ctox runtime switch &lt;model&gt; &lt;quality|performance&gt;</code></td>
@@ -655,9 +657,78 @@ ctox process-mining case case-OPS-204 --limit 200</code></pre>
                   <td>No required flags.</td>
                 </tr>
                 <tr>
+                  <td><code>ctox business-os status</code>, <code>install</code></td>
+                  <td>Inspect or install the bundled Business OS template into a separate customer-owned repo.</td>
+                  <td><code>install --target &lt;empty-dir&gt;</code>, optional <code>--init-git</code>.</td>
+                </tr>
+                <tr>
                   <td><code>ctox update ...</code>, <code>ctox upgrade</code></td>
                   <td>Check, apply, rollback, or configure release channels.</td>
                   <td><code>--stable</code>, <code>--dev</code>, <code>--latest</code>, <code>--version</code>, <code>--from-source</code>, <code>--repo</code>.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="business-os">
+          <p class="kicker">Business OS</p>
+          <h2>Installable business workspace</h2>
+          <p>
+            The Business OS commands deliberately create or inspect a separate
+            application repository. Core upgrades should update CTOX runtime and
+            bundled defaults, but they must not overwrite customer-owned
+            Business OS customizations.
+          </p>
+          <pre><code>ctox business-os status
+ctox business-os install --target &lt;empty-dir&gt; [--init-git]
+ctox business status
+ctox business install --target &lt;empty-dir&gt; [--init-git]</code></pre>
+        </section>
+
+        <section id="capabilities">
+          <p class="kicker">Capabilities</p>
+          <h2>Tool stacks exposed through the CLI</h2>
+          <p>
+            These commands are mostly used by CTOX worker runs and power users.
+            They expose browser, web, scraping, document, and verification
+            capabilities without requiring a model run to rediscover local
+            tooling.
+          </p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Command</th>
+                  <th>Purpose</th>
+                  <th>Audience</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>ctox browser &lt;subcmd&gt;</code></td>
+                  <td>Interactive browser automation and browser-state inspection.</td>
+                  <td>Worker/tool surface.</td>
+                </tr>
+                <tr>
+                  <td><code>ctox web &lt;subcmd&gt;</code>, <code>ctox scrape &lt;subcmd&gt;</code></td>
+                  <td>Web search/read and scraping/extraction helpers.</td>
+                  <td>Worker/tool surface.</td>
+                </tr>
+                <tr>
+                  <td><code>ctox doc &lt;subcmd&gt;</code></td>
+                  <td>Document stack helpers for file-oriented work.</td>
+                  <td>Worker/tool surface.</td>
+                </tr>
+                <tr>
+                  <td><code>ctox verification &lt;subcmd&gt;</code></td>
+                  <td>Verification records, evidence checks, and proof-oriented state.</td>
+                  <td>Operational control surface.</td>
+                </tr>
+                <tr>
+                  <td><code>ctox boost status|start|stop</code></td>
+                  <td>Temporary boost lease for model/runtime behavior.</td>
+                  <td>Power-user/runtime control.</td>
                 </tr>
               </tbody>
             </table>
@@ -1000,8 +1071,12 @@ ctox jami-daemon --foreground</code></pre>
             CLI design.
           </p>
           <pre><code>ctox boost status | ctox boost start [--minutes &lt;n&gt;] [--model &lt;id&gt;] [--reason &lt;text&gt;] | ctox boost stop
+ctox browser &lt;subcmd&gt; [args]
+ctox business-os status
+ctox business-os install --target &lt;empty-dir&gt; [--init-git]
 ctox channel ack [--db &lt;path&gt;] [--status &lt;status&gt;] &lt;message-key&gt;...
-ctox chat "&lt;instruction&gt;" [--thread-key &lt;key&gt;] [--workspace &lt;path&gt;] [--wait] [--timeout-secs &lt;n&gt;] [--atif-out &lt;path&gt;]
+ctox chat "&lt;instruction&gt;" [--thread-key &lt;key&gt;] [--workspace &lt;path&gt;] [--wait] [--timeout-secs &lt;n&gt;] [--atif-out &lt;path&gt;] [--to &lt;addr&gt; ...] [--cc &lt;addr&gt; ...] [--subject &lt;text&gt;]
+ctox doc &lt;subcmd&gt; [args]
 ctox context-health &lt;db-path&gt; &lt;conversation-id&gt; [latest-user-prompt] [token-budget]
 ctox context-stress &lt;db-path&gt; [conversation-id] [iterations] [token-budget]
 ctox continuity-apply &lt;db-path&gt; &lt;conversation-id&gt; &lt;narrative|anchors|focus&gt; &lt;diff-path&gt;
@@ -1050,12 +1125,20 @@ ctox queue reprioritize --message-key &lt;key&gt; --priority &lt;urgent|high|nor
 ctox queue restore --message-key &lt;key&gt; [--priority &lt;urgent|high|normal|low&gt;] [--note &lt;text&gt;]
 ctox queue show --message-key &lt;key&gt;
 ctox queue spill --message-key &lt;key&gt; [--ticket-system &lt;name&gt;] [--reason &lt;text&gt;] [--skill &lt;name&gt;] [--publish]
+ctox runtime embedding-doctor
+ctox runtime embedding-smoke [--token-id &lt;id&gt;]
 ctox runtime switch &lt;model&gt; &lt;quality|performance&gt; [--context 128k|256k] [--timeout &lt;secs&gt;]
+ctox runtime stt-doctor
+ctox runtime stt-smoke &lt;wav-path&gt;
+ctox runtime stt-realtime-smoke &lt;wav-path&gt;
+ctox runtime tts-doctor
+ctox runtime tts-smoke [--text &lt;text&gt;]
 ctox schedule add --name &lt;label&gt; --cron '&lt;expr&gt;' --prompt &lt;text&gt;
 ctox schedule pause --task-id &lt;id&gt;
 ctox schedule remove --task-id &lt;id&gt;
 ctox schedule resume --task-id &lt;id&gt;
 ctox schedule run-now --task-id &lt;id&gt;
+ctox scrape &lt;subcmd&gt; [args]
 ctox secret delete --scope &lt;scope&gt; --name &lt;name&gt;
 ctox secret get --scope &lt;scope&gt; --name &lt;name&gt;
 ctox secret intake --scope &lt;scope&gt; --name &lt;name&gt; --value &lt;text&gt; [--description &lt;text&gt;] [--metadata-json &lt;json&gt;] [--db &lt;path&gt; --conversation-id &lt;id&gt; --match-text &lt;text&gt; [--label &lt;text&gt;]]
@@ -1065,6 +1148,7 @@ ctox secret show --scope &lt;scope&gt; --name &lt;name&gt;
 ctox strategy activate --directive-id &lt;id&gt; [--decided-by &lt;name&gt;] [--reason &lt;text&gt;]
 ctox strategy propose --kind &lt;vision|mission|...&gt; --title &lt;text&gt; --body &lt;text&gt;|--body-file &lt;path&gt; [--conversation-id &lt;id&gt;|--thread-key &lt;key&gt;] [--author &lt;name&gt;] [--reason &lt;text&gt;]
 ctox strategy set --kind &lt;vision|mission|...&gt; --title &lt;text&gt; --body &lt;text&gt;|--body-file &lt;path&gt; [--conversation-id &lt;id&gt;|--thread-key &lt;key&gt;] [--author &lt;name&gt;] [--reason &lt;text&gt;]
+ctox service --foreground [--autonomy progressive|balanced|defensive]
 ctox ticket access-request-put --system &lt;name&gt; --title &lt;title&gt; --body &lt;text&gt; [--required-scopes &lt;csv&gt;] [--secret-refs &lt;csv&gt;] [--channels &lt;csv&gt;] [--skill &lt;name&gt;] [--metadata-json &lt;json&gt;] [--publish]
 ctox ticket ack --status &lt;handled|failed|duplicate|blocked&gt; &lt;event-key&gt;...
 ctox ticket approve --case-id &lt;id&gt; --status &lt;approved|rejected&gt;
@@ -1116,7 +1200,10 @@ ctox ticket test --system &lt;local&gt;
 ctox ticket verify --case-id &lt;id&gt; --status &lt;passed|failed&gt; [--summary &lt;text&gt;]
 ctox ticket writeback-comment --case-id &lt;id&gt; --body &lt;text&gt;
 ctox ticket writeback-transition --case-id &lt;id&gt; --state &lt;value&gt; [--body &lt;text&gt;] [--internal]
-ctox turn end --status &lt;done|blocked|escalated|waiting_external|invalid&gt; [--reason &lt;text&gt;] [--turn-id &lt;id&gt;]</code></pre>
+ctox turn end --status &lt;done|blocked|escalated|waiting_external|invalid&gt; [--reason &lt;text&gt;] [--turn-id &lt;id&gt;]
+ctox update check | apply | rollback | status | channel ...
+ctox verification &lt;subcmd&gt; [args]
+ctox web &lt;subcmd&gt; [args]</code></pre>
         </section>
       </article>
     </main>
