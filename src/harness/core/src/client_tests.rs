@@ -58,6 +58,39 @@ fn test_model_client(session_source: SessionSource) -> ModelClient {
     )
 }
 
+fn test_openrouter_model_client(session_source: SessionSource) -> ModelClient {
+    let provider = crate::model_provider_info::ModelProviderInfo {
+        name: "ctox-core-api".to_string(),
+        base_url: Some("https://openrouter.ai/api/v1".to_string()),
+        transport_endpoint: None,
+        socket_transport_required: false,
+        env_key: None,
+        env_key_instructions: None,
+        experimental_bearer_token: None,
+        wire_api: crate::model_provider_info::WireApi::Responses,
+        query_params: None,
+        http_headers: None,
+        env_http_headers: None,
+        request_max_retries: None,
+        stream_max_retries: None,
+        stream_idle_timeout_ms: None,
+        websocket_connect_timeout_ms: None,
+        requires_openai_auth: false,
+        supports_websockets: false,
+    };
+    ModelClient::new(
+        None,
+        ThreadId::new(),
+        provider,
+        session_source,
+        None,
+        false,
+        false,
+        false,
+        None,
+    )
+}
+
 fn test_local_ipc_model_client(session_source: SessionSource) -> ModelClient {
     let provider = crate::model_provider_info::ModelProviderInfo {
         name: "cto-local".to_string(),
@@ -609,6 +642,46 @@ fn managed_local_gpt_oss_request_preserves_explicit_none_reasoning() {
             .and_then(|reasoning| reasoning.effort),
         Some(ReasoningEffortConfig::None)
     );
+}
+
+#[test]
+fn openrouter_kimi_responses_request_disables_default_thinking() {
+    let client = test_openrouter_model_client(SessionSource::Cli);
+    let session = client.new_session();
+    let api_provider = client.state.provider.to_api_provider(None).unwrap();
+    let model_info = ModelInfo {
+        slug: "moonshotai/kimi-k2.6".to_string(),
+        default_reasoning_level: None,
+        supports_reasoning_summaries: false,
+        ..test_model_info()
+    };
+    let prompt = crate::client_common::Prompt {
+        input: Vec::new(),
+        tools: Vec::new(),
+        parallel_tool_calls: true,
+        base_instructions: BaseInstructions::default(),
+        personality: None,
+        output_schema: None,
+    };
+
+    let request = session
+        .build_responses_request(
+            &api_provider,
+            &prompt,
+            &model_info,
+            None,
+            ReasoningSummaryConfig::None,
+            None,
+        )
+        .unwrap();
+    let reasoning = request
+        .reasoning
+        .as_ref()
+        .expect("OpenRouter Kimi should opt out of provider default thinking");
+
+    assert_eq!(reasoning.effort, Some(ReasoningEffortConfig::None));
+    assert_eq!(reasoning.summary, None);
+    assert_eq!(reasoning.exclude, Some(true));
 }
 
 #[test]

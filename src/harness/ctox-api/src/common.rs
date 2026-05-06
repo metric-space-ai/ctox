@@ -96,6 +96,8 @@ pub struct Reasoning {
     pub effort: Option<ReasoningEffortConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub summary: Option<ReasoningSummaryConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exclude: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Default, Clone, PartialEq)]

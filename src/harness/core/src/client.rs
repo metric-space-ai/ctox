@@ -470,6 +470,7 @@ impl ModelClient {
             reasoning: effort.map(|effort| Reasoning {
                 effort: Some(effort),
                 summary: None,
+                exclude: None,
             }),
         };
 
@@ -528,10 +529,34 @@ impl ModelClient {
                 } else {
                     Some(summary)
                 },
+                exclude: None,
             })
         } else {
             None
         }
+    }
+
+    fn openrouter_kimi_reasoning_override(&self, model_info: &ModelInfo) -> Option<Reasoning> {
+        let model = model_info.slug.trim().to_ascii_lowercase();
+        if !model.starts_with("moonshotai/kimi-k2.") {
+            return None;
+        }
+        let provider = &self.state.provider;
+        let provider_name = provider.name.trim().to_ascii_lowercase();
+        let base_url = provider
+            .base_url
+            .as_deref()
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase();
+        if !provider_name.contains("openrouter") && !base_url.contains("openrouter.ai") {
+            return None;
+        }
+        Some(Reasoning {
+            effort: Some(ReasoningEffortConfig::None),
+            summary: None,
+            exclude: Some(true),
+        })
     }
 
     /// Returns whether the Responses-over-WebSocket transport is active for this session.
@@ -728,19 +753,24 @@ impl ModelClientSession {
         let supports_managed_local_reasoning =
             self.client.state.provider.requires_socket_transport()
                 && model_info.slug.starts_with("openai/gpt-oss-");
-        let reasoning =
-            if model_info.supports_reasoning_summaries || supports_managed_local_reasoning {
-                Some(Reasoning {
-                    effort: effort.or(default_reasoning_effort),
-                    summary: if summary == ReasoningSummaryConfig::None {
-                        None
-                    } else {
-                        Some(summary)
-                    },
-                })
-            } else {
-                None
-            };
+        let reasoning = self
+            .client
+            .openrouter_kimi_reasoning_override(model_info)
+            .or_else(|| {
+                if model_info.supports_reasoning_summaries || supports_managed_local_reasoning {
+                    Some(Reasoning {
+                        effort: effort.or(default_reasoning_effort),
+                        summary: if summary == ReasoningSummaryConfig::None {
+                            None
+                        } else {
+                            Some(summary)
+                        },
+                        exclude: None,
+                    })
+                } else {
+                    None
+                }
+            });
         let include = if reasoning.is_some() && model_info.supports_reasoning_summaries {
             vec!["reasoning.encrypted_content".to_string()]
         } else {
