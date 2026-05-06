@@ -2752,10 +2752,38 @@ fn start_prompt_worker(
                 .leased_message_keys
                 .iter()
                 .any(|key| key.starts_with("plan:system::"));
+            let mut execution_prompt = artifact_first_execution_prompt(&job);
+            match maybe_terminal_bench_controller_runtime_ref_feedback(&root, &job) {
+                Ok(Some(note)) => {
+                    push_event(
+                        &event_state,
+                        format!("phase {} terminal-bench-runtime-ref-feedback", event_source),
+                    );
+                    execution_prompt = format!("{note}\n\n{execution_prompt}");
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    let note = format!(
+                        "HARNESS FEEDBACK\n\
+The harness could not inspect the Terminal-Bench runtime-ticket refs before model execution: {}\n\
+Before doing any other work, persist this blocker in controller.json, logbook.md, and run-queue.jsonl with the exact next command needed to repair it. Do not claim completion.",
+                        clip_text(&err.to_string(), 600)
+                    );
+                    push_event(
+                        &event_state,
+                        format!(
+                            "phase {} terminal-bench-runtime-ref-feedback-failed {}",
+                            event_source,
+                            clip_text(&err.to_string(), 160)
+                        ),
+                    );
+                    execution_prompt = format!("{note}\n\n{execution_prompt}");
+                }
+            }
             let result = turn_loop::run_chat_turn_with_events_extended(
                 &root,
                 &db_path,
-                &artifact_first_execution_prompt(&job),
+                &execution_prompt,
                 workspace_root,
                 conversation_id,
                 job.suggested_skill.as_deref(),
@@ -4959,6 +4987,77 @@ fn terminal_bench_controller_has_explicit_blocker(expected_artifact_refs: &[Arti
         }
     }
     controller_has_blocker && next_action_recorded
+}
+
+fn maybe_terminal_bench_controller_runtime_ref_feedback(
+    root: &Path,
+    job: &QueuedPrompt,
+) -> Result<Option<String>> {
+    if !terminal_bench_controller_requires_runtime_refs(job) {
+        return Ok(None);
+    }
+    let expected = expected_outcome_artifacts_for_job(job);
+    let runtime_ref_paths = terminal_bench_controller_runtime_ref_paths(&expected);
+    if runtime_ref_paths.is_empty() {
+        return Ok(None);
+    }
+    let mut valid_refs = Vec::new();
+    let mut synthetic_refs = Vec::new();
+    for path in &runtime_ref_paths {
+        if path.is_file() {
+            let text = std::fs::read_to_string(path)
+                .with_context(|| format!("failed to read {}", path.display()))?;
+            collect_valid_terminal_bench_runtime_refs(
+                root,
+                job,
+                &text,
+                &mut valid_refs,
+                &mut synthetic_refs,
+            )?;
+        }
+    }
+    if !valid_refs.is_empty() {
+        return Ok(Some(terminal_bench_runtime_ref_feedback_note(
+            &valid_refs,
+            "The harness found existing real preparation queue refs.",
+        )));
+    }
+
+    let example = parent_queue_key_for_feedback(job)
+        .map(|key| format!("Use `--parent-message-key {key}` on each preparation queue item."))
+        .unwrap_or_else(|| {
+            "Use the current controller queue item as the parent if a parent key is available."
+                .to_string()
+        });
+    Ok(Some(format!(
+        "HARNESS FEEDBACK\n\
+The Terminal-Bench controller requires real CTOX runtime queue/ticket refs, but none are currently recorded in ticket-map.jsonl, preparation-tickets.jsonl, or run-queue.jsonl.\n\
+Do not invent identifiers. Values like msg-prep-runtime-001, q1, ticket-1, or TODO are invalid.\n\
+Your next shell action must create the preparation work yourself with `ctox queue add`, capture the real `queue:system::*` message_key values from stdout, verify each with `ctox queue show --message-key <key>`, and persist those exact keys in ticket-map.jsonl, preparation-tickets.jsonl, and run-queue.jsonl before any benchmark work.\n\
+{example}\n\
+If any `ctox queue add` command fails, persist a blocker in controller.json, logbook.md, and run-queue.jsonl with the exact failing command and stderr. Do not claim completion."
+    )))
+}
+
+fn parent_queue_key_for_feedback(job: &QueuedPrompt) -> Option<String> {
+    job.leased_message_keys
+        .iter()
+        .find(|key| key.starts_with("queue:"))
+        .cloned()
+}
+
+fn terminal_bench_runtime_ref_feedback_note(refs: &[String], action: &str) -> String {
+    format!(
+        "HARNESS FEEDBACK\n\
+{action}\n\
+These refs are real CTOX runtime objects already persisted in the run artifacts:\n\
+{}\n\n\
+Do not create duplicate preparation queue tasks. Read controller.json, ticket-map.jsonl, preparation-tickets.jsonl, run-queue.jsonl, knowledge.md, and logbook.md first. Continue by verifying the queued preparation work and updating the durable files with any new facts.",
+        refs.iter()
+            .map(|value| format!("- {value}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    )
 }
 
 fn terminal_bench_controller_hold_feedback_prompt(
