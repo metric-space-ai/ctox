@@ -666,7 +666,7 @@ impl PersistentSession {
         _include_apply_patch_tool: Option<bool>,
         _conversation_id: i64,
     ) -> Result<String> {
-        self.run_turn_with_terminal_bench_preflight(prompt, timeout, None)
+        self.run_turn_with_terminal_bench_preflight(prompt, timeout, None, true)
     }
 
     pub(crate) fn run_turn_with_terminal_bench_preflight(
@@ -674,6 +674,7 @@ impl PersistentSession {
         prompt: &str,
         timeout: Option<Duration>,
         terminal_bench_preflight: Option<TerminalBenchPreflightSpec>,
+        infer_terminal_bench_preflight_from_prompt: bool,
     ) -> Result<String> {
         let client = self
             .client
@@ -719,6 +720,7 @@ impl PersistentSession {
                 &mut self.ctx_log,
                 disable_active_tools,
                 terminal_bench_preflight_guard,
+                infer_terminal_bench_preflight_from_prompt,
             )
             .await
         });
@@ -1028,6 +1030,7 @@ impl PersistentSession {
         ctx_log: &mut ContextLogger,
         disable_active_tools: bool,
         terminal_bench_preflight_guard: Option<TerminalBenchPreflightGuard>,
+        infer_terminal_bench_preflight_from_prompt: bool,
     ) -> Result<String> {
         // Create a fresh thread per turn — reuse the same CLIENT but not
         // the same thread. After TurnComplete, the thread may not accept
@@ -1083,8 +1086,11 @@ impl PersistentSession {
         // Event loop
         let mut final_message: Option<String> = None;
         let mut forced_followup_fired = false;
-        let mut terminal_bench_preflight_guard = terminal_bench_preflight_guard
-            .or_else(|| TerminalBenchPreflightGuard::from_prompt(prompt));
+        let mut terminal_bench_preflight_guard = terminal_bench_preflight_guard.or_else(|| {
+            infer_terminal_bench_preflight_from_prompt
+                .then(|| TerminalBenchPreflightGuard::from_prompt(prompt))
+                .flatten()
+        });
         let turn_started_at = Instant::now();
         let mut last_usage_event_at = turn_started_at;
         let mut last_recorded_cumulative_usage: Option<ApiTokenUsage> = None;

@@ -2802,6 +2802,7 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
                 job.suggested_skill.as_deref(),
                 force_continuity_refresh,
                 terminal_bench_preflight,
+                false,
                 None, // TUI service: per-turn clients (persistent session TODO)
                 |event| {
                     push_event(&event_state, format!("phase {} {}", event_source, event));

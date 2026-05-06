@@ -361,6 +361,7 @@ where
         suggested_skill,
         force_continuity_refresh,
         None,
+        true,
         session,
         emit,
     )
@@ -375,6 +376,7 @@ pub(crate) fn run_chat_turn_with_events_extended_guarded<F>(
     suggested_skill: Option<&str>,
     force_continuity_refresh: bool,
     terminal_bench_preflight: Option<TerminalBenchPreflightSpec>,
+    infer_terminal_bench_preflight_from_prompt: bool,
     mut session: Option<&mut PersistentSession>,
     mut emit: F,
 ) -> Result<String>
@@ -494,6 +496,7 @@ where
             &rendered_prompt.prompt,
             Some(Duration::from_secs(config.turn_timeout_secs)),
             terminal_bench_preflight.clone(),
+            infer_terminal_bench_preflight_from_prompt,
         )?,
         None => owned_session
             .as_mut()
@@ -502,6 +505,7 @@ where
                 &rendered_prompt.prompt,
                 Some(Duration::from_secs(config.turn_timeout_secs)),
                 terminal_bench_preflight,
+                infer_terminal_bench_preflight_from_prompt,
             )?,
     };
     emit("persist-assistant-turn");
