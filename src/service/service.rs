@@ -9734,6 +9734,9 @@ fn maybe_enqueue_timeout_continuation(
     if !is_turn_timeout_blocker(blocker) {
         return Ok(None);
     }
+    if should_queue_durable_artifact_timeout_recovery(job) {
+        return queue_durable_artifact_timeout_recovery(root, job, blocker);
+    }
     let _ = governance::record_event(
         root,
         governance::GovernanceEventRequest {
@@ -9762,6 +9765,119 @@ fn maybe_enqueue_timeout_continuation(
         },
     );
     Ok(None)
+}
+
+fn should_queue_durable_artifact_timeout_recovery(job: &QueuedPrompt) -> bool {
+    if job.outbound_email.is_some()
+        || founder_email_reply_message_key(job).is_some()
+        || is_founder_or_owner_email_job(job)
+        || job.ticket_self_work_id.is_some()
+        || job.leased_message_keys.is_empty()
+        || is_legacy_timeout_continuation_job(job)
+    {
+        return false;
+    }
+    let file_refs = declared_workspace_file_artifacts_for_job(job);
+    if file_refs.is_empty() {
+        return false;
+    }
+    let normalized = normalize_token(&format!("{} {} {}", job.goal, job.preview, job.prompt));
+    normalized.contains("terminal-bench")
+        || normalized.contains("terminal bench")
+        || normalized.contains("benchmark")
+        || normalized.contains("bench ")
+        || normalized.contains("harbor")
+        || normalized.contains("controller")
+        || normalized.contains("durable artifact")
+        || normalized.contains("required durable")
+}
+
+fn queue_durable_artifact_timeout_recovery(
+    root: &Path,
+    job: &QueuedPrompt,
+    blocker: &str,
+) -> Result<Option<String>> {
+    let thread_key = job
+        .thread_key
+        .clone()
+        .unwrap_or_else(|| default_follow_up_thread_key(&job.goal));
+    let title = format!("Recover interrupted {}", clip_text(&job.goal, 52));
+    let event_key = format!(
+        "durable-artifact-timeout-recovery:{}:{}",
+        thread_key,
+        channels::stable_digest(&title)
+    );
+    if let Some(existing_title) = existing_timeout_continuation(
+        root,
+        &thread_key,
+        job.workspace_root.as_deref(),
+        &job.leased_message_keys,
+        &title,
+    )? {
+        let _ = governance::record_event(
+            root,
+            governance::GovernanceEventRequest {
+                mechanism_id: "turn_timeout_continuation",
+                conversation_id: Some(turn_loop::CHAT_CONVERSATION_ID),
+                severity: "warning",
+                reason: "an artifact-backed controller turn hit the runtime time budget",
+                action_taken: "reused an existing open durable artifact recovery task",
+                details: serde_json::json!({
+                    "source_label": job.source_label,
+                    "thread_key": thread_key,
+                    "title": title,
+                    "existing_title": existing_title,
+                    "workspace_root": job.workspace_root.clone(),
+                    "leased_message_keys": job.leased_message_keys.clone(),
+                    "blocker": clip_text(blocker, 180),
+                }),
+                idempotence_key: Some(&event_key),
+            },
+        );
+        return Ok(Some(format!(
+            "existing durable artifact recovery reused: {existing_title}"
+        )));
+    }
+
+    let created = channels::create_queue_task_with_metadata(
+        root,
+        channels::QueueTaskCreateRequest {
+            title: title.clone(),
+            prompt: render_durable_artifact_timeout_recovery_prompt(job, blocker),
+            thread_key: thread_key.clone(),
+            workspace_root: job.workspace_root.clone(),
+            priority: "high".to_string(),
+            suggested_skill: job.suggested_skill.clone(),
+            parent_message_key: None,
+            extra_metadata: Some(serde_json::json!({
+                "dedupe_key": event_key,
+                "origin_source_label": job.source_label,
+                "durable_artifact_timeout_recovery": true,
+                "interrupted_message_keys": job.leased_message_keys.clone(),
+                "workspace_root": job.workspace_root.clone(),
+            })),
+        },
+    )?;
+    let _ = governance::record_event(
+        root,
+        governance::GovernanceEventRequest {
+            mechanism_id: "turn_timeout_continuation",
+            conversation_id: Some(turn_loop::CHAT_CONVERSATION_ID),
+            severity: "warning",
+            reason: "an artifact-backed controller turn hit the runtime time budget",
+            action_taken: "queued a durable artifact recovery task",
+            details: serde_json::json!({
+                "source_label": job.source_label,
+                "thread_key": created.thread_key.clone(),
+                "title": created.title.clone(),
+                "workspace_root": created.workspace_root.clone(),
+                "leased_message_keys": job.leased_message_keys.clone(),
+                "blocker": clip_text(blocker, 180),
+            }),
+            idempotence_key: Some(&format!("{}:queued", created.message_key)),
+        },
+    );
+    Ok(Some(created.title))
 }
 
 fn maybe_suppress_fatal_harness_prompt_before_execution(
@@ -10016,6 +10132,24 @@ fn render_timeout_continue_prompt(
         clip_text(blocker.trim(), 220)
     );
     prepend_workspace_contract(&prompt, workspace_root)
+}
+
+fn render_durable_artifact_timeout_recovery_prompt(job: &QueuedPrompt, blocker: &str) -> String {
+    let file_refs = declared_workspace_file_artifacts_for_job(job);
+    let mut prompt = format!(
+        "HARNESS FEEDBACK\nProblem: The previous slice reached its runtime budget before the controller reached a terminal durable outcome. This is not completion.\n\nCURRENT TASK\n{}\n\nSTOP REASON\n{}\n\nDURABLE FILES THAT MUST STAY UPDATED\n",
+        summarize_follow_up_goal(&job.goal),
+        clip_text(blocker.trim(), 220)
+    );
+    for path in &file_refs {
+        prompt.push_str("- ");
+        prompt.push_str(path);
+        prompt.push('\n');
+    }
+    prompt.push_str(
+        "\nREQUIRED ACTIONS\n- Inspect the workspace and the listed files first; preserve valid progress.\n- Continue the same controller run from the durable files instead of restarting from scratch.\n- Each listed path must be a regular file. A directory at a required file path is invalid and must be corrected before any completion claim.\n- Keep the logbook and summary truthful about attempted work, discovered tasks, blockers, and next actions.\n- If benchmark execution still needs another slice, persist exactly one concrete queue item or plan item before ending.\n\nEXIT GATE\nFinish only after the durable outcome exists in the listed files and the benchmark controller is either terminal or has exactly one persisted next action.",
+    );
+    prepend_workspace_contract(&prompt, job.workspace_root.as_deref())
 }
 
 fn render_runtime_retry_prompt(job: &QueuedPrompt, error_text: &str) -> String {
@@ -12058,9 +12192,10 @@ mod tests {
             None,
         );
         assert!(
-            prompt.contains("Slice goal:\nMission continuity watchdog detected an open mission")
+            prompt.contains("CURRENT TASK\nMission continuity watchdog detected an open mission")
         );
-        assert!(prompt.contains("Runtime stop:\nexecution timed out after 900s"));
+        assert!(prompt.contains("STOP REASON\nexecution timed out after 900s"));
+        assert!(prompt.contains("Preserve work that already exists"));
         assert!(!prompt.contains("The previous slice stopped because it hit the turn time budget:\nexecution timed out after 900s\n\nThe previous slice stopped"));
     }
 
@@ -12875,6 +13010,59 @@ mod tests {
         assert!(events
             .iter()
             .any(|event| event.mechanism_id == "turn_timeout_continuation"));
+    }
+
+    #[test]
+    fn timeout_blocker_queues_durable_artifact_controller_recovery() {
+        let root = temp_root("ctox-timeout-durable-artifact-controller");
+        let workspace = root.join("terminal-bench-run");
+        std::fs::create_dir_all(&workspace).expect("failed to create workspace");
+        let controller = workspace.join("controller.json");
+        let logbook = workspace.join("run-log.md");
+        let job = QueuedPrompt {
+            prompt: format!(
+                "Terminal-Bench 2 controller via Harbor.\n\nOnly required durable files for this controller turn:\n- {}\n- {}\n\nKeep these artifacts updated while running benchmark tickets.",
+                controller.display(),
+                logbook.display()
+            ),
+            goal: "Run Terminal-Bench 2 controller and write durable results".to_string(),
+            preview: "Terminal-Bench 2 controller".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: Some("benchmark-controller".to_string()),
+            leased_message_keys: vec!["queue:system::current".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("tb2-controller".to_string()),
+            workspace_root: Some(workspace.to_string_lossy().into_owned()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let created =
+            maybe_enqueue_timeout_continuation(&root, &job, "direct session timeout after 900s")
+                .expect("timeout recovery should succeed");
+
+        assert!(created
+            .as_deref()
+            .unwrap_or_default()
+            .starts_with("Recover interrupted Run Terminal-Bench 2"));
+        let pending = channels::list_queue_tasks(&root, &["pending".to_string()], 10)
+            .expect("failed to list pending queue tasks");
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].thread_key, "tb2-controller");
+        assert_eq!(
+            pending[0].workspace_root.as_deref(),
+            job.workspace_root.as_deref()
+        );
+        assert_eq!(pending[0].parent_message_key, None);
+        assert!(pending[0]
+            .prompt
+            .contains("DURABLE FILES THAT MUST STAY UPDATED"));
+        assert!(pending[0].prompt.contains(controller.to_str().unwrap()));
+        assert!(pending[0].prompt.contains(logbook.to_str().unwrap()));
+        let self_work = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
+            .expect("failed to list self-work items");
+        assert!(self_work.is_empty());
     }
 
     #[test]
