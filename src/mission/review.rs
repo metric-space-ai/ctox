@@ -508,12 +508,7 @@ fn assess_review_requirement(
     let internal_smoke_artifact_slice = internal_artifact_slice
         && contains_any(
             &lowered,
-            &[
-                "smoke",
-                "qwen36-local",
-                "response adapter",
-                "local backend",
-            ],
+            &["smoke", "qwen36-local", "response adapter", "local backend"],
         );
 
     let closure_claim = contains_any(

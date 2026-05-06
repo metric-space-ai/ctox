@@ -611,6 +611,9 @@ printf CTOX_OK
         assert_eq!(plain, None);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "namespace.exec_command");
-        assert_eq!(calls[0].arguments, json!({"cmd":"printf CTOX_OK"}).to_string());
+        assert_eq!(
+            calls[0].arguments,
+            json!({"cmd":"printf CTOX_OK"}).to_string()
+        );
     }
 }

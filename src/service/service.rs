@@ -4681,14 +4681,14 @@ fn extract_terminal_bench_controller_file_artifacts(job: &QueuedPrompt) -> Vec<S
         job.preview,
         job.workspace_root.clone().unwrap_or_default()
     );
-    let Some(run_dir) = extract_terminal_bench_run_dir_from_text(&haystack)
-        .or_else(|| job.workspace_root.clone().and_then(|root| {
+    let Some(run_dir) = extract_terminal_bench_run_dir_from_text(&haystack).or_else(|| {
+        job.workspace_root.clone().and_then(|root| {
             extract_terminal_bench_run_dir_from_text(&root).or_else(|| {
                 let trimmed = root.trim();
                 (!trimmed.is_empty()).then(|| trimmed.to_string())
             })
-        }))
-    else {
+        })
+    }) else {
         return Vec::new();
     };
 

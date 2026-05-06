@@ -35,6 +35,7 @@ pub const SUPPORTED_OPENROUTER_API_CHAT_MODELS: &[&str] = &[
     "anthropic/claude-sonnet-4.6",
     "moonshotai/kimi-k2.5",
     "moonshotai/kimi-k2.6",
+    "deepseek/deepseek-v4-flash",
     "tencent/hy3-preview:free",
     "minimax/minimax-m2.7",
     "mistralai/mistral-small-2603",
@@ -81,6 +82,7 @@ pub const SUPPORTED_CHAT_MODELS: &[&str] = &[
     "qwen/qwen3.5-397b-a17b",
     "moonshotai/kimi-k2.5",
     "moonshotai/kimi-k2.6",
+    "deepseek/deepseek-v4-flash",
     "tencent/hy3-preview:free",
 ];
 
@@ -337,6 +339,15 @@ const CHAT_FAMILY_REGISTRY: &[ChatFamilyCatalogEntry] = &[
         variants: &["moonshotai/kimi-k2.6", "moonshotai/kimi-k2.5"],
         planning_variants: &["moonshotai/kimi-k2.6", "moonshotai/kimi-k2.5"],
         supports_vision: true,
+    },
+    ChatFamilyCatalogEntry {
+        family: engine::ChatModelFamily::DeepSeek,
+        label: "DeepSeek",
+        selector: "deepseek",
+        parse_aliases: &["deepseek", "deepseek-v4", "deepseek v4"],
+        variants: &["deepseek/deepseek-v4-flash"],
+        planning_variants: &["deepseek/deepseek-v4-flash"],
+        supports_vision: false,
     },
 ];
 
@@ -1411,6 +1422,11 @@ const REMOTE_CHAT_FAMILY_REGISTRY: &[RemoteChatFamilyEntry] = &[
     RemoteChatFamilyEntry {
         model: "moonshotai/kimi-k2.6",
         chat_family: engine::ChatModelFamily::Kimi,
+    },
+    // DeepSeek family
+    RemoteChatFamilyEntry {
+        model: "deepseek/deepseek-v4-flash",
+        chat_family: engine::ChatModelFamily::DeepSeek,
     },
     // Gemma family (free tier aliases)
     RemoteChatFamilyEntry {

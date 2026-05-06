@@ -6,10 +6,10 @@ use serde_json::Value;
 use super::ResponsesTransportKind;
 
 const LOCAL_COMPACT_INSTRUCTIONS: &str = "You are Codex running through CTOX on a local responses-backed runtime. Be concise and tool-accurate. Emit either one tool call or one final answer per turn. Prefer exec_command for shell work and apply_patch for file edits. Do not restate instructions. If the task requires creating or modifying files, running builds or tests, or proving a result inside a workspace, your next completion must be a tool call, not a final answer. You must not claim success, emit an exact marker, or give a final answer until tool output has verified the required result. When the user asks for an exact marker or short final answer, return only that required text after any needed tool calls and verification.";
-const DEFAULT_MODEL: &str = "moonshotai/kimi-k2.6";
+const DEFAULT_MODEL: &str = "deepseek/deepseek-v4-flash";
 
 pub fn adapter_id() -> &'static str {
-    "kimi"
+    "deepseek"
 }
 
 pub fn transport_kind() -> ResponsesTransportKind {
@@ -47,28 +47,6 @@ pub fn runtime_tuning(
     crate::inference::runtime_state::AdapterRuntimeTuning::default()
 }
 
-fn enable_thinking_from_reasoning(payload: &Value) -> bool {
-    let Some(reasoning) = payload.get("reasoning") else {
-        return false;
-    };
-    if reasoning
-        .get("exclude")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
-        return false;
-    }
-    let Some(effort) = reasoning
-        .get("effort")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        return false;
-    };
-    !effort.eq_ignore_ascii_case("none")
-}
-
 pub fn rewrite_request(raw: &[u8]) -> anyhow::Result<Vec<u8>> {
     let payload: Value =
         serde_json::from_slice(raw).context("failed to parse responses request")?;
@@ -95,14 +73,9 @@ pub fn rewrite_request(raw: &[u8]) -> anyhow::Result<Vec<u8>> {
     if !tools.is_empty() {
         request.insert("tools".to_string(), Value::Array(tools));
     }
-    if let Some(value) = payload.get("tool_choice") {
-        request.insert("tool_choice".to_string(), value.clone());
-    }
-    request.insert(
-        "enable_thinking".to_string(),
-        Value::Bool(enable_thinking_from_reasoning(&payload)),
-    );
     for key in [
+        "tool_choice",
+        "reasoning",
         "temperature",
         "top_p",
         "presence_penalty",
@@ -126,7 +99,7 @@ pub fn rewrite_request(raw: &[u8]) -> anyhow::Result<Vec<u8>> {
     }
 
     serde_json::to_vec(&Value::Object(request))
-        .context("failed to encode Kimi chat-completions payload")
+        .context("failed to encode DeepSeek chat-completions payload")
 }
 
 pub fn rewrite_success_response(
@@ -148,7 +121,6 @@ pub fn rewrite_success_response(
             {
                 builder.push_message_text(text);
             }
-            // Kimi uses reasoning_content for thinking output
             if let Some(reasoning) = message
                 .and_then(|msg| {
                     msg.get("reasoning_content")
@@ -192,7 +164,7 @@ pub fn rewrite_success_response(
         }
     }
     let response_payload = builder.build();
-    serde_json::to_vec(&response_payload).context("failed to encode Kimi responses payload")
+    serde_json::to_vec(&response_payload).context("failed to encode DeepSeek responses payload")
 }
 
 fn build_request_parts(payload: &Value, messages: Vec<Value>) -> (Vec<Value>, Vec<Value>) {
@@ -356,33 +328,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn openrouter_kimi_reasoning_none_disables_thinking() {
+    fn openrouter_deepseek_keeps_reasoning_parameter_without_thinking_flag() {
         let raw = json!({
-            "model": "moonshotai/kimi-k2.6",
+            "model": "deepseek/deepseek-v4-flash",
             "instructions": "Use tools.",
             "input": [{"type": "message", "role": "user", "content": "hi"}],
-            "reasoning": {"effort": "none", "exclude": true}
+            "reasoning": {"effort": "high"}
         });
 
         let rewritten = rewrite_request(raw.to_string().as_bytes()).expect("rewrite request");
         let payload: Value =
             serde_json::from_slice(&rewritten).expect("rewritten request should be JSON");
 
-        assert_eq!(payload.get("enable_thinking"), Some(&Value::Bool(false)));
-    }
-
-    #[test]
-    fn openrouter_kimi_non_none_reasoning_enables_thinking() {
-        let raw = json!({
-            "model": "moonshotai/kimi-k2.6",
-            "input": [{"type": "message", "role": "user", "content": "hi"}],
-            "reasoning": {"effort": "low"}
-        });
-
-        let rewritten = rewrite_request(raw.to_string().as_bytes()).expect("rewrite request");
-        let payload: Value =
-            serde_json::from_slice(&rewritten).expect("rewritten request should be JSON");
-
-        assert_eq!(payload.get("enable_thinking"), Some(&Value::Bool(true)));
+        assert_eq!(payload.get("reasoning"), Some(&json!({"effort": "high"})));
+        assert!(payload.get("enable_thinking").is_none());
     }
 }

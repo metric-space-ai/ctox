@@ -3,6 +3,7 @@ use anyhow::Context;
 use serde_json::Value;
 
 pub(crate) mod anthropic;
+pub(crate) mod deepseek;
 pub(crate) mod gemma4;
 pub(crate) mod glm47;
 pub(crate) mod gpt_oss;
@@ -29,6 +30,7 @@ pub enum ResponsesModelAdapter {
     MiniMax,
     Mistral,
     Kimi,
+    DeepSeek,
     Anthropic,
 }
 
@@ -72,6 +74,7 @@ impl ResponsesModelAdapter {
             engine::ChatModelFamily::MiniMax => Some(Self::MiniMax),
             engine::ChatModelFamily::Mistral => Some(Self::Mistral),
             engine::ChatModelFamily::Kimi => Some(Self::Kimi),
+            engine::ChatModelFamily::DeepSeek => Some(Self::DeepSeek),
             engine::ChatModelFamily::Anthropic => Some(Self::Anthropic),
         }
     }
@@ -86,6 +89,7 @@ impl ResponsesModelAdapter {
             Self::MiniMax => minimax::adapter_id(),
             Self::Mistral => mistral::adapter_id(),
             Self::Kimi => kimi::adapter_id(),
+            Self::DeepSeek => deepseek::adapter_id(),
             Self::Anthropic => anthropic::adapter_id(),
         }
     }
@@ -100,6 +104,7 @@ impl ResponsesModelAdapter {
             Self::MiniMax => minimax::transport_kind(),
             Self::Mistral => mistral::transport_kind(),
             Self::Kimi => kimi::transport_kind(),
+            Self::DeepSeek => deepseek::transport_kind(),
             Self::Anthropic => anthropic::transport_kind(),
         }
     }
@@ -114,6 +119,7 @@ impl ResponsesModelAdapter {
             Self::MiniMax => minimax::upstream_path(),
             Self::Mistral => mistral::upstream_path(),
             Self::Kimi => kimi::upstream_path(),
+            Self::DeepSeek => deepseek::upstream_path(),
             Self::Anthropic => anthropic::upstream_path(),
         }
     }
@@ -166,6 +172,7 @@ impl ResponsesModelAdapter {
             Self::MiniMax => minimax::rewrite_request(raw),
             Self::Mistral => mistral::rewrite_request(raw),
             Self::Kimi => kimi::rewrite_request(raw),
+            Self::DeepSeek => deepseek::rewrite_request(raw),
             Self::Anthropic => anthropic::rewrite_request(raw),
         }
     }
@@ -205,6 +212,9 @@ impl ResponsesModelAdapter {
                 mistral::rewrite_success_response(raw, fallback_model, exact_text_override)
             }
             Self::Kimi => kimi::rewrite_success_response(raw, fallback_model, exact_text_override),
+            Self::DeepSeek => {
+                deepseek::rewrite_success_response(raw, fallback_model, exact_text_override)
+            }
             Self::Anthropic => {
                 anthropic::rewrite_success_response(raw, fallback_model, exact_text_override)
             }
@@ -227,6 +237,7 @@ impl ResponsesModelAdapter {
             | Self::MiniMax
             | Self::Mistral
             | Self::Kimi
+            | Self::DeepSeek
             | Self::Anthropic => Ok(None),
         }
     }
@@ -248,6 +259,9 @@ pub fn runtime_adapter_tuning_for_local_plan(
         Some(ResponsesModelAdapter::MiniMax) => minimax::runtime_tuning(preset, max_output_tokens),
         Some(ResponsesModelAdapter::Mistral) => mistral::runtime_tuning(preset, max_output_tokens),
         Some(ResponsesModelAdapter::Kimi) => kimi::runtime_tuning(preset, max_output_tokens),
+        Some(ResponsesModelAdapter::DeepSeek) => {
+            deepseek::runtime_tuning(preset, max_output_tokens)
+        }
         Some(ResponsesModelAdapter::Anthropic) => {
             anthropic::runtime_tuning(preset, max_output_tokens)
         }
@@ -339,6 +353,7 @@ impl LocalCodexExecPolicy {
             ResponsesModelAdapter::MiniMax => minimax::compact_instructions(),
             ResponsesModelAdapter::Mistral => mistral::compact_instructions(),
             ResponsesModelAdapter::Kimi => kimi::compact_instructions(),
+            ResponsesModelAdapter::DeepSeek => deepseek::compact_instructions(),
             ResponsesModelAdapter::Anthropic => anthropic::compact_instructions(),
         }
     }
@@ -355,6 +370,7 @@ impl LocalCodexExecPolicy {
             ResponsesModelAdapter::MiniMax => minimax::reasoning_effort_override(),
             ResponsesModelAdapter::Mistral => mistral::reasoning_effort_override(),
             ResponsesModelAdapter::Kimi => kimi::reasoning_effort_override(),
+            ResponsesModelAdapter::DeepSeek => deepseek::reasoning_effort_override(),
             ResponsesModelAdapter::Anthropic => anthropic::reasoning_effort_override(),
         }
     }
@@ -369,6 +385,7 @@ impl LocalCodexExecPolicy {
             ResponsesModelAdapter::MiniMax => minimax::unified_exec_enabled(),
             ResponsesModelAdapter::Mistral => mistral::unified_exec_enabled(),
             ResponsesModelAdapter::Kimi => kimi::unified_exec_enabled(),
+            ResponsesModelAdapter::DeepSeek => deepseek::unified_exec_enabled(),
             ResponsesModelAdapter::Anthropic => anthropic::unified_exec_enabled(),
         }
     }
@@ -383,6 +400,7 @@ impl LocalCodexExecPolicy {
             ResponsesModelAdapter::MiniMax => minimax::uses_ctox_web_stack(),
             ResponsesModelAdapter::Mistral => mistral::uses_ctox_web_stack(),
             ResponsesModelAdapter::Kimi => kimi::uses_ctox_web_stack(),
+            ResponsesModelAdapter::DeepSeek => deepseek::uses_ctox_web_stack(),
             ResponsesModelAdapter::Anthropic => anthropic::uses_ctox_web_stack(),
         }
     }
@@ -412,6 +430,9 @@ impl LocalCodexExecPolicy {
             }
             ResponsesModelAdapter::Kimi => {
                 kimi::compact_limit(self.model.as_str(), realized_context)
+            }
+            ResponsesModelAdapter::DeepSeek => {
+                deepseek::compact_limit(self.model.as_str(), realized_context)
             }
             ResponsesModelAdapter::Anthropic => {
                 anthropic::compact_limit(self.model.as_str(), realized_context)
@@ -483,6 +504,29 @@ mod tests {
         assert_eq!(
             plan.transport_kind(),
             ResponsesTransportKind::AnthropicMessages
+        );
+    }
+
+    #[test]
+    fn deepseek_route_uses_chat_completions_transport() {
+        let request = serde_json::json!({
+            "model": "deepseek/deepseek-v4-flash",
+            "input": "hello",
+            "stream": false
+        });
+        let route = ResolvedResponsesAdapterRoute::resolve(
+            Some("deepseek/deepseek-v4-flash"),
+            &serde_json::to_vec(&request).expect("request should encode"),
+            true,
+        )
+        .expect("route resolution should succeed")
+        .expect("deepseek route should resolve");
+        let plan = route.response_plan();
+        assert_eq!(route.id(), "deepseek");
+        assert_eq!(route.upstream_path(), "/v1/chat/completions");
+        assert_eq!(
+            plan.transport_kind(),
+            ResponsesTransportKind::ChatCompletions
         );
     }
 

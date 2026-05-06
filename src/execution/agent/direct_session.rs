@@ -13,8 +13,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ctox_app_server_client::{
-    DEFAULT_IN_PROCESS_CHANNEL_CAPACITY, InProcessAppServerClient, InProcessClientStartArgs,
-    InProcessServerEvent,
+    InProcessAppServerClient, InProcessClientStartArgs, InProcessServerEvent,
+    DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
 };
 use ctox_app_server_protocol::{
     ClientRequest, JSONRPCNotification, RequestId, ServerNotification, ThreadCompactStartParams,
@@ -24,12 +24,12 @@ use ctox_app_server_protocol::{
 };
 use ctox_arg0::Arg0DispatchPaths;
 use ctox_cloud_requirements::cloud_requirements_loader;
-use ctox_core::AuthManager;
-use ctox_core::ThreadManager;
 use ctox_core::config::{
-    ConfigBuilder, ConfigOverrides, find_codex_home, load_config_as_toml_with_cli_overrides,
+    find_codex_home, load_config_as_toml_with_cli_overrides, ConfigBuilder, ConfigOverrides,
 };
 use ctox_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
+use ctox_core::AuthManager;
+use ctox_core::ThreadManager;
 use ctox_feedback::CodexFeedback;
 use ctox_protocol::config_types::SandboxMode;
 use ctox_protocol::openai_models::ReasoningEffort;
@@ -1017,13 +1017,11 @@ impl PersistentSession {
                 request_id: seq.next(),
                 params: TurnStartParams {
                     thread_id: thread_id.to_string(),
-                    input: vec![
-                        UserInput::Text {
-                            text: prompt.to_string(),
-                            text_elements: Vec::new(),
-                        }
-                        .into(),
-                    ],
+                    input: vec![UserInput::Text {
+                        text: prompt.to_string(),
+                        text_elements: Vec::new(),
+                    }
+                    .into()],
                     cwd: Some(cwd.to_path_buf()),
                     approval_policy: Some(AskForApproval::Never.into()),
                     approvals_reviewer: None,
@@ -1424,18 +1422,14 @@ The controller must create preparation queue/tickets and record queue:system::* 
         let violation = guard
             .violation_for_first_exec("ls -la /home/metricspace/.local/share/ctox/install/current");
 
-        assert!(
-            violation
-                .as_deref()
-                .unwrap_or_default()
-                .contains("terminal-bench preflight violation")
-        );
+        assert!(violation
+            .as_deref()
+            .unwrap_or_default()
+            .contains("terminal-bench preflight violation"));
         assert!(violation.unwrap().contains("first shell command"));
-        assert!(
-            guard
-                .violation_for_first_exec("ls -la /home/metricspace")
-                .is_none()
-        );
+        assert!(guard
+            .violation_for_first_exec("ls -la /home/metricspace")
+            .is_none());
     }
 
     #[test]
@@ -1456,12 +1450,10 @@ The controller must create preparation queue/tickets and record queue:system::* 
             "ls -la /home/metricspace/.local/share/ctox/install/current/runtime",
         );
 
-        assert!(
-            violation
-                .as_deref()
-                .unwrap_or_default()
-                .contains("terminal-bench preflight violation")
-        );
+        assert!(violation
+            .as_deref()
+            .unwrap_or_default()
+            .contains("terminal-bench preflight violation"));
     }
 
     #[test]
