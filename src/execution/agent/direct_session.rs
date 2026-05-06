@@ -152,12 +152,35 @@ impl TerminalBenchPreflightGuard {
         ) {
             return None;
         }
-        Some(format!(
-            "terminal-bench preflight violation: the first shell command did not create and verify the required current-run artifacts. First command: {}. Required next action: run exactly one shell script that creates `{}/tasks`, creates or updates every required file in the current RUN_DIR as a regular file, records real CTOX queue refs or an exact CLI blocker, and verifies every required path with `test -f`. The harness will not create files, create tickets, or mark this complete for the worker.",
-            clip_text_local(command, 360),
-            self.run_dir
+        Some(terminal_bench_preflight_violation_feedback(
+            command,
+            &self.run_dir,
+            &self.required_files,
+            self.requires_runtime_refs,
         ))
     }
+}
+
+fn terminal_bench_preflight_violation_feedback(
+    command: &str,
+    run_dir: &str,
+    required_files: &[String],
+    requires_runtime_refs: bool,
+) -> String {
+    let required_files = required_files
+        .iter()
+        .map(|path| format!("- {path}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let runtime_refs = if requires_runtime_refs {
+        "The same script must also persist either real `ctox queue add` output/message keys or an explicit `blocker` value explaining the exact CLI blocker."
+    } else {
+        "The same script must persist enough controller state to continue the run."
+    };
+    format!(
+        "terminal-bench preflight violation: the first shell command did not create and verify the required current-run artifacts. First command: {}.\n\nWhy this failed: the first worker shell call must be one complete artifact bootstrap script, not a partial mkdir/cat/help/discovery step. It must mention and create every required file, create `{run_dir}/tasks`, include `test -f` checks for every required file, and finish only if those checks pass. {runtime_refs}\n\nRequired next worker action: run exactly one `exec_command` shell script now. Do not answer in prose. Do not call `ctox --help`, inspect old runs, inspect install trees, browse, or split this over multiple tool calls before the files below are verified.\n\nRequired files:\n{required_files}\n\nAcceptance checklist for the next shell script:\n- sets `RUN_DIR=\"{run_dir}\"`\n- runs `mkdir -p \"$RUN_DIR/tasks\"`\n- writes non-empty initial content to every required file above\n- records queue refs with `ctox queue add` or records an explicit `blocker` in controller.json/logbook.md\n- runs `test -f` for every required file above in the same shell call\n- exits nonzero if any required file is missing\n\nThe harness will not create files, create tickets, or mark this complete for the worker.",
+        clip_text_local(command, 360),
+    )
 }
 
 fn clip_text_local(value: &str, max_chars: usize) -> String {
