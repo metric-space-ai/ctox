@@ -4685,6 +4685,282 @@ fn is_terminal_bench_controller_artifact_job(job: &QueuedPrompt) -> bool {
     terminal_bench_scope && controller_shape
 }
 
+fn terminal_bench_controller_requires_runtime_refs(job: &QueuedPrompt) -> bool {
+    if !is_terminal_bench_controller_artifact_job(job) {
+        return false;
+    }
+    let haystack = format!(
+        "{}\n{}\n{}\n{}\n{}",
+        job.prompt,
+        job.goal,
+        job.preview,
+        job.thread_key.clone().unwrap_or_default(),
+        job.workspace_root.clone().unwrap_or_default()
+    )
+    .to_ascii_lowercase();
+    haystack.contains("create durable ctox queue/ticket work")
+        || haystack.contains("preparation queue/tickets")
+        || haystack.contains("preparation-tickets.jsonl")
+        || haystack.contains("one benchmark ticket")
+        || haystack.contains("message keys")
+}
+
+fn validate_terminal_bench_controller_runtime_refs(
+    root: &Path,
+    job: &QueuedPrompt,
+    expected_artifact_refs: &[ArtifactRef],
+) -> Result<()> {
+    if !terminal_bench_controller_requires_runtime_refs(job) {
+        return Ok(());
+    }
+    let paths = terminal_bench_controller_runtime_ref_paths(expected_artifact_refs);
+    if paths.is_empty() {
+        return Ok(());
+    }
+
+    let mut valid_refs = Vec::new();
+    let mut synthetic_refs = Vec::new();
+    for path in &paths {
+        if !path.is_file() {
+            continue;
+        }
+        let text = std::fs::read_to_string(path)
+            .with_context(|| format!("failed to read {}", path.display()))?;
+        collect_valid_terminal_bench_runtime_refs(
+            root,
+            job,
+            &text,
+            &mut valid_refs,
+            &mut synthetic_refs,
+        )?;
+    }
+
+    if !valid_refs.is_empty() {
+        return Ok(());
+    }
+    if terminal_bench_controller_has_explicit_blocker(expected_artifact_refs) {
+        return Ok(());
+    }
+
+    anyhow::bail!(
+        "Terminal-Bench controller outcome is missing real CTOX runtime ticket/queue refs. \
+ticket-map.jsonl, preparation-tickets.jsonl, and run-queue.jsonl must reference existing \
+CTOX queue message keys such as queue:system::<id> or existing ticket self-work IDs. \
+Synthetic refs like {} do not count. Create real CTOX queue tasks via `ctox queue add` \
+or persist an explicit blocker with the exact next command.",
+        if synthetic_refs.is_empty() {
+            "msg-prep-runtime-001".to_string()
+        } else {
+            synthetic_refs
+                .iter()
+                .take(3)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ")
+        }
+    );
+}
+
+fn terminal_bench_controller_runtime_ref_paths(
+    expected_artifact_refs: &[ArtifactRef],
+) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    for artifact in expected_artifact_refs {
+        if artifact.kind != ArtifactKind::WorkspaceFile {
+            continue;
+        }
+        let path = Path::new(&artifact.primary_key);
+        let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if matches!(
+            name,
+            "ticket-map.jsonl" | "preparation-tickets.jsonl" | "run-queue.jsonl"
+        ) {
+            paths.push(path.to_path_buf());
+        }
+    }
+    paths
+}
+
+fn collect_valid_terminal_bench_runtime_refs(
+    root: &Path,
+    job: &QueuedPrompt,
+    text: &str,
+    valid_refs: &mut Vec<String>,
+    synthetic_refs: &mut Vec<String>,
+) -> Result<()> {
+    for raw_line in text.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Ok(value) = serde_json::from_str::<Value>(line) {
+            collect_valid_terminal_bench_runtime_refs_from_value(
+                root,
+                job,
+                &value,
+                valid_refs,
+                synthetic_refs,
+            )?;
+        } else {
+            collect_valid_terminal_bench_runtime_refs_from_text(
+                root,
+                job,
+                line,
+                valid_refs,
+                synthetic_refs,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn collect_valid_terminal_bench_runtime_refs_from_value(
+    root: &Path,
+    job: &QueuedPrompt,
+    value: &Value,
+    valid_refs: &mut Vec<String>,
+    synthetic_refs: &mut Vec<String>,
+) -> Result<()> {
+    match value {
+        Value::Object(map) => {
+            for (key, value) in map {
+                if let Some(value) = value.as_str() {
+                    validate_terminal_bench_runtime_ref_value(
+                        root,
+                        job,
+                        key,
+                        value,
+                        valid_refs,
+                        synthetic_refs,
+                    )?;
+                } else {
+                    collect_valid_terminal_bench_runtime_refs_from_value(
+                        root,
+                        job,
+                        value,
+                        valid_refs,
+                        synthetic_refs,
+                    )?;
+                }
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                collect_valid_terminal_bench_runtime_refs_from_value(
+                    root,
+                    job,
+                    item,
+                    valid_refs,
+                    synthetic_refs,
+                )?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn collect_valid_terminal_bench_runtime_refs_from_text(
+    root: &Path,
+    job: &QueuedPrompt,
+    text: &str,
+    valid_refs: &mut Vec<String>,
+    synthetic_refs: &mut Vec<String>,
+) -> Result<()> {
+    for token in text
+        .split(|ch: char| ch.is_whitespace() || matches!(ch, '"' | '\'' | ',' | ';' | '[' | ']'))
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+    {
+        validate_terminal_bench_runtime_ref_value(
+            root,
+            job,
+            "runtime_ref",
+            token,
+            valid_refs,
+            synthetic_refs,
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_terminal_bench_runtime_ref_value(
+    root: &Path,
+    job: &QueuedPrompt,
+    key: &str,
+    value: &str,
+    valid_refs: &mut Vec<String>,
+    synthetic_refs: &mut Vec<String>,
+) -> Result<()> {
+    let key = key.to_ascii_lowercase();
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(());
+    }
+    if value.starts_with("msg-") || value.starts_with("queue-id-") {
+        push_unique_string(synthetic_refs, value.to_string());
+        return Ok(());
+    }
+    let queue_key_field =
+        key.contains("message_key") || key.contains("queue_key") || key == "runtime_ref";
+    if queue_key_field && value.starts_with("queue:") {
+        if job
+            .leased_message_keys
+            .iter()
+            .any(|leased| leased.as_str() == value)
+        {
+            return Ok(());
+        }
+        if channels::load_queue_task(root, value)?.is_some() {
+            push_unique_string(valid_refs, value.to_string());
+        }
+        return Ok(());
+    }
+    let work_id_field =
+        key.contains("work_id") || key.contains("self_work_id") || key.contains("ticket_work");
+    if work_id_field && tickets::load_ticket_self_work_item(root, value)?.is_some() {
+        push_unique_string(valid_refs, value.to_string());
+    }
+    Ok(())
+}
+
+fn terminal_bench_controller_has_explicit_blocker(expected_artifact_refs: &[ArtifactRef]) -> bool {
+    let mut controller_has_blocker = false;
+    let mut next_action_recorded = false;
+    for artifact in expected_artifact_refs {
+        if artifact.kind != ArtifactKind::WorkspaceFile {
+            continue;
+        }
+        let path = Path::new(&artifact.primary_key);
+        if !path.is_file() {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        let lowered = text.to_ascii_lowercase();
+        if path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .is_some_and(|name| name == "controller.json")
+            && (lowered.contains("\"blocker\"")
+                || lowered.contains("\"status\":\"blocked\"")
+                || lowered.contains("\"phase\":\"blocked\""))
+        {
+            controller_has_blocker = true;
+        }
+        if lowered.contains("next_action")
+            || lowered.contains("next command")
+            || lowered.contains("next_command")
+        {
+            next_action_recorded = true;
+        }
+    }
+    controller_has_blocker && next_action_recorded
+}
+
 fn terminal_bench_controller_hold_feedback_prompt(
     job: &QueuedPrompt,
     review_summary: &str,
@@ -4928,6 +5204,7 @@ fn enforce_job_outcome_witness(
     if expected_artifact_refs.is_empty() {
         return Ok(None);
     }
+    validate_terminal_bench_controller_runtime_refs(root, job, &expected_artifact_refs)?;
 
     let db_path = root.join("runtime/ctox.sqlite3");
     let conn = channels::open_channel_db(&db_path)?;
@@ -17791,6 +18068,201 @@ Exit after the write command.",
         assert_eq!(delivered.len(), 2);
         let proof_id = enforce_job_outcome_witness(&root, &job, expected, delivered)
             .expect("fresh checkpoint files should satisfy witness")
+            .expect("proof id should be returned");
+        assert!(proof_id.starts_with("ctp-"));
+    }
+
+    #[test]
+    fn terminal_bench_controller_rejects_synthetic_runtime_ticket_refs() {
+        let root = temp_root("terminal-bench-synthetic-runtime-refs");
+        let run_dir = root.join("tb2-run");
+        let controller = run_dir.join("controller.json");
+        let ticket_map = run_dir.join("ticket-map.jsonl");
+        let preparation = run_dir.join("preparation-tickets.jsonl");
+        let run_queue = run_dir.join("run-queue.jsonl");
+        let prompt = format!(
+            "You are CTOX running the Terminal-Bench 2 evaluation controller.\n\
+REQUIRED OUTPUT FILES TO UPDATE NOW\n\
+- {}\n\
+- {}\n\
+- {}\n\
+- {}\n\n\
+Before any benchmark task attempt, create durable CTOX queue/ticket work for \
+preparation queue/tickets and record message keys.",
+            controller.display(),
+            ticket_map.display(),
+            preparation.display(),
+            run_queue.display()
+        );
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Terminal-Bench 2 controller synthetic refs".to_string(),
+                prompt: prompt.clone(),
+                thread_key: "queue/tb2-synthetic-refs".to_string(),
+                workspace_root: Some(run_dir.to_string_lossy().into_owned()),
+                priority: "urgent".to_string(),
+                suggested_skill: Some("benchmark-controller".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create parent queue task");
+        let leased = channels::lease_queue_task(&root, &task.message_key, "test")
+            .expect("failed to lease parent queue task");
+        std::fs::create_dir_all(&run_dir).expect("failed to create run dir");
+        std::fs::write(
+            &controller,
+            "{\"phase\":\"1-preparation\",\"next_action\":\"prep\"}\n",
+        )
+        .expect("failed to write controller");
+        std::fs::write(
+            &ticket_map,
+            "{\"ticket_id\":\"prep-runtime\",\"message_key\":\"msg-prep-runtime-001\"}\n",
+        )
+        .expect("failed to write ticket map");
+        std::fs::write(
+            &preparation,
+            "{\"ticket_id\":\"prep-runtime\",\"message_key\":\"msg-prep-runtime-001\"}\n",
+        )
+        .expect("failed to write prep tickets");
+        std::fs::write(
+            &run_queue,
+            "{\"queue_id\":\"q1\",\"ticket_id\":\"prep-runtime\",\"status\":\"pending\"}\n",
+        )
+        .expect("failed to write run queue");
+        let job = QueuedPrompt {
+            prompt,
+            goal: "Terminal-Bench 2 controller".to_string(),
+            preview: "Terminal-Bench 2 controller".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: Some("benchmark-controller".to_string()),
+            leased_message_keys: vec![leased.message_key],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("queue/tb2-synthetic-refs".to_string()),
+            workspace_root: Some(run_dir.to_string_lossy().into_owned()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let expected = expected_outcome_artifacts_for_job(&job);
+        let delivered = delivered_outcome_artifacts_for_job(&root, &job, &expected)
+            .expect("failed to read delivered artifacts");
+
+        assert_eq!(delivered.len(), 4);
+        let err = enforce_job_outcome_witness(&root, &job, expected, delivered)
+            .expect_err("synthetic runtime refs must not satisfy Terminal-Bench witness");
+        assert!(err
+            .to_string()
+            .contains("missing real CTOX runtime ticket/queue refs"));
+        assert!(err.to_string().contains("msg-prep-runtime-001"));
+    }
+
+    #[test]
+    fn terminal_bench_controller_accepts_real_queue_runtime_refs() {
+        let root = temp_root("terminal-bench-real-runtime-refs");
+        let run_dir = root.join("tb2-run");
+        let controller = run_dir.join("controller.json");
+        let ticket_map = run_dir.join("ticket-map.jsonl");
+        let preparation = run_dir.join("preparation-tickets.jsonl");
+        let run_queue = run_dir.join("run-queue.jsonl");
+        let prompt = format!(
+            "You are CTOX running the Terminal-Bench 2 evaluation controller.\n\
+REQUIRED OUTPUT FILES TO UPDATE NOW\n\
+- {}\n\
+- {}\n\
+- {}\n\
+- {}\n\n\
+Before any benchmark task attempt, create durable CTOX queue/ticket work for \
+preparation queue/tickets and record message keys.",
+            controller.display(),
+            ticket_map.display(),
+            preparation.display(),
+            run_queue.display()
+        );
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Terminal-Bench 2 controller real refs".to_string(),
+                prompt: prompt.clone(),
+                thread_key: "queue/tb2-real-refs".to_string(),
+                workspace_root: Some(run_dir.to_string_lossy().into_owned()),
+                priority: "urgent".to_string(),
+                suggested_skill: Some("benchmark-controller".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create parent queue task");
+        let leased = channels::lease_queue_task(&root, &task.message_key, "test")
+            .expect("failed to lease parent queue task");
+        let child = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "prep-runtime".to_string(),
+                prompt: "verify runtime".to_string(),
+                thread_key: "queue/tb2-real-refs/prep-runtime".to_string(),
+                workspace_root: Some(run_dir.to_string_lossy().into_owned()),
+                priority: "urgent".to_string(),
+                suggested_skill: Some("benchmark-controller".to_string()),
+                parent_message_key: Some(leased.message_key.clone()),
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create child queue task");
+        std::fs::create_dir_all(&run_dir).expect("failed to create run dir");
+        std::fs::write(
+            &controller,
+            "{\"phase\":\"1-preparation\",\"next_action\":\"prep\"}\n",
+        )
+        .expect("failed to write controller");
+        std::fs::write(
+            &ticket_map,
+            format!(
+                "{{\"ticket_id\":\"prep-runtime\",\"message_key\":\"{}\"}}\n",
+                child.message_key
+            ),
+        )
+        .expect("failed to write ticket map");
+        std::fs::write(
+            &preparation,
+            format!(
+                "{{\"ticket_id\":\"prep-runtime\",\"message_key\":\"{}\"}}\n",
+                child.message_key
+            ),
+        )
+        .expect("failed to write prep tickets");
+        std::fs::write(
+            &run_queue,
+            format!(
+                "{{\"queue_key\":\"{}\",\"ticket_id\":\"prep-runtime\",\"status\":\"pending\"}}\n",
+                child.message_key
+            ),
+        )
+        .expect("failed to write run queue");
+        let job = QueuedPrompt {
+            prompt,
+            goal: "Terminal-Bench 2 controller".to_string(),
+            preview: "Terminal-Bench 2 controller".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: Some("benchmark-controller".to_string()),
+            leased_message_keys: vec![leased.message_key],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("queue/tb2-real-refs".to_string()),
+            workspace_root: Some(run_dir.to_string_lossy().into_owned()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let expected = expected_outcome_artifacts_for_job(&job);
+        let delivered = delivered_outcome_artifacts_for_job(&root, &job, &expected)
+            .expect("failed to read delivered artifacts");
+
+        assert_eq!(delivered.len(), 4);
+        let proof_id = enforce_job_outcome_witness(&root, &job, expected, delivered)
+            .expect("real queue runtime refs should satisfy Terminal-Bench witness")
             .expect("proof id should be returned");
         assert!(proof_id.starts_with("ctp-"));
     }
