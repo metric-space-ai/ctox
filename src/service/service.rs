@@ -5033,6 +5033,7 @@ fn maybe_terminal_bench_controller_runtime_ref_feedback(
         "HARNESS FEEDBACK\n\
 The Terminal-Bench controller requires real CTOX runtime queue/ticket refs, but none are currently recorded in ticket-map.jsonl, preparation-tickets.jsonl, or run-queue.jsonl.\n\
 Do not invent identifiers. Values like msg-prep-runtime-001, q1, ticket-1, or TODO are invalid.\n\
+If you are unsure about CTOX CLI syntax, inspect it yourself with `ctox help`, `ctox queue --help`, and `ctox queue add --help` before creating any tickets. Do not guess.\n\
 Your next shell action must create the preparation work yourself with `ctox queue add`, capture the real `queue:system::*` message_key values from stdout, verify each with `ctox queue show --message-key <key>`, and persist those exact keys in ticket-map.jsonl, preparation-tickets.jsonl, and run-queue.jsonl before any benchmark work.\n\
 {example}\n\
 If any `ctox queue add` command fails, persist a blocker in controller.json, logbook.md, and run-queue.jsonl with the exact failing command and stderr. Do not claim completion."
