@@ -2753,7 +2753,7 @@ fn start_prompt_worker(
             let result = turn_loop::run_chat_turn_with_events_extended(
                 &root,
                 &db_path,
-                &job.prompt,
+                &artifact_first_execution_prompt(&job),
                 workspace_root,
                 conversation_id,
                 job.suggested_skill.as_deref(),
@@ -4477,6 +4477,31 @@ fn declared_workspace_file_artifacts_for_job(job: &QueuedPrompt) -> Vec<String> 
         }
     }
     refs
+}
+
+fn artifact_first_execution_prompt(job: &QueuedPrompt) -> String {
+    let file_refs = declared_workspace_file_artifacts_for_job(job);
+    if file_refs.is_empty() {
+        return job.prompt.clone();
+    }
+
+    let mut prompt = String::new();
+    prompt.push_str("HARNESS ARTIFACT CONTRACT\n");
+    prompt.push_str("This task declares durable file artifacts. The harness will not accept a final answer, plan, or interim text as completion unless these files exist on disk.\n\n");
+    prompt.push_str("Required files:\n");
+    for path in &file_refs {
+        prompt.push_str("- ");
+        prompt.push_str(path);
+        prompt.push('\n');
+    }
+    prompt.push_str("\nExecution order:\n");
+    prompt.push_str("1. Before open-ended research or exploratory loops, create or update the required files with the best current status.\n");
+    prompt.push_str("2. If final content depends on later work, write a provisional, truthful status plus the next action, then keep updating the file as work progresses.\n");
+    prompt.push_str("3. Before claiming completion, run shell checks equivalent to `test -f` for every required path.\n");
+    prompt.push_str("4. If a required file cannot be created, write the blocker into the files that can be created and do not claim completion.\n\n");
+    prompt.push_str("ORIGINAL TASK\n");
+    prompt.push_str(&job.prompt);
+    prompt
 }
 
 fn extract_only_required_durable_file_paths(prompt: &str) -> Vec<String> {
@@ -16552,6 +16577,59 @@ Initial completion criteria:\n\
                 "/tmp/ctox-tb2-run/summary.md",
             ]
         );
+    }
+
+    #[test]
+    fn artifact_first_prompt_front_loads_declared_workspace_files() {
+        let run_dir = "/tmp/ctox-tb2-run";
+        let job = QueuedPrompt {
+            prompt: format!(
+                "Only required durable files for this controller turn:\n\
+- {run_dir}/controller.json\n\
+- {run_dir}/summary.md\n\n\
+Start by discovering benchmark tasks."
+            ),
+            goal: "Terminal-Bench 2 controller".to_string(),
+            preview: "Terminal-Bench 2 controller".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: None,
+            leased_message_keys: vec!["queue:tb2-controller".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: None,
+            workspace_root: Some("/tmp".to_string()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let prompt = artifact_first_execution_prompt(&job);
+
+        assert!(prompt.starts_with("HARNESS ARTIFACT CONTRACT"));
+        assert!(prompt.contains("/tmp/ctox-tb2-run/controller.json"));
+        assert!(prompt.contains("/tmp/ctox-tb2-run/summary.md"));
+        assert!(prompt.contains("Before open-ended research or exploratory loops"));
+        assert!(prompt.contains("test -f"));
+        assert!(prompt.contains("ORIGINAL TASK"));
+    }
+
+    #[test]
+    fn artifact_first_prompt_leaves_non_artifact_jobs_unchanged() {
+        let job = QueuedPrompt {
+            prompt: "Summarize the current service status.".to_string(),
+            goal: "status".to_string(),
+            preview: "status".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: None,
+            leased_message_keys: vec!["queue:status".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: None,
+            workspace_root: Some("/tmp".to_string()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        assert_eq!(artifact_first_execution_prompt(&job), job.prompt);
     }
 
     #[test]
