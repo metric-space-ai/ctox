@@ -26,6 +26,7 @@ use crate::mission::channels::{
 };
 
 const DEFAULT_MEETING_STT_MODEL: &str = "engineai/Voxtral-Mini-4B-Realtime-2602";
+const MEETING_XVFB_SERVER_ARGS: &str = "-screen 0 1920x1080x24 -ac +extension RANDR";
 
 // ---------------------------------------------------------------------------
 // Public adapter interface (sync / send / service_sync)
@@ -1658,7 +1659,7 @@ fn build_meeting_runner_command(
         cmd.current_dir(reference_dir)
             .arg("-a")
             .arg("-s")
-            .arg("-screen 0 1280x720x24 -ac +extension RANDR")
+            .arg(MEETING_XVFB_SERVER_ARGS)
             .arg(node)
             .arg(script_path);
         Ok(cmd)
@@ -5218,6 +5219,7 @@ mod tests {
             should_wrap_browser_runner_with_xvfb(Some(OsStr::new(""))),
             cfg!(target_os = "linux")
         );
+        assert!(MEETING_XVFB_SERVER_ARGS.contains("1920x1080x24"));
     }
 
     #[test]
