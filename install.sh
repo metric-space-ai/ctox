@@ -910,6 +910,7 @@ build_google_fetch_helper() {
   [[ -f "$tool_dir/Cargo.toml" ]] || return 0
   local cargo; cargo="$(resolve_cargo 2>/dev/null || true)"
   [[ -n "$cargo" && -x "$cargo" ]] || return 0
+  prepare_cargo_target_cache "$tool_dir/target" "google-fetch"
   run_build_module "ctox Google fetch helper" "$tool_dir" "$cargo" build --release --bin ctox-google-fetch
 }
 
@@ -1341,6 +1342,7 @@ build_ctox() {
   # usable ctox-engine payload, so an empty ENGINE_FEATURES must not skip the
   # build entirely.
   if [[ -f "$source_root/tools/model-runtime/Cargo.toml" ]]; then
+    prepare_cargo_target_cache "$source_root/tools/model-runtime/target" "model-runtime"
     local cargo_features=""
     local engine_label="${ENGINE_FEATURES:-cpu-only}"
     local -a engine_build_cmd=(
