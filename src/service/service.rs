@@ -5150,11 +5150,24 @@ fn maybe_terminal_bench_controller_runtime_ref_feedback(
         )));
     }
 
-    let example = parent_queue_key_for_feedback(job)
-        .map(|key| format!("Use `--parent-message-key {key}` on each preparation queue item."))
+    let parent_key = parent_queue_key_for_feedback(job);
+    let example = parent_key
+        .as_deref()
+        .map(|key| {
+            format!(
+                "Concrete valid command shape for each preparation item:\n\
+ctox queue add --title \"<short preparation title>\" --prompt \"<full worker instruction>\" --thread-key \"terminal-bench-2/prep/<slug>\" --workspace-root \"{}\" --skill benchmark-controller --priority high --parent-message-key {key}\n\
+Do not use `--description`; this CLI requires `--prompt <text>`.",
+                current_run_dir.as_deref().unwrap_or("<current RUN_DIR>")
+            )
+        })
         .unwrap_or_else(|| {
-            "Use the current controller queue item as the parent if a parent key is available."
-                .to_string()
+            format!(
+                "Concrete valid command shape for each preparation item:\n\
+ctox queue add --title \"<short preparation title>\" --prompt \"<full worker instruction>\" --thread-key \"terminal-bench-2/prep/<slug>\" --workspace-root \"{}\" --skill benchmark-controller --priority high\n\
+Do not use `--description`; this CLI requires `--prompt <text>`.",
+                current_run_dir.as_deref().unwrap_or("<current RUN_DIR>")
+            )
         });
     Ok(Some(format!(
         "HARNESS FEEDBACK\n\
@@ -5163,7 +5176,7 @@ Current RUN_DIR for this queue item: {}\n\
 Write only to files in this RUN_DIR. Do not inspect or reuse controller-prompt.md or durable files from older Terminal-Bench run directories.\n\
 Do not invent identifiers. Values like msg-prep-runtime-001, q1, ticket-1, or TODO are invalid.\n\
 If you are unsure about CTOX CLI syntax, inspect it yourself with `ctox help`, `ctox queue --help`, and `ctox queue add --help` before creating any tickets. Do not guess.\n\
-Your next shell action must create the preparation work yourself with `ctox queue add`, capture the real `queue:system::*` message_key values from stdout, verify each with `ctox queue show --message-key <key>`, and persist those exact keys in ticket-map.jsonl, preparation-tickets.jsonl, and run-queue.jsonl before any benchmark work.\n\
+Your next shell action must create the preparation work yourself with `ctox queue add --title ... --prompt ...`; `--description` is not a valid `ctox queue add` flag. Capture the real `queue:system::*` message_key values from stdout, verify each with `ctox queue show --message-key <key>`, and persist those exact keys in ticket-map.jsonl, preparation-tickets.jsonl, and run-queue.jsonl before any benchmark work.\n\
 {example}\n\
 If any `ctox queue add` command fails, persist a blocker in controller.json, logbook.md, and run-queue.jsonl with the exact failing command and stderr. Do not claim completion."
         ,

@@ -27,6 +27,23 @@ const SPILL_RESTORE_TITLE_PREFIX: &str = "spill restore: ";
 const QUEUE_REPAIR_TIMEOUT_SECS: u64 = 300;
 const QUEUE_REPAIR_SKILL_RELATIVE_PATH: &str =
     "skills/system/mission_orchestration/queue-cleanup/SKILL.md";
+const QUEUE_ADD_USAGE: &str = "usage: ctox queue add --title <label> --prompt <text> [--thread-key <key>] [--workspace-root <path>] [--skill <name>] [--priority <urgent|high|normal|low>] [--parent-message-key <key>]";
+const QUEUE_USAGE: &str = "usage:
+  ctox queue add --title <label> --prompt <text> [--thread-key <key>] [--workspace-root <path>] [--skill <name>] [--priority <urgent|high|normal|low>] [--parent-message-key <key>]
+  ctox queue list [--status <pending|leased|blocked|failed|handled|cancelled>]... [--limit <n>]
+  ctox queue show --message-key <key>
+  ctox queue edit --message-key <key> [--title <label>] [--prompt <text>] [--thread-key <key>] [--workspace-root <path>] [--clear-workspace-root] [--skill <name>] [--clear-skill] [--priority <urgent|high|normal|low>]
+  ctox queue reprioritize --message-key <key> --priority <urgent|high|normal|low>
+  ctox queue block --message-key <key> --reason <text>
+  ctox queue release --message-key <key> [--priority <urgent|high|normal|low>] [--clear-note] [--note <text>]
+  ctox queue complete --message-key <key> [--note <text>]
+  ctox queue fail --message-key <key> --reason <text>
+  ctox queue cancel --message-key <key> [--reason <text>]
+  ctox queue spill --message-key <key> [--ticket-system <name>] [--reason <text>] [--skill <name>] [--publish]
+  ctox queue spill-candidates [--limit <n>]
+  ctox queue spills [--state <spilled|restored>] [--limit <n>]
+  ctox queue restore --message-key <key> [--priority <urgent|high|normal|low>] [--note <text>]
+  ctox queue repair [--dry-run] [--mechanical]";
 
 const QUEUE_REPAIR_SYSTEM_PROMPT: &str = r#"You are CTOX Queue Repair.
 
@@ -175,12 +192,18 @@ struct QueueRepairVerificationView {
 
 pub fn handle_queue_command(root: &Path, args: &[String]) -> Result<()> {
     let command = args.first().map(String::as_str).unwrap_or("");
+    if matches!(command, "" | "-h" | "--help" | "help") {
+        println!("{QUEUE_USAGE}");
+        return Ok(());
+    }
     match command {
         "add" => {
-            let title = required_flag_value(args, "--title")
-                .context("usage: ctox queue add --title <label> --prompt <text> [--thread-key <key>] [--workspace-root <path>] [--skill <name>] [--priority <urgent|high|normal|low>] [--parent-message-key <key>]")?;
-            let prompt = required_flag_value(args, "--prompt")
-                .context("usage: ctox queue add --title <label> --prompt <text> [--thread-key <key>] [--workspace-root <path>] [--skill <name>] [--priority <urgent|high|normal|low>] [--parent-message-key <key>]")?;
+            if args.iter().any(|arg| arg == "--help" || arg == "-h") {
+                println!("{QUEUE_ADD_USAGE}");
+                return Ok(());
+            }
+            let title = required_flag_value(args, "--title").context(QUEUE_ADD_USAGE)?;
+            let prompt = required_flag_value(args, "--prompt").context(QUEUE_ADD_USAGE)?;
             let thread_key = find_flag_value(args, "--thread-key")
                 .map(ToOwned::to_owned)
                 .unwrap_or_else(|| default_thread_key(title));
@@ -399,9 +422,7 @@ pub fn handle_queue_command(root: &Path, args: &[String]) -> Result<()> {
             )?;
             print_json(&json!({"ok": true, "repair": repaired}))
         }
-        _ => anyhow::bail!(
-            "usage:\n  ctox queue add --title <label> --prompt <text> [--thread-key <key>] [--workspace-root <path>] [--skill <name>] [--priority <urgent|high|normal|low>] [--parent-message-key <key>]\n  ctox queue list [--status <pending|leased|blocked|failed|handled|cancelled>]... [--limit <n>]\n  ctox queue show --message-key <key>\n  ctox queue edit --message-key <key> [--title <label>] [--prompt <text>] [--thread-key <key>] [--workspace-root <path>] [--clear-workspace-root] [--skill <name>] [--clear-skill] [--priority <urgent|high|normal|low>]\n  ctox queue reprioritize --message-key <key> --priority <urgent|high|normal|low>\n  ctox queue block --message-key <key> --reason <text>\n  ctox queue release --message-key <key> [--priority <urgent|high|normal|low>] [--clear-note] [--note <text>]\n  ctox queue complete --message-key <key> [--note <text>]\n  ctox queue fail --message-key <key> --reason <text>\n  ctox queue cancel --message-key <key> [--reason <text>]\n  ctox queue spill --message-key <key> [--ticket-system <name>] [--reason <text>] [--skill <name>] [--publish]\n  ctox queue spill-candidates [--limit <n>]\n  ctox queue spills [--state <spilled|restored>] [--limit <n>]\n  ctox queue restore --message-key <key> [--priority <urgent|high|normal|low>] [--note <text>]\n  ctox queue repair [--dry-run] [--mechanical]"
-        ),
+        _ => anyhow::bail!("{QUEUE_USAGE}"),
     }
 }
 
@@ -1587,6 +1608,17 @@ mod tests {
         path.push(format!("ctox-queue-test-{}-{}", label, std::process::id()));
         let _ = std::fs::remove_dir_all(&path);
         path
+    }
+
+    #[test]
+    fn queue_add_help_returns_success() -> Result<()> {
+        let root = temp_root("queue-add-help");
+        std::fs::create_dir_all(&root)?;
+
+        handle_queue_command(&root, &["add".to_string(), "--help".to_string()])?;
+
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
     }
 
     #[test]

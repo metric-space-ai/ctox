@@ -370,6 +370,17 @@ fn terminal_bench_command_persists_runtime_refs(lower_command: &str) -> bool {
 
 fn terminal_bench_runtime_refs_problem(lower_command: &str) -> Option<String> {
     if lower_command.contains("ctox queue add") || lower_command.contains("queue add") {
+        if !lower_command.contains("--prompt") {
+            if lower_command.contains("--description") {
+                return Some(
+                    "`ctox queue add` uses `--prompt <text>`, not `--description`; create real queue items with --title, --prompt, --thread-key, --workspace-root, --skill, --priority, and --parent-message-key"
+                        .to_string(),
+                );
+            }
+            return Some(
+                "`ctox queue add` command is missing required `--prompt <text>`".to_string(),
+            );
+        }
         return None;
     }
     if !lower_command.contains("blocker") {
@@ -1556,6 +1567,43 @@ test -f \"$RUN_DIR/logbook.md\" && test -f \"$RUN_DIR/blogpost-notes.md\""
 
         let violation = guard.violation_for_first_exec(&command).unwrap();
         assert!(violation.contains("one complete artifact bootstrap script"));
+    }
+
+    #[test]
+    fn terminal_bench_preflight_guard_rejects_queue_add_without_prompt() {
+        let run_dir = "/home/metricspace/CTOX/runtime/terminal-bench-2/runs/test-run";
+        let prompt = format!(
+            "HARNESS TERMINAL-BENCH PREFLIGHT\n\
+Only required durable files for this controller turn:\n\
+- {run_dir}/controller.json\n\
+- {run_dir}/ticket-map.jsonl\n\
+- {run_dir}/preparation-tickets.jsonl\n\
+- {run_dir}/run-queue.jsonl\n\
+- {run_dir}/results.jsonl\n\
+- {run_dir}/knowledge.md\n\
+- {run_dir}/logbook.md\n\
+- {run_dir}/blogpost-notes.md\n\
+The controller must create preparation queue/tickets and record queue:system::* keys."
+        );
+        let mut guard = TerminalBenchPreflightGuard::from_prompt(&prompt).unwrap();
+        let command = format!(
+            "RUN_DIR={run_dir}; mkdir -p \"$RUN_DIR/tasks\"; \
+printf '{{\"status\":\"preflight\"}}' > \"$RUN_DIR/controller.json\"; \
+printf '{{\"status\":\"pending\"}}\\n' > \"$RUN_DIR/ticket-map.jsonl\"; \
+printf '{{\"status\":\"pending\"}}\\n' > \"$RUN_DIR/preparation-tickets.jsonl\"; \
+printf '{{\"status\":\"pending\"}}\\n' > \"$RUN_DIR/run-queue.jsonl\"; \
+printf '{{\"status\":\"not_started\"}}\\n' > \"$RUN_DIR/results.jsonl\"; \
+printf '# knowledge\\n' > \"$RUN_DIR/knowledge.md\"; printf '# log\\n' > \"$RUN_DIR/logbook.md\"; \
+printf '# notes\\n' > \"$RUN_DIR/blogpost-notes.md\"; \
+ctox queue add --title prep-runtime --description 'verify runtime' --parent-message-key queue:system::abc; \
+test -f \"$RUN_DIR/controller.json\" && test -f \"$RUN_DIR/ticket-map.jsonl\" && \
+test -f \"$RUN_DIR/preparation-tickets.jsonl\" && test -f \"$RUN_DIR/run-queue.jsonl\" && \
+test -f \"$RUN_DIR/results.jsonl\" && test -f \"$RUN_DIR/knowledge.md\" && \
+test -f \"$RUN_DIR/logbook.md\" && test -f \"$RUN_DIR/blogpost-notes.md\""
+        );
+
+        let violation = guard.violation_for_first_exec(&command).unwrap();
+        assert!(violation.contains("uses `--prompt <text>`, not `--description`"));
     }
 
     #[test]
