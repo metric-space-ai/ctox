@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta
       name="description"
-      content="CTOX is an agentic daemon for technical work that no longer fits in coding-agent sessions."
+      content="CTOX is an agentic daemon for technical work, Business OS automation, durable work state, channels, tickets, and verified execution."
     />
     <title>CTOX</title>
     <link rel="icon" href="assets/ctox-app-icon.png" />
@@ -384,6 +384,97 @@
         border-bottom: 1px solid var(--line);
       }
 
+      .business-os {
+        background: #fff;
+        border-top: 1px solid var(--line);
+        border-bottom: 1px solid var(--line);
+      }
+
+      .business-os-header {
+        display: grid;
+        grid-template-columns: minmax(0, 0.9fr) minmax(320px, 1.1fr);
+        gap: 52px;
+        align-items: end;
+      }
+
+      .business-os-header p {
+        margin: 0;
+        color: #424955;
+        font-size: 20px;
+        line-height: 1.5;
+      }
+
+      .os-proof-strip {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 1px;
+        margin-top: 42px;
+        border: 1px solid var(--line);
+        background: var(--line);
+      }
+
+      .os-proof-strip div {
+        display: grid;
+        gap: 8px;
+        min-height: 150px;
+        align-content: start;
+        padding: 22px;
+        background: #f7f9fd;
+      }
+
+      .os-proof-strip b {
+        font-size: 18px;
+        line-height: 1.15;
+      }
+
+      .os-proof-strip span {
+        color: var(--muted);
+        line-height: 1.45;
+      }
+
+      .business-os-gallery {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 22px;
+        margin-top: 34px;
+      }
+
+      .business-shot {
+        display: grid;
+        gap: 0;
+        overflow: hidden;
+        border: 1px solid var(--line);
+        background: #fff;
+        box-shadow: var(--shadow);
+      }
+
+      .business-shot img {
+        display: block;
+        width: 100%;
+        aspect-ratio: 16 / 9.7;
+        object-fit: cover;
+        object-position: top left;
+        background: #f6f8fb;
+      }
+
+      .business-shot figcaption {
+        display: grid;
+        grid-template-columns: 160px 1fr;
+        gap: 18px;
+        padding: 18px;
+        border-top: 1px solid var(--line);
+        background: #fff;
+      }
+
+      .business-shot b {
+        font-size: 17px;
+      }
+
+      .business-shot span {
+        color: var(--muted);
+        line-height: 1.45;
+      }
+
       .compare-list {
         display: grid;
         gap: 1px;
@@ -666,6 +757,9 @@
         .download-strip,
         .what-layout,
         .platform-grid,
+        .business-os-header,
+        .os-proof-strip,
+        .business-os-gallery,
         .compare-row,
         .install .download-strip,
         .install .section-inner {
@@ -734,6 +828,11 @@
         .compare-row {
           gap: 10px;
           padding: 22px;
+        }
+
+        .business-shot figcaption {
+          grid-template-columns: 1fr;
+          gap: 8px;
         }
 
         .capability-lines div {
@@ -866,6 +965,74 @@ records
   events / proofs / follow-ups</pre>
               </div>
             </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="business-os" aria-labelledby="business-os-title">
+        <div class="section-inner">
+          <div class="business-os-header">
+            <div>
+              <p class="section-kicker">Proof surface</p>
+              <h2 id="business-os-title">CTOX does the work inside software it can also change.</h2>
+            </div>
+            <p>
+              The Business OS template is a vanilla Next.js and Postgres
+              workspace that a CTOX installation can deploy, operate, and adapt.
+              It is not just a dashboard for talking about work. Records,
+              communication, bugs, tickets, documents, prompts, and automations
+              become concrete work surfaces that CTOX can inspect and modify.
+            </p>
+          </div>
+
+          <div class="os-proof-strip" aria-label="Business OS work surfaces">
+            <div>
+              <b>Context becomes action</b>
+              <span>Right-click prompts, visual bug reports, and record-level context turn a UI selection into a CTOX task.</span>
+            </div>
+            <div>
+              <b>Channels feed the same loop</b>
+              <span>Email, Teams, WhatsApp, tickets, and direct app actions can enter the same durable queue and review path.</span>
+            </div>
+            <div>
+              <b>Automation is visible</b>
+              <span>Research, pipeline gates, document work, runbooks, and follow-ups are shown as state, evidence, and next action.</span>
+            </div>
+            <div>
+              <b>The app can be customized</b>
+              <span>Users can ask CTOX to change the OS itself while customer data and local customization stay outside core upgrades.</span>
+            </div>
+          </div>
+
+          <div class="business-os-gallery" aria-label="CTOX Business OS screenshots">
+            <figure class="business-shot">
+              <img src="assets/business-os-competitive-analysis.png" alt="CTOX Business OS competitive analysis dashboard with ranking and portfolio map" loading="lazy" />
+              <figcaption>
+                <b>Competitive analysis</b>
+                <span>Marketing research is a working surface: watchlists, scoring criteria, evidence, and CTOX prompts sit on the same view.</span>
+              </figcaption>
+            </figure>
+            <figure class="business-shot">
+              <img src="assets/business-os-pipeline.png" alt="CTOX Business OS sales pipeline with candidate automation and research database request" loading="lazy" />
+              <figcaption>
+                <b>Sales pipeline</b>
+                <span>Campaign imports move into qualification gates where CTOX runs multi-step research and asks for missing evidence only when needed.</span>
+              </figcaption>
+            </figure>
+            <figure class="business-shot">
+              <img src="assets/business-os-leads.png" alt="CTOX Business OS leads workspace with lead accounts and actions" loading="lazy" />
+              <figcaption>
+                <b>Leads</b>
+                <span>Qualified work continues into the next module instead of ending as a chat answer: contacts, offers, tasks, and next steps remain operational.</span>
+              </figcaption>
+            </figure>
+            <figure class="business-shot">
+              <img src="assets/business-os-knowledge.png" alt="CTOX Business OS knowledge store with skillbooks and runbooks" loading="lazy" />
+              <figcaption>
+                <b>Knowledge</b>
+                <span>Skillbooks, runbooks, documents, and reusable procedures are visible, editable, and available for CTOX to learn from.</span>
+              </figcaption>
+            </figure>
           </div>
         </div>
       </section>
