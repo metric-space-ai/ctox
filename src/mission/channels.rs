@@ -2510,12 +2510,13 @@ fn send_message(root: &Path, db_path: &Path, request: ChannelSendRequest) -> Res
         }
         "teams" => {
             let adapter = communication_adapters::teams();
-            let tenant_id = teams_tenant_from_account_key(&request.account_key);
+            let account_config = load_account_config(&conn, &request.account_key)?;
+            let tenant_id = teams_tenant_from_account_config(account_config.as_ref());
             let adapter_json = adapter.send_cli(
                 root,
                 &communication_adapters::TeamsSendCommandRequest {
                     db_path,
-                    tenant_id: &tenant_id,
+                    tenant_id: tenant_id.as_deref().unwrap_or_default(),
                     thread_key: &request.thread_key,
                     to: &request.to,
                     sender_display: request.sender_display.as_deref(),
@@ -6692,11 +6693,13 @@ fn jami_address_from_account_key(account_key: &str) -> String {
         .to_string()
 }
 
-fn teams_tenant_from_account_key(account_key: &str) -> String {
-    account_key
-        .strip_prefix("teams:")
-        .unwrap_or(account_key)
-        .to_string()
+fn teams_tenant_from_account_config(account_config: Option<&AccountConfig>) -> Option<String> {
+    account_config
+        .and_then(|config| config.profile_json.get("tenantId"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|tenant_id| !tenant_id.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 fn resolve_account_key(conn: &Connection, channel: &str, explicit: Option<&str>) -> Result<String> {
@@ -7413,6 +7416,22 @@ mod tests {
         let request = parse_send_request(&args).expect("teams send should not require --to");
         assert_eq!(request.channel, "teams");
         assert!(request.to.is_empty());
+    }
+
+    #[test]
+    fn teams_tenant_comes_from_profile_not_account_key() {
+        let account = AccountConfig {
+            provider: "graph".to_string(),
+            profile_json: json!({
+                "tenantId": "tenant-123",
+            }),
+        };
+
+        assert_eq!(
+            teams_tenant_from_account_config(Some(&account)).as_deref(),
+            Some("tenant-123")
+        );
+        assert_eq!(teams_tenant_from_account_config(None), None);
     }
 
     #[test]
