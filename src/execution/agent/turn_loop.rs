@@ -985,6 +985,7 @@ pub fn hard_runtime_blocker_retry_cooldown_secs(content: &str) -> Option<u64> {
         || lower.contains("completed without assistant message")
         || lower.contains("no assistant message")
         || lower.contains("empty assistant message")
+        || lower.contains("terminal-bench preflight violation")
     {
         return Some(60);
     }

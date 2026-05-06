@@ -8236,6 +8236,7 @@ fn runtime_error_is_transient_api_failure(error: &str) -> bool {
         || normalized.contains("completed without assistant message")
         || normalized.contains("no assistant message")
         || normalized.contains("empty assistant message")
+        || normalized.contains("terminal-bench preflight violation")
         || normalized.contains("too many requests")
         || normalized.contains("rate limit")
         || normalized.contains("rate_limit")
@@ -10876,6 +10877,12 @@ fn is_no_assistant_message_blocker(value: &str) -> bool {
         || lowered.contains("empty assistant message")
 }
 
+fn is_terminal_bench_preflight_violation(value: &str) -> bool {
+    value
+        .to_ascii_lowercase()
+        .contains("terminal-bench preflight violation")
+}
+
 /// F3: classify a harness-error string into a structured `AgentOutcome`.
 /// The error text comes from the harness/turn-loop itself (we own its
 /// format), not from free-form prompt content. Keep the matchers narrow
@@ -10938,11 +10945,21 @@ fn render_runtime_retry_prompt(job: &QueuedPrompt, error_text: &str) -> String {
     let mut required_actions = vec![
         "inspect durable state and workspace artifacts before retrying; do not trust the previous reply text as proof",
         "preserve work that already exists and avoid duplicate queue tasks",
-        "retry only the smallest step interrupted by the transient API failure",
+        "retry only the smallest step interrupted by the runtime or harness failure",
         "finish only after the real durable outcome exists in the state machine",
-        "if the API is still unavailable, leave this work pending for another retry instead of claiming completion",
+        "if the runtime is still unavailable, leave this work pending for another retry instead of claiming completion",
     ];
-    let problem = if is_no_assistant_message_blocker(error_text) {
+    let problem = if is_terminal_bench_preflight_violation(error_text) {
+        required_actions.insert(
+            0,
+            "the previous first shell command violated the Terminal-Bench preflight gate; the next worker action must be a shell script that creates the current RUN_DIR, creates all required files as regular files, records real queue refs or an exact CLI blocker, and verifies every file with test -f before any discovery",
+        );
+        required_actions.insert(
+            1,
+            "do not inspect install trees, old run directories, Harbor, datasets, web pages, GPUs, or runtime state until the current RUN_DIR artifacts exist and the blocker or queue refs are persisted",
+        );
+        "The previous worker turn started with the wrong shell action for a Terminal-Bench controller preflight. The task is not complete; this is actionable harness feedback, not work performed by the harness."
+    } else if is_no_assistant_message_blocker(error_text) {
         required_actions.insert(
             0,
             "the previous model turn executed at least one tool phase but ended without a final assistant message; continue after the tool phase instead of restarting blindly",
@@ -15712,6 +15729,40 @@ Required artifacts. You must create and maintain exactly these durable files in 
         assert!(prompt.contains("without producing the required final assistant message"));
         assert!(prompt.contains("continue after the tool phase"));
         assert!(prompt.contains("EXIT GATE"));
+    }
+
+    #[test]
+    fn terminal_bench_preflight_violation_is_retryable_with_specific_feedback() {
+        let error = "terminal-bench preflight violation: the first shell command did not create and verify the required current-run artifacts.";
+        assert_eq!(
+            turn_loop::hard_runtime_blocker_retry_cooldown_secs(error),
+            Some(60)
+        );
+        assert!(runtime_error_is_transient_api_failure(error));
+        let job = QueuedPrompt {
+            prompt:
+                "Only required durable files for this controller turn:\n- /tmp/tb/controller.json"
+                    .to_string(),
+            goal: "Terminal-Bench controller preflight".to_string(),
+            preview: "Terminal-Bench controller preflight".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: Some("benchmark-controller".to_string()),
+            leased_message_keys: Vec::new(),
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("tb2/preflight".to_string()),
+            workspace_root: Some("/tmp".to_string()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let prompt = render_runtime_retry_prompt(&job, error);
+
+        assert!(prompt.contains("HARNESS FEEDBACK"));
+        assert!(prompt.contains("wrong shell action"));
+        assert!(prompt.contains("creates the current RUN_DIR"));
+        assert!(prompt.contains("do not inspect install trees"));
+        assert!(prompt.contains("not work performed by the harness"));
     }
 
     #[test]

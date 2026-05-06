@@ -70,6 +70,159 @@ fn compose_base_instructions(extra: Option<&str>) -> String {
     }
 }
 
+#[derive(Debug, Clone)]
+struct TerminalBenchPreflightGuard {
+    run_dir: String,
+    required_files: Vec<String>,
+    requires_runtime_refs: bool,
+    first_exec_seen: bool,
+}
+
+impl TerminalBenchPreflightGuard {
+    fn from_prompt(prompt: &str) -> Option<Self> {
+        let lower = prompt.to_ascii_lowercase();
+        if !(lower.contains("terminal-bench")
+            && lower.contains("only required durable files for this controller turn"))
+            && !prompt.contains("HARNESS TERMINAL-BENCH PREFLIGHT")
+        {
+            return None;
+        }
+        let relevant_prompt = prompt
+            .rfind("HARNESS TERMINAL-BENCH PREFLIGHT")
+            .or_else(|| prompt.rfind("Only required durable files for this controller turn"))
+            .map(|idx| &prompt[idx..])
+            .unwrap_or(prompt);
+        let run_dir = extract_terminal_bench_run_dir(relevant_prompt)?;
+        let required_files = extract_terminal_bench_required_files(relevant_prompt, &run_dir);
+        if required_files.is_empty() {
+            return None;
+        }
+        Some(Self {
+            run_dir,
+            required_files,
+            requires_runtime_refs: lower.contains("preparation queue")
+                || lower.contains("preparation queue/tickets")
+                || lower.contains("queue:system::*")
+                || lower.contains("preparation-tickets.jsonl"),
+            first_exec_seen: false,
+        })
+    }
+
+    fn violation_for_first_exec(&mut self, command: &str) -> Option<String> {
+        if self.first_exec_seen {
+            return None;
+        }
+        self.first_exec_seen = true;
+        if terminal_bench_first_preflight_command_is_valid(
+            command,
+            &self.run_dir,
+            &self.required_files,
+            self.requires_runtime_refs,
+        ) {
+            return None;
+        }
+        Some(format!(
+            "terminal-bench preflight violation: the first shell command did not create and verify the required current-run artifacts. First command: {}. Required next action: run exactly one shell script that creates `{}/tasks`, creates or updates every required file in the current RUN_DIR as a regular file, records real CTOX queue refs or an exact CLI blocker, and verifies every required path with `test -f`. The harness will not create files, create tickets, or mark this complete for the worker.",
+            clip_text_local(command, 360),
+            self.run_dir
+        ))
+    }
+}
+
+fn clip_text_local(value: &str, max_chars: usize) -> String {
+    let collapsed = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.chars().count() <= max_chars {
+        return collapsed;
+    }
+    let mut clipped = collapsed
+        .chars()
+        .take(max_chars.saturating_sub(1))
+        .collect::<String>();
+    clipped.push('…');
+    clipped
+}
+
+fn extract_terminal_bench_run_dir(text: &str) -> Option<String> {
+    let marker = "/terminal-bench-2/runs/";
+    let start = text.find(marker)?;
+    let prefix_start = text[..start]
+        .rfind(|ch: char| ch.is_whitespace() || matches!(ch, '`' | '"' | '\'' | '(' | '[' | '<'))
+        .map(|idx| idx + 1)
+        .unwrap_or(0);
+    let tail = &text[start + marker.len()..];
+    let run_id_len = tail
+        .find(|ch: char| {
+            ch.is_whitespace() || matches!(ch, '/' | '`' | '"' | '\'' | ')' | ']' | '>' | ',' | ';')
+        })
+        .unwrap_or(tail.len());
+    if run_id_len == 0 {
+        return None;
+    }
+    Some(text[prefix_start..start + marker.len() + run_id_len].to_string())
+}
+
+fn extract_terminal_bench_required_files(text: &str, run_dir: &str) -> Vec<String> {
+    let mut files = Vec::new();
+    for line in text.lines() {
+        let Some(start) = line.find(run_dir) else {
+            continue;
+        };
+        let candidate = line[start..]
+            .trim()
+            .trim_matches(|ch: char| matches!(ch, '`' | '"' | '\'' | ',' | ';' | '.'));
+        if candidate.contains("/tasks/") || candidate.contains("<task-id>") {
+            continue;
+        }
+        if files.iter().any(|existing| existing == candidate) {
+            continue;
+        }
+        files.push(candidate.to_string());
+    }
+    files
+}
+
+fn terminal_bench_first_preflight_command_is_valid(
+    command: &str,
+    run_dir: &str,
+    required_files: &[String],
+    requires_runtime_refs: bool,
+) -> bool {
+    let lower = command.to_ascii_lowercase();
+    let run_dir_lower = run_dir.to_ascii_lowercase();
+    if !lower.contains(&run_dir_lower) {
+        return false;
+    }
+    if !(lower.contains("mkdir") && lower.contains("/tasks")) {
+        return false;
+    }
+    if !lower.contains("test -f") {
+        return false;
+    }
+    let creates_files = [
+        "cat >", "cat <<", "tee ", "touch ", "printf ", "python", "perl ", "jq ", "install ", ">>",
+        ">",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle));
+    if !creates_files {
+        return false;
+    }
+    for path in required_files {
+        let basename = Path::new(path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(path)
+            .to_ascii_lowercase();
+        if !basename.is_empty() && !lower.contains(&basename) {
+            return false;
+        }
+    }
+    if requires_runtime_refs && !(lower.contains("queue add") || lower.contains("blocker")) {
+        return false;
+    }
+    true
+}
+
 fn openai_chatgpt_subscription_auth_enabled(settings: &BTreeMap<String, String>) -> bool {
     settings
         .get(OPENAI_AUTH_MODE_KEY)
@@ -679,6 +832,7 @@ impl PersistentSession {
         // Event loop
         let mut final_message: Option<String> = None;
         let mut forced_followup_fired = false;
+        let mut terminal_bench_preflight_guard = TerminalBenchPreflightGuard::from_prompt(prompt);
         let turn_started_at = Instant::now();
         let mut last_usage_event_at = turn_started_at;
         let mut last_recorded_cumulative_usage: Option<ApiTokenUsage> = None;
@@ -725,6 +879,36 @@ impl PersistentSession {
                 InProcessServerEvent::LegacyNotification(notif) => {
                     if let Some(msg) = try_extract_event_msg(&notif) {
                         ctx_log.observe(&msg);
+                        if let EventMsg::ExecCommandBegin(ev) = &msg {
+                            let command = ev.command.join(" ");
+                            if let Some(feedback) = terminal_bench_preflight_guard
+                                .as_mut()
+                                .and_then(|guard| guard.violation_for_first_exec(&command))
+                            {
+                                ctx_log.log(
+                                    "terminal_bench_preflight_violation",
+                                    &format!(
+                                        "\"turn_id\":\"{}\",\"call_id\":\"{}\",\"feedback\":{}",
+                                        turn_id,
+                                        ev.call_id,
+                                        json_string(&feedback)
+                                    ),
+                                );
+                                let interrupt_req = ClientRequest::TurnInterrupt {
+                                    request_id: seq.next(),
+                                    params: TurnInterruptParams {
+                                        thread_id: thread_id.to_string(),
+                                        turn_id: turn_id.to_string(),
+                                    },
+                                };
+                                let _ = tokio::time::timeout(
+                                    Duration::from_secs(DIRECT_SESSION_INTERRUPT_TIMEOUT_SECS),
+                                    client.request_typed::<TurnInterruptResponse>(interrupt_req),
+                                )
+                                .await;
+                                anyhow::bail!("{feedback}");
+                            }
+                        }
                         if let (Some(provider), EventMsg::TokenCount(tc)) = (api_provider, &msg) {
                             if let Some(info) = tc.info.as_ref() {
                                 let usage = &info.last_token_usage;
@@ -1004,6 +1188,69 @@ mod tests {
         let instructions = compose_base_instructions(Some("Act as the external reviewer."));
         assert!(instructions.contains("required durable outcome exists"));
         assert!(instructions.contains("Act as the external reviewer."));
+    }
+
+    #[test]
+    fn terminal_bench_preflight_guard_rejects_first_discovery_command() {
+        let run_dir = "/home/metricspace/CTOX/runtime/terminal-bench-2/runs/test-run";
+        let prompt = format!(
+            "HARNESS TERMINAL-BENCH PREFLIGHT\n\
+Only required durable files for this controller turn:\n\
+- {run_dir}/controller.json\n\
+- {run_dir}/ticket-map.jsonl\n\
+- {run_dir}/preparation-tickets.jsonl\n\
+- {run_dir}/run-queue.jsonl\n\
+- {run_dir}/results.jsonl\n\
+- {run_dir}/knowledge.md\n\
+- {run_dir}/logbook.md\n\
+- {run_dir}/blogpost-notes.md\n\
+The controller must create preparation queue/tickets and record queue:system::* keys."
+        );
+        let mut guard = TerminalBenchPreflightGuard::from_prompt(&prompt).unwrap();
+
+        let violation = guard
+            .violation_for_first_exec("ls -la /home/metricspace/.local/share/ctox/install/current");
+
+        assert!(violation
+            .as_deref()
+            .unwrap_or_default()
+            .contains("terminal-bench preflight violation"));
+        assert!(violation.unwrap().contains("first shell command"));
+        assert!(guard
+            .violation_for_first_exec("ls -la /home/metricspace")
+            .is_none());
+    }
+
+    #[test]
+    fn terminal_bench_preflight_guard_accepts_artifact_creation_script() {
+        let run_dir = "/home/metricspace/CTOX/runtime/terminal-bench-2/runs/test-run";
+        let prompt = format!(
+            "HARNESS TERMINAL-BENCH PREFLIGHT\n\
+Only required durable files for this controller turn:\n\
+- {run_dir}/controller.json\n\
+- {run_dir}/ticket-map.jsonl\n\
+- {run_dir}/preparation-tickets.jsonl\n\
+- {run_dir}/run-queue.jsonl\n\
+- {run_dir}/results.jsonl\n\
+- {run_dir}/knowledge.md\n\
+- {run_dir}/logbook.md\n\
+- {run_dir}/blogpost-notes.md\n\
+The controller must create preparation queue/tickets and record queue:system::* keys."
+        );
+        let mut guard = TerminalBenchPreflightGuard::from_prompt(&prompt).unwrap();
+        let command = format!(
+            "RUN_DIR={run_dir}; mkdir -p \"$RUN_DIR/tasks\"; \
+touch \"$RUN_DIR/controller.json\" \"$RUN_DIR/ticket-map.jsonl\" \
+\"$RUN_DIR/preparation-tickets.jsonl\" \"$RUN_DIR/run-queue.jsonl\" \
+\"$RUN_DIR/results.jsonl\" \"$RUN_DIR/knowledge.md\" \"$RUN_DIR/logbook.md\" \
+\"$RUN_DIR/blogpost-notes.md\"; ctox queue add --title prep-runtime --prompt x; \
+test -f \"$RUN_DIR/controller.json\" && test -f \"$RUN_DIR/ticket-map.jsonl\" && \
+test -f \"$RUN_DIR/preparation-tickets.jsonl\" && test -f \"$RUN_DIR/run-queue.jsonl\" && \
+test -f \"$RUN_DIR/results.jsonl\" && test -f \"$RUN_DIR/knowledge.md\" && \
+test -f \"$RUN_DIR/logbook.md\" && test -f \"$RUN_DIR/blogpost-notes.md\""
+        );
+
+        assert!(guard.violation_for_first_exec(&command).is_none());
     }
 
     #[test]
