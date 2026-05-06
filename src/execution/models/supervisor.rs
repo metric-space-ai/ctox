@@ -199,9 +199,10 @@ impl ManagedBackendRole {
                     .as_ref()
                     .and_then(|state| {
                         state
-                            .engine_model
+                            .active_model
                             .clone()
-                            .or_else(|| state.active_model.clone())
+                            .or_else(|| state.requested_model.clone())
+                            .or_else(|| state.engine_model.clone())
                             .or_else(|| state.base_model.clone())
                     })
                     .filter(|value| !value.trim().is_empty())
@@ -3740,6 +3741,42 @@ mod tests {
         assert!(!env.contains_key("CTOX_CHAT_SHARE_AUXILIARY_GPUS"));
         assert!(!env.contains_key("CTOX_UNUSED_LEGACY_SETTING"));
         assert!(!env.contains_key("CTOX_SHOULD_NOT_LEAK"));
+    }
+
+    #[test]
+    fn managed_chat_spec_prefers_active_model_over_stale_engine_model() {
+        let root = temp_root("chat-spec-prefers-active-model");
+        runtime_env::save_runtime_env_map(&root, &BTreeMap::new()).unwrap();
+        runtime_state::persist_runtime_state(
+            &root,
+            &runtime_state::InferenceRuntimeState {
+                version: 11,
+                source: runtime_state::InferenceSource::Local,
+                local_runtime: runtime_state::LocalRuntimeKind::Candle,
+                base_model: Some("Qwen/Qwen3.5-27B".to_string()),
+                requested_model: Some("Qwen/Qwen3.6-35B-A3B".to_string()),
+                active_model: Some("Qwen/Qwen3.6-35B-A3B".to_string()),
+                engine_model: Some("Qwen/Qwen3.5-27B".to_string()),
+                engine_port: Some(1235),
+                configured_context_tokens: Some(131_072),
+                realized_context_tokens: Some(131_072),
+                upstream_base_url: runtime_state::local_upstream_base_url(1235),
+                local_preset: Some("Quality".to_string()),
+                boost: runtime_state::BoostRuntimeState::default(),
+                adapter_tuning: runtime_state::AdapterRuntimeTuning::default(),
+                embedding: runtime_state::AuxiliaryRuntimeState::default(),
+                transcription: runtime_state::AuxiliaryRuntimeState::default(),
+                speech: runtime_state::AuxiliaryRuntimeState::default(),
+                vision: runtime_state::AuxiliaryRuntimeState::default(),
+            },
+        )
+        .unwrap();
+
+        let spec = ManagedBackendRole::Chat.spec(&root);
+        assert_eq!(spec.request_model, "Qwen/Qwen3.6-35B-A3B");
+        assert_eq!(spec.display_model, "Qwen/Qwen3.6-35B-A3B");
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

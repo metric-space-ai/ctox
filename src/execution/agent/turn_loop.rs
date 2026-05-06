@@ -13,6 +13,8 @@ use std::sync::OnceLock;
 use std::time::Duration;
 use toml::Value as TomlValue;
 
+use crate::inference::supervisor;
+
 /// Per-conversation refresh accounting since the last continuity refresh.
 /// Lives in process memory so that restarts do not preserve it — that is
 /// fine: a restart always starts a fresh budget window.
@@ -352,6 +354,11 @@ where
     emit("runtime-resolve");
     let runtime = runtime_kernel::InferenceRuntimeKernel::resolve(root)?;
     emit("runtime-settings");
+    if runtime.state.source.is_local() {
+        emit("runtime-backend-ready");
+        supervisor::ensure_chat_backend_ready(root, false)
+            .context("failed to ensure local chat backend before direct session")?;
+    }
     let operator_settings = runtime_env::effective_operator_env_map(root).unwrap_or_default();
     emit("session-start");
     let mut owned_session = if session.is_none() {

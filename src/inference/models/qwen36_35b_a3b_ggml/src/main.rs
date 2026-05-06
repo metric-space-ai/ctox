@@ -51,7 +51,7 @@ Local CTOX requirements:
 - If the next action requires a command, filesystem change, runtime inspection, benchmark run, ticket/state update, or artifact verification, your entire assistant message must be exactly one tool call and no prose.
 - Use the exact tool name from the available tools.
 - Do not use Markdown fences for tool calls.
-- Do not write a <think> block. Emit the tool call directly.
+- Keep any thinking concise, close it before calling a tool, and do not place tool calls inside thinking content.
 - After tool output is returned, either call another tool or give the final answer only when the requested durable result has been verified."#;
 
 #[derive(Parser, Debug, Clone)]
@@ -647,7 +647,21 @@ fn render_chat_prompt(req: &ResponsesCreateRequest) -> String {
         out.push_str("<|im_end|>\n");
     }
     out.push_str("<|im_start|>assistant\n");
+    if qwen_thinking_enabled(req) {
+        out.push_str("<think>\n");
+    } else {
+        out.push_str("<think>\n\n</think>\n\n");
+    }
     out
+}
+
+fn qwen_thinking_enabled(req: &ResponsesCreateRequest) -> bool {
+    req.reasoning
+        .as_ref()
+        .and_then(|reasoning| reasoning.get("effort"))
+        .and_then(Value::as_str)
+        .map(|effort| !matches!(effort, "none" | "off" | "disabled"))
+        .unwrap_or(true)
 }
 
 fn render_system_prompt(req: &ResponsesCreateRequest) -> String {
@@ -818,7 +832,21 @@ fn clean_model_output(text: &str) -> String {
     if let Some(pos) = out.find("\n> EOF by user") {
         out.truncate(pos);
     }
+    out = strip_prompt_opened_think_block(&out);
     strip_think_blocks(&out).trim().to_string()
+}
+
+fn strip_prompt_opened_think_block(text: &str) -> String {
+    let Some(end) = text.find("</think>") else {
+        return text.to_string();
+    };
+    let before_close = &text[..end];
+    if before_close.contains("<think>") {
+        return text.to_string();
+    }
+    text[end + "</think>".len()..]
+        .trim_start_matches(['\n', '\r'])
+        .to_string()
 }
 
 fn strip_think_blocks(text: &str) -> String {
@@ -1184,9 +1212,27 @@ mod tests {
         assert!(prompt.contains("<name>exec_command</name>"));
         assert!(prompt.contains("<tool_call>\n<function=exec_command>"));
         assert!(prompt.contains("<parameter=cmd>\nprintf hello\n</parameter>"));
-        assert!(prompt.contains("Do not write a <think> block"));
+        assert!(prompt.contains("close it before calling a tool"));
         assert!(!prompt.contains("/no_think"));
-        assert!(!prompt.contains("<think>\n\n</think>"));
+        assert!(prompt.ends_with("<|im_start|>assistant\n<think>\n"));
+    }
+
+    #[test]
+    fn render_prompt_can_disable_qwen_thinking_with_reasoning_none_effort() {
+        let mut req = test_request();
+        req.reasoning = Some(json!({"effort":"none"}));
+        let prompt = render_chat_prompt(&req);
+
+        assert!(prompt.ends_with("<|im_start|>assistant\n<think>\n\n</think>\n\n"));
+    }
+
+    #[test]
+    fn clean_output_strips_prompt_opened_thinking_prefix() {
+        let raw = "Need a shell inspection.\n</think>\n\n<tool_call>\n<function=exec_command>\n<parameter=cmd>\npwd\n</parameter>\n</function>\n</tool_call>";
+        let cleaned = clean_model_output(raw);
+
+        assert!(cleaned.starts_with("<tool_call>"));
+        assert!(!cleaned.contains("Need a shell inspection"));
     }
 
     #[test]

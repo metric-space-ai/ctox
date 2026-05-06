@@ -279,9 +279,9 @@ fn resolve_primary_generation(
         return None;
     }
     let request_model = state
-        .engine_model
-        .clone()
-        .or_else(|| state.active_or_selected_model().map(ToOwned::to_owned))
+        .active_or_selected_model()
+        .map(ToOwned::to_owned)
+        .or_else(|| state.engine_model.clone())
         .filter(|value| !value.trim().is_empty())?;
     let runtime = engine::runtime_config_for_model(&request_model)
         .unwrap_or_else(|_| engine::default_runtime_config(engine::LocalModelFamily::Qwen35Vision));
@@ -441,6 +441,48 @@ mod tests {
             Some("")
         );
         assert_eq!(resolved.internal_responses_base_url(), "/v1");
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn resolves_primary_generation_prefers_active_model_over_stale_engine_model() {
+        let root = make_temp_root();
+        runtime_env::save_runtime_env_map(&root, &BTreeMap::new()).unwrap();
+        runtime_state::persist_runtime_state(
+            &root,
+            &runtime_state::InferenceRuntimeState {
+                version: 11,
+                source: runtime_state::InferenceSource::Local,
+                local_runtime: runtime_state::LocalRuntimeKind::Candle,
+                base_model: Some("Qwen/Qwen3.5-27B".to_string()),
+                requested_model: Some("Qwen/Qwen3.6-35B-A3B".to_string()),
+                active_model: Some("Qwen/Qwen3.6-35B-A3B".to_string()),
+                engine_model: Some("Qwen/Qwen3.5-27B".to_string()),
+                engine_port: Some(1235),
+                configured_context_tokens: Some(131_072),
+                realized_context_tokens: Some(131_072),
+                upstream_base_url: runtime_state::local_upstream_base_url(1235),
+                local_preset: Some("Quality".to_string()),
+                boost: runtime_state::BoostRuntimeState::default(),
+                adapter_tuning: runtime_state::AdapterRuntimeTuning::default(),
+                embedding: runtime_state::AuxiliaryRuntimeState::default(),
+                transcription: runtime_state::AuxiliaryRuntimeState::default(),
+                speech: runtime_state::AuxiliaryRuntimeState::default(),
+                vision: runtime_state::AuxiliaryRuntimeState::default(),
+            },
+        )
+        .unwrap();
+
+        let resolved = InferenceRuntimeKernel::resolve(&root).unwrap();
+        assert_eq!(
+            resolved
+                .primary_generation
+                .as_ref()
+                .map(|binding| binding.request_model.as_str()),
+            Some("Qwen/Qwen3.6-35B-A3B")
+        );
+        assert_eq!(resolved.turn_context_tokens(), 131_072);
 
         std::fs::remove_dir_all(root).unwrap();
     }
