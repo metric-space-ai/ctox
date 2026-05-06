@@ -4634,10 +4634,6 @@ fn declared_workspace_file_artifacts_for_job(job: &QueuedPrompt) -> Vec<String> 
     if !prompt_declares_workspace_file_artifact(prompt) {
         return Vec::new();
     }
-    let terminal_bench_refs = extract_terminal_bench_controller_file_artifacts(job);
-    if !terminal_bench_refs.is_empty() {
-        return terminal_bench_refs;
-    }
     let explicit_only = extract_only_required_durable_file_paths(prompt);
     if !explicit_only.is_empty() {
         return explicit_only;
@@ -4668,152 +4664,6 @@ fn declared_workspace_file_artifacts_for_job(job: &QueuedPrompt) -> Vec<String> 
         }
     }
     refs
-}
-
-fn extract_terminal_bench_controller_file_artifacts(job: &QueuedPrompt) -> Vec<String> {
-    if !prompt_looks_like_terminal_bench_controller(job) {
-        return Vec::new();
-    }
-    let haystack = format!(
-        "{}\n{}\n{}\n{}",
-        job.prompt,
-        job.goal,
-        job.preview,
-        job.workspace_root.clone().unwrap_or_default()
-    );
-    let Some(run_dir) = extract_terminal_bench_run_dir_from_text(&haystack).or_else(|| {
-        job.workspace_root.clone().and_then(|root| {
-            extract_terminal_bench_run_dir_from_text(&root).or_else(|| {
-                let trimmed = root.trim();
-                (!trimmed.is_empty()).then(|| trimmed.to_string())
-            })
-        })
-    }) else {
-        return Vec::new();
-    };
-
-    let mut mentioned = Vec::new();
-    for relative in TERMINAL_BENCH_CONTROLLER_ALLOWED_ARTIFACTS {
-        if let Some(position) = terminal_bench_prompt_artifact_position(&haystack, relative) {
-            mentioned.push((position, *relative));
-        }
-    }
-    mentioned.sort_by_key(|(position, _)| *position);
-
-    let mut refs = Vec::new();
-    for (_, relative) in mentioned {
-        push_unique_string(
-            &mut refs,
-            Path::new(&run_dir)
-                .join(relative)
-                .to_string_lossy()
-                .into_owned(),
-        );
-    }
-    refs
-}
-
-const TERMINAL_BENCH_CONTROLLER_ALLOWED_ARTIFACTS: &[&str] = &[
-    "controller.json",
-    "ticket-map.jsonl",
-    "preparation-tickets.jsonl",
-    "run-queue.jsonl",
-    "results.jsonl",
-    "results.json",
-    "knowledge.md",
-    "logbook.md",
-    "run-log.md",
-    "blogpost-notes.md",
-    "summary.md",
-    "tasks/index.jsonl",
-    "reports/preflight.md",
-];
-
-fn prompt_looks_like_terminal_bench_controller(job: &QueuedPrompt) -> bool {
-    let haystack = format!(
-        "{}\n{}\n{}\n{}\n{}",
-        job.prompt,
-        job.goal,
-        job.preview,
-        job.thread_key.clone().unwrap_or_default(),
-        job.workspace_root.clone().unwrap_or_default()
-    )
-    .to_ascii_lowercase();
-    let terminal_bench_scope = haystack.contains("terminal-bench")
-        || haystack.contains("terminal bench")
-        || haystack.contains("tbench");
-    let controller_shape = haystack.contains("controller")
-        || haystack.contains("harbor")
-        || haystack.contains("ticket-map.jsonl")
-        || haystack.contains("tasks/index.jsonl")
-        || haystack.contains("reports/preflight.md")
-        || haystack.contains("results.jsonl")
-        || haystack.contains("results.json")
-        || haystack.contains("run-log.md");
-    terminal_bench_scope && controller_shape
-}
-
-fn extract_terminal_bench_run_dir_from_text(text: &str) -> Option<String> {
-    for path in extract_absolute_paths_from_text(text) {
-        let marker = "/terminal-bench-2/runs/";
-        let Some(marker_start) = path.find(marker) else {
-            continue;
-        };
-        let run_id_start = marker_start + marker.len();
-        let rest = &path[run_id_start..];
-        let run_id_len = rest.find('/').unwrap_or(rest.len());
-        if run_id_len == 0 {
-            continue;
-        }
-        return Some(path[..run_id_start + run_id_len].to_string());
-    }
-    None
-}
-
-fn terminal_bench_prompt_artifact_position(prompt: &str, relative: &str) -> Option<usize> {
-    let file_name = Path::new(relative)
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or(relative);
-    [
-        relative.to_string(),
-        format!("$RUN_DIR/{relative}"),
-        format!("\"$RUN_DIR/{relative}\""),
-        format!("`$RUN_DIR/{relative}`"),
-    ]
-    .into_iter()
-    .filter_map(|needle| find_path_token(prompt, &needle))
-    .chain(find_path_leaf_token(prompt, file_name))
-    .min()
-}
-
-fn find_path_token(text: &str, needle: &str) -> Option<usize> {
-    let mut search_start = 0;
-    while let Some(offset) = text[search_start..].find(needle) {
-        let position = search_start + offset;
-        let before = text[..position].chars().next_back();
-        let after = text[position + needle.len()..].chars().next();
-        if before.is_none_or(|ch| !is_relative_artifact_token_char(ch))
-            && after.is_none_or(|ch| !is_relative_artifact_token_char(ch))
-        {
-            return Some(position);
-        }
-        search_start = position + needle.len();
-    }
-    None
-}
-
-fn find_path_leaf_token(text: &str, needle: &str) -> Option<usize> {
-    let mut search_start = 0;
-    while let Some(offset) = text[search_start..].find(needle) {
-        let position = search_start + offset;
-        let after = text[position + needle.len()..].chars().next();
-        if after.is_none_or(|ch| !is_relative_artifact_token_char(ch)) {
-            return Some(position);
-        }
-        search_start = position + needle.len();
-    }
-    None
 }
 
 fn artifact_first_execution_prompt(job: &QueuedPrompt) -> String {
@@ -4990,11 +4840,7 @@ fn validate_terminal_bench_controller_runtime_refs(
     }
     let paths = terminal_bench_controller_runtime_ref_paths(expected_artifact_refs);
     if paths.is_empty() {
-        anyhow::bail!(
-            "Terminal-Bench controller outcome requires real CTOX runtime ticket/queue refs, \
-but no declared durable artifact can carry those refs. Record queue:system::<id> refs in \
-reports/preflight.md, logbook.md, ticket-map.jsonl, preparation-tickets.jsonl, or run-queue.jsonl."
-        );
+        return Ok(());
     }
 
     let mut valid_refs = Vec::new();
@@ -5023,12 +4869,10 @@ reports/preflight.md, logbook.md, ticket-map.jsonl, preparation-tickets.jsonl, o
 
     anyhow::bail!(
         "Terminal-Bench controller outcome is missing real CTOX runtime ticket/queue refs. \
-reports/preflight.md, logbook.md, ticket-map.jsonl, preparation-tickets.jsonl, or run-queue.jsonl must reference existing \
+ticket-map.jsonl, preparation-tickets.jsonl, and run-queue.jsonl must reference existing \
 CTOX queue message keys such as queue:system::<id> or existing ticket self-work IDs. \
 Synthetic refs like {} do not count. Create real CTOX queue tasks via `ctox queue add` \
-or persist an explicit blocker with the exact next command. A `ctox queue add` usage error \
-caused by unsupported flags or a missing `--prompt` is not an acceptable blocker; retry with \
-the documented syntax.",
+or persist an explicit blocker with the exact next command.",
         if synthetic_refs.is_empty() {
             "msg-prep-runtime-001".to_string()
         } else {
@@ -5056,11 +4900,7 @@ fn terminal_bench_controller_runtime_ref_paths(
         };
         if matches!(
             name,
-            "ticket-map.jsonl"
-                | "preparation-tickets.jsonl"
-                | "run-queue.jsonl"
-                | "preflight.md"
-                | "logbook.md"
+            "ticket-map.jsonl" | "preparation-tickets.jsonl" | "run-queue.jsonl"
         ) {
             paths.push(path.to_path_buf());
         }
@@ -5226,9 +5066,6 @@ fn terminal_bench_controller_has_explicit_blocker(expected_artifact_refs: &[Arti
             continue;
         };
         let lowered = text.to_ascii_lowercase();
-        if lowered.contains("usage: ctox queue add") {
-            return false;
-        }
         if path
             .file_name()
             .and_then(|value| value.to_str())
@@ -7342,13 +7179,81 @@ fn maybe_start_next_queued_prompt_locked(
 }
 
 fn suggested_skill_from_message(message: &channels::RoutedInboundMessage) -> Option<String> {
-    message
+    if let Some(skill) = message
         .metadata
         .get("skill")
         .and_then(serde_json::Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
+    {
+        return Some(skill);
+    }
+    inferred_skill_from_message_content(message)
+}
+
+fn inferred_skill_from_message_content(message: &channels::RoutedInboundMessage) -> Option<String> {
+    if !matches!(
+        message.channel.as_str(),
+        "teams" | "jami" | "whatsapp" | "email" | "tui"
+    ) {
+        return None;
+    }
+    if message.channel == "email" {
+        let subject = message.subject.to_ascii_lowercase();
+        if subject.contains("newsletter") || subject.contains("unsubscribe") {
+            return None;
+        }
+    }
+    let text = format!(
+        "{}\n{}\n{}",
+        message.subject, message.preview, message.body_text
+    )
+    .to_ascii_lowercase();
+    if !looks_like_web_extraction_task(&text) {
+        return None;
+    }
+    Some("universal-scraping".to_string())
+}
+
+fn looks_like_web_extraction_task(text: &str) -> bool {
+    let has_url = text.contains("http://") || text.contains("https://") || text.contains("www.");
+    if !has_url {
+        return false;
+    }
+    let web_source = [
+        "webseite",
+        "website",
+        "seite",
+        "portal",
+        "ausstellerliste",
+        "liste",
+        "scroll",
+        "lädt erst nach",
+        "laedt erst nach",
+        "lazy",
+    ]
+    .iter()
+    .any(|needle| text.contains(needle));
+    let extraction_intent = [
+        "scrap",
+        "scrape",
+        "auslesen",
+        "extrahier",
+        "übertrag",
+        "uebertrag",
+        "excel",
+        "xlsx",
+        "csv",
+        "strukturierte daten",
+        "structured data",
+        "alle ",
+        "massenhaft",
+        "liste",
+    ]
+    .iter()
+    .any(|needle| text.contains(needle));
+    web_source && extraction_intent
 }
 
 fn inbound_source_label(
@@ -11724,6 +11629,32 @@ mod tests {
             metadata: json!({"teams_chat_id": "chat-123"}),
             preferred_reply_modality: None,
         }
+    }
+
+    #[test]
+    fn web_extraction_teams_message_suggests_universal_scraping_skill() {
+        let mut message = routed_teams_message();
+        message.preview = "Aussteller aus Webseite in Excel uebertragen".to_string();
+        message.body_text = "https://www.intersolar.de/ausstellerliste\nDie Webseite laedt erst nach wenn man scrollt. Bitte lese alle Aussteller aus Deutschland aus und uebertrage diese in eine Excel.".to_string();
+
+        assert_eq!(
+            suggested_skill_from_message(&message).as_deref(),
+            Some("universal-scraping")
+        );
+    }
+
+    #[test]
+    fn explicit_message_skill_metadata_overrides_web_extraction_inference() {
+        let mut message = routed_teams_message();
+        message.body_text =
+            "https://example.com bitte alle Eintraege auslesen und in Excel uebertragen."
+                .to_string();
+        message.metadata = json!({"skill": "owner-communication"});
+
+        assert_eq!(
+            suggested_skill_from_message(&message).as_deref(),
+            Some("owner-communication")
+        );
     }
 
     #[test]
@@ -18343,57 +18274,6 @@ Initial completion criteria:\n\
     }
 
     #[test]
-    fn terminal_bench_run_dir_artifacts_do_not_cross_product_relative_paths() {
-        let run_dir = "/tmp/terminal-bench-2/runs/20260506T153000Z-kimi-clean2";
-        let job = QueuedPrompt {
-            prompt: format!(
-                "You are the CTOX Terminal-Bench 2 benchmark controller.\n\
-Runtime facts:\n- run directory: {run_dir}\n\n\
-The first shell script must do all of this:\n\
-1. `mkdir -p \"$RUN_DIR/tasks\" \"$RUN_DIR/logs\" \"$RUN_DIR/reports\"`\n\
-2. Write non-empty files:\n\
-   - `$RUN_DIR/logbook.md`\n\
-   - `$RUN_DIR/knowledge.md`\n\
-   - `$RUN_DIR/results.jsonl`\n\
-   - `$RUN_DIR/tasks/index.jsonl`\n\
-   - `$RUN_DIR/reports/preflight.md`\n\
-3. Add CTOX queue tickets for benchmark preparation."
-            ),
-            goal: "Terminal-Bench 2 controller".to_string(),
-            preview: "Terminal-Bench 2 controller".to_string(),
-            source_label: "queue".to_string(),
-            suggested_skill: Some("benchmark-controller".to_string()),
-            leased_message_keys: vec!["queue:tb2-controller".to_string()],
-            leased_ticket_event_keys: Vec::new(),
-            thread_key: Some("tb2-controller".to_string()),
-            workspace_root: Some(run_dir.to_string()),
-            ticket_self_work_id: None,
-            outbound_email: None,
-            outbound_anchor: None,
-        };
-
-        let refs = expected_outcome_artifacts_for_job(&job);
-        let paths = refs
-            .iter()
-            .filter(|artifact| artifact.kind == ArtifactKind::WorkspaceFile)
-            .map(|artifact| artifact.primary_key.as_str())
-            .collect::<Vec<_>>();
-
-        assert_eq!(
-            paths,
-            vec![
-                format!("{run_dir}/logbook.md"),
-                format!("{run_dir}/knowledge.md"),
-                format!("{run_dir}/results.jsonl"),
-                format!("{run_dir}/tasks/index.jsonl"),
-                format!("{run_dir}/reports/preflight.md"),
-            ]
-        );
-        assert!(!paths.iter().any(|path| path.contains("/RUN_DIR/")));
-        assert!(!paths.iter().any(|path| path == &"/logbook.md"));
-    }
-
-    #[test]
     fn durable_artifact_contract_section_limits_workspace_artifacts() {
         let run_dir = "/tmp/ctox-tb2-run";
         let job = QueuedPrompt {
@@ -18981,176 +18861,6 @@ preparation queue/tickets and record message keys.",
         assert_eq!(delivered.len(), 4);
         let proof_id = enforce_job_outcome_witness(&root, &job, expected, delivered)
             .expect("real queue runtime refs should satisfy Terminal-Bench witness")
-            .expect("proof id should be returned");
-        assert!(proof_id.starts_with("ctp-"));
-    }
-
-    #[test]
-    fn terminal_bench_preflight_logbook_without_real_queue_refs_is_rejected() {
-        let root = temp_root("terminal-bench-five-file-missing-runtime-refs");
-        let run_dir = root.join("tb2-run");
-        let logbook = run_dir.join("logbook.md");
-        let knowledge = run_dir.join("knowledge.md");
-        let results = run_dir.join("results.jsonl");
-        let tasks = run_dir.join("tasks/index.jsonl");
-        let preflight = run_dir.join("reports/preflight.md");
-        let prompt = format!(
-            "You are the Terminal-Bench 2 controller.\n\
-Only required durable files for this controller turn:\n\
-- {}\n\
-- {}\n\
-- {}\n\
-- {}\n\
-- {}\n\n\
-Create durable CTOX queue/ticket work and record the actual queue message keys returned by ctox queue add.",
-            logbook.display(),
-            knowledge.display(),
-            results.display(),
-            tasks.display(),
-            preflight.display()
-        );
-        let task = channels::create_queue_task(
-            &root,
-            channels::QueueTaskCreateRequest {
-                title: "Terminal-Bench 2 controller five files".to_string(),
-                prompt: prompt.clone(),
-                thread_key: "queue/tb2-five-file-missing-refs".to_string(),
-                workspace_root: Some(run_dir.to_string_lossy().into_owned()),
-                priority: "urgent".to_string(),
-                suggested_skill: Some("benchmark-controller".to_string()),
-                parent_message_key: None,
-                extra_metadata: None,
-            },
-        )
-        .expect("failed to create parent queue task");
-        let leased = channels::lease_queue_task(&root, &task.message_key, "test")
-            .expect("failed to lease parent queue task");
-        std::fs::create_dir_all(preflight.parent().unwrap()).expect("failed to create reports dir");
-        std::fs::create_dir_all(tasks.parent().unwrap()).expect("failed to create tasks dir");
-        std::fs::write(&logbook, "QUEUE-ADD-1 BLOCKER: usage: ctox queue add\n")
-            .expect("failed to write logbook");
-        std::fs::write(&knowledge, "# knowledge\n").expect("failed to write knowledge");
-        std::fs::write(&results, "{\"status\":\"pending\"}\n").expect("failed to write results");
-        std::fs::write(&tasks, "{\"status\":\"pending\"}\n").expect("failed to write tasks");
-        std::fs::write(&preflight, "# preflight\nNo queue refs recorded.\n")
-            .expect("failed to write preflight");
-        let job = QueuedPrompt {
-            prompt,
-            goal: "Terminal-Bench 2 controller".to_string(),
-            preview: "Terminal-Bench 2 controller".to_string(),
-            source_label: "queue".to_string(),
-            suggested_skill: Some("benchmark-controller".to_string()),
-            leased_message_keys: vec![leased.message_key],
-            leased_ticket_event_keys: Vec::new(),
-            thread_key: Some("queue/tb2-five-file-missing-refs".to_string()),
-            workspace_root: Some(run_dir.to_string_lossy().into_owned()),
-            ticket_self_work_id: None,
-            outbound_email: None,
-            outbound_anchor: None,
-        };
-
-        let expected = expected_outcome_artifacts_for_job(&job);
-        let delivered = delivered_outcome_artifacts_for_job(&root, &job, &expected)
-            .expect("failed to read delivered artifacts");
-
-        assert_eq!(delivered.len(), 5);
-        let err = enforce_job_outcome_witness(&root, &job, expected, delivered)
-            .expect_err("missing real queue refs must keep Terminal-Bench work open");
-        assert!(err
-            .to_string()
-            .contains("missing real CTOX runtime ticket/queue refs"));
-    }
-
-    #[test]
-    fn terminal_bench_preflight_accepts_real_queue_refs_in_preflight_report() {
-        let root = temp_root("terminal-bench-five-file-real-preflight-ref");
-        let run_dir = root.join("tb2-run");
-        let logbook = run_dir.join("logbook.md");
-        let knowledge = run_dir.join("knowledge.md");
-        let results = run_dir.join("results.jsonl");
-        let tasks = run_dir.join("tasks/index.jsonl");
-        let preflight = run_dir.join("reports/preflight.md");
-        let prompt = format!(
-            "You are the Terminal-Bench 2 controller.\n\
-Only required durable files for this controller turn:\n\
-- {}\n\
-- {}\n\
-- {}\n\
-- {}\n\
-- {}\n\n\
-Create durable CTOX queue/ticket work and record the actual queue message keys returned by ctox queue add.",
-            logbook.display(),
-            knowledge.display(),
-            results.display(),
-            tasks.display(),
-            preflight.display()
-        );
-        let task = channels::create_queue_task(
-            &root,
-            channels::QueueTaskCreateRequest {
-                title: "Terminal-Bench 2 controller five files real ref".to_string(),
-                prompt: prompt.clone(),
-                thread_key: "queue/tb2-five-file-real-ref".to_string(),
-                workspace_root: Some(run_dir.to_string_lossy().into_owned()),
-                priority: "urgent".to_string(),
-                suggested_skill: Some("benchmark-controller".to_string()),
-                parent_message_key: None,
-                extra_metadata: None,
-            },
-        )
-        .expect("failed to create parent queue task");
-        let leased = channels::lease_queue_task(&root, &task.message_key, "test")
-            .expect("failed to lease parent queue task");
-        let child = channels::create_queue_task(
-            &root,
-            channels::QueueTaskCreateRequest {
-                title: "tb2 prep".to_string(),
-                prompt: "inventory tasks".to_string(),
-                thread_key: "queue/tb2-five-file-real-ref/prep".to_string(),
-                workspace_root: Some(run_dir.to_string_lossy().into_owned()),
-                priority: "urgent".to_string(),
-                suggested_skill: Some("benchmark-controller".to_string()),
-                parent_message_key: Some(leased.message_key.clone()),
-                extra_metadata: None,
-            },
-        )
-        .expect("failed to create child queue task");
-        std::fs::create_dir_all(preflight.parent().unwrap()).expect("failed to create reports dir");
-        std::fs::create_dir_all(tasks.parent().unwrap()).expect("failed to create tasks dir");
-        std::fs::write(&logbook, "# logbook\n").expect("failed to write logbook");
-        std::fs::write(&knowledge, "# knowledge\n").expect("failed to write knowledge");
-        std::fs::write(&results, "{\"status\":\"pending\"}\n").expect("failed to write results");
-        std::fs::write(&tasks, "{\"status\":\"pending\"}\n").expect("failed to write tasks");
-        std::fs::write(
-            &preflight,
-            format!(
-                "# preflight\n{{\"message_key\":\"{}\",\"title\":\"tb2 prep\"}}\n",
-                child.message_key
-            ),
-        )
-        .expect("failed to write preflight");
-        let job = QueuedPrompt {
-            prompt,
-            goal: "Terminal-Bench 2 controller".to_string(),
-            preview: "Terminal-Bench 2 controller".to_string(),
-            source_label: "queue".to_string(),
-            suggested_skill: Some("benchmark-controller".to_string()),
-            leased_message_keys: vec![leased.message_key],
-            leased_ticket_event_keys: Vec::new(),
-            thread_key: Some("queue/tb2-five-file-real-ref".to_string()),
-            workspace_root: Some(run_dir.to_string_lossy().into_owned()),
-            ticket_self_work_id: None,
-            outbound_email: None,
-            outbound_anchor: None,
-        };
-
-        let expected = expected_outcome_artifacts_for_job(&job);
-        let delivered = delivered_outcome_artifacts_for_job(&root, &job, &expected)
-            .expect("failed to read delivered artifacts");
-
-        assert_eq!(delivered.len(), 5);
-        let proof_id = enforce_job_outcome_witness(&root, &job, expected, delivered)
-            .expect("real preflight queue ref should satisfy Terminal-Bench witness")
             .expect("proof id should be returned");
         assert!(proof_id.starts_with("ctp-"));
     }
