@@ -353,7 +353,7 @@ fn load_artifact_terminal_state(
         csm::ArtifactKind::WorkspaceFile => {
             let path = Path::new(&artifact.primary_key);
             if path.is_file() {
-                Ok(Some("present".to_string()))
+                Ok(Some(artifact.expected_terminal_state.clone()))
             } else {
                 Ok(None)
             }

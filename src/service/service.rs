@@ -55,6 +55,8 @@ use std::sync::Mutex;
 use std::sync::Once;
 use std::thread;
 use std::time::Duration;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 #[cfg(not(unix))]
 use tiny_http::Header;
 #[cfg(not(unix))]
@@ -4387,6 +4389,11 @@ fn no_cascade_review_block(
 
 fn expected_outcome_artifacts_for_job(job: &QueuedPrompt) -> Vec<ArtifactRef> {
     let mut refs = Vec::new();
+    let workspace_terminal_state = if workspace_file_artifacts_require_fresh_write(job) {
+        "fresh"
+    } else {
+        "present"
+    };
     if let Some(action) = job.outbound_email.as_ref() {
         refs.push(ArtifactRef {
             kind: ArtifactKind::OutboundEmail,
@@ -4427,7 +4434,7 @@ fn expected_outcome_artifacts_for_job(job: &QueuedPrompt) -> Vec<ArtifactRef> {
         refs.push(ArtifactRef {
             kind: ArtifactKind::WorkspaceFile,
             primary_key: path,
-            expected_terminal_state: "present".to_string(),
+            expected_terminal_state: workspace_terminal_state.to_string(),
         });
     }
     refs
@@ -4435,17 +4442,22 @@ fn expected_outcome_artifacts_for_job(job: &QueuedPrompt) -> Vec<ArtifactRef> {
 
 fn delivered_outcome_artifacts_for_job(
     root: &Path,
-    _job: &QueuedPrompt,
+    job: &QueuedPrompt,
     expected_artifact_refs: &[ArtifactRef],
 ) -> Result<Vec<ArtifactRef>> {
     if expected_artifact_refs.is_empty() {
         return Ok(Vec::new());
     }
     let conn = channels::open_channel_db(&root.join("runtime/ctox.sqlite3"))?;
+    let fresh_cutoff = workspace_artifact_fresh_cutoff_for_job(root, job);
     let mut delivered = Vec::new();
     for expected in expected_artifact_refs {
         if expected.kind == ArtifactKind::WorkspaceFile {
-            if Path::new(&expected.primary_key).is_file() {
+            let path = Path::new(&expected.primary_key);
+            if path.is_file()
+                && (expected.expected_terminal_state != "fresh"
+                    || workspace_file_is_fresh_enough(path, fresh_cutoff))
+            {
                 delivered.push(expected.clone());
             }
             continue;
@@ -4510,6 +4522,80 @@ fn delivered_outcome_artifacts_for_job(
         }
     }
     Ok(delivered)
+}
+
+fn workspace_file_artifacts_require_fresh_write(job: &QueuedPrompt) -> bool {
+    if declared_workspace_file_artifacts_for_job(job).is_empty() {
+        return false;
+    }
+    if is_terminal_bench_controller_artifact_job(job) {
+        return true;
+    }
+    let haystack = format!(
+        "{}\n{}\n{}\n{}\n{}",
+        job.prompt,
+        job.goal,
+        job.preview,
+        job.thread_key.clone().unwrap_or_default(),
+        job.workspace_root.clone().unwrap_or_default()
+    )
+    .to_ascii_lowercase();
+    haystack.contains("checkpoint-only")
+        || haystack.contains("checkpoint only")
+        || haystack.contains("write a durable checkpoint")
+        || haystack.contains("write a checkpoint")
+        || haystack.contains("required output files to update now")
+        || haystack.contains("required files to update now")
+        || haystack.contains("preserve and update")
+        || haystack.contains("update the required files")
+        || haystack.contains("must update")
+        || haystack.contains("update now")
+}
+
+fn workspace_artifact_fresh_cutoff_for_job(root: &Path, job: &QueuedPrompt) -> Option<SystemTime> {
+    let mut cutoff = None;
+    for message_key in &job.leased_message_keys {
+        let Ok(Some(task)) = channels::load_queue_task(root, message_key) else {
+            continue;
+        };
+        for value in [task.leased_at.as_deref(), Some(task.created_at.as_str())]
+            .into_iter()
+            .flatten()
+        {
+            if let Some(time) = parse_rfc3339_system_time(value) {
+                if cutoff.map_or(true, |current| time > current) {
+                    cutoff = Some(time);
+                }
+            }
+        }
+    }
+    cutoff
+}
+
+fn parse_rfc3339_system_time(value: &str) -> Option<SystemTime> {
+    let parsed = chrono::DateTime::parse_from_rfc3339(value).ok()?;
+    let secs = parsed.timestamp();
+    if secs < 0 {
+        return None;
+    }
+    Some(
+        UNIX_EPOCH
+            + Duration::from_secs(secs as u64)
+            + Duration::from_nanos(parsed.timestamp_subsec_nanos() as u64),
+    )
+}
+
+fn workspace_file_is_fresh_enough(path: &Path, cutoff: Option<SystemTime>) -> bool {
+    let Some(cutoff) = cutoff else {
+        return true;
+    };
+    let Ok(metadata) = path.metadata() else {
+        return false;
+    };
+    let Ok(modified) = metadata.modified() else {
+        return false;
+    };
+    modified.duration_since(cutoff).is_ok()
 }
 
 fn declared_workspace_file_artifacts_for_job(job: &QueuedPrompt) -> Vec<String> {
@@ -17582,6 +17668,130 @@ Start by discovering benchmark tasks."
             .expect("present file artifacts should satisfy witness")
             .expect("proof id should be returned");
 
+        assert!(proof_id.starts_with("ctp-"));
+    }
+
+    #[test]
+    fn checkpoint_workspace_artifacts_require_fresh_delivery_after_queue_lease() {
+        let root = temp_root("outcome-witness-stale-checkpoint-file");
+        let run_dir = root.join("tb2-run");
+        std::fs::create_dir_all(&run_dir).expect("failed to create run dir");
+        let controller = run_dir.join("controller.json");
+        let logbook = run_dir.join("logbook.md");
+        std::fs::write(&controller, "{}\n").expect("failed to write stale controller");
+        std::fs::write(&logbook, "# old\n").expect("failed to write stale logbook");
+        std::thread::sleep(Duration::from_secs(2));
+        let prompt = format!(
+            "CHECKPOINT-ONLY TERMINAL-BENCH RECOVERY SLICE\n\
+Required output files to update now:\n\
+- {}\n\
+- {}\n\
+Exit after the write command.",
+            controller.display(),
+            logbook.display()
+        );
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "checkpoint stale".to_string(),
+                prompt: prompt.clone(),
+                thread_key: "queue/checkpoint-stale".to_string(),
+                workspace_root: Some(run_dir.to_string_lossy().into_owned()),
+                priority: "urgent".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create queue task");
+        let leased = channels::lease_queue_task(&root, &task.message_key, "test")
+            .expect("failed to lease queue task");
+        let job = QueuedPrompt {
+            prompt,
+            goal: "checkpoint stale".to_string(),
+            preview: "checkpoint stale".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: None,
+            leased_message_keys: vec![leased.message_key],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("queue/checkpoint-stale".to_string()),
+            workspace_root: Some(run_dir.to_string_lossy().into_owned()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let expected = expected_outcome_artifacts_for_job(&job);
+        assert!(expected.iter().all(|artifact| {
+            artifact.kind != ArtifactKind::WorkspaceFile
+                || artifact.expected_terminal_state == "fresh"
+        }));
+        let delivered = delivered_outcome_artifacts_for_job(&root, &job, &expected)
+            .expect("failed to read delivered artifacts");
+
+        assert!(delivered.is_empty());
+        let err = enforce_job_outcome_witness(&root, &job, expected, delivered)
+            .expect_err("stale checkpoint files must not satisfy fresh outcome witness");
+        assert!(err.to_string().contains("dauerhafte Ergebnis-Artefakt"));
+    }
+
+    #[test]
+    fn checkpoint_workspace_artifacts_accept_fresh_delivery_after_queue_lease() {
+        let root = temp_root("outcome-witness-fresh-checkpoint-file");
+        let run_dir = root.join("tb2-run");
+        let controller = run_dir.join("controller.json");
+        let logbook = run_dir.join("logbook.md");
+        let prompt = format!(
+            "CHECKPOINT-ONLY TERMINAL-BENCH RECOVERY SLICE\n\
+Required output files to update now:\n\
+- {}\n\
+- {}\n\
+Exit after the write command.",
+            controller.display(),
+            logbook.display()
+        );
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "checkpoint fresh".to_string(),
+                prompt: prompt.clone(),
+                thread_key: "queue/checkpoint-fresh".to_string(),
+                workspace_root: Some(run_dir.to_string_lossy().into_owned()),
+                priority: "urgent".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create queue task");
+        let leased = channels::lease_queue_task(&root, &task.message_key, "test")
+            .expect("failed to lease queue task");
+        std::fs::create_dir_all(&run_dir).expect("failed to create run dir");
+        std::fs::write(&controller, "{\"phase\":\"checkpoint\"}\n")
+            .expect("failed to write fresh controller");
+        std::fs::write(&logbook, "# checkpoint\n").expect("failed to write fresh logbook");
+        let job = QueuedPrompt {
+            prompt,
+            goal: "checkpoint fresh".to_string(),
+            preview: "checkpoint fresh".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: None,
+            leased_message_keys: vec![leased.message_key],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("queue/checkpoint-fresh".to_string()),
+            workspace_root: Some(run_dir.to_string_lossy().into_owned()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+        let expected = expected_outcome_artifacts_for_job(&job);
+        let delivered = delivered_outcome_artifacts_for_job(&root, &job, &expected)
+            .expect("failed to read delivered artifacts");
+
+        assert_eq!(delivered.len(), 2);
+        let proof_id = enforce_job_outcome_witness(&root, &job, expected, delivered)
+            .expect("fresh checkpoint files should satisfy witness")
+            .expect("proof id should be returned");
         assert!(proof_id.starts_with("ctp-"));
     }
 
