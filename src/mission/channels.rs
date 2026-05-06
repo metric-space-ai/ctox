@@ -2454,6 +2454,8 @@ fn sync_channel(root: &Path, db_path: &Path, channel: &str, args: &[String]) -> 
 fn send_message(root: &Path, db_path: &Path, request: ChannelSendRequest) -> Result<Value> {
     let mut conn = open_channel_db(db_path)?;
     let request = resolve_outbound_subject(&conn, request)?;
+    enforce_external_work_ack_has_pipeline_backing(&conn, &request)?;
+    enforce_channel_attachment_support(&request)?;
     match request.channel.as_str() {
         "tui" => {
             let message_key = store_tui_outbound_message(&mut conn, &request)?;
@@ -2601,6 +2603,152 @@ fn send_message(root: &Path, db_path: &Path, request: ChannelSendRequest) -> Res
         }
         other => anyhow::bail!("unsupported channel send target: {other}"),
     }
+}
+
+fn enforce_channel_attachment_support(request: &ChannelSendRequest) -> Result<()> {
+    if request.channel == "teams" && !request.attachments.is_empty() {
+        anyhow::bail!(
+            "Teams outbound attachments are not implemented yet; refusing to send `{}` with {} attachment(s) because the Teams adapter would not deliver the files.",
+            request.thread_key,
+            request.attachments.len()
+        );
+    }
+    Ok(())
+}
+
+fn enforce_external_work_ack_has_pipeline_backing(
+    conn: &Connection,
+    request: &ChannelSendRequest,
+) -> Result<()> {
+    if !matches!(
+        request.channel.as_str(),
+        "teams" | "jami" | "whatsapp" | "meeting"
+    ) {
+        return Ok(());
+    }
+    if !body_promises_follow_up_work(&request.body) {
+        return Ok(());
+    }
+    if thread_has_open_work_backing(conn, &request.thread_key)? {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "outbound {} acknowledgement promises follow-up work but no durable queue, plan, or self-work item exists for thread `{}`. Create the pipeline item first, then send the acknowledgement.",
+        request.channel,
+        request.thread_key
+    )
+}
+
+fn body_promises_follow_up_work(body: &str) -> bool {
+    let normalized = format!(
+        "{} {}",
+        body.to_lowercase(),
+        normalize_deliverable_text(body)
+    );
+    text_mentions_any(
+        &normalized,
+        &[
+            "ich scrolle",
+            "ich uebertrage",
+            "ich übertrage",
+            "ich erstelle",
+            "ich bearbeite",
+            "ich kuemmere",
+            "ich kümmere",
+            "ich pruefe",
+            "ich prüfe",
+            "ich recherchiere",
+            "ich lese",
+            "ich extrahiere",
+            "ich sende",
+            "ich melde",
+            "ich mache",
+            "ich werde",
+            "werde ich",
+            "i will",
+            "i ll",
+            "i am going to",
+            "i will check",
+            "i will create",
+            "i will send",
+            "working on it",
+        ],
+    )
+}
+
+fn thread_has_open_work_backing(conn: &Connection, thread_key: &str) -> Result<bool> {
+    if open_queue_backing_exists(conn, thread_key)? {
+        return Ok(true);
+    }
+    if table_exists(conn, "planned_goals")? && open_plan_backing_exists(conn, thread_key)? {
+        return Ok(true);
+    }
+    if table_exists(conn, "ticket_self_work_items")?
+        && open_self_work_backing_exists(conn, thread_key)?
+    {
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+fn open_queue_backing_exists(conn: &Connection, thread_key: &str) -> Result<bool> {
+    let count: i64 = conn.query_row(
+        r#"
+        SELECT COUNT(*)
+        FROM communication_messages m
+        LEFT JOIN communication_routing_state r ON r.message_key = m.message_key
+        WHERE m.channel = 'queue'
+          AND m.direction = 'inbound'
+          AND m.thread_key = ?1
+          AND COALESCE(r.route_status, 'pending') NOT IN ('handled', 'cancelled', 'failed', 'superseded')
+        "#,
+        params![thread_key],
+        |row| row.get(0),
+    )?;
+    Ok(count > 0)
+}
+
+fn open_plan_backing_exists(conn: &Connection, thread_key: &str) -> Result<bool> {
+    let count: i64 = conn.query_row(
+        r#"
+        SELECT COUNT(*)
+        FROM planned_goals
+        WHERE thread_key = ?1
+          AND status NOT IN ('completed', 'closed', 'cancelled', 'failed', 'superseded')
+        "#,
+        params![thread_key],
+        |row| row.get(0),
+    )?;
+    Ok(count > 0)
+}
+
+fn open_self_work_backing_exists(conn: &Connection, thread_key: &str) -> Result<bool> {
+    let count: i64 = conn.query_row(
+        r#"
+        SELECT COUNT(*)
+        FROM ticket_self_work_items
+        WHERE state NOT IN ('closed', 'cancelled', 'failed', 'superseded', 'blocked')
+          AND (
+            json_extract(metadata_json, '$.thread_key') = ?1
+            OR json_extract(metadata_json, '$.parent_thread_key') = ?1
+            OR body_text LIKE '%' || ?1 || '%'
+          )
+        "#,
+        params![thread_key],
+        |row| row.get(0),
+    )?;
+    Ok(count > 0)
+}
+
+fn table_exists(conn: &Connection, table_name: &str) -> Result<bool> {
+    conn.query_row(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1 LIMIT 1",
+        params![table_name],
+        |_| Ok(true),
+    )
+    .optional()
+    .map(|value| value.unwrap_or(false))
+    .map_err(anyhow::Error::from)
 }
 
 fn load_message_from_conn(
@@ -7762,6 +7910,111 @@ mod tests {
 
         let _ = std::fs::remove_file(&db_path);
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn teams_work_ack_is_blocked_without_pipeline_backing() {
+        let root = std::env::temp_dir().join(format!(
+            "ctox-teams-ack-guard-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(root.join("runtime")).expect("failed to create runtime dir");
+        let db_path = root.join(DEFAULT_DB_RELATIVE_PATH);
+        let conn = open_channel_db(&db_path).expect("failed to open channel db");
+        let request = ChannelSendRequest {
+            channel: "teams".to_string(),
+            account_key: "teams:inf.yoda@example.test".to_string(),
+            thread_key: "teams:inf.yoda@example.test::chat::jill".to_string(),
+            body: "Danke für den Hinweis — verstanden. Ich scrolle die Seite vollständig durch und übertrage die Aussteller aus Deutschland in eine Excel.".to_string(),
+            subject: "(Teams)".to_string(),
+            to: Vec::new(),
+            cc: Vec::new(),
+            attachments: Vec::new(),
+            sender_display: None,
+            sender_address: None,
+            send_voice: false,
+            reviewed_founder_send: false,
+        };
+
+        let err = enforce_external_work_ack_has_pipeline_backing(&conn, &request)
+            .expect_err("work acknowledgement must require durable backing");
+        assert!(err.to_string().contains("promises follow-up work"));
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn teams_work_ack_is_allowed_with_queue_backing() {
+        let root = std::env::temp_dir().join(format!(
+            "ctox-teams-ack-backed-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("failed to create temp root");
+        let thread_key = "teams:inf.yoda@example.test::chat::jill";
+        create_queue_task(
+            &root,
+            QueueTaskCreateRequest {
+                title: "Intersolar-Aussteller Deutschland in Excel".to_string(),
+                prompt: "Scrape Intersolar and create the verified Excel artifact.".to_string(),
+                thread_key: thread_key.to_string(),
+                workspace_root: None,
+                priority: "high".to_string(),
+                suggested_skill: Some("universal-scraping".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create queue backing");
+        let conn =
+            open_channel_db(&root.join(DEFAULT_DB_RELATIVE_PATH)).expect("failed to reopen db");
+        let request = ChannelSendRequest {
+            channel: "teams".to_string(),
+            account_key: "teams:inf.yoda@example.test".to_string(),
+            thread_key: thread_key.to_string(),
+            body: "Danke, ich prüfe das und erstelle die Excel.".to_string(),
+            subject: "(Teams)".to_string(),
+            to: Vec::new(),
+            cc: Vec::new(),
+            attachments: Vec::new(),
+            sender_display: None,
+            sender_address: None,
+            send_voice: false,
+            reviewed_founder_send: false,
+        };
+
+        enforce_external_work_ack_has_pipeline_backing(&conn, &request)
+            .expect("queue-backed acknowledgement should be allowed");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn teams_send_rejects_attachments_until_graph_upload_is_implemented() {
+        let request = ChannelSendRequest {
+            channel: "teams".to_string(),
+            account_key: "teams:inf.yoda@example.test".to_string(),
+            thread_key: "teams:inf.yoda@example.test::chat::jill".to_string(),
+            body: "Hier ist die Excel.".to_string(),
+            subject: "(Teams)".to_string(),
+            to: Vec::new(),
+            cc: Vec::new(),
+            attachments: vec!["/tmp/result.xlsx".to_string()],
+            sender_display: None,
+            sender_address: None,
+            send_voice: false,
+            reviewed_founder_send: false,
+        };
+
+        let err = enforce_channel_attachment_support(&request)
+            .expect_err("Teams attachments must not be silently ignored");
+        assert!(err.to_string().contains("Teams outbound attachments"));
     }
 
     #[test]
