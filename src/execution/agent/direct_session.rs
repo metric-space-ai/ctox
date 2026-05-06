@@ -13,8 +13,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ctox_app_server_client::{
-    InProcessAppServerClient, InProcessClientStartArgs, InProcessServerEvent,
-    DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
+    DEFAULT_IN_PROCESS_CHANNEL_CAPACITY, InProcessAppServerClient, InProcessClientStartArgs,
+    InProcessServerEvent,
 };
 use ctox_app_server_protocol::{
     ClientRequest, JSONRPCNotification, RequestId, ServerNotification, ThreadCompactStartParams,
@@ -24,12 +24,12 @@ use ctox_app_server_protocol::{
 };
 use ctox_arg0::Arg0DispatchPaths;
 use ctox_cloud_requirements::cloud_requirements_loader;
-use ctox_core::config::{
-    find_codex_home, load_config_as_toml_with_cli_overrides, ConfigBuilder, ConfigOverrides,
-};
-use ctox_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use ctox_core::AuthManager;
 use ctox_core::ThreadManager;
+use ctox_core::config::{
+    ConfigBuilder, ConfigOverrides, find_codex_home, load_config_as_toml_with_cli_overrides,
+};
+use ctox_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use ctox_feedback::CodexFeedback;
 use ctox_protocol::config_types::SandboxMode;
 use ctox_protocol::openai_models::ReasoningEffort;
@@ -144,12 +144,13 @@ impl TerminalBenchPreflightGuard {
             return None;
         }
         self.first_exec_seen = true;
-        if terminal_bench_first_preflight_command_is_valid(
+        let violations = terminal_bench_first_preflight_command_violations(
             command,
             &self.run_dir,
             &self.required_files,
             self.requires_runtime_refs,
-        ) {
+        );
+        if violations.is_empty() {
             return None;
         }
         Some(terminal_bench_preflight_violation_feedback(
@@ -157,6 +158,7 @@ impl TerminalBenchPreflightGuard {
             &self.run_dir,
             &self.required_files,
             self.requires_runtime_refs,
+            &violations,
         ))
     }
 }
@@ -166,19 +168,32 @@ fn terminal_bench_preflight_violation_feedback(
     run_dir: &str,
     required_files: &[String],
     requires_runtime_refs: bool,
+    violations: &[String],
 ) -> String {
     let required_files = required_files
         .iter()
         .map(|path| format!("- {path}"))
         .collect::<Vec<_>>()
         .join("\n");
+    let detected = if violations.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\n\nDetected problem(s):\n{}",
+            violations
+                .iter()
+                .map(|violation| format!("- {violation}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        )
+    };
     let runtime_refs = if requires_runtime_refs {
         "The same script must also persist either real `ctox queue add` output/message keys or an explicit `blocker` value explaining the exact CLI blocker."
     } else {
         "The same script must persist enough controller state to continue the run."
     };
     format!(
-        "terminal-bench preflight violation: the first shell command did not create and verify the required current-run artifacts. First command: {}.\n\nWhy this failed: the first worker shell call must be one complete artifact bootstrap script, not a partial mkdir/cat/help/discovery step. It must mention and create every required file, create `{run_dir}/tasks`, include `test -f` checks for every required file, and finish only if those checks pass. {runtime_refs}\n\nRequired next worker action: run exactly one `exec_command` shell script now. Do not answer in prose. Do not call `ctox --help`, inspect old runs, inspect install trees, browse, or split this over multiple tool calls before the files below are verified.\n\nRequired files:\n{required_files}\n\nAcceptance checklist for the next shell script:\n- sets `RUN_DIR=\"{run_dir}\"`\n- runs `mkdir -p \"$RUN_DIR/tasks\"`\n- writes non-empty initial content to every required file above\n- records queue refs with `ctox queue add` or records an explicit `blocker` in controller.json/logbook.md\n- runs `test -f` for every required file above in the same shell call\n- exits nonzero if any required file is missing\n\nThe harness will not create files, create tickets, or mark this complete for the worker.",
+        "terminal-bench preflight violation: the first shell command did not create and verify the required current-run artifacts. First command: {}.{detected}\n\nWhy this failed: the first worker shell call must be one complete artifact bootstrap script, not a partial mkdir/cat/help/discovery step. It must mention and create every required file, create `{run_dir}/tasks`, include `test -f` checks for every required file, and finish only if those checks pass. {runtime_refs}\n\nRequired next worker action: run exactly one `exec_command` shell script now. Do not answer in prose. Do not call `ctox --help`, inspect old runs, inspect install trees, browse, or split this over multiple tool calls before the files below are verified.\n\nRequired files:\n{required_files}\n\nAcceptance checklist for the next shell script:\n- sets `RUN_DIR=\"{run_dir}\"`\n- runs `mkdir -p \"$RUN_DIR/tasks\"`\n- writes non-empty initial content to every required file above\n- records queue refs with `ctox queue add` or records an explicit `blocker` in controller.json/logbook.md\n- runs `test -s` for JSONL/Markdown/JSON files and `test -f` for every required file above in the same shell call\n- exits nonzero if any required file is missing or empty\n\nThe harness will not create files, create tickets, or mark this complete for the worker.",
         clip_text_local(command, 360),
     )
 }
@@ -224,7 +239,16 @@ fn extract_terminal_bench_required_files(text: &str, run_dir: &str) -> Vec<Strin
         let candidate = line[start..]
             .trim()
             .trim_matches(|ch: char| matches!(ch, '`' | '"' | '\'' | ',' | ';' | '.'));
+        if candidate == run_dir
+            || candidate == format!("{run_dir}/tasks")
+            || candidate.ends_with("/tasks")
+        {
+            continue;
+        }
         if candidate.contains("/tasks/") || candidate.contains("<task-id>") {
+            continue;
+        }
+        if Path::new(candidate).extension().is_none() {
             continue;
         }
         if files.iter().any(|existing| existing == candidate) {
@@ -241,19 +265,42 @@ fn terminal_bench_first_preflight_command_is_valid(
     required_files: &[String],
     requires_runtime_refs: bool,
 ) -> bool {
+    terminal_bench_first_preflight_command_violations(
+        command,
+        run_dir,
+        required_files,
+        requires_runtime_refs,
+    )
+    .is_empty()
+}
+
+fn terminal_bench_first_preflight_command_violations(
+    command: &str,
+    run_dir: &str,
+    required_files: &[String],
+    requires_runtime_refs: bool,
+) -> Vec<String> {
+    let mut violations = Vec::new();
     let lower = command.to_ascii_lowercase();
     let run_dir_lower = run_dir.to_ascii_lowercase();
     if !lower.contains(&run_dir_lower) {
-        return false;
+        violations.push(format!(
+            "the command does not mention the current RUN_DIR `{run_dir}`"
+        ));
     }
     if !(lower.contains("mkdir") && lower.contains("/tasks")) {
-        return false;
+        violations.push(format!(
+            "the command does not create the required `{run_dir}/tasks` directory"
+        ));
     }
     if !lower.contains("test -f") {
-        return false;
+        violations.push("the command does not verify required files with `test -f`".to_string());
     }
     if command_writes_empty_terminal_bench_artifacts(&lower) {
-        return false;
+        violations.push(
+            "one or more required JSONL artifacts are created with `touch` or an empty write; required artifacts need non-empty initial records"
+                .to_string(),
+        );
     }
     let creates_files = [
         "cat >", "cat <<", "tee ", "touch ", "printf ", "python", "perl ", "jq ", "install ", ">>",
@@ -262,8 +309,9 @@ fn terminal_bench_first_preflight_command_is_valid(
     .iter()
     .any(|needle| lower.contains(needle));
     if !creates_files {
-        return false;
+        violations.push("the command does not write the required artifact files".to_string());
     }
+    let mut missing_files = Vec::new();
     for path in required_files {
         let basename = Path::new(path)
             .file_name()
@@ -271,13 +319,21 @@ fn terminal_bench_first_preflight_command_is_valid(
             .unwrap_or(path)
             .to_ascii_lowercase();
         if !basename.is_empty() && !lower.contains(&basename) {
-            return false;
+            missing_files.push(basename);
         }
     }
-    if requires_runtime_refs && !terminal_bench_command_persists_runtime_refs(&lower) {
-        return false;
+    if !missing_files.is_empty() {
+        violations.push(format!(
+            "the command does not mention required artifact file(s): {}",
+            missing_files.join(", ")
+        ));
     }
-    true
+    if requires_runtime_refs {
+        if let Some(problem) = terminal_bench_runtime_refs_problem(&lower) {
+            violations.push(problem);
+        }
+    }
+    violations
 }
 
 fn command_writes_empty_terminal_bench_artifacts(lower_command: &str) -> bool {
@@ -301,11 +357,18 @@ fn command_writes_empty_terminal_bench_artifacts(lower_command: &str) -> bool {
 }
 
 fn terminal_bench_command_persists_runtime_refs(lower_command: &str) -> bool {
+    terminal_bench_runtime_refs_problem(lower_command).is_none()
+}
+
+fn terminal_bench_runtime_refs_problem(lower_command: &str) -> Option<String> {
     if lower_command.contains("ctox queue add") || lower_command.contains("queue add") {
-        return true;
+        return None;
     }
     if !lower_command.contains("blocker") {
-        return false;
+        return Some(
+            "the command records neither real `ctox queue add` output/message keys nor an explicit blocker"
+                .to_string(),
+        );
     }
     if [
         "\"blocker\":null",
@@ -320,9 +383,12 @@ fn terminal_bench_command_persists_runtime_refs(lower_command: &str) -> bool {
     .iter()
     .any(|needle| lower_command.contains(needle))
     {
-        return false;
+        return Some(
+            "`blocker:null`/`blocker:none` is not an explicit blocker; record the exact failed CLI command or runtime error"
+                .to_string(),
+        );
     }
-    [
+    if [
         "blocked",
         "blocker:",
         "blocker\":",
@@ -337,6 +403,13 @@ fn terminal_bench_command_persists_runtime_refs(lower_command: &str) -> bool {
     ]
     .iter()
     .any(|needle| lower_command.contains(needle))
+    {
+        return None;
+    }
+    Some(
+        "the blocker text is too vague; record the exact failed CLI command or runtime error"
+            .to_string(),
+    )
 }
 
 fn openai_chatgpt_subscription_auth_enabled(settings: &BTreeMap<String, String>) -> bool {
@@ -936,11 +1009,13 @@ impl PersistentSession {
                 request_id: seq.next(),
                 params: TurnStartParams {
                     thread_id: thread_id.to_string(),
-                    input: vec![UserInput::Text {
-                        text: prompt.to_string(),
-                        text_elements: Vec::new(),
-                    }
-                    .into()],
+                    input: vec![
+                        UserInput::Text {
+                            text: prompt.to_string(),
+                            text_elements: Vec::new(),
+                        }
+                        .into(),
+                    ],
                     cwd: Some(cwd.to_path_buf()),
                     approval_policy: Some(AskForApproval::Never.into()),
                     approvals_reviewer: None,
@@ -1341,14 +1416,18 @@ The controller must create preparation queue/tickets and record queue:system::* 
         let violation = guard
             .violation_for_first_exec("ls -la /home/metricspace/.local/share/ctox/install/current");
 
-        assert!(violation
-            .as_deref()
-            .unwrap_or_default()
-            .contains("terminal-bench preflight violation"));
+        assert!(
+            violation
+                .as_deref()
+                .unwrap_or_default()
+                .contains("terminal-bench preflight violation")
+        );
         assert!(violation.unwrap().contains("first shell command"));
-        assert!(guard
-            .violation_for_first_exec("ls -la /home/metricspace")
-            .is_none());
+        assert!(
+            guard
+                .violation_for_first_exec("ls -la /home/metricspace")
+                .is_none()
+        );
     }
 
     #[test]
@@ -1369,10 +1448,12 @@ The controller must create preparation queue/tickets and record queue:system::* 
             "ls -la /home/metricspace/.local/share/ctox/install/current/runtime",
         );
 
-        assert!(violation
-            .as_deref()
-            .unwrap_or_default()
-            .contains("terminal-bench preflight violation"));
+        assert!(
+            violation
+                .as_deref()
+                .unwrap_or_default()
+                .contains("terminal-bench preflight violation")
+        );
     }
 
     #[test]
@@ -1660,7 +1741,10 @@ impl ContextLogger {
             f,
             "{{\"ts\":{ts},\"elapsed_s\":{elapsed},\"event\":\"{event}\",\
              \"total_tokens\":{},\"context_window\":{},\"items_this_turn\":{},\"session_kind\":\"{}\",{extra}}}",
-            self.last_total_tokens, self.last_context_window, self.items_this_turn, self.session_kind
+            self.last_total_tokens,
+            self.last_context_window,
+            self.items_this_turn,
+            self.session_kind
         );
     }
 
