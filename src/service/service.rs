@@ -4497,8 +4497,9 @@ fn artifact_first_execution_prompt(job: &QueuedPrompt) -> String {
     prompt.push_str("\nExecution order:\n");
     prompt.push_str("1. Before open-ended research or exploratory loops, create or update the required files with the best current status.\n");
     prompt.push_str("2. If final content depends on later work, write a provisional, truthful status plus the next action, then keep updating the file as work progresses.\n");
-    prompt.push_str("3. Before claiming completion, run shell checks equivalent to `test -f` for every required path.\n");
-    prompt.push_str("4. If a required file cannot be created, write the blocker into the files that can be created and do not claim completion.\n\n");
+    prompt.push_str("3. Each required path must be a regular file. A directory at that path is invalid; move or remove the directory and create the file.\n");
+    prompt.push_str("4. Before claiming completion, run shell checks equivalent to `test -f` for every required path.\n");
+    prompt.push_str("5. If a required file cannot be created, write the blocker into the files that can be created and do not claim completion.\n\n");
     prompt.push_str("ORIGINAL TASK\n");
     prompt.push_str(&job.prompt);
     prompt
@@ -4511,6 +4512,11 @@ fn extract_only_required_durable_file_paths(prompt: &str) -> Vec<String> {
         let lowered = line.to_ascii_lowercase();
         if lowered.contains("only required durable files")
             || lowered.contains("only required durable file")
+            || lowered.contains("durable artifact contract")
+            || lowered.contains("required durable files")
+            || lowered.contains("required files:")
+            || lowered.contains("create these files")
+            || lowered.contains("create these five files")
             || lowered.contains("exact files")
             || lowered.contains("these exact files")
         {
@@ -4544,6 +4550,19 @@ fn extract_only_required_durable_file_paths(prompt: &str) -> Vec<String> {
         }
     }
     refs
+}
+
+fn workspace_file_artifact_diagnostic(path: &str) -> &'static str {
+    let path = Path::new(path);
+    if path.is_file() {
+        "ok: regular file exists"
+    } else if path.is_dir() {
+        "invalid: exists as a directory; required path must be a regular file"
+    } else if path.exists() {
+        "invalid: exists but is not a regular file"
+    } else {
+        "missing: regular file not found"
+    }
 }
 
 fn prompt_declares_workspace_file_artifact(prompt: &str) -> bool {
@@ -4788,10 +4807,14 @@ fn outcome_witness_recovery_message(job: &QueuedPrompt, approved_body: &str, err
                 "\n\nHARNESS FEEDBACK\nProblem: Du hast die Aufgabe als fertig behandelt, aber der Harness konnte die erwarteten Datei-Artefakte nicht finden. Eine Textantwort, ein Plan oder ein Codeblock reicht hier nicht.\n\nREQUIRED ARTIFACTS\nDiese Pfade muessen als Dateien existieren, bevor du Abschluss behauptest:",
             );
             for path in file_refs {
-                message.push_str(&format!("\n- {}", path));
+                message.push_str(&format!(
+                    "\n- {} [{}]",
+                    path,
+                    workspace_file_artifact_diagnostic(&path)
+                ));
             }
             message.push_str(
-                "\n\nNEXT ACTION\n1. Fuehre jetzt einen Terminal-/Shell-Toolcall aus. Schreibe nicht nur, was du tun wuerdest.\n2. Erzeuge oder aktualisiere genau diese Artefakte.\n3. Pruefe jeden Pfad mit `test -f '<pfad>'`.\n4. Wenn ein Artefakt absichtlich leer sein darf, ist Existenz genug; sonst schreibe den geforderten Inhalt hinein.\n5. Antworte erst danach mit einer kurzen Ergebniszusammenfassung.\n\nORIGINAL TASK\nDer urspruengliche Auftrag bleibt aktiv und ist weiterhin der fachliche Inhalt fuer die Artefakte:\n",
+                "\n\nNEXT ACTION\n1. Fuehre jetzt einen Terminal-/Shell-Toolcall aus. Schreibe nicht nur, was du tun wuerdest.\n2. Erzeuge oder aktualisiere genau diese Artefakte als regulaere Dateien. Wenn `test -d '<pfad>'` fuer einen erforderlichen Pfad erfolgreich ist, ist genau das der Fehler: verschiebe oder entferne dieses Verzeichnis und schreibe die Datei an denselben Pfad. Schreibe die Artefakte nicht in `<pfad>/...`.\n3. Pruefe jeden Pfad mit `test -f '<pfad>'`.\n4. Wenn ein Artefakt absichtlich leer sein darf, ist Existenz genug; sonst schreibe den geforderten Inhalt hinein.\n5. Antworte erst danach mit einer kurzen Ergebniszusammenfassung.\n\nORIGINAL TASK\nDer urspruengliche Auftrag bleibt aktiv und ist weiterhin der fachliche Inhalt fuer die Artefakte:\n",
             );
             message.push_str(&clip_text(&job.prompt, 6000));
             message.push_str(
@@ -16647,6 +16670,52 @@ Initial completion criteria:\n\
     }
 
     #[test]
+    fn durable_artifact_contract_section_limits_workspace_artifacts() {
+        let run_dir = "/tmp/ctox-tb2-run";
+        let job = QueuedPrompt {
+            prompt: format!(
+                "DURABLE ARTIFACT CONTRACT\n\
+Create these five files immediately:\n\
+1. {run_dir}/controller.json\n\
+2. {run_dir}/ticket-map.jsonl\n\
+3. {run_dir}/run-log.md\n\
+4. {run_dir}/results.jsonl\n\
+5. {run_dir}/summary.md\n\n\
+Write {run_dir}/controller.json as valid JSON after planning. Helper files like {run_dir}/controller-prompt.md may exist but are not required."
+            ),
+            goal: "Terminal-Bench 2 controller".to_string(),
+            preview: "Terminal-Bench 2 controller".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: None,
+            leased_message_keys: vec!["queue:tb2-controller".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: None,
+            workspace_root: Some("/tmp".to_string()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let refs = expected_outcome_artifacts_for_job(&job);
+        let paths = refs
+            .iter()
+            .filter(|artifact| artifact.kind == ArtifactKind::WorkspaceFile)
+            .map(|artifact| artifact.primary_key.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            paths,
+            vec![
+                "/tmp/ctox-tb2-run/controller.json",
+                "/tmp/ctox-tb2-run/ticket-map.jsonl",
+                "/tmp/ctox-tb2-run/run-log.md",
+                "/tmp/ctox-tb2-run/results.jsonl",
+                "/tmp/ctox-tb2-run/summary.md",
+            ]
+        );
+    }
+
+    #[test]
     fn artifact_first_prompt_front_loads_declared_workspace_files() {
         let run_dir = "/tmp/ctox-tb2-run";
         let job = QueuedPrompt {
@@ -16675,6 +16744,7 @@ Start by discovering benchmark tasks."
         assert!(prompt.contains("/tmp/ctox-tb2-run/controller.json"));
         assert!(prompt.contains("/tmp/ctox-tb2-run/summary.md"));
         assert!(prompt.contains("Before open-ended research or exploratory loops"));
+        assert!(prompt.contains("regular file"));
         assert!(prompt.contains("test -f"));
         assert!(prompt.contains("ORIGINAL TASK"));
     }
@@ -16810,6 +16880,39 @@ Start by discovering benchmark tasks."
         assert!(prompt.contains("/tmp/ctox-tb2-run/logbook.md"));
         assert!(prompt.contains("/tmp/ctox-tb2-run/controller.json"));
         assert!(!prompt.contains("reviewed-founder-send"));
+    }
+
+    #[test]
+    fn workspace_file_recovery_prompt_reports_directory_paths() {
+        let root = temp_root("workspace-file-recovery-directory-path");
+        let run_dir = root.join("tb2-run");
+        let controller_path = run_dir.join("controller.json");
+        std::fs::create_dir_all(&controller_path)
+            .expect("failed to create directory at artifact path");
+        let job = QueuedPrompt {
+            prompt: format!(
+                "Only required durable files for this controller turn:\n- {}\n",
+                controller_path.display()
+            ),
+            goal: "bootstrap artifacts".to_string(),
+            preview: "bootstrap artifacts".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: None,
+            leased_message_keys: vec!["queue:tb2-bootstrap".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: None,
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let prompt = outcome_witness_recovery_message(&job, "done", "missing artifact");
+
+        assert!(prompt.contains(controller_path.to_string_lossy().as_ref()));
+        assert!(prompt.contains("exists as a directory"));
+        assert!(prompt.contains("test -d"));
+        assert!(prompt.contains("regular file"));
     }
 
     #[test]
