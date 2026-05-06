@@ -4513,6 +4513,7 @@ fn extract_only_required_durable_file_paths(prompt: &str) -> Vec<String> {
         if lowered.contains("only required durable files")
             || lowered.contains("only required durable file")
             || lowered.contains("durable artifact contract")
+            || lowered.contains("required artifacts")
             || lowered.contains("required durable files")
             || lowered.contains("required files:")
             || lowered.contains("create these files")
@@ -17101,6 +17102,60 @@ Start by discovering benchmark tasks."
         assert!(prompt.contains("exists as a directory"));
         assert!(prompt.contains("test -d"));
         assert!(prompt.contains("regular file"));
+    }
+
+    #[test]
+    fn recovery_artifact_section_does_not_infer_paths_from_original_task() {
+        let run_dir = "/tmp/ctox-tb2-run";
+        let job = QueuedPrompt {
+            prompt: format!(
+                "HARNESS FEEDBACK\n\
+Problem: expected artifacts are missing.\n\n\
+REQUIRED ARTIFACTS\n\
+These paths must exist as files:\n\
+- {run_dir}/controller.json [missing]\n\
+- {run_dir}/ticket-map.jsonl [missing]\n\
+- {run_dir}/run-log.md [missing]\n\
+- {run_dir}/results.jsonl [missing]\n\
+- {run_dir}/summary.md [missing]\n\n\
+NEXT ACTION\n\
+Create the listed files.\n\n\
+ORIGINAL TASK\n\
+Mandatory checks mention /home/metricspace/ctox/runtime/ctox.sqlite3, \
+/home/metricspace/ctox/runtime/inference_runtime.json, \
+and labels like Qwen3.6-35B-A3B/controller.json or GPU/controller.json. \
+Those are not durable artifact requirements."
+            ),
+            goal: "recover artifacts".to_string(),
+            preview: "recover artifacts".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: None,
+            leased_message_keys: vec!["queue:tb2-controller".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: None,
+            workspace_root: Some("/tmp".to_string()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let refs = expected_outcome_artifacts_for_job(&job);
+        let paths = refs
+            .iter()
+            .filter(|artifact| artifact.kind == ArtifactKind::WorkspaceFile)
+            .map(|artifact| artifact.primary_key.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            paths,
+            vec![
+                "/tmp/ctox-tb2-run/controller.json",
+                "/tmp/ctox-tb2-run/ticket-map.jsonl",
+                "/tmp/ctox-tb2-run/run-log.md",
+                "/tmp/ctox-tb2-run/results.jsonl",
+                "/tmp/ctox-tb2-run/summary.md",
+            ]
+        );
     }
 
     #[test]
