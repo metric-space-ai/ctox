@@ -10,6 +10,7 @@ use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::fs;
 use std::io::{BufRead, BufReader, Write as IoWrite};
 use std::path::{Path, PathBuf};
@@ -1005,16 +1006,20 @@ pub(crate) fn run_meeting_session(root: &Path, config: &MeetingSessionConfig) ->
         );
     }
 
-    // Spawn the Node.js process
-    let mut child = Command::new(&node)
-        .current_dir(&reference_dir)
-        .arg(&script_path)
+    // Spawn the Node.js process. On Linux VPS hosts there is usually no
+    // interactive X server, but Teams needs a headed browser for media capture.
+    let mut runner_cmd = build_meeting_runner_command(&node, &reference_dir, &script_path)?;
+    runner_cmd
         .env("CTOX_MEETING_COMMAND_FILE", &command_path)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .with_context(|| format!("failed to spawn node at {node}"))?;
+        .stderr(Stdio::piped());
+    let mut child = runner_cmd.spawn().with_context(|| {
+        format!(
+            "failed to spawn meeting browser runner via {:?}",
+            runner_cmd
+        )
+    })?;
 
     // Drain stderr in a background thread so we surface Node.js errors
     // (otherwise the pipe fills, blocks, and we never see the failure)
@@ -1634,6 +1639,54 @@ fn find_node_executable() -> Result<String> {
         }
     }
     bail!("node executable not found — install Node.js >= 18")
+}
+
+fn build_meeting_runner_command(
+    node: &str,
+    reference_dir: &Path,
+    script_path: &Path,
+) -> Result<Command> {
+    if should_wrap_browser_runner_with_xvfb(std::env::var_os("DISPLAY").as_deref()) {
+        let xvfb_run = find_xvfb_run_executable().with_context(|| {
+            "DISPLAY is not set and xvfb-run was not found; install xvfb for VPS meeting capture"
+        })?;
+        eprintln!(
+            "[meeting] DISPLAY is not set; launching headed browser runner via {}",
+            xvfb_run.display()
+        );
+        let mut cmd = Command::new(xvfb_run);
+        cmd.current_dir(reference_dir)
+            .arg("-a")
+            .arg("-s")
+            .arg("-screen 0 1280x720x24 -ac +extension RANDR")
+            .arg(node)
+            .arg(script_path);
+        Ok(cmd)
+    } else {
+        let mut cmd = Command::new(node);
+        cmd.current_dir(reference_dir).arg(script_path);
+        Ok(cmd)
+    }
+}
+
+fn should_wrap_browser_runner_with_xvfb(display: Option<&OsStr>) -> bool {
+    cfg!(target_os = "linux") && display.map(|value| value.is_empty()).unwrap_or(true)
+}
+
+fn find_xvfb_run_executable() -> Option<PathBuf> {
+    for candidate in ["/usr/bin/xvfb-run", "/usr/local/bin/xvfb-run"] {
+        let path = PathBuf::from(candidate);
+        if path.exists() {
+            return Some(path);
+        }
+    }
+    if let Ok(output) = Command::new("which").arg("xvfb-run").output() {
+        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !path.is_empty() {
+            return Some(PathBuf::from(path));
+        }
+    }
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -5150,6 +5203,21 @@ mod tests {
         assert!(!check_engine_reachable(Path::new(
             "/definitely/not/a/ctox/root"
         )));
+    }
+
+    #[test]
+    fn linux_meeting_runner_uses_xvfb_when_display_is_missing() {
+        assert_eq!(
+            should_wrap_browser_runner_with_xvfb(None),
+            cfg!(target_os = "linux")
+        );
+        assert!(!should_wrap_browser_runner_with_xvfb(Some(OsStr::new(
+            ":99"
+        ))));
+        assert_eq!(
+            should_wrap_browser_runner_with_xvfb(Some(OsStr::new(""))),
+            cfg!(target_os = "linux")
+        );
     }
 
     #[test]
