@@ -4634,6 +4634,10 @@ fn declared_workspace_file_artifacts_for_job(job: &QueuedPrompt) -> Vec<String> 
     if !prompt_declares_workspace_file_artifact(prompt) {
         return Vec::new();
     }
+    let terminal_bench_refs = extract_terminal_bench_controller_file_artifacts(job);
+    if !terminal_bench_refs.is_empty() {
+        return terminal_bench_refs;
+    }
     let explicit_only = extract_only_required_durable_file_paths(prompt);
     if !explicit_only.is_empty() {
         return explicit_only;
@@ -4664,6 +4668,152 @@ fn declared_workspace_file_artifacts_for_job(job: &QueuedPrompt) -> Vec<String> 
         }
     }
     refs
+}
+
+fn extract_terminal_bench_controller_file_artifacts(job: &QueuedPrompt) -> Vec<String> {
+    if !prompt_looks_like_terminal_bench_controller(job) {
+        return Vec::new();
+    }
+    let haystack = format!(
+        "{}\n{}\n{}\n{}",
+        job.prompt,
+        job.goal,
+        job.preview,
+        job.workspace_root.clone().unwrap_or_default()
+    );
+    let Some(run_dir) = extract_terminal_bench_run_dir_from_text(&haystack)
+        .or_else(|| job.workspace_root.clone().and_then(|root| {
+            extract_terminal_bench_run_dir_from_text(&root).or_else(|| {
+                let trimmed = root.trim();
+                (!trimmed.is_empty()).then(|| trimmed.to_string())
+            })
+        }))
+    else {
+        return Vec::new();
+    };
+
+    let mut mentioned = Vec::new();
+    for relative in TERMINAL_BENCH_CONTROLLER_ALLOWED_ARTIFACTS {
+        if let Some(position) = terminal_bench_prompt_artifact_position(&haystack, relative) {
+            mentioned.push((position, *relative));
+        }
+    }
+    mentioned.sort_by_key(|(position, _)| *position);
+
+    let mut refs = Vec::new();
+    for (_, relative) in mentioned {
+        push_unique_string(
+            &mut refs,
+            Path::new(&run_dir)
+                .join(relative)
+                .to_string_lossy()
+                .into_owned(),
+        );
+    }
+    refs
+}
+
+const TERMINAL_BENCH_CONTROLLER_ALLOWED_ARTIFACTS: &[&str] = &[
+    "controller.json",
+    "ticket-map.jsonl",
+    "preparation-tickets.jsonl",
+    "run-queue.jsonl",
+    "results.jsonl",
+    "results.json",
+    "knowledge.md",
+    "logbook.md",
+    "run-log.md",
+    "blogpost-notes.md",
+    "summary.md",
+    "tasks/index.jsonl",
+    "reports/preflight.md",
+];
+
+fn prompt_looks_like_terminal_bench_controller(job: &QueuedPrompt) -> bool {
+    let haystack = format!(
+        "{}\n{}\n{}\n{}\n{}",
+        job.prompt,
+        job.goal,
+        job.preview,
+        job.thread_key.clone().unwrap_or_default(),
+        job.workspace_root.clone().unwrap_or_default()
+    )
+    .to_ascii_lowercase();
+    let terminal_bench_scope = haystack.contains("terminal-bench")
+        || haystack.contains("terminal bench")
+        || haystack.contains("tbench");
+    let controller_shape = haystack.contains("controller")
+        || haystack.contains("harbor")
+        || haystack.contains("ticket-map.jsonl")
+        || haystack.contains("tasks/index.jsonl")
+        || haystack.contains("reports/preflight.md")
+        || haystack.contains("results.jsonl")
+        || haystack.contains("results.json")
+        || haystack.contains("run-log.md");
+    terminal_bench_scope && controller_shape
+}
+
+fn extract_terminal_bench_run_dir_from_text(text: &str) -> Option<String> {
+    for path in extract_absolute_paths_from_text(text) {
+        let marker = "/terminal-bench-2/runs/";
+        let Some(marker_start) = path.find(marker) else {
+            continue;
+        };
+        let run_id_start = marker_start + marker.len();
+        let rest = &path[run_id_start..];
+        let run_id_len = rest.find('/').unwrap_or(rest.len());
+        if run_id_len == 0 {
+            continue;
+        }
+        return Some(path[..run_id_start + run_id_len].to_string());
+    }
+    None
+}
+
+fn terminal_bench_prompt_artifact_position(prompt: &str, relative: &str) -> Option<usize> {
+    let file_name = Path::new(relative)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(relative);
+    [
+        relative.to_string(),
+        format!("$RUN_DIR/{relative}"),
+        format!("\"$RUN_DIR/{relative}\""),
+        format!("`$RUN_DIR/{relative}`"),
+    ]
+    .into_iter()
+    .filter_map(|needle| find_path_token(prompt, &needle))
+    .chain(find_path_leaf_token(prompt, file_name))
+    .min()
+}
+
+fn find_path_token(text: &str, needle: &str) -> Option<usize> {
+    let mut search_start = 0;
+    while let Some(offset) = text[search_start..].find(needle) {
+        let position = search_start + offset;
+        let before = text[..position].chars().next_back();
+        let after = text[position + needle.len()..].chars().next();
+        if before.is_none_or(|ch| !is_relative_artifact_token_char(ch))
+            && after.is_none_or(|ch| !is_relative_artifact_token_char(ch))
+        {
+            return Some(position);
+        }
+        search_start = position + needle.len();
+    }
+    None
+}
+
+fn find_path_leaf_token(text: &str, needle: &str) -> Option<usize> {
+    let mut search_start = 0;
+    while let Some(offset) = text[search_start..].find(needle) {
+        let position = search_start + offset;
+        let after = text[position + needle.len()..].chars().next();
+        if after.is_none_or(|ch| !is_relative_artifact_token_char(ch)) {
+            return Some(position);
+        }
+        search_start = position + needle.len();
+    }
+    None
 }
 
 fn artifact_first_execution_prompt(job: &QueuedPrompt) -> String {
@@ -18177,6 +18327,57 @@ Initial completion criteria:\n\
                 "/tmp/ctox-tb2-run/summary.md",
             ]
         );
+    }
+
+    #[test]
+    fn terminal_bench_run_dir_artifacts_do_not_cross_product_relative_paths() {
+        let run_dir = "/tmp/terminal-bench-2/runs/20260506T153000Z-kimi-clean2";
+        let job = QueuedPrompt {
+            prompt: format!(
+                "You are the CTOX Terminal-Bench 2 benchmark controller.\n\
+Runtime facts:\n- run directory: {run_dir}\n\n\
+The first shell script must do all of this:\n\
+1. `mkdir -p \"$RUN_DIR/tasks\" \"$RUN_DIR/logs\" \"$RUN_DIR/reports\"`\n\
+2. Write non-empty files:\n\
+   - `$RUN_DIR/logbook.md`\n\
+   - `$RUN_DIR/knowledge.md`\n\
+   - `$RUN_DIR/results.jsonl`\n\
+   - `$RUN_DIR/tasks/index.jsonl`\n\
+   - `$RUN_DIR/reports/preflight.md`\n\
+3. Add CTOX queue tickets for benchmark preparation."
+            ),
+            goal: "Terminal-Bench 2 controller".to_string(),
+            preview: "Terminal-Bench 2 controller".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: Some("benchmark-controller".to_string()),
+            leased_message_keys: vec!["queue:tb2-controller".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("tb2-controller".to_string()),
+            workspace_root: Some(run_dir.to_string()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let refs = expected_outcome_artifacts_for_job(&job);
+        let paths = refs
+            .iter()
+            .filter(|artifact| artifact.kind == ArtifactKind::WorkspaceFile)
+            .map(|artifact| artifact.primary_key.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            paths,
+            vec![
+                format!("{run_dir}/logbook.md"),
+                format!("{run_dir}/knowledge.md"),
+                format!("{run_dir}/results.jsonl"),
+                format!("{run_dir}/tasks/index.jsonl"),
+                format!("{run_dir}/reports/preflight.md"),
+            ]
+        );
+        assert!(!paths.iter().any(|path| path.contains("/RUN_DIR/")));
+        assert!(!paths.iter().any(|path| path == &"/logbook.md"));
     }
 
     #[test]
