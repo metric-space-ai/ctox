@@ -253,7 +253,7 @@ clean_stale_cmake_cache_dirs() {
     fi
     printf '  %b%bremoving stale CMake cache %s%b\n' "$C_BOLD" "$C_GREY" "$cache_file" "$C_RESET" >&2
     rm -rf "$(dirname "$cache_file")"
-  done < <(find "$target_dir" -path '*/out/*/CMakeCache.txt' -print0 2>/dev/null)
+  done < <(find "$target_dir" -name 'CMakeCache.txt' -print0 2>/dev/null)
 }
 
 # ── Interactive backend selector ─────────────────────────────────────────────
