@@ -3005,6 +3005,11 @@ fn start_prompt_worker(
                             &review_disposition,
                             CompletionReviewDisposition::NoSend { .. }
                         );
+                        let held_benchmark_controller = matches!(
+                            &review_disposition,
+                            CompletionReviewDisposition::Hold { .. }
+                        )
+                            && is_terminal_bench_controller_artifact_job(&job);
                         let expected_artifact_refs = expected_outcome_artifacts_for_job(&job);
                         let delivered_artifact_refs = match delivered_outcome_artifacts_for_job(
                             &root,
@@ -3181,7 +3186,7 @@ fn start_prompt_worker(
                                 || is_founder_or_owner_email_job(&job);
                             let retry_status = if outcome_witness_error.is_some() {
                                 outcome_witness_retry_route_status(&root, &job)
-                            } else if held_founder_review {
+                            } else if held_founder_review || held_benchmark_controller {
                                 "review_rework"
                             } else {
                                 "pending"
@@ -3628,6 +3633,35 @@ fn start_prompt_worker(
                             job.source_label
                         ),
                     );
+                } else if let CompletionReviewDisposition::Hold { summary } = &review_disposition {
+                    if job.ticket_self_work_id.is_none()
+                        && job.outbound_email.is_none()
+                        && is_terminal_bench_controller_artifact_job(&job)
+                    {
+                        let feedback_prompt =
+                            terminal_bench_controller_hold_feedback_prompt(&job, summary);
+                        shared.pending_prompts.push_front(QueuedPrompt {
+                            prompt: feedback_prompt.clone(),
+                            goal: format!("Continue Terminal-Bench controller for {}", job.goal),
+                            preview: clip_text(&feedback_prompt, 180),
+                            source_label: "review-feedback".to_string(),
+                            suggested_skill: job.suggested_skill.clone(),
+                            leased_message_keys: Vec::new(),
+                            leased_ticket_event_keys: Vec::new(),
+                            thread_key: job.thread_key.clone(),
+                            workspace_root: job.workspace_root.clone(),
+                            ticket_self_work_id: None,
+                            outbound_email: None,
+                            outbound_anchor: job.outbound_anchor.clone(),
+                        });
+                        push_event_locked(
+                            &mut shared,
+                            format!(
+                                "Queued benchmark controller continuation feedback for {} after review hold",
+                                job.source_label
+                            ),
+                        );
+                    }
                 } else if matches!(&review_disposition, CompletionReviewDisposition::Approved) {
                     // Successful approval clears the rewrite-only failure
                     // counter so a future regression starts from zero.
@@ -4502,6 +4536,70 @@ fn artifact_first_execution_prompt(job: &QueuedPrompt) -> String {
     prompt.push_str("5. If a required file cannot be created, write the blocker into the files that can be created and do not claim completion.\n\n");
     prompt.push_str("ORIGINAL TASK\n");
     prompt.push_str(&job.prompt);
+    prompt
+}
+
+fn is_terminal_bench_controller_artifact_job(job: &QueuedPrompt) -> bool {
+    if declared_workspace_file_artifacts_for_job(job).is_empty() {
+        return false;
+    }
+    let haystack = format!(
+        "{}\n{}\n{}\n{}\n{}",
+        job.prompt,
+        job.goal,
+        job.preview,
+        job.thread_key.clone().unwrap_or_default(),
+        job.workspace_root.clone().unwrap_or_default()
+    )
+    .to_ascii_lowercase();
+    let terminal_bench_scope = haystack.contains("terminal-bench")
+        || haystack.contains("terminal bench")
+        || haystack.contains("tbench");
+    let controller_shape = haystack.contains("controller")
+        || haystack.contains("harbor")
+        || haystack.contains("ticket-map.jsonl")
+        || haystack.contains("results.json")
+        || haystack.contains("run-log.md");
+    terminal_bench_scope && controller_shape
+}
+
+fn terminal_bench_controller_hold_feedback_prompt(
+    job: &QueuedPrompt,
+    review_summary: &str,
+) -> String {
+    let file_refs = declared_workspace_file_artifacts_for_job(job);
+    let mut prompt = String::new();
+    prompt.push_str("HARNESS FEEDBACK\n");
+    prompt.push_str(
+        "The previous Terminal-Bench controller turn is not accepted as benchmark completion. ",
+    );
+    prompt.push_str("The durable files may have been initialized, but the benchmark controller must continue until Terminal-Bench work has real task statuses in results.json or a concrete persisted next action after exhausting the current time budget.\n\n");
+    prompt.push_str("Review status:\n");
+    prompt.push_str("- ");
+    prompt.push_str(&clip_text(review_summary, 500));
+    prompt.push_str("\n\n");
+    prompt.push_str("Required continuation behavior:\n");
+    prompt.push_str("- Read the existing controller.json, ticket-map.jsonl, run-log.md, knowledge.md, and results.json first. Do not recreate them from scratch.\n");
+    prompt.push_str(
+        "- Preserve and update the same run directory and the same five durable files.\n",
+    );
+    prompt.push_str("- Treat controller.phase=preparation and results.json with zero tasks as an unfinished state, not as completion.\n");
+    prompt.push_str("- Verify the runtime facts before benchmark execution: CTOX release is current, harness model is Qwen/Qwen3.6-35B-A3B, inference source is local, local runtime is ggml, effective context is 131072 tokens, the Qwen process uses --ctx 131072, CUDA devices 0,1,2,3 are active, and no HTTP inference path is used.\n");
+    prompt.push_str("- Verify Harbor and the Terminal-Bench 2 task source, then write one ticket per discovered benchmark task into ticket-map.jsonl.\n");
+    prompt.push_str("- Research public Terminal-Bench references and leaderboards only for task selection and comparison context; do not read benchmark solutions.\n");
+    prompt.push_str("- Start with tasks known to be solvable by other harnesses/models, update knowledge.md after each attempt, skip blocked tasks temporarily, and return later with accumulated learnings.\n");
+    prompt.push_str("- After every benchmark action, update run-log.md and results.json truthfully. Each task must end as passed, failed, blocked, skipped, or pending with evidence.\n");
+    prompt.push_str("- Only finish after all discovered Terminal-Bench tasks have terminal statuses, or after the current time budget is exhausted with a single explicit persisted next_action in controller.json and matching run-log.md.\n\n");
+    if !file_refs.is_empty() {
+        prompt.push_str("Durable files to preserve and update:\n");
+        for path in &file_refs {
+            prompt.push_str("- ");
+            prompt.push_str(path);
+            prompt.push('\n');
+        }
+        prompt.push('\n');
+    }
+    prompt.push_str("Continue now from the persisted state. Use shell tools and direct file checks for evidence.");
     prompt
 }
 
@@ -14488,6 +14586,53 @@ Use shell tools to create or update these files."
                 format!("{run_dir}/results.json"),
             ]
         );
+    }
+
+    #[test]
+    fn terminal_bench_review_hold_generates_actionable_continuation_feedback() {
+        let run_dir = "/home/metricspace/CTOX/runtime/terminal-bench-2/runs/run-hold-feedback";
+        let prompt = format!(
+            "You are CTOX running a Terminal-Bench 2 evaluation controller on this 4xGPU host.\n\n\
+Required artifacts. You must create and maintain exactly these durable files in this run directory:\n\
+- {run_dir}/controller.json\n\
+- {run_dir}/ticket-map.jsonl\n\
+- {run_dir}/run-log.md\n\
+- {run_dir}/knowledge.md\n\
+- {run_dir}/results.json\n\n\
+Use shell tools to create or update these files through Harbor."
+        );
+        let job = QueuedPrompt {
+            prompt,
+            goal: "Terminal-Bench 2 controller Qwen3.6 128k".to_string(),
+            preview: "Terminal-Bench 2 controller Qwen3.6 128k".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: None,
+            leased_message_keys: vec!["queue:system::tb2".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("queue/tb2-qwen36-128k".to_string()),
+            workspace_root: Some("/home/metricspace/CTOX/runtime/terminal-bench-2".to_string()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        assert!(is_terminal_bench_controller_artifact_job(&job));
+
+        let feedback = terminal_bench_controller_hold_feedback_prompt(
+            &job,
+            "completion review leg did not produce a verdict within 300s",
+        );
+        assert!(feedback.contains("HARNESS FEEDBACK"));
+        assert!(feedback.contains("not accepted as benchmark completion"));
+        assert!(feedback.contains("Do not recreate them from scratch"));
+        assert!(feedback.contains("controller.phase=preparation"));
+        assert!(feedback.contains("results.json with zero tasks"));
+        assert!(feedback.contains("Qwen/Qwen3.6-35B-A3B"));
+        assert!(feedback.contains("131072 tokens"));
+        assert!(feedback.contains("no HTTP inference path"));
+        assert!(feedback.contains("Verify Harbor"));
+        assert!(feedback.contains(&format!("{run_dir}/controller.json")));
+        assert!(feedback.contains(&format!("{run_dir}/results.json")));
     }
 
     #[test]
