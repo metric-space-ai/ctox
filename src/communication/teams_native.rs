@@ -493,6 +493,7 @@ fn sync_channel_messages(
             &options.team_id,
             &options.channel_id,
             self_identity,
+            options,
         ) {
             store_teams_message(conn, &inbound)?;
             count += 1;
@@ -513,6 +514,7 @@ fn sync_channel_messages(
                         &options.team_id,
                         &options.channel_id,
                         self_identity,
+                        options,
                     ) {
                         store_teams_message(conn, &inbound)?;
                         count += 1;
@@ -534,9 +536,13 @@ fn sync_chat_messages(
     let messages = client.list_chat_messages(&options.chat_id, options.limit)?;
     let mut count = 0;
     for msg in &messages {
-        if let Some(inbound) =
-            normalize_teams_chat_message_for_sync(msg, account_key, &options.chat_id, self_identity)
-        {
+        if let Some(inbound) = normalize_teams_chat_message_for_sync(
+            msg,
+            account_key,
+            &options.chat_id,
+            self_identity,
+            options,
+        ) {
             store_teams_message(conn, &inbound)?;
             count += 1;
         }
@@ -559,9 +565,13 @@ fn sync_discovered_chats(
         };
         let messages = client.list_chat_messages(chat_id, options.limit)?;
         for msg in &messages {
-            if let Some(inbound) =
-                normalize_teams_chat_message_for_sync(msg, account_key, chat_id, self_identity)
-            {
+            if let Some(inbound) = normalize_teams_chat_message_for_sync(
+                msg,
+                account_key,
+                chat_id,
+                self_identity,
+                options,
+            ) {
                 store_teams_message(conn, &inbound)?;
                 count += 1;
             }
@@ -602,6 +612,7 @@ fn sync_discovered_channels(
                     team_id,
                     channel_id,
                     self_identity,
+                    options,
                 ) {
                     store_teams_message(conn, &inbound)?;
                     count += 1;
@@ -626,6 +637,7 @@ fn sync_discovered_channels(
                         team_id,
                         channel_id,
                         self_identity,
+                        options,
                     ) {
                         store_teams_message(conn, &inbound)?;
                         count += 1;
@@ -643,8 +655,9 @@ fn normalize_teams_message_for_sync(
     team_id: &str,
     channel_id: &str,
     self_identity: &TeamsSelfIdentity,
+    options: &TeamsOptions,
 ) -> Option<TeamsInboundMessage> {
-    if is_self_teams_message(msg, self_identity) {
+    if is_self_teams_message(msg, self_identity, options) {
         return None;
     }
     normalize_teams_message(msg, account_key, team_id, channel_id)
@@ -655,14 +668,19 @@ fn normalize_teams_chat_message_for_sync(
     account_key: &str,
     chat_id: &str,
     self_identity: &TeamsSelfIdentity,
+    options: &TeamsOptions,
 ) -> Option<TeamsInboundMessage> {
-    if is_self_teams_message(msg, self_identity) {
+    if is_self_teams_message(msg, self_identity, options) {
         return None;
     }
     normalize_teams_chat_message(msg, account_key, chat_id)
 }
 
-fn is_self_teams_message(msg: &Value, self_identity: &TeamsSelfIdentity) -> bool {
+fn is_self_teams_message(
+    msg: &Value,
+    self_identity: &TeamsSelfIdentity,
+    options: &TeamsOptions,
+) -> bool {
     let user = msg
         .get("from")
         .and_then(|from| from.get("user"))
@@ -684,6 +702,53 @@ fn is_self_teams_message(msg: &Value, self_identity: &TeamsSelfIdentity) -> bool
         || same(sender_upn, &self_identity.user_principal_name)
         || same(sender_mail, &self_identity.mail)
         || (sender_id.trim().is_empty() && same(sender_display, &self_identity.display_name))
+        || same(sender_id, &options.bot_id)
+        || same(sender_upn, &options.bot_id)
+        || same(sender_mail, &options.bot_id)
+        || same(sender_upn, &options.username)
+        || same(sender_mail, &options.username)
+        || display_matches_configured_bot(sender_display, options)
+}
+
+fn display_matches_configured_bot(sender_display: &str, options: &TeamsOptions) -> bool {
+    let sender = normalize_teams_identity_label(sender_display);
+    if sender.len() < 4 {
+        return false;
+    }
+    [&options.bot_id, &options.username]
+        .iter()
+        .filter_map(|value| configured_identity_labels(value))
+        .any(|labels| labels.iter().any(|label| label == &sender))
+}
+
+fn configured_identity_labels(value: &str) -> Option<Vec<String>> {
+    let normalized = normalize_teams_identity_label(value);
+    if normalized.is_empty() {
+        return None;
+    }
+    let local = value.split('@').next().unwrap_or(value);
+    let local_normalized = normalize_teams_identity_label(local);
+    let last_segment = local
+        .split(['.', '_', '-', ' '])
+        .next_back()
+        .map(normalize_teams_identity_label)
+        .unwrap_or_default();
+    let mut labels = vec![normalized, local_normalized, last_segment];
+    labels.retain(|label| label.len() >= 4);
+    labels.sort();
+    labels.dedup();
+    Some(labels)
+}
+
+fn normalize_teams_identity_label(value: &str) -> String {
+    value
+        .to_ascii_lowercase()
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { ' ' })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn normalize_teams_message(
@@ -1467,6 +1532,21 @@ mod tests {
         let result = normalize_teams_chat_message(&msg, "teams:bot", "chat-123").unwrap();
         assert_eq!(result.sender_display, "Bob");
         assert_eq!(result.thread_key, "teams:bot::chat::chat-123");
+    }
+
+    #[test]
+    fn self_message_detection_uses_configured_bot_display_alias() {
+        let options = test_options("inf.yoda@remcapital.de", "INF.Yoda@remcapital.de", "");
+        let identity = TeamsSelfIdentity::default();
+        let self_msg = json!({
+            "from": {"user": {"displayName": "Yoda", "id": "2cec2f2d-9b6d-4b36-9d47-ea3f7d7fb47e"}},
+        });
+        let other_msg = json!({
+            "from": {"user": {"displayName": "Cakmak, Jill", "id": "cfbba921-291c-42d3-8e30-3032f36b4601"}},
+        });
+
+        assert!(is_self_teams_message(&self_msg, &identity, &options));
+        assert!(!is_self_teams_message(&other_msg, &identity, &options));
     }
 
     #[test]
