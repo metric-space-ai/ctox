@@ -4690,6 +4690,16 @@ fn artifact_first_execution_prompt(job: &QueuedPrompt) -> String {
     let mut prompt = String::new();
     prompt.push_str("HARNESS ARTIFACT CONTRACT\n");
     prompt.push_str("This task declares durable file artifacts. The harness will not accept a final answer, plan, or interim text as completion unless these files exist on disk.\n\n");
+    if let Some(workspace_root) = job
+        .workspace_root
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        prompt.push_str("Workspace root:\n");
+        prompt.push_str(workspace_root);
+        prompt.push_str("\n\n");
+    }
     prompt.push_str("Required files:\n");
     for path in &file_refs {
         prompt.push_str("- ");
@@ -4700,8 +4710,9 @@ fn artifact_first_execution_prompt(job: &QueuedPrompt) -> String {
     prompt.push_str("1. Before open-ended research or exploratory loops, create or update the required files with the best current status.\n");
     prompt.push_str("2. If final content depends on later work, write a provisional, truthful status plus the next action, then keep updating the file as work progresses.\n");
     prompt.push_str("3. Each required path must be a regular file. A directory at that path is invalid; move or remove the directory and create the file.\n");
-    prompt.push_str("4. Before claiming completion, run shell checks equivalent to `test -f` for every required path.\n");
-    prompt.push_str("5. If a required file cannot be created, write the blocker into the files that can be created and do not claim completion.\n\n");
+    prompt.push_str("4. Use absolute paths from the Required files list, or explicitly `cd` into the Workspace root before relative writes. A file written under the install directory or any other cwd does not satisfy this task.\n");
+    prompt.push_str("5. Before claiming completion, run shell checks equivalent to `test -f` for every required path.\n");
+    prompt.push_str("6. If a required file cannot be created, write the blocker into the files that can be created and do not claim completion.\n\n");
     prompt.push_str("ORIGINAL TASK\n");
     prompt.push_str(&job.prompt);
     prompt
@@ -18260,6 +18271,88 @@ Was jetzt zu tun ist:\n\
                 && artifact.primary_key == "/tmp/ctox-smoke/required-smoke.json"
                 && artifact.expected_terminal_state == "present"
         }));
+    }
+
+    #[test]
+    fn chat_prompt_declares_workspace_relative_smoke_artifact() {
+        let run_dir = "/tmp/ctox-model-smoke/20260506T195937-hy3-responses-id-smoke";
+        let job = QueuedPrompt {
+            prompt: format!(
+                "Work only inside this workspace: {run_dir}\n\
+Create a file named smoke.txt inside that workspace containing exactly HY3_CTOX_OK.\n\
+Use shell tools and verify with `test -f {run_dir}/smoke.txt` before claiming completion."
+            ),
+            goal: "HY3 smoke artifact".to_string(),
+            preview: "HY3 smoke artifact".to_string(),
+            source_label: "tui".to_string(),
+            suggested_skill: None,
+            leased_message_keys: Vec::new(),
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("smoke/hy3-responses-id".to_string()),
+            workspace_root: Some(run_dir.to_string()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let refs = expected_outcome_artifacts_for_job(&job);
+        assert!(refs.iter().any(|artifact| {
+            artifact.kind == ArtifactKind::WorkspaceFile
+                && artifact.primary_key == format!("{run_dir}/smoke.txt")
+                && artifact.expected_terminal_state == "present"
+        }));
+
+        let prompt = artifact_first_execution_prompt(&job);
+        assert!(prompt.contains("HARNESS ARTIFACT CONTRACT"));
+        assert!(prompt.contains("Workspace root:"));
+        assert!(prompt.contains(run_dir));
+        assert!(prompt.contains("install directory"));
+        assert!(prompt.contains(&format!("{run_dir}/smoke.txt")));
+    }
+
+    #[test]
+    fn outcome_witness_blocks_hy3_smoke_when_file_written_in_wrong_directory() {
+        let root = temp_root("outcome-witness-hy3-smoke-wrong-directory");
+        let run_dir = root.join("model-smoke/hy3");
+        let wrong_dir = root.join("install-current");
+        std::fs::create_dir_all(&wrong_dir).expect("failed to create wrong dir");
+        std::fs::write(wrong_dir.join("smoke.txt"), "HY3_CTOX_OK\n")
+            .expect("failed to write wrong smoke file");
+        let job = QueuedPrompt {
+            prompt: format!(
+                "Work only inside this workspace: {}\n\
+Create a file named smoke.txt inside that workspace containing exactly HY3_CTOX_OK.",
+                run_dir.display()
+            ),
+            goal: "HY3 smoke artifact".to_string(),
+            preview: "HY3 smoke artifact".to_string(),
+            source_label: "tui".to_string(),
+            suggested_skill: None,
+            leased_message_keys: Vec::new(),
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("smoke/hy3-wrong-dir".to_string()),
+            workspace_root: Some(run_dir.to_string_lossy().into_owned()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let expected = expected_outcome_artifacts_for_job(&job);
+        assert_eq!(
+            expected
+                .iter()
+                .filter(|artifact| artifact.kind == ArtifactKind::WorkspaceFile)
+                .count(),
+            1
+        );
+        let delivered = delivered_outcome_artifacts_for_job(&root, &job, &expected)
+            .expect("failed to inspect delivered artifacts");
+        assert!(delivered.is_empty());
+        let err = enforce_job_outcome_witness(&root, &job, expected, delivered)
+            .expect_err("wrong-directory smoke file must not satisfy witness");
+        assert!(err.to_string().contains("dauerhafte Ergebnis-Artefakt"));
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

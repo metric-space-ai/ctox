@@ -710,12 +710,23 @@ fn looks_like_secretish_value(value: &str) -> bool {
     {
         return true;
     }
+    if looks_like_filesystem_path_value(value) {
+        return false;
+    }
     value.len() >= 12
         && !value.contains(' ')
         && value.chars().any(|ch| ch.is_ascii_digit())
         && value
             .chars()
             .any(|ch| matches!(ch, '-' | '_' | ':' | '/' | '?' | '=' | '&'))
+}
+
+fn looks_like_filesystem_path_value(value: &str) -> bool {
+    let trimmed = value.trim_matches(|ch: char| matches!(ch, '"' | '\'' | '`'));
+    trimmed.starts_with('/')
+        || trimmed.starts_with("~/")
+        || trimmed.starts_with("./")
+        || trimmed.starts_with("../")
 }
 
 pub fn secret_exists(root: &Path, scope: &str, name: &str) -> Result<bool> {
@@ -1234,6 +1245,30 @@ vercel-password-123
             get_secret_value(&root, "captured-input", "VERCEL_LOGIN_PASSWORD")?,
             "vercel-password-123"
         );
+
+        let _ = fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn auto_intake_does_not_rewrite_workspace_paths_as_secrets() -> Result<()> {
+        let root = temp_root("prompt-auto-intake-workspace-path");
+        fs::create_dir_all(&root)?;
+        let workspace =
+            "/home/metricspace/ctox/runtime/model-smoke/20260506T195937-hy3-responses-id-smoke";
+        let prompt = format!(
+            "Work only inside this workspace: {workspace}\nCreate smoke.txt in that workspace."
+        );
+
+        let result = auto_intake_prompt_secrets(&root, &prompt)?;
+
+        assert_eq!(result.auto_ingested_secrets, 0);
+        assert_eq!(result.sanitized_prompt, prompt);
+        assert!(!secret_exists(
+            &root,
+            "captured-input",
+            "WORK_ONLY_INSIDE_THIS_WORKSPACE"
+        )?);
 
         let _ = fs::remove_dir_all(&root);
         Ok(())
