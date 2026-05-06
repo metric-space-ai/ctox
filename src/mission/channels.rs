@@ -1918,12 +1918,19 @@ pub fn update_queue_task(root: &Path, request: QueueTaskUpdateRequest) -> Result
     } else if request.clear_skill {
         metadata.remove("skill");
     }
-    if let Some(workspace_root) = normalize_workspace_root(request.workspace_root.as_deref())
-        .or_else(|| legacy_workspace_root_from_prompt(&prompt))
-    {
+    if let Some(workspace_root) = normalize_workspace_root(request.workspace_root.as_deref()) {
         metadata.insert("workspace_root".to_string(), Value::String(workspace_root));
     } else if request.clear_workspace_root {
         metadata.remove("workspace_root");
+    } else if metadata
+        .get("workspace_root")
+        .and_then(Value::as_str)
+        .and_then(|value| normalize_workspace_root(Some(value)))
+        .is_none()
+    {
+        if let Some(workspace_root) = legacy_workspace_root_from_prompt(&prompt) {
+            metadata.insert("workspace_root".to_string(), Value::String(workspace_root));
+        }
     }
     if let Some(note) = request
         .status_note
@@ -7223,6 +7230,52 @@ mod tests {
         assert_eq!(
             legacy.workspace_root.as_deref(),
             Some("/tmp/ctox-legacy-workspace")
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn queue_task_prompt_update_preserves_existing_workspace_root() {
+        let root = std::env::temp_dir().join(format!(
+            "ctox-queue-workspace-update-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("failed to create temp test root");
+
+        let task = create_queue_task(
+            &root,
+            QueueTaskCreateRequest {
+                title: "workspace update".to_string(),
+                prompt: "Create and verify artifacts.".to_string(),
+                thread_key: "queue/workspace-update".to_string(),
+                workspace_root: Some("/tmp/ctox-original-workspace".to_string()),
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create workspace task");
+
+        let updated = update_queue_task(
+            &root,
+            QueueTaskUpdateRequest {
+                message_key: task.message_key,
+                prompt: Some(
+                    "HARNESS FEEDBACK\n\nCURRENT TASK\nWork only inside this workspace: /tmp/wrong-inline-text Execution contract: keep working.\n\nRUNTIME FAILURE\nx".to_string(),
+                ),
+                ..Default::default()
+            },
+        )
+        .expect("failed to update workspace task");
+
+        assert_eq!(
+            updated.workspace_root.as_deref(),
+            Some("/tmp/ctox-original-workspace")
         );
 
         let _ = fs::remove_dir_all(&root);

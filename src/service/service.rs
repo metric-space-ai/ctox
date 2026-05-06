@@ -10106,7 +10106,10 @@ fn prepend_workspace_contract(prompt: &str, workspace_root: Option<&str>) -> Str
     else {
         return prompt.to_string();
     };
-    if prompt.contains("Work only inside this workspace:") {
+    if prompt
+        .trim_start()
+        .starts_with("Work only inside this workspace:")
+    {
         return prompt.to_string();
     }
     format!(
@@ -10849,6 +10852,7 @@ fn apply_runtime_retry_feedback_to_leased_queue(
             channels::QueueTaskUpdateRequest {
                 message_key: message_key.clone(),
                 prompt: Some(feedback_prompt.clone()),
+                workspace_root: job.workspace_root.clone(),
                 status_note: Some(note.clone()),
                 ..Default::default()
             },
@@ -10994,11 +10998,38 @@ fn render_runtime_retry_prompt(job: &QueuedPrompt, error_text: &str) -> String {
     }
     let prompt = format!(
         "HARNESS FEEDBACK\nProblem: {problem}\n\nCURRENT TASK\n{}\n\nRUNTIME FAILURE\n{}\n\nREQUIRED ACTIONS\n- {}\n\nEXIT GATE\nFinish only after the durable outcome exists in runtime state. If the runtime is still unavailable, keep the work pending instead of claiming completion.",
-        summarize_follow_up_goal(&job.goal),
+        runtime_retry_current_task_summary(job),
         clip_text(error_text.trim(), 220),
         required_actions.join("\n- ")
     );
     prepend_workspace_contract(&prompt, job.workspace_root.as_deref())
+}
+
+fn runtime_retry_current_task_summary(job: &QueuedPrompt) -> String {
+    let prompt = strip_harness_feedback_wrappers(&job.prompt);
+    let goal = strip_harness_feedback_wrappers(&job.goal);
+    let candidate = if !prompt.trim().is_empty() && prompt.trim() != job.prompt.trim() {
+        prompt
+    } else {
+        goal
+    };
+    summarize_follow_up_goal(candidate)
+}
+
+fn strip_harness_feedback_wrappers(value: &str) -> &str {
+    let mut current = value.trim();
+    loop {
+        let Some(current_task_start) = current.find("\n\nCURRENT TASK\n") else {
+            return current;
+        };
+        let after_current_task = current_task_start + "\n\nCURRENT TASK\n".len();
+        let Some(runtime_failure_start) =
+            current[after_current_task..].find("\n\nRUNTIME FAILURE\n")
+        else {
+            return current;
+        };
+        current = current[after_current_task..after_current_task + runtime_failure_start].trim();
+    }
 }
 
 fn runnable_thread_task_exists_ignoring(
@@ -15833,7 +15864,39 @@ Required artifacts. You must create and maintain exactly these durable files in 
         assert!(reloaded
             .prompt
             .contains("Create and verify the smoke artifact."));
+        assert_eq!(reloaded.workspace_root.as_deref(), Some("/tmp/qwen-smoke"));
         assert_eq!(route_status_for(&root, &task.message_key), "leased");
+    }
+
+    #[test]
+    fn runtime_retry_prompt_strips_nested_harness_feedback() {
+        let original =
+            "Work only inside this workspace:\n/home/metricspace\n\nRun Terminal-Bench 2 cleanly.";
+        let nested = format!(
+            "HARNESS FEEDBACK\nProblem: x\n\nCURRENT TASK\n{original}\n\nRUNTIME FAILURE\ny\n\nREQUIRED ACTIONS\n- z"
+        );
+        let job = QueuedPrompt {
+            prompt: nested.clone(),
+            goal: nested,
+            preview: "Terminal-Bench 2".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: None,
+            leased_message_keys: Vec::new(),
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("tb2".to_string()),
+            workspace_root: Some("/home/metricspace".to_string()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let prompt =
+            render_runtime_retry_prompt(&job, "terminal-bench preflight violation: bad first call");
+
+        assert!(prompt.contains("Run Terminal-Bench 2 cleanly."));
+        assert_eq!(prompt.matches("RUNTIME FAILURE").count(), 1);
+        assert!(!prompt.contains("CURRENT TASK\nHARNESS FEEDBACK"));
+        assert!(prompt.starts_with("Work only inside this workspace:\n/home/metricspace"));
     }
 
     #[test]
