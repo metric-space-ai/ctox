@@ -2977,7 +2977,16 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
             // history). The reviewer either ratifies the result (PASS) or
             // CTOX enqueues a rework slice with the reviewer's report as
             // input. Errors / timeouts skip the review (no slice to judge).
-            let review_disposition = if let Ok(reply_text) = result.as_ref() {
+            let review_disposition = if completion_review_should_skip_feedback_turn(&job) {
+                push_event(
+                    &state,
+                    format!(
+                        "Completion review skipped for {} because feedback turns must not review themselves",
+                        job.source_label
+                    ),
+                );
+                CompletionReviewDisposition::None
+            } else if let Ok(reply_text) = result.as_ref() {
                 push_event(
                     &state,
                     format!(
@@ -4300,6 +4309,10 @@ fn completion_review_unavailable_disposition(
     }
 
     CompletionReviewDisposition::None
+}
+
+fn completion_review_should_skip_feedback_turn(job: &QueuedPrompt) -> bool {
+    job.source_label == "review-feedback"
 }
 
 fn continuation_self_work_requested<'a>(
@@ -18838,6 +18851,7 @@ The previous controller turn is incomplete. Update these files now:\n\
 
         assert!(is_terminal_bench_controller_artifact_job(&job));
         assert!(terminal_bench_preflight_spec_for_job(&job).is_none());
+        assert!(completion_review_should_skip_feedback_turn(&job));
         let prompt = artifact_first_execution_prompt(&job);
         assert!(!prompt.starts_with("HARNESS TERMINAL-BENCH PREFLIGHT"));
         assert!(prompt.contains("ORIGINAL TASK"));
