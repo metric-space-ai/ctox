@@ -245,11 +245,16 @@ clean_stale_cmake_cache_dirs() {
   local source_root="${2:-}"
   [[ -d "$target_dir" ]] || return 0
 
+  local scan_dir="$target_dir"
+  if command -v readlink >/dev/null 2>&1; then
+    scan_dir="$(readlink -f "$target_dir" 2>/dev/null || printf '%s\n' "$target_dir")"
+  fi
+
   local cache_file
   while IFS= read -r -d '' cache_file; do
     printf '  %b%bremoving stale CMake cache %s%b\n' "$C_BOLD" "$C_GREY" "$cache_file" "$C_RESET" >&2
     rm -rf "$(dirname "$cache_file")"
-  done < <(find "$target_dir" -name 'CMakeCache.txt' -print0 2>/dev/null)
+  done < <(find "$scan_dir" -name 'CMakeCache.txt' -print0 2>/dev/null)
 }
 
 # ── Interactive backend selector ─────────────────────────────────────────────
