@@ -212,6 +212,34 @@ run_build_module() {
   tui_module_done "$label" "$started"
 }
 
+prepare_cargo_target_cache() {
+  local link_path="$1"
+  local cache_key="$2"
+  [[ "${CTOX_DISABLE_CARGO_TARGET_CACHE:-0}" == "1" ]] && return 0
+  [[ -n "${CACHE_ROOT:-}" ]] || return 0
+
+  local cache_dir="$CACHE_ROOT/cargo-target/$cache_key"
+  mkdir -p "$cache_dir"
+
+  if [[ -L "$link_path" ]]; then
+    ln -sfn "$cache_dir" "$link_path"
+    return 0
+  fi
+  if [[ ! -e "$link_path" ]]; then
+    mkdir -p "$(dirname "$link_path")"
+    ln -s "$cache_dir" "$link_path" 2>/dev/null || true
+    return 0
+  fi
+  if [[ -d "$link_path" ]] && [[ -z "$(find "$link_path" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]]; then
+    rmdir "$link_path" 2>/dev/null || true
+    ln -s "$cache_dir" "$link_path" 2>/dev/null || true
+    return 0
+  fi
+
+  printf '  %b%breusing local cargo target at %s; cache link skipped because it already exists%b\n' \
+    "$C_BOLD" "$C_GREY" "$link_path" "$C_RESET" >&2
+}
+
 # ── Interactive backend selector ─────────────────────────────────────────────
 tui_select_backend() {
   local detected_gpu="$1"     # "nvidia", "metal", "none"
@@ -1247,6 +1275,7 @@ CUDASRC
 build_ctox() {
   local source_root="$1"
   local cargo; cargo="$(resolve_cargo)"
+  prepare_cargo_target_cache "$source_root/target" "ctox-main"
 
   # 1. Build main CTOX binary
   run_build_module "ctox CLI" "$source_root" "$cargo" build --release --bin ctox
@@ -1254,6 +1283,7 @@ build_ctox() {
   cp "$source_root/target/release/ctox" "$source_root/bin/" 2>/dev/null || true
 
   if [[ -f "$source_root/desktop/Cargo.toml" ]]; then
+    prepare_cargo_target_cache "$source_root/desktop/target" "ctox-desktop"
     run_build_module "ctox desktop host" "$source_root" "$cargo" build --release --manifest-path desktop/Cargo.toml --bin ctox-desktop-host
     cp "$source_root/desktop/target/release/ctox-desktop-host" "$source_root/bin/" 2>/dev/null || true
   fi
@@ -1263,6 +1293,7 @@ build_ctox() {
   # build it explicitly when the source crate is present.
   local qwen36_backend_dir="$source_root/src/inference/models/qwen36_35b_a3b_ggml"
   if [[ -f "$qwen36_backend_dir/Cargo.toml" ]]; then
+    prepare_cargo_target_cache "$qwen36_backend_dir/target" "qwen36-35b-a3b-ggml"
     run_build_module "Qwen3.6 ggml backend" "$qwen36_backend_dir" "$cargo" build --release --bin qwen36-35b-a3b-ggml-server
   fi
 
@@ -1839,6 +1870,7 @@ parse_args() {
         printf '  CTOX_BIN_DIR                Same as --bin-dir\n'
         printf '  CTOX_TOOLS_ROOT             Canonical install root for CTOX-managed helper tools\n'
         printf '  CTOX_DEPENDENCIES_ROOT      Canonical install root for downloaded dependencies/assets\n'
+        printf '  CTOX_DISABLE_CARGO_TARGET_CACHE=1 Disable persistent upgrade build cache\n'
         printf '  CTOX_REPO                   Same as --repo\n'
         printf '  CTOX_BRANCH                 Same as --branch\n\n'
         exit 0
