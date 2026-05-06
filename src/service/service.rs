@@ -7761,10 +7761,15 @@ fn is_bounded_benchmark_or_runtime_execution_job(job: &QueuedPrompt) -> bool {
                 || haystack.contains("run-log.md")));
     let concrete_execution = haystack.contains("run_dir=")
         || haystack.contains("required output artifacts")
+        || haystack.contains("required artifacts")
+        || haystack.contains("required files:")
+        || haystack.contains("required files")
         || haystack.contains("durable artifact contract")
         || haystack.contains("required durable files")
         || haystack.contains("write these exact files")
         || haystack.contains("use shell/tools")
+        || haystack.contains("use shell tools")
+        || haystack.contains("harbor")
         || haystack.contains("local ipc")
         || haystack.contains("local ctox ipc")
         || haystack.contains("context_window")
@@ -14401,6 +14406,88 @@ Create these five files immediately, before open-ended discovery or research.\n\
         let items = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
             .expect("failed to list self-work");
         assert!(items.is_empty());
+    }
+
+    #[test]
+    fn terminal_bench_controller_with_required_artifacts_does_not_reroute_or_infer_extra_files() {
+        let root = temp_root("ctox-terminal-bench-required-artifacts-no-strategy-reroute");
+        let run_dir = "/home/metricspace/CTOX/runtime/terminal-bench-2/runs/run-required-artifacts";
+        let prompt = format!(
+            "You are CTOX running a Terminal-Bench 2 evaluation controller on this 4xGPU host.\n\n\
+Hard runtime facts you must verify before doing benchmark work:\n\
+- CTOX release must be branch-main-20260506T031528Z or newer.\n\
+- Harness model must be Qwen/Qwen3.6-35B-A3B.\n\
+- Inference source must be local.\n\
+- Local runtime must be ggml.\n\
+- Effective context must be 131072 tokens (128k). Any smaller context is invalid and must be fixed before continuing.\n\
+- The Qwen process must use --ctx 131072 and CUDA GPUs 0,1,2,3.\n\
+- Do not use an HTTP inference path.\n\n\
+Your mission is to run Terminal-Bench 2 through Harbor as an honest benchmark controller.\n\
+Public references to use:\n\
+- https://registry.hub.databricks.com/environments/terminal-bench:2.0\n\
+- https://evalscope.readthedocs.io/en/latest/third_party/terminal_bench.html\n\
+- https://www.tbench.ai/leaderboard\n\
+- https://github.com/laude-institute/terminal-bench\n\n\
+Required artifacts. You must create and maintain exactly these durable files in this run directory:\n\
+- {run_dir}/controller.json\n\
+- {run_dir}/ticket-map.jsonl\n\
+- {run_dir}/run-log.md\n\
+- {run_dir}/knowledge.md\n\
+- {run_dir}/results.json\n\n\
+Initial artifact requirements:\n\
+- controller.json must include the phase.\n\
+- ticket-map.jsonl must include preparation tickets.\n\n\
+Use shell tools to create or update these files."
+        );
+        let queue_task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Terminal-Bench 2 controller Qwen3.6 128k c1ad584".to_string(),
+                prompt: prompt.clone(),
+                thread_key: "queue/terminal-bench-2-controller-qwen3-6".to_string(),
+                workspace_root: Some("/home/metricspace/CTOX/runtime/terminal-bench-2".to_string()),
+                priority: "urgent".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to seed Terminal-Bench queue task");
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        let job = QueuedPrompt {
+            prompt: queue_task.prompt.clone(),
+            goal: queue_task.title.clone(),
+            preview: queue_task.title.clone(),
+            source_label: "queue".to_string(),
+            suggested_skill: None,
+            leased_message_keys: vec![queue_task.message_key.clone()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("queue/terminal-bench-2-controller-qwen3-6".to_string()),
+            workspace_root: Some("/home/metricspace/CTOX/runtime/terminal-bench-2".to_string()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let redirected = maybe_redirect_owner_visible_work_to_strategy_setup(&root, &state, &job)
+            .expect("strategy evaluation should succeed");
+        assert!(!redirected);
+
+        let paths = expected_outcome_artifacts_for_job(&job)
+            .iter()
+            .filter(|artifact| artifact.kind == ArtifactKind::WorkspaceFile)
+            .map(|artifact| artifact.primary_key.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            paths,
+            vec![
+                format!("{run_dir}/controller.json"),
+                format!("{run_dir}/ticket-map.jsonl"),
+                format!("{run_dir}/run-log.md"),
+                format!("{run_dir}/knowledge.md"),
+                format!("{run_dir}/results.json"),
+            ]
+        );
     }
 
     #[test]
