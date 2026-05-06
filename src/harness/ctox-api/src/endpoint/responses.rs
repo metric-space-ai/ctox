@@ -81,9 +81,7 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
 
         let mut body = serde_json::to_value(&request)
             .map_err(|e| ApiError::Stream(format!("failed to encode responses request: {e}")))?;
-        if request.store && self.session.provider().is_azure_responses_endpoint() {
-            attach_item_ids(&mut body, &request.input);
-        }
+        attach_item_ids(&mut body, &request.input);
 
         let mut headers = extra_headers;
         if let Some(ref conv_id) = conversation_id {

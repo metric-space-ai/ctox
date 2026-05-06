@@ -2176,15 +2176,26 @@ fn status_from_shared_state(root: &Path, state: &Arc<Mutex<SharedState>>) -> Res
     let in_memory_pending_count = shared.pending_prompts.len();
     drop(shared);
 
-    let durable_tasks =
-        channels::list_queue_tasks(root, &["pending".to_string(), "leased".to_string()], 6)
-            .unwrap_or_default();
+    let durable_tasks = channels::list_queue_tasks(
+        root,
+        &[
+            "pending".to_string(),
+            "leased".to_string(),
+            "blocked".to_string(),
+        ],
+        6,
+    )
+    .unwrap_or_default();
     let ticket_cases = tickets::list_cases(root, None, 6).unwrap_or_default();
     for task in &durable_tasks {
         if pending_previews.len() >= 6 {
             break;
         }
-        let preview = format!("queue  {}", clip_text(task.title.trim(), 120));
+        let preview = if task.route_status == "blocked" {
+            format!("queue blocked  {}", clip_text(task.title.trim(), 112))
+        } else {
+            format!("queue  {}", clip_text(task.title.trim(), 120))
+        };
         if !pending_previews.iter().any(|existing| existing == &preview) {
             pending_previews.push(preview);
         }
@@ -12924,6 +12935,36 @@ mod tests {
         assert!(status.pending_previews.is_empty());
         assert_eq!(status.current_goal_preview, None);
         assert_eq!(status.recent_events, vec!["ready".to_string()]);
+    }
+
+    #[test]
+    fn service_status_surfaces_blocked_queue_tasks() {
+        let root = temp_root("status-blocked-queue");
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "HY3 smoke artifact missing".to_string(),
+                prompt: "Create the missing smoke artifact.".to_string(),
+                thread_key: "queue/status-blocked".to_string(),
+                workspace_root: None,
+                priority: "high".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create queue task");
+        channels::set_queue_task_route_status(&root, &task.message_key, "blocked")
+            .expect("failed to block queue task");
+        let state = Arc::new(Mutex::new(SharedState::default()));
+
+        let status = status_from_shared_state(&root, &state).expect("status should load");
+
+        assert_eq!(status.pending_count, 1);
+        assert!(status
+            .pending_previews
+            .iter()
+            .any(|preview| preview.contains("queue blocked  HY3 smoke artifact missing")));
     }
 
     #[cfg(unix)]
