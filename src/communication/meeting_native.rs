@@ -1205,6 +1205,14 @@ pub(crate) fn run_meeting_session(root: &Path, config: &MeetingSessionConfig) ->
                     &text[..text.len().min(80)]
                 );
             }
+            "ffmpeg_error" => {
+                let text = event.get("text").and_then(Value::as_str).unwrap_or("");
+                eprintln!("[meeting] ffmpeg error: {}", &text[..text.len().min(200)]);
+            }
+            "ffmpeg_exit" => {
+                let code = event.get("code").and_then(Value::as_i64).unwrap_or(-1);
+                eprintln!("[meeting] ffmpeg exited with code {code}");
+            }
             "participant_count" => {
                 let count = event.get("count").and_then(Value::as_u64).unwrap_or(0);
                 eprintln!("[meeting] participants: {count}");
@@ -3143,7 +3151,10 @@ if (provider === "microsoft" && process.platform !== "darwin") {
     if (s.includes("error") || s.includes("Error")) emit({ type: "ffmpeg_error", text: s.substring(0, 200) });
   });
   ffmpeg.on("exit", (code) => {
-    if (code !== 0 && code !== null) emit({ type: "ffmpeg_exit", code });
+    if (code !== 0 && code !== null) {
+      emit({ type: "ffmpeg_exit", code });
+      window.ctoxMeetingEnd?.("ffmpeg_exit");
+    }
   });
 
   // Teams participant detection (from reference) + audio silence via parec
