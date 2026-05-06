@@ -252,6 +252,9 @@ fn terminal_bench_first_preflight_command_is_valid(
     if !lower.contains("test -f") {
         return false;
     }
+    if command_writes_empty_terminal_bench_artifacts(&lower) {
+        return false;
+    }
     let creates_files = [
         "cat >", "cat <<", "tee ", "touch ", "printf ", "python", "perl ", "jq ", "install ", ">>",
         ">",
@@ -271,10 +274,69 @@ fn terminal_bench_first_preflight_command_is_valid(
             return false;
         }
     }
-    if requires_runtime_refs && !(lower.contains("queue add") || lower.contains("blocker")) {
+    if requires_runtime_refs && !terminal_bench_command_persists_runtime_refs(&lower) {
         return false;
     }
     true
+}
+
+fn command_writes_empty_terminal_bench_artifacts(lower_command: &str) -> bool {
+    [
+        "printf '' >",
+        "printf \"\" >",
+        "echo -n '' >",
+        "echo -n \"\" >",
+        "touch ",
+    ]
+    .iter()
+    .any(|needle| lower_command.contains(needle))
+        && [
+            "ticket-map.jsonl",
+            "preparation-tickets.jsonl",
+            "run-queue.jsonl",
+            "results.jsonl",
+        ]
+        .iter()
+        .any(|needle| lower_command.contains(needle))
+}
+
+fn terminal_bench_command_persists_runtime_refs(lower_command: &str) -> bool {
+    if lower_command.contains("ctox queue add") || lower_command.contains("queue add") {
+        return true;
+    }
+    if !lower_command.contains("blocker") {
+        return false;
+    }
+    if [
+        "\"blocker\":null",
+        "\"blocker\": null",
+        "'blocker':null",
+        "'blocker': null",
+        "blocker=null",
+        "blocker=none",
+        "\"blocker\":\"none\"",
+        "\"blocker\": \"none\"",
+    ]
+    .iter()
+    .any(|needle| lower_command.contains(needle))
+    {
+        return false;
+    }
+    [
+        "blocked",
+        "blocker:",
+        "blocker\":",
+        "blocker=",
+        "unavailable",
+        "failed",
+        "error",
+        "missing",
+        "not found",
+        "permission",
+        "unsupported",
+    ]
+    .iter()
+    .any(|needle| lower_command.contains(needle))
 }
 
 fn openai_chatgpt_subscription_auth_enabled(settings: &BTreeMap<String, String>) -> bool {
@@ -1332,10 +1394,13 @@ The controller must create preparation queue/tickets and record queue:system::* 
         let mut guard = TerminalBenchPreflightGuard::from_prompt(&prompt).unwrap();
         let command = format!(
             "RUN_DIR={run_dir}; mkdir -p \"$RUN_DIR/tasks\"; \
-touch \"$RUN_DIR/controller.json\" \"$RUN_DIR/ticket-map.jsonl\" \
-\"$RUN_DIR/preparation-tickets.jsonl\" \"$RUN_DIR/run-queue.jsonl\" \
-\"$RUN_DIR/results.jsonl\" \"$RUN_DIR/knowledge.md\" \"$RUN_DIR/logbook.md\" \
-\"$RUN_DIR/blogpost-notes.md\"; ctox queue add --title prep-runtime --prompt x; \
+printf '{{\"status\":\"preflight\"}}' > \"$RUN_DIR/controller.json\"; \
+printf '{{\"ticket\":\"prep\",\"message_key\":\"queue:system::abc\"}}\\n' > \"$RUN_DIR/ticket-map.jsonl\"; \
+printf '{{\"id\":\"prep\",\"state\":\"pending\"}}\\n' > \"$RUN_DIR/preparation-tickets.jsonl\"; \
+printf '{{\"id\":\"prep\",\"state\":\"pending\"}}\\n' > \"$RUN_DIR/run-queue.jsonl\"; \
+printf '{{\"status\":\"not_started\"}}\\n' > \"$RUN_DIR/results.jsonl\"; \
+printf '# knowledge\\n' > \"$RUN_DIR/knowledge.md\"; printf '# log\\n' > \"$RUN_DIR/logbook.md\"; \
+printf '# notes\\n' > \"$RUN_DIR/blogpost-notes.md\"; ctox queue add --title prep-runtime --prompt x; \
 test -f \"$RUN_DIR/controller.json\" && test -f \"$RUN_DIR/ticket-map.jsonl\" && \
 test -f \"$RUN_DIR/preparation-tickets.jsonl\" && test -f \"$RUN_DIR/run-queue.jsonl\" && \
 test -f \"$RUN_DIR/results.jsonl\" && test -f \"$RUN_DIR/knowledge.md\" && \
@@ -1343,6 +1408,43 @@ test -f \"$RUN_DIR/logbook.md\" && test -f \"$RUN_DIR/blogpost-notes.md\""
         );
 
         assert!(guard.violation_for_first_exec(&command).is_none());
+    }
+
+    #[test]
+    fn terminal_bench_preflight_guard_rejects_empty_artifacts_and_null_blocker() {
+        let run_dir = "/home/metricspace/CTOX/runtime/terminal-bench-2/runs/test-run";
+        let prompt = format!(
+            "HARNESS TERMINAL-BENCH PREFLIGHT\n\
+Only required durable files for this controller turn:\n\
+- {run_dir}/controller.json\n\
+- {run_dir}/ticket-map.jsonl\n\
+- {run_dir}/preparation-tickets.jsonl\n\
+- {run_dir}/run-queue.jsonl\n\
+- {run_dir}/results.jsonl\n\
+- {run_dir}/knowledge.md\n\
+- {run_dir}/logbook.md\n\
+- {run_dir}/blogpost-notes.md\n\
+The controller must create preparation queue/tickets and record queue:system::* keys."
+        );
+        let mut guard = TerminalBenchPreflightGuard::from_prompt(&prompt).unwrap();
+        let command = format!(
+            "RUN_DIR={run_dir}; mkdir -p \"$RUN_DIR/tasks\"; \
+printf '{{\"blocker\":null}}' > \"$RUN_DIR/controller.json\"; \
+printf '' > \"$RUN_DIR/ticket-map.jsonl\"; \
+printf '' > \"$RUN_DIR/preparation-tickets.jsonl\"; \
+printf '' > \"$RUN_DIR/run-queue.jsonl\"; \
+printf '' > \"$RUN_DIR/results.jsonl\"; \
+printf '# knowledge\\n' > \"$RUN_DIR/knowledge.md\"; \
+printf '# log\\n' > \"$RUN_DIR/logbook.md\"; \
+printf '# notes\\n' > \"$RUN_DIR/blogpost-notes.md\"; \
+test -f \"$RUN_DIR/controller.json\" && test -f \"$RUN_DIR/ticket-map.jsonl\" && \
+test -f \"$RUN_DIR/preparation-tickets.jsonl\" && test -f \"$RUN_DIR/run-queue.jsonl\" && \
+test -f \"$RUN_DIR/results.jsonl\" && test -f \"$RUN_DIR/knowledge.md\" && \
+test -f \"$RUN_DIR/logbook.md\" && test -f \"$RUN_DIR/blogpost-notes.md\""
+        );
+
+        let violation = guard.violation_for_first_exec(&command).unwrap();
+        assert!(violation.contains("one complete artifact bootstrap script"));
     }
 
     #[test]
