@@ -127,6 +127,7 @@ pub(crate) struct TeamsSendCommandRequest<'a> {
     pub sender_display: Option<&'a str>,
     pub subject: &'a str,
     pub body: &'a str,
+    pub attachments: &'a [String],
 }
 
 pub(crate) struct TeamsTestCommandRequest<'a> {

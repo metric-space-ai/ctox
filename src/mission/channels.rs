@@ -2531,6 +2531,7 @@ fn send_message(root: &Path, db_path: &Path, request: ChannelSendRequest) -> Res
                     sender_display: request.sender_display.as_deref(),
                     subject: &request.subject,
                     body: &request.body,
+                    attachments: &request.attachments,
                 },
             )?;
             Ok(json!({
@@ -2606,13 +2607,7 @@ fn send_message(root: &Path, db_path: &Path, request: ChannelSendRequest) -> Res
 }
 
 fn enforce_channel_attachment_support(request: &ChannelSendRequest) -> Result<()> {
-    if request.channel == "teams" && !request.attachments.is_empty() {
-        anyhow::bail!(
-            "Teams outbound attachments are not implemented yet; refusing to send `{}` with {} attachment(s) because the Teams adapter would not deliver the files.",
-            request.thread_key,
-            request.attachments.len()
-        );
-    }
+    let _ = request;
     Ok(())
 }
 
@@ -7996,7 +7991,7 @@ mod tests {
     }
 
     #[test]
-    fn teams_send_rejects_attachments_until_graph_upload_is_implemented() {
+    fn teams_send_allows_attachments_for_adapter_delivery() {
         let request = ChannelSendRequest {
             channel: "teams".to_string(),
             account_key: "teams:inf.yoda@example.test".to_string(),
@@ -8012,9 +8007,8 @@ mod tests {
             reviewed_founder_send: false,
         };
 
-        let err = enforce_channel_attachment_support(&request)
-            .expect_err("Teams attachments must not be silently ignored");
-        assert!(err.to_string().contains("Teams outbound attachments"));
+        enforce_channel_attachment_support(&request)
+            .expect("Teams attachments are handed to the adapter for Graph delivery");
     }
 
     #[test]

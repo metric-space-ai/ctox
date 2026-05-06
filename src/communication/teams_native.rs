@@ -7,9 +7,12 @@ use url::Url;
 use crate::communication::adapters::{
     AdapterSyncCommandRequest, TeamsSendCommandRequest, TeamsTestCommandRequest,
 };
+use crate::communication::attachments::{
+    load_outbound_attachments, refs_for_paths, AttachmentFile,
+};
 use crate::communication::email_native as communication_email_native;
 use crate::communication::microsoft_graph_auth::{
-    acquire_app_token, acquire_ropc_token, ROPC_PUBLIC_CLIENT_ID,
+    acquire_app_token, acquire_ropc_token, urlencoding_encode, ROPC_PUBLIC_CLIENT_ID,
 };
 use crate::mission::channels::{
     ensure_account, ensure_routing_rows_for_inbound, now_iso_string, open_channel_db, preview_text,
@@ -52,8 +55,20 @@ struct TeamsInboundMessage {
     preview: String,
     seen: bool,
     has_attachments: bool,
+    attachment_refs: Vec<String>,
     external_created_at: String,
     metadata: Value,
+}
+
+#[derive(Clone, Debug)]
+struct TeamsUploadedAttachment {
+    id: String,
+    name: String,
+    content_type: String,
+    source_path: String,
+    size_bytes: u64,
+    web_url: String,
+    drive_item_id: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -159,6 +174,85 @@ impl GraphTeamsClient {
             bail!("Graph HTTP {}: {value}", response.status);
         }
         Ok(value)
+    }
+
+    fn request_bytes(
+        &self,
+        method: &str,
+        path: &str,
+        content_type: &str,
+        body: &[u8],
+    ) -> Result<Value> {
+        let url = Url::parse(&(self.base_url.clone() + path))
+            .with_context(|| format!("invalid Graph url: {}{}", self.base_url, path))?;
+        let mut headers = self.headers();
+        headers.insert("content-type".to_string(), content_type.to_string());
+        let response =
+            communication_email_native::http_request(method, url.as_str(), &headers, Some(body))?;
+        let value = if response.body.is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_slice::<Value>(&response.body).unwrap_or_else(|_| {
+                Value::String(String::from_utf8_lossy(&response.body).into_owned())
+            })
+        };
+        if !(200..300).contains(&response.status) {
+            bail!("Graph HTTP {}: {value}", response.status);
+        }
+        Ok(value)
+    }
+
+    fn upload_drive_attachment(
+        &self,
+        attachment: &AttachmentFile,
+    ) -> Result<TeamsUploadedAttachment> {
+        let folder = urlencoding_encode("CTOX Attachments");
+        let file_name = urlencoding_encode(&attachment.file_name);
+        let item = self.request_bytes(
+            "PUT",
+            &format!("/me/drive/root:/{folder}/{file_name}:/content"),
+            &attachment.content_type,
+            &attachment.bytes,
+        )?;
+        let drive_item_id = item
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let web_url = item
+            .get("webUrl")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .or_else(|| {
+                (!drive_item_id.is_empty())
+                    .then(|| self.create_drive_link(&drive_item_id).ok())
+                    .flatten()
+            })
+            .context("Graph drive upload did not return a webUrl or share link")?;
+        Ok(TeamsUploadedAttachment {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: attachment.file_name.clone(),
+            content_type: attachment.content_type.clone(),
+            source_path: attachment.path.display().to_string(),
+            size_bytes: attachment.size_bytes,
+            web_url,
+            drive_item_id,
+        })
+    }
+
+    fn create_drive_link(&self, drive_item_id: &str) -> Result<String> {
+        let value = self.request(
+            "POST",
+            &format!("/me/drive/items/{drive_item_id}/createLink"),
+            &[],
+            Some(&json!({"type": "view", "scope": "organization"})),
+        )?;
+        value
+            .get("link")
+            .and_then(|link| link.get("webUrl"))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .context("Graph createLink response did not include link.webUrl")
     }
 
     fn list_channel_messages(
@@ -284,13 +378,9 @@ impl GraphTeamsClient {
         team_id: &str,
         channel_id: &str,
         body_content: &str,
+        attachments: &[TeamsUploadedAttachment],
     ) -> Result<Value> {
-        let payload = json!({
-            "body": {
-                "contentType": "text",
-                "content": body_content,
-            },
-        });
+        let payload = build_teams_send_payload(body_content, attachments);
         self.request(
             "POST",
             &format!("/teams/{team_id}/channels/{channel_id}/messages"),
@@ -305,13 +395,9 @@ impl GraphTeamsClient {
         channel_id: &str,
         message_id: &str,
         body_content: &str,
+        attachments: &[TeamsUploadedAttachment],
     ) -> Result<Value> {
-        let payload = json!({
-            "body": {
-                "contentType": "text",
-                "content": body_content,
-            },
-        });
+        let payload = build_teams_send_payload(body_content, attachments);
         self.request(
             "POST",
             &format!("/teams/{team_id}/channels/{channel_id}/messages/{message_id}/replies"),
@@ -320,13 +406,13 @@ impl GraphTeamsClient {
         )
     }
 
-    fn send_chat_message(&self, chat_id: &str, body_content: &str) -> Result<Value> {
-        let payload = json!({
-            "body": {
-                "contentType": "text",
-                "content": body_content,
-            },
-        });
+    fn send_chat_message(
+        &self,
+        chat_id: &str,
+        body_content: &str,
+        attachments: &[TeamsUploadedAttachment],
+    ) -> Result<Value> {
+        let payload = build_teams_send_payload(body_content, attachments);
         self.request(
             "POST",
             &format!("/chats/{chat_id}/messages"),
@@ -338,6 +424,48 @@ impl GraphTeamsClient {
     fn get_app_info(&self) -> Result<Value> {
         self.request("GET", "/organization", &[], None)
     }
+}
+
+fn build_teams_send_payload(body_content: &str, attachments: &[TeamsUploadedAttachment]) -> Value {
+    if attachments.is_empty() {
+        return json!({
+            "body": {
+                "contentType": "text",
+                "content": body_content,
+            },
+        });
+    }
+
+    let attachment_tags = attachments
+        .iter()
+        .map(|attachment| format!("<attachment id=\"{}\"></attachment>", attachment.id))
+        .collect::<Vec<_>>()
+        .join("");
+    let content = if body_content.trim().is_empty() {
+        attachment_tags
+    } else {
+        format!("{attachment_tags}<p>{}</p>", html_escape(body_content))
+    };
+    json!({
+        "body": {
+            "contentType": "html",
+            "content": content,
+        },
+        "attachments": attachments.iter().map(|attachment| json!({
+            "id": attachment.id,
+            "contentType": "reference",
+            "contentUrl": attachment.web_url,
+            "name": attachment.name,
+        })).collect::<Vec<_>>(),
+    })
+}
+
+fn html_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 pub(crate) fn sync(
@@ -793,11 +921,13 @@ fn normalize_teams_message(
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
-    let has_attachments = msg
+    let attachments = msg
         .get("attachments")
         .and_then(Value::as_array)
-        .map(|items| !items.is_empty())
-        .unwrap_or(false);
+        .cloned()
+        .unwrap_or_default();
+    let attachment_refs = teams_attachment_refs(&attachments);
+    let has_attachments = !attachments.is_empty();
     let thread_key = format!(
         "{account_key}::{team_id}::{channel_id}::{}",
         msg.get("replyToId")
@@ -820,12 +950,14 @@ fn normalize_teams_message(
         body_text: body_text.clone(),
         seen: false,
         has_attachments,
+        attachment_refs,
         external_created_at: created,
         metadata: json!({
             "teams_message_id": id,
             "teams_team_id": team_id,
             "teams_channel_id": channel_id,
             "teams_reply_to_id": msg.get("replyToId").and_then(Value::as_str),
+            "attachments": attachments,
         }),
     })
 }
@@ -866,11 +998,13 @@ fn normalize_teams_chat_message(
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
-    let has_attachments = msg
+    let attachments = msg
         .get("attachments")
         .and_then(Value::as_array)
-        .map(|items| !items.is_empty())
-        .unwrap_or(false);
+        .cloned()
+        .unwrap_or_default();
+    let attachment_refs = teams_attachment_refs(&attachments);
+    let has_attachments = !attachments.is_empty();
     let thread_key = format!("{account_key}::chat::{chat_id}");
     let remote_id = id.to_string();
     let message_key = format!("{account_key}::INBOX::{remote_id}");
@@ -887,12 +1021,27 @@ fn normalize_teams_chat_message(
         preview: preview_text(&body_text, ""),
         seen: false,
         has_attachments,
+        attachment_refs,
         external_created_at: created,
         metadata: json!({
             "teams_message_id": id,
             "teams_chat_id": chat_id,
+            "attachments": attachments,
         }),
     })
+}
+
+fn teams_attachment_refs(attachments: &[Value]) -> Vec<String> {
+    attachments
+        .iter()
+        .filter_map(|attachment| {
+            attachment
+                .get("contentUrl")
+                .and_then(Value::as_str)
+                .or_else(|| attachment.get("name").and_then(Value::as_str))
+                .map(str::to_string)
+        })
+        .collect()
 }
 
 fn store_teams_message(conn: &mut rusqlite::Connection, msg: &TeamsInboundMessage) -> Result<()> {
@@ -917,7 +1066,7 @@ fn store_teams_message(conn: &mut rusqlite::Connection, msg: &TeamsInboundMessag
             preview: &msg.preview,
             body_text: &msg.body_text,
             body_html: "",
-            raw_payload_ref: "",
+            raw_payload_ref: &msg.attachment_refs.join("\n"),
             trust_level: "medium",
             status: "received",
             seen: msg.seen,
@@ -964,10 +1113,17 @@ fn execute_send(options: &TeamsOptions, request: &TeamsSendCommandRequest<'_>) -
         request.subject.to_string()
     };
 
+    let attachment_files = load_outbound_attachments(request.attachments)?;
+    let uploaded_attachments = attachment_files
+        .iter()
+        .map(|attachment| client.upload_drive_attachment(attachment))
+        .collect::<Result<Vec<_>>>()?;
+    let attachment_refs = refs_for_paths(request.attachments)?;
+    let raw_payload_ref = request.attachments.join("\n");
     let destination = resolve_send_destination(&thread_key, options)?;
     let (send_result, sent_team_id, sent_channel_id, sent_chat_id) = match &destination {
         TeamsSendDestination::Chat { chat_id } => (
-            client.send_chat_message(chat_id, request.body),
+            client.send_chat_message(chat_id, request.body, &uploaded_attachments),
             String::new(),
             String::new(),
             chat_id.clone(),
@@ -978,9 +1134,20 @@ fn execute_send(options: &TeamsOptions, request: &TeamsSendCommandRequest<'_>) -
             parent_message_id,
         } => {
             let result = if let Some(parent_id) = parent_message_id {
-                client.send_channel_reply(team_id, channel_id, parent_id, request.body)
+                client.send_channel_reply(
+                    team_id,
+                    channel_id,
+                    parent_id,
+                    request.body,
+                    &uploaded_attachments,
+                )
             } else {
-                client.send_channel_message(team_id, channel_id, request.body)
+                client.send_channel_message(
+                    team_id,
+                    channel_id,
+                    request.body,
+                    &uploaded_attachments,
+                )
             };
             (result, team_id.clone(), channel_id.clone(), String::new())
         }
@@ -1014,11 +1181,11 @@ fn execute_send(options: &TeamsOptions, request: &TeamsSendCommandRequest<'_>) -
             preview: &preview_text(request.body, &subject),
             body_text: request.body,
             body_html: "",
-            raw_payload_ref: "",
+            raw_payload_ref: &raw_payload_ref,
             trust_level: "high",
             status: if delivery_confirmed { "sent" } else { "failed" },
             seen: true,
-            has_attachments: false,
+            has_attachments: !request.attachments.is_empty(),
             external_created_at: &timestamp,
             observed_at: &timestamp,
             metadata_json: &serde_json::to_string(&json!({
@@ -1026,6 +1193,17 @@ fn execute_send(options: &TeamsOptions, request: &TeamsSendCommandRequest<'_>) -
                 "teams_team_id": sent_team_id,
                 "teams_channel_id": sent_channel_id,
                 "teams_chat_id": sent_chat_id,
+                "attachments": attachment_refs,
+                "teams_uploaded_attachments": uploaded_attachments.iter().map(|attachment| json!({
+                    "id": attachment.id,
+                    "name": attachment.name,
+                    "contentType": attachment.content_type,
+                    "sourcePath": attachment.source_path,
+                    "sizeBytes": attachment.size_bytes,
+                    "webUrl": attachment.web_url,
+                    "driveItemId": attachment.drive_item_id,
+                    "deliveryMethod": "graph_drive_reference",
+                })).collect::<Vec<_>>(),
             }))?,
         },
     )?;
@@ -1487,6 +1665,33 @@ mod tests {
             TeamsSendDestination::Chat {
                 chat_id: "configured-chat".to_string()
             }
+        );
+    }
+
+    #[test]
+    fn teams_send_payload_includes_reference_attachments() {
+        let attachments = vec![TeamsUploadedAttachment {
+            id: "att-1".to_string(),
+            name: "result.xlsx".to_string(),
+            content_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                .to_string(),
+            source_path: "/tmp/result.xlsx".to_string(),
+            size_bytes: 42,
+            web_url: "https://example.test/result.xlsx".to_string(),
+            drive_item_id: "drive-1".to_string(),
+        }];
+
+        let payload = build_teams_send_payload("Hier ist die Excel.", &attachments);
+
+        assert_eq!(payload["body"]["contentType"], "html");
+        assert!(payload["body"]["content"]
+            .as_str()
+            .unwrap()
+            .contains("<attachment id=\"att-1\"></attachment>"));
+        assert_eq!(payload["attachments"][0]["contentType"], "reference");
+        assert_eq!(
+            payload["attachments"][0]["contentUrl"],
+            "https://example.test/result.xlsx"
         );
     }
 

@@ -15,6 +15,7 @@ use std::time::Duration;
 use crate::communication::adapters::{
     AdapterSyncCommandRequest, WhatsappSendCommandRequest, WhatsappTestCommandRequest,
 };
+use crate::communication::attachments::{content_type_for_path, refs_for_paths};
 use crate::communication::runtime as communication_runtime;
 use crate::mission::channels::{
     ensure_account, ensure_routing_rows_for_inbound, now_iso_string, open_channel_db, preview_text,
@@ -70,6 +71,7 @@ struct WhatsappInboundMessage {
     preview: String,
     seen: bool,
     has_attachments: bool,
+    attachment_refs: Vec<String>,
     external_created_at: String,
     metadata: Value,
 }
@@ -344,7 +346,7 @@ async fn execute_send_async(
         } else {
             remote_ids.push(
                 account
-                    .send_document(&chat, &bytes, mime_type_for_path(&path), &file_name)
+                    .send_document(&chat, &bytes, content_type_for_path(&path), &file_name)
                     .await?,
             );
         }
@@ -361,10 +363,11 @@ async fn execute_send_async(
         request.thread_key.clone()
     };
     let recipients_json = serde_json::to_string(&vec![chat.to_non_ad().to_string()])?;
+    let attachment_refs = refs_for_paths(&request.attachments)?;
     let metadata_json = serde_json::to_string(&json!({
         "whatsapp_sent_message_ids": remote_ids,
         "whatsapp_chat_jid": chat.to_non_ad().to_string(),
-        "attachments": request.attachments,
+        "attachments": attachment_refs,
     }))?;
     let message_key = format!(
         "{account_key}::SENT::{}",
@@ -531,6 +534,18 @@ fn normalize_inbound_message(
         ))
     );
     let message_type = whatsapp_message_type(message);
+    let attachments = whatsapp_media_attachments(message);
+    let attachment_refs = attachments
+        .iter()
+        .filter_map(|attachment| {
+            attachment
+                .get("url")
+                .and_then(Value::as_str)
+                .or_else(|| attachment.get("directPath").and_then(Value::as_str))
+                .or_else(|| attachment.get("fileName").and_then(Value::as_str))
+                .map(str::to_string)
+        })
+        .collect::<Vec<_>>();
     Ok(WhatsappInboundMessage {
         message_key,
         account_key: account_key.to_string(),
@@ -547,7 +562,8 @@ fn normalize_inbound_message(
         preview: preview_text(&body_text, "WhatsApp"),
         body_text,
         seen: false,
-        has_attachments: message.is_media(),
+        has_attachments: !attachments.is_empty(),
+        attachment_refs,
         external_created_at,
         metadata: json!({
             "whatsapp_chat_jid": chat_jid,
@@ -558,8 +574,72 @@ fn normalize_inbound_message(
             "is_media": message.is_media(),
             "is_reaction": message.is_reaction(),
             "message_type": message_type,
+            "attachments": attachments,
         }),
     })
+}
+
+fn whatsapp_media_attachments(message: &IncomingMessage) -> Vec<Value> {
+    let mut attachments = Vec::new();
+    if let Some(image) = message.proto.image_message.as_ref() {
+        attachments.push(json!({
+            "kind": "image",
+            "contentType": image.mimetype.as_deref().unwrap_or("image/jpeg"),
+            "caption": image.caption.as_deref().unwrap_or(""),
+            "url": image.url.as_deref().unwrap_or(""),
+            "directPath": image.direct_path.as_deref().unwrap_or(""),
+            "sizeBytes": image.file_length.unwrap_or_default(),
+            "width": image.width.unwrap_or_default(),
+            "height": image.height.unwrap_or_default(),
+        }));
+    }
+    if let Some(video) = message.proto.video_message.as_ref() {
+        attachments.push(json!({
+            "kind": "video",
+            "contentType": video.mimetype.as_deref().unwrap_or("video/mp4"),
+            "caption": video.caption.as_deref().unwrap_or(""),
+            "url": video.url.as_deref().unwrap_or(""),
+            "directPath": video.direct_path.as_deref().unwrap_or(""),
+            "sizeBytes": video.file_length.unwrap_or_default(),
+            "width": video.width.unwrap_or_default(),
+            "height": video.height.unwrap_or_default(),
+            "seconds": video.seconds.unwrap_or_default(),
+        }));
+    }
+    if let Some(audio) = message.proto.audio_message.as_ref() {
+        attachments.push(json!({
+            "kind": "audio",
+            "contentType": audio.mimetype.as_deref().unwrap_or("audio/ogg"),
+            "url": audio.url.as_deref().unwrap_or(""),
+            "directPath": audio.direct_path.as_deref().unwrap_or(""),
+            "sizeBytes": audio.file_length.unwrap_or_default(),
+            "seconds": audio.seconds.unwrap_or_default(),
+            "pushToTalk": audio.ptt.unwrap_or(false),
+        }));
+    }
+    if let Some(document) = message.proto.document_message.as_ref() {
+        attachments.push(json!({
+            "kind": "document",
+            "fileName": document.file_name.as_deref().unwrap_or("attachment"),
+            "title": document.title.as_deref().unwrap_or(""),
+            "contentType": document.mimetype.as_deref().unwrap_or("application/octet-stream"),
+            "caption": document.caption.as_deref().unwrap_or(""),
+            "url": document.url.as_deref().unwrap_or(""),
+            "directPath": document.direct_path.as_deref().unwrap_or(""),
+            "sizeBytes": document.file_length.unwrap_or_default(),
+            "pageCount": document.page_count.unwrap_or_default(),
+        }));
+    }
+    if let Some(sticker) = message.proto.sticker_message.as_ref() {
+        attachments.push(json!({
+            "kind": "sticker",
+            "contentType": sticker.mimetype.as_deref().unwrap_or("image/webp"),
+            "url": sticker.url.as_deref().unwrap_or(""),
+            "directPath": sticker.direct_path.as_deref().unwrap_or(""),
+            "sizeBytes": sticker.file_length.unwrap_or_default(),
+        }));
+    }
+    attachments
 }
 
 fn store_inbound_message(
@@ -587,7 +667,7 @@ fn store_inbound_message(
             preview: &message.preview,
             body_text: &message.body_text,
             body_html: "",
-            raw_payload_ref: "",
+            raw_payload_ref: &message.attachment_refs.join("\n"),
             trust_level: "medium",
             status: "received",
             seen: message.seen,
@@ -949,24 +1029,6 @@ fn is_jpeg_file(path: &Path) -> bool {
             lowered == "jpg" || lowered == "jpeg"
         })
         .unwrap_or(false)
-}
-
-fn mime_type_for_path(path: &Path) -> &'static str {
-    match path
-        .extension()
-        .and_then(|value| value.to_str())
-        .map(|value| value.to_ascii_lowercase())
-        .as_deref()
-    {
-        Some("pdf") => "application/pdf",
-        Some("png") => "image/png",
-        Some("jpg") | Some("jpeg") => "image/jpeg",
-        Some("txt") | Some("md") => "text/plain",
-        Some("html") => "text/html",
-        Some("json") => "application/json",
-        Some("csv") => "text/csv",
-        _ => "application/octet-stream",
-    }
 }
 
 #[cfg(test)]

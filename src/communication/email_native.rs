@@ -17,6 +17,7 @@ use url::Url;
 use crate::communication::adapters::{
     AdapterSyncCommandRequest, EmailSendCommandRequest, EmailTestCommandRequest,
 };
+use crate::communication::attachments::{load_outbound_attachments, refs_for_paths};
 use crate::communication::microsoft_graph_auth::{
     acquire_app_token, acquire_ropc_token, ROPC_PUBLIC_CLIENT_ID,
 };
@@ -96,6 +97,7 @@ struct ParsedEmailMessage {
     body_text: String,
     body_html: String,
     has_attachments: bool,
+    attachments: Vec<Value>,
     /// RFC 3834 `Auto-Submitted` marker. Populated when the inbound
     /// header is present and its value is anything other than `no` /
     /// empty. We intentionally key off the structured RFC field instead
@@ -269,32 +271,28 @@ fn execute_send(options: &EmailOptions, request: &EmailSendCommandRequest<'_>) -
                 &message_id,
                 request.thread_key,
                 request.attachments,
-            );
+            )?;
             smtp.send_mail(&options.email, request.to, request.cc, &[], &raw_message)?;
             smtp.close();
         }
         "graph" => {
-            if !request.attachments.is_empty() {
-                bail!("email attachments are not yet supported for graph provider");
-            }
             GraphClient::from_options(options)?.send_mail(
                 request.subject,
                 request.body,
                 request.to,
                 request.cc,
                 &[],
+                request.attachments,
             )?;
         }
         "ews" | "owa" => {
-            if !request.attachments.is_empty() {
-                bail!("email attachments are not yet supported for ews/owa provider");
-            }
             EwsClient::from_options(options)?.send_mail(
                 request.subject,
                 request.body,
                 request.to,
                 request.cc,
                 &[],
+                request.attachments,
             )?;
         }
         "activesync" => {
@@ -303,6 +301,7 @@ fn execute_send(options: &EmailOptions, request: &EmailSendCommandRequest<'_>) -
         other => bail!("Unsupported email provider: {other}"),
     }
 
+    let attachment_refs = refs_for_paths(request.attachments)?;
     let delivery = verify_sent_delivery(options, request, &message_id, &send_started_at)?;
     let observed_at = now_iso_string();
     upsert_communication_message(
@@ -350,7 +349,7 @@ fn execute_send(options: &EmailOptions, request: &EmailSendCommandRequest<'_>) -
             metadata_json: &serde_json::to_string(&json!({
                 "messageId": message_id,
                 "delivery": delivery_json(&delivery),
-                "attachments": request.attachments,
+                "attachments": attachment_refs,
             }))?,
         },
     )?;
@@ -421,7 +420,7 @@ fn execute_test(options: &EmailOptions) -> Result<Value> {
                 &message_id,
                 "",
                 &[],
-            );
+            )?;
             smtp.send_mail(
                 &options.email,
                 &[options.email.clone()],
@@ -584,6 +583,7 @@ fn execute_sync(options: &EmailOptions) -> Result<Value> {
                                     || parsed.auto_response_suppress,
                                 "autoSubmittedValue": parsed.auto_submitted_value,
                                 "autoResponseSuppress": parsed.auto_response_suppress,
+                                "attachments": parsed.attachments,
                             }))?,
                         },
                     )?;
@@ -693,6 +693,7 @@ fn store_provider_message(
     }
     let observed_at = now_iso_string();
     let direction = synced_message_direction(&item.sender_address, &options.email);
+    let raw_payload_ref = provider_attachment_refs(&item.metadata).join("\n");
     upsert_communication_message(
         conn,
         UpsertMessage {
@@ -712,7 +713,7 @@ fn store_provider_message(
             preview: &item.preview,
             body_text: &item.body_text,
             body_html: &item.body_html,
-            raw_payload_ref: "",
+            raw_payload_ref: &raw_payload_ref,
             trust_level: &options.trust_level,
             status: "received",
             seen: item.seen,
@@ -724,6 +725,22 @@ fn store_provider_message(
     )?;
     refresh_thread(conn, &item.thread_key)?;
     Ok(true)
+}
+
+fn provider_attachment_refs(metadata: &Value) -> Vec<String> {
+    metadata
+        .get("attachments")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|attachment| {
+            attachment
+                .get("contentUrl")
+                .and_then(Value::as_str)
+                .or_else(|| attachment.get("name").and_then(Value::as_str))
+                .map(str::to_string)
+        })
+        .collect()
 }
 
 fn known_communication_message(conn: &Connection, message_key: &str) -> Result<bool> {
@@ -1296,7 +1313,8 @@ fn parse_rfc822_message(raw: &[u8]) -> Result<ParsedEmailMessage> {
         .get_first_value("X-Auto-Response-Suppress")
         .map(|value| !value.trim().is_empty())
         .unwrap_or(false);
-    let (body_text, body_html, has_attachments) = collect_mail_bodies(&parsed)?;
+    let (body_text, body_html, attachments) = collect_mail_bodies(&parsed)?;
+    let has_attachments = !attachments.is_empty();
     Ok(ParsedEmailMessage {
         subject,
         from_header,
@@ -1309,6 +1327,7 @@ fn parse_rfc822_message(raw: &[u8]) -> Result<ParsedEmailMessage> {
         body_text,
         body_html,
         has_attachments,
+        attachments,
         auto_submitted,
         auto_submitted_value,
         auto_response_suppress,
@@ -1340,26 +1359,45 @@ fn classify_auto_submitted_header(raw: Option<&str>) -> (bool, Option<String>) {
     (true, Some(raw.trim().to_string()))
 }
 
-fn collect_mail_bodies(parsed: &ParsedMail<'_>) -> Result<(String, String, bool)> {
+fn collect_mail_bodies(parsed: &ParsedMail<'_>) -> Result<(String, String, Vec<Value>)> {
     if parsed.subparts.is_empty() {
         let mimetype = parsed.ctype.mimetype.to_lowercase();
         let disposition = parsed.get_content_disposition();
         let has_attachment = matches!(disposition.disposition, DispositionType::Attachment);
+        let attachments = if has_attachment {
+            let fallback_name = format!("attachment.{}", extension_for_content_type(&mimetype));
+            let name = disposition
+                .params
+                .get("filename")
+                .or_else(|| parsed.ctype.params.get("name"))
+                .map(String::as_str)
+                .unwrap_or(&fallback_name)
+                .to_string();
+            let size_bytes = parsed.get_body_raw().map(|bytes| bytes.len()).unwrap_or(0);
+            vec![json!({
+                "name": name,
+                "contentType": mimetype.clone(),
+                "sizeBytes": size_bytes,
+                "source": "mime",
+            })]
+        } else {
+            Vec::new()
+        };
         let body = parsed.get_body().unwrap_or_default();
         if mimetype == "text/html" {
-            return Ok((strip_html(&body), body, has_attachment));
+            return Ok((strip_html(&body), body, attachments));
         }
         if mimetype.starts_with("text/") || mimetype.is_empty() {
-            return Ok((body, String::new(), has_attachment));
+            return Ok((body, String::new(), attachments));
         }
-        return Ok((String::new(), String::new(), has_attachment));
+        return Ok((String::new(), String::new(), attachments));
     }
 
     let mut body_text = String::new();
     let mut body_html = String::new();
-    let mut has_attachments = false;
+    let mut attachments = Vec::new();
     for part in &parsed.subparts {
-        let (part_text, part_html, part_attachments) = collect_mail_bodies(part)?;
+        let (part_text, part_html, mut part_attachments) = collect_mail_bodies(part)?;
         if body_text.is_empty() && !part_text.trim().is_empty() {
             body_text = part_text;
         } else if looks_like_calendar_text(&part_text) {
@@ -1371,12 +1409,24 @@ fn collect_mail_bodies(parsed: &ParsedMail<'_>) -> Result<(String, String, bool)
         if body_html.is_empty() && !part_html.trim().is_empty() {
             body_html = part_html;
         }
-        has_attachments |= part_attachments;
+        attachments.append(&mut part_attachments);
     }
     if body_text.is_empty() && !body_html.is_empty() {
         body_text = strip_html(&body_html);
     }
-    Ok((body_text, body_html, has_attachments))
+    Ok((body_text, body_html, attachments))
+}
+
+fn extension_for_content_type(content_type: &str) -> &'static str {
+    match content_type {
+        "application/pdf" => "pdf",
+        "image/jpeg" => "jpg",
+        "image/png" => "png",
+        "text/csv" => "csv",
+        "text/html" => "html",
+        "text/plain" => "txt",
+        _ => "bin",
+    }
 }
 
 fn looks_like_calendar_text(value: &str) -> bool {
@@ -1494,7 +1544,7 @@ fn build_smtp_raw_message(
     message_id: &str,
     thread_key: &str,
     attachments: &[String],
-) -> String {
+) -> Result<String> {
     let mut lines = vec![format!("From: {from}"), format!("To: {}", to.join(", "))];
     if !cc.is_empty() {
         lines.push(format!("Cc: {}", cc.join(", ")));
@@ -1519,7 +1569,7 @@ fn build_smtp_raw_message(
             }
         }
         lines.push(String::new());
-        return lines.join("\r\n");
+        return Ok(lines.join("\r\n"));
     }
 
     let boundary = format!("ctox-mixed-{}", stable_digest(message_id));
@@ -1539,51 +1589,31 @@ fn build_smtp_raw_message(
         }
     }
     lines.push(String::new());
-    for attachment in attachments {
-        let path = Path::new(attachment);
-        if let Ok(bytes) = std::fs::read(path) {
-            let filename = path
-                .file_name()
-                .and_then(|value| value.to_str())
-                .unwrap_or("attachment.bin");
-            lines.push(format!("--{boundary}"));
-            lines.push(format!(
-                "Content-Type: {}; name=\"{}\"",
-                smtp_attachment_content_type(path),
-                mime_header_value(filename)
-            ));
-            lines.push("Content-Transfer-Encoding: base64".to_string());
-            lines.push(format!(
-                "Content-Disposition: attachment; filename=\"{}\"",
-                mime_header_value(filename)
-            ));
-            lines.push(String::new());
-            for chunk in BASE64_STANDARD.encode(bytes).as_bytes().chunks(76) {
-                lines.push(String::from_utf8_lossy(chunk).to_string());
-            }
-            lines.push(String::new());
+    for attachment in load_outbound_attachments(attachments)? {
+        lines.push(format!("--{boundary}"));
+        lines.push(format!(
+            "Content-Type: {}; name=\"{}\"",
+            attachment.content_type,
+            mime_header_value(&attachment.file_name)
+        ));
+        lines.push("Content-Transfer-Encoding: base64".to_string());
+        lines.push(format!(
+            "Content-Disposition: attachment; filename=\"{}\"",
+            mime_header_value(&attachment.file_name)
+        ));
+        lines.push(String::new());
+        for chunk in BASE64_STANDARD
+            .encode(attachment.bytes)
+            .as_bytes()
+            .chunks(76)
+        {
+            lines.push(String::from_utf8_lossy(chunk).to_string());
         }
+        lines.push(String::new());
     }
     lines.push(format!("--{boundary}--"));
     lines.push(String::new());
-    lines.join("\r\n")
-}
-
-fn smtp_attachment_content_type(path: &Path) -> &'static str {
-    match path
-        .extension()
-        .and_then(|value| value.to_str())
-        .unwrap_or_default()
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "pdf" => "application/pdf",
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "svg" => "image/svg+xml",
-        "txt" | "log" => "text/plain; charset=utf-8",
-        _ => "application/octet-stream",
-    }
+    Ok(lines.join("\r\n"))
 }
 
 fn mime_header_value(value: &str) -> String {
@@ -2444,6 +2474,10 @@ impl GraphClient {
                     "$select",
                     "id,subject,from,toRecipients,ccRecipients,receivedDateTime,sentDateTime,isRead,hasAttachments,bodyPreview,parentFolderId,conversationId,internetMessageId,body".to_string(),
                 ),
+                (
+                    "$expand",
+                    "attachments($select=id,name,contentType,size,isInline)".to_string(),
+                ),
             ],
             None,
         )?;
@@ -2463,6 +2497,7 @@ impl GraphClient {
         to: &[String],
         cc: &[String],
         bcc: &[String],
+        attachments: &[String],
     ) -> Result<()> {
         let mk = |items: &[String]| -> Vec<Value> {
             items
@@ -2470,14 +2505,37 @@ impl GraphClient {
                 .map(|address| json!({"emailAddress":{"address": address.trim().to_lowercase()}}))
                 .collect()
         };
-        let body = json!({
-            "message": {
+        let attachment_files = load_outbound_attachments(attachments)?;
+        let attachment_payload = attachment_files
+            .iter()
+            .map(|attachment| {
+                if attachment.size_bytes >= 3 * 1024 * 1024 {
+                    bail!(
+                        "Graph email attachment {} is {} bytes; simple Graph fileAttachment send supports files below 3 MB",
+                        attachment.path.display(),
+                        attachment.size_bytes
+                    );
+                }
+                Ok(json!({
+                    "@odata.type": "#microsoft.graph.fileAttachment",
+                    "name": attachment.file_name,
+                    "contentType": attachment.content_type,
+                    "contentBytes": BASE64_STANDARD.encode(&attachment.bytes),
+                }))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut message = json!({
                 "subject": subject,
                 "body": {"contentType": "Text", "content": body},
                 "toRecipients": mk(to),
                 "ccRecipients": mk(cc),
                 "bccRecipients": mk(bcc),
-            },
+        });
+        if !attachment_payload.is_empty() {
+            message["attachments"] = Value::Array(attachment_payload);
+        }
+        let body = json!({
+            "message": message,
             "saveToSentItems": true,
         });
         self.request(
@@ -2569,6 +2627,7 @@ fn normalize_graph_mail_item(raw: &Value, folder_id_fallback: &str) -> Option<Ma
             "internetMessageId": raw.get("internetMessageId").and_then(Value::as_str).unwrap_or(""),
             "conversationId": raw.get("conversationId").and_then(Value::as_str).unwrap_or(""),
             "graphFolderId": raw.get("parentFolderId").and_then(Value::as_str).unwrap_or(folder_id_fallback),
+            "attachments": raw.get("attachments").cloned().unwrap_or(Value::Array(Vec::new())),
         }),
     })
 }
@@ -2716,6 +2775,7 @@ impl EwsClient {
         to: &[String],
         cc: &[String],
         bcc: &[String],
+        attachments: &[String],
     ) -> Result<()> {
         let recipients = |tag: &str, values: &[String]| -> String {
             if values.is_empty() {
@@ -2735,12 +2795,13 @@ impl EwsClient {
                     .join("")
             )
         };
+        let attachment_xml = build_ews_file_attachments_xml(attachments)?;
         let body = format!(
             r#"<m:SavedItemFolderId>{}</m:SavedItemFolderId>
 <m:Items><t:Message>
 <t:ItemClass>IPM.Note</t:ItemClass>
 <t:Subject>{}</t:Subject>
-<t:Body BodyType="Text">{}</t:Body>{}{}{}
+<t:Body BodyType="Text">{}</t:Body>{}{}{}{}
 </t:Message></m:Items>"#,
             distinguished_folder_xml("sentitems"),
             xml_escape(subject),
@@ -2748,6 +2809,7 @@ impl EwsClient {
             recipients("ToRecipients", to),
             recipients("CcRecipients", cc),
             recipients("BccRecipients", bcc),
+            attachment_xml,
         );
         self.request(
             "CreateItem",
@@ -2756,6 +2818,28 @@ impl EwsClient {
         )?;
         Ok(())
     }
+}
+
+fn build_ews_file_attachments_xml(paths: &[String]) -> Result<String> {
+    let attachments = load_outbound_attachments(paths)?;
+    if attachments.is_empty() {
+        return Ok(String::new());
+    }
+    Ok(format!(
+        "<t:Attachments>{}</t:Attachments>",
+        attachments
+            .iter()
+            .map(|attachment| {
+                format!(
+                    "<t:FileAttachment><t:Name>{}</t:Name><t:ContentType>{}</t:ContentType><t:Content>{}</t:Content></t:FileAttachment>",
+                    xml_escape(&attachment.file_name),
+                    xml_escape(&attachment.content_type),
+                    BASE64_STANDARD.encode(&attachment.bytes),
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("")
+    ))
 }
 
 fn assert_ews_success(status: u16, document: &Document<'_>) -> Result<()> {
@@ -3637,10 +3721,11 @@ fn acquire_graph_access_token(options: &EmailOptions) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        acquire_graph_access_token, effective_graph_password, effective_graph_username,
-        extract_address, latest_imap_uids, require_provider_credentials, synced_message_direction,
-        EmailOptions,
+        acquire_graph_access_token, build_ews_file_attachments_xml, effective_graph_password,
+        effective_graph_username, extract_address, latest_imap_uids, require_provider_credentials,
+        synced_message_direction, EmailOptions,
     };
+    use std::io::Write;
     use std::path::PathBuf;
 
     fn empty_options() -> EmailOptions {
@@ -3780,6 +3865,23 @@ mod tests {
     }
 
     #[test]
+    fn ews_file_attachment_payload_embeds_file_content() {
+        let mut file = tempfile::Builder::new()
+            .suffix(".csv")
+            .tempfile()
+            .expect("create temp attachment");
+        file.write_all(b"a,b\n").expect("write attachment");
+        let path = file.path().display().to_string();
+
+        let xml = build_ews_file_attachments_xml(&[path]).expect("build EWS attachment xml");
+
+        assert!(xml.contains("<t:Attachments>"));
+        assert!(xml.contains("<t:FileAttachment>"));
+        assert!(xml.contains("<t:ContentType>text/csv; charset=utf-8</t:ContentType>"));
+        assert!(xml.contains("<t:Content>YSxiCg==</t:Content>"));
+    }
+
+    #[test]
     fn acquire_graph_access_token_rejects_when_no_credentials() {
         let options = graph_options_with_token("");
         let err = acquire_graph_access_token(&options).unwrap_err();
@@ -3874,5 +3976,35 @@ mod tests {
         let parsed = parse_rfc822_message(raw).expect("parse no-marker");
         assert!(!parsed.auto_submitted);
         assert_eq!(parsed.auto_submitted_value.as_deref(), Some("no"));
+    }
+
+    #[test]
+    fn parse_rfc822_message_records_attachment_metadata() {
+        use super::parse_rfc822_message;
+        let raw = b"From: jill@example.org\r\n\
+            To: yoda@example.org\r\n\
+            Subject: Datei\r\n\
+            Message-ID: <file-1@example.org>\r\n\
+            MIME-Version: 1.0\r\n\
+            Content-Type: multipart/mixed; boundary=\"b\"\r\n\
+            \r\n\
+            --b\r\n\
+            Content-Type: text/plain; charset=utf-8\r\n\
+            \r\n\
+            siehe Anhang\r\n\
+            --b\r\n\
+            Content-Type: text/csv; name=\"result.csv\"\r\n\
+            Content-Disposition: attachment; filename=\"result.csv\"\r\n\
+            Content-Transfer-Encoding: base64\r\n\
+            \r\n\
+            YSxiCg==\r\n\
+            --b--\r\n";
+
+        let parsed = parse_rfc822_message(raw).expect("parse mail with attachment");
+
+        assert!(parsed.has_attachments);
+        assert_eq!(parsed.attachments.len(), 1);
+        assert_eq!(parsed.attachments[0]["name"], "result.csv");
+        assert_eq!(parsed.attachments[0]["contentType"], "text/csv");
     }
 }
