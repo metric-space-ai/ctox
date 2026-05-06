@@ -4669,18 +4669,13 @@ fn artifact_first_execution_prompt(job: &QueuedPrompt) -> String {
         return job.prompt.clone();
     }
 
+    if is_terminal_bench_controller_artifact_job(job) {
+        return terminal_bench_controller_artifact_preflight_prompt(job, &file_refs);
+    }
+
     let mut prompt = String::new();
     prompt.push_str("HARNESS ARTIFACT CONTRACT\n");
     prompt.push_str("This task declares durable file artifacts. The harness will not accept a final answer, plan, or interim text as completion unless these files exist on disk.\n\n");
-    if is_terminal_bench_controller_artifact_job(job) {
-        if let Some(run_dir) = terminal_bench_run_dir_from_artifact_paths(&file_refs) {
-            prompt.push_str("CURRENT TERMINAL-BENCH RUN SCOPE\n");
-            prompt.push_str("Use exactly this RUN_DIR for this queue item:\n");
-            prompt.push_str(&run_dir);
-            prompt.push_str("\n\n");
-            prompt.push_str("Do not read, copy, or continue controller-prompt.md, controller.json, ticket-map.jsonl, preparation-tickets.jsonl, run-queue.jsonl, results.jsonl, knowledge.md, logbook.md, or blogpost-notes.md from any other Terminal-Bench run directory. Other directories under /home/metricspace/CTOX/runtime/terminal-bench-2/runs are stale context for this item. If a shell command or file path points at a different run id, that is a wrong-run error; stop that command sequence and write the blocker into the required files in the current RUN_DIR.\n\n");
-        }
-    }
     prompt.push_str("Required files:\n");
     for path in &file_refs {
         prompt.push_str("- ");
@@ -4695,6 +4690,64 @@ fn artifact_first_execution_prompt(job: &QueuedPrompt) -> String {
     prompt.push_str("5. If a required file cannot be created, write the blocker into the files that can be created and do not claim completion.\n\n");
     prompt.push_str("ORIGINAL TASK\n");
     prompt.push_str(&job.prompt);
+    prompt
+}
+
+fn terminal_bench_controller_artifact_preflight_prompt(
+    job: &QueuedPrompt,
+    file_refs: &[String],
+) -> String {
+    let run_dir = terminal_bench_run_dir_from_artifact_paths(file_refs);
+    let mut prompt = String::new();
+    prompt.push_str("HARNESS TERMINAL-BENCH PREFLIGHT\n");
+    prompt.push_str("The current Terminal-Bench controller task is paused at an artifact gate. The worker must perform this preflight itself. The harness and review system will not create files, create tickets, run commands, patch artifacts, or mark anything complete for the worker.\n\n");
+    if let Some(run_dir) = run_dir.as_deref() {
+        prompt.push_str("CURRENT TERMINAL-BENCH RUN SCOPE\n");
+        prompt.push_str("Use exactly this RUN_DIR for this queue item:\n");
+        prompt.push_str(run_dir);
+        prompt.push_str("\n\n");
+        prompt.push_str("Do not read, copy, or continue controller-prompt.md, controller.json, ticket-map.jsonl, preparation-tickets.jsonl, run-queue.jsonl, results.jsonl, knowledge.md, logbook.md, or blogpost-notes.md from any other Terminal-Bench run directory. Other directories under /home/metricspace/CTOX/runtime/terminal-bench-2/runs are stale context for this item. If a shell command or file path points at a different run id, that is a wrong-run error; stop that command sequence and write the blocker into the required files in the current RUN_DIR.\n\n");
+    }
+    prompt.push_str("FIRST TOOL CALL CONTRACT\n");
+    prompt.push_str("Your next assistant turn must use exactly one shell/terminal tool call before any prose conclusion. That shell script must, in this order:\n");
+    if let Some(run_dir) = run_dir.as_deref() {
+        prompt.push_str("1. Run `mkdir -p ");
+        prompt.push_str(run_dir);
+        prompt.push_str("/tasks`.\n");
+    } else {
+        prompt.push_str("1. Create the directory that contains the required files and its tasks subdirectory.\n");
+    }
+    prompt.push_str("2. Create or update every required file listed below as a regular file with truthful current status.\n");
+    prompt.push_str("3. If CTOX queue syntax is needed, run `ctox queue --help` or `ctox queue add --help` only after those files exist, and append the useful output or blocker to logbook.md.\n");
+    if terminal_bench_controller_requires_runtime_refs(job) {
+        prompt.push_str("4. Create durable CTOX queue/ticket work for the preparation phase and record the real message keys in ticket-map.jsonl and preparation-tickets.jsonl. Use the worker's CLI; do not invent synthetic keys.\n");
+        prompt.push_str("5. Verify each queued item with `ctox queue show` when the CLI supports it, or record the exact CLI blocker in logbook.md and controller.json.\n");
+        prompt.push_str("6. Run `test -f` checks for every required file and append the result to logbook.md.\n\n");
+        prompt.push_str("Required preparation queue items:\n");
+        prompt.push_str("- Inventory Terminal-Bench 2 tasks and create one durable benchmark ticket per task without opening solutions.\n");
+        prompt.push_str("- Research public Terminal-Bench 2 reference results and safe task ordering without solution leakage.\n");
+        prompt.push_str("- Verify the local Qwen3.6 35B harness runtime, native IPC path, response adapter, and 131072 token context setting.\n");
+        prompt.push_str("- Run an initial small set of likely-solvable Terminal-Bench 2 tasks under Harbor/Terminal-Bench tooling.\n");
+        prompt.push_str(
+            "- Update knowledge.md, results.jsonl, and logbook.md after each benchmark attempt.\n",
+        );
+        prompt.push_str("- Return later to failed or skipped tasks with accumulated learnings, without treating intermediate state as final success.\n\n");
+    } else {
+        prompt.push_str("4. Run `test -f` checks for every required file and append the result to logbook.md or the closest required log file.\n\n");
+    }
+    prompt.push_str("Forbidden before the above succeeds:\n");
+    prompt.push_str("- `find`, `grep`, `rg`, `ls`, `cat`, `which`, `pip`, `python`, `docker`, `harbor`, or install-tree inspection unless the same shell script has already created every required file in the current RUN_DIR.\n");
+    prompt.push_str("- Web research, benchmark execution, model evaluation, broad codebase discovery, or reading old Terminal-Bench run directories.\n");
+    prompt.push_str("- A final answer that says work will be done later without the files and real queue refs existing on disk.\n\n");
+    prompt.push_str("Required files:\n");
+    for path in file_refs {
+        prompt.push_str("- ");
+        prompt.push_str(path);
+        prompt.push('\n');
+    }
+    prompt.push_str("\nCompletion condition for this preflight turn:\n");
+    prompt.push_str("End only after the shell has created the required files, recorded real queue refs or a precise CLI blocker, and verified every required path with `test -f`. If anything fails, write the failure into the required files and continue only with the next concrete repair step.\n\n");
+    prompt.push_str("Original controller task is intentionally withheld until this artifact preflight exists. Use the preparation queue items above to carry the benchmark forward.");
     prompt
 }
 
@@ -18067,18 +18120,53 @@ Start by discovering benchmark tasks."
 
         let prompt = artifact_first_execution_prompt(&job);
 
-        assert!(prompt.starts_with("HARNESS ARTIFACT CONTRACT"));
+        assert!(prompt.starts_with("HARNESS TERMINAL-BENCH PREFLIGHT"));
+        assert!(prompt.contains("The worker must perform this preflight itself"));
+        assert!(prompt.contains("The harness and review system will not create files"));
         assert!(prompt.contains("CURRENT TERMINAL-BENCH RUN SCOPE"));
         assert!(prompt.contains("Use exactly this RUN_DIR"));
         assert!(prompt.contains(run_dir));
         assert!(prompt.contains("controller-prompt.md"));
         assert!(prompt.contains("wrong-run error"));
+        assert!(prompt.contains("FIRST TOOL CALL CONTRACT"));
         assert!(prompt.contains(&format!("{run_dir}/controller.json")));
         assert!(prompt.contains(&format!("{run_dir}/summary.md")));
-        assert!(prompt.contains("Before open-ended research or exploratory loops"));
         assert!(prompt.contains("regular file"));
         assert!(prompt.contains("test -f"));
+        assert!(prompt.contains("Forbidden before the above succeeds"));
+        assert!(prompt.contains("Original controller task is intentionally withheld"));
+        assert!(!prompt.contains("Start by discovering benchmark tasks"));
+        assert!(!prompt.contains("ORIGINAL TASK"));
+    }
+
+    #[test]
+    fn artifact_first_prompt_keeps_original_task_for_generic_artifact_jobs() {
+        let run_dir = "/tmp/ctox-generic-artifacts";
+        let job = QueuedPrompt {
+            prompt: format!(
+                "Only required durable files for this worker turn:\n\
+- {run_dir}/summary.md\n\n\
+Start by checking the local service status."
+            ),
+            goal: "generic artifact worker".to_string(),
+            preview: "generic artifact worker".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: None,
+            leased_message_keys: vec!["queue:generic-artifact".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: None,
+            workspace_root: Some("/tmp".to_string()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let prompt = artifact_first_execution_prompt(&job);
+
+        assert!(prompt.starts_with("HARNESS ARTIFACT CONTRACT"));
         assert!(prompt.contains("ORIGINAL TASK"));
+        assert!(prompt.contains("Start by checking the local service status"));
+        assert!(prompt.contains(&format!("{run_dir}/summary.md")));
     }
 
     #[test]
