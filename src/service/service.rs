@@ -7179,13 +7179,81 @@ fn maybe_start_next_queued_prompt_locked(
 }
 
 fn suggested_skill_from_message(message: &channels::RoutedInboundMessage) -> Option<String> {
-    message
+    if let Some(skill) = message
         .metadata
         .get("skill")
         .and_then(serde_json::Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
+    {
+        return Some(skill);
+    }
+    inferred_skill_from_message_content(message)
+}
+
+fn inferred_skill_from_message_content(message: &channels::RoutedInboundMessage) -> Option<String> {
+    if !matches!(
+        message.channel.as_str(),
+        "teams" | "jami" | "whatsapp" | "email" | "tui"
+    ) {
+        return None;
+    }
+    if message.channel == "email" {
+        let subject = message.subject.to_ascii_lowercase();
+        if subject.contains("newsletter") || subject.contains("unsubscribe") {
+            return None;
+        }
+    }
+    let text = format!(
+        "{}\n{}\n{}",
+        message.subject, message.preview, message.body_text
+    )
+    .to_ascii_lowercase();
+    if !looks_like_web_extraction_task(&text) {
+        return None;
+    }
+    Some("universal-scraping".to_string())
+}
+
+fn looks_like_web_extraction_task(text: &str) -> bool {
+    let has_url = text.contains("http://") || text.contains("https://") || text.contains("www.");
+    if !has_url {
+        return false;
+    }
+    let web_source = [
+        "webseite",
+        "website",
+        "seite",
+        "portal",
+        "ausstellerliste",
+        "liste",
+        "scroll",
+        "lädt erst nach",
+        "laedt erst nach",
+        "lazy",
+    ]
+    .iter()
+    .any(|needle| text.contains(needle));
+    let extraction_intent = [
+        "scrap",
+        "scrape",
+        "auslesen",
+        "extrahier",
+        "übertrag",
+        "uebertrag",
+        "excel",
+        "xlsx",
+        "csv",
+        "strukturierte daten",
+        "structured data",
+        "alle ",
+        "massenhaft",
+        "liste",
+    ]
+    .iter()
+    .any(|needle| text.contains(needle));
+    web_source && extraction_intent
 }
 
 fn inbound_source_label(
@@ -11561,6 +11629,32 @@ mod tests {
             metadata: json!({"teams_chat_id": "chat-123"}),
             preferred_reply_modality: None,
         }
+    }
+
+    #[test]
+    fn web_extraction_teams_message_suggests_universal_scraping_skill() {
+        let mut message = routed_teams_message();
+        message.preview = "Aussteller aus Webseite in Excel uebertragen".to_string();
+        message.body_text = "https://www.intersolar.de/ausstellerliste\nDie Webseite laedt erst nach wenn man scrollt. Bitte lese alle Aussteller aus Deutschland aus und uebertrage diese in eine Excel.".to_string();
+
+        assert_eq!(
+            suggested_skill_from_message(&message).as_deref(),
+            Some("universal-scraping")
+        );
+    }
+
+    #[test]
+    fn explicit_message_skill_metadata_overrides_web_extraction_inference() {
+        let mut message = routed_teams_message();
+        message.body_text =
+            "https://example.com bitte alle Eintraege auslesen und in Excel uebertragen."
+                .to_string();
+        message.metadata = json!({"skill": "owner-communication"});
+
+        assert_eq!(
+            suggested_skill_from_message(&message).as_deref(),
+            Some("owner-communication")
+        );
     }
 
     #[test]
