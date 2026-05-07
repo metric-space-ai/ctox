@@ -30,6 +30,8 @@ use std::sync::OnceLock;
 use tokio::sync::mpsc;
 use tracing::instrument;
 
+const OPENROUTER_CHAT_COMPLETION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
 pub struct ResponsesClient<T: HttpTransport, A: AuthProvider> {
     session: EndpointSession<T, A>,
     sse_telemetry: Option<Arc<dyn SseTelemetry>>,
@@ -169,7 +171,9 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
         let body = openrouter_chat_completion_request(&request)?;
         let response = self
             .session
-            .execute(Method::POST, "chat/completions", extra_headers, Some(body))
+            .execute_with(Method::POST, "chat/completions", extra_headers, Some(body), |req| {
+                req.timeout = Some(OPENROUTER_CHAT_COMPLETION_TIMEOUT);
+            })
             .await?;
         if !response.status.is_success() {
             let message = String::from_utf8_lossy(&response.body).trim().to_string();
@@ -467,6 +471,53 @@ fn chat_token_usage(usage: &Value) -> TokenUsage {
 mod tests {
     use super::*;
     use crate::provider::Provider;
+    use async_trait::async_trait;
+    use ctox_client::Request;
+    use ctox_client::Response;
+    use ctox_client::StreamResponse;
+    use ctox_client::TransportError;
+    use http::StatusCode;
+    use std::sync::Mutex;
+
+    #[derive(Clone)]
+    struct CapturingTransport {
+        last_request: Arc<Mutex<Option<Request>>>,
+        response_body: Arc<Vec<u8>>,
+    }
+
+    impl CapturingTransport {
+        fn new(response_body: Vec<u8>) -> Self {
+            Self {
+                last_request: Arc::new(Mutex::new(None)),
+                response_body: Arc::new(response_body),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl HttpTransport for CapturingTransport {
+        async fn execute(&self, req: Request) -> Result<Response, TransportError> {
+            *self.last_request.lock().expect("lock request store") = Some(req);
+            Ok(Response {
+                status: StatusCode::OK,
+                headers: HeaderMap::new(),
+                body: self.response_body.as_ref().clone().into(),
+            })
+        }
+
+        async fn stream(&self, _req: Request) -> Result<StreamResponse, TransportError> {
+            Err(TransportError::Build("stream should not run".to_string()))
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct DummyAuth;
+
+    impl AuthProvider for DummyAuth {
+        fn bearer_token(&self) -> Option<String> {
+            None
+        }
+    }
 
     fn provider(base_url: &str) -> Provider {
         Provider {
@@ -543,5 +594,74 @@ mod tests {
         );
         assert_eq!(body.pointer("/messages/0/role"), Some(&json!("system")));
         assert_eq!(body.pointer("/messages/1/role"), Some(&json!("user")));
+    }
+
+    #[tokio::test]
+    async fn openrouter_chat_adapter_sets_request_timeout() {
+        let response_body = serde_json::to_vec(&json!({
+            "id": "chatcmpl-timeout-test",
+            "model": "deepseek/deepseek-v4-flash",
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "ok"
+                }
+            }]
+        }))
+        .unwrap();
+        let transport = CapturingTransport::new(response_body);
+        let client = ResponsesClient::new(
+            transport.clone(),
+            provider("https://openrouter.ai/api/v1"),
+            DummyAuth,
+        );
+        let request = ResponsesApiRequest {
+            model: "deepseek/deepseek-v4-flash".to_string(),
+            instructions: "Use tools.".to_string(),
+            previous_response_id: None,
+            input: vec![ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "hi".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            }],
+            tools: Vec::new(),
+            tool_choice: "auto".to_string(),
+            parallel_tool_calls: true,
+            reasoning: None,
+            max_output_tokens: Some(128),
+            store: false,
+            stream: true,
+            include: Vec::new(),
+            service_tier: None,
+            prompt_cache_key: None,
+            text: None,
+        };
+
+        let _stream = client
+            .stream_request(
+                request,
+                ResponsesOptions {
+                    conversation_id: None,
+                    session_source: Some(SessionSource::Exec),
+                    extra_headers: HeaderMap::new(),
+                    compression: Compression::None,
+                    turn_state: None,
+                },
+            )
+            .await
+            .expect("chat adapter should return stream");
+
+        let captured = transport
+            .last_request
+            .lock()
+            .expect("lock request store")
+            .clone()
+            .expect("request captured");
+        assert_eq!(captured.url, "https://openrouter.ai/api/v1/chat/completions");
+        assert_eq!(captured.timeout, Some(OPENROUTER_CHAT_COMPLETION_TIMEOUT));
     }
 }
