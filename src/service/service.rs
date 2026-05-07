@@ -135,6 +135,10 @@ pub struct ServiceStatus {
     #[serde(default)]
     pub pending_previews: Vec<String>,
     #[serde(default)]
+    pub blocked_count: usize,
+    #[serde(default)]
+    pub blocked_previews: Vec<String>,
+    #[serde(default)]
     pub current_goal_preview: Option<String>,
     pub active_source_label: Option<String>,
     pub recent_events: Vec<String>,
@@ -165,6 +169,8 @@ struct ServiceStatusWire {
     manager: String,
     pending_count: usize,
     pending_previews: Vec<String>,
+    blocked_count: usize,
+    blocked_previews: Vec<String>,
     current_goal_preview: Option<String>,
     active_source_label: Option<String>,
     recent_events: Vec<String>,
@@ -195,6 +201,8 @@ impl ServiceStatus {
                 .unwrap_or_else(|| "process".to_string()),
             pending_count: 0,
             pending_previews: Vec::new(),
+            blocked_count: 0,
+            blocked_previews: Vec::new(),
             current_goal_preview: None,
             active_source_label: None,
             recent_events: Vec::new(),
@@ -231,6 +239,8 @@ fn parse_service_status(body: &str, root: &Path) -> Result<ServiceStatus> {
         },
         pending_count: wire.pending_count,
         pending_previews: wire.pending_previews,
+        blocked_count: wire.blocked_count,
+        blocked_previews: wire.blocked_previews,
         current_goal_preview: wire.current_goal_preview,
         active_source_label: wire.active_source_label,
         recent_events: wire.recent_events,
@@ -2221,28 +2231,29 @@ fn status_from_shared_state(root: &Path, state: &Arc<Mutex<SharedState>>) -> Res
     let in_memory_pending_count = shared.pending_prompts.len();
     drop(shared);
 
-    let durable_tasks = channels::list_queue_tasks(
-        root,
-        &[
-            "pending".to_string(),
-            "leased".to_string(),
-            "blocked".to_string(),
-        ],
-        6,
-    )
-    .unwrap_or_default();
+    let runnable_durable_tasks =
+        channels::list_queue_tasks(root, &["pending".to_string(), "leased".to_string()], 6)
+            .unwrap_or_default();
+    let blocked_durable_tasks =
+        channels::list_queue_tasks(root, &["blocked".to_string()], 6).unwrap_or_default();
+    let mut blocked_previews = Vec::new();
     let ticket_cases = tickets::list_cases(root, None, 6).unwrap_or_default();
-    for task in &durable_tasks {
+    for task in &runnable_durable_tasks {
         if pending_previews.len() >= 6 {
             break;
         }
-        let preview = if task.route_status == "blocked" {
-            format!("queue blocked  {}", clip_text(task.title.trim(), 112))
-        } else {
-            format!("queue  {}", clip_text(task.title.trim(), 120))
-        };
+        let preview = format!("queue  {}", clip_text(task.title.trim(), 120));
         if !pending_previews.iter().any(|existing| existing == &preview) {
             pending_previews.push(preview);
+        }
+    }
+    for task in &blocked_durable_tasks {
+        if blocked_previews.len() >= 6 {
+            break;
+        }
+        let preview = format!("queue blocked  {}", clip_text(task.title.trim(), 112));
+        if !blocked_previews.iter().any(|existing| existing == &preview) {
+            blocked_previews.push(preview);
         }
     }
     for case in ticket_cases
@@ -2289,8 +2300,11 @@ fn status_from_shared_state(root: &Path, state: &Arc<Mutex<SharedState>>) -> Res
             .flatten()
             .map(|_| "systemd-user".to_string())
             .unwrap_or_else(|| "process".to_string()),
-        pending_count: in_memory_pending_count.max(durable_tasks.len().max(pending_previews.len())),
+        pending_count: in_memory_pending_count
+            .max(runnable_durable_tasks.len().max(pending_previews.len())),
         pending_previews,
+        blocked_count: blocked_durable_tasks.len().max(blocked_previews.len()),
+        blocked_previews,
         current_goal_preview,
         active_source_label,
         recent_events,
@@ -13411,7 +13425,7 @@ mod tests {
     }
 
     #[test]
-    fn service_status_surfaces_blocked_queue_tasks() {
+    fn service_status_separates_blocked_queue_tasks_from_pending() {
         let root = temp_root("status-blocked-queue");
         let task = channels::create_queue_task(
             &root,
@@ -13433,9 +13447,11 @@ mod tests {
 
         let status = status_from_shared_state(&root, &state).expect("status should load");
 
-        assert_eq!(status.pending_count, 1);
+        assert_eq!(status.pending_count, 0);
+        assert!(status.pending_previews.is_empty());
+        assert_eq!(status.blocked_count, 1);
         assert!(status
-            .pending_previews
+            .blocked_previews
             .iter()
             .any(|preview| preview.contains("queue blocked  HY3 smoke artifact missing")));
     }
@@ -13469,6 +13485,8 @@ mod tests {
             manager: "process".to_string(),
             pending_count: 1,
             pending_previews: vec!["ticket  support/onboarding zammad:42".to_string()],
+            blocked_count: 0,
+            blocked_previews: Vec::new(),
             current_goal_preview: Some("Inspect onboarding ticket".to_string()),
             active_source_label: Some("ticket:zammad".to_string()),
             recent_events: vec!["Started prompt [skill system-onboarding]".to_string()],
@@ -13564,6 +13582,8 @@ mod tests {
             manager: "process".to_string(),
             pending_count: 0,
             pending_previews: Vec::new(),
+            blocked_count: 0,
+            blocked_previews: Vec::new(),
             current_goal_preview: None,
             active_source_label: None,
             recent_events: vec!["slow status ok".to_string()],
