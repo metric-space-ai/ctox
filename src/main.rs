@@ -134,6 +134,7 @@ RUN / EXEC
   ctox runtime stt-realtime-smoke <wav-path>
   ctox runtime tts-doctor
   ctox runtime tts-smoke [--text <text>]
+  ctox runtime openrouter-tool-smoke [--model <id>] [--tool-choice auto|required|named|all]
   ctox boost status|start|stop   temporary model/runtime boost lease
 
 CAPABILITIES / WEB STACK
@@ -225,6 +226,7 @@ fn skips_cli_turn_ledger(args: &[String]) -> bool {
                         | "stt-realtime-smoke"
                         | "tts-doctor"
                         | "tts-smoke"
+                        | "openrouter-tool-smoke"
                 )
     )
 }
@@ -324,6 +326,11 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
                 );
                 Ok(())
             }
+            Some("openrouter-tool-smoke") => {
+                let result = openrouter_tool_smoke_json(&root, &args[2..])?;
+                println!("{}", serde_json::to_string_pretty(&result)?);
+                Ok(())
+            }
             Some("switch") => {
                 let model = args
                     .get(2)
@@ -363,7 +370,7 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
                 Ok(())
             }
             _ => anyhow::bail!(
-                "usage: ctox runtime switch <model> <quality|performance> [--context 128k|256k] [--timeout <secs>] | ctox runtime embedding-doctor | ctox runtime embedding-smoke [--token-id <id>] | ctox runtime stt-doctor | ctox runtime stt-smoke <wav-path> | ctox runtime stt-realtime-smoke <wav-path> | ctox runtime tts-doctor | ctox runtime tts-smoke [--text <text>]"
+                "usage: ctox runtime switch <model> <quality|performance> [--context 128k|256k] [--timeout <secs>] | ctox runtime embedding-doctor | ctox runtime embedding-smoke [--token-id <id>] | ctox runtime stt-doctor | ctox runtime stt-smoke <wav-path> | ctox runtime stt-realtime-smoke <wav-path> | ctox runtime tts-doctor | ctox runtime tts-smoke [--text <text>] | ctox runtime openrouter-tool-smoke [--model <id>] [--tool-choice auto|required|named|all]"
             ),
         },
         Some("boost") => match args.get(1).map(String::as_str) {
@@ -1350,6 +1357,180 @@ fn resolve_workspace_root() -> anyhow::Result<PathBuf> {
     Ok(current_dir)
 }
 
+fn openrouter_tool_smoke_json(root: &Path, args: &[String]) -> anyhow::Result<serde_json::Value> {
+    let model = find_flag_value(args, "--model").unwrap_or("deepseek/deepseek-v4-flash");
+    let requested_tool_choice = find_flag_value(args, "--tool-choice").unwrap_or("all");
+    let api_key = std::env::var("OPENROUTER_API_KEY")
+        .ok()
+        .or_else(|| secrets::get_credential(root, "OPENROUTER_API_KEY"))
+        .context(
+            "OPENROUTER_API_KEY not found in env or CTOX secret store credentials/OPENROUTER_API_KEY",
+        )?;
+    let variants = openrouter_tool_smoke_variants(requested_tool_choice)?;
+    let endpoint = "https://openrouter.ai/api/v1/chat/completions";
+    let mut results = Vec::new();
+    for (variant_name, tool_choice) in variants {
+        let payload = serde_json::json!({
+            "model": model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "You are testing tool calling. If tools are available, respond only by calling the requested tool."
+                },
+                {
+                    "role": "user",
+                    "content": "Call the record_status tool with status exactly ok. Do not answer in prose."
+                }
+            ],
+            "tools": [{
+                "type": "function",
+                "function": {
+                    "name": "record_status",
+                    "description": "Record a status string.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "status": {"type": "string"}
+                        },
+                        "required": ["status"],
+                        "additionalProperties": false
+                    }
+                }
+            }],
+            "tool_choice": tool_choice,
+            "max_tokens": 128,
+            "temperature": 0,
+            "stream": false
+        });
+        let payload = serde_json::to_string(&payload)?;
+        let request_result = ureq::post(endpoint)
+            .set("Authorization", &format!("Bearer {api_key}"))
+            .set("Content-Type", "application/json")
+            .set("HTTP-Referer", "https://ctox.local")
+            .set("X-OpenRouter-Title", "ctox-openrouter-tool-smoke")
+            .timeout(std::time::Duration::from_secs(120))
+            .send_string(&payload);
+        let (status, body) = match request_result {
+            Ok(response) => (response.status(), response.into_string()?),
+            Err(ureq::Error::Status(status, response)) => {
+                let body = response.into_string().unwrap_or_default();
+                (status, body)
+            }
+            Err(err) => {
+                results.push(serde_json::json!({
+                    "variant": variant_name,
+                    "transport_error": err.to_string(),
+                    "has_tool_calls": false
+                }));
+                continue;
+            }
+        };
+        let parsed = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_else(|_| {
+            serde_json::json!({
+                "error": {
+                    "message": format!("non-json response ({} bytes)", body.len())
+                }
+            })
+        });
+        results.push(openrouter_tool_smoke_summary(variant_name, status, &parsed));
+    }
+    let ok = results.iter().all(|item| {
+        item.get("has_tool_calls")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true)
+    });
+    Ok(serde_json::json!({
+        "ok": ok,
+        "endpoint": endpoint,
+        "model": model,
+        "checked_variants": results.len(),
+        "results": results
+    }))
+}
+
+fn openrouter_tool_smoke_variants(
+    requested_tool_choice: &str,
+) -> anyhow::Result<Vec<(&'static str, serde_json::Value)>> {
+    let named = serde_json::json!({
+        "type": "function",
+        "function": {"name": "record_status"}
+    });
+    match requested_tool_choice {
+        "all" => Ok(vec![
+            ("auto", serde_json::json!("auto")),
+            ("required", serde_json::json!("required")),
+            ("named", named),
+        ]),
+        "auto" => Ok(vec![("auto", serde_json::json!("auto"))]),
+        "required" => Ok(vec![("required", serde_json::json!("required"))]),
+        "named" => Ok(vec![("named", named)]),
+        other => anyhow::bail!(
+            "unsupported --tool-choice {other:?}; expected auto, required, named, or all"
+        ),
+    }
+}
+
+fn openrouter_tool_smoke_summary(
+    variant_name: &'static str,
+    status: u16,
+    payload: &serde_json::Value,
+) -> serde_json::Value {
+    let choice = payload
+        .get("choices")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|choices| choices.first())
+        .unwrap_or(&serde_json::Value::Null);
+    let message = choice.get("message").and_then(serde_json::Value::as_object);
+    let tool_calls = message
+        .and_then(|message| message.get("tool_calls"))
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let tool_call_names = tool_calls
+        .iter()
+        .map(|tool_call| {
+            tool_call
+                .get("function")
+                .and_then(|function| function.get("name"))
+                .or_else(|| tool_call.get("name"))
+                .cloned()
+                .unwrap_or(serde_json::Value::Null)
+        })
+        .collect::<Vec<_>>();
+    let tool_call_arguments = tool_calls
+        .iter()
+        .map(|tool_call| {
+            tool_call
+                .get("function")
+                .and_then(|function| function.get("arguments"))
+                .or_else(|| tool_call.get("arguments"))
+                .cloned()
+                .unwrap_or(serde_json::Value::Null)
+        })
+        .collect::<Vec<_>>();
+    let content_len = message
+        .and_then(|message| message.get("content"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::len)
+        .unwrap_or(0);
+    let error = payload.get("error");
+    serde_json::json!({
+        "variant": variant_name,
+        "status": status,
+        "response_model": payload.get("model").cloned().unwrap_or(serde_json::Value::Null),
+        "provider": payload.get("provider").cloned().unwrap_or(serde_json::Value::Null),
+        "finish_reason": choice.get("finish_reason").cloned().unwrap_or(serde_json::Value::Null),
+        "native_finish_reason": choice.get("native_finish_reason").cloned().unwrap_or(serde_json::Value::Null),
+        "has_tool_calls": !tool_calls.is_empty(),
+        "tool_call_count": tool_calls.len(),
+        "tool_call_names": tool_call_names,
+        "tool_call_arguments": tool_call_arguments,
+        "content_len": content_len,
+        "error_code": error.and_then(|error| error.get("code")).cloned().unwrap_or(serde_json::Value::Null),
+        "error_message": error.and_then(|error| error.get("message")).cloned().unwrap_or(serde_json::Value::Null)
+    })
+}
+
 fn validated_workspace_root_override(key: &str) -> Option<PathBuf> {
     let candidate = std::env::var_os(key).map(PathBuf::from)?;
     looks_like_ctox_root(&candidate).then_some(candidate)
@@ -1489,8 +1670,8 @@ fn resolve_systemd_user_ctox_root(home_dir: &Path) -> Option<PathBuf> {
 mod tests {
     use super::{
         chat_status_has_completed_since, find_ctox_root_from_ancestors, looks_like_ctox_root,
-        persist_runtime_turn_timeout, resolve_chat_attachment_paths, resolve_runtime_ctox_root,
-        validated_workspace_root_override,
+        openrouter_tool_smoke_summary, persist_runtime_turn_timeout, resolve_chat_attachment_paths,
+        resolve_runtime_ctox_root, validated_workspace_root_override,
     };
     use crate::execution::models::runtime_env;
     use std::fs;
@@ -1675,6 +1856,39 @@ mod tests {
             before.as_ref(),
             before.as_ref()
         ));
+    }
+
+    #[test]
+    fn openrouter_tool_smoke_summary_detects_tool_call_response() {
+        let payload = serde_json::json!({
+            "model": "deepseek/deepseek-v4-flash-20260423",
+            "provider": "DeepInfra",
+            "choices": [{
+                "finish_reason": "tool_calls",
+                "native_finish_reason": "tool_calls",
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{
+                        "id": "call_123",
+                        "type": "function",
+                        "function": {
+                            "name": "record_status",
+                            "arguments": "{\"status\":\"ok\"}"
+                        }
+                    }]
+                }
+            }]
+        });
+
+        let summary = openrouter_tool_smoke_summary("auto", 200, &payload);
+        assert_eq!(summary["has_tool_calls"], serde_json::json!(true));
+        assert_eq!(summary["tool_call_count"], serde_json::json!(1));
+        assert_eq!(
+            summary["tool_call_names"],
+            serde_json::json!(["record_status"])
+        );
+        assert_eq!(summary["content_len"], serde_json::json!(0));
     }
 
     fn make_fake_ctox_root(name: &str) -> PathBuf {
