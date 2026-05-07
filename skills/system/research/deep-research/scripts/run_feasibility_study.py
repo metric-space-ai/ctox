@@ -331,16 +331,48 @@ def write_synthesis_files(
 def report_outline() -> str:
     return """# Report outline
 
-1. Management Summary
-2. Problemstellung und Schichtannahmen
-3. Methodik und Evidenzbasis
-4. Technologie-Screening
-5. Detailbewertung der Shortlist
-6. Metallische Folie als Confounder
-7. Versuchsdesign mit Couponmatrix
-8. Risiken, Unsicherheiten und Entscheidungsgates
-9. Empfehlung
-10. Quellen
+## 1. Management Summary
+- Entscheidungsfrage, Top-Empfehlung, No-Go-Kandidaten und naechster Versuchsschritt.
+- Kurzfazit zu Kupfergitter, CFK-Schichtsystem und metallischer Folie als dominanter Stoergroesse.
+
+## 2. Problemstellung und Schichtannahmen
+- Zielstruktur: Lack/Primer, CFK/CFRP, Kupfer-Blitzschutzgitter, optionale kontinuierliche Metallfolie.
+- Defektbilder: Gitterunterbrechung, Verschiebung, lokale Delamination, Kopplungsfehler, Korrosion, Ueberdeckung.
+- Randbedingungen: kontaktlos, Flaechenleistung, Single-shot-Potential, Stand-off, Industrialisierbarkeit.
+
+## 3. Research-Methodik und Evidenzbasis
+- Suchstrategie ueber Web, wissenschaftliche Datenbanken, offene Paper, Industriequellen und Patente.
+- Quellenmix, Read-Zahlen, Snapshots/PDFs, Datenlinks und Grenzen der Evidenz.
+- Trennung zwischen belegten Aussagen, physikalischen Inferenzen und Annahmen.
+
+## 4. Technologie-Screening
+- Hyperspektral/optisch, THz, Mikrowelle/mmWave, Wirbelstrom, pulsed eddy current, Induktionsthermografie, IR-Thermografie, Shearografie, X-ray/CT, magnetische Verfahren.
+- Bewertung nach Sichtbarkeit, Tiefenwirkung, Defektsensitivitaet, Folienrobustheit, Durchsatz, Reifegrad und Sicherheits-/Integrationsrisiko.
+
+## 5. Detailbewertung der Shortlist
+- Elektromagnetischer Pfad: Wirbelstrom, gepulster Wirbelstrom, Induktionsthermografie.
+- Indirekte Flaechenverfahren: Thermografie und Shearografie.
+- Referenzverfahren: X-ray/CT als Ground Truth statt Produktionspfad.
+
+## 6. Metallische Folie als Confounder
+- Abschirmung/Reflexion bei THz, mmWave und optischen Verfahren.
+- Entkopplungsmoeglichkeiten bei frequenz- und zeitaufgeloesten elektromagnetischen Verfahren.
+- Kill-Kriterien fuer Verfahren, die Gitter und Folie nicht trennen koennen.
+
+## 7. Versuchsdesign
+- Couponmatrix mit intakten/defekten Gittern, variierender Schichtdicke, Folie ja/nein und realistischen Lift-off-Werten.
+- Messgroessen, Wiederholbarkeit, Ground Truth und Auswertung.
+- Entscheidungsgates fuer Demonstrator und Abbruch.
+
+## 8. Risiken und Mitigation
+- Fehlalarme, Aufloesungsgrenzen, Kalibrierbarkeit, Materialvariabilitaet, Kosten, Sicherheit, Datenauswertung.
+- Mitigations durch Ground Truth, Modellierung, Coupondesign und multimodale Pruefung.
+
+## 9. Empfehlung
+- Primaere technische Linie, Nebenpfade, sofortige Experimente, Erfolgskriterien und weitere Forschungsfragen.
+
+## 10. Quellenverzeichnis
+- DOI/URL, Quelletyp, Evidenzrolle und Grenzen.
 """
 
 
