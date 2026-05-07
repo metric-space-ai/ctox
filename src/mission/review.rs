@@ -110,6 +110,7 @@ pub struct CompletionReviewRequest {
     pub artifact_action: Option<String>,
     pub artifact_to: Vec<String>,
     pub artifact_cc: Vec<String>,
+    pub artifact_subject: String,
     pub artifact_attachments: Vec<String>,
     pub required_deliverables: Vec<String>,
     pub artifact_commitments: Vec<String>,
@@ -699,6 +700,11 @@ fn build_review_prompt(request: &CompletionReviewRequest, reasons: &[String]) ->
     } else {
         request.artifact_cc.join(", ")
     };
+    let artifact_subject = if request.artifact_subject.trim().is_empty() {
+        "(none recorded)"
+    } else {
+        request.artifact_subject.trim()
+    };
     let artifact_attachments = if request.artifact_attachments.is_empty() {
         "(none recorded)".to_string()
     } else {
@@ -728,7 +734,10 @@ fn build_review_prompt(request: &CompletionReviewRequest, reasons: &[String]) ->
         "\
 Founder/owner communication gate:\n\
 - judge the outbound draft itself as the artifact under review\n\
-- judge the full mail action, not just the prose: recipients, cc list, and reply/forward behavior are part of the artifact\n\
+- judge the full mail action, not just the prose: recipients, cc list, subject, attachments, and reply/forward behavior are part of the artifact\n\
+- verify that the mail is still relevant against the latest communication, meeting outcomes, ticket/work state, and durable knowledge/runbook context\n\
+- verify that the mail truthfully reflects completed work; fail when it only promises work that has not actually been done, reviewed, queued, or attached\n\
+- verify that the wording is recipient-appropriate, concise, and does not hide material limitations or missing proof\n\
 - decide whether the draft should be sent now, blocked, or reworked first\n\
 - if the correct outcome is no outbound mail yet because the thread is waiting on specific founder input, return FAIL, begin SUMMARY with `NO-SEND:`, and state the wait condition; do not invent rework\n\
 - treat every listed required deliverable as mandatory; if a required deliverable is missing, the mail must fail review and be reworked first\n\
@@ -779,6 +788,7 @@ Artifact under review:\n\
 Artifact action: {artifact_action}\n\
 Artifact to: {artifact_to}\n\
 Artifact cc: {artifact_cc}\n\
+Artifact subject: {artifact_subject}\n\
 Artifact attachments: {artifact_attachments}\n\
 Required deliverables: {required_deliverables}\n\
 Artifact commitments: {artifact_commitments}\n\
@@ -800,7 +810,7 @@ Required review work:\n\
 4. inspect explicit artifact paths and attachments directly; for spreadsheets, verify row counts, headers, and whether the content satisfies the requested scope\n\
 5. inspect delivery state before accepting any claim that a message, mail, or attachment was sent\n\
 6. inspect live public/runtime surfaces when the reviewed work depends on them\n\
-7. compare the artifact text, recipients, attachments, commitments, and required deliverables against the original task contract and inspected evidence\n\
+7. compare the artifact text, recipients, cc list, subject, attachments, commitments, and required deliverables against the original task contract and inspected evidence\n\
 8. decide whether this specific artifact is ready to send/release/close, or whether real rework is required first\n\
 9. produce a verdict from evidence\n\
 \n\
@@ -839,6 +849,7 @@ DISPOSITION is the structural terminal flag: emit `NO_SEND` only when the curren
         artifact_action = artifact_action,
         artifact_to = artifact_to,
         artifact_cc = artifact_cc,
+        artifact_subject = artifact_subject,
         artifact_attachments = artifact_attachments,
         required_deliverables = required_deliverables,
         artifact_commitments = artifact_commitments,
@@ -1324,6 +1335,7 @@ mod tests {
             artifact_action: Some("reply".to_string()),
             artifact_to: vec!["o.schaefers@gmx.net".to_string()],
             artifact_cc: vec!["michael.welsch@metric-space.ai".to_string()],
+            artifact_subject: "Jami Setup und QR-Code".to_string(),
             artifact_attachments: vec![
                 "/srv/runtime/communication/artifacts/jami/ctox-jami-setup.pdf".to_string(),
             ],
@@ -1345,6 +1357,7 @@ mod tests {
         assert!(rendered.contains("Artifact action: reply"));
         assert!(rendered.contains("Artifact to: o.schaefers@gmx.net"));
         assert!(rendered.contains("Artifact cc: michael.welsch@metric-space.ai"));
+        assert!(rendered.contains("Artifact subject: Jami Setup und QR-Code"));
         assert!(rendered.contains(
             "Artifact attachments: /srv/runtime/communication/artifacts/jami/ctox-jami-setup.pdf"
         ));
@@ -1356,6 +1369,10 @@ mod tests {
         ));
         assert!(rendered.contains("Recent same-thread email: inbound founder requested QR code"));
         assert!(rendered.contains("judge the full mail action, not just the prose"));
+        assert!(rendered.contains("recipients, cc list, subject, attachments"));
+        assert!(rendered.contains("still relevant against the latest communication"));
+        assert!(rendered.contains("truthfully reflects completed work"));
+        assert!(rendered.contains("recipient-appropriate, concise"));
         assert!(rendered.contains("treat every listed required deliverable as mandatory"));
         assert!(rendered.contains("future promise, dated commitment, or deadline promise"));
         assert!(rendered.contains("inspect recent relevant meeting outcomes"));

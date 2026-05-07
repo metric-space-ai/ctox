@@ -4055,6 +4055,15 @@ fn run_completion_review(
                     .map(|action| action.cc.clone())
             })
             .unwrap_or_default(),
+        artifact_subject: founder_reply_action
+            .as_ref()
+            .map(|action| action.subject.clone())
+            .or_else(|| {
+                proactive_founder_action
+                    .as_ref()
+                    .map(|action| action.subject.clone())
+            })
+            .unwrap_or_default(),
         artifact_attachments,
         required_deliverables,
         artifact_commitments: founder_commitments.clone(),
