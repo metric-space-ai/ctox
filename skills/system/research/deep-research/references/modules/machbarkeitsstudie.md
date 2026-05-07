@@ -76,13 +76,15 @@ For hidden metal structures in composites/coatings, also consider:
 
 Perform these steps in the research workspace:
 
+0. Verify the evidence base is sufficient before synthesis: at least 20 credible sources for normal decision-grade studies, saved source reads, non-empty `sources.jsonl`, and source-backed evidence in `evidence_bundle.json`. For exhaustive scientific studies, target substantially more sources and record why the final source count is sufficient.
 1. Write `synthesis/evidence-matrix.md` from the source ledger.
 2. Write `synthesis/technology-scores.md` with one row per technology, numeric/qualitative score, uncertainty, and evidence IDs.
 3. Write `synthesis/report-outline.md`; the outline must be generated from the evidence and decision question, not copied from any reference document.
 4. Write `synthesis/figure-plan.md` listing each figure/table, its data source, and whether it is original, source-derived, or omitted for licensing.
 5. If GitHub/data links are present, inspect relevant repositories/datasets and note findings in `synthesis/data-artifacts.md`; build diagrams/tables from them only when they add evidence.
 6. Write `synthesis/report-draft.md` as a full narrative Machbarkeitsstudie with citations.
-7. Generate the DOCX from the draft and matrix. Then write `synthesis/qa-notes.md` covering opening/ZIP checks, visual/render checks where available, missing evidence, and whether the report satisfies the decision question.
+7. Generate the DOCX from the draft and matrix. The output path must be a real `.docx` file, not a directory.
+8. Run `scripts/validate_research_deliverable.py` against the research workspace and final DOCX. Then write `synthesis/qa-notes.md` with the validator JSON, opening/ZIP checks, visual/render checks where available, missing evidence, and whether the report satisfies the decision question.
 
 Do not produce a final DOCX until the draft has become a coherent study with management summary, problem framing, technology comparison, feasibility scoring, risk discussion, and recommended experiments.
 
@@ -95,3 +97,4 @@ Do not produce a final DOCX until the draft has become a coherent study with man
 - Explicit statement of inspected GitHub/data/supplement links and any diagrams/tables derived from them.
 - Short validation plan with pass/fail gates.
 - Final Word/PDF document opens successfully and contains a synthesized study, not copied source text or a formatted evidence dump.
+- `validate_research_deliverable.py` exits successfully. If it fails, the final answer must say the deliverable is not complete and list the failing gates.

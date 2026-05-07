@@ -58,6 +58,7 @@ Use the folder as a research project, not as an output dump. For long reports, w
 
 - Never use control/reference documents as hidden input to the research or writing agent. If the user supplies a sample only for later evaluation, do not attach it, quote it, paraphrase it, extract images from it, or copy its structure into the agent prompt.
 - Write from `evidence_bundle.json`, `sources.jsonl`, `reads/`, `snapshots/`, inspected data links, and agent-created synthesis notes.
+- Empty or placeholder evidence is a hard failure. Do not mark a deep-research report done when `sources.jsonl` is empty, `evidence_bundle.json` has no sources, `reads/` is empty, or the synthesis files contain placeholders such as "provisional", "research underway", "checks planned", "TBD", or "placeholder".
 - Create these files before the final document for decision-grade work:
   - `synthesis/evidence-matrix.md`
   - `synthesis/report-outline.md`
@@ -67,6 +68,8 @@ Use the folder as a research project, not as an output dump. For long reports, w
   - `synthesis/qa-notes.md`
 - Figures must be either legally usable source figures with explicit usage notes, or original schematics/diagrams generated from the synthesis. Do not reuse figures from a reference/control document.
 - The final document must be a written study, not a raw evidence export. It needs an argument, recommendations, uncertainty, decision gates, tables, and references.
+- The final `.docx` path must be a ZIP/DOCX file. A directory ending in `.docx` is a hard failure.
+- Before answering success, run the deliverable validator. If it fails, continue the research/writing loop or report the failure instead of claiming completion.
 
 ## DOCX Helper
 
@@ -79,3 +82,17 @@ python3 skills/system/research/deep-research/scripts/build_research_report_docx.
 ```
 
 The JSON input should contain `title`, optional `subtitle`, `metadata`, `sections`, optional `figures`, optional `tables`, and `references`. Use `python-docx` from the bundled runtime if the system Python lacks it.
+
+Then validate:
+
+```bash
+python3 skills/system/research/deep-research/scripts/validate_research_deliverable.py \
+  --workspace /path/to/research-workspace \
+  --docx /path/to/report.docx \
+  --min-sources 20 \
+  --min-reads 5 \
+  --min-draft-chars 8000 \
+  --require-call-counts
+```
+
+For exhaustive scientific reports, raise the thresholds rather than lowering them. A validator failure means the deliverable is not complete.

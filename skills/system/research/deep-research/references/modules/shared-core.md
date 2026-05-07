@@ -27,6 +27,8 @@ Use this file for every deep-research module.
 - Important recommendations need both supporting and limiting evidence.
 - Weak assumptions must be explicit.
 - If call counts are low for a supposedly deep task, state that the evidence base is insufficient and run additional targeted searches.
+- If `sources.jsonl` is empty, `evidence_bundle.json` has no sources, or `reads/` has no saved source reads, the work is not deep research. Stop writing and gather evidence.
+- Placeholder synthesis is not acceptable. Files containing only "provisional", "research underway", "checks planned", "TBD", or generic outlines do not satisfy the writing loop.
 - If a figure is discovered, record source page, image URL, caption/context, and usage status before embedding.
 - If data/repository links are discovered, state whether they were inspected and whether they changed the findings. Do not ignore relevant code/data links.
 - If the user gives a reference/control artifact for evaluation, keep it out of the research and writing context. Use it only after the candidate deliverable exists, and only to compare quality/coverage.
@@ -39,6 +41,7 @@ For reports that may span multiple turns or compactions:
 - Keep open questions and missing evidence in `synthesis/open-questions.md`.
 - Keep a running citation map from report claims to `sources.jsonl` indices.
 - Do not skip directly from evidence gathering to DOCX generation.
+- Do not create a directory with the final document name. The `.docx` target must remain a file path and must pass ZIP/DOCX validation.
 - After compaction, resume from `manifest.json`, `CONTINUE.md`, and `synthesis/status.md`.
 
 ## Standard Report Metadata
