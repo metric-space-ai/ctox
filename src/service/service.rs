@@ -589,6 +589,39 @@ fn completion_review_disposition_label(disposition: &CompletionReviewDisposition
     }
 }
 
+fn short_terminal_bench_artifact_reply_disposition(
+    root: &Path,
+    job: &QueuedPrompt,
+    reply_text: &str,
+) -> Option<CompletionReviewDisposition> {
+    if !is_terminal_bench_controller_artifact_job(job) {
+        return None;
+    }
+    if reply_text.trim().chars().count() > 8 {
+        return None;
+    }
+
+    let expected = expected_outcome_artifacts_for_job(job);
+    if expected.is_empty() {
+        return None;
+    }
+    let delivered = delivered_outcome_artifacts_for_job(root, job, &expected).unwrap_or_default();
+    let runtime_refs_ok =
+        validate_terminal_bench_controller_runtime_refs(root, job, &expected).is_ok();
+    if delivered.len() == expected.len() && runtime_refs_ok {
+        return None;
+    }
+
+    let missing_count = expected.len().saturating_sub(delivered.len());
+    Some(CompletionReviewDisposition::Hold {
+        summary: format!(
+            "Terminal-Bench controller stayed open because the worker returned only {} character(s) and did not satisfy the durable artifact contract. Missing or stale artifacts: {missing_count}/{}. The harness/review must not create files or queue work; retry the same worker with feedback so it performs the shell work itself.",
+            reply_text.chars().count(),
+            expected.len()
+        ),
+    })
+}
+
 struct ServiceExitGuard {
     pid: u32,
 }
@@ -2996,9 +3029,11 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
                         reply_text.chars().count()
                     ),
                 );
-                let disposition = if let Some(work_id) =
-                    continuation_self_work_requested(&job, reply_text)
+                let disposition = if let Some(disposition) =
+                    short_terminal_bench_artifact_reply_disposition(&root, &job, reply_text)
                 {
+                    disposition
+                } else if let Some(work_id) = continuation_self_work_requested(&job, reply_text) {
                     let summary = format!(
                             "Agentic work is not finished; the last turn explicitly requested continuation with concrete next steps. Last reply: {}",
                             clip_text(reply_text, 260)
@@ -18887,6 +18922,48 @@ Create durable CTOX queue/ticket work and record message keys."
             .required_files
             .iter()
             .any(|path| path.contains(stale_run_dir)));
+    }
+
+    #[test]
+    fn short_terminal_bench_reply_holds_artifact_job_open() {
+        let root = temp_root("terminal-bench-short-reply-hold");
+        let run_dir = root.join("terminal-bench-2/runs/short-reply");
+        let run_dir = run_dir.to_string_lossy().into_owned();
+        let job = QueuedPrompt {
+            prompt: format!(
+                "Only required durable files for this controller turn:\n\
+- {run_dir}/controller.json\n\
+- {run_dir}/ticket-map.jsonl\n\
+- {run_dir}/preparation-tickets.jsonl\n\
+- {run_dir}/run-queue.jsonl\n\
+- {run_dir}/results.jsonl\n\
+- {run_dir}/knowledge.md\n\
+- {run_dir}/logbook.md\n\
+- {run_dir}/blogpost-notes.md\n\n\
+The controller must create preparation queue/tickets and record queue:system::* keys."
+            ),
+            goal: "Terminal-Bench 2 controller".to_string(),
+            preview: "Terminal-Bench 2 controller".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: Some("benchmark-controller".to_string()),
+            leased_message_keys: vec!["queue:system::parent".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("terminal-bench-2/deepseek/short-reply/controller".to_string()),
+            workspace_root: Some(run_dir.clone()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let disposition = short_terminal_bench_artifact_reply_disposition(&root, &job, "::")
+            .expect("short artifact reply must hold the slice open");
+
+        assert!(matches!(
+            disposition,
+            CompletionReviewDisposition::Hold { .. }
+        ));
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
