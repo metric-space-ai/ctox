@@ -107,6 +107,11 @@ fn locate_helper() -> Result<std::path::PathBuf> {
         Some(std::path::PathBuf::from(HELPER_RELATIVE)),
         std::env::var_os("HOME").map(|h| {
             std::path::PathBuf::from(h)
+                .join(".local/lib/ctox/current")
+                .join(HELPER_RELATIVE)
+        }),
+        std::env::var_os("HOME").map(|h| {
+            std::path::PathBuf::from(h)
                 .join(".local/lib/ctox")
                 .join(HELPER_RELATIVE)
         }),

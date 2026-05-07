@@ -87,7 +87,7 @@ pub fn upsert_evidence(
     if input.canonical_id.trim().is_empty() {
         bail!("canonical_id must be non-empty");
     }
-    let evidence_id = derive_evidence_id(&input.citation_kind, &input.canonical_id);
+    let evidence_id = derive_evidence_id(run_id, &input.citation_kind, &input.canonical_id);
     let now = store::now_iso();
     let snippet_for_hash = input.snippet_md.as_deref().unwrap_or("");
     let integrity_hash = sha256_hex(snippet_for_hash);
@@ -194,8 +194,8 @@ pub fn load_evidence(
     Ok(row)
 }
 
-pub fn derive_evidence_id(kind: &str, canonical_id: &str) -> String {
-    let basis = format!("{}|{}", kind, canonical_id.trim());
+pub fn derive_evidence_id(run_id: &str, kind: &str, canonical_id: &str) -> String {
+    let basis = format!("{}|{}|{}", run_id, kind, canonical_id.trim());
     format!("ev_{}", &sha256_hex(&basis)[..16])
 }
 
