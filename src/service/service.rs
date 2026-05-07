@@ -2882,8 +2882,12 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
                     outbound_anchor: Some("tui-outbound:test".to_string()),
                 };
 
-                let prompt =
-                    outcome_witness_recovery_message(&job, approved_body, "missing artifact");
+                let prompt = outcome_witness_recovery_message(
+                    Path::new(""),
+                    &job,
+                    approved_body,
+                    "missing artifact",
+                );
 
                 assert!(prompt.contains("Die Review-Freigabe"));
                 assert!(prompt.contains("Fuehre keine DB- oder Code-Forensik aus"));
@@ -3181,8 +3185,9 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
                             );
                             should_handle_messages = false;
                             if founder_send_error.is_none() {
-                                founder_send_error =
-                                    Some(outcome_witness_recovery_message(&job, &reply, err));
+                                founder_send_error = Some(outcome_witness_recovery_message(
+                                    &root, &job, &reply, err,
+                                ));
                             }
                             if job.ticket_self_work_id.is_none()
                                 && job.leased_message_keys.is_empty()
@@ -3195,7 +3200,7 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
                             {
                                 let recovery =
                                     founder_send_error.as_ref().cloned().unwrap_or_else(|| {
-                                        outcome_witness_recovery_message(&job, &reply, err)
+                                        outcome_witness_recovery_message(&root, &job, &reply, err)
                                     });
                                 outcome_recovery_prompt = Some(QueuedPrompt {
                                     prompt: recovery.clone(),
@@ -3227,7 +3232,7 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
                             {
                                 let recovery =
                                     founder_send_error.as_ref().cloned().unwrap_or_else(|| {
-                                        outcome_witness_recovery_message(&job, &reply, err)
+                                        outcome_witness_recovery_message(&root, &job, &reply, err)
                                     });
                                 outcome_recovery_prompt = Some(QueuedPrompt {
                                     prompt: recovery.clone(),
@@ -3365,7 +3370,7 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
                                             .as_ref()
                                             .cloned()
                                             .unwrap_or_else(|| {
-                                                outcome_witness_recovery_message(&job, &reply, err)
+                                                outcome_witness_recovery_message(&root, &job, &reply, err)
                                             });
                                         review_requeue = Some((work_id.to_string(), recovery));
                                         push_event_locked(
@@ -5486,6 +5491,21 @@ fn workspace_file_artifact_diagnostic(path: &str) -> &'static str {
     }
 }
 
+fn workspace_file_artifact_diagnostic_for_expected(
+    root: &Path,
+    job: &QueuedPrompt,
+    artifact: &ArtifactRef,
+) -> String {
+    let path = Path::new(&artifact.primary_key);
+    if artifact.expected_terminal_state == "fresh"
+        && path.is_file()
+        && !workspace_file_is_fresh_enough(path, workspace_artifact_fresh_cutoff_for_job(root, job))
+    {
+        return "stale: regular file exists, but it was not updated after the current queue lease; this turn must write or touch the file with truthful current state".to_string();
+    }
+    workspace_file_artifact_diagnostic(&artifact.primary_key).to_string()
+}
+
 fn prompt_declares_workspace_file_artifact(prompt: &str) -> bool {
     let lowered = prompt.to_ascii_lowercase();
     let artifact_words = [
@@ -5684,8 +5704,20 @@ fn enforce_job_outcome_witness(
     Ok(Some(proof.proof_id))
 }
 
-fn outcome_witness_recovery_message(job: &QueuedPrompt, approved_body: &str, err: &str) -> String {
-    let file_refs = declared_workspace_file_artifacts_for_job(job);
+fn outcome_witness_recovery_message(
+    root: &Path,
+    job: &QueuedPrompt,
+    approved_body: &str,
+    err: &str,
+) -> String {
+    let expected_file_artifacts = expected_outcome_artifacts_for_job(job)
+        .into_iter()
+        .filter(|artifact| artifact.kind == ArtifactKind::WorkspaceFile)
+        .collect::<Vec<_>>();
+    let file_refs = expected_file_artifacts
+        .iter()
+        .map(|artifact| artifact.primary_key.clone())
+        .collect::<Vec<_>>();
     let mut message = if !file_refs.is_empty()
         && job.outbound_email.is_none()
         && founder_email_reply_message_key(job).is_none()
@@ -5735,7 +5767,7 @@ fn outcome_witness_recovery_message(job: &QueuedPrompt, approved_body: &str, err
             );
         } else {
             message.push_str(
-                "\n\nHARNESS FEEDBACK\nProblem: Du hast die Aufgabe als fertig behandelt, aber der Harness konnte die erwarteten Datei-Artefakte nicht finden. Eine Textantwort, ein Plan oder ein Codeblock reicht hier nicht.\n\nREQUIRED ARTIFACTS\nDiese Pfade muessen als Dateien existieren, bevor du Abschluss behauptest:",
+                "\n\nHARNESS FEEDBACK\nProblem: Du hast die Aufgabe als fertig behandelt, aber der Harness konnte die erwarteten Datei-Artefakte nicht als Ergebnis dieses Turns nachweisen. Eine Textantwort, ein Plan oder ein Codeblock reicht hier nicht.\n\nREQUIRED ARTIFACTS\nDiese Pfade muessen als regulaere Dateien existieren und, wenn unten als stale markiert, in diesem Turn aktualisiert werden, bevor du Abschluss behauptest:",
             );
             if is_terminal_bench_controller_artifact_job(job) {
                 if let Some(run_dir) = terminal_bench_run_dir_from_artifact_paths(&file_refs) {
@@ -5745,19 +5777,25 @@ fn outcome_witness_recovery_message(job: &QueuedPrompt, approved_body: &str, err
                     ));
                 }
             }
-            for path in file_refs {
-                message.push_str(&format!(
-                    "\n- {} [{}]",
-                    path,
-                    workspace_file_artifact_diagnostic(&path)
-                ));
+            for artifact in expected_file_artifacts {
+                let path = artifact.primary_key;
+                let diagnostic = workspace_file_artifact_diagnostic_for_expected(
+                    root,
+                    job,
+                    &ArtifactRef {
+                        kind: ArtifactKind::WorkspaceFile,
+                        primary_key: path.clone(),
+                        expected_terminal_state: artifact.expected_terminal_state,
+                    },
+                );
+                message.push_str(&format!("\n- {} [{}]", path, diagnostic));
             }
             message.push_str(
-                "\n\nNEXT ACTION\n1. Fuehre jetzt einen Terminal-/Shell-Toolcall aus. Schreibe nicht nur, was du tun wuerdest.\n2. Erzeuge oder aktualisiere genau diese Artefakte als regulaere Dateien. Wenn `test -d '<pfad>'` fuer einen erforderlichen Pfad erfolgreich ist, ist genau das der Fehler: verschiebe oder entferne dieses Verzeichnis und schreibe die Datei an denselben Pfad. Schreibe die Artefakte nicht in `<pfad>/...`.\n3. Pruefe jeden Pfad mit `test -f '<pfad>'`.\n4. Wenn ein Artefakt absichtlich leer sein darf, ist Existenz genug; sonst schreibe den geforderten Inhalt hinein.\n5. Antworte erst danach mit einer kurzen Ergebniszusammenfassung.\n\nORIGINAL TASK\nDer urspruengliche Auftrag bleibt aktiv und ist weiterhin der fachliche Inhalt fuer die Artefakte:\n",
+                "\n\nNEXT ACTION\n1. Fuehre jetzt einen Terminal-/Shell-Toolcall aus. Schreibe nicht nur, was du tun wuerdest.\n2. Erzeuge oder aktualisiere genau diese Artefakte als regulaere Dateien. Wenn `test -d '<pfad>'` fuer einen erforderlichen Pfad erfolgreich ist, ist genau das der Fehler: verschiebe oder entferne dieses Verzeichnis und schreibe die Datei an denselben Pfad. Schreibe die Artefakte nicht in `<pfad>/...`.\n3. Fuer stale markierte Dateien reicht vorhandene Existenz nicht: schreibe einen truthful checkpoint oder fuehre mindestens eine inhaltlich korrekte Aktualisierung im aktuellen RUN_DIR aus.\n4. Pruefe jeden Pfad mit `test -f '<pfad>'`.\n5. Wenn ein Artefakt absichtlich leer sein darf, ist Existenz genug; sonst schreibe den geforderten Inhalt hinein.\n6. Antworte erst danach mit einer kurzen Ergebniszusammenfassung.\n\nORIGINAL TASK\nDer urspruengliche Auftrag bleibt aktiv und ist weiterhin der fachliche Inhalt fuer die Artefakte:\n",
             );
             message.push_str(&clip_text(&job.prompt, 6000));
             message.push_str(
-                "\n\nEXIT GATE\nDu darfst diese Aufgabe erst als erledigt behandeln, wenn alle oben genannten `test -f` Pruefungen erfolgreich sind.",
+                "\n\nEXIT GATE\nDu darfst diese Aufgabe erst als erledigt behandeln, wenn alle oben genannten `test -f` Pruefungen erfolgreich sind und alle stale markierten Dateien in diesem Turn aktualisiert wurden.",
             );
         }
     }
@@ -19690,7 +19728,8 @@ preparation queue/tickets and record message keys.",
             outbound_anchor: None,
         };
 
-        let prompt = outcome_witness_recovery_message(&job, "done", "missing artifact");
+        let prompt =
+            outcome_witness_recovery_message(Path::new(""), &job, "done", "missing artifact");
 
         assert!(prompt.contains("Datei-Artefakte fehlen"));
         assert!(prompt.contains("test -f"));
@@ -19724,12 +19763,71 @@ preparation queue/tickets and record message keys.",
             outbound_anchor: None,
         };
 
-        let prompt = outcome_witness_recovery_message(&job, "done", "missing artifact");
+        let prompt = outcome_witness_recovery_message(&root, &job, "done", "missing artifact");
 
         assert!(prompt.contains(controller_path.to_string_lossy().as_ref()));
         assert!(prompt.contains("exists as a directory"));
         assert!(prompt.contains("test -d"));
         assert!(prompt.contains("regular file"));
+    }
+
+    #[test]
+    fn workspace_file_recovery_prompt_reports_stale_fresh_artifacts() {
+        let root = temp_root("workspace-file-recovery-stale-fresh-artifacts");
+        let run_dir = root.join("tb2-run");
+        let controller = run_dir.join("controller.json");
+        let logbook = run_dir.join("logbook.md");
+        std::fs::create_dir_all(&run_dir).expect("failed to create run dir");
+        std::fs::write(&controller, "{}\n").expect("failed to write stale controller");
+        std::fs::write(&logbook, "# old\n").expect("failed to write stale logbook");
+        std::thread::sleep(Duration::from_secs(2));
+        let prompt = format!(
+            "CHECKPOINT-ONLY TERMINAL-BENCH RECOVERY SLICE\n\
+Required output files to update now:\n\
+- {}\n\
+- {}\n\
+Exit after the write command.",
+            controller.display(),
+            logbook.display()
+        );
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "checkpoint stale recovery".to_string(),
+                prompt: prompt.clone(),
+                thread_key: "queue/checkpoint-stale-recovery".to_string(),
+                workspace_root: Some(run_dir.to_string_lossy().into_owned()),
+                priority: "urgent".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create queue task");
+        let leased = channels::lease_queue_task(&root, &task.message_key, "test")
+            .expect("failed to lease queue task");
+        let job = QueuedPrompt {
+            prompt,
+            goal: "checkpoint stale recovery".to_string(),
+            preview: "checkpoint stale recovery".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: None,
+            leased_message_keys: vec![leased.message_key],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("queue/checkpoint-stale-recovery".to_string()),
+            workspace_root: Some(run_dir.to_string_lossy().into_owned()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let recovery = outcome_witness_recovery_message(&root, &job, "done", "missing artifact");
+
+        assert!(recovery.contains("stale: regular file exists"));
+        assert!(recovery.contains("not updated after the current queue lease"));
+        assert!(recovery.contains("stale markierten Dateien in diesem Turn aktualisiert"));
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -19878,7 +19976,12 @@ Those are not durable artifact requirements."
             outbound_anchor: Some("tui-outbound:test".to_string()),
         };
 
-        let prompt = outcome_witness_recovery_message(&job, approved_body, "missing artifact");
+        let prompt = outcome_witness_recovery_message(
+            Path::new(""),
+            &job,
+            approved_body,
+            "missing artifact",
+        );
 
         assert!(prompt.contains("Die Review-Freigabe"));
         assert!(prompt.contains("Fuehre keine DB- oder Code-Forensik aus"));
