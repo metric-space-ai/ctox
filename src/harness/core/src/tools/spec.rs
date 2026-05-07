@@ -1195,7 +1195,16 @@ fn create_ctox_deep_research_tool() -> ToolSpec {
             JsonSchema::Number {
                 description: Some("Optional maximum number of deduplicated sources.".to_string()),
                 minimum: Some(3.0),
-                maximum: Some(40.0),
+                maximum: Some(300.0),
+            },
+        ),
+        (
+            "workspace".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Optional path for the persistent research workspace. When omitted, CTOX creates runtime/research/deep-research/<timestamp>-<slug>."
+                        .to_string(),
+                ),
             },
         ),
         (
@@ -1212,6 +1221,15 @@ fn create_ctox_deep_research_tool() -> ToolSpec {
             JsonSchema::Boolean {
                 description: Some(
                     "When true, skip paper-specific scholarly query expansions.".to_string(),
+                ),
+            },
+        ),
+        (
+            "no_workspace".to_string(),
+            JsonSchema::Boolean {
+                description: Some(
+                    "When true, skip creation of the persistent research workspace. Avoid this for decision-grade research."
+                        .to_string(),
                 ),
             },
         ),

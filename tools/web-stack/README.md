@@ -32,6 +32,14 @@ scholarly, open-access, DOI/metadata, patent/industry, and failure-mode search
 profiles, deduplicates sources, reads top pages, and returns an evidence bundle
 plus a report scaffold for the agent to synthesize.
 
+Deep research also creates a persistent research workspace by default under
+`runtime/research/deep-research/<timestamp>-<slug>`. The folder contains the
+full evidence bundle, source JSONL, per-source read payloads, limited raw
+snapshots, figure candidates, discovered data/GitHub links, and `CONTINUE.md`
+so a later agent turn can resume the same research project after context
+compaction. Use `--workspace <path>` to choose the folder or `--no-workspace`
+only for tests/smoke runs.
+
 Anna's Archive support is intentionally metadata-only. The tool may use it to
 discover bibliographic records when `--include-annas-archive` is explicit, but
 it must not download or reproduce unauthorized copyrighted full text.

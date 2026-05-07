@@ -4,26 +4,26 @@ use serde_json::Value;
 use std::path::Path;
 use std::path::PathBuf;
 
+use crate::browser::BrowserAutomationRequest;
+use crate::browser::BrowserCaptureRequest;
+use crate::browser::BrowserPrepareOptions;
 use crate::browser::capture_browser_transport;
 use crate::browser::prepare_browser_environment;
 use crate::browser::read_browser_automation_source;
 use crate::browser::run_browser_automation;
-use crate::browser::BrowserAutomationRequest;
-use crate::browser::BrowserCaptureRequest;
-use crate::browser::BrowserPrepareOptions;
-use crate::deep_research::run_ctox_deep_research_tool;
 use crate::deep_research::DeepResearchDepth;
 use crate::deep_research::DeepResearchRequest;
+use crate::deep_research::run_ctox_deep_research_tool;
+use crate::web_search::CanonicalWebSearchRequest;
+use crate::web_search::ContextSize;
+use crate::web_search::DirectWebReadRequest;
+use crate::web_search::SearchUserLocation;
 use crate::web_search::run_ctox_google_bootstrap_doctor_tool;
 use crate::web_search::run_ctox_google_bootstrap_import_tool;
 use crate::web_search::run_ctox_google_bootstrap_refresh_tool;
 use crate::web_search::run_ctox_google_bootstrap_status_tool;
 use crate::web_search::run_ctox_web_read_tool;
 use crate::web_search::run_ctox_web_search_tool;
-use crate::web_search::CanonicalWebSearchRequest;
-use crate::web_search::ContextSize;
-use crate::web_search::DirectWebReadRequest;
-use crate::web_search::SearchUserLocation;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WebScrapeRequest {
@@ -140,7 +140,7 @@ pub fn handle_web_command(
             let query = required_flag_value(args, "--query")
                 .or_else(|| args.get(1).map(String::as_str))
                 .context(
-                    "usage: ctox web deep-research --query <text> [--focus <text>] [--depth <quick|standard|exhaustive>] [--max-sources <n>] [--include-annas-archive] [--no-papers]",
+                    "usage: ctox web deep-research --query <text> [--focus <text>] [--depth <quick|standard|exhaustive>] [--max-sources <n>] [--workspace <path>] [--include-annas-archive] [--no-papers] [--no-workspace]",
                 )?;
             let depth = find_flag_value(args, "--depth")
                 .map(parse_deep_research_depth)
@@ -160,6 +160,8 @@ pub fn handle_web_command(
                     max_sources,
                     include_annas_archive: args.iter().any(|arg| arg == "--include-annas-archive"),
                     include_papers: !args.iter().any(|arg| arg == "--no-papers"),
+                    workspace: find_flag_value(args, "--workspace").map(PathBuf::from),
+                    persist_workspace: !args.iter().any(|arg| arg == "--no-workspace"),
                 },
             )?;
             print_json(&payload)
@@ -205,8 +207,7 @@ pub fn handle_web_command(
             let source = required_flag_value(args, "--file")
                 .or_else(|| args.get(1).map(String::as_str))
                 .context("usage: ctox web google-bootstrap-import --file <path>")?;
-            let payload =
-                run_ctox_google_bootstrap_import_tool(root, &PathBuf::from(source))?;
+            let payload = run_ctox_google_bootstrap_import_tool(root, &PathBuf::from(source))?;
             print_json(&payload)
         }
         "scrape" => {
@@ -283,7 +284,7 @@ pub fn handle_web_command(
             print_json(&payload)
         }
         _ => anyhow::bail!(
-            "usage:\n  ctox web search --query <text> [--domain <host>]... [--context-size <low|medium|high>] [--cached] [--include-sources]\n  ctox web read --url <url> [--query <text>] [--find <text>]...\n  ctox web deep-research --query <text> [--focus <text>] [--depth <quick|standard|exhaustive>] [--max-sources <n>] [--include-annas-archive] [--no-papers]\n  ctox web google-bootstrap-refresh --query <text> [--domain <host>]... [--timeout-ms <n>]\n  ctox web google-bootstrap-status\n  ctox web google-bootstrap-import --file <path>\n  ctox web google-doctor\n  ctox web scrape --target-key <key> --mode <latest|semantic> [--query <text>] [--limit <n>]\n  ctox web browser-prepare [--dir <path>] [--install-reference] [--install-browser] [--skip-npm-install]\n  ctox web browser-automation [--dir <path>] [--timeout-ms <n>] [--script-file <path>] < script.js\n  ctox web browser-capture --url <url> [--dir <path>] [--out-dir <path>] [--timeout-ms <n>]"
+            "usage:\n  ctox web search --query <text> [--domain <host>]... [--context-size <low|medium|high>] [--cached] [--include-sources]\n  ctox web read --url <url> [--query <text>] [--find <text>]...\n  ctox web deep-research --query <text> [--focus <text>] [--depth <quick|standard|exhaustive>] [--max-sources <n>] [--workspace <path>] [--include-annas-archive] [--no-papers] [--no-workspace]\n  ctox web google-bootstrap-refresh --query <text> [--domain <host>]... [--timeout-ms <n>]\n  ctox web google-bootstrap-status\n  ctox web google-bootstrap-import --file <path>\n  ctox web google-doctor\n  ctox web scrape --target-key <key> --mode <latest|semantic> [--query <text>] [--limit <n>]\n  ctox web browser-prepare [--dir <path>] [--install-reference] [--install-browser] [--skip-npm-install]\n  ctox web browser-automation [--dir <path>] [--timeout-ms <n>] [--script-file <path>] < script.js\n  ctox web browser-capture --url <url> [--dir <path>] [--out-dir <path>] [--timeout-ms <n>]"
         ),
     }
 }

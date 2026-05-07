@@ -51,9 +51,13 @@ struct CtoxDeepResearchArgs {
     #[serde(default)]
     max_sources: Option<u64>,
     #[serde(default)]
+    workspace: Option<String>,
+    #[serde(default)]
     include_annas_archive: bool,
     #[serde(default)]
     no_papers: bool,
+    #[serde(default)]
+    no_workspace: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -161,11 +165,17 @@ impl ToolHandler for CtoxWebHandler {
                 if let Some(max_sources) = args.max_sources {
                     command.arg("--max-sources").arg(max_sources.to_string());
                 }
+                if let Some(workspace) = args.workspace {
+                    command.arg("--workspace").arg(workspace);
+                }
                 if args.include_annas_archive {
                     command.arg("--include-annas-archive");
                 }
                 if args.no_papers {
                     command.arg("--no-papers");
+                }
+                if args.no_workspace {
+                    command.arg("--no-workspace");
                 }
             }
             "ctox_web_scrape" => {

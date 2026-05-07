@@ -41,6 +41,7 @@ For technical studies, cover:
 - negative evidence and known failure modes
 - relevant adjacent industries
 - validation methods and ground truth
+- supplementary datasets, GitHub repositories, notebooks, simulation models, benchmark images, and raw measurement data when linked from papers or project pages
 
 For hidden metal structures in composites/coatings, also consider:
 
@@ -63,10 +64,11 @@ For hidden metal structures in composites/coatings, also consider:
 5. Candidate Technologies
 6. Evidence Review
 7. Feasibility Matrix
-8. Recommended Experimental Design
-9. Risks, Unknowns, and Decision Gates
-10. Conclusion and Recommendation
-11. References
+8. Data, Figures, and Reproducible Artifacts
+9. Recommended Experimental Design
+10. Risks, Unknowns, and Decision Gates
+11. Conclusion and Recommendation
+12. References
 
 ## Completion Criteria
 
@@ -74,4 +76,5 @@ For hidden metal structures in composites/coatings, also consider:
 - Feasibility score with uncertainty for each major approach.
 - Explicit handling of confounders.
 - Source-backed claims with citations.
+- Explicit statement of inspected GitHub/data/supplement links and any diagrams/tables derived from them.
 - Short validation plan with pass/fail gates.

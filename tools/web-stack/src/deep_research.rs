@@ -1,20 +1,26 @@
 use anyhow::Result;
 use scraper::Html;
 use scraper::Selector;
-use serde_json::json;
 use serde_json::Value;
+use serde_json::json;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::fs;
+use std::io::Read;
+use std::io::Write;
 use std::path::Path;
+use std::path::PathBuf;
 use std::time::Duration;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 use url::Url;
 
-use crate::web_search::run_ctox_web_read_tool;
-use crate::web_search::run_ctox_web_search_tool;
 use crate::web_search::CanonicalWebSearchRequest;
 use crate::web_search::ContextSize;
 use crate::web_search::DirectWebReadRequest;
 use crate::web_search::SearchUserLocation;
+use crate::web_search::run_ctox_web_read_tool;
+use crate::web_search::run_ctox_web_search_tool;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeepResearchRequest {
@@ -24,6 +30,8 @@ pub struct DeepResearchRequest {
     pub max_sources: usize,
     pub include_annas_archive: bool,
     pub include_papers: bool,
+    pub workspace: Option<PathBuf>,
+    pub persist_workspace: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,6 +88,14 @@ impl DeepResearchDepth {
             Self::Quick => 3,
             Self::Standard => 12,
             Self::Exhaustive => 40,
+        }
+    }
+
+    fn snapshot_budget(self) -> usize {
+        match self {
+            Self::Quick => 8,
+            Self::Standard => 32,
+            Self::Exhaustive => 96,
         }
     }
 }
@@ -200,6 +216,7 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
 
     let source_mix = summarize_source_mix(&enriched);
     let figure_candidates = collect_figure_candidates(&enriched);
+    let data_links = collect_data_links(&enriched);
     let sources_with_read = enriched
         .iter()
         .filter(|source| source.get("read").is_some())
@@ -215,7 +232,7 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
         })
         .count();
     let failed_page_reads = sources_with_read.saturating_sub(successful_page_reads);
-    Ok(json!({
+    let mut payload = json!({
         "ok": true,
         "tool": "ctox_deep_research",
         "query": query_text,
@@ -256,10 +273,24 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
                 + sources_with_read
                 + enriched.iter().take(24).count(),
         },
+        "data_links": data_links,
         "figure_candidates": figure_candidates,
         "sources": enriched,
         "report_scaffold": report_scaffold(&query_text),
-    }))
+    });
+
+    if request.persist_workspace {
+        match persist_research_workspace(root, request, &payload) {
+            Ok(summary) => {
+                payload["research_workspace"] = summary;
+            }
+            Err(err) => {
+                payload["research_workspace_error"] = Value::String(err.to_string());
+            }
+        }
+    }
+
+    Ok(payload)
 }
 
 fn normalize_required_query(raw: &str) -> Result<String> {
@@ -693,6 +724,227 @@ fn push_database_sources(
     pushed
 }
 
+fn persist_research_workspace(
+    root: &Path,
+    request: &DeepResearchRequest,
+    payload: &Value,
+) -> Result<Value> {
+    let workspace = request
+        .workspace
+        .clone()
+        .unwrap_or_else(|| default_research_workspace(root, request, payload));
+    fs::create_dir_all(&workspace)?;
+    for child in ["reads", "snapshots", "synthesis", "data"] {
+        fs::create_dir_all(workspace.join(child))?;
+    }
+
+    write_json_pretty(&workspace.join("evidence_bundle.json"), payload)?;
+    fs::write(workspace.join("query.txt"), request.query.as_bytes())?;
+    fs::write(
+        workspace.join("CONTINUE.md"),
+        continuation_markdown(payload),
+    )?;
+
+    if let Some(items) = payload.get("sources").and_then(Value::as_array) {
+        let mut sources_jsonl = fs::File::create(workspace.join("sources.jsonl"))?;
+        for (index, source) in items.iter().enumerate() {
+            writeln!(sources_jsonl, "{}", serde_json::to_string(source)?)?;
+            if let Some(read) = source.get("read") {
+                write_json_pretty(
+                    &workspace
+                        .join("reads")
+                        .join(format!("source-{index:04}.json")),
+                    read,
+                )?;
+            }
+        }
+
+        let snapshot_count = persist_source_snapshots(
+            &workspace.join("snapshots"),
+            items,
+            request.depth.snapshot_budget(),
+        );
+        let manifest = json!({
+            "workspace": workspace,
+            "query": payload.get("query").cloned().unwrap_or(Value::Null),
+            "search_query": payload.get("search_query").cloned().unwrap_or(Value::Null),
+            "depth": payload.get("depth").cloned().unwrap_or(Value::Null),
+            "research_call_counts": payload.get("research_call_counts").cloned().unwrap_or(Value::Null),
+            "source_count": items.len(),
+            "read_artifact_count": items.iter().filter(|source| source.get("read").is_some()).count(),
+            "snapshot_count": snapshot_count,
+            "data_link_count": payload.get("data_links").and_then(Value::as_array).map(Vec::len).unwrap_or(0),
+            "figure_candidate_count": payload.get("figure_candidates").and_then(Value::as_array).map(Vec::len).unwrap_or(0),
+            "files": {
+                "evidence_bundle": "evidence_bundle.json",
+                "sources_jsonl": "sources.jsonl",
+                "continuation": "CONTINUE.md",
+                "reads_dir": "reads/",
+                "snapshots_dir": "snapshots/",
+                "synthesis_dir": "synthesis/",
+                "data_dir": "data/"
+            }
+        });
+        write_json_pretty(&workspace.join("manifest.json"), &manifest)?;
+    }
+
+    write_json_pretty(
+        &workspace.join("search_runs.json"),
+        payload.get("search_runs").unwrap_or(&Value::Null),
+    )?;
+    write_json_pretty(
+        &workspace.join("database_runs.json"),
+        payload.get("database_runs").unwrap_or(&Value::Null),
+    )?;
+    write_json_pretty(
+        &workspace.join("figure_candidates.json"),
+        payload.get("figure_candidates").unwrap_or(&Value::Null),
+    )?;
+    write_json_pretty(
+        &workspace.join("data_links.json"),
+        payload.get("data_links").unwrap_or(&Value::Null),
+    )?;
+
+    Ok(json!({
+        "path": workspace,
+        "manifest": workspace.join("manifest.json"),
+        "continuation": workspace.join("CONTINUE.md"),
+        "evidence_bundle": workspace.join("evidence_bundle.json"),
+        "sources_jsonl": workspace.join("sources.jsonl"),
+    }))
+}
+
+fn default_research_workspace(
+    root: &Path,
+    request: &DeepResearchRequest,
+    payload: &Value,
+) -> PathBuf {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    let query = payload
+        .get("search_query")
+        .and_then(Value::as_str)
+        .unwrap_or(&request.query);
+    root.join("runtime")
+        .join("research")
+        .join("deep-research")
+        .join(format!("{now}-{}", slugify(query)))
+}
+
+fn write_json_pretty(path: &Path, value: &Value) -> Result<()> {
+    fs::write(path, serde_json::to_vec_pretty(value)?)?;
+    Ok(())
+}
+
+fn continuation_markdown(payload: &Value) -> String {
+    let counts = payload
+        .get("research_call_counts")
+        .cloned()
+        .unwrap_or(Value::Null);
+    format!(
+        "# Continue Deep Research\n\n\
+         Resume from this folder after context compaction or handoff.\n\n\
+         1. Read `manifest.json` and `evidence_bundle.json`.\n\
+         2. Inspect `sources.jsonl`, `reads/`, and `snapshots/` before synthesis.\n\
+         3. Inspect `data_links.json`; follow GitHub/data links when relevant and build diagrams/tables from data if useful.\n\
+         4. Write intermediate notes into `synthesis/` before producing the final report.\n\
+         5. Keep source-backed claims linked to `sources.jsonl` records or DOI/URL references.\n\n\
+         Research call counts:\n\n```json\n{}\n```\n",
+        serde_json::to_string_pretty(&counts).unwrap_or_else(|_| "null".to_string())
+    )
+}
+
+fn persist_source_snapshots(snapshot_dir: &Path, sources: &[Value], limit: usize) -> usize {
+    let mut saved = 0;
+    for (index, source) in sources.iter().enumerate() {
+        if saved >= limit {
+            break;
+        }
+        if source
+            .get("source_type")
+            .and_then(Value::as_str)
+            .is_some_and(|kind| kind == "annas_archive_metadata")
+        {
+            continue;
+        }
+        let Some(url) = source_read_url(source) else {
+            continue;
+        };
+        let Ok(snapshot) = fetch_limited_snapshot(&url, 5_000_000) else {
+            continue;
+        };
+        let extension = snapshot_extension(&url, snapshot.content_type.as_deref());
+        let target = snapshot_dir.join(format!("source-{index:04}.{extension}"));
+        if fs::write(&target, &snapshot.bytes).is_ok() {
+            let meta = json!({
+                "source_index": index,
+                "url": url,
+                "content_type": snapshot.content_type,
+                "bytes": snapshot.bytes.len(),
+                "file": target.file_name().and_then(|name| name.to_str()).unwrap_or_default(),
+            });
+            let _ = write_json_pretty(
+                &snapshot_dir.join(format!("source-{index:04}.metadata.json")),
+                &meta,
+            );
+            saved += 1;
+        }
+    }
+    saved
+}
+
+struct Snapshot {
+    content_type: Option<String>,
+    bytes: Vec<u8>,
+}
+
+fn fetch_limited_snapshot(url: &str, max_bytes: usize) -> Result<Snapshot> {
+    let agent = ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(8))
+        .build();
+    let response = agent
+        .get(url)
+        .set("User-Agent", "ctox-deep-research/0.1")
+        .call()
+        .map_err(anyhow::Error::from)?;
+    let content_type = response.header("content-type").map(|value| {
+        value
+            .split(';')
+            .next()
+            .unwrap_or(value)
+            .trim()
+            .to_ascii_lowercase()
+    });
+    let mut reader = response.into_reader().take(max_bytes as u64 + 1);
+    let mut bytes = Vec::new();
+    reader.read_to_end(&mut bytes)?;
+    if bytes.len() > max_bytes {
+        bytes.truncate(max_bytes);
+    }
+    Ok(Snapshot {
+        content_type,
+        bytes,
+    })
+}
+
+fn snapshot_extension(url: &str, content_type: Option<&str>) -> &'static str {
+    if content_type.is_some_and(|value| value.contains("pdf"))
+        || url.to_ascii_lowercase().contains(".pdf")
+    {
+        "pdf"
+    } else if content_type.is_some_and(|value| value.contains("html")) {
+        "html"
+    } else if content_type.is_some_and(|value| value.contains("json")) {
+        "json"
+    } else if content_type.is_some_and(|value| value.starts_with("text/")) {
+        "txt"
+    } else {
+        "bin"
+    }
+}
+
 fn query_crossref(query: &str, limit: usize) -> Result<Vec<Value>> {
     let url = format!(
         "https://api.crossref.org/works?rows={}&query.bibliographic={}",
@@ -943,6 +1195,104 @@ fn summarize_source_mix(sources: &[Value]) -> Value {
     json!(counts)
 }
 
+fn collect_data_links(sources: &[Value]) -> Vec<Value> {
+    let mut links = Vec::new();
+    let mut seen = BTreeSet::new();
+    for (source_index, source) in sources.iter().enumerate() {
+        let mut text = String::new();
+        append_json_text(&mut text, source.get("url"));
+        append_json_text(&mut text, source.get("snippet"));
+        append_json_text(&mut text, source.get("summary"));
+        if let Some(read) = source.get("read") {
+            append_json_text(&mut text, read.get("url"));
+            append_json_text(&mut text, read.get("summary"));
+            append_json_text(&mut text, read.get("excerpts"));
+            append_json_text(&mut text, read.get("find_results"));
+        }
+        for url in extract_urls(&text) {
+            let Some(kind) = classify_data_link(&url) else {
+                continue;
+            };
+            let normalized = normalize_url_key(&url);
+            if !seen.insert(normalized) {
+                continue;
+            }
+            links.push(json!({
+                "kind": kind,
+                "url": url,
+                "source_index": source_index,
+                "source_title": source.get("title").cloned().unwrap_or(Value::Null),
+                "source_url": source.get("url").cloned().unwrap_or(Value::Null),
+                "next_step": if kind == "github" {
+                    "Inspect repository README, releases, issues, datasets, notebooks, and diagrams if relevant to the research question."
+                } else {
+                    "Inspect linked dataset or repository and extract tables/figures when useful for synthesis."
+                },
+            }));
+        }
+    }
+    links
+}
+
+fn append_json_text(target: &mut String, value: Option<&Value>) {
+    match value {
+        Some(Value::String(text)) => {
+            target.push(' ');
+            target.push_str(text);
+        }
+        Some(Value::Array(items)) => {
+            for item in items {
+                append_json_text(target, Some(item));
+            }
+        }
+        Some(Value::Object(map)) => {
+            for value in map.values() {
+                append_json_text(target, Some(value));
+            }
+        }
+        _ => {}
+    }
+}
+
+fn extract_urls(text: &str) -> Vec<String> {
+    text.split_whitespace()
+        .filter_map(|token| {
+            let trimmed = token.trim_matches(|c: char| {
+                matches!(
+                    c,
+                    '"' | '\'' | '<' | '>' | '(' | ')' | '[' | ']' | '{' | '}' | ',' | ';'
+                )
+            });
+            if trimmed.starts_with("https://") || trimmed.starts_with("http://") {
+                let url = trimmed.trim_end_matches(|c: char| matches!(c, '.' | ',' | ')' | ']'));
+                Url::parse(url).ok().map(|parsed| parsed.to_string())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn classify_data_link(url: &str) -> Option<&'static str> {
+    let domain = domain_for_url(url);
+    if domain == "github.com" || domain.ends_with(".github.com") {
+        Some("github")
+    } else if domain.contains("gitlab.com") {
+        Some("gitlab")
+    } else if domain.contains("zenodo.org")
+        || domain.contains("figshare.com")
+        || domain.contains("kaggle.com")
+        || domain.contains("huggingface.co")
+        || domain.contains("data.mendeley.com")
+        || domain.contains("osf.io")
+        || domain.contains("dataverse")
+    {
+        Some("dataset")
+    } else {
+        None
+    }
+}
+
 fn collect_figure_candidates(sources: &[Value]) -> Vec<Value> {
     let mut figures = Vec::new();
     let mut seen = BTreeSet::new();
@@ -1072,6 +1422,37 @@ fn normalize_url_key(raw: &str) -> String {
         .unwrap_or_else(|_| raw.trim().to_ascii_lowercase())
 }
 
+fn slugify(raw: &str) -> String {
+    let mut slug = String::new();
+    for ch in raw.chars() {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch.to_ascii_lowercase());
+        } else if (ch.is_whitespace() || matches!(ch, '-' | '_' | '/' | ':'))
+            && !slug.ends_with('-')
+        {
+            slug.push('-');
+        }
+        if slug.len() >= 72 {
+            break;
+        }
+    }
+    slug.trim_matches('-').to_string().if_empty("research")
+}
+
+trait IfEmpty {
+    fn if_empty(self, fallback: &str) -> String;
+}
+
+impl IfEmpty for String {
+    fn if_empty(self, fallback: &str) -> String {
+        if self.is_empty() {
+            fallback.to_string()
+        } else {
+            self
+        }
+    }
+}
+
 fn report_scaffold(query: &str) -> Value {
     json!({
         "recommended_sections": [
@@ -1128,6 +1509,8 @@ mod tests {
             max_sources: 20,
             include_annas_archive: true,
             include_papers: true,
+            workspace: None,
+            persist_workspace: false,
         };
         let plans = build_research_search_plan(&request.query, &request);
         let annas = plans
@@ -1179,5 +1562,70 @@ mod tests {
         });
         assert!(should_attempt_source_read(&paper));
         assert!(!should_attempt_source_read(&annas));
+    }
+
+    #[test]
+    fn collects_github_and_dataset_links_from_sources() {
+        let sources = vec![json!({
+            "title": "Supplemented paper",
+            "url": "https://doi.org/10.1234/example",
+            "snippet": "Code: https://github.com/example/project and data https://zenodo.org/records/123",
+            "read": {
+                "summary": "Notebook at https://huggingface.co/datasets/example/data."
+            }
+        })];
+        let links = collect_data_links(&sources);
+        assert!(
+            links
+                .iter()
+                .any(|link| link.get("kind").and_then(Value::as_str) == Some("github"))
+        );
+        assert!(
+            links
+                .iter()
+                .any(|link| link.get("kind").and_then(Value::as_str) == Some("dataset"))
+        );
+    }
+
+    #[test]
+    fn persists_research_workspace_manifest_and_continuation() {
+        let root = std::env::temp_dir().join(format!(
+            "ctox_deep_research_workspace_test_{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let workspace = root.join("research-folder");
+        let request = DeepResearchRequest {
+            query: "test query".to_string(),
+            focus: None,
+            depth: DeepResearchDepth::Quick,
+            max_sources: 3,
+            include_annas_archive: false,
+            include_papers: true,
+            workspace: Some(workspace.clone()),
+            persist_workspace: true,
+        };
+        let payload = json!({
+            "query": "test query",
+            "search_query": "test query",
+            "depth": "quick",
+            "research_call_counts": {"deduplicated_sources": 0},
+            "sources": [],
+            "search_runs": [],
+            "database_runs": [],
+            "figure_candidates": [],
+            "data_links": [],
+        });
+        let summary = persist_research_workspace(&root, &request, &payload).unwrap();
+        assert!(workspace.join("manifest.json").is_file());
+        assert!(workspace.join("CONTINUE.md").is_file());
+        assert!(workspace.join("synthesis").is_dir());
+        assert_eq!(
+            summary.get("path").and_then(Value::as_str),
+            Some(workspace.to_str().unwrap())
+        );
+        let _ = fs::remove_dir_all(root);
     }
 }
