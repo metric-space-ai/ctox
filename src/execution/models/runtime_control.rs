@@ -1173,17 +1173,40 @@ fn apply_selection_runtime_projection(
     match next_state.source {
         runtime_state::InferenceSource::Api => {
             runtime_plan::clear_chat_plan_env(env_map);
-            // Derive the API provider from the freshly-selected model first;
-            // env_map at this point may still hold a stale CTOX_CHAT_MODEL
-            // from a previous selection or no model at all (clean install),
-            // and infer_api_provider_from_env_map would then fall back to
-            // OpenAI even if the new model is e.g. MiniMax-M2.7.
+            // Keep an explicit compatible provider (for example Azure
+            // Foundry for GPT-family deployments) across model-only runtime
+            // switches. If no compatible provider is configured, fall back to
+            // the selected model's default provider so provider-specific
+            // models such as MiniMax and Anthropic still switch correctly.
+            let inferred_provider = runtime_state::infer_api_provider_from_env_map(env_map);
+            let state_provider =
+                runtime_state::api_provider_for_upstream_base_url(&next_state.upstream_base_url)
+                    .to_string();
             let api_provider = next_state
                 .active_model
                 .as_deref()
-                .filter(|model| engine::is_api_chat_model(model))
-                .map(|model| engine::default_api_provider_for_model(model).to_string())
-                .unwrap_or_else(|| runtime_state::infer_api_provider_from_env_map(env_map));
+                .and_then(|model| {
+                    (!inferred_provider.eq_ignore_ascii_case("local")
+                        && engine::api_provider_supports_model(&inferred_provider, model))
+                    .then(|| inferred_provider.clone())
+                    .or_else(|| {
+                        (!state_provider.eq_ignore_ascii_case("local")
+                            && engine::api_provider_supports_model(&state_provider, model))
+                        .then(|| state_provider.clone())
+                    })
+                    .or_else(|| {
+                        engine::is_api_chat_model(model)
+                            .then(|| engine::default_api_provider_for_model(model).to_string())
+                    })
+                })
+                .unwrap_or(inferred_provider);
+            let existing_api_upstream_base_url = (!next_state.upstream_base_url.trim().is_empty()
+                && !runtime_state::is_local_loopback_base_url(&next_state.upstream_base_url)
+                && runtime_state::api_provider_for_upstream_base_url(
+                    &next_state.upstream_base_url,
+                )
+                .eq_ignore_ascii_case(&api_provider))
+            .then(|| next_state.upstream_base_url.clone());
             let azure_foundry_base_url = api_provider
                 .eq_ignore_ascii_case("azure_foundry")
                 .then(|| {
@@ -1201,6 +1224,7 @@ fn apply_selection_runtime_projection(
                 .filter(|value| !runtime_state::is_local_loopback_base_url(value))
                 .map(str::to_string)
                 .or(azure_foundry_base_url)
+                .or(existing_api_upstream_base_url)
                 .unwrap_or_else(|| {
                     runtime_state::default_api_upstream_base_url_for_provider(&api_provider)
                         .to_string()
@@ -2811,6 +2835,52 @@ mod tests {
         assert!(runtime_plan::load_persisted_runtime_fleet_plan(&root)
             .unwrap()
             .is_none());
+    }
+
+    #[test]
+    fn api_runtime_selection_preserves_explicit_azure_foundry_provider() {
+        let root = make_temp_root();
+        let mut env_map = BTreeMap::new();
+        env_map.insert("CTOX_CHAT_SOURCE".to_string(), "api".to_string());
+        env_map.insert("CTOX_API_PROVIDER".to_string(), "azure_foundry".to_string());
+        env_map.insert(
+            "CTOX_UPSTREAM_BASE_URL".to_string(),
+            "https://inf-yoda-resource.cognitiveservices.azure.com/openai/v1".to_string(),
+        );
+        env_map.insert("CTOX_CHAT_MODEL".to_string(), "gpt-5.4".to_string());
+        env_map.insert("CTOX_ACTIVE_MODEL".to_string(), "gpt-5.4".to_string());
+        runtime_env::save_runtime_env_map(&root, &env_map).unwrap();
+
+        let change = apply_runtime_selection_with_context(
+            &root,
+            "gpt-5.4-mini",
+            Some("performance"),
+            Some("128k"),
+        )
+        .unwrap();
+        assert_eq!(
+            change.next_state.source,
+            runtime_state::InferenceSource::Api
+        );
+        assert_eq!(
+            change.next_state.upstream_base_url,
+            "https://inf-yoda-resource.cognitiveservices.azure.com/openai/v1"
+        );
+        assert_eq!(change.next_state.configured_context_tokens, Some(131_072));
+
+        let persisted = runtime_env::load_runtime_env_map(&root).unwrap();
+        assert_eq!(
+            persisted.get("CTOX_API_PROVIDER").map(String::as_str),
+            Some("azure_foundry")
+        );
+        assert_eq!(
+            persisted.get("CTOX_CHAT_MODEL").map(String::as_str),
+            Some("gpt-5.4-mini")
+        );
+        assert_eq!(
+            persisted.get("CTOX_UPSTREAM_BASE_URL").map(String::as_str),
+            Some("https://inf-yoda-resource.cognitiveservices.azure.com/openai/v1")
+        );
     }
 
     #[cfg(unix)]
