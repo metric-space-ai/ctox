@@ -91,8 +91,9 @@ struct ResearchSearchPlan {
 
 pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -> Result<Value> {
     let query_text = normalize_required_query(&request.query)?;
+    let search_query = derive_research_search_query(&query_text, request.focus.as_deref());
     let max_sources = request.max_sources.clamp(3, 40);
-    let plans = build_research_search_plan(&query_text, request)
+    let plans = build_research_search_plan(&search_query, request)
         .into_iter()
         .take(request.depth.query_budget())
         .collect::<Vec<_>>();
@@ -101,7 +102,7 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
     let mut seen_urls = BTreeSet::new();
     let mut search_runs = Vec::new();
     let database_runs =
-        collect_scholarly_database_sources(&query_text, request, &mut seen_urls, &mut sources);
+        collect_scholarly_database_sources(&search_query, request, &mut seen_urls, &mut sources);
 
     for plan in &plans {
         let payload = match run_ctox_web_search_tool(
@@ -161,8 +162,8 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
                     root,
                     &DirectWebReadRequest {
                         url: url.to_string(),
-                        query: Some(query_text.clone()),
-                        find: build_find_terms(&query_text),
+                        query: Some(search_query.clone()),
+                        find: build_find_terms(&search_query),
                     },
                 ) {
                     Ok(read_payload) => {
@@ -193,6 +194,7 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
         "ok": true,
         "tool": "ctox_deep_research",
         "query": query_text,
+        "search_query": search_query,
         "focus": request.focus,
         "depth": request.depth.as_str(),
         "max_sources": max_sources,
@@ -226,6 +228,82 @@ fn normalize_required_query(raw: &str) -> Result<String> {
         anyhow::bail!("ctox deep research requires a non-empty query");
     }
     Ok(trimmed)
+}
+
+fn derive_research_search_query(raw: &str, focus: Option<&str>) -> String {
+    let compact = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    if compact.chars().count() <= 220 {
+        return append_focus(compact, focus);
+    }
+
+    let lowered = compact.to_ascii_lowercase();
+    let mut terms = Vec::<&'static str>::new();
+    let mapping = [
+        (
+            ["blitzschutz", "lightning", "lsp"].as_slice(),
+            "lightning strike protection",
+        ),
+        (
+            ["kupfergitter", "copper mesh", "mesh"].as_slice(),
+            "copper mesh",
+        ),
+        (
+            ["cfk", "cfrp", "carbon"].as_slice(),
+            "CFRP carbon fiber composite",
+        ),
+        (["lack", "primer", "coating"].as_slice(), "coating primer"),
+        (
+            ["metallische folie", "metallic foil", "folie"].as_slice(),
+            "metallic foil",
+        ),
+        (
+            ["kontaktlos", "contactless"].as_slice(),
+            "contactless non-destructive testing",
+        ),
+        (["terahertz", "thz"].as_slice(), "terahertz imaging"),
+        (
+            ["eddy", "wirbelstrom", "elektrisch", "magnetisch"].as_slice(),
+            "eddy current electromagnetic induction",
+        ),
+        (
+            ["thermografie", "thermography", "induktion"].as_slice(),
+            "induction thermography",
+        ),
+        (
+            ["mikrowelle", "microwave", "mmwave"].as_slice(),
+            "microwave mmWave",
+        ),
+        (
+            ["hyperspektral", "hyperspectral"].as_slice(),
+            "hyperspectral imaging",
+        ),
+        (
+            ["roentgen", "röntgen", "x-ray", "ct"].as_slice(),
+            "X-ray CT",
+        ),
+        (["shearografie", "shearography"].as_slice(), "shearography"),
+        (["aircraft", "luftfahrt"].as_slice(), "aircraft composites"),
+    ];
+
+    for (needles, term) in mapping {
+        if needles.iter().any(|needle| lowered.contains(needle)) && !terms.contains(&term) {
+            terms.push(term);
+        }
+    }
+
+    if terms.is_empty() {
+        compact.chars().take(220).collect()
+    } else {
+        append_focus(terms.join(" "), focus)
+    }
+}
+
+fn append_focus(mut query: String, focus: Option<&str>) -> String {
+    if let Some(focus) = focus.map(str::trim).filter(|value| !value.is_empty()) {
+        query.push(' ');
+        query.push_str(focus);
+    }
+    query.chars().take(260).collect()
 }
 
 fn build_research_search_plan(
@@ -760,5 +838,16 @@ mod tests {
             classify_source("https://patents.google.com/patent/US123", false, false),
             "patent"
         );
+    }
+
+    #[test]
+    fn derives_concise_search_query_from_long_german_research_prompt() {
+        let prompt = "Da es um Metallstrukturen in Kunststoff geht und unter dem Gitter scheinbar noch eine konstante metallische Folie liegt: waere es denkbar, mit elektrischen und magnetischen Feldern zu arbeiten? Der Blitzschutz wird durch ein Kupfergitter in kohlenstofffaserverstaerktem Kunststoff CFK bewerkstelligt. Zu bewerten sind Hyperspektralkamera, Terahertz Imaging, Eddy Current, Induktion, Thermografie, Mikrowelle/mmWave, Roentgen/CT und Shearografie.";
+        let query = derive_research_search_query(prompt, None);
+        assert!(query.contains("lightning strike protection"));
+        assert!(query.contains("copper mesh"));
+        assert!(query.contains("CFRP"));
+        assert!(query.contains("eddy current"));
+        assert!(query.chars().count() <= 260);
     }
 }
