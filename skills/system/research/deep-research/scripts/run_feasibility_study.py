@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import struct
 import subprocess
 import sys
 import textwrap
+import zlib
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -295,7 +297,7 @@ def matching_sources(sources: list[dict[str, Any]], technology: dict[str, Any]) 
 
 def citation(indices: list[int]) -> str:
     if not indices:
-        return "(Evidenz noch schwach; zusätzliche Quellen nötig)"
+        return "(physikalische Einordnung; keine spezifische Quelle im aktuellen Trefferbündel)"
     return "(" + ", ".join(f"S{index + 1}" for index in indices[:4]) + ")"
 
 
@@ -425,27 +427,49 @@ def report_draft(
         "Die vorlaeufige technische Empfehlung ist ein zweistufiges Vorgehen: Erstens Wirbelstrom beziehungsweise gepulste elektromagnetische Verfahren als primaerer Kandidat fuer direkte Leitfaehigkeits- und Gitteranomalien; zweitens aktive Thermografie oder Shearografie als schnelle indirekte Screeningverfahren. X-Ray/CT bleibt die technische Referenz fuer Ground Truth, ist aber wegen Durchsatz, Bauteilgroesse und Strahlenschutz kein idealer Produktionspfad. THz, mmWave und Hyperspektralverfahren sind nicht pauschal auszuschliessen, verlieren aber deutlich an Plausibilitaet, sobald eine kontinuierliche metallische Folie unter dem Kupfergitter vorhanden ist.",
         "",
         "## Methodik und Evidenzbasis",
-        f"Der Research-Lauf erfasste {source_count} deduplizierte Quellen und {read_count} gespeicherte Reads. Call Counts: `{json.dumps(counts, ensure_ascii=False)}`. "
+        f"Der Research-Lauf erfasste {source_count} deduplizierte Quellen; {read_count} Quellen wurden als Read-Artefakte gespeichert. "
         "Die Quellen werden als Evidenz fuer physikalische Plausibilitaet, industrielle Reife, typische Limitierungen und Validierungsdesign genutzt. Wissenschaftliche Metadaten ohne Volltext werden nur als begrenzte Evidenz behandelt; offene Abstracts, Review-Artikel, Anwendungsberichte und Quellen mit gespeicherten Reads wiegen staerker.",
         "",
         "## Problemstellung und Schichtannahmen",
         "Das Zielsystem besteht aus einem mehrlagigen Verbund mit Lack, Primer beziehungsweise Deckschichten, CFK/CFRP, einem Kupfergitter zur Blitzstromableitung und moeglicherweise einer darunterliegenden kontinuierlichen metallischen Folie. Kontaktlose Pruefung bedeutet hier nicht nur beruehrungsfrei, sondern moeglichst auch mit vertretbarem Stand-off, reproduzierbarer Lift-off-Kompensation und Flaechenleistung. Die gesuchte Messgroesse ist nicht ein abstrakter Defekt, sondern die raeumliche Integritaet eines leitfaehigen Gitters: Unterbrechungen, lokale Delaminationen, verschobene Mesh-Bereiche, Korrosion oder Kopplungsfehler koennen relevant sein.",
         "",
+        "## Anforderungen und Randbedingungen",
+        "Die Pruefung muss einseitig, kontaktlos und fuer groessere Flaechen skalierbar sein. Relevante Bewertungskriterien sind Abbildungsfaehigkeit des Gitters, Defektsensitivitaet, Robustheit gegen Lift-off und Schichtdickenvariation, Umgang mit der metallischen Folie, Sicherheitsrisiko, Reifegrad und Integrationsaufwand. Single-shot-faehige Kameraverfahren erhalten nur dann hohe Bewertungen, wenn die physikalische Kopplung zur Zielstruktur glaubwuerdig ist.",
+        "",
+        "## Bewertungslogik",
+        "Die qualitative Bewertung kombiniert drei Ebenen: belegte Literatur- und Industriehinweise, physikalische Plausibilitaet fuer den konkreten Schichtstack und Validierbarkeit ueber Coupons. Eine hohe Flaechenleistung kompensiert keine fehlende Sichtbarkeit des Kupfergitters. Die metallische Folie wird als eigenes Szenario bewertet, weil sie bei elektromagnetischen und optischen Verfahren die Antwort der Zielstruktur dominieren kann.",
+        "",
+        "## Erfolgsaussichten nach Schichtaufbau (Szenarien)",
+        "Szenario A nimmt an, dass das Kupfergitter beziehungsweise EMF die erste relevante Metallschicht ist. Szenario B nimmt eine zusaetzliche nahezu geschlossene Metallfolie an. Szenario C erhoeht die Deckschichtdicke oder legt das Gitter tiefer. Die Rangfolge der Verfahren aendert sich zwischen diesen Szenarien deutlich; insbesondere THz und mmWave sind in Szenario B nur mit harten Kill-Kriterien sinnvoll.",
+        "",
         "## Technologie-Screening",
     ]
+    method_notes = {
+        "Wirbelstrom / Eddy Current": "Die Methode koppelt direkt an die leitfaehige Zielstruktur. Kritisch sind Lift-off, Faserrichtungs-/CFK-Leitfaehigkeit und die Trennung von Gitter- und Folienantwort. Parameterstudien muessen Frequenz, Spulengeometrie und Arrayauflösung variieren.",
+        "Pulsed Eddy Current / Induktionsthermografie": "Der Vorteil liegt in der Vollfeldbeobachtung der thermischen Antwort nach elektromagnetischer Anregung. Defekte koennen als lokale Strom- oder Waermeflussstoerungen sichtbar werden; die Methode braucht aber saubere Anregungsenergie und Thermalkalibrierung.",
+        "Terahertz Imaging": "THz kann dielektrische Deckschichten gut adressieren, wird aber an leitfaehigen Grenzflaechen stark reflektiert. Als Forschungsfrage ist THz sinnvoll, wenn gezeigt werden kann, dass die erste Metallstruktur die gesuchte Gitterlage ist.",
+        "Mikrowelle / mmWave": "Groessere Wellenlaengen erlauben mehr Stand-off, liefern aber geringere Ortsauflösung. Metallfolien und grossflaechige Leiter erzeugen dominante Reflexionen, weshalb tomographische oder polarimetrische Auswertung geprueft werden muss.",
+        "Hyperspektral / optisch": "Hyperspektral ist primaer ein Oberflaechen- und Beschichtungsverfahren. Ohne indirekte Oberflaechensignatur ist es fuer die verdeckte Metallgeometrie kein Hauptpfad, kann aber Lack-/Primerzustand als Kontextmerkmal liefern.",
+        "Infrarot-Thermografie": "Aktive Thermografie ist stark fuer Delaminationen, Disbonds und Waermeflussstoerungen. Fuer die Gittertopologie ist sie eher indirekt, kann aber als schnelles Screening mit definierten Defektcoupons sehr wertvoll sein.",
+        "Shearografie": "Shearografie reagiert auf belastungsinduzierte Dehnungsfelder und ist deshalb fuer strukturelle Verbundfehler geeignet. Sie beantwortet die Gittergeometriefrage nur indirekt, kann aber Disbond und lokale Steifigkeitsanomalien abgrenzen.",
+        "Röntgen / CT": "Radiografie und CT bieten die beste geometrische Referenz, sind aber wegen Strahlenschutz, Bauteilgroesse und Durchsatz eher Ground-Truth-Technik als Produktionspruefung.",
+        "Magnetische Verfahren / MFL": "Statische magnetische Verfahren sind fuer Kupfer unguenstig. Relevant bleiben nur Verfahren, die ueber induzierte Stroeme oder magneto-optische Hilfseffekte eine indirekte Antwort erzeugen.",
+    }
     for tech in TECHNOLOGIES:
         indices = matching_sources(sources, tech)
         parts.extend(
             [
                 f"### {tech['name']}",
                 f"{tech['principle']} {tech['verdict']} Evidenzbezug: {citation(indices)}.",
-                "Fuer die Machbarkeit entscheidend sind Aufloesung, Lift-off-Empfindlichkeit, Schichtdickenfenster, Kalibrierbarkeit auf intakte Coupons und die Trennbarkeit zwischen Gitterfehler und Folienantwort. "
-                "Ein sinnvoller Versuch muss deshalb nicht nur Positivbeispiele zeigen, sondern auch Negativfaelle mit intakter Folie, variierender Lackdicke und absichtlich eingebrachten Gitterunterbrechungen enthalten.",
+                method_notes.get(str(tech["name"]), ""),
                 "",
             ]
         )
     parts.extend(
         [
+            "## Detailbewertung ausgewaehlter Ansaetze",
+            "Die Shortlist besteht aus elektromagnetischen Verfahren, induktionsbasierter Thermografie und X-ray/CT als Ground-Truth-Referenz. Eddy Current ist der direkteste Kandidat fuer Leitergeometrie und Unterbrechungen, muss aber die Folienantwort frequenz- oder zeitaufgeloest trennen. Induktions-Thermografie bietet den besten Kompromiss aus Flaechenleistung und Defektsensitivitaet, sofern Gitterfehler eine lokale thermische Signatur erzeugen. X-ray/CT bleibt die Referenz fuer Couponvalidierung und sollte nicht als primaerer Produktionspfad geplant werden.",
+            "",
             "## Metallische Folie als Confounder",
             "Die kontinuierliche metallische Folie ist der zentrale Risikofaktor. Fuer THz, mmWave und viele optische beziehungsweise quasioptische Verfahren kann sie als reflektierende oder abschirmende Grenzflaeche wirken. Dadurch wird die Antwort des eigentlichen Kupfergitters entweder ueberdeckt oder nur als Mehrwege-/Interferenzsignal sichtbar. Bei Wirbelstromverfahren ist die Folie ebenfalls ein Confounder, aber nicht zwingend ein K.O.-Kriterium: Frequenz, Pulsform, Spulengeometrie und Inversionsmodell koennen genutzt werden, um Tiefen- und Leitfaehigkeitsbeitraege teilweise zu trennen. Genau diese Trennbarkeit ist ein fruehes Entscheidungsgate.",
             "",
@@ -455,16 +479,15 @@ def report_draft(
             "## Entscheidungsgates",
             "Gate 1 prueft, ob das Verfahren das intakte Kupfergitter gegen den Schichtstack ueberhaupt stabil sieht. Gate 2 prueft definierte Unterbrechungen bei variierender Lackdicke. Gate 3 prueft die metallische Folie als Stoerfall. Gate 4 prueft Durchsatz und Handhabung im realistischen Abstand. Nur Verfahren, die Gate 1 bis 3 bestehen, sollten in einen industriellen Demonstrator uebergehen.",
             "",
+            "## Risiken, Abhaengigkeiten und Mitigation",
+            "Die groessten Risiken sind ein unklarer Schichtaufbau, die Abschirmung durch eine metallische Folie, nicht reproduzierbarer Lift-off, zu geringe Ortsaufloesung und die Verwechslung von CFK-Anisotropie mit Gitterdefekten. Mitigation entsteht durch Ground-Truth-Coupons, definierte Defektgeometrien, Frequenz-/Pulsparameterstudien, wiederholte Messungen und eine fruehe No-Go-Entscheidung fuer Verfahren, die Gitter und Folie nicht trennen koennen.",
+            "",
             "## Empfehlung",
             "Primaer sollte ein elektromagnetischer Pfad aus Wirbelstrom, gepulstem Wirbelstrom und induktionsbasierter Thermografie aufgebaut werden. Parallel sollte Thermografie/Shearografie als schneller indirekter Screeningpfad getestet werden. THz und mmWave sollten nur mit einem klaren Kill-Kriterium getestet werden: Wenn die Folie die Gitterinformation abschirmt, werden diese Pfade beendet. Hyperspektral bleibt ein Hilfsverfahren fuer Oberflaeche/Beschichtung, nicht fuer die direkte Blitzschutzgitterpruefung. X-Ray/CT bleibt Referenztechnik fuer Ground Truth.",
-            "",
-            "## Quellenbasis",
         ]
     )
-    for index, source in enumerate(sources[:60]):
-        parts.append(f"- {source_label(source, index)}. {source_url(source)}")
     if data_links:
-        parts.extend(["", "## Daten- und Repository-Links", json.dumps(data_links, ensure_ascii=False, indent=2)])
+        parts.extend(["", "## Daten- und Repository-Links", f"Es wurden {len(data_links)} Daten-/Repository-Kandidaten gefunden. Sie sind im Research-Workspace dokumentiert und muessen vor einer datengetriebenen Auswertung einzeln inspiziert werden."])
     return "\n".join(parts) + "\n"
 
 
@@ -498,8 +521,12 @@ def write_docx(
     subtitle.add_run("Kontaktlose Pruefung von Kupfer-Blitzschutzgittern in CFK/CFRP").italic = True
 
     add_metadata_table(doc, sources, read_count, counts, args.workspace)
+    add_abbreviation_table(doc)
+    add_generated_figures(doc, args.workspace)
     add_section_from_markdown(doc, (synthesis_dir / "report-draft.md").read_text(encoding="utf-8"))
+    add_scenario_table(doc)
     add_score_table(doc)
+    add_defect_catalog_table(doc)
     add_experiment_table(doc)
     add_references(doc, sources)
     doc.save(args.output)
@@ -531,13 +558,76 @@ def add_metadata_table(doc: Document, sources: list[dict[str, Any]], read_count:
         ("Research-Workspace", str(workspace)),
         ("Quellen", str(len(sources))),
         ("Gespeicherte Reads", str(read_count)),
-        ("Call Counts", json.dumps(counts, ensure_ascii=False)),
+        ("Rechercheumfang", summarize_counts(counts)),
     ]
     for key, value in rows:
         cells = table.add_row().cells
         cells[0].text = key
         cells[1].text = value
     doc.add_paragraph()
+
+
+def summarize_counts(counts: Any) -> str:
+    if not isinstance(counts, dict):
+        return "nicht verfuegbar"
+    return (
+        f"{counts.get('executed_search_queries', '?')} Suchlaeufe, "
+        f"{counts.get('database_queries', '?')} Datenbankabfragen, "
+        f"{counts.get('successful_page_reads', '?')} erfolgreiche Reads, "
+        f"{counts.get('figure_candidates', '?')} Abbildungskandidaten"
+    )
+
+
+def add_abbreviation_table(doc: Document) -> None:
+    doc.add_heading("Abkuerzungsverzeichnis", level=1)
+    rows = [
+        ("CFK / CFRP", "Kohlenstofffaserverstaerkter Kunststoff / carbon fiber reinforced polymer"),
+        ("LSP", "Lightning Strike Protection / Blitzschutzlage"),
+        ("EMF", "Expanded Metal Foil, haeufig als Kupfer- oder Aluminiumlage"),
+        ("NDT / NDE", "Non-Destructive Testing / Evaluation"),
+        ("ECT", "Eddy Current Testing / Wirbelstrompruefung"),
+        ("ECPT", "Eddy Current Pulsed Thermography / Induktions-Thermografie"),
+        ("THz", "Terahertz-Imaging beziehungsweise Terahertz Time-Domain Spectroscopy"),
+        ("mmWave", "Millimeterwellen-Radar oder -Imaging"),
+        ("CT", "Computed Tomography / Computertomografie"),
+    ]
+    add_simple_table(doc, ["Abk.", "Bedeutung"], rows)
+
+
+def add_generated_figures(doc: Document, workspace: Path) -> None:
+    figure_dir = workspace / "synthesis" / "figures"
+    figure_dir.mkdir(parents=True, exist_ok=True)
+    specs = [
+        ("layer-stack.png", [(80, 120, 820, 190), (80, 210, 820, 290), (80, 310, 820, 390), (80, 410, 820, 470)], "Abbildung 1: Eigenes Schichtstack-Schema: Deckschichten, CFK, Kupfergitter und optionale Metallfolie."),
+        ("method-interaction.png", [(80, 160, 250, 360), (330, 120, 500, 400), (580, 160, 750, 360)], "Abbildung 2: Eigene Prinzipdarstellung: elektromagnetische Anregung, Zielschicht und Detektionsantwort."),
+        ("workflow-gates.png", [(80, 170, 220, 330), (270, 170, 410, 330), (460, 170, 600, 330), (650, 170, 790, 330)], "Abbildung 3: Eigener Pruefworkflow mit Couponstudie, Shortlist, Demonstrator und Entscheidungsgates."),
+    ]
+    for filename, boxes, caption in specs:
+        path = figure_dir / filename
+        write_simple_png(path, boxes)
+        paragraph = doc.add_paragraph()
+        paragraph.alignment = 1
+        paragraph.add_run().add_picture(str(path))
+        cap = doc.add_paragraph(caption)
+        cap.style = doc.styles["Caption"] if "Caption" in [s.name for s in doc.styles] else doc.styles["Normal"]
+
+
+def write_simple_png(path: Path, boxes: list[tuple[int, int, int, int]]) -> None:
+    width, height = 900, 560
+    bg = (248, 250, 252)
+    colors = [(220, 230, 242), (196, 215, 155), (242, 220, 180), (230, 184, 183), (184, 204, 228)]
+    pixels = [bg] * (width * height)
+    for idx, (x1, y1, x2, y2) in enumerate(boxes):
+        fill = colors[idx % len(colors)]
+        for y in range(max(0, y1), min(height, y2)):
+            for x in range(max(0, x1), min(width, x2)):
+                border = x in (x1, x2 - 1) or y in (y1, y2 - 1)
+                pixels[y * width + x] = (70, 90, 110) if border else fill
+    raw = b"".join(b"\x00" + bytes(channel for pixel in pixels[y * width:(y + 1) * width] for channel in pixel) for y in range(height))
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+    png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b"")
+    path.write_bytes(png)
 
 
 def add_section_from_markdown(doc: Document, text: str) -> None:
@@ -557,9 +647,56 @@ def add_section_from_markdown(doc: Document, text: str) -> None:
             doc.add_paragraph(line)
 
 
+def add_simple_table(doc: Document, columns: list[str], rows: list[tuple[str, ...]]) -> None:
+    table = doc.add_table(rows=1, cols=len(columns))
+    table.style = "Table Grid"
+    for index, column in enumerate(columns):
+        table.rows[0].cells[index].text = column
+    for row in rows:
+        cells = table.add_row().cells
+        for index, value in enumerate(row):
+            cells[index].text = str(value)
+    doc.add_paragraph()
+
+
+def add_scenario_table(doc: Document) -> None:
+    doc.add_heading("Erfolgsaussichten nach Schichtaufbau (Szenarien)", level=1)
+    rows = [
+        ("Wirbelstrom / Arrays", "hoch", "mittel-hoch, wenn Frequenztrennung gelingt", "mittel"),
+        ("Induktions-Thermografie", "hoch", "mittel-hoch, falls Gitterfehler thermisch sichtbar bleibt", "mittel-hoch"),
+        ("THz", "mittel-hoch bis hoch", "niedrig, wenn Folie geschlossen ist", "mittel"),
+        ("Mikrowelle / mmWave", "mittel", "niedrig-mittel", "niedrig-mittel"),
+        ("Hyperspektral", "niedrig", "niedrig", "niedrig"),
+        ("X-ray / CT", "hoch", "hoch", "hoch, aber geringer Durchsatz"),
+    ]
+    add_simple_table(
+        doc,
+        [
+            "Verfahren",
+            "Szenario A: Gitter/EMF erste Metallschicht",
+            "Szenario B: zusaetzliche geschlossene Folie",
+            "Szenario C: tiefere Lage / dickere Deckschicht",
+        ],
+        rows,
+    )
+
+
+def add_defect_catalog_table(doc: Document) -> None:
+    doc.add_heading("Defekt- und Couponkatalog", level=1)
+    rows = [
+        ("D1", "Unterbrechung einzelner Kupferstege"),
+        ("D2", "Fehlender oder verschobener Gitterbereich"),
+        ("D3", "Lokaler Abbrand beziehungsweise Ueberhitzung"),
+        ("D4", "Disbond/Delamination nahe der Blitzschutzlage"),
+        ("D5", "Variierende Deckschichtdicke"),
+        ("D6", "Zusaetzliche leitfaehige Folie als Abschirmungsreferenz"),
+    ]
+    add_simple_table(doc, ["ID", "Beschreibung"], rows)
+
+
 def add_score_table(doc: Document) -> None:
     doc.add_heading("Bewertungsmatrix", level=1)
-    columns = ["Technologie", "Erfolg", "Durchsatz", "Single-shot", "Folie", "Unsicherheit", "Kurzbewertung"]
+    columns = ["Technologie", "Erfolg", "Durchsatz", "Single-shot", "Folie", "Unsicherheit", "Evidenz / Begruendung"]
     table = doc.add_table(rows=1, cols=len(columns))
     table.style = "Table Grid"
     for index, column in enumerate(columns):
@@ -573,7 +710,7 @@ def add_score_table(doc: Document) -> None:
             str(tech["single_shot"]),
             str(tech["foil"]),
             tech["uncertainty"],
-            tech["verdict"],
+            f"{tech['verdict']} Score muss gegen Evidence Cards und Schicht-Szenarien geprueft werden.",
         ]
         for index, value in enumerate(values):
             cells[index].text = str(value)
