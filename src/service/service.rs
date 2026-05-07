@@ -575,6 +575,8 @@ const DEFAULT_REWRITE_FAILURE_THRESHOLD: i64 = 1;
 const MAX_REWRITE_FAILURE_THRESHOLD: i64 = 10;
 const DEFAULT_AGENT_FAILURE_THRESHOLD: i64 = 2;
 const MAX_AGENT_FAILURE_THRESHOLD: i64 = 6;
+const REVIEW_FEEDBACK_SOURCE_LABEL: &str = "review-feedback";
+const OUTCOME_WITNESS_RECOVERY_SOURCE_LABEL: &str = "outcome-witness-recovery";
 
 fn completion_review_disposition_label(disposition: &CompletionReviewDisposition) -> &'static str {
     match disposition {
@@ -587,6 +589,15 @@ fn completion_review_disposition_label(disposition: &CompletionReviewDisposition
         CompletionReviewDisposition::RewriteOnly { .. } => REVIEW_REWRITE_SOURCE_LABEL,
         CompletionReviewDisposition::FeedbackRetry { .. } => "feedback-retry",
     }
+}
+
+fn outbound_in_process_review_retry_allowed(job: &QueuedPrompt) -> bool {
+    !matches!(
+        job.source_label.as_str(),
+        REVIEW_FEEDBACK_SOURCE_LABEL
+            | OUTCOME_WITNESS_RECOVERY_SOURCE_LABEL
+            | REVIEW_REWRITE_SOURCE_LABEL
+    )
 }
 
 fn short_terminal_bench_artifact_reply_disposition(
@@ -3192,11 +3203,7 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
                             if job.ticket_self_work_id.is_none()
                                 && job.leased_message_keys.is_empty()
                                 && job.outbound_email.is_some()
-                                && outcome_witness_rejection_count(&root, &job)
-                                    .map(|count| {
-                                        count < review_checkpoint_requeue_block_threshold()
-                                    })
-                                    .unwrap_or(true)
+                                && outcome_witness_outbound_recovery_requeue_allowed(&root, &job)
                             {
                                 let recovery =
                                     founder_send_error.as_ref().cloned().unwrap_or_else(|| {
@@ -3209,7 +3216,7 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
                                         job.source_label
                                     ),
                                     preview: clip_text(&recovery, 180),
-                                    source_label: "outcome-witness-recovery".to_string(),
+                                    source_label: OUTCOME_WITNESS_RECOVERY_SOURCE_LABEL.to_string(),
                                     suggested_skill: job.suggested_skill.clone(),
                                     leased_message_keys: Vec::new(),
                                     leased_ticket_event_keys: Vec::new(),
@@ -3238,7 +3245,7 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
                                     prompt: recovery.clone(),
                                     goal: format!("Complete required artifacts for {}", job.goal),
                                     preview: clip_text(&recovery, 180),
-                                    source_label: "outcome-witness-recovery".to_string(),
+                                    source_label: OUTCOME_WITNESS_RECOVERY_SOURCE_LABEL.to_string(),
                                     suggested_skill: job.suggested_skill.clone(),
                                     leased_message_keys: job.leased_message_keys.clone(),
                                     leased_ticket_event_keys: job.leased_ticket_event_keys.clone(),
@@ -3775,7 +3782,7 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
                         prompt: feedback_prompt.clone(),
                         goal: format!("Address review feedback for {}", job.goal),
                         preview: clip_text(review_summary, 180),
-                        source_label: "review-feedback".to_string(),
+                        source_label: REVIEW_FEEDBACK_SOURCE_LABEL.to_string(),
                         suggested_skill: job.suggested_skill.clone(),
                         leased_message_keys: Vec::new(),
                         leased_ticket_event_keys: Vec::new(),
@@ -3803,7 +3810,7 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
                             prompt: feedback_prompt.clone(),
                             goal: format!("Continue Terminal-Bench controller for {}", job.goal),
                             preview: clip_text(&feedback_prompt, 180),
-                            source_label: "review-feedback".to_string(),
+                            source_label: REVIEW_FEEDBACK_SOURCE_LABEL.to_string(),
                             suggested_skill: job.suggested_skill.clone(),
                             leased_message_keys: job.leased_message_keys.clone(),
                             leased_ticket_event_keys: Vec::new(),
@@ -4274,6 +4281,21 @@ fn run_completion_review(
                     return disposition;
                 }
                 if matches!(routing_class, ReviewRoutingClass::Stale) {
+                    if !outbound_in_process_review_retry_allowed(job) {
+                        push_event(
+                            state,
+                            format!(
+                                "Founder outbound review for {} stayed held because an in-process review retry already failed; automatic retry loop stopped",
+                                job.source_label
+                            ),
+                        );
+                        return CompletionReviewDisposition::Hold {
+                            summary: format!(
+                                "{}\n\nAutomatic in-process outbound review retry stopped after the prior retry still failed. Create durable follow-up work or provide explicit operator review approval before sending.",
+                                outcome.summary
+                            ),
+                        };
+                    }
                     return CompletionReviewDisposition::FeedbackRetry {
                         feedback_prompt: build_review_feedback_retry_prompt(
                             job, &outcome, reply_text,
@@ -4296,6 +4318,21 @@ fn run_completion_review(
                         prior_body: reply_text.to_string(),
                         anchor_message_key: Some(anchor_key.to_string()),
                         review_summary: outcome.summary.clone(),
+                    };
+                }
+                if !outbound_in_process_review_retry_allowed(job) {
+                    push_event(
+                        state,
+                        format!(
+                            "Founder outbound review for {} stayed held because an in-process review retry already failed; automatic retry loop stopped",
+                            job.source_label
+                        ),
+                    );
+                    return CompletionReviewDisposition::Hold {
+                        summary: format!(
+                            "{}\n\nAutomatic in-process outbound review retry stopped after the prior retry still failed. Create durable follow-up work or provide explicit operator review approval before sending.",
+                            outcome.summary
+                        ),
                     };
                 }
                 CompletionReviewDisposition::FeedbackRetry {
@@ -5783,15 +5820,21 @@ fn outcome_witness_recovery_message(
             .iter()
             .map(|value| format!(" --cc {}", shell_quote(value)))
             .collect::<String>();
+        let attachment_flags = action
+            .attachments
+            .iter()
+            .map(|value| format!(" --attach-file {}", shell_quote(value)))
+            .collect::<String>();
         let approved_body_block = approved_body.trim();
         message.push_str(&format!(
-            "\n\nNaechster Schritt fuer den Worker: Die Review-Freigabe fuer exakt diesen Body und diese Empfaenger ist bereits persistiert. Fuehre keine DB- oder Code-Forensik aus und erstelle keine Review-Zeilen manuell. Sende genau den freigegebenen Text mit genau diesem Befehl:\n\nBODY=$(cat <<'CTOX_REVIEWED_BODY'\n{}\nCTOX_REVIEWED_BODY\n)\nctox channel send --channel email --account-key {} --thread-key {} --subject {}{}{} --reviewed-founder-send --body \"$BODY\"\n\nAendere Body, Empfaenger, CC oder Betreff nicht. Wenn der Befehl fehlschlaegt, melde exakt die Fehlermeldung und stoppe. Wenn er erfolgreich ist, pruefe, dass `communication_messages` fuer thread_key `{}` eine outbound email mit `status='accepted'` enthaelt.",
+            "\n\nNaechster Schritt fuer den Worker: Die Review-Freigabe fuer exakt diesen Body, diese Empfaenger und diese Attachments ist bereits persistiert. Fuehre keine DB- oder Code-Forensik aus und erstelle keine Review-Zeilen manuell. Sende genau den freigegebenen Text mit genau diesem Befehl:\n\nBODY=$(cat <<'CTOX_REVIEWED_BODY'\n{}\nCTOX_REVIEWED_BODY\n)\nctox channel send --channel email --account-key {} --thread-key {} --subject {}{}{}{} --reviewed-founder-send --body \"$BODY\"\n\nAendere Body, Empfaenger, CC, Betreff oder Attachments nicht. Wenn der Befehl fehlschlaegt, melde exakt die Fehlermeldung und stoppe. Wenn er erfolgreich ist, pruefe, dass `communication_messages` fuer thread_key `{}` eine outbound email mit `status='accepted'` enthaelt.",
             approved_body_block,
             shell_quote(&action.account_key),
             shell_quote(&action.thread_key),
             shell_quote(&action.subject),
             to_flags,
             cc_flags,
+            attachment_flags,
             action.thread_key
         ));
     } else {
@@ -5855,7 +5898,9 @@ fn outcome_witness_retry_route_status(root: &Path, job: &QueuedPrompt) -> &'stat
 }
 
 fn outcome_witness_retry_route_status_for_job(root: &Path, job: &QueuedPrompt) -> &'static str {
-    if job.source_label == "review-feedback" && is_terminal_bench_controller_artifact_job(job) {
+    if job.source_label == REVIEW_FEEDBACK_SOURCE_LABEL
+        && is_terminal_bench_controller_artifact_job(job)
+    {
         return "pending";
     }
     if is_terminal_bench_controller_artifact_job(job) {
@@ -5868,7 +5913,17 @@ fn should_queue_artifact_outcome_recovery(job: &QueuedPrompt) -> bool {
     if declared_workspace_file_artifacts_for_job(job).is_empty() {
         return false;
     }
-    !(job.source_label == "review-feedback" && is_terminal_bench_controller_artifact_job(job))
+    !(job.source_label == REVIEW_FEEDBACK_SOURCE_LABEL
+        && is_terminal_bench_controller_artifact_job(job))
+}
+
+fn outcome_witness_outbound_recovery_requeue_allowed(root: &Path, job: &QueuedPrompt) -> bool {
+    if job.source_label == OUTCOME_WITNESS_RECOVERY_SOURCE_LABEL {
+        return false;
+    }
+    outcome_witness_rejection_count(root, job)
+        .map(|count| count < review_checkpoint_requeue_block_threshold())
+        .unwrap_or(true)
 }
 
 fn outcome_witness_rejection_count(root: &Path, job: &QueuedPrompt) -> Result<usize> {
@@ -18733,6 +18788,36 @@ Was jetzt zu tun ist:\n\
     }
 
     #[test]
+    fn outcome_witness_recovery_job_cannot_queue_another_outbound_recovery() {
+        let root = temp_root("outcome-witness-outbound-recovery-loop-stop");
+        let job = QueuedPrompt {
+            prompt: "Sende den freigegebenen Body.".to_string(),
+            goal: "send mail".to_string(),
+            preview: "send mail".to_string(),
+            source_label: OUTCOME_WITNESS_RECOVERY_SOURCE_LABEL.to_string(),
+            suggested_skill: None,
+            leased_message_keys: Vec::new(),
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("thread:jill".to_string()),
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: Some(channels::FounderOutboundAction {
+                account_key: "email:yoda@example.test".to_string(),
+                thread_key: "thread:jill".to_string(),
+                subject: "Subject".to_string(),
+                to: vec!["jill@example.test".to_string()],
+                cc: Vec::new(),
+                attachments: Vec::new(),
+            }),
+            outbound_anchor: Some("tui-outbound:test".to_string()),
+        };
+
+        assert!(!outcome_witness_outbound_recovery_requeue_allowed(
+            &root, &job
+        ));
+    }
+
+    #[test]
     fn queue_prompt_declares_required_workspace_file_artifacts() {
         let job = QueuedPrompt {
             prompt: "RUN_DIR=\"/tmp/ctox-tb2-run\"\nInitialisiere die Dateien logbook.md, controller.json, results.jsonl und blogpost-notes.md.".to_string(),
@@ -19301,18 +19386,16 @@ The controller must update stale files itself."
             delivered.is_empty(),
             "review-feedback must not accept files older than latest outcome rejection"
         );
-        assert!(
-            workspace_file_artifact_diagnostic_for_expected(
-                &root,
-                &job,
-                &ArtifactRef {
-                    kind: ArtifactKind::WorkspaceFile,
-                    primary_key: controller_text,
-                    expected_terminal_state: "fresh".to_string(),
-                },
-            )
-            .contains("stale")
-        );
+        assert!(workspace_file_artifact_diagnostic_for_expected(
+            &root,
+            &job,
+            &ArtifactRef {
+                kind: ArtifactKind::WorkspaceFile,
+                primary_key: controller_text,
+                expected_terminal_state: "fresh".to_string(),
+            },
+        )
+        .contains("stale"));
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -20179,7 +20262,10 @@ Those are not durable artifact requirements."
                 subject: "Erste Meeting-Teilnahme als INF Yoda Notetaker".to_string(),
                 to: vec!["j.kienzler@remcapital.de".to_string()],
                 cc: Vec::new(),
-                attachments: Vec::new(),
+                attachments: vec![
+                    "/tmp/Vertriebsmanagement.html".to_string(),
+                    "/tmp/Jill App's Notes.xlsx".to_string(),
+                ],
             }),
             outbound_anchor: Some("tui-outbound:test".to_string()),
         };
@@ -20196,8 +20282,44 @@ Those are not durable artifact requirements."
         assert!(prompt.contains("BODY=$(cat <<'CTOX_REVIEWED_BODY'"));
         assert!(prompt.contains(approved_body));
         assert!(prompt.contains("ctox channel send --channel email"));
+        assert!(prompt.contains("--attach-file '/tmp/Vertriebsmanagement.html'"));
+        assert!(prompt.contains("--attach-file '/tmp/Jill App'\\''s Notes.xlsx'"));
         assert!(prompt.contains("--reviewed-founder-send --body \"$BODY\""));
+        assert!(prompt.contains("Attachments nicht"));
         assert!(!prompt.contains("<freigegebener Mailtext>"));
+    }
+
+    #[test]
+    fn outbound_in_process_review_retry_does_not_chain_retry_sources() {
+        let mut job = QueuedPrompt {
+            prompt: "Schreibe eine Mail an Jill.".to_string(),
+            goal: "send mail".to_string(),
+            preview: "send mail".to_string(),
+            source_label: "tui".to_string(),
+            suggested_skill: None,
+            leased_message_keys: Vec::new(),
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("thread:jill".to_string()),
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: Some(channels::FounderOutboundAction {
+                account_key: "email:yoda@example.test".to_string(),
+                thread_key: "thread:jill".to_string(),
+                subject: "Subject".to_string(),
+                to: vec!["jill@example.test".to_string()],
+                cc: Vec::new(),
+                attachments: Vec::new(),
+            }),
+            outbound_anchor: Some("tui-outbound:test".to_string()),
+        };
+
+        assert!(outbound_in_process_review_retry_allowed(&job));
+
+        job.source_label = REVIEW_FEEDBACK_SOURCE_LABEL.to_string();
+        assert!(!outbound_in_process_review_retry_allowed(&job));
+
+        job.source_label = OUTCOME_WITNESS_RECOVERY_SOURCE_LABEL.to_string();
+        assert!(!outbound_in_process_review_retry_allowed(&job));
     }
 
     // F3: classify_agent_failure must produce stable, structured outcomes.
