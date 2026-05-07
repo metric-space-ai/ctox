@@ -3218,7 +3218,7 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
                             if job.ticket_self_work_id.is_none()
                                 && !job.leased_message_keys.is_empty()
                                 && job.outbound_email.is_none()
-                                && !declared_workspace_file_artifacts_for_job(&job).is_empty()
+                                && should_queue_artifact_outcome_recovery(&job)
                                 && outcome_witness_rejection_count(&root, &job)
                                     .map(|count| {
                                         count < review_checkpoint_requeue_block_threshold()
@@ -5781,6 +5781,13 @@ fn outcome_witness_retry_route_status_for_job(root: &Path, job: &QueuedPrompt) -
         };
     }
     outcome_witness_retry_route_status(root, job)
+}
+
+fn should_queue_artifact_outcome_recovery(job: &QueuedPrompt) -> bool {
+    if declared_workspace_file_artifacts_for_job(job).is_empty() {
+        return false;
+    }
+    !(job.source_label == "review-feedback" && is_terminal_bench_controller_artifact_job(job))
 }
 
 fn outcome_witness_rejection_count(root: &Path, job: &QueuedPrompt) -> Result<usize> {
@@ -19012,6 +19019,50 @@ The controller must create preparation queue/tickets and record queue:system::* 
             outcome_witness_retry_route_status_for_job(&root, &job),
             "pending"
         );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn terminal_bench_review_feedback_does_not_need_outcome_recovery_prompt() {
+        let root = temp_root("terminal-bench-feedback-no-recovery-prompt");
+        let run_dir = root.join("terminal-bench-2/runs/feedback-no-recovery");
+        let run_dir = run_dir.to_string_lossy().into_owned();
+        let job = QueuedPrompt {
+            prompt: format!(
+                "HARNESS FEEDBACK\n\
+Only required durable files for this controller turn:\n\
+- {run_dir}/controller.json\n\
+- {run_dir}/ticket-map.jsonl\n\
+- {run_dir}/preparation-tickets.jsonl\n\
+- {run_dir}/run-queue.jsonl\n\
+- {run_dir}/results.jsonl\n\
+- {run_dir}/knowledge.md\n\
+- {run_dir}/logbook.md\n\
+- {run_dir}/blogpost-notes.md\n\n\
+The controller must create preparation queue/tickets and record queue:system::* keys."
+            ),
+            goal: "Continue Terminal-Bench controller".to_string(),
+            preview: "Terminal-Bench review feedback".to_string(),
+            source_label: "review-feedback".to_string(),
+            suggested_skill: Some("benchmark-controller".to_string()),
+            leased_message_keys: vec!["queue:system::parent".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some(
+                "terminal-bench-2/deepseek/feedback-no-recovery/controller".to_string(),
+            ),
+            workspace_root: Some(run_dir),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        assert!(is_terminal_bench_controller_artifact_job(&job));
+        assert_eq!(
+            outcome_witness_retry_route_status_for_job(&root, &job),
+            "pending"
+        );
+        assert!(!should_queue_artifact_outcome_recovery(&job));
 
         let _ = std::fs::remove_dir_all(&root);
     }
