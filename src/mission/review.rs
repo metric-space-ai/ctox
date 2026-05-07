@@ -108,6 +108,7 @@ pub struct CompletionReviewRequest {
     pub review_skill_path: String,
     pub artifact_text: String,
     pub artifact_action: Option<String>,
+    pub artifact_channel: String,
     pub artifact_to: Vec<String>,
     pub artifact_cc: Vec<String>,
     pub artifact_subject: String,
@@ -490,6 +491,15 @@ fn assess_review_requirement(
         .as_deref()
         .map(|value| value.to_ascii_lowercase().contains("founder"))
         .unwrap_or(false);
+    let external_chat_quick_response = request
+        .artifact_action
+        .as_deref()
+        .map(|value| {
+            value
+                .to_ascii_lowercase()
+                .contains("external_chat_quick_response")
+        })
+        .unwrap_or(false);
     let internal_artifact_slice = !founder_or_owner_email
         && !request.owner_visible
         && request.artifact_action.is_none()
@@ -619,6 +629,10 @@ fn assess_review_requirement(
         score = score.saturating_add(3);
         push_unique_reason(&mut reasons, "founder_communication");
     }
+    if external_chat_quick_response {
+        score = score.saturating_add(3);
+        push_unique_reason(&mut reasons, "external_chat_quick_response");
+    }
 
     if request.owner_visible && (closure_claim || runtime_or_infra_change) {
         score = score.saturating_add(1);
@@ -674,8 +688,19 @@ fn build_review_prompt(request: &CompletionReviewRequest, reasons: &[String]) ->
         .as_deref()
         .map(|value| value.to_ascii_lowercase().contains("founder"))
         .unwrap_or(false);
+    let external_chat_artifact = request
+        .artifact_action
+        .as_deref()
+        .map(|value| {
+            value
+                .to_ascii_lowercase()
+                .contains("external_chat_quick_response")
+        })
+        .unwrap_or(false);
     let artifact_kind = if founder_artifact {
         "founder_or_owner_outbound_email_draft"
+    } else if external_chat_artifact {
+        "external_chat_quick_response"
     } else {
         "reviewed_output_artifact"
     };
@@ -690,6 +715,11 @@ fn build_review_prompt(request: &CompletionReviewRequest, reasons: &[String]) ->
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or("(none recorded)");
+    let artifact_channel = if request.artifact_channel.trim().is_empty() {
+        "(none recorded)"
+    } else {
+        request.artifact_channel.trim()
+    };
     let artifact_to = if request.artifact_to.is_empty() {
         "(none recorded)".to_string()
     } else {
@@ -753,6 +783,20 @@ Founder/owner communication gate:\n\
     } else {
         ""
     };
+    let external_chat_specific_work = if external_chat_artifact {
+        "\
+External chat quick-response gate:\n\
+- this is a quick acknowledgement/reply for an external chat channel, not a final result mail\n\
+- judge the full chat action: channel, thread, subject when present, recipients when present, attachments, and body\n\
+- approve only short, timely, recipient-appropriate responses that either acknowledge the task accurately or ask a necessary clarifying question\n\
+- if the body promises follow-up work, verify durable pipeline backing exists first: queue item, plan, ticket case, or self-work linked to this thread\n\
+- do not require the final work result before approving a chat acknowledgement; require a real pipeline item instead\n\
+- fail if the response claims the work is done before evidence exists, promises work without backing, omits an obvious clarification, or ignores current communication/meeting/knowledge context\n\
+- fail if a requested attachment is mentioned but not attached, or if an attachment is attached without being relevant\n\
+"
+    } else {
+        ""
+    };
 
     let artifact_review_work = if founder_artifact {
         ""
@@ -786,6 +830,7 @@ Task prompt: {task_prompt}\n\
 \n\
 Artifact under review:\n\
 Artifact action: {artifact_action}\n\
+Artifact channel: {artifact_channel}\n\
 Artifact to: {artifact_to}\n\
 Artifact cc: {artifact_cc}\n\
 Artifact subject: {artifact_subject}\n\
@@ -817,6 +862,7 @@ Required review work:\n\
 Use the runtime DB path and workspace root above as the primary grounding points.\n\
 \n\
 {founder_specific_work}\
+{external_chat_specific_work}\
 {artifact_review_work}\
 \n\
 If active vision or active mission is missing for strategic or owner-visible work, that is a review failure unless the current task is explicitly establishing them.\n\
@@ -847,6 +893,7 @@ DISPOSITION is the structural terminal flag: emit `NO_SEND` only when the curren
         task_goal = task_goal,
         task_prompt = task_prompt,
         artifact_action = artifact_action,
+        artifact_channel = artifact_channel,
         artifact_to = artifact_to,
         artifact_cc = artifact_cc,
         artifact_subject = artifact_subject,
@@ -855,6 +902,7 @@ DISPOSITION is the structural terminal flag: emit `NO_SEND` only when the curren
         artifact_commitments = artifact_commitments,
         commitment_backing = commitment_backing,
         deterministic_evidence = deterministic_evidence,
+        external_chat_specific_work = external_chat_specific_work,
     )
 }
 
@@ -1333,6 +1381,7 @@ mod tests {
             review_skill_path: "/srv/skills/system/review/external-review/SKILL.md".to_string(),
             artifact_text: "Kurzstand: Ich liefere spaeter.".to_string(),
             artifact_action: Some("reply".to_string()),
+            artifact_channel: "email".to_string(),
             artifact_to: vec!["o.schaefers@gmx.net".to_string()],
             artifact_cc: vec!["michael.welsch@metric-space.ai".to_string()],
             artifact_subject: "Jami Setup und QR-Code".to_string(),
@@ -1381,6 +1430,44 @@ mod tests {
         assert!(rendered.contains("setup, access, credentials, links, or next operational steps"));
         assert!(rendered.contains("does not answer the latest founder mail"));
         assert!(rendered.contains("Kurzstand: Ich liefere spaeter."));
+    }
+
+    #[test]
+    fn external_chat_review_prompt_requires_pipeline_backed_quick_response() {
+        let request = CompletionReviewRequest {
+            task_goal: "Acknowledge Jill's Teams scraping request.".to_string(),
+            task_prompt: "Create a durable work item, then draft a short Teams acknowledgement."
+                .to_string(),
+            preview: "[Teams-Nachricht eingegangen] Jill".to_string(),
+            source_label: "teams".to_string(),
+            owner_visible: true,
+            conversation_id: 88,
+            thread_key: "teams:inf.yoda@example.test::chat::jill".to_string(),
+            runtime_db_path: "/srv/runtime/ctox.sqlite3".to_string(),
+            artifact_text: "Verstanden, ich lege das als Aufgabe an und prüfe die Seite."
+                .to_string(),
+            artifact_action: Some("external_chat_quick_response".to_string()),
+            artifact_channel: "teams".to_string(),
+            deterministic_evidence: vec![
+                "External chat work backing for thread `teams:inf.yoda@example.test::chat::jill`: queue_open=1, plan_open=0, self_work_open=0.".to_string(),
+            ],
+            ..CompletionReviewRequest::default()
+        };
+        let (required, _score, reasons) = assess_review_requirement(
+            &request,
+            "Verstanden, ich lege das als Aufgabe an und prüfe die Seite.",
+        );
+        assert!(required);
+        assert!(reasons
+            .iter()
+            .any(|reason| reason == "external_chat_quick_response"));
+        let rendered = build_review_prompt(&request, &reasons);
+        assert!(rendered.contains("Artifact kind: external_chat_quick_response"));
+        assert!(rendered.contains("Artifact channel: teams"));
+        assert!(rendered.contains("External chat quick-response gate"));
+        assert!(rendered.contains("durable pipeline backing exists first"));
+        assert!(rendered.contains("do not require the final work result"));
+        assert!(rendered.contains("queue_open=1"));
     }
 
     #[test]

@@ -3989,6 +3989,20 @@ fn run_completion_review(
     } else {
         None
     };
+    let external_chat_action = if founder_reply_key.is_none()
+        && proactive_founder_action.is_none()
+        && !matches!(
+            job.source_label.as_str(),
+            OUTCOME_WITNESS_RECOVERY_SOURCE_LABEL
+                | REVIEW_FEEDBACK_SOURCE_LABEL
+                | REVIEW_REWRITE_SOURCE_LABEL
+        ) {
+        reviewed_external_chat_action_for_job(root, job)
+            .ok()
+            .flatten()
+    } else {
+        None
+    };
     let founder_required_deliverables = founder_reply_key
         .and_then(|message_key| {
             channels::required_founder_reply_deliverables(root, message_key).ok()
@@ -3999,6 +4013,11 @@ fn run_completion_review(
         .map(|action| action.attachments.clone())
         .or_else(|| {
             proactive_founder_action
+                .as_ref()
+                .map(|action| action.attachments.clone())
+        })
+        .or_else(|| {
+            external_chat_action
                 .as_ref()
                 .map(|action| action.attachments.clone())
         })
@@ -4036,12 +4055,36 @@ fn run_completion_review(
                 proactive_founder_action
                     .as_ref()
                     .map(|_| "proactive_founder_outbound_email".to_string())
+            })
+            .or_else(|| {
+                external_chat_action
+                    .as_ref()
+                    .map(|_| "external_chat_quick_response".to_string())
             }),
+        artifact_channel: founder_reply_action
+            .as_ref()
+            .map(|_| "email".to_string())
+            .or_else(|| {
+                proactive_founder_action
+                    .as_ref()
+                    .map(|_| "email".to_string())
+            })
+            .or_else(|| {
+                external_chat_action
+                    .as_ref()
+                    .map(|action| action.channel.clone())
+            })
+            .unwrap_or_default(),
         artifact_to: founder_reply_action
             .as_ref()
             .map(|action| action.to.clone())
             .or_else(|| {
                 proactive_founder_action
+                    .as_ref()
+                    .map(|action| action.to.clone())
+            })
+            .or_else(|| {
+                external_chat_action
                     .as_ref()
                     .map(|action| action.to.clone())
             })
@@ -4054,12 +4097,22 @@ fn run_completion_review(
                     .as_ref()
                     .map(|action| action.cc.clone())
             })
+            .or_else(|| {
+                external_chat_action
+                    .as_ref()
+                    .map(|action| action.cc.clone())
+            })
             .unwrap_or_default(),
         artifact_subject: founder_reply_action
             .as_ref()
             .map(|action| action.subject.clone())
             .or_else(|| {
                 proactive_founder_action
+                    .as_ref()
+                    .map(|action| action.subject.clone())
+            })
+            .or_else(|| {
+                external_chat_action
                     .as_ref()
                     .map(|action| action.subject.clone())
             })
@@ -4110,9 +4163,12 @@ fn run_completion_review(
         // Founder-visible mail is never allowed to fall through unreviewed.
         // If the gate declines to run, hold the outbound path and force
         // explicit rework instead of sending or immediately retrying.
-        if is_founder_or_owner_email_job(job) || proactive_founder_action.is_some() {
+        if is_founder_or_owner_email_job(job)
+            || proactive_founder_action.is_some()
+            || external_chat_action.is_some()
+        {
             let summary =
-                "Founder communication was held because no completion review was produced.";
+                "Reviewed communication was held because no completion review was produced.";
             push_event(state, summary.to_string());
             return CompletionReviewDisposition::Hold {
                 summary: summary.to_string(),
@@ -4395,6 +4451,57 @@ fn run_completion_review(
             },
         };
     }
+    if let (Some(anchor_key), Some(action)) =
+        (external_chat_anchor_key(job), external_chat_action.as_ref())
+    {
+        return match outcome.verdict {
+            review::ReviewVerdict::Pass => {
+                if let Err(err) = channels::record_external_chat_review_approval(
+                    root,
+                    anchor_key,
+                    action,
+                    reply_text,
+                    &outcome.summary,
+                ) {
+                    push_event(
+                        state,
+                        format!(
+                            "External chat review passed for {} but approval persistence failed: {}",
+                            job.source_label, err
+                        ),
+                    );
+                    CompletionReviewDisposition::Hold {
+                        summary: err.to_string(),
+                    }
+                } else {
+                    CompletionReviewDisposition::Approved
+                }
+            }
+            review::ReviewVerdict::Fail | review::ReviewVerdict::Partial
+                if actionable_rejection =>
+            {
+                if let Some(disposition) = no_cascade_review_block(root, job, &outcome) {
+                    return disposition;
+                }
+                if matches!(routing_class, ReviewRoutingClass::RewriteOnly) {
+                    let findings = rewrite_findings_from(&outcome.categorized_findings);
+                    return CompletionReviewDisposition::RewriteOnly {
+                        findings,
+                        prior_body: reply_text.to_string(),
+                        anchor_message_key: Some(anchor_key.to_string()),
+                        review_summary: outcome.summary.clone(),
+                    };
+                }
+                CompletionReviewDisposition::FeedbackRetry {
+                    feedback_prompt: build_review_feedback_retry_prompt(job, &outcome, reply_text),
+                    review_summary: outcome.summary.clone(),
+                }
+            }
+            _ => CompletionReviewDisposition::Hold {
+                summary: outcome.summary.clone(),
+            },
+        };
+    }
     if actionable_rejection {
         if let Some(disposition) = no_cascade_review_block(root, job, &outcome) {
             return disposition;
@@ -4643,6 +4750,7 @@ fn collect_review_evidence_summaries(
     evidence.extend(attachment_evidence_summaries(artifact_attachments));
     evidence.extend(review_delivery_evidence_summaries(root, job));
     evidence.extend(review_thread_evidence_summaries(root, job));
+    evidence.extend(review_external_work_backing_evidence_summaries(root, job));
     evidence.extend(review_meeting_evidence_summaries(
         root,
         job,
@@ -4782,6 +4890,89 @@ fn review_thread_evidence_summaries(root: &Path, job: &QueuedPrompt) -> Vec<Stri
             "Same-thread communication evidence unavailable for `{thread_key}`: {err}"
         )],
     }
+}
+
+fn review_external_work_backing_evidence_summaries(root: &Path, job: &QueuedPrompt) -> Vec<String> {
+    if external_chat_channel_for_job(job).is_none() {
+        return Vec::new();
+    }
+    let Some(thread_key) = job
+        .thread_key
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    else {
+        return vec!["External chat work backing: no thread key recorded.".to_string()];
+    };
+    let db_path = crate::paths::core_db(&root);
+    let conn = match channels::open_channel_db(&db_path) {
+        Ok(conn) => conn,
+        Err(err) => {
+            return vec![format!(
+                "External chat work backing unavailable: failed to open channel DB: {err}"
+            )]
+        }
+    };
+    let queue_count = conn
+        .query_row(
+            r#"
+            SELECT COUNT(*)
+            FROM communication_messages m
+            LEFT JOIN communication_routing_state r ON r.message_key = m.message_key
+            WHERE m.channel = 'queue'
+              AND m.direction = 'inbound'
+              AND m.thread_key = ?1
+              AND COALESCE(r.route_status, 'pending') NOT IN ('handled', 'cancelled', 'failed', 'superseded')
+            "#,
+            params![thread_key],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0);
+    let plan_count = if sqlite_table_exists(&conn, "planned_goals").unwrap_or(false) {
+        conn.query_row(
+            r#"
+            SELECT COUNT(*)
+            FROM planned_goals
+            WHERE thread_key = ?1
+              AND status NOT IN ('completed', 'closed', 'cancelled', 'failed', 'superseded')
+            "#,
+            params![thread_key],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+    } else {
+        0
+    };
+    let self_work_count = if sqlite_table_exists(&conn, "ticket_self_work_items").unwrap_or(false) {
+        conn.query_row(
+            r#"
+            SELECT COUNT(*)
+            FROM ticket_self_work_items
+            WHERE state NOT IN ('closed', 'cancelled', 'failed', 'superseded', 'blocked')
+              AND (
+                json_extract(metadata_json, '$.thread_key') = ?1
+                OR json_extract(metadata_json, '$.parent_thread_key') = ?1
+                OR body_text LIKE '%' || ?1 || '%'
+              )
+            "#,
+            params![thread_key],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+    } else {
+        0
+    };
+    vec![format!(
+        "External chat work backing for thread `{thread_key}`: queue_open={queue_count}, plan_open={plan_count}, self_work_open={self_work_count}."
+    )]
+}
+
+fn sqlite_table_exists(conn: &Connection, table_name: &str) -> Result<bool> {
+    let exists: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+        params![table_name],
+        |row| row.get(0),
+    )?;
+    Ok(exists > 0)
 }
 
 fn review_meeting_evidence_summaries(
@@ -5221,6 +5412,19 @@ fn expected_outcome_artifacts_for_job(job: &QueuedPrompt) -> Vec<ArtifactRef> {
             expected_terminal_state: "accepted".to_string(),
         });
     }
+    if let (Some(channel), Some(thread_key)) = (
+        external_chat_channel_for_job(job),
+        job.thread_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty()),
+    ) {
+        refs.push(ArtifactRef {
+            kind: ArtifactKind::OutboundCommunication,
+            primary_key: format!("{channel}:{thread_key}"),
+            expected_terminal_state: "sent".to_string(),
+        });
+    }
     for path in declared_workspace_file_artifacts_for_job(job) {
         if refs.iter().any(|existing| {
             existing.kind == ArtifactKind::WorkspaceFile && existing.primary_key == path
@@ -5255,6 +5459,35 @@ fn delivered_outcome_artifacts_for_job(
                     || workspace_file_is_fresh_enough(path, fresh_cutoff))
             {
                 delivered.push(expected.clone());
+            }
+            continue;
+        }
+        if expected.kind == ArtifactKind::OutboundCommunication {
+            let Some((channel, thread_key)) = expected.primary_key.split_once(':') else {
+                continue;
+            };
+            let message_key = conn
+                .query_row(
+                    r#"
+                    SELECT message_key
+                    FROM communication_messages
+                    WHERE channel = ?1
+                      AND direction = 'outbound'
+                      AND thread_key = ?2
+                      AND status IN ('sent', 'accepted', 'queued')
+                    ORDER BY observed_at DESC
+                    LIMIT 1
+                    "#,
+                    params![channel, thread_key],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?;
+            if let Some(message_key) = message_key {
+                delivered.push(ArtifactRef {
+                    kind: ArtifactKind::OutboundCommunication,
+                    primary_key: message_key,
+                    expected_terminal_state: expected.expected_terminal_state.clone(),
+                });
             }
             continue;
         }
@@ -6505,6 +6738,41 @@ fn outcome_witness_recovery_message(
             attachment_flags,
             action.thread_key
         ));
+    } else if let Ok(Some(action)) = reviewed_external_chat_action_for_job(root, job) {
+        let to_flags = action
+            .to
+            .iter()
+            .map(|value| format!(" --to {}", shell_quote(value)))
+            .collect::<String>();
+        let cc_flags = action
+            .cc
+            .iter()
+            .map(|value| format!(" --cc {}", shell_quote(value)))
+            .collect::<String>();
+        let attachment_flags = action
+            .attachments
+            .iter()
+            .map(|value| format!(" --attach-file {}", shell_quote(value)))
+            .collect::<String>();
+        let subject_flag = if action.subject.trim().is_empty() {
+            String::new()
+        } else {
+            format!(" --subject {}", shell_quote(&action.subject))
+        };
+        let approved_body_block = approved_body.trim();
+        message.push_str(&format!(
+            "\n\nNaechster Schritt fuer den Worker: Die Review-Freigabe fuer exakt diesen Chat-Body, Kanal, Thread und diese Attachments ist bereits persistiert. Fuehre keine DB- oder Code-Forensik aus und erstelle keine Review-Zeilen manuell. Sende genau den freigegebenen Text mit genau diesem Befehl:\n\nBODY=$(cat <<'CTOX_REVIEWED_BODY'\n{}\nCTOX_REVIEWED_BODY\n)\nctox channel send --channel {} --account-key {} --thread-key {}{}{}{}{} --reviewed-communication-send --body \"$BODY\"\n\nAendere Body, Kanal, Thread, Empfaenger oder Attachments nicht. Wenn der Befehl fehlschlaegt, melde exakt die Fehlermeldung und stoppe. Wenn er erfolgreich ist, pruefe, dass `communication_messages` fuer thread_key `{}` eine outbound {} Nachricht mit terminalem Status enthaelt.",
+            approved_body_block,
+            shell_quote(&action.channel),
+            shell_quote(&action.account_key),
+            shell_quote(&action.thread_key),
+            subject_flag,
+            to_flags,
+            cc_flags,
+            attachment_flags,
+            action.thread_key,
+            action.channel
+        ));
     } else {
         if file_refs.is_empty() {
             message.push_str(
@@ -6578,6 +6846,9 @@ fn outcome_witness_retry_route_status_for_job(root: &Path, job: &QueuedPrompt) -
 }
 
 fn should_queue_artifact_outcome_recovery(job: &QueuedPrompt) -> bool {
+    if external_chat_channel_for_job(job).is_some() {
+        return true;
+    }
     if declared_workspace_file_artifacts_for_job(job).is_empty() {
         return false;
     }
@@ -9419,6 +9690,49 @@ fn founder_outbound_anchor_key(job: &QueuedPrompt) -> Option<&str> {
     job.leased_message_keys.first().map(|key| key.as_str())
 }
 
+fn external_chat_channel_for_job(job: &QueuedPrompt) -> Option<&'static str> {
+    for value in std::iter::once(job.source_label.as_str())
+        .chain(job.leased_message_keys.iter().map(String::as_str))
+    {
+        let lowered = value.to_ascii_lowercase();
+        if lowered == "teams" || lowered.starts_with("teams:") {
+            return Some("teams");
+        }
+        if lowered == "jami" || lowered.starts_with("jami:") {
+            return Some("jami");
+        }
+        if lowered == "whatsapp" || lowered.starts_with("whatsapp:") {
+            return Some("whatsapp");
+        }
+        if lowered == "meeting" || lowered.starts_with("meeting:") {
+            return Some("meeting");
+        }
+    }
+    None
+}
+
+fn external_chat_anchor_key(job: &QueuedPrompt) -> Option<&str> {
+    job.leased_message_keys
+        .iter()
+        .find(|key| {
+            matches!(
+                key.split(':').next().unwrap_or_default(),
+                "teams" | "jami" | "whatsapp" | "meeting"
+            )
+        })
+        .map(String::as_str)
+}
+
+fn reviewed_external_chat_action_for_job(
+    root: &Path,
+    job: &QueuedPrompt,
+) -> Result<Option<channels::ExternalChatAction>> {
+    let Some(anchor_key) = external_chat_anchor_key(job) else {
+        return Ok(None);
+    };
+    channels::prepare_reviewed_external_chat_reply(root, anchor_key)
+}
+
 fn detect_founder_mail_commitments(text: &str) -> Vec<String> {
     let normalized = text.replace('\n', " ");
     normalized
@@ -11287,9 +11601,7 @@ fn enrich_inbound_prompt(
         };
         let sender = display_inbound_sender(message);
         return format!(
-            "[Jami-Nachricht eingegangen]\nSender: {sender}\nThread: {}\nWenn du antwortest, nutze `ctox channel send --channel jami --account-key {} --thread-key '{}' --body \"<deine Antwort>\" [--attach-file <pfad>]...{voice_hint}`.{voice_note} Wenn ein QR-Code, PDF, Bild oder anderer konkreter Anhang verlangt ist, sende ihn als echte Datei ueber `--attach-file` und niemals als oeffentlichen Link.\n\n{}",
-            message.thread_key,
-            message.account_key,
+            "[Jami-Nachricht eingegangen]\nSender: {sender}\nThread: {}\nWenn du antwortest, sende nicht direkt. Gib nur den kurzen Chat-Antworttext fuer den Review aus; der Harness versendet ihn nach Review mit `--reviewed-communication-send`. Wenn die Nachricht eine Aufgabe oder Nacharbeit ausloest, lege vorher durable Queue-/Plan-/Self-Work-Backing fuer genau diesen Thread an. Wenn ein QR-Code, PDF, Bild oder anderer konkreter Anhang verlangt ist, sende ihn als echte Datei ueber `--attach-file` und niemals als oeffentlichen Link.{voice_note}\n\n{}",
             message.thread_key,
             prepend_workspace_contract(prompt_body, message.workspace_root.as_deref())
         );
@@ -11302,9 +11614,7 @@ fn enrich_inbound_prompt(
             format!("\nBetreff: {}", message.subject.trim())
         };
         return format!(
-            "[Teams-Nachricht eingegangen]\nSender: {sender}{subject_line}\nThread: {}\nWenn du antwortest, nutze `ctox channel send --channel teams --account-key {} --thread-key '{}' --body \"<deine Antwort>\"`. Der Teams-Adapter sendet ueber Microsoft Graph in den konfigurierten Chat oder Channel-Thread; erfinde keine Empfaengeradresse und wechsle fuer Live-Meeting-Chat nur auf den `meeting`-Kanal, wenn die Nachricht aus einer aktiven Meeting-Session stammt.\n\n{}",
-            message.thread_key,
-            message.account_key,
+            "[Teams-Nachricht eingegangen]\nSender: {sender}{subject_line}\nThread: {}\nWenn du antwortest, sende nicht direkt. Gib nur den kurzen Chat-Antworttext fuer den Review aus; der Harness versendet ihn nach Review mit `--reviewed-communication-send`. Wenn die Nachricht eine Aufgabe oder Nacharbeit ausloest, lege vorher durable Queue-/Plan-/Self-Work-Backing fuer genau diesen Thread an. Der Teams-Adapter sendet ueber Microsoft Graph in den konfigurierten Chat oder Channel-Thread; erfinde keine Empfaengeradresse und wechsle fuer Live-Meeting-Chat nur auf den `meeting`-Kanal, wenn die Nachricht aus einer aktiven Meeting-Session stammt.\n\n{}",
             message.thread_key,
             prepend_workspace_contract(prompt_body, message.workspace_root.as_deref())
         );
@@ -11312,9 +11622,7 @@ fn enrich_inbound_prompt(
     if message.channel == "whatsapp" {
         let sender = display_inbound_sender(message);
         return format!(
-            "[WhatsApp-Nachricht eingegangen]\nSender: {sender}\nThread: {}\nWenn du antwortest, nutze `ctox channel send --channel whatsapp --account-key {} --thread-key '{}' --body \"<deine Antwort>\"` [--attach-file <pfad>].... Antworte auf diesem Kanal kurz und direkt; wenn ein konkreter Anhang verlangt ist, sende ihn als echte Datei ueber `--attach-file`.\n\n{}",
-            message.thread_key,
-            message.account_key,
+            "[WhatsApp-Nachricht eingegangen]\nSender: {sender}\nThread: {}\nWenn du antwortest, sende nicht direkt. Gib nur den kurzen Chat-Antworttext fuer den Review aus; der Harness versendet ihn nach Review mit `--reviewed-communication-send`. Wenn die Nachricht eine Aufgabe oder Nacharbeit ausloest, lege vorher durable Queue-/Plan-/Self-Work-Backing fuer genau diesen Thread an. Antworte auf diesem Kanal kurz und direkt; wenn ein konkreter Anhang verlangt ist, sende ihn als echte Datei ueber `--attach-file`.\n\n{}",
             message.thread_key,
             prepend_workspace_contract(prompt_body, message.workspace_root.as_deref())
         );
@@ -11344,7 +11652,7 @@ fn enrich_inbound_prompt(
              Provider: {provider}\n\
              Sender: {sender}\n\
              Session: {session_id}\n\
-             Wenn du im Meeting-Chat antworten willst, nutze `ctox channel send --channel meeting --thread-key '{session_id}' --body \"<deine Antwort>\"`.{mention_hint}\n\n{}",
+             Wenn du antwortest, sende nicht direkt. Gib nur den kurzen Chat-Antworttext fuer den Review aus; der Harness versendet ihn nach Review mit `--reviewed-communication-send`. Wenn die Nachricht eine Aufgabe oder Nacharbeit ausloest, lege vorher durable Queue-/Plan-/Self-Work-Backing fuer diese Session an.{mention_hint}\n\n{}",
             prepend_workspace_contract(prompt_body, message.workspace_root.as_deref())
         );
     }
@@ -14779,9 +15087,9 @@ mod tests {
         let prompt = enrich_inbound_prompt(&root, &settings, &message, &message.body_text);
 
         assert!(prompt.contains("[Teams-Nachricht eingegangen]"));
-        assert!(prompt.contains("ctox channel send --channel teams"));
-        assert!(prompt.contains("--account-key teams:bot"));
-        assert!(prompt.contains("--thread-key 'teams:bot::chat::chat-123'"));
+        assert!(prompt.contains("sende nicht direkt"));
+        assert!(prompt.contains("reviewed-communication-send"));
+        assert!(prompt.contains("Queue-/Plan-/Self-Work-Backing"));
         assert!(prompt.contains("Microsoft Graph"));
         let _ = std::fs::remove_dir_all(&root);
     }

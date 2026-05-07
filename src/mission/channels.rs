@@ -1358,7 +1358,7 @@ pub fn handle_channel_command(root: &Path, args: &[String]) -> Result<()> {
         }
         _ => {
             anyhow::bail!(
-                "usage:\n  ctox channel init [--db <path>]\n  ctox channel sync --channel <email|jami|teams|meeting|whatsapp> [--db <path>] [adapter flags]\n  ctox channel take [--db <path>] [--channel <name>] [--limit <n>] [--lease-owner <owner>]\n  ctox channel ack [--db <path>] [--status <status>] <message-key>...\n  ctox channel send --channel <tui|email|jami|teams|meeting|whatsapp> --account-key <key> --thread-key <key> --body <text> [--subject <text>] [--to <addr>]... [--cc <addr>]... [--attach-file <path>]... [--send-voice] [--reviewed-founder-send]\n  ctox channel founder-reply --message-key <inbound-email-key> --body <text>\n  ctox channel test --channel <tui|email|jami|teams|whatsapp> [--db <path>] [--account-key <key>]\n  ctox channel ingest-tui --account-key <key> --thread-key <key> --body <text> [--sender-display <name>] [--sender-address <addr>] [--subject <text>]\n  ctox channel list [--db <path>] [--channel <name>] [--limit <n>]\n  ctox channel history --thread-key <key> [--db <path>] [--limit <n>]\n  ctox channel search --query <text> [--db <path>] [--channel <name>] [--sender <addr>] [--limit <n>]\n  ctox channel context --thread-key <key> [--db <path>] [--query <text>] [--sender <addr>] [--limit <n>]\n  ctox channel pipeline-status [--thread-key <key>] [--limit <n>]"
+                "usage:\n  ctox channel init [--db <path>]\n  ctox channel sync --channel <email|jami|teams|meeting|whatsapp> [--db <path>] [adapter flags]\n  ctox channel take [--db <path>] [--channel <name>] [--limit <n>] [--lease-owner <owner>]\n  ctox channel ack [--db <path>] [--status <status>] <message-key>...\n  ctox channel send --channel <tui|email|jami|teams|meeting|whatsapp> --account-key <key> --thread-key <key> --body <text> [--subject <text>] [--to <addr>]... [--cc <addr>]... [--attach-file <path>]... [--send-voice] [--reviewed-founder-send] [--reviewed-communication-send]\n  ctox channel founder-reply --message-key <inbound-email-key> --body <text>\n  ctox channel test --channel <tui|email|jami|teams|whatsapp> [--db <path>] [--account-key <key>]\n  ctox channel ingest-tui --account-key <key> --thread-key <key> --body <text> [--sender-display <name>] [--sender-address <addr>] [--subject <text>]\n  ctox channel list [--db <path>] [--channel <name>] [--limit <n>]\n  ctox channel history --thread-key <key> [--db <path>] [--limit <n>]\n  ctox channel search --query <text> [--db <path>] [--channel <name>] [--sender <addr>] [--limit <n>]\n  ctox channel context --thread-key <key> [--db <path>] [--query <text>] [--sender <addr>] [--limit <n>]\n  ctox channel pipeline-status [--thread-key <key>] [--limit <n>]"
             )
         }
     }
@@ -2358,6 +2358,17 @@ pub(crate) struct FounderOutboundAction {
     pub attachments: Vec<String>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct ExternalChatAction {
+    pub channel: String,
+    pub account_key: String,
+    pub thread_key: String,
+    pub subject: String,
+    pub to: Vec<String>,
+    pub cc: Vec<String>,
+    pub attachments: Vec<String>,
+}
+
 fn sync_channel(root: &Path, db_path: &Path, channel: &str, args: &[String]) -> Result<Value> {
     let conn = open_channel_db(db_path)?;
     match communication_adapters::external_adapter_for_channel(channel) {
@@ -2453,8 +2464,20 @@ fn sync_channel(root: &Path, db_path: &Path, channel: &str, args: &[String]) -> 
 fn send_message(root: &Path, db_path: &Path, request: ChannelSendRequest) -> Result<Value> {
     let mut conn = open_channel_db(db_path)?;
     let request = resolve_outbound_subject(&conn, request)?;
+    enforce_external_chat_send_is_reviewed(&request)?;
     enforce_external_work_ack_has_pipeline_backing(&conn, &request)?;
     enforce_channel_attachment_support(&request)?;
+    let reviewed_external_chat_approval =
+        if request.reviewed_founder_send && is_reviewed_external_chat_channel(&request.channel) {
+            let action = external_chat_action_from_send_request(&request);
+            Some(require_any_unconsumed_external_chat_review(
+                &conn,
+                &action,
+                &request.body,
+            )?)
+        } else {
+            None
+        };
     match request.channel.as_str() {
         "tui" => {
             let message_key = store_tui_outbound_message(&mut conn, &request)?;
@@ -2500,6 +2523,9 @@ fn send_message(root: &Path, db_path: &Path, request: ChannelSendRequest) -> Res
                     attachments: &request.attachments,
                 },
             )?;
+            if let Some((approval_key, _anchor_key)) = reviewed_external_chat_approval.as_ref() {
+                mark_founder_reply_review_sent(&conn, approval_key, &adapter_json)?;
+            }
             Ok(json!({
                 "ok": true,
                 "channel": "jami",
@@ -2533,6 +2559,9 @@ fn send_message(root: &Path, db_path: &Path, request: ChannelSendRequest) -> Res
                     attachments: &request.attachments,
                 },
             )?;
+            if let Some((approval_key, _anchor_key)) = reviewed_external_chat_approval.as_ref() {
+                mark_founder_reply_review_sent(&conn, approval_key, &adapter_json)?;
+            }
             Ok(json!({
                 "ok": true,
                 "channel": "teams",
@@ -2563,6 +2592,9 @@ fn send_message(root: &Path, db_path: &Path, request: ChannelSendRequest) -> Res
                     attachments: &request.attachments,
                 },
             )?;
+            if let Some((approval_key, _anchor_key)) = reviewed_external_chat_approval.as_ref() {
+                mark_founder_reply_review_sent(&conn, approval_key, &adapter_json)?;
+            }
             Ok(json!({
                 "ok": true,
                 "channel": "whatsapp",
@@ -2590,6 +2622,9 @@ fn send_message(root: &Path, db_path: &Path, request: ChannelSendRequest) -> Res
                     body: &request.body,
                 },
             )?;
+            if let Some((approval_key, _anchor_key)) = reviewed_external_chat_approval.as_ref() {
+                mark_founder_reply_review_sent(&conn, approval_key, &adapter_json)?;
+            }
             Ok(json!({
                 "ok": true,
                 "channel": "meeting",
@@ -2610,6 +2645,16 @@ fn enforce_channel_attachment_support(request: &ChannelSendRequest) -> Result<()
     Ok(())
 }
 
+fn enforce_external_chat_send_is_reviewed(request: &ChannelSendRequest) -> Result<()> {
+    if is_reviewed_external_chat_channel(&request.channel) && !request.reviewed_founder_send {
+        anyhow::bail!(
+            "outbound {} communication must pass external chat review before sending. Draft the chat response for completion review first, then send the exact approved body with --reviewed-communication-send.",
+            request.channel
+        );
+    }
+    Ok(())
+}
+
 fn enforce_external_work_ack_has_pipeline_backing(
     conn: &Connection,
     request: &ChannelSendRequest,
@@ -2624,7 +2669,13 @@ fn enforce_external_work_ack_has_pipeline_backing(
         return Ok(());
     }
     if thread_has_open_work_backing(conn, &request.thread_key)? {
-        return Ok(());
+        if request.reviewed_founder_send {
+            return Ok(());
+        }
+        anyhow::bail!(
+            "outbound {} acknowledgement promises follow-up work and has pipeline backing, but it has not passed external chat review. Draft the quick response for review first, then send the exact approved body with --reviewed-communication-send.",
+            request.channel
+        );
     }
     anyhow::bail!(
         "outbound {} acknowledgement promises follow-up work but no durable queue, plan, or self-work item exists for thread `{}`. Create the pipeline item first, then send the acknowledgement.",
@@ -3579,6 +3630,74 @@ fn founder_outbound_review_digest(
     (action_digest, action_json, body_sha256)
 }
 
+fn external_chat_review_digest(
+    action: &ExternalChatAction,
+    body: &str,
+) -> (String, String, String) {
+    let action_json = json!({
+        "kind": "external_chat_quick_response",
+        "channel": &action.channel,
+        "account_key": &action.account_key,
+        "thread_key": &action.thread_key,
+        "subject": &action.subject,
+        "to": &action.to,
+        "cc": &action.cc,
+        "attachments": &action.attachments,
+    })
+    .to_string();
+    let body_sha256 = format!("{:x}", Sha256::digest(body.trim().as_bytes()));
+    let mut hasher = Sha256::new();
+    hasher.update(action_json.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(body_sha256.as_bytes());
+    let action_digest = format!("{:x}", hasher.finalize());
+    (action_digest, action_json, body_sha256)
+}
+
+fn is_reviewed_external_chat_channel(channel: &str) -> bool {
+    matches!(channel, "teams" | "jami" | "whatsapp" | "meeting")
+}
+
+fn external_chat_action_from_send_request(request: &ChannelSendRequest) -> ExternalChatAction {
+    ExternalChatAction {
+        channel: request.channel.clone(),
+        account_key: request.account_key.clone(),
+        thread_key: request.thread_key.clone(),
+        subject: request.subject.clone(),
+        to: request.to.clone(),
+        cc: request.cc.clone(),
+        attachments: request.attachments.clone(),
+    }
+}
+
+pub(crate) fn prepare_reviewed_external_chat_reply(
+    root: &Path,
+    inbound_message_key: &str,
+) -> Result<Option<ExternalChatAction>> {
+    let db_path = resolve_db_path(root, None);
+    let conn = open_channel_db(&db_path)?;
+    let Some(inbound) = load_message_from_conn(&conn, inbound_message_key)? else {
+        return Ok(None);
+    };
+    if !is_reviewed_external_chat_channel(&inbound.channel) || inbound.direction != "inbound" {
+        return Ok(None);
+    }
+    let to = if inbound.channel == "jami" && !inbound.sender_address.trim().is_empty() {
+        vec![inbound.sender_address.trim().to_string()]
+    } else {
+        Vec::new()
+    };
+    Ok(Some(ExternalChatAction {
+        channel: inbound.channel,
+        account_key: inbound.account_key,
+        thread_key: inbound.thread_key,
+        subject: inbound.subject,
+        to,
+        cc: Vec::new(),
+        attachments: Vec::new(),
+    }))
+}
+
 pub(crate) fn default_email_account_key(root: &Path) -> Result<String> {
     let db_path = resolve_db_path(root, None);
     bootstrap_channel_account(root, "email")?;
@@ -3676,6 +3795,67 @@ pub(crate) fn record_founder_outbound_review_approval(
                 "body_sha256": body_sha256,
                 "action_digest": action_digest,
                 "outbound": true,
+            }),
+        },
+    );
+    Ok(())
+}
+
+pub(crate) fn record_external_chat_review_approval(
+    root: &Path,
+    anchor_message_key: &str,
+    action: &ExternalChatAction,
+    body: &str,
+    review_summary: &str,
+) -> Result<()> {
+    let db_path = resolve_db_path(root, None);
+    let conn = open_channel_db(&db_path)?;
+    let (action_digest, action_json, body_sha256) = external_chat_review_digest(action, body);
+    let approval_key = format!("external-chat-review:{anchor_message_key}:{action_digest}");
+    conn.execute(
+        r#"
+        INSERT INTO communication_founder_reply_reviews (
+            approval_key, inbound_message_key, action_digest, action_json,
+            body_sha256, reviewer, review_summary, approved_at, sent_at, send_result_json
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, 'external-review', ?6, ?7, NULL, '{}')
+        ON CONFLICT(inbound_message_key, action_digest) DO UPDATE SET
+            approval_key=excluded.approval_key,
+            action_json=excluded.action_json,
+            body_sha256=excluded.body_sha256,
+            reviewer=excluded.reviewer,
+            review_summary=excluded.review_summary,
+            approved_at=excluded.approved_at,
+            sent_at=NULL,
+            send_result_json='{}'
+        "#,
+        params![
+            approval_key,
+            anchor_message_key,
+            action_digest,
+            action_json,
+            body_sha256,
+            review_summary,
+            now_iso_string()
+        ],
+    )
+    .context("failed to record external chat review approval")?;
+    record_harness_flow_event_lossy(
+        root,
+        RecordHarnessFlowEventRequest {
+            event_kind: "review.approved",
+            title: "External chat review approved",
+            body_text: review_summary,
+            message_key: Some(anchor_message_key),
+            work_id: None,
+            ticket_key: None,
+            attempt_index: Some(1),
+            metadata: json!({
+                "approval_key": approval_key,
+                "body_sha256": body_sha256,
+                "action_digest": action_digest,
+                "channel": &action.channel,
+                "external_chat": true,
             }),
         },
     );
@@ -3855,6 +4035,34 @@ fn require_any_unconsumed_founder_outbound_review(
         .context("failed to load founder outbound review approval")?;
     approval.with_context(|| {
         "reviewed founder outbound has no matching unconsumed review approval for the exact body, recipients, cc, subject, and attachments. Run completion review first, then send exactly the approved body with the same recipients and subject."
+            .to_string()
+    })
+}
+
+fn require_any_unconsumed_external_chat_review(
+    conn: &Connection,
+    action: &ExternalChatAction,
+    body: &str,
+) -> Result<(String, String)> {
+    let (action_digest, _, _) = external_chat_review_digest(action, body);
+    let approval = conn
+        .query_row(
+            r#"
+            SELECT approval_key, inbound_message_key
+            FROM communication_founder_reply_reviews
+            WHERE action_digest = ?1
+              AND sent_at IS NULL
+              AND terminal_no_send = 0
+            ORDER BY approved_at DESC
+            LIMIT 1
+            "#,
+            params![action_digest],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()
+        .context("failed to load external chat review approval")?;
+    approval.with_context(|| {
+        "reviewed external chat acknowledgement has no matching unconsumed review approval for the exact body, channel, thread, recipients, subject, and attachments. Run completion review first, then send exactly the approved body with --reviewed-communication-send."
             .to_string()
     })
 }
@@ -4621,7 +4829,8 @@ fn parse_send_request(args: &[String]) -> Result<ChannelSendRequest> {
         sender_display: find_flag_value(args, "--sender-display").map(ToOwned::to_owned),
         sender_address: find_flag_value(args, "--sender-address").map(ToOwned::to_owned),
         send_voice: has_flag(args, "--send-voice"),
-        reviewed_founder_send: has_flag(args, "--reviewed-founder-send"),
+        reviewed_founder_send: has_flag(args, "--reviewed-founder-send")
+            || has_flag(args, "--reviewed-communication-send"),
     })
 }
 
@@ -7942,7 +8151,7 @@ mod tests {
     }
 
     #[test]
-    fn teams_work_ack_is_allowed_with_queue_backing() {
+    fn teams_work_ack_requires_review_even_with_queue_backing() {
         let root = std::env::temp_dir().join(format!(
             "ctox-teams-ack-backed-{}",
             SystemTime::now()
@@ -7982,14 +8191,53 @@ mod tests {
             reviewed_founder_send: false,
         };
 
-        enforce_external_work_ack_has_pipeline_backing(&conn, &request)
-            .expect("queue-backed acknowledgement should be allowed");
+        let err = enforce_external_work_ack_has_pipeline_backing(&conn, &request)
+            .expect_err("queue-backed acknowledgement must still require review");
+        assert!(err
+            .to_string()
+            .contains("has not passed external chat review"));
+
+        let reviewed_request = ChannelSendRequest {
+            reviewed_founder_send: true,
+            ..request
+        };
+        enforce_external_work_ack_has_pipeline_backing(&conn, &reviewed_request)
+            .expect("reviewed queue-backed acknowledgement should be allowed");
 
         let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
-    fn teams_send_allows_attachments_for_adapter_delivery() {
+    fn teams_send_requires_external_chat_review_even_without_work_promise() {
+        let request = ChannelSendRequest {
+            channel: "teams".to_string(),
+            account_key: "teams:inf.yoda@example.test".to_string(),
+            thread_key: "teams:inf.yoda@example.test::chat::jill".to_string(),
+            body: "Verstanden, ich habe die Rueckfrage gesehen.".to_string(),
+            subject: "(Teams)".to_string(),
+            to: Vec::new(),
+            cc: Vec::new(),
+            attachments: Vec::new(),
+            sender_display: None,
+            sender_address: None,
+            send_voice: false,
+            reviewed_founder_send: false,
+        };
+
+        let err = enforce_external_chat_send_is_reviewed(&request)
+            .expect_err("external chat sends must pass review even without work promise");
+        assert!(err.to_string().contains("must pass external chat review"));
+
+        let reviewed_request = ChannelSendRequest {
+            reviewed_founder_send: true,
+            ..request
+        };
+        enforce_external_chat_send_is_reviewed(&reviewed_request)
+            .expect("reviewed external chat sends should pass this guard");
+    }
+
+    #[test]
+    fn teams_reviewed_send_allows_attachments_for_adapter_delivery() {
         let request = ChannelSendRequest {
             channel: "teams".to_string(),
             account_key: "teams:inf.yoda@example.test".to_string(),
@@ -8002,9 +8250,11 @@ mod tests {
             sender_display: None,
             sender_address: None,
             send_voice: false,
-            reviewed_founder_send: false,
+            reviewed_founder_send: true,
         };
 
+        enforce_external_chat_send_is_reviewed(&request)
+            .expect("reviewed Teams attachment send should pass review guard");
         enforce_channel_attachment_support(&request)
             .expect("Teams attachments are handed to the adapter for Graph delivery");
     }

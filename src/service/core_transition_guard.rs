@@ -315,7 +315,9 @@ fn artifact_ref_satisfies(expected: &csm::ArtifactRef, delivered: &csm::Artifact
         && expected.expected_terminal_state == delivered.expected_terminal_state
         && (expected.primary_key == delivered.primary_key
             || expected.primary_key == "*"
-            || expected.primary_key.starts_with("thread:"))
+            || expected.primary_key.starts_with("thread:")
+            || (expected.kind == csm::ArtifactKind::OutboundCommunication
+                && expected.primary_key.contains(':')))
 }
 
 fn load_artifact_terminal_state(
@@ -343,6 +345,36 @@ fn load_artifact_terminal_state(
             } else {
                 conn.query_row(
                     "SELECT status FROM communication_messages WHERE message_key = ?1 LIMIT 1",
+                    params![artifact.primary_key],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(anyhow::Error::from)
+            }
+        }
+        csm::ArtifactKind::OutboundCommunication => {
+            if let Some((channel, thread_key)) = artifact.primary_key.split_once(':') {
+                conn.query_row(
+                    r#"
+                    SELECT CASE
+                        WHEN status IN ('sent', 'accepted', 'queued') THEN 'sent'
+                        ELSE status
+                    END
+                    FROM communication_messages
+                    WHERE direction = 'outbound'
+                      AND channel = ?1
+                      AND thread_key = ?2
+                    ORDER BY observed_at DESC, rowid DESC
+                    LIMIT 1
+                    "#,
+                    params![channel, thread_key],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(anyhow::Error::from)
+            } else {
+                conn.query_row(
+                    "SELECT CASE WHEN status IN ('sent', 'accepted', 'queued') THEN 'sent' ELSE status END FROM communication_messages WHERE message_key = ?1 LIMIT 1",
                     params![artifact.primary_key],
                     |row| row.get(0),
                 )

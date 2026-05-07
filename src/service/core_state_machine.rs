@@ -205,6 +205,7 @@ pub enum CoreEvent {
 #[serde(rename_all = "snake_case")]
 pub enum ArtifactKind {
     OutboundEmail,
+    OutboundCommunication,
     WorkspaceFile,
     TicketClosure,
     KnowledgeEntry,
