@@ -4686,7 +4686,13 @@ fn workspace_file_artifacts_require_fresh_write(job: &QueuedPrompt) -> bool {
 }
 
 fn workspace_artifact_fresh_cutoff_for_job(root: &Path, job: &QueuedPrompt) -> Option<SystemTime> {
-    let mut cutoff = None;
+    let mut cutoff = if job.source_label == "review-feedback"
+        && is_terminal_bench_controller_artifact_job(job)
+    {
+        latest_outcome_witness_rejection_cutoff_for_job(root, job)
+    } else {
+        None
+    };
     for message_key in &job.leased_message_keys {
         let Ok(Some(task)) = channels::load_queue_task(root, message_key) else {
             continue;
@@ -4703,6 +4709,34 @@ fn workspace_artifact_fresh_cutoff_for_job(root: &Path, job: &QueuedPrompt) -> O
         }
     }
     cutoff
+}
+
+fn latest_outcome_witness_rejection_cutoff_for_job(
+    root: &Path,
+    job: &QueuedPrompt,
+) -> Option<SystemTime> {
+    let conn = channels::open_channel_db(&crate::paths::core_db(root)).ok()?;
+    let updated_at = conn
+        .query_row(
+            r#"
+            SELECT updated_at
+            FROM ctox_core_transition_proofs
+            WHERE entity_id = ?1
+              AND accepted = 0
+              AND (
+                violation_codes_json LIKE '%WP-Outcome-Missing%'
+                OR violation_codes_json LIKE '%WP-Outcome-Wrong-State%'
+              )
+            ORDER BY updated_at DESC
+            LIMIT 1
+            "#,
+            params![job_outcome_entity_id(job)],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .ok()
+        .flatten()?;
+    parse_rfc3339_system_time(&updated_at)
 }
 
 fn parse_rfc3339_system_time(value: &str) -> Option<SystemTime> {
@@ -19204,6 +19238,80 @@ The controller must update stale files itself."
         assert_eq!(
             outcome_witness_retry_route_status_for_job(&root, &job),
             "review_rework"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn terminal_bench_review_feedback_requires_files_newer_than_last_rejection() {
+        let root = temp_root("terminal-bench-feedback-fresh-after-rejection");
+        let run_dir = root.join("terminal-bench-2/runs/fresh-after-rejection");
+        std::fs::create_dir_all(&run_dir).expect("failed to create run dir");
+        let controller = run_dir.join("controller.json");
+        std::fs::write(&controller, "{\"status\":\"preflight-in-progress\"}\n")
+            .expect("failed to write stale controller");
+        let run_dir_text = run_dir.to_string_lossy().into_owned();
+        let controller_text = controller.to_string_lossy().into_owned();
+        let job = QueuedPrompt {
+            prompt: format!(
+                "HARNESS FEEDBACK\n\
+Only required durable files for this controller turn:\n\
+- {controller_text}\n\n\
+The controller must update stale files itself."
+            ),
+            goal: "Continue Terminal-Bench controller".to_string(),
+            preview: "Terminal-Bench review feedback".to_string(),
+            source_label: "review-feedback".to_string(),
+            suggested_skill: Some("benchmark-controller".to_string()),
+            leased_message_keys: vec!["queue:system::parent-fresh-cutoff".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some(
+                "terminal-bench-2/deepseek/fresh-after-rejection/controller".to_string(),
+            ),
+            workspace_root: Some(run_dir_text),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let _ = enforce_job_outcome_witness(
+            &root,
+            &job,
+            vec![ArtifactRef {
+                kind: ArtifactKind::WorkspaceFile,
+                primary_key: "/missing/controller.json".to_string(),
+                expected_terminal_state: "fresh".to_string(),
+            }],
+            Vec::new(),
+        );
+        let conn = channels::open_channel_db(&crate::paths::core_db(&root))
+            .expect("failed to open channel db");
+        conn.execute(
+            "UPDATE ctox_core_transition_proofs SET updated_at='2999-01-01T00:00:00Z' WHERE entity_id=?1",
+            params![job_outcome_entity_id(&job)],
+        )
+        .expect("failed to move rejection into future");
+
+        let expected = expected_outcome_artifacts_for_job(&job);
+        let delivered = delivered_outcome_artifacts_for_job(&root, &job, &expected)
+            .expect("failed to read delivered artifacts");
+
+        assert!(
+            delivered.is_empty(),
+            "review-feedback must not accept files older than latest outcome rejection"
+        );
+        assert!(
+            workspace_file_artifact_diagnostic_for_expected(
+                &root,
+                &job,
+                &ArtifactRef {
+                    kind: ArtifactKind::WorkspaceFile,
+                    primary_key: controller_text,
+                    expected_terminal_state: "fresh".to_string(),
+                },
+            )
+            .contains("stale")
         );
 
         let _ = std::fs::remove_dir_all(&root);
