@@ -73,7 +73,19 @@ Use the folder as a research project, not as an output dump. For long reports, w
 
 ## DOCX Helper
 
-When a Word report is requested, prefer the bundled helper:
+When a technical feasibility Word report is requested, prefer the executable end-to-end workflow:
+
+```bash
+python3 skills/system/research/deep-research/scripts/run_feasibility_study.py \
+  --query "<research question>" \
+  --workspace /path/to/research-workspace \
+  --output /path/to/report.docx \
+  --title "Machbarkeitsstudie ..."
+```
+
+This command runs CTOX deep research, writes the required synthesis files, builds the DOCX, and runs the validator. If it exits non-zero, the report is not complete.
+
+For generic Word reports, use the lower-level bundled helper:
 
 ```bash
 python3 skills/system/research/deep-research/scripts/build_research_report_docx.py \

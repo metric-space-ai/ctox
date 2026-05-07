@@ -127,8 +127,6 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
     let mut sources = Vec::new();
     let mut seen_urls = BTreeSet::new();
     let mut search_runs = Vec::new();
-    let database_runs =
-        collect_scholarly_database_sources(&plans, request, &mut seen_urls, &mut sources);
 
     for plan in &plans {
         let payload = match run_ctox_web_search_tool(
@@ -169,14 +167,14 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
             "result_count": payload.get("results").and_then(Value::as_array).map(Vec::len).unwrap_or(0),
         }));
         collect_search_sources(&payload, plan, &mut seen_urls, &mut sources);
-        if sources.len() >= max_sources {
-            break;
-        }
     }
+    let database_runs =
+        collect_scholarly_database_sources(&plans, request, &mut seen_urls, &mut sources);
 
     let read_budget = request.depth.read_budget().min(max_sources);
-    let mut enriched = Vec::with_capacity(sources.len());
-    for mut source in sources.into_iter().take(max_sources) {
+    let selected_sources = select_balanced_sources(sources, max_sources);
+    let mut enriched = Vec::with_capacity(selected_sources.len());
+    for mut source in selected_sources {
         let read_url = source_read_url(&source);
         let should_read = enriched.len() < read_budget && should_attempt_source_read(&source);
         if should_read {
@@ -291,6 +289,47 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
     }
 
     Ok(payload)
+}
+
+fn select_balanced_sources(sources: Vec<Value>, max_sources: usize) -> Vec<Value> {
+    let mut selected = Vec::new();
+    let mut buckets = BTreeMap::<String, Vec<Value>>::new();
+    for source in sources {
+        let kind = source
+            .get("source_type")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .to_string();
+        buckets.entry(kind).or_default().push(source);
+    }
+
+    let preferred = [
+        "open_access_paper",
+        "scholarly",
+        "patent",
+        "web",
+        "metadata",
+        "paper_metadata",
+        "annas_archive_metadata",
+        "unknown",
+    ];
+    while selected.len() < max_sources {
+        let before = selected.len();
+        for kind in preferred {
+            if selected.len() >= max_sources {
+                break;
+            }
+            if let Some(bucket) = buckets.get_mut(kind) {
+                if !bucket.is_empty() {
+                    selected.push(bucket.remove(0));
+                }
+            }
+        }
+        if selected.len() == before {
+            break;
+        }
+    }
+    selected
 }
 
 fn normalize_required_query(raw: &str) -> Result<String> {
