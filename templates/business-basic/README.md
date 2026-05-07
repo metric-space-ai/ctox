@@ -41,7 +41,8 @@ python3 skills/system/product_engineering/business-stack/scripts/test_install_bu
   surfaces.
 - Operations: projects, work items, boards, wiki, meetings, documents, and
   day-to-day execution.
-- Business: products, customers, invoices, bookkeeping exports, and reporting.
+- Business: products, customers, invoices, ledger, receipts, payments,
+  bookkeeping exports, and reporting.
 
 All modules share the same shell, login entry, design system, bug reporting,
 audit model, and CTOX bridge.
@@ -147,6 +148,9 @@ Business routes:
 /app/business/customers
 /app/business/products
 /app/business/invoices
+/app/business/ledger
+/app/business/receipts
+/app/business/payments
 /app/business/bookkeeping
 /app/business/reports
 ```
@@ -190,6 +194,18 @@ Run the full route/API/queue smoke test against a running dev server:
 ```sh
 pnpm test:business-stack
 ```
+
+Run the accounting persistence smoke test against a local Postgres server:
+
+```sh
+pnpm test:accounting-db
+```
+
+The test creates a temporary database, applies every Drizzle SQL migration,
+persists an accounting setup and invoice workflow snapshot, checks journal /
+ledger readback, and verifies that posted journal entries and ledger rows are
+blocked from mutation. Set `DATABASE_ADMIN_URL` when the default
+`postgres://$USER@localhost:5432/postgres` admin connection is not valid.
 
 Run the complete local verification suite against a running dev server:
 

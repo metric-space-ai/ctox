@@ -18,7 +18,7 @@ type MarkupAttachment = {
   markupSvgDataUrl: string;
   screenshotDataUrl?: string;
   compositeDataUrl: string;
-  captureMode: "screen" | "markup-only";
+  captureMode: "screen" | "dom" | "markup-only";
   capturedAt: string;
 };
 type MarkupState =
@@ -195,7 +195,9 @@ export function BugReportWidget({ locale, moduleId, submoduleId }: BugReportWidg
     setMarkup({ mode: "idle" });
 
     try {
-      const screenshotDataUrl = await captureScreenRegion(rect);
+      const screenDataUrl = await captureScreenRegion(rect);
+      const domDataUrl = screenDataUrl ? null : await captureDomRegion(rect);
+      const screenshotDataUrl = screenDataUrl ?? domDataUrl;
       const compositeDataUrl = screenshotDataUrl
         ? await buildCompositeDataUrl(rect, strokes, screenshotDataUrl).catch(() => markupSvgDataUrl)
         : markupSvgDataUrl;
@@ -206,7 +208,7 @@ export function BugReportWidget({ locale, moduleId, submoduleId }: BugReportWidg
         svgDataUrl: compositeDataUrl,
         markupSvgDataUrl,
         compositeDataUrl,
-        captureMode: screenshotDataUrl ? "screen" : "markup-only",
+        captureMode: screenDataUrl ? "screen" : domDataUrl ? "dom" : "markup-only",
         capturedAt: new Date().toISOString(),
         ...(screenshotDataUrl ? { screenshotDataUrl } : {})
       });
@@ -256,7 +258,7 @@ export function BugReportWidget({ locale, moduleId, submoduleId }: BugReportWidg
           {attachment ? (
             <div className="bug-report-attachment">
               <span>
-                {attachment.captureMode === "screen" ? t.attachmentScreen : t.attachmentFallback}
+                {attachment.captureMode !== "markup-only" ? t.attachmentScreen : t.attachmentFallback}
               </span>
               <img alt={t.attachment} src={attachment.compositeDataUrl} />
             </div>
@@ -399,6 +401,60 @@ async function captureScreenRegion(rect: Rect): Promise<string | null> {
   } finally {
     stream.getTracks().forEach((track) => track.stop());
   }
+}
+
+async function captureDomRegion(rect: Rect): Promise<string | null> {
+  try {
+    const width = Math.max(1, Math.round(window.innerWidth));
+    const height = Math.max(1, Math.round(window.innerHeight));
+    const clone = document.documentElement.cloneNode(true) as HTMLElement;
+    clone.querySelectorAll("script, .bug-markup-overlay").forEach((node) => node.remove());
+    clone.querySelectorAll("textarea").forEach((node) => {
+      const source = document.querySelector<HTMLTextAreaElement>(`textarea[name="${node.getAttribute("name") ?? ""}"]`);
+      if (source) node.textContent = source.value;
+    });
+    clone.querySelectorAll("input").forEach((node) => {
+      const input = node as HTMLInputElement;
+      const source = document.querySelector<HTMLInputElement>(`input[name="${input.getAttribute("name") ?? ""}"]`);
+      if (source) input.setAttribute("value", source.value);
+    });
+
+    const style = document.createElement("style");
+    style.textContent = collectStyleText();
+    clone.querySelector("head")?.appendChild(style);
+    clone.setAttribute("style", `${clone.getAttribute("style") ?? ""}; width:${width}px; min-height:${height}px;`);
+
+    const serialized = new XMLSerializer().serializeToString(clone);
+    const svg = [
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`,
+      `<foreignObject width="100%" height="100%">${serialized}</foreignObject>`,
+      "</svg>"
+    ].join("");
+    const image = await loadImage(toDataUrl("image/svg+xml", svg));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(rect.width));
+    canvas.height = Math.max(1, Math.round(rect.height));
+    const context = canvas.getContext("2d");
+    if (!context) return null;
+    context.drawImage(image, rect.x, rect.y, rect.width, rect.height, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL("image/png");
+  } catch {
+    return null;
+  }
+}
+
+function collectStyleText() {
+  return Array.from(document.styleSheets).map((sheet) => {
+    try {
+      return Array.from(sheet.cssRules).map((rule) => rule.cssText).join("\n");
+    } catch {
+      return "";
+    }
+  }).join("\n");
+}
+
+function toDataUrl(mimeType: string, value: string) {
+  return `data:${mimeType};base64,${window.btoa(unescape(encodeURIComponent(value)))}`;
 }
 
 async function buildCompositeDataUrl(rect: Rect, strokes: Stroke[], screenshotDataUrl: string) {

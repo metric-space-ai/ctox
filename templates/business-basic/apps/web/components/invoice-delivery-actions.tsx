@@ -50,6 +50,8 @@ export function InvoiceDeliveryActions({
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isEmailOpen, setIsEmailOpen] = useState(false);
   const [sendCopy, setSendCopy] = useState(true);
+  const [sendStatus, setSendStatus] = useState<"idle" | "sending" | "sent" | "error">("idle");
+  const [sendMessage, setSendMessage] = useState("");
   const pdfHref = `/api/business/invoices/${invoice.id}/pdf?locale=${locale}`;
   const senderName = locale === "de" ? "Metric Space UG (haftungsbeschränkt)" : "Metric Space UG";
   const subject = `${invoice.documentTitle ?? (locale === "de" ? "Rechnung" : "Invoice")} ${invoice.number} ${locale === "de" ? "von" : "from"} ${senderName}`;
@@ -60,6 +62,39 @@ export function InvoiceDeliveryActions({
   const openPdf = () => {
     setIsMenuOpen(false);
     window.open(new URL(pdfHref, window.location.href).toString(), "_blank");
+  };
+
+  const queueInvoiceSend = async (channel: "email" | "print") => {
+    setSendStatus("sending");
+    setSendMessage(locale === "de" ? "Rechnung wird fachlich geprüft." : "Checking invoice.");
+
+    const response = await fetch("/api/business/invoices", {
+      body: JSON.stringify({
+        action: "send",
+        locale,
+        payload: { channel, sendCopy },
+        recordId: invoice.id,
+        title: `${invoice.documentTitle ?? (locale === "de" ? "Rechnung" : "Invoice")} ${invoice.number}`
+      }),
+      headers: { "content-type": "application/json" },
+      method: "POST"
+    });
+    const result = await response.json().catch(() => ({ ok: false, error: "invalid_response" })) as { ok?: boolean; error?: string };
+
+    if (!response.ok || !result.ok) {
+      setSendStatus("error");
+      setSendMessage(result.error ?? (locale === "de" ? "Senden konnte nicht vorbereitet werden." : "Could not prepare send."));
+      return false;
+    }
+
+    setSendStatus("sent");
+    setSendMessage(locale === "de" ? "Accounting-Prüfung und CTOX-Aufgabe sind vorbereitet." : "Accounting check and CTOX task are ready.");
+    return true;
+  };
+
+  const queueAndOpenPdf = async () => {
+    const ok = await queueInvoiceSend("print");
+    if (ok) openPdf();
   };
 
   const openEmail = () => {
@@ -110,8 +145,11 @@ export function InvoiceDeliveryActions({
             <span>{copy.emailCopy}</span>
           </label>
           <button onClick={() => setIsEmailOpen(false)} type="button">{copy.cancel}</button>
-          <button className="drawer-primary" disabled type="button">{copy.completeAndSend}</button>
+          <button className="drawer-primary" disabled={sendStatus === "sending"} onClick={() => void queueInvoiceSend("email")} type="button">
+            {sendStatus === "sending" ? (locale === "de" ? "Prüfen..." : "Checking...") : copy.completeAndSend}
+          </button>
         </footer>
+        {sendMessage ? <small className={`invoice-delivery-status is-${sendStatus}`}>{sendMessage}</small> : null}
       </section>
     </div>
   ) : null;
@@ -120,9 +158,9 @@ export function InvoiceDeliveryActions({
     <>
       <button className="invoice-save-draft" type="button">{copy.draftSave}</button>
       <div className="invoice-delivery-split">
-        <button className="drawer-primary" onClick={openPdf} type="button">
+        <button className="drawer-primary" disabled={sendStatus === "sending"} onClick={() => void queueAndOpenPdf()} type="button">
           <span className="invoice-print-icon" aria-hidden="true" />
-          {copy.completeAndPrint}
+          {sendStatus === "sending" ? (locale === "de" ? "Prüfen..." : "Checking...") : copy.completeAndPrint}
         </button>
         <button aria-label={copy.template} className="invoice-delivery-menu-trigger" onClick={() => setIsMenuOpen((value) => !value)} type="button">
           <span aria-hidden="true" />
@@ -140,6 +178,7 @@ export function InvoiceDeliveryActions({
           </div>
         ) : null}
       </div>
+      {sendMessage ? <small className={`invoice-delivery-status is-${sendStatus}`}>{sendMessage}</small> : null}
 
       {emailDialog && typeof document !== "undefined" ? createPortal(emailDialog, document.body) : null}
     </>

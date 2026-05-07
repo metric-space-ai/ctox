@@ -1,4 +1,4 @@
-import { createCtoxCoreTask, emitCtoxCoreEvent } from "@/lib/ctox-core-bridge";
+import { emitCtoxCoreEvent, upsertCtoxCoreTask } from "@/lib/ctox-core-bridge";
 import { appendCtoxBugReport, businessOsBugReportTag, getCtoxResource, type CtoxBugRecord } from "@/lib/ctox-seed";
 import { NextResponse } from "next/server";
 
@@ -47,27 +47,29 @@ export async function POST(request: Request) {
     createdAt: new Date().toISOString()
   };
 
-  const core = await createCtoxCoreTask({
-    title: `Bug: ${summary.slice(0, 80)}`,
-    prompt: [
-      "A user reported a bug from the CTOX Business OS UI.",
-      "",
-      `Summary: ${summary}`,
-      `Expected: ${report.expected || "Not specified"}`,
-      `Page: ${report.pageUrl}`,
-      `Context: ${[report.moduleId, report.submoduleId].filter(Boolean).join(" / ") || "workspace"}`,
-      "",
-      "Use the attached structured payload to reproduce, triage, and create the necessary implementation task."
-    ].join("\n"),
+  const queuedReport = await appendCtoxBugReport(report);
+  const threadKey = ["business", queuedReport.moduleId, queuedReport.submoduleId, "bugs"].filter(Boolean).join("/");
+  const prompt = buildBugQueuePrompt(queuedReport);
+  const core = await upsertCtoxCoreTask({
+    title: `Bug inbox: ${[queuedReport.moduleId, queuedReport.submoduleId].filter(Boolean).join(" / ")}`,
+    prompt,
     source: "business-bug-report",
-    context: { report },
+    context: {
+      latestReport: summarizeBugReportForQueue(queuedReport),
+      bugReportsEndpoint: "/api/ctox/bug-reports",
+      bugReportsStore: ".ctox-business/bug-reports.json"
+    },
     priority: "high",
     skill: "product_engineering/business-stack",
-    threadKey: ["business", report.moduleId, report.submoduleId, "bugs"].filter(Boolean).join("/")
+    threadKey
+  }, {
+    threadKey,
+    updateTitle: `Bug inbox: ${[queuedReport.moduleId, queuedReport.submoduleId].filter(Boolean).join(" / ")}`,
+    updatePrompt: prompt
   });
 
   const persistedReport = await appendCtoxBugReport({
-    ...report,
+    ...queuedReport,
     coreTaskId: core.taskId
   });
 
@@ -80,4 +82,47 @@ export async function POST(request: Request) {
   });
 
   return NextResponse.json({ ok: true, accepted: true, report: persistedReport, core });
+}
+
+function buildBugQueuePrompt(report: CtoxBugRecord) {
+  return [
+    "A user reported one or more bugs from the CTOX Business OS UI.",
+    "",
+    "Do not spawn one CTOX queue task per bug report. This task is the shared inbox for the current module/submodule; read the bug report store/API and process all open reports in this scope.",
+    "",
+    `Latest report: ${report.id}`,
+    `Summary: ${report.summary}`,
+    `Expected: ${report.expected || "Not specified"}`,
+    `Page: ${report.pageUrl || "Not specified"}`,
+    `Context: ${[report.moduleId, report.submoduleId].filter(Boolean).join(" / ") || "workspace"}`,
+    "",
+    "Use the structured bug report payload, including annotation metadata and screenshot/markup data when present, to reproduce, triage, and create the necessary implementation task."
+  ].join("\n");
+}
+
+function summarizeBugReportForQueue(report: CtoxBugRecord) {
+  const annotation = isRecord(report.annotation) ? report.annotation : {};
+  const strokes = Array.isArray(annotation.strokes) ? annotation.strokes : [];
+  return {
+    id: report.id,
+    title: report.title,
+    moduleId: report.moduleId,
+    submoduleId: report.submoduleId,
+    summary: report.summary,
+    expected: report.expected,
+    pageUrl: report.pageUrl,
+    createdAt: report.createdAt,
+    annotation: {
+      captureMode: annotation.captureMode,
+      capturedAt: annotation.capturedAt,
+      rect: annotation.rect,
+      strokeCount: strokes.length,
+      hasScreenshotDataUrl: typeof annotation.screenshotDataUrl === "string",
+      hasCompositeDataUrl: typeof annotation.compositeDataUrl === "string"
+    }
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }

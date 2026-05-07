@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { SalesQueueButton } from "./actions";
 
 type QueryState = {
@@ -27,6 +27,56 @@ type SalesBundle = {
   campaigns: SalesCampaign[];
 };
 
+type SalesAutomationCampaign = {
+  id: string;
+  name: string;
+  sourceType: "Excel" | "URL" | "PDF" | "Text";
+  sourceName: string;
+  rowCount: number;
+  completedRows: number;
+  status: string;
+};
+
+type SalesAutomationRow = {
+  id: string;
+  campaignId: string;
+  rowIndex: number;
+  companyName: string;
+  imported: Record<string, string>;
+  researchStatus: "pending" | "running" | "complete" | "failed";
+  webEvidence?: {
+    ok: boolean;
+    provider?: string;
+    toolCalls?: Array<{ tool?: string; query?: string; url?: string; ok?: boolean; note?: string }>;
+    results?: Array<{ title?: string; url?: string; snippet?: string }>;
+  };
+  research?: {
+    likelyWebsite?: string;
+    phone?: string;
+    email?: string;
+    address?: string;
+    contactCandidates?: Array<{ name?: string; role?: string; email?: string; phone?: string; confidence?: string; evidence?: string }>;
+    qualification?: { fit?: "low" | "medium" | "high"; reason?: string; consultingAngle?: string };
+    missingFields?: string[];
+    recommendedNextAction?: string;
+    sourceNote?: string;
+  };
+  pipeline?: {
+    status: "active" | "lead-ready" | "transferred-to-leads";
+    stageId: "company" | "contact" | "decision" | "conversation" | "lead-ready";
+    transferredAt: string;
+    transferredBy: "campaign-gate" | "manual" | "ctox";
+    gateReasons: string[];
+    score: number;
+  };
+  error?: string;
+};
+
+type SalesAutomationStore = {
+  campaigns: SalesAutomationCampaign[];
+  rows: SalesAutomationRow[];
+};
+
 type CampaignDialog = "create" | "import" | "details" | null;
 type CampaignColumnConfig = "" | "company" | "contact" | "touchpoint" | "outreach" | "send";
 
@@ -36,6 +86,15 @@ type CampaignCreateDraft = {
   assignmentPrompt: string;
   status: SalesCampaign["status"];
 };
+
+const campaignPipelineGateCriteria = [
+  "Research status is complete.",
+  "CTOX webstack evidence exists; legacy rows with 0 tool steps are not eligible.",
+  "Company is identified through a usable website or official/source evidence.",
+  "Company fits the campaign idea as a staffing, recruiting, personnel-service, talent, or adjacent consulting prospect.",
+  "Qualification fit is medium or high and the row is not marked REJECT.",
+  "Missing contact person, phone, or email is carried into the pipeline as the next action, not used as a handoff blocker."
+];
 
 type LocalizedText = {
   en: string;
@@ -291,6 +350,8 @@ export function SalesCampaignsView({
   const [importNewCampaignName, setImportNewCampaignName] = useState("");
   const [importNewCampaignPrompt, setImportNewCampaignPrompt] = useState(assignmentRules.join("\n"));
   const [columnConfig, setColumnConfig] = useState<CampaignColumnConfig>("");
+  const [automationStore, setAutomationStore] = useState<SalesAutomationStore>({ campaigns: [], rows: [] });
+  const [researchStatus, setResearchStatus] = useState("");
   const [showCreateRow, setShowCreateRow] = useState(false);
   const [createDraft, setCreateDraft] = useState<CampaignCreateDraft>({
     campaignType: "Outbound",
@@ -303,22 +364,116 @@ export function SalesCampaignsView({
   const selectedCampaign = selectedOutboundCampaign ?? campaigns[0];
   const selectedCampaignLabel = selectedOutboundCampaign?.name ?? selectedInboundCampaign?.name ?? selectedCampaign?.name ?? (locale === "de" ? "Laufende Kampagne" : "Running campaign");
   const selectedOutreachRows = selectedOutboundCampaign ? outreachRows.filter((row) => row.campaignId === selectedOutboundCampaign.id) : [];
+  const selectedAutomationCampaign = automationStore.campaigns.find((campaign) => campaign.id === selectedCampaignId);
+  const selectedAutomationRowsRaw = selectedOutboundCampaign
+    ? automationStore.rows.filter((row) => row.campaignId === selectedOutboundCampaign.id)
+    : [];
+  const selectedAutomationRows = [...selectedAutomationRowsRaw].sort((a, b) => {
+    const aTools = automationToolStepCount(a);
+    const bTools = automationToolStepCount(b);
+    if (aTools > 0 && bTools === 0) return -1;
+    if (aTools === 0 && bTools > 0) return 1;
+    if (aTools > 0 && bTools > 0) return b.rowIndex - a.rowIndex;
+    return a.rowIndex - b.rowIndex;
+  });
+  const selectedAutomationStats = {
+    imported: selectedAutomationRowsRaw.length,
+    complete: selectedAutomationRowsRaw.filter((row) => row.researchStatus === "complete").length,
+    validResearch: selectedAutomationRowsRaw.filter((row) => row.researchStatus === "complete" && automationToolStepCount(row) > 0).length,
+    legacyComplete: selectedAutomationRowsRaw.filter((row) => row.researchStatus === "complete" && automationToolStepCount(row) === 0).length,
+    pending: selectedAutomationRowsRaw.filter((row) => row.researchStatus === "pending").length,
+    running: selectedAutomationRowsRaw.filter((row) => row.researchStatus === "running").length,
+    failed: selectedAutomationRowsRaw.filter((row) => row.researchStatus === "failed").length,
+    verifiedWebsites: selectedAutomationRowsRaw.filter((row) => row.research?.likelyWebsite && automationToolStepCount(row) > 0).length,
+    contacts: selectedAutomationRowsRaw.reduce((sum, row) => sum + (automationToolStepCount(row) > 0 ? row.research?.contactCandidates?.length ?? 0 : 0), 0),
+    pipelineReady: selectedAutomationRowsRaw.filter((row) => campaignPipelineGate(row).status === "ready").length
+  };
+  const selectedPipelineReadyRows = selectedAutomationRowsRaw.filter((row) => campaignPipelineGate(row).status === "ready" && !row.pipeline);
+  const selectedPipelineTransferredRows = selectedAutomationRowsRaw.filter((row) => row.pipeline?.status === "active" || row.pipeline?.status === "lead-ready");
+  const selectedCampaignPrepRows = selectedAutomationRows.length ? selectedAutomationRows : selectedOutreachRows;
   const selectedSourceImports = selectedOutboundCampaign?.id === "campaign-energy-market-import"
     ? sourceImports.filter((source) => source.id !== "src-partner-xlsx")
     : selectedOutboundCampaign?.id === "campaign-account-expansion"
       ? sourceImports.filter((source) => source.id === "src-partner-xlsx")
       : [];
+  const importedOutreachCount = automationStore.rows.length || outreachRows.length;
   const assigned = campaigns.reduce((sum, campaign) => sum + campaign.assignedRecords, 0);
   const outboundCampaignRows = campaigns.map((campaign) => {
-    const rows = outreachRows.filter((row) => row.campaignId === campaign.id);
-    const replies = rows.filter((row) => row.status === "Antwort").length;
-    const ready = rows.filter((row) => row.status === "Bereit" || row.status === "Entwurf").length;
+    const automationRows = automationStore.rows.filter((row) => row.campaignId === campaign.id);
+    const rows = automationRows.length ? automationRows : outreachRows.filter((row) => row.campaignId === campaign.id);
+    const replies = rows.filter((row) => "status" in row && row.status === "Antwort").length;
+    const ready = automationRows.length
+      ? automationRows.filter((row) => row.researchStatus === "complete").length
+      : rows.filter((row) => "status" in row && (row.status === "Bereit" || row.status === "Entwurf")).length;
     return { campaign, rows, replies, ready };
   });
   const campaignOptions = useMemo(
     () => campaigns.map((campaign) => ({ id: campaign.id, name: campaign.name })),
     [campaigns]
   );
+  const refreshAutomationStore = async () => {
+    const response = await fetch("/api/sales/campaign-imports", { cache: "no-store" });
+    const store = await response.json().catch(() => ({ campaigns: [], rows: [] })) as SalesAutomationStore;
+    setAutomationStore({
+      campaigns: Array.isArray(store.campaigns) ? store.campaigns : [],
+      rows: Array.isArray(store.rows) ? store.rows : []
+    });
+    if (Array.isArray(store.campaigns) && store.campaigns.length) {
+      setCampaigns((current) => current.map((campaign) => {
+        const automationCampaign = store.campaigns.find((item) => item.id === campaign.id);
+        if (!automationCampaign) return campaign;
+        return {
+          ...campaign,
+          importedRecords: automationCampaign.rowCount,
+          enrichedRecords: automationCampaign.completedRows,
+          assignedRecords: automationCampaign.completedRows,
+          status: automationCampaign.status === "ready" ? "Ready" : "Research",
+          nextStep: {
+            en: `${automationCampaign.completedRows}/${automationCampaign.rowCount} independent MiniMax research jobs complete.`,
+            de: `${automationCampaign.completedRows}/${automationCampaign.rowCount} unabhaengige MiniMax-Research-Jobs abgeschlossen.`
+          }
+        };
+      }));
+    }
+  };
+  const transferReadyRowsToPipeline = async () => {
+    if (!selectedOutboundCampaign) return;
+    setResearchStatus(locale === "de" ? "Pipeline-Uebergabe laeuft ..." : "Pipeline handoff running ...");
+    const response = await fetch("/api/sales/campaign-imports/pipeline", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ campaignId: selectedOutboundCampaign.id })
+    });
+    const result = await response.json().catch(() => ({ ok: false, transferred: 0 })) as { ok?: boolean; transferred?: number; error?: string };
+    await refreshAutomationStore();
+    setResearchStatus(result.ok
+      ? (locale === "de" ? `${result.transferred ?? 0} Kandidaten in die Pipeline uebergeben.` : `${result.transferred ?? 0} candidates moved to pipeline.`)
+      : (result.error ?? (locale === "de" ? "Pipeline-Uebergabe fehlgeschlagen." : "Pipeline handoff failed.")));
+  };
+  useEffect(() => {
+    void refreshAutomationStore();
+  }, []);
+  const runCampaignResearch = async (limit = 2, retryFailed = false, rowId?: string, rerunComplete = false) => {
+    if (!selectedOutboundCampaign) return;
+    setResearchStatus(locale === "de" ? `Research-Batch mit ${limit} Datensaetzen laeuft.` : `Research batch with ${limit} records is running.`);
+    const response = await fetch("/api/sales/campaign-imports/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        campaignId: selectedOutboundCampaign.id,
+        limit,
+        rowId,
+        retryFailed,
+        rerunComplete,
+        useWebSearch: true
+      })
+    });
+    const result = await response.json().catch(() => ({ ok: false, error: "Invalid response" })) as { ok?: boolean; processed?: number; error?: string };
+    await refreshAutomationStore();
+    setResearchStatus(result.ok
+      ? (locale === "de" ? `${result.processed ?? 0} Datensaetze recherchiert.` : `${result.processed ?? 0} records researched.`)
+      : (result.error ?? (locale === "de" ? "Research fehlgeschlagen." : "Research failed.")));
+  };
   const toggleCampaignDetails = (campaignId: string) => {
     if (activeDialog === "details" && selectedCampaignId === campaignId) {
       setActiveDialog(null);
@@ -456,7 +611,7 @@ export function SalesCampaignsView({
           </div>
           <div className="campaign-kpis" aria-label="Campaign summary">
             <span><strong>{campaigns.length + inboundCampaignState.length}</strong>{locale === "de" ? "laufend" : "running"}</span>
-            <span><strong>{outreachRows.length}</strong>{locale === "de" ? "Ansprachen" : "outreach"}</span>
+            <span><strong>{importedOutreachCount}</strong>{locale === "de" ? "Datensaetze" : "records"}</span>
             <span><strong>{inboundCampaignState.reduce((sum, campaign) => sum + campaign.leads, 0)}</strong>{locale === "de" ? "Inbound-Leads" : "inbound leads"}</span>
             <span><strong>{assigned}</strong>{locale === "de" ? "zugeordnet" : "assigned"}</span>
           </div>
@@ -470,7 +625,6 @@ export function SalesCampaignsView({
             <span>Outbound</span>
             <span>Inbound</span>
             <span>{locale === "de" ? "Naechster Schritt" : "Next step"}</span>
-            <span>{locale === "de" ? "Verwalten" : "Manage"}</span>
           </div>
           {showCreateRow ? (
             <form
@@ -538,18 +692,6 @@ export function SalesCampaignsView({
               <span><strong>{rows.length}</strong><small>{ready} bereit · {replies} Antworten</small></span>
               <span><strong>-</strong><small>{locale === "de" ? "keine Landingpage" : "no landing page"}</small></span>
               <span>{text(campaign.nextStep, locale)}</span>
-              <span className="campaign-row-actions compact-actions">
-                <button onClick={(event) => {
-                  event.stopPropagation();
-                  setSelectedCampaignId(campaign.id);
-                  toggleCampaignDetails(campaign.id);
-                }} type="button">{locale === "de" ? "Details" : "Details"}</button>
-                <button onClick={(event) => {
-                  event.stopPropagation();
-                  setSelectedCampaignId(campaign.id);
-                  setActiveDialog("details");
-                }} type="button">{locale === "de" ? "Settings" : "Settings"}</button>
-              </span>
             </article>
           ))}
           {inboundCampaignState.map((campaign) => (
@@ -582,17 +724,6 @@ export function SalesCampaignsView({
               <span><strong>-</strong><small>{locale === "de" ? "kein Versandlauf" : "no send run"}</small></span>
               <span><strong>{campaign.leads}</strong><small>{campaign.budget.toLocaleString("de-DE")} € Budget · {campaign.cpl} € CPL</small></span>
               <span>{campaign.target}</span>
-              <span className="campaign-row-actions compact-actions">
-                <button onClick={(event) => {
-                  event.stopPropagation();
-                  toggleCampaignDetails(campaign.id);
-                }} type="button">{locale === "de" ? "Details" : "Details"}</button>
-                <button onClick={(event) => {
-                  event.stopPropagation();
-                  setSelectedCampaignId(campaign.id);
-                  setActiveDialog("details");
-                }} type="button">{locale === "de" ? "Settings" : "Settings"}</button>
-              </span>
             </article>
           ))}
         </div>
@@ -692,36 +823,23 @@ export function SalesCampaignsView({
             setImportStatus(locale === "de" ? "Import wird gestartet." : "Import is starting.");
             const canUseFile = sourceType === "Excel" || sourceType === "PDF";
             const importedRecords = canUseFile && file instanceof File && file.name ? estimateImportedRecords(file, sourceType) : sourceUrl ? 25 : sourceText ? estimateTextRecords(sourceText) : 0;
-            const result = await postCampaignMutation(query, {
-              action: "create",
-              recordId: `source-import-${crypto.randomUUID()}`,
-              title: createsCampaign ? `Create campaign and import contact list: ${targetCampaign?.name ?? targetCampaignId}` : `Import contact list into campaign: ${targetCampaign?.name ?? targetCampaignId}`,
-              instruction: createsCampaign
-                ? "Create a new outbound Sales campaign from this import, then import the contact/source list into it. Parse contacts from Excel, CSV, PDF, URL, or text; normalize company, person, role, email, URL, postal code, source evidence, and consent/status fields; then start the campaign preparation stages."
-                : "Import this contact/source list into the selected Sales campaign. Parse contacts from Excel, CSV, PDF, URL, or text; normalize company, person, role, email, URL, postal code, source evidence, and consent/status fields; then start LLM research enrichment and assign every usable contact to this campaign by the campaign prompt.",
-              payload: {
-                campaignId: targetCampaignId,
-                campaignName: targetCampaign?.name,
-                createCampaign: createsCampaign,
-                newCampaign,
-                assignmentPrompt: targetCampaign ? text(targetCampaign.assignmentPrompt, locale) : "",
-                sourceType,
-                sourceUrl,
-                sourceText,
-                sourceHint,
-                fileName: canUseFile && file instanceof File && file.name ? file.name : "",
-                fileType: canUseFile && file instanceof File && file.type ? file.type : "",
-                fileSize: canUseFile && file instanceof File && file.size ? file.size : 0,
-                importedRecordsEstimate: importedRecords,
-                importMode: "campaign_contact_list"
-              }
+            const result = await postCampaignImport(query, {
+              campaignId: targetCampaignId,
+              campaignName: targetCampaign?.name ?? campaignName,
+              description: targetCampaign ? text(targetCampaign.assignmentPrompt, locale) : importNewCampaignPrompt,
+              sourceType,
+              sourceUrl,
+              sourceText,
+              sourceHint,
+              sourceFile: canUseFile && file instanceof File ? file : undefined
             });
             if (result.ok) {
+              await refreshAutomationStore();
               setCampaigns((current) => {
                 const next = current.map((campaign) => campaign.id === targetCampaignId
                   ? {
                       ...campaign,
-                      importedRecords: campaign.importedRecords + importedRecords,
+                    importedRecords: campaign.importedRecords + (result.importedRows ?? importedRecords),
                       sourceTypes: campaign.sourceTypes.includes(sourceType) ? campaign.sourceTypes : [...campaign.sourceTypes, sourceType],
                       status: campaign.status === "Draft" ? "Research" : campaign.status
                     }
@@ -730,7 +848,7 @@ export function SalesCampaignsView({
                 return [
                   {
                     ...newCampaign,
-                    importedRecords,
+                    importedRecords: result.importedRows ?? importedRecords,
                     sourceTypes: [sourceType]
                   },
                   ...next.filter((campaign) => campaign.id !== newCampaign.id)
@@ -828,72 +946,48 @@ export function SalesCampaignsView({
                   </SalesQueueButton>
                 </form>
                 <div className="campaign-source-strip">
-                  <strong>{selectedOutboundCampaign.importedRecords} importiert · {selectedOutboundCampaign.enrichedRecords} recherchiert · {selectedOutboundCampaign.assignedRecords} zugeordnet</strong>
-                  {selectedSourceImports.map((source) => (
-                    <span key={source.id}>{source.type}: {source.name} · {source.records}</span>
-                  ))}
-                  {selectedSourceImports.length ? null : <span>{locale === "de" ? "Noch keine Quelle importiert." : "No source imported yet."}</span>}
-                  <SalesQueueButton
-                    action="sync"
-                    className="campaign-secondary"
-                    instruction="Run research enrichment for imported Sales campaign sources. Complete missing website, address, contact role, ICP segment, buying trigger, source confidence, and evidence links."
-                    payload={{ campaign: selectedOutboundCampaign, sources: selectedSourceImports, rules: selectedOutboundCampaign.assignmentPrompt }}
-                    recordId={`campaign-research-pipeline-${selectedOutboundCampaign.id}`}
-                    resource="campaigns"
-                    title={`Run campaign source research: ${selectedOutboundCampaign.name}`}
-                  >
-                    {locale === "de" ? "Research starten" : "Start research"}
-                  </SalesQueueButton>
+                  <div className="campaign-source-summary">
+                    <strong>{selectedAutomationStats.imported || selectedOutboundCampaign.importedRecords} importiert · {selectedAutomationStats.complete || selectedOutboundCampaign.enrichedRecords} recherchiert · {selectedAutomationStats.validResearch} valide mit Webstack</strong>
+                    {selectedAutomationRowsRaw.length ? (
+                      <span>{selectedAutomationStats.pipelineReady} pipeline-ready · {selectedPipelineTransferredRows.length} uebergeben · {selectedAutomationStats.verifiedWebsites} Websites · {selectedAutomationStats.contacts} Ansprechpartner · {selectedAutomationStats.failed} Fehler · {selectedAutomationStats.pending + selectedAutomationStats.running} offen</span>
+                    ) : null}
+                    {selectedSourceImports.map((source) => (
+                      <span key={source.id}>{source.type}: {source.name} · {source.records}</span>
+                    ))}
+                    {selectedAutomationCampaign ? <span>{selectedAutomationCampaign.sourceType}: {selectedAutomationCampaign.sourceName} · {selectedAutomationCampaign.rowCount}</span> : null}
+                    {selectedSourceImports.length || selectedAutomationCampaign ? null : <span>{locale === "de" ? "Noch keine Quelle importiert." : "No source imported yet."}</span>}
+                    {researchStatus ? <small>{researchStatus}</small> : null}
+                  </div>
+                  <div className="campaign-source-actions">
+                    {selectedAutomationStats.pending || selectedAutomationStats.running ? (
+                      <button className="campaign-primary" disabled={selectedAutomationStats.running > 0} onClick={() => void runCampaignResearch(25, false)} type="button">
+                        {selectedAutomationStats.running > 0
+                          ? (locale === "de" ? "Research laeuft" : "Research running")
+                          : (locale === "de" ? "Offene recherchieren" : "Research open")}
+                      </button>
+                    ) : null}
+                    {selectedAutomationStats.failed ? (
+                      <button className="campaign-secondary" onClick={() => void runCampaignResearch(25, true)} type="button">{locale === "de" ? "Fehler erneut pruefen" : "Retry failed"}</button>
+                    ) : null}
+                    {selectedPipelineReadyRows.length ? (
+                      <button className="campaign-primary" onClick={() => void transferReadyRowsToPipeline()} type="button">
+                        {locale === "de" ? `${selectedPipelineReadyRows.length} in Pipeline uebergeben` : `Move ${selectedPipelineReadyRows.length} to pipeline`}
+                      </button>
+                    ) : selectedPipelineTransferredRows.length ? (
+                      <a className="campaign-secondary" href={`/app/sales/pipeline?locale=${locale}&theme=${query.theme ?? "light"}`}>
+                        {locale === "de" ? `${selectedPipelineTransferredRows.length} in Pipeline ansehen` : `View ${selectedPipelineTransferredRows.length} in pipeline`}
+                      </a>
+                    ) : null}
+                  </div>
                 </div>
               </section>
               <section className="campaign-prep-table" aria-label={locale === "de" ? "Kampagnenvorbereitung" : "Campaign preparation"}>
                 <div className="campaign-prep-row campaign-prep-head">
                   <span>{locale === "de" ? "Datensatz" : "Record"}</span>
-                  <span>
-                    <b>{locale === "de" ? "Firmenstammdaten" : "Company data"}</b>
-                    <span className="campaign-column-header-actions">
-                      <button aria-label={locale === "de" ? "Firmenstammdaten konfigurieren" : "Configure company data"} onClick={() => setColumnConfig((current) => current === "company" ? "" : "company")} type="button">⚙</button>
-                      <SalesQueueButton action="sync" className="campaign-header-play" instruction={`Create company master-data content for all rows in campaign ${selectedOutboundCampaign.name}. Use the configured company data settings, source imports, assignment prompt, and evidence requirements.`} payload={{ campaign: selectedOutboundCampaign, column: "company", prompt: campaignColumnDefaultPrompt("company", locale), rows: selectedOutreachRows }} recordId={`run-company-column-${selectedOutboundCampaign.id}`} resource="campaigns" title={`Run company data column: ${selectedOutboundCampaign.name}`}>▶</SalesQueueButton>
-                    </span>
-                  </span>
-                  <span>
-                    <b>{locale === "de" ? "Ansprechpartner" : "Contact"}</b>
-                    <span className="campaign-column-header-actions">
-                      <button aria-label={locale === "de" ? "Ansprechpartner konfigurieren" : "Configure contact research"} onClick={() => setColumnConfig((current) => current === "contact" ? "" : "contact")} type="button">⚙</button>
-                      <SalesQueueButton action="sync" className="campaign-header-play" instruction={`Create contact research content for all rows in campaign ${selectedOutboundCampaign.name}. Use configured contact criteria, verify decision relevance, email, role, source evidence, and alternatives.`} payload={{ campaign: selectedOutboundCampaign, column: "contact", prompt: campaignColumnDefaultPrompt("contact", locale), rows: selectedOutreachRows }} recordId={`run-contact-column-${selectedOutboundCampaign.id}`} resource="campaigns" title={`Run contact research column: ${selectedOutboundCampaign.name}`}>▶</SalesQueueButton>
-                    </span>
-                  </span>
-                  <span>
-                    <b>Touchpoint</b>
-                    <span className="campaign-column-header-actions">
-                      <button aria-label={locale === "de" ? "Touchpoint Research konfigurieren" : "Configure touchpoint research"} onClick={() => setColumnConfig((current) => current === "touchpoint" ? "" : "touchpoint")} type="button">⚙</button>
-                      <SalesQueueButton action="sync" className="campaign-header-play" instruction={`Create touchpoint research content for all rows in campaign ${selectedOutboundCampaign.name}. Use configured touchpoint criteria, find triggers, evidence, hypotheses, objections, and source links.`} payload={{ campaign: selectedOutboundCampaign, column: "touchpoint", prompt: campaignColumnDefaultPrompt("touchpoint", locale), rows: selectedOutreachRows }} recordId={`run-touchpoint-column-${selectedOutboundCampaign.id}`} resource="campaigns" title={`Run touchpoint column: ${selectedOutboundCampaign.name}`}>▶</SalesQueueButton>
-                    </span>
-                  </span>
-                  <span>
-                    <b>{locale === "de" ? "Ansprache" : "Outreach"}</b>
-                    <span className="campaign-column-header-actions">
-                      <button aria-label={locale === "de" ? "Ansprache konfigurieren" : "Configure outreach writing"} onClick={() => setColumnConfig((current) => current === "outreach" ? "" : "outreach")} type="button">⚙</button>
-                      <SalesQueueButton action="sync" className="campaign-header-play" instruction={`Create outreach drafts for all prepared rows in campaign ${selectedOutboundCampaign.name}. Use company data, contact research, touchpoints, campaign prompt, and configured outreach writing rules.`} payload={{ campaign: selectedOutboundCampaign, column: "outreach", prompt: campaignColumnDefaultPrompt("outreach", locale), rows: selectedOutreachRows }} recordId={`run-outreach-column-${selectedOutboundCampaign.id}`} resource="campaigns" title={`Run outreach column: ${selectedOutboundCampaign.name}`}>▶</SalesQueueButton>
-                    </span>
-                  </span>
-                  <span>
-                    <b>{locale === "de" ? "Start / Send" : "Start / send"}</b>
-                    <span className="campaign-column-header-actions">
-                      <button aria-label={locale === "de" ? "Versand konfigurieren" : "Configure sending"} onClick={() => setColumnConfig((current) => current === "send" ? "" : "send")} type="button">⚙</button>
-                      <SalesQueueButton
-                        action="sync"
-                        className="campaign-header-play"
-                        instruction={`Start the approved outbound send run for campaign ${selectedOutboundCampaign.name}. Use configured sender account, provider-compliant rate limits, quiet hours, unsubscribe handling, bounce stopping, and approval requirements. Do not bypass provider or recipient protections.`}
-                        payload={{ campaign: selectedOutboundCampaign, column: "send", mailAccounts: campaignMailAccounts, sendPolicy: campaignSendPolicy, rows: selectedOutreachRows }}
-                        recordId={`run-send-column-${selectedOutboundCampaign.id}`}
-                        resource="campaigns"
-                        title={`Run campaign send: ${selectedOutboundCampaign.name}`}
-                      >
-                        ▶
-                      </SalesQueueButton>
-                    </span>
-                  </span>
+                  <span>{locale === "de" ? "Firmenstammdaten" : "Company data"}</span>
+                  <span>{locale === "de" ? "Ansprechpartner" : "Contact"}</span>
+                  <span>{locale === "de" ? "Qualifizierung" : "Qualification"}</span>
+                  <span>{locale === "de" ? "Ansprache" : "Outreach"}</span>
                   <span>{locale === "de" ? "Ergebnis" : "Result"}</span>
                 </div>
                 {columnConfig ? (
@@ -968,7 +1062,76 @@ export function SalesCampaignsView({
                     </SalesQueueButton>
                   </div>
                 ) : null}
-                {selectedOutreachRows.length ? selectedOutreachRows.map((row) => (
+                {selectedAutomationRows.length ? selectedAutomationRows.map((row) => {
+                  const firstContact = row.research?.contactCandidates?.find((candidate) => candidate.name || candidate.email || candidate.role);
+                  const fit = row.research?.qualification?.fit ?? "medium";
+                  const evidenceCount = row.webEvidence?.results?.length ?? 0;
+                  const toolStepCount = automationToolStepCount(row);
+                  const isLegacyComplete = row.researchStatus === "complete" && toolStepCount === 0;
+                  const pipelineGate = campaignPipelineGate(row);
+                  return (
+                  <article
+                    className={`campaign-prep-row status-${row.researchStatus}${isLegacyComplete ? " stale-research" : ""}`}
+                    data-campaign-id={row.campaignId}
+                    data-company={row.companyName}
+                    data-context-item
+                    data-context-label={row.companyName}
+                    data-context-module="sales"
+                    data-context-record-id={row.id}
+                    data-context-record-type="campaign_import_row"
+                    data-context-submodule="campaigns"
+                    key={row.id}
+                  >
+                    <span>
+                      <strong>#{row.rowIndex} {row.companyName}</strong>
+                      <small>{isLegacyComplete ? "Altbestand · neu recherchieren" : `${row.researchStatus} · ${toolStepCount} Tool-Schritte · ${evidenceCount} Quellen`}</small>
+                      {row.error ? <em>{row.error}</em> : <em>{Object.values(row.imported).filter(Boolean).join(" · ")}</em>}
+                    </span>
+                    <span>
+                      <strong>{row.research?.likelyWebsite || (locale === "de" ? "Website offen" : "Website missing")}</strong>
+                      <small>{[row.research?.email, row.research?.phone, row.research?.address].filter(Boolean).join(" · ") || (locale === "de" ? "Kontaktfelder fehlen" : "Contact fields missing")}</small>
+                      {row.research?.likelyWebsite ? <a href={row.research.likelyWebsite.startsWith("http") ? row.research.likelyWebsite : `https://${row.research.likelyWebsite}`} rel="noreferrer" target="_blank">{locale === "de" ? "Website oeffnen" : "Open website"}</a> : null}
+                    </span>
+                    <span>
+                      <strong>{firstContact?.name || (locale === "de" ? "Noch kein Ansprechpartner" : "No contact yet")}</strong>
+                      <small>{[firstContact?.role, firstContact?.email, firstContact?.phone].filter(Boolean).join(" · ") || (locale === "de" ? "Entscheider muss noch verifiziert werden" : "Decision maker still needs verification")}</small>
+                      {firstContact?.evidence ? <em>{firstContact.evidence}</em> : null}
+                    </span>
+                    <span>
+                      <strong>{fit.toUpperCase()}</strong>
+                      <textarea readOnly value={row.research?.qualification?.reason || (locale === "de" ? "Noch nicht recherchiert." : "Not researched yet.")} />
+                    </span>
+                    <span className="campaign-message-cell">
+                      <small><strong>{locale === "de" ? "Consulting Angle" : "Consulting angle"}</strong></small>
+                      <textarea readOnly value={row.research?.qualification?.consultingAngle || ""} />
+                    </span>
+                    <span className="campaign-result-cell">
+                      <strong>{pipelineGate.label}</strong>
+                      <small>{pipelineGate.reasons.slice(0, 2).join(" · ")}</small>
+                      <em>{row.research?.recommendedNextAction || row.research?.sourceNote || (locale === "de" ? "Wartet auf Research." : "Waiting for research.")}</em>
+                      {row.research?.missingFields?.length ? <small>{row.research.missingFields.slice(0, 3).join(", ")}</small> : null}
+                      {row.pipeline ? (
+                        <a className="campaign-secondary" href={`/app/sales/pipeline?locale=${locale}&theme=${query.theme ?? "light"}&selectedId=${row.id}`}>
+                          {locale === "de" ? "In Pipeline" : "In pipeline"}
+                        </a>
+                      ) : pipelineGate.status === "ready" ? (
+                        <SalesQueueButton
+                          action="create"
+                          className="campaign-primary"
+                          instruction="Create a Sales pipeline opportunity from this campaign pre-research row. Preserve campaign source, evidence URLs, selected contact candidate, qualification fit, consulting angle, missing fields, and recommended next action. Open it in the first pipeline stage for controlled follow-up."
+                          payload={{ campaign: selectedOutboundCampaign, gate: pipelineGate, gateCriteria: campaignPipelineGateCriteria, row }}
+                          recordId={`campaign-row-pipeline-handoff-${row.id}`}
+                          resource="opportunities"
+                          successLabel={locale === "de" ? "Queue" : "Queued"}
+                          title={`Pipeline handoff: ${row.companyName}`}
+                        >
+                          {locale === "de" ? "In Pipeline" : "To pipeline"}
+                        </SalesQueueButton>
+                      ) : null}
+                      {row.researchStatus === "failed" ? <button onClick={() => void runCampaignResearch(1, true, row.id)} type="button">{locale === "de" ? "Retry" : "Retry"}</button> : null}
+                    </span>
+                  </article>
+                );}) : selectedOutreachRows.length ? selectedOutreachRows.map((row) => (
                   <article
                     className={`campaign-prep-row status-${row.status.toLowerCase()}`}
                     data-campaign-id={row.campaignId}
@@ -1151,6 +1314,44 @@ async function postCampaignMutation(query: QueryState, body: Record<string, unkn
   }>;
 }
 
+async function postCampaignImport(query: QueryState, body: {
+  campaignId: string;
+  campaignName: string;
+  description: string;
+  sourceType: SalesCampaign["sourceTypes"][number];
+  sourceUrl: string;
+  sourceText: string;
+  sourceHint: string;
+  sourceFile?: File;
+}): Promise<{
+  ok?: boolean;
+  importedRows?: number;
+  error?: string;
+}> {
+  const form = new FormData();
+  form.set("campaignId", body.campaignId);
+  form.set("campaignName", body.campaignName);
+  form.set("description", body.description);
+  form.set("assignmentPrompt", body.description);
+  form.set("sourceType", body.sourceType);
+  form.set("sourceUrl", body.sourceUrl);
+  form.set("sourceText", body.sourceText);
+  form.set("sourceHint", body.sourceHint);
+  form.set("locale", query.locale ?? "");
+  form.set("theme", query.theme ?? "");
+  if (body.sourceFile) form.set("sourceFile", body.sourceFile);
+
+  const response = await fetch("/api/sales/campaign-imports", {
+    method: "POST",
+    body: form
+  });
+  return response.json().catch(() => ({ ok: false, error: "Invalid response" })) as Promise<{
+    ok?: boolean;
+    importedRows?: number;
+    error?: string;
+  }>;
+}
+
 function slugify(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
@@ -1165,6 +1366,37 @@ function estimateImportedRecords(file: File, sourceType: SalesCampaign["sourceTy
 function estimateTextRecords(value: string) {
   const rows = value.split(/\n+/).map((row) => row.trim()).filter(Boolean);
   return Math.max(1, Math.min(250, rows.length || Math.round(value.length / 120)));
+}
+
+function automationToolStepCount(row: SalesAutomationRow) {
+  return row.webEvidence?.toolCalls?.length ?? 0;
+}
+
+function campaignPipelineGate(row: SalesAutomationRow): {
+  status: "ready" | "pending" | "stale" | "needs_evidence" | "reject" | "failed";
+  label: string;
+  reasons: string[];
+} {
+  const toolSteps = automationToolStepCount(row);
+  const research = row.research;
+  const sourceNote = research?.sourceNote ?? "";
+  const nextAction = research?.recommendedNextAction ?? "";
+  const reason = research?.qualification?.reason ?? "";
+  const fit = research?.qualification?.fit ?? "medium";
+  const hasVerifiedEvidence = toolSteps > 0 && !/No verified CTOX web evidence/i.test(sourceNote);
+  const hasIdentity = Boolean(research?.likelyWebsite || hasVerifiedEvidence);
+  const rejected = /REJECT ROW|not a valid prospect|does not correspond|not correspond|not a staffing|not a personnel|not a personal|not relevant|kein.*personaldienst|gar nicht/i.test(`${nextAction} ${reason} ${research?.missingFields?.join(" ") ?? ""}`);
+
+  if (row.researchStatus === "failed") return { status: "failed", label: "Research failed", reasons: [row.error ?? "Research failed"] };
+  if (row.researchStatus !== "complete") return { status: "pending", label: "Research offen", reasons: ["Research ist noch nicht abgeschlossen"] };
+  if (toolSteps === 0) return { status: "stale", label: "Altbestand", reasons: ["Keine CTOX-Webstack-Toolschritte vorhanden"] };
+  if (rejected || fit === "low") return { status: "reject", label: "Nicht passend", reasons: ["Unternehmen passt nicht zur Kampagnenidee"] };
+  if (!hasIdentity) return { status: "needs_evidence", label: "Nicht identifiziert", reasons: ["Unternehmen konnte nicht belastbar identifiziert werden"] };
+
+  const reasons = ["Unternehmen identifiziert", `Fit: ${fit}`];
+  if (!research?.contactCandidates?.length) reasons.push("Ansprechpartner fehlt; als Pipeline-Aufgabe uebergeben");
+  if (!research?.phone && !research?.email) reasons.push("Kontaktkanal fehlt; als Pipeline-Aufgabe uebergeben");
+  return { status: "ready", label: "Pipeline-ready", reasons };
 }
 
 function campaignColumnConfigTitle(column: string, locale: SupportedLocale) {

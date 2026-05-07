@@ -1,4 +1,8 @@
+import { execFile } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 export type CtoxRun = {
   id: string;
@@ -230,9 +234,13 @@ export const ctoxSeed: CtoxBundle = {
 export const businessOsBugReportTag = "Business OS Bug Report";
 
 export async function getCtoxBundle() {
-  const persistedBugs = await readPersistedBugReports();
+  const [persistedBugs, coreQueue] = await Promise.all([
+    readPersistedBugReports(),
+    readCtoxCoreQueueItems()
+  ]);
   return {
     ...ctoxSeed,
+    queue: mergeQueueItems(coreQueue, ctoxSeed.queue),
     bugs: mergeBugReports(persistedBugs, ctoxSeed.bugs)
   };
 }
@@ -342,8 +350,81 @@ function mergeBugReports(primary: CtoxBugRecord[], secondary: CtoxBugRecord[]) {
   return Array.from(byId.values()).sort((left, right) => right.createdAt.localeCompare(left.createdAt));
 }
 
+function mergeQueueItems(primary: CtoxQueueItem[], secondary: CtoxQueueItem[]) {
+  const byId = new Map<string, CtoxQueueItem>();
+  [...secondary, ...primary].forEach((item) => byId.set(item.id, item));
+  return Array.from(byId.values()).sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+async function readCtoxCoreQueueItems(): Promise<CtoxQueueItem[]> {
+  if (process.env.CTOX_BUSINESS_QUEUE_MODE === "planned") return [];
+
+  const command = [
+    process.env.CTOX_BIN ?? process.env.CTOX_WEB_BIN ?? "ctox",
+    "queue",
+    "list",
+    "--status",
+    "pending",
+    "--status",
+    "leased",
+    "--status",
+    "blocked",
+    "--status",
+    "failed",
+    "--limit",
+    "2000",
+    "--json"
+  ];
+  const [binary, ...args] = command;
+  try {
+    const { stdout } = await execFileAsync(binary, args, {
+      cwd: process.env.CTOX_ROOT,
+      maxBuffer: 32 * 1024 * 1024
+    });
+    const payload = JSON.parse(stdout) as { tasks?: unknown[] };
+    if (!Array.isArray(payload.tasks)) return [];
+    return payload.tasks.map(normalizeCoreQueueItem).filter(Boolean) as CtoxQueueItem[];
+  } catch {
+    return [];
+  }
+}
+
+function normalizeCoreQueueItem(value: unknown): CtoxQueueItem | null {
+  if (!isRecord(value)) return null;
+  const messageKey = typeof value.message_key === "string" ? value.message_key : "";
+  if (!messageKey) return null;
+  const title = typeof value.title === "string" ? value.title : messageKey;
+  const threadKey = typeof value.thread_key === "string" ? value.thread_key : "";
+  const routeStatus = typeof value.route_status === "string" ? value.route_status : "";
+  const source = threadKey.endsWith("/bugs") || title.startsWith("Bug")
+    ? "business-bug-report"
+    : "ctox-core";
+
+  return {
+    id: messageKey,
+    title,
+    source,
+    priority: normalizePriority(value.priority),
+    status: normalizeQueueStatus(routeStatus),
+    target: threadKey || String(value.suggested_skill ?? "CTOX core"),
+    createdAt: typeof value.created_at === "string" ? value.created_at : new Date().toISOString()
+  };
+}
+
+function normalizePriority(value: unknown): CtoxQueueItem["priority"] {
+  if (value === "urgent" || value === "high" || value === "normal" || value === "low") return value;
+  return "normal";
+}
+
+function normalizeQueueStatus(value: string): CtoxQueueItem["status"] {
+  if (value === "leased") return "running";
+  if (value === "blocked" || value === "failed") return "blocked";
+  if (value === "handled") return "done";
+  return "queued";
 }
 
 async function readPostgresBugReports() {

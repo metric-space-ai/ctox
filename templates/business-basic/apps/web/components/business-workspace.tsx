@@ -1,13 +1,26 @@
 import { resolveLocale, type WorkSurfacePanelState } from "@ctox-business/ui";
 import {
+  buildAccountingSnapshot,
+  buildDatevLines,
+  buildLedgerRows,
+  buildReceiptQueue,
+  buildReconciliationRows,
+  buildTrialBalance,
+  isBalanced
+} from "../lib/accounting-runtime";
+import {
   businessCurrency,
   getBusinessBundle,
   text,
+  type BusinessAccount,
+  type BusinessBankTransaction,
   type BusinessBookkeepingExport,
   type BusinessBundle,
   type BusinessCustomer,
   type BusinessInvoice,
+  type BusinessJournalEntry,
   type BusinessProduct,
+  type BusinessReceipt,
   type BusinessReport,
   type SupportedLocale
 } from "../lib/business-seed";
@@ -43,6 +56,9 @@ export async function BusinessWorkspace({
 
   if (submoduleId === "products") return <ProductsView copy={copy} data={data} locale={locale} query={query} submoduleId={submoduleId} />;
   if (submoduleId === "invoices") return <InvoicesView copy={copy} data={data} locale={locale} query={query} submoduleId={submoduleId} />;
+  if (submoduleId === "ledger") return <LedgerView copy={copy} data={data} locale={locale} query={query} submoduleId={submoduleId} />;
+  if (submoduleId === "receipts") return <ReceiptsView copy={copy} data={data} locale={locale} query={query} submoduleId={submoduleId} />;
+  if (submoduleId === "payments") return <PaymentsView copy={copy} data={data} locale={locale} query={query} submoduleId={submoduleId} />;
   if (submoduleId === "bookkeeping") return <BookkeepingView copy={copy} data={data} locale={locale} query={query} submoduleId={submoduleId} />;
   if (submoduleId === "reports") return <ReportsView copy={copy} data={data} locale={locale} query={query} submoduleId={submoduleId} />;
   return <CustomersView copy={copy} data={data} locale={locale} query={query} submoduleId={submoduleId} />;
@@ -88,6 +104,10 @@ export async function BusinessPanel({
   const customer = data.customers.find((item) => item.id === recordId);
   const product = data.products.find((item) => item.id === recordId);
   const invoice = data.invoices.find((item) => item.id === recordId);
+  const account = data.accounts.find((item) => item.id === recordId);
+  const bankTransaction = data.bankTransactions.find((item) => item.id === recordId);
+  const journalEntry = data.journalEntries.find((item) => item.id === recordId);
+  const receipt = data.receipts.find((item) => item.id === recordId);
   const exportBatch = data.bookkeeping.find((item) => item.id === recordId);
   const report = data.reports.find((item) => item.id === recordId);
 
@@ -146,6 +166,10 @@ export async function BusinessPanel({
   if (customer) return <CustomerPanel copy={copy} customer={customer} data={data} locale={locale} query={query} submoduleId={submoduleId} />;
   if (product) return <ProductPanel copy={copy} data={data} locale={locale} product={product} query={query} submoduleId={submoduleId} />;
   if (invoice) return <InvoicePanel copy={copy} data={data} invoice={invoice} locale={locale} query={query} submoduleId={submoduleId} />;
+  if (account) return <AccountPanel account={account} copy={copy} data={data} locale={locale} query={query} submoduleId={submoduleId} />;
+  if (bankTransaction) return <BankTransactionPanel bankTransaction={bankTransaction} copy={copy} data={data} locale={locale} query={query} submoduleId={submoduleId} />;
+  if (journalEntry) return <JournalEntryPanel copy={copy} data={data} entry={journalEntry} locale={locale} query={query} submoduleId={submoduleId} />;
+  if (receipt) return <ReceiptPanel copy={copy} data={data} locale={locale} query={query} receipt={receipt} submoduleId={submoduleId} />;
   if (exportBatch) return <BookkeepingPanel copy={copy} data={data} exportBatch={exportBatch} locale={locale} query={query} submoduleId={submoduleId} />;
   if (report) return <ReportPanel copy={copy} data={data} locale={locale} query={query} report={report} submoduleId={submoduleId} />;
 
@@ -401,7 +425,285 @@ function InvoicesView({ copy, data, locale, query, submoduleId }: BusinessViewPr
   );
 }
 
+function LedgerView({ copy, data, locale, query, submoduleId }: BusinessViewProps) {
+  const snapshot = buildAccountingSnapshot(data);
+  const trialBalance = buildTrialBalance(data);
+  const ledgerRows = buildLedgerRows(data).slice(0, 18);
+  const unbalanced = data.journalEntries.filter((entry) => !isBalanced(entry));
+
+  return (
+    <div className="ops-workspace accounting-workspace">
+      <section className="ops-pane accounting-control-pane" aria-label={copy.ledger}>
+        <BusinessPaneHead description={copy.ledgerDescription} title={copy.ledger}>
+          <a
+            aria-label={copy.newJournalEntry}
+            data-context-action="create"
+            data-context-item
+            data-context-label={copy.newJournalEntry}
+            data-context-module="business"
+            data-context-record-id="journal-entry"
+            data-context-record-type="journal-entry"
+            data-context-submodule={submoduleId}
+            href={businessPanelHref(query, submoduleId, "new", "journal-entry", "left-bottom")}
+          >
+            +
+          </a>
+        </BusinessPaneHead>
+        <div className="accounting-kpi-strip">
+          <BusinessSignal href={businessPanelHref(query, submoduleId, "business-set", "receivables", "right")} label={copy.receivables} value={businessCurrency(snapshot.receivableBalance, "EUR", locale)} />
+          <BusinessSignal href={businessPanelHref(query, submoduleId, "business-set", "payables", "right")} label={copy.payables} value={businessCurrency(snapshot.payableBalance, "EUR", locale)} />
+          <BusinessSignal href={businessPanelHref(query, submoduleId, "business-set", "vat-payable", "right")} label={copy.vatPayable} value={businessCurrency(snapshot.vatPayable, "EUR", locale)} />
+          <BusinessSignal href={businessPanelHref(query, submoduleId, "business-set", "unbalanced", "right")} label={copy.unbalanced} value={String(unbalanced.length)} />
+        </div>
+        <div className="ops-table ops-work-table accounting-ledger-table">
+          <div className="ops-table-head">
+            <span>{copy.date}</span>
+            <span>{copy.account}</span>
+            <span>{copy.reference}</span>
+            <span>{copy.debit}</span>
+            <span>{copy.credit}</span>
+          </div>
+          {ledgerRows.map((row) => (
+            <a
+              className="ops-table-row"
+              data-context-item
+              data-context-label={`${row.entry.number} ${row.account.code}`}
+              data-context-module="business"
+              data-context-record-id={row.entry.id}
+              data-context-record-type="journal-entry"
+              data-context-submodule={submoduleId}
+              href={businessPanelHref(query, submoduleId, "journal-entry", row.entry.id, "right")}
+              key={row.id}
+            >
+              <span><strong>{row.entry.postingDate}</strong><small>{row.entry.number}</small></span>
+              <span><strong>{row.account.code} {row.account.name}</strong><small>{row.partyLabel}</small></span>
+              <span><strong>{row.refLabel}</strong><small>{text(row.entry.narration, locale)}</small></span>
+              <span><strong>{row.debit ? businessCurrency(row.debit, row.account.currency, locale) : "-"}</strong><small>{row.entry.status}</small></span>
+              <span><strong>{row.credit ? businessCurrency(row.credit, row.account.currency, locale) : "-"}</strong><small>{row.account.rootType}</small></span>
+            </a>
+          ))}
+        </div>
+      </section>
+
+      <section className="ops-pane accounting-trial-pane" aria-label={copy.trialBalance}>
+        <BusinessPaneHead description={copy.trialBalanceDescription} title={copy.trialBalance} />
+        <div className="ops-table ops-work-table accounting-balance-table">
+          <div className="ops-table-head">
+            <span>{copy.account}</span>
+            <span>{copy.debit}</span>
+            <span>{copy.credit}</span>
+            <span>{copy.balance}</span>
+          </div>
+          {trialBalance.map((row) => (
+            <a
+              className="ops-table-row"
+              data-context-item
+              data-context-label={`${row.account.code} ${row.account.name}`}
+              data-context-module="business"
+              data-context-record-id={row.account.id}
+              data-context-record-type="account"
+              data-context-submodule={submoduleId}
+              href={businessPanelHref(query, submoduleId, "account", row.account.id, "right")}
+              key={row.account.id}
+            >
+              <span><strong>{row.account.code} {row.account.name}</strong><small>{row.account.rootType} · {row.account.accountType}</small></span>
+              <span><strong>{businessCurrency(row.debit, row.account.currency, locale)}</strong><small>{copy.debit}</small></span>
+              <span><strong>{businessCurrency(row.credit, row.account.currency, locale)}</strong><small>{copy.credit}</small></span>
+              <span><strong>{businessCurrency(row.balance, row.account.currency, locale)}</strong><small>{row.account.taxCode ?? copy.noTaxCode}</small></span>
+            </a>
+          ))}
+        </div>
+      </section>
+
+      <section className="ops-pane ops-sync-rail" aria-label={copy.accountingControls}>
+        <BusinessPaneHead title={copy.accountingControls} description={copy.accountingControlsDescription} />
+        <div className="ops-signal-list">
+          <BusinessSignal href={businessPanelHref(query, submoduleId, "business-set", "posted-journal", "right")} label={copy.posted} value={String(data.journalEntries.filter((entry) => entry.status === "Posted").length)} />
+          <BusinessSignal href={businessPanelHref(query, submoduleId, "business-set", "draft-journal", "right")} label={copy.draft} value={String(data.journalEntries.filter((entry) => entry.status === "Draft").length)} />
+          <BusinessSignal href={businessPanelHref(query, submoduleId, "business-set", "revenue", "right")} label={copy.revenue} value={businessCurrency(snapshot.revenueTotal, "EUR", locale)} />
+          <BusinessSignal href={businessPanelHref(query, submoduleId, "business-set", "expenses", "right")} label={copy.expenses} value={businessCurrency(snapshot.expenseTotal, "EUR", locale)} />
+        </div>
+        <div className="ops-card-stack">
+          {data.journalEntries.slice(0, 5).map((entry) => (
+            <a
+              className={`ops-work-card ${isBalanced(entry) ? "" : "priority-urgent"}`}
+              data-context-item
+              data-context-label={entry.number}
+              data-context-module="business"
+              data-context-record-id={entry.id}
+              data-context-record-type="journal-entry"
+              data-context-submodule={submoduleId}
+              href={businessPanelHref(query, submoduleId, "journal-entry", entry.id, "right")}
+              key={entry.id}
+            >
+              <strong>{entry.number} · {entry.type}</strong>
+              <small>{entry.postingDate} · {entry.status}</small>
+              <span>{text(entry.narration, locale)}</span>
+            </a>
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function ReceiptsView({ copy, data, locale, query, submoduleId }: BusinessViewProps) {
+  const receipts = buildReceiptQueue(data);
+  const reviewTotal = receipts.filter((receipt) => receipt.status === "Needs review" || receipt.status === "Inbox").reduce((sum, receipt) => sum + receipt.total, 0);
+
+  return (
+    <div className="ops-workspace accounting-workspace accounting-receipts-workspace">
+      <section className="ops-pane ops-work-items" aria-label={copy.receipts}>
+        <BusinessPaneHead description={copy.receiptsDescription} title={copy.receipts}>
+          <a
+            aria-label={copy.newReceipt}
+            data-context-action="create"
+            data-context-item
+            data-context-label={copy.newReceipt}
+            data-context-module="business"
+            data-context-record-id="receipt"
+            data-context-record-type="receipt"
+            data-context-submodule={submoduleId}
+            href={businessPanelHref(query, submoduleId, "new", "receipt", "left-bottom")}
+          >
+            +
+          </a>
+        </BusinessPaneHead>
+        <div className="receipt-inbox-toolbar">
+          <BusinessSignal href={businessPanelHref(query, submoduleId, "business-set", "receipts-review", "right")} label={copy.needsReview} value={String(receipts.filter((receipt) => receipt.status === "Needs review").length)} />
+          <BusinessSignal href={businessPanelHref(query, submoduleId, "business-set", "receipts-inbox", "right")} label={copy.inbox} value={String(receipts.filter((receipt) => receipt.status === "Inbox").length)} />
+          <BusinessSignal href={businessPanelHref(query, submoduleId, "business-set", "receipts-open-total", "right")} label={copy.openAmount} value={businessCurrency(reviewTotal, "EUR", locale)} />
+        </div>
+        <div className="ops-table ops-work-table accounting-receipt-table">
+          <div className="ops-table-head">
+            <span>{copy.receipt}</span>
+            <span>{copy.vendor}</span>
+            <span>{copy.tax}</span>
+            <span>{copy.bankMatch}</span>
+            <span>{copy.amount}</span>
+          </div>
+          {receipts.map((receipt) => (
+            <a
+              className="ops-table-row"
+              data-context-item
+              data-context-label={receipt.number}
+              data-context-module="business"
+              data-context-record-id={receipt.id}
+              data-context-record-type="receipt"
+              data-context-submodule={submoduleId}
+              href={businessPanelHref(query, submoduleId, "receipt", receipt.id, "right")}
+              key={receipt.id}
+            >
+              <span><strong>{receipt.number}</strong><small>{receipt.receiptDate} · {receipt.status}</small></span>
+              <span><strong>{receipt.vendorName}</strong><small>{receipt.attachmentName}</small></span>
+              <span><strong>{receipt.taxCode}</strong><small>{businessCurrency(receipt.taxAmount, receipt.currency, locale)}</small></span>
+              <span><strong>{receipt.bankTransaction?.status ?? copy.notMatched}</strong><small>{receipt.bankTransaction?.counterparty ?? receipt.source}</small></span>
+              <span><strong>{businessCurrency(receipt.total, receipt.currency, locale)}</strong><small>{receipt.expenseAccount.code} {receipt.expenseAccount.name}</small></span>
+            </a>
+          ))}
+        </div>
+      </section>
+
+      <section className="ops-pane ops-sync-rail" aria-label={copy.receiptReview}>
+        <BusinessPaneHead title={copy.receiptReview} description={copy.receiptReviewDescription} />
+        <div className="ops-card-stack">
+          {receipts.filter((receipt) => receipt.status === "Needs review" || receipt.status === "Inbox").map((receipt) => (
+            <a
+              className="ops-work-card priority-high"
+              data-context-item
+              data-context-label={receipt.number}
+              data-context-module="business"
+              data-context-record-id={receipt.id}
+              data-context-record-type="receipt"
+              data-context-submodule={submoduleId}
+              href={businessPanelHref(query, submoduleId, "receipt", receipt.id, "right")}
+              key={receipt.id}
+            >
+              <strong>{receipt.vendorName}</strong>
+              <small>{receipt.number} · {businessCurrency(receipt.total, receipt.currency, locale)}</small>
+              <span>{text(receipt.notes, locale)}</span>
+            </a>
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function PaymentsView({ copy, data, locale, query, submoduleId }: BusinessViewProps) {
+  const snapshot = buildAccountingSnapshot(data);
+  const bankRows = buildReconciliationRows(data);
+
+  return (
+    <div className="ops-workspace accounting-workspace accounting-payments-workspace">
+      <section className="ops-pane ops-work-items" aria-label={copy.payments}>
+        <BusinessPaneHead description={copy.paymentsDescription} title={copy.payments} />
+        <div className="receipt-inbox-toolbar">
+          <BusinessSignal href={businessPanelHref(query, submoduleId, "business-set", "bank-matched", "right")} label={copy.matched} value={String(bankRows.filter((row) => row.status === "Matched").length)} />
+          <BusinessSignal href={businessPanelHref(query, submoduleId, "business-set", "bank-suggested", "right")} label={copy.suggested} value={String(bankRows.filter((row) => row.status === "Suggested").length)} />
+          <BusinessSignal href={businessPanelHref(query, submoduleId, "business-set", "bank-unmatched", "right")} label={copy.unmatched} value={String(bankRows.filter((row) => row.status === "Unmatched").length)} />
+          <BusinessSignal href={businessPanelHref(query, submoduleId, "business-set", "bank-balance", "right")} label={copy.bankBalance} value={businessCurrency(snapshot.bankBalance, "EUR", locale)} />
+        </div>
+        <div className="ops-table ops-work-table accounting-bank-table">
+          <div className="ops-table-head">
+            <span>{copy.date}</span>
+            <span>{copy.counterparty}</span>
+            <span>{copy.match}</span>
+            <span>{copy.confidence}</span>
+            <span>{copy.amount}</span>
+          </div>
+          {bankRows.map((row) => (
+            <a
+              className="ops-table-row"
+              data-context-item
+              data-context-label={`${row.counterparty} ${row.amount}`}
+              data-context-module="business"
+              data-context-record-id={row.id}
+              data-context-record-type="bank-transaction"
+              data-context-submodule={submoduleId}
+              href={businessPanelHref(query, submoduleId, "bank-transaction", row.id, "right")}
+              key={row.id}
+            >
+              <span><strong>{row.bookingDate}</strong><small>{row.valueDate}</small></span>
+              <span><strong>{row.counterparty}</strong><small>{row.purpose}</small></span>
+              <span><strong>{row.status}</strong><small>{row.matchedLabel}</small></span>
+              <span><strong>{row.confidence}%</strong><small>{row.nextAction}</small></span>
+              <span><strong>{businessCurrency(row.amount, row.currency, locale)}</strong><small>{row.matchType ?? copy.manual}</small></span>
+            </a>
+          ))}
+        </div>
+      </section>
+
+      <section className="ops-pane ops-sync-rail" aria-label={copy.reconciliation}>
+        <BusinessPaneHead title={copy.reconciliation} description={copy.reconciliationDescription} />
+        <div className="ops-card-stack">
+          {bankRows.filter((row) => row.status !== "Matched").map((row) => (
+            <a
+              className={`ops-work-card ${row.status === "Unmatched" ? "priority-urgent" : "priority-high"}`}
+              data-context-item
+              data-context-label={row.counterparty}
+              data-context-module="business"
+              data-context-record-id={row.id}
+              data-context-record-type="bank-transaction"
+              data-context-submodule={submoduleId}
+              href={businessPanelHref(query, submoduleId, "bank-transaction", row.id, "right")}
+              key={row.id}
+            >
+              <strong>{row.counterparty}</strong>
+              <small>{row.status} · {businessCurrency(row.amount, row.currency, locale)}</small>
+              <span>{row.nextAction}</span>
+            </a>
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function BookkeepingView({ copy, data, locale, query, submoduleId }: BusinessViewProps) {
+  const snapshot = buildAccountingSnapshot(data);
+  const datevLines = buildDatevLines(data);
+
   return (
     <div className="ops-workspace ops-project-workspace">
       <section className="ops-pane ops-project-tree" aria-label={copy.bookkeeping}>
@@ -443,31 +745,33 @@ function BookkeepingView({ copy, data, locale, query, submoduleId }: BusinessVie
 
       <section className="ops-pane ops-work-items" aria-label={copy.exportLines}>
         <BusinessPaneHead description={copy.exportLinesDescription} title={copy.exportLines} />
-        <div className="ops-table ops-work-table">
+        <div className="ops-table ops-work-table accounting-datev-table">
           <div className="ops-table-head">
-            <span>{copy.export}</span>
-            <span>{copy.invoice}</span>
-            <span>{copy.tax}</span>
+            <span>{copy.date}</span>
+            <span>{copy.account}</span>
+            <span>{copy.contraAccount}</span>
+            <span>{copy.taxCode}</span>
             <span>{copy.amount}</span>
           </div>
-          {data.bookkeeping.flatMap((exportBatch) => exportBatch.invoiceIds.map((invoiceId) => ({ exportBatch, invoice: data.invoices.find((item) => item.id === invoiceId) }))).map(({ exportBatch, invoice }) => invoice ? (
+          {datevLines.slice(0, 18).map((line) => (
             <a
               className="ops-table-row"
               data-context-item
-              data-context-label={`${exportBatch.id} ${invoice.number}`}
+              data-context-label={`${line.entry.number} ${line.account.code}`}
               data-context-module="business"
-              data-context-record-id={exportBatch.id}
-              data-context-record-type="bookkeeping"
+              data-context-record-id={line.entry.id}
+              data-context-record-type="journal-entry"
               data-context-submodule={submoduleId}
-              href={businessPanelHref(query, submoduleId, "export", exportBatch.id, "right")}
-              key={`${exportBatch.id}-${invoice.id}`}
+              href={businessPanelHref(query, "ledger", "journal-entry", line.entry.id, "right")}
+              key={`${line.entry.id}-${line.account.id}-${line.side}-${line.amount}`}
             >
-              <span><strong>{exportBatch.period}</strong><small>{exportBatch.system}</small></span>
-              <span><strong>{invoice.number}</strong><small>{invoice.status}</small></span>
-              <span><strong>{businessCurrency(invoice.taxAmount, invoice.currency, locale)}</strong><small>{invoice.lines.length} {copy.lines}</small></span>
-              <span><strong>{businessCurrency(invoice.total, invoice.currency, locale)}</strong><small>{invoice.dueDate}</small></span>
+              <span><strong>{line.entry.postingDate}</strong><small>{line.entry.number}</small></span>
+              <span><strong>{line.account.code}</strong><small>{line.account.name}</small></span>
+              <span><strong>{line.contraAccount?.code ?? "-"}</strong><small>{line.contraAccount?.name ?? copy.splitPosting}</small></span>
+              <span><strong>{line.taxCode || "-"}</strong><small>{line.side}</small></span>
+              <span><strong>{businessCurrency(line.amount, line.account.currency, locale)}</strong><small>{line.entry.status}</small></span>
             </a>
-          ) : null)}
+          ))}
         </div>
       </section>
 
@@ -477,7 +781,7 @@ function BookkeepingView({ copy, data, locale, query, submoduleId }: BusinessVie
           <BusinessSignal href={businessPanelHref(query, submoduleId, "business-set", "exports-ready", "right")} label={copy.ready} value={String(data.bookkeeping.filter((item) => item.status === "Ready").length)} />
           <BusinessSignal href={businessPanelHref(query, submoduleId, "business-set", "tax-review", "right")} label={copy.review} value={String(data.bookkeeping.filter((item) => item.status === "Needs review").length)} />
           <BusinessSignal href={businessPanelHref(query, submoduleId, "business-set", "exports-queued", "right")} label={copy.queued} value={String(data.bookkeeping.filter((item) => item.status === "Queued").length)} />
-          <BusinessSignal href={businessPanelHref(query, submoduleId, "business-set", "export-tax", "right")} label={copy.tax} value={businessCurrency(data.bookkeeping.reduce((sum, item) => sum + item.taxAmount, 0), "EUR", locale)} />
+          <BusinessSignal href={businessPanelHref(query, submoduleId, "business-set", "vat-payable", "right")} label={copy.vatPayable} value={businessCurrency(snapshot.vatPayable, "EUR", locale)} />
         </div>
       </section>
     </div>
@@ -485,6 +789,10 @@ function BookkeepingView({ copy, data, locale, query, submoduleId }: BusinessVie
 }
 
 function ReportsView({ copy, data, locale, query, submoduleId }: BusinessViewProps) {
+  const snapshot = buildAccountingSnapshot(data);
+  const trialBalance = buildTrialBalance(data);
+  const profit = snapshot.revenueTotal - snapshot.expenseTotal;
+
   return (
     <div className="ops-workspace ops-project-workspace">
       <section className="ops-pane ops-work-items" aria-label={copy.reports}>
@@ -534,27 +842,37 @@ function ReportsView({ copy, data, locale, query, submoduleId }: BusinessViewPro
       <section className="ops-pane ops-sync-rail" aria-label={copy.reportSignals}>
         <BusinessPaneHead title={copy.reportSignals} description={copy.reportSignalsDescription} />
         <div className="ops-signal-list">
-          <BusinessSignal href={businessPanelHref(query, submoduleId, "business-set", "revenue", "right")} label={copy.revenue} value={businessCurrency(data.invoices.reduce((sum, invoice) => sum + invoice.total, 0), "EUR", locale)} />
-          <BusinessSignal href={businessPanelHref(query, submoduleId, "business-set", "invoice-tax", "right")} label={copy.tax} value={businessCurrency(data.invoices.reduce((sum, invoice) => sum + invoice.taxAmount, 0), "EUR", locale)} />
+          <BusinessSignal href={businessPanelHref(query, submoduleId, "business-set", "revenue", "right")} label={copy.revenue} value={businessCurrency(snapshot.revenueTotal, "EUR", locale)} />
+          <BusinessSignal href={businessPanelHref(query, submoduleId, "business-set", "expenses", "right")} label={copy.expenses} value={businessCurrency(snapshot.expenseTotal, "EUR", locale)} />
+          <BusinessSignal href={businessPanelHref(query, submoduleId, "business-set", "vat-payable", "right")} label={copy.vatPayable} value={businessCurrency(snapshot.vatPayable, "EUR", locale)} />
           <BusinessSignal href={businessPanelHref(query, submoduleId, "business-set", "open-reports", "right")} label={copy.openReports} value={String(data.reports.filter((report) => report.status !== "Current").length)} />
-          <BusinessSignal href={businessPanelHref(query, submoduleId, "business-set", "exports", "right")} label={copy.exports} value={String(data.bookkeeping.length)} />
+        </div>
+        <div className="finance-report-summary">
+          <div>
+            <span>{copy.profit}</span>
+            <strong>{businessCurrency(profit, "EUR", locale)}</strong>
+          </div>
+          <div>
+            <span>{copy.bankBalance}</span>
+            <strong>{businessCurrency(snapshot.bankBalance, "EUR", locale)}</strong>
+          </div>
         </div>
         <div className="ops-card-stack">
-          {data.reports.map((report) => (
+          {trialBalance.slice(0, 4).map((row) => (
             <a
               className="ops-work-card"
               data-context-item
-              data-context-label={report.title}
+              data-context-label={`${row.account.code} ${row.account.name}`}
               data-context-module="business"
-              data-context-record-id={report.id}
-              data-context-record-type="report"
+              data-context-record-id={row.account.id}
+              data-context-record-type="account"
               data-context-submodule={submoduleId}
-              href={businessPanelHref(query, submoduleId, "report", report.id, "right")}
-              key={report.id}
+              href={businessPanelHref(query, "ledger", "account", row.account.id, "right")}
+              key={row.account.id}
             >
-              <strong>{report.title}</strong>
-              <small>{report.status} - {report.dueDate}</small>
-              <span>{text(report.summary, locale)}</span>
+              <strong>{row.account.code} {row.account.name}</strong>
+              <small>{businessCurrency(row.balance, row.account.currency, locale)}</small>
+              <span>{row.account.rootType} · {row.account.accountType}</span>
             </a>
           ))}
         </div>
@@ -1175,6 +1493,178 @@ function InvoiceDocumentPreview({ copy, data, invoice, locale }: {
   );
 }
 
+function AccountPanel({ account, copy, data, locale, query, submoduleId }: {
+  account: BusinessAccount;
+  copy: BusinessCopy;
+  data: BusinessBundle;
+  locale: SupportedLocale;
+  query: QueryState;
+  submoduleId: string;
+}) {
+  const rows = buildLedgerRows(data).filter((row) => row.account.id === account.id);
+  const debit = rows.reduce((sum, row) => sum + row.debit, 0);
+  const credit = rows.reduce((sum, row) => sum + row.credit, 0);
+
+  return (
+    <div className="drawer-content ops-drawer">
+      <DrawerHeader title={`${account.code} ${account.name}`} query={query} submoduleId={submoduleId} />
+      <p className="drawer-description">{copy.accountDrawerDescription}</p>
+      <dl className="drawer-facts">
+        <div><dt>{copy.accountType}</dt><dd>{account.accountType}</dd></div>
+        <div><dt>{copy.rootType}</dt><dd>{account.rootType}</dd></div>
+        <div><dt>{copy.debit}</dt><dd>{businessCurrency(debit, account.currency, locale)}</dd></div>
+        <div><dt>{copy.credit}</dt><dd>{businessCurrency(credit, account.currency, locale)}</dd></div>
+        <div><dt>{copy.taxCode}</dt><dd>{account.taxCode ?? "-"}</dd></div>
+      </dl>
+      <BusinessRecordList title={copy.ledger} items={rows.slice(0, 8).map((row) => `${row.entry.postingDate} - ${row.entry.number} - ${businessCurrency(Math.max(row.debit, row.credit), account.currency, locale)} - ${row.refLabel}`)} />
+      <BusinessQueueButton
+        action="sync"
+        className="drawer-primary"
+        instruction={`Review account ${account.code} ${account.name}, ledger entries, tax mapping, and export readiness.`}
+        payload={{ account, rows }}
+        recordId={account.id}
+        resource="accounts"
+        title={`Review account: ${account.code}`}
+      >
+        {copy.askCtoxSync}
+      </BusinessQueueButton>
+    </div>
+  );
+}
+
+function JournalEntryPanel({ copy, data, entry, locale, query, submoduleId }: {
+  copy: BusinessCopy;
+  data: BusinessBundle;
+  entry: BusinessJournalEntry;
+  locale: SupportedLocale;
+  query: QueryState;
+  submoduleId: string;
+}) {
+  const debit = entry.lines.reduce((sum, line) => sum + line.debit, 0);
+  const credit = entry.lines.reduce((sum, line) => sum + line.credit, 0);
+  const lineItems = entry.lines.map((line) => {
+    const account = data.accounts.find((item) => item.id === line.accountId);
+    return `${account?.code ?? line.accountId} ${account?.name ?? ""} - ${copy.debit}: ${businessCurrency(line.debit, account?.currency ?? "EUR", locale)} - ${copy.credit}: ${businessCurrency(line.credit, account?.currency ?? "EUR", locale)}`;
+  });
+
+  return (
+    <div className="drawer-content ops-drawer">
+      <DrawerHeader title={entry.number} query={query} submoduleId={submoduleId} />
+      <p className="drawer-description">{text(entry.narration, locale)}</p>
+      <dl className="drawer-facts">
+        <div><dt>{copy.date}</dt><dd>{entry.postingDate}</dd></div>
+        <div><dt>{copy.status}</dt><dd>{entry.status}</dd></div>
+        <div><dt>{copy.reference}</dt><dd>{entry.refId}</dd></div>
+        <div><dt>{copy.debit}</dt><dd>{businessCurrency(debit, "EUR", locale)}</dd></div>
+        <div><dt>{copy.credit}</dt><dd>{businessCurrency(credit, "EUR", locale)}</dd></div>
+        <div><dt>{copy.balance}</dt><dd>{isBalanced(entry) ? copy.balanced : copy.unbalanced}</dd></div>
+      </dl>
+      <BusinessRecordList title={copy.lines} items={lineItems} />
+      <BusinessQueueButton
+        action="sync"
+        className="drawer-primary"
+        instruction={`Review journal entry ${entry.number}, validate debit and credit balance, and prepare bookkeeping export context.`}
+        payload={{ entry }}
+        recordId={entry.id}
+        resource="ledger"
+        title={`Review journal entry: ${entry.number}`}
+      >
+        {copy.askCtoxSync}
+      </BusinessQueueButton>
+    </div>
+  );
+}
+
+function ReceiptPanel({ copy, data, locale, query, receipt, submoduleId }: {
+  copy: BusinessCopy;
+  data: BusinessBundle;
+  locale: SupportedLocale;
+  query: QueryState;
+  receipt: BusinessReceipt;
+  submoduleId: string;
+}) {
+  const expenseAccount = data.accounts.find((account) => account.id === receipt.expenseAccountId);
+  const bankTransaction = receipt.bankTransactionId ? data.bankTransactions.find((transaction) => transaction.id === receipt.bankTransactionId) : undefined;
+
+  return (
+    <div className="drawer-content ops-drawer">
+      <DrawerHeader title={receipt.number} query={query} submoduleId={submoduleId} />
+      <p className="drawer-description">{text(receipt.notes, locale)}</p>
+      <dl className="drawer-facts">
+        <div><dt>{copy.vendor}</dt><dd>{receipt.vendorName}</dd></div>
+        <div><dt>{copy.status}</dt><dd>{receipt.status}</dd></div>
+        <div><dt>{copy.due}</dt><dd>{receipt.dueDate}</dd></div>
+        <div><dt>{copy.account}</dt><dd>{expenseAccount?.code} {expenseAccount?.name}</dd></div>
+        <div><dt>{copy.taxCode}</dt><dd>{receipt.taxCode}</dd></div>
+        <div><dt>{copy.amount}</dt><dd>{businessCurrency(receipt.total, receipt.currency, locale)}</dd></div>
+      </dl>
+      <BusinessRecordList title={copy.extractedFields} items={receipt.extractedFields.map((field) => `${field.label}: ${field.value} (${field.confidence}%)`)} />
+      <BusinessRecordList title={copy.bankMatch} items={bankTransaction ? [`${bankTransaction.bookingDate} - ${bankTransaction.counterparty} - ${businessCurrency(bankTransaction.amount, bankTransaction.currency, locale)} - ${bankTransaction.status}`] : [copy.notMatched]} />
+      <div className="ops-action-dock">
+        <BusinessQueueButton
+          action="sync"
+          className="drawer-primary"
+          instruction={`Review inbound receipt ${receipt.number}, confirm OCR fields, tax code, account mapping, and posting readiness.`}
+          payload={{ receipt, bankTransaction }}
+          recordId={receipt.id}
+          resource="receipts"
+          title={`Review receipt: ${receipt.number}`}
+        >
+          {copy.reviewReceipt}
+        </BusinessQueueButton>
+        <BusinessQueueButton
+          action="payment"
+          instruction={`Match or create payment posting for receipt ${receipt.number}.`}
+          payload={{ receipt, bankTransaction }}
+          recordId={receipt.id}
+          resource="receipts"
+          title={`Reconcile receipt: ${receipt.number}`}
+        >
+          {copy.reconcile}
+        </BusinessQueueButton>
+      </div>
+    </div>
+  );
+}
+
+function BankTransactionPanel({ bankTransaction, copy, data, locale, query, submoduleId }: {
+  bankTransaction: BusinessBankTransaction;
+  copy: BusinessCopy;
+  data: BusinessBundle;
+  locale: SupportedLocale;
+  query: QueryState;
+  submoduleId: string;
+}) {
+  const reconciliation = buildReconciliationRows(data).find((row) => row.id === bankTransaction.id);
+  const entries = data.journalEntries.filter((entry) => entry.refId === bankTransaction.id);
+
+  return (
+    <div className="drawer-content ops-drawer">
+      <DrawerHeader title={bankTransaction.counterparty} query={query} submoduleId={submoduleId} />
+      <p className="drawer-description">{bankTransaction.purpose}</p>
+      <dl className="drawer-facts">
+        <div><dt>{copy.date}</dt><dd>{bankTransaction.bookingDate}</dd></div>
+        <div><dt>{copy.status}</dt><dd>{bankTransaction.status}</dd></div>
+        <div><dt>{copy.match}</dt><dd>{reconciliation?.matchedLabel ?? "-"}</dd></div>
+        <div><dt>{copy.confidence}</dt><dd>{bankTransaction.confidence}%</dd></div>
+        <div><dt>{copy.amount}</dt><dd>{businessCurrency(bankTransaction.amount, bankTransaction.currency, locale)}</dd></div>
+      </dl>
+      <BusinessRecordList title={copy.ledger} items={entries.map((entry) => `${entry.number} - ${entry.status} - ${text(entry.narration, locale)}`)} />
+      <BusinessQueueButton
+        action="payment"
+        className="drawer-primary"
+        instruction={`Reconcile bank transaction ${bankTransaction.id}, confirm match, and create or adjust payment posting.`}
+        payload={{ bankTransaction, entries }}
+        recordId={bankTransaction.id}
+        resource="payments"
+        title={`Reconcile bank transaction: ${bankTransaction.counterparty}`}
+      >
+        {copy.reconcile}
+      </BusinessQueueButton>
+    </div>
+  );
+}
+
 function BookkeepingPanel({ copy, data, exportBatch, locale, query, submoduleId }: {
   copy: BusinessCopy;
   data: BusinessBundle;
@@ -1404,6 +1894,41 @@ function resolveBusinessSet(recordId: string | undefined, data: BusinessBundle, 
     type: "product",
     amount: product.price
   }));
+  const accountItems = (items: BusinessAccount[]): BusinessSetItem[] => items.map((account) => {
+    const trialRow = buildTrialBalance(data).find((row) => row.account.id === account.id);
+    return {
+      id: account.id,
+      label: `${account.code} ${account.name}`,
+      meta: `${account.rootType} · ${account.accountType} · ${businessCurrency(trialRow?.balance ?? 0, account.currency, locale)}`,
+      panel: "account",
+      type: "account",
+      amount: Math.abs(trialRow?.balance ?? 0)
+    };
+  });
+  const journalItems = (items: BusinessJournalEntry[]): BusinessSetItem[] => items.map((entry) => ({
+    id: entry.id,
+    label: entry.number,
+    meta: `${entry.status} · ${entry.postingDate} · ${text(entry.narration, locale)}`,
+    panel: "journal-entry",
+    type: "journal-entry",
+    amount: entry.lines.reduce((sum, line) => sum + line.debit, 0)
+  }));
+  const receiptItems = (items: BusinessReceipt[]): BusinessSetItem[] => items.map((receipt) => ({
+    id: receipt.id,
+    label: receipt.number,
+    meta: `${receipt.status} · ${receipt.vendorName} · ${businessCurrency(receipt.total, receipt.currency, locale)}`,
+    panel: "receipt",
+    type: "receipt",
+    amount: receipt.total
+  }));
+  const bankItems = (items: BusinessBankTransaction[]): BusinessSetItem[] => items.map((transaction) => ({
+    id: transaction.id,
+    label: transaction.counterparty,
+    meta: `${transaction.status} · ${transaction.bookingDate} · ${businessCurrency(transaction.amount, transaction.currency, locale)}`,
+    panel: "bank-transaction",
+    type: "bank-transaction",
+    amount: Math.abs(transaction.amount)
+  }));
   const exportItems = (items: BusinessBookkeepingExport[]): BusinessSetItem[] => items.map((exportBatch) => ({
     id: exportBatch.id,
     label: `${exportBatch.system} ${exportBatch.period}`,
@@ -1433,6 +1958,19 @@ function resolveBusinessSet(recordId: string | undefined, data: BusinessBundle, 
     if (key === "exports-ready") return { title: copy.ready, description: copy.businessSetExportsDescription, items: exportItems(data.bookkeeping.filter((item) => item.status === "Ready")), resource: "bookkeeping" };
     if (key === "exports-queued") return { title: copy.queued, description: copy.businessSetExportsDescription, items: exportItems(data.bookkeeping.filter((item) => item.status === "Queued")), resource: "bookkeeping" };
     if (key === "export-tax") return { title: copy.tax, description: copy.businessSetTaxDescription, items: exportItems(data.bookkeeping), resource: "bookkeeping" };
+    if (key === "payables") return { title: copy.payables, description: copy.businessSetTaxDescription, items: accountItems(data.accounts.filter((item) => item.accountType === "payable")), resource: "accounts" };
+    if (key === "vat-payable") return { title: copy.vatPayable, description: copy.businessSetTaxDescription, items: accountItems(data.accounts.filter((item) => item.accountType === "tax")), resource: "accounts" };
+    if (key === "unbalanced") return { title: copy.unbalanced, description: copy.businessSetTaxDescription, items: journalItems(data.journalEntries.filter((entry) => !isBalanced(entry))), resource: "ledger" };
+    if (key === "posted-journal") return { title: copy.posted, description: copy.ledgerDescription, items: journalItems(data.journalEntries.filter((entry) => entry.status === "Posted")), resource: "ledger" };
+    if (key === "draft-journal") return { title: copy.draft, description: copy.ledgerDescription, items: journalItems(data.journalEntries.filter((entry) => entry.status === "Draft")), resource: "ledger" };
+    if (key === "expenses") return { title: copy.expenses, description: copy.ledgerDescription, items: accountItems(data.accounts.filter((item) => item.rootType === "expense")), resource: "accounts" };
+    if (key === "receipts-review") return { title: copy.needsReview, description: copy.receiptReviewDescription, items: receiptItems(data.receipts.filter((item) => item.status === "Needs review")), resource: "receipts" };
+    if (key === "receipts-inbox") return { title: copy.inbox, description: copy.receiptsDescription, items: receiptItems(data.receipts.filter((item) => item.status === "Inbox")), resource: "receipts" };
+    if (key === "receipts-open-total") return { title: copy.openAmount, description: copy.receiptsDescription, items: receiptItems(data.receipts.filter((item) => item.status === "Needs review" || item.status === "Inbox")), resource: "receipts" };
+    if (key === "bank-matched") return { title: copy.matched, description: copy.reconciliationDescription, items: bankItems(data.bankTransactions.filter((item) => item.status === "Matched")), resource: "payments" };
+    if (key === "bank-suggested") return { title: copy.suggested, description: copy.reconciliationDescription, items: bankItems(data.bankTransactions.filter((item) => item.status === "Suggested")), resource: "payments" };
+    if (key === "bank-unmatched") return { title: copy.unmatched, description: copy.reconciliationDescription, items: bankItems(data.bankTransactions.filter((item) => item.status === "Unmatched")), resource: "payments" };
+    if (key === "bank-balance") return { title: copy.bankBalance, description: copy.reconciliationDescription, items: accountItems(data.accounts.filter((item) => item.accountType === "bank")), resource: "accounts" };
     if (key === "revenue") return { title: copy.revenue, description: copy.businessSetRevenueDescription, items: invoiceItems(data.invoices), resource: "invoices" };
     if (key === "invoice-tax") return { title: copy.tax, description: copy.businessSetTaxDescription, items: invoiceItems(data.invoices), resource: "invoices" };
     if (key === "open-reports") return { title: copy.openReports, description: copy.businessSetReportsDescription, items: reportItems(data.reports.filter((report) => report.status !== "Current")), resource: "reports" };
@@ -1447,6 +1985,9 @@ function resolveBusinessSet(recordId: string | undefined, data: BusinessBundle, 
 }
 
 function resolveNewResource(recordId: string | undefined, submoduleId: string) {
+  if (recordId?.includes("journal") || submoduleId === "ledger") return "ledger";
+  if (recordId?.includes("receipt") || submoduleId === "receipts") return "receipts";
+  if (recordId?.includes("payment") || submoduleId === "payments") return "payments";
   if (recordId?.includes("product") || submoduleId === "products") return "products";
   if (recordId?.includes("invoice") || submoduleId === "invoices") return "invoices";
   if (recordId?.includes("export") || submoduleId === "bookkeeping") return "bookkeeping";
@@ -1638,6 +2179,7 @@ const businessCopy = {
     product: "Product",
     products: "Products",
     productsDescription: "Products and services with pricing, margin, tax, and revenue-account context.",
+    profit: "Profit",
     projectReferenceNote: "Please include the project reference in all correspondence.",
     quantity: "Quantity",
     queueCreate: "Queue create",
@@ -1696,7 +2238,57 @@ const businessCopy = {
     unitNet: "Sales price (net)",
     useWithoutMasterData: "Use without master data",
     value: "Value",
-    vat: "VAT"
+    accountDrawerDescription: "Account ledger, tax mapping, and posting activity.",
+    accountingControls: "Accounting controls",
+    accountingControlsDescription: "Journal state, balances, and exceptions that need review.",
+    accountType: "Account type",
+    balance: "Balance",
+    balanced: "Balanced",
+    bankBalance: "Bank balance",
+    bankMatch: "Bank match",
+    confidence: "Confidence",
+    contraAccount: "Contra account",
+    counterparty: "Counterparty",
+    credit: "Credit",
+    debit: "Debit",
+    expenses: "Expenses",
+    extractedFields: "Extracted fields",
+    inbox: "Inbox",
+    ledger: "Ledger",
+    ledgerDescription: "Double-entry journal, chart of accounts, and audit-ready ledger lines.",
+    manual: "Manual",
+    match: "Match",
+    matched: "Matched",
+    needsReview: "Needs review",
+    newJournalEntry: "New journal entry",
+    newReceipt: "New receipt",
+    noTaxCode: "No tax code",
+    notMatched: "Not matched",
+    openAmount: "Open amount",
+    payables: "Payables",
+    paymentsDescription: "Bank feed, payment matches, confidence, and reconciliation work.",
+    posted: "Posted",
+    receipt: "Receipt",
+    receiptReview: "Receipt review",
+    receiptReviewDescription: "Inbound documents that still need OCR, tax, or account confirmation.",
+    receipts: "Receipts",
+    receiptsDescription: "Inbound receipts with extracted fields, tax treatment, and posting state.",
+    reconcile: "Reconcile",
+    reconciliation: "Reconciliation",
+    reconciliationDescription: "Bank lines that need matching, posting, or human confirmation.",
+    reference: "Reference",
+    reviewReceipt: "Review receipt",
+    rootType: "Root type",
+    splitPosting: "Split posting",
+    suggested: "Suggested",
+    taxCode: "Tax code",
+    trialBalance: "Trial balance",
+    trialBalanceDescription: "Debit, credit, and signed balances by posting account.",
+    unbalanced: "Unbalanced",
+    unmatched: "Unmatched",
+    vat: "VAT",
+    vatPayable: "VAT payable",
+    vendor: "Vendor"
   },
   de: {
     account: "Konto",
@@ -1840,6 +2432,7 @@ const businessCopy = {
     product: "Produkt",
     products: "Produkte",
     productsDescription: "Produkte und Services mit Pricing, Marge, Steuer und Erloskonten.",
+    profit: "Ergebnis",
     projectReferenceNote: "Bitte geben Sie bei Rueckfragen die Projektreferenz mit an.",
     quantity: "Menge",
     queueCreate: "Create queuen",
@@ -1898,6 +2491,56 @@ const businessCopy = {
     unitNet: "VK (Netto)",
     useWithoutMasterData: "Ohne Stammdaten verwenden",
     value: "Wert",
-    vat: "USt"
+    accountDrawerDescription: "Kontenblatt, Steuermapping und Buchungsaktivitaet.",
+    accountingControls: "Buchhaltungskontrollen",
+    accountingControlsDescription: "Journalstatus, Salden und Ausnahmen mit Review-Bedarf.",
+    accountType: "Kontotyp",
+    balance: "Saldo",
+    balanced: "Ausgeglichen",
+    bankBalance: "Banksaldo",
+    bankMatch: "Bankabgleich",
+    confidence: "Konfidenz",
+    contraAccount: "Gegenkonto",
+    counterparty: "Gegenpartei",
+    credit: "Haben",
+    debit: "Soll",
+    expenses: "Aufwand",
+    extractedFields: "Extrahierte Felder",
+    inbox: "Eingang",
+    ledger: "Journal",
+    ledgerDescription: "Doppelte Buchfuehrung mit Kontenrahmen, Journal und pruefbaren Buchungszeilen.",
+    manual: "Manuell",
+    match: "Abgleich",
+    matched: "Abgeglichen",
+    needsReview: "Review noetig",
+    newJournalEntry: "Neue Buchung",
+    newReceipt: "Neuer Eingangsbeleg",
+    noTaxCode: "Kein Steuerschluessel",
+    notMatched: "Nicht abgeglichen",
+    openAmount: "Offener Betrag",
+    payables: "Verbindlichkeiten",
+    paymentsDescription: "Bankfeed, Zahlungsabgleich, Konfidenz und offene Reconciliation-Arbeit.",
+    posted: "Gebucht",
+    receipt: "Eingangsbeleg",
+    receiptReview: "Belegreview",
+    receiptReviewDescription: "Eingangsbelege mit OCR-, Steuer- oder Kontierungsbedarf.",
+    receipts: "Eingangsbelege",
+    receiptsDescription: "Eingangsbelege mit extrahierten Feldern, Steuerbehandlung und Buchungsstatus.",
+    reconcile: "Abgleichen",
+    reconciliation: "Reconciliation",
+    reconciliationDescription: "Bankzeilen, die Abgleich, Buchung oder menschliche Bestaetigung brauchen.",
+    reference: "Referenz",
+    reviewReceipt: "Beleg pruefen",
+    rootType: "Kontenklasse",
+    splitPosting: "Splitbuchung",
+    suggested: "Vorgeschlagen",
+    taxCode: "Steuerschluessel",
+    trialBalance: "Summen- und Saldenliste",
+    trialBalanceDescription: "Soll, Haben und vorzeichenrichtige Salden je bebuchtem Konto.",
+    unbalanced: "Nicht ausgeglichen",
+    unmatched: "Ungeklaert",
+    vat: "USt",
+    vatPayable: "USt Zahllast",
+    vendor: "Lieferant"
   }
 } satisfies Record<SupportedLocale, Record<string, string>>;

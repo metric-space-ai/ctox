@@ -17,7 +17,7 @@ import {
 import { InvoiceCustomerEditor, type InvoiceCustomerOption } from "./invoice-customer-editor";
 import { InvoiceLinesEditor, type InvoiceLineDraft } from "./invoice-lines-editor";
 import { LexicalRichTextEditor } from "./lexical-rich-text-editor";
-import { SalesPipelineView } from "./sales/sales-pipeline";
+import { KunstmenPipelineView } from "./sales/kunstmen-pipeline";
 import { LeadFlowCanvas, type LeadFlow, type LeadFlowLink, type LeadFlowNode, type LeadFlowNodeState } from "./sales/lead-flow-canvas";
 import { SalesCreateForm, SalesQueueButton } from "./sales/actions";
 import { SalesCampaignsView } from "./sales/sales-campaigns";
@@ -55,7 +55,7 @@ export async function SalesWorkspace({
   if (submoduleId === "customers") return <CustomersView copy={copy} data={data} locale={locale} query={query} submoduleId={submoduleId} />;
   if (submoduleId === "tasks") return <TasksView copy={copy} data={data} locale={locale} query={query} submoduleId={submoduleId} />;
 
-  return <SalesPipelineView query={query} />;
+  return <KunstmenPipelineView query={query} />;
 }
 
 export async function SalesPanel({

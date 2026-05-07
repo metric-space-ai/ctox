@@ -1,9 +1,13 @@
 import { createBusinessDb } from "./client";
 import {
+  businessAccounts,
+  businessBankTransactions,
   businessBookkeepingExports,
   businessCustomers,
   businessInvoices,
+  businessJournalEntries,
   businessProducts,
+  businessReceipts,
   businessReports,
   ctoxBugReports,
   marketingAssets,
@@ -71,10 +75,14 @@ type OrganizationRecord = {
 
 const tableMap = {
   business: {
+    accounts: businessAccounts,
+    "bank-transactions": businessBankTransactions,
     bookkeeping: businessBookkeepingExports,
     customers: businessCustomers,
     invoices: businessInvoices,
+    ledger: businessJournalEntries,
     products: businessProducts,
+    receipts: businessReceipts,
     reports: businessReports
   },
   marketing: {
@@ -176,7 +184,10 @@ export async function seedModuleRecords(
 function resolveTable(module: ModuleName, resource: string) {
   if (module === "business") {
     if (resource === "exports") return tableMap.business.bookkeeping;
+    if (resource === "banking" || resource === "payments") return tableMap.business["bank-transactions"];
+    if (resource === "journal" || resource === "journal-entries") return tableMap.business.ledger;
     if (resource === "services") return tableMap.business.products;
+    if (resource === "inbound-receipts") return tableMap.business.receipts;
     return tableMap.business[resource as keyof typeof tableMap.business] ?? null;
   }
 

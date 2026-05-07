@@ -2,7 +2,6 @@
   "id": "business",
   "name": "Business",
   "defaultRoute": "/app/business",
-  "records": ["customers", "products", "invoices", "payments", "ledger_entries"],
-  "ctoxSync": ["invoice_tasks", "reporting_jobs", "bug_reports"]
+  "records": ["accounts", "customers", "products", "invoices", "receipts", "bank_transactions", "journal_entries", "bookkeeping_exports", "reports"],
+  "ctoxSync": ["invoice_tasks", "receipt_reviews", "payment_reconciliation", "reporting_jobs", "bug_reports"]
 }
-
