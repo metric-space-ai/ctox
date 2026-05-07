@@ -882,6 +882,7 @@ fn find_playwright_chromium_executable_in(cache_root: &Path) -> Option<PathBuf> 
         for relative in [
             "chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
             "chrome-mac/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+            "chrome-linux64/chrome",
             "chrome-linux/chrome",
             "chrome-win/chrome.exe",
         ] {
@@ -1514,6 +1515,7 @@ mod tests {
     use super::build_browser_capture_runner_script;
     use super::capture_chrome_extra_args;
     use super::ensure_reference_package_json;
+    use super::find_playwright_chromium_executable_in;
     use super::parse_browser_automation_source;
     use super::parse_node_major_version;
     use super::resolve_root_relative_path;
@@ -1529,6 +1531,19 @@ mod tests {
             .unwrap()
             .as_nanos();
         std::env::temp_dir().join(format!("ctox-browser-{label}-{unique}"))
+    }
+
+    #[test]
+    fn finds_playwright_chromium_linux64_executable() {
+        let dir = temp_path("linux64-cache");
+        let executable = dir.join("chromium-1217/chrome-linux64/chrome");
+        fs::create_dir_all(executable.parent().unwrap()).unwrap();
+        fs::write(&executable, b"").unwrap();
+        assert_eq!(
+            find_playwright_chromium_executable_in(&dir),
+            Some(executable)
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
