@@ -1,4 +1,6 @@
 use anyhow::Result;
+use scraper::Html;
+use scraper::Selector;
 use serde_json::json;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -59,17 +61,25 @@ impl DeepResearchDepth {
 
     fn query_budget(self) -> usize {
         match self {
-            Self::Quick => 4,
-            Self::Standard => 8,
-            Self::Exhaustive => 14,
+            Self::Quick => 8,
+            Self::Standard => 24,
+            Self::Exhaustive => 80,
         }
     }
 
     fn read_budget(self) -> usize {
         match self {
-            Self::Quick => 4,
-            Self::Standard => 8,
-            Self::Exhaustive => 14,
+            Self::Quick => 8,
+            Self::Standard => 40,
+            Self::Exhaustive => 180,
+        }
+    }
+
+    fn database_query_budget(self) -> usize {
+        match self {
+            Self::Quick => 3,
+            Self::Standard => 12,
+            Self::Exhaustive => 40,
         }
     }
 }
@@ -92,7 +102,7 @@ struct ResearchSearchPlan {
 pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -> Result<Value> {
     let query_text = normalize_required_query(&request.query)?;
     let search_query = derive_research_search_query(&query_text, request.focus.as_deref());
-    let max_sources = request.max_sources.clamp(3, 40);
+    let max_sources = request.max_sources.clamp(3, 300);
     let plans = build_research_search_plan(&search_query, request)
         .into_iter()
         .take(request.depth.query_budget())
@@ -102,7 +112,7 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
     let mut seen_urls = BTreeSet::new();
     let mut search_runs = Vec::new();
     let database_runs =
-        collect_scholarly_database_sources(&search_query, request, &mut seen_urls, &mut sources);
+        collect_scholarly_database_sources(&plans, request, &mut seen_urls, &mut sources);
 
     for plan in &plans {
         let payload = match run_ctox_web_search_tool(
@@ -190,6 +200,11 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
     }
 
     let source_mix = summarize_source_mix(&enriched);
+    let figure_candidates = collect_figure_candidates(&enriched);
+    let sources_with_read = enriched
+        .iter()
+        .filter(|source| source.get("read").is_some())
+        .count();
     Ok(json!({
         "ok": true,
         "tool": "ctox_deep_research",
@@ -217,6 +232,15 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
         "database_runs": database_runs,
         "search_runs": search_runs,
         "source_mix": source_mix,
+        "research_call_counts": {
+            "planned_search_queries": plans.len(),
+            "executed_search_queries": search_runs.len(),
+            "database_queries": database_runs.len(),
+            "deduplicated_sources": enriched.len(),
+            "sources_with_page_read_attempts": sources_with_read,
+            "figure_candidates": figure_candidates.len(),
+        },
+        "figure_candidates": figure_candidates,
         "sources": enriched,
         "report_scaffold": report_scaffold(&query_text),
     }))
@@ -294,7 +318,8 @@ fn derive_research_search_query(raw: &str, focus: Option<&str>) -> String {
     if terms.is_empty() {
         compact.chars().take(220).collect()
     } else {
-        append_focus(terms.join(" "), focus)
+        let core_terms = terms.iter().take(6).copied().collect::<Vec<_>>().join(" ");
+        append_focus(core_terms, focus)
     }
 }
 
@@ -321,13 +346,7 @@ fn build_research_search_plan(
         ResearchSearchPlan {
             label: "scholarly_general",
             query: format!("{query} review state of the art feasibility limitations"),
-            domains: vec![
-                "nature.com".to_string(),
-                "springer.com".to_string(),
-                "sciencedirect.com".to_string(),
-                "mdpi.com".to_string(),
-                "ieee.org".to_string(),
-            ],
+            domains: Vec::new(),
             scholarly: true,
             metadata_only: false,
         },
@@ -376,6 +395,62 @@ fn build_research_search_plan(
 
     if request.include_papers {
         plans.extend([
+            ResearchSearchPlan {
+                label: "eddy_current_lsp",
+                query: "aircraft composite lightning strike protection layer eddy current testing copper mesh".to_string(),
+                domains: Vec::new(),
+                scholarly: true,
+                metadata_only: false,
+            },
+            ResearchSearchPlan {
+                label: "induction_thermography_lsp",
+                query: "CFRP copper mesh lightning strike protection induction thermography eddy current pulsed thermography".to_string(),
+                domains: Vec::new(),
+                scholarly: true,
+                metadata_only: false,
+            },
+            ResearchSearchPlan {
+                label: "terahertz_lsp",
+                query: "terahertz imaging aircraft composite lightning strike protection copper mesh coating".to_string(),
+                domains: Vec::new(),
+                scholarly: true,
+                metadata_only: false,
+            },
+            ResearchSearchPlan {
+                label: "microwave_composites",
+                query: "microwave mmWave non-destructive testing CFRP composites hidden metal mesh".to_string(),
+                domains: Vec::new(),
+                scholarly: true,
+                metadata_only: false,
+            },
+            ResearchSearchPlan {
+                label: "hyperspectral_coatings",
+                query: "hyperspectral imaging aircraft composite coating non destructive testing hidden defects".to_string(),
+                domains: Vec::new(),
+                scholarly: true,
+                metadata_only: false,
+            },
+            ResearchSearchPlan {
+                label: "xray_ct_lsp",
+                query: "X-ray CT lightning strike protection copper mesh carbon fiber composite inspection".to_string(),
+                domains: Vec::new(),
+                scholarly: true,
+                metadata_only: false,
+            },
+            ResearchSearchPlan {
+                label: "shearography_composites",
+                query: "shearography non destructive testing aircraft composite delamination lightning strike protection".to_string(),
+                domains: Vec::new(),
+                scholarly: true,
+                metadata_only: false,
+            },
+            ResearchSearchPlan {
+                label: "metal_foil_confounder",
+                query: "metallic foil shielding terahertz microwave eddy current CFRP composite inspection".to_string(),
+                domains: Vec::new(),
+                scholarly: true,
+                metadata_only: false,
+            },
             ResearchSearchPlan {
                 label: "aircraft_composites_ndt",
                 query: format!(
@@ -463,7 +538,7 @@ fn collect_search_sources(
 }
 
 fn collect_scholarly_database_sources(
-    query: &str,
+    plans: &[ResearchSearchPlan],
     request: &DeepResearchRequest,
     seen_urls: &mut BTreeSet<String>,
     sources: &mut Vec<Value>,
@@ -473,36 +548,65 @@ fn collect_scholarly_database_sources(
     }
 
     let mut runs = Vec::new();
-    runs.push(match query_crossref(query, 6) {
-        Ok(items) => {
-            let count = push_database_sources("crossref", items, seen_urls, sources);
-            json!({
+    let queries = plans
+        .iter()
+        .filter(|plan| plan.scholarly)
+        .map(|plan| plan.query.clone())
+        .take(request.depth.database_query_budget())
+        .collect::<Vec<_>>();
+    for query in queries {
+        runs.push(match query_crossref(&query, 12) {
+            Ok(items) => {
+                let count = push_database_sources("crossref", items, seen_urls, sources);
+                json!({
+                    "database": "crossref",
+                    "query": query,
+                    "ok": true,
+                    "result_count": count,
+                })
+            }
+            Err(err) => json!({
                 "database": "crossref",
-                "ok": true,
-                "result_count": count,
-            })
-        }
-        Err(err) => json!({
-            "database": "crossref",
-            "ok": false,
-            "error": err.to_string(),
-        }),
-    });
-    runs.push(match query_semantic_scholar(query, 6) {
-        Ok(items) => {
-            let count = push_database_sources("semantic_scholar", items, seen_urls, sources);
-            json!({
+                "query": query,
+                "ok": false,
+                "error": err.to_string(),
+            }),
+        });
+        runs.push(match query_openalex(&query, 12) {
+            Ok(items) => {
+                let count = push_database_sources("openalex", items, seen_urls, sources);
+                json!({
+                    "database": "openalex",
+                    "query": query,
+                    "ok": true,
+                    "result_count": count,
+                })
+            }
+            Err(err) => json!({
+                "database": "openalex",
+                "query": query,
+                "ok": false,
+                "error": err.to_string(),
+            }),
+        });
+        runs.push(match query_semantic_scholar(&query, 8) {
+            Ok(items) => {
+                let count = push_database_sources("semantic_scholar", items, seen_urls, sources);
+                json!({
+                    "database": "semantic_scholar",
+                    "query": query,
+                    "ok": true,
+                    "result_count": count,
+                })
+            }
+            Err(err) => json!({
                 "database": "semantic_scholar",
-                "ok": true,
-                "result_count": count,
-            })
-        }
-        Err(err) => json!({
-            "database": "semantic_scholar",
-            "ok": false,
-            "error": err.to_string(),
-        }),
-    });
+                "query": query,
+                "ok": false,
+                "error": err.to_string(),
+            }),
+        });
+    }
     runs
 }
 
@@ -579,6 +683,49 @@ fn query_crossref(query: &str, limit: usize) -> Result<Vec<Value>> {
         .collect())
 }
 
+fn query_openalex(query: &str, limit: usize) -> Result<Vec<Value>> {
+    let url = format!(
+        "https://api.openalex.org/works?per-page={}&search={}",
+        limit.clamp(1, 25),
+        encode_query(query)
+    );
+    let payload = fetch_json(&url)?;
+    let items = payload
+        .get("results")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    Ok(items
+        .into_iter()
+        .filter_map(|item| {
+            let title = item
+                .get("display_name")
+                .and_then(Value::as_str)
+                .unwrap_or("Untitled")
+                .to_string();
+            let url = item
+                .get("doi")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+                .or_else(|| item.get("id").and_then(Value::as_str).map(ToOwned::to_owned))?;
+            Some(json!({
+                "title": title,
+                "url": url,
+                "snippet": item.get("abstract_inverted_index").map(|_| Value::String("OpenAlex abstract metadata available".to_string())).unwrap_or(Value::Null),
+                "rank": Value::Null,
+                "summary": Value::Null,
+                "excerpts": [],
+                "is_pdf": false,
+                "pdf_total_pages": Value::Null,
+                "doi": item.get("doi").cloned().unwrap_or(Value::Null),
+                "year": item.get("publication_year").cloned().unwrap_or(Value::Null),
+                "open_access": item.get("open_access").cloned().unwrap_or(Value::Null),
+                "primary_location": item.get("primary_location").cloned().unwrap_or(Value::Null),
+            }))
+        })
+        .collect())
+}
+
 fn query_semantic_scholar(query: &str, limit: usize) -> Result<Vec<Value>> {
     let url = format!(
         "https://api.semanticscholar.org/graph/v1/paper/search?limit={}&fields=title,authors,year,url,abstract,venue,externalIds,openAccessPdf,isOpenAccess&query={}",
@@ -645,6 +792,19 @@ fn fetch_json(url: &str) -> Result<Value> {
         .into_string()
         .map_err(anyhow::Error::from)?;
     serde_json::from_str(&text).map_err(anyhow::Error::from)
+}
+
+fn fetch_text(url: &str) -> Result<String> {
+    let agent = ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(8))
+        .build();
+    agent
+        .get(url)
+        .set("User-Agent", "ctox-deep-research/0.1")
+        .call()
+        .map_err(anyhow::Error::from)?
+        .into_string()
+        .map_err(anyhow::Error::from)
 }
 
 fn first_string(value: Option<&Value>) -> Option<String> {
@@ -729,6 +889,108 @@ fn summarize_source_mix(sources: &[Value]) -> Value {
         }
     }
     json!(counts)
+}
+
+fn collect_figure_candidates(sources: &[Value]) -> Vec<Value> {
+    let mut figures = Vec::new();
+    let mut seen = BTreeSet::new();
+    let img_selector = Selector::parse("img").ok();
+    let meta_selector =
+        Selector::parse("meta[property='og:image'], meta[name='twitter:image']").ok();
+
+    for source in sources.iter().take(24) {
+        let Some(page_url) = source.get("url").and_then(Value::as_str) else {
+            continue;
+        };
+        let Ok(html) = fetch_text(page_url) else {
+            continue;
+        };
+        let doc = Html::parse_document(&html);
+        if let Some(selector) = &meta_selector {
+            for element in doc.select(selector).take(3) {
+                if let Some(raw) = element.value().attr("content") {
+                    push_figure_candidate(
+                        &mut figures,
+                        &mut seen,
+                        page_url,
+                        raw,
+                        element
+                            .value()
+                            .attr("property")
+                            .or_else(|| element.value().attr("name")),
+                        source,
+                    );
+                }
+            }
+        }
+        if let Some(selector) = &img_selector {
+            for element in doc.select(selector).take(20) {
+                let Some(raw) = element.value().attr("src") else {
+                    continue;
+                };
+                push_figure_candidate(
+                    &mut figures,
+                    &mut seen,
+                    page_url,
+                    raw,
+                    element.value().attr("alt"),
+                    source,
+                );
+                if figures.len() >= 40 {
+                    return figures;
+                }
+            }
+        }
+    }
+    figures
+}
+
+fn push_figure_candidate(
+    figures: &mut Vec<Value>,
+    seen: &mut BTreeSet<String>,
+    page_url: &str,
+    raw_image_url: &str,
+    caption_hint: Option<&str>,
+    source: &Value,
+) {
+    let Some(image_url) = resolve_url(page_url, raw_image_url) else {
+        return;
+    };
+    let normalized = normalize_url_key(&image_url);
+    if !seen.insert(normalized) {
+        return;
+    }
+    let lower = image_url.to_ascii_lowercase();
+    if !(lower.ends_with(".png")
+        || lower.ends_with(".jpg")
+        || lower.ends_with(".jpeg")
+        || lower.ends_with(".webp")
+        || lower.contains("image")
+        || lower.contains("figure"))
+    {
+        return;
+    }
+    figures.push(json!({
+        "image_url": image_url,
+        "source_page": page_url,
+        "source_title": source.get("title").cloned().unwrap_or(Value::Null),
+        "caption_hint": caption_hint.unwrap_or(""),
+        "usage_note": "Candidate source figure. Check license/permission before embedding; otherwise cite as source-only or redraw as own schematic.",
+    }));
+}
+
+fn resolve_url(base: &str, raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    if raw.is_empty() || raw.starts_with("data:") {
+        return None;
+    }
+    if let Ok(url) = Url::parse(raw) {
+        return Some(url.to_string());
+    }
+    Url::parse(base)
+        .ok()
+        .and_then(|base_url| base_url.join(raw).ok())
+        .map(|url| url.to_string())
 }
 
 fn build_find_terms(query: &str) -> Vec<String> {

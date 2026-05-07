@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import tempfile
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -97,10 +99,13 @@ def add_metadata(doc: Document, metadata: dict[str, Any]) -> None:
 
 def add_figure(doc: Document, figure: dict[str, Any]) -> None:
     path = figure.get("path")
-    if path and Path(path).is_file():
+    image_path = Path(path) if path else None
+    if image_path is None and figure.get("url"):
+        image_path = download_figure(str(figure["url"]))
+    if image_path and image_path.is_file():
         paragraph = doc.add_paragraph()
         paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        paragraph.add_run().add_picture(str(path), width=Cm(float(figure.get("width_cm", 15))))
+        paragraph.add_run().add_picture(str(image_path), width=Cm(float(figure.get("width_cm", 15))))
     caption = figure.get("caption")
     if caption:
         p = doc.add_paragraph()
@@ -108,6 +113,20 @@ def add_figure(doc: Document, figure: dict[str, Any]) -> None:
         run = p.add_run(str(caption))
         run.italic = True
         run.font.size = Pt(9)
+
+
+def download_figure(url: str) -> Path | None:
+    suffix = Path(url.split("?", 1)[0]).suffix.lower()
+    if suffix not in {".png", ".jpg", ".jpeg", ".webp"}:
+        suffix = ".img"
+    target = Path(tempfile.gettempdir()) / f"ctox-research-figure-{abs(hash(url))}{suffix}"
+    try:
+        request = urllib.request.Request(url, headers={"User-Agent": "ctox-deep-research/0.1"})
+        with urllib.request.urlopen(request, timeout=12) as response:
+            target.write_bytes(response.read(5_000_000))
+        return target
+    except Exception:
+        return None
 
 
 def add_section(doc: Document, section: dict[str, Any]) -> None:
