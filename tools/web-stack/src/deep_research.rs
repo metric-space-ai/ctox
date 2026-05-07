@@ -70,8 +70,8 @@ impl DeepResearchDepth {
     fn read_budget(self) -> usize {
         match self {
             Self::Quick => 8,
-            Self::Standard => 40,
-            Self::Exhaustive => 180,
+            Self::Standard => 80,
+            Self::Exhaustive => 260,
         }
     }
 
@@ -607,7 +607,7 @@ fn collect_scholarly_database_sources(
         .take(request.depth.database_query_budget())
         .collect::<Vec<_>>();
     for query in queries {
-        runs.push(match query_crossref(&query, 12) {
+        runs.push(match query_crossref(&query, 20) {
             Ok(items) => {
                 let count = push_database_sources("crossref", items, seen_urls, sources);
                 json!({
@@ -624,7 +624,7 @@ fn collect_scholarly_database_sources(
                 "error": err.to_string(),
             }),
         });
-        runs.push(match query_openalex(&query, 12) {
+        runs.push(match query_openalex(&query, 20) {
             Ok(items) => {
                 let count = push_database_sources("openalex", items, seen_urls, sources);
                 json!({
@@ -641,7 +641,7 @@ fn collect_scholarly_database_sources(
                 "error": err.to_string(),
             }),
         });
-        runs.push(match query_semantic_scholar(&query, 8) {
+        runs.push(match query_semantic_scholar(&query, 12) {
             Ok(items) => {
                 let count = push_database_sources("semantic_scholar", items, seen_urls, sources);
                 json!({
