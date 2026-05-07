@@ -161,17 +161,14 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
     let read_budget = request.depth.read_budget().min(max_sources);
     let mut enriched = Vec::with_capacity(sources.len());
     for mut source in sources.into_iter().take(max_sources) {
-        let should_read = enriched.len() < read_budget
-            && !source
-                .get("metadata_only")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
+        let read_url = source_read_url(&source);
+        let should_read = enriched.len() < read_budget && should_attempt_source_read(&source);
         if should_read {
-            if let Some(url) = source.get("url").and_then(Value::as_str) {
+            if let Some(url) = read_url {
                 match run_ctox_web_read_tool(
                     root,
                     &DirectWebReadRequest {
-                        url: url.to_string(),
+                        url: url.clone(),
                         query: Some(search_query.clone()),
                         find: build_find_terms(&search_query),
                     },
@@ -179,6 +176,7 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
                     Ok(read_payload) => {
                         source["read"] = json!({
                             "ok": read_payload.get("ok").and_then(Value::as_bool).unwrap_or(false),
+                            "url": url,
                             "title": read_payload.get("title").cloned().unwrap_or(Value::Null),
                             "summary": read_payload.get("summary").cloned().unwrap_or(Value::Null),
                             "excerpts": read_payload.get("excerpts").cloned().unwrap_or_else(|| json!([])),
@@ -190,6 +188,7 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
                     Err(err) => {
                         source["read"] = json!({
                             "ok": false,
+                            "url": url,
                             "error": err.to_string(),
                         });
                     }
@@ -205,6 +204,17 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
         .iter()
         .filter(|source| source.get("read").is_some())
         .count();
+    let successful_page_reads = enriched
+        .iter()
+        .filter(|source| {
+            source
+                .get("read")
+                .and_then(|read| read.get("ok"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        })
+        .count();
+    let failed_page_reads = sources_with_read.saturating_sub(successful_page_reads);
     Ok(json!({
         "ok": true,
         "tool": "ctox_deep_research",
@@ -238,7 +248,13 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
             "database_queries": database_runs.len(),
             "deduplicated_sources": enriched.len(),
             "sources_with_page_read_attempts": sources_with_read,
+            "successful_page_reads": successful_page_reads,
+            "failed_page_reads": failed_page_reads,
             "figure_candidates": figure_candidates.len(),
+            "estimated_external_fetches": search_runs.len()
+                + database_runs.len()
+                + sources_with_read
+                + enriched.iter().take(24).count(),
         },
         "figure_candidates": figure_candidates,
         "sources": enriched,
@@ -535,6 +551,42 @@ fn collect_search_sources(
             "pdf_total_pages": result.get("pdf_total_pages").cloned().unwrap_or(Value::Null),
         }));
     }
+}
+
+fn should_attempt_source_read(source: &Value) -> bool {
+    let source_type = source
+        .get("source_type")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if source_type == "annas_archive_metadata" {
+        return false;
+    }
+    source_read_url(source).is_some()
+}
+
+fn source_read_url(source: &Value) -> Option<String> {
+    if let Some(pdf_url) = source
+        .get("open_access_pdf")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+    {
+        return Some(pdf_url.to_string());
+    }
+
+    if let Some(pdf_url) = source
+        .get("primary_location")
+        .and_then(|location| location.get("pdf_url"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+    {
+        return Some(pdf_url.to_string());
+    }
+
+    source
+        .get("url")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(ToOwned::to_owned)
 }
 
 fn collect_scholarly_database_sources(
@@ -1111,5 +1163,21 @@ mod tests {
         assert!(query.contains("CFRP"));
         assert!(query.contains("eddy current"));
         assert!(query.chars().count() <= 260);
+    }
+
+    #[test]
+    fn scholarly_metadata_sources_are_read_but_annas_archive_is_not() {
+        let paper = json!({
+            "source_type": "paper_metadata",
+            "url": "https://doi.org/10.1234/example",
+            "metadata_only": true,
+        });
+        let annas = json!({
+            "source_type": "annas_archive_metadata",
+            "url": "https://annas-archive.org/search?q=example",
+            "metadata_only": true,
+        });
+        assert!(should_attempt_source_read(&paper));
+        assert!(!should_attempt_source_read(&annas));
     }
 }
