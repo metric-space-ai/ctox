@@ -2822,7 +2822,8 @@ fn start_prompt_worker(
                 .leased_message_keys
                 .iter()
                 .any(|key| key.starts_with("plan:system::"));
-            let mut execution_prompt = artifact_first_execution_prompt(&job);
+            let mut execution_prompt =
+                outbound_email_first_execution_prompt(&job, artifact_first_execution_prompt(&job));
             let terminal_bench_preflight = terminal_bench_preflight_spec_for_job(&job);
             match maybe_terminal_bench_controller_runtime_ref_feedback(&root, &job) {
                 Ok(Some(note)) => {
@@ -4080,6 +4081,16 @@ fn run_completion_review(
                 state,
                 format!(
                     "Founder communication guard blocked unbacked commitment(s): {}",
+                    clip_text(&guard_outcome.summary, 180)
+                ),
+            );
+            outcome = guard_outcome;
+        }
+        if let Some(guard_outcome) = founder_outbound_body_guard_outcome(job, &review_request) {
+            push_event(
+                state,
+                format!(
+                    "Founder outbound body guard blocked non-email review artifact: {}",
                     clip_text(&guard_outcome.summary, 180)
                 ),
             );
@@ -5486,6 +5497,48 @@ fn artifact_first_execution_prompt(job: &QueuedPrompt) -> String {
     prompt.push_str("ORIGINAL TASK\n");
     prompt.push_str(&job.prompt);
     prompt
+}
+
+fn outbound_email_first_execution_prompt(job: &QueuedPrompt, base_prompt: String) -> String {
+    let Some(action) = job.outbound_email.as_ref() else {
+        return base_prompt;
+    };
+    let to = if action.to.is_empty() {
+        "(none recorded)".to_string()
+    } else {
+        action.to.join(", ")
+    };
+    let cc = if action.cc.is_empty() {
+        "(none)".to_string()
+    } else {
+        action.cc.join(", ")
+    };
+    let attachments = if action.attachments.is_empty() {
+        "(none)".to_string()
+    } else {
+        action.attachments.join("\n- ")
+    };
+    format!(
+        "REVIEWED FOUNDER OUTBOUND EMAIL CONTRACT\n\
+This task carries explicit outbound email metadata. Your response in this turn is the email body draft that will be reviewed; it is not a completion/status report.\n\n\
+Recipient(s): {to}\n\
+CC: {cc}\n\
+Subject: {subject}\n\
+Attachment(s):\n- {attachments}\n\n\
+Rules:\n\
+1. Reply only with the email body text to be sent.\n\
+2. Do not claim the mail is sent, accepted, confirmed, present in CTOX history, or visible in an outbox.\n\
+3. Do not include internal commands, DB/status evidence, approval hashes, file paths, or reviewer/harness notes.\n\
+4. Do not add To/CC/Subject headers; those are already bound by the metadata above.\n\
+5. If a verified attachment or fact is missing, say exactly what is missing instead of inventing completion.\n\n\
+ORIGINAL TASK\n\
+{base_prompt}",
+        to = to,
+        cc = cc,
+        subject = &action.subject,
+        attachments = attachments,
+        base_prompt = base_prompt
+    )
 }
 
 fn terminal_bench_controller_artifact_preflight_prompt(
@@ -9477,6 +9530,112 @@ fn founder_commitment_guard_outcome(
         handoff: None,
         disposition: review::ReviewDisposition::Send,
     })
+}
+
+fn founder_outbound_body_guard_outcome(
+    job: &QueuedPrompt,
+    request: &review::CompletionReviewRequest,
+) -> Option<review::ReviewOutcome> {
+    let founder_artifact = is_founder_or_owner_email_job(job) || job.outbound_email.is_some();
+    if !founder_artifact {
+        return None;
+    }
+    let body = request.artifact_text.trim();
+    if body.is_empty() {
+        return Some(founder_outbound_body_failure_outcome(
+            "The reviewed founder/outbound mail body is empty.".to_string(),
+            "Return the actual email body to be reviewed; do not claim completion.".to_string(),
+            "(empty body)".to_string(),
+        ));
+    }
+    if founder_outbound_body_looks_like_internal_status(body) {
+        return Some(founder_outbound_body_failure_outcome(
+            "The reviewed founder/outbound artifact is an internal status or completion report, not the email body to send.".to_string(),
+            "Rewrite the response as the actual email body only; omit CTOX status, accepted/outbox claims, review notes, and internal commands.".to_string(),
+            clip_text(body, 240),
+        ));
+    }
+    None
+}
+
+fn founder_outbound_body_looks_like_internal_status(body: &str) -> bool {
+    let lowered = body.trim().to_ascii_lowercase();
+    if lowered.is_empty() {
+        return true;
+    }
+    let starts_like_status = [
+        "erledigt:",
+        "erledigt.",
+        "done:",
+        "done.",
+        "blocked:",
+        "blocker:",
+        "runbook updated",
+        "mailversand ist",
+        "der versand ist",
+    ]
+    .iter()
+    .any(|prefix| lowered.starts_with(prefix));
+    let contains_internal_delivery_claim = (lowered.contains("accepted")
+        || lowered.contains("confirmed")
+        || lowered.contains("bestätigt")
+        || lowered.contains("bestaetigt"))
+        && (lowered.contains("ctox")
+            || lowered.contains("verlauf")
+            || lowered.contains("history")
+            || lowered.contains("outbound")
+            || lowered.contains("outbox")
+            || lowered.contains("sent-folder")
+            || lowered.contains("send-folder")
+            || lowered.contains("mail ist")
+            || lowered.contains("email is"));
+    let contains_harness_or_command = lowered.contains("review-freigabe")
+        || lowered.contains("review approval")
+        || lowered.contains("reviewed-founder-send")
+        || lowered.contains("ctox channel send")
+        || lowered.contains("communication_messages")
+        || lowered.contains("status='accepted'")
+        || lowered.contains("status=`accepted`")
+        || lowered.contains("no matching unconsumed review approval")
+        || lowered.contains("keine passende review-freigabe");
+    starts_like_status || contains_internal_delivery_claim || contains_harness_or_command
+}
+
+fn founder_outbound_body_failure_outcome(
+    summary: String,
+    corrective_action: String,
+    evidence: String,
+) -> review::ReviewOutcome {
+    review::ReviewOutcome {
+        required: true,
+        verdict: review::ReviewVerdict::Fail,
+        mission_state: "UNHEALTHY".to_string(),
+        summary,
+        report: String::new(),
+        score: 100,
+        reasons: vec!["founder_outbound_body_contract".to_string()],
+        failed_gates: vec!["founder_outbound_body_contract".to_string()],
+        semantic_findings: vec![
+            "The review artifact for a founder/outbound email must be the actual email body, not an internal completion/status message."
+                .to_string(),
+        ],
+        categorized_findings: vec![review::CategorizedFinding {
+            id: "founder_outbound_body_contract".to_string(),
+            category: review::FindingCategory::Rewrite,
+            evidence,
+            corrective_action,
+        }],
+        open_items: vec![
+            "Produce only the email body that should be sent through reviewed-founder-send."
+                .to_string(),
+        ],
+        evidence: vec![
+            "Deterministic founder outbound body guard ran before approval persistence."
+                .to_string(),
+        ],
+        handoff: None,
+        disposition: review::ReviewDisposition::Send,
+    }
 }
 
 fn is_owner_visible_strategic_job(job: &QueuedPrompt) -> bool {
@@ -21010,6 +21169,86 @@ Those are not durable artifact requirements."
         assert!(prompt.contains("--reviewed-founder-send --body \"$BODY\""));
         assert!(prompt.contains("Attachments nicht"));
         assert!(!prompt.contains("<freigegebener Mailtext>"));
+    }
+
+    #[test]
+    fn proactive_founder_outbound_status_reply_is_rewrite_blocked() {
+        let job = QueuedPrompt {
+            prompt: "Sende Jill die korrigierte Excel per E-Mail.".to_string(),
+            goal: "send corrected Excel".to_string(),
+            preview: "send corrected Excel".to_string(),
+            source_label: "tui".to_string(),
+            suggested_skill: None,
+            leased_message_keys: Vec::new(),
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("intersolar-germany-exhibitors-jill-20260507".to_string()),
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: Some(channels::FounderOutboundAction {
+                account_key: "email:INF.Yoda@remcapital.de".to_string(),
+                thread_key: "intersolar-germany-exhibitors-jill-20260507".to_string(),
+                subject: "Korrigierte Intersolar-Ausstellerliste mit PLZ".to_string(),
+                to: vec!["j.cakmak@remcapital.de".to_string()],
+                cc: Vec::new(),
+                attachments: vec!["/tmp/intersolar_deutschland_plz_verified.xlsx".to_string()],
+            }),
+            outbound_anchor: Some("tui-outbound:test".to_string()),
+        };
+        let request = review::CompletionReviewRequest {
+            artifact_text:
+                "Erledigt: Die Mail an Jill ist als `accepted` im Verlauf vorhanden, mit der geprüften Excel als Anhang."
+                    .to_string(),
+            artifact_action: Some("proactive_founder_outbound_email".to_string()),
+            artifact_to: vec!["j.cakmak@remcapital.de".to_string()],
+            artifact_attachments: vec!["/tmp/intersolar_deutschland_plz_verified.xlsx".to_string()],
+            ..review::CompletionReviewRequest::default()
+        };
+
+        let outcome = founder_outbound_body_guard_outcome(&job, &request)
+            .expect("status/completion text must not be approved as a mail body");
+
+        assert_eq!(outcome.verdict, review::ReviewVerdict::Fail);
+        assert_eq!(
+            classify_findings(&outcome.categorized_findings),
+            ReviewRoutingClass::RewriteOnly
+        );
+        assert!(outcome
+            .summary
+            .contains("internal status or completion report"));
+    }
+
+    #[test]
+    fn proactive_founder_outbound_body_prompt_requires_body_only() {
+        let job = QueuedPrompt {
+            prompt: "Sende Jill die korrigierte Excel per E-Mail.".to_string(),
+            goal: "send corrected Excel".to_string(),
+            preview: "send corrected Excel".to_string(),
+            source_label: "tui".to_string(),
+            suggested_skill: None,
+            leased_message_keys: Vec::new(),
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("intersolar-germany-exhibitors-jill-20260507".to_string()),
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: Some(channels::FounderOutboundAction {
+                account_key: "email:INF.Yoda@remcapital.de".to_string(),
+                thread_key: "intersolar-germany-exhibitors-jill-20260507".to_string(),
+                subject: "Korrigierte Intersolar-Ausstellerliste mit PLZ".to_string(),
+                to: vec!["j.cakmak@remcapital.de".to_string()],
+                cc: Vec::new(),
+                attachments: vec!["/tmp/intersolar_deutschland_plz_verified.xlsx".to_string()],
+            }),
+            outbound_anchor: Some("tui-outbound:test".to_string()),
+        };
+
+        let prompt = outbound_email_first_execution_prompt(&job, job.prompt.clone());
+
+        assert!(prompt.contains("REVIEWED FOUNDER OUTBOUND EMAIL CONTRACT"));
+        assert!(prompt.contains("Your response in this turn is the email body draft"));
+        assert!(prompt.contains("Do not claim the mail is sent"));
+        assert!(prompt.contains("j.cakmak@remcapital.de"));
+        assert!(prompt.contains("Korrigierte Intersolar-Ausstellerliste mit PLZ"));
+        assert!(prompt.contains("/tmp/intersolar_deutschland_plz_verified.xlsx"));
     }
 
     #[test]
