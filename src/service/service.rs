@@ -112,6 +112,7 @@ const PLATFORM_EXPERTISE_KIND: &str = "platform-expertise-pass";
 const PLATFORM_IMPLEMENTATION_KIND: &str = "platform-implementation";
 const STRATEGIC_DIRECTION_KIND: &str = "strategic-direction-pass";
 const FOUNDER_COMMUNICATION_REWORK_KIND: &str = "founder-communication-rework";
+const RUNTIME_API_RETRY_KIND: &str = "runtime-api-retry";
 const FOUNDER_REWORK_REQUEUE_BLOCK_THRESHOLD: usize = 2;
 const REVIEW_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD: usize = 2;
 const MAX_REVIEW_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD: usize = 10;
@@ -9819,6 +9820,11 @@ fn requeue_review_rejected_self_work(
     work_id: &str,
     summary: &str,
 ) -> Result<Option<channels::QueueTaskView>> {
+    if let Some(note) = runtime_api_retry_review_rejection_block_note(root, work_id, summary)? {
+        block_self_work_queue_tasks_for_work(root, work_id, &note)?;
+        block_ticket_self_work_item(root, work_id, &note);
+        return Ok(None);
+    }
     if let Some(note) = review_checkpoint_loop_block_note(root, work_id, summary)? {
         block_self_work_queue_tasks_for_work(root, work_id, &note)?;
         if !review_checkpoint_loop_block_already_active(root, work_id)? {
@@ -9856,6 +9862,24 @@ fn requeue_review_rejected_self_work(
         return Ok(None);
     }
     queue_ticket_self_work_item(root, &item)
+}
+
+fn runtime_api_retry_review_rejection_block_note(
+    root: &Path,
+    work_id: &str,
+    summary: &str,
+) -> Result<Option<String>> {
+    let Some(item) = tickets::load_ticket_self_work_item(root, work_id)? else {
+        return Ok(None);
+    };
+    if item.kind != RUNTIME_API_RETRY_KIND {
+        return Ok(None);
+    }
+    Ok(Some(format!(
+        "Dieses Runtime-API-Retry-Work-Item `{}` wurde vom Review-Checkpoint abgelehnt. Runtime-API-Retry ist nur fuer die Fortsetzung nach transienten API-Fehlern gedacht und darf nach einem Review-Reject nicht automatisch erneut starten; sonst kann der Harness dieselbe Multi-Turn-Arbeit wiederholt ausfuehren und Tokens verbrennen. Lege eine frische fachliche Aufgabe oder einen exakten reviewed-send-Fortsetzungsauftrag mit belastbarer Evidenz an. Letzter Review-Hinweis: {}",
+        item.work_id,
+        clip_text(summary, 220)
+    )))
 }
 
 fn review_checkpoint_requeue_block_threshold() -> usize {
@@ -15055,6 +15079,62 @@ mod tests {
         assert!(blocked_tasks
             .iter()
             .any(|task| task.message_key == second.message_key));
+    }
+
+    #[test]
+    fn runtime_api_retry_review_rejection_blocks_without_requeue() {
+        let root = temp_root("ctox-runtime-api-retry-review-block");
+        let item = tickets::put_ticket_self_work_item(
+            &root,
+            tickets::TicketSelfWorkUpsertInput {
+                source_system: "local".to_string(),
+                kind: RUNTIME_API_RETRY_KIND.to_string(),
+                title: "Retry Jill reviewed send after API failure".to_string(),
+                body_text: "Continue the exact reviewed-send turn after a transient API failure."
+                    .to_string(),
+                state: "open".to_string(),
+                metadata: serde_json::json!({
+                    "thread_key": "queue/runtime-api-retry",
+                    "priority": "urgent",
+                    "skill": "follow-up-orchestrator",
+                    "dedupe_key": "runtime-api-retry:jill-reviewed-send",
+                }),
+            },
+            false,
+        )
+        .expect("failed to create runtime retry self-work");
+        let first = queue_ticket_self_work_item(&root, &item)
+            .expect("failed to queue runtime retry self-work")
+            .expect("expected initial runtime retry queue task");
+
+        let requeued = requeue_review_rejected_self_work(
+            &root,
+            &item.work_id,
+            "NO-SEND: the worker produced an internal status update instead of the reviewed send.",
+        )
+        .expect("runtime retry review rejection should be handled");
+        assert!(requeued.is_none());
+
+        let reloaded = tickets::load_ticket_self_work_item(&root, &item.work_id)
+            .expect("failed to reload self-work")
+            .expect("missing self-work");
+        assert_eq!(reloaded.state, "blocked");
+
+        let pending =
+            channels::list_queue_tasks(&root, &["pending".to_string(), "leased".to_string()], 10)
+                .expect("failed to list pending queue tasks");
+        assert!(pending.is_empty());
+
+        let blocked = channels::list_queue_tasks(&root, &["blocked".to_string()], 10)
+            .expect("failed to list blocked queue tasks");
+        assert!(blocked
+            .iter()
+            .any(|task| task.message_key == first.message_key
+                && task
+                    .status_note
+                    .as_deref()
+                    .unwrap_or("")
+                    .contains("darf nach einem Review-Reject nicht automatisch erneut starten")));
     }
 
     #[test]
