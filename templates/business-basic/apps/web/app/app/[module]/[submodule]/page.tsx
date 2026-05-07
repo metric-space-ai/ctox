@@ -1,14 +1,9 @@
 import { notFound } from "next/navigation";
 import { cookies } from "next/headers";
+import type { ReactNode } from "react";
 import { findBusinessModule, findBusinessSubmodule, WorkSurface, type BusinessModuleId, type WorkSurfacePanelState } from "@ctox-business/ui";
 import { AppShell } from "../../../../components/app-shell";
-import { BusinessPanel, BusinessWorkspace } from "../../../../components/business-workspace";
-import { CompetitiveAnalysisDashboard, CompetitiveAnalysisPanel } from "../../../../components/competitive-analysis-dashboard";
-import { CtoxPanel, CtoxWorkspace } from "../../../../components/ctox-workspace";
 import { businessOsName, companyNameCookieName, normalizeCompanyName } from "../../../../lib/company-settings";
-import { MarketingPanel, MarketingWorkspace } from "../../../../components/marketing-workspace";
-import { OperationsPanel, OperationsWorkspace } from "../../../../components/operations-workspace";
-import { SalesPanel, SalesWorkspace } from "../../../../components/sales-workspace";
 
 export default async function SubmodulePage({
   params,
@@ -72,6 +67,34 @@ export default async function SubmodulePage({
     skillbookId: query.skillbookId,
     runbookId: query.runbookId
   };
+  let panelContent: ReactNode;
+  let workspaceContent: ReactNode;
+
+  if (isSales) {
+    const { SalesPanel, SalesWorkspace } = await import("../../../../components/sales-workspace");
+    panelContent = <SalesPanel panelState={panelState} query={viewQuery} submoduleId={submodule.id} />;
+    workspaceContent = <SalesWorkspace query={viewQuery} submoduleId={submodule.id} />;
+  } else if (isCompetitiveAnalysis) {
+    const { CompetitiveAnalysisDashboard, CompetitiveAnalysisPanel } = await import("../../../../components/competitive-analysis-dashboard");
+    panelContent = <CompetitiveAnalysisPanel panelState={panelState} query={viewQuery} />;
+    workspaceContent = <CompetitiveAnalysisDashboard query={viewQuery} />;
+  } else if (isMarketing) {
+    const { MarketingPanel, MarketingWorkspace } = await import("../../../../components/marketing-workspace");
+    panelContent = <MarketingPanel panelState={panelState} query={viewQuery} submoduleId={submodule.id} />;
+    workspaceContent = <MarketingWorkspace query={viewQuery} submoduleId={submodule.id} />;
+  } else if (isOperations) {
+    const { OperationsPanel, OperationsWorkspace } = await import("../../../../components/operations-workspace");
+    panelContent = <OperationsPanel panelState={panelState} query={viewQuery} submoduleId={submodule.id} />;
+    workspaceContent = <OperationsWorkspace query={viewQuery} submoduleId={submodule.id} />;
+  } else if (isBusiness) {
+    const { BusinessPanel, BusinessWorkspace } = await import("../../../../components/business-workspace");
+    panelContent = <BusinessPanel panelState={panelState} query={viewQuery} submoduleId={submodule.id} />;
+    workspaceContent = <BusinessWorkspace query={viewQuery} submoduleId={submodule.id} />;
+  } else if (isCtox) {
+    const { CtoxPanel, CtoxWorkspace } = await import("../../../../components/ctox-workspace");
+    panelContent = <CtoxPanel panelState={panelState} query={viewQuery} submoduleId={submodule.id} />;
+    workspaceContent = <CtoxWorkspace companyName={companyName} query={viewQuery} submoduleId={submodule.id} />;
+  }
 
   return (
     <AppShell
@@ -88,21 +111,7 @@ export default async function SubmodulePage({
         title={submodule.label}
         description={isCompetitiveAnalysis ? "Market monitor workspace" : isOperations ? "Operations workspace" : `${module.label} workspace`}
         panelState={panelState}
-        panelContent={
-          isSales
-            ? <SalesPanel panelState={panelState} query={viewQuery} submoduleId={submodule.id} />
-            : isCompetitiveAnalysis
-              ? <CompetitiveAnalysisPanel panelState={panelState} query={viewQuery} />
-              : isMarketing
-                ? <MarketingPanel panelState={panelState} query={viewQuery} submoduleId={submodule.id} />
-                : isOperations
-                  ? <OperationsPanel panelState={panelState} query={viewQuery} submoduleId={submodule.id} />
-                  : isBusiness
-                    ? <BusinessPanel panelState={panelState} query={viewQuery} submoduleId={submodule.id} />
-                    : isCtox
-                      ? <CtoxPanel panelState={panelState} query={viewQuery} submoduleId={submodule.id} />
-                      : undefined
-        }
+        panelContent={panelContent}
         hideHeader={isSales || isCompetitiveAnalysis || isMarketing || isOperations || isBusiness || isCtox}
       >
         <div
@@ -114,12 +123,7 @@ export default async function SubmodulePage({
           data-context-record-type="workspace"
           data-context-submodule={submodule.id}
         >
-          {isSales ? <SalesWorkspace query={viewQuery} submoduleId={submodule.id} /> : null}
-          {isCompetitiveAnalysis ? <CompetitiveAnalysisDashboard query={viewQuery} /> : null}
-          {isMarketing ? <MarketingWorkspace query={viewQuery} submoduleId={submodule.id} /> : null}
-          {isOperations ? <OperationsWorkspace query={viewQuery} submoduleId={submodule.id} /> : null}
-          {isBusiness ? <BusinessWorkspace query={viewQuery} submoduleId={submodule.id} /> : null}
-          {isCtox ? <CtoxWorkspace companyName={companyName} query={viewQuery} submoduleId={submodule.id} /> : null}
+          {workspaceContent}
         </div>
       </WorkSurface>
     </AppShell>

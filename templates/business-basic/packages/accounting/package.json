@@ -1,0 +1,35 @@
+{
+  "name": "@ctox-business/accounting",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./agents": "./src/agents/manifest.ts",
+    "./bank-import": "./src/bank-import/index.ts",
+    "./chart": "./src/chart/index.ts",
+    "./dunning": "./src/dunning/index.ts",
+    "./invoice": "./src/invoice/index.ts",
+    "./fiscal": "./src/fiscal/index.ts",
+    "./money": "./src/money.ts",
+    "./number-series": "./src/number-series.ts",
+    "./parties": "./src/parties.ts",
+    "./payment": "./src/payment/index.ts",
+    "./posting": "./src/posting/service.ts",
+    "./receipt": "./src/receipt/index.ts",
+    "./export": "./src/export/index.ts",
+    "./reports": "./src/reports/index.ts",
+    "./tax": "./src/tax.ts",
+    "./workflow": "./src/workflow/index.ts"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json --noEmit",
+    "test": "tsx --test src/tests/*.test.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.3"
+  }
+}

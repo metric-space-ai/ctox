@@ -46,6 +46,6 @@ export async function POST(
 }
 
 function parseAction(value: unknown): BusinessMutationRequest["action"] {
-  if (value === "create" || value === "update" || value === "delete" || value === "sync" || value === "export" || value === "payment") return value;
+  if (value === "create" || value === "update" || value === "delete" || value === "sync" || value === "export" || value === "payment" || value === "send" || value === "post" || value === "match") return value;
   return "update";
 }

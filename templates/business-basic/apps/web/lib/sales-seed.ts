@@ -808,7 +808,7 @@ const seedSalesBundle: SalesBundle = {
 };
 
 export async function getSalesBundle(): Promise<SalesBundle> {
-  if (!shouldUsePostgres()) return seedSalesBundle;
+  if (!shouldUsePostgres()) return withAutomationCampaigns(seedSalesBundle);
 
   try {
     const db = await import("@ctox-business/db/modules");
@@ -829,7 +829,7 @@ export async function getSalesBundle(): Promise<SalesBundle> {
       return getSalesBundle();
     }
 
-    return {
+    return withAutomationCampaigns({
       owners: salesOwners,
       accounts: rowsToPayload(accountRows, salesAccounts),
       campaigns: rowsToPayload(campaignRows, salesCampaigns),
@@ -839,12 +839,62 @@ export async function getSalesBundle(): Promise<SalesBundle> {
       offers: rowsToPayload(offerRows, salesOffers),
       leads: rowsToPayload(leadRows, salesLeads),
       tasks: rowsToPayload(taskRows, salesTasks)
-    };
+    });
   } catch (error) {
     console.warn("Falling back to Sales seed data.", error);
-    return seedSalesBundle;
+    return withAutomationCampaigns(seedSalesBundle);
   }
 }
+
+async function withAutomationCampaigns(bundle: SalesBundle): Promise<SalesBundle> {
+  try {
+    const automationStoreModule = "./sales-automation-store";
+    const { loadSalesAutomationStore } = await import(automationStoreModule) as SalesAutomationStoreModule;
+    const store = await loadSalesAutomationStore();
+    const campaigns = store.campaigns.map((campaign): SalesCampaign => ({
+      id: campaign.id,
+      name: campaign.name,
+      status: campaign.status === "ready" ? "Ready" : "Research",
+      sourceTypes: [campaign.sourceType === "URL" || campaign.sourceType === "PDF" || campaign.sourceType === "Text" || campaign.sourceType === "Excel" ? campaign.sourceType : "Excel"],
+      importedRecords: campaign.rowCount,
+      enrichedRecords: campaign.completedRows,
+      assignedRecords: campaign.completedRows,
+      ownerId: "ctox-agent",
+      assignmentPrompt: {
+        en: campaign.description,
+        de: campaign.description
+      },
+      nextStep: {
+        en: `${campaign.completedRows}/${campaign.rowCount} independent Minimax research jobs complete.`,
+        de: `${campaign.completedRows}/${campaign.rowCount} unabhaengige Minimax-Research-Jobs abgeschlossen.`
+      }
+    }));
+
+    return {
+      ...bundle,
+      campaigns: [
+        ...campaigns,
+        ...bundle.campaigns.filter((campaign) => !campaigns.some((item) => item.id === campaign.id))
+      ]
+    };
+  } catch {
+    return bundle;
+  }
+}
+
+type SalesAutomationStoreModule = {
+  loadSalesAutomationStore: () => Promise<{
+    campaigns: Array<{
+      completedRows: number;
+      description: string;
+      id: string;
+      name: string;
+      rowCount: number;
+      sourceType: string;
+      status: string;
+    }>;
+  }>;
+};
 
 export async function getSalesResource(resource: string) {
   const data = await getSalesBundle();

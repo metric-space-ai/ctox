@@ -1,5 +1,6 @@
 import { type WorkSurfacePanelState } from "@ctox-business/ui";
 import type { ReactNode } from "react";
+import { getCtoxHarnessFlow, type CtoxHarnessFlowResult } from "../lib/ctox-core-bridge";
 import { getCtoxBundle, getCtoxResource, type CtoxBundle } from "../lib/ctox-seed";
 import { CtoxQueueButton } from "./ctox-actions";
 
@@ -11,7 +12,7 @@ type QueryState = {
   drawer?: string;
 };
 
-type Resource = keyof CtoxBundle | "settings";
+type Resource = keyof CtoxBundle | "harness" | "settings";
 
 export async function CtoxWorkspace({
   companyName,
@@ -26,6 +27,7 @@ export async function CtoxWorkspace({
   const resource = resolveResource(submoduleId);
 
   if (resource === "settings") return <SettingsView companyName={companyName} query={query} submoduleId={submoduleId} />;
+  if (resource === "harness") return <HarnessView flow={await getCtoxHarnessFlow()} query={query} submoduleId={submoduleId} />;
   if (resource === "queue") return <QueueView data={data} query={query} submoduleId={submoduleId} />;
   if (resource === "knowledge") return <KnowledgeView data={data} query={query} submoduleId={submoduleId} />;
   if (resource === "bugs") return <BugsView data={data} query={query} submoduleId={submoduleId} />;
@@ -44,6 +46,7 @@ export async function CtoxPanel({
 }) {
   const resource = resolveResource(submoduleId);
   if (resource === "settings") return null;
+  if (resource === "harness") return <HarnessPanel query={query} submoduleId={submoduleId} />;
   const record = (await getCtoxResource(resource))?.find((item) => item.id === panelState?.recordId);
 
   if (!record) return null;
@@ -73,6 +76,94 @@ export async function CtoxPanel({
           label={recordTitle(record)}
           recordId={record.id}
           recordType={resource}
+          submoduleId={submoduleId}
+        />
+      </section>
+    </div>
+  );
+}
+
+function HarnessView({ flow, query, submoduleId }: { flow: CtoxHarnessFlowResult; query: QueryState; submoduleId: string }) {
+  const finishBlock = flow.flow.blocks.find((block) => block.kind === "finish");
+  const stateMachine = finishBlock?.branches.find((branch) => branch.kind === "state_machine");
+  const guard = finishBlock?.branches.find((branch) => branch.kind === "guard");
+  const processMining = finishBlock?.branches.find((branch) => branch.kind === "process_mining");
+
+  return (
+    <div className="ops-workspace ctox-harness-workspace">
+      <Pane description={`Live harness flow from ${flow.mode}. Review, outcome, spawn, and process-mining checkpoints stay on the same path.`} title="Harness flow">
+        <div className="ctox-harness-flow" data-context-item data-context-label="Harness state machine" data-context-module="ctox" data-context-record-id="harness-flow" data-context-record-type="harness_flow" data-context-submodule={submoduleId}>
+          {flow.flow.blocks.map((block, index) => (
+            <section className={`ctox-harness-block ctox-harness-block-${block.kind}`} key={`${block.title}-${index}`}>
+              <div className="ctox-harness-spine">
+                <span>{index + 1}</span>
+              </div>
+              <div className="ctox-harness-main">
+                <h3>{block.title}</h3>
+                {block.lines.map((line) => <p key={line}>{line}</p>)}
+              </div>
+              <div className="ctox-harness-branches">
+                {block.branches.map((branch) => (
+                  <article className={`ctox-harness-branch ctox-harness-branch-${branch.kind}`} key={branch.title}>
+                    <strong>{branch.title}</strong>
+                    {branch.lines.map((line) => <span key={line}>{line}</span>)}
+                    <small>{branch.returns_to_spine ? "returns to main work" : "creates follow-up branch"}</small>
+                  </article>
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
+      </Pane>
+      <Pane description="Same flow in the terminal format used by the TUI and support workflows." title="ASCII mirror">
+        <pre className="ctox-harness-ascii">{flow.ascii}</pre>
+      </Pane>
+      <Pane description="Kernel checkpoints that prevent LLM completion claims from becoming durable truth." title="Kernel gates">
+        <SignalList
+          items={[
+            ["Review Gate", stateMachine?.lines[0] ?? "Review feedback returns to the main work item."],
+            ["Outcome Witness", guard?.lines.find((line) => line.includes("outbound") || line.includes("artifact")) ?? "Terminal work requires a durable delivered artifact."],
+            ["Spawn Discipline", stateMachine?.lines.find((line) => line.includes("Spawn")) ?? "Every spawned child needs a modeled parent edge and budget."],
+            ["Forensics", processMining?.lines.at(-1) ?? "Process mining checks proofs, spawn edges, and conformance."]
+          ]}
+          recordType="harness_gate"
+          submoduleId={submoduleId}
+        />
+        <div className="ops-pane-actions ctox-harness-actions">
+          <CtoxQueueButton
+            instruction="Run CTOX harness forensics for the current Business OS state. Check core-liveness, spawn-liveness, process-mining proofs, spawn-edges, harness-mining multiperspective, and report any missing outcome witness or rejected spawn edge."
+            label="Run harness forensics"
+            recordId="harness-flow"
+            recordType="harness_flow"
+            submoduleId={submoduleId}
+          />
+          <a href={panelHref(query, submoduleId, "harness", "harness-flow", "right")}>Open details</a>
+        </div>
+      </Pane>
+    </div>
+  );
+}
+
+function HarnessPanel({ query, submoduleId }: { query: QueryState; submoduleId: string }) {
+  return (
+    <div className="drawer-content ops-drawer">
+      <DrawerHeader query={query} submoduleId={submoduleId} title="Harness integrity" />
+      <section className="ops-drawer-section">
+        <h3>Completion contract</h3>
+        <div className="ops-mini-list">
+          <span>The agent completes work only after the required durable artifact exists.</span>
+          <span>The Review Gate gives feedback but never performs the task.</span>
+          <span>Every spawned task must have a modeled parent edge, checkpoint, and bounded budget.</span>
+          <span>Process mining verifies proofs, outcome refs, spawn edges, and stuck cases.</span>
+        </div>
+      </section>
+      <section className="ops-drawer-section">
+        <h3>CTOX instruction</h3>
+        <CtoxQueueButton
+          instruction="Audit the current CTOX harness flow from the Business OS Harness page. Verify outcome witnesses, review checkpoints, spawn edges, and process-mining conformance before protected outbound work continues."
+          label="Harness integrity audit"
+          recordId="harness-flow"
+          recordType="harness_flow"
           submoduleId={submoduleId}
         />
       </section>
@@ -398,6 +489,7 @@ function baseHref(query: QueryState, submoduleId: string) {
 }
 
 function resolveResource(submoduleId: string): Resource {
+  if (submoduleId === "harness") return "harness";
   if (submoduleId === "queue") return "queue";
   if (submoduleId === "knowledge") return "knowledge";
   if (submoduleId === "bugs") return "bugs";

@@ -68,7 +68,10 @@ export const businessModules: BusinessModule[] = [
       { id: "customers", label: "Customers", href: "/app/business/customers", resourceTypes: ["customer"] },
       { id: "products", label: "Products", href: "/app/business/products", resourceTypes: ["product", "service"] },
       { id: "invoices", label: "Invoices", href: "/app/business/invoices", resourceTypes: ["invoice"] },
-      { id: "bookkeeping", label: "Bookkeeping", href: "/app/business/bookkeeping", resourceTypes: ["ledger_entry", "export"] },
+      { id: "ledger", label: "Ledger", href: "/app/business/ledger", resourceTypes: ["account", "journal_entry", "ledger_entry"] },
+      { id: "receipts", label: "Receipts", href: "/app/business/receipts", resourceTypes: ["receipt", "vendor", "attachment"] },
+      { id: "payments", label: "Payments", href: "/app/business/payments", resourceTypes: ["bank_transaction", "payment", "reconciliation"] },
+      { id: "bookkeeping", label: "Exports", href: "/app/business/bookkeeping", resourceTypes: ["ledger_entry", "export"] },
       { id: "reports", label: "Reports", href: "/app/business/reports", resourceTypes: ["report"] }
     ]
   },
@@ -79,6 +82,7 @@ export const businessModules: BusinessModule[] = [
     summary: "Agent runs, sync health, bug reports, knowledge links, and bridge status.",
     submodules: [
       { id: "runs", label: "Runs", href: "/app/ctox/runs", resourceTypes: ["agent_run"] },
+      { id: "harness", label: "Harness", href: "/app/ctox/harness", resourceTypes: ["harness_flow", "state_machine", "process_proof"] },
       { id: "queue", label: "Queue", href: "/app/ctox/queue", resourceTypes: ["queue_item"] },
       { id: "knowledge", label: "Knowledge", href: "/app/ctox/knowledge", resourceTypes: ["knowledge_record"] },
       { id: "bugs", label: "Bugs", href: "/app/ctox/bugs", resourceTypes: ["bug_report"] },

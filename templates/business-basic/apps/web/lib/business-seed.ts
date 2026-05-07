@@ -47,6 +47,41 @@ export type BusinessPaymentEvent = {
   amount: number;
 };
 
+export type BusinessAccount = {
+  id: string;
+  code: string;
+  name: string;
+  rootType: "asset" | "liability" | "equity" | "income" | "expense";
+  accountType: "bank" | "receivable" | "payable" | "tax" | "income" | "expense" | "equity";
+  currency: "EUR" | "USD";
+  taxCode?: string;
+  isPosting: boolean;
+};
+
+export type BusinessJournalLine = {
+  accountId: string;
+  debit: number;
+  credit: number;
+  partyId?: string;
+  taxCode?: string;
+  costCenter?: string;
+  projectId?: string;
+};
+
+export type BusinessJournalEntry = {
+  id: string;
+  number: string;
+  postingDate: string;
+  type: "invoice" | "payment" | "receipt" | "manual" | "fx" | "reverse";
+  refType: "invoice" | "payment" | "receipt" | "bank_transaction" | "manual";
+  refId: string;
+  status: "Posted" | "Draft" | "Reversed";
+  narration: LocalizedText;
+  lines: BusinessJournalLine[];
+  postedAt?: string;
+  exportId?: string;
+};
+
 export type BusinessInvoice = {
   id: string;
   number: string;
@@ -94,6 +129,43 @@ export type BusinessBookkeepingExport = {
   context: LocalizedText;
 };
 
+export type BusinessReceipt = {
+  id: string;
+  number: string;
+  vendorName: string;
+  receiptDate: string;
+  dueDate: string;
+  status: "Inbox" | "Needs review" | "Posted" | "Paid" | "Rejected";
+  currency: "EUR" | "USD";
+  netAmount: number;
+  taxAmount: number;
+  total: number;
+  expenseAccountId: string;
+  payableAccountId: string;
+  taxCode: "DE_19_INPUT" | "DE_7_INPUT" | "DE_0" | "RC";
+  documentType: "Invoice" | "Receipt" | "Credit note";
+  source: "Upload" | "Email" | "Bank match" | "Manual";
+  bankTransactionId?: string;
+  journalEntryId?: string;
+  attachmentName: string;
+  extractedFields: Array<{ label: string; value: string; confidence: number }>;
+  notes: LocalizedText;
+};
+
+export type BusinessBankTransaction = {
+  id: string;
+  bookingDate: string;
+  valueDate: string;
+  counterparty: string;
+  purpose: string;
+  amount: number;
+  currency: "EUR" | "USD";
+  status: "Matched" | "Suggested" | "Unmatched" | "Ignored";
+  matchType?: "invoice" | "receipt" | "fee" | "manual";
+  matchedRecordId?: string;
+  confidence: number;
+};
+
 export type BusinessReport = {
   id: string;
   title: string;
@@ -108,14 +180,96 @@ export type BusinessReport = {
 };
 
 export type BusinessBundle = {
+  accounts: BusinessAccount[];
+  bankTransactions: BusinessBankTransaction[];
   customers: BusinessCustomer[];
+  journalEntries: BusinessJournalEntry[];
   products: BusinessProduct[];
   invoices: BusinessInvoice[];
   bookkeeping: BusinessBookkeepingExport[];
+  receipts: BusinessReceipt[];
   reports: BusinessReport[];
 };
 
 export const businessSeed: BusinessBundle = {
+  accounts: [
+    { id: "acc-bank", code: "1200", name: "Bank", rootType: "asset", accountType: "bank", currency: "EUR", isPosting: true },
+    { id: "acc-ar", code: "1400", name: "Forderungen aus Lieferungen und Leistungen", rootType: "asset", accountType: "receivable", currency: "EUR", isPosting: true },
+    { id: "acc-ap", code: "1600", name: "Verbindlichkeiten aus Lieferungen und Leistungen", rootType: "liability", accountType: "payable", currency: "EUR", isPosting: true },
+    { id: "acc-vat-output", code: "1776", name: "Umsatzsteuer 19%", rootType: "liability", accountType: "tax", currency: "EUR", taxCode: "DE_19_OUTPUT", isPosting: true },
+    { id: "acc-vat-input", code: "1576", name: "Abziehbare Vorsteuer 19%", rootType: "asset", accountType: "tax", currency: "EUR", taxCode: "DE_19_INPUT", isPosting: true },
+    { id: "acc-revenue-saas", code: "8400", name: "SaaS subscriptions", rootType: "income", accountType: "income", currency: "EUR", isPosting: true },
+    { id: "acc-revenue-implementation", code: "8337", name: "Implementation services", rootType: "income", accountType: "income", currency: "EUR", isPosting: true },
+    { id: "acc-revenue-research", code: "8338", name: "Research services", rootType: "income", accountType: "income", currency: "EUR", isPosting: true },
+    { id: "acc-revenue-support", code: "8401", name: "Support subscriptions", rootType: "income", accountType: "income", currency: "EUR", isPosting: true },
+    { id: "acc-software", code: "4920", name: "Software und Cloud", rootType: "expense", accountType: "expense", currency: "EUR", isPosting: true },
+    { id: "acc-contractor", code: "3125", name: "Fremdleistungen", rootType: "expense", accountType: "expense", currency: "EUR", isPosting: true },
+    { id: "acc-fees", code: "4970", name: "Nebenkosten des Geldverkehrs", rootType: "expense", accountType: "expense", currency: "EUR", isPosting: true }
+  ],
+  bankTransactions: [
+    {
+      id: "bank-2026-05-001",
+      bookingDate: "2026-05-01",
+      valueDate: "2026-05-01",
+      counterparty: "Stripe Payments Europe",
+      purpose: "Qualified Piper Inc. US-2026-003",
+      amount: 3300,
+      currency: "USD",
+      status: "Matched",
+      matchType: "invoice",
+      matchedRecordId: "inv-2026-003",
+      confidence: 98
+    },
+    {
+      id: "bank-2026-05-002",
+      bookingDate: "2026-05-02",
+      valueDate: "2026-05-02",
+      counterparty: "Cloud Harbor GmbH",
+      purpose: "R-2026-017 Hosting Business OS",
+      amount: -221.94,
+      currency: "EUR",
+      status: "Matched",
+      matchType: "receipt",
+      matchedRecordId: "rcpt-2026-017",
+      confidence: 96
+    },
+    {
+      id: "bank-2026-05-003",
+      bookingDate: "2026-05-03",
+      valueDate: "2026-05-03",
+      counterparty: "Stripe Payments Europe",
+      purpose: "Processing fees April",
+      amount: -39.22,
+      currency: "EUR",
+      status: "Suggested",
+      matchType: "fee",
+      confidence: 81
+    },
+    {
+      id: "bank-2026-05-004",
+      bookingDate: "2026-05-04",
+      valueDate: "2026-05-04",
+      counterparty: "Nova Logistics GmbH",
+      purpose: "RE-2026-004 Teilzahlung",
+      amount: 1200,
+      currency: "EUR",
+      status: "Suggested",
+      matchType: "invoice",
+      matchedRecordId: "inv-2026-004",
+      confidence: 73
+    },
+    {
+      id: "bank-2026-05-005",
+      bookingDate: "2026-05-04",
+      valueDate: "2026-05-04",
+      counterparty: "Unknown SEPA",
+      purpose: "Invoice May",
+      amount: -148.75,
+      currency: "EUR",
+      status: "Unmatched",
+      confidence: 32
+    }
+  ],
   customers: [
     {
       id: "cust-nova",
@@ -522,6 +676,252 @@ export const businessSeed: BusinessBundle = {
       }
     }
   ],
+  journalEntries: [
+    {
+      id: "je-inv-2026-001",
+      number: "B-2026-0001",
+      postingDate: "2026-04-18",
+      type: "invoice",
+      refType: "invoice",
+      refId: "inv-2026-001",
+      status: "Posted",
+      narration: {
+        en: "Posted customer invoice RE-2026-001 for Operations setup and CTOX Core.",
+        de: "Gebuchte Ausgangsrechnung RE-2026-001 fuer Operations Setup und CTOX Core."
+      },
+      lines: [
+        { accountId: "acc-ar", debit: 7378, credit: 0, partyId: "cust-nova" },
+        { accountId: "acc-revenue-saas", debit: 0, credit: 2200, partyId: "cust-nova" },
+        { accountId: "acc-revenue-implementation", debit: 0, credit: 4000, partyId: "cust-nova" },
+        { accountId: "acc-vat-output", debit: 0, credit: 1178, partyId: "cust-nova", taxCode: "DE_19_OUTPUT" }
+      ],
+      postedAt: "2026-04-18T10:20:00.000Z",
+      exportId: "exp-2026-04"
+    },
+    {
+      id: "je-inv-2026-002",
+      number: "B-2026-0002",
+      postingDate: "2026-04-26",
+      type: "invoice",
+      refType: "invoice",
+      refId: "inv-2026-002",
+      status: "Posted",
+      narration: {
+        en: "Posted customer invoice RE-2026-002 with cross-border VAT review flag.",
+        de: "Gebuchte Ausgangsrechnung RE-2026-002 mit Cross-Border-USt-Review."
+      },
+      lines: [
+        { accountId: "acc-ar", debit: 3332, credit: 0, partyId: "cust-atelier" },
+        { accountId: "acc-revenue-saas", debit: 0, credit: 2200, partyId: "cust-atelier" },
+        { accountId: "acc-revenue-research", debit: 0, credit: 600, partyId: "cust-atelier" },
+        { accountId: "acc-vat-output", debit: 0, credit: 532, partyId: "cust-atelier", taxCode: "DE_19_OUTPUT" }
+      ],
+      postedAt: "2026-04-26T12:45:00.000Z",
+      exportId: "exp-2026-04"
+    },
+    {
+      id: "je-inv-2026-003",
+      number: "B-2026-0003",
+      postingDate: "2026-05-01",
+      type: "invoice",
+      refType: "invoice",
+      refId: "inv-2026-003",
+      status: "Posted",
+      narration: {
+        en: "Posted reverse-charge USD subscription invoice US-2026-003.",
+        de: "Gebuchte Reverse-Charge USD Subscription Rechnung US-2026-003."
+      },
+      lines: [
+        { accountId: "acc-ar", debit: 3300, credit: 0, partyId: "cust-piper", taxCode: "DE_0" },
+        { accountId: "acc-revenue-saas", debit: 0, credit: 2400, partyId: "cust-piper" },
+        { accountId: "acc-revenue-support", debit: 0, credit: 900, partyId: "cust-piper" }
+      ],
+      postedAt: "2026-05-01T08:15:00.000Z",
+      exportId: "exp-2026-05-open"
+    },
+    {
+      id: "je-pay-2026-003",
+      number: "B-2026-0004",
+      postingDate: "2026-05-01",
+      type: "payment",
+      refType: "bank_transaction",
+      refId: "bank-2026-05-001",
+      status: "Posted",
+      narration: {
+        en: "Matched Stripe settlement against US-2026-003.",
+        de: "Stripe Settlement gegen US-2026-003 ausgeglichen."
+      },
+      lines: [
+        { accountId: "acc-bank", debit: 3300, credit: 0, partyId: "cust-piper" },
+        { accountId: "acc-ar", debit: 0, credit: 3300, partyId: "cust-piper" }
+      ],
+      postedAt: "2026-05-01T09:10:00.000Z",
+      exportId: "exp-2026-05-open"
+    },
+    {
+      id: "je-inv-2026-004",
+      number: "B-2026-0005",
+      postingDate: "2026-04-01",
+      type: "invoice",
+      refType: "invoice",
+      refId: "inv-2026-004",
+      status: "Posted",
+      narration: {
+        en: "Posted April subscription invoice RE-2026-004.",
+        de: "Gebuchte April Subscription Rechnung RE-2026-004."
+      },
+      lines: [
+        { accountId: "acc-ar", debit: 3689, credit: 0, partyId: "cust-nova" },
+        { accountId: "acc-revenue-saas", debit: 0, credit: 2200, partyId: "cust-nova" },
+        { accountId: "acc-revenue-support", debit: 0, credit: 900, partyId: "cust-nova" },
+        { accountId: "acc-vat-output", debit: 0, credit: 589, partyId: "cust-nova", taxCode: "DE_19_OUTPUT" }
+      ],
+      postedAt: "2026-04-01T07:45:00.000Z",
+      exportId: "exp-2026-04"
+    },
+    {
+      id: "je-rcpt-2026-017",
+      number: "B-2026-0006",
+      postingDate: "2026-05-02",
+      type: "receipt",
+      refType: "receipt",
+      refId: "rcpt-2026-017",
+      status: "Posted",
+      narration: {
+        en: "Posted Cloud Harbor hosting receipt with input VAT.",
+        de: "Cloud Harbor Hosting-Eingangsbeleg mit Vorsteuer gebucht."
+      },
+      lines: [
+        { accountId: "acc-software", debit: 186.5, credit: 0, taxCode: "DE_19_INPUT" },
+        { accountId: "acc-vat-input", debit: 35.44, credit: 0, taxCode: "DE_19_INPUT" },
+        { accountId: "acc-ap", debit: 0, credit: 221.94 }
+      ],
+      postedAt: "2026-05-02T11:15:00.000Z",
+      exportId: "exp-2026-05-open"
+    },
+    {
+      id: "je-pay-rcpt-2026-017",
+      number: "B-2026-0007",
+      postingDate: "2026-05-02",
+      type: "payment",
+      refType: "bank_transaction",
+      refId: "bank-2026-05-002",
+      status: "Posted",
+      narration: {
+        en: "Matched bank payment for Cloud Harbor hosting receipt.",
+        de: "Bankzahlung fuer Cloud Harbor Hosting-Eingangsbeleg ausgeglichen."
+      },
+      lines: [
+        { accountId: "acc-ap", debit: 221.94, credit: 0 },
+        { accountId: "acc-bank", debit: 0, credit: 221.94 }
+      ],
+      postedAt: "2026-05-02T11:20:00.000Z",
+      exportId: "exp-2026-05-open"
+    },
+    {
+      id: "je-bank-fee-2026-05",
+      number: "B-2026-0008",
+      postingDate: "2026-05-03",
+      type: "manual",
+      refType: "bank_transaction",
+      refId: "bank-2026-05-003",
+      status: "Draft",
+      narration: {
+        en: "Suggested posting for Stripe processing fees, waiting for review.",
+        de: "Buchungsvorschlag fuer Stripe-Gebuehren, wartet auf Review."
+      },
+      lines: [
+        { accountId: "acc-fees", debit: 39.22, credit: 0 },
+        { accountId: "acc-bank", debit: 0, credit: 39.22 }
+      ]
+    }
+  ],
+  receipts: [
+    {
+      id: "rcpt-2026-017",
+      number: "R-2026-017",
+      vendorName: "Cloud Harbor GmbH",
+      receiptDate: "2026-05-02",
+      dueDate: "2026-05-02",
+      status: "Paid",
+      currency: "EUR",
+      netAmount: 186.5,
+      taxAmount: 35.44,
+      total: 221.94,
+      expenseAccountId: "acc-software",
+      payableAccountId: "acc-ap",
+      taxCode: "DE_19_INPUT",
+      documentType: "Invoice",
+      source: "Email",
+      bankTransactionId: "bank-2026-05-002",
+      journalEntryId: "je-rcpt-2026-017",
+      attachmentName: "cloud-harbor-r-2026-017.pdf",
+      extractedFields: [
+        { label: "Vendor", value: "Cloud Harbor GmbH", confidence: 99 },
+        { label: "Gross", value: "221.94 EUR", confidence: 98 },
+        { label: "VAT", value: "35.44 EUR", confidence: 96 }
+      ],
+      notes: {
+        en: "Hosting receipt is posted, paid, and matched against the bank feed.",
+        de: "Hosting-Eingangsbeleg ist gebucht, bezahlt und mit dem Bankfeed abgeglichen."
+      }
+    },
+    {
+      id: "rcpt-2026-018",
+      number: "R-2026-018",
+      vendorName: "Independent Design Partner",
+      receiptDate: "2026-05-03",
+      dueDate: "2026-05-17",
+      status: "Needs review",
+      currency: "EUR",
+      netAmount: 780,
+      taxAmount: 148.2,
+      total: 928.2,
+      expenseAccountId: "acc-contractor",
+      payableAccountId: "acc-ap",
+      taxCode: "DE_19_INPUT",
+      documentType: "Invoice",
+      source: "Upload",
+      attachmentName: "design-partner-r-2026-018.pdf",
+      extractedFields: [
+        { label: "Vendor", value: "Independent Design Partner", confidence: 91 },
+        { label: "Service date", value: "2026-04-30", confidence: 76 },
+        { label: "VAT ID", value: "missing", confidence: 52 }
+      ],
+      notes: {
+        en: "OCR found the amount, but VAT ID and service period need human review before posting.",
+        de: "OCR hat den Betrag erkannt, aber USt-ID und Leistungszeitraum brauchen Review vor Buchung."
+      }
+    },
+    {
+      id: "rcpt-2026-019",
+      number: "R-2026-019",
+      vendorName: "OpenAI API Platform",
+      receiptDate: "2026-05-04",
+      dueDate: "2026-05-04",
+      status: "Inbox",
+      currency: "USD",
+      netAmount: 148.75,
+      taxAmount: 0,
+      total: 148.75,
+      expenseAccountId: "acc-software",
+      payableAccountId: "acc-ap",
+      taxCode: "RC",
+      documentType: "Receipt",
+      source: "Bank match",
+      bankTransactionId: "bank-2026-05-005",
+      attachmentName: "openai-usage-2026-05.html",
+      extractedFields: [
+        { label: "Vendor", value: "OpenAI API Platform", confidence: 88 },
+        { label: "Gross", value: "148.75 USD", confidence: 84 },
+        { label: "Tax treatment", value: "reverse charge", confidence: 61 }
+      ],
+      notes: {
+        en: "Bank line is unmatched until the imported receipt is reviewed for reverse-charge treatment.",
+        de: "Bankzeile bleibt ungeklärt, bis der importierte Beleg fuer Reverse Charge geprueft ist."
+      }
+    }
+  ],
   bookkeeping: [
     {
       id: "exp-2026-04",
@@ -610,11 +1010,25 @@ export async function getBusinessBundle() {
 
   try {
     const db = await import("@ctox-business/db/modules");
-    const [customerRows, productRows, invoiceRows, bookkeepingRows, reportRows] = await Promise.all([
+    const [
+      accountRows,
+      bankTransactionRows,
+      customerRows,
+      journalEntryRows,
+      productRows,
+      invoiceRows,
+      bookkeepingRows,
+      receiptRows,
+      reportRows
+    ] = await Promise.all([
+      db.listModuleRecords("business", "accounts"),
+      db.listModuleRecords("business", "bank-transactions"),
       db.listModuleRecords("business", "customers"),
+      db.listModuleRecords("business", "ledger"),
       db.listModuleRecords("business", "products"),
       db.listModuleRecords("business", "invoices"),
       db.listModuleRecords("business", "bookkeeping"),
+      db.listModuleRecords("business", "receipts"),
       db.listModuleRecords("business", "reports")
     ]);
 
@@ -625,10 +1039,14 @@ export async function getBusinessBundle() {
     }
 
     return {
+      accounts: rowsToPayload(accountRows, businessSeed.accounts),
+      bankTransactions: rowsToPayload(bankTransactionRows, businessSeed.bankTransactions),
       customers: rowsToPayload(customerRows, businessSeed.customers),
+      journalEntries: rowsToPayload(journalEntryRows, businessSeed.journalEntries),
       products: rowsToPayload(productRows, businessSeed.products),
       invoices: rowsToPayload(invoiceRows, businessSeed.invoices),
       bookkeeping: rowsToPayload(bookkeepingRows, businessSeed.bookkeeping),
+      receipts: rowsToPayload(receiptRows, businessSeed.receipts),
       reports: rowsToPayload(reportRows, businessSeed.reports)
     };
   } catch (error) {
@@ -649,10 +1067,14 @@ export async function getBusinessResource(resource: string) {
 }
 
 export function normalizeBusinessResource(resource: string): keyof BusinessBundle | null {
+  if (resource === "accounts") return "accounts";
+  if (resource === "bank-transactions" || resource === "banking" || resource === "payments") return "bankTransactions";
   if (resource === "customers") return "customers";
+  if (resource === "journal" || resource === "ledger" || resource === "journal-entries") return "journalEntries";
   if (resource === "products" || resource === "services") return "products";
   if (resource === "invoices") return "invoices";
   if (resource === "bookkeeping" || resource === "exports") return "bookkeeping";
+  if (resource === "receipts" || resource === "inbound-receipts") return "receipts";
   if (resource === "reports") return "reports";
   return null;
 }
@@ -662,15 +1084,31 @@ export function text(value: LocalizedText, locale: SupportedLocale) {
 }
 
 export function businessCurrency(amount: number, currency = "EUR", locale: SupportedLocale = "en") {
+  const hasCents = Math.abs(amount % 1) > 0.001;
   return new Intl.NumberFormat(locale === "de" ? "de-DE" : "en-US", {
     currency,
-    maximumFractionDigits: 0,
+    maximumFractionDigits: hasCents ? 2 : 0,
+    minimumFractionDigits: hasCents ? 2 : 0,
     style: "currency"
   }).format(amount);
 }
 
 function businessSeedRecords() {
   return {
+    accounts: businessSeed.accounts.map((account) => ({
+      id: account.id,
+      label: `${account.code} ${account.name}`,
+      status: account.isPosting ? "Posting" : "Group",
+      ownerId: account.rootType,
+      payload: account
+    })),
+    "bank-transactions": businessSeed.bankTransactions.map((transaction) => ({
+      id: transaction.id,
+      label: `${transaction.counterparty} ${transaction.amount}`,
+      status: transaction.status,
+      ownerId: transaction.matchedRecordId ?? transaction.matchType,
+      payload: transaction
+    })),
     bookkeeping: businessSeed.bookkeeping.map((item) => ({
       id: item.id,
       label: item.period,
@@ -692,12 +1130,26 @@ function businessSeedRecords() {
       ownerId: invoice.customerId,
       payload: invoice
     })),
+    ledger: businessSeed.journalEntries.map((entry) => ({
+      id: entry.id,
+      label: entry.number,
+      status: entry.status,
+      ownerId: entry.refId,
+      payload: entry
+    })),
     products: businessSeed.products.map((product) => ({
       id: product.id,
       label: product.name,
       status: product.status,
       ownerId: product.revenueAccount,
       payload: product
+    })),
+    receipts: businessSeed.receipts.map((receipt) => ({
+      id: receipt.id,
+      label: receipt.number,
+      status: receipt.status,
+      ownerId: receipt.vendorName,
+      payload: receipt
     })),
     reports: businessSeed.reports.map((report) => ({
       id: report.id,

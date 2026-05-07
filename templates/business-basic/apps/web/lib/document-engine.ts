@@ -46,7 +46,7 @@ export function renderDocumentHtml(document: OperationsDocumentRecord, locale: S
     "<head>",
     "<meta charset=\"utf-8\" />",
     `<title>${escapeHtml(document.title)}</title>`,
-    "<style>body{font-family:Inter,Arial,sans-serif;line-height:1.5;margin:40px;color:#162126} h1,h2{line-height:1.15} table{border-collapse:collapse;width:100%} td,th{border:1px solid #ccd6dd;padding:6px}</style>",
+    "<style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;line-height:1.5;margin:40px;color:#162126} h1,h2{line-height:1.15} table{border-collapse:collapse;width:100%} td,th{border:1px solid #ccd6dd;padding:6px}</style>",
     "</head>",
     "<body>",
     text(document.bodyHtml, locale),

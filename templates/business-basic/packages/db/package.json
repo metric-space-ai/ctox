@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "exports": {
+    "./accounting": "./src/accounting.ts",
     ".": "./src/index.ts",
     "./modules": "./src/modules.ts",
     "./operations": "./src/operations.ts",
@@ -12,6 +13,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json --noEmit",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test:accounting-smoke": "tsx scripts/accounting-smoke.ts",
     "generate": "drizzle-kit generate --config drizzle.config.ts",
     "migrate": "drizzle-kit migrate --config drizzle.config.ts"
   },
@@ -23,6 +25,7 @@
     "@types/node": "^25.6.0",
     "@types/pg": "^8.15.6",
     "drizzle-kit": "^0.31.10",
+    "tsx": "^4.21.0",
     "typescript": "^6.0.3"
   }
 }
