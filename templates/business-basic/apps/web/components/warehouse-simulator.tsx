@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   getAvailableQuantity,
   SYSTEM_OWNER_PARTY_ID,
@@ -23,9 +24,13 @@ export function WarehouseSimulator({
   pickLabel: string;
   shipLabel: string;
 }) {
+  const router = useRouter();
   const [state, setState] = useState(initialSnapshot);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [message, setMessage] = useState("Ready");
+  useEffect(() => {
+    setState(initialSnapshot);
+  }, [initialSnapshot]);
   const simulatorReservation = [...state.reservations]
     .reverse()
     .find((reservation) => reservation.id.startsWith("sim-reserve-"));
@@ -60,6 +65,7 @@ export function WarehouseSimulator({
         throw new Error(payload.error ?? "Action failed");
       }
       setState(payload.snapshot);
+      router.refresh();
       setMessage(successMessage);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Action failed");
@@ -71,7 +77,7 @@ export function WarehouseSimulator({
   return (
     <section className="warehouse-simulator" aria-label="Warehouse command simulator">
       <div>
-        <strong>Interactive command loop</strong>
+        <strong>Manual reservation</strong>
         <span>{message}</span>
       </div>
       <div className="warehouse-command-row">

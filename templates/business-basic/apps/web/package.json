@@ -4,13 +4,14 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev --webpack",
     "build": "pnpm typecheck && next build --webpack",
+    "test:accounting-e2e": "node scripts/accounting-e2e-smoke.mjs",
     "start": "next start",
     "test:business-stack": "node scripts/business-stack-smoke.mjs",
     "test:operations": "node scripts/operations-smoke.mjs",
     "test:ui-contract": "node scripts/ui-contract-smoke.mjs",
-    "test:all": "pnpm typecheck && pnpm test:ui-contract && pnpm test:operations && pnpm test:business-stack && pnpm build",
+    "test:all": "pnpm typecheck && pnpm test:ui-contract && pnpm test:operations && pnpm test:business-stack && pnpm test:accounting-e2e && pnpm build",
     "typecheck": "tsc -p tsconfig.typecheck.json --noEmit"
   },
   "dependencies": {

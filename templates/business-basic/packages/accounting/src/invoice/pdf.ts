@@ -104,6 +104,28 @@ export function buildZugferdXml(invoice: BusinessInvoiceLike, context: InvoiceCo
   ].join("\n");
 }
 
+export function validateZugferdXml(xml: string) {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+  const required = [
+    ["cross_industry_invoice_missing", /<rsm:CrossIndustryInvoice[\s>]/],
+    ["document_id_missing", /<ram:ID>[^<]+<\/ram:ID>/],
+    ["issue_date_missing", /<ram:IssueDateTime>/],
+    ["seller_missing", /<ram:SellerTradeParty>/],
+    ["buyer_missing", /<ram:BuyerTradeParty>/],
+    ["currency_missing", /<ram:InvoiceCurrencyCode>[^<]+<\/ram:InvoiceCurrencyCode>/],
+    ["grand_total_missing", /<ram:GrandTotalAmount>[^<]+<\/ram:GrandTotalAmount>/],
+    ["due_payable_missing", /<ram:DuePayableAmount>[^<]+<\/ram:DuePayableAmount>/]
+  ] as const;
+
+  for (const [code, pattern] of required) {
+    if (!pattern.test(xml)) errors.push(code);
+  }
+  if (!/<ram:ApplicableTradeTax>/.test(xml)) warnings.push("trade_tax_missing");
+  if (!/<ram:IncludedSupplyChainTradeLineItem>/.test(xml)) errors.push("invoice_lines_missing");
+  return { errors, warnings };
+}
+
 function localized(value: LocalizedValue, locale: "de" | "en") {
   return typeof value === "string" ? value : value[locale] ?? value.de ?? value.en;
 }

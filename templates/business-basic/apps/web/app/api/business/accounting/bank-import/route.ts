@@ -102,7 +102,7 @@ export async function POST(request: Request) {
       payload: { command, statement: bankStatement },
       topic: "business.bank_statement.prepare_import"
     });
-    const matchSnapshot = await buildMatchedLineSnapshot(statement.lines);
+    const matchSnapshot = await buildMatchedLineSnapshot(statementExternalId, statement.lines);
 
     if (process.env.DATABASE_URL) {
       await saveAccountingWorkflowSnapshot({ audit, bankStatement, outbox });
@@ -136,7 +136,7 @@ export async function POST(request: Request) {
   }
 }
 
-async function buildMatchedLineSnapshot(lines: BankStatementLines) {
+async function buildMatchedLineSnapshot(statementExternalId: string, lines: BankStatementLines) {
   const data = await getDatabaseBackedBusinessBundle(await getBusinessBundle());
   const line = lines.find((item) => data.invoices.some((invoice) => item.purpose?.includes(invoice.number)));
   if (!line) return null;
@@ -149,7 +149,7 @@ async function buildMatchedLineSnapshot(lines: BankStatementLines) {
       confidence: invoice ? 0.92 : 0.45,
       counterparty: line.remitterName ?? "Unknown",
       currency: line.currency === "USD" ? "USD" : "EUR",
-      id: `bank-line-${line.lineNo}`,
+      id: bankLineExternalId(statementExternalId, line.lineNo),
       matchedRecordId: invoice?.id,
       matchType: invoice ? "invoice" : "manual",
       purpose: line.purpose ?? "",

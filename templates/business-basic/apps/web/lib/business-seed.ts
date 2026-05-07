@@ -52,7 +52,7 @@ export type BusinessAccount = {
   code: string;
   name: string;
   rootType: "asset" | "liability" | "equity" | "income" | "expense";
-  accountType: "bank" | "receivable" | "payable" | "tax" | "income" | "expense" | "equity";
+  accountType: "accumulated_depreciation" | "bank" | "depreciation" | "fixed_asset" | "receivable" | "payable" | "tax" | "income" | "expense" | "equity";
   currency: "EUR" | "USD";
   taxCode?: string;
   isPosting: boolean;
@@ -72,8 +72,8 @@ export type BusinessJournalEntry = {
   id: string;
   number: string;
   postingDate: string;
-  type: "invoice" | "payment" | "receipt" | "manual" | "fx" | "reverse";
-  refType: "invoice" | "payment" | "receipt" | "bank_transaction" | "manual";
+  type: "depreciation" | "invoice" | "payment" | "receipt" | "manual" | "fx" | "reverse";
+  refType: "asset" | "invoice" | "payment" | "receipt" | "bank_transaction" | "manual";
   refId: string;
   status: "Posted" | "Draft" | "Reversed";
   narration: LocalizedText;
@@ -179,16 +179,48 @@ export type BusinessReport = {
   linkedExportIds: string[];
 };
 
+export type BusinessFixedAsset = {
+  accumulatedDepreciationAccountId: string;
+  acquisitionCost: number;
+  acquisitionDate: string;
+  acquisitionJournalEntryId?: string;
+  assetAccountId: string;
+  category: string;
+  currency: "EUR" | "USD";
+  depreciationExpenseAccountId: string;
+  depreciationMethod: "Straight line";
+  id: string;
+  name: string;
+  notes: LocalizedText;
+  receiptId?: string;
+  salvageValue: number;
+  serialNumber?: string;
+  status: "Draft" | "Active" | "Fully depreciated" | "Disposed";
+  supplier: string;
+  usefulLifeMonths: number;
+};
+
+export type BusinessFiscalPeriod = {
+  closedAt?: string;
+  companyId: string;
+  endDate: string;
+  id: string;
+  startDate: string;
+  status: "closed" | "open";
+};
+
 export type BusinessBundle = {
   accounts: BusinessAccount[];
   bankTransactions: BusinessBankTransaction[];
   customers: BusinessCustomer[];
+  fiscalPeriods: BusinessFiscalPeriod[];
   journalEntries: BusinessJournalEntry[];
   products: BusinessProduct[];
   invoices: BusinessInvoice[];
   bookkeeping: BusinessBookkeepingExport[];
   receipts: BusinessReceipt[];
   reports: BusinessReport[];
+  fixedAssets: BusinessFixedAsset[];
   warehouse: Array<Record<string, unknown>>;
 };
 
@@ -196,14 +228,19 @@ export const businessSeed: BusinessBundle = {
   accounts: [
     { id: "acc-bank", code: "1200", name: "Bank", rootType: "asset", accountType: "bank", currency: "EUR", isPosting: true },
     { id: "acc-ar", code: "1400", name: "Forderungen aus Lieferungen und Leistungen", rootType: "asset", accountType: "receivable", currency: "EUR", isPosting: true },
+    { id: "acc-fixed-assets", code: "0480", name: "Betriebs- und Geschaeftsausstattung", rootType: "asset", accountType: "fixed_asset", currency: "EUR", isPosting: true },
+    { id: "acc-accumulated-depreciation", code: "0490", name: "Kumulierte Abschreibungen auf Sachanlagen", rootType: "asset", accountType: "accumulated_depreciation", currency: "EUR", isPosting: true },
     { id: "acc-ap", code: "1600", name: "Verbindlichkeiten aus Lieferungen und Leistungen", rootType: "liability", accountType: "payable", currency: "EUR", isPosting: true },
     { id: "acc-vat-output", code: "1776", name: "Umsatzsteuer 19%", rootType: "liability", accountType: "tax", currency: "EUR", taxCode: "DE_19_OUTPUT", isPosting: true },
+    { id: "acc-vat-output-7", code: "1771", name: "Umsatzsteuer 7%", rootType: "liability", accountType: "tax", currency: "EUR", taxCode: "DE_7_OUTPUT", isPosting: true },
     { id: "acc-vat-input", code: "1576", name: "Abziehbare Vorsteuer 19%", rootType: "asset", accountType: "tax", currency: "EUR", taxCode: "DE_19_INPUT", isPosting: true },
+    { id: "acc-vat-input-7", code: "1571", name: "Abziehbare Vorsteuer 7%", rootType: "asset", accountType: "tax", currency: "EUR", taxCode: "DE_7_INPUT", isPosting: true },
     { id: "acc-revenue-saas", code: "8400", name: "SaaS subscriptions", rootType: "income", accountType: "income", currency: "EUR", isPosting: true },
     { id: "acc-revenue-implementation", code: "8337", name: "Implementation services", rootType: "income", accountType: "income", currency: "EUR", isPosting: true },
     { id: "acc-revenue-research", code: "8338", name: "Research services", rootType: "income", accountType: "income", currency: "EUR", isPosting: true },
     { id: "acc-revenue-support", code: "8401", name: "Support subscriptions", rootType: "income", accountType: "income", currency: "EUR", isPosting: true },
     { id: "acc-software", code: "4920", name: "Software und Cloud", rootType: "expense", accountType: "expense", currency: "EUR", isPosting: true },
+    { id: "acc-depreciation", code: "4830", name: "Abschreibungen auf Sachanlagen", rootType: "expense", accountType: "depreciation", currency: "EUR", isPosting: true },
     { id: "acc-contractor", code: "3125", name: "Fremdleistungen", rootType: "expense", accountType: "expense", currency: "EUR", isPosting: true },
     { id: "acc-fees", code: "4970", name: "Nebenkosten des Geldverkehrs", rootType: "expense", accountType: "expense", currency: "EUR", isPosting: true }
   ],
@@ -835,6 +872,100 @@ export const businessSeed: BusinessBundle = {
         { accountId: "acc-fees", debit: 39.22, credit: 0 },
         { accountId: "acc-bank", debit: 0, credit: 39.22 }
       ]
+    },
+    {
+      id: "je-asset-acq-2024-001",
+      number: "B-2024-0001",
+      postingDate: "2024-01-23",
+      type: "manual",
+      refType: "asset",
+      refId: "asset-macbook-2024",
+      status: "Posted",
+      narration: {
+        en: "Capitalized fixed asset from supplier invoice RE2401186.",
+        de: "Anlage aus Lieferantenrechnung RE2401186 aktiviert."
+      },
+      lines: [
+        { accountId: "acc-fixed-assets", debit: 1236.97, credit: 0 },
+        { accountId: "acc-vat-input", debit: 235.03, credit: 0, taxCode: "DE_19_INPUT" },
+        { accountId: "acc-ap", debit: 0, credit: 1472 }
+      ],
+      postedAt: "2024-01-23T14:11:00.000Z",
+      exportId: "exp-2024-01"
+    },
+    {
+      id: "je-asset-pay-2024-001",
+      number: "B-2024-0002",
+      postingDate: "2024-01-23",
+      type: "payment",
+      refType: "asset",
+      refId: "asset-macbook-2024",
+      status: "Posted",
+      narration: {
+        en: "Paid supplier invoice for fixed asset RE2401186.",
+        de: "Lieferantenrechnung fuer Anlage RE2401186 bezahlt."
+      },
+      lines: [
+        { accountId: "acc-ap", debit: 1472, credit: 0 },
+        { accountId: "acc-bank", debit: 0, credit: 1472 }
+      ],
+      postedAt: "2024-01-23T14:20:00.000Z",
+      exportId: "exp-2024-01"
+    },
+    {
+      id: "je-asset-depr-2024-001",
+      number: "B-2024-0012",
+      postingDate: "2024-12-31",
+      type: "depreciation",
+      refType: "asset",
+      refId: "asset-macbook-2024",
+      status: "Posted",
+      narration: {
+        en: "Annual depreciation 2024 for MacBook Pro asset.",
+        de: "Jahresabschreibung 2024 fuer MacBook Pro Anlage."
+      },
+      lines: [
+        { accountId: "acc-depreciation", debit: 247.97, credit: 0 },
+        { accountId: "acc-accumulated-depreciation", debit: 0, credit: 247.97 }
+      ],
+      postedAt: "2024-12-31T18:00:00.000Z",
+      exportId: "exp-2024-12"
+    },
+    {
+      id: "je-asset-depr-2025-001",
+      number: "B-2025-0012",
+      postingDate: "2025-12-31",
+      type: "depreciation",
+      refType: "asset",
+      refId: "asset-macbook-2024",
+      status: "Posted",
+      narration: {
+        en: "Annual depreciation 2025 for MacBook Pro asset.",
+        de: "Jahresabschreibung 2025 fuer MacBook Pro Anlage."
+      },
+      lines: [
+        { accountId: "acc-depreciation", debit: 248, credit: 0 },
+        { accountId: "acc-accumulated-depreciation", debit: 0, credit: 248 }
+      ],
+      postedAt: "2025-12-31T18:00:00.000Z",
+      exportId: "exp-2025-12"
+    },
+    {
+      id: "je-asset-depr-2026-001",
+      number: "B-2026-0009",
+      postingDate: "2026-12-31",
+      type: "depreciation",
+      refType: "asset",
+      refId: "asset-macbook-2024",
+      status: "Draft",
+      narration: {
+        en: "Prepared annual depreciation 2026 for MacBook Pro asset.",
+        de: "Vorbereitete Jahresabschreibung 2026 fuer MacBook Pro Anlage."
+      },
+      lines: [
+        { accountId: "acc-depreciation", debit: 248, credit: 0 },
+        { accountId: "acc-accumulated-depreciation", debit: 0, credit: 248 }
+      ]
     }
   ],
   receipts: [
@@ -957,6 +1088,32 @@ export const businessSeed: BusinessBundle = {
       }
     }
   ],
+  fiscalPeriods: fiscalPeriodsForYear(2026),
+  fixedAssets: [
+    {
+      id: "asset-macbook-2024",
+      name: "MacBook Pro 14 M3",
+      category: "Computer und Zubehoer",
+      supplier: "Schneiderladen GmbH",
+      receiptId: "RE2401186",
+      acquisitionDate: "2024-01-23",
+      acquisitionCost: 1236.97,
+      currency: "EUR",
+      usefulLifeMonths: 60,
+      salvageValue: 1,
+      status: "Active",
+      assetAccountId: "acc-fixed-assets",
+      accumulatedDepreciationAccountId: "acc-accumulated-depreciation",
+      depreciationExpenseAccountId: "acc-depreciation",
+      acquisitionJournalEntryId: "je-asset-acq-2024-001",
+      depreciationMethod: "Straight line",
+      serialNumber: "WS101009",
+      notes: {
+        en: "Capitalized office hardware. Depreciation schedule posts to accumulated depreciation and flows into the balance sheet.",
+        de: "Aktivierte Buero-Hardware. Abschreibungsplan bucht gegen kumulierte Abschreibung und fliesst in die Bilanz."
+      }
+    }
+  ],
   warehouse: [],
   reports: [
     {
@@ -1021,6 +1178,7 @@ export async function getBusinessBundle() {
       invoiceRows,
       bookkeepingRows,
       receiptRows,
+      fixedAssetRows,
       reportRows
     ] = await Promise.all([
       db.listModuleRecords("business", "accounts"),
@@ -1031,6 +1189,7 @@ export async function getBusinessBundle() {
       db.listModuleRecords("business", "invoices"),
       db.listModuleRecords("business", "bookkeeping"),
       db.listModuleRecords("business", "receipts"),
+      db.listModuleRecords("business", "fixed-assets"),
       db.listModuleRecords("business", "reports")
     ]);
 
@@ -1045,10 +1204,12 @@ export async function getBusinessBundle() {
       bankTransactions: rowsToPayload(bankTransactionRows, businessSeed.bankTransactions),
       customers: rowsToPayload(customerRows, businessSeed.customers),
       journalEntries: rowsToPayload(journalEntryRows, businessSeed.journalEntries),
+      fiscalPeriods: businessSeed.fiscalPeriods,
       products: rowsToPayload(productRows, businessSeed.products),
       invoices: rowsToPayload(invoiceRows, businessSeed.invoices),
       bookkeeping: rowsToPayload(bookkeepingRows, businessSeed.bookkeeping),
       receipts: rowsToPayload(receiptRows, businessSeed.receipts),
+      fixedAssets: rowsToPayload(fixedAssetRows, businessSeed.fixedAssets),
       reports: rowsToPayload(reportRows, businessSeed.reports),
       warehouse: []
     };
@@ -1079,6 +1240,8 @@ export function normalizeBusinessResource(resource: string): keyof BusinessBundl
   if (resource === "invoices") return "invoices";
   if (resource === "bookkeeping" || resource === "exports") return "bookkeeping";
   if (resource === "receipts" || resource === "inbound-receipts") return "receipts";
+  if (resource === "fixed-assets" || resource === "assets" || resource === "anlagen") return "fixedAssets";
+  if (resource === "fiscal-periods" || resource === "periods" || resource === "perioden") return "fiscalPeriods";
   if (resource === "reports") return "reports";
   return null;
 }
@@ -1134,6 +1297,20 @@ function businessSeedRecords() {
       ownerId: invoice.customerId,
       payload: invoice
     })),
+    "fixed-assets": businessSeed.fixedAssets.map((asset) => ({
+      id: asset.id,
+      label: asset.name,
+      status: asset.status,
+      ownerId: asset.category,
+      payload: asset
+    })),
+    "fiscal-periods": businessSeed.fiscalPeriods.map((period) => ({
+      id: period.id,
+      label: `${period.startDate} - ${period.endDate}`,
+      status: period.status,
+      ownerId: period.companyId,
+      payload: period
+    })),
     ledger: businessSeed.journalEntries.map((entry) => ({
       id: entry.id,
       label: entry.number,
@@ -1163,6 +1340,37 @@ function businessSeedRecords() {
       payload: report
     }))
   };
+}
+
+function fiscalPeriodsForYear(year: number): BusinessFiscalPeriod[] {
+  const companyId = "business-basic-company";
+  const months = Array.from({ length: 12 }, (_, index) => {
+    const month = index + 1;
+    const start = new Date(Date.UTC(year, index, 1));
+    const end = new Date(Date.UTC(year, month, 0));
+    return {
+      companyId,
+      endDate: isoDate(end),
+      id: `fy-${year}-${String(month).padStart(2, "0")}`,
+      startDate: isoDate(start),
+      status: "open" as const
+    };
+  });
+
+  return [
+    {
+      companyId,
+      endDate: `${year}-12-31`,
+      id: `fy-${year}`,
+      startDate: `${year}-01-01`,
+      status: "open"
+    },
+    ...months
+  ];
+}
+
+function isoDate(date: Date) {
+  return date.toISOString().slice(0, 10);
 }
 
 function rowsToPayload<T>(rows: Array<{ payloadJson: string }> | null | undefined, fallback: T[]): T[] {

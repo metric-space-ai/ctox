@@ -4,7 +4,7 @@ import { useState } from "react";
 import { notifyAccountingWorkflowUpdated } from "./accounting-workflow-events";
 
 type AccountingCommandButtonProps = {
-  action: "export" | "match" | "post";
+  action: "capitalize" | "depreciate" | "dispose" | "export" | "match" | "post";
   label: string;
   recordId: string;
   resource: string;

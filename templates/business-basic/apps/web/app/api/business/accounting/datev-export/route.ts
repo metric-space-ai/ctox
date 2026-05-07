@@ -17,6 +17,7 @@ export async function GET(request: Request) {
   if (process.env.DATABASE_URL) {
     await saveAccountingWorkflowSnapshot({
       audit: accounting.audit,
+      datevExport: accounting.datevExport,
       outbox: accounting.outbox,
       proposal: accounting.proposal
     });
@@ -31,6 +32,7 @@ export async function GET(request: Request) {
       persisted,
       workflow: {
         audit: accounting.audit,
+        datevExport: accounting.datevExport,
         outbox: accounting.outbox,
         proposal: accounting.proposal
       }

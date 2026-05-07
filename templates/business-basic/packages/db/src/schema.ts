@@ -1174,6 +1174,45 @@ export const accountingLedgerEntries = pgTable("accounting_ledger_entries", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow()
 });
 
+export const accountingDatevExports = pgTable("accounting_datev_exports", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  externalId: text("external_id").notNull().unique(),
+  companyId: text("company_id").notNull(),
+  period: text("period").notNull(),
+  system: text("system").notNull().default("DATEV"),
+  status: text("status").notNull(),
+  sourceProposalExternalId: text("source_proposal_external_id"),
+  lineCount: integer("line_count").notNull().default(0),
+  netAmountMinor: integer("net_amount_minor").notNull().default(0),
+  taxAmountMinor: integer("tax_amount_minor").notNull().default(0),
+  csvSha256: text("csv_sha256"),
+  csvBlobRef: text("csv_blob_ref"),
+  exportedAt: timestamp("exported_at", { withTimezone: true }),
+  exportedBy: text("exported_by"),
+  payloadJson: text("payload_json").notNull().default("{}"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
+});
+
+export const accountingDunningRuns = pgTable("accounting_dunning_runs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  externalId: text("external_id").notNull().unique(),
+  companyId: text("company_id").notNull(),
+  invoiceExternalId: text("invoice_external_id").notNull(),
+  invoiceNumber: text("invoice_number").notNull(),
+  level: integer("level").notNull(),
+  status: text("status").notNull(),
+  feeAmountMinor: integer("fee_amount_minor").notNull().default(0),
+  daysOverdue: integer("days_overdue").notNull().default(0),
+  sourceProposalExternalId: text("source_proposal_external_id"),
+  letterBlobRef: text("letter_blob_ref"),
+  deliveredAt: timestamp("delivered_at", { withTimezone: true }),
+  createdBy: text("created_by").notNull(),
+  payloadJson: text("payload_json").notNull().default("{}"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
+});
+
 export const operationsProjects = pgTable("operations_projects", {
   id: uuid("id").primaryKey().defaultRandom(),
   externalId: text("external_id").notNull().unique(),

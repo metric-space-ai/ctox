@@ -42,7 +42,7 @@ type WorkflowResponse = {
   source?: "database" | "demo";
 };
 
-export function AccountingWorkflowPanel({ locale }: { locale: "de" | "en" }) {
+export function AccountingWorkflowPanel({ compact = false, locale }: { compact?: boolean; locale: "de" | "en" }) {
   const [busy, setBusy] = useState(false);
   const [data, setData] = useState<WorkflowResponse | null>(null);
   const [decisionMessage, setDecisionMessage] = useState("");
@@ -80,6 +80,8 @@ export function AccountingWorkflowPanel({ locale }: { locale: "de" | "en" }) {
   }, []);
 
   const proposals = data?.proposals ?? [];
+  const openProposals = proposals.filter((proposal) => !proposal.status || proposal.status === "open");
+  const decidedProposals = proposals.filter((proposal) => proposal.status && proposal.status !== "open");
   const outbox = data?.outbox ?? [];
   const audit = data?.audit ?? [];
   const isDemo = data?.source === "demo" || data?.persistence === "disabled";
@@ -156,8 +158,8 @@ export function AccountingWorkflowPanel({ locale }: { locale: "de" | "en" }) {
     <section className="accounting-workflow-panel" aria-label="Accounting workflow">
       <header>
         <div>
-          <p>{locale === "de" ? "Agentic Workflow" : "Agentic workflow"}</p>
-          <h2>{locale === "de" ? "Buchhaltungs-Queue" : "Accounting queue"}</h2>
+          <p>{locale === "de" ? "Workflow" : "Workflow"}</p>
+          <h2>{locale === "de" ? "Review" : "Review"}</h2>
         </div>
         <button className="business-accounting-download" disabled={busy} onClick={() => void refresh()} type="button">
           {busy ? "..." : locale === "de" ? "Aktualisieren" : "Refresh"}
@@ -166,17 +168,47 @@ export function AccountingWorkflowPanel({ locale }: { locale: "de" | "en" }) {
       <p className={`accounting-workflow-status status-${data?.persistence ?? "loading"}`}>
         {workflowStatus(data, locale)}
       </p>
-      <div className="accounting-workflow-grid">
-        <ProposalList
-          empty={locale === "de" ? "Keine offenen Vorschlaege." : "No open proposals."}
-          locale={locale}
-          onDecision={decideProposal}
-          proposals={proposals.slice(0, 4)}
-          title={locale === "de" ? "Proposals" : "Proposals"}
-        />
+      <div className="accounting-workflow-summary" aria-label={locale === "de" ? "Workflow Zusammenfassung" : "Workflow summary"}>
+        <div>
+          <span>{locale === "de" ? "Offen" : "Open"}</span>
+          <strong>{openProposals.length}</strong>
+        </div>
+        <div>
+          <span>{locale === "de" ? "Entschieden" : "Decided"}</span>
+          <strong>{decidedProposals.length}</strong>
+        </div>
+        <div>
+          <span>Outbox</span>
+          <strong>{outbox.filter((event) => event.status !== "delivered").length}</strong>
+        </div>
+      </div>
+      {compact ? (
+        <details className="accounting-workflow-details">
+          <summary>{locale === "de" ? "Offene Vorschlaege" : "Open proposals"}</summary>
+          <ProposalList
+            empty={locale === "de" ? "Keine offenen Vorschlaege." : "No open proposals."}
+            locale={locale}
+            onDecision={decideProposal}
+            proposals={openProposals.slice(0, 5)}
+            title={locale === "de" ? "Jetzt pruefen" : "Needs review"}
+          />
+        </details>
+      ) : (
+        <div className="accounting-workflow-focus">
+          <ProposalList
+            empty={locale === "de" ? "Keine offenen Vorschlaege." : "No open proposals."}
+            locale={locale}
+            onDecision={decideProposal}
+            proposals={openProposals.slice(0, 5)}
+            title={locale === "de" ? "Jetzt pruefen" : "Needs review"}
+          />
+        </div>
+      )}
+      <details className="accounting-workflow-details">
+        <summary>{locale === "de" ? "Systemverlauf" : "System trail"}</summary>
         <WorkflowList
           empty={locale === "de" ? "Keine Outbox-Events." : "No outbox events."}
-          items={outbox.slice(0, 4).map((event) => ({
+          items={outbox.slice(0, 5).map((event) => ({
             id: event.externalId ?? event.id ?? event.topic ?? "outbox",
             meta: event.status ?? "pending",
             title: event.topic ?? "business.outbox"
@@ -185,14 +217,14 @@ export function AccountingWorkflowPanel({ locale }: { locale: "de" | "en" }) {
         />
         <WorkflowList
           empty={locale === "de" ? "Keine Audit-Events." : "No audit events."}
-          items={audit.slice(0, 4).map((event, index) => ({
+          items={audit.slice(0, 5).map((event, index) => ({
             id: `${event.action}-${event.refId}-${index}`,
             meta: `${event.actorType ?? "system"}:${event.actorId ?? "-"} · ${event.refType ?? "ref"}:${event.refId ?? "-"}`,
             title: event.action ?? "audit"
           }))}
           title="Audit"
         />
-      </div>
+      </details>
       {isDemo ? (
         <small className="accounting-workflow-note">
           {locale === "de"
@@ -228,7 +260,7 @@ function ProposalList({
             const isOpen = !proposal.status || proposal.status === "open";
             return (
               <li key={id}>
-                <strong>{proposal.kind ?? "proposal"} · {proposal.status ?? "open"}</strong>
+                <strong>{humanProposalKind(proposal.kind, locale)}</strong>
                 <span>{proposal.refType ?? "ref"}:{proposal.refId ?? "-"} · {confidence(proposal.confidence)}</span>
                 <span>{proposal.createdByAgent ?? "agent"}</span>
                 {proposal.resultingJournalEntryId ? <span>result: {proposal.resultingJournalEntryId}</span> : null}
@@ -251,6 +283,32 @@ function ProposalList({
       )}
     </article>
   );
+}
+
+function humanProposalKind(kind: string | undefined, locale: "de" | "en") {
+  const de: Record<string, string> = {
+    asset_activation: "Anlage aktivieren",
+    asset_depreciation: "AfA buchen",
+    asset_disposal: "Anlage abgehen",
+    bank_match: "Bankmatch",
+    datev_export: "DATEV Export",
+    dunning_run: "Mahnlauf",
+    invoice_check: "Rechnung",
+    receipt_extraction: "Belegbuchung",
+    receipt_ingest: "OCR"
+  };
+  const en: Record<string, string> = {
+    asset_activation: "Asset activation",
+    asset_depreciation: "Depreciation",
+    asset_disposal: "Asset disposal",
+    bank_match: "Bank match",
+    datev_export: "DATEV export",
+    dunning_run: "Dunning",
+    invoice_check: "Invoice",
+    receipt_extraction: "Receipt posting",
+    receipt_ingest: "OCR"
+  };
+  return (locale === "de" ? de : en)[kind ?? ""] ?? kind ?? "Proposal";
 }
 
 function WorkflowList({
@@ -350,10 +408,9 @@ function resultingJournalEntryIdForCommand(command: Record<string, unknown> | un
   if (!refType || !refId) return null;
   if (type === "SendInvoice") return `je-invoice-${refType}-${refId}`;
   if (type === "PostReceipt") return `je-receipt-${refType}-${refId}`;
+  if (type === "CapitalizeReceipt") return `je-manual-asset-asset-${refId}`;
+  if (type === "DisposeAsset") return `je-manual-asset-${refId}`;
+  if (type === "PostDepreciation") return `je-depreciation-${refType}-${refId}`;
   if (type === "AcceptBankMatch") return `je-payment-${refType}-${refId}`;
-  if (type === "RunDunning") return `dunning-run-${refId}`;
-  if (type === "ExportDatev") return `datev-export-${refId}`;
-  if (type === "ImportBankStatement") return `bank-statement-${refId}`;
-  if (type === "IngestReceipt") return `receipt-ingest-${refId}`;
   return null;
 }

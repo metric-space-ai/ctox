@@ -4,7 +4,9 @@ import { getBusinessBundle } from "@/lib/business-seed";
 import {
   prepareBankMatchForAccounting,
   prepareDatevExportForAccounting,
+  prepareAssetDepreciationForAccounting,
   prepareExistingInvoiceForAccounting,
+  prepareReceiptCapitalizationForAccounting,
   prepareReceiptForAccounting
 } from "@/lib/business-accounting";
 
@@ -32,7 +34,7 @@ export async function GET() {
       audit,
       outbox,
       persistence: "enabled",
-      proposals,
+      proposals: proposals.map(normalizePersistedProposal),
       source: "database"
     });
   } catch (error) {
@@ -50,11 +52,15 @@ async function buildDemoWorkflow() {
   const data = await getBusinessBundle();
   const invoice = data.invoices[0];
   const receipt = data.receipts.find((item) => item.status === "Needs review" || item.status === "Inbox") ?? data.receipts[0];
+  const capitalizableReceipt = data.receipts.find((item) => item.status === "Needs review" && item.netAmount >= 250) ?? receipt;
+  const asset = data.fixedAssets.find((item) => item.status === "Active") ?? data.fixedAssets[0];
   const bankTransaction = data.bankTransactions.find((item) => item.status === "Suggested") ?? data.bankTransactions[0];
   const exportBatch = data.bookkeeping[0];
   const entries = [
     invoice ? prepareExistingInvoiceForAccounting({ data, invoice }) : undefined,
     receipt ? prepareReceiptForAccounting({ receipt }) : undefined,
+    capitalizableReceipt ? prepareReceiptCapitalizationForAccounting({ receipt: capitalizableReceipt }) : undefined,
+    asset ? prepareAssetDepreciationForAccounting({ asset }) : undefined,
     bankTransaction ? prepareBankMatchForAccounting({ transaction: bankTransaction }) : undefined,
     exportBatch ? prepareDatevExportForAccounting({ data, exportBatch }) : undefined
   ].filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
@@ -64,4 +70,22 @@ async function buildDemoWorkflow() {
     outbox: entries.map((entry) => entry.outbox),
     proposals: entries.map((entry) => entry.proposal)
   };
+}
+
+function normalizePersistedProposal(proposal: Awaited<ReturnType<typeof listAccountingProposals>>[number]) {
+  return {
+    ...proposal,
+    confidence: proposal.confidence,
+    evidence: parseJson(proposal.evidenceJson),
+    proposedCommand: parseJson(proposal.proposedCommandJson)
+  };
+}
+
+function parseJson(value: string | null) {
+  if (!value) return null;
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return null;
+  }
 }

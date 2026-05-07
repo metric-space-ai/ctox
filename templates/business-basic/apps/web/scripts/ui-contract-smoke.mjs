@@ -52,7 +52,7 @@ assert(operationsMeetings.includes("actionContext") && operationsMeetings.includ
 assert(salesWorkspace.includes("contextFromHref") && salesWorkspace.includes("\"data-context-item\": true"), "Sales KPI signals and create actions must expose right-click context");
 assert(salesWorkspace.includes("query.panel === panel && query.recordId === recordId"), "Sales drawer links must toggle closed on repeated item clicks");
 assert(businessWorkspace.includes("businessContextFromHref") && businessWorkspace.includes("data-context-item"), "Business KPI signals and create actions must expose right-click context");
-assert(businessWorkspace.includes("WarehouseView") && businessWorkspace.includes("warehouse-replay"), "Business warehouse workspace must expose M0/M1 replay context");
+assert(businessWorkspace.includes("WarehouseStorageView") && businessWorkspace.includes("FulfillmentView") && businessWorkspace.includes("warehouse-replay"), "Business warehouse and fulfillment workspaces must expose storage and M0/M1 replay context");
 assert(competitiveDashboard.includes("data-context-record-type=\"criteria\"") && competitiveDashboard.includes("data-context-record-id=\"new-note\""), "Competitive analysis toolbar actions must expose right-click context");
 assert(portfolioMap.includes("data-context-record-type=\"watchlist\""), "Portfolio map create action must expose right-click context");
 

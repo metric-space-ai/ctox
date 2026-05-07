@@ -1,4 +1,5 @@
 import { resolveLocale, type WorkSurfacePanelState } from "@ctox-business/ui";
+import { SYSTEM_OWNER_PARTY_ID, type WarehouseState } from "@ctox-business/warehouse";
 import {
   buildAccountingSnapshot,
   buildDatevLines,
@@ -33,14 +34,19 @@ import { InvoiceDocumentSelector, type InvoiceDocumentOption } from "./invoice-d
 import { InvoiceListSidebar, type InvoiceListItem, type InvoiceListMetric } from "./invoice-list-sidebar";
 import { InvoiceLinesEditor, type InvoiceLineDraft } from "./invoice-lines-editor";
 import { LexicalRichTextEditor } from "./lexical-rich-text-editor";
-import { WarehouseCheckoutSimulator } from "./warehouse-checkout-simulator";
-import { WarehouseSimulator } from "./warehouse-simulator";
+import { WarehouseLineWorkflow } from "./warehouse-line-workflow";
+import { WarehouseLayoutActions } from "./warehouse-layout-actions";
+import { WarehouseOrderActionButton } from "./warehouse-order-action-button";
+import { WarehouseStorageWorkbench } from "./warehouse-storage-workbench";
+import { WarehouseWorkStepButton } from "./warehouse-work-step-button";
 
 type QueryState = {
   locale?: string;
+  orderSearch?: string;
   theme?: string;
   panel?: string;
   recordId?: string;
+  warehouseSearch?: string;
   selectedId?: string;
   drawer?: string;
 };
@@ -59,7 +65,8 @@ export async function BusinessWorkspace({
   const data = await getDatabaseBackedBusinessBundle(await getBusinessBundle());
 
   if (submoduleId === "products") return <ProductsView copy={copy} data={data} locale={locale} query={query} submoduleId={submoduleId} />;
-  if (submoduleId === "warehouse") return await WarehouseView({ copy, data, locale, query, submoduleId });
+  if (submoduleId === "warehouse") return await WarehouseStorageView({ copy, data, locale, query, submoduleId });
+  if (submoduleId === "fulfillment") return await FulfillmentView({ copy, data, locale, query, submoduleId });
   if (submoduleId === "invoices") return <InvoicesView copy={copy} data={data} locale={locale} query={query} submoduleId={submoduleId} />;
   if (submoduleId === "ledger") return <LedgerView copy={copy} data={data} locale={locale} query={query} submoduleId={submoduleId} />;
   if (submoduleId === "receipts") return <ReceiptsView copy={copy} data={data} locale={locale} query={query} submoduleId={submoduleId} />;
@@ -124,7 +131,8 @@ export async function BusinessPanel({
         status: warehouseBalance.stockStatus,
         version: 1
       }
-    : warehouse.items.find((item) => item.id === recordId) ??
+    : warehouse.locations.find((item) => item.id === recordId) ??
+      warehouse.items.find((item) => item.id === recordId) ??
       warehouse.reservations.find((item) => item.id === recordId) ??
       warehouse.pickLists.find((item) => item.id === recordId) ??
       warehouse.shipments.find((item) => item.id === recordId) ??
@@ -146,7 +154,7 @@ export async function BusinessPanel({
       warehouse.receipts.find((item) => item.id === recordId);
 
   if (panel === "business-set") {
-    const businessSet = resolveBusinessSet(recordId, data, locale, copy);
+    const businessSet = resolveBusinessSet(recordId, data, locale, copy, warehouse);
 
     return (
       <div className="drawer-content ops-drawer">
@@ -191,6 +199,14 @@ export async function BusinessPanel({
         </section>
       </div>
     );
+  }
+
+  if (panel === "warehouse-admin") {
+    return <WarehouseAdminPanel query={query} submoduleId={submoduleId} />;
+  }
+
+  if (panel === "warehouse-match") {
+    return <WarehouseMatchPanel query={query} submoduleId={submoduleId} />;
   }
 
   if (panel === "text-template") {
@@ -1772,246 +1788,621 @@ function ReportPanel({ copy, data, locale, query, report, submoduleId }: {
   );
 }
 
-async function WarehouseView({ query, submoduleId }: BusinessViewProps) {
+async function WarehouseStorageView({ query, submoduleId }: BusinessViewProps) {
+  const warehouseSnapshot = await getWarehouseSnapshot();
+  const locale = resolveLocale(query.locale) as SupportedLocale;
+  return (
+    <WarehouseStorageWorkbench
+      initialSelectedWarehouseId={query.selectedId}
+      initialSnapshot={warehouseSnapshot.snapshot}
+      locale={locale}
+      query={{ locale: query.locale, theme: query.theme, warehouseSearch: query.warehouseSearch }}
+      submoduleId={submoduleId}
+    />
+  );
+}
+
+async function FulfillmentView({ query, submoduleId }: BusinessViewProps) {
   const warehouseSnapshot = await getWarehouseSnapshot();
   const warehouse = warehouseSnapshot.snapshot;
   const summary = warehouseSnapshot.summary;
+  const locale = resolveLocale(query.locale) as SupportedLocale;
+  const de = locale === "de";
   const itemName = (id: string) => warehouse.items.find((item) => item.id === id)?.name ?? id;
+  const itemSku = (id: string) => warehouse.items.find((item) => item.id === id)?.sku ?? id;
   const locationName = (id: string) => warehouse.locations.find((location) => location.id === id)?.name ?? id;
   const ownerName = (id: string) => id === "cust-nova" ? "Nova Logistics" : "Metric Space";
+  const warehouses = warehouse.locations.filter((location) => location.kind === "warehouse");
+  const warehouseSearch = String(query.warehouseSearch ?? "").trim().toLowerCase();
+  const orderSearch = String(query.orderSearch ?? "").trim().toLowerCase();
+  const matchesText = (parts: Array<string | number | undefined>) => parts.join(" ").toLowerCase().includes(orderSearch);
+  const selectedWarehouse = warehouses.find((location) => location.id === query.selectedId) ?? warehouses[0];
+  const childLocations = (parentId: string) => warehouse.locations.filter((location) => location.parentId === parentId);
+  const descendantIds = (parentId: string): string[] => childLocations(parentId).flatMap((location) => [location.id, ...descendantIds(location.id)]);
+  const matchesWarehouseText = (warehouseLocationId: string) => {
+    if (!warehouseSearch) return true;
+    const children = descendantIds(warehouseLocationId).map((id) => locationName(id));
+    return [locationName(warehouseLocationId), ...children].join(" ").toLowerCase().includes(warehouseSearch);
+  };
+  const visibleWarehouses = warehouses.filter((warehouseLocation) => matchesWarehouseText(warehouseLocation.id));
+  const selectedLocationIds = new Set(selectedWarehouse ? [selectedWarehouse.id, ...descendantIds(selectedWarehouse.id)] : []);
+  const locationQuantity = (locationId: string, statuses: readonly string[] = ["available", "reserved", "picked", "receiving"]) => warehouse.balances
+    .filter((balance) => balance.locationId === locationId && statuses.includes(balance.stockStatus))
+    .reduce((sum, balance) => sum + balance.quantity, 0);
+  const warehouseQuantity = (status: string) => warehouse.balances
+    .filter((balance) => selectedLocationIds.has(balance.locationId) && balance.stockStatus === status)
+    .reduce((sum, balance) => sum + balance.quantity, 0);
+  const sections = selectedWarehouse
+    ? childLocations(selectedWarehouse.id)
+        .filter((location) => location.kind === "zone")
+        .map((section) => {
+          const slots = childLocations(section.id).filter((location) => location.kind === "bin");
+          const usedSlots = slots.filter((slot) => locationQuantity(slot.id) > 0).length;
+          const available = slots.reduce((sum, slot) => sum + warehouse.balances.filter((balance) => balance.locationId === slot.id && balance.stockStatus === "available").reduce((slotSum, balance) => slotSum + balance.quantity, 0), 0);
+          const committed = slots.reduce((sum, slot) => sum + warehouse.balances.filter((balance) => balance.locationId === slot.id && (balance.stockStatus === "reserved" || balance.stockStatus === "picked")).reduce((slotSum, balance) => slotSum + balance.quantity, 0), 0);
+          return { available, committed, section, slots, usedSlots };
+        })
+    : [];
+  const firstSectionId = sections[0]?.section.id;
+  const availableByItem = new Map<string, number>();
+  warehouse.balances
+    .filter((balance) => selectedLocationIds.has(balance.locationId) && balance.stockStatus === "available")
+    .forEach((balance) => availableByItem.set(balance.inventoryItemId, (availableByItem.get(balance.inventoryItemId) ?? 0) + balance.quantity));
+  const totalRequired = warehouse.reservations.reduce((sum, reservation) => sum + reservation.lines.reduce((lineSum, line) => lineSum + line.quantity, 0), 0);
+  const totalMatched = warehouse.reservations.reduce((sum, reservation) => sum + reservation.lines.reduce((lineSum, line) => lineSum + Math.min(line.quantity, line.quantity - line.releasedQuantity), 0), 0);
+  const orderReadiness = totalRequired > 0 ? Math.round((totalMatched / totalRequired) * 100) : 0;
+  const completedWorkSteps = new Set(warehouse.commandLog
+    .filter((command) => command.type === "CompleteValueStep" && typeof command.payload.reservationId === "string" && typeof command.payload.step === "string")
+    .map((command) => typeof command.payload.lineId === "string"
+      ? `${command.payload.reservationId}:${command.payload.lineId}:${command.payload.step}`
+      : `${command.payload.reservationId}:${command.payload.step}`));
+  const assemblyRows = warehouse.reservations.map((reservation, index) => {
+    const lines = reservation.lines.map((line) => {
+      const matched = Math.max(0, line.quantity - line.releasedQuantity);
+      const completed = Math.min(line.quantity, line.pickedQuantity + line.shippedQuantity);
+      const missing = Math.max(0, line.quantity - matched);
+      const available = availableByItem.get(line.inventoryItemId) ?? 0;
+      return {
+        available,
+        completed,
+        id: line.id,
+        item: itemName(line.inventoryItemId),
+        inventoryItemId: line.inventoryItemId,
+        locationId: line.locationId,
+        owner: ownerName(line.inventoryOwnerPartyId),
+        matched,
+        missing,
+        picked: line.pickedQuantity,
+        quantity: line.quantity,
+        shipped: line.shippedQuantity,
+        sku: itemSku(line.inventoryItemId),
+        sourceLineId: line.sourceLineId
+      };
+    });
+    const required = lines.reduce((sum, line) => sum + line.quantity, 0);
+    const matched = lines.reduce((sum, line) => sum + line.matched, 0);
+    const completed = lines.reduce((sum, line) => sum + line.completed, 0);
+    const materialProgress = required > 0 ? Math.round((matched / required) * 100) : 0;
+    const completionProgress = required > 0 ? Math.round((completed / required) * 100) : 0;
+    const lineStepDone = (lineId: string, step: "build" | "qa" | "pack") =>
+      completedWorkSteps.has(`${reservation.id}:${lineId}:${step}`) || completedWorkSteps.has(`${reservation.id}:${step}`);
+    const buildDone = lines.length > 0 && lines.every((line) => lineStepDone(line.id, "build"));
+    const qaDone = lines.length > 0 && lines.every((line) => lineStepDone(line.id, "qa"));
+    const packDone = lines.length > 0 && lines.every((line) => lineStepDone(line.id, "pack"));
+    const valueSteps = reservation.status === "consumed"
+      ? [100, 100, 100, 100]
+      : reservation.status === "partially_consumed"
+        ? [100, buildDone ? 100 : 80, qaDone ? 100 : 60, packDone ? 100 : 30]
+        : reservation.status === "reserved" || reservation.status === "partially_reserved"
+          ? [materialProgress, buildDone ? 100 : Math.min(65, materialProgress), qaDone ? 100 : Math.min(35, materialProgress), packDone ? 100 : 0]
+          : [materialProgress, 0, 0, 0];
+    const scoredLines = lines.map((line) => {
+      const lineMaterialScore = line.quantity > 0 ? Math.round((line.matched / line.quantity) * 100) : 0;
+      const linePickScore = line.quantity > 0 ? Math.round((line.picked / line.quantity) * 100) : 0;
+      const lineShipScore = line.quantity > 0 ? Math.round((line.shipped / line.quantity) * 100) : 0;
+      const lineBuildDone = lineStepDone(line.id, "build");
+      const lineQaDone = lineStepDone(line.id, "qa");
+      const linePackDone = lineStepDone(line.id, "pack");
+      const lineBuildScore = reservation.status === "consumed" ? 100 : lineBuildDone ? 100 : Math.min(65, lineMaterialScore);
+      const lineQaScore = reservation.status === "consumed" ? 100 : lineQaDone ? 100 : Math.min(lineBuildDone ? 70 : 35, lineBuildScore);
+      const linePackScore = reservation.status === "consumed" ? 100 : linePackDone ? 100 : lineQaDone ? 65 : 0;
+      const linePerformanceScore = Math.round((linePickScore * 0.34) + (lineBuildScore * 0.22) + (lineQaScore * 0.22) + (linePackScore * 0.22));
+      const lineDelightScore = Math.round(((line.available >= line.quantity ? 100 : line.available > 0 ? 65 : 0) * 0.5) + (lineShipScore * 0.5));
+      const lineScore = Math.min(100, Math.round((lineMaterialScore * 0.5) + (linePerformanceScore * 0.35) + (lineDelightScore * 0.15)));
+      const kanbanStage = reservation.status === "consumed" || lineScore === 100
+        ? "ready"
+        : lineMaterialScore < 100
+          ? "material"
+          : !lineBuildDone
+            ? "build"
+            : !lineQaDone
+              ? "qa"
+              : !linePackDone
+                ? "pack"
+                : "ready";
+      return {
+        ...line,
+        basisScore: lineMaterialScore,
+        buildScore: lineBuildScore,
+        delightScore: lineDelightScore,
+        kanbanStage,
+        packScore: linePackScore,
+        performanceScore: linePerformanceScore,
+        qaScore: lineQaScore,
+        score: lineScore
+      };
+    });
+    const progress = Math.min(100, Math.round((materialProgress * 0.45) + (completionProgress * 0.25) + (valueSteps.reduce((sum, step) => sum + step, 0) / 4 * 0.3)));
+    const nextAction = reservation.status === "consumed"
+      ? { action: "ship" as const, disabled: true, label: "Done" }
+      : reservation.status === "partially_consumed"
+        ? { action: "ship" as const, disabled: progress < 100, label: progress === 100 ? "Ship" : "Locked" }
+        : reservation.status === "reserved" || reservation.status === "partially_reserved"
+          ? { action: "pick" as const, disabled: false, label: "Pick parts" }
+          : { action: "reserve" as const, disabled: true, label: "Blocked" };
+    return {
+      href: businessPanelHref(query, submoduleId, "reservation", reservation.id, "right"),
+      id: reservation.id,
+      lines: scoredLines,
+      nextAction,
+      owner: ownerName(reservation.inventoryOwnerPartyId),
+      progress,
+      sourceId: reservation.sourceId,
+      status: reservation.status,
+      steps: [
+        { done: valueSteps[0] === 100, enabled: false, key: "material" as const, label: "Material", value: valueSteps[0] },
+        { done: valueSteps[1] === 100, enabled: valueSteps[0] === 100, key: "build" as const, label: "Build", value: valueSteps[1] },
+        { done: valueSteps[2] === 100, enabled: valueSteps[1] === 100, key: "qa" as const, label: "QA", value: valueSteps[2] },
+        { done: valueSteps[3] === 100, enabled: valueSteps[2] === 100, key: "pack" as const, label: "Pack", value: valueSteps[3] }
+      ],
+      tone: progress === 100 ? "ready" : progress >= 70 ? "active" : "blocked",
+      workOrder: `WO-${String(index + 7101).padStart(4, "0")}`
+    };
+  });
+  const visibleAssemblyRows = orderSearch
+    ? assemblyRows.filter((order) => matchesText([
+        order.sourceId,
+        order.workOrder,
+        order.owner,
+        order.status,
+        ...order.lines.flatMap((line) => [line.item, line.sku, line.owner, line.sourceLineId])
+      ]))
+    : assemblyRows;
+  const readyOrders = assemblyRows.filter((order) => order.progress === 100).length;
+  const selectedRecordParts = String(query.recordId ?? "").split(":");
+  const selectedOrder = assemblyRows.find((order) => order.id === selectedRecordParts[0]) ?? assemblyRows[0];
+  const selectedLine = selectedOrder?.lines.find((line) => line.id === selectedRecordParts[1] || line.sourceLineId === selectedRecordParts[1])
+    ?? selectedOrder?.lines.find((line) => line.missing > 0)
+    ?? selectedOrder?.lines[0];
+  const selectedSources = selectedLine
+    ? warehouse.balances
+        .filter((balance) => selectedLocationIds.has(balance.locationId) && balance.inventoryItemId === selectedLine.inventoryItemId)
+        .sort((a, b) => (b.stockStatus === "available" ? 1 : 0) - (a.stockStatus === "available" ? 1 : 0) || b.quantity - a.quantity)
+        .slice(0, 6)
+    : [];
+  const selectedLineProgress = selectedLine?.score ?? 0;
+  const selectedLineBasisScore = selectedLine?.basisScore ?? 0;
+  const selectedLinePerformanceScore = selectedLine?.performanceScore ?? 0;
+  const selectedLineDelightScore = selectedLine?.delightScore ?? 0;
+  const selectedLineBuildScore = selectedLine?.buildScore ?? 0;
+  const selectedLineQaScore = selectedLine?.qaScore ?? 0;
+  const selectedLinePackScore = selectedLine?.packScore ?? 0;
+  const requirementGroups = [
+    {
+      key: "base",
+      label: de ? "Basis-Anforderungen" : "Base requirements",
+      items: [
+        { label: de ? "Materialdeckung" : "Material coverage", score: selectedLineBasisScore, detail: selectedLine ? `${selectedLine.matched}/${selectedLine.quantity}` : "0/0" },
+        { label: de ? "Richtiger Owner" : "Correct owner", score: selectedLine ? 100 : 0, detail: selectedLine?.owner ?? "-" }
+      ]
+    },
+    {
+      key: "value",
+      label: de ? "Leistungs-Anforderungen" : "Performance requirements",
+      items: [
+        { label: de ? "Gesamtleistung" : "Performance score", score: selectedLinePerformanceScore, detail: selectedLine ? `${selectedLine.picked}/${selectedLine.quantity} Pick` : "0/0" },
+        { label: "Build", score: selectedLineBuildScore, detail: selectedLineBuildScore === 100 ? (de ? "fertig" : "done") : (de ? "offen" : "open") },
+        { label: "QA", score: selectedLineQaScore, detail: selectedLineQaScore === 100 ? (de ? "freigegeben" : "approved") : (de ? "offen" : "open") }
+      ]
+    },
+    {
+      key: "fulfillment",
+      label: de ? "Begeisterungsfaktoren" : "Delight factors",
+      items: [
+        { label: de ? "Robuste Quelle" : "Robust source", score: selectedLineDelightScore, detail: selectedLine ? `${selectedLine.available} verfuegbar` : "0" },
+        { label: de ? "Packen" : "Pack", score: selectedLinePackScore, detail: selectedLinePackScore === 100 ? (de ? "fertig" : "done") : (de ? "offen" : "open") },
+        { label: de ? "Quellen" : "Sources", score: selectedSources.some((source) => source.stockStatus === "available" && source.quantity > 0) ? 100 : 0, detail: `${selectedSources.length}` }
+      ]
+    }
+  ];
+  const readinessLabel = selectedOrder?.progress === 100 ? (de ? "auslieferbar" : "ready to ship") : (de ? "gesperrt" : "locked");
+  const warehouseKpis = selectedWarehouse
+    ? [
+        { label: de ? "Verfuegbar" : "Available", value: warehouseQuantity("available") },
+        { label: de ? "Gebunden" : "Committed", value: warehouseQuantity("reserved") + warehouseQuantity("picked") },
+        { label: de ? "Versendet" : "Shipped", value: warehouseQuantity("shipped") },
+        { label: de ? "Counts" : "Counts", value: summary.cycleCounts }
+      ]
+    : [];
 
   return (
-    <div className="ops-workspace warehouse-workspace">
-      <section className="ops-pane warehouse-control-pane" aria-label="Warehouse control">
-        <BusinessPaneHead description="M0/M1 inventory kernel with owner-aware balances, reservations, pick, ship, receipt, and putaway flow." title="Warehouse">
-          <a
-            data-context-action="sync"
-            data-context-item
-            data-context-label="Warehouse replay check"
-            data-context-module="business"
-            data-context-record-id="warehouse-replay"
-            data-context-record-type="warehouse_set"
-            data-context-submodule={submoduleId}
-            href={businessPanelHref(query, submoduleId, "business-set", "warehouse-replay", "right")}
-          >
-            Sync
-          </a>
-        </BusinessPaneHead>
-        <div className="ops-signal-grid">
-          <BusinessSignal label="Available units" value={String(summary.available)} />
-          <BusinessSignal label="Reserved units" value={String(summary.reserved)} />
-          <BusinessSignal label="Shipped units" value={String(summary.shipped)} />
-          <BusinessSignal label="Pending outbox" value={String(summary.outboxPending)} />
-          <BusinessSignal label="Scan events" value={String(summary.scanEvents)} />
-          <BusinessSignal label="Cycle counts" value={String(summary.cycleCounts)} />
-          <BusinessSignal label="Adjustments" value={String(summary.inventoryAdjustments)} />
-          <BusinessSignal label="Tracking events" value={String(summary.shipmentTrackingEvents)} />
-          <BusinessSignal label="WES/robot events" value={String(summary.integrationEvents + summary.roboticsEvents)} />
-          <BusinessSignal label="Wave plans" value={String(summary.wavePlans)} />
-          <BusinessSignal label="Transfers" value={String(summary.transfers)} />
-          <BusinessSignal label="3PL charges" value={String(summary.threePlCharges)} />
-        </div>
-        <WarehouseSimulator cancelLabel="Cancel" initialSnapshot={warehouse} pickLabel="Pick" releaseLabel="Release" reserveLabel="Reserve" shipLabel="Ship" />
-        <WarehouseCheckoutSimulator initialSnapshot={warehouse} />
-      </section>
-
-      <section className="ops-pane warehouse-balance-pane" aria-label="Stock balances">
-        <BusinessPaneHead description="Balances are keyed by company, owner, item, location, status, lot, and serial sentinel values." title="Balances" />
-        <div className="ops-table warehouse-balance-table">
-          <div className="ops-table-head">
-            <span>Item</span>
-            <span>Owner</span>
-            <span>Location</span>
-            <span>Status</span>
-            <span>Qty</span>
+    <div className="warehouse-workbench" data-context-module="business" data-context-submodule={submoduleId}>
+      <section className="warehouse-panel warehouse-left" aria-label={de ? "Lager" : "Warehouses"}>
+        <header className="warehouse-panel-head">
+          <h2>{de ? "Lager" : "Warehouses"}</h2>
+          <div className="warehouse-head-actions">
+            <a
+              className="warehouse-subtle-action"
+              data-context-item
+              data-context-label={de ? "Lager Stammdaten" : "Warehouse master data"}
+              data-context-module="business"
+              data-context-record-id={selectedWarehouse?.id ?? "warehouse"}
+              data-context-record-type="warehouse_admin"
+              data-context-submodule={submoduleId}
+              href={businessPanelHref(query, submoduleId, "warehouse-admin", selectedWarehouse?.id ?? "warehouse", "left-bottom")}
+            >
+              {de ? "Verwalten" : "Manage"}
+            </a>
+            {selectedWarehouse ? <WarehouseLayoutActions sectionId={firstSectionId} warehouseId={selectedWarehouse.id} /> : null}
           </div>
-          {warehouse.balances.filter((balance) => balance.quantity !== 0).map((balance) => (
-            <a
-              className="ops-table-row"
-              data-context-item
-              data-context-label={`${itemName(balance.inventoryItemId)} ${balance.stockStatus}`}
-              data-context-module="business"
-              data-context-record-id={balance.balanceKey}
-              data-context-record-type="stock_balance"
-              data-context-submodule={submoduleId}
-              href={businessPanelHref(query, submoduleId, "balance", balance.balanceKey, "right")}
-              key={balance.balanceKey}
-            >
-              <strong>{itemName(balance.inventoryItemId)}</strong>
-              <span>{ownerName(balance.inventoryOwnerPartyId)}</span>
-              <span>{locationName(balance.locationId)}</span>
-              <span>{balance.stockStatus}</span>
-              <span>{balance.quantity}</span>
-            </a>
+        </header>
+        <div className="warehouse-tool-row">
+          <form className="warehouse-search-form" action={`/app/business/${submoduleId}`}>
+            {query.locale ? <input type="hidden" name="locale" value={query.locale} /> : null}
+            {query.theme ? <input type="hidden" name="theme" value={query.theme} /> : null}
+            {selectedWarehouse ? <input type="hidden" name="selectedId" value={selectedWarehouse.id} /> : null}
+            {orderSearch ? <input type="hidden" name="orderSearch" value={orderSearch} /> : null}
+            <input name="warehouseSearch" defaultValue={query.warehouseSearch ?? ""} placeholder={de ? "Lagerquelle suchen" : "Find warehouse source"} />
+          </form>
+          <a className="warehouse-subtle-action" href={businessSelectionHref(query, "warehouse", selectedWarehouse?.id ?? "")}>
+            {de ? "Bestand" : "Stock"}
+          </a>
+        </div>
+        <div className="warehouse-source-list">
+          {visibleWarehouses.map((warehouseLocation) => {
+            const locationIds = new Set([warehouseLocation.id, ...descendantIds(warehouseLocation.id)]);
+            const available = warehouse.balances
+              .filter((balance) => locationIds.has(balance.locationId) && balance.stockStatus === "available")
+              .reduce((sum, balance) => sum + balance.quantity, 0);
+            const held = warehouse.balances
+              .filter((balance) => locationIds.has(balance.locationId) && (balance.stockStatus === "reserved" || balance.stockStatus === "picked"))
+              .reduce((sum, balance) => sum + balance.quantity, 0);
+            const sectionCount = childLocations(warehouseLocation.id).filter((location) => location.kind === "zone").length;
+            return (
+              <a
+                aria-current={warehouseLocation.id === selectedWarehouse?.id ? "page" : undefined}
+                className={warehouseLocation.id === selectedWarehouse?.id ? "warehouse-source-card is-active" : "warehouse-source-card"}
+                data-context-item
+                data-context-label={warehouseLocation.name}
+                data-context-module="business"
+                data-context-record-id={warehouseLocation.id}
+                data-context-record-type="warehouse_source"
+                data-context-submodule={submoduleId}
+                href={businessSelectionHref(query, submoduleId, warehouseLocation.id)}
+                key={warehouseLocation.id}
+              >
+                <span className="warehouse-avatar">{warehouseLocation.name.slice(0, 1)}</span>
+                <span>
+                  <strong>{warehouseLocation.name}</strong>
+                  <small>{sectionCount} {de ? "Bereiche" : "areas"} · {held} {de ? "fuer Auftraege gebunden" : "held for orders"}</small>
+                </span>
+                <em>{available}</em>
+              </a>
+            );
+          })}
+        </div>
+        <div className="warehouse-left-metrics">
+          {warehouseKpis.map((metric) => (
+            <div key={metric.label}><span>{metric.label}</span><strong>{metric.value}</strong></div>
           ))}
+        </div>
+        <div className="warehouse-position-list">
+          <section className="warehouse-match-panel">
+            <h3>{de ? "Uebergabe fuer ausgewaehlte Position" : "Handoff for selected position"}</h3>
+            {selectedOrder && selectedLine ? (
+              <div className="warehouse-source-match-list">
+                <a
+                  className="warehouse-source-match is-reserved"
+                  data-context-item
+                  data-context-label={`${selectedOrder.sourceId} ${selectedLine.item}`}
+                  data-context-module="business"
+                  data-context-record-id={`${selectedOrder.id}:${selectedLine.id}`}
+                  data-context-record-type="fulfillment_line_handoff"
+                  data-context-submodule={submoduleId}
+                  href={businessWarehouseSelectionHref(query, submoduleId, selectedWarehouse?.id, selectedOrder.id, selectedLine.id)}
+                >
+                  <span><strong>{selectedLine.item}</strong><small>{selectedLine.matched}/{selectedLine.quantity} {de ? "reserviert" : "reserved"} · {selectedLine.picked}/{selectedLine.quantity} Pick</small></span>
+                  <em>{selectedLine.score}%</em>
+                </a>
+              </div>
+            ) : (
+              <div className="warehouse-empty-note">{de ? "Keine Position ausgewaehlt." : "No line selected."}</div>
+            )}
+          </section>
+          <section className="warehouse-match-panel">
+            <h3>{de ? "Verfuegbare Quellen" : "Available sources"}</h3>
+            <div className="warehouse-source-match-list">
+              {selectedSources.length > 0 ? selectedSources.map((source) => (
+                <a
+                  className={`warehouse-source-match is-${source.stockStatus}`}
+                  data-context-item
+                  data-context-label={`${selectedLine?.item ?? "Item"} ${locationName(source.locationId)}`}
+                  data-context-module="business"
+                  data-context-record-id={source.balanceKey}
+                  data-context-record-type="warehouse_source_match"
+                  data-context-submodule={submoduleId}
+                  href={businessPanelHref(query, "warehouse", "balance", source.balanceKey, "right")}
+                  key={source.balanceKey}
+                >
+                  <span><strong>{locationName(source.locationId)}</strong><small>{source.stockStatus}</small></span>
+                  <em>{source.quantity}</em>
+                </a>
+              )) : (
+                <div className="warehouse-empty-note">{de ? "Keine Quelle im gewaehlten Lager." : "No source in the selected warehouse."}</div>
+              )}
+            </div>
+          </section>
         </div>
       </section>
 
-      <section className="ops-pane warehouse-flow-pane" aria-label="Reservations and shipments">
-        <BusinessPaneHead description="Reservations, scanner sessions, counts, integrations, waves, transfers, and billing all flow through command logs and movement rows." title="M1/M3 flow" />
-        <div className="warehouse-flow-list">
-          {warehouse.reservations.map((reservation) => (
-            <a
+      <section className="warehouse-panel warehouse-center" aria-label={de ? "Bestellabarbeitung" : "Order work"}>
+        <header className="warehouse-panel-head warehouse-work-head">
+          <div>
+            <h2>{de ? "Bestellungen" : "Orders"}</h2>
+            <p>{readyOrders}/{assemblyRows.length} {de ? "auslieferbar" : "ready"} · {orderReadiness}% {de ? "Material gematcht" : "material matched"}</p>
+          </div>
+          <nav className="warehouse-view-tabs" aria-label={de ? "Ansicht" : "View"}>
+            <a className="is-active" href={businessBaseHref(query, submoduleId)}>{de ? "Liste" : "List"}</a>
+            <a href={businessPanelHref(query, submoduleId, "business-set", "warehouse-replay", "right")}>{de ? "Audit" : "Audit"}</a>
+          </nav>
+        </header>
+        <div className="warehouse-work-toolbar">
+          <form className="warehouse-search-form" action={`/app/business/${submoduleId}`}>
+            {query.locale ? <input type="hidden" name="locale" value={query.locale} /> : null}
+            {query.theme ? <input type="hidden" name="theme" value={query.theme} /> : null}
+            {selectedWarehouse ? <input type="hidden" name="selectedId" value={selectedWarehouse.id} /> : null}
+            {warehouseSearch ? <input type="hidden" name="warehouseSearch" value={warehouseSearch} /> : null}
+            <input name="orderSearch" defaultValue={query.orderSearch ?? ""} placeholder={de ? "Auftrag, Kunde, Artikel oder Quelle suchen" : "Find order, owner, item or source"} />
+          </form>
+          <span>{summary.outboxPending} {de ? "Events" : "events"}</span>
+        </div>
+        <div className="warehouse-order-list">
+          {visibleAssemblyRows.length > 0 ? visibleAssemblyRows.map((order) => (
+            <article
+              className={`warehouse-work-order is-${order.tone} ${order.id === selectedOrder?.id ? "is-selected" : ""}`}
               data-context-item
-              data-context-label={reservation.id}
+              data-context-label={order.sourceId}
               data-context-module="business"
-              data-context-record-id={reservation.id}
-              data-context-record-type="stock_reservation"
+              data-context-record-id={order.id}
+              data-context-record-type="warehouse_order"
               data-context-submodule={submoduleId}
-              href={businessPanelHref(query, submoduleId, "reservation", reservation.id, "right")}
-              key={reservation.id}
+              key={order.id}
             >
-              <span className={`ops-health ${reservation.status === "consumed" ? "ops-health-green" : "ops-health-amber"}`} />
-              <strong>{reservation.sourceId}</strong>
-              <small>{reservation.status} · {ownerName(reservation.inventoryOwnerPartyId)} · {reservation.lines.length} lines</small>
-            </a>
-          ))}
-          {warehouse.shipments.map((shipment) => (
-            <a
-              data-context-item
-              data-context-label={shipment.id}
-              data-context-module="business"
-              data-context-record-id={shipment.id}
-              data-context-record-type="shipment"
-              data-context-submodule={submoduleId}
-              href={businessPanelHref(query, submoduleId, "shipment", shipment.id, "right")}
-              key={shipment.id}
-            >
-              <span className="ops-health ops-health-green" />
-              <strong>{shipment.trackingNumber}</strong>
-              <small>{shipment.carrier} · {shipment.status} · {shipment.lines.length} lines</small>
-            </a>
-          ))}
-          {warehouse.returns.map((returnAuthorization) => (
-            <a
-              data-context-item
-              data-context-label={returnAuthorization.id}
-              data-context-module="business"
-              data-context-record-id={returnAuthorization.id}
-              data-context-record-type="return_authorization"
-              data-context-submodule={submoduleId}
-              href={businessPanelHref(query, submoduleId, "return", returnAuthorization.id, "right")}
-              key={returnAuthorization.id}
-            >
-              <span className={returnAuthorization.status === "received" ? "ops-health ops-health-green" : "ops-health ops-health-amber"} />
-              <strong>{returnAuthorization.id}</strong>
-              <small>{returnAuthorization.status} · {ownerName(returnAuthorization.inventoryOwnerPartyId)} · {returnAuthorization.lines.length} lines</small>
-            </a>
-          ))}
-          {warehouse.scannerSessions.map((session) => (
-            <a
-              data-context-item
-              data-context-label={session.id}
-              data-context-module="business"
-              data-context-record-id={session.id}
-              data-context-record-type="scanner_session"
-              data-context-submodule={submoduleId}
-              href={businessPanelHref(query, submoduleId, "scanner", session.id, "right")}
-              key={session.id}
-            >
-              <span className="ops-health ops-health-green" />
-              <strong>{session.deviceId}</strong>
-              <small>{session.status} · {locationName(session.locationId ?? "")} · {session.scanCount} scans</small>
-            </a>
-          ))}
-          {warehouse.cycleCounts.map((count) => (
-            <a
-              data-context-item
-              data-context-label={count.id}
-              data-context-module="business"
-              data-context-record-id={count.id}
-              data-context-record-type="cycle_count"
-              data-context-submodule={submoduleId}
-              href={businessPanelHref(query, submoduleId, "cycle-count", count.id, "right")}
-              key={count.id}
-            >
-              <span className={count.status === "closed" ? "ops-health ops-health-green" : "ops-health ops-health-amber"} />
-              <strong>{count.id}</strong>
-              <small>{count.status} · {locationName(count.locationId)} · {count.lines.length} lines</small>
-            </a>
-          ))}
-          {warehouse.fulfillmentLabels.map((label) => (
-            <a
-              data-context-item
-              data-context-label={label.id}
-              data-context-module="business"
-              data-context-record-id={label.id}
-              data-context-record-type="fulfillment_label"
-              data-context-submodule={submoduleId}
-              href={businessPanelHref(query, submoduleId, "label", label.id, "right")}
-              key={label.id}
-            >
-              <span className="ops-health ops-health-green" />
-              <strong>{label.trackingNumber}</strong>
-              <small>{label.carrier} · {label.status} · {label.provider}</small>
-            </a>
-          ))}
-          {warehouse.wavePlans.map((wave) => (
-            <a
-              data-context-item
-              data-context-label={wave.id}
-              data-context-module="business"
-              data-context-record-id={wave.id}
-              data-context-record-type="wave_plan"
-              data-context-submodule={submoduleId}
-              href={businessPanelHref(query, submoduleId, "wave", wave.id, "right")}
-              key={wave.id}
-            >
-              <span className="ops-health ops-health-green" />
-              <strong>{wave.id}</strong>
-              <small>{wave.status} · {wave.priority} · {wave.lines.length} reservations</small>
-            </a>
-          ))}
-          {warehouse.transfers.map((transfer) => (
-            <a
-              data-context-item
-              data-context-label={transfer.id}
-              data-context-module="business"
-              data-context-record-id={transfer.id}
-              data-context-record-type="warehouse_transfer"
-              data-context-submodule={submoduleId}
-              href={businessPanelHref(query, submoduleId, "transfer", transfer.id, "right")}
-              key={transfer.id}
-            >
-              <span className={transfer.status === "received" ? "ops-health ops-health-green" : "ops-health ops-health-amber"} />
-              <strong>{transfer.id}</strong>
-              <small>{transfer.status} · {locationName(transfer.fromLocationId)} to {locationName(transfer.toLocationId)}</small>
-            </a>
-          ))}
-          {warehouse.integrationEvents.map((event) => (
-            <a
-              data-context-item
-              data-context-label={event.id}
-              data-context-module="business"
-              data-context-record-id={event.id}
-              data-context-record-type="integration_event"
-              data-context-submodule={submoduleId}
-              href={businessPanelHref(query, submoduleId, "integration", event.id, "right")}
-              key={event.id}
-            >
-              <span className="ops-health ops-health-green" />
-              <strong>{event.provider}</strong>
-              <small>{event.source} · {event.eventType}</small>
-            </a>
-          ))}
-          {warehouse.threePlCharges.map((charge) => (
-            <a
-              data-context-item
-              data-context-label={charge.id}
-              data-context-module="business"
-              data-context-record-id={charge.id}
-              data-context-record-type="three_pl_charge"
-              data-context-submodule={submoduleId}
-              href={businessPanelHref(query, submoduleId, "3pl-charge", charge.id, "right")}
-              key={charge.id}
-            >
-              <span className="ops-health ops-health-green" />
-              <strong>{charge.id}</strong>
-              <small>{charge.metric} · {charge.amountCents / 100} {charge.currency}</small>
-            </a>
-          ))}
+              <header>
+                <a className="warehouse-open-mark" href={businessWarehouseSelectionHref(query, submoduleId, selectedWarehouse?.id, order.id)} aria-label={de ? "Auftrag auswaehlen" : "Select order"}>↗</a>
+                <span>
+                  <strong>{order.sourceId}</strong>
+                  <small>{order.workOrder} · {order.owner} · {order.status}</small>
+                </span>
+                <div className="warehouse-score">
+                  <strong>{order.progress}%</strong>
+                  <small>{order.progress === 100 ? (de ? "bereit" : "ready") : (de ? "offen" : "open")}</small>
+                </div>
+                <div className="warehouse-order-actions">
+                  <a href={businessPanelHref(query, submoduleId, "reservation", order.id, "right")}>{de ? "Akte" : "File"}</a>
+                  <WarehouseOrderActionButton action={order.nextAction.action} disabled={order.nextAction.disabled} label={order.nextAction.label} reservationId={order.id} />
+                </div>
+              </header>
+              <div className="warehouse-progress-track" aria-label={`Order progress ${order.progress}%`}>
+                <span style={{ width: `${order.progress}%` }} />
+              </div>
+              <div className="warehouse-line-badges" aria-label={de ? "Arbeitspositionen im Auftrag" : "Work positions in order"}>
+                {order.lines.map((line) => {
+                  return (
+                    <article
+                      className={`warehouse-line-badge ${line.id === selectedLine?.id && order.id === selectedOrder?.id ? "is-selected" : ""}`}
+                      data-context-item
+                      data-context-label={`${order.sourceId} ${line.item}`}
+                      data-context-module="business"
+                      data-context-record-id={`${order.id}:${line.id}`}
+                      data-context-record-type="warehouse_order_line"
+                      data-context-submodule={submoduleId}
+                      key={`${order.id}-${line.id}`}
+                    >
+                      <div className="warehouse-line-head">
+                        <a href={businessWarehouseSelectionHref(query, submoduleId, selectedWarehouse?.id, order.id, line.id)}>
+                          <strong>{line.item}</strong>
+                          <small>{line.sku} · {line.missing > 0 ? `${line.missing} ${de ? "fehlt" : "missing"}` : de ? "gematcht" : "matched"}</small>
+                        </a>
+                        <a className="warehouse-line-score" href={businessPanelHref(query, submoduleId, "warehouse-match", `${order.id}:${line.id}`, "bottom")}>{line.score}%</a>
+                      </div>
+                      <i><b style={{ width: `${line.score}%` }} /></i>
+                      <div className="warehouse-line-status">
+                        <span className={line.kanbanStage === "material" ? "is-active" : line.basisScore === 100 ? "is-done" : undefined}>Material</span>
+                        <span className={line.kanbanStage === "build" ? "is-active" : line.buildScore === 100 ? "is-done" : undefined}>Build</span>
+                        <span className={line.kanbanStage === "qa" ? "is-active" : line.qaScore === 100 ? "is-done" : undefined}>QA</span>
+                        <span className={line.kanbanStage === "pack" ? "is-active" : line.packScore === 100 ? "is-done" : undefined}>Pack</span>
+                        <span className={line.kanbanStage === "ready" ? "is-done" : undefined}>Ready</span>
+                      </div>
+                      <div className="warehouse-line-actions">
+                        {line.kanbanStage === "material" ? (
+                          <WarehouseOrderActionButton action="pick" disabled={order.status === "consumed"} label={de ? "Pick" : "Pick"} reservationId={order.id} />
+                        ) : line.kanbanStage === "build" ? (
+                          <WarehouseWorkStepButton disabled={line.basisScore < 100} done={false} label="Build" lineId={line.id} reservationId={order.id} sourceId={order.sourceId} step="build" />
+                        ) : line.kanbanStage === "qa" ? (
+                          <WarehouseWorkStepButton disabled={line.buildScore < 100} done={false} label="QA" lineId={line.id} reservationId={order.id} sourceId={order.sourceId} step="qa" />
+                        ) : line.kanbanStage === "pack" ? (
+                          <WarehouseWorkStepButton disabled={line.qaScore < 100} done={false} label="Pack" lineId={line.id} reservationId={order.id} sourceId={order.sourceId} step="pack" />
+                        ) : (
+                          <a href={businessPanelHref(query, submoduleId, "warehouse-match", `${order.id}:${line.id}`, "bottom")}>
+                            {de ? "Nachweis" : "Evidence"}
+                          </a>
+                        )}
+                      </div>
+                      <span className="warehouse-line-tools" aria-label={de ? "Positionsaktionen" : "Line actions"}>
+                        <b>{de ? "Basis" : "Base"} {line.basisScore}%</b>
+                        <b>{de ? "Leistung" : "Performance"} {line.performanceScore}%</b>
+                        <b>{de ? "Begeisterung" : "Delight"} {line.delightScore}%</b>
+                      </span>
+                    </article>
+                  );
+                })}
+              </div>
+            </article>
+          )) : <div className="warehouse-empty-note">{de ? "Keine Auftraege im aktuellen Filter." : "No orders in the current filter."}</div>}
         </div>
       </section>
+
+      <section className="warehouse-panel warehouse-right" aria-label={de ? "Arbeitspositionen" : "Work positions"}>
+        <header className="warehouse-panel-head">
+          <div>
+            <h2>{de ? "Positionen" : "Positions"}</h2>
+            <p>{selectedOrder?.sourceId ?? (de ? "Kein Auftrag" : "No order")} · {readinessLabel}</p>
+          </div>
+          {selectedOrder ? (
+            <a className="warehouse-subtle-action" href={businessPanelHref(query, submoduleId, "reservation", selectedOrder.id, "right")}>
+              {de ? "rechts oeffnen" : "open right"}
+            </a>
+          ) : null}
+        </header>
+        {selectedOrder ? (
+          <div className="warehouse-position-list">
+            {selectedOrder.lines.map((line) => {
+              return (
+                <article
+                  className={`warehouse-position-card ${line.id === selectedLine?.id ? "is-selected" : ""}`}
+                  data-context-item
+                  data-context-label={`${selectedOrder.sourceId} ${line.item}`}
+                  data-context-module="business"
+                  data-context-record-id={`${selectedOrder.id}:${line.id}`}
+                  data-context-record-type="warehouse_order_line"
+                  data-context-submodule={submoduleId}
+                  key={`${selectedOrder.id}-${line.id}`}
+                >
+                  <div className="warehouse-position-main">
+                    <a
+                      className="warehouse-position-open"
+                      href={businessWarehouseSelectionHref(query, submoduleId, selectedWarehouse?.id, selectedOrder.id, line.id)}
+                    >
+                      <span className="warehouse-position-icon">{line.sku.slice(0, 2)}</span>
+                      <span>
+                        <strong>{line.item}</strong>
+                        <small>{line.sku} · {line.owner}</small>
+                        <small>{line.missing > 0 ? `${line.missing} ${de ? "fehlt" : "missing"}` : de ? "vollstaendig" : "complete"} · {line.available} {de ? "im Lager" : "in warehouse"}</small>
+                      </span>
+                    </a>
+                    <a
+                      className="warehouse-position-score"
+                      href={businessPanelHref(query, submoduleId, "warehouse-match", `${selectedOrder.id}:${line.id}`, "bottom")}
+                    >
+                      {line.score}%
+                    </a>
+                  </div>
+                  <i><b style={{ width: `${line.score}%` }} /></i>
+                  <div className="warehouse-position-workflow">
+                    <span className={line.kanbanStage === "material" ? "is-active" : line.basisScore === 100 ? "is-done" : undefined}>Material</span>
+                    <span className={line.kanbanStage === "build" ? "is-active" : line.buildScore === 100 ? "is-done" : undefined}>Build</span>
+                    <span className={line.kanbanStage === "qa" ? "is-active" : line.qaScore === 100 ? "is-done" : undefined}>QA</span>
+                    <span className={line.kanbanStage === "pack" ? "is-active" : line.packScore === 100 ? "is-done" : undefined}>Pack</span>
+                    <span className={line.kanbanStage === "ready" ? "is-done" : undefined}>Ready</span>
+                  </div>
+                  <div className="warehouse-position-buttons">
+                    <WarehouseWorkStepButton
+                      disabled={line.basisScore < 100}
+                      done={line.buildScore === 100}
+                      label="Build"
+                      lineId={line.id}
+                      reservationId={selectedOrder.id}
+                      sourceId={selectedOrder.sourceId}
+                      step="build"
+                    />
+                    <WarehouseWorkStepButton
+                      disabled={line.buildScore < 100}
+                      done={line.qaScore === 100}
+                      label="QA"
+                      lineId={line.id}
+                      reservationId={selectedOrder.id}
+                      sourceId={selectedOrder.sourceId}
+                      step="qa"
+                    />
+                    <WarehouseWorkStepButton
+                      disabled={line.qaScore < 100}
+                      done={line.packScore === 100}
+                      label="Pack"
+                      lineId={line.id}
+                      reservationId={selectedOrder.id}
+                      sourceId={selectedOrder.sourceId}
+                      step="pack"
+                    />
+                    <a href={businessPanelHref(query, submoduleId, "warehouse-match", `${selectedOrder.id}:${line.id}`, "bottom")}>
+                      Score
+                    </a>
+                  </div>
+                  <span className="warehouse-position-actions">
+                    <span>{de ? "Basis" : "Base"} {line.basisScore}%</span>
+                    <span>{de ? "Leistung" : "Performance"} {line.performanceScore}%</span>
+                    <span>{de ? "Begeisterung" : "Delight"} {line.delightScore}%</span>
+                  </span>
+                </article>
+              );
+            })}
+            <section className="warehouse-match-panel">
+              <h3>{de ? "Quellen fuer ausgewaehlte Position" : "Sources for selected position"}</h3>
+              <div className="warehouse-source-match-list">
+                {selectedSources.length > 0 ? selectedSources.map((source) => (
+                  <a
+                    className={`warehouse-source-match is-${source.stockStatus}`}
+                    data-context-item
+                    data-context-label={`${selectedLine?.item ?? "Item"} ${locationName(source.locationId)}`}
+                    data-context-module="business"
+                    data-context-record-id={source.balanceKey}
+                    data-context-record-type="warehouse_source_match"
+                    data-context-submodule={submoduleId}
+                    href={businessPanelHref(query, submoduleId, "balance", source.balanceKey, "right")}
+                    key={source.balanceKey}
+                  >
+                    <span><strong>{locationName(source.locationId)}</strong><small>{source.stockStatus}</small></span>
+                    <em>{source.quantity}</em>
+                  </a>
+                )) : (
+                  <div className="warehouse-empty-note">{de ? "Keine Lagerquelle im aktuellen Lager gefunden." : "No source in the selected warehouse."}</div>
+                )}
+              </div>
+            </section>
+          </div>
+        ) : (
+          <div className="warehouse-empty-note">{de ? "Kein Auftrag vorhanden." : "No order available."}</div>
+        )}
+      </section>
+
+      <aside className="warehouse-match-bar" aria-label={de ? "Match Details" : "Match details"}>
+        <div>
+          <span>{selectedOrder?.sourceId ?? "Order"}</span>
+          <strong>{selectedLine?.item ?? (de ? "Keine Position" : "No line")}</strong>
+          {selectedOrder && selectedLine ? (
+            <a className="warehouse-match-open" href={businessPanelHref(query, submoduleId, "warehouse-match", `${selectedOrder.id}:${selectedLine.id}`, "bottom")}>
+              {de ? "Nachweis oeffnen" : "Open evidence"}
+            </a>
+          ) : null}
+        </div>
+        <div className="warehouse-match-score"><strong>{selectedLineProgress}%</strong><span>{de ? "Anforderung erfuellt" : "requirement met"}</span></div>
+        <div className="warehouse-match-pill-grid">
+          {requirementGroups.map((group) => (
+            <section className={`warehouse-match-pill-column is-${group.key}`} key={group.key}>
+              <header>{group.label}</header>
+              <div>
+                {group.items.map((item) => (
+                  <span className={item.score === 100 ? "is-done" : item.score > 0 ? "is-active" : undefined} key={`${group.key}-${item.label}`}>
+                    <b>{item.label}</b>
+                    <small>{item.detail}</small>
+                    <em>{item.score}%</em>
+                  </span>
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
+      </aside>
     </div>
   );
 }
@@ -2025,10 +2416,26 @@ function WarehousePanel({
   record: { id: string; status?: string; name?: string; sourceId?: string; lines?: unknown[]; version?: number };
   submoduleId: string;
 }) {
+  const locale = resolveLocale(query.locale) as SupportedLocale;
+  const de = locale === "de";
+  const lines = Array.isArray(record.lines) ? record.lines as Array<Record<string, unknown>> : [];
+  const lineLabel = (line: Record<string, unknown>, index: number) => {
+    const item = typeof line.inventoryItemId === "string" ? line.inventoryItemId : `line-${index + 1}`;
+    const qty = typeof line.quantity === "number" ? line.quantity : 0;
+    const picked = typeof line.pickedQuantity === "number" ? line.pickedQuantity : 0;
+    const shipped = typeof line.shippedQuantity === "number" ? line.shippedQuantity : 0;
+    const released = typeof line.releasedQuantity === "number" ? line.releasedQuantity : 0;
+    return { item, picked, qty, released, shipped };
+  };
+
   return (
     <div className="drawer-content ops-drawer">
       <DrawerHeader title={record.name ?? record.sourceId ?? record.id} query={query} submoduleId={submoduleId} />
-      <p className="drawer-description">Warehouse record with M0/M1 command, owner, version, and movement context.</p>
+      <p className="drawer-description">
+        {de
+          ? "Auftragsakte mit Materialdeckung, Wertschritten, Versandgate und Ledger-Kontext."
+          : "Order file with material coverage, value steps, shipping gate, and ledger context."}
+      </p>
       <dl className="drawer-facts">
         <div><dt>ID</dt><dd>{record.id}</dd></div>
         <div><dt>Status</dt><dd>{record.status ?? "master"}</dd></div>
@@ -2036,14 +2443,293 @@ function WarehousePanel({
         <div><dt>Lines</dt><dd>{record.lines?.length ?? 0}</dd></div>
       </dl>
       <section className="ops-drawer-section">
-        <h3>Implementation gates</h3>
+        <h3>{de ? "Positionen" : "Positions"}</h3>
         <div className="ops-mini-list">
-          <span>Owner-aware stock dimensions</span>
-          <span>Non-null balance key</span>
-          <span>Reservation commands only</span>
-          <span>Shared business outbox</span>
+          {lines.length > 0 ? lines.map((line, index) => {
+            const label = lineLabel(line, index);
+            return (
+              <span key={`${record.id}-line-${index}`}>
+                {label.item} · {label.picked}/{label.qty} {de ? "gepickt" : "picked"} · {label.shipped}/{label.qty} {de ? "versendet" : "shipped"} · {label.released} {de ? "offen" : "open"}
+              </span>
+            );
+          }) : <span>{de ? "Keine Positionen verknuepft." : "No linked positions."}</span>}
         </div>
       </section>
+      <section className="ops-drawer-section">
+        <h3>{de ? "Freigabe-Gates" : "Release gates"}</h3>
+        <div className="ops-mini-list">
+          <span>{de ? "Material: alle Positionen 100% gedeckt" : "Material: every line covered at 100%"}</span>
+          <span>{de ? "Wertschoepfung: Build, QA und Pack abgeschlossen" : "Value creation: build, QA, and pack complete"}</span>
+          <span>{de ? "Versand: Ship erst nach 100% Fortschritt" : "Shipping: ship only after 100% progress"}</span>
+          <span>{de ? "Audit: Status entsteht aus Warehouse Commands" : "Audit: status comes from warehouse commands"}</span>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+async function WarehouseAdminPanel({
+  query,
+  submoduleId
+}: {
+  query: QueryState;
+  submoduleId: string;
+}) {
+  const locale = resolveLocale(query.locale) as SupportedLocale;
+  const de = locale === "de";
+  const warehouse = (await getWarehouseSnapshot()).snapshot;
+  const warehouses = warehouse.locations.filter((location) => location.kind === "warehouse");
+  const selectedWarehouse = warehouses.find((location) => location.id === query.recordId) ?? warehouses[0];
+  const childLocations = (parentId: string) => warehouse.locations.filter((location) => location.parentId === parentId);
+  const zones = selectedWarehouse ? childLocations(selectedWarehouse.id).filter((location) => location.kind === "zone") : [];
+  const firstZoneId = zones[0]?.id;
+
+  return (
+    <div className="drawer-content ops-drawer warehouse-admin-drawer">
+      <DrawerHeader title={de ? "Lagerverwaltung" : "Warehouse management" } query={query} submoduleId={submoduleId} />
+      <p className="drawer-description">
+        {de
+          ? "Stammdaten, Lagerstruktur und Inventurkontext bleiben links unten, waehrend die Abarbeitung sichtbar bleibt."
+          : "Master data, layout, and count context stay in the lower-left drawer while order work remains visible."}
+      </p>
+      <section className="ops-drawer-section">
+        <h3>{de ? "Aktives Lager" : "Active warehouse"}</h3>
+        <div className="drawer-field-grid">
+          <label className="drawer-field">
+            <span>Name</span>
+            <input readOnly value={selectedWarehouse?.name ?? ""} />
+          </label>
+          <label className="drawer-field">
+            <span>Owner</span>
+            <input readOnly value={selectedWarehouse?.defaultOwnerPartyId ?? SYSTEM_OWNER_PARTY_ID} />
+          </label>
+          <label className="drawer-field">
+            <span>{de ? "Wareneingang" : "Receiving"}</span>
+            <select defaultValue={selectedWarehouse?.receivable ? "yes" : "no"}>
+              <option value="yes">{de ? "aktiv" : "active"}</option>
+              <option value="no">{de ? "gesperrt" : "blocked"}</option>
+            </select>
+          </label>
+          <label className="drawer-field">
+            <span>{de ? "Pickbar" : "Pickable"}</span>
+            <select defaultValue={selectedWarehouse?.pickable ? "yes" : "no"}>
+              <option value="yes">{de ? "aktiv" : "active"}</option>
+              <option value="no">{de ? "gesperrt" : "blocked"}</option>
+            </select>
+          </label>
+        </div>
+      </section>
+      <section className="ops-drawer-section">
+        <h3>{de ? "Struktur anlegen" : "Create structure"}</h3>
+        {selectedWarehouse ? <WarehouseLayoutActions sectionId={firstZoneId} warehouseId={selectedWarehouse.id} /> : null}
+        <div className="ops-mini-list">
+          {zones.length > 0 ? zones.map((zone) => {
+            const slots = childLocations(zone.id).filter((location) => location.kind === "bin");
+            return <span key={zone.id}>{zone.name} · {slots.length} Slots · {zone.pickable ? "pickbar" : "nicht pickbar"}</span>;
+          }) : <span>{de ? "Noch keine Bereiche." : "No sections yet."}</span>}
+        </div>
+      </section>
+      <section className="ops-drawer-section">
+        <h3>{de ? "Inventur" : "Cycle count"}</h3>
+        <div className="drawer-field-grid">
+          <label className="drawer-field">
+            <span>{de ? "Zaehlliste" : "Count sheet"}</span>
+            <select defaultValue={warehouse.cycleCounts[0]?.id ?? "new"}>
+              <option value={warehouse.cycleCounts[0]?.id ?? "new"}>{warehouse.cycleCounts[0]?.id ?? (de ? "Neue Zaehlliste" : "New count")}</option>
+            </select>
+          </label>
+          <label className="drawer-field">
+            <span>{de ? "Modus" : "Mode"}</span>
+            <select defaultValue="slot">
+              <option value="slot">{de ? "Slot zaehlen" : "Count slot"}</option>
+              <option value="item">{de ? "Artikel pruefen" : "Check item"}</option>
+            </select>
+          </label>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+async function WarehouseMatchPanel({
+  query,
+  submoduleId
+}: {
+  query: QueryState;
+  submoduleId: string;
+}) {
+  const locale = resolveLocale(query.locale) as SupportedLocale;
+  const de = locale === "de";
+  const warehouse = (await getWarehouseSnapshot()).snapshot;
+  const [reservationId, lineId] = String(query.recordId ?? "").split(":");
+  const reservation = warehouse.reservations.find((item) => item.id === reservationId) ?? warehouse.reservations[0];
+  const line = reservation?.lines.find((item) => item.id === lineId) ?? reservation?.lines[0];
+  const item = line ? warehouse.items.find((entry) => entry.id === line.inventoryItemId) : undefined;
+  const sources = line
+    ? warehouse.balances
+        .filter((balance) => balance.inventoryItemId === line.inventoryItemId)
+        .sort((a, b) => (b.stockStatus === "available" ? 1 : 0) - (a.stockStatus === "available" ? 1 : 0) || b.quantity - a.quantity)
+        .slice(0, 8)
+    : [];
+  const completedWorkSteps = new Set(warehouse.commandLog
+    .filter((command) => command.type === "CompleteValueStep" && typeof command.payload.reservationId === "string" && typeof command.payload.step === "string")
+    .map((command) => typeof command.payload.lineId === "string"
+      ? `${command.payload.reservationId}:${command.payload.lineId}:${command.payload.step}`
+      : `${command.payload.reservationId}:${command.payload.step}`));
+  const locationName = (id: string) => warehouse.locations.find((location) => location.id === id)?.name ?? id;
+  const materialScore = line && line.quantity > 0 ? Math.round(((line.quantity - line.releasedQuantity) / line.quantity) * 100) : 0;
+  const pickedScore = line && line.quantity > 0 ? Math.round((line.pickedQuantity / line.quantity) * 100) : 0;
+  const shippedScore = line && line.quantity > 0 ? Math.round((line.shippedQuantity / line.quantity) * 100) : 0;
+  const availableQuantity = sources
+    .filter((source) => source.stockStatus === "available")
+    .reduce((sum, source) => sum + source.quantity, 0);
+  const requiredQuantity = line?.quantity ?? 0;
+  const shortage = Math.max(0, requiredQuantity - (line ? line.quantity - line.releasedQuantity : 0));
+  const sourceScore = requiredQuantity > 0 ? Math.min(100, Math.round((availableQuantity / requiredQuantity) * 100)) : 0;
+  const lineStepDone = (step: "build" | "qa" | "pack") => Boolean(reservation && line && (
+    completedWorkSteps.has(`${reservation.id}:${line.id}:${step}`) || completedWorkSteps.has(`${reservation.id}:${step}`)
+  ));
+  const buildScore = lineStepDone("build") ? 100 : reservation?.status === "consumed" ? 100 : pickedScore >= 100 ? 80 : Math.min(60, pickedScore);
+  const qaScore = lineStepDone("qa") ? 100 : reservation?.status === "consumed" ? 100 : buildScore >= 100 ? 70 : Math.min(35, buildScore);
+  const packScore = lineStepDone("pack") ? 100 : reservation?.status === "consumed" ? 100 : shippedScore >= 100 ? 100 : Math.min(40, qaScore);
+  const auditScore = warehouse.commandLog.some((command) => command.payload && JSON.stringify(command.payload).includes(reservation?.id ?? "")) ? 100 : 40;
+  const backupScore = requiredQuantity > 0 && availableQuantity > requiredQuantity ? 100 : availableQuantity > 0 ? 65 : 0;
+  const cleanHandoffScore = shortage === 0 && packScore === 100 && shippedScore === 100 ? 100 : shortage === 0 ? 75 : 20;
+  const scoreTone = (score: number) => score >= 90 ? "is-full" : score >= 60 ? "is-partial" : "is-missing";
+  const scoreLabel = (score: number) => score >= 90 ? (de ? "erfuellt" : "fulfilled") : score >= 60 ? (de ? "teilweise" : "partial") : (de ? "offen" : "open");
+  const requirementColumns = [
+    {
+      key: "base",
+      title: de ? "Basis-Anforderungen" : "Base requirements",
+      subtitle: de ? "Muss erfuellt sein, sonst keine Freigabe." : "Must pass before the order can be released.",
+      items: [
+        {
+          evidence: item ? `${item.sku} · ${item.trackingMode}` : "-",
+          gap: item ? (de ? "keine Artikelluecke" : "no item gap") : (de ? "Artikel fehlt" : "item missing"),
+          label: de ? "Richtiger Artikel" : "Correct item",
+          score: item ? 100 : 0
+        },
+        {
+          evidence: line ? `${line.quantity - line.releasedQuantity}/${line.quantity} ${item?.uom ?? ""}` : "0/0",
+          gap: shortage > 0 ? `${shortage} ${de ? "fehlt" : "missing"}` : (de ? "voll gedeckt" : "fully covered"),
+          label: de ? "Menge gedeckt" : "Quantity covered",
+          score: materialScore
+        },
+        {
+          evidence: reservation?.inventoryOwnerPartyId ?? "-",
+          gap: de ? "Owner-Dimension gesetzt" : "owner dimension present",
+          label: de ? "Bestands-Owner passt" : "Inventory owner matches",
+          score: reservation?.inventoryOwnerPartyId ? 100 : 0
+        }
+      ]
+    },
+    {
+      key: "performance",
+      title: de ? "Leistungs-Anforderungen" : "Performance requirements",
+      subtitle: de ? "Bewertet die eigentliche Wertschöpfung der Auftragsposition." : "Scores the value-creation work on this order line.",
+      items: [
+        {
+          evidence: line ? `${line.pickedQuantity}/${line.quantity}` : "0/0",
+          gap: pickedScore === 100 ? (de ? "Pick abgeschlossen" : "pick complete") : (de ? "Pick offen" : "pick open"),
+          label: de ? "Kommissioniert" : "Picked",
+          score: pickedScore
+        },
+        {
+          evidence: buildScore === 100 ? (de ? "Build-Command vorhanden" : "build command present") : (de ? "aus Pick-Fortschritt abgeleitet" : "inferred from pick progress"),
+          gap: buildScore === 100 ? (de ? "fertig" : "done") : (de ? "Fertigung offen" : "build open"),
+          label: de ? "Fertigung / Montage" : "Build / assembly",
+          score: buildScore
+        },
+        {
+          evidence: qaScore === 100 ? (de ? "QA-Command vorhanden" : "QA command present") : (de ? "Gate noch nicht voll freigegeben" : "gate not fully approved"),
+          gap: qaScore === 100 ? (de ? "freigegeben" : "approved") : (de ? "QA offen" : "QA open"),
+          label: de ? "Qualitaetsfreigabe" : "Quality approval",
+          score: qaScore
+        }
+      ]
+    },
+    {
+      key: "enthusiasm",
+      title: de ? "Begeisterungsfaktoren" : "Delight factors",
+      subtitle: de ? "Nicht zwingend, aber zeigt robuste und schnelle Auslieferung." : "Not mandatory, but signals robust, fast fulfillment.",
+      items: [
+        {
+          evidence: `${availableQuantity} ${de ? "verfuegbar" : "available"} · ${sources.length} ${de ? "Quellen" : "sources"}`,
+          gap: sourceScore >= 100 ? (de ? "Sofortquelle vorhanden" : "instant source available") : (de ? "Quelle pruefen" : "check source"),
+          label: de ? "Beste Lagerquelle" : "Best warehouse source",
+          score: sourceScore
+        },
+        {
+          evidence: backupScore === 100 ? (de ? "Pufferbestand vorhanden" : "buffer stock exists") : `${availableQuantity}/${requiredQuantity}`,
+          gap: backupScore === 100 ? (de ? "Reserve vorhanden" : "reserve available") : (de ? "kein voller Puffer" : "no full buffer"),
+          label: de ? "Puffer gegen Stoerung" : "Buffer against disruption",
+          score: backupScore
+        },
+        {
+          evidence: `${reservation?.status ?? "-"} · audit ${auditScore}%`,
+          gap: cleanHandoffScore === 100 ? (de ? "versandklar" : "clean handoff") : (de ? "Handoff noch offen" : "handoff still open"),
+          label: de ? "Sauberer Handoff" : "Clean handoff",
+          score: cleanHandoffScore
+        }
+      ]
+    }
+  ];
+  const allScores = requirementColumns.flatMap((column) => column.items.map((entry) => entry.score));
+  const overallScore = allScores.length ? Math.round(allScores.reduce((sum, score) => sum + score, 0) / allScores.length) : 0;
+
+  return (
+    <div className="drawer-content ops-drawer warehouse-match-drawer warehouse-ai-score-drawer">
+      <DrawerHeader title={de ? "KI Match-Scoring" : "AI match scoring"} query={query} submoduleId={submoduleId} />
+      <div className="warehouse-ai-score-summary">
+        <div>
+          <span>{reservation?.sourceId ?? "-"}</span>
+          <strong>{item?.name ?? (de ? "Auftragsposition" : "Order line")}</strong>
+          <small>{item?.sku ?? "-"} · {de ? "Bestellung gegen gelieferten Zustand" : "order requirements against delivered state"}</small>
+        </div>
+        <em className={scoreTone(overallScore)}>{overallScore}%</em>
+      </div>
+      <div className="warehouse-ai-score-grid">
+        {requirementColumns.map((column) => (
+          <section className={`warehouse-ai-score-column is-${column.key}`} key={column.key}>
+            <header>
+              <strong>{column.title}</strong>
+              <span>{column.subtitle}</span>
+            </header>
+            <div className="warehouse-ai-requirements">
+              {column.items.map((entry) => (
+                <article className={scoreTone(entry.score)} key={`${column.key}-${entry.label}`}>
+                  <div>
+                    <strong>{entry.label}</strong>
+                    <em>{entry.score}%</em>
+                  </div>
+                  <p>{entry.evidence}</p>
+                  <small>{scoreLabel(entry.score)} · {entry.gap}</small>
+                </article>
+              ))}
+            </div>
+          </section>
+        ))}
+      </div>
+      <div className="warehouse-ai-evidence-row">
+        <section>
+          <h3>{de ? "Quellen" : "Sources"}</h3>
+          <div>
+            {sources.map((source) => (
+              <span key={source.balanceKey}>{locationName(source.locationId)} · {source.stockStatus} · {source.quantity}</span>
+            ))}
+          </div>
+        </section>
+        <section>
+          <h3>{de ? "KI-Begruendung" : "AI rationale"}</h3>
+          <p>
+            {overallScore >= 90
+              ? (de ? "Die Position ist fachlich sauber gematcht. Basis, Leistung und Handoff sind konsistent nachweisbar." : "The line is cleanly matched. Base, performance, and handoff evidence are consistent.")
+              : shortage > 0
+                ? (de ? "Die Basis-Anforderung ist blockiert, weil die bestellte Menge nicht voll gedeckt ist." : "The base requirement is blocked because quantity coverage is incomplete.")
+                : (de ? "Die Basis passt, aber mindestens ein Leistungs- oder Handoff-Gate ist noch offen." : "Base requirements pass, but at least one performance or handoff gate is still open.")}
+          </p>
+        </section>
+      </div>
     </div>
   );
 }
@@ -2143,6 +2829,8 @@ function businessPanelHref(
   if (query.locale) params.set("locale", query.locale);
   if (query.theme) params.set("theme", query.theme);
   if (query.selectedId) params.set("selectedId", query.selectedId);
+  if (query.warehouseSearch) params.set("warehouseSearch", query.warehouseSearch);
+  if (query.orderSearch) params.set("orderSearch", query.orderSearch);
   params.set("panel", panel);
   params.set("recordId", recordId);
   params.set("drawer", drawer);
@@ -2154,6 +2842,8 @@ function businessBaseHref(query: QueryState, submoduleId: string) {
   if (query.locale) params.set("locale", query.locale);
   if (query.theme) params.set("theme", query.theme);
   if (query.selectedId) params.set("selectedId", query.selectedId);
+  if (query.warehouseSearch) params.set("warehouseSearch", query.warehouseSearch);
+  if (query.orderSearch) params.set("orderSearch", query.orderSearch);
   const queryString = params.toString();
   return queryString ? `/app/business/${submoduleId}?${queryString}` : `/app/business/${submoduleId}`;
 }
@@ -2162,7 +2852,20 @@ function businessSelectionHref(query: QueryState, submoduleId: string, recordId:
   const params = new URLSearchParams();
   if (query.locale) params.set("locale", query.locale);
   if (query.theme) params.set("theme", query.theme);
+  if (query.warehouseSearch) params.set("warehouseSearch", query.warehouseSearch);
+  if (query.orderSearch) params.set("orderSearch", query.orderSearch);
   params.set("selectedId", recordId);
+  return `/app/business/${submoduleId}?${params.toString()}`;
+}
+
+function businessWarehouseSelectionHref(query: QueryState, submoduleId: string, warehouseId: string | undefined, orderId: string, lineId?: string) {
+  const params = new URLSearchParams();
+  if (query.locale) params.set("locale", query.locale);
+  if (query.theme) params.set("theme", query.theme);
+  if (query.warehouseSearch) params.set("warehouseSearch", query.warehouseSearch);
+  if (query.orderSearch) params.set("orderSearch", query.orderSearch);
+  if (warehouseId) params.set("selectedId", warehouseId);
+  params.set("recordId", lineId ? `${orderId}:${lineId}` : orderId);
   return `/app/business/${submoduleId}?${params.toString()}`;
 }
 
@@ -2179,7 +2882,7 @@ type BusinessSetItem = {
   amount: number;
 };
 
-function resolveBusinessSet(recordId: string | undefined, data: BusinessBundle, locale: SupportedLocale, copy: BusinessCopy) {
+function resolveBusinessSet(recordId: string | undefined, data: BusinessBundle, locale: SupportedLocale, copy: BusinessCopy, warehouse?: WarehouseState) {
   const key = recordId ?? "customers";
   const customerItems = (items: BusinessCustomer[]): BusinessSetItem[] => items.map((customer) => ({
     id: customer.id,
@@ -2256,6 +2959,28 @@ function resolveBusinessSet(recordId: string | undefined, data: BusinessBundle, 
     type: "report",
     amount: report.amount
   }));
+  const warehouseReplayItems = (): BusinessSetItem[] => {
+    const commands = warehouse?.commandLog.slice(-8).reverse() ?? [];
+    if (commands.length > 0) {
+      return commands.map((command) => ({
+        id: command.refId,
+        label: command.type,
+        meta: `${command.refType} · ${command.requestedAt}`,
+        panel: "warehouse-record",
+        type: "warehouse-command",
+        amount: 0
+      }));
+    }
+
+    return (warehouse?.locations ?? []).slice(0, 8).map((location) => ({
+      id: location.id,
+      label: location.name,
+      meta: `${location.kind} · ${location.pickable ? "pickable" : "not pickable"} · ${location.receivable ? "receivable" : "not receivable"}`,
+      panel: "warehouse-record",
+      type: "warehouse-location",
+      amount: 0
+    }));
+  };
 
   const set = (() => {
     if (key === "receivables") return { title: copy.receivables, description: copy.businessSetReceivablesDescription, items: invoiceItems(data.invoices.filter((invoice) => invoice.status !== "Paid")), resource: "invoices" };
@@ -2285,6 +3010,7 @@ function resolveBusinessSet(recordId: string | undefined, data: BusinessBundle, 
     if (key === "revenue") return { title: copy.revenue, description: copy.businessSetRevenueDescription, items: invoiceItems(data.invoices), resource: "invoices" };
     if (key === "invoice-tax") return { title: copy.tax, description: copy.businessSetTaxDescription, items: invoiceItems(data.invoices), resource: "invoices" };
     if (key === "open-reports") return { title: copy.openReports, description: copy.businessSetReportsDescription, items: reportItems(data.reports.filter((report) => report.status !== "Current")), resource: "reports" };
+    if (key === "warehouse-replay") return { title: "Replay", description: locale === "de" ? "Auditfaehige Lagerereignisse und bestaetigte Kommandos." : "Auditable warehouse events and confirmed commands.", items: warehouseReplayItems(), resource: "warehouse" };
     if (key === "exports") return { title: copy.exports, description: copy.businessSetExportsDescription, items: exportItems(data.bookkeeping), resource: "bookkeeping" };
     return { title: copy.customers, description: copy.businessSetCustomersDescription, items: customerItems(data.customers), resource: "customers" };
   })();

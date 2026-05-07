@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   getAvailableQuantity,
   SYSTEM_OWNER_PARTY_ID,
@@ -13,9 +14,13 @@ const checkoutSessionId = "cs_demo_warehouse";
 const orderId = "web-order-9001";
 
 export function WarehouseCheckoutSimulator({ initialSnapshot }: { initialSnapshot: WarehouseState }) {
+  const router = useRouter();
   const [state, setState] = useState(initialSnapshot);
-  const [message, setMessage] = useState("Stripe-ready checkout hook");
+  const [message, setMessage] = useState("Ready");
   const [busyEvent, setBusyEvent] = useState<WarehouseCheckoutEventType | null>(null);
+  useEffect(() => {
+    setState(initialSnapshot);
+  }, [initialSnapshot]);
   const reservation = state.reservations.find((item) => item.id === `checkout-${checkoutSessionId}`);
   const shipment = state.shipments.find((item) => item.reservationId === reservation?.id);
   const availableCore = useMemo(() => getAvailableQuantity(state, {
@@ -53,6 +58,7 @@ export function WarehouseCheckoutSimulator({ initialSnapshot }: { initialSnapsho
       };
       if (!response.ok || payload.ok === false || !payload.snapshot) throw new Error(payload.error ?? "Checkout event failed");
       setState(payload.snapshot);
+      router.refresh();
       setMessage(successMessage);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Checkout event failed");
@@ -64,7 +70,7 @@ export function WarehouseCheckoutSimulator({ initialSnapshot }: { initialSnapsho
   return (
     <section className="warehouse-simulator warehouse-checkout-simulator" aria-label="Warehouse checkout simulator">
       <div>
-        <strong>Checkout inventory hook</strong>
+        <strong>Checkout hold</strong>
         <span>{message}</span>
       </div>
       <div className="warehouse-command-row">

@@ -85,6 +85,13 @@
       "when": 1777756800000,
       "tag": "0011_business_warehouse_movement_idempotency",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1777757400000,
+      "tag": "0012_business_accounting_artifacts",
+      "breakpoints": true
     }
   ]
 }

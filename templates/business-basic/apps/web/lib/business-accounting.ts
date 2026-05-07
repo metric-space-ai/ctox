@@ -1,14 +1,20 @@
 import {
   bankMatchConfidence,
+  buildAssetAcquisitionJournalDraft,
+  buildAssetDepreciationJournalDraft,
+  buildAssetDisposalJournalDraft,
   buildDatevExtfCsv,
   buildBankMatchJournalDraft,
+  buildStraightLineDepreciationSchedule,
   buildInvoiceDocument as buildAccountingInvoiceDocument,
   buildInvoiceJournalDraft,
   buildReceiptJournalDraft,
   buildZugferdXml,
   createAccountingAuditEvent,
+  createAccountingCommand,
   createAccountingProposal,
   createBusinessOutboxEvent,
+  LedgerPosting,
   prepareAcceptBankMatchCommand,
   preparePostReceiptCommand,
   prepareSendInvoiceCommand,
@@ -22,6 +28,7 @@ import type {
   BusinessBookkeepingExport,
   BusinessBundle,
   BusinessCustomer,
+  BusinessFixedAsset,
   BusinessInvoice,
   BusinessProduct,
   BusinessReceipt,
@@ -230,6 +237,291 @@ export function prepareReceiptForAccounting({
   return { audit, command, journalDraft, outbox, proposal, receiptProjection, validation: { errors: [], warnings: [] } };
 }
 
+export function prepareReceiptCapitalizationForAccounting({
+  receipt
+}: {
+  receipt: BusinessReceipt;
+}) {
+  const assetId = `asset-${receipt.id}`;
+  const asset = {
+    accumulatedDepreciationAccountId: "acc-accumulated-depreciation",
+    acquisitionAccountId: receipt.payableAccountId,
+    acquisitionCost: receipt.netAmount,
+    acquisitionDate: receipt.receiptDate,
+    assetAccountId: "acc-fixed-assets",
+    currency: receipt.currency,
+    depreciationExpenseAccountId: "acc-depreciation",
+    id: assetId,
+    name: `${receipt.vendorName} ${receipt.number}`,
+    receiptId: receipt.id,
+    salvageValue: 1,
+    usefulLifeMonths: 60
+  } satisfies Parameters<typeof buildAssetAcquisitionJournalDraft>[0]["asset"];
+  const command = createAccountingCommand({
+    companyId: BUSINESS_COMPANY_ID,
+    payload: {
+      assetId,
+      receiptId: receipt.id,
+      receiptNumber: receipt.number,
+      vendorName: receipt.vendorName
+    },
+    refId: receipt.id,
+    refType: "receipt",
+    requestedBy: "business-runtime",
+    type: "CapitalizeReceipt"
+  });
+  const journalDraft = buildAssetAcquisitionJournalDraft({
+    asset,
+    companyId: BUSINESS_COMPANY_ID,
+    inputVatAccountId: receipt.taxAmount > 0 ? "acc-vat-input" : undefined,
+    inputVatAmount: receipt.taxAmount,
+    payableAccountId: receipt.payableAccountId
+  });
+  const receiptProjection = {
+    companyId: BUSINESS_COMPANY_ID,
+    currency: receipt.currency,
+    dueDate: receipt.dueDate,
+    expenseAccountExternalId: "acc-fixed-assets",
+    externalId: receipt.id,
+    extractedJson: receipt.extractedFields,
+    files: [{
+      blobRef: `receipt-file:${receipt.id}`,
+      mime: "application/pdf",
+      originalFilename: receipt.attachmentName,
+      sha256: stablePseudoSha256(`${receipt.id}:${receipt.attachmentName}`)
+    }],
+    lines: [{
+      description: `Fixed asset activation ${asset.name}`,
+      expenseAccountExternalId: "acc-fixed-assets",
+      lineNo: 1,
+      netAmountMinor: toMinor(receipt.netAmount),
+      taxAmountMinor: toMinor(receipt.taxAmount),
+      taxCode: receipt.taxCode,
+      totalAmountMinor: toMinor(receipt.total)
+    }],
+    netAmountMinor: toMinor(receipt.netAmount),
+    number: receipt.number,
+    payableAccountExternalId: receipt.payableAccountId,
+    postedAt: new Date(`${receipt.receiptDate}T00:00:00.000Z`),
+    postedJournalEntryExternalId: journalExternalId(journalDraft),
+    receiptDate: receipt.receiptDate,
+    reviewedAt: new Date(`${receipt.receiptDate}T00:00:00.000Z`),
+    status: "posted",
+    taxAmountMinor: toMinor(receipt.taxAmount),
+    taxCode: receipt.taxCode,
+    totalAmountMinor: toMinor(receipt.total),
+    vendorExternalId: vendorExternalId(receipt.vendorName),
+    vendorInvoiceNumber: receipt.number
+  };
+  const proposal = createAccountingProposal({
+    companyId: BUSINESS_COMPANY_ID,
+    confidence: receipt.netAmount >= 250 ? 0.86 : 0.62,
+    createdByAgent: "asset-accountant",
+    evidence: {
+      assetAccountId: asset.assetAccountId,
+      netAmount: receipt.netAmount,
+      receiptId: receipt.id,
+      vendorName: receipt.vendorName
+    },
+    kind: "asset_activation",
+    proposedCommand: command,
+    refId: receipt.id,
+    refType: "receipt"
+  });
+  const audit = createAccountingAuditEvent({
+    action: "asset.prepare_capitalization",
+    actorId: "business-runtime",
+    actorType: "system",
+    after: { asset, command, journalDraft, receiptProjection },
+    companyId: BUSINESS_COMPANY_ID,
+    refId: receipt.id,
+    refType: "receipt"
+  });
+  const outbox = createBusinessOutboxEvent({
+    companyId: BUSINESS_COMPANY_ID,
+    id: `outbox-business.asset.prepare_capitalization-${receipt.id}`,
+    payload: { asset, command, journalDraft, proposalId: proposal.id, receiptProjection },
+    topic: "business.asset.prepare_capitalization"
+  });
+
+  return {
+    audit,
+    assetProjection: asset,
+    command,
+    journalDraft,
+    outbox,
+    proposal,
+    receiptProjection,
+    validation: { errors: [], warnings: receipt.netAmount < 250 ? ["asset_capitalization_threshold_review"] : [] }
+  };
+}
+
+export function prepareAssetDepreciationForAccounting({
+  asset,
+  fiscalYear = 2026
+}: {
+  asset: BusinessFixedAsset;
+  fiscalYear?: number;
+}) {
+  const fixedAsset = {
+    accumulatedDepreciationAccountId: asset.accumulatedDepreciationAccountId,
+    acquisitionAccountId: asset.assetAccountId,
+    acquisitionCost: asset.acquisitionCost,
+    acquisitionDate: asset.acquisitionDate,
+    assetAccountId: asset.assetAccountId,
+    currency: asset.currency,
+    depreciationExpenseAccountId: asset.depreciationExpenseAccountId,
+    id: asset.id,
+    name: asset.name,
+    receiptId: asset.receiptId,
+    salvageValue: asset.salvageValue,
+    usefulLifeMonths: asset.usefulLifeMonths
+  } satisfies Parameters<typeof buildAssetDepreciationJournalDraft>[0]["asset"];
+  const dueLines = buildStraightLineDepreciationSchedule(fixedAsset).filter((line) => line.fiscalYear === fiscalYear);
+  const annualAmount = dueLines.reduce((sum, line) => sum + line.amount, 0);
+  const journalDraft = newAnnualDepreciationDraft(fixedAsset, fiscalYear, dueLines);
+  const command = createAccountingCommand({
+    companyId: BUSINESS_COMPANY_ID,
+    payload: {
+      amountMinor: toMinor(annualAmount),
+      assetId: asset.id,
+      fiscalYear
+    },
+    refId: `${asset.id}-${fiscalYear}`,
+    refType: "asset",
+    requestedBy: "business-runtime",
+    type: "PostDepreciation"
+  });
+  const proposal = createAccountingProposal({
+    companyId: BUSINESS_COMPANY_ID,
+    confidence: dueLines.length ? 0.9 : 0.45,
+    createdByAgent: "asset-accountant",
+    evidence: {
+      accountCredit: asset.accumulatedDepreciationAccountId,
+      accountDebit: asset.depreciationExpenseAccountId,
+      fiscalYear,
+      lineCount: dueLines.length
+    },
+    kind: "asset_depreciation",
+    proposedCommand: command,
+    refId: `${asset.id}-disposal`,
+    refType: "asset"
+  });
+  const audit = createAccountingAuditEvent({
+    action: "asset.prepare_depreciation",
+    actorId: "business-runtime",
+    actorType: "system",
+    after: { command, dueLines, journalDraft },
+    companyId: BUSINESS_COMPANY_ID,
+    refId: asset.id,
+    refType: "asset"
+  });
+  const outbox = createBusinessOutboxEvent({
+    companyId: BUSINESS_COMPANY_ID,
+    id: `outbox-business.asset.prepare_depreciation-${asset.id}-${fiscalYear}`,
+    payload: { command, journalDraft, proposalId: proposal.id },
+    topic: "business.asset.prepare_depreciation"
+  });
+
+  return {
+    audit,
+    command,
+    journalDraft,
+    outbox,
+    proposal,
+    validation: { errors: dueLines.length ? [] : ["asset_no_depreciation_due"], warnings: [] }
+  };
+}
+
+export function prepareAssetDisposalForAccounting({
+  asset,
+  disposalDate = "2026-12-31",
+  proceeds = 0
+}: {
+  asset: BusinessFixedAsset & { accumulatedDepreciation?: number; bookValue?: number };
+  disposalDate?: string;
+  proceeds?: number;
+}) {
+  const fixedAsset = {
+    accumulatedDepreciationAccountId: asset.accumulatedDepreciationAccountId,
+    acquisitionAccountId: asset.assetAccountId,
+    acquisitionCost: asset.acquisitionCost,
+    acquisitionDate: asset.acquisitionDate,
+    assetAccountId: asset.assetAccountId,
+    currency: asset.currency,
+    depreciationExpenseAccountId: asset.depreciationExpenseAccountId,
+    id: asset.id,
+    name: asset.name,
+    receiptId: asset.receiptId,
+    salvageValue: asset.salvageValue,
+    usefulLifeMonths: asset.usefulLifeMonths
+  } satisfies Parameters<typeof buildAssetDisposalJournalDraft>[0]["asset"];
+  const accumulatedDepreciation = asset.accumulatedDepreciation ?? Math.max(0, asset.acquisitionCost - (asset.bookValue ?? asset.acquisitionCost));
+  const journalDraft = buildAssetDisposalJournalDraft({
+    accumulatedDepreciation,
+    asset: fixedAsset,
+    companyId: BUSINESS_COMPANY_ID,
+    disposalDate,
+    gainAccountId: "acc-revenue-saas",
+    lossAccountId: "acc-depreciation",
+    proceeds,
+    proceedsAccountId: "acc-bank"
+  });
+  const command = createAccountingCommand({
+    companyId: BUSINESS_COMPANY_ID,
+    payload: {
+      accumulatedDepreciationMinor: toMinor(accumulatedDepreciation),
+      assetId: asset.id,
+      disposalDate,
+      proceedsMinor: toMinor(proceeds)
+    },
+    refId: asset.id,
+    refType: "asset",
+    requestedBy: "business-runtime",
+    type: "DisposeAsset"
+  });
+  const proposal = createAccountingProposal({
+    companyId: BUSINESS_COMPANY_ID,
+    confidence: asset.status === "Active" ? 0.84 : 0.52,
+    createdByAgent: "asset-accountant",
+    evidence: {
+      accumulatedDepreciation,
+      assetAccountId: asset.assetAccountId,
+      bookValue: asset.bookValue ?? asset.acquisitionCost - accumulatedDepreciation,
+      disposalDate,
+      proceeds
+    },
+    kind: "asset_disposal",
+    proposedCommand: command,
+    refId: asset.id,
+    refType: "asset"
+  });
+  const audit = createAccountingAuditEvent({
+    action: "asset.prepare_disposal",
+    actorId: "business-runtime",
+    actorType: "system",
+    after: { command, journalDraft },
+    companyId: BUSINESS_COMPANY_ID,
+    refId: asset.id,
+    refType: "asset"
+  });
+  const outbox = createBusinessOutboxEvent({
+    companyId: BUSINESS_COMPANY_ID,
+    id: `outbox-business.asset.prepare_disposal-${asset.id}`,
+    payload: { command, journalDraft, proposalId: proposal.id },
+    topic: "business.asset.prepare_disposal"
+  });
+
+  return {
+    audit,
+    command,
+    journalDraft,
+    outbox,
+    proposal,
+    validation: { errors: asset.status === "Disposed" ? ["asset_already_disposed"] : [], warnings: proceeds === 0 ? ["asset_disposal_without_proceeds"] : [] }
+  };
+}
+
 export function prepareBankMatchForAccounting({
   transaction
 }: {
@@ -250,6 +542,11 @@ export function prepareBankMatchForAccounting({
       invoiceExternalId: transaction.matchType === "invoice" ? transaction.matchedRecordId : null,
       receiptExternalId: transaction.matchType === "receipt" ? transaction.matchedRecordId : null
     } : undefined,
+    allocations: transaction.matchedRecordId ? [{
+      amountMinor: toMinor(Math.abs(transaction.amount)),
+      invoiceExternalId: transaction.matchType === "invoice" ? transaction.matchedRecordId : null,
+      receiptExternalId: transaction.matchType === "receipt" ? transaction.matchedRecordId : null
+    }] : [],
     amountMinor: toMinor(Math.abs(transaction.amount)),
     bankAccountExternalId: "acc-bank",
     bankStatementLineExternalId: transaction.id,
@@ -313,7 +610,9 @@ export function prepareDatevExportForAccounting({
     requestedBy: "business-runtime",
     type: "ExportDatev" as const
   };
-  const sourceLines: DatevExtfLine[] = buildDatevLines(data, exportBatch.id).map((line) => ({
+  const exportLines = buildDatevLines(data, exportBatch.id);
+  const sourceRows = exportLines.length ? exportLines : buildDatevLines(data);
+  const sourceLines: DatevExtfLine[] = sourceRows.map((line) => ({
     accountCode: line.account.code,
     amount: line.amount,
     contraAccountCode: line.contraAccount?.code,
@@ -355,8 +654,24 @@ export function prepareDatevExportForAccounting({
     payload: { command, proposalId: proposal.id },
     topic: "business.datev.prepare_export"
   });
+  const datevExport = {
+    companyId: BUSINESS_COMPANY_ID,
+    csvBlobRef: `datev-export:${exportBatch.id}`,
+    csvSha256: stablePseudoSha256(csv),
+    externalId: exportBatch.id,
+    exportedAt: exportBatch.status === "Exported" ? new Date(exportBatch.generatedAt) : null,
+    exportedBy: exportBatch.status === "Exported" ? exportBatch.reviewer : null,
+    lineCount: sourceLines.length,
+    netAmountMinor: toMinor(exportBatch.netAmount),
+    payload: { filename: `${exportBatch.period}-datev.csv`, proposalId: proposal.id },
+    period: exportBatch.period,
+    sourceProposalExternalId: proposal.id,
+    status: exportBatch.status === "Exported" ? "exported" : "prepared",
+    system: exportBatch.system,
+    taxAmountMinor: toMinor(exportBatch.taxAmount)
+  };
 
-  return { audit, command, csv, outbox, proposal, validation: { errors: [], warnings: [] } };
+  return { audit, command, csv, datevExport, outbox, proposal, validation: { errors: [], warnings: [] } };
 }
 
 export function invoiceAccountingParties(customer: BusinessCustomer | undefined, products: BusinessProduct[]) {
@@ -364,6 +679,32 @@ export function invoiceAccountingParties(customer: BusinessCustomer | undefined,
     customer,
     products
   };
+}
+
+function newAnnualDepreciationDraft(
+  asset: Parameters<typeof buildAssetDepreciationJournalDraft>[0]["asset"],
+  fiscalYear: number,
+  lines: ReturnType<typeof buildStraightLineDepreciationSchedule>
+) {
+  if (!lines.length) {
+    return buildAssetDepreciationJournalDraft({
+      asset,
+      companyId: BUSINESS_COMPANY_ID,
+      line: {
+        accumulatedDepreciation: 0,
+        amount: 0,
+        bookValue: asset.acquisitionCost,
+        fiscalYear,
+        postingDate: `${fiscalYear}-12-31`
+      }
+    });
+  }
+
+  const amount = lines.reduce((sum, line) => sum + line.amount, 0);
+  return new LedgerPosting(BUSINESS_COMPANY_ID, "asset", `${asset.id}-${fiscalYear}`, `${fiscalYear}-12-31`, asset.currency)
+    .debit(asset.depreciationExpenseAccountId, amount)
+    .credit(asset.accumulatedDepreciationAccountId, amount)
+    .toJournalDraft("depreciation", `Annual depreciation ${fiscalYear} ${asset.name}.`);
 }
 
 function toMinor(amount: number) {

@@ -7,7 +7,7 @@ export type TaxRate = {
 
 export const germanTaxRates: TaxRate[] = [
   { accountId: "acc-vat-output", code: "DE_19", rate: 19, type: "output" },
-  { accountId: "acc-vat-output", code: "DE_7", rate: 7, type: "output" },
+  { accountId: "acc-vat-output-7", code: "DE_7", rate: 7, type: "output" },
   { code: "DE_0", rate: 0, type: "output" },
   { code: "DE_RC", rate: 0, type: "reverse_charge" },
   { code: "DE_KU", rate: 0, type: "kleinunternehmer" }
@@ -17,4 +17,9 @@ export function resolveGermanTaxRate(input: { kleinunternehmer?: boolean; revers
   if (input.kleinunternehmer) return germanTaxRates.find((rate) => rate.code === "DE_KU")!;
   if (input.reverseCharge) return germanTaxRates.find((rate) => rate.code === "DE_RC")!;
   return germanTaxRates.find((rate) => rate.rate === input.taxRate && rate.type === "output") ?? germanTaxRates[0]!;
+}
+
+export function germanInputVatAccountId(taxCode?: string) {
+  if (taxCode === "DE_7_INPUT") return "acc-vat-input-7";
+  return "acc-vat-input";
 }

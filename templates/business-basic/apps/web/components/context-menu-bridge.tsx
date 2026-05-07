@@ -336,6 +336,52 @@ function contextMenuActions(item: ContextItem, locale: "de" | "en"): ContextMenu
   }
 
   if (item.moduleId === "business") {
+    if (item.submoduleId === "warehouse") {
+      if (item.recordType === "warehouse_order") {
+        add("warehouse-order-readiness", de ? "Auftrag pruefen" : "Check order", de ? "Material, Wertschritte, Versandgate" : "Material, value steps, shipping gate", (ctx) => de
+          ? `Pruefe diesen Warehouse-Auftrag ${ctx.label}. Bewerte Materialdeckung, fehlende Einzelpositionen, Wertschritte, QA, Packstatus und ob Versand wirklich freigegeben werden darf.`
+          : `Check this warehouse order ${ctx.label}. Assess material coverage, missing order lines, value steps, QA, packing status, and whether shipping can be released.`);
+        add("warehouse-order-blockers", de ? "Blocker planen" : "Plan blockers", de ? "Fehlteile und Fertigung" : "Missing parts and production", (ctx) => de
+          ? `Plane die Blocker fuer Auftrag ${ctx.label}. Leite konkrete Aktionen fuer fehlende Teile, Umlagerung, Auftragsfertigung, QA und Packfreigabe ab.`
+          : `Plan blockers for order ${ctx.label}. Derive concrete actions for missing parts, transfers, order production, QA, and packing approval.`);
+      } else if (item.recordType === "warehouse_order_line") {
+        add("warehouse-line-source", de ? "Position matchen" : "Match line", de ? "Bestand, Fehlteil, Quelle" : "Stock, shortage, source", (ctx) => de
+          ? `Matche diese Auftragsposition ${ctx.label}. Pruefe verfuegbaren Bestand, fehlende Menge, beste Lagerquelle, Umlagerung und Fertigungsbedarf.`
+          : `Match this order line ${ctx.label}. Check available stock, missing quantity, best warehouse source, transfer, and production need.`);
+        add("warehouse-line-escalate", de ? "Fehlteil klaeren" : "Resolve shortage", de ? "Einkauf, Fertigung, Ersatz" : "Purchase, production, substitute", (ctx) => de
+          ? `Klaere Fehlteile fuer ${ctx.label}. Nenne Einkaufs-, Fertigungs-, Ersatzteil- oder Teillieferungsoptionen mit naechstem Schritt.`
+          : `Resolve shortages for ${ctx.label}. Name purchasing, production, substitute, or partial delivery options with the next step.`);
+      } else if (item.recordType === "warehouse_work_step") {
+        add("warehouse-step-gate", de ? "Gate pruefen" : "Check gate", de ? "Owner, Status, Freigabe" : "Owner, status, approval", (ctx) => de
+          ? `Pruefe den Wertschritt ${ctx.label}. Klaere Owner, Status, Voraussetzungen, Nachweis und Freigabe fuer den naechsten Schritt.`
+          : `Check value step ${ctx.label}. Clarify owner, status, prerequisites, evidence, and approval for the next step.`);
+      } else if (item.recordType === "warehouse_slot") {
+        add("warehouse-slot-edit", de ? "Slot bearbeiten" : "Edit slot", de ? "Name, Status, Bestand" : "Name, status, stock", (ctx) => de
+          ? `Bearbeite Lagerplatz ${ctx.label}. Pruefe Name, Zone, Pickbarkeit, Sperrgrund, Bestand, Reservierungen und Inventurstatus. Formuliere eine konkrete bestaetigungspflichtige Lageraktion.`
+          : `Edit warehouse slot ${ctx.label}. Check name, zone, pickability, block reason, stock, reservations, and count state. Phrase a concrete warehouse action requiring confirmation.`);
+        add("warehouse-slot-rename", de ? "Umbenennen" : "Rename", de ? "Slot-Code und Lage" : "Slot code and location", (ctx) => de
+          ? `Benenne Lagerplatz ${ctx.label} sinnvoll um. Leite einen konsistenten Slot-Code aus Lager, Zone und Lage ab und nenne Konflikte vor der Aenderung.`
+          : `Rename warehouse slot ${ctx.label}. Derive a consistent slot code from warehouse, zone, and physical position and list conflicts before the change.`);
+        add("warehouse-slot-duplicate", de ? "Duplizieren" : "Duplicate", de ? "Gleiche Struktur" : "Same structure", (ctx) => de
+          ? `Dupliziere Lagerplatz ${ctx.label} als neuen Slot. Uebernehme sinnvolle Slot-Eigenschaften, aber keinen Bestand, keine Reservierungen und keine offenen Inventurfaelle.`
+          : `Duplicate warehouse slot ${ctx.label} as a new slot. Keep useful slot properties but no stock, reservations, or open count cases.`);
+        add("warehouse-slot-block", de ? "Sperren/Entsperren" : "Block/unblock", de ? "Operativer Status" : "Operational status", (ctx) => de
+          ? `Pruefe, ob Lagerplatz ${ctx.label} gesperrt oder entsperrt werden soll. Beruecksichtige Bestand, offene Picks, Reservierungen, Inventur und Sperrgrund.`
+          : `Check whether warehouse slot ${ctx.label} should be blocked or unblocked. Consider stock, open picks, reservations, count state, and block reason.`);
+      } else if (item.recordType === "stock_balance" || item.recordType === "warehouse_source_match") {
+        add("warehouse-stock-move", de ? "Bestand verschieben" : "Move stock", de ? "Quelle, Ziel, Menge" : "Source, target, quantity", (ctx) => de
+          ? `Bereite eine Bestandsverschiebung fuer ${ctx.label} vor. Klaere Quelle, Zielslot, Menge, Owner, Status, offene Reservierungen und ob die Bewegung regelkonform ist.`
+          : `Prepare a stock move for ${ctx.label}. Clarify source, target slot, quantity, owner, status, open reservations, and whether the movement is valid.`);
+        add("warehouse-stock-count", de ? "Inventur pruefen" : "Check count", de ? "Soll/Ist und Differenz" : "Expected/actual and variance", (ctx) => de
+          ? `Pruefe diesen Bestand fuer eine Inventur- oder Schnellkorrektur: ${ctx.label}. Stelle Sollbestand, moeglichen Istbestand, Differenz, Grund und Audit-Folgeaktion dar.`
+          : `Check this stock for count or quick correction: ${ctx.label}. Show expected stock, possible actual stock, variance, reason, and audit follow-up.`);
+      } else if (item.recordType === "warehouse_source") {
+        add("warehouse-source-load", de ? "Lagerquelle pruefen" : "Check source", de ? "Deckung, Engpass, Umlagerung" : "Coverage, bottleneck, transfer", (ctx) => de
+          ? `Pruefe Lagerquelle ${ctx.label}. Bewerte Deckung, Engpaesse, Umlagerungsbedarf und betroffene Auftraege.`
+          : `Check warehouse source ${ctx.label}. Assess coverage, bottlenecks, transfer needs, and affected orders.`);
+      }
+    }
+
     add("business-check", de ? "Business-Datensatz pruefen" : "Check business record", de ? "Stammdaten, Beleg, Folgeaktion" : "Master data, document, next action", (ctx) => de
       ? `Pruefe diesen Business-Kontext ${ctx.label}. Kontrolliere Stammdaten, Beleg-/Produktbezug, offene Folgeaktionen und Synchronisierung.`
       : `Check this business context ${ctx.label}. Review master data, document/product relation, open follow-ups, and synchronization.`);

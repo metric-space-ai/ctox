@@ -1,5 +1,6 @@
 import { moneyFromMajor } from "../money";
 import { LedgerPosting, type JournalDraft } from "../posting/service";
+import { resolveGermanTaxRate } from "../tax";
 import { createAccountingCommand, type AccountingCommand } from "../workflow/commands";
 import { assertInvoiceCanSend, validateInvoiceForSend } from "./validate";
 import type { BusinessInvoiceLike, InvoiceContext } from "./types";
@@ -34,17 +35,38 @@ export function buildInvoiceJournalDraft(invoice: BusinessInvoiceLike, context: 
 
   const posting = new LedgerPosting(context.companyId, "invoice", invoice.id, invoice.issueDate, invoice.currency);
   posting.debit(context.defaultReceivableAccountId, moneyFromMajor(invoice.total, invoice.currency), invoice.customerId);
+  const taxByCode = new Map<string, number>();
 
   for (const line of invoice.lines) {
     const product = context.products.find((item) => item.id === line.productId);
-    posting.credit(revenueAccountId(product?.revenueAccount, context), moneyFromMajor(line.quantity * line.unitPrice, invoice.currency), invoice.customerId);
+    const lineNet = line.quantity * line.unitPrice;
+    const tax = resolveGermanTaxRate({
+      kleinunternehmer: context.kleinunternehmer || invoice.kleinunternehmer,
+      reverseCharge: invoice.reverseCharge || line.reverseCharge,
+      taxRate: line.taxRate
+    });
+    const taxCode = taxCodeForTaxRate(tax.code);
+    posting.credit(revenueAccountId(product?.revenueAccount, context), moneyFromMajor(lineNet, invoice.currency), invoice.customerId, { taxCode });
+    if (line.taxRate > 0 && taxCode.endsWith("_OUTPUT")) {
+      const accountId = tax.accountId ?? context.defaultTaxAccountId;
+      taxByCode.set(`${taxCode}:${accountId}`, round(taxByCode.get(`${taxCode}:${accountId}`) ?? 0) + round(lineNet * (line.taxRate / 100)));
+    }
   }
 
-  if (invoice.taxAmount > 0) {
-    posting.credit(context.defaultTaxAccountId, moneyFromMajor(invoice.taxAmount, invoice.currency), invoice.customerId, { taxCode: "DE_19_OUTPUT" });
+  for (const [key, amount] of taxByCode) {
+    if (amount > 0) {
+      const [taxCode, accountId] = key.split(":");
+      posting.credit(accountId ?? context.defaultTaxAccountId, moneyFromMajor(round(amount), invoice.currency), invoice.customerId, { taxCode });
+    }
   }
 
   return posting.toJournalDraft("invoice", `Posted customer invoice ${invoice.number}.`);
+}
+
+function taxCodeForTaxRate(code: ReturnType<typeof resolveGermanTaxRate>["code"]) {
+  if (code === "DE_19") return "DE_19_OUTPUT";
+  if (code === "DE_7") return "DE_7_OUTPUT";
+  return code;
 }
 
 function revenueAccountId(revenueAccount: string | undefined, context: InvoiceContext) {
@@ -62,3 +84,7 @@ const knownRevenueAccountIds: Record<string, string> = {
   "8400": "acc-revenue-saas",
   "8401": "acc-revenue-support"
 };
+
+function round(value: number) {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}

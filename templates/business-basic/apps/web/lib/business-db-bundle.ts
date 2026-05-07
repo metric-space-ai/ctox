@@ -2,8 +2,11 @@ import { loadAccountingBusinessRows } from "@ctox-business/db/accounting";
 import type {
   BusinessAccount,
   BusinessBankTransaction,
+  BusinessBookkeepingExport,
   BusinessBundle,
   BusinessCustomer,
+  BusinessFiscalPeriod,
+  BusinessFixedAsset,
   BusinessInvoice,
   BusinessJournalEntry,
   BusinessProduct,
@@ -16,30 +19,58 @@ export async function getDatabaseBackedBusinessBundle(seed: BusinessBundle): Pro
 
   try {
     const rows = await loadAccountingBusinessRows();
-    const hasAccountingRows = rows.accounts.length || rows.invoices.length || rows.receipts.length || rows.journalEntries.length;
+    const hasAccountingRows = rows.accounts.length || rows.datevExports.length || rows.dunningRuns.length || rows.invoices.length || rows.receipts.length || rows.journalEntries.length;
     if (!hasAccountingRows) return seed;
+
+    const dbAccounts: BusinessAccount[] = rows.accounts.map((account) => ({
+      accountType: accountType(account.accountType),
+      code: account.code,
+      currency: currency(account.currency),
+      id: account.externalId,
+      isPosting: account.isGroup !== 1,
+      name: account.name,
+      rootType: rootType(account.rootType)
+    }));
+    const dbJournalEntries: BusinessJournalEntry[] = rows.journalEntries.map((entry) => ({
+      id: entry.externalId,
+      lines: rows.journalEntryLines
+        .filter((line) => line.journalEntryExternalId === entry.externalId)
+        .map((line) => ({
+          accountId: line.accountExternalId,
+          costCenter: line.costCenterExternalId ?? undefined,
+          credit: line.creditMinor / 100,
+          debit: line.debitMinor / 100,
+          partyId: line.partyExternalId ?? undefined,
+          projectId: line.projectExternalId ?? undefined
+        })),
+      narration: entry.narration ?? dbNote("Persisted journal entry", "Persistierter Buchungssatz"),
+      number: entry.number,
+      postedAt: entry.postedAt?.toISOString(),
+      postingDate: entry.postingDate,
+      refId: entry.refId,
+      refType: journalRefType(entry.refType),
+      status: entry.postedAt ? "Posted" : "Draft",
+      type: journalType(entry.type)
+    }));
 
     return {
       ...seed,
-      accounts: rows.accounts.length ? rows.accounts.map((account) => ({
-        accountType: accountType(account.accountType),
-        code: account.code,
-        currency: currency(account.currency),
-        id: account.externalId,
-        isPosting: account.isGroup !== 1,
-        name: account.name,
-        rootType: rootType(account.rootType)
-      })) : seed.accounts,
+      accounts: rows.accounts.length ? mergeById(seed.accounts, dbAccounts) : seed.accounts,
       bankTransactions: rows.bankStatementLines.length || rows.payments.length
-        ? mergeBankTransactions(seed.bankTransactions, rows.bankStatementLines, rows.payments, rows.parties)
+        ? mergeBankTransactions(seed.bankTransactions, rows.bankStatementLines, rows.payments, rows.parties, seed.invoices, rows.invoices)
         : seed.bankTransactions,
+      bookkeeping: rows.datevExports.length ? mergeBookkeepingExports(seed.bookkeeping, rows.datevExports) : seed.bookkeeping,
       customers: rows.parties.some((party) => party.kind === "customer") ? rows.parties
         .filter((party) => party.kind === "customer")
         .map((party) => customerFromParty(party, seed)) : seed.customers,
+      fiscalPeriods: rows.fiscalPeriods.length ? rows.fiscalPeriods.map(fiscalPeriodFromRow) : seed.fiscalPeriods,
+      fixedAssets: mergeById(seed.fixedAssets, fixedAssetsFromJournals(seed.fixedAssets, dbJournalEntries, rows.receipts)),
       invoices: rows.invoices.length ? rows.invoices.map((invoice) => {
         const lines = rows.invoiceLines.filter((line) => line.invoiceExternalId === invoice.externalId);
+        const dunning = latestDunningRun(rows.dunningRuns, invoice.externalId);
         return {
           balanceDue: invoice.balanceDueMinor / 100,
+          collectionStatus: dunning ? collectionStatusFromDunningLevel(dunning.level) : undefined,
           customerId: invoice.customerExternalId,
           currency: currency(invoice.currency),
           dueDate: invoice.dueDate,
@@ -53,6 +84,8 @@ export async function getDatabaseBackedBusinessBundle(seed: BusinessBundle): Pro
           netAmount: invoice.netAmountMinor / 100,
           notes: dbNote("Persisted accounting invoice", "Persistierte Accounting-Rechnung"),
           number: invoice.number,
+          reminderDueDate: dunning?.deliveredAt?.toISOString().slice(0, 10),
+          reminderLevel: dunning?.level as 0 | 1 | 2 | 3 | undefined,
           serviceDate: invoice.serviceDate ?? undefined,
           status: invoiceStatus(invoice.status),
           taxAmount: invoice.taxAmountMinor / 100,
@@ -60,27 +93,7 @@ export async function getDatabaseBackedBusinessBundle(seed: BusinessBundle): Pro
           id: invoice.externalId
         };
       }) : seed.invoices,
-      journalEntries: rows.journalEntries.length ? rows.journalEntries.map((entry) => ({
-        id: entry.externalId,
-        lines: rows.journalEntryLines
-          .filter((line) => line.journalEntryExternalId === entry.externalId)
-          .map((line) => ({
-            accountId: line.accountExternalId,
-            costCenter: line.costCenterExternalId ?? undefined,
-            credit: line.creditMinor / 100,
-            debit: line.debitMinor / 100,
-            partyId: line.partyExternalId ?? undefined,
-            projectId: line.projectExternalId ?? undefined
-          })),
-        narration: entry.narration ?? dbNote("Persisted journal entry", "Persistierter Buchungssatz"),
-        number: entry.number,
-        postedAt: entry.postedAt?.toISOString(),
-        postingDate: entry.postingDate,
-        refId: entry.refId,
-        refType: journalRefType(entry.refType),
-        status: entry.postedAt ? "Posted" : "Draft",
-        type: journalType(entry.type)
-      })) : seed.journalEntries,
+      journalEntries: rows.journalEntries.length ? mergeById(seed.journalEntries, dbJournalEntries) : seed.journalEntries,
       receipts: rows.receipts.length ? rows.receipts.map((receipt) => {
         const files = rows.receiptFiles.filter((file) => file.receiptExternalId === receipt.externalId);
         const lines = rows.receiptLines.filter((line) => line.receiptExternalId === receipt.externalId);
@@ -112,6 +125,96 @@ export async function getDatabaseBackedBusinessBundle(seed: BusinessBundle): Pro
   } catch {
     return seed;
   }
+}
+
+function mergeById<T extends { id: string }>(seedRows: T[], dbRows: T[]) {
+  const byId = new Map(seedRows.map((row) => [row.id, row]));
+  for (const row of dbRows) byId.set(row.id, row);
+  return Array.from(byId.values());
+}
+
+function mergeBookkeepingExports(
+  seedRows: BusinessBookkeepingExport[],
+  dbRows: Awaited<ReturnType<typeof loadAccountingBusinessRows>>["datevExports"]
+) {
+  const byId = new Map(seedRows.map((row) => [row.id, row]));
+  for (const row of dbRows) {
+    const existing = byId.get(row.externalId);
+    byId.set(row.externalId, {
+      context: existing?.context ?? dbNote("Persisted DATEV export batch", "Persistierter DATEV-Exportstapel"),
+      dueDate: existing?.dueDate ?? row.period,
+      generatedAt: row.exportedAt?.toISOString() ?? row.updatedAt.toISOString(),
+      id: row.externalId,
+      invoiceIds: existing?.invoiceIds ?? [],
+      netAmount: row.netAmountMinor / 100,
+      period: row.period,
+      reviewer: row.exportedBy ?? existing?.reviewer ?? "datev-exporter",
+      status: row.status === "exported" ? "Exported" : "Ready",
+      system: row.system === "Lexoffice" ? "Lexoffice" : row.system === "CSV" ? "CSV" : "DATEV",
+      taxAmount: row.taxAmountMinor / 100
+    });
+  }
+  return Array.from(byId.values());
+}
+
+function latestDunningRun(
+  runs: Awaited<ReturnType<typeof loadAccountingBusinessRows>>["dunningRuns"],
+  invoiceExternalId: string
+) {
+  return runs
+    .filter((run) => run.invoiceExternalId === invoiceExternalId)
+    .sort((left, right) => right.level - left.level || (right.deliveredAt?.getTime() ?? 0) - (left.deliveredAt?.getTime() ?? 0))[0];
+}
+
+function collectionStatusFromDunningLevel(level: number): BusinessInvoice["collectionStatus"] {
+  if (level >= 3) return "Final notice";
+  return "Reminder sent";
+}
+
+function fiscalPeriodFromRow(period: Awaited<ReturnType<typeof loadAccountingBusinessRows>>["fiscalPeriods"][number]): BusinessFiscalPeriod {
+  return {
+    closedAt: period.closedAt?.toISOString(),
+    companyId: period.companyId,
+    endDate: period.endDate,
+    id: period.externalId,
+    startDate: period.startDate,
+    status: period.status === "closed" ? "closed" : "open"
+  };
+}
+
+function fixedAssetsFromJournals(
+  seedAssets: BusinessFixedAsset[],
+  journalEntries: BusinessJournalEntry[],
+  receipts: Awaited<ReturnType<typeof loadAccountingBusinessRows>>["receipts"]
+): BusinessFixedAsset[] {
+  const known = new Set(seedAssets.map((asset) => asset.id));
+  const assets: BusinessFixedAsset[] = [];
+  for (const entry of journalEntries.filter((item) => item.refType === "asset" && !known.has(item.refId))) {
+    const assetLine = entry.lines.find((line) => line.accountId === "acc-fixed-assets" && line.debit > 0);
+    if (!assetLine) continue;
+    const receiptExternalId = entry.refId.startsWith("asset-") ? entry.refId.slice("asset-".length) : undefined;
+    const receipt = receiptExternalId ? receipts.find((item) => item.externalId === receiptExternalId) : undefined;
+    assets.push({
+      accumulatedDepreciationAccountId: "acc-accumulated-depreciation",
+      acquisitionCost: assetLine.debit,
+      acquisitionDate: entry.postingDate,
+      acquisitionJournalEntryId: entry.id,
+      assetAccountId: "acc-fixed-assets",
+      category: "Aus Eingangsbeleg aktiviert",
+      currency: "EUR",
+      depreciationExpenseAccountId: "acc-depreciation",
+      depreciationMethod: "Straight line",
+      id: entry.refId,
+      name: receipt?.vendorInvoiceNumber ? `Anlage ${receipt.vendorInvoiceNumber}` : `Anlage ${entry.refId}`,
+      notes: dbNote("Capitalized from an inbound receipt workflow.", "Aus dem Eingangsbeleg-Workflow aktiviert."),
+      receiptId: receiptExternalId,
+      salvageValue: 1,
+      status: "Active",
+      supplier: receipt?.vendorExternalId ?? "Eingangsbeleg",
+      usefulLifeMonths: 60
+    });
+  }
+  return assets;
 }
 
 function customerFromParty(
@@ -164,10 +267,19 @@ function mergeBankTransactions(
   seedTransactions: BusinessBankTransaction[],
   bankStatementLines: Awaited<ReturnType<typeof loadAccountingBusinessRows>>["bankStatementLines"],
   payments: Awaited<ReturnType<typeof loadAccountingBusinessRows>>["payments"],
-  parties: Awaited<ReturnType<typeof loadAccountingBusinessRows>>["parties"]
+  parties: Awaited<ReturnType<typeof loadAccountingBusinessRows>>["parties"],
+  seedInvoices: BusinessInvoice[],
+  dbInvoices: Awaited<ReturnType<typeof loadAccountingBusinessRows>>["invoices"]
 ): BusinessBankTransaction[] {
   const byId = new Map<string, BusinessBankTransaction>();
+  const invoiceRefs = [
+    ...seedInvoices.map((invoice) => ({ id: invoice.id, number: invoice.number })),
+    ...dbInvoices.map((invoice) => ({ id: invoice.externalId, number: invoice.number }))
+  ];
   for (const line of bankStatementLines) {
+    const suggestedInvoice = line.matchStatus === "suggested"
+      ? invoiceRefs.find((invoice) => line.purpose?.includes(invoice.number))
+      : undefined;
     byId.set(line.externalId, {
       amount: line.amountMinor / 100,
       bookingDate: line.bookingDate,
@@ -175,8 +287,8 @@ function mergeBankTransactions(
       counterparty: line.remitterName ?? "-",
       currency: currency(line.currency),
       id: line.externalId,
-      matchedRecordId: line.matchedJournalEntryExternalId ?? undefined,
-      matchType: line.matchedJournalEntryExternalId ? "invoice" : undefined,
+      matchedRecordId: line.matchedJournalEntryExternalId ?? suggestedInvoice?.id,
+      matchType: line.matchedJournalEntryExternalId || suggestedInvoice ? "invoice" : undefined,
       purpose: line.purpose ?? "",
       status: bankStatus(line.matchStatus),
       valueDate: line.valueDate ?? line.bookingDate
@@ -212,7 +324,18 @@ export async function getDatabaseBackedBusinessResource(resource: string, seed: 
 }
 
 function accountType(value: string): BusinessAccount["accountType"] {
-  if (value === "bank" || value === "receivable" || value === "payable" || value === "tax" || value === "income" || value === "expense" || value === "equity") return value;
+  if (
+    value === "accumulated_depreciation"
+    || value === "bank"
+    || value === "depreciation"
+    || value === "fixed_asset"
+    || value === "receivable"
+    || value === "payable"
+    || value === "tax"
+    || value === "income"
+    || value === "expense"
+    || value === "equity"
+  ) return value;
   return "expense";
 }
 
@@ -240,12 +363,12 @@ function invoiceStatus(value: string): BusinessInvoice["status"] {
 }
 
 function journalRefType(value: string): BusinessJournalEntry["refType"] {
-  if (value === "invoice" || value === "payment" || value === "receipt" || value === "bank_transaction" || value === "manual") return value;
+  if (value === "asset" || value === "invoice" || value === "payment" || value === "receipt" || value === "bank_transaction" || value === "manual") return value;
   return "manual";
 }
 
 function journalType(value: string): BusinessJournalEntry["type"] {
-  if (value === "invoice" || value === "payment" || value === "receipt" || value === "manual" || value === "fx" || value === "reverse") return value;
+  if (value === "depreciation" || value === "invoice" || value === "payment" || value === "receipt" || value === "manual" || value === "fx" || value === "reverse") return value;
   return "manual";
 }
 

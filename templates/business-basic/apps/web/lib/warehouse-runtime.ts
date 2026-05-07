@@ -38,6 +38,7 @@ import {
 import {
   buildWarehouseDemo,
   cancelReservation,
+  createBalanceKey,
   createWarehouseCommand,
   ingestIntegrationEvent,
   pickReservation,
@@ -54,6 +55,7 @@ import {
   type StockStatus,
   type WarehouseCommand,
   type WarehouseCommandType,
+  type WarehouseLocation,
   type WarehouseState
 } from "@ctox-business/warehouse";
 
@@ -71,6 +73,33 @@ export type WarehousePersistenceSnapshot = {
 };
 
 export type WarehouseMutationAction = "reserve" | "release" | "cancel" | "pick" | "ship";
+
+export type WarehouseLayoutAction =
+  | "createWarehouse"
+  | "createSection"
+  | "createSlot"
+  | "duplicateLocation"
+  | "moveStock"
+  | "renameLocation"
+  | "toggleLocationPickable";
+
+export type WarehouseWorkStep = "build" | "qa" | "pack";
+
+export type WarehouseLayoutMutation = {
+  action: WarehouseLayoutAction;
+  balanceKey?: string;
+  locationName?: string;
+  parentId?: string;
+  slotCount?: number;
+  targetLocationId?: string;
+  quantity?: number;
+};
+
+export type WarehouseWorkStepMutation = {
+  lineId?: string;
+  reservationId: string;
+  step: WarehouseWorkStep;
+};
 
 export type WarehouseCheckoutEventType =
   | "checkout.created"
@@ -125,7 +154,7 @@ export async function getWarehouseSnapshot(): Promise<WarehousePersistenceSnapsh
   }
 }
 
-export async function executeWarehouseMutation(action: WarehouseMutationAction): Promise<WarehousePersistenceSnapshot & { action: WarehouseMutationAction }> {
+export async function executeWarehouseMutation(action: WarehouseMutationAction, reservationId?: string): Promise<WarehousePersistenceSnapshot & { action: WarehouseMutationAction }> {
   if (!process.env.DATABASE_URL) {
     throw new Error("DATABASE_URL is required for persistent warehouse mutations.");
   }
@@ -139,13 +168,63 @@ export async function executeWarehouseMutation(action: WarehouseMutationAction):
       await persistWarehouseState(tx, snapshot);
     }
 
-    const next = applySimulatorAction(snapshot, action);
+    const next = applySimulatorAction(snapshot, action, reservationId);
     await persistWarehouseState(tx, next);
     return {
       action,
       persisted: true,
       snapshot: next,
       summary: summarizeWarehouse(next)
+    };
+  });
+}
+
+export async function executeWarehouseLayoutMutation(input: WarehouseLayoutMutation): Promise<WarehousePersistenceSnapshot & { layoutAction: WarehouseLayoutAction }> {
+  if (!process.env.DATABASE_URL) {
+    throw new Error("DATABASE_URL is required for persistent warehouse layout mutations.");
+  }
+
+  const db = createBusinessDb();
+  return db.transaction(async (tx) => {
+    await lockWarehouse(tx);
+    let snapshot = await loadWarehouseState(tx);
+    if (!snapshot.items.length) {
+      snapshot = buildWarehouseDemo();
+      await persistWarehouseState(tx, snapshot);
+    }
+
+    const next = applyLayoutMutation(snapshot, input);
+    await persistWarehouseState(tx, next);
+    return {
+      layoutAction: input.action,
+      persisted: true,
+      snapshot: next,
+      summary: summarizeWarehouse(next)
+    };
+  });
+}
+
+export async function executeWarehouseWorkStepMutation(input: WarehouseWorkStepMutation): Promise<WarehousePersistenceSnapshot & { workStep: WarehouseWorkStep }> {
+  if (!process.env.DATABASE_URL) {
+    throw new Error("DATABASE_URL is required for persistent warehouse work-step mutations.");
+  }
+
+  const db = createBusinessDb();
+  return db.transaction(async (tx) => {
+    await lockWarehouse(tx);
+    let snapshot = await loadWarehouseState(tx);
+    if (!snapshot.items.length) {
+      snapshot = buildWarehouseDemo();
+      await persistWarehouseState(tx, snapshot);
+    }
+
+    const next = applyWorkStepMutation(snapshot, input);
+    await persistWarehouseState(tx, next);
+    return {
+      persisted: true,
+      snapshot: next,
+      summary: summarizeWarehouse(next),
+      workStep: input.step
     };
   });
 }
@@ -183,6 +262,269 @@ function demoSnapshot(reason: string): WarehousePersistenceSnapshot {
     snapshot,
     summary: summarizeWarehouse(snapshot)
   };
+}
+
+function applyLayoutMutation(state: WarehouseState, input: WarehouseLayoutMutation): WarehouseState {
+  if (input.action === "createWarehouse") {
+    const warehouses = state.locations.filter((location) => location.kind === "warehouse");
+    const nextNumber = warehouses.length + 1;
+    const id = nextLocationId(state, `loc-warehouse-${nextNumber}`);
+    return {
+      ...state,
+      locations: [
+        ...state.locations,
+        {
+          companyId: WAREHOUSE_COMPANY_ID,
+          defaultOwnerPartyId: SYSTEM_OWNER_PARTY_ID,
+          externalId: id,
+          id,
+          kind: "warehouse",
+          name: `Warehouse ${nextNumber}`,
+          pickable: false,
+          receivable: true
+        }
+      ]
+    };
+  }
+
+  const parent = state.locations.find((location) => location.id === input.parentId);
+  if (!parent) throw new Error("Parent warehouse or section not found.");
+
+  if (input.action === "renameLocation") {
+    const name = input.locationName?.trim();
+    if (!name) throw new Error("Location name is required.");
+    return {
+      ...state,
+      locations: state.locations.map((location) => location.id === parent.id ? { ...location, name } : location),
+      commandLog: [
+        ...state.commandLog,
+        createWarehouseCommand({
+          companyId: WAREHOUSE_COMPANY_ID,
+          idempotencyKey: `layout:rename:${parent.id}:${name}`,
+          payload: { locationId: parent.id, name },
+          refId: parent.id,
+          refType: "warehouse_location",
+          requestedBy: "user",
+          type: "PostStockMovement"
+        })
+      ]
+    };
+  }
+
+  if (input.action === "toggleLocationPickable") {
+    return {
+      ...state,
+      locations: state.locations.map((location) => location.id === parent.id ? { ...location, pickable: !location.pickable } : location),
+      commandLog: [
+        ...state.commandLog,
+        createWarehouseCommand({
+          companyId: WAREHOUSE_COMPANY_ID,
+          idempotencyKey: `layout:toggle-pickable:${parent.id}:${!parent.pickable}`,
+          payload: { locationId: parent.id, pickable: !parent.pickable },
+          refId: parent.id,
+          refType: "warehouse_location",
+          requestedBy: "user",
+          type: "PostStockMovement"
+        })
+      ]
+    };
+  }
+
+  if (input.action === "duplicateLocation") {
+    if (parent.kind === "warehouse") {
+      const id = nextLocationId(state, `${parent.id}-copy`);
+      return {
+        ...state,
+        locations: [
+          ...state.locations,
+          {
+            ...parent,
+            externalId: id,
+            id,
+            name: `${parent.name} Copy`
+          }
+        ]
+      };
+    }
+    if (parent.kind === "zone") {
+      const id = nextLocationId(state, `${parent.id}-copy`);
+      const childSlots = state.locations.filter((location) => location.parentId === parent.id && location.kind === "bin");
+      const slotCopies = childSlots.map((slot, index): WarehouseLocation => {
+        const slotId = nextLocationId(state, `${slot.id}-copy-${index + 1}`);
+        return {
+          ...slot,
+          externalId: slotId,
+          id: slotId,
+          name: `${slot.name} Copy`,
+          parentId: id
+        };
+      });
+      return {
+        ...state,
+        locations: [
+          ...state.locations,
+          { ...parent, externalId: id, id, name: `${parent.name} Copy` },
+          ...slotCopies
+        ]
+      };
+    }
+    const id = nextLocationId(state, `${parent.id}-copy`);
+    return {
+      ...state,
+      locations: [
+        ...state.locations,
+        {
+          ...parent,
+          externalId: id,
+          id,
+          name: `${parent.name} Copy`
+        }
+      ]
+    };
+  }
+
+  if (input.action === "moveStock") {
+    const source = state.balances.find((balance) => balance.balanceKey === input.balanceKey);
+    const target = state.locations.find((location) => location.id === input.targetLocationId);
+    if (!source) throw new Error("Source balance not found.");
+    if (!target || target.kind !== "bin") throw new Error("Target slot not found.");
+    const quantity = Math.max(1, Math.min(source.quantity, Math.floor(input.quantity ?? source.quantity)));
+    const nextSource = { ...source, quantity: source.quantity - quantity, updatedAt: new Date().toISOString() };
+    const targetDimension = { ...source, locationId: target.id };
+    const targetBalanceKey = createBalanceKey(targetDimension);
+    const existingTarget = state.balances.find((balance) => balance.balanceKey === targetBalanceKey);
+    const balances = state.balances
+      .map((balance) => balance.balanceKey === source.balanceKey ? nextSource : balance)
+      .filter((balance) => balance.quantity > 0);
+    const nextBalances = existingTarget
+      ? balances.map((balance) => balance.balanceKey === targetBalanceKey ? { ...balance, quantity: balance.quantity + quantity, updatedAt: new Date().toISOString() } : balance)
+      : [
+          ...balances,
+          {
+            ...targetDimension,
+            balanceKey: targetBalanceKey,
+            locationId: target.id,
+            quantity,
+            updatedAt: new Date().toISOString()
+          }
+        ];
+    return {
+      ...state,
+      balances: nextBalances,
+      commandLog: [
+        ...state.commandLog,
+        createWarehouseCommand({
+          companyId: WAREHOUSE_COMPANY_ID,
+          idempotencyKey: `layout:move:${source.balanceKey}:${target.id}:${Date.now()}`,
+          payload: {
+            fromLocationId: source.locationId,
+            inventoryItemId: source.inventoryItemId,
+            quantity,
+            stockStatus: source.stockStatus,
+            toLocationId: target.id
+          },
+          refId: source.balanceKey,
+          refType: "stock_balance",
+          requestedBy: "user",
+          type: "PostStockMovement"
+        })
+      ]
+    };
+  }
+
+  if (input.action === "createSection") {
+    if (parent.kind !== "warehouse") throw new Error("Sections can only be added to a warehouse.");
+    const existing = state.locations.filter((location) => location.parentId === parent.id && location.kind === "zone");
+    const code = sectionCode(existing.length);
+    const id = nextLocationId(state, `loc-zone-${slugPart(parent.name)}-${code.toLowerCase()}`);
+    return {
+      ...state,
+      locations: [
+        ...state.locations,
+        {
+          companyId: WAREHOUSE_COMPANY_ID,
+          defaultOwnerPartyId: parent.defaultOwnerPartyId ?? SYSTEM_OWNER_PARTY_ID,
+          externalId: id,
+          id,
+          kind: "zone",
+          name: `${code}-Section`,
+          parentId: parent.id,
+          pickable: false,
+          receivable: false
+        }
+      ]
+    };
+  }
+
+  if (parent.kind !== "zone") throw new Error("Slots can only be added to a section.");
+  const existingSlots = state.locations.filter((location) => location.parentId === parent.id && location.kind === "bin");
+  const count = Math.max(1, Math.min(24, input.slotCount ?? 4));
+  const sectionPrefix = parent.name.match(/[A-Z]/)?.[0] ?? "S";
+  const additions = Array.from({ length: count }, (_, index): WarehouseLocation => {
+    const slotNumber = existingSlots.length + index + 1;
+    const id = nextLocationId(state, `loc-${slugPart(parent.name)}-${String(slotNumber).padStart(2, "0")}`);
+    return {
+      companyId: WAREHOUSE_COMPANY_ID,
+      defaultOwnerPartyId: parent.defaultOwnerPartyId ?? SYSTEM_OWNER_PARTY_ID,
+      externalId: id,
+      id,
+      kind: "bin",
+      name: `${sectionPrefix}${slotNumber}`,
+      parentId: parent.id,
+      pickable: true,
+      receivable: false
+    };
+  });
+  return {
+    ...state,
+    locations: [...state.locations, ...additions]
+  };
+}
+
+function applyWorkStepMutation(state: WarehouseState, input: WarehouseWorkStepMutation): WarehouseState {
+  const reservation = state.reservations.find((item) => item.id === input.reservationId);
+  if (!reservation) throw new Error("Reservation not found.");
+  const line = input.lineId ? reservation.lines.find((item) => item.id === input.lineId) : undefined;
+  if (input.lineId && !line) throw new Error("Reservation line not found.");
+  const idempotencyKey = `work-step:${input.reservationId}:${input.lineId ?? "order"}:${input.step}`;
+  if (state.commandLog.some((command) => command.idempotencyKey === idempotencyKey)) return state;
+  return {
+    ...state,
+    commandLog: [
+      ...state.commandLog,
+      createWarehouseCommand({
+        companyId: WAREHOUSE_COMPANY_ID,
+        idempotencyKey,
+        payload: {
+          lineId: input.lineId,
+          reservationId: input.reservationId,
+          sourceLineId: line?.sourceLineId,
+          sourceId: reservation.sourceId,
+          step: input.step
+        },
+        refId: input.lineId ?? input.reservationId,
+        refType: input.lineId ? "warehouse_order_line" : "warehouse_order",
+        requestedBy: "user",
+        type: "CompleteValueStep"
+      })
+    ]
+  };
+}
+
+function nextLocationId(state: WarehouseState, base: string) {
+  const existing = new Set(state.locations.map((location) => location.id));
+  if (!existing.has(base)) return base;
+  let suffix = 2;
+  while (existing.has(`${base}-${suffix}`)) suffix += 1;
+  return `${base}-${suffix}`;
+}
+
+function sectionCode(index: number) {
+  return String.fromCharCode(65 + (index % 26));
+}
+
+function slugPart(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "warehouse";
 }
 
 function applyCheckoutEvent(state: WarehouseState, input: WarehouseCheckoutEvent) {
@@ -283,8 +625,10 @@ async function lockWarehouse(tx: Tx) {
   await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`warehouse:${WAREHOUSE_COMPANY_ID}`}))`);
 }
 
-function applySimulatorAction(state: WarehouseState, action: WarehouseMutationAction) {
-  const reservation = latestSimulatorReservation(state);
+function applySimulatorAction(state: WarehouseState, action: WarehouseMutationAction, reservationId?: string) {
+  const reservation = reservationId
+    ? state.reservations.find((item) => item.id === reservationId)
+    : latestSimulatorReservation(state);
   if (action === "reserve") {
     const suffix = Date.now().toString(36);
     return reserveStock(state, {

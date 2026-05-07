@@ -58,10 +58,9 @@ function resultingJournalEntryIdForCommand(command: Record<string, unknown> | un
   if (!refType || !refId) return null;
   if (type === "SendInvoice") return `je-invoice-${refType}-${refId}`;
   if (type === "PostReceipt") return `je-receipt-${refType}-${refId}`;
+  if (type === "CapitalizeReceipt") return `je-manual-asset-asset-${refId}`;
+  if (type === "DisposeAsset") return `je-manual-asset-${refId}`;
+  if (type === "PostDepreciation") return `je-depreciation-${refType}-${refId}`;
   if (type === "AcceptBankMatch") return `je-payment-${refType}-${refId}`;
-  if (type === "RunDunning") return `dunning-run-${refId}`;
-  if (type === "ExportDatev") return `datev-export-${refId}`;
-  if (type === "ImportBankStatement") return `bank-statement-${refId}`;
-  if (type === "IngestReceipt") return `receipt-ingest-${refId}`;
   return null;
 }

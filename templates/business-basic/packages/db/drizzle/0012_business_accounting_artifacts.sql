@@ -1,0 +1,40 @@
+CREATE TABLE "accounting_datev_exports" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"external_id" text NOT NULL,
+	"company_id" text NOT NULL,
+	"period" text NOT NULL,
+	"system" text DEFAULT 'DATEV' NOT NULL,
+	"status" text NOT NULL,
+	"source_proposal_external_id" text,
+	"line_count" integer DEFAULT 0 NOT NULL,
+	"net_amount_minor" integer DEFAULT 0 NOT NULL,
+	"tax_amount_minor" integer DEFAULT 0 NOT NULL,
+	"csv_sha256" text,
+	"csv_blob_ref" text,
+	"exported_at" timestamp with time zone,
+	"exported_by" text,
+	"payload_json" text DEFAULT '{}' NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "accounting_datev_exports_external_id_unique" UNIQUE("external_id")
+);
+--> statement-breakpoint
+CREATE TABLE "accounting_dunning_runs" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"external_id" text NOT NULL,
+	"company_id" text NOT NULL,
+	"invoice_external_id" text NOT NULL,
+	"invoice_number" text NOT NULL,
+	"level" integer NOT NULL,
+	"status" text NOT NULL,
+	"fee_amount_minor" integer DEFAULT 0 NOT NULL,
+	"days_overdue" integer DEFAULT 0 NOT NULL,
+	"source_proposal_external_id" text,
+	"letter_blob_ref" text,
+	"delivered_at" timestamp with time zone,
+	"created_by" text NOT NULL,
+	"payload_json" text DEFAULT '{}' NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "accounting_dunning_runs_external_id_unique" UNIQUE("external_id")
+);

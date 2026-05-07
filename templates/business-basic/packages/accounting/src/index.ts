@@ -1,4 +1,5 @@
 export * from "./agents/manifest";
+export * from "./assets";
 export * from "./bank-import";
 export * from "./chart";
 export * from "./dunning";

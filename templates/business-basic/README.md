@@ -147,8 +147,11 @@ Business routes:
 ```text
 /app/business/customers
 /app/business/products
+/app/business/warehouse
+/app/business/fulfillment
 /app/business/invoices
 /app/business/ledger
+/app/business/fixed-assets
 /app/business/receipts
 /app/business/payments
 /app/business/bookkeeping
@@ -195,6 +198,21 @@ Run the full route/API/queue smoke test against a running dev server:
 pnpm test:business-stack
 ```
 
+Run the Accounting package unit suite without a database:
+
+```sh
+pnpm test:accounting-unit
+```
+
+Run the Accounting API smoke test against a running dev server. With
+`DATABASE_URL` configured, it verifies the persisted bank-match and asset
+workflows end to end. Without `DATABASE_URL`, it still validates the generated
+commands, document flows, reports, DATEV preview, and seed-mode projections:
+
+```sh
+pnpm test:accounting-e2e
+```
+
 Run the accounting persistence smoke test against a local Postgres server:
 
 ```sh
@@ -214,9 +232,16 @@ pnpm test:all
 ```
 
 `test:all` runs TypeScript, the UI contract smoke test, the Operations smoke
-test, the full Business Stack route/API/queue smoke test, and the production
-Next.js build. Keep this command green before handing a customized stack back
-to the owner.
+test, the full Business Stack route/API/queue smoke test, the Accounting API
+smoke test, the Accounting package unit suite, and the production Next.js
+build. Keep this command green before handing a customized stack back to the
+owner. `test:accounting-db` stays separate because it creates and drops a
+temporary Postgres database.
+
+When working inside `apps/web`, `pnpm test:all` runs the web-local subset:
+typecheck, UI contract, Operations smoke, Business Stack smoke, Accounting API
+smoke, and the Next.js production build. Use the repository-root `pnpm
+test:all` before handoff so the Accounting package unit suite is included too.
 
 ## UI/UX Platform Contract
 

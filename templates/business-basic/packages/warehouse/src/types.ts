@@ -43,7 +43,8 @@ export type WarehouseCommandType =
   | "ShipWarehouseTransfer"
   | "ReceiveWarehouseTransfer"
   | "RecordOfflineSyncBatch"
-  | "RecordThreePlCharge";
+  | "RecordThreePlCharge"
+  | "CompleteValueStep";
 
 export type InventoryTrackingMode = "none" | "lot" | "serial";
 

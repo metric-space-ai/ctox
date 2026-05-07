@@ -80,14 +80,17 @@ export function buildWarehouseDemo(): WarehouseState {
       {
         companyId: WAREHOUSE_COMPANY_ID,
         defaultOwnerPartyId: SYSTEM_OWNER_PARTY_ID,
-        externalId: "bin-a-01",
-        id: "loc-a-01",
-        kind: "bin",
-        name: "A-01 Pick Bin",
-        parentId: "loc-berlin",
-        pickable: true,
-        receivable: false
+        externalId: "wh-hamburg",
+        id: "loc-hamburg",
+        kind: "warehouse",
+        name: "Hamburg Store",
+        pickable: false,
+        receivable: true
       },
+      ...warehouseSection("A", "Electronics", 12),
+      ...warehouseSection("B", "Appliances", 12),
+      ...warehouseSection("C", "Home Decor", 12),
+      ...warehouseSection("D", "Sports", 12),
       {
         companyId: WAREHOUSE_COMPANY_ID,
         defaultOwnerPartyId: SYSTEM_OWNER_PARTY_ID,
@@ -453,6 +456,38 @@ export function buildWarehouseDemo(): WarehouseState {
   });
 
   return state;
+}
+
+function warehouseSection(code: string, name: string, slotCount: number): WarehouseState["locations"] {
+  const lower = code.toLowerCase();
+  return [
+    {
+      companyId: WAREHOUSE_COMPANY_ID,
+      defaultOwnerPartyId: SYSTEM_OWNER_PARTY_ID,
+      externalId: `section-${lower}`,
+      id: `loc-zone-${lower}`,
+      kind: "zone",
+      name: `${code}-${name}`,
+      parentId: "loc-berlin",
+      pickable: false,
+      receivable: false
+    },
+    ...Array.from({ length: slotCount }, (_, index) => {
+      const slotNumber = index + 1;
+      const padded = String(slotNumber).padStart(2, "0");
+      return {
+        companyId: WAREHOUSE_COMPANY_ID,
+        defaultOwnerPartyId: SYSTEM_OWNER_PARTY_ID,
+        externalId: `bin-${lower}-${padded}`,
+        id: `loc-${lower}-${padded}`,
+        kind: "bin" as const,
+        name: `${code}${slotNumber}`,
+        parentId: `loc-zone-${lower}`,
+        pickable: true,
+        receivable: false
+      };
+    })
+  ];
 }
 
 export function summarizeWarehouse(state = buildWarehouseDemo()) {

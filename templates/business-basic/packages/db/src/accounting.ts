@@ -4,6 +4,8 @@ import {
   accountingAccounts,
   accountingBankStatementLines,
   accountingBankStatements,
+  accountingDatevExports,
+  accountingDunningRuns,
   accountingFiscalPeriods,
   accountingInvoiceLines,
   accountingInvoices,
@@ -115,6 +117,11 @@ export type AccountingPaymentProjection = {
     invoiceExternalId?: string | null;
     receiptExternalId?: string | null;
   };
+  allocations?: Array<{
+    amountMinor: number;
+    invoiceExternalId?: string | null;
+    receiptExternalId?: string | null;
+  }>;
   amountMinor: number;
   bankAccountExternalId: string;
   bankStatementLineExternalId?: string | null;
@@ -157,6 +164,23 @@ export type AccountingBankStatementProjection = {
   startDate?: string | null;
 };
 
+export type AccountingDatevExportProjection = {
+  companyId: string;
+  csvBlobRef?: string | null;
+  csvSha256?: string | null;
+  externalId: string;
+  exportedAt?: Date | null;
+  exportedBy?: string | null;
+  lineCount: number;
+  netAmountMinor: number;
+  payload?: unknown;
+  period: string;
+  sourceProposalExternalId?: string | null;
+  status: string;
+  system: string;
+  taxAmountMinor: number;
+};
+
 export type AccountingWorkflowSnapshot = {
   audit?: {
     action: string;
@@ -169,6 +193,7 @@ export type AccountingWorkflowSnapshot = {
     refType: string;
   };
   bankStatement?: AccountingBankStatementProjection;
+  datevExport?: AccountingDatevExportProjection;
   invoice?: AccountingInvoiceProjection;
   journalDraft?: AccountingJournalDraft | null;
   outbox?: {
@@ -303,6 +328,10 @@ export async function saveAccountingWorkflowSnapshot(snapshot: AccountingWorkflo
       await upsertAccountingBankStatement(tx, snapshot.bankStatement);
     }
 
+    if (snapshot.datevExport) {
+      await upsertAccountingDatevExport(tx, snapshot.datevExport);
+    }
+
     if (snapshot.invoice) {
       await upsertAccountingInvoice(tx, snapshot.invoice);
     }
@@ -350,6 +379,9 @@ export async function loadAccountingBusinessRows(databaseUrl?: string) {
   const [
     accounts,
     bankStatementLines,
+    datevExports,
+    dunningRuns,
+    fiscalPeriods,
     invoiceLines,
     invoices,
     journalEntries,
@@ -362,6 +394,9 @@ export async function loadAccountingBusinessRows(databaseUrl?: string) {
   ] = await Promise.all([
     db.select().from(accountingAccounts).orderBy(asc(accountingAccounts.code)),
     db.select().from(accountingBankStatementLines).orderBy(desc(accountingBankStatementLines.bookingDate), asc(accountingBankStatementLines.lineNo)),
+    db.select().from(accountingDatevExports).orderBy(desc(accountingDatevExports.updatedAt)),
+    db.select().from(accountingDunningRuns).orderBy(desc(accountingDunningRuns.deliveredAt), desc(accountingDunningRuns.createdAt)),
+    db.select().from(accountingFiscalPeriods).orderBy(asc(accountingFiscalPeriods.startDate), asc(accountingFiscalPeriods.endDate)),
     db.select().from(accountingInvoiceLines).orderBy(asc(accountingInvoiceLines.invoiceExternalId), asc(accountingInvoiceLines.lineNo)),
     db.select().from(accountingInvoices).orderBy(desc(accountingInvoices.issueDate)),
     db.select().from(accountingJournalEntries).orderBy(desc(accountingJournalEntries.postingDate), desc(accountingJournalEntries.createdAt)),
@@ -376,6 +411,9 @@ export async function loadAccountingBusinessRows(databaseUrl?: string) {
   return {
     accounts,
     bankStatementLines,
+    datevExports,
+    dunningRuns,
+    fiscalPeriods,
     invoiceLines,
     invoices,
     journalEntries,
@@ -406,11 +444,16 @@ export async function decideAccountingProposal(input: {
     if (!proposal) {
       throw new Error(`accounting proposal not found: ${input.externalId}`);
     }
-    const resultingJournalEntryId = input.resultingJournalEntryId
+    const command = parseJsonRecord(proposal.proposedCommandJson);
+    const proposedJournalEntryId = input.resultingJournalEntryId
       ?? proposal.resultingJournalEntryId
-      ?? resultingJournalEntryIdForCommand(parseJsonRecord(proposal.proposedCommandJson));
+      ?? resultingJournalEntryIdForCommand(command);
+    const resultingJournalEntryId = requiresJournalEntry(command) ? proposedJournalEntryId : null;
+    if (input.status === "accepted" && resultingJournalEntryId) {
+      await assertJournalEntryAcceptable(tx, proposal.companyId, resultingJournalEntryId, command);
+    }
     const appliedSideEffects = input.status === "accepted"
-      ? await applyAcceptedProposal(tx, proposal, parseJsonRecord(proposal.proposedCommandJson), resultingJournalEntryId, now)
+      ? await applyAcceptedProposal(tx, proposal, command, resultingJournalEntryId, now, input.actorId)
       : [];
 
     const [updated] = await tx.update(businessAccountingProposals)
@@ -445,12 +488,50 @@ export async function decideAccountingProposal(input: {
   });
 }
 
+async function assertJournalEntryAcceptable(
+  tx: Parameters<Parameters<ReturnType<typeof createBusinessDb>["transaction"]>[0]>[0],
+  companyId: string,
+  journalEntryExternalId: string,
+  command: Record<string, unknown> | null
+) {
+  const [entry] = await tx.select({ postingDate: accountingJournalEntries.postingDate })
+    .from(accountingJournalEntries)
+    .where(eq(accountingJournalEntries.externalId, journalEntryExternalId))
+    .limit(1);
+  if (!entry) {
+    if (requiresJournalEntry(command)) throw new Error("journal_entry_missing_for_proposal");
+    return;
+  }
+
+  const periods = await tx.select({
+    endDate: accountingFiscalPeriods.endDate,
+    startDate: accountingFiscalPeriods.startDate,
+    status: accountingFiscalPeriods.status
+  })
+    .from(accountingFiscalPeriods)
+    .where(eq(accountingFiscalPeriods.companyId, companyId));
+  const matchingPeriods = periods.filter((period) => period.startDate <= entry.postingDate && period.endDate >= entry.postingDate);
+  if (matchingPeriods.some((period) => period.status === "closed")) {
+    throw new Error("fiscal_period_closed");
+  }
+}
+
+function requiresJournalEntry(command: Record<string, unknown> | null) {
+  return command?.type === "AcceptBankMatch"
+    || command?.type === "CapitalizeReceipt"
+    || command?.type === "DisposeAsset"
+    || command?.type === "PostDepreciation"
+    || command?.type === "PostReceipt"
+    || command?.type === "SendInvoice";
+}
+
 async function applyAcceptedProposal(
   tx: Parameters<Parameters<ReturnType<typeof createBusinessDb>["transaction"]>[0]>[0],
   proposal: typeof businessAccountingProposals.$inferSelect,
   command: Record<string, unknown> | null,
   resultingJournalEntryId: string | null,
-  now: Date
+  now: Date,
+  actorId: string
 ) {
   const applied: string[] = [];
   const type = command?.type;
@@ -479,7 +560,51 @@ async function applyAcceptedProposal(
     applied.push("receipt.posted");
   }
 
+  if (resultingJournalEntryId && type === "CapitalizeReceipt") {
+    await tx.update(accountingReceipts)
+      .set({
+        postedAt: now,
+        postedJournalEntryExternalId: resultingJournalEntryId,
+        status: "posted",
+        updatedAt: now
+      })
+      .where(eq(accountingReceipts.externalId, proposal.refId));
+    applied.push("receipt.capitalized");
+  }
+
+  if (resultingJournalEntryId && type === "PostDepreciation") {
+    applied.push("asset.depreciation_posted");
+  }
+
+  if (resultingJournalEntryId && type === "DisposeAsset") {
+    applied.push("asset.disposed");
+  }
+
+  if (type === "IngestReceipt") {
+    const payload = parseCommandPayload(command);
+    const receiptId = typeof payload?.receiptId === "string" ? payload.receiptId : proposal.refId;
+    const updated = await tx.update(accountingReceipts)
+      .set({
+        status: "extracted",
+        updatedAt: now
+      })
+      .where(sql`${accountingReceipts.externalId} = ${receiptId} and ${accountingReceipts.status} not in ('paid', 'posted', 'rejected')`)
+      .returning({ externalId: accountingReceipts.externalId });
+    if (updated.length) applied.push("receipt.extracted");
+  }
+
+  if (type === "RunDunning") {
+    await upsertAcceptedDunningRun(tx, proposal, command, now, actorId);
+    applied.push("dunning.accepted");
+  }
+
+  if (type === "ExportDatev") {
+    await upsertAcceptedDatevExport(tx, proposal, command, now, actorId);
+    applied.push("datev_export.accepted");
+  }
+
   if (resultingJournalEntryId && type === "AcceptBankMatch") {
+    const paymentEffect = await applyAcceptedBankPayment(tx, command, resultingJournalEntryId, now);
     await tx.update(accountingPayments)
       .set({
         postedJournalEntryExternalId: resultingJournalEntryId,
@@ -493,6 +618,7 @@ async function applyAcceptedProposal(
       })
       .where(sql`${accountingBankStatementLines.externalId} = ${proposal.refId} or ${accountingBankStatementLines.externalId} = ${proposal.refId.replace(/^bank-line-/, "bank-statement-line-")}`);
     applied.push("bank_match.accepted");
+    applied.push(...paymentEffect);
   }
 
   await tx.update(businessOutboxEvents)
@@ -505,6 +631,147 @@ async function applyAcceptedProposal(
   applied.push("outbox.delivered");
 
   return applied;
+}
+
+async function applyAcceptedBankPayment(
+  tx: Parameters<Parameters<ReturnType<typeof createBusinessDb>["transaction"]>[0]>[0],
+  command: Record<string, unknown> | null,
+  resultingJournalEntryId: string,
+  now: Date
+) {
+  const effects: string[] = [];
+  const payload = parseCommandPayload(command);
+  const amountMinor = Math.round(Math.abs(Number(payload?.amount ?? 0)) * 100);
+  const matchedRecordId = typeof payload?.matchedRecordId === "string" ? payload.matchedRecordId : null;
+  const matchType = typeof payload?.matchType === "string" ? payload.matchType : null;
+  if (!matchedRecordId || amountMinor <= 0) return effects;
+
+  if (matchType === "invoice") {
+    const [invoice] = await tx.select({
+      balanceDueMinor: accountingInvoices.balanceDueMinor,
+      totalAmountMinor: accountingInvoices.totalAmountMinor
+    })
+      .from(accountingInvoices)
+      .where(eq(accountingInvoices.externalId, matchedRecordId))
+      .limit(1);
+    if (invoice) {
+      const nextBalance = Math.max(0, invoice.balanceDueMinor - amountMinor);
+      await tx.update(accountingInvoices)
+        .set({
+          balanceDueMinor: nextBalance,
+          status: nextBalance === 0 ? "paid" : "partially_paid",
+          updatedAt: now
+        })
+        .where(eq(accountingInvoices.externalId, matchedRecordId));
+      effects.push(nextBalance === 0 ? "invoice.paid" : "invoice.partially_paid");
+    }
+  }
+
+  if (matchType === "receipt") {
+    const [receipt] = await tx.select({
+      totalAmountMinor: accountingReceipts.totalAmountMinor
+    })
+      .from(accountingReceipts)
+      .where(eq(accountingReceipts.externalId, matchedRecordId))
+      .limit(1);
+    if (receipt) {
+      await tx.update(accountingReceipts)
+        .set({
+          postedJournalEntryExternalId: resultingJournalEntryId,
+          status: "paid",
+          updatedAt: now
+        })
+        .where(eq(accountingReceipts.externalId, matchedRecordId));
+      effects.push("receipt.paid");
+    }
+  }
+
+  return effects;
+}
+
+async function upsertAcceptedDatevExport(
+  tx: Parameters<Parameters<ReturnType<typeof createBusinessDb>["transaction"]>[0]>[0],
+  proposal: typeof businessAccountingProposals.$inferSelect,
+  command: Record<string, unknown> | null,
+  now: Date,
+  actorId: string
+) {
+  const payload = parseCommandPayload(command);
+  const evidence = parseJsonRecord(proposal.evidenceJson) ?? {};
+  const exportId = typeof payload?.exportId === "string" ? payload.exportId : proposal.refId;
+  const period = typeof payload?.period === "string" ? payload.period : "unknown";
+  const system = typeof payload?.system === "string" ? payload.system : "DATEV";
+  const lineCount = Number(evidence.lineCount ?? 0);
+  const [existing] = await tx.select({
+    csvBlobRef: accountingDatevExports.csvBlobRef,
+    csvSha256: accountingDatevExports.csvSha256,
+    netAmountMinor: accountingDatevExports.netAmountMinor,
+    taxAmountMinor: accountingDatevExports.taxAmountMinor
+  })
+    .from(accountingDatevExports)
+    .where(eq(accountingDatevExports.externalId, exportId))
+    .limit(1);
+
+  await upsertAccountingDatevExport(tx, {
+    companyId: proposal.companyId,
+    csvBlobRef: existing?.csvBlobRef ?? null,
+    csvSha256: existing?.csvSha256 ?? null,
+    exportedAt: now,
+    exportedBy: actorId,
+    externalId: exportId,
+    lineCount,
+    netAmountMinor: existing?.netAmountMinor ?? 0,
+    payload: { command, evidence },
+    period,
+    sourceProposalExternalId: proposal.externalId,
+    status: "exported",
+    system,
+    taxAmountMinor: existing?.taxAmountMinor ?? 0
+  });
+}
+
+async function upsertAcceptedDunningRun(
+  tx: Parameters<Parameters<ReturnType<typeof createBusinessDb>["transaction"]>[0]>[0],
+  proposal: typeof businessAccountingProposals.$inferSelect,
+  command: Record<string, unknown> | null,
+  now: Date,
+  actorId: string
+) {
+  const payload = parseCommandPayload(command);
+  const evidence = parseJsonRecord(proposal.evidenceJson) ?? {};
+  const invoiceId = typeof payload?.invoiceId === "string" ? payload.invoiceId : proposal.refId;
+  const invoiceNumber = typeof payload?.invoiceNumber === "string" ? payload.invoiceNumber : invoiceId;
+  const level = normalizePositiveInt(payload?.level);
+  const daysOverdue = normalizePositiveInt(evidence.daysOverdue);
+  const feeAmountMinor = Math.round(Number(payload?.feeAmount ?? 0) * 100);
+  const externalId = `dunning-${invoiceId}-level-${level}`;
+
+  await tx.insert(accountingDunningRuns).values({
+    companyId: proposal.companyId,
+    createdBy: actorId,
+    daysOverdue,
+    deliveredAt: now,
+    externalId,
+    feeAmountMinor,
+    invoiceExternalId: invoiceId,
+    invoiceNumber,
+    level,
+    payloadJson: JSON.stringify({ command, evidence }),
+    sourceProposalExternalId: proposal.externalId,
+    status: "delivered",
+    updatedAt: now
+  }).onConflictDoUpdate({
+    target: accountingDunningRuns.externalId,
+    set: {
+      daysOverdue,
+      deliveredAt: sql`coalesce(${accountingDunningRuns.deliveredAt}, excluded.delivered_at)`,
+      feeAmountMinor,
+      payloadJson: JSON.stringify({ command, evidence }),
+      sourceProposalExternalId: proposal.externalId,
+      status: "delivered",
+      updatedAt: now
+    }
+  });
 }
 
 export async function saveAccountingSetupSnapshot(snapshot: AccountingSetupSnapshot, databaseUrl?: string) {
@@ -597,6 +864,41 @@ export async function closeAccountingFiscalPeriod(input: {
   return period ?? null;
 }
 
+async function upsertAccountingDatevExport(
+  tx: Parameters<Parameters<ReturnType<typeof createBusinessDb>["transaction"]>[0]>[0],
+  exportBatch: AccountingDatevExportProjection
+) {
+  const values = {
+    companyId: exportBatch.companyId,
+    csvBlobRef: exportBatch.csvBlobRef ?? null,
+    csvSha256: exportBatch.csvSha256 ?? null,
+    exportedAt: exportBatch.exportedAt ?? null,
+    exportedBy: exportBatch.exportedBy ?? null,
+    externalId: exportBatch.externalId,
+    lineCount: exportBatch.lineCount,
+    netAmountMinor: exportBatch.netAmountMinor,
+    payloadJson: JSON.stringify(exportBatch.payload ?? {}),
+    period: exportBatch.period,
+    sourceProposalExternalId: exportBatch.sourceProposalExternalId ?? null,
+    status: exportBatch.status,
+    system: exportBatch.system,
+    taxAmountMinor: exportBatch.taxAmountMinor,
+    updatedAt: new Date()
+  };
+
+  await tx.insert(accountingDatevExports).values(values).onConflictDoUpdate({
+    target: accountingDatevExports.externalId,
+    set: {
+      ...values,
+      csvBlobRef: sql`coalesce(excluded.csv_blob_ref, ${accountingDatevExports.csvBlobRef})`,
+      csvSha256: sql`coalesce(excluded.csv_sha256, ${accountingDatevExports.csvSha256})`,
+      exportedAt: sql`coalesce(${accountingDatevExports.exportedAt}, excluded.exported_at)`,
+      exportedBy: sql`coalesce(${accountingDatevExports.exportedBy}, excluded.exported_by)`,
+      status: sql`case when ${accountingDatevExports.status} = 'exported' then ${accountingDatevExports.status} else excluded.status end`
+    }
+  });
+}
+
 async function upsertAccountingInvoice(tx: Parameters<Parameters<ReturnType<typeof createBusinessDb>["transaction"]>[0]>[0], invoice: AccountingInvoiceProjection) {
   const values = {
     balanceDueMinor: invoice.balanceDueMinor,
@@ -621,7 +923,13 @@ async function upsertAccountingInvoice(tx: Parameters<Parameters<ReturnType<type
 
   await tx.insert(accountingInvoices).values(values).onConflictDoUpdate({
     target: accountingInvoices.externalId,
-    set: values
+    set: {
+      ...values,
+      balanceDueMinor: sql`case when ${accountingInvoices.status} in ('paid', 'partially_paid') then ${accountingInvoices.balanceDueMinor} else excluded.balance_due_minor end`,
+      postedJournalEntryExternalId: sql`coalesce(${accountingInvoices.postedJournalEntryExternalId}, excluded.posted_journal_entry_external_id)`,
+      sentAt: sql`coalesce(${accountingInvoices.sentAt}, excluded.sent_at)`,
+      status: sql`case when ${accountingInvoices.status} in ('paid', 'partially_paid') then ${accountingInvoices.status} else excluded.status end`
+    }
   });
 
   await tx.delete(accountingInvoiceLines).where(eq(accountingInvoiceLines.invoiceExternalId, invoice.externalId));
@@ -669,7 +977,12 @@ async function upsertAccountingReceipt(tx: Parameters<Parameters<ReturnType<type
 
   await tx.insert(accountingReceipts).values(values).onConflictDoUpdate({
     target: accountingReceipts.externalId,
-    set: values
+    set: {
+      ...values,
+      postedAt: sql`coalesce(${accountingReceipts.postedAt}, excluded.posted_at)`,
+      postedJournalEntryExternalId: sql`coalesce(${accountingReceipts.postedJournalEntryExternalId}, excluded.posted_journal_entry_external_id)`,
+      status: sql`case when ${accountingReceipts.status} in ('paid', 'posted') then ${accountingReceipts.status} else excluded.status end`
+    }
   });
 
   await tx.delete(accountingReceiptLines).where(eq(accountingReceiptLines.receiptExternalId, receipt.externalId));
@@ -715,17 +1028,21 @@ async function upsertAccountingPayment(tx: Parameters<Parameters<ReturnType<type
 
   await tx.insert(accountingPayments).values(values).onConflictDoUpdate({
     target: accountingPayments.externalId,
-    set: values
+    set: {
+      ...values,
+      postedJournalEntryExternalId: sql`coalesce(${accountingPayments.postedJournalEntryExternalId}, excluded.posted_journal_entry_external_id)`
+    }
   });
 
   await tx.delete(accountingPaymentAllocations).where(eq(accountingPaymentAllocations.paymentExternalId, payment.externalId));
-  if (payment.allocation) {
-    await tx.insert(accountingPaymentAllocations).values({
-      amountMinor: payment.allocation.amountMinor,
-      invoiceExternalId: payment.allocation.invoiceExternalId ?? null,
+  const allocations = payment.allocations ?? (payment.allocation ? [payment.allocation] : []);
+  if (allocations.length) {
+    await tx.insert(accountingPaymentAllocations).values(allocations.map((allocation) => ({
+      amountMinor: allocation.amountMinor,
+      invoiceExternalId: allocation.invoiceExternalId ?? null,
       paymentExternalId: payment.externalId,
-      receiptExternalId: payment.allocation.receiptExternalId ?? null
-    });
+      receiptExternalId: allocation.receiptExternalId ?? null
+    })));
   }
 }
 
@@ -850,6 +1167,16 @@ function parseJsonRecord(value: string) {
   }
 }
 
+function parseCommandPayload(command: Record<string, unknown> | null) {
+  const payload = command?.payload;
+  return payload && typeof payload === "object" ? payload as Record<string, unknown> : null;
+}
+
+function normalizePositiveInt(value: unknown) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : 0;
+}
+
 function resultingJournalEntryIdForCommand(command: Record<string, unknown> | null) {
   const type = command?.type;
   const refType = typeof command?.refType === "string" ? command.refType : null;
@@ -858,10 +1185,9 @@ function resultingJournalEntryIdForCommand(command: Record<string, unknown> | nu
   if (!refType || !refId) return null;
   if (type === "SendInvoice") return `je-invoice-${refType}-${refId}`;
   if (type === "PostReceipt") return `je-receipt-${refType}-${refId}`;
+  if (type === "CapitalizeReceipt") return `je-manual-asset-asset-${refId}`;
+  if (type === "DisposeAsset") return `je-manual-asset-${refId}`;
+  if (type === "PostDepreciation") return `je-depreciation-asset-${refId}`;
   if (type === "AcceptBankMatch") return `je-payment-${refType}-${refId}`;
-  if (type === "RunDunning") return `dunning-run-${refId}`;
-  if (type === "ExportDatev") return `datev-export-${refId}`;
-  if (type === "ImportBankStatement") return `bank-statement-${refId}`;
-  if (type === "IngestReceipt") return `receipt-ingest-${refId}`;
   return null;
 }
