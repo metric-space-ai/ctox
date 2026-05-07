@@ -67,6 +67,7 @@ export const businessModules: BusinessModule[] = [
     submodules: [
       { id: "customers", label: "Customers", href: "/app/business/customers", resourceTypes: ["customer"] },
       { id: "products", label: "Products", href: "/app/business/products", resourceTypes: ["product", "service"] },
+      { id: "warehouse", label: "Warehouse", href: "/app/business/warehouse", resourceTypes: ["inventory_item", "stock_balance", "stock_reservation", "shipment"] },
       { id: "invoices", label: "Invoices", href: "/app/business/invoices", resourceTypes: ["invoice"] },
       { id: "ledger", label: "Ledger", href: "/app/business/ledger", resourceTypes: ["account", "journal_entry", "ledger_entry"] },
       { id: "receipts", label: "Receipts", href: "/app/business/receipts", resourceTypes: ["receipt", "vendor", "attachment"] },

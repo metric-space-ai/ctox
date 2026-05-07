@@ -189,6 +189,7 @@ export type BusinessBundle = {
   bookkeeping: BusinessBookkeepingExport[];
   receipts: BusinessReceipt[];
   reports: BusinessReport[];
+  warehouse: Array<Record<string, unknown>>;
 };
 
 export const businessSeed: BusinessBundle = {
@@ -956,6 +957,7 @@ export const businessSeed: BusinessBundle = {
       }
     }
   ],
+  warehouse: [],
   reports: [
     {
       id: "rep-runway",
@@ -1047,7 +1049,8 @@ export async function getBusinessBundle() {
       invoices: rowsToPayload(invoiceRows, businessSeed.invoices),
       bookkeeping: rowsToPayload(bookkeepingRows, businessSeed.bookkeeping),
       receipts: rowsToPayload(receiptRows, businessSeed.receipts),
-      reports: rowsToPayload(reportRows, businessSeed.reports)
+      reports: rowsToPayload(reportRows, businessSeed.reports),
+      warehouse: []
     };
   } catch (error) {
     console.warn("Falling back to Business seed data.", error);
@@ -1072,6 +1075,7 @@ export function normalizeBusinessResource(resource: string): keyof BusinessBundl
   if (resource === "customers") return "customers";
   if (resource === "journal" || resource === "ledger" || resource === "journal-entries") return "journalEntries";
   if (resource === "products" || resource === "services") return "products";
+  if (resource === "warehouse" || resource === "inventory" || resource === "stock") return "warehouse";
   if (resource === "invoices") return "invoices";
   if (resource === "bookkeeping" || resource === "exports") return "bookkeeping";
   if (resource === "receipts" || resource === "inbound-receipts") return "receipts";

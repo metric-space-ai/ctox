@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { notifyAccountingWorkflowUpdated } from "./accounting-workflow-events";
 
 type AccountingCommandButtonProps = {
   action: "export" | "match" | "post";
@@ -21,7 +22,12 @@ export function AccountingCommandButton({ action, label, recordId, resource }: A
       headers: { "content-type": "application/json" },
       method: "POST"
     });
-    const result = await response.json().catch(() => ({ ok: false, error: "invalid_response" })) as { ok?: boolean; error?: string; accounting?: { command?: { type?: string } } };
+    const result = await response.json().catch(() => ({ ok: false, error: "invalid_response" })) as {
+      accounting?: { command?: { type?: string } };
+      accountingPersistence?: { persisted?: boolean };
+      error?: string;
+      ok?: boolean;
+    };
 
     if (!response.ok || !result.ok) {
       setStatus("error");
@@ -31,6 +37,10 @@ export function AccountingCommandButton({ action, label, recordId, resource }: A
 
     setStatus("done");
     setMessage(`${result.accounting?.command?.type ?? "Accounting command"} prepared.`);
+    notifyAccountingWorkflowUpdated({
+      accounting: result.accounting,
+      persisted: result.accountingPersistence?.persisted
+    });
   }
 
   return (

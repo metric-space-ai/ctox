@@ -1,10 +1,13 @@
 import { cookies } from "next/headers";
 import { notFound } from "next/navigation";
-import { findBusinessModule, findBusinessSubmodule, WorkSurface } from "@ctox-business/ui";
+import { findBusinessModule, findBusinessSubmodule, WorkSurface, type WorkSurfacePanelState } from "@ctox-business/ui";
 import { AppShell } from "../../../../components/app-shell";
 import { AccountingApiButton } from "../../../../components/accounting-api-button";
 import { AccountingCommandButton } from "../../../../components/accounting-command-button";
+import { AccountingWorkflowPanel } from "../../../../components/accounting-workflow-panel";
 import { BankImportPreviewButton } from "../../../../components/bank-import-preview-button";
+import { BusinessPanel, BusinessWorkspace } from "../../../../components/business-workspace";
+import { DatevExportButton } from "../../../../components/datev-export-button";
 import { DunningPreviewButton } from "../../../../components/dunning-preview-button";
 import { InvoiceDeliveryActions } from "../../../../components/invoice-delivery-actions";
 import { ReceiptIngestButton } from "../../../../components/receipt-ingest-button";
@@ -18,6 +21,7 @@ import {
 } from "../../../../lib/accounting-runtime";
 import { businessOsName, companyNameCookieName, normalizeCompanyName } from "../../../../lib/company-settings";
 import { businessCurrency, getBusinessBundle, text, type BusinessBundle, type SupportedLocale } from "../../../../lib/business-seed";
+import { getDatabaseBackedBusinessBundle } from "../../../../lib/business-db-bundle";
 import { prepareExistingInvoiceForAccounting } from "../../../../lib/business-accounting";
 
 export default async function BusinessSubmodulePage({
@@ -25,7 +29,7 @@ export default async function BusinessSubmodulePage({
   searchParams
 }: {
   params: Promise<{ submodule: string }>;
-  searchParams: Promise<{ locale?: string; theme?: string }>;
+  searchParams: Promise<{ drawer?: string; locale?: string; panel?: string; recordId?: string; selectedId?: string; theme?: string }>;
 }) {
   const { submodule: submoduleId } = await params;
   const query = await searchParams;
@@ -36,7 +40,46 @@ export default async function BusinessSubmodulePage({
 
   const cookieStore = await cookies();
   const companyName = normalizeCompanyName(cookieStore.get(companyNameCookieName)?.value);
-  const data = await getBusinessBundle();
+  const data = await getDatabaseBackedBusinessBundle(await getBusinessBundle());
+  const drawer: WorkSurfacePanelState["drawer"] = query.drawer === "left-bottom" || query.drawer === "bottom" || query.drawer === "right" ? query.drawer : undefined;
+  const panelState: WorkSurfacePanelState = {
+    drawer,
+    panel: query.panel,
+    recordId: query.recordId
+  };
+  const viewQuery = {
+    drawer: query.drawer,
+    locale: query.locale,
+    panel: query.panel,
+    recordId: query.recordId,
+    selectedId: query.selectedId,
+    theme: query.theme
+  };
+
+  if (submoduleId === "warehouse") {
+    return (
+      <AppShell
+        brandName={businessOsName(companyName)}
+        currentHref={businessCurrentHref(submoduleId, query)}
+        locale={locale}
+        moduleId="business"
+        submoduleId={submoduleId}
+        theme={query.theme}
+      >
+        <WorkSurface
+          hideHeader
+          moduleId="business"
+          submoduleId={submoduleId}
+          title={submodule.label}
+          description={`${module.label} workspace`}
+          panelState={panelState}
+          panelContent={<BusinessPanel panelState={panelState} query={viewQuery} submoduleId={submoduleId} />}
+        >
+          <BusinessWorkspace query={viewQuery} submoduleId={submoduleId} />
+        </WorkSurface>
+      </AppShell>
+    );
+  }
 
   return (
     <AppShell
@@ -50,6 +93,8 @@ export default async function BusinessSubmodulePage({
       <WorkSurface
         hideHeader
         moduleId="business"
+        panelContent={<BusinessPanel panelState={panelState} query={viewQuery} submoduleId={submoduleId} />}
+        panelState={panelState}
         submoduleId={submoduleId}
         title={submodule.label}
         description={`${module.label} workspace`}
@@ -58,6 +103,18 @@ export default async function BusinessSubmodulePage({
       </WorkSurface>
     </AppShell>
   );
+}
+
+function businessCurrentHref(submoduleId: string, query: { drawer?: string; locale?: string; panel?: string; recordId?: string; selectedId?: string; theme?: string }) {
+  const params = new URLSearchParams();
+  if (query.locale) params.set("locale", query.locale);
+  if (query.theme) params.set("theme", query.theme);
+  if (query.panel) params.set("panel", query.panel);
+  if (query.recordId) params.set("recordId", query.recordId);
+  if (query.selectedId) params.set("selectedId", query.selectedId);
+  if (query.drawer) params.set("drawer", query.drawer);
+  const queryString = params.toString();
+  return queryString ? `/app/business/${submoduleId}?${queryString}` : `/app/business/${submoduleId}`;
 }
 
 function BusinessAccountingSurface({ data, locale, submoduleId }: { data: BusinessBundle; locale: SupportedLocale; submoduleId: string }) {
@@ -103,9 +160,7 @@ function BusinessAccountingSurface({ data, locale, submoduleId }: { data: Busine
           <div className="business-accounting-header-actions">
             <AccountingApiButton label={locale === "de" ? "Setup vorbereiten" : "Prepare setup"} path="/api/business/accounting/setup" />
             <BankImportPreviewButton label={locale === "de" ? "Bankimport pruefen" : "Check bank import"} />
-            <a className="business-accounting-download" href="/api/business/accounting/datev-export">
-              {locale === "de" ? "DATEV CSV laden" : "Download DATEV CSV"}
-            </a>
+            <DatevExportButton label={locale === "de" ? "DATEV CSV laden" : "Download DATEV CSV"} />
             <AccountingCommandButton action="export" label={locale === "de" ? "DATEV Export vorbereiten" : "Prepare DATEV export"} recordId={exportBatch.id} resource="bookkeeping" />
           </div>
         ) : null}
@@ -131,6 +186,8 @@ function BusinessAccountingSurface({ data, locale, submoduleId }: { data: Busine
         <QaCard title="VAT payable" value={businessCurrency(snapshot.vatPayable, "EUR", locale)} meta="output minus input VAT" />
         <QaCard title="Proposal" value={accounting.proposal.status} meta={`${Math.round(accounting.proposal.confidence * 100)}% confidence`} />
       </section>
+
+      <AccountingWorkflowPanel locale={locale} />
 
       {submoduleId === "invoices" ? (
         <section className="accounting-qa-document">

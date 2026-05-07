@@ -1,7 +1,9 @@
-import { eq } from "drizzle-orm";
+import { asc, desc, eq, sql } from "drizzle-orm";
 import { createBusinessDb } from "./client";
 import {
   accountingAccounts,
+  accountingBankStatementLines,
+  accountingBankStatements,
   accountingFiscalPeriods,
   accountingInvoiceLines,
   accountingInvoices,
@@ -125,6 +127,36 @@ export type AccountingPaymentProjection = {
   postedJournalEntryExternalId?: string | null;
 };
 
+export type AccountingBankStatementProjection = {
+  accountExternalId: string;
+  closingBalanceMinor?: number;
+  companyId: string;
+  currency: string;
+  endDate?: string | null;
+  externalId: string;
+  format: string;
+  importedBy?: string | null;
+  lines: Array<{
+    amountMinor: number;
+    bookingDate: string;
+    currency: string;
+    duplicateOfLineExternalId?: string | null;
+    endToEndRef?: string | null;
+    externalId: string;
+    lineNo: number;
+    matchStatus?: string;
+    matchedJournalEntryExternalId?: string | null;
+    purpose?: string | null;
+    remitterIban?: string | null;
+    remitterName?: string | null;
+    valueDate?: string | null;
+  }>;
+  openingBalanceMinor?: number;
+  sourceFilename: string;
+  sourceSha256: string;
+  startDate?: string | null;
+};
+
 export type AccountingWorkflowSnapshot = {
   audit?: {
     action: string;
@@ -136,6 +168,7 @@ export type AccountingWorkflowSnapshot = {
     refId: string;
     refType: string;
   };
+  bankStatement?: AccountingBankStatementProjection;
   invoice?: AccountingInvoiceProjection;
   journalDraft?: AccountingJournalDraft | null;
   outbox?: {
@@ -222,7 +255,10 @@ export async function saveAccountingWorkflowSnapshot(snapshot: AccountingWorkflo
 
       await tx.insert(businessAccountingProposals).values(values).onConflictDoUpdate({
         target: businessAccountingProposals.externalId,
-        set: values
+        set: {
+          ...values,
+          status: sql`case when ${businessAccountingProposals.status} in ('accepted', 'rejected', 'superseded') then ${businessAccountingProposals.status} else excluded.status end`
+        }
       });
     }
 
@@ -240,7 +276,12 @@ export async function saveAccountingWorkflowSnapshot(snapshot: AccountingWorkflo
 
       await tx.insert(businessOutboxEvents).values(values).onConflictDoUpdate({
         target: businessOutboxEvents.externalId,
-        set: values
+        set: {
+          ...values,
+          attempts: sql`case when ${businessOutboxEvents.status} = 'delivered' then ${businessOutboxEvents.attempts} else excluded.attempts end`,
+          payloadJson: sql`case when ${businessOutboxEvents.status} = 'delivered' then ${businessOutboxEvents.payloadJson} else excluded.payload_json end`,
+          status: sql`case when ${businessOutboxEvents.status} = 'delivered' then ${businessOutboxEvents.status} else excluded.status end`
+        }
       });
     }
 
@@ -256,6 +297,10 @@ export async function saveAccountingWorkflowSnapshot(snapshot: AccountingWorkflo
         refId: audit.refId,
         refType: audit.refType
       });
+    }
+
+    if (snapshot.bankStatement) {
+      await upsertAccountingBankStatement(tx, snapshot.bankStatement);
     }
 
     if (snapshot.invoice) {
@@ -277,11 +322,189 @@ export async function saveAccountingWorkflowSnapshot(snapshot: AccountingWorkflo
 }
 
 export async function listAccountingProposals(databaseUrl?: string) {
-  return createBusinessDb(databaseUrl).select().from(businessAccountingProposals);
+  return createBusinessDb(databaseUrl)
+    .select()
+    .from(businessAccountingProposals)
+    .orderBy(desc(businessAccountingProposals.updatedAt))
+    .limit(20);
 }
 
 export async function listBusinessOutboxEvents(databaseUrl?: string) {
-  return createBusinessDb(databaseUrl).select().from(businessOutboxEvents);
+  return createBusinessDb(databaseUrl)
+    .select()
+    .from(businessOutboxEvents)
+    .orderBy(desc(businessOutboxEvents.updatedAt))
+    .limit(20);
+}
+
+export async function listAccountingAuditEvents(databaseUrl?: string) {
+  return createBusinessDb(databaseUrl)
+    .select()
+    .from(businessAccountingAuditEvents)
+    .orderBy(desc(businessAccountingAuditEvents.createdAt))
+    .limit(20);
+}
+
+export async function loadAccountingBusinessRows(databaseUrl?: string) {
+  const db = createBusinessDb(databaseUrl);
+  const [
+    accounts,
+    bankStatementLines,
+    invoiceLines,
+    invoices,
+    journalEntries,
+    journalEntryLines,
+    parties,
+    payments,
+    receiptFiles,
+    receiptLines,
+    receipts
+  ] = await Promise.all([
+    db.select().from(accountingAccounts).orderBy(asc(accountingAccounts.code)),
+    db.select().from(accountingBankStatementLines).orderBy(desc(accountingBankStatementLines.bookingDate), asc(accountingBankStatementLines.lineNo)),
+    db.select().from(accountingInvoiceLines).orderBy(asc(accountingInvoiceLines.invoiceExternalId), asc(accountingInvoiceLines.lineNo)),
+    db.select().from(accountingInvoices).orderBy(desc(accountingInvoices.issueDate)),
+    db.select().from(accountingJournalEntries).orderBy(desc(accountingJournalEntries.postingDate), desc(accountingJournalEntries.createdAt)),
+    db.select().from(accountingJournalEntryLines).orderBy(asc(accountingJournalEntryLines.journalEntryExternalId), asc(accountingJournalEntryLines.lineNo)),
+    db.select().from(accountingParties).orderBy(asc(accountingParties.name)),
+    db.select().from(accountingPayments).orderBy(desc(accountingPayments.paymentDate)),
+    db.select().from(accountingReceiptFiles).orderBy(asc(accountingReceiptFiles.uploadedAt)),
+    db.select().from(accountingReceiptLines).orderBy(asc(accountingReceiptLines.receiptExternalId), asc(accountingReceiptLines.lineNo)),
+    db.select().from(accountingReceipts).orderBy(desc(accountingReceipts.receiptDate))
+  ]);
+
+  return {
+    accounts,
+    bankStatementLines,
+    invoiceLines,
+    invoices,
+    journalEntries,
+    journalEntryLines,
+    parties,
+    payments,
+    receiptFiles,
+    receiptLines,
+    receipts
+  };
+}
+
+export async function decideAccountingProposal(input: {
+  actorId: string;
+  externalId: string;
+  resultingJournalEntryId?: string | null;
+  status: "accepted" | "rejected" | "superseded";
+}, databaseUrl?: string) {
+  const db = createBusinessDb(databaseUrl);
+  const now = new Date();
+
+  return await db.transaction(async (tx) => {
+    const [proposal] = await tx.select()
+      .from(businessAccountingProposals)
+      .where(eq(businessAccountingProposals.externalId, input.externalId))
+      .limit(1);
+
+    if (!proposal) {
+      throw new Error(`accounting proposal not found: ${input.externalId}`);
+    }
+    const resultingJournalEntryId = input.resultingJournalEntryId
+      ?? proposal.resultingJournalEntryId
+      ?? resultingJournalEntryIdForCommand(parseJsonRecord(proposal.proposedCommandJson));
+    const appliedSideEffects = input.status === "accepted"
+      ? await applyAcceptedProposal(tx, proposal, parseJsonRecord(proposal.proposedCommandJson), resultingJournalEntryId, now)
+      : [];
+
+    const [updated] = await tx.update(businessAccountingProposals)
+      .set({
+        decidedAt: now,
+        decidedBy: input.actorId,
+        resultingJournalEntryId,
+        status: input.status,
+        updatedAt: now
+      })
+      .where(eq(businessAccountingProposals.externalId, input.externalId))
+      .returning();
+
+    await tx.insert(businessAccountingAuditEvents).values({
+      action: `proposal.${input.status}`,
+      actorId: input.actorId,
+      actorType: "user",
+      afterJson: JSON.stringify({
+        appliedSideEffects,
+        resultingJournalEntryId,
+        status: input.status
+      }),
+      beforeJson: JSON.stringify({
+        status: proposal.status
+      }),
+      companyId: proposal.companyId,
+      refId: proposal.refId,
+      refType: proposal.refType
+    });
+
+    return updated;
+  });
+}
+
+async function applyAcceptedProposal(
+  tx: Parameters<Parameters<ReturnType<typeof createBusinessDb>["transaction"]>[0]>[0],
+  proposal: typeof businessAccountingProposals.$inferSelect,
+  command: Record<string, unknown> | null,
+  resultingJournalEntryId: string | null,
+  now: Date
+) {
+  const applied: string[] = [];
+  const type = command?.type;
+
+  if (resultingJournalEntryId && type === "SendInvoice") {
+    await tx.update(accountingInvoices)
+      .set({
+        postedJournalEntryExternalId: resultingJournalEntryId,
+        sentAt: now,
+        status: "sent",
+        updatedAt: now
+      })
+      .where(eq(accountingInvoices.externalId, proposal.refId));
+    applied.push("invoice.sent");
+  }
+
+  if (resultingJournalEntryId && type === "PostReceipt") {
+    await tx.update(accountingReceipts)
+      .set({
+        postedAt: now,
+        postedJournalEntryExternalId: resultingJournalEntryId,
+        status: "posted",
+        updatedAt: now
+      })
+      .where(eq(accountingReceipts.externalId, proposal.refId));
+    applied.push("receipt.posted");
+  }
+
+  if (resultingJournalEntryId && type === "AcceptBankMatch") {
+    await tx.update(accountingPayments)
+      .set({
+        postedJournalEntryExternalId: resultingJournalEntryId,
+        updatedAt: now
+      })
+      .where(sql`${accountingPayments.bankStatementLineExternalId} = ${proposal.refId} or ${accountingPayments.externalId} = ${`pay-${proposal.refId}`}`);
+    await tx.update(accountingBankStatementLines)
+      .set({
+        matchedJournalEntryExternalId: resultingJournalEntryId,
+        matchStatus: "matched"
+      })
+      .where(sql`${accountingBankStatementLines.externalId} = ${proposal.refId} or ${accountingBankStatementLines.externalId} = ${proposal.refId.replace(/^bank-line-/, "bank-statement-line-")}`);
+    applied.push("bank_match.accepted");
+  }
+
+  await tx.update(businessOutboxEvents)
+    .set({
+      deliveredAt: now,
+      status: "delivered",
+      updatedAt: now
+    })
+    .where(sql`${businessOutboxEvents.payloadJson}::jsonb ->> 'proposalId' = ${proposal.externalId}`);
+  applied.push("outbox.delivered");
+
+  return applied;
 }
 
 export async function saveAccountingSetupSnapshot(snapshot: AccountingSetupSnapshot, databaseUrl?: string) {
@@ -363,13 +586,15 @@ export async function closeAccountingFiscalPeriod(input: {
   status?: "closed";
 }, databaseUrl?: string) {
   const db = createBusinessDb(databaseUrl);
-  await db.update(accountingFiscalPeriods)
+  const [period] = await db.update(accountingFiscalPeriods)
     .set({
       closedAt: input.closedAt ?? new Date(),
       status: input.status ?? "closed",
       updatedAt: new Date()
     })
-    .where(eq(accountingFiscalPeriods.externalId, input.externalId));
+    .where(eq(accountingFiscalPeriods.externalId, input.externalId))
+    .returning();
+  return period ?? null;
 }
 
 async function upsertAccountingInvoice(tx: Parameters<Parameters<ReturnType<typeof createBusinessDb>["transaction"]>[0]>[0], invoice: AccountingInvoiceProjection) {
@@ -504,6 +729,58 @@ async function upsertAccountingPayment(tx: Parameters<Parameters<ReturnType<type
   }
 }
 
+async function upsertAccountingBankStatement(
+  tx: Parameters<Parameters<ReturnType<typeof createBusinessDb>["transaction"]>[0]>[0],
+  statement: AccountingBankStatementProjection
+) {
+  const values = {
+    accountExternalId: statement.accountExternalId,
+    closingBalanceMinor: statement.closingBalanceMinor ?? 0,
+    companyId: statement.companyId,
+    endDate: statement.endDate ?? null,
+    externalId: statement.externalId,
+    format: statement.format,
+    importedBy: statement.importedBy ?? null,
+    openingBalanceMinor: statement.openingBalanceMinor ?? 0,
+    sourceFilename: statement.sourceFilename,
+    sourceSha256: statement.sourceSha256,
+    startDate: statement.startDate ?? null
+  };
+
+  await tx.insert(accountingBankStatements).values(values).onConflictDoUpdate({
+    target: accountingBankStatements.externalId,
+    set: values
+  });
+
+  for (const line of statement.lines) {
+    const values = {
+      amountMinor: line.amountMinor,
+      bookingDate: line.bookingDate,
+      currency: line.currency,
+      duplicateOfLineExternalId: line.duplicateOfLineExternalId ?? null,
+      endToEndRef: line.endToEndRef ?? null,
+      externalId: line.externalId,
+      lineNo: line.lineNo,
+      matchStatus: line.matchStatus ?? "unmatched",
+      matchedJournalEntryExternalId: line.matchedJournalEntryExternalId ?? null,
+      purpose: line.purpose ?? null,
+      remitterIban: line.remitterIban ?? null,
+      remitterName: line.remitterName ?? null,
+      statementExternalId: statement.externalId,
+      valueDate: line.valueDate ?? null
+    };
+
+    await tx.insert(accountingBankStatementLines).values(values).onConflictDoUpdate({
+      target: accountingBankStatementLines.externalId,
+      set: {
+        ...values,
+        matchStatus: sql`case when ${accountingBankStatementLines.matchStatus} = 'matched' then ${accountingBankStatementLines.matchStatus} else excluded.match_status end`,
+        matchedJournalEntryExternalId: sql`coalesce(${accountingBankStatementLines.matchedJournalEntryExternalId}, excluded.matched_journal_entry_external_id)`
+      }
+    });
+  }
+}
+
 async function upsertJournalDraft(tx: Parameters<Parameters<ReturnType<typeof createBusinessDb>["transaction"]>[0]>[0], journal: AccountingJournalDraft) {
   const externalId = journalExternalId(journal);
   const now = new Date();
@@ -562,4 +839,29 @@ function journalExternalId(journal: AccountingJournalDraft) {
 
 function journalNumber(journal: AccountingJournalDraft) {
   return `${journal.type.toUpperCase()}-${journal.refId}`;
+}
+
+function parseJsonRecord(value: string) {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : null;
+  } catch {
+    return null;
+  }
+}
+
+function resultingJournalEntryIdForCommand(command: Record<string, unknown> | null) {
+  const type = command?.type;
+  const refType = typeof command?.refType === "string" ? command.refType : null;
+  const refId = typeof command?.refId === "string" ? command.refId : null;
+
+  if (!refType || !refId) return null;
+  if (type === "SendInvoice") return `je-invoice-${refType}-${refId}`;
+  if (type === "PostReceipt") return `je-receipt-${refType}-${refId}`;
+  if (type === "AcceptBankMatch") return `je-payment-${refType}-${refId}`;
+  if (type === "RunDunning") return `dunning-run-${refId}`;
+  if (type === "ExportDatev") return `datev-export-${refId}`;
+  if (type === "ImportBankStatement") return `bank-statement-${refId}`;
+  if (type === "IngestReceipt") return `receipt-ingest-${refId}`;
+  return null;
 }

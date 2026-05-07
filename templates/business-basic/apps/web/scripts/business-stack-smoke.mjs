@@ -35,6 +35,8 @@ const moduleRoutes = [
   ["/app/business/bookkeeping?locale=en&theme=light&panel=business-set&recordId=tax-review&drawer=right", "Selected items"],
   ["/app/business/reports?locale=en&theme=light&panel=business-set&recordId=open-reports&drawer=right", "Open reports"],
   ["/app/business/products?locale=en&theme=light", "Business"],
+  ["/app/business/warehouse?locale=en&theme=light", "Warehouse"],
+  ["/app/business/warehouse?locale=en&theme=light&panel=reservation&recordId=res-7001&drawer=right", "Implementation gates"],
   ["/app/business/invoices?locale=en&theme=light", "Business"],
   ["/app/business/ledger?locale=en&theme=light", "Ledger"],
   ["/app/business/receipts?locale=en&theme=light", "Receipts"],
@@ -76,6 +78,7 @@ const apiRoutes = [
   "/api/business/bank-transactions",
   "/api/business/customers",
   "/api/business/products",
+  "/api/business/warehouse",
   "/api/business/invoices",
   "/api/business/ledger",
   "/api/business/receipts",
@@ -167,6 +170,18 @@ await assertMutation({
     payload: { smoke: true }
   },
   deepLinkFragment: "/app/business/invoices"
+});
+
+await assertMutation({
+  route: "/api/business/warehouse",
+  body: {
+    action: "sync",
+    recordId: "warehouse-replay",
+    title: "Warehouse smoke sync",
+    instruction: "Smoke test Warehouse queue integration.",
+    payload: { smoke: true }
+  },
+  deepLinkFragment: "/app/business/warehouse"
 });
 
 await assertPromptQueue();

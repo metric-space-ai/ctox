@@ -1,5 +1,6 @@
 import { buildInvoiceDocument as buildAccountingInvoiceDocument, buildZugferdXml } from "@ctox-business/accounting/invoice";
 import { getBusinessBundle, text, type BusinessInvoice } from "@/lib/business-seed";
+import { getDatabaseBackedBusinessBundle } from "@/lib/business-db-bundle";
 
 type PdfLine = {
   description: string;
@@ -41,7 +42,7 @@ export async function GET(
 ) {
   const { id } = await params;
   const locale = new URL(request.url).searchParams.get("locale") === "en" ? "en" : "de";
-  const data = await getBusinessBundle();
+  const data = await getDatabaseBackedBusinessBundle(await getBusinessBundle());
   const invoice = data.invoices.find((item) => item.id === id);
 
   if (!invoice) {

@@ -128,6 +128,7 @@ export function prepareExistingInvoiceForAccounting({
   });
   const outbox = createBusinessOutboxEvent({
     companyId: context.companyId,
+    id: `outbox-business.invoice.prepare_send-${invoice.id}`,
     payload: {
       command,
       invoiceId: invoice.id,
@@ -221,6 +222,7 @@ export function prepareReceiptForAccounting({
   });
   const outbox = createBusinessOutboxEvent({
     companyId: BUSINESS_COMPANY_ID,
+    id: `outbox-business.receipt.prepare_post-${receipt.id}`,
     payload: { command, journalDraft, proposalId: proposal.id, receiptProjection },
     topic: "business.receipt.prepare_post"
   });
@@ -286,6 +288,7 @@ export function prepareBankMatchForAccounting({
   });
   const outbox = createBusinessOutboxEvent({
     companyId: BUSINESS_COMPANY_ID,
+    id: `outbox-business.bank_match.prepare_accept-${transaction.id}`,
     payload: { command, journalDraft, paymentProjection, proposalId: proposal.id },
     topic: "business.bank_match.prepare_accept"
   });
@@ -348,6 +351,7 @@ export function prepareDatevExportForAccounting({
   });
   const outbox = createBusinessOutboxEvent({
     companyId: BUSINESS_COMPANY_ID,
+    id: `outbox-business.datev.prepare_export-${exportBatch.id}`,
     payload: { command, proposalId: proposal.id },
     topic: "business.datev.prepare_export"
   });

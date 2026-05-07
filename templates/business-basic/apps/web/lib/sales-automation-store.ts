@@ -2,10 +2,6 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { Agent, OpenAIChatCompletionsModel, run, setTracingDisabled, tool } from "@openai/agents";
-import OpenAI from "openai";
-import * as XLSX from "xlsx";
-import { z } from "zod";
 
 const execFileAsync = promisify(execFile);
 
@@ -206,7 +202,7 @@ export type AnswerPipelineRunOptions = {
   text?: string;
 };
 
-const DEFAULT_STORE_PATH = join(process.cwd(), ".ctox-business", "sales-automation.json");
+const DEFAULT_STORE_PATH = join(/* webpackIgnore: true */ /* turbopackIgnore: true */ process.cwd(), ".ctox-business", "sales-automation.json");
 const MINIMAX_MODEL = "MiniMax-M2.7";
 const DEFAULT_RESEARCH_TIMEOUT_MS = 360_000;
 const IRRELEVANT_SEARCH_HOSTS = [
@@ -245,6 +241,25 @@ const GENERIC_COMPANY_TOKENS = new Set([
   "deutschland",
   "germany"
 ]);
+
+async function loadAgentRuntime() {
+  const agents = await import("@openai/agents");
+  const openai = await import("openai");
+  const zod = await import("zod");
+  return {
+    Agent: agents.Agent,
+    OpenAI: openai.default,
+    OpenAIChatCompletionsModel: agents.OpenAIChatCompletionsModel,
+    run: agents.run,
+    setTracingDisabled: agents.setTracingDisabled,
+    tool: agents.tool,
+    z: zod.z
+  };
+}
+
+async function loadXlsxRuntime() {
+  return await import("xlsx");
+}
 
 export async function importSalesCampaignSource(input: CampaignImportInput) {
   const now = new Date().toISOString();
@@ -628,6 +643,7 @@ async function runPipelineGateAgent(
   mode: SalesPipelineRunMode,
   runItem: SalesPipelineRun
 ): Promise<SalesPipelineAgentOutput> {
+  const { Agent, OpenAI, OpenAIChatCompletionsModel, run, setTracingDisabled, tool, z } = await loadAgentRuntime();
   setTracingDisabled(true);
   const campaign = store.campaigns.find((item) => item.id === row.campaignId);
   const abortController = new AbortController();
@@ -1347,6 +1363,7 @@ function emptyGateState(gate: SalesPipelineRunGateId): SalesPipelineGateState {
 
 async function parseImportRows(input: CampaignImportInput) {
   if (input.file && input.sourceType === "Excel") {
+    const XLSX = await loadXlsxRuntime();
     const buffer = Buffer.from(await input.file.arrayBuffer());
     const workbook = XLSX.read(buffer, { type: "buffer", cellDates: false });
     const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
@@ -1553,6 +1570,7 @@ async function researchCompanyWithSalesAgent(
   campaign: SalesAutomationCampaign | undefined,
   options: { useWebSearch: boolean }
 ) {
+  const { Agent, OpenAI, OpenAIChatCompletionsModel, run, setTracingDisabled, tool, z } = await loadAgentRuntime();
   setTracingDisabled(true);
   const abortController = new AbortController();
   const timeout = setTimeout(() => abortController.abort("sales_research_timeout"), DEFAULT_RESEARCH_TIMEOUT_MS);
@@ -1812,7 +1830,7 @@ function buildSalesResearchSystemPrompt({
 }
 
 async function repairSalesResearchJsonOutput(
-  client: OpenAI,
+  client: unknown,
   input: {
     campaign: SalesAutomationCampaign | undefined;
     row: SalesCampaignImportRow;
@@ -1821,6 +1839,7 @@ async function repairSalesResearchJsonOutput(
     signal: AbortSignal;
   }
 ) {
+  const { Agent, OpenAIChatCompletionsModel, run } = await loadAgentRuntime();
   const repairAgent = new Agent({
     name: "Sales Research JSON Contract Repair",
     model: new OpenAIChatCompletionsModel(client, MINIMAX_MODEL),

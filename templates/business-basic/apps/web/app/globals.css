@@ -10988,11 +10988,147 @@ a {
 
 .accounting-qa-card,
 .accounting-qa-table,
-.accounting-qa-document {
+.accounting-qa-document,
+.accounting-workflow-panel {
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--surface);
   box-shadow: 0 12px 30px rgb(15 23 42 / 0.08);
+}
+
+.accounting-workflow-panel {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+}
+
+.accounting-workflow-panel > header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.accounting-workflow-panel > header p {
+  margin: 0 0 4px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 780;
+  text-transform: uppercase;
+}
+
+.accounting-workflow-panel h2,
+.accounting-workflow-panel h3 {
+  margin: 0;
+  letter-spacing: 0;
+}
+
+.accounting-workflow-panel h2 {
+  font-size: 20px;
+}
+
+.accounting-workflow-panel h3 {
+  font-size: 14px;
+}
+
+.accounting-workflow-status,
+.accounting-workflow-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 720;
+}
+
+.accounting-workflow-status.status-enabled {
+  color: var(--success);
+}
+
+.accounting-workflow-status.status-error {
+  color: var(--danger);
+}
+
+.accounting-workflow-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.accounting-workflow-grid article {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  padding: 12px;
+}
+
+.accounting-workflow-grid ul {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.accounting-workflow-grid li {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+
+.accounting-workflow-grid li:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.accounting-workflow-grid strong,
+.accounting-workflow-grid span,
+.accounting-workflow-grid p {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.accounting-workflow-grid strong {
+  font-size: 12px;
+}
+
+.accounting-workflow-grid span,
+.accounting-workflow-grid p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.accounting-workflow-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 3px;
+}
+
+.accounting-workflow-actions button {
+  min-height: 30px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  color: var(--text);
+  padding: 0 9px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 820;
+  text-transform: uppercase;
+}
+
+.accounting-workflow-actions button:first-child {
+  border-color: var(--module-accent);
+  background: var(--module-accent);
+  color: #fff;
 }
 
 .accounting-qa-card {
@@ -11089,7 +11225,8 @@ a {
 
   .accounting-qa-grid,
   .accounting-qa-columns,
-  .accounting-qa-document dl {
+  .accounting-qa-document dl,
+  .accounting-workflow-grid {
     grid-template-columns: 1fr;
   }
 
@@ -11393,4 +11530,142 @@ a {
   background: var(--surface);
   color: var(--muted);
   box-shadow: 0 10px 28px rgb(0 0 0 / 0.26);
+}
+
+.warehouse-workspace {
+  grid-template-columns: minmax(320px, 0.95fr) minmax(420px, 1.25fr) minmax(320px, 0.9fr);
+}
+
+.warehouse-control-pane,
+.warehouse-balance-pane,
+.warehouse-flow-pane {
+  min-width: 0;
+}
+
+.warehouse-balance-table .ops-table-head,
+.warehouse-balance-table .ops-table-row {
+  grid-template-columns: minmax(130px, 1.2fr) minmax(90px, 0.8fr) minmax(100px, 0.9fr) minmax(86px, 0.7fr) 54px;
+}
+
+.warehouse-simulator {
+  display: grid;
+  gap: 14px;
+  border-top: 1px solid var(--border);
+  padding-top: 16px;
+}
+
+.warehouse-simulator > div:first-child {
+  align-items: center;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 1fr auto;
+}
+
+.warehouse-simulator > div:first-child span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.warehouse-command-row {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.warehouse-command-row button {
+  min-height: 36px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 760;
+  padding: 8px 10px;
+}
+
+.warehouse-command-row button:hover:not(:disabled) {
+  border-color: var(--module-accent);
+}
+
+.warehouse-command-row button:disabled {
+  cursor: not-allowed;
+  opacity: 0.46;
+}
+
+.warehouse-sim-metrics {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.warehouse-sim-metrics div {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  padding: 10px;
+}
+
+.warehouse-sim-metrics dt {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.warehouse-sim-metrics dd {
+  margin: 4px 0 0;
+  font-size: 19px;
+  font-weight: 820;
+}
+
+.warehouse-flow-list {
+  display: grid;
+  gap: 10px;
+}
+
+.warehouse-flow-list a {
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  color: inherit;
+  display: grid;
+  gap: 4px 10px;
+  grid-template-columns: auto 1fr;
+  padding: 12px;
+  text-decoration: none;
+}
+
+.warehouse-flow-list a:hover {
+  border-color: var(--module-accent);
+}
+
+.warehouse-flow-list small {
+  color: var(--muted);
+  grid-column: 2;
+}
+
+@media (max-width: 1180px) {
+  .warehouse-workspace {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .warehouse-command-row,
+  .warehouse-sim-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .warehouse-balance-table .ops-table-head,
+  .warehouse-balance-table .ops-table-row {
+    grid-template-columns: minmax(130px, 1fr) 58px;
+  }
+
+  .warehouse-balance-table .ops-table-head span:nth-child(2),
+  .warehouse-balance-table .ops-table-head span:nth-child(3),
+  .warehouse-balance-table .ops-table-head span:nth-child(4),
+  .warehouse-balance-table .ops-table-row span:nth-child(2),
+  .warehouse-balance-table .ops-table-row span:nth-child(3),
+  .warehouse-balance-table .ops-table-row span:nth-child(4) {
+    display: none;
+  }
 }

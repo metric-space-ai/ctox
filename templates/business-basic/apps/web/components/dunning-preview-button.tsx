@@ -1,8 +1,10 @@
 "use client";
 
 import { useState } from "react";
+import { notifyAccountingWorkflowUpdated } from "./accounting-workflow-events";
 
 type DunningResult = {
+  persisted?: boolean;
   proposals: Array<{
     command: {
       payload: {
@@ -11,6 +13,7 @@ type DunningResult = {
       };
     };
   }>;
+  workflow?: unknown;
 };
 
 export function DunningPreviewButton({ label }: { label: string }) {
@@ -29,6 +32,10 @@ export function DunningPreviewButton({ label }: { label: string }) {
       }
       const first = payload.proposals[0]?.command.payload;
       setStatus(first ? `${payload.proposals.length} Vorschlag: ${first.invoiceNumber} Level ${first.level}.` : "Keine Mahnung faellig.");
+      notifyAccountingWorkflowUpdated({
+        persisted: payload.persisted,
+        workflow: payload.workflow
+      });
     } finally {
       setBusy(false);
     }

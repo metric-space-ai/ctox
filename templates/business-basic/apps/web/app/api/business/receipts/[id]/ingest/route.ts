@@ -7,6 +7,7 @@ import {
 import { saveAccountingWorkflowSnapshot } from "@ctox-business/db/accounting";
 import { NextResponse } from "next/server";
 import { getBusinessBundle } from "@/lib/business-seed";
+import { getDatabaseBackedBusinessBundle } from "@/lib/business-db-bundle";
 
 const companyId = "business-basic-company";
 
@@ -22,7 +23,7 @@ export async function POST(
     sha256?: string;
     sourceText?: string;
   };
-  const data = await getBusinessBundle();
+  const data = await getDatabaseBackedBusinessBundle(await getBusinessBundle());
   const receipt = data.receipts.find((item) => item.id === id);
 
   if (!receipt) {
@@ -67,6 +68,7 @@ export async function POST(
   });
   const outbox = createBusinessOutboxEvent({
     companyId,
+    id: `outbox-business.receipt.prepare_ingest-${receipt.id}`,
     payload: { command, file, proposalId: proposal.id, sourceText: body.sourceText },
     topic: "business.receipt.prepare_ingest"
   });

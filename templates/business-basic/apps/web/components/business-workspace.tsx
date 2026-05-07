@@ -24,6 +24,8 @@ import {
   type BusinessReport,
   type SupportedLocale
 } from "../lib/business-seed";
+import { getDatabaseBackedBusinessBundle } from "../lib/business-db-bundle";
+import { getWarehouseSnapshot } from "../lib/warehouse-runtime";
 import { BusinessCreateForm, BusinessQueueButton } from "./business/business-actions";
 import { InvoiceCustomerEditor, type InvoiceCustomerOption } from "./invoice-customer-editor";
 import { InvoiceDeliveryActions } from "./invoice-delivery-actions";
@@ -31,6 +33,8 @@ import { InvoiceDocumentSelector, type InvoiceDocumentOption } from "./invoice-d
 import { InvoiceListSidebar, type InvoiceListItem, type InvoiceListMetric } from "./invoice-list-sidebar";
 import { InvoiceLinesEditor, type InvoiceLineDraft } from "./invoice-lines-editor";
 import { LexicalRichTextEditor } from "./lexical-rich-text-editor";
+import { WarehouseCheckoutSimulator } from "./warehouse-checkout-simulator";
+import { WarehouseSimulator } from "./warehouse-simulator";
 
 type QueryState = {
   locale?: string;
@@ -52,9 +56,10 @@ export async function BusinessWorkspace({
 }) {
   const locale = resolveLocale(query.locale) as SupportedLocale;
   const copy = businessCopy[locale];
-  const data = await getBusinessBundle();
+  const data = await getDatabaseBackedBusinessBundle(await getBusinessBundle());
 
   if (submoduleId === "products") return <ProductsView copy={copy} data={data} locale={locale} query={query} submoduleId={submoduleId} />;
+  if (submoduleId === "warehouse") return await WarehouseView({ copy, data, locale, query, submoduleId });
   if (submoduleId === "invoices") return <InvoicesView copy={copy} data={data} locale={locale} query={query} submoduleId={submoduleId} />;
   if (submoduleId === "ledger") return <LedgerView copy={copy} data={data} locale={locale} query={query} submoduleId={submoduleId} />;
   if (submoduleId === "receipts") return <ReceiptsView copy={copy} data={data} locale={locale} query={query} submoduleId={submoduleId} />;
@@ -75,7 +80,7 @@ export async function BusinessPanel({
 }) {
   const locale = resolveLocale(query.locale) as SupportedLocale;
   const copy = businessCopy[locale];
-  const data = await getBusinessBundle();
+  const data = await getDatabaseBackedBusinessBundle(await getBusinessBundle());
   const panel = panelState?.panel;
   const recordId = panelState?.recordId;
 
@@ -110,6 +115,35 @@ export async function BusinessPanel({
   const receipt = data.receipts.find((item) => item.id === recordId);
   const exportBatch = data.bookkeeping.find((item) => item.id === recordId);
   const report = data.reports.find((item) => item.id === recordId);
+  const warehouse = (await getWarehouseSnapshot()).snapshot;
+  const warehouseBalance = warehouse.balances.find((item) => item.balanceKey === recordId);
+  const warehouseRecord = warehouseBalance
+    ? {
+        id: warehouseBalance.balanceKey,
+        name: warehouseBalance.inventoryItemId,
+        status: warehouseBalance.stockStatus,
+        version: 1
+      }
+    : warehouse.items.find((item) => item.id === recordId) ??
+      warehouse.reservations.find((item) => item.id === recordId) ??
+      warehouse.pickLists.find((item) => item.id === recordId) ??
+      warehouse.shipments.find((item) => item.id === recordId) ??
+      warehouse.returns.find((item) => item.id === recordId) ??
+      warehouse.scannerSessions.find((item) => item.id === recordId) ??
+      warehouse.scanEvents.find((item) => item.id === recordId) ??
+      warehouse.cycleCounts.find((item) => item.id === recordId) ??
+      warehouse.inventoryAdjustments.find((item) => item.id === recordId) ??
+      warehouse.shipmentPackages.find((item) => item.id === recordId) ??
+      warehouse.fulfillmentLabels.find((item) => item.id === recordId) ??
+      warehouse.shipmentTrackingEvents.find((item) => item.id === recordId) ??
+      warehouse.integrationEvents.find((item) => item.id === recordId) ??
+      warehouse.roboticsEvents.find((item) => item.id === recordId) ??
+      warehouse.wavePlans.find((item) => item.id === recordId) ??
+      warehouse.slottingRecommendations.find((item) => item.id === recordId) ??
+      warehouse.transfers.find((item) => item.id === recordId) ??
+      warehouse.offlineSyncBatches.find((item) => item.id === recordId) ??
+      warehouse.threePlCharges.find((item) => item.id === recordId) ??
+      warehouse.receipts.find((item) => item.id === recordId);
 
   if (panel === "business-set") {
     const businessSet = resolveBusinessSet(recordId, data, locale, copy);
@@ -172,6 +206,7 @@ export async function BusinessPanel({
   if (receipt) return <ReceiptPanel copy={copy} data={data} locale={locale} query={query} receipt={receipt} submoduleId={submoduleId} />;
   if (exportBatch) return <BookkeepingPanel copy={copy} data={data} exportBatch={exportBatch} locale={locale} query={query} submoduleId={submoduleId} />;
   if (report) return <ReportPanel copy={copy} data={data} locale={locale} query={query} report={report} submoduleId={submoduleId} />;
+  if (warehouseRecord) return <WarehousePanel query={query} record={warehouseRecord} submoduleId={submoduleId} />;
 
   return (
     <div className="drawer-content ops-drawer">
@@ -1733,6 +1768,282 @@ function ReportPanel({ copy, data, locale, query, report, submoduleId }: {
       >
         {copy.askCtoxReport}
       </BusinessQueueButton>
+    </div>
+  );
+}
+
+async function WarehouseView({ query, submoduleId }: BusinessViewProps) {
+  const warehouseSnapshot = await getWarehouseSnapshot();
+  const warehouse = warehouseSnapshot.snapshot;
+  const summary = warehouseSnapshot.summary;
+  const itemName = (id: string) => warehouse.items.find((item) => item.id === id)?.name ?? id;
+  const locationName = (id: string) => warehouse.locations.find((location) => location.id === id)?.name ?? id;
+  const ownerName = (id: string) => id === "cust-nova" ? "Nova Logistics" : "Metric Space";
+
+  return (
+    <div className="ops-workspace warehouse-workspace">
+      <section className="ops-pane warehouse-control-pane" aria-label="Warehouse control">
+        <BusinessPaneHead description="M0/M1 inventory kernel with owner-aware balances, reservations, pick, ship, receipt, and putaway flow." title="Warehouse">
+          <a
+            data-context-action="sync"
+            data-context-item
+            data-context-label="Warehouse replay check"
+            data-context-module="business"
+            data-context-record-id="warehouse-replay"
+            data-context-record-type="warehouse_set"
+            data-context-submodule={submoduleId}
+            href={businessPanelHref(query, submoduleId, "business-set", "warehouse-replay", "right")}
+          >
+            Sync
+          </a>
+        </BusinessPaneHead>
+        <div className="ops-signal-grid">
+          <BusinessSignal label="Available units" value={String(summary.available)} />
+          <BusinessSignal label="Reserved units" value={String(summary.reserved)} />
+          <BusinessSignal label="Shipped units" value={String(summary.shipped)} />
+          <BusinessSignal label="Pending outbox" value={String(summary.outboxPending)} />
+          <BusinessSignal label="Scan events" value={String(summary.scanEvents)} />
+          <BusinessSignal label="Cycle counts" value={String(summary.cycleCounts)} />
+          <BusinessSignal label="Adjustments" value={String(summary.inventoryAdjustments)} />
+          <BusinessSignal label="Tracking events" value={String(summary.shipmentTrackingEvents)} />
+          <BusinessSignal label="WES/robot events" value={String(summary.integrationEvents + summary.roboticsEvents)} />
+          <BusinessSignal label="Wave plans" value={String(summary.wavePlans)} />
+          <BusinessSignal label="Transfers" value={String(summary.transfers)} />
+          <BusinessSignal label="3PL charges" value={String(summary.threePlCharges)} />
+        </div>
+        <WarehouseSimulator cancelLabel="Cancel" initialSnapshot={warehouse} pickLabel="Pick" releaseLabel="Release" reserveLabel="Reserve" shipLabel="Ship" />
+        <WarehouseCheckoutSimulator initialSnapshot={warehouse} />
+      </section>
+
+      <section className="ops-pane warehouse-balance-pane" aria-label="Stock balances">
+        <BusinessPaneHead description="Balances are keyed by company, owner, item, location, status, lot, and serial sentinel values." title="Balances" />
+        <div className="ops-table warehouse-balance-table">
+          <div className="ops-table-head">
+            <span>Item</span>
+            <span>Owner</span>
+            <span>Location</span>
+            <span>Status</span>
+            <span>Qty</span>
+          </div>
+          {warehouse.balances.filter((balance) => balance.quantity !== 0).map((balance) => (
+            <a
+              className="ops-table-row"
+              data-context-item
+              data-context-label={`${itemName(balance.inventoryItemId)} ${balance.stockStatus}`}
+              data-context-module="business"
+              data-context-record-id={balance.balanceKey}
+              data-context-record-type="stock_balance"
+              data-context-submodule={submoduleId}
+              href={businessPanelHref(query, submoduleId, "balance", balance.balanceKey, "right")}
+              key={balance.balanceKey}
+            >
+              <strong>{itemName(balance.inventoryItemId)}</strong>
+              <span>{ownerName(balance.inventoryOwnerPartyId)}</span>
+              <span>{locationName(balance.locationId)}</span>
+              <span>{balance.stockStatus}</span>
+              <span>{balance.quantity}</span>
+            </a>
+          ))}
+        </div>
+      </section>
+
+      <section className="ops-pane warehouse-flow-pane" aria-label="Reservations and shipments">
+        <BusinessPaneHead description="Reservations, scanner sessions, counts, integrations, waves, transfers, and billing all flow through command logs and movement rows." title="M1/M3 flow" />
+        <div className="warehouse-flow-list">
+          {warehouse.reservations.map((reservation) => (
+            <a
+              data-context-item
+              data-context-label={reservation.id}
+              data-context-module="business"
+              data-context-record-id={reservation.id}
+              data-context-record-type="stock_reservation"
+              data-context-submodule={submoduleId}
+              href={businessPanelHref(query, submoduleId, "reservation", reservation.id, "right")}
+              key={reservation.id}
+            >
+              <span className={`ops-health ${reservation.status === "consumed" ? "ops-health-green" : "ops-health-amber"}`} />
+              <strong>{reservation.sourceId}</strong>
+              <small>{reservation.status} · {ownerName(reservation.inventoryOwnerPartyId)} · {reservation.lines.length} lines</small>
+            </a>
+          ))}
+          {warehouse.shipments.map((shipment) => (
+            <a
+              data-context-item
+              data-context-label={shipment.id}
+              data-context-module="business"
+              data-context-record-id={shipment.id}
+              data-context-record-type="shipment"
+              data-context-submodule={submoduleId}
+              href={businessPanelHref(query, submoduleId, "shipment", shipment.id, "right")}
+              key={shipment.id}
+            >
+              <span className="ops-health ops-health-green" />
+              <strong>{shipment.trackingNumber}</strong>
+              <small>{shipment.carrier} · {shipment.status} · {shipment.lines.length} lines</small>
+            </a>
+          ))}
+          {warehouse.returns.map((returnAuthorization) => (
+            <a
+              data-context-item
+              data-context-label={returnAuthorization.id}
+              data-context-module="business"
+              data-context-record-id={returnAuthorization.id}
+              data-context-record-type="return_authorization"
+              data-context-submodule={submoduleId}
+              href={businessPanelHref(query, submoduleId, "return", returnAuthorization.id, "right")}
+              key={returnAuthorization.id}
+            >
+              <span className={returnAuthorization.status === "received" ? "ops-health ops-health-green" : "ops-health ops-health-amber"} />
+              <strong>{returnAuthorization.id}</strong>
+              <small>{returnAuthorization.status} · {ownerName(returnAuthorization.inventoryOwnerPartyId)} · {returnAuthorization.lines.length} lines</small>
+            </a>
+          ))}
+          {warehouse.scannerSessions.map((session) => (
+            <a
+              data-context-item
+              data-context-label={session.id}
+              data-context-module="business"
+              data-context-record-id={session.id}
+              data-context-record-type="scanner_session"
+              data-context-submodule={submoduleId}
+              href={businessPanelHref(query, submoduleId, "scanner", session.id, "right")}
+              key={session.id}
+            >
+              <span className="ops-health ops-health-green" />
+              <strong>{session.deviceId}</strong>
+              <small>{session.status} · {locationName(session.locationId ?? "")} · {session.scanCount} scans</small>
+            </a>
+          ))}
+          {warehouse.cycleCounts.map((count) => (
+            <a
+              data-context-item
+              data-context-label={count.id}
+              data-context-module="business"
+              data-context-record-id={count.id}
+              data-context-record-type="cycle_count"
+              data-context-submodule={submoduleId}
+              href={businessPanelHref(query, submoduleId, "cycle-count", count.id, "right")}
+              key={count.id}
+            >
+              <span className={count.status === "closed" ? "ops-health ops-health-green" : "ops-health ops-health-amber"} />
+              <strong>{count.id}</strong>
+              <small>{count.status} · {locationName(count.locationId)} · {count.lines.length} lines</small>
+            </a>
+          ))}
+          {warehouse.fulfillmentLabels.map((label) => (
+            <a
+              data-context-item
+              data-context-label={label.id}
+              data-context-module="business"
+              data-context-record-id={label.id}
+              data-context-record-type="fulfillment_label"
+              data-context-submodule={submoduleId}
+              href={businessPanelHref(query, submoduleId, "label", label.id, "right")}
+              key={label.id}
+            >
+              <span className="ops-health ops-health-green" />
+              <strong>{label.trackingNumber}</strong>
+              <small>{label.carrier} · {label.status} · {label.provider}</small>
+            </a>
+          ))}
+          {warehouse.wavePlans.map((wave) => (
+            <a
+              data-context-item
+              data-context-label={wave.id}
+              data-context-module="business"
+              data-context-record-id={wave.id}
+              data-context-record-type="wave_plan"
+              data-context-submodule={submoduleId}
+              href={businessPanelHref(query, submoduleId, "wave", wave.id, "right")}
+              key={wave.id}
+            >
+              <span className="ops-health ops-health-green" />
+              <strong>{wave.id}</strong>
+              <small>{wave.status} · {wave.priority} · {wave.lines.length} reservations</small>
+            </a>
+          ))}
+          {warehouse.transfers.map((transfer) => (
+            <a
+              data-context-item
+              data-context-label={transfer.id}
+              data-context-module="business"
+              data-context-record-id={transfer.id}
+              data-context-record-type="warehouse_transfer"
+              data-context-submodule={submoduleId}
+              href={businessPanelHref(query, submoduleId, "transfer", transfer.id, "right")}
+              key={transfer.id}
+            >
+              <span className={transfer.status === "received" ? "ops-health ops-health-green" : "ops-health ops-health-amber"} />
+              <strong>{transfer.id}</strong>
+              <small>{transfer.status} · {locationName(transfer.fromLocationId)} to {locationName(transfer.toLocationId)}</small>
+            </a>
+          ))}
+          {warehouse.integrationEvents.map((event) => (
+            <a
+              data-context-item
+              data-context-label={event.id}
+              data-context-module="business"
+              data-context-record-id={event.id}
+              data-context-record-type="integration_event"
+              data-context-submodule={submoduleId}
+              href={businessPanelHref(query, submoduleId, "integration", event.id, "right")}
+              key={event.id}
+            >
+              <span className="ops-health ops-health-green" />
+              <strong>{event.provider}</strong>
+              <small>{event.source} · {event.eventType}</small>
+            </a>
+          ))}
+          {warehouse.threePlCharges.map((charge) => (
+            <a
+              data-context-item
+              data-context-label={charge.id}
+              data-context-module="business"
+              data-context-record-id={charge.id}
+              data-context-record-type="three_pl_charge"
+              data-context-submodule={submoduleId}
+              href={businessPanelHref(query, submoduleId, "3pl-charge", charge.id, "right")}
+              key={charge.id}
+            >
+              <span className="ops-health ops-health-green" />
+              <strong>{charge.id}</strong>
+              <small>{charge.metric} · {charge.amountCents / 100} {charge.currency}</small>
+            </a>
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function WarehousePanel({
+  query,
+  record,
+  submoduleId
+}: {
+  query: QueryState;
+  record: { id: string; status?: string; name?: string; sourceId?: string; lines?: unknown[]; version?: number };
+  submoduleId: string;
+}) {
+  return (
+    <div className="drawer-content ops-drawer">
+      <DrawerHeader title={record.name ?? record.sourceId ?? record.id} query={query} submoduleId={submoduleId} />
+      <p className="drawer-description">Warehouse record with M0/M1 command, owner, version, and movement context.</p>
+      <dl className="drawer-facts">
+        <div><dt>ID</dt><dd>{record.id}</dd></div>
+        <div><dt>Status</dt><dd>{record.status ?? "master"}</dd></div>
+        <div><dt>Version</dt><dd>{record.version ?? 1}</dd></div>
+        <div><dt>Lines</dt><dd>{record.lines?.length ?? 0}</dd></div>
+      </dl>
+      <section className="ops-drawer-section">
+        <h3>Implementation gates</h3>
+        <div className="ops-mini-list">
+          <span>Owner-aware stock dimensions</span>
+          <span>Non-null balance key</span>
+          <span>Reservation commands only</span>
+          <span>Shared business outbox</span>
+        </div>
+      </section>
     </div>
   );
 }

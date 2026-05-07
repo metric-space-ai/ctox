@@ -2,6 +2,7 @@ import { businessDeepLink } from "@ctox-business/ui";
 import { saveAccountingWorkflowSnapshot } from "@ctox-business/db/accounting";
 import { createCtoxCoreTask, emitCtoxCoreEvent } from "./ctox-core-bridge";
 import { getBusinessBundle, normalizeBusinessResource } from "./business-seed";
+import { getDatabaseBackedBusinessBundle } from "./business-db-bundle";
 import {
   prepareBankMatchForAccounting,
   prepareDatevExportForAccounting,
@@ -29,13 +30,16 @@ const resourceToSubmodule: Record<string, string> = {
   customers: "customers",
   exports: "bookkeeping",
   invoices: "invoices",
+  inventory: "warehouse",
   journal: "ledger",
   ledger: "ledger",
   payments: "payments",
   products: "products",
   receipts: "receipts",
   reports: "reports",
-  services: "products"
+  services: "products",
+  stock: "warehouse",
+  warehouse: "warehouse"
 };
 
 const resourceToPanel: Record<string, string> = {
@@ -46,13 +50,16 @@ const resourceToPanel: Record<string, string> = {
   customers: "customer",
   exports: "export",
   invoices: "invoice",
+  inventory: "stock_balance",
   journal: "journal-entry",
   ledger: "journal-entry",
   payments: "bank-transaction",
   products: "product",
   receipts: "receipt",
   reports: "report",
-  services: "product"
+  services: "product",
+  stock: "stock_balance",
+  warehouse: "warehouse_set"
 };
 
 export async function queueBusinessMutation(request: BusinessMutationRequest, origin?: string) {
@@ -141,7 +148,7 @@ export async function queueBusinessMutation(request: BusinessMutationRequest, or
 }
 
 async function buildAccountingContext(request: BusinessMutationRequest, normalizedResource: string, recordId: string) {
-  const data = await getBusinessBundle();
+  const data = await getDatabaseBackedBusinessBundle(await getBusinessBundle());
   const locale = request.locale === "en" ? "en" : "de";
 
   if (normalizedResource === "invoices" && (request.action === "send" || request.action === "export" || request.action === "sync")) {

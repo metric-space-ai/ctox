@@ -1,9 +1,11 @@
 "use client";
 
 import { useState } from "react";
+import { notifyAccountingWorkflowUpdated } from "./accounting-workflow-events";
 
 type ImportResult = {
   duplicateCount: number;
+  persisted?: boolean;
   statement: {
     lines: Array<{
       amount: number;
@@ -13,6 +15,7 @@ type ImportResult = {
       remitterName?: string;
     }>;
   };
+  workflow?: unknown;
 };
 
 export function BankImportPreviewButton({ label }: { label: string }) {
@@ -45,6 +48,10 @@ export function BankImportPreviewButton({ label }: { label: string }) {
       const total = payload.statement.lines.reduce((sum: number, line) => sum + line.amount, 0);
       setStatus(`${payload.statement.lines.length} lines, ${payload.duplicateCount} duplicates, net ${total.toFixed(2)}.`);
       setLines(payload.statement.lines.slice(0, 4));
+      notifyAccountingWorkflowUpdated({
+        persisted: payload.persisted,
+        workflow: payload.workflow
+      });
     } finally {
       setBusy(false);
     }
