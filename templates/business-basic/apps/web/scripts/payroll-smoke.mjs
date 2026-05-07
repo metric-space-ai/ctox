@@ -123,13 +123,15 @@ await post("lock_period", { id: periodId });
 const lockedReject = await postExpectFail("create_run", { periodId, payableAccountId: "1755" }, "period_locked");
 assert(lockedReject, "Locked period must reject create_run");
 
-// 16. M1 commands cycle: fresh period for the M1 round-trip.
-const m1Period = await post("create_period", {
+// 16. M1 commands cycle: fresh period for the M1 round-trip (unique id avoids collisions across smoke reruns).
+const m1PeriodId = `period_m1_${stamp}`;
+const m1PeriodCreate = await post("create_period", {
+  id: m1PeriodId,
   startDate: `${yyyy}-12-01`,
   endDate: `${yyyy}-12-31`,
   frequency: "monthly"
 });
-const m1PeriodId = m1Period.snapshot.periods.find((p) => p.startDate === `${yyyy}-12-01`).id;
+assert(m1PeriodCreate.snapshot.periods.some((p) => p.id === m1PeriodId), "m1 period missing in snapshot");
 const m1Run = await post("create_run", { periodId: m1PeriodId, payableAccountId: "1755" });
 const m1RunId = m1Run.snapshot.runs.find((r) => r.periodId === m1PeriodId).id;
 const m1Queued = await post("queue_run", { id: m1RunId });

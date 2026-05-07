@@ -894,8 +894,9 @@ function buildPayrollSeed(): PayrollSnapshot {
       taxable: true,
       dependsOnPaymentDays: true,
       accountId: "6020",
-      formulaKind: "fix",
-      formulaAmount: 4000,
+      formulaKind: "percent_of",
+      formulaBase: "base_salary",
+      formulaPercent: 100,
       sequence: 10,
       disabled: false
     },
