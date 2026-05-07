@@ -1499,6 +1499,7 @@ checksum = "52560adf09603e58c9a7ee1fe1dcb95a16927b17c127f0ac02d6e768a0e25bc1"
 name = "ctox-api"
 version = "0.0.0"
 dependencies = [
+ "assert_matches",
  "async-trait",
  "bytes",
  "ctox-client",
@@ -1507,11 +1508,13 @@ dependencies = [
  "eventsource-stream",
  "futures",
  "http 1.4.0",
+ "pretty_assertions",
  "regex-lite",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-test",
  "tokio-tungstenite 0.28.0",
  "tokio-util",
  "tracing",

@@ -24,5 +24,10 @@ regex-lite = { workspace = true }
 tokio-util = { workspace = true, features = ["codec"] }
 url = { workspace = true }
 
+[dev-dependencies]
+assert_matches = { workspace = true }
+pretty_assertions = { workspace = true }
+tokio-test = { workspace = true }
+
 [lints]
 workspace = true
