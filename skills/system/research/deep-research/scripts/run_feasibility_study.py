@@ -152,11 +152,11 @@ def main() -> None:
     write_synthesis_files(args, sources, data_links, read_count, counts, synthesis_dir)
     write_docx(args, sources, data_links, read_count, counts, synthesis_dir)
 
-    validator = Path(__file__).with_name("validate_research_deliverable.py")
-    result = subprocess.run(
+    deliverable_validator = Path(__file__).with_name("validate_research_deliverable.py")
+    deliverable_result = subprocess.run(
         [
             sys.executable,
-            str(validator),
+            str(deliverable_validator),
             "--workspace",
             str(args.workspace),
             "--docx",
@@ -172,16 +172,39 @@ def main() -> None:
         text=True,
         capture_output=True,
     )
+    quality_validator = Path(__file__).with_name("validate_study_quality.py")
+    quality_result = subprocess.run(
+        [
+            sys.executable,
+            str(quality_validator),
+            "--docx",
+            str(args.output),
+            "--min-images",
+            "3",
+            "--min-domain-tables",
+            "4",
+        ],
+        text=True,
+        capture_output=True,
+    )
     with (synthesis_dir / "qa-notes.md").open("a", encoding="utf-8") as handle:
-        handle.write("\n\n## Validator\n\n```json\n")
-        handle.write(result.stdout.strip())
+        handle.write("\n\n## Deliverable Validator\n\n```json\n")
+        handle.write(deliverable_result.stdout.strip())
         handle.write("\n```\n")
-        if result.stderr.strip():
+        if deliverable_result.stderr.strip():
             handle.write("\nStderr:\n\n```text\n")
-            handle.write(result.stderr.strip())
+            handle.write(deliverable_result.stderr.strip())
             handle.write("\n```\n")
-    print(result.stdout)
-    raise SystemExit(result.returncode)
+        handle.write("\n\n## Study Quality Validator\n\n```json\n")
+        handle.write(quality_result.stdout.strip())
+        handle.write("\n```\n")
+        if quality_result.stderr.strip():
+            handle.write("\nStderr:\n\n```text\n")
+            handle.write(quality_result.stderr.strip())
+            handle.write("\n```\n")
+    print(deliverable_result.stdout)
+    print(quality_result.stdout)
+    raise SystemExit(deliverable_result.returncode or quality_result.returncode)
 
 
 def run_research(args: argparse.Namespace) -> None:

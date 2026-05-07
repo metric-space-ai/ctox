@@ -21,6 +21,7 @@ This skill is a router plus shared research contract. Pick exactly one primary m
 
 1. Reframe the user request as a decision problem and select the module.
 2. Read `references/modules/shared-core.md`, then the selected module reference.
+   For technical feasibility Word studies, also read `references/modules/machbarkeitsstudie-quality.md`.
 3. Extract constraints, assumptions, unknowns, target geography, time horizon, and output format.
 4. Run `ctox_deep_research` first when available. Use `depth: "exhaustive"` for decision-grade reports, feasibility studies, scientific claims, market maps, or competitive landscapes.
 5. Treat the returned `research_workspace.path` as the authoritative project folder. Read/write notes there so the work can continue after compaction or handoff.
@@ -69,7 +70,7 @@ Use the folder as a research project, not as an output dump. For long reports, w
 - Figures must be either legally usable source figures with explicit usage notes, or original schematics/diagrams generated from the synthesis. Do not reuse figures from a reference/control document.
 - The final document must be a written study, not a raw evidence export. It needs an argument, recommendations, uncertainty, decision gates, tables, and references.
 - The final `.docx` path must be a ZIP/DOCX file. A directory ending in `.docx` is a hard failure.
-- Before answering success, run the deliverable validator. If it fails, continue the research/writing loop or report the failure instead of claiming completion.
+- Before answering success, run both the deliverable validator and the study-quality validator. If either fails, continue the research/writing loop or report the failure instead of claiming completion.
 
 ## DOCX Helper
 
@@ -105,6 +106,15 @@ python3 skills/system/research/deep-research/scripts/validate_research_deliverab
   --min-reads 5 \
   --min-draft-chars 8000 \
   --require-call-counts
+```
+
+For technical feasibility studies, also validate study quality:
+
+```bash
+python3 skills/system/research/deep-research/scripts/validate_study_quality.py \
+  --docx /path/to/report.docx \
+  --min-images 3 \
+  --min-domain-tables 4
 ```
 
 For exhaustive scientific reports, raise the thresholds rather than lowering them. A validator failure means the deliverable is not complete.

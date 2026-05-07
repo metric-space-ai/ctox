@@ -59,18 +59,22 @@ For hidden metal structures in composites/coatings, also consider:
 
 ## Default Report Structure
 
-1. Executive Summary
-2. Objective and Scope
-3. System / Material Stack and Inspection Problem
-4. Methodology and Search Strategy
-5. Candidate Technologies
-6. Evidence Review
-7. Feasibility Matrix
-8. Data, Figures, and Reproducible Artifacts
-9. Recommended Experimental Design
-10. Risks, Unknowns, and Decision Gates
-11. Conclusion and Recommendation
-12. References
+Use the report architecture in `machbarkeitsstudie-quality.md`. The minimum structure is:
+
+1. Title page, status/context note, and evidence limitation note
+2. Table of contents / section roadmap
+3. Abbreviation table
+4. Management Summary
+5. Ausgangslage, Prüfobjekt, and Fragestellung
+6. Bauteilaufbau and reference/schematic figures
+7. Requirements and boundary conditions
+8. Technology screening with stated scoring logic
+9. Qualitative matrix and scenario matrix
+10. Detailed assessment of shortlisted approaches
+11. Recommended system concept and phased experimental design
+12. Defect/coupon catalogue
+13. Risks, dependencies, mitigations, and decision gates
+14. Conclusion and curated references
 
 ## Writing Loop
 
@@ -79,12 +83,15 @@ Perform these steps in the research workspace:
 0. Verify the evidence base is sufficient before synthesis: at least 20 credible sources for normal decision-grade studies, saved source reads, non-empty `sources.jsonl`, and source-backed evidence in `evidence_bundle.json`. For exhaustive scientific studies, target substantially more sources and record why the final source count is sufficient.
 1. Write `synthesis/evidence-matrix.md` from the source ledger.
 2. Write `synthesis/technology-scores.md` with one row per technology, numeric/qualitative score, uncertainty, and evidence IDs.
-3. Write `synthesis/report-outline.md`; the outline must be generated from the evidence and decision question, not copied from any reference document.
-4. Write `synthesis/figure-plan.md` listing each figure/table, its data source, and whether it is original, source-derived, or omitted for licensing.
-5. If GitHub/data links are present, inspect relevant repositories/datasets and note findings in `synthesis/data-artifacts.md`; build diagrams/tables from them only when they add evidence.
-6. Write `synthesis/report-draft.md` as a full narrative Machbarkeitsstudie with citations.
-7. Generate the DOCX from the draft and matrix. The output path must be a real `.docx` file, not a directory.
-8. Run `scripts/validate_research_deliverable.py` against the research workspace and final DOCX. Then write `synthesis/qa-notes.md` with the validator JSON, opening/ZIP checks, visual/render checks where available, missing evidence, and whether the report satisfies the decision question.
+3. Write `synthesis/score-rationale.md`: one subsection per technology, with score-by-score rationale and evidence IDs. No score may be unexplained.
+4. Write `synthesis/scenarios.md` for stack variants, especially grid/EMF as first metal layer, additional nearly closed foil, and deeper/thicker cover stack.
+5. Write `synthesis/defect-catalog.md` with defect IDs and coupon variants.
+6. Write `synthesis/report-outline.md`; the outline must follow the study architecture, be generated from the evidence and decision question, and not copy a reference document.
+7. Write `synthesis/figure-plan.md` listing each figure/table, its data source, and whether it is original, source-derived, or omitted for licensing.
+8. If GitHub/data links are present, inspect relevant repositories/datasets and note findings in `synthesis/data-artifacts.md`; build diagrams/tables from them only when they add evidence.
+9. Write `synthesis/report-draft.md` as a full narrative Machbarkeitsstudie with citations.
+10. Generate the DOCX from the draft and matrix. The output path must be a real `.docx` file, not a directory.
+11. Run `scripts/validate_research_deliverable.py` and `scripts/validate_study_quality.py` against the research workspace and final DOCX. Then write `synthesis/qa-notes.md` with both validator JSON outputs, opening/ZIP checks, visual/render checks where available, missing evidence, and whether the report satisfies the decision question.
 
 Do not produce a final DOCX until the draft has become a coherent study with management summary, problem framing, technology comparison, feasibility scoring, risk discussion, and recommended experiments.
 
@@ -98,3 +105,4 @@ Do not produce a final DOCX until the draft has become a coherent study with man
 - Short validation plan with pass/fail gates.
 - Final Word/PDF document opens successfully and contains a synthesized study, not copied source text or a formatted evidence dump.
 - `validate_research_deliverable.py` exits successfully. If it fails, the final answer must say the deliverable is not complete and list the failing gates.
+- `validate_study_quality.py` exits successfully. If it fails, the final answer must say the study is not client-ready and list the failing gates.
