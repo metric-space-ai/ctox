@@ -5322,32 +5322,60 @@ fn terminal_bench_controller_hold_feedback_prompt(
     review_summary: &str,
 ) -> String {
     let file_refs = declared_workspace_file_artifacts_for_job(job);
+    let run_dir = terminal_bench_run_dir_from_artifact_paths(&file_refs);
+    let basenames = file_refs
+        .iter()
+        .filter_map(|path| {
+            Path::new(path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(str::to_string)
+        })
+        .collect::<Vec<_>>();
+    let artifact_names = if basenames.is_empty() {
+        "the declared durable files".to_string()
+    } else {
+        basenames.join(", ")
+    };
+    let results_name = basenames
+        .iter()
+        .find(|name| name.starts_with("results."))
+        .cloned()
+        .unwrap_or_else(|| "results.jsonl".to_string());
+    let log_name = basenames
+        .iter()
+        .find(|name| *name == "logbook.md" || *name == "run-log.md")
+        .cloned()
+        .unwrap_or_else(|| "logbook.md".to_string());
     let mut prompt = String::new();
     prompt.push_str("HARNESS FEEDBACK\n");
     prompt.push_str(
         "The previous Terminal-Bench controller turn is not accepted as benchmark completion. ",
     );
-    prompt.push_str("The durable files may have been initialized, but the benchmark controller must continue until Terminal-Bench work has real task statuses in results.json or a concrete persisted next action after exhausting the current time budget.\n\n");
+    prompt.push_str(&format!("The durable files may have been initialized, but the benchmark controller must continue until Terminal-Bench work has real task statuses in {results_name} or a concrete persisted next action after exhausting the current time budget.\n\n"));
     prompt.push_str("Review status:\n");
     prompt.push_str("- ");
     prompt.push_str(&clip_text(review_summary, 500));
     prompt.push_str("\n\n");
+    if let Some(run_dir) = run_dir.as_deref() {
+        prompt.push_str("Current RUN_DIR:\n");
+        prompt.push_str(run_dir);
+        prompt.push_str("\n\n");
+    }
     prompt.push_str("Required continuation behavior:\n");
     prompt.push_str("- The harness is only giving feedback. It will not perform the benchmark work, create tickets, patch artifacts, or mark tasks complete for you. You must do the work yourself with shell tools and CTOX CLI commands.\n");
     prompt.push_str("- If you are unsure about CTOX CLI syntax or available commands, inspect it yourself with `ctox help`, `ctox queue --help`, `ctox queue add --help`, and the relevant subcommand `--help` before acting.\n");
-    prompt.push_str("- Read the existing controller.json, ticket-map.jsonl, run-log.md, knowledge.md, and results.json first. Do not recreate them from scratch.\n");
-    prompt.push_str(
-        "- Preserve and update the same run directory and the same five durable files.\n",
-    );
-    prompt.push_str("- Before any open-ended discovery, runner probing, benchmark execution, or web research, write a checkpoint into controller.json, run-log.md, knowledge.md, and results.json that records the current phase, verified facts, blockers, and exact next action.\n");
-    prompt.push_str("- If a tool call finds new runtime, task, runner, leaderboard, blocker, or result information, the next tool call must persist that information into the durable files before continuing exploration.\n");
-    prompt.push_str("- Treat controller.phase=preparation and results.json with zero tasks as an unfinished state, not as completion.\n");
+    prompt.push_str(&format!("- Read only the current RUN_DIR durable files ({artifact_names}) far enough to preserve existing progress. Do not recreate them from scratch and do not read stale Terminal-Bench run directories.\n"));
+    prompt.push_str("- Your next shell action after this feedback must update the current RUN_DIR durable files, not just inspect them. A valid first action may read the current files and write the checkpoint in the same shell script.\n");
+    prompt.push_str(&format!("- Before any open-ended discovery, runner probing, benchmark execution, or web research, write a checkpoint into the declared durable files, especially controller.json, {log_name}, knowledge.md, and {results_name}. The checkpoint must record the current phase, verified facts, blockers, and exact next action.\n"));
+    prompt.push_str("- If a tool call finds new runtime, task, runner, leaderboard, blocker, or result information, the next tool call must persist that information into the current RUN_DIR durable files before continuing exploration.\n");
+    prompt.push_str(&format!("- Treat controller.phase=preparation and {results_name} with zero real task statuses as an unfinished state, not as completion.\n"));
     prompt.push_str("- Verify the runtime facts before benchmark execution: CTOX release is current, active harness model/provider match this run, response adapter is correct, and effective context is 131072 tokens. If inference is local, record native runtime/IPC/GPU evidence; if inference is API-backed, record the provider/API evidence instead of inventing local-only facts.\n");
     prompt.push_str("- Verify Harbor and the Terminal-Bench 2 task source, then write one ticket per discovered benchmark task into ticket-map.jsonl.\n");
     prompt.push_str("- Research public Terminal-Bench references and leaderboards only for task selection and comparison context; do not read benchmark solutions.\n");
     prompt.push_str("- Start with tasks known to be solvable by other harnesses/models, update knowledge.md after each attempt, skip blocked tasks temporarily, and return later with accumulated learnings.\n");
-    prompt.push_str("- After every benchmark action, update run-log.md and results.json truthfully. Each task must end as passed, failed, blocked, skipped, or pending with evidence.\n");
-    prompt.push_str("- Only finish after all discovered Terminal-Bench tasks have terminal statuses, or after the current time budget is exhausted with a single explicit persisted next_action in controller.json and matching run-log.md.\n\n");
+    prompt.push_str(&format!("- After every benchmark action, update {log_name} and {results_name} truthfully. Each task must end as passed, failed, blocked, skipped, or pending with evidence.\n"));
+    prompt.push_str(&format!("- Only finish after all discovered Terminal-Bench tasks have terminal statuses, or after the current time budget is exhausted with a single explicit persisted next_action in controller.json and matching {log_name}.\n\n"));
     if !file_refs.is_empty() {
         prompt.push_str("Durable files to preserve and update:\n");
         for path in &file_refs {
@@ -5357,7 +5385,7 @@ fn terminal_bench_controller_hold_feedback_prompt(
         }
         prompt.push('\n');
     }
-    prompt.push_str("Continue now from the persisted state. Use shell tools and direct file checks for evidence. Do not wait for the harness to do any work for you.");
+    prompt.push_str("Continue now from the persisted state. Use shell tools and direct file checks for evidence. Do not wait for the harness to do any work for you. Do not answer with prose only.");
     prompt
 }
 
@@ -11196,9 +11224,28 @@ fn render_durable_artifact_timeout_recovery_prompt(job: &QueuedPrompt, blocker: 
         "\nREQUIRED ACTIONS\n- Inspect the workspace and the listed files first; preserve valid progress.\n- Continue the same controller run from the durable files instead of restarting from scratch.\n- Each listed path must be a regular file. A directory at a required file path is invalid and must be corrected before any completion claim.\n- Keep the logbook and summary truthful about attempted work, discovered tasks, blockers, and next actions.\n- If benchmark execution still needs another slice, persist exactly one concrete queue item or plan item before ending.\n\nEXIT GATE\nFinish only after the durable outcome exists in the listed files and the benchmark controller is either terminal or has exactly one persisted next action.",
     );
     if is_terminal_bench_controller_artifact_job(job) {
-        prompt.push_str(
-            "\n\nTERMINAL-BENCH TIMEOUT RECOVERY ORDER\n1. Read the listed files and recent context only far enough to recover the current phase.\n2. Immediately write a checkpoint into controller.json, logbook.md or run-log.md, knowledge.md, and results.json before any further discovery.\n3. The checkpoint must include verified runtime facts, discovered task source, runner/container blocker status, no-solutions policy status, and the exact next action.\n4. After every further tool call that discovers facts or changes benchmark state, the next tool call must persist those facts into the durable files.\n5. Do not finish with a prose summary only. The durable files are the state.",
-        );
+        let basenames = file_refs
+            .iter()
+            .filter_map(|path| {
+                Path::new(path)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .map(str::to_string)
+            })
+            .collect::<Vec<_>>();
+        let results_name = basenames
+            .iter()
+            .find(|name| name.starts_with("results."))
+            .cloned()
+            .unwrap_or_else(|| "results.jsonl".to_string());
+        let log_name = basenames
+            .iter()
+            .find(|name| *name == "logbook.md" || *name == "run-log.md")
+            .cloned()
+            .unwrap_or_else(|| "logbook.md".to_string());
+        prompt.push_str(&format!(
+            "\n\nTERMINAL-BENCH TIMEOUT RECOVERY ORDER\n1. Read the listed files and recent context only far enough to recover the current phase.\n2. Immediately write a checkpoint into controller.json, {log_name}, knowledge.md, and {results_name} before any further discovery.\n3. The checkpoint must include verified runtime facts, discovered task source, runner/container blocker status, no-solutions policy status, and the exact next action.\n4. After every further tool call that discovers facts or changes benchmark state, the next tool call must persist those facts into the durable files.\n5. Do not finish with a prose summary only. The durable files are the state."
+        ));
     }
     prepend_workspace_contract(&prompt, job.workspace_root.as_deref())
 }
@@ -15854,7 +15901,9 @@ Use shell tools to create or update these files through Harbor."
         assert!(feedback.contains("not accepted as benchmark completion"));
         assert!(feedback.contains("Do not recreate them from scratch"));
         assert!(feedback.contains("controller.phase=preparation"));
-        assert!(feedback.contains("results.json with zero tasks"));
+        assert!(feedback.contains("results.json with zero real task statuses"));
+        assert!(!feedback.contains("same five durable files"));
+        assert!(!feedback.contains("Read the existing controller.json, ticket-map.jsonl, run-log.md, knowledge.md, and results.json first"));
         assert!(feedback.contains("active harness model/provider"));
         assert!(feedback.contains("131072 tokens"));
         assert!(feedback.contains("API-backed"));
