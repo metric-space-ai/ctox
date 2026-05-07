@@ -2,7 +2,6 @@
   "id": "operations",
   "name": "Operations",
   "defaultRoute": "/app/operations",
-  "records": ["projects", "work_items", "boards", "wiki_pages", "meetings", "documents"],
-  "ctoxSync": ["work_items", "wiki_pages", "project_events", "bug_reports"]
+  "records": ["projects", "work_items", "boards", "wiki_pages", "meetings", "documents", "workforce_people", "workforce_shift_types", "workforce_location_slots", "workforce_assignments", "workforce_time_entries", "workforce_handoffs"],
+  "ctoxSync": ["work_items", "wiki_pages", "project_events", "bug_reports", "workforce_assignment_events", "workforce_time_entry_events"]
 }
-

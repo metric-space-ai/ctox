@@ -284,8 +284,12 @@ pub fn capture_browser_transport(root: &Path, request: &BrowserCaptureRequest) -
     );
     fs::create_dir_all(&out_dir)
         .with_context(|| format!("failed to create browser capture dir {}", out_dir.display()))?;
-    let out_dir = fs::canonicalize(&out_dir)
-        .with_context(|| format!("failed to canonicalize browser capture dir {}", out_dir.display()))?;
+    let out_dir = fs::canonicalize(&out_dir).with_context(|| {
+        format!(
+            "failed to canonicalize browser capture dir {}",
+            out_dir.display()
+        )
+    })?;
     let profile_dir = out_dir.join("chrome-profile");
     fs::create_dir_all(&profile_dir).with_context(|| {
         format!(
@@ -1511,8 +1515,8 @@ fn unix_ts() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::build_browser_runner_script;
     use super::build_browser_capture_runner_script;
+    use super::build_browser_runner_script;
     use super::capture_chrome_extra_args;
     use super::ensure_reference_package_json;
     use super::find_playwright_chromium_executable_in;
@@ -1632,10 +1636,9 @@ mod tests {
 
     #[test]
     fn browser_capture_uses_playwright_chrome_for_testing() {
-        let selected = select_capture_browser_executable(Some(PathBuf::from(
-            "/tmp/chrome-for-testing",
-        )))
-        .expect("browser executable");
+        let selected =
+            select_capture_browser_executable(Some(PathBuf::from("/tmp/chrome-for-testing")))
+                .expect("browser executable");
         assert_eq!(selected.0, "playwright-cache");
         assert_eq!(selected.1, PathBuf::from("/tmp/chrome-for-testing"));
     }

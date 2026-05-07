@@ -83,6 +83,37 @@ export type VatStatementReport = {
   rows: Array<TrialBalanceRow & { vatKind: "input" | "other" | "output" }>;
 };
 
+export type OpenItemStatus = "open" | "paid" | "partial";
+
+export type OpenItemRow = {
+  account: ChartAccount;
+  ageDays?: number;
+  dueDate?: string;
+  kind: "payable" | "receivable";
+  originalAmount: number;
+  outstandingAmount: number;
+  paidAmount: number;
+  partyId?: string;
+  postingDate: string;
+  refId: string;
+  refType: string;
+  status: OpenItemStatus;
+};
+
+export type OpenItemsReport = {
+  asOf: string;
+  buckets: {
+    current: number;
+    overdue1To30: number;
+    overdue31To60: number;
+    overdue61To90: number;
+    overdueOver90: number;
+  };
+  openPayables: number;
+  openReceivables: number;
+  rows: OpenItemRow[];
+};
+
 export function buildGeneralLedger(input: { accountId: string; entries: JournalDraft[] }): GeneralLedgerRow[] {
   let runningBalance = 0;
   return input.entries
@@ -107,6 +138,94 @@ export function buildGeneralLedger(input: { accountId: string; entries: JournalD
     });
 }
 
+export function buildOpenItems(input: {
+  accounts: ChartAccount[];
+  asOf?: string;
+  dueDatesByRef?: Record<string, string | undefined>;
+  entries: JournalDraft[];
+  includePaid?: boolean;
+}): OpenItemsReport {
+  const asOf = input.asOf ?? new Date().toISOString().slice(0, 10);
+  const accountById = new Map(input.accounts.map((account) => [account.id, account]));
+  const sourceRows: OpenItemRow[] = [];
+  const settlementLines: Array<{ accountId: string; amount: number; kind: OpenItemRow["kind"]; partyId?: string; refId: string }> = [];
+
+  for (const entry of input.entries) {
+    for (const line of entry.lines) {
+      const account = accountById.get(line.accountId);
+      if (!account || (account.accountType !== "receivable" && account.accountType !== "payable")) continue;
+
+      const debit = moneyToMajor(line.debit);
+      const credit = moneyToMajor(line.credit);
+      const kind = account.accountType === "receivable" ? "receivable" : "payable";
+      const signed = kind === "receivable" ? debit - credit : credit - debit;
+      if (signed === 0) continue;
+
+      if ((entry.type === "invoice" && kind === "receivable" && signed > 0)
+        || (entry.type === "receipt" && kind === "payable" && signed > 0)
+        || (entry.type === "manual" && signed > 0)) {
+        const dueDate = input.dueDatesByRef?.[entry.refId];
+        sourceRows.push({
+          account,
+          ageDays: dueDate ? daysBetween(dueDate, asOf) : undefined,
+          dueDate,
+          kind,
+          originalAmount: round(signed),
+          outstandingAmount: round(signed),
+          paidAmount: 0,
+          partyId: line.partyId,
+          postingDate: entry.postingDate,
+          refId: entry.refId,
+          refType: entry.refType,
+          status: "open"
+        });
+      } else if (signed < 0) {
+        settlementLines.push({
+          accountId: account.id,
+          amount: round(Math.abs(signed)),
+          kind,
+          partyId: line.partyId,
+          refId: entry.refId
+        });
+      }
+    }
+  }
+
+  for (const settlement of settlementLines) {
+    let remaining = settlement.amount;
+    const candidates = sourceRows
+      .filter((row) => row.kind === settlement.kind
+        && row.account.id === settlement.accountId
+        && row.outstandingAmount > 0
+        && (!settlement.partyId || settlement.partyId === row.refId || settlement.partyId === row.partyId))
+      .sort((left, right) => left.postingDate.localeCompare(right.postingDate));
+
+    for (const row of candidates) {
+      if (remaining <= 0) break;
+      const applied = Math.min(row.outstandingAmount, remaining);
+      row.paidAmount = round(row.paidAmount + applied);
+      row.outstandingAmount = round(row.outstandingAmount - applied);
+      remaining = round(remaining - applied);
+    }
+  }
+
+  for (const row of sourceRows) {
+    row.status = row.outstandingAmount <= 0 ? "paid" : row.paidAmount > 0 ? "partial" : "open";
+  }
+
+  const rows = sourceRows
+    .filter((row) => input.includePaid || row.status !== "paid")
+    .sort((left, right) => `${left.dueDate ?? left.postingDate}:${left.refId}`.localeCompare(`${right.dueDate ?? right.postingDate}:${right.refId}`));
+
+  return {
+    asOf,
+    buckets: buildAgingBuckets(rows),
+    openPayables: round(rows.filter((row) => row.kind === "payable").reduce((sum, row) => sum + row.outstandingAmount, 0)),
+    openReceivables: round(rows.filter((row) => row.kind === "receivable").reduce((sum, row) => sum + row.outstandingAmount, 0)),
+    rows
+  };
+}
+
 export function buildTrialBalanceFromEntries(input: { accounts: ChartAccount[]; entries: JournalDraft[] }): TrialBalanceRow[] {
   return input.accounts.map((account) => {
     const lines = input.entries.flatMap((entry) => entry.lines).filter((line) => line.accountId === account.id);
@@ -120,6 +239,33 @@ export function buildTrialBalanceFromEntries(input: { accounts: ChartAccount[]; 
       debit
     };
   }).filter((row) => row.debit !== 0 || row.credit !== 0);
+}
+
+function buildAgingBuckets(rows: OpenItemRow[]): OpenItemsReport["buckets"] {
+  const buckets: OpenItemsReport["buckets"] = {
+    current: 0,
+    overdue1To30: 0,
+    overdue31To60: 0,
+    overdue61To90: 0,
+    overdueOver90: 0
+  };
+
+  for (const row of rows) {
+    const age = row.ageDays ?? 0;
+    if (age <= 0) buckets.current = round(buckets.current + row.outstandingAmount);
+    else if (age <= 30) buckets.overdue1To30 = round(buckets.overdue1To30 + row.outstandingAmount);
+    else if (age <= 60) buckets.overdue31To60 = round(buckets.overdue31To60 + row.outstandingAmount);
+    else if (age <= 90) buckets.overdue61To90 = round(buckets.overdue61To90 + row.outstandingAmount);
+    else buckets.overdueOver90 = round(buckets.overdueOver90 + row.outstandingAmount);
+  }
+
+  return buckets;
+}
+
+function daysBetween(startDate: string, endDate: string) {
+  const start = new Date(`${startDate.slice(0, 10)}T00:00:00.000Z`).getTime();
+  const end = new Date(`${endDate.slice(0, 10)}T00:00:00.000Z`).getTime();
+  return Math.floor((end - start) / 86_400_000);
 }
 
 export function buildProfitAndLoss(input: { accounts: ChartAccount[]; entries: JournalDraft[] }): ProfitAndLossReport {

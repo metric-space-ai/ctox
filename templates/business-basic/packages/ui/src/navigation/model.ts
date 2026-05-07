@@ -1,7 +1,7 @@
 import { resolveLocale } from "../i18n/locales";
 import { resolveThemeMode } from "../theme/modes";
 
-export type BusinessModuleId = "sales" | "marketing" | "operations" | "business" | "ctox";
+export type BusinessModuleId = "sales" | "marketing" | "operations" | "business" | "payroll" | "ctox";
 
 export type BusinessSubmodule = {
   id: string;
@@ -55,6 +55,7 @@ export const businessModules: BusinessModule[] = [
       { id: "work-items", label: "Work Items", href: "/app/operations/work-items", resourceTypes: ["work_item", "ticket"] },
       { id: "boards", label: "Boards", href: "/app/operations/boards", resourceTypes: ["board"] },
       { id: "planning", label: "Planning", href: "/app/operations/planning", resourceTypes: ["timeline", "calendar_event"] },
+      { id: "workforce", label: "Einsatzplanung", href: "/app/operations/workforce", resourceTypes: ["workforce_person", "workforce_shift_type", "workforce_assignment", "workforce_time_entry", "workforce_handoff"] },
       { id: "knowledge", label: "Knowledge", href: "/app/operations/knowledge", resourceTypes: ["wiki_page", "document", "runbook"] },
       { id: "meetings", label: "Meetings", href: "/app/operations/meetings", resourceTypes: ["meeting"] }
     ]
@@ -76,6 +77,19 @@ export const businessModules: BusinessModule[] = [
       { id: "payments", label: "Payments", href: "/app/business/payments", resourceTypes: ["bank_transaction", "payment", "reconciliation"] },
       { id: "bookkeeping", label: "Exports", href: "/app/business/bookkeeping", resourceTypes: ["ledger_entry", "export"] },
       { id: "reports", label: "Reports", href: "/app/business/reports", resourceTypes: ["report"] }
+    ]
+  },
+  {
+    id: "payroll",
+    label: "Payroll",
+    href: "/app/payroll",
+    summary: "Lohnabrechnung: Stamm, Lohnläufe, Lohnzettel, Zusatzposten, Audit.",
+    submodules: [
+      { id: "runs", label: "Lohnläufe", href: "/app/payroll/runs", resourceTypes: ["payroll_run", "payroll_payslip", "payroll_payslip_line"] },
+      { id: "payslips", label: "Lohnzettel", href: "/app/payroll/payslips", resourceTypes: ["payroll_payslip", "payroll_payslip_line"] },
+      { id: "master", label: "Stamm", href: "/app/payroll/master", resourceTypes: ["payroll_period", "payroll_component", "payroll_structure", "payroll_structure_assignment"] },
+      { id: "additionals", label: "Zusatzposten", href: "/app/payroll/additionals", resourceTypes: ["payroll_additional"] },
+      { id: "audit", label: "Audit", href: "/app/payroll/audit", resourceTypes: ["payroll_audit", "payroll_event"] }
     ]
   },
   {

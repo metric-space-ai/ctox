@@ -1,0 +1,5 @@
+interface:
+  display_name: Business Basic Module
+  short_description: Build Business Basic modules from cloned OSS implementations to RFC, M0/M1, and 50-story UI/UX hardening.
+  default_prompt:
+    - Run $business-basic-module-development for this Business Basic module. First find existing CTOX docs/code, then use GitHub search to select at least 3 real open-source implementations, clone them, read schemas/services/states/UI/tests with rg, write OSS implementation notes, derive the RFC from that evidence, implement M0 and M1 in templates/business-basic, write 50 paired manual/CTOX user stories, drive UI/UX iterations through the acceptance matrix, and verify with smoke commands plus ctox_browser_automation before claiming ready.

@@ -14,6 +14,20 @@ export type DatevExtfLine = {
   text: string;
 };
 
+export type DatevExtfExportBundle = {
+  csv: string;
+  lineCount: number;
+  period: {
+    endDate: string;
+    startDate: string;
+  };
+  totals: {
+    credit: number;
+    debit: number;
+  };
+  validation: ReturnType<typeof validateDatevExtf>;
+};
+
 export type DatevExtfSettings = {
   accountLength: number;
   consultantNumber: string;
@@ -90,6 +104,28 @@ export function buildDatevExtfLinesFromJournalDrafts(input: { accounts: ChartAcc
   }));
 }
 
+export function buildDatevExtfExportBundle(input: {
+  accounts: ChartAccount[];
+  entries: JournalDraft[];
+  period: { endDate: string; startDate: string };
+  settings?: DatevExtfSettings;
+}): DatevExtfExportBundle {
+  const entries = input.entries.filter((entry) => entry.postingDate >= input.period.startDate && entry.postingDate <= input.period.endDate);
+  const lines = buildDatevExtfLinesFromJournalDrafts({ accounts: input.accounts, entries });
+  const validation = validateDatevExtf(lines, input.settings);
+  if (validation.errors.length) throw new Error(`datev_extf_validation_failed:${validation.errors.join(",")}`);
+  return {
+    csv: buildDatevExtfCsv(lines, input.settings),
+    lineCount: lines.length,
+    period: input.period,
+    totals: {
+      credit: round(lines.filter((line) => line.side === "H").reduce((sum, line) => sum + line.amount, 0)),
+      debit: round(lines.filter((line) => line.side === "S").reduce((sum, line) => sum + line.amount, 0))
+    },
+    validation
+  };
+}
+
 function findAccount(accounts: ChartAccount[], accountId: string) {
   const account = accounts.find((candidate) => candidate.id === accountId);
   if (!account) throw new Error(`datev_account_not_found:${accountId}`);
@@ -103,4 +139,8 @@ function formatDatevAmount(amount: number) {
 function csvCell(value: string) {
   const escaped = value.replace(/"/g, "\"\"");
   return /[;"\n\r]/.test(escaped) ? `"${escaped}"` : escaped;
+}
+
+function round(value: number) {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
 }

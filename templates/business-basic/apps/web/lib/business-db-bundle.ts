@@ -64,7 +64,7 @@ export async function getDatabaseBackedBusinessBundle(seed: BusinessBundle): Pro
         .filter((party) => party.kind === "customer")
         .map((party) => customerFromParty(party, seed)) : seed.customers,
       fiscalPeriods: rows.fiscalPeriods.length ? rows.fiscalPeriods.map(fiscalPeriodFromRow) : seed.fiscalPeriods,
-      fixedAssets: mergeById(seed.fixedAssets, fixedAssetsFromJournals(seed.fixedAssets, dbJournalEntries, rows.receipts)),
+      fixedAssets: mergeById(seed.fixedAssets, fixedAssetsFromJournals(seed.fixedAssets, dbJournalEntries, rows.receipts, rows.parties)),
       invoices: rows.invoices.length ? rows.invoices.map((invoice) => {
         const lines = rows.invoiceLines.filter((line) => line.invoiceExternalId === invoice.externalId);
         const dunning = latestDunningRun(rows.dunningRuns, invoice.externalId);
@@ -117,7 +117,7 @@ export async function getDatabaseBackedBusinessBundle(seed: BusinessBundle): Pro
           taxAmount: receipt.taxAmountMinor / 100,
           taxCode: taxCode(receipt.taxCode),
           total: receipt.totalAmountMinor / 100,
-          vendorName: receipt.vendorExternalId ?? receipt.vendorInvoiceNumber ?? "Vendor"
+          vendorName: partyName(rows.parties, receipt.vendorExternalId) ?? receipt.vendorExternalId ?? receipt.vendorInvoiceNumber ?? "Vendor"
         };
       }) : seed.receipts,
       products: mergeProducts(seed.products, rows.invoiceLines)
@@ -185,7 +185,8 @@ function fiscalPeriodFromRow(period: Awaited<ReturnType<typeof loadAccountingBus
 function fixedAssetsFromJournals(
   seedAssets: BusinessFixedAsset[],
   journalEntries: BusinessJournalEntry[],
-  receipts: Awaited<ReturnType<typeof loadAccountingBusinessRows>>["receipts"]
+  receipts: Awaited<ReturnType<typeof loadAccountingBusinessRows>>["receipts"],
+  parties: Awaited<ReturnType<typeof loadAccountingBusinessRows>>["parties"]
 ): BusinessFixedAsset[] {
   const known = new Set(seedAssets.map((asset) => asset.id));
   const assets: BusinessFixedAsset[] = [];
@@ -210,11 +211,24 @@ function fixedAssetsFromJournals(
       receiptId: receiptExternalId,
       salvageValue: 1,
       status: "Active",
-      supplier: receipt?.vendorExternalId ?? "Eingangsbeleg",
+      supplier: partyName(parties, receipt?.vendorExternalId) ?? receipt?.vendorExternalId ?? "Eingangsbeleg",
       usefulLifeMonths: 60
     });
   }
   return assets;
+}
+
+function partyName(
+  parties: Awaited<ReturnType<typeof loadAccountingBusinessRows>>["parties"],
+  externalId?: string | null
+) {
+  if (!externalId) return undefined;
+  const normalized = normalizeVendorExternalId(externalId);
+  return parties.find((party) => party.externalId === externalId || party.externalId === normalized)?.name;
+}
+
+function normalizeVendorExternalId(externalId: string) {
+  return externalId.replace(/^(vendor-)+/, "vendor-");
 }
 
 function customerFromParty(

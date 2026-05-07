@@ -1,4 +1,4 @@
-import { closeFiscalPeriod, createAccountingAuditEvent, createBusinessOutboxEvent } from "@ctox-business/accounting";
+import { buildPeriodCloseChecklist, closeFiscalPeriod, createAccountingAuditEvent, createBusinessOutboxEvent, moneyFromMajor } from "@ctox-business/accounting";
 import { closeAccountingFiscalPeriod, saveAccountingWorkflowSnapshot } from "@ctox-business/db/accounting";
 import { NextResponse } from "next/server";
 import { buildFiscalPeriodState } from "@/lib/accounting-runtime";
@@ -19,6 +19,35 @@ export async function POST(request: Request) {
       fiscalPeriods: buildFiscalPeriodState(data),
       persisted: false,
       reason: "No open fiscal period ending before today was found."
+    }, { status: 409 });
+  }
+
+  const checklist = buildPeriodCloseChecklist({
+    datevExported: data.bookkeeping.some((item) => item.status === "Exported" && item.period.includes(periodToClose.startDate.slice(0, 7))),
+    entries: data.journalEntries
+      .filter((entry) => entry.status === "Posted")
+      .map((entry) => ({
+        lines: entry.lines.map((line) => ({
+          credit: moneyFromMajor(line.credit, "EUR"),
+          debit: moneyFromMajor(line.debit, "EUR")
+        })),
+        postingDate: entry.postingDate,
+        refId: entry.refId,
+        type: entry.type
+      })),
+    openDraftCount: data.invoices.filter((invoice) => invoice.status === "Draft" && invoice.issueDate >= periodToClose.startDate && invoice.issueDate <= periodToClose.endDate).length,
+    period: periodToClose,
+    unmatchedBankLineCount: data.bankTransactions.filter((line) => line.status === "Unmatched" && line.bookingDate >= periodToClose.startDate && line.bookingDate <= periodToClose.endDate).length,
+    unpostedReceiptCount: data.receipts.filter((receipt) => !["Paid", "Posted", "Rejected"].includes(receipt.status) && receipt.receiptDate >= periodToClose.startDate && receipt.receiptDate <= periodToClose.endDate).length,
+    vatStatementReviewed: body?.vatStatementReviewed === true || data.reports.some((report) => report.id.includes("vat") && report.status === "Current")
+  });
+
+  if (body?.strict === true && !checklist.ready) {
+    return NextResponse.json({
+      checklist,
+      error: "period_close_blocked",
+      fiscalPeriods: buildFiscalPeriodState(data),
+      persisted: false
     }, { status: 409 });
   }
 
@@ -46,6 +75,7 @@ export async function POST(request: Request) {
   if (!process.env.DATABASE_URL) {
     return NextResponse.json({
       period,
+      checklist,
       fiscalPeriods: buildFiscalPeriodState({
         ...data,
         fiscalPeriods: data.fiscalPeriods.map((item) => item.id === period.id ? period : item)
@@ -67,12 +97,12 @@ export async function POST(request: Request) {
     }, { status: 404 });
   }
   await saveAccountingWorkflowSnapshot(workflow);
-  return NextResponse.json({ period: closedPeriod, persisted: true, workflow });
+  return NextResponse.json({ checklist, period: closedPeriod, persisted: true, workflow });
 }
 
 async function parseJsonBody(request: Request) {
   try {
-    return await request.json() as { periodId?: unknown };
+    return await request.json() as { periodId?: unknown; strict?: unknown; vatStatementReviewed?: unknown };
   } catch {
     return null;
   }

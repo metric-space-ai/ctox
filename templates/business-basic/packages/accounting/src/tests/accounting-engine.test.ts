@@ -6,21 +6,37 @@ import {
   buildAssetDepreciationJournalDraft,
   buildAssetDisposalJournalDraft,
   buildBankMatchJournalDraft,
+  buildCancellationCreditNote,
+  buildCreditNoteJournalDraft,
   buildDunningProposals,
+  buildDunningFeeJournalDraft,
   buildDatevExtfCsv,
+  buildDatevExtfExportBundle,
   buildDatevExtfLinesFromJournalDrafts,
+  buildEmployeeExpenseJournalDraft,
+  buildPartialCreditNote,
   buildStraightLineDepreciationSchedule,
   buildBalanceSheet,
   buildBusinessAnalysis,
   buildGeneralLedger,
+  buildOpenItems,
+  buildPeriodCloseChecklist,
+  buildReverseJournalDraft,
+  buildSupplierDiscountJournalDraft,
+  buildSupplierPaymentJournalDraft,
   buildTrialBalanceFromEntries,
   buildVatStatement,
+  checkPurchaseOrderReceiptMatch,
   createSeriesState,
   findDuplicateBankLines,
+  findDuplicateReceipts,
+  findVendorCandidates,
   parseBankCsv,
   parseCamt053,
   parseMt940,
+  prepareCreateVendorFromReceiptCommand,
   prepareImportBankStatementCommand,
+  preparePaymentRunCommand,
   buildInvoiceJournalDraft,
   buildProfitAndLoss,
   buildZugferdXml,
@@ -30,8 +46,22 @@ import {
   moneyFromMajor,
   moneyToMajor,
   prepareAcceptBankMatchCommand,
+  prepareCreditNoteCommand,
+  prepareDunningFeeCommand,
+  preparePurchaseOrderMatchCommand,
+  prepareQuoteCommand,
+  prepareQuoteConversionCommand,
   preparePostReceiptCommand,
+  prepareReceiptClarificationCommand,
+  prepareReviewReceiptExtractionCommand,
   prepareSendInvoiceCommand,
+  prepareSubmitEmployeeExpenseCommand,
+  prepareSupplierDiscountCommand,
+  prepareSupplierPaymentCommand,
+  quoteToInvoiceLike,
+  reviewReceiptOcr,
+  selectPaymentRunCandidates,
+  validateQuoteForSend,
   validateInvoiceForSend,
   validateDatevExtf,
   validateZugferdXml,
@@ -41,6 +71,7 @@ import {
   type InvoiceContext,
   closeFiscalPeriod,
   createParty,
+  germanTaxRatesForChart,
   resolveGermanTaxRate,
   seedChartAccounts
 } from "../index";
@@ -120,6 +151,84 @@ test("Sending an invoice creates an agent command and balanced journal draft", (
   assert.equal(journal.lines.reduce((sum, line) => sum + line.credit.minor, 0), 29750);
 });
 
+test("Quote commands validate the offer without touching the ledger, then convert to invoice posting", () => {
+  const quote = {
+    currency: "EUR" as const,
+    customerId: "cust-1",
+    id: "quote-1",
+    issueDate: "2026-05-07",
+    lines: [{ productId: "prod-saas", quantity: 1, taxRate: 19, unitPrice: 100 }],
+    netAmount: 100,
+    number: "ANG-2026-001",
+    status: "Accepted",
+    taxAmount: 19,
+    total: 119,
+    validUntil: "2026-05-21"
+  };
+  const validation = validateQuoteForSend(quote, invoiceContext);
+  const quoteCommand = prepareQuoteCommand(quote, invoiceContext);
+  const invoiceDraft = quoteToInvoiceLike(quote, {
+    dueDate: "2026-06-06",
+    invoiceId: "inv-from-quote-1",
+    invoiceNumber: "RE-2026-101",
+    issueDate: "2026-05-23"
+  });
+  const conversionCommand = prepareQuoteConversionCommand(quote, invoiceDraft, invoiceContext);
+  const journal = buildInvoiceJournalDraft(invoiceDraft, invoiceContext);
+
+  assert.deepEqual(validation.errors, []);
+  assert.equal(quoteCommand.type, "PrepareQuote");
+  assert.equal(conversionCommand.type, "ConvertQuoteToInvoice");
+  assert.equal(journal.refId, "inv-from-quote-1");
+  assert.equal(journal.lines.reduce((sum, line) => sum + line.debit.minor, 0), 11900);
+  assert.equal(journal.lines.reduce((sum, line) => sum + line.credit.minor, 0), 11900);
+});
+
+test("Cancellation and partial credit notes reverse receivable, revenue, and VAT", () => {
+  const cancellation = buildCancellationCreditNote({
+    id: "cn-1",
+    issueDate: "2026-05-08",
+    number: "GS-2026-001",
+    originalInvoice: invoice,
+    reason: "Falscher Leistungszeitraum"
+  });
+  const cancellationCommand = prepareCreditNoteCommand(cancellation, invoice, invoiceContext);
+  const cancellationJournal = buildCreditNoteJournalDraft(cancellation, invoice, invoiceContext);
+  const partial = buildPartialCreditNote({
+    currency: "EUR",
+    id: "cn-2",
+    issueDate: "2026-05-09",
+    line: { productId: "prod-saas", quantity: 1, taxRate: 19, unitPrice: 50 },
+    number: "GS-2026-002",
+    originalInvoiceId: invoice.id,
+    reason: "Nachlass"
+  });
+  const partialJournal = buildCreditNoteJournalDraft(partial, invoice, invoiceContext);
+
+  assert.equal(cancellationCommand.type, "CreateCancellationCreditNote");
+  assert.equal(cancellationJournal.type, "reverse");
+  assert.equal(cancellationJournal.lines.find((line) => line.accountId === "acc-ar")?.credit.minor, 29750);
+  assert.equal(cancellationJournal.lines.reduce((sum, line) => sum + line.debit.minor, 0), 29750);
+  assert.equal(partialJournal.lines.find((line) => line.accountId === "acc-ar")?.credit.minor, 5950);
+  assert.equal(partialJournal.lines.reduce((sum, line) => sum + line.debit.minor, 0), 5950);
+});
+
+test("Dunning fee command can create a VAT-bearing fee posting", () => {
+  const command = prepareDunningFeeCommand(invoice, invoiceContext, { feeAmount: 12, level: 2 });
+  const journal = buildDunningFeeJournalDraft(invoice, invoiceContext, {
+    feeAmount: 12,
+    feeRevenueAccountId: "acc-dunning-fees",
+    issueDate: "2026-06-15",
+    level: 2
+  });
+
+  assert.equal(command.type, "RunDunning");
+  assert.equal(command.payload.level, 2);
+  assert.ok(journal);
+  assert.equal(journal.lines.find((line) => line.accountId === "acc-ar")?.debit.minor, 1200);
+  assert.equal(journal.lines.reduce((sum, line) => sum + line.credit.minor, 0), 1200);
+});
+
 test("Invoice validator blocks Kleinunternehmer and reverse-charge tax misuse", () => {
   const ku = validateInvoiceForSend({
     ...invoice,
@@ -195,6 +304,121 @@ test("Posting an inbound receipt debits expense and VAT, then credits payable", 
   assert.ok(reducedRateReceipt.lines.some((line) => line.accountId === "acc-vat-input-7" && line.taxCode === "DE_7_INPUT" && moneyToMajor(line.debit) === 7));
 });
 
+test("Receipt OCR review blocks unclear receipts and prepares vendor or duplicate commands", () => {
+  const clearFields = [
+    { confidence: 0.95, label: "vendor", value: "Hetzner Online GmbH" },
+    { confidence: 0.92, label: "invoice_number", value: "HET-2026-0517" },
+    { confidence: 0.9, label: "receipt_date", value: "2026-05-03" },
+    { confidence: 0.94, label: "total_amount", value: "142.80" }
+  ];
+  const weakFields = [
+    { confidence: 0.41, label: "vendor", value: "Restaurant" },
+    { confidence: 0.38, label: "total_amount", value: "86.40" }
+  ];
+  const clearReview = reviewReceiptOcr({ companyId: "company-1", fields: clearFields, receiptId: "rec-ocr-1" });
+  const weakReview = reviewReceiptOcr({ companyId: "company-1", fields: weakFields, receiptId: "rec-ocr-2" });
+  const reviewCommand = prepareReviewReceiptExtractionCommand({ companyId: "company-1", fields: clearFields, receiptId: "rec-ocr-1" });
+  const clarificationCommand = prepareReceiptClarificationCommand({ companyId: "company-1", fields: weakFields, receiptId: "rec-ocr-2" });
+  const vendorCommand = prepareCreateVendorFromReceiptCommand({
+    companyId: "company-1",
+    defaultPayableAccountId: "acc-ap",
+    iban: "DE123",
+    receiptId: "rec-ocr-1",
+    vendorName: "Hetzner Online GmbH"
+  });
+  const vendorCandidates = findVendorCandidates({
+    companyId: "company-1",
+    iban: "DE123",
+    receiptId: "rec-ocr-1",
+    vendorName: "Hetzner Online GmbH"
+  }, [{ id: "vendor-1", iban: "DE123", name: "Hetzner Online GmbH" }]);
+  const duplicates = findDuplicateReceipts({
+    amount: 142.8,
+    companyId: "company-1",
+    currency: "EUR",
+    id: "rec-new",
+    vendorInvoiceNumber: "HET-2026-0517",
+    vendorName: "Hetzner Online GmbH"
+  }, [{
+    amount: 142.8,
+    currency: "EUR",
+    id: "rec-existing",
+    vendorInvoiceNumber: "HET-2026-0517",
+    vendorName: "Hetzner Online GmbH"
+  }]);
+
+  assert.equal(clearReview.status, "reviewed");
+  assert.equal(weakReview.status, "needs_clarification");
+  assert.equal(reviewCommand.type, "ReviewReceiptExtraction");
+  assert.equal(clarificationCommand.type, "RequestReceiptClarification");
+  assert.equal(vendorCommand.type, "CreateVendorFromReceipt");
+  assert.equal(vendorCandidates[0]?.vendor.id, "vendor-1");
+  assert.equal(duplicates[0]?.receipt.id, "rec-existing");
+});
+
+test("Purchase-order matching reports exact matches and price variances", () => {
+  const matched = checkPurchaseOrderReceiptMatch({
+    companyId: "company-1",
+    invoicedQuantity: 25,
+    invoicedUnitPrice: 50,
+    orderedQuantity: 25,
+    orderedUnitPrice: 50,
+    purchaseOrderId: "po-1",
+    receiptId: "rec-po-1",
+    receivedQuantity: 25
+  });
+  const variance = checkPurchaseOrderReceiptMatch({
+    companyId: "company-1",
+    invoicedQuantity: 25,
+    invoicedUnitPrice: 60,
+    orderedQuantity: 25,
+    orderedUnitPrice: 50,
+    purchaseOrderId: "po-2",
+    receiptId: "rec-po-2",
+    receivedQuantity: 25
+  });
+  const command = preparePurchaseOrderMatchCommand({
+    companyId: "company-1",
+    invoicedQuantity: 25,
+    invoicedUnitPrice: 60,
+    orderedQuantity: 25,
+    orderedUnitPrice: 50,
+    purchaseOrderId: "po-2",
+    receiptId: "rec-po-2",
+    receivedQuantity: 25
+  });
+
+  assert.equal(matched.status, "matched");
+  assert.equal(variance.status, "variance");
+  assert.equal(variance.totalVariance, 250);
+  assert.equal(command.type, "CheckPurchaseOrderMatch");
+});
+
+test("Employee expenses create payable drafts without posting unreadable receipts", () => {
+  const expense = {
+    companyId: "company-1",
+    currency: "EUR",
+    employeeName: "Milena Ducic",
+    employeePayableAccountId: "acc-employee-payables",
+    expenseAccountId: "acc-travel",
+    expenseDate: "2026-04-28",
+    grossAmount: 38.6,
+    id: "expense-1",
+    netAmount: 38.6,
+    projectId: "project-rem",
+    taxAmount: 0,
+    taxCode: "DE_0"
+  };
+  const command = prepareSubmitEmployeeExpenseCommand(expense);
+  const journal = buildEmployeeExpenseJournalDraft(expense);
+
+  assert.equal(command.type, "SubmitEmployeeExpense");
+  assert.equal(journal.refType, "employee_expense");
+  assert.equal(journal.lines[0]?.projectId, "project-rem");
+  assert.equal(journal.lines.reduce((sum, line) => sum + line.debit.minor, 0), 3860);
+  assert.equal(journal.lines.reduce((sum, line) => sum + line.credit.minor, 0), 3860);
+});
+
 test("Bank match commands preserve reconciler confidence context", () => {
   const transaction = {
     amount: 297.5,
@@ -239,6 +463,66 @@ test("Bank match journal drafts post incoming payments to bank and receivables",
   assert.equal(journal.lines[1]?.accountId, "acc-ar");
   assert.equal(journal.lines.reduce((sum, line) => sum + line.debit.minor, 0), 29750);
   assert.equal(journal.lines.reduce((sum, line) => sum + line.credit.minor, 0), 29750);
+});
+
+test("Payables commands handle supplier payments, cash discounts and payment runs", () => {
+  const supplierPayment = {
+    allocations: [
+      { amount: 820, receiptId: "rec-tel-1" },
+      { amount: 760, receiptId: "rec-tel-2" },
+      { amount: 800, receiptId: "rec-tel-3" }
+    ],
+    bankAccountId: "acc-bank",
+    companyId: "company-1",
+    currency: "EUR",
+    id: "pay-telekom",
+    payableAccountId: "acc-ap",
+    paymentDate: "2026-05-15",
+    vendorName: "Telekom Deutschland GmbH"
+  };
+  const paymentCommand = prepareSupplierPaymentCommand(supplierPayment);
+  const paymentJournal = buildSupplierPaymentJournalDraft(supplierPayment);
+  const discountPayment = {
+    allocations: [{ amount: 1190, receiptId: "rec-office-1" }],
+    bankAccountId: "acc-bank",
+    companyId: "company-1",
+    currency: "EUR",
+    discountAccountId: "acc-purchase-discounts",
+    discountGrossAmount: 23.8,
+    discountNetAmount: 20,
+    id: "pay-office-discount",
+    inputVatAccountId: "acc-vat-input",
+    inputVatCorrectionAmount: 3.8,
+    paidAmount: 1166.2,
+    payableAccountId: "acc-ap",
+    paymentDate: "2026-05-10",
+    vendorName: "Buerobedarf Nord"
+  };
+  const discountCommand = prepareSupplierDiscountCommand(discountPayment);
+  const discountJournal = buildSupplierDiscountJournalDraft(discountPayment);
+  const runInput = {
+    candidates: [
+      { amount: 142.8, currency: "EUR", dueDate: "2026-05-12", receiptId: "rec-hosting", vendorName: "Hetzner" },
+      { amount: 714, blocked: true, currency: "EUR", dueDate: "2026-05-10", receiptId: "rec-print", vendorName: "Printwerk Hamburg" },
+      { amount: 416.5, currency: "EUR", dueDate: "2026-05-18", receiptId: "rec-insurance", vendorName: "Versicherung AG" }
+    ],
+    companyId: "company-1",
+    dueBy: "2026-05-15",
+    id: "run-2026-05-15"
+  };
+  const runCommand = preparePaymentRunCommand(runInput);
+  const selected = selectPaymentRunCandidates(runInput);
+
+  assert.equal(paymentCommand.type, "PostSupplierPayment");
+  assert.equal(paymentJournal.lines.length, 4);
+  assert.equal(paymentJournal.lines.reduce((sum, line) => sum + line.debit.minor, 0), 238000);
+  assert.equal(paymentJournal.lines.reduce((sum, line) => sum + line.credit.minor, 0), 238000);
+  assert.equal(discountCommand.type, "ApplySupplierDiscount");
+  assert.equal(discountJournal.lines.reduce((sum, line) => sum + line.debit.minor, 0), 119000);
+  assert.equal(discountJournal.lines.reduce((sum, line) => sum + line.credit.minor, 0), 119000);
+  assert.equal(runCommand.type, "PreparePaymentRun");
+  assert.equal(runCommand.payload.selectedCount, 1);
+  assert.equal(selected[0]?.receiptId, "rec-hosting");
 });
 
 test("DATEV EXTF CSV quotes text and keeps German decimal comma", () => {
@@ -357,7 +641,9 @@ test("Dunning runner proposes the next unpaid overdue level only", () => {
 
 test("Chart seed, tax rates and parties expose German accounting defaults", () => {
   const accounts = seedChartAccounts({ companyId: "company-1", chart: "skr03" });
+  const skr04Accounts = seedChartAccounts({ companyId: "company-1", chart: "skr04" });
   const tax = resolveGermanTaxRate({ taxRate: 19 });
+  const skr04Tax = germanTaxRatesForChart("skr04");
   const party = createParty({
     defaultReceivableAccountId: "acc-ar",
     id: "cust-1",
@@ -366,7 +652,10 @@ test("Chart seed, tax rates and parties expose German accounting defaults", () =
   });
 
   assert.equal(accounts.find((account) => account.code === "8400")?.externalId, "acc-revenue-saas");
+  assert.equal(skr04Accounts.find((account) => account.code === "4400")?.externalId, "acc-revenue-saas");
   assert.equal(tax.accountId, "acc-vat-output");
+  assert.equal(skr04Tax.find((rate) => rate.code === "DE_19")?.accountCode, "3806");
+  assert.equal(skr04Tax.find((rate) => rate.code === "DE_19_INPUT")?.accountCode, "1406");
   assert.equal(party.defaultReceivableAccountId, "acc-ar");
 });
 
@@ -395,6 +684,122 @@ test("Reports derive GL, P&L and balance sheet from journal drafts", () => {
   assert.equal(balanceSheet.liabilities, 47.5);
   assert.equal(balanceSheet.retainedEarnings, 250);
   assert.equal(balanceSheet.balanced, true);
+});
+
+test("Open items allocate invoice and receipt payments by matched record id", () => {
+  const accounts = seedChartAccounts({ companyId: "company-1", chart: "skr03" });
+  const customerInvoice = buildInvoiceJournalDraft(invoice, invoiceContext);
+  const paymentContext = {
+    accountsPayableAccountId: "acc-ap",
+    accountsReceivableAccountId: "acc-ar",
+    bankAccountId: "acc-bank",
+    bankFeeAccountId: "acc-fees",
+    companyId: "company-1"
+  };
+  const partialCustomerPayment = buildBankMatchJournalDraft({
+    amount: 100,
+    bookingDate: "2026-05-15",
+    counterparty: "Kunstmen GmbH",
+    currency: "EUR",
+    id: "bank-in-partial",
+    matchedRecordId: "inv-1",
+    matchType: "invoice",
+    purpose: "RE-2026-001",
+    status: "Suggested"
+  }, paymentContext);
+  const receipt = buildReceiptJournalDraft({
+    currency: "EUR",
+    expenseAccountId: "acc-software",
+    id: "rec-open-item",
+    netAmount: 100,
+    number: "EB-2026-002",
+    payableAccountId: "acc-ap",
+    receiptDate: "2026-05-01",
+    status: "Posted",
+    taxAmount: 19,
+    total: 119,
+    vendorName: "Figma"
+  }, "company-1");
+  const receiptPayment = buildBankMatchJournalDraft({
+    amount: -119,
+    bookingDate: "2026-05-12",
+    counterparty: "Figma",
+    currency: "EUR",
+    id: "bank-out-receipt",
+    matchedRecordId: "rec-open-item",
+    matchType: "receipt",
+    purpose: "EB-2026-002",
+    status: "Suggested"
+  }, paymentContext);
+
+  const openItems = buildOpenItems({
+    accounts,
+    asOf: "2026-06-15",
+    dueDatesByRef: {
+      "inv-1": "2026-05-31",
+      "rec-open-item": "2026-05-10"
+    },
+    entries: [customerInvoice, partialCustomerPayment, receipt, receiptPayment],
+    includePaid: true
+  });
+
+  const receivable = openItems.rows.find((row) => row.refId === "inv-1");
+  const payable = openItems.rows.find((row) => row.refId === "rec-open-item");
+  assert.equal(receivable?.status, "partial");
+  assert.equal(receivable?.paidAmount, 100);
+  assert.equal(receivable?.outstandingAmount, 197.5);
+  assert.equal(payable?.status, "paid");
+  assert.equal(openItems.openReceivables, 197.5);
+  assert.equal(openItems.openPayables, 0);
+  assert.equal(openItems.buckets.overdue1To30, 197.5);
+});
+
+test("Period close checklist blocks unbalanced or incomplete accounting periods", () => {
+  const period = { endDate: "2026-05-31", id: "fy-2026-05", startDate: "2026-05-01", status: "open" as const };
+  const ready = buildPeriodCloseChecklist({
+    datevExported: true,
+    entries: [buildInvoiceJournalDraft(invoice, invoiceContext)],
+    period,
+    vatStatementReviewed: true
+  });
+  const blocked = buildPeriodCloseChecklist({
+    entries: [{
+      lines: [
+        { credit: moneyFromMajor(0), debit: moneyFromMajor(10) },
+        { credit: moneyFromMajor(9), debit: moneyFromMajor(0) }
+      ],
+      postingDate: "2026-05-07",
+      refId: "bad-manual",
+      type: "manual"
+    }],
+    openDraftCount: 1,
+    period,
+    unmatchedBankLineCount: 1,
+    unpostedReceiptCount: 1,
+    vatStatementReviewed: false
+  });
+
+  assert.equal(ready.ready, true);
+  assert.equal(ready.status, "ready");
+  assert.match(blocked.blockers.join(","), /unbalanced_journal:manual:bad-manual/);
+  assert.match(blocked.blockers.join(","), /open_drafts_in_period/);
+  assert.match(blocked.blockers.join(","), /vat_statement_not_reviewed/);
+  assert.equal(blocked.ready, false);
+});
+
+test("GoBD reversal drafts keep original journal immutable and invert all lines", () => {
+  const original = buildInvoiceJournalDraft(invoice, invoiceContext);
+  const reverse = buildReverseJournalDraft(original, {
+    postingDate: "2026-05-08",
+    refId: "inv-1-storno"
+  });
+
+  assert.equal(reverse.type, "reverse");
+  assert.equal(reverse.refType, original.refType);
+  assert.equal(reverse.lines[0]?.credit.minor, original.lines[0]?.debit.minor);
+  assert.equal(reverse.lines.reduce((sum, line) => sum + line.debit.minor, 0), 29750);
+  assert.equal(reverse.lines.reduce((sum, line) => sum + line.credit.minor, 0), 29750);
+  assert.equal(original.type, "invoice");
 });
 
 test("VAT statement derives 7 percent and reverse-charge bases from tagged journal lines", () => {
@@ -530,6 +935,17 @@ test("German bookkeeping acceptance scenario derives ledger, DATEV, P&L and bala
   const balanceSheet = buildBalanceSheet({ accounts, entries });
   const vatStatement = buildVatStatement({ accounts, entries });
   const datevLines = buildDatevExtfLinesFromJournalDrafts({ accounts, entries });
+  const datevBundle = buildDatevExtfExportBundle({
+    accounts,
+    entries,
+    period: { endDate: "2026-12-31", startDate: "2026-01-01" },
+    settings: {
+      accountLength: 4,
+      clientNumber: "67890",
+      consultantNumber: "12345",
+      fiscalYearStart: "20260101"
+    }
+  });
   const datevCsv = buildDatevExtfCsv(datevLines, {
     accountLength: 4,
     clientNumber: "67890",
@@ -592,6 +1008,11 @@ test("German bookkeeping acceptance scenario derives ledger, DATEV, P&L and bala
   assert.match(datevCsv, /1190,00/);
   assert.match(datevCsv, /DE_19_INPUT/);
   assert.match(datevCsv, /DE_19_OUTPUT/);
+  assert.equal(datevBundle.lineCount, buildDatevExtfLinesFromJournalDrafts({
+    accounts,
+    entries: entries.filter((entry) => entry.postingDate >= "2026-01-01" && entry.postingDate <= "2026-12-31")
+  }).length);
+  assert.equal(datevBundle.totals.debit, datevBundle.totals.credit);
 });
 
 test("Fixed assets create acquisition and depreciation journals for the balance sheet", () => {

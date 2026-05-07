@@ -10,13 +10,17 @@ import {
   prepareAssetDisposalForAccounting,
   prepareBankMatchForAccounting,
   prepareDatevExportForAccounting,
+  prepareDunningFeeForAccounting,
   prepareExistingInvoiceForAccounting,
+  prepareInvoiceCreditNoteForAccounting,
+  prepareQuoteConversionForAccounting,
+  prepareQuoteForAccounting,
   prepareReceiptCapitalizationForAccounting,
   prepareReceiptForAccounting
 } from "./business-accounting";
 
 export type BusinessMutationRequest = {
-  action: "capitalize" | "create" | "delete" | "depreciate" | "dispose" | "export" | "match" | "payment" | "post" | "send" | "sync" | "update";
+  action: "accept" | "cancel" | "capitalize" | "convert" | "create" | "credit" | "delete" | "depreciate" | "dispose" | "export" | "match" | "payment" | "post" | "remind" | "send" | "storno" | "sync" | "update";
   resource: string;
   recordId?: string;
   title?: string;
@@ -41,6 +45,10 @@ const resourceToSubmodule: Record<string, string> = {
   ledger: "ledger",
   payments: "payments",
   products: "products",
+  quote: "invoices",
+  quotes: "invoices",
+  "credit-note": "invoices",
+  "credit-notes": "invoices",
   receipts: "receipts",
   reports: "reports",
   services: "products",
@@ -62,6 +70,10 @@ const resourceToPanel: Record<string, string> = {
   ledger: "journal-entry",
   payments: "bank-transaction",
   products: "product",
+  quote: "quote",
+  quotes: "quote",
+  "credit-note": "credit-note",
+  "credit-notes": "credit-note",
   receipts: "receipt",
   reports: "report",
   services: "product",
@@ -70,7 +82,7 @@ const resourceToPanel: Record<string, string> = {
 };
 
 export async function queueBusinessMutation(request: BusinessMutationRequest, origin?: string) {
-  const normalizedResource = normalizeBusinessResource(request.resource);
+  const normalizedResource = normalizeBusinessResource(request.resource) ?? normalizeDebtorResource(request.resource);
   if (!normalizedResource) {
     return {
       ok: false,
@@ -158,6 +170,14 @@ async function buildAccountingContext(request: BusinessMutationRequest, normaliz
   const data = await getDatabaseBackedBusinessBundle(await getBusinessBundle());
   const locale = request.locale === "en" ? "en" : "de";
 
+  if (normalizedResource === "quotes" && (request.action === "create" || request.action === "send" || request.action === "sync")) {
+    return prepareQuoteForAccounting({ data, locale, payload: { ...request.payload, quoteId: recordId } });
+  }
+
+  if (normalizedResource === "quotes" && (request.action === "accept" || request.action === "convert")) {
+    return withPeriodValidation(data, prepareQuoteConversionForAccounting({ data, locale, payload: { ...request.payload, quoteId: recordId } }));
+  }
+
   if (normalizedResource === "invoices" && (request.action === "send" || request.action === "export" || request.action === "sync")) {
     const invoice = data.invoices.find((item) => item.id === recordId);
     if (!invoice) return undefined;
@@ -179,6 +199,41 @@ async function buildAccountingContext(request: BusinessMutationRequest, normaliz
       validation: preview.validation,
       zugferdXml: preview.zugferdXml
     });
+  }
+
+  if (normalizedResource === "invoices" && (request.action === "cancel" || request.action === "storno" || request.action === "credit")) {
+    const invoice = data.invoices.find((item) => item.id === recordId);
+    if (!invoice) return undefined;
+    return withPeriodValidation(data, prepareInvoiceCreditNoteForAccounting({
+      data,
+      invoice,
+      locale,
+      payload: request.payload,
+      type: request.action === "credit" ? "partial" : "cancellation"
+    }));
+  }
+
+  if (normalizedResource === "creditNotes" && (request.action === "create" || request.action === "credit" || request.action === "storno")) {
+    const invoiceId = typeof request.payload?.invoiceId === "string" ? request.payload.invoiceId : typeof request.payload?.originalInvoiceId === "string" ? request.payload.originalInvoiceId : recordId;
+    const invoice = data.invoices.find((item) => item.id === invoiceId);
+    if (!invoice) return undefined;
+    return withPeriodValidation(data, prepareInvoiceCreditNoteForAccounting({
+      data,
+      invoice,
+      locale,
+      payload: { ...request.payload, creditNoteId: recordId },
+      type: request.action === "credit" ? "partial" : "cancellation"
+    }));
+  }
+
+  if (normalizedResource === "creditNotes" && request.action === "remind") {
+    return undefined;
+  }
+
+  if (normalizedResource === "invoices" && request.action === "remind") {
+    const invoice = data.invoices.find((item) => item.id === recordId);
+    if (!invoice) return undefined;
+    return withPeriodValidation(data, prepareDunningFeeForAccounting({ data, invoice, locale, payload: request.payload }));
   }
 
   if (normalizedResource === "receipts" && request.action === "post") {
@@ -291,6 +346,12 @@ function defaultInstruction(request: BusinessMutationRequest, deepLink: string |
 
 function capitalize(value: string) {
   return value ? `${value[0].toUpperCase()}${value.slice(1)}` : value;
+}
+
+function normalizeDebtorResource(resource: string) {
+  if (resource === "quote" || resource === "quotes" || resource === "angebot" || resource === "angebote") return "quotes";
+  if (resource === "credit-note" || resource === "credit-notes" || resource === "gutschrift" || resource === "gutschriften") return "creditNotes";
+  return null;
 }
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: () => T): Promise<T> {

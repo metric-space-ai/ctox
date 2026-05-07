@@ -3,6 +3,8 @@ import { getBusinessBundle, getBusinessResource } from "@/lib/business-seed";
 import { getDatabaseBackedBusinessResource } from "@/lib/business-db-bundle";
 import { queueBusinessMutation, type BusinessMutationRequest } from "@/lib/business-runtime";
 
+export const dynamic = "force-dynamic";
+
 export async function GET(
   _request: Request,
   { params }: { params: Promise<{ resource: string }> }

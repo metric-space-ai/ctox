@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "ctox-business-web",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@ctox-business/web", "dev"],
+      "port": 3001
+    }
+  ]
+}

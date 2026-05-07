@@ -4503,6 +4503,17 @@ fn run_completion_review(
         };
     }
     if actionable_rejection {
+        if completion_review_is_reviewer_limited_internal_work(job, &outcome) {
+            push_event(
+                state,
+                format!(
+                    "Completion review could not inspect internal work for {}; leaving worker result unblocked: {}",
+                    job.source_label,
+                    clip_text(&outcome.summary, 180)
+                ),
+            );
+            return CompletionReviewDisposition::None;
+        }
         if let Some(disposition) = no_cascade_review_block(root, job, &outcome) {
             return disposition;
         }
@@ -4550,8 +4561,60 @@ fn completion_review_unavailable_disposition(
     CompletionReviewDisposition::None
 }
 
+fn completion_review_is_reviewer_limited_internal_work(
+    job: &QueuedPrompt,
+    outcome: &review::ReviewOutcome,
+) -> bool {
+    if !matches!(
+        outcome.verdict,
+        review::ReviewVerdict::Fail | review::ReviewVerdict::Partial
+    ) {
+        return false;
+    }
+    if is_founder_or_owner_email_job(job)
+        || job.outbound_email.is_some()
+        || is_terminal_bench_controller_artifact_job(job)
+        || !outcome.categorized_findings.is_empty()
+    {
+        return false;
+    }
+
+    let lowered = format!(
+        "{}\n{}\n{}\n{}\n{}\n{}",
+        outcome.summary,
+        outcome.report,
+        outcome.failed_gates.join("\n"),
+        outcome.semantic_findings.join("\n"),
+        outcome.open_items.join("\n"),
+        outcome.evidence.join("\n")
+    )
+    .to_ascii_lowercase();
+
+    contains_any(
+        &lowered,
+        &[
+            "sandbox restriction",
+            "sandbox restrictions",
+            "blocked by sandbox",
+            "blocking all filesystem",
+            "filesystem and database inspection",
+            "could not inspect",
+            "couldn't inspect",
+            "unable to inspect",
+            "could not access",
+            "couldn't access",
+            "unable to access",
+            "tools unavailable",
+            "tool access",
+            "without filesystem access",
+            "without database access",
+            "read-only inspection was unavailable",
+        ],
+    )
+}
+
 fn completion_review_should_skip_feedback_turn(job: &QueuedPrompt) -> bool {
-    job.source_label == "review-feedback"
+    job.source_label == "review-feedback" || job.source_label == QUEUE_GUARD_SOURCE_LABEL
 }
 
 fn continuation_self_work_requested<'a>(
@@ -5730,12 +5793,25 @@ fn artifact_first_execution_prompt(job: &QueuedPrompt) -> String {
         prompt.push('\n');
     }
     prompt.push_str("\nExecution order:\n");
-    prompt.push_str("1. Before open-ended research or exploratory loops, create or update the required files with the best current status.\n");
-    prompt.push_str("2. If final content depends on later work, write a provisional, truthful status plus the next action, then keep updating the file as work progresses.\n");
-    prompt.push_str("3. Each required path must be a regular file. A directory at that path is invalid; move or remove the directory and create the file.\n");
-    prompt.push_str("4. Use absolute paths from the Required files list, or explicitly `cd` into the Workspace root before relative writes. A file written under the install directory or any other cwd does not satisfy this task.\n");
-    prompt.push_str("5. Before claiming completion, run shell checks equivalent to `test -f` for every required path.\n");
-    prompt.push_str("6. If a required file cannot be created, write the blocker into the files that can be created and do not claim completion.\n\n");
+    if file_refs
+        .iter()
+        .any(|path| final_binary_artifact_file_name(path))
+    {
+        prompt.push_str("1. Treat binary deliverables such as DOCX/PDF/XLSX/PPTX as final outputs, not checkpoint placeholders. Do not create empty files, copied note folders, or directories with those suffixes.\n");
+        prompt.push_str("2. Produce the binary deliverable through the task's required workflow or helper. If the workflow cannot run, write a blocker into a non-binary required status file if one exists and do not claim completion.\n");
+        prompt.push_str("3. Each required path must be a regular file. A directory at that path is invalid; remove only directories created by your failed attempt and rerun the required workflow.\n");
+        prompt.push_str("4. Use only the current Required files list and the current Workspace root. Ignore stale paths from previous turns, older artifact contracts, review examples, or prior failed runs.\n");
+        prompt.push_str("5. Before claiming completion, run shell checks equivalent to `test -f` for every required path plus format-specific checks for binary outputs, such as ZIP/DOCX listing when applicable.\n");
+        prompt.push_str("6. If a required file cannot be created, say which gate failed and do not report success.\n\n");
+    } else {
+        prompt.push_str("1. Before open-ended research or exploratory loops, create or update the required files with the best current status.\n");
+        prompt.push_str("2. If final content depends on later work, write a provisional, truthful status plus the next action, then keep updating the file as work progresses.\n");
+        prompt.push_str("3. Each required path must be a regular file. A directory at that path is invalid; move or remove the directory and create the file.\n");
+        prompt.push_str("4. Use absolute paths from the Required files list, or explicitly `cd` into the Workspace root before relative writes. A file written under the install directory or any other cwd does not satisfy this task.\n");
+        prompt.push_str("5. Use only the current Required files list and the current Workspace root. Ignore stale paths from previous turns, older artifact contracts, review examples, or prior failed runs.\n");
+        prompt.push_str("6. Before claiming completion, run shell checks equivalent to `test -f` for every required path.\n");
+        prompt.push_str("7. If a required file cannot be created, write the blocker into the files that can be created and do not claim completion.\n\n");
+    }
     prompt.push_str("ORIGINAL TASK\n");
     prompt.push_str(&job.prompt);
     prompt
@@ -6572,11 +6648,35 @@ fn extract_relative_artifact_file_names(prompt: &str) -> Vec<String> {
         {
             continue;
         }
+        if relative_path_looks_like_archive_member(prompt, trimmed) {
+            continue;
+        }
         if artifact_file_name(trimmed) {
             push_unique_string(&mut names, trimmed.to_string());
         }
     }
     names
+}
+
+fn relative_path_looks_like_archive_member(prompt: &str, path: &str) -> bool {
+    if path.starts_with('/') || !path.contains('/') {
+        return false;
+    }
+    let lowered_path = path.to_ascii_lowercase();
+    if !lowered_path.starts_with("ctox/") && !lowered_path.starts_with("word/") {
+        return false;
+    }
+    let lowered_prompt = prompt.to_ascii_lowercase();
+    lowered_prompt.contains("inside the docx")
+        || lowered_prompt.contains("inside docx")
+        || lowered_prompt.contains("in the docx")
+        || lowered_prompt.contains("innerhalb der docx")
+        || lowered_prompt.contains("docx zip")
+        || lowered_prompt.contains("zipfile")
+        || lowered_prompt.contains("zip-member")
+        || lowered_prompt.contains("zip member")
+        || lowered_prompt.contains("valide zip")
+        || lowered_prompt.contains("valid zip")
 }
 
 fn artifact_file_name(path: &str) -> bool {
@@ -6586,10 +6686,20 @@ fn artifact_file_name(path: &str) -> bool {
     let lowered = name.to_ascii_lowercase();
     [
         ".md", ".json", ".jsonl", ".txt", ".csv", ".tsv", ".log", ".yaml", ".yml", ".toml",
-        ".sqlite", ".sqlite3",
+        ".sqlite", ".sqlite3", ".docx", ".pdf", ".xlsx", ".xls", ".pptx", ".ppt",
     ]
     .iter()
     .any(|suffix| lowered.ends_with(suffix))
+}
+
+fn final_binary_artifact_file_name(path: &str) -> bool {
+    let Some(name) = Path::new(path).file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    let lowered = name.to_ascii_lowercase();
+    [".docx", ".pdf", ".xlsx", ".xls", ".pptx", ".ppt"]
+        .iter()
+        .any(|suffix| lowered.ends_with(suffix))
 }
 
 fn is_path_char(ch: char) -> bool {
@@ -17290,7 +17400,7 @@ Use shell tools to create or update these files through Harbor."
 
         let feedback = terminal_bench_controller_hold_feedback_prompt(
             &job,
-            "completion review leg did not produce a verdict within 300s",
+            "completion review leg did not produce a verdict within 900s",
         );
         assert!(feedback.contains("HARNESS FEEDBACK"));
         assert!(feedback.contains("not accepted as benchmark completion"));
@@ -17329,7 +17439,7 @@ Use shell tools to create or update these files through Harbor."
         assert!(matches!(
             completion_review_unavailable_disposition(
                 &job,
-                "completion review leg did not produce a verdict within 300s"
+                "completion review leg did not produce a verdict within 900s"
             ),
             CompletionReviewDisposition::None
         ));
@@ -17365,9 +17475,92 @@ Required artifacts. You must create and maintain exactly these durable files in 
         assert!(matches!(
             completion_review_unavailable_disposition(
                 &job,
-                "completion review leg did not produce a verdict within 300s"
+                "completion review leg did not produce a verdict within 900s"
             ),
             CompletionReviewDisposition::Hold { .. }
+        ));
+    }
+
+    #[test]
+    fn reviewer_limited_internal_queue_review_does_not_block_worker_result() {
+        let job = QueuedPrompt {
+            prompt: "Work in /tmp/workspace and implement the requested CLI.".to_string(),
+            goal: "internal queue work".to_string(),
+            preview: "internal queue work".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: None,
+            leased_message_keys: vec!["queue:system::internal".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("tbq-qwen36/example".to_string()),
+            workspace_root: Some("/tmp/workspace".to_string()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+        let outcome = review::ReviewOutcome {
+            required: true,
+            verdict: review::ReviewVerdict::Partial,
+            mission_state: "UNCLEAR".to_string(),
+            summary: "Unable to complete the review continuation due to sandbox restrictions blocking all filesystem and database inspection.".to_string(),
+            report: "VERDICT: PARTIAL\nSUMMARY: Unable to complete the review continuation due to sandbox restrictions blocking all filesystem and database inspection.\nCATEGORIZED_FINDINGS:\n- none\nOPEN_ITEMS:\n- inspect workspace".to_string(),
+            score: 6,
+            reasons: vec!["closure_claim".to_string(), "runtime_or_infra_change".to_string()],
+            failed_gates: Vec::new(),
+            semantic_findings: Vec::new(),
+            categorized_findings: Vec::new(),
+            open_items: vec!["inspect workspace".to_string()],
+            evidence: Vec::new(),
+            handoff: None,
+            disposition: review::ReviewDisposition::Send,
+        };
+
+        assert!(completion_review_is_reviewer_limited_internal_work(
+            &job, &outcome
+        ));
+    }
+
+    #[test]
+    fn reviewer_limited_detection_does_not_bypass_structured_rework_findings() {
+        let job = QueuedPrompt {
+            prompt: "Work in /tmp/workspace and implement the requested CLI.".to_string(),
+            goal: "internal queue work".to_string(),
+            preview: "internal queue work".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: None,
+            leased_message_keys: vec!["queue:system::internal".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("tbq-qwen36/example".to_string()),
+            workspace_root: Some("/tmp/workspace".to_string()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+        let outcome = review::ReviewOutcome {
+            required: true,
+            verdict: review::ReviewVerdict::Partial,
+            mission_state: "UNCLEAR".to_string(),
+            summary:
+                "Sandbox restrictions prevented some inspection, and the required file is missing."
+                    .to_string(),
+            report: String::new(),
+            score: 6,
+            reasons: vec!["closure_claim".to_string()],
+            failed_gates: vec!["required file missing".to_string()],
+            semantic_findings: vec!["required file missing".to_string()],
+            categorized_findings: vec![review::CategorizedFinding {
+                id: "missing-artifact".to_string(),
+                category: review::FindingCategory::Rework,
+                evidence: "required file missing".to_string(),
+                corrective_action: "create the required file".to_string(),
+            }],
+            open_items: vec!["create required file".to_string()],
+            evidence: Vec::new(),
+            handoff: None,
+            disposition: review::ReviewDisposition::Send,
+        };
+
+        assert!(!completion_review_is_reviewer_limited_internal_work(
+            &job, &outcome
         ));
     }
 
@@ -20746,6 +20939,26 @@ The previous controller turn is incomplete. Update these files now:\n\
     }
 
     #[test]
+    fn queue_guard_slice_does_not_spawn_completion_review_rework() {
+        let job = QueuedPrompt {
+            prompt: "Use the queue-cleanup skill first. Inspect service state and reduce queue pressure.".to_string(),
+            goal: "Queue pressure guard".to_string(),
+            preview: "Queue pressure guard".to_string(),
+            source_label: QUEUE_GUARD_SOURCE_LABEL.to_string(),
+            suggested_skill: Some("queue-cleanup".to_string()),
+            leased_message_keys: Vec::new(),
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: None,
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        assert!(completion_review_should_skip_feedback_turn(&job));
+    }
+
+    #[test]
     fn artifact_first_prompt_keeps_original_task_for_generic_artifact_jobs() {
         let run_dir = "/tmp/ctox-generic-artifacts";
         let job = QueuedPrompt {
@@ -20773,6 +20986,47 @@ Start by checking the local service status."
         assert!(prompt.contains("ORIGINAL TASK"));
         assert!(prompt.contains("Start by checking the local service status"));
         assert!(prompt.contains(&format!("{run_dir}/summary.md")));
+    }
+
+    #[test]
+    fn docx_artifact_contract_tracks_final_docx_not_internal_zip_member() {
+        let workspace = "/tmp/ctox-research/workspace";
+        let output = "/tmp/ctox-research/output/report.docx";
+        let job = QueuedPrompt {
+            prompt: format!(
+                "Workspace:\n{workspace}\n\n\
+Finaler DOCX-Pfad:\n{output}\n\n\
+Die DOCX muss ein valides ZIP sein und ctox/helper_manifest.json enthalten: python3 -m zipfile -l \"$OUTPUT\".\n\
+Im Workspace muss synthesis/helper-run.json existieren."
+            ),
+            goal: "deep research feasibility DOCX".to_string(),
+            preview: "deep research feasibility DOCX".to_string(),
+            source_label: "tui".to_string(),
+            suggested_skill: None,
+            leased_message_keys: Vec::new(),
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("deep-research/docx-artifact".to_string()),
+            workspace_root: Some("/tmp/ctox-research".to_string()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let refs = expected_outcome_artifacts_for_job(&job);
+        let paths = refs
+            .iter()
+            .filter(|artifact| artifact.kind == ArtifactKind::WorkspaceFile)
+            .map(|artifact| artifact.primary_key.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(paths.contains(&output));
+        assert!(paths.contains(&format!("{workspace}/synthesis/helper-run.json").as_str()));
+        assert!(!paths.contains(&format!("{workspace}/ctox/helper_manifest.json").as_str()));
+
+        let prompt = artifact_first_execution_prompt(&job);
+        assert!(prompt.contains("binary deliverables such as DOCX/PDF/XLSX/PPTX"));
+        assert!(prompt.contains(output));
+        assert!(!prompt.contains(&format!("{workspace}/ctox/helper_manifest.json")));
     }
 
     #[test]

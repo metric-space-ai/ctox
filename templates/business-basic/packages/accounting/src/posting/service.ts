@@ -21,6 +21,12 @@ export type JournalDraft = {
   type: "invoice" | "payment" | "receipt" | "manual" | "fx" | "depreciation" | "reverse";
 };
 
+export type ReverseJournalDraftInput = {
+  narration?: string;
+  postingDate: string;
+  refId: string;
+};
+
 export class LedgerPosting {
   private readonly lines: PostingLine[] = [];
 
@@ -81,4 +87,27 @@ export function validatePostingLines(lines: PostingLine[]) {
   if (debit.minor !== credit.minor) {
     throw new Error("posting_debit_credit_mismatch");
   }
+}
+
+export function buildReverseJournalDraft(original: JournalDraft, input: ReverseJournalDraftInput): JournalDraft {
+  if (!input.refId.trim()) throw new Error("reverse_ref_id_required");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.postingDate)) throw new Error("reverse_posting_date_invalid");
+
+  const lines = original.lines.map((line) => ({
+    ...line,
+    credit: line.debit,
+    debit: line.credit
+  }));
+  validatePostingLines(lines);
+
+  return {
+    companyId: original.companyId,
+    currency: original.currency,
+    lines,
+    narration: input.narration ?? `Reversal of ${original.type}:${original.refType}:${original.refId}.`,
+    postingDate: input.postingDate,
+    refId: input.refId,
+    refType: original.refType,
+    type: "reverse"
+  };
 }

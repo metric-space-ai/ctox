@@ -10,6 +10,9 @@
     "start": "next start",
     "test:business-stack": "node scripts/business-stack-smoke.mjs",
     "test:operations": "node scripts/operations-smoke.mjs",
+    "test:payroll": "node scripts/payroll-smoke.mjs",
+    "test:payroll-browser": "node scripts/payroll-browser-proof.mjs",
+    "test:workforce": "node scripts/workforce-smoke.mjs",
     "test:ui-contract": "node scripts/ui-contract-smoke.mjs",
     "test:all": "pnpm typecheck && pnpm test:ui-contract && pnpm test:operations && pnpm test:business-stack && pnpm test:accounting-e2e && pnpm build",
     "typecheck": "tsc -p tsconfig.typecheck.json --noEmit"
@@ -18,6 +21,8 @@
     "@ctox-business/accounting": "workspace:*",
     "@ctox-business/ctox-bridge": "workspace:*",
     "@ctox-business/db": "workspace:*",
+    "@ctox-business/payroll": "workspace:*",
+    "@ctox-business/payroll-de": "workspace:*",
     "@ctox-business/ui": "workspace:*",
     "@ctox-business/warehouse": "workspace:*",
     "@lexical/code": "0.44.0",
@@ -44,6 +49,7 @@
     "@types/node": "^25.6.0",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
+    "puppeteer-core": "^24.43.0",
     "typescript": "^6.0.3"
   }
 }

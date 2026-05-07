@@ -1,0 +1,138 @@
+schema_version = "1"
+preset = "feasibility"
+title_en = "Feasibility Study"
+title_de = "Machbarkeitsstudie"
+default_language = "en"
+
+# Mandatory bounds for the run. The check-validators read these.
+[bounds]
+min_options = 3
+min_scenarios = 2
+min_evidence_count = 8
+min_leading_questions = 2
+min_disclaimer_chars = 120
+max_revise_iterations = 10
+
+# Sections in document order. Section IDs are used as `report_claims.section_id`
+# and as `Manuscript v1` block IDs. Some sections are deterministic-only
+# (assembled from typed tables, e.g. matrices/risks); others require
+# at least one claim row to exist.
+[[sections]]
+id = "title_block"
+heading_level = 0
+kind = "deterministic"
+requires_claim = false
+
+[[sections]]
+id = "scope_disclaimer"
+heading_level = 1
+kind = "deterministic"
+requires_claim = false
+
+[[sections]]
+id = "management_summary"
+heading_level = 1
+kind = "claims"
+requires_claim = true
+min_claims = 3
+
+[[sections]]
+id = "context_and_question"
+heading_level = 1
+kind = "claims"
+requires_claim = true
+min_claims = 1
+
+[[sections]]
+id = "requirements"
+heading_level = 1
+kind = "deterministic"
+requires_claim = false
+
+[[sections]]
+id = "options_overview"
+heading_level = 1
+kind = "deterministic"
+requires_claim = false
+
+[[sections]]
+id = "main_matrix"
+heading_level = 1
+kind = "matrix"
+matrix_kind = "main"
+
+[[sections]]
+id = "scenario_matrix"
+heading_level = 1
+kind = "matrix"
+matrix_kind = "scenario"
+
+[[sections]]
+id = "detail_assessment"
+heading_level = 1
+kind = "claims"
+requires_claim = true
+min_claims_per_option = 1
+
+[[sections]]
+id = "risks"
+heading_level = 1
+kind = "risk_register"
+
+[[sections]]
+id = "recommendation"
+heading_level = 1
+kind = "claims"
+requires_claim = true
+min_claims = 1
+require_primary_recommendation = true
+
+[[sections]]
+id = "appendix_sources"
+heading_level = 1
+kind = "citation_register"
+
+# Matrix definitions. Axes are NOT prepopulated content — operators define
+# rubric levels with `report scoring define-rubric`.
+[matrices.main]
+label_en = "Qualitative Evaluation Matrix"
+label_de = "Qualitative Bewertungsmatrix"
+axis_codes = ["coverage", "imaging", "defect_sensitivity", "delamination_sensitivity", "maturity"]
+axis_labels_en = ["Coverage", "Imaging Capability", "Defect Sensitivity", "Delamination Sensitivity", "Industrial Maturity"]
+required = true
+
+[matrices.scenario]
+label_en = "Outcome by Scenario"
+label_de = "Erfolgsaussichten nach Szenario"
+required = true
+
+# Validators. Hard validators block render; soft validators emit warnings.
+[validators]
+disclaimer_present = "hard"
+scope_questions_min = "hard"
+min_evidence_count = "hard"
+every_section_present = "hard"
+every_claim_has_fk_evidence = "hard"
+claim_evidence_relevance = "hard"
+every_matrix_cell_has_rationale = "hard"
+every_matrix_cell_supported = "hard"
+numeric_values_have_rubric = "hard"
+every_risk_has_mitigation = "hard"
+min_scenarios = "hard"
+min_options = "hard"
+forbid_unicode_dashes = "hard"
+forbid_unanchored_hedges = "hard"
+forbid_filler_phrases = "hard"
+recommendation_takes_position = "hard"
+recommendation_not_tautological = "hard"
+figures_have_captions = "hard"
+citation_register_complete = "hard"
+urls_resolve = "soft"
+dois_resolve = "soft"
+forbid_internal_vocab = "soft"
+
+# Disclaimer requirements: the disclaimer must contain these tokens (any of
+# `must_contain_any` and all of `must_contain_all`).
+[disclaimer]
+must_contain_all = []
+must_contain_any = ["assumption", "validation", "Annahme", "Validierung", "limitation", "Einschränkung"]

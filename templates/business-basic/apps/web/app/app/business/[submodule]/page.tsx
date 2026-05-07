@@ -1,15 +1,19 @@
 import { cookies } from "next/headers";
 import { notFound } from "next/navigation";
+import type { ReactNode } from "react";
 import { findBusinessModule, findBusinessSubmodule, WorkSurface, type WorkSurfacePanelState } from "@ctox-business/ui";
 import { AppShell } from "../../../../components/app-shell";
 import { AccountingApiButton } from "../../../../components/accounting-api-button";
 import { AccountingCommandButton } from "../../../../components/accounting-command-button";
+import { AccountingCtoxActionButton } from "../../../../components/accounting-ctox-action-button";
+import { AccountingStoryWorkflowPanel } from "../../../../components/accounting-story-workflow-panel";
 import { AccountingWorkflowPanel } from "../../../../components/accounting-workflow-panel";
 import { BankImportPreviewButton } from "../../../../components/bank-import-preview-button";
 import { BusinessPanel, BusinessWorkspace } from "../../../../components/business-workspace";
 import { DatevExportButton } from "../../../../components/datev-export-button";
 import { DunningPreviewButton } from "../../../../components/dunning-preview-button";
 import { InvoiceDeliveryActions } from "../../../../components/invoice-delivery-actions";
+import { PaymentsHeaderActions, PaymentsReconciliationWorkspace } from "../../../../components/payments-reconciliation-workspace";
 import { ReceiptIngestButton } from "../../../../components/receipt-ingest-button";
 import {
   buildAccountingSnapshot,
@@ -29,6 +33,9 @@ import { businessOsName, companyNameCookieName, normalizeCompanyName } from "../
 import { businessCurrency, getBusinessBundle, text, type BusinessBundle, type SupportedLocale } from "../../../../lib/business-seed";
 import { getDatabaseBackedBusinessBundle } from "../../../../lib/business-db-bundle";
 import { prepareExistingInvoiceForAccounting } from "../../../../lib/business-accounting";
+import { storyWorkflowsForSubmodule } from "../../../../lib/accounting-story-workflows";
+
+export const dynamic = "force-dynamic";
 
 export default async function BusinessSubmodulePage({
   params,
@@ -143,6 +150,7 @@ function BusinessAccountingSurface({ data, locale, submoduleId }: { data: Busine
   const receipts = buildReceiptQueue(data);
   const bankRows = buildReconciliationRows(data);
   const datevLines = buildDatevLines(data);
+  const storyWorkflows = storyWorkflowsForSubmodule(submoduleId);
   const receiptToPost = receipts.find((receipt) => receipt.status === "Needs review" || receipt.status === "Inbox") ?? receipts[0];
   const assetToDepreciate = fixedAssets.find((asset) => asset.status === "Active") ?? fixedAssets[0];
   const transactionToMatch = bankRows.find((row) => row.status === "Suggested") ?? bankRows[0];
@@ -189,8 +197,94 @@ function BusinessAccountingSurface({ data, locale, submoduleId }: { data: Busine
       : [locale === "de" ? "Bankklaerung" : "Bank review", String(openBankRows.length), `${bankRows.filter((row) => row.status === "Matched").length} ${locale === "de" ? "gematcht" : "matched"}`]
   ] satisfies Array<[string, string, string]>;
 
+  if (submoduleId === "payments") {
+    return (
+      <PaymentsReconciliationWorkspaceShell
+        accounts={data.accounts}
+        bankRows={bankRows}
+        locale={locale}
+        summaryItems={summaryItems}
+      />
+    );
+  }
+
+  if (submoduleId === "invoices") {
+    return (
+      <InvoiceDocumentWorkspace
+        accounting={accounting}
+        customer={customer}
+        data={data}
+        invoice={invoice}
+        locale={locale}
+        summaryItems={summaryItems}
+      />
+    );
+  }
+
+  if (submoduleId === "receipts") {
+    return (
+      <ReceiptDocumentWorkspace
+        locale={locale}
+        receiptToPost={receiptToPost}
+        receipts={receipts}
+        summaryItems={summaryItems}
+      />
+    );
+  }
+
+  if (submoduleId === "fixed-assets") {
+    return (
+      <FixedAssetsWorkspace
+        assetToDepreciate={assetToDepreciate}
+        fixedAssets={fixedAssets}
+        locale={locale}
+        summaryItems={summaryItems}
+      />
+    );
+  }
+
+  if (submoduleId === "ledger") {
+    return (
+      <LedgerEvidenceWorkspace
+        data={data}
+        ledgerRows={ledgerRows}
+        locale={locale}
+        summaryItems={summaryItems}
+        trialBalance={trialBalance}
+      />
+    );
+  }
+
+  if (submoduleId === "bookkeeping") {
+    return (
+      <BookkeepingOperationsWorkspace
+        bankRows={bankRows}
+        bookkeeping={data.bookkeeping}
+        datevLines={datevLines}
+        fiscalPeriods={fiscalPeriods}
+        locale={locale}
+        summaryItems={summaryItems}
+      />
+    );
+  }
+
+  if (submoduleId === "reports") {
+    return (
+      <ReportsCloseWorkspace
+        balanceSheet={balanceSheet}
+        businessAnalysis={businessAnalysis}
+        fiscalPeriods={fiscalPeriods}
+        locale={locale}
+        profitAndLoss={profitAndLoss}
+        summaryItems={summaryItems}
+        trialBalance={trialBalance}
+        vatStatement={vatStatement}
+      />
+    );
+  }
+
   return (
-    <main className="business-accounting-page">
+    <main className="business-accounting-page" data-submodule={submoduleId}>
       <header className="business-accounting-header finance-page-header">
         <div>
           <p>{locale === "de" ? "Business Basic" : "Business Basic"}</p>
@@ -212,14 +306,6 @@ function BusinessAccountingSurface({ data, locale, submoduleId }: { data: Busine
         </div>
       </header>
 
-      <nav className="business-accounting-tabs" aria-label="Business accounting">
-        {["invoices", "ledger", "fixed-assets", "receipts", "payments", "bookkeeping", "reports"].map((id) => (
-          <a aria-current={id === submoduleId ? "page" : undefined} href={`/app/business/${id}?locale=${locale}`} key={id}>
-            {titleForSubmodule(id, locale)}
-          </a>
-        ))}
-      </nav>
-
       <section className="finance-workbench" aria-label={locale === "de" ? "Finanzarbeitsbereich" : "Finance workspace"}>
         <div className="finance-summary-strip" aria-label={locale === "de" ? "Finanzlage" : "Financial state"}>
           {summaryItems.map(([label, value, meta]) => (
@@ -230,7 +316,7 @@ function BusinessAccountingSurface({ data, locale, submoduleId }: { data: Busine
             </div>
           ))}
         </div>
-        <FinanceModeTabs modes={financeModesForSubmodule({ balanceSheet, bankRows, data, fiscalPeriods, fixedAssets, locale, receipts, submoduleId, vatStatement })} />
+        <FinanceModeTabs locale={locale} modes={financeModesForSubmodule({ balanceSheet, bankRows, data, fiscalPeriods, fixedAssets, locale, receipts, submoduleId, vatStatement })} />
         <FinanceFilters locale={locale} submoduleId={submoduleId} />
         <div className={`finance-workbench-body ${usesDocumentRail(submoduleId) ? "with-document-rail" : ""}`}>
           {usesDocumentRail(submoduleId) ? (
@@ -241,23 +327,563 @@ function BusinessAccountingSurface({ data, locale, submoduleId }: { data: Busine
             rows={financeRows}
             title={worklistTitleForSubmodule(submoduleId, locale)}
           />
-          <aside className="finance-inspector" aria-label={locale === "de" ? "Details und Review" : "Details and review"}>
-            <FinanceInspector nextStep={nextStep} />
-            <FinanceInlineActions
-              accounting={accounting}
-              assetToDepreciate={assetToDepreciate}
-              customer={customer}
-              invoice={invoice}
-              locale={locale}
-              receiptToPost={receiptToPost}
-              submoduleId={submoduleId}
-              transactionToMatch={transactionToMatch}
-            />
-            <AccountingWorkflowPanel compact locale={locale} />
-          </aside>
+          <FinanceDecisionPanel
+            accounting={accounting}
+            assetToDepreciate={assetToDepreciate}
+            customer={customer}
+            invoice={invoice}
+            locale={locale}
+            nextStep={nextStep}
+            receiptToPost={receiptToPost}
+            storyWorkflows={storyWorkflows}
+            submoduleId={submoduleId}
+            transactionToMatch={transactionToMatch}
+          />
         </div>
       </section>
     </main>
+  );
+}
+
+function FinanceReferenceHeader({
+  actions,
+  locale,
+  summaryItems,
+  title,
+  subtitle
+}: {
+  actions?: ReactNode;
+  locale: SupportedLocale;
+  subtitle: string;
+  summaryItems: Array<[string, string, string]>;
+  title: string;
+}) {
+  return (
+    <>
+      <header className="business-accounting-header finance-page-header">
+        <div>
+          <h1>{title}</h1>
+          {subtitle ? <span>{subtitle}</span> : null}
+        </div>
+        <div className="finance-header-actions">
+          {actions}
+        </div>
+      </header>
+      <section className="finance-summary-strip" aria-label={locale === "de" ? "Finanzlage" : "Financial state"}>
+        {summaryItems.map(([label, value, meta]) => (
+          <div key={label}>
+            <span>{label}</span>
+            <strong>{value}</strong>
+            <small>{meta}</small>
+          </div>
+        ))}
+      </section>
+    </>
+  );
+}
+
+function PaymentsReconciliationWorkspaceShell({
+  accounts,
+  bankRows,
+  locale,
+  summaryItems
+}: {
+  accounts: BusinessBundle["accounts"];
+  bankRows: ReturnType<typeof buildReconciliationRows>;
+  locale: SupportedLocale;
+  summaryItems: Array<[string, string, string]>;
+}) {
+  const de = locale === "de";
+  const orderedRows = [...bankRows].sort((a, b) => bankRowPriority(a.status) - bankRowPriority(b.status));
+  return (
+    <main className="business-accounting-page accounting-reference-page accounting-payments-page" data-submodule="payments">
+      <FinanceReferenceHeader
+        locale={locale}
+        summaryItems={summaryItems}
+        title={de ? "Finanzen" : "Finance"}
+        subtitle=""
+        actions={<PaymentsHeaderActions locale={locale} />}
+      />
+      <PaymentsReconciliationWorkspace accounts={accounts} bankRows={orderedRows} locale={locale} />
+    </main>
+  );
+}
+
+function InvoiceDocumentWorkspace({
+  accounting,
+  customer,
+  data,
+  invoice,
+  locale,
+  summaryItems
+}: {
+  accounting: ReturnType<typeof prepareExistingInvoiceForAccounting>;
+  customer: BusinessBundle["customers"][number] | undefined;
+  data: BusinessBundle;
+  invoice: BusinessBundle["invoices"][number];
+  locale: SupportedLocale;
+  summaryItems: Array<[string, string, string]>;
+}) {
+  const de = locale === "de";
+  return (
+    <main className="business-accounting-page accounting-reference-page document-workspace-page" data-submodule="invoices">
+      <FinanceReferenceHeader
+        locale={locale}
+        summaryItems={summaryItems}
+        title={de ? "Alle Belege" : "All documents"}
+        subtitle=""
+        actions={null}
+      />
+      <section className="document-shell">
+        <DocumentSideNav
+          items={[
+            [de ? "Alle Belege" : "All documents", data.invoices.length],
+            [de ? "Ausgangsbelege" : "Outgoing", data.invoices.length],
+            [de ? "Überfällige" : "Overdue", data.invoices.filter((item) => item.status === "Overdue").length],
+            [de ? "Entwürfe" : "Drafts", data.invoices.filter((item) => item.status === "Draft").length],
+            [de ? "Archiviert" : "Archived", data.invoices.filter((item) => item.status === "Paid").length]
+          ]}
+        />
+        <section className="document-list-panel" id="document-list">
+          <div className="document-list-toolbar">
+            <input readOnly placeholder={de ? "Suchen Sie nach Name, Belegnummer oder Betrag" : "Search by name, document number or amount"} />
+            <span>{de ? "Sortieren nach Belegdatum" : "Sort by document date"}</span>
+          </div>
+          {data.invoices.map((item) => (
+            <article className={item.id === invoice.id ? "is-selected" : ""} key={item.id}>
+              <input aria-label={item.number} readOnly checked={item.id === invoice.id} type="checkbox" />
+              <div>
+                <strong>{customerName(data, item.customerId)}</strong>
+                <span>{item.number} · {item.issueDate} · {statusLabel(item.status, locale)}</span>
+              </div>
+              <strong>{businessCurrency(item.balanceDue ?? item.total, item.currency, locale)}</strong>
+              <a href={`/api/business/invoices/${item.id}/pdf?locale=${locale}`}>PDF</a>
+            </article>
+          ))}
+        </section>
+        <aside className="document-detail-panel">
+          <div className="document-preview">RE</div>
+          <dl>
+            <div><dt>{de ? "Belegnummer" : "Document no."}</dt><dd>{invoice.number}</dd></div>
+            <div><dt>{de ? "Kontakt" : "Contact"}</dt><dd>{customer?.name ?? invoice.customerId}</dd></div>
+            <div><dt>{de ? "Fälligkeit" : "Due"}</dt><dd>{invoice.dueDate}</dd></div>
+            <div><dt>{de ? "Betrag" : "Amount"}</dt><dd>{businessCurrency(invoice.total, invoice.currency, locale)}</dd></div>
+          </dl>
+          <div className="document-action-stack">
+            <InvoiceDeliveryActions copy={deliveryCopy(locale)} customer={customer} invoice={invoice} locale={locale} />
+            <a className="business-accounting-inline-link" href={`/api/business/invoices/${invoice.id}/zugferd?locale=${locale}`}>ZUGFeRD XML</a>
+            <AccountingCtoxActionButton label={de ? "CTOX sagen" : "Ask CTOX"} locale={locale} storyId="story-04" />
+          </div>
+          {accounting.validation.errors.length ? <small>{accounting.validation.errors.join(", ")}</small> : null}
+        </aside>
+      </section>
+    </main>
+  );
+}
+
+function ReceiptDocumentWorkspace({
+  locale,
+  receiptToPost,
+  receipts,
+  summaryItems
+}: {
+  locale: SupportedLocale;
+  receiptToPost: ReturnType<typeof buildReceiptQueue>[number] | undefined;
+  receipts: ReturnType<typeof buildReceiptQueue>;
+  summaryItems: Array<[string, string, string]>;
+}) {
+  const de = locale === "de";
+  const selected = receiptToPost ?? receipts[0];
+  return (
+    <main className="business-accounting-page accounting-reference-page document-workspace-page" data-submodule="receipts">
+      <FinanceReferenceHeader
+        locale={locale}
+        summaryItems={summaryItems}
+        title={de ? "Eingangsbelege" : "Inbound receipts"}
+        subtitle=""
+        actions={null}
+      />
+      <section className="document-shell">
+        <DocumentSideNav
+          items={[
+            [de ? "Alle Belege" : "All receipts", receipts.length],
+            [de ? "Eingangsbelege" : "Inbound", receipts.length],
+            [de ? "Zu prüfen" : "Review", receipts.filter((item) => item.status === "Needs review").length],
+            [de ? "Offene" : "Open", receipts.filter((item) => item.status === "Inbox").length],
+            [de ? "Archiviert" : "Archived", receipts.filter((item) => item.status === "Posted" || item.status === "Paid").length]
+          ]}
+        />
+        <section className="document-list-panel">
+          <div className="document-list-toolbar">
+            <input readOnly placeholder={de ? "Name, Belegnummer oder Betrag suchen" : "Search name, receipt number or amount"} />
+            <span>{de ? "Sortieren nach Belegdatum" : "Sort by receipt date"}</span>
+          </div>
+          {receipts.map((item) => (
+            <article className={item.id === selected?.id ? "is-selected" : ""} key={item.id}>
+              <input aria-label={item.number} readOnly checked={item.id === selected?.id} type="checkbox" />
+              <div>
+                <strong>{item.vendorName}</strong>
+                <span>{item.number} · {item.receiptDate} · {statusLabel(item.status, locale)}</span>
+              </div>
+              <strong>{businessCurrency(item.total, item.currency, locale)}</strong>
+              <span>{item.status === "Needs review" ? (de ? "Zuordnen" : "Assign") : statusLabel(item.status, locale)}</span>
+            </article>
+          ))}
+        </section>
+        {selected ? (
+          <aside className="document-detail-panel">
+            <div className="document-preview">EG</div>
+            <dl>
+              <div><dt>{de ? "Lieferant" : "Vendor"}</dt><dd>{selected.vendorName}</dd></div>
+              <div><dt>{de ? "Belegnummer" : "Receipt no."}</dt><dd>{selected.number}</dd></div>
+              <div><dt>{de ? "Aufwandskonto" : "Expense account"}</dt><dd>{selected.expenseAccount.code} {selected.expenseAccount.name}</dd></div>
+              <div><dt>{de ? "Betrag" : "Amount"}</dt><dd>{businessCurrency(selected.total, selected.currency, locale)}</dd></div>
+            </dl>
+            <div className="document-action-stack">
+              <ReceiptIngestButton label={de ? "OCR vorbereiten" : "Prepare OCR"} path={`/api/business/receipts/${selected.id}/ingest`} />
+              {selected.status === "Needs review" || selected.status === "Inbox" ? (
+                <>
+                  <AccountingCommandButton action="post" label={de ? "Buchen" : "Post"} recordId={selected.id} resource="receipts" />
+                  <AccountingCommandButton action="capitalize" label={de ? "Als Anlage" : "As asset"} recordId={selected.id} resource="receipts" />
+                </>
+              ) : null}
+              <AccountingCtoxActionButton label={de ? "CTOX sagen" : "Ask CTOX"} locale={locale} storyId="story-13" />
+            </div>
+          </aside>
+        ) : null}
+      </section>
+    </main>
+  );
+}
+
+function DocumentSideNav({ items }: { items: Array<[string, number]> }) {
+  return (
+    <nav className="document-side-nav">
+      {items.map(([label, count], index) => (
+        <button aria-current={index === 0 ? "true" : undefined} key={label} type="button">
+          <span>{label}</span>
+          <strong>{count}</strong>
+        </button>
+      ))}
+    </nav>
+  );
+}
+
+function FixedAssetsWorkspace({
+  assetToDepreciate,
+  fixedAssets,
+  locale,
+  summaryItems
+}: {
+  assetToDepreciate: ReturnType<typeof buildFixedAssetRegister>[number] | undefined;
+  fixedAssets: ReturnType<typeof buildFixedAssetRegister>;
+  locale: SupportedLocale;
+  summaryItems: Array<[string, string, string]>;
+}) {
+  const de = locale === "de";
+  const selected = assetToDepreciate ?? fixedAssets[0];
+  return (
+    <main className="business-accounting-page accounting-reference-page fixed-assets-page" data-submodule="fixed-assets">
+      <FinanceReferenceHeader
+        locale={locale}
+        summaryItems={summaryItems}
+        title={de ? "Anlagen" : "Fixed assets"}
+        subtitle=""
+        actions={null}
+      />
+      <section className="assets-shell">
+        <nav className="assets-side-nav">
+          <button aria-current="true" type="button">{de ? "Abschreibungsjahr" : "Depreciation year"} <strong>2026</strong></button>
+          <button type="button">{de ? "Alle Anlagen" : "All assets"} <strong>{fixedAssets.length}</strong></button>
+        </nav>
+        <section className="assets-list" id="asset-list">
+          <header><span>{de ? "Anlage" : "Asset"}</span><span>Status</span><span>{de ? "AfA 2026" : "Dep. 2026"}</span></header>
+          {fixedAssets.map((asset) => (
+            <article className={asset.id === selected?.id ? "is-selected" : ""} key={asset.id}>
+              <div><strong>{asset.name}</strong><span>{asset.category} · {asset.supplier}</span></div>
+              <span>{statusLabel(asset.status, locale)}</span>
+              <strong>{businessCurrency(asset.currentYearDepreciation, asset.currency, locale)}</strong>
+            </article>
+          ))}
+        </section>
+        {selected ? (
+          <aside className="asset-detail-panel">
+            <header>
+              <div>
+                <h2>{selected.name}</h2>
+                <p>{selected.category}</p>
+              </div>
+              <AccountingCommandButton action="depreciate" label={de ? "AfA buchen" : "Post depreciation"} recordId={selected.id} resource="fixed-assets" />
+            </header>
+            <dl>
+              <div><dt>{de ? "Anschaffung" : "Acquisition"}</dt><dd>{businessCurrency(selected.acquisitionCost, selected.currency, locale)}</dd></div>
+              <div><dt>{de ? "Buchwert" : "Book value"}</dt><dd>{businessCurrency(selected.bookValue, selected.currency, locale)}</dd></div>
+              <div><dt>{de ? "Kumulierte AfA" : "Accumulated dep."}</dt><dd>{businessCurrency(selected.accumulatedDepreciation, selected.currency, locale)}</dd></div>
+            </dl>
+            <section className="asset-schedule">
+              <h3>{de ? "Abschreibungsverlauf" : "Depreciation schedule"}</h3>
+              {selected.schedule.map((row) => (
+                <div className={row.fiscalYear === 2026 ? "is-current" : ""} key={row.fiscalYear}>
+                  <span>{row.fiscalYear}</span>
+                  <strong>{businessCurrency(row.amount, selected.currency, locale)}</strong>
+                  <span>{businessCurrency(row.bookValue, selected.currency, locale)}</span>
+                </div>
+              ))}
+            </section>
+            <div className="document-action-stack">
+              <AccountingCommandButton action="dispose" label={de ? "Abgang vorbereiten" : "Prepare disposal"} recordId={selected.id} resource="fixed-assets" />
+              <AccountingCtoxActionButton label={de ? "CTOX sagen" : "Ask CTOX"} locale={locale} storyId="story-39" />
+            </div>
+          </aside>
+        ) : null}
+      </section>
+    </main>
+  );
+}
+
+function ReportsCloseWorkspace({
+  balanceSheet,
+  businessAnalysis,
+  fiscalPeriods,
+  locale,
+  profitAndLoss,
+  summaryItems,
+  trialBalance,
+  vatStatement
+}: {
+  balanceSheet: ReturnType<typeof buildBalanceSheet>;
+  businessAnalysis: ReturnType<typeof buildBusinessAnalysis>;
+  fiscalPeriods: ReturnType<typeof buildFiscalPeriodState>;
+  locale: SupportedLocale;
+  profitAndLoss: ReturnType<typeof buildProfitAndLoss>;
+  summaryItems: Array<[string, string, string]>;
+  trialBalance: ReturnType<typeof buildTrialBalance>;
+  vatStatement: ReturnType<typeof buildVatStatement>;
+}) {
+  const de = locale === "de";
+  const assets = trialBalance.filter((row) => row.account.rootType === "asset").slice(0, 5);
+  const passiva = trialBalance.filter((row) => row.account.rootType === "liability" || row.account.rootType === "equity").slice(0, 5);
+  return (
+    <main className="business-accounting-page accounting-reference-page reports-close-page" data-submodule="reports">
+      <FinanceReferenceHeader
+        locale={locale}
+        summaryItems={summaryItems}
+        title={de ? "Berichte" : "Reports"}
+        subtitle=""
+        actions={<AccountingApiButton label={de ? "Periode schließen" : "Close period"} path="/api/business/accounting/period-close" />}
+      />
+      <section className="reports-dashboard">
+        <article className="balance-report-panel">
+          <header>
+            <div><p>{de ? "Ledger-basiert" : "Ledger-based"}</p><h2>{de ? "Bilanz" : "Balance sheet"}</h2></div>
+            <strong>{balanceSheet.balanced ? (de ? "stimmig" : "balanced") : businessCurrency(balanceSheet.difference, "EUR", locale)}</strong>
+          </header>
+          <div className="balance-total-row">
+            <span>Aktiva</span><strong>{businessCurrency(balanceSheet.assets, "EUR", locale)}</strong>
+            <span>Passiva</span><strong>{businessCurrency(balanceSheet.liabilities + balanceSheet.equity, "EUR", locale)}</strong>
+          </div>
+          <div className="balance-columns">
+            <ReportAccountColumn title="Aktiva" rows={assets} locale={locale} />
+            <ReportAccountColumn title="Passiva" rows={passiva} locale={locale} />
+          </div>
+        </article>
+        <article className="report-summary-panel">
+          <h2>{de ? "GuV" : "P&L"}</h2>
+          <strong>{businessCurrency(profitAndLoss.netIncome, "EUR", locale)}</strong>
+          <span>{de ? "Erloese" : "Income"} {businessCurrency(profitAndLoss.income, "EUR", locale)}</span>
+          <span>{de ? "Aufwand" : "Expense"} {businessCurrency(profitAndLoss.expense, "EUR", locale)}</span>
+        </article>
+        <article className="report-summary-panel">
+          <h2>BWA</h2>
+          <strong>{businessCurrency(businessAnalysis.ebit, "EUR", locale)}</strong>
+          <span>{de ? "Rohertrag" : "Gross profit"} {businessCurrency(businessAnalysis.grossProfit, "EUR", locale)}</span>
+          <span>{de ? "AfA" : "Depreciation"} {businessCurrency(businessAnalysis.depreciation, "EUR", locale)}</span>
+        </article>
+        <article className="report-summary-panel">
+          <h2>UStVA</h2>
+          <strong>{businessCurrency(vatStatement.netPosition, "EUR", locale)}</strong>
+          {vatStatement.boxes.slice(0, 3).map((box) => <span key={box.code}>Kz {box.code} {businessCurrency(box.amount, "EUR", locale)}</span>)}
+        </article>
+        <aside className="close-action-panel">
+          <h2>{de ? "Abschluss" : "Close"}</h2>
+          <p>{fiscalPeriods.nextClosablePeriod ? `${de ? "Nächste offene Periode" : "Next open period"} ${fiscalPeriods.nextClosablePeriod.id}` : (de ? "Keine überfällige Periode" : "No overdue period")}</p>
+          <DunningPreviewButton label={de ? "Mahnlauf prüfen" : "Review dunning"} />
+          <AccountingCtoxActionButton label={de ? "CTOX sagen" : "Ask CTOX"} locale={locale} storyId="story-33" />
+        </aside>
+      </section>
+    </main>
+  );
+}
+
+function LedgerEvidenceWorkspace({
+  data,
+  ledgerRows,
+  locale,
+  summaryItems,
+  trialBalance
+}: {
+  data: BusinessBundle;
+  ledgerRows: ReturnType<typeof buildLedgerRows>;
+  locale: SupportedLocale;
+  summaryItems: Array<[string, string, string]>;
+  trialBalance: ReturnType<typeof buildTrialBalance>;
+}) {
+  const de = locale === "de";
+  const selected = ledgerRows[0];
+  const accounts = trialBalance.slice(0, 10);
+  return (
+    <main className="business-accounting-page accounting-reference-page ledger-evidence-page" data-submodule="ledger">
+      <FinanceReferenceHeader
+        locale={locale}
+        summaryItems={summaryItems}
+        title="Ledger"
+        subtitle=""
+        actions={<AccountingApiButton label={de ? "Setup prüfen" : "Check setup"} path="/api/business/accounting/setup" />}
+      />
+      <section className="ledger-shell">
+        <nav className="ledger-account-nav" aria-label={de ? "Konten" : "Accounts"}>
+          {accounts.map((row, index) => (
+            <button aria-current={index === 0 ? "true" : undefined} key={row.account.id} type="button">
+              <span>{row.account.code} {row.account.name}</span>
+              <strong>{businessCurrency(row.balance, row.account.currency, locale)}</strong>
+            </button>
+          ))}
+        </nav>
+        <section className="ledger-entry-list">
+          <header>
+            <span>{de ? "Datum" : "Date"}</span>
+            <span>{de ? "Buchung" : "Posting"}</span>
+            <span>{de ? "Soll" : "Debit"}</span>
+            <span>{de ? "Haben" : "Credit"}</span>
+            <span>{de ? "Aktion" : "Action"}</span>
+          </header>
+          {ledgerRows.slice(0, 12).map((row, index) => (
+            <article className={index === 0 ? "is-selected" : ""} key={row.id}>
+              <span>{row.entry.postingDate}</span>
+              <div>
+                <strong>{text(row.entry.narration, locale)}</strong>
+                <small>{row.entry.number} · {row.account.code} {row.account.name} · {row.refLabel}</small>
+              </div>
+              <strong>{row.debit ? businessCurrency(row.debit, row.account.currency, locale) : "-"}</strong>
+              <strong>{row.credit ? businessCurrency(row.credit, row.account.currency, locale) : "-"}</strong>
+              <span>{de ? "Festgeschrieben" : "Posted"}</span>
+            </article>
+          ))}
+        </section>
+        {selected ? (
+          <aside className="ledger-detail-panel">
+            <h2>{text(selected.entry.narration, locale)}</h2>
+            <p>{selected.entry.number}</p>
+            <dl>
+              <div><dt>{de ? "Referenz" : "Reference"}</dt><dd>{selected.refLabel}</dd></div>
+              <div><dt>{de ? "Status" : "Status"}</dt><dd>{statusLabel(selected.entry.status, locale)}</dd></div>
+              <div><dt>{de ? "Buchungsdatum" : "Posting date"}</dt><dd>{selected.entry.postingDate}</dd></div>
+              <div><dt>{de ? "Ausgeglichen" : "Balanced"}</dt><dd>{selected.entry.lines.reduce((sum, line) => sum + line.debit, 0) === selected.entry.lines.reduce((sum, line) => sum + line.credit, 0) ? "OK" : "!"}</dd></div>
+            </dl>
+            <section className="ledger-lines">
+              {selected.entry.lines.map((line, index) => {
+                const account = data.accounts.find((item) => item.id === line.accountId);
+                return (
+                  <div key={`${line.accountId}-${index}`}>
+                    <span>{account?.code ?? line.accountId} {account?.name ?? ""}</span>
+                    <strong>{line.debit ? `S ${businessCurrency(line.debit, account?.currency ?? "EUR", locale)}` : `H ${businessCurrency(line.credit, account?.currency ?? "EUR", locale)}`}</strong>
+                  </div>
+                );
+              })}
+            </section>
+            <AccountingCtoxActionButton label={de ? "CTOX sagen" : "Ask CTOX"} locale={locale} storyId="story-26" />
+          </aside>
+        ) : null}
+      </section>
+    </main>
+  );
+}
+
+function BookkeepingOperationsWorkspace({
+  bankRows,
+  bookkeeping,
+  datevLines,
+  fiscalPeriods,
+  locale,
+  summaryItems
+}: {
+  bankRows: ReturnType<typeof buildReconciliationRows>;
+  bookkeeping: BusinessBundle["bookkeeping"];
+  datevLines: ReturnType<typeof buildDatevLines>;
+  fiscalPeriods: ReturnType<typeof buildFiscalPeriodState>;
+  locale: SupportedLocale;
+  summaryItems: Array<[string, string, string]>;
+}) {
+  const de = locale === "de";
+  const batch = bookkeeping[0];
+  return (
+    <main className="business-accounting-page accounting-reference-page bookkeeping-ops-page" data-submodule="bookkeeping">
+      <FinanceReferenceHeader
+        locale={locale}
+        summaryItems={summaryItems}
+        title={de ? "Buchhaltung" : "Bookkeeping"}
+        subtitle=""
+        actions={<DatevExportButton label={de ? "DATEV exportieren" : "Export DATEV"} />}
+      />
+      <section className="bookkeeping-shell">
+        <article className="bookkeeping-primary">
+          <header>
+            <div>
+              <p>{de ? "Nächster Stapel" : "Next batch"}</p>
+              <h2>{batch ? `${batch.system} ${batch.period}` : "DATEV"}</h2>
+            </div>
+            <strong>{batch ? statusLabel(batch.status, locale) : "-"}</strong>
+          </header>
+          {batch ? (
+            <dl>
+              <div><dt>{de ? "Belege" : "Documents"}</dt><dd>{batch.invoiceIds.length}</dd></div>
+              <div><dt>{de ? "Netto" : "Net"}</dt><dd>{businessCurrency(batch.netAmount, "EUR", locale)}</dd></div>
+              <div><dt>{de ? "Steuer" : "Tax"}</dt><dd>{businessCurrency(batch.taxAmount, "EUR", locale)}</dd></div>
+              <div><dt>{de ? "Fällig" : "Due"}</dt><dd>{batch.dueDate}</dd></div>
+            </dl>
+          ) : null}
+          <div className="bookkeeping-action-row">
+            <DatevExportButton label={de ? "DATEV CSV" : "DATEV CSV"} />
+            <AccountingCtoxActionButton label={de ? "CTOX sagen" : "Ask CTOX"} locale={locale} storyId="story-32" />
+          </div>
+        </article>
+        <article className="bookkeeping-secondary">
+          <h2>{de ? "Bankimport" : "Bank import"}</h2>
+          <p>{de ? `${bankRows.filter((row) => row.status !== "Matched").length} offene Bankzeilen vor dem Export klären.` : `${bankRows.filter((row) => row.status !== "Matched").length} open bank lines to clear before export.`}</p>
+          <PaymentsHeaderActions locale={locale} />
+        </article>
+        <article className="bookkeeping-secondary">
+          <h2>{de ? "Perioden" : "Periods"}</h2>
+          <p>{fiscalPeriods.nextClosablePeriod ? `${de ? "Nächste Periode" : "Next period"} ${fiscalPeriods.nextClosablePeriod.id}` : (de ? "Keine überfällige Periode" : "No overdue period")}</p>
+          <AccountingApiButton label={de ? "Periode schließen" : "Close period"} path="/api/business/accounting/period-close" />
+        </article>
+        <section className="datev-line-list">
+          <header><span>{de ? "Konto" : "Account"}</span><span>{de ? "Gegenkonto" : "Contra"}</span><span>{de ? "Betrag" : "Amount"}</span><span>DATEV</span></header>
+          {datevLines.slice(0, 10).map((line, index) => (
+            <article key={`${line.entry.id}-${line.account.id}-${index}`}>
+              <span>{line.account.code} {line.account.name}</span>
+              <span>{line.contraAccount?.code ?? "-"}</span>
+              <strong>{businessCurrency(line.amount, line.account.currency, locale)}</strong>
+              <span>{line.taxCode || "-"}</span>
+            </article>
+          ))}
+        </section>
+      </section>
+    </main>
+  );
+}
+
+function ReportAccountColumn({ locale, rows, title }: { locale: SupportedLocale; rows: ReturnType<typeof buildTrialBalance>; title: string }) {
+  return (
+    <div className="report-account-column">
+      <h3>{title}</h3>
+      {rows.map((row) => (
+        <div key={row.account.id}>
+          <span>{row.account.code} {row.account.name}</span>
+          <strong>{businessCurrency(row.balance, row.account.currency, locale)}</strong>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -280,9 +906,10 @@ type FinanceRow = {
   title: string;
 };
 
-function FinanceModeTabs({ modes }: { modes: FinanceMode[] }) {
+function FinanceModeTabs({ locale, modes }: { locale: SupportedLocale; modes: FinanceMode[] }) {
   return (
     <div className="finance-mode-tabs" role="tablist" aria-label="Finance modes">
+      <span className="finance-mode-label">{locale === "de" ? "Arbeitsfokus" : "Work focus"}</span>
       {modes.map((mode, index) => (
         <button aria-selected={index === 0} className={`finance-mode-tab tone-${mode.tone}`} key={mode.label} role="tab" type="button">
           <span>{mode.label}</span>
@@ -369,6 +996,7 @@ function FinanceRows({ caption, rows, title }: { caption?: string; rows: Finance
       </header>
       <div className="finance-row-board-head" aria-hidden="true">
         <span>Auswahl</span>
+        <span>Art</span>
         <span>Vorgang</span>
         <span>Status</span>
         <span>Betrag</span>
@@ -421,6 +1049,52 @@ function FinanceInspector({ nextStep }: { nextStep: BusinessNextStep }) {
   );
 }
 
+type FinanceDecisionPanelProps = FinanceActionProps & {
+  nextStep: BusinessNextStep;
+  storyWorkflows: ReturnType<typeof storyWorkflowsForSubmodule>;
+};
+
+function FinanceDecisionPanel({
+  accounting,
+  assetToDepreciate,
+  customer,
+  invoice,
+  locale,
+  nextStep,
+  receiptToPost,
+  storyWorkflows,
+  submoduleId,
+  transactionToMatch
+}: FinanceDecisionPanelProps) {
+  return (
+    <aside className="finance-inspector" aria-label={locale === "de" ? "Entscheidung und Freigabe" : "Decision and approval"}>
+      <section className="finance-decision-panel">
+        <FinanceInspector nextStep={nextStep} />
+        <div className="finance-decision-actions">
+          <FinanceInlineActions
+            accounting={accounting}
+            assetToDepreciate={assetToDepreciate}
+            customer={customer}
+            invoice={invoice}
+            locale={locale}
+            receiptToPost={receiptToPost}
+            submoduleId={submoduleId}
+            transactionToMatch={transactionToMatch}
+          />
+        </div>
+      </section>
+      <AccountingStoryWorkflowPanel
+        contextPrompt={ctoxPromptForDecision({ assetToDepreciate, customer, invoice, locale, receiptToPost, submoduleId, transactionToMatch })}
+        locale={locale}
+        recommendedStoryId={recommendedStoryIdForSubmodule(submoduleId)}
+        stories={storyWorkflows}
+        submoduleId={submoduleId}
+      />
+      <AccountingWorkflowPanel compact locale={locale} quiet />
+    </aside>
+  );
+}
+
 function FinancePrimaryActions(props: FinanceActionProps) {
   if (props.submoduleId === "receipts" || props.submoduleId === "bookkeeping") {
     return (
@@ -434,11 +1108,53 @@ function FinancePrimaryActions(props: FinanceActionProps) {
     );
   }
 
-  return (
-    <div className="finance-primary-actions">
-      <FinanceInlineActions {...props} compact />
-    </div>
-  );
+  return null;
+}
+
+function ctoxPromptForDecision({
+  assetToDepreciate,
+  customer,
+  invoice,
+  locale,
+  receiptToPost,
+  submoduleId,
+  transactionToMatch
+}: Pick<FinanceActionProps, "assetToDepreciate" | "customer" | "invoice" | "locale" | "receiptToPost" | "submoduleId" | "transactionToMatch">) {
+  const de = locale === "de";
+  if (submoduleId === "payments" && transactionToMatch) {
+    const amount = businessCurrency(transactionToMatch.amount, transactionToMatch.currency, locale);
+    return de
+      ? `Prüfe den Bankumsatz ${amount} von ${transactionToMatch.counterparty} und bereite den vorgeschlagenen Match zur Freigabe vor.`
+      : `Review the ${amount} bank transaction from ${transactionToMatch.counterparty} and prepare the suggested match for approval.`;
+  }
+  if (submoduleId === "receipts" && receiptToPost) {
+    return de
+      ? `Prüfe den Eingangsbeleg ${receiptToPost.number} von ${receiptToPost.vendorName} und bereite die Buchung vor.`
+      : `Review inbound receipt ${receiptToPost.number} from ${receiptToPost.vendorName} and prepare the posting.`;
+  }
+  if (submoduleId === "fixed-assets" && assetToDepreciate) {
+    return de
+      ? `Prüfe die Anlage ${assetToDepreciate.name} und bereite die nächste AfA-Buchung mit Bilanzwirkung vor.`
+      : `Review asset ${assetToDepreciate.name} and prepare the next depreciation posting with balance sheet impact.`;
+  }
+  if (submoduleId === "bookkeeping") {
+    return de
+      ? "Bereite den nächsten DATEV-Export vor, prüfe offene Bankzeilen und markiere nur freigabefähige Buchungen."
+      : "Prepare the next DATEV export, review open bank lines, and mark only postings ready for approval.";
+  }
+  if (submoduleId === "ledger") {
+    return de
+      ? `Zeige mir die Buchungskette zur Rechnung ${invoice.number} und markiere Storno- oder GoBD-relevante Auffälligkeiten.`
+      : `Show me the posting chain for invoice ${invoice.number} and flag reversal or GoBD-relevant issues.`;
+  }
+  if (submoduleId === "reports") {
+    return de
+      ? "Leite Bilanz, GuV und UStVA aus dem Ledger ab und zeige mir vor dem Periodenabschluss nur die offenen Klärpunkte."
+      : "Derive balance sheet, P&L, and VAT return from the ledger and show only open review points before period close.";
+  }
+  return de
+    ? `Prüfe Rechnung ${invoice.number} für ${customer?.name ?? invoice.customerId}, bereite Versand, ZUGFeRD-PDF und Buchung zur Freigabe vor.`
+    : `Review invoice ${invoice.number} for ${customer?.name ?? invoice.customerId}, then prepare delivery, ZUGFeRD PDF, and posting for approval.`;
 }
 
 type FinanceActionProps = {
@@ -511,6 +1227,19 @@ function FinanceInlineActions({
 
 function usesDocumentRail(submoduleId: string) {
   return submoduleId === "invoices" || submoduleId === "receipts";
+}
+
+function recommendedStoryIdForSubmodule(submoduleId: string) {
+  const ids: Record<string, string> = {
+    bookkeeping: "story-32",
+    "fixed-assets": "story-39",
+    invoices: "story-04",
+    ledger: "story-26",
+    payments: "story-05",
+    receipts: "story-13",
+    reports: "story-33"
+  };
+  return ids[submoduleId];
 }
 
 function financeModesForSubmodule({
@@ -646,7 +1375,7 @@ function financeRowsForSubmodule({
   }
 
   if (submoduleId === "payments") {
-    return bankRows.slice(0, 10).map((row) => ({
+    return [...bankRows].sort((a, b) => bankRowPriority(a.status) - bankRowPriority(b.status)).slice(0, 10).map((row) => ({
       action: paymentActionLabel(row.nextAction, locale),
       amount: businessCurrency(row.amount, row.currency, locale),
       amountTone: row.amount < 0 ? "negative" : "positive",
@@ -718,6 +1447,18 @@ function financeRowsForSubmodule({
     ];
     const reportRows: FinanceRow[] = [
       {
+        action: balanceSheet.balanced ? "stimmig" : "Differenz",
+        amount: businessCurrency(balanceSheet.assets, "EUR", locale),
+        amountTone: "neutral",
+        detail: `${locale === "de" ? "Passiva" : "Liabilities and equity"} ${businessCurrency(balanceSheet.liabilities + balanceSheet.equity, "EUR", locale)} · ${locale === "de" ? "Jahresergebnis" : "retained earnings"} ${businessCurrency(balanceSheet.retainedEarnings, "EUR", locale)}`,
+        id: "balance-sheet-derived",
+        marker: "B",
+        meta: locale === "de" ? "aus Ledger und Kontenrahmen" : "from ledger and chart of accounts",
+        tone: balanceSheet.balanced ? "focus" : "review",
+        status: locale === "de" ? "Bilanz" : "Balance sheet",
+        title: locale === "de" ? "Bilanz aus Ledger" : "Balance sheet from ledger"
+      },
+      {
         action: fiscalPeriods.nextClosablePeriod ? (locale === "de" ? "schließen" : "close") : "aktuell",
         amount: fiscalPeriods.nextClosablePeriod?.id ?? `${fiscalPeriods.closedCount}/${fiscalPeriods.periodCount}`,
         amountTone: "neutral",
@@ -732,18 +1473,6 @@ function financeRowsForSubmodule({
         title: fiscalPeriods.nextClosablePeriod
           ? (locale === "de" ? "Nächste Periode schließen" : "Close next period")
           : (locale === "de" ? "Perioden sind aktuell" : "Periods are current")
-      },
-      {
-        action: balanceSheet.balanced ? "stimmig" : "Differenz",
-        amount: businessCurrency(balanceSheet.assets, "EUR", locale),
-        amountTone: "neutral",
-        detail: `${locale === "de" ? "Passiva" : "Liabilities and equity"} ${businessCurrency(balanceSheet.liabilities + balanceSheet.equity, "EUR", locale)} · ${locale === "de" ? "Jahresergebnis" : "retained earnings"} ${businessCurrency(balanceSheet.retainedEarnings, "EUR", locale)}`,
-        id: "balance-sheet-derived",
-        marker: "B",
-        meta: locale === "de" ? "aus Ledger und Kontenrahmen" : "from ledger and chart of accounts",
-        tone: balanceSheet.balanced ? "focus" : "review",
-        status: locale === "de" ? "Bilanz" : "Balance sheet",
-        title: locale === "de" ? "Bilanz aus Ledger" : "Balance sheet from ledger"
       },
       {
         action: "GuV",
@@ -825,6 +1554,13 @@ function financeRowsForSubmodule({
     status: statusLabel(row.entry.status, locale),
     title: row.account.name
   }));
+}
+
+function bankRowPriority(status: string) {
+  if (status === "Suggested") return 0;
+  if (status === "Unmatched") return 1;
+  if (status === "Matched") return 3;
+  return 2;
 }
 
 function statusLabel(status: string, locale: SupportedLocale) {

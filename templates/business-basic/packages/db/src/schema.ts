@@ -1315,3 +1315,141 @@ export const operationsActionItems = pgTable("operations_action_items", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
 });
+
+export const workforcePeople = pgTable("workforce_people", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  externalId: text("external_id").notNull().unique(),
+  companyId: text("company_id").notNull(),
+  number: text("number").notNull(),
+  name: text("name").notNull(),
+  role: text("role").notNull(),
+  team: text("team").notNull(),
+  active: integer("active").notNull().default(1),
+  locationSlotExternalId: text("location_slot_external_id"),
+  payrollEmployeeExternalId: text("payroll_employee_external_id"),
+  weeklyHours: integer("weekly_hours").notNull().default(40),
+  skillsJson: text("skills_json").notNull().default("[]"),
+  payloadJson: text("payload_json").notNull().default("{}"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
+});
+
+export const workforceShiftTypes = pgTable("workforce_shift_types", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  externalId: text("external_id").notNull().unique(),
+  companyId: text("company_id").notNull(),
+  name: text("name").notNull(),
+  role: text("role").notNull(),
+  startTime: text("start_time").notNull(),
+  endTime: text("end_time").notNull(),
+  color: text("color").notNull(),
+  billable: integer("billable").notNull().default(1),
+  payloadJson: text("payload_json").notNull().default("{}"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
+});
+
+export const workforceLocationSlots = pgTable("workforce_location_slots", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  externalId: text("external_id").notNull().unique(),
+  companyId: text("company_id").notNull(),
+  name: text("name").notNull(),
+  zone: text("zone").notNull(),
+  capacity: integer("capacity").notNull().default(1),
+  payloadJson: text("payload_json").notNull().default("{}"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
+});
+
+export const workforceAbsences = pgTable("workforce_absences", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  externalId: text("external_id").notNull().unique(),
+  companyId: text("company_id").notNull(),
+  personExternalId: text("person_external_id").notNull(),
+  startDate: text("start_date").notNull(),
+  endDate: text("end_date").notNull(),
+  type: text("type").notNull(),
+  status: text("status").notNull(),
+  note: text("note"),
+  payloadJson: text("payload_json").notNull().default("{}"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
+});
+
+export const workforceRecurringShiftPatterns = pgTable("workforce_recurring_shift_patterns", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  externalId: text("external_id").notNull().unique(),
+  companyId: text("company_id").notNull(),
+  title: text("title").notNull(),
+  personExternalId: text("person_external_id").notNull(),
+  shiftTypeExternalId: text("shift_type_external_id").notNull(),
+  locationSlotExternalId: text("location_slot_external_id").notNull(),
+  weekday: integer("weekday").notNull(),
+  startDate: text("start_date").notNull(),
+  endDate: text("end_date"),
+  active: integer("active").notNull().default(1),
+  payloadJson: text("payload_json").notNull().default("{}"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
+});
+
+export const workforceAssignments = pgTable("workforce_assignments", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  externalId: text("external_id").notNull().unique(),
+  companyId: text("company_id").notNull(),
+  title: text("title").notNull(),
+  personExternalId: text("person_external_id").notNull(),
+  shiftTypeExternalId: text("shift_type_external_id").notNull(),
+  locationSlotExternalId: text("location_slot_external_id").notNull(),
+  date: text("date").notNull(),
+  startTime: text("start_time").notNull(),
+  endTime: text("end_time").notNull(),
+  customerExternalId: text("customer_external_id"),
+  projectExternalId: text("project_external_id"),
+  status: text("status").notNull(),
+  blocker: text("blocker"),
+  notes: text("notes"),
+  payloadJson: text("payload_json").notNull().default("{}"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
+}, (table) => [
+  uniqueIndex("workforce_assignment_slot_unique").on(table.companyId, table.personExternalId, table.date, table.startTime, table.endTime)
+]);
+
+export const workforceTimeEntries = pgTable("workforce_time_entries", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  externalId: text("external_id").notNull().unique(),
+  companyId: text("company_id").notNull(),
+  assignmentExternalId: text("assignment_external_id").notNull(),
+  personExternalId: text("person_external_id").notNull(),
+  date: text("date").notNull(),
+  startTime: text("start_time").notNull(),
+  endTime: text("end_time").notNull(),
+  breakMinutes: integer("break_minutes").notNull().default(0),
+  status: text("status").notNull(),
+  evidence: text("evidence"),
+  note: text("note"),
+  approvedAt: timestamp("approved_at", { withTimezone: true }),
+  approvedBy: text("approved_by"),
+  payloadJson: text("payload_json").notNull().default("{}"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
+}, (table) => [
+  uniqueIndex("workforce_time_entry_assignment_unique").on(table.companyId, table.assignmentExternalId)
+]);
+
+export const workforceHandoffs = pgTable("workforce_handoffs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  externalId: text("external_id").notNull().unique(),
+  companyId: text("company_id").notNull(),
+  handoffType: text("handoff_type").notNull(),
+  assignmentExternalId: text("assignment_external_id").notNull(),
+  sourceExternalId: text("source_external_id").notNull(),
+  targetExternalId: text("target_external_id"),
+  amountMinor: integer("amount_minor").notNull().default(0),
+  currency: text("currency").notNull().default("EUR"),
+  status: text("status").notNull(),
+  payloadJson: text("payload_json").notNull().default("{}"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
+});

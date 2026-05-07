@@ -18,6 +18,7 @@ import {
   type BusinessBookkeepingExport,
   type BusinessBundle,
   type BusinessCustomer,
+  type BusinessFixedAsset,
   type BusinessInvoice,
   type BusinessJournalEntry,
   type BusinessProduct,
@@ -120,6 +121,7 @@ export async function BusinessPanel({
   const bankTransaction = data.bankTransactions.find((item) => item.id === recordId);
   const journalEntry = data.journalEntries.find((item) => item.id === recordId);
   const receipt = data.receipts.find((item) => item.id === recordId);
+  const fixedAsset = data.fixedAssets.find((item) => item.id === recordId);
   const exportBatch = data.bookkeeping.find((item) => item.id === recordId);
   const report = data.reports.find((item) => item.id === recordId);
   const warehouse = (await getWarehouseSnapshot()).snapshot;
@@ -220,6 +222,7 @@ export async function BusinessPanel({
   if (bankTransaction) return <BankTransactionPanel bankTransaction={bankTransaction} copy={copy} data={data} locale={locale} query={query} submoduleId={submoduleId} />;
   if (journalEntry) return <JournalEntryPanel copy={copy} data={data} entry={journalEntry} locale={locale} query={query} submoduleId={submoduleId} />;
   if (receipt) return <ReceiptPanel copy={copy} data={data} locale={locale} query={query} receipt={receipt} submoduleId={submoduleId} />;
+  if (fixedAsset) return <FixedAssetPanel asset={fixedAsset} copy={copy} data={data} locale={locale} query={query} submoduleId={submoduleId} />;
   if (exportBatch) return <BookkeepingPanel copy={copy} data={data} exportBatch={exportBatch} locale={locale} query={query} submoduleId={submoduleId} />;
   if (report) return <ReportPanel copy={copy} data={data} locale={locale} query={query} report={report} submoduleId={submoduleId} />;
   if (warehouseRecord) return <WarehousePanel query={query} record={warehouseRecord} submoduleId={submoduleId} />;
@@ -1672,6 +1675,79 @@ function ReceiptPanel({ copy, data, locale, query, receipt, submoduleId }: {
           title={`Reconcile receipt: ${receipt.number}`}
         >
           {copy.reconcile}
+        </BusinessQueueButton>
+      </div>
+    </div>
+  );
+}
+
+function FixedAssetPanel({ asset, copy, data, locale, query, submoduleId }: {
+  asset: BusinessFixedAsset;
+  copy: BusinessCopy;
+  data: BusinessBundle;
+  locale: SupportedLocale;
+  query: QueryState;
+  submoduleId: string;
+}) {
+  const assetAccount = data.accounts.find((account) => account.id === asset.assetAccountId);
+  const accumulatedAccount = data.accounts.find((account) => account.id === asset.accumulatedDepreciationAccountId);
+  const depreciationAccount = data.accounts.find((account) => account.id === asset.depreciationExpenseAccountId);
+  const receipt = asset.receiptId ? data.receipts.find((item) => item.id === asset.receiptId) : undefined;
+  const rows = buildLedgerRows(data).filter((row) => row.entry.refType === "asset" && row.entry.refId.startsWith(asset.id));
+  const postedDepreciation = rows
+    .filter((row) => row.account.id === asset.accumulatedDepreciationAccountId)
+    .reduce((sum, row) => sum + row.credit - row.debit, 0);
+  const bookValue = Math.max(asset.salvageValue, asset.acquisitionCost - postedDepreciation);
+  const usefulLifeYears = Math.max(1, Math.ceil(asset.usefulLifeMonths / 12));
+  const annualDepreciation = (asset.acquisitionCost - asset.salvageValue) / usefulLifeYears;
+
+  return (
+    <div className="drawer-content ops-drawer">
+      <DrawerHeader title={asset.name} query={query} submoduleId={submoduleId} />
+      <p className="drawer-description">{text(asset.notes, locale)}</p>
+      <dl className="drawer-facts">
+        <div><dt>{copy.status}</dt><dd>{asset.status}</dd></div>
+        <div><dt>{locale === "de" ? "Kategorie" : "Category"}</dt><dd>{asset.category}</dd></div>
+        <div><dt>{copy.vendor}</dt><dd>{asset.supplier}</dd></div>
+        <div><dt>{copy.date}</dt><dd>{asset.acquisitionDate}</dd></div>
+        <div><dt>{copy.amount}</dt><dd>{businessCurrency(asset.acquisitionCost, asset.currency, locale)}</dd></div>
+        <div><dt>{copy.balance}</dt><dd>{businessCurrency(bookValue, asset.currency, locale)}</dd></div>
+      </dl>
+      <section className="ops-drawer-section">
+        <h3>{locale === "de" ? "Bilanz und AfA" : "Balance sheet and depreciation"}</h3>
+        <div className="ops-mini-list">
+          <span>{assetAccount?.code ?? asset.assetAccountId} {assetAccount?.name ?? ""}</span>
+          <span>{accumulatedAccount?.code ?? asset.accumulatedDepreciationAccountId} {accumulatedAccount?.name ?? ""}</span>
+          <span>{depreciationAccount?.code ?? asset.depreciationExpenseAccountId} {depreciationAccount?.name ?? ""}</span>
+          <span>{locale === "de" ? "Plan-AfA pro Jahr" : "Planned annual depreciation"}: {businessCurrency(annualDepreciation, asset.currency, locale)}</span>
+        </div>
+      </section>
+      <BusinessRecordList
+        title={copy.ledger}
+        items={rows.slice(0, 8).map((row) => `${row.entry.postingDate} - ${row.entry.number} - ${row.account.code} - ${businessCurrency(Math.max(row.debit, row.credit), row.account.currency, locale)}`)}
+      />
+      {receipt ? <BusinessRecordList title={copy.receipt} items={[`${receipt.number} - ${receipt.vendorName} - ${businessCurrency(receipt.total, receipt.currency, locale)}`]} /> : null}
+      <div className="ops-action-dock">
+        <BusinessQueueButton
+          action="sync"
+          className="drawer-primary"
+          instruction={`Prepare depreciation review for fixed asset ${asset.name}. Check acquisition, accumulated depreciation, current book value, and period lock before posting.`}
+          payload={{ asset, rows }}
+          recordId={asset.id}
+          resource="fixed-assets"
+          title={`Review fixed asset: ${asset.name}`}
+        >
+          {locale === "de" ? "CTOX AfA prüfen lassen" : "Ask CTOX to review depreciation"}
+        </BusinessQueueButton>
+        <BusinessQueueButton
+          action="sync"
+          instruction={`Prepare fixed asset disposal workflow for ${asset.name}. Do not post without user approval.`}
+          payload={{ asset, rows }}
+          recordId={asset.id}
+          resource="fixed-assets"
+          title={`Prepare fixed asset disposal: ${asset.name}`}
+        >
+          {locale === "de" ? "Abgang vorbereiten" : "Prepare disposal"}
         </BusinessQueueButton>
       </div>
     </div>

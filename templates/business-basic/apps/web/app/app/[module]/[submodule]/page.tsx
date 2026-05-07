@@ -41,6 +41,7 @@ export default async function SubmodulePage({
   const isCtox = module.id === "ctox";
   const isMarketing = module.id === "marketing" && !isCompetitiveAnalysis;
   const isOperations = module.id === "operations";
+  const isPayroll = module.id === "payroll";
   const isSales = module.id === "sales";
   const drawer: WorkSurfacePanelState["drawer"] =
     query.drawer === "left-bottom" || query.drawer === "bottom" || query.drawer === "right"
@@ -86,6 +87,10 @@ export default async function SubmodulePage({
     const { OperationsPanel, OperationsWorkspace } = await import("../../../../components/operations-workspace");
     panelContent = <OperationsPanel panelState={panelState} query={viewQuery} submoduleId={submodule.id} />;
     workspaceContent = <OperationsWorkspace query={viewQuery} submoduleId={submodule.id} />;
+  } else if (isPayroll) {
+    const { PayrollPanel, PayrollWorkspace } = await import("../../../../components/payroll-workspace");
+    panelContent = <PayrollPanel panelState={panelState} query={viewQuery} submoduleId={submodule.id} />;
+    workspaceContent = <PayrollWorkspace query={viewQuery} submoduleId={submodule.id} />;
   } else if (isBusiness) {
     const { BusinessPanel, BusinessWorkspace } = await import("../../../../components/business-workspace");
     panelContent = <BusinessPanel panelState={panelState} query={viewQuery} submoduleId={submodule.id} />;
@@ -109,10 +114,10 @@ export default async function SubmodulePage({
         moduleId={module.id}
         submoduleId={submodule.id}
         title={submodule.label}
-        description={isCompetitiveAnalysis ? "Market monitor workspace" : isOperations ? "Operations workspace" : `${module.label} workspace`}
+        description={isCompetitiveAnalysis ? "Market monitor workspace" : isOperations ? "Operations workspace" : isPayroll ? "Payroll workspace" : `${module.label} workspace`}
         panelState={panelState}
         panelContent={panelContent}
-        hideHeader={isSales || isCompetitiveAnalysis || isMarketing || isOperations || isBusiness || isCtox}
+        hideHeader={isSales || isCompetitiveAnalysis || isMarketing || isOperations || isPayroll || isBusiness || isCtox}
       >
         <div
           className="context-menu-scope"

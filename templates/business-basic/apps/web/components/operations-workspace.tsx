@@ -18,6 +18,8 @@ import { OperationsCreateForm, OperationsKnowledgeCreateForm, OperationsQueueBut
 import { OperationsPlanningView as OperationsPlanningSliceView } from "./operations/planning-view";
 import { OperationsProjectsView } from "./operations/projects-view";
 import { OperationsWorkItemsView } from "./operations/work-items-view";
+import { WorkforceWorkbench } from "./workforce-workbench";
+import { getWorkforceSnapshot } from "../lib/workforce-runtime";
 
 type QueryState = {
   drawer?: string;
@@ -62,6 +64,11 @@ export async function OperationsWorkspace({
 
   if (normalizedSubmodule === "work-items") {
     return <OperationsWorkItemsView copy={copy} data={data} locale={locale} query={query} submoduleId={submoduleId} />;
+  }
+
+  if (normalizedSubmodule === "workforce") {
+    const workforce = await getWorkforceSnapshot();
+    return <WorkforceWorkbench query={query} snapshot={workforce} />;
   }
 
   return <OperationsProjectsView copy={copy} data={data} locale={locale} query={query} submoduleId={submoduleId} />;
