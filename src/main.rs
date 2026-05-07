@@ -1083,7 +1083,21 @@ fn handle_chat(root: &Path, args: &[String]) -> anyhow::Result<()> {
             if !status.running {
                 anyhow::bail!("CTOX service stopped before the chat request completed");
             }
-            if !status.busy && status.pending_count == 0 {
+            let completed_after_submit = chat_status_has_completed_since(
+                status.last_completed_at.as_ref(),
+                last_completed_before_submit.as_ref(),
+            );
+            let outbound_completed = outbound_email_for_wait
+                .as_ref()
+                .zip(outbound_terminal_count_before)
+                .map(|(intent, before_count)| {
+                    let action = channels::FounderOutboundAction::from(intent.clone());
+                    channels::terminal_founder_outbound_artifact_count(root, &action)
+                        .map(|after_count| after_count > before_count)
+                })
+                .transpose()?
+                .unwrap_or(false);
+            if completed_after_submit || outbound_completed {
                 final_status = Some(status);
                 break;
             }
@@ -1098,8 +1112,22 @@ fn handle_chat(root: &Path, args: &[String]) -> anyhow::Result<()> {
         let completed_after_submit = final_status
             .as_ref()
             .and_then(|status| status.last_completed_at.as_ref())
-            .is_some_and(|completed| Some(completed) != last_completed_before_submit.as_ref());
-        if !completed_after_submit {
+            .is_some_and(|completed| {
+                chat_status_has_completed_since(
+                    Some(completed),
+                    last_completed_before_submit.as_ref(),
+                )
+            });
+        let outbound_completed_after = if let (Some(intent), Some(before_count)) = (
+            outbound_email_for_wait.as_ref(),
+            outbound_terminal_count_before,
+        ) {
+            let action = channels::FounderOutboundAction::from(intent.clone());
+            channels::terminal_founder_outbound_artifact_count(root, &action)? > before_count
+        } else {
+            false
+        };
+        if !completed_after_submit && !outbound_completed_after {
             anyhow::bail!(
                 "CTOX service became idle before this chat request reported a completed turn"
             );
@@ -1352,6 +1380,10 @@ fn collect_flag_values(args: &[String], flag: &str) -> Vec<String> {
     values
 }
 
+fn chat_status_has_completed_since(completed: Option<&String>, before: Option<&String>) -> bool {
+    completed.is_some_and(|completed| Some(completed) != before)
+}
+
 fn resolve_chat_attachment_paths(args: &[String]) -> anyhow::Result<Vec<String>> {
     let mut paths = Vec::new();
     let mut idx = 0usize;
@@ -1456,8 +1488,9 @@ fn resolve_systemd_user_ctox_root(home_dir: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        find_ctox_root_from_ancestors, looks_like_ctox_root, persist_runtime_turn_timeout,
-        resolve_chat_attachment_paths, resolve_runtime_ctox_root, validated_workspace_root_override,
+        chat_status_has_completed_since, find_ctox_root_from_ancestors, looks_like_ctox_root,
+        persist_runtime_turn_timeout, resolve_chat_attachment_paths, resolve_runtime_ctox_root,
+        validated_workspace_root_override,
     };
     use crate::execution::models::runtime_env;
     use std::fs;
@@ -1606,7 +1639,10 @@ mod tests {
         let attachments = resolve_chat_attachment_paths(&args).unwrap();
         assert_eq!(
             attachments,
-            vec![fs::canonicalize(&file).unwrap().to_string_lossy().to_string()]
+            vec![fs::canonicalize(&file)
+                .unwrap()
+                .to_string_lossy()
+                .to_string()]
         );
 
         cleanup_test_dir(&root);
@@ -1624,6 +1660,21 @@ mod tests {
         assert!(err
             .to_string()
             .contains("failed to resolve --attach-file path"));
+    }
+
+    #[test]
+    fn chat_wait_completion_ignores_unrelated_pending_queue() {
+        let before = Some("2026-05-06T23:50:00Z".to_string());
+        let completed = Some("2026-05-06T23:51:00Z".to_string());
+
+        assert!(chat_status_has_completed_since(
+            completed.as_ref(),
+            before.as_ref()
+        ));
+        assert!(!chat_status_has_completed_since(
+            before.as_ref(),
+            before.as_ref()
+        ));
     }
 
     fn make_fake_ctox_root(name: &str) -> PathBuf {
