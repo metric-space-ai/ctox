@@ -5532,11 +5532,13 @@ fn extract_absolute_workspace_file_paths(prompt: &str) -> Vec<String> {
 fn extract_absolute_paths_from_text(text: &str) -> Vec<String> {
     let mut paths = Vec::new();
     let mut current = String::new();
+    let mut previous = None;
     for ch in text.chars().chain(std::iter::once(' ')) {
         if current.is_empty() {
-            if ch == '/' {
+            if ch == '/' && is_absolute_path_start_boundary(previous) {
                 current.push(ch);
             }
+            previous = Some(ch);
             continue;
         }
         if is_path_char(ch) {
@@ -5555,8 +5557,15 @@ fn extract_absolute_paths_from_text(text: &str) -> Vec<String> {
             }
             current.clear();
         }
+        previous = Some(ch);
     }
     paths
+}
+
+fn is_absolute_path_start_boundary(previous: Option<char>) -> bool {
+    previous.is_none_or(|ch| {
+        ch.is_whitespace() || matches!(ch, '"' | '\'' | '`' | '(' | '[' | '{' | '<' | '=')
+    })
 }
 
 fn extract_relative_artifact_file_names(prompt: &str) -> Vec<String> {
@@ -15993,6 +16002,45 @@ Use shell tools to create or update these files."
                 format!("{run_dir}/results.json"),
             ]
         );
+    }
+
+    #[test]
+    fn terminal_bench_artifact_parser_ignores_openrouter_model_ids() {
+        let run_dir = "/home/metricspace/ctox/runtime/terminal-bench-2/runs/run-deepseek-v4-flash";
+        let prompt = format!(
+            "Terminal-Bench controller artifact contract:\n\
+- {run_dir}/controller.json\n\
+- {run_dir}/logbook.md\n\n\
+Current RUN_DIR and workspace scope: {run_dir}; active model deepseek/deepseek-v4-flash via OpenRouter.\n\
+Preserve and update controller.json and logbook.md."
+        );
+        let job = QueuedPrompt {
+            prompt,
+            goal: "Terminal-Bench 2 controller DeepSeek flash".to_string(),
+            preview: "Terminal-Bench 2 controller DeepSeek flash".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: Some("benchmark-controller".to_string()),
+            leased_message_keys: vec!["queue:system::parent".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("terminal-bench-2/deepseek-v4-flash/controller".to_string()),
+            workspace_root: Some(run_dir.to_string()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let paths = declared_workspace_file_artifacts_for_job(&job);
+
+        assert_eq!(
+            paths,
+            vec![
+                format!("{run_dir}/controller.json"),
+                format!("{run_dir}/logbook.md"),
+            ]
+        );
+        assert!(!paths
+            .iter()
+            .any(|path| path.starts_with("/deepseek-v4-flash/")));
     }
 
     #[test]
