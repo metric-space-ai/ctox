@@ -9,6 +9,7 @@ use std::io::Read;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
+use std::process::Output;
 use std::process::Stdio;
 use std::thread;
 use std::time::Duration;
@@ -43,7 +44,18 @@ struct BrowserDoctorReport {
     playwright_browser_installed: bool,
     chromium_fallback_executable: Option<String>,
     toolchain: serde_json::Value,
+    smoke: BrowserSmokeReport,
     automation_ready: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct BrowserSmokeReport {
+    ran: bool,
+    ok: bool,
+    timeout_ms: u64,
+    stdout: Option<String>,
+    stderr: Option<String>,
+    error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -197,16 +209,24 @@ pub fn run_browser_automation(root: &Path, request: &BrowserAutomationRequest) -
     fs::write(&runner_path, runner_source)
         .with_context(|| format!("failed to write {}", runner_path.display()))?;
 
-    let output = Command::new(&node_path)
+    let mut command = Command::new(&node_path);
+    command
         .current_dir(&reference_dir)
-        .arg(&runner_path)
-        .output()
-        .with_context(|| {
-            format!(
-                "failed to launch browser automation runtime with {}",
-                node_path.display()
-            )
-        });
+        .env(
+            "PLAYWRIGHT_BROWSERS_PATH",
+            playwright_browser_cache_dir(&reference_dir),
+        )
+        .arg(&runner_path);
+    let output = command_output_with_timeout(
+        command,
+        Duration::from_millis(timeout_ms.saturating_add(5_000)),
+    )
+    .with_context(|| {
+        format!(
+            "failed to launch browser automation runtime with {}",
+            node_path.display()
+        )
+    });
     let _ = fs::remove_file(&runner_path);
     let output = output?;
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -444,6 +464,27 @@ fn build_doctor_report(reference_dir: &Path) -> Result<BrowserDoctorReport> {
         .map(|major| major >= MINIMUM_NODE_MAJOR)
         .unwrap_or(false);
     let ok = node.available && npm.available && npx.available;
+    let smoke = if ok
+        && node_version_compatible
+        && playwright_dependency_installed
+        && playwright_browser_installed
+    {
+        run_browser_smoke(reference_dir, chromium_fallback_executable.as_deref())
+    } else {
+        BrowserSmokeReport {
+            ran: false,
+            ok: false,
+            timeout_ms: 8_000,
+            stdout: None,
+            stderr: None,
+            error: Some("skipped because browser prerequisites are incomplete".to_string()),
+        }
+    };
+    let automation_ready = ok
+        && node_version_compatible
+        && playwright_dependency_installed
+        && playwright_browser_installed
+        && smoke.ok;
     Ok(BrowserDoctorReport {
         ok,
         reference_dir: reference_dir.to_path_buf(),
@@ -462,11 +503,95 @@ fn build_doctor_report(reference_dir: &Path) -> Result<BrowserDoctorReport> {
             "npm": npm,
             "npx": npx,
         }),
-        automation_ready: ok
-            && node_version_compatible
-            && playwright_dependency_installed
-            && playwright_browser_installed,
+        smoke,
+        automation_ready,
     })
+}
+
+fn run_browser_smoke(
+    reference_dir: &Path,
+    chromium_fallback_executable: Option<&str>,
+) -> BrowserSmokeReport {
+    const TIMEOUT_MS: u64 = 8_000;
+    let Some(node_path) = find_command_on_path("node") else {
+        return BrowserSmokeReport {
+            ran: true,
+            ok: false,
+            timeout_ms: TIMEOUT_MS,
+            stdout: None,
+            stderr: None,
+            error: Some("node was not found on PATH".to_string()),
+        };
+    };
+    let encoded_executable = match serde_json::to_string(&chromium_fallback_executable) {
+        Ok(value) => value,
+        Err(err) => {
+            return BrowserSmokeReport {
+                ran: true,
+                ok: false,
+                timeout_ms: TIMEOUT_MS,
+                stdout: None,
+                stderr: None,
+                error: Some(format!("failed to encode browser executable: {err}")),
+            };
+        }
+    };
+    let smoke_source = format!(
+        r#"
+const fallbackExecutable = {encoded_executable};
+const {{ chromium }} = await import("playwright");
+const launchOptions = {{ headless: true }};
+if (fallbackExecutable) {{
+  launchOptions.executablePath = fallbackExecutable;
+}}
+const browser = await chromium.launch(launchOptions);
+try {{
+  const page = await browser.newPage();
+  await page.goto("data:text/html,<title>ctox-browser-smoke</title><button data-testid='ready'>ready</button>", {{ waitUntil: "domcontentloaded" }});
+  const text = await page.getByTestId("ready").textContent();
+  await page.screenshot({{ type: "png" }});
+  if (text !== "ready") {{
+    throw new Error(`unexpected smoke text: ${{text}}`);
+  }}
+  console.log(JSON.stringify({{ ok: true, title: await page.title() }}));
+}} finally {{
+  await browser.close();
+}}
+"#
+    );
+    let mut command = Command::new(&node_path);
+    command
+        .current_dir(reference_dir)
+        .env(
+            "PLAYWRIGHT_BROWSERS_PATH",
+            playwright_browser_cache_dir(reference_dir),
+        )
+        .arg("--input-type=module")
+        .arg("-e")
+        .arg(smoke_source);
+
+    match command_output_with_timeout(command, Duration::from_millis(TIMEOUT_MS)) {
+        Ok(output) => {
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            BrowserSmokeReport {
+                ran: true,
+                ok: output.status.success(),
+                timeout_ms: TIMEOUT_MS,
+                stdout: (!stdout.is_empty()).then_some(trim_text(&stdout, 800)),
+                stderr: (!stderr.is_empty()).then_some(trim_text(&stderr, 800)),
+                error: (!output.status.success()).then(|| format!("exit status {}", output.status)),
+            }
+        }
+        Err(err) => BrowserSmokeReport {
+            ran: true,
+            ok: false,
+            timeout_ms: TIMEOUT_MS,
+            stdout: None,
+            stderr: None,
+            error: Some(err.to_string()),
+        },
+    }
 }
 
 fn install_reference(
@@ -555,6 +680,28 @@ fn read_playwright_dependency_declared(reference_dir: &Path) -> Result<bool> {
 
 fn run_command(cwd: &Path, program: &str, args: &[&str], error_message: &str) -> Result<()> {
     run_command_with_env(cwd, program, args, &[], error_message)
+}
+
+fn command_output_with_timeout(mut command: Command, timeout: Duration) -> Result<Output> {
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("failed to launch command")?;
+    let deadline = Instant::now() + timeout;
+    loop {
+        if child.try_wait()?.is_some() {
+            return child
+                .wait_with_output()
+                .context("failed to collect command output");
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            anyhow::bail!("timed out after {}ms", timeout.as_millis());
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
 }
 
 fn run_command_with_env(
@@ -922,10 +1069,159 @@ globalThis.webkit = webkit;
 globalThis.context = context;
 globalThis.page = page;
 globalThis.browser = browser;
-globalThis.ctoxBrowser = {{
-  logs,
-  profileDir,
-}};
+	const ctoxBrowserApi = {{
+	  logs,
+	  profileDir,
+	  locatorFor(target) {{
+	    if (typeof target === "string") return page.locator(target);
+	    if (!target || typeof target !== "object") throw new Error("ctoxBrowser target must be a selector string or target object");
+	    if (target.selector) return page.locator(target.selector);
+	    if (target.testId) return page.getByTestId(String(target.testId));
+	    if (target.role && target.name) return page.getByRole(String(target.role), {{ name: String(target.name), exact: true }});
+	    if (target.label) return page.getByLabel(String(target.label), {{ exact: true }});
+	    if (target.placeholder) return page.getByPlaceholder(String(target.placeholder), {{ exact: true }});
+	    if (target.text) return page.getByText(String(target.text), {{ exact: true }});
+	    throw new Error("ctoxBrowser target has no usable selector, testId, role/name, label, placeholder, or text");
+	  }},
+	  async resolveTarget(target) {{
+	    const locator = this.locatorFor(target);
+	    const count = await locator.count();
+	    if (count !== 1) {{
+	      throw new Error(`ctoxBrowser target resolved to ${{count}} elements; refine the target before acting`);
+	    }}
+	    return locator;
+	  }},
+	  async observe(options = {{}}) {{
+	    const limit = Number.isFinite(options.limit) ? Math.max(1, Math.min(200, Math.floor(options.limit))) : 80;
+	    const textMax = Number.isFinite(options.textMax) ? Math.max(20, Math.min(400, Math.floor(options.textMax))) : 120;
+	    const dom = await page.evaluate(
+	      ({{ limit, textMax }}) => {{
+	        const trim = (value, max = textMax) => {{
+	          const text = String(value ?? "").replace(/\s+/g, " ").trim();
+	          return text.length > max ? text.slice(0, max - 1) + "..." : text;
+	        }};
+	        const cssEscape = (value) => globalThis.CSS && typeof globalThis.CSS.escape === "function"
+	          ? globalThis.CSS.escape(String(value))
+	          : String(value).replace(/["\\]/g, "\\$&");
+	        const visible = (element) => {{
+	          const style = globalThis.getComputedStyle(element);
+	          const box = element.getBoundingClientRect();
+	          return style.visibility !== "hidden"
+	            && style.display !== "none"
+	            && Number(style.opacity || "1") > 0
+	            && box.width > 0
+	            && box.height > 0;
+	        }};
+	        const textOf = (element) => trim(
+	          element.getAttribute("aria-label")
+	          || element.getAttribute("title")
+	          || element.getAttribute("alt")
+	          || element.getAttribute("placeholder")
+	          || element.value
+	          || element.innerText
+	          || element.textContent
+	          || ""
+	        );
+	        const candidatesFor = (element) => {{
+	          const candidates = [];
+	          const testId = element.getAttribute("data-testid");
+	          if (testId) candidates.push(`[data-testid="${{cssEscape(testId)}}"]`);
+	          for (const attr of element.getAttributeNames()) {{
+	            if (attr.startsWith("data-") && attr !== "data-testid") {{
+	              const value = element.getAttribute(attr);
+	              if (value && value.length <= 80) candidates.push(`[${{attr}}="${{cssEscape(value)}}"]`);
+	            }}
+	          }}
+	          const id = element.getAttribute("id");
+	          if (id) candidates.push(`#${{cssEscape(id)}}`);
+	          const href = element.getAttribute("href");
+	          if (href) candidates.push(`${{element.tagName.toLowerCase()}}[href="${{cssEscape(href)}}"]`);
+	          const name = element.getAttribute("name");
+	          if (name) candidates.push(`${{element.tagName.toLowerCase()}}[name="${{cssEscape(name)}}"]`);
+	          return [...new Set(candidates)].slice(0, 6);
+	        }};
+	        const selector = [
+	          "a",
+	          "button",
+	          "input",
+	          "textarea",
+	          "select",
+	          "summary",
+	          "[role]",
+	          "[data-testid]",
+	          "[onclick]",
+	          "[contenteditable='true']",
+	        ].join(",");
+	        const targets = [];
+	        for (const element of Array.from(document.querySelectorAll(selector))) {{
+	          if (!visible(element)) continue;
+	          const box = element.getBoundingClientRect();
+	          const candidates = candidatesFor(element);
+	          targets.push({{
+	            id: `target-${{targets.length + 1}}`,
+	            tag: element.tagName.toLowerCase(),
+	            role: element.getAttribute("role") || null,
+	            name: element.getAttribute("aria-label") || textOf(element) || null,
+	            text: textOf(element) || null,
+	            testId: element.getAttribute("data-testid") || null,
+	            href: element.getAttribute("href") || null,
+	            selector: candidates[0] || null,
+	            candidates,
+	            box: {{
+	              x: Math.round(box.x),
+	              y: Math.round(box.y),
+	              width: Math.round(box.width),
+	              height: Math.round(box.height),
+	            }},
+	          }});
+	          if (targets.length >= limit) break;
+	        }}
+	        return {{
+	          documentText: trim(document.body ? document.body.innerText : "", Math.max(textMax * 8, 800)),
+	          targets,
+	        }};
+	      }},
+	      {{ limit, textMax }}
+	    );
+	    return {{
+	      url: page.url(),
+	      title: await page.title(),
+	      documentText: dom.documentText,
+	      targets: dom.targets,
+	    }};
+	  }},
+	  async goto(url, options = {{}}) {{
+	    await page.goto(url, {{
+	      waitUntil: options.waitUntil || "domcontentloaded",
+	      timeout: options.timeoutMs || 30_000,
+	    }});
+	    return await this.observe(options);
+	  }},
+	  async click(target, options = {{}}) {{
+	    const locator = await this.resolveTarget(target);
+	    await locator.click(options);
+	    return await this.observe(options);
+	  }},
+	  async fill(target, value, options = {{}}) {{
+	    const locator = await this.resolveTarget(target);
+	    await locator.fill(String(value), options);
+	    return await this.observe(options);
+	  }},
+	  async press(target, key, options = {{}}) {{
+	    const locator = await this.resolveTarget(target);
+	    await locator.press(String(key), options);
+	    return await this.observe(options);
+	  }},
+	  async screenshot(options = {{}}) {{
+	    const buffer = await page.screenshot({{ fullPage: !!options.fullPage }});
+	    return {{ mimeType: "image/png", base64: buffer.toString("base64") }};
+	  }},
+	  async logsFor(levels = ["error", "warning", "warn"]) {{
+	    const wanted = new Set(levels);
+	    return logs.filter((entry) => wanted.has(entry.level));
+	  }},
+	}};
+	globalThis.ctoxBrowser = ctoxBrowserApi;
 let timeoutHandle = null;
 
 try {{
@@ -1266,6 +1562,21 @@ mod tests {
             build_browser_runner_script("return await page.title();", 12_345, None).unwrap();
         assert!(script.contains("const timeoutMs = 12345;"));
         assert!(script.contains("const userSource = \"return await page.title();\";"));
+    }
+
+    #[test]
+    fn browser_runner_script_exposes_agent_friendly_api() {
+        let script = build_browser_runner_script(
+            "return await ctoxBrowser.observe({ limit: 10 });",
+            12_345,
+            None,
+        )
+        .unwrap();
+        assert!(script.contains("globalThis.ctoxBrowser = ctoxBrowserApi;"));
+        assert!(script.contains("async observe(options = {})"));
+        assert!(script.contains("async resolveTarget(target)"));
+        assert!(script.contains("async click(target, options = {})"));
+        assert!(script.contains("async screenshot(options = {})"));
     }
 
     #[test]

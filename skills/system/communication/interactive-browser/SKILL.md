@@ -58,6 +58,9 @@ ctox browser install-reference --install-browser
 
 Treat browser work as reviewed capability, not as prompt sludge.
 
+- Prefer CTOX's injected `ctoxBrowser` helper for interactive work. It wraps
+  Playwright in an agent-oriented loop: observe compact DOM targets, act only on
+  a unique target, then observe again.
 - Keep the browser session persistent through `js_repl`.
 - Keep long traces out of the main prompt.
 - Store screenshots or compact artifacts on disk when they matter.
@@ -68,10 +71,13 @@ Treat browser work as reviewed capability, not as prompt sludge.
 
 1. Decide whether the task really needs a real browser.
 2. Verify the reference with `ctox browser doctor`.
-3. In a `js_repl` session, dynamically import `playwright`.
-4. Launch Chromium headed unless a headless pass is clearly better.
-5. Reuse `browser`, `context`, and `page` handles across iterations.
-6. Capture compact evidence.
+3. Use `ctox_browser_automation` for bounded headless interaction, or `js_repl`
+   only when a longer persistent manual loop is explicitly needed.
+4. Start with `await ctoxBrowser.observe()` rather than guessing selectors.
+5. Use `ctoxBrowser.click/fill/press` with a selector or target from the latest
+   observation; these helpers reject ambiguous targets.
+6. Capture compact evidence with `ctoxBrowser.screenshot()` or concise returned
+   observations.
 7. If the behavior must recur, convert the observation into a `universal-scraping` target instead of repeating ad hoc browser work forever.
 
 ## Minimal Bootstrap
@@ -99,6 +105,18 @@ await page.goto("http://127.0.0.1:3000", { waitUntil: "domcontentloaded" });
 console.log("Loaded:", await page.title());
 ```
 
+Equivalent `ctox_browser_automation` snippet:
+
+```javascript
+// ctox-browser: timeout_ms=20000
+await ctoxBrowser.goto("http://127.0.0.1:3000");
+const state = await ctoxBrowser.observe({ limit: 40 });
+return {
+  title: state.title,
+  targets: state.targets.slice(0, 10)
+};
+```
+
 ## Guardrails
 
 - Do not default to browser work when `WebSearch` or `WebRead` is enough.
@@ -114,6 +132,8 @@ Do not report this path as ready until:
 - `ctox browser doctor` reports `node`, `npm`, and `npx` available
 - the reference workspace exists
 - `playwright` is installed in the reference workspace
+- the doctor smoke check imports Playwright, launches Chromium, reads DOM, and
+  captures a screenshot within its timeout
 - the Codex session receives `features.js_repl=true`
 
 If a task also needs durable repeated extraction, hand it off to `universal-scraping` before claiming the browser path alone solved the long-run operating need.

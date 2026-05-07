@@ -1318,7 +1318,7 @@ JS_SOURCE: /(?:\s*)(?:[^\s{\"`]|`[^`]|``[^`])[\s\S]*/
 
     ToolSpec::Freeform(FreeformTool {
         name: "ctox_browser_automation".to_string(),
-        description: "Runs raw JavaScript in CTOX's owned Playwright-capable browser automation runtime. Use top-level await and dynamic imports like `await import(\"playwright\")` when needed. This is a freeform tool: send plain JavaScript only, optionally with a first-line pragma like `// ctox-browser: timeout_ms=15000`; do not send JSON, quoted strings, or markdown fences."
+        description: "Runs raw JavaScript in CTOX's owned Playwright-capable browser automation runtime. Prefer the injected `ctoxBrowser` helper (`observe`, `goto`, `click`, `fill`, `press`, `screenshot`, `logsFor`) for agentic browser work; raw `page`, `context`, and `browser` are also available for advanced Playwright use. Use top-level await and dynamic imports like `await import(\"playwright\")` when needed. This is a freeform tool: send plain JavaScript only, optionally with a first-line pragma like `// ctox-browser: timeout_ms=15000`; do not send JSON, quoted strings, or markdown fences."
             .to_string(),
         format: FreeformToolFormat {
             r#type: "grammar".to_string(),
