@@ -24,9 +24,10 @@ type MenuState = {
 
 type ContextMenuAction = {
   description: string;
+  direct?: boolean;
   id: string;
   label: string;
-  prompt: (item: ContextItem) => string;
+  prompt?: (item: ContextItem) => string;
 };
 
 type QueueResponse = {
@@ -182,9 +183,13 @@ export function ContextMenuBridge({ locale }: { locale?: string }) {
               onClick={(event) => {
                 event.stopPropagation();
                 setMenu(null);
-                setStatus("idle");
-                setMessage("");
-                setPrompt({ item: menu.item, text: action.prompt(menu.item) });
+                if (action.direct) {
+                  window.dispatchEvent(new CustomEvent("ctox:context-action", { detail: { actionId: action.id, item: menu.item } }));
+                } else if (action.prompt) {
+                  setStatus("idle");
+                  setMessage("");
+                  setPrompt({ item: menu.item, text: action.prompt(menu.item) });
+                }
               }}
               role="menuitem"
               type="button"
@@ -274,6 +279,9 @@ function contextMenuActions(item: ContextItem, locale: "de" | "en"): ContextMenu
   const add = (id: string, label: string, description: string, prompt: (item: ContextItem) => string) => {
     actions.push({ id, label, description, prompt });
   };
+  const addDirect = (id: string, label: string, description: string) => {
+    actions.push({ description, direct: true, id, label });
+  };
 
   if (item.action === "create") {
     add(
@@ -328,6 +336,25 @@ function contextMenuActions(item: ContextItem, locale: "de" | "en"): ContextMenu
       add("work-status", de ? "Work Item klaeren" : "Clarify work item", de ? "Status, Owner, Blocker" : "Status, owner, blocker", (ctx) => de
         ? `Klaere dieses Work Item ${ctx.label}: aktueller Status, Owner, Blocker, Faelligkeit und konkreter naechster Schritt.`
         : `Clarify this work item ${ctx.label}: current status, owner, blocker, due date, and concrete next step.`);
+    } else if (item.submoduleId === "workforce") {
+      if (item.recordType === "workforce_assignment") {
+        addDirect("workforce-assignment-edit", de ? "Bearbeiten" : "Edit", de ? "unteres Einsatzmodul" : "bottom assignment module");
+        addDirect("workforce-assignment-duplicate", de ? "Duplizieren" : "Duplicate", de ? "naechsten Tag planen" : "plan next day");
+        addDirect("workforce-assignment-time", de ? "Zeit erfassen" : "Record time", de ? "Istzeit anlegen" : "create actual time");
+        addDirect("workforce-assignment-payroll", de ? "Payroll vorbereiten" : "Prepare payroll", de ? "freigegebene Stunden uebergeben" : "handoff approved hours");
+        addDirect("workforce-assignment-invoice-draft", de ? "Rechnungsdraft" : "Invoice draft", de ? "abrechenbare Position erstellen" : "create billable draft");
+        add("workforce-assignment-score", de ? "Score pruefen" : "Check score", de ? "Basis, Leistung, Bonus" : "base, performance, bonus", (ctx) => de
+          ? `Pruefe diesen Einsatz ${ctx.label}. Bewerte Basis-Anforderungen, Leistungsanforderungen und Begeisterungsfaktoren: Person, Zeitfenster, Ueberschneidungen, Istzeit, Freigabe, Auftrag/Kunde und Uebergabe. Nenne genau die naechste Korrektur.`
+          : `Check this assignment ${ctx.label}. Assess base, performance, and bonus criteria: person, time window, overlaps, actual time, approval, project/customer, and handoff. Name the exact next correction.`);
+      } else if (item.recordType === "workforce_time_entry") {
+        addDirect("workforce-time-approve", de ? "Freigeben" : "Approve", de ? "Zeitnachweis buchen" : "approve entry");
+        addDirect("workforce-time-correction", de ? "Korrektur" : "Correction", de ? "Rueckfrage setzen" : "request correction");
+      } else if (item.recordType === "workforce_person") {
+        addDirect("workforce-person-edit", de ? "Bearbeiten" : "Edit", de ? "Stammdaten links" : "left master data");
+        add("workforce-person-plan", de ? "Auslastung pruefen" : "Check utilization", de ? "Woche, Rolle, Konflikte" : "week, role, conflicts", (ctx) => de
+          ? `Pruefe die Einsatzlage von ${ctx.label}. Stelle Wochenstunden, Rolle, Konflikte, offene Zeitnachweise und sinnvolle Umplanung dar.`
+          : `Check workforce utilization for ${ctx.label}. Show weekly hours, role, conflicts, open time entries, and useful replanning.`);
+      }
     } else {
       add("operations-context", de ? "Operations-Kontext" : "Operations context", de ? "Strukturieren und verknuepfen" : "Structure and link", (ctx) => de
         ? `Strukturiere diesen Operations-Kontext ${ctx.label}. Verknuepfe relevante Projekte, Work Items, Wissen und Meetings.`
@@ -356,29 +383,34 @@ function contextMenuActions(item: ContextItem, locale: "de" | "en"): ContextMenu
           ? `Pruefe den Wertschritt ${ctx.label}. Klaere Owner, Status, Voraussetzungen, Nachweis und Freigabe fuer den naechsten Schritt.`
           : `Check value step ${ctx.label}. Clarify owner, status, prerequisites, evidence, and approval for the next step.`);
       } else if (item.recordType === "warehouse_slot") {
-        add("warehouse-slot-edit", de ? "Slot bearbeiten" : "Edit slot", de ? "Name, Status, Bestand" : "Name, status, stock", (ctx) => de
-          ? `Bearbeite Lagerplatz ${ctx.label}. Pruefe Name, Zone, Pickbarkeit, Sperrgrund, Bestand, Reservierungen und Inventurstatus. Formuliere eine konkrete bestaetigungspflichtige Lageraktion.`
-          : `Edit warehouse slot ${ctx.label}. Check name, zone, pickability, block reason, stock, reservations, and count state. Phrase a concrete warehouse action requiring confirmation.`);
-        add("warehouse-slot-rename", de ? "Umbenennen" : "Rename", de ? "Slot-Code und Lage" : "Slot code and location", (ctx) => de
-          ? `Benenne Lagerplatz ${ctx.label} sinnvoll um. Leite einen konsistenten Slot-Code aus Lager, Zone und Lage ab und nenne Konflikte vor der Aenderung.`
-          : `Rename warehouse slot ${ctx.label}. Derive a consistent slot code from warehouse, zone, and physical position and list conflicts before the change.`);
-        add("warehouse-slot-duplicate", de ? "Duplizieren" : "Duplicate", de ? "Gleiche Struktur" : "Same structure", (ctx) => de
-          ? `Dupliziere Lagerplatz ${ctx.label} als neuen Slot. Uebernehme sinnvolle Slot-Eigenschaften, aber keinen Bestand, keine Reservierungen und keine offenen Inventurfaelle.`
-          : `Duplicate warehouse slot ${ctx.label} as a new slot. Keep useful slot properties but no stock, reservations, or open count cases.`);
-        add("warehouse-slot-block", de ? "Sperren/Entsperren" : "Block/unblock", de ? "Operativer Status" : "Operational status", (ctx) => de
-          ? `Pruefe, ob Lagerplatz ${ctx.label} gesperrt oder entsperrt werden soll. Beruecksichtige Bestand, offene Picks, Reservierungen, Inventur und Sperrgrund.`
-          : `Check whether warehouse slot ${ctx.label} should be blocked or unblocked. Consider stock, open picks, reservations, count state, and block reason.`);
+        addDirect("warehouse-slot-edit", de ? "Bearbeiten" : "Edit", de ? "unteres Slot-Modul" : "lower slot module");
+        addDirect("warehouse-slot-duplicate", de ? "Duplizieren" : "Duplicate", de ? "neuen Slot anlegen" : "create new slot");
+        addDirect("warehouse-slot-block", de ? "Sperren/Entsperren" : "Block/unblock", de ? "Pickbarkeit umschalten" : "toggle pickability");
+        addDirect("warehouse-slot-count", de ? "Inventur" : "Count", de ? "Zaehlmodus oeffnen" : "open count mode");
+        addDirect("warehouse-slot-audit", de ? "Audit" : "Audit", de ? "Bewegungen anzeigen" : "show movements");
+      } else if (item.recordType === "inventory_item") {
+        addDirect("warehouse-item-edit", de ? "Bearbeiten" : "Edit", de ? "SKU, Einheit, Tracking" : "SKU, UOM, tracking");
+        addDirect("warehouse-item-duplicate", de ? "Duplizieren" : "Duplicate", de ? "Variante anlegen" : "create variant");
+        addDirect("warehouse-item-deactivate", de ? "Deaktivieren" : "Deactivate", de ? "fuer neue Vorgaenge sperren" : "block for new work");
+        add("warehouse-item-check", de ? "KI-Pruefung" : "AI check", de ? "Auslauf und Abhaengigkeiten" : "Phase-out and dependencies", (ctx) => de
+          ? `Pruefe, ob Warehouse-Artikel ${ctx.label} geaendert oder deaktiviert werden kann. Fasse Bestand, offene Auftraege, Reservierungen, Webshop-Sync und sichere Folgeaktion zusammen.`
+          : `Check whether warehouse item ${ctx.label} can be changed or deactivated. Summarize stock, open orders, reservations, shop sync, and safe follow-up.`);
       } else if (item.recordType === "stock_balance" || item.recordType === "warehouse_source_match") {
-        add("warehouse-stock-move", de ? "Bestand verschieben" : "Move stock", de ? "Quelle, Ziel, Menge" : "Source, target, quantity", (ctx) => de
-          ? `Bereite eine Bestandsverschiebung fuer ${ctx.label} vor. Klaere Quelle, Zielslot, Menge, Owner, Status, offene Reservierungen und ob die Bewegung regelkonform ist.`
-          : `Prepare a stock move for ${ctx.label}. Clarify source, target slot, quantity, owner, status, open reservations, and whether the movement is valid.`);
-        add("warehouse-stock-count", de ? "Inventur pruefen" : "Check count", de ? "Soll/Ist und Differenz" : "Expected/actual and variance", (ctx) => de
+        addDirect("warehouse-stock-reserve", de ? "In Ausgang" : "Reserve outbound", de ? "1 Einheit reservieren" : "reserve 1 unit");
+        addDirect("warehouse-stock-move", de ? "Umlagern" : "Move stock", de ? "Bestandsmodul oeffnen" : "open stock module");
+        addDirect("warehouse-stock-audit", de ? "Audit" : "Audit", de ? "Slotbewegungen anzeigen" : "show slot movements");
+        add("warehouse-stock-count", de ? "KI-Inventurpruefung" : "AI count check", de ? "Soll/Ist und Differenz" : "Expected/actual and variance", (ctx) => de
           ? `Pruefe diesen Bestand fuer eine Inventur- oder Schnellkorrektur: ${ctx.label}. Stelle Sollbestand, moeglichen Istbestand, Differenz, Grund und Audit-Folgeaktion dar.`
           : `Check this stock for count or quick correction: ${ctx.label}. Show expected stock, possible actual stock, variance, reason, and audit follow-up.`);
       } else if (item.recordType === "warehouse_source") {
-        add("warehouse-source-load", de ? "Lagerquelle pruefen" : "Check source", de ? "Deckung, Engpass, Umlagerung" : "Coverage, bottleneck, transfer", (ctx) => de
-          ? `Pruefe Lagerquelle ${ctx.label}. Bewerte Deckung, Engpaesse, Umlagerungsbedarf und betroffene Auftraege.`
-          : `Check warehouse source ${ctx.label}. Assess coverage, bottlenecks, transfer needs, and affected orders.`);
+        addDirect("warehouse-source-edit", de ? "Bearbeiten" : "Edit", de ? "Lagerstruktur oeffnen" : "open warehouse structure");
+        addDirect("warehouse-source-section", de ? "Bereich anlegen" : "Add section", de ? "neue Zone" : "new zone");
+        addDirect("warehouse-source-duplicate", de ? "Duplizieren" : "Duplicate", de ? "Lager kopieren" : "copy warehouse");
+        addDirect("warehouse-source-toggle", de ? "Aktivieren/Deaktivieren" : "Activate/deactivate", de ? "operativer Status" : "operational status");
+      } else if (item.recordType === "warehouse_zone") {
+        addDirect("warehouse-zone-edit", de ? "Bearbeiten" : "Edit", de ? "Zone unten oeffnen" : "open zone below");
+        addDirect("warehouse-zone-slots", de ? "Slots anlegen" : "Add slots", de ? "+4 Plaetze" : "+4 slots");
+        addDirect("warehouse-zone-duplicate", de ? "Duplizieren" : "Duplicate", de ? "Slot-Struktur uebernehmen" : "copy slot structure");
       }
     }
 
@@ -397,7 +429,7 @@ function contextMenuActions(item: ContextItem, locale: "de" | "en"): ContextMenu
     ? `Fasse diesen Kontext kurz zusammen und nenne die naechste sinnvolle Aktion: ${ctx.label}.`
     : `Briefly summarize this context and name the next useful action: ${ctx.label}.`);
 
-  return actions.slice(0, 4);
+  return actions.slice(0, 6);
 }
 
 function fitMenuPosition(clientX: number, clientY: number, actionCount = 0) {

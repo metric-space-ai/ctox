@@ -807,7 +807,9 @@ pub fn run_ctox_google_bootstrap_doctor_tool(root: &Path) -> Result<Value> {
             issues.push("CTOX_WEB_CHROME_BIN is not configured in local CTOX runtime config");
         }
         if chrome_user_data_dir.is_none() {
-            issues.push("CTOX_WEB_CHROME_USER_DATA_DIR is not configured in local CTOX runtime config");
+            issues.push(
+                "CTOX_WEB_CHROME_USER_DATA_DIR is not configured in local CTOX runtime config",
+            );
         }
     }
 

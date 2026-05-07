@@ -7,7 +7,7 @@ use std::time::Duration;
 use crate::execution::agent::direct_session::PersistentSession;
 use crate::inference::runtime_env;
 
-const REVIEW_TIMEOUT_SECS: u64 = 300;
+const REVIEW_TIMEOUT_SECS: u64 = 900;
 const REVIEW_MAX_LEGS: usize = 3;
 
 const REVIEW_SYSTEM_PROMPT: &str = r#"You are CTOX Review.

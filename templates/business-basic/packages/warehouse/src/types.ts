@@ -39,6 +39,10 @@ export type WarehouseCommandType =
   | "IngestRoboticsEvent"
   | "CreateWavePlan"
   | "CreateSlottingRecommendation"
+  | "CreateInventoryItem"
+  | "DuplicateInventoryItem"
+  | "RenameInventoryItem"
+  | "DeactivateInventoryItem"
   | "CreateWarehouseTransfer"
   | "ShipWarehouseTransfer"
   | "ReceiveWarehouseTransfer"
@@ -59,15 +63,21 @@ export type InventoryItem = {
 };
 
 export type WarehouseLocation = {
+  aisle?: string;
+  bay?: string;
+  capacityUnits?: number;
   companyId: string;
   defaultOwnerPartyId?: string;
   externalId: string;
   id: string;
   kind: "warehouse" | "zone" | "bin";
+  level?: string;
   name: string;
   parentId?: string;
   pickable: boolean;
+  positionNote?: string;
   receivable: boolean;
+  slotType?: "standard" | "pick_face" | "bulk" | "staging" | "quarantine" | "returns";
 };
 
 export type WarehouseNode = {

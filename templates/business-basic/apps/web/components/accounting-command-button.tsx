@@ -23,8 +23,14 @@ export function AccountingCommandButton({ action, label, recordId, resource }: A
       method: "POST"
     });
     const result = await response.json().catch(() => ({ ok: false, error: "invalid_response" })) as {
-      accounting?: { command?: { type?: string } };
-      accountingPersistence?: { persisted?: boolean };
+      accounting?: {
+        command?: { type?: string };
+        proposal?: {
+          id?: string;
+          proposedCommand?: Record<string, unknown>;
+        };
+      };
+      accountingPersistence?: { persisted?: boolean; error?: string; reason?: string };
       error?: string;
       ok?: boolean;
     };
@@ -35,12 +41,37 @@ export function AccountingCommandButton({ action, label, recordId, resource }: A
       return;
     }
 
+    if (result.accounting?.proposal?.id && result.accountingPersistence?.persisted) {
+      const decisionResponse = await fetch(`/api/business/accounting/workflow/proposals/${encodeURIComponent(result.accounting.proposal.id)}`, {
+        body: JSON.stringify({
+          decision: "accept",
+          proposedCommand: result.accounting.proposal.proposedCommand
+        }),
+        headers: { "content-type": "application/json" },
+        method: "POST"
+      });
+      const decision = await decisionResponse.json().catch(() => ({ error: "invalid_response" })) as {
+        error?: string;
+        persisted?: boolean;
+      };
+      if (!decisionResponse.ok || !decision.persisted) {
+        setStatus("error");
+        setMessage(decision.error ?? "Accounting proposal could not be accepted.");
+        return;
+      }
+    } else if (result.accounting?.proposal?.id) {
+      setStatus("error");
+      setMessage(result.accountingPersistence?.error ?? result.accountingPersistence?.reason ?? "Accounting proposal was not persisted.");
+      return;
+    }
+
     setStatus("done");
-    setMessage(`${result.accounting?.command?.type ?? "Accounting command"} prepared.`);
+    setMessage(`${result.accounting?.command?.type ?? "Accounting command"} posted.`);
     notifyAccountingWorkflowUpdated({
       accounting: result.accounting,
       persisted: result.accountingPersistence?.persisted
     });
+    window.location.reload();
   }
 
   return (

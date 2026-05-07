@@ -1,7 +1,7 @@
 import {
   createAccountingAuditEvent,
   createBusinessOutboxEvent,
-  germanTaxRates,
+  germanTaxRatesForChart,
   seedChartAccounts
 } from "@ctox-business/accounting";
 import { saveAccountingSetupSnapshot, saveAccountingWorkflowSnapshot } from "@ctox-business/db/accounting";
@@ -10,10 +10,23 @@ import { getBusinessBundle } from "@/lib/business-seed";
 
 const companyId = "business-basic-company";
 
-export async function POST() {
+export async function POST(request: Request) {
+  const body = await parseJsonBody(request);
+  const chart = body?.chart === "skr04" ? "skr04" : "skr03";
+  return prepareAccountingSetup(chart);
+}
+
+export async function PUT(request: Request) {
+  const body = await parseJsonBody(request);
+  const chart = body?.chart === "skr04" ? "skr04" : "skr03";
+  return prepareAccountingSetup(chart);
+}
+
+async function prepareAccountingSetup(chart: "skr03" | "skr04") {
   const data = await getBusinessBundle();
   const snapshot = {
-    accounts: seedChartAccounts({ chart: "skr03", companyId }),
+    accounts: seedChartAccounts({ chart, companyId }),
+    chart,
     fiscalPeriods: fiscalPeriods2026(),
     parties: [
       ...data.customers.map((customer) => ({
@@ -32,7 +45,8 @@ export async function POST() {
         name: receipt.vendorName
       }))
     ],
-    taxRates: germanTaxRates.map((taxRate) => ({
+    taxRates: germanTaxRatesForChart(chart).map((taxRate) => ({
+      accountCode: taxRate.accountCode,
       accountId: taxRate.accountId,
       code: taxRate.code,
       companyId,
@@ -47,6 +61,7 @@ export async function POST() {
     actorType: "system",
     after: {
       accountCount: snapshot.accounts.length,
+      chart,
       fiscalPeriodCount: snapshot.fiscalPeriods.length,
       partyCount: snapshot.parties.length,
       taxRateCount: snapshot.taxRates.length
@@ -60,6 +75,7 @@ export async function POST() {
     id: `outbox-business.accounting.setup-${companyId}`,
     payload: {
       accountCount: snapshot.accounts.length,
+      chart,
       fiscalPeriodCount: snapshot.fiscalPeriods.length,
       partyCount: snapshot.parties.length,
       taxRateCount: snapshot.taxRates.length
@@ -82,8 +98,17 @@ export async function POST() {
   return NextResponse.json({ persisted: true, snapshot, workflow });
 }
 
+async function parseJsonBody(request: Request) {
+  try {
+    return await request.json() as { chart?: unknown };
+  } catch {
+    return null;
+  }
+}
+
 function vendorExternalId(vendorName: string) {
-  return `vendor-${vendorName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`;
+  const normalized = vendorName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  return normalized.startsWith("vendor-") ? normalized.replace(/^(vendor-)+/, "vendor-") : `vendor-${normalized}`;
 }
 
 function fiscalPeriods2026() {

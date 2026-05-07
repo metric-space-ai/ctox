@@ -28,6 +28,8 @@ const sampleCsv = [
 
 const companyId = "business-basic-company";
 
+export const dynamic = "force-dynamic";
+
 export async function POST(request: Request) {
   const body = await request.json().catch(() => ({})) as BankImportRequest;
   const format = body.format ?? "csv";

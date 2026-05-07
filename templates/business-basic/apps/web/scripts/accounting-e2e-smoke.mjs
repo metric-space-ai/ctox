@@ -12,6 +12,7 @@ await assertBankReconciliationFlow();
 await assertFixedAssetLifecycle();
 await assertDatevAndDunningFlow();
 await assertDerivedReports();
+await assertStoryWorkflows();
 
 console.log(`Accounting E2E smoke passed against ${baseUrl}`);
 
@@ -200,6 +201,61 @@ async function assertDerivedReports() {
   assert(Array.isArray(payload.datevPreview) && payload.datevPreview.every((line) => line.entry?.status === "Posted"), "DATEV preview includes non-posted journal entries");
   assert(!payload.ledger.some((row) => row.entry?.id === "je-bank-fee-2026-05" || row.entry?.id === "je-asset-depr-2026-001"), "Ledger report leaked known draft entries");
   assert(!payload.datevPreview.some((line) => line.entry?.id === "je-bank-fee-2026-05" || line.entry?.id === "je-asset-depr-2026-001"), "DATEV preview leaked known draft entries");
+}
+
+async function assertStoryWorkflows() {
+  const allResponse = await fetch(`${baseUrl}/api/business/accounting/story-workflows`, {
+    headers: { cookie: authCookie }
+  });
+  assert(allResponse.ok, `/api/business/accounting/story-workflows returned ${allResponse.status}`);
+  const allListing = await allResponse.json();
+  assert(allListing.count === 50, `Story workflow listing expected 50 stories, got ${allListing.count}`);
+
+  const listingResponse = await fetch(`${baseUrl}/api/business/accounting/story-workflows?submodule=invoices`, {
+    headers: { cookie: authCookie }
+  });
+  assert(listingResponse.ok, `/api/business/accounting/story-workflows returned ${listingResponse.status}`);
+  const listing = await listingResponse.json();
+  assert(listing.count >= 8, "Invoice story workflow listing is incomplete");
+  assert(listing.workflows?.some((story) => story.id === "story-04"), "Story workflow listing missing invoice send story");
+
+  const runResponse = await fetch(`${baseUrl}/api/business/accounting/story-workflows`, {
+    body: JSON.stringify({ locale: "de", storyId: "story-04" }),
+    headers: {
+      "content-type": "application/json",
+      cookie: authCookie
+    },
+    method: "POST"
+  });
+  assert(runResponse.ok, `/api/business/accounting/story-workflows POST returned ${runResponse.status}`);
+  const payload = await runResponse.json();
+  assert(payload.workflow?.command?.type === "SendInvoice", "Story 04 missing concrete SendInvoice command");
+  assert(payload.workflow?.command?.payload?.implementationLevel === "direct", "Story 04 missing direct implementation marker");
+  assert(payload.workflow?.proposal?.kind === "invoice_check", "Story 04 missing invoice_check proposal");
+  assert(payload.workflow?.audit?.action === "story.story-04.prepare", "Story 04 missing audit event");
+  assert(payload.workflow?.outbox?.topic === "business.accounting.story-04.prepare", "Story 04 missing CTOX outbox event");
+  assertBalancedJournal(payload.workflow?.journalDraft, "Story 04 journal draft");
+
+  for (const story of allListing.workflows ?? []) {
+    const response = await fetch(`${baseUrl}/api/business/accounting/story-workflows`, {
+      body: JSON.stringify({ locale: "de", storyId: story.id }),
+      headers: {
+        "content-type": "application/json",
+        cookie: authCookie
+      },
+      method: "POST"
+    });
+    assert(response.ok, `Story ${story.id} returned ${response.status}`);
+    const storyPayload = await response.json();
+    const command = storyPayload.workflow?.command;
+    assert(command?.type && command.type !== "PrepareStoryWorkflow", `Story ${story.id} still uses generic PrepareStoryWorkflow`);
+    assert(command?.payload?.implementationLevel === "direct", `Story ${story.id} missing direct implementation marker`);
+    assert(storyPayload.workflow?.proposal?.kind, `Story ${story.id} missing proposal kind`);
+    assert(storyPayload.workflow?.outbox?.topic?.startsWith("business.accounting."), `Story ${story.id} missing accounting outbox topic`);
+    if (storyPayload.workflow?.journalDraft) {
+      assertBalancedJournal(storyPayload.workflow.journalDraft, `${story.id} journal draft`);
+    }
+  }
 }
 
 async function postBusinessMutation(route, body) {

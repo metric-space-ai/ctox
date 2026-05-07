@@ -42,7 +42,15 @@ type WorkflowResponse = {
   source?: "database" | "demo";
 };
 
-export function AccountingWorkflowPanel({ compact = false, locale }: { compact?: boolean; locale: "de" | "en" }) {
+export function AccountingWorkflowPanel({
+  compact = false,
+  locale,
+  quiet = false
+}: {
+  compact?: boolean;
+  locale: "de" | "en";
+  quiet?: boolean;
+}) {
   const [busy, setBusy] = useState(false);
   const [data, setData] = useState<WorkflowResponse | null>(null);
   const [decisionMessage, setDecisionMessage] = useState("");
@@ -155,33 +163,43 @@ export function AccountingWorkflowPanel({ compact = false, locale }: { compact?:
   }
 
   return (
-    <section className="accounting-workflow-panel" aria-label="Accounting workflow">
+    <section className={`accounting-workflow-panel ${quiet ? "is-quiet" : ""}`} aria-label="Accounting workflow">
       <header>
         <div>
-          <p>{locale === "de" ? "Workflow" : "Workflow"}</p>
-          <h2>{locale === "de" ? "Review" : "Review"}</h2>
+          <p>{quiet ? (locale === "de" ? "Audit" : "Audit") : (locale === "de" ? "Workflow" : "Workflow")}</p>
+          <h2>{quiet ? (locale === "de" ? "Nachweis" : "Evidence") : (locale === "de" ? "Review" : "Review")}</h2>
         </div>
         <button className="business-accounting-download" disabled={busy} onClick={() => void refresh()} type="button">
           {busy ? "..." : locale === "de" ? "Aktualisieren" : "Refresh"}
         </button>
       </header>
-      <p className={`accounting-workflow-status status-${data?.persistence ?? "loading"}`}>
-        {workflowStatus(data, locale)}
-      </p>
-      <div className="accounting-workflow-summary" aria-label={locale === "de" ? "Workflow Zusammenfassung" : "Workflow summary"}>
-        <div>
-          <span>{locale === "de" ? "Offen" : "Open"}</span>
-          <strong>{openProposals.length}</strong>
-        </div>
-        <div>
-          <span>{locale === "de" ? "Entschieden" : "Decided"}</span>
-          <strong>{decidedProposals.length}</strong>
-        </div>
-        <div>
-          <span>Outbox</span>
-          <strong>{outbox.filter((event) => event.status !== "delivered").length}</strong>
-        </div>
-      </div>
+      {quiet ? (
+        <p className={`accounting-workflow-status status-${data?.persistence ?? "loading"}`}>
+          {locale === "de"
+            ? `${openProposals.length} offen · ${decidedProposals.length} entschieden · ${outbox.filter((event) => event.status !== "delivered").length} Outbox`
+            : `${openProposals.length} open · ${decidedProposals.length} decided · ${outbox.filter((event) => event.status !== "delivered").length} outbox`}
+        </p>
+      ) : (
+        <>
+          <p className={`accounting-workflow-status status-${data?.persistence ?? "loading"}`}>
+            {workflowStatus(data, locale)}
+          </p>
+          <div className="accounting-workflow-summary" aria-label={locale === "de" ? "Workflow Zusammenfassung" : "Workflow summary"}>
+            <div>
+              <span>{locale === "de" ? "Offen" : "Open"}</span>
+              <strong>{openProposals.length}</strong>
+            </div>
+            <div>
+              <span>{locale === "de" ? "Entschieden" : "Decided"}</span>
+              <strong>{decidedProposals.length}</strong>
+            </div>
+            <div>
+              <span>Outbox</span>
+              <strong>{outbox.filter((event) => event.status !== "delivered").length}</strong>
+            </div>
+          </div>
+        </>
+      )}
       {compact ? (
         <details className="accounting-workflow-details">
           <summary>{locale === "de" ? "Offene Vorschlaege" : "Open proposals"}</summary>
@@ -291,22 +309,86 @@ function humanProposalKind(kind: string | undefined, locale: "de" | "en") {
     asset_depreciation: "AfA buchen",
     asset_disposal: "Anlage abgehen",
     bank_match: "Bankmatch",
+    business_analysis: "BWA",
+    chart_setup: "Kontenrahmen",
+    cost_center_assignment: "Kostenstelle",
+    customer_masterdata: "Kunde",
     datev_export: "DATEV Export",
     dunning_run: "Mahnlauf",
+    employee_expense: "Auslage",
+    gobd_reversal: "GoBD-Storno",
     invoice_check: "Rechnung",
+    invoice_cancellation_credit_note: "Storno-Gutschrift",
+    invoice_partial_credit_note: "Teilgutschrift",
+    loan_drawdown: "Darlehen",
+    loan_installment: "Darlehensrate",
+    manual_journal: "Journal",
+    month_close: "Monatsabschluss",
+    open_items_review: "Offene Posten",
+    payables_payment: "Lieferantenzahlung",
+    payables_payment_run: "Zahlungslauf",
+    product_account_assignment: "Produktkonto",
+    profit_and_loss_analysis: "GuV",
+    purchase_order_match: "Bestellabgleich",
+    quote_prepare: "Angebot",
+    quote_to_invoice: "Angebot abrechnen",
+    recurring_posting: "Dauerbuchung",
+    receipt_clarification: "Belegrueckfrage",
+    receipt_duplicate: "Dublette",
     receipt_extraction: "Belegbuchung",
-    receipt_ingest: "OCR"
+    receipt_ingest: "OCR",
+    receipt_variance: "Abweichung",
+    report_balance_sheet: "Bilanz",
+    reverse_charge_receipt: "Reverse Charge",
+    story_workflow: "User Story",
+    supplier_discount: "Skonto",
+    tax_advisor_handoff: "Steuerberaterpaket",
+    travel_expense_report: "Reisekosten",
+    vat_return: "UStVA",
+    vendor_creation: "Lieferant"
   };
   const en: Record<string, string> = {
     asset_activation: "Asset activation",
     asset_depreciation: "Depreciation",
     asset_disposal: "Asset disposal",
     bank_match: "Bank match",
+    business_analysis: "Business analysis",
+    chart_setup: "Chart setup",
+    cost_center_assignment: "Cost center",
+    customer_masterdata: "Customer",
     datev_export: "DATEV export",
     dunning_run: "Dunning",
+    employee_expense: "Employee expense",
+    gobd_reversal: "GoBD reversal",
     invoice_check: "Invoice",
+    invoice_cancellation_credit_note: "Cancellation credit note",
+    invoice_partial_credit_note: "Partial credit note",
+    loan_drawdown: "Loan drawdown",
+    loan_installment: "Loan installment",
+    manual_journal: "Journal",
+    month_close: "Month close",
+    open_items_review: "Open items",
+    payables_payment: "Supplier payment",
+    payables_payment_run: "Payment run",
+    product_account_assignment: "Product account",
+    profit_and_loss_analysis: "P&L",
+    purchase_order_match: "Purchase order match",
+    quote_prepare: "Quote",
+    quote_to_invoice: "Quote conversion",
+    recurring_posting: "Recurring posting",
+    receipt_clarification: "Receipt clarification",
+    receipt_duplicate: "Duplicate",
     receipt_extraction: "Receipt posting",
-    receipt_ingest: "OCR"
+    receipt_ingest: "OCR",
+    receipt_variance: "Variance",
+    report_balance_sheet: "Balance sheet",
+    reverse_charge_receipt: "Reverse charge",
+    story_workflow: "User story",
+    supplier_discount: "Cash discount",
+    tax_advisor_handoff: "Tax advisor handoff",
+    travel_expense_report: "Travel expense",
+    vat_return: "VAT return",
+    vendor_creation: "Vendor"
   };
   return (locale === "de" ? de : en)[kind ?? ""] ?? kind ?? "Proposal";
 }

@@ -44,6 +44,10 @@
   --module-accent: #6d5b33;
 }
 
+[data-module="payroll"] {
+  --module-accent: #6e3f74;
+}
+
 [data-module="ctox"] {
   --module-accent: #5d5f68;
 }

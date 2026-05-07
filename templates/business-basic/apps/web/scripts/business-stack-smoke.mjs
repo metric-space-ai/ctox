@@ -89,6 +89,7 @@ const apiRoutes = [
   "/api/business/bookkeeping",
   "/api/business/reports",
   "/api/business/accounting/reports",
+  "/api/business/accounting/story-workflows?submodule=invoices",
   "/api/ctox/runs",
   "/api/ctox/queue",
   "/api/ctox/knowledge",
@@ -252,6 +253,7 @@ await assertBankImport();
 await assertDatevExport();
 await assertDunningRun();
 await assertAccountingWorkflow();
+await assertAccountingStoryWorkflows();
 await assertAccountingReports();
 
 console.log(`Business stack smoke passed against ${baseUrl}`);
@@ -478,6 +480,24 @@ async function assertAccountingWorkflow() {
     id: activation.externalId ?? activation.id,
     proposedCommand: activation.proposedCommand
   });
+}
+
+async function assertAccountingStoryWorkflows() {
+  const response = await fetch(`${baseUrl}/api/business/accounting/story-workflows`, {
+    body: JSON.stringify({ locale: "en", storyId: "story-50" }),
+    headers: {
+      "content-type": "application/json",
+      cookie: authCookie
+    },
+    method: "POST"
+  });
+  assert(response.ok, `/api/business/accounting/story-workflows returned ${response.status}`);
+  const payload = await response.json();
+  assert(payload.workflow?.story?.id === "story-50", "Story workflow missing selected story");
+  assert(payload.workflow?.command?.type === "PrepareAccountingApprovalBatch", "Story workflow missing concrete approval batch command");
+  assert(payload.workflow?.command?.payload?.implementationLevel === "direct", "Story workflow missing direct implementation marker");
+  assert(payload.workflow?.proposal?.kind === "story_workflow", "Story workflow missing proposal");
+  assert(payload.workflow?.outbox?.topic === "business.accounting.story-50.prepare", "Story workflow missing CTOX outbox event");
 }
 
 async function assertProposalDecision({ expectedResultingJournalEntryId, id, proposedCommand }) {

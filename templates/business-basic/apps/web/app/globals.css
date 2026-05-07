@@ -14552,7 +14552,7 @@ a {
   gap: 10px;
   min-height: 0;
   height: 100%;
-  overflow: hidden;
+  overflow: auto;
   background: color-mix(in oklch, var(--background), var(--surface) 4%);
 }
 
@@ -14563,7 +14563,8 @@ a {
 
 .warehouse-ops-workbench {
   position: relative;
-  grid-template-columns: minmax(270px, 0.68fr) minmax(620px, 1.55fr) minmax(330px, 0.82fr);
+  grid-template-columns: minmax(250px, 0.58fr) minmax(620px, 1.62fr) minmax(310px, 0.74fr);
+  min-width: 1180px;
   transition: grid-template-rows 180ms ease-out;
 }
 
@@ -14577,9 +14578,9 @@ a {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: color-mix(in oklch, var(--surface), var(--background) 8%);
+  border: 1px solid color-mix(in oklch, var(--border), var(--background) 18%);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--surface), var(--background) 10%);
 }
 
 .warehouse-panel-head {
@@ -14618,16 +14619,20 @@ a {
 .warehouse-left {
   grid-column: 1;
   grid-row: 1;
+  background: color-mix(in oklch, var(--surface), var(--background) 15%);
 }
 
 .warehouse-center {
   grid-column: 2;
   grid-row: 1;
+  border-color: color-mix(in oklch, var(--module-accent), var(--border) 70%);
+  background: color-mix(in oklch, var(--surface), var(--background) 4%);
 }
 
 .warehouse-right {
   grid-column: 3;
   grid-row: 1;
+  background: color-mix(in oklch, var(--surface), var(--background) 13%);
 }
 
 .warehouse-match-bar {
@@ -14895,7 +14900,7 @@ button.warehouse-source-card:hover,
 
 .warehouse-zone-card header {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 10px;
   align-items: start;
 }
@@ -14978,6 +14983,64 @@ button.warehouse-source-card:hover,
   padding: 12px 14px;
 }
 
+.warehouse-inbound-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  border-top: 1px solid var(--border);
+  padding: 12px 14px;
+}
+
+.warehouse-inbound-form header {
+  display: grid;
+  gap: 2px;
+  grid-column: 1 / -1;
+}
+
+.warehouse-inbound-form header strong {
+  font-size: 12px;
+  font-weight: 820;
+}
+
+.warehouse-inbound-form header span,
+.warehouse-inbound-form label span {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.warehouse-inbound-form label {
+  display: grid;
+  gap: 4px;
+}
+
+.warehouse-inbound-form input,
+.warehouse-inbound-form select {
+  min-height: 30px;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--background), var(--surface) 35%);
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
+  padding: 0 8px;
+}
+
+.warehouse-inbound-source {
+  grid-column: 1 / -1;
+}
+
+.warehouse-inbound-form button {
+  min-height: 30px;
+  border: 1px solid color-mix(in oklch, var(--module-accent), var(--border) 45%);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--module-accent), var(--surface) 88%);
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 820;
+}
+
 .warehouse-flow-panel header {
   display: flex;
   align-items: center;
@@ -15015,9 +15078,162 @@ button.warehouse-source-card:hover,
   gap: 3px;
   border: 1px solid color-mix(in oklch, var(--border), var(--background) 12%);
   border-radius: 9px;
+  background: transparent;
   color: inherit;
+  font: inherit;
   padding: 9px 10px;
   text-decoration: none;
+  text-align: left;
+}
+
+.warehouse-putaway-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.warehouse-scan-putaway-row {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.warehouse-scan-putaway-row label {
+  display: grid;
+  gap: 4px;
+}
+
+.warehouse-scan-putaway-row label span {
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 780;
+  text-transform: uppercase;
+}
+
+.warehouse-scan-putaway-row input {
+  min-height: 28px;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--background), var(--surface) 35%);
+  color: var(--text);
+  font: inherit;
+  font-size: 10px;
+  padding: 0 7px;
+}
+
+.warehouse-putaway-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.warehouse-putaway-actions button {
+  min-height: 28px;
+  border: 1px solid color-mix(in oklch, var(--module-accent), var(--border) 58%);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--module-accent), var(--surface) 94%);
+  color: inherit;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 820;
+  padding: 4px 8px;
+}
+
+.warehouse-putaway-row em {
+  border: 1px solid color-mix(in oklch, var(--module-accent), var(--border) 45%);
+  border-radius: 999px;
+  color: color-mix(in oklch, var(--module-accent), var(--text) 28%);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 820;
+  padding: 4px 7px;
+  white-space: nowrap;
+}
+
+.warehouse-quality-panel header span {
+  min-width: 24px;
+  border: 1px solid color-mix(in oklch, var(--warning), var(--border) 52%);
+  border-radius: 999px;
+  color: color-mix(in oklch, var(--warning), var(--text) 24%);
+  font-size: 10px;
+  font-weight: 820;
+  text-align: center;
+}
+
+.warehouse-quality-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+}
+
+.warehouse-quality-row em {
+  font-style: normal;
+  font-weight: 820;
+}
+
+.warehouse-quality-row label {
+  display: grid;
+  gap: 4px;
+}
+
+.warehouse-quality-row label span {
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 780;
+  text-transform: uppercase;
+}
+
+.warehouse-quality-row input,
+.warehouse-quality-row select {
+  min-height: 28px;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--background), var(--surface) 35%);
+  color: var(--text);
+  font: inherit;
+  font-size: 10px;
+  padding: 0 7px;
+}
+
+.warehouse-quality-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.warehouse-quality-actions button {
+  min-height: 28px;
+  border: 1px solid color-mix(in oklch, var(--module-accent), var(--border) 58%);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--module-accent), var(--surface) 94%);
+  color: inherit;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 820;
+  padding: 4px 8px;
+}
+
+.warehouse-quality-actions button[value="scrap"] {
+  border-color: color-mix(in oklch, var(--danger), var(--border) 62%);
+  background: color-mix(in oklch, var(--danger), var(--surface) 95%);
+}
+
+button.warehouse-flow-item {
+  cursor: pointer;
+}
+
+.warehouse-flow-item.is-selected,
+button.warehouse-flow-item:hover,
+.warehouse-flow-item:hover {
+  border-color: color-mix(in oklch, var(--module-accent), var(--border) 54%);
+  background: color-mix(in oklch, var(--module-accent), var(--surface) 94%);
+}
+
+.warehouse-item-master-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.warehouse-item-master-row.is-inactive {
+  opacity: 0.62;
 }
 
 .warehouse-flow-item strong {
@@ -15143,9 +15359,28 @@ button.warehouse-source-card:hover,
   align-content: start;
 }
 
+.warehouse-stock-forms {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+}
+
+.warehouse-correction-editor {
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
 .warehouse-bottom-editor label {
   display: grid;
   gap: 4px;
+}
+
+.warehouse-count-editor {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.warehouse-count-line {
+  grid-column: 1 / -1;
 }
 
 .warehouse-bottom-editor label span {
@@ -15155,7 +15390,8 @@ button.warehouse-source-card:hover,
   text-transform: uppercase;
 }
 
-.warehouse-bottom-editor input {
+.warehouse-bottom-editor input,
+.warehouse-bottom-editor select {
   min-height: 32px;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -15192,6 +15428,33 @@ button.warehouse-source-card:hover,
   grid-template-columns: minmax(0, 1fr);
   color: color-mix(in oklch, var(--text), var(--muted) 8%);
   font-size: 11px;
+}
+
+.warehouse-bottom-ai span b,
+.warehouse-structure-preview span b {
+  font-size: 11px;
+  font-weight: 820;
+}
+
+.warehouse-bottom-ai span small,
+.warehouse-structure-preview span small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.warehouse-structure-preview {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
+  gap: 7px;
+}
+
+.warehouse-structure-preview span {
+  display: grid;
+  gap: 2px;
+  border: 1px solid color-mix(in oklch, var(--border), var(--background) 12%);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--surface), var(--background) 36%);
+  padding: 8px;
 }
 
 .warehouse-bottom-stock strong,
@@ -15802,6 +16065,107 @@ button.warehouse-source-card:hover,
   text-decoration: none;
 }
 
+.warehouse-source-match > a {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 9px;
+  align-items: center;
+  color: inherit;
+  min-width: 0;
+  text-decoration: none;
+}
+
+.warehouse-pick-task {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.warehouse-pick-task i {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 10px;
+  font-style: normal;
+}
+
+.warehouse-pick-task i b {
+  overflow: hidden;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.warehouse-pick-task label {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: 4px;
+}
+
+.warehouse-pick-task label span {
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 780;
+  text-transform: uppercase;
+}
+
+.warehouse-pick-task input {
+  min-height: 28px;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--background), var(--surface) 35%);
+  color: var(--text);
+  font: inherit;
+  font-size: 10px;
+  padding: 0 7px;
+}
+
+.warehouse-pick-task > a {
+  width: fit-content;
+  color: color-mix(in oklch, var(--module-accent), var(--text) 20%);
+  font-size: 10px;
+  font-weight: 820;
+  text-decoration: none;
+}
+
+.warehouse-ops-panel {
+  gap: 10px;
+}
+
+.warehouse-ops-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.warehouse-ops-actions button,
+.warehouse-ops-actions a {
+  display: grid;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--surface), var(--background) 34%);
+  color: inherit;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 800;
+  padding: 4px 7px;
+  text-align: center;
+  text-decoration: none;
+}
+
+.warehouse-ops-actions button:not(:disabled),
+.warehouse-ops-actions a {
+  border-color: color-mix(in oklch, var(--module-accent), var(--border) 62%);
+}
+
+.warehouse-ops-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.46;
+}
+
 .warehouse-source-match.is-available {
   border-color: color-mix(in oklch, var(--success), var(--border) 64%);
 }
@@ -16240,22 +16604,13 @@ button.warehouse-source-card:hover,
 }
 
 @media (max-width: 1280px) {
+  .warehouse-ops-workbench {
+    grid-template-columns: 240px minmax(560px, 1fr) 300px;
+    min-width: 1100px;
+  }
+
   .warehouse-workbench {
-    grid-template-columns: minmax(230px, 0.78fr) minmax(420px, 1.4fr);
-    grid-template-rows: minmax(0, 1fr) minmax(260px, 0.54fr) auto;
-  }
-
-  .warehouse-storage-workbench {
-    grid-template-rows: minmax(0, 1fr) minmax(260px, 0.54fr);
-  }
-
-  .warehouse-right {
-    grid-column: 1 / -1;
-    grid-row: 2;
-  }
-
-  .warehouse-match-bar {
-    grid-row: 3;
+    grid-template-rows: minmax(0, 1fr) auto;
   }
 }
 
@@ -16264,10 +16619,28 @@ button.warehouse-source-card:hover,
     display: flex;
     flex-direction: column;
     overflow: auto;
+    min-width: 0;
   }
 
   .warehouse-panel {
     min-height: 360px;
+  }
+
+  .warehouse-center {
+    order: 1;
+    min-height: 560px;
+  }
+
+  .warehouse-left {
+    order: 2;
+  }
+
+  .warehouse-right {
+    order: 3;
+  }
+
+  .warehouse-bottom-module {
+    order: 4;
   }
 
   .warehouse-line-badges,
@@ -16292,5 +16665,2605 @@ button.warehouse-source-card:hover,
     border-inline: 0;
     border-block: 1px solid var(--border);
     padding: 10px 0;
+  }
+}
+
+.business-accounting-page {
+  --finance-ink: color-mix(in oklch, var(--text), var(--muted) 12%);
+  --finance-muted: color-mix(in oklch, var(--muted), var(--surface) 14%);
+  --finance-faint: color-mix(in oklch, var(--muted), var(--surface) 42%);
+  --finance-line: color-mix(in oklch, var(--border), transparent 36%);
+  width: min(1500px, calc(100vw - 44px));
+  max-width: none;
+  min-height: auto;
+  margin: 0 auto;
+  gap: 12px;
+  padding: 18px 0 28px;
+}
+
+.business-accounting-page .business-accounting-tabs {
+  display: none;
+}
+
+.business-accounting-page .business-accounting-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 28px;
+  align-items: end;
+  border-bottom: 1px solid var(--finance-line);
+  padding: 0 0 14px;
+}
+
+.business-accounting-page .business-accounting-header p {
+  margin: 0 0 3px;
+  color: var(--finance-faint);
+  font-size: 10px;
+  font-weight: 480;
+}
+
+.business-accounting-page .business-accounting-header h1 {
+  margin: 0;
+  color: var(--finance-ink);
+  font-size: 24px;
+  font-weight: 650;
+  line-height: 1.15;
+}
+
+.business-accounting-page .business-accounting-header span {
+  display: block;
+  max-width: 58ch;
+  margin-top: 5px;
+  color: var(--finance-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.business-accounting-page .finance-header-actions {
+  gap: 10px;
+  align-items: center;
+  padding: 0;
+}
+
+.business-accounting-page .finance-secondary-action {
+  min-height: 28px;
+  border: 0;
+  background: transparent;
+  color: var(--finance-faint);
+  padding: 0;
+  font-size: 11px;
+  font-weight: 480;
+}
+
+.business-accounting-page .finance-primary-actions {
+  gap: 8px;
+}
+
+.business-accounting-page .finance-primary-actions .accounting-command-control .drawer-primary,
+.business-accounting-page .finance-primary-actions .business-accounting-inline-link,
+.business-accounting-page .finance-primary-actions .business-accounting-download,
+.business-accounting-page .finance-primary-actions .invoice-save-draft,
+.business-accounting-page .finance-primary-actions .invoice-send-button,
+.business-accounting-page .finance-secondary-action.is-primary {
+  min-height: 32px;
+  border: 1px solid color-mix(in oklch, var(--module-accent), var(--border) 68%);
+  border-radius: 7px;
+  background: color-mix(in oklch, var(--module-accent), var(--surface) 88%);
+  color: color-mix(in oklch, var(--module-accent), var(--text) 22%);
+  padding: 0 11px;
+  box-shadow: none;
+  font-size: 11px;
+  font-weight: 620;
+  text-transform: none;
+}
+
+.business-accounting-page .finance-primary-actions .invoice-delivery-split {
+  box-shadow: none;
+}
+
+.business-accounting-page .business-accounting-header .invoice-save-draft,
+.business-accounting-page .finance-inline-actions .invoice-save-draft {
+  min-height: 30px;
+  border: 1px solid var(--finance-line);
+  border-radius: 7px;
+  background: transparent;
+  color: color-mix(in oklch, var(--finance-ink), var(--muted) 24%);
+  padding: 0 10px;
+  font-size: 11px;
+  font-weight: 520;
+  text-transform: none;
+}
+
+.business-accounting-page .finance-primary-actions .invoice-delivery-split > .drawer-primary,
+.business-accounting-page .finance-inline-actions .invoice-delivery-split > .drawer-primary {
+  min-height: 30px;
+  border-color: var(--finance-line) !important;
+  background: transparent !important;
+  color: color-mix(in oklch, var(--finance-ink), var(--muted) 20%) !important;
+  padding: 0 10px;
+  font-size: 11px;
+  font-weight: 540;
+  text-transform: none;
+}
+
+.business-accounting-page .finance-primary-actions .invoice-delivery-menu-trigger,
+.business-accounting-page .finance-inline-actions .invoice-delivery-menu-trigger {
+  width: 32px;
+  min-height: 30px;
+  border-color: var(--finance-line) !important;
+  border-left-color: var(--finance-line) !important;
+  background: transparent !important;
+  color: var(--finance-muted) !important;
+}
+
+.business-accounting-page .invoice-delivery-menu-trigger span {
+  border-top-width: 4px;
+  border-right-width: 4px;
+  border-left-width: 4px;
+}
+
+.business-accounting-page .finance-workbench {
+  display: grid;
+  gap: 12px;
+  overflow: visible;
+  border: 0;
+  background: transparent;
+}
+
+.business-accounting-page .finance-summary-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px 22px;
+  border: 0;
+  background: transparent;
+  padding: 0 0 2px;
+}
+
+.business-accounting-page .finance-summary-strip div {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.business-accounting-page .finance-summary-strip span,
+.business-accounting-page .finance-summary-strip small {
+  color: var(--finance-faint);
+  font-size: 10px;
+  font-weight: 420;
+}
+
+.business-accounting-page .finance-summary-strip small::before,
+.business-accounting-page .finance-summary-strip small::after {
+  content: none;
+}
+
+.business-accounting-page .finance-summary-strip strong {
+  color: color-mix(in oklch, var(--finance-ink), var(--muted) 28%);
+  font-size: 11px;
+  font-weight: 560;
+}
+
+.business-accounting-page .finance-mode-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  align-items: center;
+  margin: 0;
+  border-bottom: 0;
+  padding: 2px 0 4px;
+}
+
+.business-accounting-page .finance-mode-label {
+  margin-right: 3px;
+  color: var(--finance-faint);
+  font-size: 9px;
+  font-weight: 430;
+}
+
+.business-accounting-page .finance-mode-tab,
+.business-accounting-page .finance-mode-tab:first-child,
+.business-accounting-page .finance-mode-tab:last-child,
+.business-accounting-page .finance-mode-tab[aria-selected="true"] {
+  min-height: 24px;
+  gap: 6px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--finance-muted);
+  padding: 0 7px;
+  font-size: 10px;
+  font-weight: 430;
+}
+
+.business-accounting-page .finance-mode-tab[aria-selected="true"] {
+  background: color-mix(in oklch, var(--surface-alt), var(--surface) 54%);
+  color: var(--finance-ink);
+  font-weight: 520;
+}
+
+.business-accounting-page .finance-mode-tab strong,
+.business-accounting-page .finance-mode-tab.tone-active strong,
+.business-accounting-page .finance-mode-tab.tone-attention strong {
+  min-width: auto;
+  background: transparent;
+  color: var(--finance-faint);
+  padding: 0;
+  font-size: 10px;
+  font-weight: 450;
+}
+
+.business-accounting-page .finance-filter-row {
+  display: block;
+  padding: 0 0 12px;
+}
+
+.business-accounting-page .finance-filter-row label {
+  display: none;
+}
+
+.business-accounting-page .finance-filter-row label:last-child {
+  display: block;
+  width: min(420px, 100%);
+}
+
+.business-accounting-page .finance-filter-row label:last-child span {
+  display: none;
+}
+
+.business-accounting-page .finance-filter-row input {
+  min-height: 30px;
+  border: 0;
+  border-bottom: 1px solid var(--finance-line);
+  border-radius: 0;
+  background: transparent;
+  color: var(--finance-muted);
+  padding: 0;
+  font-size: 12px;
+}
+
+.business-accounting-page .finance-workbench-body,
+.business-accounting-page .finance-workbench-body.with-document-rail {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 330px);
+  gap: 30px;
+  border: 0;
+}
+
+.business-accounting-page .finance-workbench-body.with-document-rail {
+  grid-template-columns: 148px minmax(0, 1fr) minmax(280px, 330px);
+}
+
+.business-accounting-page .finance-document-rail {
+  gap: 1px;
+  border: 0;
+  background: transparent;
+  padding: 8px 0 0;
+}
+
+.business-accounting-page .finance-document-rail button {
+  min-height: 28px;
+  border: 0;
+  background: transparent;
+  color: var(--finance-muted);
+  padding: 0;
+  font-size: 11px;
+  font-weight: 430;
+}
+
+.business-accounting-page .finance-document-rail button[aria-pressed="true"] {
+  color: var(--finance-ink);
+  font-weight: 600;
+}
+
+.business-accounting-page .finance-document-rail strong {
+  background: transparent;
+  color: var(--finance-faint);
+  font-size: 10px;
+  font-weight: 430;
+}
+
+.business-accounting-page .finance-row-board {
+  min-width: 0;
+  background: transparent;
+}
+
+.business-accounting-page .finance-row-board > header {
+  min-height: auto;
+  border: 0;
+  padding: 0 0 11px;
+}
+
+.business-accounting-page .finance-row-board h2 {
+  color: var(--finance-ink);
+  font-size: 19px;
+  font-weight: 640;
+}
+
+.business-accounting-page .finance-row-board p {
+  max-width: 52ch;
+  color: var(--finance-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.business-accounting-page .finance-row-board > header button {
+  border: 0;
+  background: transparent;
+  color: var(--finance-faint);
+  padding: 0;
+  font-size: 11px;
+  font-weight: 430;
+}
+
+.business-accounting-page .finance-row-board-head,
+.business-accounting-page .finance-row-board li {
+  grid-template-columns: 22px 28px minmax(0, 1.9fr) minmax(78px, 0.42fr) minmax(104px, 0.48fr) minmax(88px, 0.34fr);
+  gap: 9px;
+}
+
+.business-accounting-page .finance-row-board-head {
+  border-top: 1px solid var(--finance-line);
+  border-bottom: 1px solid var(--finance-line);
+  color: var(--finance-faint);
+  padding: 6px 0;
+  font-size: 9px;
+  font-weight: 430;
+}
+
+.business-accounting-page .finance-row-board li {
+  min-height: 56px;
+  border-bottom: 1px solid color-mix(in oklch, var(--border), transparent 52%);
+  padding: 8px 0;
+}
+
+.business-accounting-page .finance-row-board li.is-selected {
+  min-height: 72px;
+  background: transparent;
+  box-shadow: none;
+  padding: 13px 0;
+}
+
+.business-accounting-page .finance-row-check input {
+  width: 13px;
+  height: 13px;
+  opacity: 0.56;
+}
+
+.business-accounting-page .finance-row-marker {
+  width: auto;
+  height: auto;
+  justify-content: flex-start;
+  background: transparent;
+  color: var(--finance-faint);
+  font-size: 9px;
+  font-weight: 430;
+}
+
+.business-accounting-page .finance-row-main {
+  gap: 1px;
+}
+
+.business-accounting-page .finance-row-main strong {
+  color: color-mix(in oklch, var(--finance-ink), var(--muted) 10%);
+  font-size: 12px;
+  font-weight: 560;
+}
+
+.business-accounting-page .finance-row-main span {
+  color: var(--finance-muted);
+  font-size: 11px;
+  font-weight: 430;
+}
+
+.business-accounting-page .finance-row-main small {
+  display: none;
+  color: var(--finance-muted);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.35;
+}
+
+.business-accounting-page .finance-row-status,
+.business-accounting-page .finance-row-action {
+  color: var(--finance-faint);
+  font-size: 10px;
+  font-weight: 430;
+}
+
+.business-accounting-page .finance-row-amount {
+  color: color-mix(in oklch, var(--finance-ink), var(--muted) 16%);
+  font-size: 12px;
+  font-weight: 560;
+}
+
+.business-accounting-page .finance-row-action {
+  min-height: auto;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  text-align: right;
+}
+
+.business-accounting-page .finance-row-board li.is-selected .finance-row-main strong {
+  color: var(--finance-ink);
+  font-size: 15px;
+  font-weight: 660;
+}
+
+.business-accounting-page .finance-row-board li.is-selected .finance-row-main span {
+  color: var(--finance-muted);
+  font-size: 12px;
+}
+
+.business-accounting-page .finance-row-board li.is-selected .finance-row-main small {
+  display: block;
+}
+
+.business-accounting-page .finance-row-board li.is-selected .finance-row-marker {
+  color: color-mix(in oklch, var(--module-accent), var(--text) 32%);
+  font-weight: 620;
+}
+
+.business-accounting-page .finance-row-board li.is-selected .finance-row-status {
+  color: var(--finance-muted);
+  font-size: 11px;
+}
+
+.business-accounting-page .finance-row-board li.is-selected .finance-row-amount {
+  color: var(--finance-ink);
+  font-size: 16px;
+  font-weight: 690;
+}
+
+.business-accounting-page .finance-row-board li.is-selected .finance-row-action {
+  min-height: 29px;
+  border: 1px solid var(--finance-line);
+  border-radius: 7px;
+  color: color-mix(in oklch, var(--finance-ink), var(--muted) 20%);
+  padding: 0 8px;
+}
+
+.business-accounting-page .finance-row-board li.is-review:not(.is-selected) .finance-row-marker,
+.business-accounting-page .finance-row-board li.is-review:not(.is-selected) .finance-row-status {
+  color: color-mix(in oklch, var(--warning), var(--muted) 58%);
+}
+
+.business-accounting-page .finance-inspector {
+  gap: 13px;
+  border: 0;
+  background: transparent;
+  padding: 2px 0 0;
+}
+
+.business-accounting-page .finance-decision-panel {
+  display: grid;
+  gap: 10px;
+  border-bottom: 1px solid var(--finance-line);
+  padding-bottom: 12px;
+}
+
+.business-accounting-page .finance-inspector-card {
+  gap: 5px;
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.business-accounting-page .finance-inspector-card p,
+.business-accounting-page .finance-inspector-card dt {
+  color: var(--finance-faint);
+  font-size: 9px;
+  font-weight: 430;
+}
+
+.business-accounting-page .finance-inspector-card h2 {
+  color: var(--finance-ink);
+  font-size: 15px;
+  font-weight: 620;
+  line-height: 1.22;
+}
+
+.business-accounting-page .finance-inspector-card > span {
+  color: var(--finance-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.business-accounting-page .finance-inspector-card dl {
+  gap: 4px;
+  margin-top: 7px;
+}
+
+.business-accounting-page .finance-inspector-card dd {
+  color: color-mix(in oklch, var(--finance-ink), var(--muted) 10%);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.business-accounting-page .finance-inline-actions:not(.is-compact) {
+  gap: 6px;
+  border: 0;
+  padding: 0;
+}
+
+.business-accounting-page .finance-decision-actions {
+  display: grid;
+  gap: 6px;
+}
+
+.business-accounting-page .finance-inline-actions:not(.is-compact) > * {
+  flex: 0 1 auto;
+}
+
+.business-accounting-page .finance-inline-actions:not(.is-compact) .drawer-primary,
+.business-accounting-page .finance-inline-actions:not(.is-compact) .business-accounting-download,
+.business-accounting-page .finance-inline-actions:not(.is-compact) .business-accounting-inline-link,
+.business-accounting-page .finance-inline-actions:not(.is-compact) .accounting-file-command {
+  min-height: 29px;
+  border-color: var(--finance-line);
+  background: transparent;
+  color: color-mix(in oklch, var(--finance-ink), var(--muted) 26%);
+  font-size: 11px;
+  font-weight: 520;
+  text-transform: none;
+}
+
+.business-accounting-page .accounting-story-panel {
+  display: grid;
+  gap: 8px;
+  border-bottom: 1px solid var(--finance-line);
+  padding-bottom: 12px;
+}
+
+.business-accounting-page .accounting-story-panel > header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.business-accounting-page .accounting-story-panel > header p {
+  margin: 0;
+  color: var(--finance-faint);
+  font-size: 9px;
+  font-weight: 430;
+}
+
+.business-accounting-page .accounting-story-panel > header h2 {
+  margin: 1px 0 0;
+  color: color-mix(in oklch, var(--finance-ink), var(--muted) 28%);
+  font-size: 11px;
+  font-weight: 520;
+  letter-spacing: 0;
+}
+
+.business-accounting-page .accounting-story-panel > header > span {
+  color: var(--finance-faint);
+  font-size: 10px;
+  font-weight: 430;
+}
+
+.business-accounting-page .accounting-story-focus {
+  display: grid;
+  gap: 7px;
+  padding-bottom: 2px;
+}
+
+.business-accounting-page .accounting-story-kicker {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+}
+
+.business-accounting-page .accounting-story-kicker span,
+.business-accounting-page .accounting-story-acceptance {
+  margin: 0;
+  color: var(--finance-faint);
+  font-size: 9px;
+  font-weight: 430;
+}
+
+.business-accounting-page .accounting-story-focus h3 {
+  margin: 0;
+  color: color-mix(in oklch, var(--finance-ink), var(--muted) 8%);
+  font-size: 12px;
+  font-weight: 560;
+  letter-spacing: 0;
+  line-height: 1.25;
+}
+
+.business-accounting-page .accounting-story-manual,
+.business-accounting-page .accounting-story-focus blockquote {
+  margin: 0;
+  color: var(--finance-muted);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.42;
+}
+
+.business-accounting-page .accounting-story-focus blockquote {
+  border: 1px solid color-mix(in oklch, var(--module-accent), var(--border) 78%);
+  border-radius: 7px;
+  background: color-mix(in oklch, var(--module-accent), var(--surface) 92%);
+  color: color-mix(in oklch, var(--finance-ink), var(--muted) 16%);
+  padding: 8px 9px;
+}
+
+.business-accounting-page .accounting-story-acceptance {
+  line-height: 1.4;
+}
+
+.business-accounting-page .accounting-story-focus button {
+  justify-self: start;
+  min-height: 29px;
+  border: 1px solid color-mix(in oklch, var(--module-accent), var(--border) 70%);
+  border-radius: 7px;
+  background: color-mix(in oklch, var(--module-accent), var(--surface) 90%);
+  color: color-mix(in oklch, var(--module-accent), var(--text) 24%);
+  cursor: pointer;
+  padding: 0 9px;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 540;
+}
+
+.business-accounting-page .accounting-story-focus small {
+  color: var(--finance-faint);
+  font-size: 10px;
+  font-weight: 400;
+}
+
+.business-accounting-page .accounting-story-focus small.is-error {
+  color: color-mix(in oklch, var(--danger), var(--muted) 25%);
+}
+
+.business-accounting-page .accounting-story-context {
+  border: 0;
+  padding: 0;
+}
+
+.business-accounting-page .accounting-story-context summary {
+  color: var(--finance-faint);
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 430;
+}
+
+.business-accounting-page .accounting-story-context p {
+  margin: 6px 0 0;
+  color: var(--finance-muted);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.business-accounting-page .accounting-story-queue {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.business-accounting-page .accounting-story-queue summary {
+  color: var(--finance-faint);
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 430;
+}
+
+.business-accounting-page .accounting-story-queue > div {
+  display: grid;
+  gap: 3px;
+  max-height: 154px;
+  overflow: auto;
+  padding: 6px 3px 0 0;
+}
+
+.business-accounting-page .accounting-story-queue button {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 7px;
+  align-items: center;
+  border: 0;
+  background: transparent;
+  color: var(--finance-muted);
+  cursor: pointer;
+  padding: 3px 0;
+  text-align: left;
+}
+
+.business-accounting-page .accounting-story-queue button[aria-current="true"] {
+  color: var(--finance-ink);
+}
+
+.business-accounting-page .accounting-story-queue span {
+  color: var(--finance-faint);
+  font-size: 9px;
+  font-weight: 430;
+}
+
+.business-accounting-page .accounting-story-queue strong {
+  overflow: hidden;
+  color: inherit;
+  font-size: 10px;
+  font-weight: 430;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.business-accounting-page .accounting-story-queue button[aria-current="true"] strong {
+  font-weight: 560;
+}
+
+.business-accounting-page .finance-inspector .accounting-workflow-panel {
+  gap: 8px;
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.business-accounting-page .finance-inspector .accounting-workflow-panel > header {
+  position: relative;
+  border-top: 0;
+  margin-top: 0;
+  padding-top: 0;
+}
+
+.business-accounting-page .finance-inspector .accounting-workflow-panel > header::before {
+  content: none;
+  position: absolute;
+  top: 12px;
+  right: 0;
+  color: var(--finance-faint);
+  font-size: 9px;
+  font-weight: 520;
+}
+
+.business-accounting-page .finance-inspector .accounting-workflow-panel > header p {
+  color: var(--finance-faint);
+  font-size: 9px;
+  font-weight: 430;
+}
+
+.business-accounting-page .finance-inspector .accounting-workflow-panel h2 {
+  color: color-mix(in oklch, var(--finance-ink), var(--muted) 32%);
+  font-size: 11px;
+  font-weight: 520;
+}
+
+.business-accounting-page .finance-inspector .accounting-workflow-panel .business-accounting-download {
+  min-height: 26px;
+  border: 0;
+  background: transparent;
+  color: var(--finance-faint);
+  padding: 0;
+  font-size: 10px;
+  font-weight: 430;
+}
+
+.business-accounting-page .finance-inspector .accounting-workflow-status,
+.business-accounting-page .finance-inspector .accounting-workflow-note {
+  color: var(--finance-faint);
+  font-size: 9px;
+  font-weight: 400;
+}
+
+.business-accounting-page .finance-inspector .accounting-workflow-summary {
+  display: flex;
+  gap: 12px;
+}
+
+.business-accounting-page .finance-inspector .accounting-workflow-summary div,
+.business-accounting-page .finance-inspector .accounting-workflow-focus li,
+.business-accounting-page .finance-inspector .accounting-workflow-details li {
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.business-accounting-page .finance-inspector .accounting-workflow-summary span {
+  color: var(--finance-faint);
+  font-size: 9px;
+  font-weight: 430;
+}
+
+.business-accounting-page .finance-inspector .accounting-workflow-summary strong {
+  color: color-mix(in oklch, var(--finance-ink), var(--muted) 30%);
+  font-size: 12px;
+  font-weight: 560;
+}
+
+.business-accounting-page .finance-inspector .accounting-workflow-focus strong,
+.business-accounting-page .finance-inspector .accounting-workflow-details strong {
+  color: color-mix(in oklch, var(--finance-ink), var(--muted) 14%);
+  font-size: 11px;
+  font-weight: 560;
+}
+
+.business-accounting-page .finance-inspector .accounting-workflow-focus span,
+.business-accounting-page .finance-inspector .accounting-workflow-focus p,
+.business-accounting-page .finance-inspector .accounting-workflow-details span,
+.business-accounting-page .finance-inspector .accounting-workflow-details p {
+  color: var(--finance-muted);
+  font-size: 10px;
+  font-weight: 400;
+}
+
+.business-accounting-page .finance-inspector .accounting-workflow-actions button,
+.business-accounting-page .finance-inspector .accounting-workflow-actions button:first-child {
+  min-height: 27px;
+  border: 1px solid var(--finance-line);
+  background: transparent;
+  color: color-mix(in oklch, var(--finance-ink), var(--muted) 24%);
+  box-shadow: none;
+  font-size: 10px;
+  font-weight: 520;
+  text-transform: none;
+}
+
+.business-accounting-page .finance-inspector .accounting-workflow-actions button:first-child {
+  border-color: color-mix(in oklch, var(--module-accent), var(--border) 68%);
+  color: color-mix(in oklch, var(--module-accent), var(--text) 28%);
+}
+
+.business-accounting-page .finance-inspector .accounting-workflow-details {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.business-accounting-page .finance-inspector .accounting-workflow-details summary {
+  color: var(--finance-faint);
+  font-size: 11px;
+  font-weight: 430;
+}
+
+@media (max-width: 1100px) {
+  .business-accounting-page .business-accounting-header,
+  .business-accounting-page .finance-workbench-body,
+  .business-accounting-page .finance-workbench-body.with-document-rail {
+    grid-template-columns: 1fr;
+  }
+
+  .business-accounting-page .finance-header-actions {
+    justify-content: flex-start;
+  }
+
+  .business-accounting-page .finance-document-rail {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+}
+
+@media (max-width: 760px) {
+  .business-accounting-page {
+    width: min(100% - 28px, 1500px);
+    padding-top: 12px;
+  }
+
+  .business-accounting-page .finance-row-board-head {
+    display: none;
+  }
+
+  .business-accounting-page .finance-row-board li {
+    grid-template-columns: 22px 28px minmax(0, 1fr);
+  }
+
+  .business-accounting-page .finance-row-status,
+  .business-accounting-page .finance-row-amount,
+  .business-accounting-page .finance-row-action {
+    grid-column: 3;
+    justify-self: start;
+    text-align: left;
+  }
+}
+
+.accounting-reference-page {
+  --reference-bg: #f5f6f7;
+  --reference-line: #d7dde1;
+  --reference-text: #26323a;
+  --reference-muted: #6e7a81;
+  --reference-soft: #eef2f3;
+  --reference-green: #12965a;
+  width: min(1540px, calc(100vw - 44px));
+  color: var(--reference-text);
+  padding-top: 18px;
+}
+
+.accounting-reference-page .business-accounting-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  min-height: 38px;
+  align-items: center;
+  gap: 16px;
+  border-bottom-color: var(--reference-line);
+  padding-bottom: 10px;
+}
+
+.accounting-reference-page .business-accounting-header > div:first-child {
+  justify-self: start;
+  text-align: left;
+}
+
+.accounting-reference-page .finance-header-actions {
+  justify-self: end;
+}
+
+.accounting-reference-page .business-accounting-header h1 {
+  color: var(--reference-text);
+  font-size: 24px;
+  font-weight: 700;
+}
+
+.accounting-reference-page .business-accounting-header span,
+.accounting-reference-page .finance-summary-strip span,
+.accounting-reference-page .finance-summary-strip small {
+  color: var(--reference-muted);
+}
+
+.accounting-reference-page .finance-secondary-action.is-primary,
+.accounting-reference-page .finance-header-actions .drawer-primary,
+.accounting-reference-page .finance-header-actions .business-accounting-download,
+.accounting-reference-page .finance-header-actions .accounting-file-command {
+  border-color: color-mix(in oklch, var(--reference-green), white 45%);
+  background: var(--reference-green);
+  color: white;
+}
+
+.reference-top-tabs {
+  display: flex;
+  gap: 28px;
+  border-bottom: 1px solid var(--reference-line);
+  padding-top: 8px;
+}
+
+.reference-top-tabs button {
+  min-height: 42px;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  background: transparent;
+  color: var(--reference-muted);
+  cursor: pointer;
+  padding: 0;
+  font-size: 14px;
+  font-weight: 650;
+  text-transform: none;
+}
+
+.reference-top-tabs button[aria-selected="true"] {
+  border-bottom-color: var(--reference-green);
+  color: var(--reference-green);
+}
+
+.payment-status-bar {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  overflow: hidden;
+  border: 1px solid var(--reference-line);
+  border-radius: 3px;
+  background: white;
+}
+
+.payment-status-bar button {
+  display: flex;
+  min-height: 54px;
+  align-items: center;
+  gap: 12px;
+  border: 0;
+  border-right: 1px solid var(--reference-line);
+  background: white;
+  color: var(--reference-text);
+  cursor: pointer;
+  padding: 0 18px;
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.payment-status-bar button:last-child {
+  border-right: 0;
+}
+
+.payment-status-bar button[aria-selected="true"] {
+  background: #edf7f1;
+}
+
+.payment-status-bar strong {
+  min-width: 28px;
+  border-radius: 999px;
+  background: #f07300;
+  color: white;
+  padding: 4px 8px;
+  font-size: 12px;
+  text-align: center;
+}
+
+.reference-filter-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.9fr) minmax(160px, 0.75fr) minmax(180px, 0.9fr) minmax(240px, 1.15fr);
+  gap: 12px;
+  padding: 12px 0;
+}
+
+.reference-filter-row label {
+  display: grid;
+  gap: 2px;
+}
+
+.reference-filter-row span {
+  color: var(--reference-muted);
+  font-size: 10px;
+}
+
+.reference-filter-row input {
+  min-height: 42px;
+  border: 1px solid #c7cdd1;
+  border-radius: 4px;
+  background: white;
+  color: var(--reference-muted);
+  padding: 0 12px;
+  font-size: 14px;
+}
+
+.reference-filter-row select {
+  min-height: 42px;
+  border: 1px solid #c7cdd1;
+  border-radius: 4px;
+  background: white;
+  color: var(--reference-text);
+  padding: 0 12px;
+  font-size: 14px;
+}
+
+.payment-ledger-list {
+  display: grid;
+  overflow: hidden;
+  border-top: 1px solid var(--reference-line);
+  background: white;
+}
+
+.payment-ledger-row {
+  display: grid;
+  grid-template-columns: 42px minmax(260px, 1.2fr) minmax(110px, 0.34fr) minmax(190px, 0.55fr) minmax(190px, 0.58fr);
+  gap: 18px;
+  align-items: center;
+  min-height: 78px;
+  border-bottom: 1px solid var(--reference-line);
+  padding: 10px 14px;
+  cursor: pointer;
+}
+
+.payment-ledger-row.is-suggested {
+  background: #fbf6ef;
+}
+
+.payment-ledger-row[aria-current="true"] {
+  background: #f2f4f5;
+}
+
+.payment-row-icon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: #ef2f2f;
+  color: white;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.payment-row-party,
+.payment-row-assignment,
+.payment-row-actions {
+  display: grid;
+  gap: 3px;
+}
+
+.payment-row-party strong {
+  color: var(--reference-text);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.payment-row-party span,
+.payment-row-assignment span {
+  color: var(--reference-muted);
+  font-size: 13px;
+}
+
+.payment-ledger-row > strong {
+  justify-self: end;
+  color: var(--reference-text);
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.payment-ledger-row > strong.is-negative {
+  color: #e33131;
+}
+
+.payment-ledger-row > strong.is-positive {
+  color: var(--reference-text);
+}
+
+.payment-row-assignment strong {
+  color: var(--reference-text);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.payment-row-actions {
+  justify-items: start;
+}
+
+.payment-row-actions .drawer-primary,
+.payment-row-actions button,
+.reference-ctox-button,
+.document-action-stack .drawer-primary,
+.document-action-stack .business-accounting-download,
+.document-action-stack .business-accounting-inline-link,
+.document-action-stack .accounting-file-command,
+.asset-detail-panel .drawer-primary,
+.close-action-panel .business-accounting-download {
+  min-height: 30px;
+  border: 1px solid var(--reference-line);
+  border-radius: 4px;
+  background: white;
+  color: var(--reference-text);
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-decoration: none;
+  text-transform: none;
+}
+
+.payment-row-actions .accounting-command-control .drawer-primary,
+.document-action-stack .accounting-command-control .drawer-primary,
+.asset-detail-panel .accounting-command-control .drawer-primary {
+  text-transform: none;
+}
+
+.reference-ctox-button {
+  color: var(--reference-green);
+}
+
+.reference-ctox-button:disabled {
+  opacity: 0.68;
+}
+
+.reference-ctox-button.is-done {
+  border-color: rgba(22, 163, 74, 0.28);
+  background: rgba(22, 163, 74, 0.06);
+}
+
+.reference-ctox-button.is-error {
+  border-color: rgba(227, 49, 49, 0.3);
+  color: #b91c1c;
+}
+
+.payment-empty-state {
+  margin: 0;
+  border-bottom: 1px solid var(--reference-line);
+  background: white;
+  color: var(--reference-muted);
+  padding: 18px;
+  font-size: 14px;
+}
+
+.payment-focus-panel {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.9fr) minmax(300px, 0.9fr) auto minmax(280px, 0.7fr);
+  gap: 18px;
+  align-items: center;
+  border: 1px solid var(--reference-line);
+  border-top: 0;
+  background: white;
+  padding: 14px;
+}
+
+.payment-focus-panel > div:first-child {
+  display: grid;
+  gap: 3px;
+}
+
+.payment-focus-panel span,
+.payment-focus-panel small {
+  color: var(--reference-muted);
+  font-size: 12px;
+}
+
+.payment-focus-panel strong {
+  color: var(--reference-text);
+  font-size: 15px;
+}
+
+.payment-focus-panel dl {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+}
+
+.payment-focus-panel dt {
+  color: var(--reference-muted);
+  font-size: 11px;
+}
+
+.payment-focus-panel dd {
+  margin: 0;
+  color: var(--reference-text);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.payment-focus-actions {
+  display: flex;
+  gap: 8px;
+  align-items: start;
+}
+
+.payment-manual-posting {
+  display: grid;
+  grid-template-columns: minmax(170px, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+}
+
+.payment-manual-posting label {
+  display: grid;
+  gap: 4px;
+}
+
+.payment-manual-posting span {
+  color: var(--reference-muted);
+  font-size: 11px;
+}
+
+.payment-manual-posting select,
+.payment-manual-posting button {
+  min-height: 32px;
+  border: 1px solid var(--reference-line);
+  border-radius: 4px;
+  background: white;
+  color: var(--reference-text);
+  padding: 0 10px;
+  font: inherit;
+  font-size: 12px;
+}
+
+.payment-manual-posting button {
+  background: var(--reference-green);
+  color: white;
+  font-weight: 650;
+}
+
+.payment-simple-panel {
+  display: grid;
+  border: 1px solid var(--reference-line);
+  background: white;
+}
+
+.payment-simple-panel header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--reference-line);
+  padding: 14px 16px;
+}
+
+.payment-simple-panel h2 {
+  margin: 0;
+  color: var(--reference-text);
+  font-size: 18px;
+}
+
+.payment-simple-panel header button,
+.payment-transfer-row,
+.payment-account-row {
+  border: 0;
+  background: white;
+  color: var(--reference-text);
+}
+
+.payment-simple-panel header button {
+  min-height: 32px;
+  border: 1px solid var(--reference-line);
+  border-radius: 4px;
+  padding: 0 10px;
+  font-weight: 600;
+}
+
+.payment-transfer-row,
+.payment-account-row {
+  display: grid;
+  grid-template-columns: 110px minmax(200px, 0.9fr) minmax(260px, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  border-bottom: 1px solid var(--reference-line);
+  padding: 14px 16px;
+  text-align: left;
+}
+
+.payment-transfer-row span,
+.payment-transfer-row small,
+.payment-account-row small {
+  color: var(--reference-muted);
+  font-size: 13px;
+}
+
+.payment-transfer-row strong,
+.payment-account-row span {
+  color: var(--reference-text);
+  font-size: 14px;
+}
+
+.payment-transfer-row b,
+.payment-account-row strong {
+  color: var(--reference-text);
+  font-size: 16px;
+}
+
+.document-shell,
+.assets-shell {
+  display: grid;
+  grid-template-columns: 168px minmax(0, 1fr) minmax(280px, 330px);
+  min-height: 620px;
+  border-top: 1px solid var(--reference-line);
+  background: white;
+}
+
+.document-side-nav,
+.assets-side-nav {
+  display: grid;
+  align-content: start;
+  gap: 1px;
+  background: #edf0f2;
+  padding-top: 10px;
+}
+
+.document-side-nav button,
+.assets-side-nav button {
+  display: flex;
+  justify-content: space-between;
+  min-height: 36px;
+  border: 0;
+  background: transparent;
+  color: var(--reference-text);
+  cursor: pointer;
+  padding: 0 12px;
+  font-size: 13px;
+  text-align: left;
+}
+
+.document-side-nav button[aria-current="true"],
+.assets-side-nav button[aria-current="true"] {
+  background: white;
+  font-weight: 650;
+}
+
+.document-side-nav strong,
+.assets-side-nav strong {
+  color: var(--reference-muted);
+}
+
+.document-list-panel,
+.assets-list {
+  min-width: 0;
+  border-right: 1px solid var(--reference-line);
+  padding: 12px;
+}
+
+.document-list-toolbar {
+  display: grid;
+  grid-template-columns: minmax(260px, 420px) 1fr;
+  gap: 16px;
+  align-items: center;
+  border-bottom: 1px solid var(--reference-line);
+  padding-bottom: 10px;
+}
+
+.document-list-toolbar input {
+  min-height: 36px;
+  border: 1px solid #c7cdd1;
+  border-radius: 3px;
+  padding: 0 12px;
+}
+
+.document-list-toolbar span {
+  justify-self: end;
+  color: var(--reference-muted);
+  font-size: 12px;
+}
+
+.document-upload-strip {
+  margin: 10px 0;
+  border: 1px dashed var(--reference-green);
+  color: var(--reference-green);
+  padding: 10px 12px;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.document-list-panel article {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) minmax(100px, auto) auto;
+  gap: 12px;
+  align-items: center;
+  min-height: 58px;
+  border-bottom: 1px solid var(--reference-line);
+  padding: 8px 0;
+}
+
+.document-list-panel article.is-selected {
+  background: #f2f4f5;
+  box-shadow: 0 0 0 1px var(--reference-line);
+  padding-inline: 8px;
+}
+
+.document-list-panel article strong {
+  color: var(--reference-text);
+  font-size: 14px;
+}
+
+.document-list-panel article div,
+.assets-list article div,
+.ledger-entry-list article div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.document-list-panel article span {
+  display: block;
+  color: var(--reference-muted);
+  font-size: 12px;
+}
+
+.document-list-panel article > button,
+.document-list-panel article > a {
+  min-height: 30px;
+  border: 0;
+  background: transparent;
+  color: var(--reference-green);
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.document-detail-panel,
+.asset-detail-panel {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  background: #f4f5f6;
+  padding: 14px;
+}
+
+.document-preview {
+  display: grid;
+  height: 120px;
+  place-items: center;
+  border: 1px solid var(--reference-line);
+  background: white;
+  color: var(--reference-muted);
+  font-size: 28px;
+  font-weight: 800;
+}
+
+.document-detail-panel dl,
+.asset-detail-panel dl {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.document-detail-panel dl div,
+.asset-detail-panel dl div {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 10px;
+}
+
+.document-detail-panel dt,
+.asset-detail-panel dt {
+  color: var(--reference-muted);
+  font-size: 12px;
+}
+
+.document-detail-panel dd,
+.asset-detail-panel dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--reference-text);
+  font-size: 12px;
+  font-weight: 700;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.document-detail-panel dd {
+  text-align: left;
+}
+
+.document-action-stack {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.document-action-stack > button {
+  min-height: 30px;
+  border: 1px solid var(--reference-line);
+  border-radius: 4px;
+  background: white;
+  color: var(--reference-text);
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.assets-list header,
+.assets-list article {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(140px, 0.45fr) minmax(100px, 0.32fr);
+  gap: 12px;
+  align-items: center;
+}
+
+.assets-list header {
+  color: var(--reference-muted);
+  border-bottom: 1px solid var(--reference-line);
+  padding: 0 0 8px;
+  font-size: 11px;
+}
+
+.assets-list article {
+  min-height: 52px;
+  border-bottom: 1px solid var(--reference-line);
+}
+
+.assets-list article.is-selected {
+  background: #f2f4f5;
+  padding-inline: 8px;
+}
+
+.assets-list article strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--reference-text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assets-list article span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--reference-muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.asset-detail-panel header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.asset-detail-panel h2,
+.asset-schedule h3 {
+  margin: 0;
+  color: var(--reference-text);
+  font-size: 16px;
+}
+
+.asset-detail-panel p {
+  margin: 4px 0 0;
+  color: var(--reference-muted);
+  font-size: 12px;
+}
+
+.asset-schedule {
+  display: grid;
+  gap: 6px;
+}
+
+.asset-schedule div {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+  border-bottom: 1px solid var(--reference-line);
+  padding: 5px 0;
+  color: var(--reference-muted);
+  font-size: 12px;
+}
+
+.asset-schedule div.is-current {
+  background: #fffbc7;
+}
+
+.asset-schedule strong {
+  color: var(--reference-text);
+}
+
+.reports-dashboard {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(260px, 0.55fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.balance-report-panel,
+.report-summary-panel,
+.close-action-panel {
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--reference-line);
+  background: white;
+  padding: 14px;
+}
+
+.balance-report-panel {
+  grid-row: span 4;
+}
+
+.balance-report-panel header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.balance-report-panel p {
+  margin: 0;
+  color: var(--reference-muted);
+  font-size: 11px;
+}
+
+.balance-report-panel h2,
+.report-summary-panel h2,
+.close-action-panel h2 {
+  margin: 2px 0 0;
+  color: var(--reference-text);
+  font-size: 18px;
+}
+
+.balance-total-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: 8px 12px;
+  align-items: baseline;
+}
+
+.balance-total-row span,
+.report-summary-panel span,
+.close-action-panel p {
+  color: var(--reference-muted);
+  font-size: 12px;
+}
+
+.balance-total-row strong,
+.report-summary-panel > strong {
+  color: var(--reference-text);
+  font-size: 18px;
+}
+
+.balance-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.report-account-column {
+  display: grid;
+  gap: 5px;
+}
+
+.report-account-column h3 {
+  margin: 0;
+  color: var(--reference-text);
+  font-size: 13px;
+}
+
+.report-account-column div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  border-bottom: 1px solid var(--reference-line);
+  padding: 5px 0;
+}
+
+.report-account-column span {
+  overflow: hidden;
+  color: var(--reference-muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.report-account-column strong {
+  color: var(--reference-text);
+  font-size: 12px;
+}
+
+.close-action-panel {
+  background: #eef7f2;
+}
+
+.ledger-shell,
+.bookkeeping-shell {
+  display: grid;
+  gap: 16px;
+}
+
+.ledger-shell {
+  grid-template-columns: 250px minmax(0, 1fr) minmax(290px, 340px);
+  align-items: start;
+}
+
+.ledger-account-nav {
+  display: grid;
+  overflow: hidden;
+  border: 1px solid var(--reference-line);
+  background: white;
+}
+
+.ledger-account-nav button {
+  display: grid;
+  gap: 4px;
+  min-height: 54px;
+  border: 0;
+  border-bottom: 1px solid var(--reference-line);
+  background: white;
+  color: var(--reference-text);
+  cursor: pointer;
+  padding: 9px 11px;
+  text-align: left;
+}
+
+.ledger-account-nav button[aria-current="true"] {
+  background: #eef7f2;
+}
+
+.ledger-account-nav span {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ledger-account-nav strong {
+  color: var(--reference-muted);
+  font-size: 12px;
+}
+
+.ledger-entry-list,
+.ledger-detail-panel,
+.bookkeeping-primary,
+.bookkeeping-secondary,
+.datev-line-list {
+  border: 1px solid var(--reference-line);
+  background: white;
+}
+
+.ledger-entry-list header,
+.ledger-entry-list article,
+.datev-line-list header,
+.datev-line-list article {
+  display: grid;
+  gap: 12px;
+  align-items: center;
+  border-bottom: 1px solid var(--reference-line);
+}
+
+.ledger-entry-list header {
+  grid-template-columns: 96px minmax(0, 1fr) 110px 110px 86px;
+  color: var(--reference-muted);
+  padding: 8px 12px;
+  font-size: 11px;
+}
+
+.ledger-entry-list article {
+  grid-template-columns: 96px minmax(0, 1fr) 110px 110px 86px;
+  min-height: 58px;
+  padding: 8px 12px;
+}
+
+.ledger-entry-list article.is-selected {
+  background: #f2f4f5;
+}
+
+.ledger-entry-list strong,
+.ledger-detail-panel h2,
+.bookkeeping-primary h2,
+.bookkeeping-secondary h2 {
+  color: var(--reference-text);
+}
+
+.ledger-entry-list article div strong {
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.ledger-entry-list article > strong {
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.ledger-entry-list small,
+.ledger-entry-list span,
+.ledger-detail-panel p,
+.bookkeeping-primary p,
+.bookkeeping-secondary p {
+  color: var(--reference-muted);
+  font-size: 12px;
+}
+
+.ledger-entry-list article div strong,
+.ledger-entry-list article div small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ledger-entry-list button,
+.ledger-entry-list article > span:last-child,
+.bookkeeping-action-row button,
+.bookkeeping-secondary button {
+  min-height: 30px;
+  border: 1px solid var(--reference-line);
+  border-radius: 4px;
+  background: white;
+  color: var(--reference-text);
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.ledger-detail-panel {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+.ledger-detail-panel h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.ledger-detail-panel p {
+  margin: 0;
+}
+
+.ledger-detail-panel dl,
+.bookkeeping-primary dl {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+}
+
+.ledger-detail-panel dl div,
+.bookkeeping-primary dl div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+}
+
+.ledger-detail-panel dt,
+.bookkeeping-primary dt {
+  color: var(--reference-muted);
+  font-size: 12px;
+}
+
+.ledger-detail-panel dd,
+.bookkeeping-primary dd {
+  margin: 0;
+  color: var(--reference-text);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.ledger-lines {
+  display: grid;
+}
+
+.ledger-lines div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  border-bottom: 1px solid var(--reference-line);
+  padding: 6px 0;
+}
+
+.ledger-lines span {
+  overflow: hidden;
+  color: var(--reference-muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ledger-lines strong {
+  color: var(--reference-text);
+  font-size: 12px;
+}
+
+.bookkeeping-shell {
+  grid-template-columns: minmax(0, 1.1fr) minmax(260px, 0.48fr) minmax(260px, 0.48fr);
+  align-items: start;
+}
+
+.bookkeeping-primary {
+  display: grid;
+  grid-row: span 2;
+  gap: 14px;
+  padding: 14px;
+}
+
+.bookkeeping-primary header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.bookkeeping-primary header p {
+  margin: 0 0 2px;
+}
+
+.bookkeeping-primary h2,
+.bookkeeping-secondary h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.bookkeeping-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.bookkeeping-action-row .business-accounting-download {
+  min-height: 30px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.bookkeeping-secondary {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+}
+
+.bookkeeping-secondary p {
+  margin: 0;
+}
+
+.datev-line-list {
+  grid-column: 1 / -1;
+}
+
+.datev-line-list header,
+.datev-line-list article {
+  grid-template-columns: minmax(0, 1.4fr) minmax(80px, 0.3fr) minmax(110px, 0.35fr) minmax(70px, 0.25fr);
+  padding: 8px 12px;
+}
+
+.datev-line-list header {
+  color: var(--reference-muted);
+  font-size: 11px;
+}
+
+.datev-line-list article span,
+.datev-line-list article strong {
+  overflow: hidden;
+  color: var(--reference-text);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 1100px) {
+  .reference-filter-row,
+  .payment-ledger-row,
+  .document-shell,
+  .assets-shell,
+  .reports-dashboard,
+  .ledger-shell,
+  .bookkeeping-shell,
+  .balance-columns {
+    grid-template-columns: 1fr;
+  }
+
+  .payment-status-bar {
+    grid-template-columns: 1fr;
+  }
+
+  .document-detail-panel,
+  .asset-detail-panel {
+    min-height: auto;
+  }
+
+  .datev-line-list {
+    grid-column: auto;
+  }
+}
+
+/* Workforce rebuild: Einsatzplanung workbench */
+.wf2-shell {
+  min-height: calc(100vh - 96px);
+  display: grid;
+  grid-template-columns: minmax(260px, 0.82fr) minmax(560px, 1.9fr) minmax(270px, 0.9fr);
+  gap: 12px;
+  padding: 12px;
+  color: var(--foreground, #17202a);
+  background: #f5f6f2;
+}
+
+.wf2-rail,
+.wf2-board,
+.wf2-side-drawer,
+.wf2-bottom {
+  border: 1px solid rgba(19, 38, 48, 0.12);
+  background: rgba(255, 255, 255, 0.84);
+  box-shadow: 0 10px 26px rgba(19, 38, 48, 0.06);
+}
+
+.wf2-rail,
+.wf2-board {
+  border-radius: 8px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.wf2-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+}
+
+.wf2-rail-header,
+.wf2-board-header,
+.wf2-bottom header,
+.wf2-side-drawer header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.wf2-rail-header span,
+.wf2-board-header span,
+.wf2-bottom header span {
+  display: block;
+  margin-bottom: 2px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0;
+  color: #68747b;
+}
+
+.wf2-rail h2,
+.wf2-board h1,
+.wf2-bottom h2,
+.wf2-side-drawer h2 {
+  margin: 0;
+  color: #173d4b;
+  font-size: 18px;
+  line-height: 1.15;
+}
+
+.wf2-board h1 {
+  font-size: 25px;
+  font-weight: 760;
+}
+
+.wf2-panel {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(19, 38, 48, 0.1);
+  border-radius: 8px;
+  background: rgba(247, 248, 245, 0.92);
+}
+
+.wf2-panel h3,
+.wf2-bottom h3,
+.wf2-side-drawer h3 {
+  margin: 0;
+  color: #173d4b;
+  font-size: 13px;
+  font-weight: 780;
+}
+
+.wf2-form {
+  display: grid;
+  gap: 7px;
+}
+
+.wf2-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.wf2-form input,
+.wf2-form select,
+.wf2-form textarea {
+  width: 100%;
+  min-height: 34px;
+  border: 1px solid rgba(19, 38, 48, 0.14);
+  border-radius: 7px;
+  padding: 7px 8px;
+  background: #ffffff;
+  color: #17313c;
+  font: inherit;
+}
+
+.wf2-form textarea {
+  min-height: 68px;
+  resize: vertical;
+}
+
+.wf2-rail button,
+.wf2-board button,
+.wf2-bottom button,
+.wf2-side-drawer button,
+.wf2-context button {
+  border: 1px solid rgba(19, 38, 48, 0.14);
+  border-radius: 7px;
+  background: #ffffff;
+  color: #173d4b;
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.wf2-rail button,
+.wf2-board button,
+.wf2-bottom button,
+.wf2-side-drawer button {
+  min-height: 32px;
+  padding: 6px 10px;
+}
+
+.wf2-rail button:disabled,
+.wf2-board button:disabled,
+.wf2-bottom button:disabled,
+.wf2-context button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.wf2-stack {
+  display: grid;
+  gap: 8px;
+}
+
+.wf2-demand,
+.wf2-review,
+.wf2-master-row {
+  display: grid;
+  gap: 3px;
+  padding: 9px;
+  border: 1px solid rgba(19, 38, 48, 0.1);
+  border-radius: 8px;
+  background: #ffffff;
+  text-align: left;
+}
+
+.wf2-demand strong,
+.wf2-review strong,
+.wf2-master-row strong {
+  color: #17313c;
+  font-size: 13px;
+}
+
+.wf2-demand span,
+.wf2-review span,
+.wf2-master-row small,
+.wf2-muted {
+  color: #68747b;
+  font-size: 12px;
+}
+
+.wf2-review div {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.wf2-review.is-blocked {
+  border-color: rgba(185, 28, 28, 0.24);
+}
+
+.wf2-people {
+  overflow: auto;
+}
+
+.wf2-people button {
+  display: grid;
+  grid-template-columns: 34px 1fr;
+  align-items: center;
+  column-gap: 8px;
+  text-align: left;
+}
+
+.wf2-people button > span {
+  grid-row: span 2;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: #eaf2f4;
+  color: #173d4b;
+  font-weight: 760;
+}
+
+.wf2-people button small {
+  color: #68747b;
+}
+
+.wf2-people button.is-selected {
+  border-color: #173d4b;
+}
+
+.wf2-board {
+  display: flex;
+  flex-direction: column;
+  padding: 12px;
+  background: #fbfcfa;
+}
+
+.wf2-status-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.wf2-state {
+  border: 1px solid rgba(19, 38, 48, 0.14);
+  border-radius: 999px;
+  padding: 5px 8px;
+  color: #68747b;
+  background: #ffffff;
+  font-size: 12px;
+}
+
+.wf2-state.ok {
+  color: #166534;
+}
+
+.wf2-state.err {
+  color: #991b1b;
+}
+
+.wf2-roster {
+  margin-top: 12px;
+  display: grid;
+  border: 1px solid rgba(19, 38, 48, 0.11);
+  border-radius: 8px;
+  overflow: auto;
+  background: #ffffff;
+}
+
+.wf2-roster-head,
+.wf2-row {
+  min-width: 890px;
+  display: grid;
+  grid-template-columns: 150px repeat(5, minmax(130px, 1fr));
+}
+
+.wf2-roster-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #edf2f0;
+  color: #173d4b;
+  font-weight: 760;
+}
+
+.wf2-roster-head > div,
+.wf2-person-cell,
+.wf2-cell {
+  border-right: 1px solid rgba(19, 38, 48, 0.09);
+  border-bottom: 1px solid rgba(19, 38, 48, 0.09);
+}
+
+.wf2-roster-head > div {
+  padding: 9px;
+  font-size: 12px;
+}
+
+.wf2-roster-head span {
+  display: block;
+  color: #68747b;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.wf2-person-cell {
+  min-height: 132px;
+  display: grid;
+  grid-template-columns: 34px 1fr;
+  align-content: start;
+  gap: 4px 8px;
+  padding: 10px;
+  background: #f7f8f5;
+}
+
+.wf2-person-cell > span {
+  grid-row: span 2;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: #173d4b;
+  color: #ffffff;
+  font-weight: 760;
+}
+
+.wf2-person-cell strong {
+  color: #17313c;
+  font-size: 13px;
+}
+
+.wf2-person-cell small {
+  color: #68747b;
+  font-size: 11px;
+}
+
+.wf2-cell {
+  position: relative;
+  min-height: 132px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 8px;
+  background: linear-gradient(180deg, #ffffff 0%, #fbfcfa 100%);
+}
+
+.wf2-cell:has(.wf2-card) .wf2-empty-slot {
+  display: none;
+}
+
+.wf2-empty-slot {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  width: 28px;
+  min-height: 28px;
+  padding: 0;
+  border-radius: 50%;
+  color: #173d4b;
+}
+
+.wf2-card {
+  --wf-card-color: #7dd3fc;
+  display: grid;
+  gap: 5px;
+  padding: 8px;
+  border: 1px solid rgba(19, 38, 48, 0.14);
+  border-left: 5px solid var(--wf-card-color);
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 7px 14px rgba(19, 38, 48, 0.07);
+  cursor: grab;
+}
+
+.wf2-card:active {
+  cursor: grabbing;
+}
+
+.wf2-card.is-selected {
+  outline: 2px solid #173d4b;
+}
+
+.wf2-card.status-blocked {
+  border-color: rgba(185, 28, 28, 0.26);
+}
+
+.wf2-card.status-approved,
+.wf2-card.status-invoice_ready {
+  border-color: rgba(22, 101, 52, 0.24);
+}
+
+.wf2-card-top,
+.wf2-card-bottom {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+}
+
+.wf2-card strong {
+  min-width: 0;
+  color: #17313c;
+  font-size: 12px;
+}
+
+.wf2-card-top span {
+  color: #173d4b;
+  font-weight: 800;
+  font-size: 12px;
+}
+
+.wf2-card small,
+.wf2-card-bottom span {
+  color: #68747b;
+  font-size: 11px;
+}
+
+.wf2-bottom {
+  position: fixed;
+  left: 50%;
+  bottom: 0;
+  z-index: 45;
+  width: min(1220px, calc(100vw - 24px));
+  max-height: 48vh;
+  transform: translateX(-50%);
+  overflow: auto;
+  border-radius: 8px 8px 0 0;
+  padding: 10px;
+}
+
+.wf2-bottom header strong {
+  margin-left: auto;
+  color: #173d4b;
+  font-size: 24px;
+}
+
+.wf2-bottom-grid {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: minmax(260px, 0.9fr) minmax(420px, 1.4fr) minmax(220px, 0.75fr);
+  gap: 12px;
+}
+
+.wf2-score-columns {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.wf2-check-row {
+  display: grid;
+  grid-template-columns: 24px 1fr;
+  gap: 2px 6px;
+  padding: 7px;
+  border: 1px solid rgba(19, 38, 48, 0.11);
+  border-radius: 7px;
+  margin-top: 5px;
+  background: #ffffff;
+}
+
+.wf2-check-row strong {
+  grid-row: span 2;
+  color: #166534;
+}
+
+.wf2-check-row.warning strong,
+.wf2-check-row.blocker strong {
+  color: #991b1b;
+}
+
+.wf2-check-row span {
+  color: #17313c;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.wf2-check-row small {
+  color: #68747b;
+  font-size: 11px;
+}
+
+.wf2-bottom-actions {
+  display: grid;
+  align-content: start;
+  gap: 7px;
+}
+
+.wf2-time-fact {
+  display: grid;
+  gap: 2px;
+  padding: 8px;
+  border: 1px solid rgba(19, 38, 48, 0.11);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.wf2-time-fact span {
+  color: #68747b;
+  font-size: 12px;
+}
+
+.wf2-side-drawer {
+  position: fixed;
+  top: 0;
+  z-index: 50;
+  width: min(440px, 100vw);
+  height: 100vh;
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  overflow: auto;
+  padding: 14px;
+  background: #fbfcfa;
+}
+
+.wf2-side-drawer.left {
+  left: 0;
+  border-radius: 0 8px 8px 0;
+}
+
+.wf2-side-drawer.right {
+  right: 0;
+  border-radius: 8px 0 0 8px;
+}
+
+.wf2-side-drawer section {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(19, 38, 48, 0.1);
+  border-radius: 8px;
+  background: #f7f8f5;
+}
+
+.wf2-master-row {
+  grid-template-columns: 18px 1fr;
+  align-items: center;
+}
+
+.wf2-master-row > span {
+  grid-row: span 2;
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+}
+
+.wf2-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #17313c;
+  font-size: 12px;
+}
+
+.wf2-context {
+  position: fixed;
+  z-index: 90;
+  display: grid;
+  gap: 4px;
+  min-width: 210px;
+  padding: 6px;
+  border: 1px solid rgba(19, 38, 48, 0.16);
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 14px 30px rgba(19, 38, 48, 0.16);
+}
+
+.wf2-context button {
+  min-height: 30px;
+  padding: 6px 8px;
+  text-align: left;
+}
+
+@media (max-width: 1180px) {
+  .wf2-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .wf2-bottom-grid,
+  .wf2-score-columns {
+    grid-template-columns: 1fr;
   }
 }
