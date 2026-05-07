@@ -12,8 +12,8 @@
 
 pub mod blueprints;
 pub mod check;
-pub mod cli;
 pub mod claims;
+pub mod cli;
 pub mod critique;
 pub mod draft;
 pub mod evidence;

@@ -2,15 +2,16 @@
 //! binary via `include_str!` so a release build always carries the full set
 //! shipped with that build.
 
+use anyhow::bail;
 use anyhow::Context;
 use anyhow::Result;
-use anyhow::bail;
 use serde::Deserialize;
+use serde::Serialize;
 use std::collections::BTreeMap;
 
 const FEASIBILITY_TOML: &str = include_str!("feasibility.toml");
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Blueprint {
     pub schema_version: String,
     pub preset: String,
@@ -31,7 +32,7 @@ fn default_language() -> String {
     "en".to_string()
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Bounds {
     pub min_options: usize,
     pub min_scenarios: usize,
@@ -41,7 +42,7 @@ pub struct Bounds {
     pub max_revise_iterations: usize,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Section {
     pub id: String,
     pub heading_level: u32,
@@ -58,7 +59,7 @@ pub struct Section {
     pub require_primary_recommendation: bool,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SectionKind {
     Deterministic,
@@ -68,7 +69,7 @@ pub enum SectionKind {
     CitationRegister,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct MatrixDef {
     pub label_en: String,
     #[serde(default)]
@@ -80,7 +81,7 @@ pub struct MatrixDef {
     pub required: bool,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct Disclaimer {
     #[serde(default)]
     pub must_contain_all: Vec<String>,

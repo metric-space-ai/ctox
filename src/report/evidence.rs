@@ -9,12 +9,12 @@
 //! `evidence_id = sha256(canonical_id)`. Re-importing the same DOI updates
 //! the row in place.
 
+use anyhow::bail;
 use anyhow::Context;
 use anyhow::Result;
-use anyhow::bail;
+use rusqlite::params;
 use rusqlite::Connection;
 use rusqlite::OptionalExtension;
-use rusqlite::params;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -69,14 +69,7 @@ pub struct EvidenceView {
     pub resolver: String,
 }
 
-const VALID_KINDS: [&str; 6] = [
-    "doi",
-    "arxiv",
-    "url",
-    "book",
-    "standard",
-    "assumption",
-];
+const VALID_KINDS: [&str; 6] = ["doi", "arxiv", "url", "book", "standard", "assumption"];
 
 pub fn upsert_evidence(
     conn: &Connection,
@@ -141,8 +134,7 @@ pub fn upsert_evidence(
     .context("failed to upsert report_evidence")?;
     state_machine::advance_to(conn, run_id, Status::Gathering)?;
     crate::report::runs::set_next_stage(conn, run_id, Some("score"))?;
-    load_evidence(conn, run_id, &evidence_id)?
-        .context("evidence row missing after upsert")
+    load_evidence(conn, run_id, &evidence_id)?.context("evidence row missing after upsert")
 }
 
 pub fn list_evidence(conn: &Connection, run_id: &str) -> Result<Vec<EvidenceView>> {

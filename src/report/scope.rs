@@ -1,15 +1,15 @@
 //! `report scope` — bound the run: leading questions, out-of-scope, assumptions, disclaimer.
 
+use anyhow::bail;
 use anyhow::Context;
 use anyhow::Result;
-use anyhow::bail;
+use rusqlite::params;
 use rusqlite::Connection;
 use rusqlite::OptionalExtension;
-use rusqlite::params;
 use serde::Deserialize;
 use serde::Serialize;
-use serde_json::Value;
 use serde_json::json;
+use serde_json::Value;
 
 use crate::report::blueprints::Blueprint;
 use crate::report::state_machine::{self, Status};
@@ -60,9 +60,7 @@ pub fn upsert_scope(
     let lower = trimmed_disclaimer.to_lowercase();
     for required in &blueprint.disclaimer.must_contain_all {
         if !lower.contains(&required.to_lowercase()) {
-            bail!(
-                "disclaimer must contain '{required}' (blueprint disclaimer.must_contain_all)"
-            );
+            bail!("disclaimer must contain '{required}' (blueprint disclaimer.must_contain_all)");
         }
     }
     if !blueprint.disclaimer.must_contain_any.is_empty() {

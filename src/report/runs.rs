@@ -1,14 +1,14 @@
 //! `report_runs` CRUD: creating runs, listing, showing state.
 
+use anyhow::bail;
 use anyhow::Context;
 use anyhow::Result;
-use anyhow::bail;
+use rusqlite::params;
 use rusqlite::Connection;
 use rusqlite::OptionalExtension;
-use rusqlite::params;
 use serde::Serialize;
-use serde_json::Value;
 use serde_json::json;
+use serde_json::Value;
 
 use crate::report::blueprints::Blueprint;
 use crate::report::state_machine::Status;

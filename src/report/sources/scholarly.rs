@@ -283,7 +283,10 @@ struct OpenAlexOpenAccess {
 
 impl OpenAlexWork {
     fn into_canonical(self, fallback_doi: String) -> CanonicalCitation {
-        let venue = self.host_venue.as_ref().and_then(|v| v.display_name.clone());
+        let venue = self
+            .host_venue
+            .as_ref()
+            .and_then(|v| v.display_name.clone());
         let publisher = self.host_venue.as_ref().and_then(|v| v.publisher.clone());
         let landing = self
             .primary_location
@@ -297,7 +300,9 @@ impl OpenAlexWork {
             .primary_location
             .as_ref()
             .and_then(|p| p.license.clone());
-        let oa_url = self.open_access.and_then(|oa| if oa.is_oa { oa.oa_url } else { None });
+        let oa_url = self
+            .open_access
+            .and_then(|oa| if oa.is_oa { oa.oa_url } else { None });
         let authors = self
             .authorships
             .into_iter()
@@ -445,17 +450,11 @@ mod tests {
     fn extract_arxiv_strips_versions() {
         let txt = "see arXiv:2401.12345v2 and arXiv:2310.99999.";
         let ax = extract_arxiv_from_text(txt);
-        assert_eq!(
-            ax,
-            vec!["2310.99999".to_string(), "2401.12345".to_string()]
-        );
+        assert_eq!(ax, vec!["2310.99999".to_string(), "2401.12345".to_string()]);
     }
 
     #[test]
     fn normalize_doi_strips_prefix_and_punct() {
-        assert_eq!(
-            normalize_doi("doi:10.1016/x.y."),
-            "10.1016/x.y".to_string()
-        );
+        assert_eq!(normalize_doi("doi:10.1016/x.y."), "10.1016/x.y".to_string());
     }
 }
