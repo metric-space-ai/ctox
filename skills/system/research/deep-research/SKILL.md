@@ -27,8 +27,9 @@ This skill is a router plus shared research contract. Pick exactly one primary m
 6. Follow with targeted `ctox_web_search`, `ctox_web_read`, `ctox_web_scrape`, and `ctox_browser_automation` calls for gaps the evidence bundle does not cover.
 7. Inspect `data_links.json`. If sources point to GitHub, datasets, notebooks, repositories, or supplementary data, inspect them when relevant; derive tables/diagrams from the data when it materially improves the report.
 8. Build the module-specific evidence matrix before writing. Do not write the report directly from search snippets.
-9. Separate evidence from inference, mark weak assumptions, and cite source-backed claims.
-10. When the user asks for Word/PDF output, produce a document artifact with report sections, tables, figures where legally usable, and references.
+9. Run the report-writing loop: evidence matrix -> outline -> section drafts -> tables/figures -> final DOCX/PDF -> QA notes.
+10. Separate evidence from inference, mark weak assumptions, and cite source-backed claims.
+11. When the user asks for Word/PDF output, produce a document artifact with report sections, tables, figures where legally usable, and references.
 
 ## Source Policy
 
@@ -52,6 +53,20 @@ Every serious run should leave a folder with:
 - `CONTINUE.md` with instructions for resuming after context compaction.
 
 Use the folder as a research project, not as an output dump. For long reports, write interim files such as `synthesis/evidence-matrix.md`, `synthesis/report-outline.md`, and `synthesis/open-questions.md` before drafting the final document.
+
+## Report Writing Contract
+
+- Never use control/reference documents as hidden input to the research or writing agent. If the user supplies a sample only for later evaluation, do not attach it, quote it, paraphrase it, extract images from it, or copy its structure into the agent prompt.
+- Write from `evidence_bundle.json`, `sources.jsonl`, `reads/`, `snapshots/`, inspected data links, and agent-created synthesis notes.
+- Create these files before the final document for decision-grade work:
+  - `synthesis/evidence-matrix.md`
+  - `synthesis/report-outline.md`
+  - `synthesis/technology-scores.md` or module equivalent
+  - `synthesis/figure-plan.md`
+  - `synthesis/report-draft.md`
+  - `synthesis/qa-notes.md`
+- Figures must be either legally usable source figures with explicit usage notes, or original schematics/diagrams generated from the synthesis. Do not reuse figures from a reference/control document.
+- The final document must be a written study, not a raw evidence export. It needs an argument, recommendations, uncertainty, decision gates, tables, and references.
 
 ## DOCX Helper
 

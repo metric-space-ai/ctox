@@ -32,6 +32,8 @@ Build a matrix with these columns:
 - success probability with uncertainty
 - next experiment
 
+Save this as `synthesis/evidence-matrix.md` before writing prose.
+
 ## Search Coverage
 
 For technical studies, cover:
@@ -70,6 +72,20 @@ For hidden metal structures in composites/coatings, also consider:
 11. Conclusion and Recommendation
 12. References
 
+## Writing Loop
+
+Perform these steps in the research workspace:
+
+1. Write `synthesis/evidence-matrix.md` from the source ledger.
+2. Write `synthesis/technology-scores.md` with one row per technology, numeric/qualitative score, uncertainty, and evidence IDs.
+3. Write `synthesis/report-outline.md`; the outline must be generated from the evidence and decision question, not copied from any reference document.
+4. Write `synthesis/figure-plan.md` listing each figure/table, its data source, and whether it is original, source-derived, or omitted for licensing.
+5. If GitHub/data links are present, inspect relevant repositories/datasets and note findings in `synthesis/data-artifacts.md`; build diagrams/tables from them only when they add evidence.
+6. Write `synthesis/report-draft.md` as a full narrative Machbarkeitsstudie with citations.
+7. Generate the DOCX from the draft and matrix. Then write `synthesis/qa-notes.md` covering opening/ZIP checks, visual/render checks where available, missing evidence, and whether the report satisfies the decision question.
+
+Do not produce a final DOCX until the draft has become a coherent study with management summary, problem framing, technology comparison, feasibility scoring, risk discussion, and recommended experiments.
+
 ## Completion Criteria
 
 - Clear recommendation, not just a literature summary.
@@ -78,3 +94,4 @@ For hidden metal structures in composites/coatings, also consider:
 - Source-backed claims with citations.
 - Explicit statement of inspected GitHub/data/supplement links and any diagrams/tables derived from them.
 - Short validation plan with pass/fail gates.
+- Final Word/PDF document opens successfully and contains a synthesized study, not copied source text or a formatted evidence dump.

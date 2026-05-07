@@ -29,6 +29,17 @@ Use this file for every deep-research module.
 - If call counts are low for a supposedly deep task, state that the evidence base is insufficient and run additional targeted searches.
 - If a figure is discovered, record source page, image URL, caption/context, and usage status before embedding.
 - If data/repository links are discovered, state whether they were inspected and whether they changed the findings. Do not ignore relevant code/data links.
+- If the user gives a reference/control artifact for evaluation, keep it out of the research and writing context. Use it only after the candidate deliverable exists, and only to compare quality/coverage.
+
+## Long-Running Writing Discipline
+
+For reports that may span multiple turns or compactions:
+
+- Update `CONTINUE.md` or add `synthesis/status.md` after each major loop.
+- Keep open questions and missing evidence in `synthesis/open-questions.md`.
+- Keep a running citation map from report claims to `sources.jsonl` indices.
+- Do not skip directly from evidence gathering to DOCX generation.
+- After compaction, resume from `manifest.json`, `CONTINUE.md`, and `synthesis/status.md`.
 
 ## Standard Report Metadata
 
