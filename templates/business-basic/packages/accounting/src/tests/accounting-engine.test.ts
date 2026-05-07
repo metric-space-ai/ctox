@@ -2,11 +2,19 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   bankMatchConfidence,
+  buildAssetAcquisitionJournalDraft,
+  buildAssetDepreciationJournalDraft,
+  buildAssetDisposalJournalDraft,
   buildBankMatchJournalDraft,
   buildDunningProposals,
   buildDatevExtfCsv,
+  buildDatevExtfLinesFromJournalDrafts,
+  buildStraightLineDepreciationSchedule,
   buildBalanceSheet,
+  buildBusinessAnalysis,
   buildGeneralLedger,
+  buildTrialBalanceFromEntries,
+  buildVatStatement,
   createSeriesState,
   findDuplicateBankLines,
   parseBankCsv,
@@ -25,6 +33,8 @@ import {
   preparePostReceiptCommand,
   prepareSendInvoiceCommand,
   validateInvoiceForSend,
+  validateDatevExtf,
+  validateZugferdXml,
   allocateNumber,
   assertPeriodOpen,
   type BusinessInvoiceLike,
@@ -114,15 +124,40 @@ test("Invoice validator blocks Kleinunternehmer and reverse-charge tax misuse", 
   const ku = validateInvoiceForSend({
     ...invoice,
     kleinunternehmer: true,
-    notes: "Gemäß § 19 UStG wird keine Umsatzsteuer berechnet."
+    lines: [{ productId: "prod-saas", quantity: 1, taxRate: 0, unitPrice: 100 }],
+    netAmount: 100,
+    notes: "Gemäß § 19 UStG wird keine Umsatzsteuer berechnet.",
+    taxAmount: 0,
+    total: 100
   }, invoiceContext);
   const reverseCharge = validateInvoiceForSend({
     ...invoice,
     reverseCharge: true
   }, invoiceContext);
+  const inconsistentTotals = validateInvoiceForSend({
+    ...invoice,
+    taxAmount: 1,
+    total: 251
+  }, invoiceContext);
+  const invalidDates = validateInvoiceForSend({
+    ...invoice,
+    dueDate: "2026-05-01",
+    issueDate: "2026-05-07"
+  }, invoiceContext);
+  const unsupportedTax = validateInvoiceForSend({
+    ...invoice,
+    lines: [{ productId: "prod-saas", quantity: 1, taxRate: 13, unitPrice: 100 }],
+    netAmount: 100,
+    taxAmount: 13,
+    total: 113
+  }, invoiceContext);
 
-  assert.match(ku.errors.join(","), /kleinunternehmer_invoice_must_not_have_tax/);
+  assert.deepEqual(ku.errors, []);
   assert.match(reverseCharge.errors.join(","), /reverse_charge_invoice_must_not_have_tax/);
+  assert.match(inconsistentTotals.errors.join(","), /invoice_tax_amount_mismatch/);
+  assert.match(inconsistentTotals.errors.join(","), /invoice_total_amount_mismatch/);
+  assert.match(invalidDates.errors.join(","), /due_date_before_issue_date/);
+  assert.match(unsupportedTax.errors.join(","), /line_1_unsupported_tax_rate/);
 });
 
 test("Posting an inbound receipt debits expense and VAT, then credits payable", () => {
@@ -147,6 +182,17 @@ test("Posting an inbound receipt debits expense and VAT, then credits payable", 
   assert.equal(journal.lines.length, 3);
   assert.equal(journal.lines.reduce((sum, line) => sum + line.debit.minor, 0), 11900);
   assert.equal(journal.lines.reduce((sum, line) => sum + line.credit.minor, 0), 11900);
+
+  const reducedRateReceipt = buildReceiptJournalDraft({
+    ...receipt,
+    id: "rec-7",
+    netAmount: 100,
+    number: "EB-2026-007",
+    taxAmount: 7,
+    taxCode: "DE_7_INPUT",
+    total: 107
+  }, "company-1");
+  assert.ok(reducedRateReceipt.lines.some((line) => line.accountId === "acc-vat-input-7" && line.taxCode === "DE_7_INPUT" && moneyToMajor(line.debit) === 7));
 });
 
 test("Bank match commands preserve reconciler confidence context", () => {
@@ -196,7 +242,7 @@ test("Bank match journal drafts post incoming payments to bank and receivables",
 });
 
 test("DATEV EXTF CSV quotes text and keeps German decimal comma", () => {
-  const csv = buildDatevExtfCsv([
+  const lines = [
     {
       accountCode: "8400",
       amount: 297.5,
@@ -204,10 +250,13 @@ test("DATEV EXTF CSV quotes text and keeps German decimal comma", () => {
       currency: "EUR",
       date: "2026-05-07",
       documentNumber: "RE-2026-001",
-      side: "H",
+      side: "H" as const,
       taxCode: "19",
       text: "SaaS; Support"
     }
+  ];
+  const csv = buildDatevExtfCsv([
+    ...lines
   ], {
     accountLength: 4,
     clientNumber: "67890",
@@ -218,6 +267,13 @@ test("DATEV EXTF CSV quotes text and keeps German decimal comma", () => {
   assert.match(csv.split("\n")[0] ?? "", /EXTF;700/);
   assert.match(csv, /297,50/);
   assert.match(csv, /"SaaS; Support"/);
+  assert.deepEqual(validateDatevExtf(lines, {
+    accountLength: 4,
+    clientNumber: "67890",
+    consultantNumber: "12345",
+    fiscalYearStart: "20260101"
+  }).errors, []);
+  assert.match(validateDatevExtf([{ ...lines[0], accountCode: "84", amount: 0 }]).errors.join(","), /datev_line_1_amount_must_be_positive/);
 });
 
 test("ZUGFeRD XML includes buyer, totals, due date and tax category", () => {
@@ -228,6 +284,8 @@ test("ZUGFeRD XML includes buyer, totals, due date and tax category", () => {
   assert.match(xml, /GrandTotalAmount>297\.50/);
   assert.match(xml, /DueDateDateTime/);
   assert.match(xml, /CategoryCode>S/);
+  assert.deepEqual(validateZugferdXml(xml).errors, []);
+  assert.match(validateZugferdXml("<xml />").errors.join(","), /cross_industry_invoice_missing/);
 });
 
 test("Number series allocates fiscal-year scoped gap-free numbers", () => {
@@ -314,8 +372,11 @@ test("Chart seed, tax rates and parties expose German accounting defaults", () =
 
 test("Fiscal periods prevent postings into closed ranges", () => {
   const open = { endDate: "2026-12-31", id: "fy-2026", startDate: "2026-01-01", status: "open" as const };
+  const may = { endDate: "2026-05-31", id: "fy-2026-05", startDate: "2026-05-01", status: "open" as const };
   assert.equal(assertPeriodOpen([open], "2026-05-07").id, "fy-2026");
+  assert.equal(assertPeriodOpen([open, may], "2026-05-07").id, "fy-2026-05");
   assert.throws(() => assertPeriodOpen([closeFiscalPeriod(open)], "2026-05-07"), /fiscal_period_closed/);
+  assert.throws(() => assertPeriodOpen([open, closeFiscalPeriod(may)], "2026-05-07"), /fiscal_period_closed/);
 });
 
 test("Reports derive GL, P&L and balance sheet from journal drafts", () => {
@@ -323,10 +384,285 @@ test("Reports derive GL, P&L and balance sheet from journal drafts", () => {
   const accounts = seedChartAccounts({ companyId: "company-1", chart: "skr03" });
   const ledger = buildGeneralLedger({ accountId: "acc-ar", entries: [journal] });
   const pnl = buildProfitAndLoss({ accounts, entries: [journal] });
+  const bwa = buildBusinessAnalysis({ accounts, entries: [journal] });
   const balanceSheet = buildBalanceSheet({ accounts, entries: [journal] });
 
   assert.equal(ledger[0]?.runningBalance, 297.5);
   assert.equal(pnl.income, 250);
+  assert.equal(bwa.revenue, 250);
+  assert.equal(bwa.ebit, 250);
   assert.equal(balanceSheet.assets, 297.5);
   assert.equal(balanceSheet.liabilities, 47.5);
+  assert.equal(balanceSheet.retainedEarnings, 250);
+  assert.equal(balanceSheet.balanced, true);
 });
+
+test("VAT statement derives 7 percent and reverse-charge bases from tagged journal lines", () => {
+  const accounts = seedChartAccounts({ companyId: "company-1", chart: "skr03" });
+  const reducedRateInvoice = buildInvoiceJournalDraft({
+    ...invoice,
+    id: "inv-reduced-rate",
+    lines: [{ productId: "prod-support", quantity: 1, taxRate: 7, unitPrice: 100 }],
+    netAmount: 100,
+    number: "RE-2026-007",
+    taxAmount: 7,
+    total: 107
+  }, invoiceContext);
+  const reverseChargeInvoice = buildInvoiceJournalDraft({
+    ...invoice,
+    id: "inv-reverse-charge",
+    lines: [{ productId: "prod-saas", quantity: 1, reverseCharge: true, taxRate: 0, unitPrice: 250 }],
+    netAmount: 250,
+    number: "RE-2026-RC",
+    reverseCharge: true,
+    taxAmount: 0,
+    total: 250
+  }, invoiceContext);
+
+  const vatStatement = buildVatStatement({ accounts, entries: [reducedRateInvoice, reverseChargeInvoice] });
+
+  assert.equal(vatStatement.outputVat, 7);
+  assert.equal(vatStatement.boxes.find((box) => box.code === "86")?.amount, 100);
+  assert.equal(vatStatement.boxes.find((box) => box.code === "RC")?.amount, 250);
+  assert.equal(vatStatement.boxes.find((box) => box.code === "83")?.amount, 7);
+  assert.ok(reducedRateInvoice.lines.some((line) => line.taxCode === "DE_7_OUTPUT" && moneyToMajor(line.credit) === 100));
+  assert.ok(reducedRateInvoice.lines.some((line) => line.accountId === "acc-vat-output-7" && line.taxCode === "DE_7_OUTPUT" && moneyToMajor(line.credit) === 7));
+  assert.ok(reverseChargeInvoice.lines.some((line) => line.taxCode === "DE_RC" && moneyToMajor(line.credit) === 250));
+});
+
+test("German bookkeeping acceptance scenario derives ledger, DATEV, P&L and balance sheet values", () => {
+  const accounts = seedChartAccounts({ companyId: "company-1", chart: "skr03" });
+  const paymentContext = {
+    accountsPayableAccountId: "acc-ap",
+    accountsReceivableAccountId: "acc-ar",
+    bankAccountId: "acc-bank",
+    bankFeeAccountId: "acc-fees",
+    companyId: "company-1"
+  };
+  const opening = new LedgerPosting("company-1", "manual", "opening-capital-2026", "2026-01-01")
+    .debit("acc-bank", 10000)
+    .credit("acc-equity", 10000)
+    .toJournalDraft("manual", "Opening capital contribution.");
+  const serviceInvoice = buildInvoiceJournalDraft({
+    ...invoice,
+    id: "inv-acceptance-1",
+    issueDate: "2026-02-01",
+    lines: [{ productId: "prod-saas", quantity: 1, taxRate: 19, unitPrice: 1000 }],
+    netAmount: 1000,
+    number: "RE-2026-0001",
+    taxAmount: 190,
+    total: 1190
+  }, invoiceContext);
+  const servicePayment = buildBankMatchJournalDraft({
+    amount: 1190,
+    bookingDate: "2026-02-14",
+    counterparty: "Kunstmen GmbH",
+    currency: "EUR",
+    id: "bank-in-1",
+    matchedRecordId: "inv-acceptance-1",
+    matchType: "invoice",
+    purpose: "RE-2026-0001",
+    status: "Suggested"
+  }, paymentContext);
+  const cloudReceipt = buildReceiptJournalDraft({
+    currency: "EUR",
+    expenseAccountId: "acc-software",
+    id: "rec-cloud-1",
+    netAmount: 200,
+    number: "EB-2026-0001",
+    payableAccountId: "acc-ap",
+    receiptDate: "2026-03-05",
+    status: "Reviewed",
+    taxAmount: 38,
+    total: 238,
+    vendorName: "Figma"
+  }, "company-1");
+  const cloudPayment = buildBankMatchJournalDraft({
+    amount: -238,
+    bookingDate: "2026-03-10",
+    counterparty: "Figma",
+    currency: "EUR",
+    id: "bank-out-cloud-1",
+    matchedRecordId: "rec-cloud-1",
+    matchType: "receipt",
+    purpose: "EB-2026-0001",
+    status: "Suggested"
+  }, paymentContext);
+  const asset = {
+    accumulatedDepreciationAccountId: "acc-accumulated-depreciation",
+    acquisitionAccountId: "acc-ap",
+    acquisitionCost: 1200,
+    acquisitionDate: "2025-12-01",
+    assetAccountId: "acc-fixed-assets",
+    currency: "EUR" as const,
+    depreciationExpenseAccountId: "acc-depreciation",
+    id: "asset-acceptance-notebook",
+    name: "Notebook",
+    salvageValue: 0,
+    usefulLifeMonths: 60
+  };
+  const assetAcquisition = buildAssetAcquisitionJournalDraft({
+    asset,
+    companyId: "company-1",
+    inputVatAccountId: "acc-vat-input",
+    inputVatAmount: 228,
+    payableAccountId: "acc-ap"
+  });
+  const assetPayment = buildBankMatchJournalDraft({
+    amount: -1428,
+    bookingDate: "2026-01-15",
+    counterparty: "Hardware GmbH",
+    currency: "EUR",
+    id: "bank-out-asset-1",
+    matchedRecordId: "asset-acceptance-notebook",
+    matchType: "receipt",
+    purpose: "Asset acquisition asset-acceptance-notebook",
+    status: "Suggested"
+  }, paymentContext);
+  const depreciationEntries = buildStraightLineDepreciationSchedule(asset)
+    .filter((line) => line.fiscalYear === 2026)
+    .map((line) => buildAssetDepreciationJournalDraft({ asset, companyId: "company-1", line }));
+  const entries = [opening, assetAcquisition, assetPayment, serviceInvoice, servicePayment, cloudReceipt, cloudPayment, ...depreciationEntries];
+  const trialBalance = buildTrialBalanceFromEntries({ accounts, entries });
+  const generalLedger = buildGeneralLedger({ accountId: "acc-bank", entries });
+  const pnl = buildProfitAndLoss({ accounts, entries });
+  const bwa = buildBusinessAnalysis({ accounts, entries });
+  const balanceSheet = buildBalanceSheet({ accounts, entries });
+  const vatStatement = buildVatStatement({ accounts, entries });
+  const datevLines = buildDatevExtfLinesFromJournalDrafts({ accounts, entries });
+  const datevCsv = buildDatevExtfCsv(datevLines, {
+    accountLength: 4,
+    clientNumber: "67890",
+    consultantNumber: "12345",
+    fiscalYearStart: "20260101"
+  });
+
+  assert.equal(depreciationEntries.length, 12);
+  assert.equal(journalSideTotal(entries, "debit"), 15952);
+  assert.equal(journalSideTotal(entries, "credit"), 15952);
+  assert.equal(generalLedger.at(-1)?.runningBalance, 9524);
+  assert.equal(accountBalance(trialBalance, "acc-bank"), 9524);
+  assert.equal(accountBalance(trialBalance, "acc-ar"), 0);
+  assert.equal(accountBalance(trialBalance, "acc-fixed-assets"), 1200);
+  assert.equal(accountBalance(trialBalance, "acc-accumulated-depreciation"), -240);
+  assert.equal(accountBalance(trialBalance, "acc-vat-input"), 266);
+  assert.equal(accountBalance(trialBalance, "acc-ap"), 0);
+  assert.equal(accountBalance(trialBalance, "acc-vat-output"), 190);
+  assert.equal(accountBalance(trialBalance, "acc-equity"), 10000);
+  assert.equal(accountBalance(trialBalance, "acc-software"), 200);
+  assert.equal(accountBalance(trialBalance, "acc-depreciation"), 240);
+  assert.equal(accountBalance(trialBalance, "acc-revenue-saas"), 1000);
+  assert.equal(pnl.income, 1000);
+  assert.equal(pnl.expense, 440);
+  assert.equal(pnl.netIncome, 560);
+  assert.equal(bwa.revenue, 1000);
+  assert.equal(bwa.operatingExpenses, 200);
+  assert.equal(bwa.depreciation, 240);
+  assert.equal(bwa.ebit, 560);
+  assert.equal(vatStatement.outputVat, 190);
+  assert.equal(vatStatement.inputVat, 266);
+  assert.equal(vatStatement.netPosition, -76);
+  assert.equal(vatStatement.payable, 0);
+  assert.equal(vatStatement.refundable, 76);
+  assert.deepEqual(vatStatement.boxes.find((box) => box.code === "81"), {
+    amount: 1000,
+    amountKind: "base",
+    code: "81",
+    label: "Steuerpflichtige Umsaetze 19%",
+    source: "invoice_revenue_lines_de_19_output",
+    taxRate: 19
+  });
+  assert.deepEqual(vatStatement.boxes.find((box) => box.code === "66"), {
+    amount: 266,
+    amountKind: "tax",
+    code: "66",
+    label: "Abziehbare Vorsteuer",
+    source: "input_vat_tax_accounts"
+  });
+  assert.equal(vatStatement.boxes.find((box) => box.code === "83")?.amount, -76);
+  assert.equal(balanceSheet.assets, 10750);
+  assert.equal(balanceSheet.liabilities, 190);
+  assert.equal(balanceSheet.equity, 10560);
+  assert.equal(balanceSheet.retainedEarnings, 560);
+  assert.equal(balanceSheet.difference, 0);
+  assert.equal(balanceSheet.balanced, true);
+  assert.ok(datevLines.some((line) => line.accountCode === "0480" && line.side === "S" && line.amount === 1200));
+  assert.ok(datevLines.some((line) => line.accountCode === "0490" && line.side === "H" && line.amount === 20));
+  assert.ok(datevLines.some((line) => line.accountCode === "4830" && line.side === "S" && line.amount === 20));
+  assert.match(datevCsv, /1190,00/);
+  assert.match(datevCsv, /DE_19_INPUT/);
+  assert.match(datevCsv, /DE_19_OUTPUT/);
+});
+
+test("Fixed assets create acquisition and depreciation journals for the balance sheet", () => {
+  const asset = {
+    accumulatedDepreciationAccountId: "acc-accumulated-depreciation",
+    acquisitionAccountId: "acc-ap",
+    acquisitionCost: 1200,
+    acquisitionDate: "2026-01-15",
+    assetAccountId: "acc-fixed-assets",
+    currency: "EUR" as const,
+    depreciationExpenseAccountId: "acc-depreciation",
+    id: "asset-1",
+    name: "Notebook",
+    salvageValue: 0,
+    usefulLifeMonths: 60
+  };
+  const schedule = buildStraightLineDepreciationSchedule(asset);
+  const acquisition = buildAssetAcquisitionJournalDraft({ asset, companyId: "company-1", payableAccountId: "acc-ap" });
+  const depreciation = buildAssetDepreciationJournalDraft({ asset, companyId: "company-1", line: schedule[0]! });
+  const accounts = seedChartAccounts({ companyId: "company-1", chart: "skr03" });
+  const balanceSheet = buildBalanceSheet({ accounts, entries: [acquisition, depreciation] });
+
+  assert.equal(schedule[0]?.amount, 20);
+  assert.equal(balanceSheet.rows.find((row) => row.account.id === "acc-fixed-assets")?.balance, 1200);
+  assert.equal(balanceSheet.rows.find((row) => row.account.id === "acc-accumulated-depreciation")?.balance, -20);
+  assert.equal(balanceSheet.assets, 1180);
+});
+
+test("Fixed asset disposal removes cost and accumulated depreciation from the balance sheet", () => {
+  const asset = {
+    accumulatedDepreciationAccountId: "acc-accumulated-depreciation",
+    acquisitionAccountId: "acc-ap",
+    acquisitionCost: 1200,
+    acquisitionDate: "2026-01-15",
+    assetAccountId: "acc-fixed-assets",
+    currency: "EUR" as const,
+    depreciationExpenseAccountId: "acc-depreciation",
+    id: "asset-disposal-1",
+    name: "Notebook",
+    salvageValue: 0,
+    usefulLifeMonths: 60
+  };
+  const acquisition = buildAssetAcquisitionJournalDraft({ asset, companyId: "company-1", payableAccountId: "acc-ap" });
+  const depreciation = buildAssetDepreciationJournalDraft({ asset, companyId: "company-1", line: buildStraightLineDepreciationSchedule(asset)[0]! });
+  const disposal = buildAssetDisposalJournalDraft({
+    accumulatedDepreciation: 20,
+    asset,
+    companyId: "company-1",
+    disposalDate: "2026-04-30",
+    gainAccountId: "acc-revenue-saas",
+    lossAccountId: "acc-depreciation",
+    proceeds: 1000,
+    proceedsAccountId: "acc-bank"
+  });
+  const accounts = seedChartAccounts({ companyId: "company-1", chart: "skr03" });
+  const balanceSheet = buildBalanceSheet({ accounts, entries: [acquisition, depreciation, disposal] });
+
+  assert.equal(disposal.lines.reduce((sum, line) => sum + line.debit.minor, 0), 120000);
+  assert.equal(disposal.lines.reduce((sum, line) => sum + line.credit.minor, 0), 120000);
+  assert.equal(balanceSheet.rows.find((row) => row.account.id === "acc-fixed-assets")?.balance ?? 0, 0);
+  assert.equal(balanceSheet.rows.find((row) => row.account.id === "acc-accumulated-depreciation")?.balance ?? 0, 0);
+  assert.equal(balanceSheet.assets, 1000);
+  assert.equal(balanceSheet.balanced, true);
+});
+
+function accountBalance(rows: ReturnType<typeof buildTrialBalanceFromEntries>, accountId: string) {
+  const row = rows.find((candidate) => candidate.account.id === accountId);
+  assert.ok(row, `expected trial balance row for ${accountId}`);
+  return row.balance;
+}
+
+function journalSideTotal(entries: ReturnType<typeof buildInvoiceJournalDraft>[], side: "credit" | "debit") {
+  return entries.reduce((entrySum, entry) => entrySum + entry.lines.reduce((lineSum, line) => lineSum + moneyToMajor(line[side]), 0), 0);
+}

@@ -10988,11 +10988,147 @@ a {
 
 .accounting-qa-card,
 .accounting-qa-table,
-.accounting-qa-document {
+.accounting-qa-document,
+.accounting-workflow-panel {
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--surface);
   box-shadow: 0 12px 30px rgb(15 23 42 / 0.08);
+}
+
+.accounting-workflow-panel {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+}
+
+.accounting-workflow-panel > header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.accounting-workflow-panel > header p {
+  margin: 0 0 4px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 780;
+  text-transform: uppercase;
+}
+
+.accounting-workflow-panel h2,
+.accounting-workflow-panel h3 {
+  margin: 0;
+  letter-spacing: 0;
+}
+
+.accounting-workflow-panel h2 {
+  font-size: 20px;
+}
+
+.accounting-workflow-panel h3 {
+  font-size: 14px;
+}
+
+.accounting-workflow-status,
+.accounting-workflow-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 720;
+}
+
+.accounting-workflow-status.status-enabled {
+  color: var(--success);
+}
+
+.accounting-workflow-status.status-error {
+  color: var(--danger);
+}
+
+.accounting-workflow-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.accounting-workflow-grid article {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  padding: 12px;
+}
+
+.accounting-workflow-grid ul {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.accounting-workflow-grid li {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+
+.accounting-workflow-grid li:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.accounting-workflow-grid strong,
+.accounting-workflow-grid span,
+.accounting-workflow-grid p {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.accounting-workflow-grid strong {
+  font-size: 12px;
+}
+
+.accounting-workflow-grid span,
+.accounting-workflow-grid p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.accounting-workflow-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 3px;
+}
+
+.accounting-workflow-actions button {
+  min-height: 30px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  color: var(--text);
+  padding: 0 9px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 820;
+  text-transform: uppercase;
+}
+
+.accounting-workflow-actions button:first-child {
+  border-color: var(--module-accent);
+  background: var(--module-accent);
+  color: #fff;
 }
 
 .accounting-qa-card {
@@ -11081,6 +11217,1913 @@ a {
   font-weight: 800;
 }
 
+.business-command-header {
+  max-width: 980px;
+}
+
+.business-command-header > div {
+  display: grid;
+  gap: 6px;
+}
+
+.business-command-header span {
+  max-width: 68ch;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.business-command-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.business-command-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
+  gap: 16px;
+  align-items: start;
+}
+
+.business-primary-zone,
+.business-review-zone {
+  display: grid;
+  min-width: 0;
+  gap: 14px;
+}
+
+.business-next-step {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(260px, 0.85fr);
+  gap: 18px;
+  align-items: end;
+  border: 1px solid color-mix(in srgb, var(--module-accent) 18%, var(--border));
+  border-radius: 8px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--module-accent) 5%, var(--surface)) 0%, var(--surface) 76%);
+  padding: 20px;
+  box-shadow: 0 16px 32px rgb(15 23 42 / 0.07);
+}
+
+.business-next-step-copy {
+  display: grid;
+  gap: 7px;
+}
+
+.business-next-step-copy p {
+  margin: 0;
+  color: var(--module-accent);
+  font-size: 12px;
+  font-weight: 820;
+  text-transform: uppercase;
+}
+
+.business-next-step-copy h2 {
+  margin: 0;
+  font-size: 26px;
+  line-height: 1.08;
+}
+
+.business-next-step-copy span {
+  max-width: 64ch;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.business-next-step dl {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+.business-next-step dl div {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-muted) 62%, var(--surface));
+  padding: 10px 11px;
+}
+
+.business-next-step dt {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 760;
+  text-transform: uppercase;
+}
+
+.business-next-step dd {
+  overflow: hidden;
+  margin: 4px 0 0;
+  font-size: 14px;
+  font-weight: 820;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.business-next-step-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.business-next-step-actions .invoice-delivery-actions,
+.business-next-step-actions .invoice-action-bar {
+  display: contents;
+}
+
+.business-next-step-actions .invoice-save-draft,
+.business-next-step-actions .business-accounting-download,
+.business-next-step-actions .business-accounting-inline-link {
+  min-height: 36px;
+}
+
+.business-next-step-actions small {
+  flex-basis: 100%;
+  color: var(--danger);
+  font-size: 12px;
+  text-align: right;
+}
+
+.business-accounting-page .accounting-qa-card {
+  gap: 5px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface) 86%, var(--surface-muted));
+  box-shadow: none;
+  padding: 12px 14px;
+}
+
+.business-accounting-page .accounting-qa-card strong {
+  font-size: 17px;
+}
+
+.business-accounting-page .accounting-qa-card span,
+.business-accounting-page .accounting-qa-card small {
+  font-size: 11px;
+}
+
+.business-accounting-page .accounting-qa-table {
+  box-shadow: none;
+}
+
+.accounting-qa-table header {
+  display: grid;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+  padding: 15px 18px 12px;
+}
+
+.accounting-qa-table header h2 {
+  padding: 0;
+}
+
+.accounting-qa-table header p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.business-review-zone .accounting-workflow-panel {
+  position: sticky;
+  top: 16px;
+  gap: 12px;
+  box-shadow: none;
+}
+
+.accounting-workflow-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.accounting-workflow-summary div {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  padding: 8px;
+}
+
+.accounting-workflow-summary span {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 760;
+  text-transform: uppercase;
+}
+
+.accounting-workflow-summary strong {
+  display: block;
+  margin-top: 2px;
+  font-size: 18px;
+}
+
+.accounting-workflow-focus article,
+.accounting-workflow-details article {
+  display: grid;
+  gap: 9px;
+}
+
+.accounting-workflow-focus ul,
+.accounting-workflow-details ul {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.accounting-workflow-focus li,
+.accounting-workflow-details li {
+  display: grid;
+  gap: 3px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  padding: 10px;
+}
+
+.accounting-workflow-focus strong,
+.accounting-workflow-details strong {
+  font-size: 12px;
+}
+
+.accounting-workflow-focus span,
+.accounting-workflow-focus p,
+.accounting-workflow-details span,
+.accounting-workflow-details p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.accounting-workflow-details {
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
+.accounting-workflow-details summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 820;
+  text-transform: uppercase;
+}
+
+.accounting-workflow-details[open] {
+  display: grid;
+  gap: 12px;
+}
+
+.finance-page-header {
+  display: flex;
+  gap: 18px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.finance-page-header > div:first-child {
+  display: grid;
+  gap: 5px;
+}
+
+.finance-page-header span {
+  max-width: 66ch;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.finance-header-actions,
+.finance-primary-actions,
+.finance-inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.finance-secondary-action,
+.finance-inline-actions .business-accounting-inline-link {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  border: 1px solid color-mix(in srgb, var(--module-accent) 42%, var(--border));
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  color: var(--module-accent);
+  padding: 0 12px;
+  font-size: 12px;
+  font-weight: 820;
+  text-decoration: none;
+  text-transform: uppercase;
+}
+
+.finance-secondary-action.is-primary {
+  border-color: var(--module-accent);
+  background: var(--module-accent);
+  color: white;
+  box-shadow: 0 12px 24px rgb(15 23 42 / 0.12);
+}
+
+.finance-primary-actions .invoice-delivery-actions,
+.finance-inline-actions .invoice-delivery-actions,
+.finance-primary-actions .invoice-action-bar,
+.finance-inline-actions .invoice-action-bar {
+  display: contents;
+}
+
+.finance-primary-actions .invoice-save-draft,
+.finance-primary-actions .invoice-send-button,
+.finance-primary-actions .business-accounting-download,
+.finance-primary-actions .business-accounting-inline-link,
+.finance-primary-actions .accounting-command-control,
+.finance-primary-actions .accounting-file-command,
+.finance-primary-actions .accounting-import-preview,
+.finance-inline-actions .invoice-save-draft,
+.finance-inline-actions .invoice-send-button,
+.finance-inline-actions .business-accounting-download,
+.finance-inline-actions .business-accounting-inline-link,
+.finance-inline-actions .accounting-command-control,
+.finance-inline-actions .accounting-file-command,
+.finance-inline-actions .accounting-import-preview {
+  min-height: 36px;
+}
+
+.finance-inline-actions:not(.is-compact) {
+  justify-content: stretch;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.finance-inline-actions:not(.is-compact) > * {
+  flex: 1 1 150px;
+}
+
+.finance-inline-actions small {
+  flex-basis: 100%;
+  color: var(--danger);
+  font-size: 12px;
+}
+
+.business-accounting-page .business-accounting-tabs {
+  gap: 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.business-accounting-page .business-accounting-tabs a {
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  padding: 0 0 12px;
+  font-size: 12px;
+  font-weight: 820;
+  letter-spacing: 0;
+}
+
+.business-accounting-page .business-accounting-tabs a[aria-current="page"] {
+  border-color: var(--module-accent);
+  background: transparent;
+  color: var(--module-accent);
+}
+
+.finance-workbench {
+  display: grid;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 12px 24px rgb(15 23 42 / 0.05);
+}
+
+.finance-summary-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface-muted) 54%, var(--surface));
+}
+
+.finance-summary-strip div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  border-right: 1px solid var(--border);
+  padding: 12px 16px;
+}
+
+.finance-summary-strip div:last-child {
+  border-right: 0;
+}
+
+.finance-summary-strip span,
+.finance-summary-strip small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 760;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.finance-summary-strip strong {
+  overflow: hidden;
+  font-size: 17px;
+  letter-spacing: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.finance-mode-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  padding: 14px 14px 0;
+}
+
+.finance-mode-tab {
+  display: flex;
+  min-width: 0;
+  min-height: 50px;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-right: 0;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 780;
+}
+
+.finance-mode-tab:first-child {
+  border-radius: 6px 0 0 6px;
+}
+
+.finance-mode-tab:last-child {
+  border-right: 1px solid var(--border);
+  border-radius: 0 6px 6px 0;
+}
+
+.finance-mode-tab[aria-selected="true"] {
+  border-color: color-mix(in srgb, var(--module-accent) 26%, var(--border));
+  background: color-mix(in srgb, var(--module-accent) 8%, var(--surface));
+  color: var(--text);
+}
+
+.finance-mode-tab strong {
+  min-width: 28px;
+  border-radius: 999px;
+  background: var(--surface-muted);
+  color: var(--text);
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+.finance-mode-tab.tone-active strong {
+  background: color-mix(in srgb, var(--module-accent) 88%, var(--surface));
+  color: white;
+}
+
+.finance-mode-tab.tone-attention strong {
+  background: color-mix(in srgb, var(--warning) 86%, var(--surface));
+  color: white;
+}
+
+.finance-filter-row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  padding: 12px 14px 16px;
+}
+
+.finance-filter-row label {
+  position: relative;
+  min-width: 0;
+}
+
+.finance-filter-row span {
+  position: absolute;
+  top: -8px;
+  left: 12px;
+  z-index: 1;
+  background: var(--surface);
+  color: var(--muted);
+  padding: 0 4px;
+  font-size: 11px;
+  font-weight: 720;
+}
+
+.finance-filter-row input {
+  width: 100%;
+  min-height: 46px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--muted);
+  padding: 0 12px;
+  font: inherit;
+  font-size: 14px;
+}
+
+.finance-workbench-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 330px);
+  border-top: 1px solid var(--border);
+}
+
+.finance-workbench-body.with-document-rail {
+  grid-template-columns: 190px minmax(0, 1fr) minmax(280px, 330px);
+}
+
+.finance-document-rail {
+  display: grid;
+  align-content: start;
+  gap: 2px;
+  border-right: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface-muted) 66%, var(--surface));
+  padding: 10px 0;
+}
+
+.finance-document-rail button {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 0;
+  border-left: 3px solid transparent;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  padding: 0 14px 0 12px;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+}
+
+.finance-document-rail button[aria-pressed="true"] {
+  border-color: var(--module-accent);
+  background: var(--surface);
+  font-weight: 800;
+}
+
+.finance-document-rail strong {
+  min-width: 24px;
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  padding: 3px 7px;
+  font-size: 11px;
+  text-align: center;
+}
+
+.finance-row-board {
+  min-width: 0;
+  background: var(--surface);
+}
+
+.finance-row-board > header {
+  display: flex;
+  gap: 14px;
+  align-items: end;
+  justify-content: space-between;
+  min-height: 62px;
+  border-bottom: 1px solid var(--border);
+  padding: 14px 16px;
+}
+
+.finance-row-board h2,
+.finance-inspector-card h2 {
+  margin: 0;
+  letter-spacing: 0;
+}
+
+.finance-row-board h2 {
+  font-size: 18px;
+}
+
+.finance-row-board p {
+  max-width: 72ch;
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.finance-row-board > header button,
+.finance-row-action {
+  min-height: 32px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  padding: 0 10px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.finance-row-board-head,
+.finance-row-board li {
+  display: grid;
+  grid-template-columns: 34px 42px minmax(0, 1.5fr) minmax(92px, 0.45fr) minmax(112px, 0.5fr) minmax(110px, 0.45fr);
+  gap: 10px;
+  align-items: center;
+}
+
+.finance-row-board-head {
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  padding: 10px 16px;
+  font-size: 11px;
+  font-weight: 820;
+  text-transform: uppercase;
+}
+
+.finance-row-board-head span:first-child {
+  grid-column: 1 / 3;
+}
+
+.finance-row-board ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.finance-row-board li {
+  min-height: 74px;
+  border-bottom: 1px solid var(--border);
+  padding: 12px 16px;
+}
+
+.finance-row-board li.is-selected {
+  background: color-mix(in srgb, var(--warning) 8%, var(--surface));
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--warning) 80%, var(--module-accent));
+}
+
+.finance-row-check {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.finance-row-check input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--module-accent);
+}
+
+.finance-row-marker {
+  display: inline-flex;
+  width: 34px;
+  height: 34px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--module-accent) 12%, var(--surface-muted));
+  color: var(--module-accent);
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.finance-row-main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.finance-row-main strong,
+.finance-row-main span,
+.finance-row-main small,
+.finance-row-status,
+.finance-row-amount {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.finance-row-main strong {
+  font-size: 14px;
+}
+
+.finance-row-main span,
+.finance-row-main small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.finance-row-status {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.finance-row-amount {
+  text-align: right;
+  font-size: 15px;
+}
+
+.finance-row-amount.tone-positive {
+  color: var(--success);
+}
+
+.finance-row-amount.tone-negative {
+  color: var(--danger);
+}
+
+.finance-row-action {
+  justify-self: end;
+  max-width: 100%;
+}
+
+.finance-inspector {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  border-left: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface-muted) 54%, var(--surface));
+  padding: 14px;
+}
+
+.finance-inspector-card {
+  display: grid;
+  gap: 8px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 14px;
+}
+
+.finance-inspector-card p {
+  margin: 0;
+  color: var(--module-accent);
+  font-size: 11px;
+  font-weight: 820;
+  text-transform: uppercase;
+}
+
+.finance-inspector-card h2 {
+  font-size: 19px;
+  line-height: 1.15;
+}
+
+.finance-inspector-card > span {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.finance-inspector-card dl {
+  display: grid;
+  gap: 8px;
+  margin: 8px 0 0;
+}
+
+.finance-inspector-card dl div {
+  display: grid;
+  grid-template-columns: minmax(90px, 0.5fr) minmax(0, 1fr);
+  gap: 10px;
+  align-items: baseline;
+}
+
+.finance-inspector-card dt {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 760;
+  text-transform: uppercase;
+}
+
+.finance-inspector-card dd {
+  min-width: 0;
+  overflow: hidden;
+  margin: 0;
+  font-size: 13px;
+  font-weight: 820;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.finance-inspector .accounting-workflow-panel {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+}
+
+.finance-inspector .accounting-workflow-panel > header {
+  align-items: center;
+}
+
+.finance-inspector .accounting-workflow-panel h2 {
+  font-size: 16px;
+}
+
+.finance-inspector .accounting-command-control {
+  justify-items: stretch;
+}
+
+.finance-inspector .accounting-command-control .drawer-primary {
+  width: 100%;
+  min-height: 40px;
+}
+
+.business-accounting-page {
+  background: color-mix(in srgb, var(--surface-muted) 42%, var(--surface));
+}
+
+.business-accounting-page .business-accounting-header {
+  padding-top: 18px;
+}
+
+.business-accounting-page .business-accounting-header p,
+.finance-row-board-head,
+.finance-summary-strip span,
+.finance-summary-strip small,
+.finance-inspector-card p,
+.finance-inspector-card dt,
+.accounting-workflow-panel > header p,
+.accounting-workflow-summary span,
+.accounting-workflow-details summary {
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.business-accounting-page .business-accounting-header h1 {
+  font-size: 26px;
+  font-weight: 760;
+}
+
+.business-accounting-page .business-accounting-tabs {
+  gap: 18px;
+  border-bottom-color: color-mix(in srgb, var(--border) 74%, transparent);
+}
+
+.business-accounting-page .business-accounting-tabs a {
+  color: color-mix(in srgb, var(--muted) 88%, var(--text));
+  font-size: 12px;
+  font-weight: 680;
+  padding-bottom: 10px;
+}
+
+.business-accounting-page .business-accounting-tabs a[aria-current="page"] {
+  color: var(--text);
+}
+
+.finance-header-actions {
+  gap: 7px;
+}
+
+.finance-secondary-action,
+.finance-inline-actions .business-accounting-inline-link,
+.finance-row-board > header button,
+.finance-row-action {
+  min-height: 32px;
+  border-color: color-mix(in srgb, var(--border) 84%, var(--surface));
+  background: color-mix(in srgb, var(--surface) 92%, var(--surface-muted));
+  color: color-mix(in srgb, var(--text) 86%, var(--muted));
+  font-size: 11px;
+  font-weight: 680;
+  text-transform: none;
+}
+
+.finance-secondary-action.is-primary,
+.finance-primary-actions .accounting-command-control .drawer-primary,
+.finance-inline-actions .accounting-command-control .drawer-primary {
+  border-color: color-mix(in srgb, var(--module-accent) 38%, var(--border));
+  background: color-mix(in srgb, var(--module-accent) 86%, var(--surface-muted));
+  color: color-mix(in srgb, var(--surface) 94%, var(--text));
+  box-shadow: none;
+  font-size: 11px;
+  font-weight: 720;
+  text-transform: none;
+}
+
+.finance-workbench {
+  border-color: color-mix(in srgb, var(--border) 72%, var(--surface));
+  background: color-mix(in srgb, var(--surface) 96%, var(--surface-muted));
+  box-shadow: none;
+}
+
+.finance-summary-strip {
+  background: color-mix(in srgb, var(--surface-muted) 36%, var(--surface));
+  border-bottom-color: color-mix(in srgb, var(--border) 70%, var(--surface));
+}
+
+.finance-summary-strip div {
+  gap: 2px;
+  border-right-color: color-mix(in srgb, var(--border) 70%, var(--surface));
+  padding: 10px 16px;
+}
+
+.finance-summary-strip span,
+.finance-summary-strip small {
+  color: color-mix(in srgb, var(--muted) 84%, var(--surface));
+  font-size: 10px;
+  font-weight: 620;
+}
+
+.finance-summary-strip strong {
+  color: color-mix(in srgb, var(--text) 90%, var(--muted));
+  font-size: 15px;
+  font-weight: 720;
+}
+
+.finance-mode-tabs {
+  padding: 12px 14px 0;
+}
+
+.finance-mode-tab {
+  min-height: 42px;
+  border-color: color-mix(in srgb, var(--border) 76%, var(--surface));
+  background: color-mix(in srgb, var(--surface) 96%, var(--surface-muted));
+  color: color-mix(in srgb, var(--text) 86%, var(--muted));
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.finance-mode-tab[aria-selected="true"] {
+  border-color: color-mix(in srgb, var(--module-accent) 22%, var(--border));
+  background: color-mix(in srgb, var(--module-accent) 4%, var(--surface));
+}
+
+.finance-mode-tab strong,
+.finance-mode-tab.tone-active strong,
+.finance-mode-tab.tone-attention strong {
+  min-width: 24px;
+  background: color-mix(in srgb, var(--surface-muted) 72%, var(--surface));
+  color: color-mix(in srgb, var(--text) 76%, var(--muted));
+  padding: 2px 7px;
+  font-size: 11px;
+  font-weight: 680;
+}
+
+.finance-filter-row {
+  gap: 10px;
+  padding: 11px 14px 14px;
+}
+
+.finance-filter-row span {
+  color: color-mix(in srgb, var(--muted) 78%, var(--surface));
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.finance-filter-row input {
+  min-height: 40px;
+  border-color: color-mix(in srgb, var(--border) 78%, var(--surface));
+  color: color-mix(in srgb, var(--muted) 88%, var(--text));
+  font-size: 13px;
+}
+
+.finance-workbench-body,
+.finance-workbench-body.with-document-rail {
+  border-top-color: color-mix(in srgb, var(--border) 70%, var(--surface));
+}
+
+.finance-document-rail {
+  border-right-color: color-mix(in srgb, var(--border) 68%, var(--surface));
+  background: color-mix(in srgb, var(--surface-muted) 42%, var(--surface));
+}
+
+.finance-document-rail button {
+  min-height: 36px;
+  border-left: 0;
+  color: color-mix(in srgb, var(--text) 86%, var(--muted));
+  font-size: 12px;
+  font-weight: 560;
+}
+
+.finance-document-rail button[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--surface) 88%, var(--surface-muted));
+  color: var(--text);
+  font-weight: 680;
+}
+
+.finance-document-rail strong {
+  background: color-mix(in srgb, var(--surface-muted) 74%, var(--surface));
+  font-weight: 650;
+}
+
+.finance-row-board > header {
+  min-height: 54px;
+  border-bottom-color: color-mix(in srgb, var(--border) 70%, var(--surface));
+  padding: 12px 16px;
+}
+
+.finance-row-board h2 {
+  font-size: 17px;
+  font-weight: 730;
+}
+
+.finance-row-board p {
+  color: color-mix(in srgb, var(--muted) 84%, var(--text));
+  font-size: 12px;
+}
+
+.finance-row-board-head {
+  border-bottom-color: color-mix(in srgb, var(--border) 70%, var(--surface));
+  color: color-mix(in srgb, var(--muted) 78%, var(--surface));
+  font-size: 10px;
+  font-weight: 620;
+}
+
+.finance-row-board li {
+  min-height: 68px;
+  border-bottom-color: color-mix(in srgb, var(--border) 66%, var(--surface));
+  padding: 10px 16px;
+}
+
+.finance-row-board li.is-selected {
+  background: color-mix(in srgb, var(--module-accent) 3%, var(--surface));
+  box-shadow: none;
+}
+
+.finance-row-check input {
+  width: 16px;
+  height: 16px;
+}
+
+.finance-row-marker {
+  width: 30px;
+  height: 30px;
+  background: color-mix(in srgb, var(--surface-muted) 74%, var(--surface));
+  color: color-mix(in srgb, var(--text) 58%, var(--muted));
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.finance-row-main strong {
+  color: color-mix(in srgb, var(--text) 92%, var(--muted));
+  font-size: 13px;
+  font-weight: 710;
+}
+
+.finance-row-main span,
+.finance-row-main small,
+.finance-row-status {
+  color: color-mix(in srgb, var(--muted) 86%, var(--text));
+  font-size: 11px;
+  font-weight: 560;
+}
+
+.finance-row-amount {
+  color: color-mix(in srgb, var(--text) 88%, var(--muted));
+  font-size: 14px;
+  font-weight: 720;
+}
+
+.finance-row-amount.tone-positive,
+.finance-row-amount.tone-negative {
+  color: color-mix(in srgb, var(--text) 88%, var(--muted));
+}
+
+.finance-inspector {
+  gap: 12px;
+  border-left-color: color-mix(in srgb, var(--border) 68%, var(--surface));
+  background: color-mix(in srgb, var(--surface-muted) 34%, var(--surface));
+  padding: 14px;
+}
+
+.finance-inspector-card {
+  gap: 6px;
+  border-bottom-color: color-mix(in srgb, var(--border) 68%, var(--surface));
+  padding-bottom: 12px;
+}
+
+.finance-inspector-card p {
+  color: color-mix(in srgb, var(--muted) 82%, var(--text));
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.finance-inspector-card h2 {
+  font-size: 17px;
+  font-weight: 730;
+}
+
+.finance-inspector-card > span {
+  color: color-mix(in srgb, var(--muted) 88%, var(--text));
+  font-size: 12px;
+}
+
+.finance-inspector-card dt {
+  color: color-mix(in srgb, var(--muted) 80%, var(--surface));
+  font-size: 10px;
+  font-weight: 620;
+}
+
+.finance-inspector-card dd {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.finance-inspector .accounting-workflow-panel h2 {
+  font-size: 15px;
+  font-weight: 720;
+}
+
+.finance-inspector .accounting-workflow-status,
+.finance-inspector .accounting-workflow-note {
+  color: color-mix(in srgb, var(--muted) 88%, var(--text));
+  font-size: 11px;
+  font-weight: 560;
+}
+
+.finance-inspector .accounting-workflow-summary div,
+.finance-inspector .accounting-workflow-focus li,
+.finance-inspector .accounting-workflow-details li {
+  border-color: color-mix(in srgb, var(--border) 70%, var(--surface));
+  background: color-mix(in srgb, var(--surface-muted) 50%, var(--surface));
+}
+
+.finance-inspector .accounting-workflow-summary strong {
+  font-size: 15px;
+  font-weight: 720;
+}
+
+.finance-inspector .accounting-workflow-actions button,
+.finance-inspector .accounting-workflow-actions button:first-child {
+  border-color: color-mix(in srgb, var(--border) 76%, var(--surface));
+  background: color-mix(in srgb, var(--surface) 90%, var(--surface-muted));
+  color: color-mix(in srgb, var(--text) 84%, var(--muted));
+  box-shadow: none;
+  font-size: 10px;
+  font-weight: 680;
+  text-transform: none;
+}
+
+.business-accounting-page {
+  max-width: 1480px;
+  margin: 0 auto;
+  background: transparent;
+}
+
+.business-accounting-page .business-accounting-header {
+  padding: 8px 0 18px;
+}
+
+.business-accounting-page .business-accounting-header p {
+  margin-bottom: 4px;
+  color: color-mix(in srgb, var(--muted) 76%, var(--text));
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.business-accounting-page .business-accounting-header h1 {
+  font-size: 25px;
+  font-weight: 690;
+}
+
+.business-accounting-page .business-accounting-header span {
+  color: color-mix(in srgb, var(--muted) 86%, var(--text));
+  font-size: 13px;
+}
+
+.finance-header-actions {
+  align-items: flex-start;
+  padding-top: 28px;
+}
+
+.finance-secondary-action,
+.finance-secondary-action.is-primary,
+.finance-primary-actions .accounting-command-control .drawer-primary,
+.finance-inline-actions .accounting-command-control .drawer-primary {
+  min-height: 30px;
+  border-color: transparent;
+  background: transparent;
+  color: color-mix(in srgb, var(--text) 76%, var(--muted));
+  padding: 0 4px;
+  box-shadow: none;
+  font-size: 12px;
+  font-weight: 620;
+}
+
+.finance-secondary-action.is-primary,
+.finance-primary-actions .accounting-command-control .drawer-primary {
+  color: color-mix(in srgb, var(--module-accent) 82%, var(--text));
+}
+
+.business-accounting-page .business-accounting-tabs {
+  gap: 22px;
+  border-bottom: 0;
+  margin-bottom: 8px;
+}
+
+.business-accounting-page .business-accounting-tabs a {
+  border-bottom-width: 1px;
+  color: color-mix(in srgb, var(--muted) 82%, var(--text));
+  font-size: 12px;
+  font-weight: 560;
+  padding-bottom: 8px;
+}
+
+.business-accounting-page .business-accounting-tabs a[aria-current="page"] {
+  color: color-mix(in srgb, var(--text) 88%, var(--module-accent));
+  font-weight: 650;
+}
+
+.finance-workbench {
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.finance-summary-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  border: 0;
+  background: transparent;
+  padding: 2px 0 18px;
+}
+
+.finance-summary-strip div {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  border: 0;
+  padding: 0;
+}
+
+.finance-summary-strip span,
+.finance-summary-strip small {
+  color: color-mix(in srgb, var(--muted) 78%, var(--text));
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.finance-summary-strip small::before {
+  content: "(";
+}
+
+.finance-summary-strip small::after {
+  content: ")";
+}
+
+.finance-summary-strip strong {
+  color: color-mix(in srgb, var(--text) 84%, var(--muted));
+  font-size: 13px;
+  font-weight: 640;
+}
+
+.finance-mode-tabs {
+  display: flex;
+  gap: 20px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 58%, transparent);
+  padding: 0;
+}
+
+.finance-mode-tab,
+.finance-mode-tab:first-child,
+.finance-mode-tab:last-child,
+.finance-mode-tab[aria-selected="true"] {
+  min-height: 34px;
+  justify-content: flex-start;
+  border: 0;
+  border-bottom: 1px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: color-mix(in srgb, var(--muted) 82%, var(--text));
+  padding: 0;
+  font-size: 13px;
+  font-weight: 540;
+}
+
+.finance-mode-tab[aria-selected="true"] {
+  border-bottom-color: color-mix(in srgb, var(--module-accent) 70%, var(--border));
+  color: color-mix(in srgb, var(--text) 88%, var(--module-accent));
+  font-weight: 620;
+}
+
+.finance-mode-tab strong,
+.finance-mode-tab.tone-active strong,
+.finance-mode-tab.tone-attention strong {
+  min-width: auto;
+  border-radius: 0;
+  background: transparent;
+  color: color-mix(in srgb, var(--muted) 78%, var(--text));
+  padding: 0;
+  font-size: 12px;
+  font-weight: 560;
+}
+
+.finance-filter-row {
+  grid-template-columns: minmax(160px, 0.7fr) minmax(160px, 0.7fr) minmax(160px, 0.7fr) minmax(240px, 1.1fr);
+  gap: 18px;
+  padding: 18px 0 14px;
+}
+
+.finance-filter-row span {
+  position: static;
+  display: block;
+  margin-bottom: 4px;
+  background: transparent;
+  padding: 0;
+  color: color-mix(in srgb, var(--muted) 72%, var(--text));
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.finance-filter-row input {
+  min-height: 32px;
+  border: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 66%, var(--surface));
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+  color: color-mix(in srgb, var(--muted) 84%, var(--text));
+  font-size: 13px;
+}
+
+.finance-workbench-body,
+.finance-workbench-body.with-document-rail {
+  grid-template-columns: minmax(0, 1fr) minmax(270px, 310px);
+  gap: 26px;
+  border-top: 0;
+}
+
+.finance-workbench-body.with-document-rail {
+  grid-template-columns: 150px minmax(0, 1fr) minmax(270px, 310px);
+}
+
+.finance-document-rail {
+  gap: 0;
+  border-right: 0;
+  background: transparent;
+  padding: 8px 0 0;
+}
+
+.finance-document-rail button {
+  min-height: 30px;
+  background: transparent;
+  padding: 0;
+  color: color-mix(in srgb, var(--muted) 84%, var(--text));
+  font-size: 12px;
+  font-weight: 520;
+}
+
+.finance-document-rail button[aria-pressed="true"] {
+  background: transparent;
+  color: color-mix(in srgb, var(--text) 88%, var(--muted));
+  font-weight: 620;
+}
+
+.finance-document-rail strong {
+  background: transparent;
+  color: color-mix(in srgb, var(--muted) 76%, var(--text));
+  font-size: 11px;
+  font-weight: 520;
+}
+
+.finance-row-board {
+  background: transparent;
+}
+
+.finance-row-board > header {
+  min-height: auto;
+  border-bottom: 0;
+  padding: 8px 0 10px;
+}
+
+.finance-row-board h2 {
+  color: color-mix(in srgb, var(--text) 88%, var(--muted));
+  font-size: 18px;
+  font-weight: 680;
+}
+
+.finance-row-board p {
+  max-width: 54ch;
+  font-size: 12px;
+}
+
+.finance-row-board > header button {
+  border: 0;
+  background: transparent;
+  color: color-mix(in srgb, var(--muted) 82%, var(--text));
+  padding: 0;
+  font-size: 12px;
+  font-weight: 520;
+}
+
+.finance-row-board-head {
+  grid-template-columns: 28px 34px minmax(0, 1.7fr) minmax(82px, 0.42fr) minmax(108px, 0.5fr) minmax(96px, 0.4fr);
+  border-top: 1px solid color-mix(in srgb, var(--border) 58%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 58%, transparent);
+  padding: 8px 0;
+  color: color-mix(in srgb, var(--muted) 72%, var(--text));
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.finance-row-board li {
+  grid-template-columns: 28px 34px minmax(0, 1.7fr) minmax(82px, 0.42fr) minmax(108px, 0.5fr) minmax(96px, 0.4fr);
+  min-height: 64px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+  padding: 10px 0;
+}
+
+.finance-row-board li.is-selected {
+  background: transparent;
+}
+
+.finance-row-check input {
+  width: 14px;
+  height: 14px;
+}
+
+.finance-row-marker {
+  width: 24px;
+  height: 24px;
+  background: transparent;
+  color: color-mix(in srgb, var(--muted) 70%, var(--text));
+  font-size: 10px;
+  font-weight: 560;
+}
+
+.finance-row-main {
+  gap: 1px;
+}
+
+.finance-row-main strong {
+  color: color-mix(in srgb, var(--text) 88%, var(--muted));
+  font-size: 13px;
+  font-weight: 640;
+}
+
+.finance-row-main span,
+.finance-row-main small,
+.finance-row-status {
+  color: color-mix(in srgb, var(--muted) 82%, var(--text));
+  font-size: 11px;
+  font-weight: 470;
+}
+
+.finance-row-amount {
+  color: color-mix(in srgb, var(--text) 84%, var(--muted));
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.finance-row-action {
+  min-height: 28px;
+  border: 0;
+  background: transparent;
+  color: color-mix(in srgb, var(--muted) 82%, var(--text));
+  padding: 0;
+  font-size: 11px;
+  font-weight: 520;
+  text-align: right;
+}
+
+.finance-inspector {
+  gap: 12px;
+  border-left: 0;
+  background: transparent;
+  padding: 8px 0 0;
+}
+
+.finance-inspector-card {
+  gap: 5px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  padding-bottom: 12px;
+}
+
+.finance-inspector-card p {
+  color: color-mix(in srgb, var(--muted) 76%, var(--text));
+  font-size: 10px;
+  font-weight: 520;
+}
+
+.finance-inspector-card h2 {
+  color: color-mix(in srgb, var(--text) 88%, var(--muted));
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.finance-inspector-card > span {
+  color: color-mix(in srgb, var(--muted) 86%, var(--text));
+  font-size: 12px;
+}
+
+.finance-inspector-card dl {
+  gap: 4px;
+  margin-top: 7px;
+}
+
+.finance-inspector-card dl div {
+  grid-template-columns: minmax(84px, 0.48fr) minmax(0, 1fr);
+}
+
+.finance-inspector-card dt {
+  color: color-mix(in srgb, var(--muted) 72%, var(--text));
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.finance-inspector-card dd {
+  font-size: 12px;
+  font-weight: 620;
+}
+
+.finance-inline-actions:not(.is-compact) {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.finance-inline-actions:not(.is-compact) > * {
+  flex: 0 1 auto;
+}
+
+.finance-inspector .accounting-workflow-panel {
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.finance-inspector .accounting-workflow-panel > header {
+  border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  padding-top: 12px;
+}
+
+.finance-inspector .accounting-workflow-panel h2 {
+  font-size: 14px;
+  font-weight: 610;
+}
+
+.finance-inspector .accounting-workflow-status,
+.finance-inspector .accounting-workflow-note {
+  font-size: 11px;
+  font-weight: 450;
+}
+
+.finance-inspector .accounting-workflow-summary {
+  display: flex;
+  gap: 12px;
+}
+
+.finance-inspector .accounting-workflow-summary div,
+.finance-inspector .accounting-workflow-focus li,
+.finance-inspector .accounting-workflow-details li {
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.finance-inspector .accounting-workflow-summary span {
+  font-size: 10px;
+  font-weight: 470;
+}
+
+.finance-inspector .accounting-workflow-summary strong {
+  font-size: 13px;
+  font-weight: 620;
+}
+
+.finance-inspector .accounting-workflow-details {
+  border-top: 1px solid color-mix(in srgb, var(--border) 52%, transparent);
+  padding-top: 8px;
+}
+
+.finance-inspector .accounting-workflow-details summary {
+  color: color-mix(in srgb, var(--muted) 80%, var(--text));
+  font-size: 11px;
+  font-weight: 520;
+}
+
+.finance-summary-strip {
+  display: none;
+}
+
+.finance-mode-tabs {
+  margin-top: 6px;
+}
+
+.finance-mode-tab,
+.finance-mode-tab:first-child,
+.finance-mode-tab:last-child,
+.finance-mode-tab[aria-selected="true"] {
+  color: color-mix(in srgb, var(--muted) 72%, var(--text));
+  font-size: 12px;
+  font-weight: 430;
+}
+
+.finance-mode-tab[aria-selected="true"] {
+  color: color-mix(in srgb, var(--text) 92%, var(--muted));
+  font-weight: 610;
+}
+
+.finance-mode-tab strong,
+.finance-mode-tab.tone-active strong,
+.finance-mode-tab.tone-attention strong {
+  color: color-mix(in srgb, var(--muted) 64%, var(--text));
+  font-size: 11px;
+  font-weight: 430;
+}
+
+.finance-filter-row {
+  display: block;
+  padding: 14px 0 22px;
+}
+
+.finance-filter-row label {
+  display: none;
+}
+
+.finance-filter-row label:last-child {
+  display: block;
+  max-width: 420px;
+}
+
+.finance-filter-row label:last-child span {
+  display: none;
+}
+
+.finance-filter-row label:last-child input {
+  min-height: 30px;
+  max-width: 100%;
+  border-bottom-color: color-mix(in srgb, var(--border) 45%, transparent);
+  color: color-mix(in srgb, var(--muted) 76%, var(--text));
+  font-size: 12px;
+}
+
+.finance-row-board > header {
+  padding-top: 0;
+  padding-bottom: 12px;
+}
+
+.finance-row-board h2 {
+  font-size: 20px;
+  font-weight: 660;
+}
+
+.finance-row-board p {
+  max-width: 42ch;
+  color: color-mix(in srgb, var(--muted) 78%, var(--text));
+  font-size: 12px;
+}
+
+.finance-row-board > header button {
+  color: color-mix(in srgb, var(--muted) 58%, var(--surface));
+  font-size: 11px;
+}
+
+.finance-row-board-head {
+  grid-template-columns: 24px 24px minmax(0, 1.95fr) minmax(74px, 0.38fr) minmax(94px, 0.45fr) minmax(82px, 0.34fr);
+  color: color-mix(in srgb, var(--muted) 54%, var(--surface));
+  font-size: 9px;
+  font-weight: 430;
+  padding: 6px 0;
+}
+
+.finance-row-board li {
+  grid-template-columns: 24px 24px minmax(0, 1.95fr) minmax(74px, 0.38fr) minmax(94px, 0.45fr) minmax(82px, 0.34fr);
+  min-height: 58px;
+  padding: 9px 0;
+}
+
+.finance-row-check input {
+  width: 13px;
+  height: 13px;
+  opacity: 0.62;
+}
+
+.finance-row-marker {
+  justify-content: flex-start;
+  width: auto;
+  height: auto;
+  color: color-mix(in srgb, var(--muted) 50%, var(--surface));
+  font-size: 9px;
+  font-weight: 430;
+}
+
+.finance-row-main strong {
+  font-size: 13px;
+  font-weight: 620;
+}
+
+.finance-row-main span {
+  color: color-mix(in srgb, var(--muted) 78%, var(--text));
+  font-size: 11px;
+  font-weight: 430;
+}
+
+.finance-row-main small {
+  color: color-mix(in srgb, var(--muted) 62%, var(--surface));
+  font-size: 10px;
+  font-weight: 400;
+}
+
+.finance-row-status {
+  color: color-mix(in srgb, var(--muted) 62%, var(--surface));
+  font-size: 10px;
+  font-weight: 430;
+}
+
+.finance-row-amount {
+  color: color-mix(in srgb, var(--text) 82%, var(--muted));
+  font-size: 13px;
+  font-weight: 640;
+}
+
+.finance-row-action {
+  color: color-mix(in srgb, var(--muted) 60%, var(--surface));
+  font-size: 10px;
+  font-weight: 430;
+}
+
+.finance-inspector {
+  padding-top: 2px;
+}
+
+.finance-inspector-card p,
+.finance-inspector-card dt {
+  color: color-mix(in srgb, var(--muted) 58%, var(--surface));
+  font-size: 9px;
+  font-weight: 430;
+}
+
+.finance-inspector-card h2 {
+  font-size: 15px;
+  font-weight: 620;
+}
+
+.finance-inspector-card > span {
+  color: color-mix(in srgb, var(--muted) 80%, var(--text));
+  font-size: 12px;
+}
+
+.finance-inspector-card dd {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.finance-inline-actions:not(.is-compact) {
+  gap: 6px;
+}
+
+.finance-inline-actions:not(.is-compact) .drawer-primary,
+.finance-inline-actions:not(.is-compact) .business-accounting-download,
+.finance-inline-actions:not(.is-compact) .business-accounting-inline-link,
+.finance-inline-actions:not(.is-compact) .accounting-file-command {
+  color: color-mix(in srgb, var(--muted) 74%, var(--text));
+  font-size: 11px;
+  font-weight: 520;
+}
+
+.finance-inspector .accounting-workflow-panel > header {
+  margin-top: 2px;
+}
+
+.finance-inspector .accounting-workflow-panel > header p {
+  color: color-mix(in srgb, var(--muted) 54%, var(--surface));
+  font-size: 9px;
+  font-weight: 430;
+}
+
+.finance-inspector .accounting-workflow-panel h2 {
+  font-size: 13px;
+  font-weight: 560;
+}
+
+.finance-inspector .accounting-workflow-panel .business-accounting-download {
+  min-height: 26px;
+  color: color-mix(in srgb, var(--muted) 62%, var(--surface));
+  font-size: 10px;
+  font-weight: 430;
+}
+
+.finance-inspector .accounting-workflow-status,
+.finance-inspector .accounting-workflow-note {
+  color: color-mix(in srgb, var(--muted) 66%, var(--surface));
+  font-size: 10px;
+}
+
+.finance-inspector .accounting-workflow-summary span {
+  color: color-mix(in srgb, var(--muted) 56%, var(--surface));
+  font-size: 9px;
+}
+
+.finance-inspector .accounting-workflow-summary strong {
+  color: color-mix(in srgb, var(--text) 70%, var(--muted));
+  font-size: 12px;
+  font-weight: 560;
+}
+
+.finance-row-board li:not(.is-selected) .finance-row-main small {
+  display: none;
+}
+
+.finance-row-board li:not(.is-selected) .finance-row-action {
+  opacity: 0.36;
+}
+
+.finance-row-board li:not(.is-selected) .finance-row-action.is-passive {
+  justify-self: end;
+  min-height: auto;
+  color: color-mix(in srgb, var(--muted) 50%, var(--surface));
+  pointer-events: none;
+}
+
+.finance-row-board li:not(.is-selected) .finance-row-marker,
+.finance-row-board li:not(.is-selected) .finance-row-check input,
+.finance-row-board li:not(.is-selected) .finance-row-status {
+  opacity: 0.58;
+}
+
+.finance-row-board li.is-selected {
+  padding-top: 14px;
+  padding-bottom: 14px;
+}
+
+.finance-row-board li.is-selected .finance-row-main strong {
+  font-size: 15px;
+  font-weight: 680;
+}
+
+.finance-row-board li.is-selected .finance-row-main span {
+  font-size: 12px;
+  color: color-mix(in srgb, var(--muted) 86%, var(--text));
+}
+
+.finance-row-board li.is-selected .finance-row-main small {
+  display: block;
+  max-width: 52ch;
+  color: color-mix(in srgb, var(--muted) 78%, var(--text));
+  font-size: 11px;
+}
+
+.finance-row-board li.is-selected .finance-row-amount {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.finance-row-board li.is-selected .finance-row-action {
+  min-height: 30px;
+  border: 1px solid color-mix(in srgb, var(--border) 62%, transparent);
+  border-radius: var(--radius-control);
+  color: color-mix(in srgb, var(--text) 76%, var(--muted));
+  padding: 0 8px;
+  opacity: 1;
+}
+
+.finance-row-board li.is-selected .finance-row-marker {
+  color: color-mix(in srgb, var(--module-accent) 56%, var(--text));
+  font-weight: 620;
+}
+
+.finance-row-board li.is-review:not(.is-selected) .finance-row-marker,
+.finance-row-board li.is-review:not(.is-selected) .finance-row-status {
+  color: color-mix(in srgb, var(--warning) 42%, var(--muted));
+  opacity: 0.78;
+}
+
+.finance-row-board li.is-focus:not(.is-selected) .finance-row-main strong {
+  color: color-mix(in srgb, var(--text) 90%, var(--muted));
+  font-weight: 600;
+}
+
+.finance-row-board li.is-quiet:not(.is-selected) .finance-row-main strong,
+.finance-row-board li.is-quiet:not(.is-selected) .finance-row-amount {
+  color: color-mix(in srgb, var(--muted) 78%, var(--text));
+}
+
+.finance-row-board li.is-selected .finance-row-status {
+  color: color-mix(in srgb, var(--text) 70%, var(--muted));
+  font-size: 11px;
+  font-weight: 540;
+}
+
+.finance-row-board li + li {
+  color: color-mix(in srgb, var(--text) 86%, var(--muted));
+}
+
+.finance-row-board li:not(.is-selected) .finance-row-main strong {
+  font-size: 12px;
+  font-weight: 560;
+}
+
+.finance-row-board li:not(.is-selected) .finance-row-amount {
+  font-size: 12px;
+  font-weight: 560;
+}
+
+.finance-inspector .accounting-workflow-details:not([open]) + .accounting-workflow-details:not([open]) {
+  margin-top: -4px;
+}
+
 @media (max-width: 760px) {
   .accounting-qa-page,
   .business-accounting-page {
@@ -11088,9 +13131,21 @@ a {
   }
 
   .accounting-qa-grid,
+  .business-command-metrics,
+  .business-command-layout,
+  .business-next-step,
   .accounting-qa-columns,
-  .accounting-qa-document dl {
+  .accounting-qa-document dl,
+  .accounting-workflow-grid {
     grid-template-columns: 1fr;
+  }
+
+  .business-next-step dl {
+    grid-template-columns: 1fr;
+  }
+
+  .business-next-step-actions {
+    justify-content: stretch;
   }
 
   .accounting-qa-header,
@@ -11111,6 +13166,87 @@ a {
 
   .accounting-preview-controls {
     grid-template-columns: 1fr;
+  }
+
+  .finance-page-header,
+  .finance-header-actions {
+    align-items: flex-start;
+  }
+
+  .finance-page-header,
+  .finance-primary-actions,
+  .finance-inline-actions {
+    flex-direction: column;
+  }
+
+  .finance-header-actions {
+    flex-direction: row;
+    justify-content: flex-start;
+    padding-top: 0;
+  }
+
+  .finance-primary-actions > *,
+  .finance-inline-actions > * {
+    width: 100%;
+  }
+
+  .finance-inline-actions:not(.is-compact) > * {
+    flex: 0 1 auto;
+  }
+
+  .finance-summary-strip,
+  .finance-filter-row,
+  .finance-workbench-body,
+  .finance-workbench-body.with-document-rail {
+    grid-template-columns: 1fr;
+  }
+
+  .finance-mode-tabs {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 0;
+    border-bottom: 0;
+  }
+
+  .finance-mode-tab,
+  .finance-mode-tab:first-child,
+  .finance-mode-tab:last-child,
+  .finance-mode-tab[aria-selected="true"] {
+    min-height: 32px;
+    justify-content: space-between;
+    border-bottom: 1px solid color-mix(in srgb, var(--border) 44%, transparent);
+    padding: 0;
+  }
+
+  .finance-summary-strip div {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .finance-document-rail {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .finance-row-board-head {
+    display: none;
+  }
+
+  .finance-row-board li {
+    grid-template-columns: 28px 38px minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  .finance-row-status,
+  .finance-row-amount,
+  .finance-row-action {
+    grid-column: 3;
+    justify-self: start;
+  }
+
+  .finance-inspector {
+    border-left: 0;
+    border-top: 1px solid var(--border);
   }
 }
 
@@ -11393,4 +13529,2768 @@ a {
   background: var(--surface);
   color: var(--muted);
   box-shadow: 0 10px 28px rgb(0 0 0 / 0.26);
+}
+
+.warehouse-workspace {
+  grid-template-columns: minmax(560px, 1fr) minmax(330px, 0.42fr);
+  grid-template-rows: auto minmax(280px, 0.9fr) minmax(0, 1fr) minmax(0, 0.75fr) minmax(0, 0.75fr);
+  gap: 8px;
+  background: var(--background);
+}
+
+.warehouse-overview-pane,
+.warehouse-inventory-pane,
+.warehouse-assembly-pane,
+.warehouse-action-pane,
+.warehouse-queue-pane,
+.warehouse-ledger-pane {
+  min-width: 0;
+}
+
+.warehouse-overview-pane {
+  grid-column: 1 / -1;
+  min-height: auto;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.warehouse-overview-pane .ops-pane-head {
+  min-height: 34px;
+  border: 0;
+  padding: 0 2px 4px;
+}
+
+.warehouse-overview-pane .ops-pane-head h2 {
+  font-size: 13px;
+  font-weight: 820;
+}
+
+.warehouse-overview-pane .ops-pane-head p {
+  max-width: 72ch;
+  font-size: 11px;
+}
+
+.warehouse-overview-pane .ops-pane-head a {
+  height: 22px;
+  border-color: transparent;
+  background: transparent;
+}
+
+.warehouse-inventory-pane {
+  grid-column: 1;
+  grid-row: 3 / 6;
+  border-color: var(--border);
+}
+
+.warehouse-assembly-pane {
+  grid-column: 1 / -1;
+  grid-row: 2;
+}
+
+.warehouse-action-pane {
+  grid-column: 2;
+  grid-row: 3;
+}
+
+.warehouse-queue-pane {
+  grid-column: 2;
+  grid-row: 3 / 5;
+}
+
+.warehouse-ledger-pane {
+  grid-column: 2;
+  grid-row: 5;
+}
+
+.warehouse-workspace :is(.warehouse-action-pane, .warehouse-queue-pane, .warehouse-ledger-pane) {
+  border: 0;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+}
+
+.warehouse-workspace :is(.warehouse-action-pane, .warehouse-queue-pane, .warehouse-ledger-pane) .ops-pane-head {
+  min-height: 42px;
+  border-bottom-color: color-mix(in oklch, var(--border), var(--background) 24%);
+  padding: 8px 10px;
+}
+
+.warehouse-workspace :is(.warehouse-action-pane, .warehouse-queue-pane, .warehouse-ledger-pane) .ops-pane-head h2 {
+  color: color-mix(in oklch, var(--text), var(--muted) 18%);
+  font-size: 12px;
+}
+
+.warehouse-workspace :is(.warehouse-action-pane, .warehouse-queue-pane, .warehouse-ledger-pane) .ops-pane-head p {
+  display: none;
+}
+
+.warehouse-assembly-pane .ops-pane-head {
+  min-height: 42px;
+}
+
+.warehouse-status-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 14px;
+  border-block: 1px solid var(--border);
+  padding: 7px 2px;
+}
+
+.warehouse-status-strip div {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.warehouse-status-strip div:first-child {
+  margin-right: 4px;
+}
+
+.warehouse-status-strip span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 760;
+  text-transform: uppercase;
+}
+
+.warehouse-status-strip strong {
+  color: color-mix(in oklch, var(--text), var(--muted) 6%);
+  font-size: 13px;
+  line-height: 1;
+}
+
+.warehouse-status-strip div:first-child strong {
+  font-size: 21px;
+  font-weight: 860;
+}
+
+.warehouse-shellbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  border-top: 1px solid var(--border);
+  padding: 8px 0 0;
+}
+
+.warehouse-tabs,
+.warehouse-layout-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.warehouse-tabs a,
+.warehouse-layout-actions button {
+  min-height: 30px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: color-mix(in oklch, var(--text), var(--muted) 18%);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 740;
+  padding: 6px 12px;
+  text-decoration: none;
+}
+
+.warehouse-tabs a.is-active {
+  border-color: color-mix(in oklch, var(--module-accent), var(--border) 54%);
+  background: color-mix(in oklch, var(--module-accent), var(--surface) 90%);
+  color: var(--text);
+}
+
+.warehouse-layout-actions button {
+  font-size: 11px;
+}
+
+.warehouse-layout-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.44;
+}
+
+.warehouse-inventory-grid,
+.warehouse-queue-board,
+.warehouse-ledger-grid {
+  display: grid;
+  min-height: 0;
+}
+
+.warehouse-inventory-grid {
+  overflow: auto;
+}
+
+.warehouse-inventory-head,
+.warehouse-inventory-row {
+  display: grid;
+  grid-template-columns: minmax(170px, 1.2fr) minmax(100px, 0.7fr) repeat(4, minmax(54px, 0.42fr));
+  gap: 14px;
+  align-items: center;
+}
+
+.warehouse-inventory-head {
+  position: sticky;
+  z-index: 1;
+  top: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 780;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 8px 12px;
+}
+
+.warehouse-inventory-row {
+  min-height: 56px;
+  border-bottom: 1px solid var(--border);
+  color: inherit;
+  padding: 10px 12px;
+  text-decoration: none;
+}
+
+.warehouse-inventory-row:nth-child(even) {
+  background: color-mix(in oklch, var(--surface), var(--background) 12%);
+}
+
+.warehouse-inventory-row:hover,
+.warehouse-queue-row:hover,
+.warehouse-ledger-row:hover {
+  background: color-mix(in oklch, var(--surface), var(--module-accent) 4%);
+}
+
+.warehouse-inventory-row strong,
+.warehouse-queue-row strong,
+.warehouse-ledger-row strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.warehouse-inventory-row strong {
+  font-size: 13px;
+  font-weight: 820;
+}
+
+.warehouse-inventory-row small,
+.warehouse-queue-row small,
+.warehouse-ledger-row small {
+  display: block;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.warehouse-inventory-row > span:nth-child(n + 3) {
+  justify-self: end;
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 790;
+}
+
+.warehouse-inventory-row > span:nth-child(3) {
+  color: var(--text);
+  font-size: 18px;
+  font-weight: 860;
+}
+
+.warehouse-map {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(2, minmax(230px, 1fr));
+  min-height: 0;
+  overflow: auto;
+  padding: 14px;
+}
+
+.warehouse-layout-empty {
+  display: grid;
+  min-height: 220px;
+  align-content: center;
+  justify-items: center;
+  grid-column: 1 / -1;
+  gap: 6px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--surface), var(--background) 10%);
+  color: var(--muted);
+  text-align: center;
+}
+
+.warehouse-layout-empty strong {
+  color: var(--text);
+  font-size: 14px;
+}
+
+.warehouse-layout-empty span {
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.warehouse-section-map {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--surface), var(--background) 8%);
+  padding: 12px;
+}
+
+.warehouse-section-map header {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+}
+
+.warehouse-section-map header strong {
+  display: block;
+  overflow: hidden;
+  color: color-mix(in oklch, var(--text), var(--muted) 6%);
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.warehouse-section-map header span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.warehouse-section-map dl {
+  display: flex;
+  gap: 10px;
+  margin: 0;
+}
+
+.warehouse-section-map dt {
+  color: var(--muted);
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+.warehouse-section-map dd {
+  margin: 2px 0 0;
+  font-size: 14px;
+  font-weight: 820;
+  text-align: right;
+}
+
+.warehouse-slot-grid {
+  display: grid;
+  gap: 7px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.warehouse-slot-placeholder {
+  display: grid;
+  min-height: 58px;
+  place-items: center;
+  grid-column: 1 / -1;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 760;
+}
+
+.warehouse-slot {
+  display: grid;
+  place-items: center;
+  min-height: 58px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: inherit;
+  text-align: center;
+  text-decoration: none;
+}
+
+.warehouse-slot strong {
+  font-size: 12px;
+  font-weight: 820;
+}
+
+.warehouse-slot span {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.warehouse-slot.is-empty {
+  background:
+    repeating-linear-gradient(
+      135deg,
+      color-mix(in oklch, var(--surface-muted), var(--background) 25%) 0 4px,
+      transparent 4px 8px
+    ),
+    var(--surface);
+  color: color-mix(in oklch, var(--muted), var(--background) 18%);
+}
+
+.warehouse-slot.is-stocked {
+  border-color: color-mix(in oklch, var(--success), var(--border) 68%);
+  background: color-mix(in oklch, var(--success), var(--surface) 88%);
+}
+
+.warehouse-slot.is-committed {
+  border-color: color-mix(in oklch, var(--module-accent), var(--border) 56%);
+  background: color-mix(in oklch, var(--module-accent), var(--surface) 86%);
+}
+
+.warehouse-slot.is-receiving {
+  border-color: color-mix(in oklch, var(--warning), var(--border) 64%);
+  background: color-mix(in oklch, var(--warning), var(--surface) 88%);
+}
+
+.warehouse-assembly-board {
+  display: grid;
+  grid-template-columns: minmax(210px, 0.28fr) minmax(0, 1fr);
+  gap: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.warehouse-source-rail {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  overflow: auto;
+  border-right: 1px solid var(--border);
+  padding: 12px;
+}
+
+.warehouse-source {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--surface), var(--background) 7%);
+  color: inherit;
+  padding: 10px;
+  text-decoration: none;
+}
+
+.warehouse-source.is-active {
+  border-color: color-mix(in oklch, var(--module-accent), var(--border) 54%);
+  background: color-mix(in oklch, var(--module-accent), var(--surface) 91%);
+}
+
+.warehouse-source span,
+.warehouse-source small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.warehouse-source span {
+  color: color-mix(in oklch, var(--text), var(--muted) 12%);
+  font-size: 12px;
+  font-weight: 780;
+}
+
+.warehouse-source strong {
+  font-size: 22px;
+  line-height: 1;
+}
+
+.warehouse-source small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.warehouse-order-flow {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(300px, 1fr));
+  min-height: 0;
+  overflow: auto;
+  padding: 12px;
+}
+
+.warehouse-order-card {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--surface), var(--background) 6%);
+  padding: 12px;
+}
+
+.warehouse-order-card header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 12px;
+  align-items: start;
+}
+
+.warehouse-order-card header div:first-child {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.warehouse-order-card header span,
+.warehouse-order-card header small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.warehouse-order-card header span {
+  font-weight: 780;
+  text-transform: uppercase;
+}
+
+.warehouse-order-card header strong {
+  overflow: hidden;
+  font-size: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.warehouse-order-progress {
+  display: grid;
+  justify-items: end;
+  gap: 2px;
+  text-align: right;
+}
+
+.warehouse-order-progress strong {
+  font-size: 21px;
+  line-height: 1;
+}
+
+.warehouse-order-progress span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 780;
+  text-transform: uppercase;
+}
+
+.warehouse-order-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.warehouse-order-actions a,
+.warehouse-order-actions button {
+  min-height: 28px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 800;
+  padding: 5px 8px;
+  text-decoration: none;
+  text-transform: uppercase;
+}
+
+.warehouse-order-actions button:not(:disabled) {
+  border-color: color-mix(in oklch, var(--success), var(--border) 48%);
+  background: color-mix(in oklch, var(--success), var(--surface) 88%);
+}
+
+.warehouse-order-actions button:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.warehouse-progress-track,
+.warehouse-line-track {
+  overflow: hidden;
+  height: 6px;
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--surface-muted), var(--background) 18%);
+}
+
+.warehouse-progress-track span,
+.warehouse-line-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: color-mix(in oklch, var(--module-accent), var(--surface) 28%);
+}
+
+.warehouse-order-card.is-ready .warehouse-progress-track span,
+.warehouse-order-card.is-ready .warehouse-line-track span {
+  background: color-mix(in oklch, var(--success), var(--surface) 28%);
+}
+
+.warehouse-order-card.is-blocked .warehouse-progress-track span {
+  background: color-mix(in oklch, var(--warning), var(--surface) 20%);
+}
+
+.warehouse-order-lines {
+  display: grid;
+  gap: 8px;
+}
+
+.warehouse-order-line {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) auto;
+  gap: 7px 10px;
+  align-items: center;
+  min-width: 0;
+  border-top: 1px solid color-mix(in oklch, var(--border), var(--background) 18%);
+  padding-top: 8px;
+}
+
+.warehouse-order-line span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.warehouse-order-line strong,
+.warehouse-order-line small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.warehouse-order-line strong {
+  font-size: 12px;
+}
+
+.warehouse-order-line small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.warehouse-order-line em {
+  color: color-mix(in oklch, var(--text), var(--muted) 10%);
+  font-size: 12px;
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+}
+
+.warehouse-order-line .warehouse-line-track,
+.warehouse-order-line > small {
+  grid-column: 1 / -1;
+}
+
+.warehouse-value-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.warehouse-value-steps span,
+.warehouse-value-steps button {
+  min-height: 24px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  padding: 4px 9px;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.warehouse-value-steps button:not(:disabled) {
+  cursor: pointer;
+}
+
+.warehouse-value-steps button:disabled:not(.is-done) {
+  cursor: not-allowed;
+  opacity: 0.56;
+}
+
+.warehouse-value-steps span.is-active,
+.warehouse-value-steps button.is-active {
+  border-color: color-mix(in oklch, var(--module-accent), var(--border) 62%);
+  color: color-mix(in oklch, var(--text), var(--module-accent) 28%);
+}
+
+.warehouse-value-steps span.is-done,
+.warehouse-value-steps button.is-done {
+  border-color: color-mix(in oklch, var(--success), var(--border) 62%);
+  background: color-mix(in oklch, var(--success), var(--surface) 91%);
+  color: color-mix(in oklch, var(--text), var(--success) 22%);
+}
+
+.warehouse-simulator {
+  display: grid;
+  gap: 7px;
+  border-top: 1px solid var(--border);
+  padding: 8px 10px;
+}
+
+.warehouse-action-pane .warehouse-simulator:first-of-type {
+  border-top: 0;
+}
+
+.warehouse-simulator > div:first-child {
+  align-items: baseline;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.warehouse-simulator > div:first-child strong {
+  color: color-mix(in oklch, var(--text), var(--muted) 10%);
+  font-size: 12px;
+}
+
+.warehouse-simulator > div:first-child span {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.warehouse-command-row {
+  display: grid;
+  gap: 5px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.warehouse-command-row button {
+  min-height: 28px;
+  border: 1px solid color-mix(in oklch, var(--border), var(--background) 18%);
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: color-mix(in oklch, var(--text), var(--muted) 12%);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 740;
+  padding: 5px 7px;
+}
+
+.warehouse-command-row button:first-child:not(:disabled) {
+  border-color: color-mix(in oklch, var(--module-accent), var(--border) 56%);
+  background: color-mix(in oklch, var(--module-accent), var(--surface) 88%);
+  color: var(--text);
+}
+
+.warehouse-command-row button:hover:not(:disabled) {
+  background: color-mix(in oklch, var(--surface), var(--module-accent) 5%);
+}
+
+.warehouse-command-row button:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.warehouse-sim-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-top: 1px solid var(--border);
+  padding-top: 5px;
+}
+
+.warehouse-sim-metrics div {
+  min-width: 0;
+  padding-right: 8px;
+}
+
+.warehouse-sim-metrics dt {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.warehouse-sim-metrics dd {
+  overflow: hidden;
+  margin: 3px 0 0;
+  font-size: 13px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.warehouse-queue-board,
+.warehouse-ledger-grid {
+  gap: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 10px 10px;
+}
+
+.warehouse-queue-board {
+  grid-template-columns: 1fr;
+}
+
+.warehouse-queue-board > div + div,
+.warehouse-ledger-grid > div + div {
+  margin-top: 12px;
+}
+
+.warehouse-queue-board h3,
+.warehouse-ledger-grid h3 {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  margin: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--background);
+  color: color-mix(in oklch, var(--muted), var(--text) 10%);
+  font-size: 10px;
+  font-weight: 760;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 7px 0 5px;
+}
+
+.warehouse-queue-row {
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+  color: inherit;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 7px minmax(0, 1fr) auto;
+  min-height: 42px;
+  padding: 8px 0;
+  text-decoration: none;
+}
+
+.warehouse-queue-row .ops-health {
+  width: 5px;
+  height: 5px;
+  align-self: center;
+  opacity: 0.72;
+}
+
+.warehouse-queue-row strong {
+  font-size: 12px;
+  font-weight: 790;
+}
+
+.warehouse-queue-row em {
+  align-self: center;
+  border: 0;
+  color: var(--muted);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 720;
+  text-transform: uppercase;
+}
+
+.warehouse-ledger-grid {
+  grid-template-columns: 1fr;
+}
+
+.warehouse-ledger-row {
+  display: grid;
+  grid-template-columns: minmax(74px, 0.5fr) minmax(0, 1fr);
+  gap: 1px 9px;
+  min-height: 36px;
+  border-bottom: 1px solid var(--border);
+  padding: 7px 0;
+  text-decoration: none;
+}
+
+.warehouse-ledger-row > span {
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 720;
+  text-transform: uppercase;
+}
+
+.warehouse-ledger-row strong {
+  color: color-mix(in oklch, var(--text), var(--muted) 18%);
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.warehouse-ledger-row small {
+  grid-column: 2;
+}
+
+@media (max-width: 1180px) {
+  .warehouse-workspace {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto;
+    overflow: auto;
+  }
+
+  .warehouse-inventory-pane,
+  .warehouse-assembly-pane,
+  .warehouse-action-pane,
+  .warehouse-queue-pane,
+  .warehouse-ledger-pane {
+    grid-column: 1;
+    grid-row: auto;
+  }
+
+  .warehouse-overview-pane {
+    order: 1;
+  }
+
+  .warehouse-assembly-pane {
+    order: 2;
+  }
+
+  .warehouse-inventory-pane {
+    order: 3;
+    min-height: 320px;
+  }
+
+  .warehouse-queue-pane {
+    order: 4;
+  }
+
+  .warehouse-ledger-pane {
+    order: 5;
+  }
+
+  .warehouse-map {
+    grid-template-columns: repeat(2, minmax(220px, 1fr));
+  }
+
+  .warehouse-assembly-board {
+    grid-template-columns: 1fr;
+  }
+
+  .warehouse-order-flow {
+    grid-template-columns: 1fr;
+  }
+
+  .warehouse-source-rail {
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(180px, 1fr);
+    overflow-x: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+}
+
+@media (max-width: 720px) {
+  .warehouse-command-row,
+  .warehouse-sim-metrics,
+  .warehouse-status-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .warehouse-status-strip {
+    display: grid;
+  }
+
+  .warehouse-shellbar {
+    grid-template-columns: 1fr;
+  }
+
+  .warehouse-tabs,
+  .warehouse-layout-actions {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+
+  .warehouse-map {
+    grid-template-columns: 1fr;
+    padding: 10px;
+  }
+
+  .warehouse-order-line {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .warehouse-order-card header {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .warehouse-order-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
+
+  .warehouse-order-line .warehouse-line-track,
+  .warehouse-order-line > small {
+    grid-column: 1 / -1;
+  }
+
+  .warehouse-slot-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .warehouse-inventory-head,
+  .warehouse-inventory-row {
+    grid-template-columns: minmax(130px, 1fr) repeat(2, minmax(52px, auto));
+  }
+
+  .warehouse-inventory-head span:nth-child(2),
+  .warehouse-inventory-head span:nth-child(4),
+  .warehouse-inventory-head span:nth-child(6),
+  .warehouse-inventory-row > span:nth-child(2),
+  .warehouse-inventory-row > span:nth-child(4),
+  .warehouse-inventory-row > span:nth-child(6) {
+    display: none;
+  }
+}
+
+.warehouse-workbench {
+  display: grid;
+  grid-template-columns: minmax(250px, 0.62fr) minmax(560px, 1.72fr) minmax(340px, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 10px;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  background: color-mix(in oklch, var(--background), var(--surface) 4%);
+}
+
+.warehouse-storage-workbench {
+  grid-template-columns: minmax(260px, 0.66fr) minmax(560px, 1.44fr) minmax(340px, 0.9fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.warehouse-ops-workbench {
+  position: relative;
+  grid-template-columns: minmax(270px, 0.68fr) minmax(620px, 1.55fr) minmax(330px, 0.82fr);
+  transition: grid-template-rows 180ms ease-out;
+}
+
+.warehouse-ops-workbench.has-bottom-module {
+  grid-template-rows: minmax(0, 1fr) minmax(184px, auto);
+}
+
+.warehouse-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: color-mix(in oklch, var(--surface), var(--background) 8%);
+}
+
+.warehouse-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 52px;
+  border-bottom: 1px solid var(--border);
+  padding: 11px 14px;
+}
+
+.warehouse-panel-head h2 {
+  margin: 0;
+  color: color-mix(in oklch, var(--text), var(--muted) 10%);
+  font-size: 13px;
+  font-weight: 820;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.warehouse-panel-head p {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.25;
+}
+
+.warehouse-head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.warehouse-left {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.warehouse-center {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.warehouse-right {
+  grid-column: 3;
+  grid-row: 1;
+}
+
+.warehouse-match-bar {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.65fr) auto minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  grid-column: 1 / -1;
+  grid-row: 2;
+  min-height: 76px;
+  border: 1px solid var(--border);
+  border-radius: 10px 10px 0 0;
+  background: color-mix(in oklch, var(--surface), var(--background) 7%);
+  box-shadow: 0 -10px 24px color-mix(in oklch, var(--background), transparent 76%);
+  padding: 10px 12px;
+}
+
+.warehouse-tool-row,
+.warehouse-work-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+  padding: 10px 14px;
+}
+
+.warehouse-search,
+.warehouse-search-form input {
+  overflow: hidden;
+  min-height: 36px;
+  border: 1px solid color-mix(in oklch, var(--border), var(--background) 12%);
+  border-radius: 9px;
+  background: color-mix(in oklch, var(--background), var(--surface) 34%);
+  color: color-mix(in oklch, var(--muted), var(--text) 6%);
+  font-size: 12px;
+  line-height: 34px;
+  padding: 0 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.warehouse-search-form {
+  display: grid;
+  min-width: 0;
+}
+
+.warehouse-search-form input {
+  width: 100%;
+  outline: none;
+}
+
+.warehouse-search-form input:focus-visible {
+  border-color: color-mix(in oklch, var(--module-accent), var(--border) 50%);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--module-accent), transparent 84%);
+}
+
+.warehouse-subtle-action,
+.warehouse-view-tabs a,
+.warehouse-order-actions a,
+.warehouse-order-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: transparent;
+  color: color-mix(in oklch, var(--text), var(--muted) 12%);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 760;
+  padding: 5px 9px;
+  text-decoration: none;
+}
+
+.warehouse-order-actions button:not(:disabled) {
+  border-color: color-mix(in oklch, var(--success), var(--border) 58%);
+  background: color-mix(in oklch, var(--success), var(--surface) 92%);
+}
+
+.warehouse-order-actions button:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.warehouse-layout-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.warehouse-layout-actions button {
+  min-height: 28px;
+  border-radius: 9px;
+  font-size: 10px;
+  padding: 5px 8px;
+}
+
+.warehouse-source-list,
+.warehouse-layout-map,
+.warehouse-order-list,
+.warehouse-position-list {
+  min-height: 0;
+  overflow: auto;
+  scrollbar-width: thin;
+}
+
+.warehouse-source-list {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px 8px;
+}
+
+.warehouse-source-card {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  min-height: 64px;
+  border: 1px solid color-mix(in oklch, var(--border), var(--background) 10%);
+  border-radius: 10px;
+  background: color-mix(in oklch, var(--surface), var(--background) 6%);
+  color: inherit;
+  font: inherit;
+  padding: 10px;
+  text-decoration: none;
+  text-align: left;
+}
+
+button.warehouse-source-card {
+  cursor: pointer;
+}
+
+button.warehouse-source-card:hover,
+.warehouse-source-card:hover {
+  border-color: color-mix(in oklch, var(--module-accent), var(--border) 65%);
+}
+
+.warehouse-source-card.is-active {
+  border-color: color-mix(in oklch, var(--module-accent), var(--border) 48%);
+  background: color-mix(in oklch, var(--module-accent), var(--surface) 92%);
+}
+
+.warehouse-avatar,
+.warehouse-position-icon {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: color-mix(in oklch, var(--background), var(--surface) 45%);
+  color: color-mix(in oklch, var(--module-accent), var(--text) 28%);
+  font-size: 13px;
+  font-weight: 820;
+}
+
+.warehouse-source-card span:nth-child(2),
+.warehouse-position-card > span:nth-child(2),
+.warehouse-source-match span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.warehouse-source-card strong,
+.warehouse-position-card strong,
+.warehouse-position-open strong,
+.warehouse-source-match strong {
+  overflow: hidden;
+  color: color-mix(in oklch, var(--text), var(--muted) 7%);
+  font-size: 13px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.warehouse-source-card small,
+.warehouse-position-card small,
+.warehouse-position-open small,
+.warehouse-source-match small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.warehouse-source-card em,
+.warehouse-zone-card header em,
+.warehouse-position-card em,
+.warehouse-position-score,
+.warehouse-source-match em {
+  color: color-mix(in oklch, var(--text), var(--muted) 6%);
+  font-size: 16px;
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+  font-weight: 820;
+}
+
+.warehouse-left-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  border-block: 1px solid var(--border);
+  background: var(--border);
+}
+
+.warehouse-left-metrics div {
+  min-width: 0;
+  background: color-mix(in oklch, var(--surface), var(--background) 4%);
+  padding: 9px 12px;
+}
+
+.warehouse-left-metrics span {
+  display: block;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 760;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.warehouse-left-metrics strong {
+  display: block;
+  margin-top: 3px;
+  font-size: 17px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.warehouse-layout-map {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  padding: 12px 14px 14px;
+}
+
+.warehouse-layout-field {
+  grid-template-columns: repeat(auto-fit, minmax(184px, 1fr));
+  align-items: stretch;
+  gap: 12px;
+  padding: 14px;
+}
+
+.warehouse-zone-card {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: color-mix(in oklch, var(--surface), var(--background) 8%);
+  padding: 10px;
+}
+
+.warehouse-zone-lane {
+  min-height: 0;
+  background:
+    linear-gradient(180deg, color-mix(in oklch, var(--surface), var(--background) 3%), color-mix(in oklch, var(--surface), var(--background) 11%));
+}
+
+.warehouse-zone-card header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+}
+
+.warehouse-zone-card header button {
+  min-width: 36px;
+  min-height: 28px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--background), var(--surface) 42%);
+  color: color-mix(in oklch, var(--text), var(--muted) 10%);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.warehouse-visual-slot-grid {
+  grid-template-columns: repeat(2, minmax(74px, 1fr));
+  grid-auto-rows: minmax(74px, auto);
+}
+
+.warehouse-visual-slot {
+  position: relative;
+  overflow: hidden;
+  align-content: start;
+  justify-items: start;
+  min-height: 74px;
+  text-align: left;
+  transition: border-color 160ms ease-out, background 160ms ease-out, transform 160ms ease-out;
+}
+
+.warehouse-visual-slot:hover {
+  transform: translateY(-1px);
+}
+
+.warehouse-visual-slot.is-selected {
+  border-color: color-mix(in oklch, var(--module-accent), var(--border) 25%);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--module-accent), transparent 86%);
+}
+
+.warehouse-visual-slot.is-blocked {
+  background: color-mix(in oklch, var(--danger), var(--surface) 92%);
+}
+
+.warehouse-visual-slot.is-committed {
+  background: color-mix(in oklch, var(--warning), var(--surface) 90%);
+}
+
+.warehouse-visual-slot.is-receiving {
+  background: color-mix(in oklch, var(--module-accent), var(--surface) 92%);
+}
+
+.warehouse-visual-slot i {
+  display: grid;
+  gap: 3px;
+  width: 100%;
+  margin-top: 6px;
+  font-style: normal;
+}
+
+.warehouse-visual-slot i b {
+  overflow: hidden;
+  max-width: 100%;
+  border-radius: 6px;
+  background: color-mix(in oklch, var(--background), transparent 18%);
+  color: color-mix(in oklch, var(--text), var(--muted) 8%);
+  cursor: grab;
+  font-size: 9px;
+  font-weight: 760;
+  line-height: 1.2;
+  padding: 3px 5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.warehouse-flow-panel {
+  display: grid;
+  gap: 9px;
+  border-top: 1px solid var(--border);
+  padding: 12px 14px;
+}
+
+.warehouse-flow-panel header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.warehouse-flow-panel header strong {
+  font-size: 12px;
+  font-weight: 820;
+}
+
+.warehouse-flow-panel header button,
+.warehouse-cart-actions button,
+.warehouse-bottom-editor button,
+.warehouse-bottom-tabs button {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--surface), var(--background) 7%);
+  color: color-mix(in oklch, var(--text), var(--muted) 8%);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 780;
+  min-height: 28px;
+  padding: 5px 8px;
+}
+
+.warehouse-flow-panel > div {
+  display: grid;
+  gap: 7px;
+}
+
+.warehouse-flow-item {
+  display: grid;
+  gap: 3px;
+  border: 1px solid color-mix(in oklch, var(--border), var(--background) 12%);
+  border-radius: 9px;
+  color: inherit;
+  padding: 9px 10px;
+  text-decoration: none;
+}
+
+.warehouse-flow-item strong {
+  display: block;
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.warehouse-flow-item small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.warehouse-cart-order {
+  align-items: start;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.warehouse-cart-order > a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.warehouse-cart-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 7px;
+}
+
+.warehouse-cart-actions button:not(:disabled) {
+  border-color: color-mix(in oklch, var(--success), var(--border) 58%);
+}
+
+.warehouse-cart-actions button:disabled,
+.warehouse-flow-panel header button:disabled,
+.warehouse-bottom-editor button:disabled,
+.warehouse-zone-card header button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.warehouse-bottom-module {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-row: 2;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px 10px 0 0;
+  background: color-mix(in oklch, var(--surface), var(--background) 5%);
+  box-shadow: 0 -12px 26px color-mix(in oklch, var(--background), transparent 78%);
+}
+
+.warehouse-bottom-module:not(.is-open) {
+  min-height: 42px;
+  align-self: end;
+}
+
+.warehouse-bottom-tab {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 42px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: color-mix(in oklch, var(--text), var(--muted) 8%);
+  font: inherit;
+  padding: 0 14px;
+  text-align: left;
+}
+
+.warehouse-bottom-tab span {
+  font-size: 12px;
+  font-weight: 820;
+}
+
+.warehouse-bottom-tab strong {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 780;
+  text-transform: uppercase;
+}
+
+.warehouse-bottom-body {
+  display: grid;
+  grid-template-columns: 132px minmax(0, 1fr);
+  min-height: 154px;
+}
+
+.warehouse-bottom-tabs {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  border-right: 1px solid var(--border);
+  padding: 12px;
+}
+
+.warehouse-bottom-tabs button {
+  justify-content: flex-start;
+  text-align: left;
+}
+
+.warehouse-bottom-tabs button.is-active {
+  border-color: color-mix(in oklch, var(--module-accent), var(--border) 50%);
+  background: color-mix(in oklch, var(--module-accent), var(--surface) 92%);
+}
+
+.warehouse-bottom-grid {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.9fr) minmax(240px, 0.8fr) minmax(240px, 0.7fr);
+  gap: 12px;
+  min-width: 0;
+  padding: 12px;
+}
+
+.warehouse-bottom-editor {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(120px, 0.5fr);
+  gap: 8px;
+  align-content: start;
+}
+
+.warehouse-bottom-editor label {
+  display: grid;
+  gap: 4px;
+}
+
+.warehouse-bottom-editor label span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 760;
+  text-transform: uppercase;
+}
+
+.warehouse-bottom-editor input {
+  min-height: 32px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--background), var(--surface) 35%);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  padding: 0 9px;
+}
+
+.warehouse-bottom-stock,
+.warehouse-bottom-ai {
+  display: grid;
+  align-content: start;
+  gap: 7px;
+  min-width: 0;
+}
+
+.warehouse-bottom-stock a,
+.warehouse-bottom-ai a,
+.warehouse-bottom-ai span {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  border: 1px solid color-mix(in oklch, var(--border), var(--background) 12%);
+  border-radius: 9px;
+  color: inherit;
+  padding: 8px 9px;
+  text-decoration: none;
+}
+
+.warehouse-bottom-ai a,
+.warehouse-bottom-ai span {
+  grid-template-columns: minmax(0, 1fr);
+  color: color-mix(in oklch, var(--text), var(--muted) 8%);
+  font-size: 11px;
+}
+
+.warehouse-bottom-stock strong,
+.warehouse-bottom-ai strong {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 820;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.warehouse-bottom-stock small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.warehouse-bottom-stock em {
+  font-style: normal;
+  font-weight: 820;
+}
+
+.warehouse-bottom-empty {
+  display: grid;
+  align-content: center;
+  gap: 5px;
+  padding: 20px;
+}
+
+.warehouse-bottom-empty strong {
+  font-size: 13px;
+}
+
+.warehouse-bottom-empty span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.warehouse-zone-card header span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.warehouse-zone-card header strong {
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.warehouse-zone-card header small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.warehouse-work-head {
+  min-height: 62px;
+}
+
+.warehouse-view-tabs {
+  display: flex;
+  gap: 6px;
+}
+
+.warehouse-view-tabs a.is-active {
+  border-color: color-mix(in oklch, var(--module-accent), var(--border) 56%);
+  background: color-mix(in oklch, var(--module-accent), var(--surface) 91%);
+}
+
+.warehouse-work-toolbar span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 760;
+  white-space: nowrap;
+}
+
+.warehouse-order-list {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  padding: 12px 14px;
+}
+
+.warehouse-work-order {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: color-mix(in oklch, var(--surface), var(--background) 5%);
+  padding: 12px;
+}
+
+.warehouse-work-order.is-selected {
+  border-color: color-mix(in oklch, var(--module-accent), var(--border) 46%);
+  background: color-mix(in oklch, var(--module-accent), var(--surface) 94%);
+}
+
+.warehouse-work-order header {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto auto;
+  gap: 10px;
+  align-items: start;
+}
+
+.warehouse-open-mark {
+  color: color-mix(in oklch, var(--module-accent), var(--text) 18%);
+  font-size: 18px;
+  line-height: 1;
+  text-decoration: none;
+}
+
+.warehouse-work-order header > span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.warehouse-work-order header strong {
+  overflow: hidden;
+  font-size: 16px;
+  font-weight: 820;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.warehouse-work-order header small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.warehouse-score {
+  display: grid;
+  justify-items: end;
+  min-width: 58px;
+  text-align: right;
+}
+
+.warehouse-score strong {
+  font-size: 20px;
+  line-height: 1;
+}
+
+.warehouse-score small {
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 760;
+  text-transform: uppercase;
+}
+
+.warehouse-order-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.warehouse-line-badges {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.warehouse-line-badge,
+.warehouse-position-card {
+  color: inherit;
+  text-decoration: none;
+}
+
+.warehouse-line-badge {
+  display: grid;
+  gap: 7px;
+  border: 1px solid color-mix(in oklch, var(--border), var(--background) 14%);
+  border-radius: 10px;
+  background: color-mix(in oklch, var(--background), var(--surface) 38%);
+  padding: 9px;
+}
+
+.warehouse-line-badge.is-selected,
+.warehouse-position-card.is-selected {
+  border-color: color-mix(in oklch, var(--module-accent), var(--border) 50%);
+  background: color-mix(in oklch, var(--module-accent), var(--surface) 93%);
+}
+
+.warehouse-line-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: start;
+  min-width: 0;
+}
+
+.warehouse-line-head a:first-child {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  color: inherit;
+  text-decoration: none;
+}
+
+.warehouse-line-badge strong {
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.warehouse-line-badge small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.warehouse-line-badge em {
+  color: color-mix(in oklch, var(--text), var(--muted) 8%);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 820;
+}
+
+.warehouse-line-score {
+  display: grid;
+  place-items: center;
+  min-width: 50px;
+  height: 26px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--surface), var(--background) 8%);
+  color: color-mix(in oklch, var(--text), var(--muted) 8%);
+  font-size: 12px;
+  font-weight: 850;
+  text-decoration: none;
+}
+
+.warehouse-line-badge i,
+.warehouse-position-card i {
+  display: block;
+  overflow: hidden;
+  height: 5px;
+  border-radius: 99px;
+  background: color-mix(in oklch, var(--surface-muted), var(--background) 24%);
+  grid-column: 1 / -1;
+}
+
+.warehouse-line-tools,
+.warehouse-position-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  grid-column: 1 / -1;
+}
+
+.warehouse-line-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.warehouse-line-status span {
+  min-height: 19px;
+  border: 1px solid color-mix(in oklch, var(--border), var(--background) 10%);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  padding: 3px 6px;
+  text-transform: uppercase;
+}
+
+.warehouse-line-status span.is-active {
+  border-color: color-mix(in oklch, var(--module-accent), var(--border) 58%);
+  color: color-mix(in oklch, var(--module-accent), var(--text) 20%);
+}
+
+.warehouse-line-status span.is-done {
+  border-color: color-mix(in oklch, var(--success), var(--border) 62%);
+  color: color-mix(in oklch, var(--success), var(--text) 24%);
+}
+
+.warehouse-line-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.warehouse-line-actions button,
+.warehouse-line-actions a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: color-mix(in oklch, var(--text), var(--muted) 12%);
+  font: inherit;
+  font-size: 9px;
+  font-weight: 830;
+  padding: 3px 7px;
+  text-decoration: none;
+}
+
+.warehouse-line-actions button:not(:disabled) {
+  border-color: color-mix(in oklch, var(--module-accent), var(--border) 60%);
+  background: color-mix(in oklch, var(--module-accent), var(--surface) 95%);
+}
+
+.warehouse-line-actions button:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.warehouse-line-tools b,
+.warehouse-position-actions span {
+  min-height: 22px;
+  border: 1px solid color-mix(in oklch, var(--border), var(--background) 12%);
+  border-radius: 999px;
+  color: color-mix(in oklch, var(--muted), var(--text) 8%);
+  font-size: 9px;
+  font-weight: 780;
+  padding: 3px 7px;
+  text-transform: uppercase;
+}
+
+.warehouse-item-kanban {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 7px;
+  border-top: 1px solid color-mix(in oklch, var(--border), var(--background) 16%);
+  padding-top: 9px;
+}
+
+.warehouse-kanban-column {
+  display: grid;
+  grid-template-rows: auto minmax(52px, auto);
+  min-width: 0;
+  border: 1px solid color-mix(in oklch, var(--border), var(--background) 10%);
+  border-radius: 9px;
+  background: color-mix(in oklch, var(--background), var(--surface) 34%);
+}
+
+.warehouse-kanban-column > header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: center;
+  min-height: 28px;
+  border-bottom: 1px solid color-mix(in oklch, var(--border), var(--background) 16%);
+  padding: 6px 7px;
+}
+
+.warehouse-kanban-column > header span {
+  overflow: hidden;
+  color: color-mix(in oklch, var(--muted), var(--text) 12%);
+  font-size: 9px;
+  font-weight: 830;
+  letter-spacing: 0.08em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.warehouse-kanban-column > header em {
+  color: var(--muted);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 820;
+}
+
+.warehouse-kanban-column > div {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  padding: 7px;
+}
+
+.warehouse-kanban-column article {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--surface), var(--background) 3%);
+  padding: 7px;
+}
+
+.warehouse-kanban-column article a {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  color: inherit;
+  text-decoration: none;
+}
+
+.warehouse-kanban-column article strong {
+  overflow: hidden;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.warehouse-kanban-column article small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.warehouse-kanban-actions {
+  display: flex;
+  gap: 5px;
+}
+
+.warehouse-kanban-actions button {
+  min-height: 24px;
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: transparent;
+  color: color-mix(in oklch, var(--text), var(--muted) 12%);
+  font: inherit;
+  font-size: 9px;
+  font-weight: 850;
+  padding: 3px 6px;
+  text-transform: uppercase;
+}
+
+.warehouse-kanban-actions button:not(:disabled) {
+  border-color: color-mix(in oklch, var(--module-accent), var(--border) 58%);
+  background: color-mix(in oklch, var(--module-accent), var(--surface) 94%);
+}
+
+.warehouse-kanban-actions button:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.warehouse-kanban-empty {
+  display: grid;
+  place-items: center;
+  min-height: 42px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  color: color-mix(in oklch, var(--muted), var(--background) 12%);
+  font-size: 11px;
+}
+
+.warehouse-line-badge i b,
+.warehouse-position-card i b {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: color-mix(in oklch, var(--module-accent), var(--surface) 28%);
+}
+
+.warehouse-position-list {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  padding: 12px 14px;
+}
+
+.warehouse-position-card {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: color-mix(in oklch, var(--surface), var(--background) 9%);
+  padding: 10px;
+}
+
+.warehouse-position-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+}
+
+.warehouse-position-open {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  gap: 9px;
+  min-width: 0;
+  color: inherit;
+  text-decoration: none;
+}
+
+.warehouse-position-open > span:nth-child(2) {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.warehouse-position-score {
+  display: grid;
+  place-items: center;
+  min-width: 56px;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--background), var(--surface) 38%);
+  text-decoration: none;
+}
+
+.warehouse-position-workflow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.warehouse-position-workflow span {
+  min-height: 20px;
+  border: 1px solid color-mix(in oklch, var(--border), var(--background) 10%);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 790;
+  letter-spacing: 0.05em;
+  padding: 3px 7px;
+  text-transform: uppercase;
+}
+
+.warehouse-position-workflow span.is-active {
+  border-color: color-mix(in oklch, var(--module-accent), var(--border) 58%);
+  color: color-mix(in oklch, var(--module-accent), var(--text) 20%);
+}
+
+.warehouse-position-workflow span.is-done {
+  border-color: color-mix(in oklch, var(--success), var(--border) 62%);
+  color: color-mix(in oklch, var(--success), var(--text) 22%);
+}
+
+.warehouse-position-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.warehouse-position-buttons button,
+.warehouse-position-buttons a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: color-mix(in oklch, var(--text), var(--muted) 12%);
+  font: inherit;
+  font-size: 10px;
+  font-weight: 800;
+  padding: 4px 8px;
+  text-decoration: none;
+}
+
+.warehouse-position-buttons button:not(:disabled) {
+  border-color: color-mix(in oklch, var(--module-accent), var(--border) 60%);
+  background: color-mix(in oklch, var(--module-accent), var(--surface) 95%);
+}
+
+.warehouse-position-buttons button:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.warehouse-match-panel {
+  display: grid;
+  gap: 9px;
+  margin-top: 4px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.warehouse-match-panel h3 {
+  margin: 0;
+  color: color-mix(in oklch, var(--muted), var(--text) 14%);
+  font-size: 10px;
+  font-weight: 780;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.warehouse-source-match-list {
+  display: grid;
+  gap: 7px;
+}
+
+.warehouse-source-match {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 9px;
+  align-items: center;
+  min-height: 48px;
+  border: 1px solid color-mix(in oklch, var(--border), var(--background) 12%);
+  border-radius: 10px;
+  background: color-mix(in oklch, var(--background), var(--surface) 38%);
+  color: inherit;
+  padding: 9px 10px;
+  text-decoration: none;
+}
+
+.warehouse-source-match.is-available {
+  border-color: color-mix(in oklch, var(--success), var(--border) 64%);
+}
+
+.warehouse-source-match.is-reserved,
+.warehouse-source-match.is-picked {
+  border-color: color-mix(in oklch, var(--module-accent), var(--border) 62%);
+}
+
+.warehouse-empty-note {
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  padding: 14px;
+}
+
+.warehouse-match-bar > div:first-child {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.warehouse-match-open {
+  width: fit-content;
+  color: color-mix(in oklch, var(--module-accent), var(--text) 20%);
+  font-size: 11px;
+  font-weight: 780;
+  text-decoration: none;
+}
+
+.warehouse-match-bar > div:first-child span,
+.warehouse-match-score span {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 760;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.warehouse-match-bar > div:first-child strong {
+  overflow: hidden;
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.warehouse-match-score {
+  display: grid;
+  justify-items: center;
+  min-width: 88px;
+  border-inline: 1px solid var(--border);
+  padding-inline: 18px;
+}
+
+.warehouse-match-score strong {
+  font-size: 24px;
+  line-height: 1;
+}
+
+.warehouse-match-pill-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.warehouse-match-pill-column {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  min-width: 0;
+}
+
+.warehouse-match-pill-column header {
+  overflow: hidden;
+  color: color-mix(in oklch, var(--muted), var(--text) 12%);
+  font-size: 9px;
+  font-weight: 820;
+  letter-spacing: 0.08em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.warehouse-match-pill-column > div {
+  display: grid;
+  gap: 5px;
+}
+
+.warehouse-match-pill-grid span {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 3px 7px;
+  align-items: center;
+  min-height: 32px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: color-mix(in oklch, var(--background), var(--surface) 38%);
+  padding: 6px 8px;
+}
+
+.warehouse-match-pill-grid span.is-active {
+  border-color: color-mix(in oklch, var(--module-accent), var(--border) 62%);
+}
+
+.warehouse-match-pill-grid span.is-done {
+  border-color: color-mix(in oklch, var(--success), var(--border) 64%);
+  background: color-mix(in oklch, var(--success), var(--surface) 93%);
+}
+
+.warehouse-match-pill-grid b {
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 760;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.warehouse-match-pill-grid small {
+  overflow: hidden;
+  grid-column: 1;
+  color: var(--muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.warehouse-match-pill-grid em {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+  font-weight: 820;
+}
+
+.warehouse-admin-drawer .warehouse-layout-actions {
+  justify-content: flex-start;
+  margin-bottom: 10px;
+}
+
+.work-panel:has(.warehouse-admin-drawer) {
+  z-index: 70;
+  width: min(520px, calc(100vw - 32px));
+  background: var(--background);
+  padding: 16px;
+}
+
+.work-panel:has(.warehouse-match-drawer) {
+  z-index: 70;
+  min-height: 0;
+  max-height: min(430px, calc(100vh - 128px));
+  background: var(--background);
+  padding: 16px;
+}
+
+.warehouse-admin-drawer,
+.warehouse-match-drawer {
+  gap: 12px;
+}
+
+.warehouse-admin-drawer .drawer-description,
+.warehouse-match-drawer .drawer-description {
+  margin-bottom: 0;
+  max-width: 64ch;
+}
+
+.warehouse-admin-drawer .ops-drawer-section,
+.warehouse-match-drawer .ops-drawer-section {
+  gap: 8px;
+  padding-top: 10px;
+}
+
+.warehouse-admin-drawer .drawer-field-grid {
+  gap: 8px;
+}
+
+.warehouse-admin-drawer .drawer-field input,
+.warehouse-admin-drawer .drawer-field select {
+  min-height: 34px;
+}
+
+.warehouse-match-columns-drawer {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.warehouse-match-columns-drawer section {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: color-mix(in oklch, var(--surface), var(--background) 7%);
+  padding: 10px;
+}
+
+.warehouse-match-columns-drawer header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.warehouse-match-columns-drawer strong {
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.warehouse-match-columns-drawer em {
+  color: color-mix(in oklch, var(--text), var(--muted) 8%);
+  font-size: 18px;
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+  font-weight: 840;
+}
+
+.warehouse-match-columns-drawer small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.warehouse-match-drawer .ops-mini-list {
+  max-height: 112px;
+  overflow: auto;
+}
+
+.warehouse-match-drawer textarea {
+  min-height: 78px;
+  max-height: 110px;
+}
+
+.warehouse-ai-score-drawer {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  overflow: hidden;
+}
+
+.warehouse-ai-score-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: color-mix(in oklch, var(--surface), var(--background) 5%);
+  padding: 11px 12px;
+}
+
+.warehouse-ai-score-summary > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.warehouse-ai-score-summary span,
+.warehouse-ai-score-summary small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.warehouse-ai-score-summary strong {
+  overflow: hidden;
+  font-size: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.warehouse-ai-score-summary > em {
+  display: grid;
+  place-items: center;
+  min-width: 74px;
+  height: 42px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 22px;
+  font-style: normal;
+  font-weight: 860;
+}
+
+.warehouse-ai-score-summary > em.is-full,
+.warehouse-ai-requirements article.is-full {
+  border-color: color-mix(in oklch, var(--success), var(--border) 62%);
+  background: color-mix(in oklch, var(--success), var(--surface) 94%);
+}
+
+.warehouse-ai-score-summary > em.is-partial,
+.warehouse-ai-requirements article.is-partial {
+  border-color: color-mix(in oklch, var(--module-accent), var(--border) 60%);
+  background: color-mix(in oklch, var(--module-accent), var(--surface) 95%);
+}
+
+.warehouse-ai-score-summary > em.is-missing,
+.warehouse-ai-requirements article.is-missing {
+  border-color: color-mix(in oklch, var(--warning), var(--border) 62%);
+  background: color-mix(in oklch, var(--warning), var(--surface) 95%);
+}
+
+.warehouse-ai-score-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.warehouse-ai-score-column {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 8px;
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: color-mix(in oklch, var(--surface), var(--background) 7%);
+  padding: 10px;
+}
+
+.warehouse-ai-score-column > header {
+  display: grid;
+  gap: 3px;
+}
+
+.warehouse-ai-score-column > header strong {
+  color: color-mix(in oklch, var(--text), var(--muted) 8%);
+  font-size: 13px;
+  font-weight: 820;
+}
+
+.warehouse-ai-score-column > header span {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.warehouse-ai-requirements {
+  display: grid;
+  align-content: start;
+  gap: 7px;
+  min-height: 0;
+  overflow: auto;
+}
+
+.warehouse-ai-requirements article {
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 8px;
+}
+
+.warehouse-ai-requirements article > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.warehouse-ai-requirements strong {
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.warehouse-ai-requirements em {
+  font-size: 15px;
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+  font-weight: 850;
+}
+
+.warehouse-ai-requirements p,
+.warehouse-ai-requirements small {
+  margin: 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.warehouse-ai-evidence-row {
+  display: grid;
+  grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
+  gap: 10px;
+  min-height: 0;
+}
+
+.warehouse-ai-evidence-row section {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  min-width: 0;
+  border-top: 1px solid var(--border);
+  padding-top: 9px;
+}
+
+.warehouse-ai-evidence-row h3 {
+  margin: 0;
+  color: color-mix(in oklch, var(--muted), var(--text) 12%);
+  font-size: 10px;
+  font-weight: 820;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.warehouse-ai-evidence-row section > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  max-height: 54px;
+  overflow: auto;
+}
+
+.warehouse-ai-evidence-row span {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 10px;
+  padding: 3px 7px;
+}
+
+.warehouse-ai-evidence-row p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+@media (max-width: 1280px) {
+  .warehouse-workbench {
+    grid-template-columns: minmax(230px, 0.78fr) minmax(420px, 1.4fr);
+    grid-template-rows: minmax(0, 1fr) minmax(260px, 0.54fr) auto;
+  }
+
+  .warehouse-storage-workbench {
+    grid-template-rows: minmax(0, 1fr) minmax(260px, 0.54fr);
+  }
+
+  .warehouse-right {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .warehouse-match-bar {
+    grid-row: 3;
+  }
+}
+
+@media (max-width: 840px) {
+  .warehouse-workbench {
+    display: flex;
+    flex-direction: column;
+    overflow: auto;
+  }
+
+  .warehouse-panel {
+    min-height: 360px;
+  }
+
+  .warehouse-line-badges,
+  .warehouse-match-pill-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .warehouse-work-order header,
+  .warehouse-match-bar {
+    grid-template-columns: 1fr;
+  }
+
+  .warehouse-score,
+  .warehouse-order-actions {
+    justify-items: start;
+    justify-content: flex-start;
+    text-align: left;
+  }
+
+  .warehouse-match-score {
+    justify-items: start;
+    border-inline: 0;
+    border-block: 1px solid var(--border);
+    padding: 10px 0;
+  }
 }

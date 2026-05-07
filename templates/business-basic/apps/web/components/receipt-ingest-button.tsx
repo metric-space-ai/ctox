@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
+import { notifyAccountingWorkflowUpdated } from "./accounting-workflow-events";
 
 type ReceiptIngestButtonProps = {
   label: string;
@@ -8,8 +9,11 @@ type ReceiptIngestButtonProps = {
 };
 
 type ReceiptIngestResult = {
+  audit?: unknown;
   command?: { type?: string };
   error?: string;
+  outbox?: unknown;
+  persisted?: boolean;
   proposal?: { confidence?: number };
 };
 
@@ -40,6 +44,7 @@ export function ReceiptIngestButton({ label, path }: ReceiptIngestButtonProps) {
       }
       const confidence = payload.proposal?.confidence ? `${Math.round(payload.proposal.confidence * 100)}%` : "n/a";
       setStatus(`${payload.command?.type ?? "IngestReceipt"} prepared, ${confidence} confidence.`);
+      notifyAccountingWorkflowUpdated(payload);
     } finally {
       setBusy(false);
     }

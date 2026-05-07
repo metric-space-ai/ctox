@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getBusinessBundle } from "@/lib/business-seed";
+import { getDatabaseBackedBusinessBundle } from "@/lib/business-db-bundle";
 import { prepareExistingInvoiceForAccounting } from "@/lib/business-accounting";
 
 export async function GET(
@@ -8,7 +9,7 @@ export async function GET(
 ) {
   const { id } = await params;
   const locale = new URL(request.url).searchParams.get("locale") === "en" ? "en" : "de";
-  const data = await getBusinessBundle();
+  const data = await getDatabaseBackedBusinessBundle(await getBusinessBundle());
   const invoice = data.invoices.find((item) => item.id === id);
 
   if (!invoice) {

@@ -135,6 +135,7 @@ const navLabels: Record<string, {
       products: "Produkte",
       invoices: "Rechnungen",
       ledger: "Ledger",
+      "fixed-assets": "Anlagen",
       receipts: "Eingangsbelege",
       payments: "Zahlungen",
       bookkeeping: "Buchhaltung",

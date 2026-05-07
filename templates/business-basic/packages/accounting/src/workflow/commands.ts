@@ -1,8 +1,11 @@
 export type AccountingCommandType =
   | "AcceptBankMatch"
+  | "CapitalizeReceipt"
+  | "DisposeAsset"
   | "ExportDatev"
   | "IngestReceipt"
   | "ImportBankStatement"
+  | "PostDepreciation"
   | "PostReceipt"
   | "RunDunning"
   | "SendInvoice";

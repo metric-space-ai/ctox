@@ -1,6 +1,7 @@
 import { cookies } from "next/headers";
-import { WorkSurface, type BusinessModuleId } from "@ctox-business/ui";
+import { WorkSurface, type BusinessModuleId, type WorkSurfacePanelState } from "@ctox-business/ui";
 import { AppShell } from "../../../../components/app-shell";
+import { SalesPanel } from "../../../../components/sales-workspace";
 import { businessOsName, companyNameCookieName, normalizeCompanyName } from "../../../../lib/company-settings";
 
 const pipelineStages = [
@@ -87,13 +88,22 @@ const pipelineCards = [
 export default async function SalesPipelinePage({
   searchParams
 }: {
-  searchParams: Promise<{ locale?: string; selectedId?: string; theme?: string }>;
+  searchParams: Promise<{ drawer?: string; locale?: string; panel?: string; recordId?: string; selectedId?: string; theme?: string }>;
 }) {
   const query = await searchParams;
   const locale = query.locale === "en" ? "en" : "de";
   const cookieStore = await cookies();
   const companyName = normalizeCompanyName(cookieStore.get(companyNameCookieName)?.value);
   const selected = pipelineCards.find((card) => card.id === query.selectedId);
+  const drawer: WorkSurfacePanelState["drawer"] =
+    query.drawer === "left-bottom" || query.drawer === "bottom" || query.drawer === "right"
+      ? query.drawer
+      : undefined;
+  const panelState: WorkSurfacePanelState = {
+    drawer,
+    panel: query.panel,
+    recordId: query.recordId
+  };
 
   return (
     <AppShell
@@ -104,7 +114,15 @@ export default async function SalesPipelinePage({
       locale={locale}
       theme={query.theme}
     >
-      <WorkSurface hideHeader moduleId="sales" submoduleId="pipeline" title="Pipeline" description="Sales workspace">
+      <WorkSurface
+        hideHeader
+        moduleId="sales"
+        panelContent={<SalesPanel panelState={panelState} query={query} submoduleId="pipeline" />}
+        panelState={panelState}
+        submoduleId="pipeline"
+        title="Pipeline"
+        description="Sales workspace"
+      >
         <section className="kunstmen-pipeline lead-pipeline" data-context-module="sales" data-context-submodule="pipeline">
           <header className="kunstmen-work-header">
             <div className="kunstmen-work-title">

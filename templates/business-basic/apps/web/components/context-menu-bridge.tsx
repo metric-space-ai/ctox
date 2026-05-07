@@ -336,6 +336,36 @@ function contextMenuActions(item: ContextItem, locale: "de" | "en"): ContextMenu
   }
 
   if (item.moduleId === "business") {
+    if (item.submoduleId === "warehouse") {
+      if (item.recordType === "warehouse_order") {
+        add("warehouse-order-readiness", de ? "Auftrag pruefen" : "Check order", de ? "Material, Wertschritte, Versandgate" : "Material, value steps, shipping gate", (ctx) => de
+          ? `Pruefe diesen Warehouse-Auftrag ${ctx.label}. Bewerte Materialdeckung, fehlende Einzelpositionen, Wertschritte, QA, Packstatus und ob Versand wirklich freigegeben werden darf.`
+          : `Check this warehouse order ${ctx.label}. Assess material coverage, missing order lines, value steps, QA, packing status, and whether shipping can be released.`);
+        add("warehouse-order-blockers", de ? "Blocker planen" : "Plan blockers", de ? "Fehlteile und Fertigung" : "Missing parts and production", (ctx) => de
+          ? `Plane die Blocker fuer Auftrag ${ctx.label}. Leite konkrete Aktionen fuer fehlende Teile, Umlagerung, Auftragsfertigung, QA und Packfreigabe ab.`
+          : `Plan blockers for order ${ctx.label}. Derive concrete actions for missing parts, transfers, order production, QA, and packing approval.`);
+      } else if (item.recordType === "warehouse_order_line") {
+        add("warehouse-line-source", de ? "Position matchen" : "Match line", de ? "Bestand, Fehlteil, Quelle" : "Stock, shortage, source", (ctx) => de
+          ? `Matche diese Auftragsposition ${ctx.label}. Pruefe verfuegbaren Bestand, fehlende Menge, beste Lagerquelle, Umlagerung und Fertigungsbedarf.`
+          : `Match this order line ${ctx.label}. Check available stock, missing quantity, best warehouse source, transfer, and production need.`);
+        add("warehouse-line-escalate", de ? "Fehlteil klaeren" : "Resolve shortage", de ? "Einkauf, Fertigung, Ersatz" : "Purchase, production, substitute", (ctx) => de
+          ? `Klaere Fehlteile fuer ${ctx.label}. Nenne Einkaufs-, Fertigungs-, Ersatzteil- oder Teillieferungsoptionen mit naechstem Schritt.`
+          : `Resolve shortages for ${ctx.label}. Name purchasing, production, substitute, or partial delivery options with the next step.`);
+      } else if (item.recordType === "warehouse_work_step") {
+        add("warehouse-step-gate", de ? "Gate pruefen" : "Check gate", de ? "Owner, Status, Freigabe" : "Owner, status, approval", (ctx) => de
+          ? `Pruefe den Wertschritt ${ctx.label}. Klaere Owner, Status, Voraussetzungen, Nachweis und Freigabe fuer den naechsten Schritt.`
+          : `Check value step ${ctx.label}. Clarify owner, status, prerequisites, evidence, and approval for the next step.`);
+      } else if (item.recordType === "warehouse_slot") {
+        add("warehouse-slot-action", de ? "Slot Aktion" : "Slot action", de ? "Zaehlen, umlagern, reservieren" : "Count, transfer, reserve", (ctx) => de
+          ? `Pruefe Lagerplatz ${ctx.label}. Schlage Zaehlen, Umlagern, Reservieren oder Sperren vor und begruende die naechste Aktion.`
+          : `Check slot ${ctx.label}. Suggest counting, transfer, reservation, or hold and justify the next action.`);
+      } else if (item.recordType === "warehouse_source") {
+        add("warehouse-source-load", de ? "Lagerquelle pruefen" : "Check source", de ? "Deckung, Engpass, Umlagerung" : "Coverage, bottleneck, transfer", (ctx) => de
+          ? `Pruefe Lagerquelle ${ctx.label}. Bewerte Deckung, Engpaesse, Umlagerungsbedarf und betroffene Auftraege.`
+          : `Check warehouse source ${ctx.label}. Assess coverage, bottlenecks, transfer needs, and affected orders.`);
+      }
+    }
+
     add("business-check", de ? "Business-Datensatz pruefen" : "Check business record", de ? "Stammdaten, Beleg, Folgeaktion" : "Master data, document, next action", (ctx) => de
       ? `Pruefe diesen Business-Kontext ${ctx.label}. Kontrolliere Stammdaten, Beleg-/Produktbezug, offene Folgeaktionen und Synchronisierung.`
       : `Check this business context ${ctx.label}. Review master data, document/product relation, open follow-ups, and synchronization.`);

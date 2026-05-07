@@ -43,7 +43,7 @@ for (const route of routes) {
 }
 
 for (const route of apiRoutes) {
-  const response = await fetch(`${baseUrl}${route}`);
+  const response = await fetch(`${baseUrl}${route}`, { headers: { cookie: sessionCookie } });
   assert(response.ok, `${route} returned ${response.status}`);
   const payload = await response.json();
   assert(payload.ok !== false, `${route} returned failed payload`);
@@ -51,7 +51,7 @@ for (const route of apiRoutes) {
 
 const mutation = await fetch(`${baseUrl}/api/operations/work-items`, {
   method: "POST",
-  headers: { "content-type": "application/json" },
+  headers: { "content-type": "application/json", cookie: sessionCookie },
   body: JSON.stringify({
     action: "sync",
     recordId: "wp-1001",
@@ -68,7 +68,7 @@ assert(mutationPayload.core?.mode, "Operations mutation missing CTOX core mode")
 
 const createMutation = await fetch(`${baseUrl}/api/operations/projects`, {
   method: "POST",
-  headers: { "content-type": "application/json" },
+  headers: { "content-type": "application/json", cookie: sessionCookie },
   body: JSON.stringify({
     action: "create",
     title: "Operations smoke create project",
@@ -86,7 +86,7 @@ assert(createPayload.ok === true && createPayload.queued === true, "Operations c
 
 const exportMutation = await fetch(`${baseUrl}/api/operations/documents/export`, {
   method: "POST",
-  headers: { "content-type": "application/json" },
+  headers: { "content-type": "application/json", cookie: sessionCookie },
   body: JSON.stringify({
     documentId: "doc-operating-model",
     format: "docx",
@@ -100,7 +100,7 @@ assert(exportPayload.ok === true && exportPayload.export?.mode === "queued-conve
 
 const importMutation = await fetch(`${baseUrl}/api/operations/documents/import`, {
   method: "POST",
-  headers: { "content-type": "application/json" },
+  headers: { "content-type": "application/json", cookie: sessionCookie },
   body: JSON.stringify({
     filename: "customer-proposal.docx",
     format: "docx",

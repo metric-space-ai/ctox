@@ -9,7 +9,7 @@ export type AccountingProposal = {
   createdByAgent: string;
   evidence: Record<string, unknown>;
   id: string;
-  kind: "bank_match" | "datev_export" | "dunning_run" | "invoice_check" | "receipt_extraction" | "receipt_ingest";
+  kind: "asset_activation" | "asset_depreciation" | "asset_disposal" | "bank_match" | "datev_export" | "dunning_run" | "invoice_check" | "receipt_extraction" | "receipt_ingest";
   proposedCommand: AccountingCommand;
   refId: string;
   refType: string;

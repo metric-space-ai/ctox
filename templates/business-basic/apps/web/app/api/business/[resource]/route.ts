@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { getBusinessResource } from "@/lib/business-seed";
+import { getBusinessBundle, getBusinessResource } from "@/lib/business-seed";
+import { getDatabaseBackedBusinessResource } from "@/lib/business-db-bundle";
 import { queueBusinessMutation, type BusinessMutationRequest } from "@/lib/business-runtime";
 
 export async function GET(
@@ -7,7 +8,7 @@ export async function GET(
   { params }: { params: Promise<{ resource: string }> }
 ) {
   const { resource } = await params;
-  const items = await getBusinessResource(resource);
+  const items = await getDatabaseBackedBusinessResource(resource, await getBusinessBundle());
 
   if (!items) {
     return NextResponse.json({ error: "unknown_business_resource" }, { status: 404 });
@@ -46,6 +47,6 @@ export async function POST(
 }
 
 function parseAction(value: unknown): BusinessMutationRequest["action"] {
-  if (value === "create" || value === "update" || value === "delete" || value === "sync" || value === "export" || value === "payment" || value === "send" || value === "post" || value === "match") return value;
+  if (value === "capitalize" || value === "create" || value === "update" || value === "delete" || value === "sync" || value === "export" || value === "payment" || value === "send" || value === "post" || value === "match" || value === "depreciate" || value === "dispose") return value;
   return "update";
 }

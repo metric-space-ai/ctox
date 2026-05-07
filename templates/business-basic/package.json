@@ -13,8 +13,10 @@
     "test:business-stack": "pnpm --filter @ctox-business/web test:business-stack",
     "test:operations": "pnpm --filter @ctox-business/web test:operations",
     "test:ui-contract": "pnpm --filter @ctox-business/web test:ui-contract",
+    "test:accounting-unit": "pnpm --filter @ctox-business/accounting test",
     "test:accounting-db": "pnpm --filter @ctox-business/db test:accounting-smoke",
-    "test:all": "pnpm -r typecheck && pnpm test:ui-contract && pnpm test:operations && pnpm test:business-stack && pnpm build",
+    "test:accounting-e2e": "pnpm --filter @ctox-business/web test:accounting-e2e",
+    "test:all": "pnpm -r typecheck && pnpm test:ui-contract && pnpm test:operations && pnpm test:business-stack && pnpm test:accounting-e2e && pnpm test:accounting-unit && pnpm build",
     "db:generate": "pnpm --filter @ctox-business/db generate",
     "db:migrate": "pnpm --filter @ctox-business/db migrate"
   },

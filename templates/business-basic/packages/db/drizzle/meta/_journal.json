@@ -57,6 +57,41 @@
       "when": 1777754400000,
       "tag": "0007_business_accounting_engine",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1777755000000,
+      "tag": "0008_business_warehouse",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1777755600000,
+      "tag": "0009_business_warehouse_m2",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1777756200000,
+      "tag": "0010_business_warehouse_m3",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1777756800000,
+      "tag": "0011_business_warehouse_movement_idempotency",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1777757400000,
+      "tag": "0012_business_accounting_artifacts",
+      "breakpoints": true
     }
   ]
 }

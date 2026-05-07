@@ -1,16 +1,22 @@
 import { businessDeepLink } from "@ctox-business/ui";
+import { assertPeriodOpen } from "@ctox-business/accounting";
 import { saveAccountingWorkflowSnapshot } from "@ctox-business/db/accounting";
 import { createCtoxCoreTask, emitCtoxCoreEvent } from "./ctox-core-bridge";
 import { getBusinessBundle, normalizeBusinessResource } from "./business-seed";
+import { getDatabaseBackedBusinessBundle } from "./business-db-bundle";
+import { buildFixedAssetRegister } from "./accounting-runtime";
 import {
+  prepareAssetDepreciationForAccounting,
+  prepareAssetDisposalForAccounting,
   prepareBankMatchForAccounting,
   prepareDatevExportForAccounting,
   prepareExistingInvoiceForAccounting,
+  prepareReceiptCapitalizationForAccounting,
   prepareReceiptForAccounting
 } from "./business-accounting";
 
 export type BusinessMutationRequest = {
-  action: "create" | "update" | "delete" | "sync" | "export" | "payment" | "send" | "post" | "match";
+  action: "capitalize" | "create" | "delete" | "depreciate" | "dispose" | "export" | "match" | "payment" | "post" | "send" | "sync" | "update";
   resource: string;
   recordId?: string;
   title?: string;
@@ -28,14 +34,18 @@ const resourceToSubmodule: Record<string, string> = {
   bookkeeping: "bookkeeping",
   customers: "customers",
   exports: "bookkeeping",
+  "fixed-assets": "fixed-assets",
   invoices: "invoices",
+  inventory: "warehouse",
   journal: "ledger",
   ledger: "ledger",
   payments: "payments",
   products: "products",
   receipts: "receipts",
   reports: "reports",
-  services: "products"
+  services: "products",
+  stock: "warehouse",
+  warehouse: "warehouse"
 };
 
 const resourceToPanel: Record<string, string> = {
@@ -45,14 +55,18 @@ const resourceToPanel: Record<string, string> = {
   bookkeeping: "export",
   customers: "customer",
   exports: "export",
+  "fixed-assets": "asset",
   invoices: "invoice",
+  inventory: "stock_balance",
   journal: "journal-entry",
   ledger: "journal-entry",
   payments: "bank-transaction",
   products: "product",
   receipts: "receipt",
   reports: "report",
-  services: "product"
+  services: "product",
+  stock: "stock_balance",
+  warehouse: "warehouse_set"
 };
 
 export async function queueBusinessMutation(request: BusinessMutationRequest, origin?: string) {
@@ -141,7 +155,7 @@ export async function queueBusinessMutation(request: BusinessMutationRequest, or
 }
 
 async function buildAccountingContext(request: BusinessMutationRequest, normalizedResource: string, recordId: string) {
-  const data = await getBusinessBundle();
+  const data = await getDatabaseBackedBusinessBundle(await getBusinessBundle());
   const locale = request.locale === "en" ? "en" : "de";
 
   if (normalizedResource === "invoices" && (request.action === "send" || request.action === "export" || request.action === "sync")) {
@@ -154,7 +168,7 @@ async function buildAccountingContext(request: BusinessMutationRequest, normaliz
       locale
     });
 
-    return {
+    return withPeriodValidation(data, {
       audit: preview.audit,
       command: preview.command,
       document: preview.document,
@@ -164,19 +178,38 @@ async function buildAccountingContext(request: BusinessMutationRequest, normaliz
       proposal: preview.proposal,
       validation: preview.validation,
       zugferdXml: preview.zugferdXml
-    };
+    });
   }
 
   if (normalizedResource === "receipts" && request.action === "post") {
     const receipt = data.receipts.find((item) => item.id === recordId);
     if (!receipt) return undefined;
-    return prepareReceiptForAccounting({ receipt });
+    return withPeriodValidation(data, prepareReceiptForAccounting({ receipt }));
+  }
+
+  if (normalizedResource === "receipts" && request.action === "capitalize") {
+    const receipt = data.receipts.find((item) => item.id === recordId);
+    if (!receipt) return undefined;
+    return withPeriodValidation(data, prepareReceiptCapitalizationForAccounting({ receipt }));
+  }
+
+  if (normalizedResource === "fixedAssets" && request.action === "dispose") {
+    const register = buildFixedAssetRegister(data);
+    const asset = register.find((item) => item.id === recordId);
+    if (!asset) return undefined;
+    return withPeriodValidation(data, prepareAssetDisposalForAccounting({ asset }));
+  }
+
+  if (normalizedResource === "fixedAssets" && (request.action === "depreciate" || request.action === "post")) {
+    const asset = data.fixedAssets.find((item) => item.id === recordId);
+    if (!asset) return undefined;
+    return withPeriodValidation(data, prepareAssetDepreciationForAccounting({ asset }));
   }
 
   if ((normalizedResource === "bankTransactions" || normalizedResource === "payments") && request.action === "match") {
     const transaction = data.bankTransactions.find((item) => item.id === recordId);
     if (!transaction) return undefined;
-    return prepareBankMatchForAccounting({ transaction });
+    return withPeriodValidation(data, prepareBankMatchForAccounting({ transaction }));
   }
 
   if ((normalizedResource === "bookkeeping" || normalizedResource === "exports") && request.action === "export") {
@@ -186,6 +219,36 @@ async function buildAccountingContext(request: BusinessMutationRequest, normaliz
   }
 
   return undefined;
+}
+
+function withPeriodValidation<T extends {
+  audit?: unknown;
+  journalDraft?: { postingDate: string } | null;
+  outbox?: { payload?: unknown };
+  validation?: { errors: string[]; warnings: string[] };
+}>(data: Awaited<ReturnType<typeof getDatabaseBackedBusinessBundle>>, preview: T): T {
+  if (!preview.journalDraft) return preview;
+
+  try {
+    assertPeriodOpen(data.fiscalPeriods.map((period) => ({
+      closedAt: period.closedAt,
+      endDate: period.endDate,
+      id: period.id,
+      startDate: period.startDate,
+      status: period.status
+    })), preview.journalDraft.postingDate);
+    return preview;
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "fiscal_period_validation_failed";
+    return {
+      ...preview,
+      journalDraft: null,
+      validation: {
+        errors: [...(preview.validation?.errors ?? []), code],
+        warnings: preview.validation?.warnings ?? []
+      }
+    };
+  }
 }
 
 async function persistAccountingContext(accounting: NonNullable<Awaited<ReturnType<typeof buildAccountingContext>>>) {

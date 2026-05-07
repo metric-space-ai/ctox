@@ -1,7 +1,9 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { resolveBusinessAccessFromCookies } from "./lib/business-auth";
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
+  if (request.nextUrl.pathname === "/api/business/warehouse/stripe") return NextResponse.next();
+
   if (await resolveBusinessAccessFromCookies(request.cookies)) return NextResponse.next();
 
   if (request.nextUrl.pathname.startsWith("/api/")) {
