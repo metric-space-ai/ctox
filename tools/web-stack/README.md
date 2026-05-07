@@ -4,6 +4,7 @@ This crate is the owned compile boundary for the CTOX web surface:
 
 - `ctox_web_search`
 - `ctox_web_read`
+- `ctox_deep_research`
 - `ctox_browser_prepare`
 - `ctox_browser_automation`
 
@@ -17,10 +18,23 @@ binary-first and data-driven so fixture and live checks can run against a built
 
 Current ownership boundary:
 
-- `search`, `read`, `browser-prepare`, and `browser-automation` are owned here.
+- `search`, `read`, `deep-research`, `browser-prepare`, and
+  `browser-automation` are owned here.
 - the `web scrape` request shape and CLI contract are owned here.
 - the durable scrape runtime/database still stays in the wider CTOX scrape
   subsystem, so the root injects only that executor.
+
+## Deep research
+
+`ctox web deep-research` runs a multi-query evidence gathering workflow over the
+owned web search/read pipeline. It expands the user question across broad web,
+scholarly, open-access, DOI/metadata, patent/industry, and failure-mode search
+profiles, deduplicates sources, reads top pages, and returns an evidence bundle
+plus a report scaffold for the agent to synthesize.
+
+Anna's Archive support is intentionally metadata-only. The tool may use it to
+discover bibliographic records when `--include-annas-archive` is explicit, but
+it must not download or reproduce unauthorized copyrighted full text.
 
 ## Default search provider
 

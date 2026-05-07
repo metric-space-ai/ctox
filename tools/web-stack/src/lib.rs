@@ -5,6 +5,7 @@
 //! adapters for those capabilities.
 
 pub mod browser;
+pub mod deep_research;
 mod google_engine;
 mod runtime_config;
 pub mod surface;
@@ -15,6 +16,9 @@ pub use browser::prepare_browser_environment;
 pub use browser::run_browser_automation;
 pub use browser::BrowserAutomationRequest;
 pub use browser::BrowserPrepareOptions;
+pub use deep_research::run_ctox_deep_research_tool;
+pub use deep_research::DeepResearchDepth;
+pub use deep_research::DeepResearchRequest;
 pub use surface::handle_web_command;
 pub use surface::WebScrapeRequest;
 pub use web_search::augment_responses_request;

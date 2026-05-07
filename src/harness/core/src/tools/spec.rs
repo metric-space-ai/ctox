@@ -1165,6 +1165,73 @@ fn create_ctox_web_read_tool() -> ToolSpec {
     })
 }
 
+fn create_ctox_deep_research_tool() -> ToolSpec {
+    let properties = BTreeMap::from([
+        (
+            "query".to_string(),
+            JsonSchema::String {
+                description: Some("Research question or pasted research prompt.".to_string()),
+            },
+        ),
+        (
+            "focus".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Optional focus area, hypothesis, technology family, or decision context."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "depth".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Optional research depth: `quick`, `standard`, or `exhaustive`.".to_string(),
+                ),
+            },
+        ),
+        (
+            "max_sources".to_string(),
+            JsonSchema::Number {
+                description: Some("Optional maximum number of deduplicated sources.".to_string()),
+                minimum: Some(3.0),
+                maximum: Some(40.0),
+            },
+        ),
+        (
+            "include_annas_archive".to_string(),
+            JsonSchema::Boolean {
+                description: Some(
+                    "When true, include Anna's Archive as metadata-only bibliographic discovery. Do not use it to download or reproduce unauthorized copyrighted full text."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "no_papers".to_string(),
+            JsonSchema::Boolean {
+                description: Some(
+                    "When true, skip paper-specific scholarly query expansions.".to_string(),
+                ),
+            },
+        ),
+    ]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "ctox_deep_research".to_string(),
+        description: "Runs CTOX's deep-research evidence gathering workflow over web search, scholarly/source-specific query profiles, metadata-only paper discovery, and page extraction. Use this before writing decision-grade research reports; synthesize the returned evidence yourself and cite concrete sources."
+            .to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["query".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+        output_schema: None,
+    })
+}
+
 fn create_ctox_doc_search_tool() -> ToolSpec {
     let properties = BTreeMap::from([
         (
@@ -3806,12 +3873,19 @@ pub(crate) fn build_specs_with_discoverable_tools(
         );
         push_tool_spec(
             &mut builder,
+            create_ctox_deep_research_tool(),
+            /*supports_parallel_tool_calls*/ false,
+            config.code_mode_enabled,
+        );
+        push_tool_spec(
+            &mut builder,
             create_ctox_web_scrape_tool(),
             /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
         );
         builder.register_handler("ctox_web_search", ctox_web_handler.clone());
         builder.register_handler("ctox_web_read", ctox_web_handler.clone());
+        builder.register_handler("ctox_deep_research", ctox_web_handler.clone());
         builder.register_handler("ctox_web_scrape", ctox_web_handler.clone());
         push_tool_spec(
             &mut builder,

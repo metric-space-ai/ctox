@@ -11,6 +11,9 @@ use crate::browser::run_browser_automation;
 use crate::browser::BrowserAutomationRequest;
 use crate::browser::BrowserCaptureRequest;
 use crate::browser::BrowserPrepareOptions;
+use crate::deep_research::run_ctox_deep_research_tool;
+use crate::deep_research::DeepResearchDepth;
+use crate::deep_research::DeepResearchRequest;
 use crate::web_search::run_ctox_google_bootstrap_doctor_tool;
 use crate::web_search::run_ctox_google_bootstrap_import_tool;
 use crate::web_search::run_ctox_google_bootstrap_refresh_tool;
@@ -129,6 +132,34 @@ pub fn handle_web_command(
                         .into_iter()
                         .map(ToOwned::to_owned)
                         .collect(),
+                },
+            )?;
+            print_json(&payload)
+        }
+        "deep-research" => {
+            let query = required_flag_value(args, "--query")
+                .or_else(|| args.get(1).map(String::as_str))
+                .context(
+                    "usage: ctox web deep-research --query <text> [--focus <text>] [--depth <quick|standard|exhaustive>] [--max-sources <n>] [--include-annas-archive] [--no-papers]",
+                )?;
+            let depth = find_flag_value(args, "--depth")
+                .map(parse_deep_research_depth)
+                .transpose()?
+                .unwrap_or_default();
+            let max_sources = find_flag_value(args, "--max-sources")
+                .map(|value| value.parse::<usize>())
+                .transpose()
+                .context("failed to parse --max-sources")?
+                .unwrap_or(16);
+            let payload = run_ctox_deep_research_tool(
+                root,
+                &DeepResearchRequest {
+                    query: query.to_string(),
+                    focus: find_flag_value(args, "--focus").map(ToOwned::to_owned),
+                    depth,
+                    max_sources,
+                    include_annas_archive: args.iter().any(|arg| arg == "--include-annas-archive"),
+                    include_papers: !args.iter().any(|arg| arg == "--no-papers"),
                 },
             )?;
             print_json(&payload)
@@ -252,7 +283,7 @@ pub fn handle_web_command(
             print_json(&payload)
         }
         _ => anyhow::bail!(
-            "usage:\n  ctox web search --query <text> [--domain <host>]... [--context-size <low|medium|high>] [--cached] [--include-sources]\n  ctox web read --url <url> [--query <text>] [--find <text>]...\n  ctox web google-bootstrap-refresh --query <text> [--domain <host>]... [--timeout-ms <n>]\n  ctox web google-bootstrap-status\n  ctox web google-bootstrap-import --file <path>\n  ctox web google-doctor\n  ctox web scrape --target-key <key> --mode <latest|semantic> [--query <text>] [--limit <n>]\n  ctox web browser-prepare [--dir <path>] [--install-reference] [--install-browser] [--skip-npm-install]\n  ctox web browser-automation [--dir <path>] [--timeout-ms <n>] [--script-file <path>] < script.js\n  ctox web browser-capture --url <url> [--dir <path>] [--out-dir <path>] [--timeout-ms <n>]"
+            "usage:\n  ctox web search --query <text> [--domain <host>]... [--context-size <low|medium|high>] [--cached] [--include-sources]\n  ctox web read --url <url> [--query <text>] [--find <text>]...\n  ctox web deep-research --query <text> [--focus <text>] [--depth <quick|standard|exhaustive>] [--max-sources <n>] [--include-annas-archive] [--no-papers]\n  ctox web google-bootstrap-refresh --query <text> [--domain <host>]... [--timeout-ms <n>]\n  ctox web google-bootstrap-status\n  ctox web google-bootstrap-import --file <path>\n  ctox web google-doctor\n  ctox web scrape --target-key <key> --mode <latest|semantic> [--query <text>] [--limit <n>]\n  ctox web browser-prepare [--dir <path>] [--install-reference] [--install-browser] [--skip-npm-install]\n  ctox web browser-automation [--dir <path>] [--timeout-ms <n>] [--script-file <path>] < script.js\n  ctox web browser-capture --url <url> [--dir <path>] [--out-dir <path>] [--timeout-ms <n>]"
         ),
     }
 }
@@ -267,6 +298,12 @@ fn looks_headless_without_browser_session() -> bool {
 fn parse_context_size(raw: &str) -> Result<ContextSize> {
     ContextSize::from_label(raw).with_context(|| {
         format!("unsupported --context-size `{raw}`; expected low, medium, or high")
+    })
+}
+
+fn parse_deep_research_depth(raw: &str) -> Result<DeepResearchDepth> {
+    DeepResearchDepth::from_label(raw).with_context(|| {
+        format!("unsupported --depth `{raw}`; expected quick, standard, or exhaustive")
     })
 }
 

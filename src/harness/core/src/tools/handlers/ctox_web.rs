@@ -42,6 +42,22 @@ struct CtoxWebReadArgs {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct CtoxDeepResearchArgs {
+    query: String,
+    #[serde(default)]
+    focus: Option<String>,
+    #[serde(default)]
+    depth: Option<String>,
+    #[serde(default)]
+    max_sources: Option<u64>,
+    #[serde(default)]
+    include_annas_archive: bool,
+    #[serde(default)]
+    no_papers: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CtoxWebScrapeArgs {
     target_key: String,
     mode: String,
@@ -127,6 +143,29 @@ impl ToolHandler for CtoxWebHandler {
                 }
                 for pattern in args.find {
                     command.arg("--find").arg(pattern);
+                }
+            }
+            "ctox_deep_research" => {
+                let args: CtoxDeepResearchArgs = parse_arguments(&arguments)?;
+                command
+                    .arg("web")
+                    .arg("deep-research")
+                    .arg("--query")
+                    .arg(args.query);
+                if let Some(focus) = args.focus {
+                    command.arg("--focus").arg(focus);
+                }
+                if let Some(depth) = args.depth {
+                    command.arg("--depth").arg(depth);
+                }
+                if let Some(max_sources) = args.max_sources {
+                    command.arg("--max-sources").arg(max_sources.to_string());
+                }
+                if args.include_annas_archive {
+                    command.arg("--include-annas-archive");
+                }
+                if args.no_papers {
+                    command.arg("--no-papers");
                 }
             }
             "ctox_web_scrape" => {
