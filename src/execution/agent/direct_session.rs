@@ -33,7 +33,9 @@ use ctox_core::ThreadManager;
 use ctox_feedback::CodexFeedback;
 use ctox_protocol::config_types::SandboxMode;
 use ctox_protocol::openai_models::ReasoningEffort;
-use ctox_protocol::protocol::{AskForApproval, EventMsg, SandboxPolicy, SessionSource};
+use ctox_protocol::protocol::{
+    AskForApproval, EventMsg, ReadOnlyAccess, SandboxPolicy, SessionSource,
+};
 use ctox_protocol::user_input::UserInput;
 use ctox_utils_absolute_path::AbsolutePathBuf;
 
@@ -546,6 +548,7 @@ pub(crate) struct PersistentSession {
     root: PathBuf,
     base_instructions: String,
     disable_active_tools: bool,
+    read_only_sandbox: bool,
 }
 
 impl PersistentSession {
@@ -571,6 +574,26 @@ impl PersistentSession {
             base_instructions,
             disable_compaction,
             disable_compaction,
+            false,
+        )
+    }
+
+    /// Start a review session that can inspect context with tools but cannot
+    /// mutate the filesystem. The reviewer is a control-plane reader: it may
+    /// run read-only shell/CLI/browser checks, but must not send messages,
+    /// patch files, update tickets, or perform worker actions.
+    pub fn start_review_with_read_only_tools(
+        root: &Path,
+        settings: &BTreeMap<String, String>,
+        base_instructions: Option<&str>,
+    ) -> Result<Self> {
+        Self::start_with_instructions_and_tool_mode(
+            root,
+            settings,
+            base_instructions,
+            true,
+            false,
+            true,
         )
     }
 
@@ -580,6 +603,7 @@ impl PersistentSession {
         base_instructions: Option<&str>,
         disable_compaction: bool,
         disable_active_tools: bool,
+        read_only_sandbox: bool,
     ) -> Result<Self> {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
@@ -595,6 +619,7 @@ impl PersistentSession {
                     settings,
                     &composed_base_instructions,
                     disable_active_tools,
+                    read_only_sandbox,
                 )
                 .await
             })?;
@@ -653,6 +678,7 @@ impl PersistentSession {
             root: root.to_path_buf(),
             base_instructions: composed_base_instructions,
             disable_active_tools,
+            read_only_sandbox,
         })
     }
 
@@ -690,6 +716,7 @@ impl PersistentSession {
         let root = self.root.clone();
         let base_instructions = self.base_instructions.clone();
         let disable_active_tools = self.disable_active_tools;
+        let read_only_sandbox = self.read_only_sandbox;
         let terminal_bench_preflight_guard =
             terminal_bench_preflight.and_then(TerminalBenchPreflightGuard::from_spec);
 
@@ -719,6 +746,7 @@ impl PersistentSession {
                 &mut self.policy,
                 &mut self.ctx_log,
                 disable_active_tools,
+                read_only_sandbox,
                 terminal_bench_preflight_guard,
                 infer_terminal_bench_preflight_from_prompt,
             )
@@ -740,6 +768,7 @@ impl PersistentSession {
         settings: &BTreeMap<String, String>,
         base_instructions: &str,
         disable_active_tools: bool,
+        read_only_sandbox: bool,
     ) -> Result<(
         InProcessAppServerClient,
         String,
@@ -914,7 +943,11 @@ impl PersistentSession {
             model_provider: selected_provider_id.clone(),
             cwd: Some(cwd.clone()),
             approval_policy: Some(AskForApproval::Never),
-            sandbox_mode: Some(SandboxMode::DangerFullAccess),
+            sandbox_mode: Some(if read_only_sandbox {
+                SandboxMode::ReadOnly
+            } else {
+                SandboxMode::DangerFullAccess
+            }),
             ephemeral: Some(true),
             ..Default::default()
         };
@@ -988,7 +1021,11 @@ impl PersistentSession {
                     model_provider: selected_provider_id.clone(),
                     cwd: Some(cwd.to_string_lossy().to_string()),
                     approval_policy: Some(AskForApproval::Never.into()),
-                    sandbox: Some(ctox_app_server_protocol::SandboxMode::DangerFullAccess),
+                    sandbox: Some(if read_only_sandbox {
+                        ctox_app_server_protocol::SandboxMode::ReadOnly
+                    } else {
+                        ctox_app_server_protocol::SandboxMode::DangerFullAccess
+                    }),
                     base_instructions: Some(base_instructions.to_string()),
                     dynamic_tools: disable_active_tools.then(Vec::new),
                     ephemeral: Some(true),
@@ -1029,6 +1066,7 @@ impl PersistentSession {
         policy: &mut CompactPolicy,
         ctx_log: &mut ContextLogger,
         disable_active_tools: bool,
+        read_only_sandbox: bool,
         terminal_bench_preflight_guard: Option<TerminalBenchPreflightGuard>,
         infer_terminal_bench_preflight_from_prompt: bool,
     ) -> Result<String> {
@@ -1043,7 +1081,11 @@ impl PersistentSession {
                     model_provider: model_provider.map(str::to_string),
                     cwd: Some(cwd.to_string_lossy().to_string()),
                     approval_policy: Some(AskForApproval::Never.into()),
-                    sandbox: Some(ctox_app_server_protocol::SandboxMode::DangerFullAccess),
+                    sandbox: Some(if read_only_sandbox {
+                        ctox_app_server_protocol::SandboxMode::ReadOnly
+                    } else {
+                        ctox_app_server_protocol::SandboxMode::DangerFullAccess
+                    }),
                     base_instructions: Some(base_instructions.to_string()),
                     dynamic_tools: disable_active_tools.then(Vec::new),
                     ephemeral: Some(true),
@@ -1069,7 +1111,17 @@ impl PersistentSession {
                     cwd: Some(cwd.to_path_buf()),
                     approval_policy: Some(AskForApproval::Never.into()),
                     approvals_reviewer: None,
-                    sandbox_policy: Some(SandboxPolicy::DangerFullAccess.into()),
+                    sandbox_policy: Some(
+                        if read_only_sandbox {
+                            SandboxPolicy::ReadOnly {
+                                access: ReadOnlyAccess::FullAccess,
+                                network_access: true,
+                            }
+                        } else {
+                            SandboxPolicy::DangerFullAccess
+                        }
+                        .into(),
+                    ),
                     model: None,
                     service_tier: None,
                     effort: reasoning_effort,

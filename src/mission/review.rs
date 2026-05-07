@@ -15,12 +15,13 @@ const REVIEW_SYSTEM_PROMPT: &str = r#"You are CTOX Review.
 You run an external verification pass for one reviewed task result.
 
 Use the review assignment as the only task definition.
-Gather everything else yourself through read-only inspection of the workspace, runtime store, tickets, communication state, live services, logs, browser surface, and other available tools.
+Use the review assignment as the starting point, then read the relevant continuity, runtime, communication, meeting, ticket, artifact, and live-surface context yourself.
 
 Operate in strict read-only verification mode.
-Do not execute shell commands, mutate files, call CTOX CLI operations, open browsers, or run any active tool.
-Base the verdict on the assignment text and evidence already provided in the review prompt. If the provided evidence is insufficient, return PARTIAL or FAIL with the exact additional evidence the worker must produce.
-Stay bounded: answer from the assignment, explicit artifact paths, the CTOX CLI, and directly relevant read-only evidence. Do not reverse-engineer CTOX internals, schemas, or source code unless a direct verification command fails and the missing fact is necessary for the verdict.
+You may use read-only shell/CLI/browser/database inspection to gather evidence. Do not mutate files, send messages, update tickets, apply patches, install packages, restart services, join meetings, or perform any worker action.
+You are a control-plane reviewer, not an executor. Read deeply, judge skeptically, and report what the worker must do; never do the worker's action yourself.
+Base the verdict on inspected evidence, not on prose claims. If evidence is insufficient for a required gate, return PARTIAL or FAIL with the exact missing evidence and rework instruction. Never PASS from prose claims alone when the task requires an artifact, delivery proof, meeting context, or runtime proof.
+Stay bounded: inspect only directly relevant context for the reviewed task and current mission continuity.
 
 Verification standard:
 - active vision and active mission are the primary strategic context
@@ -95,6 +96,8 @@ CATEGORIZED_FINDINGS contract:
 
 #[derive(Debug, Clone, Default)]
 pub struct CompletionReviewRequest {
+    pub task_goal: String,
+    pub task_prompt: String,
     pub preview: String,
     pub source_label: String,
     pub owner_visible: bool,
@@ -111,6 +114,7 @@ pub struct CompletionReviewRequest {
     pub required_deliverables: Vec<String>,
     pub artifact_commitments: Vec<String>,
     pub commitment_backing: Vec<String>,
+    pub deterministic_evidence: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -440,11 +444,10 @@ fn run_external_review_leg_with_wall_timeout(
     leg: usize,
     timeout: Duration,
 ) -> anyhow::Result<String> {
-    let mut session = PersistentSession::start_with_instructions(
+    let mut session = PersistentSession::start_review_with_read_only_tools(
         root,
         settings,
         Some(REVIEW_SYSTEM_PROMPT),
-        true,
     )
     .map_err(|err| {
         anyhow::anyhow!(
@@ -472,8 +475,8 @@ fn assess_review_requirement(
     result_text: &str,
 ) -> (bool, u8, Vec<String>) {
     let combined = format!(
-        "{}\n{}\n{}",
-        request.preview, request.source_label, result_text
+        "{}\n{}\n{}\n{}\n{}",
+        request.task_goal, request.task_prompt, request.preview, request.source_label, result_text
     );
     let lowered = combined.to_ascii_lowercase();
     let mut score = 0u8;
@@ -631,6 +634,16 @@ fn build_review_prompt(request: &CompletionReviewRequest, reasons: &[String]) ->
         reasons.join(", ")
     };
     let source = request.source_label.as_str();
+    let task_goal = if request.task_goal.trim().is_empty() {
+        "(none recorded)"
+    } else {
+        request.task_goal.trim()
+    };
+    let task_prompt = if request.task_prompt.trim().is_empty() {
+        "(none recorded)"
+    } else {
+        request.task_prompt.trim()
+    };
     let owner_visible = if request.owner_visible { "yes" } else { "no" };
     let thread_key = if request.thread_key.trim().is_empty() {
         "(none recorded)"
@@ -706,6 +719,11 @@ fn build_review_prompt(request: &CompletionReviewRequest, reasons: &[String]) ->
     } else {
         request.commitment_backing.join(" | ")
     };
+    let deterministic_evidence = if request.deterministic_evidence.is_empty() {
+        "(none recorded)".to_string()
+    } else {
+        request.deterministic_evidence.join("\n- ")
+    };
     let founder_specific_work = if founder_artifact {
         "\
 Founder/owner communication gate:\n\
@@ -753,6 +771,10 @@ Runtime DB: {runtime_db_path}\n\
 Review skill: {review_skill_path}\n\
 Trigger reasons: {reason_block}\n\
 \n\
+Original task contract:\n\
+Task goal: {task_goal}\n\
+Task prompt: {task_prompt}\n\
+\n\
 Artifact under review:\n\
 Artifact action: {artifact_action}\n\
 Artifact to: {artifact_to}\n\
@@ -761,22 +783,24 @@ Artifact attachments: {artifact_attachments}\n\
 Required deliverables: {required_deliverables}\n\
 Artifact commitments: {artifact_commitments}\n\
 Commitment backing: {commitment_backing}\n\
+Deterministic review evidence:\n\
+- {deterministic_evidence}\n\
 --- BEGIN ARTIFACT ---\n\
 {artifact_text}\n\
 --- END ARTIFACT ---\n\
 \n\
 Open the review skill first and follow it.\n\
 \n\
-Gather the review facts yourself from the runtime store, continuity records, ticket system, communication state, workspace, runtime, live URLs, and browser surface.\n\
+Start from the deterministic review evidence above, then inspect the underlying runtime/continuity/artifact context yourself with read-only tools. Do not assume a claim is true unless the deterministic evidence or your own read-only inspection supports it.\n\
 \n\
 Required review work:\n\
-1. load the active strategic directives for this conversation or thread from runtime SQLite state first\n\
-2. treat active vision and active mission as the primary review context\n\
-3. discover the done gate and the reviewed task result or latest claimed progress for this conversation or thread\n\
-4. inspect related ticket/self-work/queue state\n\
-5. inspect recent relevant meeting outcomes before communication or artifact verdicts; prioritize meeting summaries from the last 7 days, treat 30-day-old meeting outcomes as supporting context, and ignore stale meeting notes when contradicted by newer runtime state\n\
-6. inspect relevant founder or owner communication facts when owner-visible is yes\n\
-7. inspect the live public/runtime surface when applicable\n\
+1. load active strategic directives, mission state, and continuity for this conversation/thread\n\
+2. inspect recent verification runs, open claims, queue/self-work/ticket state, and the reviewed task result\n\
+3. inspect recent same-thread communication and recent relevant meeting outcomes before communication or artifact verdicts\n\
+4. inspect explicit artifact paths and attachments directly; for spreadsheets, verify row counts, headers, and whether the content satisfies the requested scope\n\
+5. inspect delivery state before accepting any claim that a message, mail, or attachment was sent\n\
+6. inspect live public/runtime surfaces when the reviewed work depends on them\n\
+7. compare the artifact text, recipients, attachments, commitments, and required deliverables against the original task contract and inspected evidence\n\
 8. decide whether this specific artifact is ready to send/release/close, or whether real rework is required first\n\
 9. produce a verdict from evidence\n\
 \n\
@@ -784,11 +808,6 @@ Use the runtime DB path and workspace root above as the primary grounding points
 \n\
 {founder_specific_work}\
 {artifact_review_work}\
-\n\
-Helpful runtime entrypoint:\n\
-- use `ctox strategy show --conversation-id {strategy_conversation_id}` and `ctox verification runs --conversation-id {verification_conversation_id}` as starting lookups, then continue with direct SQLite/runtime/browser inspection\n\
-- for recent meeting outcomes, query `communication_messages` for `channel='meeting'` and bodies or subjects containing `Meeting Summary`, then inspect same-thread entries first and recent cross-thread entries when they mention the reviewed artifact, system, recipient, or deliverable\n\
-- if a suggested SQLite query fails because a column or table is absent, do not spend the review budget on schema exploration unless that exact fact is decisive; use `PRAGMA table_info(<table>)` once, adapt the query, or record the missing evidence as an open item\n\
 \n\
 If active vision or active mission is missing for strategic or owner-visible work, that is a review failure unless the current task is explicitly establishing them.\n\
 \n\
@@ -815,6 +834,8 @@ The CATEGORIZED_FINDINGS block is the structural input the dispatcher uses to ch
 \n\
 DISPOSITION is the structural terminal flag: emit `NO_SEND` only when the current task is closed without sending anything (the correct action is to wait for external inputs, the user already received the answer elsewhere, the task was a duplicate, etc.). Default is `SEND` — used for every PASS verdict and for FAIL verdicts that should drive a rewrite or rework loop. The dispatcher reads this enum directly; do not encode the no-send signal as free-text in the summary or findings.\n",
         conversation_id = request.conversation_id,
+        task_goal = task_goal,
+        task_prompt = task_prompt,
         artifact_action = artifact_action,
         artifact_to = artifact_to,
         artifact_cc = artifact_cc,
@@ -822,8 +843,7 @@ DISPOSITION is the structural terminal flag: emit `NO_SEND` only when the curren
         required_deliverables = required_deliverables,
         artifact_commitments = artifact_commitments,
         commitment_backing = commitment_backing,
-        strategy_conversation_id = request.conversation_id,
-        verification_conversation_id = request.conversation_id
+        deterministic_evidence = deterministic_evidence,
     )
 }
 
@@ -858,7 +878,7 @@ Workspace root: {workspace_root}\n\
 Runtime DB: {runtime_db_path}\n\
 Review skill: {review_skill_path}\n\
 \n\
-Open the review skill first and continue from this review handoff.\n\
+Open the review skill first and continue from this review handoff using read-only inspection only.\n\
 \n\
 Prior handoff:\n\
 {}\n\
@@ -1240,6 +1260,9 @@ mod tests {
     #[test]
     fn requires_review_for_founder_email_even_without_runtime_change() {
         let request = CompletionReviewRequest {
+            task_goal: "Reply with the requested QR code and status proof.".to_string(),
+            task_prompt: "Prepare a reviewed founder reply with the requested attachment."
+                .to_string(),
             preview: "[E-Mail eingegangen] Sender: Founder".to_string(),
             source_label: "email:owner".to_string(),
             owner_visible: true,
@@ -1277,14 +1300,18 @@ mod tests {
         assert!(rendered.contains("Open the review skill first and follow it."));
         assert!(rendered.contains("Artifact under review:"));
         assert!(rendered.contains("Patched rollout artifact"));
-        assert!(rendered.contains("inspect recent relevant meeting outcomes"));
-        assert!(rendered.contains("channel='meeting'"));
-        assert!(rendered.contains("Meeting Summary"));
+        assert!(rendered.contains("Original task contract:"));
+        assert!(rendered.contains("Deterministic review evidence:"));
+        assert!(rendered.contains("read-only tools"));
+        assert!(rendered.contains("inspect explicit artifact paths and attachments directly"));
     }
 
     #[test]
     fn founder_review_prompt_explicitly_reviews_the_mail_artifact() {
         let request = CompletionReviewRequest {
+            task_goal: "Reply with the requested QR code and status proof.".to_string(),
+            task_prompt: "Prepare a reviewed founder reply with the requested attachment."
+                .to_string(),
             preview: "[E-Mail eingegangen] Sender: Founder".to_string(),
             source_label: "email:owner".to_string(),
             owner_visible: true,
@@ -1307,6 +1334,10 @@ mod tests {
             commitment_backing: vec![
                 "kunstmen founder update 20utc @ 2026-04-24T20:00:00+00:00".to_string()
             ],
+            deterministic_evidence: vec![
+                "Recent same-thread email: inbound founder requested QR code".to_string(),
+                "Recent meeting evidence: none found".to_string(),
+            ],
         };
         let rendered = build_review_prompt(&request, &["founder_communication".to_string()]);
         assert!(rendered.contains("Artifact kind: founder_or_owner_outbound_email_draft"));
@@ -1323,6 +1354,7 @@ mod tests {
         assert!(rendered.contains(
             "Commitment backing: kunstmen founder update 20utc @ 2026-04-24T20:00:00+00:00"
         ));
+        assert!(rendered.contains("Recent same-thread email: inbound founder requested QR code"));
         assert!(rendered.contains("judge the full mail action, not just the prose"));
         assert!(rendered.contains("treat every listed required deliverable as mandatory"));
         assert!(rendered.contains("future promise, dated commitment, or deadline promise"));

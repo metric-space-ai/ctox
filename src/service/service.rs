@@ -35,7 +35,6 @@ use std::io::BufRead;
 use std::io::BufReader;
 #[cfg(unix)]
 use std::io::BufWriter;
-#[cfg(not(unix))]
 use std::io::Read;
 #[cfg(unix)]
 use std::io::Write;
@@ -3994,6 +3993,18 @@ fn run_completion_review(
             channels::required_founder_reply_deliverables(root, message_key).ok()
         })
         .unwrap_or_default();
+    let artifact_attachments = founder_reply_action
+        .as_ref()
+        .map(|action| action.attachments.clone())
+        .or_else(|| {
+            proactive_founder_action
+                .as_ref()
+                .map(|action| action.attachments.clone())
+        })
+        .unwrap_or_default();
+    let required_deliverables = founder_required_deliverables;
+    let deterministic_evidence =
+        collect_review_evidence_summaries(root, job, conversation_id, &artifact_attachments);
     let founder_commitments =
         if is_founder_or_owner_email_job(job) || proactive_founder_action.is_some() {
             detect_founder_mail_commitments(reply_text)
@@ -4006,6 +4017,8 @@ fn run_completion_review(
         founder_commitment_backing_summaries(root)
     };
     let review_request = review::CompletionReviewRequest {
+        task_goal: job.goal.clone(),
+        task_prompt: job.prompt.clone(),
         preview: job.preview.clone(),
         source_label: job.source_label.clone(),
         owner_visible,
@@ -4041,20 +4054,23 @@ fn run_completion_review(
                     .map(|action| action.cc.clone())
             })
             .unwrap_or_default(),
-        artifact_attachments: founder_reply_action
-            .as_ref()
-            .map(|action| action.attachments.clone())
-            .or_else(|| {
-                proactive_founder_action
-                    .as_ref()
-                    .map(|action| action.attachments.clone())
-            })
-            .unwrap_or_default(),
-        required_deliverables: founder_required_deliverables,
+        artifact_attachments,
+        required_deliverables,
         artifact_commitments: founder_commitments.clone(),
         commitment_backing: founder_commitment_backing.clone(),
+        deterministic_evidence,
     };
     let mut outcome = review::review_completion_if_needed(root, &review_request, reply_text);
+    if let Some(guard_outcome) = spreadsheet_attachment_guard_outcome(job, &review_request) {
+        push_event(
+            state,
+            format!(
+                "Spreadsheet attachment guard blocked impossible completion: {}",
+                clip_text(&guard_outcome.summary, 180)
+            ),
+        );
+        outcome = guard_outcome;
+    }
     if is_founder_or_owner_email_job(job) || proactive_founder_action.is_some() {
         if let Some(guard_outcome) = founder_commitment_guard_outcome(
             &review_request.artifact_commitments,
@@ -4569,6 +4585,582 @@ fn no_cascade_review_block(
             outcome.summary
         ),
     })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SpreadsheetAttachmentEvidence {
+    path: String,
+    sheet_name: String,
+    row_count: usize,
+    headers: Vec<String>,
+}
+
+fn attachment_evidence_summaries(paths: &[String]) -> Vec<String> {
+    paths
+        .iter()
+        .filter(|path| path.to_ascii_lowercase().ends_with(".xlsx"))
+        .map(|path| match inspect_xlsx_attachment(path) {
+            Ok(evidence) => format!(
+                "XLSX attachment `{}`: sheet `{}`, rows={}, data_rows={}, headers=[{}]",
+                evidence.path,
+                evidence.sheet_name,
+                evidence.row_count,
+                evidence.row_count.saturating_sub(1),
+                evidence.headers.join(", ")
+            ),
+            Err(err) => format!("XLSX attachment `{path}` could not be inspected: {err}"),
+        })
+        .collect()
+}
+
+fn collect_review_evidence_summaries(
+    root: &Path,
+    job: &QueuedPrompt,
+    conversation_id: i64,
+    artifact_attachments: &[String],
+) -> Vec<String> {
+    let mut evidence = Vec::new();
+    evidence.extend(attachment_evidence_summaries(artifact_attachments));
+    evidence.extend(review_delivery_evidence_summaries(root, job));
+    evidence.extend(review_thread_evidence_summaries(root, job));
+    evidence.extend(review_meeting_evidence_summaries(
+        root,
+        job,
+        conversation_id,
+    ));
+    evidence.extend(review_ticket_evidence_summaries(job));
+    if evidence.is_empty() {
+        evidence.push(
+            "Harness collected no deterministic evidence for this review; reviewer must not treat missing evidence as verified."
+                .to_string(),
+        );
+    }
+    evidence
+}
+
+fn review_delivery_evidence_summaries(root: &Path, job: &QueuedPrompt) -> Vec<String> {
+    let Some(thread_key) = job
+        .thread_key
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    else {
+        return Vec::new();
+    };
+    let db_path = crate::paths::core_db(&root);
+    let conn = match channels::open_channel_db(&db_path) {
+        Ok(conn) => conn,
+        Err(err) => {
+            return vec![format!(
+                "Outbound delivery evidence unavailable: failed to open channel DB: {err}"
+            )]
+        }
+    };
+    let mut stmt = match conn.prepare(
+        r#"
+        SELECT channel, direction, status, subject, preview, observed_at
+        FROM communication_messages
+        WHERE thread_key = ?1
+          AND direction = 'outbound'
+        ORDER BY observed_at DESC
+        LIMIT 3
+        "#,
+    ) {
+        Ok(stmt) => stmt,
+        Err(err) => {
+            return vec![format!(
+                "Outbound delivery evidence unavailable for thread `{thread_key}`: {err}"
+            )]
+        }
+    };
+    let rows = match stmt.query_map(params![thread_key], |row| {
+        Ok(format!(
+            "Outbound delivery row: channel={} direction={} status={} subject=`{}` observed_at={} preview=`{}`",
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            clip_text(&row.get::<_, String>(3)?, 120),
+            row.get::<_, String>(5)?,
+            clip_text(&row.get::<_, String>(4)?, 180),
+        ))
+    }) {
+        Ok(rows) => rows,
+        Err(err) => {
+            return vec![format!(
+                "Outbound delivery evidence unavailable for thread `{thread_key}`: {err}"
+            )]
+        }
+    };
+    match rows.collect::<rusqlite::Result<Vec<_>>>() {
+        Ok(rows) if !rows.is_empty() => rows,
+        Ok(_) => vec![format!(
+            "Outbound delivery row: none found for thread `{thread_key}`."
+        )],
+        Err(err) => vec![format!(
+            "Outbound delivery evidence unavailable for thread `{thread_key}`: {err}"
+        )],
+    }
+}
+
+fn review_thread_evidence_summaries(root: &Path, job: &QueuedPrompt) -> Vec<String> {
+    let Some(thread_key) = job
+        .thread_key
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    else {
+        return Vec::new();
+    };
+    let db_path = crate::paths::core_db(&root);
+    let conn = match channels::open_channel_db(&db_path) {
+        Ok(conn) => conn,
+        Err(err) => {
+            return vec![format!(
+                "Same-thread communication evidence unavailable: failed to open channel DB: {err}"
+            )]
+        }
+    };
+    let mut stmt = match conn.prepare(
+        r#"
+        SELECT channel, direction, status, sender_address, subject, preview, observed_at
+        FROM communication_messages
+        WHERE thread_key = ?1
+        ORDER BY observed_at DESC
+        LIMIT 6
+        "#,
+    ) {
+        Ok(stmt) => stmt,
+        Err(err) => {
+            return vec![format!(
+                "Same-thread communication evidence unavailable for `{thread_key}`: {err}"
+            )]
+        }
+    };
+    let rows = match stmt.query_map(params![thread_key], |row| {
+        Ok(format!(
+            "Same-thread message: channel={} direction={} status={} sender=`{}` subject=`{}` observed_at={} preview=`{}`",
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            clip_text(&row.get::<_, String>(3)?, 120),
+            clip_text(&row.get::<_, String>(4)?, 120),
+            row.get::<_, String>(6)?,
+            clip_text(&row.get::<_, String>(5)?, 220),
+        ))
+    }) {
+        Ok(rows) => rows,
+        Err(err) => {
+            return vec![format!(
+                "Same-thread communication evidence unavailable for `{thread_key}`: {err}"
+            )]
+        }
+    };
+    match rows.collect::<rusqlite::Result<Vec<_>>>() {
+        Ok(rows) if !rows.is_empty() => rows,
+        Ok(_) => vec![format!(
+            "Same-thread message: none found for `{thread_key}`."
+        )],
+        Err(err) => vec![format!(
+            "Same-thread communication evidence unavailable for `{thread_key}`: {err}"
+        )],
+    }
+}
+
+fn review_meeting_evidence_summaries(
+    root: &Path,
+    job: &QueuedPrompt,
+    conversation_id: i64,
+) -> Vec<String> {
+    let db_path = crate::paths::core_db(&root);
+    let conn = match channels::open_channel_db(&db_path) {
+        Ok(conn) => conn,
+        Err(err) => {
+            return vec![format!(
+                "Recent meeting evidence unavailable: failed to open channel DB: {err}"
+            )]
+        }
+    };
+    let keywords = review_context_keywords(job);
+    let mut stmt = match conn.prepare(
+        r#"
+        SELECT subject, preview, body_text, observed_at, thread_key
+        FROM communication_messages
+        WHERE channel = 'meeting'
+          AND (
+            subject LIKE '%Meeting Summary%'
+            OR preview LIKE '%Meeting Summary%'
+            OR body_text LIKE '%Meeting Summary%'
+            OR body_text LIKE '%Zusammenfassung%'
+          )
+        ORDER BY observed_at DESC
+        LIMIT 5
+        "#,
+    ) {
+        Ok(stmt) => stmt,
+        Err(err) => {
+            return vec![format!(
+                "Recent meeting evidence unavailable for conversation {conversation_id}: {err}"
+            )]
+        }
+    };
+    let rows = match stmt.query_map([], |row| {
+        let subject: String = row.get(0)?;
+        let preview: String = row.get(1)?;
+        let body: String = row.get(2)?;
+        let observed_at: String = row.get(3)?;
+        let thread_key: String = row.get(4)?;
+        let body_lc = body.to_ascii_lowercase();
+        let relevant = keywords.iter().any(|keyword| {
+            body_lc.contains(keyword) || subject.to_ascii_lowercase().contains(keyword)
+        });
+        Ok((subject, preview, body, observed_at, thread_key, relevant))
+    }) {
+        Ok(rows) => rows,
+        Err(err) => {
+            return vec![format!(
+                "Recent meeting evidence unavailable for conversation {conversation_id}: {err}"
+            )]
+        }
+    };
+    let mut summaries = Vec::new();
+    match rows.collect::<rusqlite::Result<Vec<_>>>() {
+        Ok(rows) => {
+            for (subject, preview, body, observed_at, thread_key, relevant) in rows {
+                if !relevant && !summaries.is_empty() {
+                    continue;
+                }
+                summaries.push(format!(
+                    "Recent meeting summary: relevant={} thread=`{}` observed_at={} subject=`{}` preview=`{}` body=`{}`",
+                    relevant,
+                    thread_key,
+                    observed_at,
+                    clip_text(&subject, 120),
+                    clip_text(&preview, 180),
+                    clip_text(&body, 360),
+                ));
+                if summaries.len() >= 3 {
+                    break;
+                }
+            }
+        }
+        Err(err) => {
+            return vec![format!(
+                "Recent meeting evidence unavailable for conversation {conversation_id}: {err}"
+            )]
+        }
+    }
+    if summaries.is_empty() {
+        summaries.push(format!(
+            "Recent meeting summary: none found for conversation {conversation_id}."
+        ));
+    }
+    summaries
+}
+
+fn review_ticket_evidence_summaries(job: &QueuedPrompt) -> Vec<String> {
+    let mut evidence = Vec::new();
+    if let Some(work_id) = job
+        .ticket_self_work_id
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        evidence.push(format!("Queued self-work id: {work_id}"));
+    }
+    if !job.leased_ticket_event_keys.is_empty() {
+        evidence.push(format!(
+            "Leased ticket event keys: {}",
+            job.leased_ticket_event_keys.join(", ")
+        ));
+    }
+    if !job.leased_message_keys.is_empty() {
+        evidence.push(format!(
+            "Leased inbound message keys: {}",
+            job.leased_message_keys.join(", ")
+        ));
+    }
+    evidence
+}
+
+fn review_context_keywords(job: &QueuedPrompt) -> Vec<String> {
+    let mut keywords = Vec::new();
+    for token in format!("{} {} {}", job.goal, job.prompt, job.preview)
+        .to_ascii_lowercase()
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+    {
+        let token = token.trim();
+        if token.len() >= 5
+            && !matches!(
+                token,
+                "bitte"
+                    | "diese"
+                    | "dieser"
+                    | "einen"
+                    | "einer"
+                    | "einem"
+                    | "nicht"
+                    | "sollte"
+                    | "wurde"
+                    | "wird"
+                    | "haben"
+                    | "unter"
+                    | "ueber"
+                    | "about"
+                    | "with"
+                    | "from"
+                    | "that"
+                    | "this"
+            )
+            && !keywords.iter().any(|existing| existing == token)
+        {
+            keywords.push(token.to_string());
+        }
+        if keywords.len() >= 12 {
+            break;
+        }
+    }
+    keywords
+}
+
+fn spreadsheet_attachment_guard_outcome(
+    job: &QueuedPrompt,
+    request: &review::CompletionReviewRequest,
+) -> Option<review::ReviewOutcome> {
+    if request.artifact_attachments.is_empty() {
+        return None;
+    }
+    let haystack = format!(
+        "{}\n{}\n{}\n{}",
+        job.prompt, job.goal, job.preview, request.artifact_text
+    )
+    .to_ascii_lowercase();
+    let requires_full_intersolar_company_list = haystack.contains("intersolar")
+        && (haystack.contains("alle unternehmen")
+            || haystack.contains("alle aussteller")
+            || haystack.contains("aller unternehmen")
+            || haystack.contains("vollstaendig")
+            || haystack.contains("vollständig"));
+    if !requires_full_intersolar_company_list {
+        return None;
+    }
+
+    let mut checked = Vec::new();
+    for path in &request.artifact_attachments {
+        if !path.to_ascii_lowercase().ends_with(".xlsx") {
+            continue;
+        }
+        match inspect_xlsx_attachment(path) {
+            Ok(evidence) => {
+                checked.push(format!(
+                    "`{}` rows={} data_rows={} headers=[{}]",
+                    evidence.path,
+                    evidence.row_count,
+                    evidence.row_count.saturating_sub(1),
+                    evidence.headers.join(", ")
+                ));
+                let has_plz = evidence
+                    .headers
+                    .iter()
+                    .any(|header| header.trim().eq_ignore_ascii_case("plz"));
+                if evidence.row_count.saturating_sub(1) < 200 || !has_plz {
+                    return Some(spreadsheet_guard_failure_outcome(
+                        checked,
+                        format!(
+                            "The attached Intersolar spreadsheet is not a complete PLZ deliverable: data_rows={} and PLZ column present={}.",
+                            evidence.row_count.saturating_sub(1),
+                            has_plz
+                        ),
+                    ));
+                }
+            }
+            Err(err) => {
+                checked.push(format!("`{path}` inspection failed: {err}"));
+                return Some(spreadsheet_guard_failure_outcome(
+                    checked,
+                    "The attached Intersolar spreadsheet could not be inspected.".to_string(),
+                ));
+            }
+        }
+    }
+    None
+}
+
+fn spreadsheet_guard_failure_outcome(
+    evidence: Vec<String>,
+    summary: String,
+) -> review::ReviewOutcome {
+    review::ReviewOutcome {
+        required: true,
+        verdict: review::ReviewVerdict::Fail,
+        mission_state: "UNCLEAR".to_string(),
+        summary,
+        report: "Deterministic spreadsheet attachment guard failed before completion.".to_string(),
+        score: 5,
+        reasons: vec!["spreadsheet_attachment_contract".to_string()],
+        failed_gates: vec![
+            "Attached spreadsheet does not satisfy the requested full Intersolar PLZ deliverable."
+                .to_string(),
+        ],
+        semantic_findings: vec![
+            "The task asked for all Intersolar companies, but the attached workbook is incomplete or lacks the required PLZ column."
+                .to_string(),
+        ],
+        categorized_findings: vec![review::CategorizedFinding {
+            id: "spreadsheet_attachment_contract".to_string(),
+            category: review::FindingCategory::Rework,
+            evidence: evidence.join(" | "),
+            corrective_action:
+                "Build the complete workbook from the full source set, verify row count and PLZ column, then rerun the reviewed send."
+                    .to_string(),
+        }],
+        open_items: vec![
+            "Create a complete Intersolar workbook with the full source row count and PLZ column."
+                .to_string(),
+            "Attach only the verified complete workbook to the outbound mail.".to_string(),
+        ],
+        evidence,
+        handoff: None,
+        disposition: review::ReviewDisposition::Send,
+    }
+}
+
+fn inspect_xlsx_attachment(path: &str) -> Result<SpreadsheetAttachmentEvidence> {
+    let file = std::fs::File::open(path).with_context(|| format!("failed to open `{path}`"))?;
+    let mut archive =
+        zip::ZipArchive::new(file).with_context(|| format!("failed to read xlsx zip `{path}`"))?;
+    let shared_strings = read_xlsx_shared_strings(&mut archive)?;
+    let workbook_xml = read_zip_text(&mut archive, "xl/workbook.xml")?;
+    let rels_xml = read_zip_text(&mut archive, "xl/_rels/workbook.xml.rels")?;
+    let sheet_name = first_sheet_name(&workbook_xml).unwrap_or_else(|| "Sheet1".to_string());
+    let sheet_target = first_sheet_target(&workbook_xml, &rels_xml)
+        .unwrap_or_else(|| "worksheets/sheet1.xml".to_string());
+    let sheet_path = if sheet_target.starts_with("xl/") {
+        sheet_target
+    } else if sheet_target.starts_with("/xl/") {
+        sheet_target.trim_start_matches('/').to_string()
+    } else {
+        format!("xl/{}", sheet_target.trim_start_matches('/'))
+    };
+    let sheet_xml = read_zip_text(&mut archive, &sheet_path)?;
+    let rows = parse_xlsx_rows(&sheet_xml, &shared_strings)?;
+    Ok(SpreadsheetAttachmentEvidence {
+        path: path.to_string(),
+        sheet_name,
+        row_count: rows.len(),
+        headers: rows.into_iter().next().unwrap_or_default(),
+    })
+}
+
+fn read_zip_text<R: Read + std::io::Seek>(
+    archive: &mut zip::ZipArchive<R>,
+    name: &str,
+) -> Result<String> {
+    let mut entry = archive
+        .by_name(name)
+        .with_context(|| format!("missing xlsx entry `{name}`"))?;
+    let mut text = String::new();
+    entry
+        .read_to_string(&mut text)
+        .with_context(|| format!("failed to read xlsx entry `{name}`"))?;
+    Ok(text)
+}
+
+fn read_xlsx_shared_strings<R: Read + std::io::Seek>(
+    archive: &mut zip::ZipArchive<R>,
+) -> Result<Vec<String>> {
+    let Ok(mut entry) = archive.by_name("xl/sharedStrings.xml") else {
+        return Ok(Vec::new());
+    };
+    let mut xml = String::new();
+    entry
+        .read_to_string(&mut xml)
+        .context("failed to read xlsx sharedStrings.xml")?;
+    let document = roxmltree::Document::parse(&xml).context("failed to parse sharedStrings.xml")?;
+    let mut strings = Vec::new();
+    for si in document
+        .descendants()
+        .filter(|node| node.is_element() && node.tag_name().name() == "si")
+    {
+        let value = si
+            .descendants()
+            .filter(|node| node.is_element() && node.tag_name().name() == "t")
+            .filter_map(|node| node.text())
+            .collect::<String>();
+        strings.push(value);
+    }
+    Ok(strings)
+}
+
+fn first_sheet_name(workbook_xml: &str) -> Option<String> {
+    let document = roxmltree::Document::parse(workbook_xml).ok()?;
+    document
+        .descendants()
+        .find(|node| node.is_element() && node.tag_name().name() == "sheet")
+        .and_then(|node| node.attribute("name"))
+        .map(ToOwned::to_owned)
+}
+
+fn first_sheet_target(workbook_xml: &str, rels_xml: &str) -> Option<String> {
+    let workbook = roxmltree::Document::parse(workbook_xml).ok()?;
+    let sheet = workbook
+        .descendants()
+        .find(|node| node.is_element() && node.tag_name().name() == "sheet")?;
+    let rid = sheet
+        .attribute((
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
+            "id",
+        ))
+        .or_else(|| sheet.attribute("r:id"))?;
+    let rels = roxmltree::Document::parse(rels_xml).ok()?;
+    rels.descendants()
+        .find(|node| {
+            node.is_element()
+                && node.tag_name().name() == "Relationship"
+                && node.attribute("Id") == Some(rid)
+        })
+        .and_then(|node| node.attribute("Target"))
+        .map(ToOwned::to_owned)
+}
+
+fn parse_xlsx_rows(sheet_xml: &str, shared_strings: &[String]) -> Result<Vec<Vec<String>>> {
+    let document =
+        roxmltree::Document::parse(sheet_xml).context("failed to parse worksheet xml")?;
+    let mut rows = Vec::new();
+    for row in document
+        .descendants()
+        .filter(|node| node.is_element() && node.tag_name().name() == "row")
+    {
+        let mut values = Vec::new();
+        for cell in row
+            .children()
+            .filter(|node| node.is_element() && node.tag_name().name() == "c")
+        {
+            values.push(xlsx_cell_text(cell, shared_strings));
+        }
+        rows.push(values);
+    }
+    Ok(rows)
+}
+
+fn xlsx_cell_text(cell: roxmltree::Node<'_, '_>, shared_strings: &[String]) -> String {
+    if cell.attribute("t") == Some("inlineStr") {
+        return cell
+            .descendants()
+            .filter(|node| node.is_element() && node.tag_name().name() == "t")
+            .filter_map(|node| node.text())
+            .collect::<String>();
+    }
+    let value = cell
+        .children()
+        .find(|node| node.is_element() && node.tag_name().name() == "v")
+        .and_then(|node| node.text())
+        .unwrap_or_default();
+    if cell.attribute("t") == Some("s") {
+        return value
+            .parse::<usize>()
+            .ok()
+            .and_then(|idx| shared_strings.get(idx))
+            .cloned()
+            .unwrap_or_default();
+    }
+    value.to_string()
 }
 
 fn expected_outcome_artifacts_for_job(job: &QueuedPrompt) -> Vec<ArtifactRef> {
@@ -18729,6 +19321,117 @@ Was jetzt zu tun ist:\n\
         assert_eq!(action.subject, "Update");
         assert_eq!(action.to, vec!["d.lottes@example.test".to_string()]);
         assert_eq!(action.cc, vec!["j.kienzler@example.test".to_string()]);
+    }
+
+    fn write_minimal_xlsx(path: &Path, headers: &[&str], data_rows: usize) {
+        use std::io::Write as _;
+        use zip::write::SimpleFileOptions;
+
+        fn cell_ref(row: usize, col: usize) -> String {
+            let mut n = col + 1;
+            let mut name = String::new();
+            while n > 0 {
+                let rem = (n - 1) % 26;
+                name.insert(0, (b'A' + rem as u8) as char);
+                n = (n - 1) / 26;
+            }
+            format!("{name}{row}")
+        }
+
+        fn cell(row: usize, col: usize, value: &str) -> String {
+            format!(
+                r#"<c r="{}" t="inlineStr"><is><t>{}</t></is></c>"#,
+                cell_ref(row, col),
+                value
+            )
+        }
+
+        let mut rows = Vec::new();
+        rows.push(format!(
+            r#"<row r="1">{}</row>"#,
+            headers
+                .iter()
+                .enumerate()
+                .map(|(idx, header)| cell(1, idx, header))
+                .collect::<String>()
+        ));
+        for idx in 0..data_rows {
+            let row_no = idx + 2;
+            rows.push(format!(
+                r#"<row r="{row_no}">{}{}</row>"#,
+                cell(row_no, 0, &format!("Company {idx}")),
+                cell(row_no, 1, "12345")
+            ));
+        }
+        let sheet = format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>{}</sheetData></worksheet>"#,
+            rows.join("")
+        );
+        let file = std::fs::File::create(path).expect("create xlsx");
+        let mut zip = zip::ZipWriter::new(file);
+        let options = SimpleFileOptions::default();
+        zip.start_file("[Content_Types].xml", options).unwrap();
+        zip.write_all(br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>"#).unwrap();
+        zip.start_file("_rels/.rels", options).unwrap();
+        zip.write_all(br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#).unwrap();
+        zip.start_file("xl/_rels/workbook.xml.rels", options)
+            .unwrap();
+        zip.write_all(br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#).unwrap();
+        zip.start_file("xl/workbook.xml", options).unwrap();
+        zip.write_all(br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Intersolar PLZ" sheetId="1" r:id="rId1"/></sheets></workbook>"#).unwrap();
+        zip.start_file("xl/worksheets/sheet1.xml", options).unwrap();
+        zip.write_all(sheet.as_bytes()).unwrap();
+        zip.finish().unwrap();
+    }
+
+    #[test]
+    fn xlsx_attachment_inspection_counts_rows_and_headers() {
+        let root = temp_root("xlsx-inspection");
+        let path = root.join("fixture.xlsx");
+        write_minimal_xlsx(&path, &["company", "PLZ"], 3);
+
+        let evidence = inspect_xlsx_attachment(&path.to_string_lossy()).expect("inspect xlsx");
+
+        assert_eq!(evidence.sheet_name, "Intersolar PLZ");
+        assert_eq!(evidence.row_count, 4);
+        assert_eq!(
+            evidence.headers,
+            vec!["company".to_string(), "PLZ".to_string()]
+        );
+    }
+
+    #[test]
+    fn spreadsheet_guard_blocks_tiny_intersolar_all_companies_attachment() {
+        let root = temp_root("xlsx-guard");
+        let path = root.join("tiny.xlsx");
+        write_minimal_xlsx(&path, &["company", "PLZ"], 19);
+        let job = QueuedPrompt {
+            prompt:
+                "Bitte recherchiere die Postleitzahl aller Unternehmen aus der Intersolar und sende die Excel."
+                    .to_string(),
+            goal: "Intersolar alle Unternehmen PLZ".to_string(),
+            preview: "Intersolar PLZ".to_string(),
+            source_label: "tui".to_string(),
+            suggested_skill: None,
+            leased_message_keys: Vec::new(),
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("jill".to_string()),
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+        let request = review::CompletionReviewRequest {
+            artifact_text: "Die Excel ist fertig.".to_string(),
+            artifact_attachments: vec![path.to_string_lossy().into_owned()],
+            ..review::CompletionReviewRequest::default()
+        };
+
+        let outcome = spreadsheet_attachment_guard_outcome(&job, &request)
+            .expect("tiny all-companies workbook must be blocked");
+
+        assert_eq!(outcome.verdict, review::ReviewVerdict::Fail);
+        assert!(outcome.summary.contains("data_rows=19"));
     }
 
     #[test]
