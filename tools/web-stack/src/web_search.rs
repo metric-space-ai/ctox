@@ -32,6 +32,7 @@ enum ProviderKind {
     DuckDuckGo,
     Bing,
     Searxng,
+    AnnasArchive,
     Mock,
 }
 
@@ -53,6 +54,9 @@ impl ProviderKind {
             "bing" => Self::Bing,
             "mock" => Self::Mock,
             "searxng" => Self::Searxng,
+            "annas_archive" | "annas-archive" | "anna_archive" | "anna-archive" | "annas" => {
+                Self::AnnasArchive
+            }
             _ => Self::Google,
         }
     }
@@ -66,6 +70,7 @@ impl ProviderKind {
             Self::DuckDuckGo => "duckduckgo",
             Self::Bing => "bing",
             Self::Searxng => "searxng",
+            Self::AnnasArchive => "annas_archive",
             Self::Mock => "mock",
         }
     }
@@ -1161,6 +1166,7 @@ fn search_with_query_plan(
             ProviderKind::DuckDuckGo => duckduckgo_search(config, &query),
             ProviderKind::Bing => bing_search(config, &query),
             ProviderKind::Searxng => searxng_search(config, &query),
+            ProviderKind::AnnasArchive => annas_archive_search_as_web(root, &query),
             ProviderKind::Mock => Ok(mock_search(&query)),
         }?;
         if !providers.contains(&response.provider) {
@@ -1723,6 +1729,65 @@ fn searxng_search(config: &SearchConfig, query: &SearchQuery) -> Result<SearchRe
 
     Ok(SearchResponse {
         provider: ProviderKind::Searxng.as_str().to_string(),
+        hits,
+        evidence: Vec::new(),
+        executed_queries: vec![query.text.clone()],
+    })
+}
+
+fn annas_archive_search_as_web(root: &Path, query: &SearchQuery) -> Result<SearchResponse> {
+    let request = crate::scholarly_search::ScholarlySearchRequest {
+        query: query.text.clone(),
+        provider: Some(crate::scholarly_search::ScholarlySearchProvider::AnnasArchive),
+        max_results: Some(query.count.max(1)),
+        page: Some(query.offset / query.count.max(1) + 1),
+        ..Default::default()
+    };
+    let response = crate::scholarly_search::execute_scholarly_search(root, &request)?;
+    let hits = response
+        .results
+        .into_iter()
+        .enumerate()
+        .map(|(idx, item)| {
+            let mut snippet_parts: Vec<String> = Vec::new();
+            if let Some(authors) = item.authors.as_deref() {
+                snippet_parts.push(authors.to_string());
+            }
+            if let Some(publisher) = item.publisher.as_deref() {
+                snippet_parts.push(publisher.to_string());
+            }
+            if let Some(year) = item.year {
+                snippet_parts.push(year.to_string());
+            }
+            if let Some(language) = item.language.as_deref() {
+                snippet_parts.push(format!("lang={language}"));
+            }
+            if let Some(format) = item.file_format.as_deref() {
+                snippet_parts.push(format.to_string());
+            }
+            if let Some(size) = item.file_size_label.as_deref() {
+                snippet_parts.push(size.to_string());
+            }
+            if let Some(isbn) = item.isbn.as_deref() {
+                snippet_parts.push(format!("ISBN={isbn}"));
+            }
+            if let Some(doi) = item.doi.as_deref() {
+                snippet_parts.push(format!("DOI={doi}"));
+            }
+            if let Some(snippet) = item.snippet.as_deref() {
+                snippet_parts.push(snippet.to_string());
+            }
+            SearchHit {
+                title: item.title,
+                url: item.detail_url,
+                snippet: snippet_parts.join(" · "),
+                source: "annas_archive".to_string(),
+                rank: query.offset + idx + 1,
+            }
+        })
+        .collect();
+    Ok(SearchResponse {
+        provider: ProviderKind::AnnasArchive.as_str().to_string(),
         hits,
         evidence: Vec::new(),
         executed_queries: vec![query.text.clone()],
@@ -8745,6 +8810,15 @@ mod tests {
             ProviderKind::from_config_value(Some("ddg".to_string())),
             ProviderKind::DuckDuckGo
         );
+        assert_eq!(
+            ProviderKind::from_config_value(Some("annas_archive".to_string())),
+            ProviderKind::AnnasArchive
+        );
+        assert_eq!(
+            ProviderKind::from_config_value(Some("annas-archive".to_string())),
+            ProviderKind::AnnasArchive
+        );
+        assert_eq!(ProviderKind::AnnasArchive.as_str(), "annas_archive");
     }
 
     #[test]
