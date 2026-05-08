@@ -1796,6 +1796,128 @@ mod tests {
     }
 
     #[test]
+    fn annas_archive_records_with_oa_pdf_become_downloadable_paper_sources() {
+        // Simulates a payload from scholarly_search where one record carried a
+        // DOI and got augmented with a legal Unpaywall open_access_pdf URL.
+        // The deep-research collector must turn that into a readable
+        // `open_access_paper` source whose top-level `url` points at the PDF
+        // - which is what the existing read pipeline downloads.
+        let payload = json!({
+            "ok": true,
+            "tool": "ctox_scholarly_search",
+            "provider": "annas_archive",
+            "executed_url": "https://annas-archive.org/search?q=shannon",
+            "results": [
+                {
+                    "provider": "annas_archive",
+                    "source_id": "1111111111111111111111111111aaaa",
+                    "detail_url": "https://annas-archive.org/md5/1111111111111111111111111111aaaa",
+                    "title": "Information Theory of Communication",
+                    "authors": "C. E. Shannon",
+                    "year": 1948,
+                    "language": "en",
+                    "file_format": "pdf",
+                    "file_size_label": "1.1MB",
+                    "doi": "10.1002/j.1538-7305.1948.tb01338.x",
+                    "open_access_pdf": "https://example.org/papers/shannon-1948.pdf",
+                    "open_access_license": "cc-by",
+                    "rank": 1,
+                    "tags": []
+                },
+                {
+                    "provider": "annas_archive",
+                    "source_id": "2222222222222222222222222222bbbb",
+                    "detail_url": "https://annas-archive.org/md5/2222222222222222222222222222bbbb",
+                    "title": "A Book Without DOI",
+                    "year": 2010,
+                    "language": "en",
+                    "file_format": "epub",
+                    "rank": 2,
+                    "tags": []
+                }
+            ]
+        });
+        let plan = ResearchSearchPlan {
+            label: "annas_archive_metadata",
+            query: "shannon".to_string(),
+            domains: vec!["annas-archive.org".to_string()],
+            scholarly: true,
+            metadata_only: true,
+        };
+        let mut seen_urls = BTreeSet::new();
+        let mut sources = Vec::new();
+        collect_scholarly_search_sources(&payload, &plan, &mut seen_urls, &mut sources);
+
+        assert_eq!(sources.len(), 2);
+
+        // First source: DOI + OA PDF -> open_access_paper, downloadable.
+        let paper = &sources[0];
+        assert_eq!(
+            paper.get("source_type").and_then(Value::as_str),
+            Some("open_access_paper"),
+            "DOI-bearing record with OA PDF must become open_access_paper, got: {paper}"
+        );
+        assert_eq!(
+            paper.get("url").and_then(Value::as_str),
+            Some("https://example.org/papers/shannon-1948.pdf"),
+            "top-level url must point at the OA PDF so the read pipeline downloads it"
+        );
+        assert_eq!(
+            paper.get("open_access_pdf").and_then(Value::as_str),
+            Some("https://example.org/papers/shannon-1948.pdf"),
+        );
+        assert_eq!(
+            paper.get("open_access_license").and_then(Value::as_str),
+            Some("cc-by")
+        );
+        assert_eq!(
+            paper.get("metadata_only").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(paper.get("is_pdf").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            paper
+                .pointer("/scholarly_metadata/doi")
+                .and_then(Value::as_str),
+            Some("10.1002/j.1538-7305.1948.tb01338.x")
+        );
+        assert_eq!(
+            paper
+                .pointer("/scholarly_metadata/annas_archive_url")
+                .and_then(Value::as_str),
+            Some("https://annas-archive.org/md5/1111111111111111111111111111aaaa")
+        );
+
+        // Now verify the read pipeline gates: should_attempt_source_read must
+        // return true for the paper, and source_read_url must return the PDF.
+        assert!(
+            should_attempt_source_read(paper),
+            "open_access_paper must be eligible for download in the read pass"
+        );
+        assert_eq!(
+            source_read_url(paper).as_deref(),
+            Some("https://example.org/papers/shannon-1948.pdf"),
+            "source_read_url must point at the OA PDF for download"
+        );
+
+        // Second source: no DOI -> stays metadata-only, NOT downloaded.
+        let book = &sources[1];
+        assert_eq!(
+            book.get("source_type").and_then(Value::as_str),
+            Some("annas_archive_metadata")
+        );
+        assert_eq!(
+            book.get("url").and_then(Value::as_str),
+            Some("https://annas-archive.org/md5/2222222222222222222222222222bbbb")
+        );
+        assert!(book.get("open_access_pdf").is_none());
+        assert!(
+            !should_attempt_source_read(book),
+            "annas_archive_metadata records must NOT be downloaded"
+        );
+    }
+
+    #[test]
     fn collects_github_and_dataset_links_from_sources() {
         let sources = vec![json!({
             "title": "Supplemented paper",
