@@ -182,6 +182,130 @@ register is full of titles but no abstracts, the prose you'll write will
 be hallucinated — the lint engine catches that, but it's faster to fix
 the evidence step first.
 
+### 3a. Storyline — write the dramatic spine BEFORE any block
+
+A real feasibility study is not an inventory of facts in a fixed
+section order. It is a journey the reader is led through: a tension is
+opened, a naïve answer is proposed, the naïve answer fails on a
+specific finding, a turning point reframes the problem, and the
+recommendation falls out as a consequence. Without this spine, the
+output reads as disconnected sentences with citations bolted on — the
+exact failure mode this skill exists to prevent.
+
+**Hard rule: before any `block-stage`, you MUST persist a storyline
+treatment.**
+
+```bash
+cat > /tmp/storyline.md <<'EOF'
+Diese Studie folgt zwei Spannungsbögen.
+
+Erstens: die offensichtliche Antwort auf "geht das" ist Methode A — sie
+koppelt am direktesten an das Kupfergitter. In §5 zeigt sich aber an
+zwei Quellen, dass A am Schichtaufbau-Lift-off scheitert.
+
+Zweitens: die saubere Auflösung ist nicht eine bessere Einzelmethode,
+sondern ein gestuftes Konzept aus A + B + C. Diese Architektur taucht
+in §1 als These auf, wird in §6 pro Methode mit ihren Stärken und
+Lücken belegt, in §7 zur Roadmap (Phase 0/1/2), und in §9 zur
+priorisierten Empfehlung.
+
+Block-Bogen-Allokation:
+- §1 Management Summary: tension_open + resolution_ratify (nimmt das
+  Ergebnis vorweg).
+- §2 Ausgangslage: tension_open vertieft.
+- §3 Bauteilaufbau: support.
+- §4 Anforderungen: support.
+- §5 Screening: complication (Matrix zeigt: keine Methode überall stark).
+- §6.x Detailbewertungen: tension_deepen pro Methode.
+- §7 Roadmap: turning_point + resolution_construct.
+- §8 Risiken: support.
+- §9 Fazit: resolution_ratify mit explizitem Rückbezug auf §1+§2.
+EOF
+ctox report storyline-set --run-id RUN_ID --markdown-file /tmp/storyline.md
+ctox report storyline-show --run-id RUN_ID
+```
+
+The storyline is free-form prose — there is no schema for it. But the
+text MUST cover: central tension(s), naïve answer + why it fails, the
+turning-point finding (named source), the resolution as architecture,
+and a per-block arc-position hint. Minimum 400 characters.
+
+When you `block-stage` later, pass `--arc-position <pos>` so the role
+in the bow is recorded. Allowed values: `tension_open` |
+`tension_deepen` | `complication` | `turning_point` |
+`resolution_construct` | `resolution_ratify` | `support`.
+
+### 3b. Figures — generate or extract, then cite
+
+Use `ctox report figure-add` to register every figure. The renderer
+auto-numbers them in document order and resolves the
+`{{fig:<figure_id>}}` token in your block markdown to "Abbildung N".
+
+```bash
+# Schematic via mermaid (preferred for layered-stack diagrams):
+cat > /tmp/stack.mmd <<'EOF'
+flowchart TD
+  A[Lack/Primer/Surfacer] --> B[Blitzschutz-Kupfergitter (LSP)]
+  B --> C[CFK-Lagen]
+  C --> D[Innenstruktur]
+EOF
+ctox report figure-add --run-id RUN_ID \
+    --kind schematic --code-mermaid /tmp/stack.mmd \
+    --caption "Schematischer Schichtaufbau einer CFK-Tragfläche mit LSP" \
+    --source "eigene Darstellung" \
+    --instance-id "doc_study__component_layout"
+# → prints figure_id: fig_<hex>; cite from a block via {{fig:fig_<hex>}}.
+
+# Schematic via Python/matplotlib:
+cat > /tmp/zones.py <<'EOF'
+import matplotlib.patches as patches
+fig, ax = plt.subplots(figsize=(6, 3))
+for i, (label, depth) in enumerate(
+    [("Lack", 0.05), ("Surfacer", 0.10), ("LSP-Mesh", 0.20), ("CFK", 1.0)]
+):
+    ax.add_patch(patches.Rectangle((0, i*0.25), 5, 0.20, label=label))
+ax.set_xlim(0, 5); ax.set_ylim(0, 1.5); ax.legend(); ax.axis("off")
+EOF
+ctox report figure-add --run-id RUN_ID --kind schematic --code-python /tmp/zones.py \
+    --caption "Eindringtiefe vs. Verfahren (Schemaillustration)" \
+    --source "eigene Darstellung" \
+    --instance-id "doc_study__screening_logic"
+
+# Extract a page image from a stored open-access PDF:
+ctox report figure-add --run-id RUN_ID --kind extracted \
+    --extract-from-evidence ev_abc123 --page 4 \
+    --caption "FE-Modell des LSP-Stack (nach Hu/Yu 2019, Abb. 4)" \
+    --source "Hu et al. 2019, doi:..."
+```
+
+Then in a block markdown body cite as: `Wie in {{fig:fig_abc123}}
+gezeigt, ...`. The renderer resolves it to `Abbildung 1` etc.
+
+### 3c. Tables — structured, not Markdown-pseudo
+
+Use `ctox report table-add` for every numeric/comparison table
+(Bewertungsmatrix, Szenario-Matrix, Defektkatalog, Risikoregister,
+Abkürzungsverzeichnis). The DOCX renderer emits a native Word table
+with bold header row; the markdown renderer emits a GFM pipe table
+with caption + legend. Cite via `{{tbl:<table_id>}}`.
+
+```bash
+cat > /tmp/matrix.csv <<'EOF'
+Verfahren,Fläche,Gitterbild,Defekt,Delamination,Reifegrad
+Hyperspektral,hoch,niedrig,niedrig,mittel,hoch
+THz,mittel,hoch*,mittel,mittel,mittel
+ECT/Arrays,mittel,sehr hoch,sehr hoch,mittel,hoch
+Induktions-Thermografie,hoch,hoch,hoch,hoch,hoch
+EOF
+ctox report table-add --run-id RUN_ID \
+    --kind matrix \
+    --caption "Bewertungsmatrix: kontaktlose NDT-Verfahren (qualitativ)" \
+    --legend "Legende: Fläche = Single-Shot-Potenzial; * = nur wenn LSP erste Metallschicht." \
+    --csv-file /tmp/matrix.csv \
+    --instance-id "doc_study__screening_matrix"
+# → prints table_id: tbl_<hex>; cite as {{tbl:tbl_<hex>}}.
+```
+
 ### 4. Draft block markdown — MUST load abstracts first
 
 **Hard rule: before drafting any block, load the source content for
@@ -275,8 +399,15 @@ ctox report block-stage --run-id RUN_ID \
     --title "Executive Summary" \
     --ord 0 \
     --reason "first pass" \
-    --used-reference-ids "ev_abc123,ev_def456"
+    --used-reference-ids "ev_abc123,ev_def456" \
+    --arc-position resolution_ratify
 ```
+
+The `--arc-position` flag locks in the block's role in the storyline
+arc (see step 3a). Allowed values: `tension_open` | `tension_deepen` |
+`complication` | `turning_point` | `resolution_construct` |
+`resolution_ratify` | `support`. The renderer + check engine use this
+later to verify the bow closes.
 
 The `instance_id` shape is `<doc_id>__<block_id>`, where the `block_id` comes
 from the report type's `block_library_keys[]` and `doc_id` is the run's
