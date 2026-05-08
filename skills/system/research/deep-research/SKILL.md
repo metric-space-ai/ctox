@@ -182,20 +182,56 @@ register is full of titles but no abstracts, the prose you'll write will
 be hallucinated — the lint engine catches that, but it's faster to fix
 the evidence step first.
 
-### 4. Draft block markdown
+### 4. Draft block markdown — MUST load abstracts first
+
+**Hard rule: before drafting any block, load the abstracts of every
+evidence_id you intend to cite into your working context.** The
+resolver path (`add-evidence --doi`) puts the abstract into the SQLite
+DB but it does NOT stay in your conversation context across turns. If
+you write block prose without re-loading the abstracts, you will
+hallucinate from priors and the prose will not actually use the
+sources.
+
+```bash
+# Per evidence id:
+ctox report evidence-show --run-id RUN_ID --evidence-id ev_abc123
+
+# Or for the whole run at once (preferred for multi-block drafting):
+ctox report evidence-show --run-id RUN_ID --all --json > /tmp/evidences.json
+```
+
+The output gives you `title`, `authors`, `year`, `venue`, `url`, plus
+the **full `abstract_md`** in the source's own words. Read it before you
+write a single sentence that cites that evidence_id. If the abstract is
+empty (`abstract: (none)`), that source contributes only a citation —
+do not put specific factual claims behind it; either re-fetch the page
+with `ctox web read` and re-register, or pick a different source.
 
 For each block in the run's `report_type.block_library_keys[]` (read from
 `references/asset_pack.json`), draft markdown that:
 
 - Follows the block's `scaffold` and `title` from the asset pack.
-- Cites `evidence_id`s inline for every non-trivial claim. Use the convention
-  `[ev_abc123]` after the sentence.
+- For each cited `evidence_id`: paraphrase or quote at least one
+  **specific** finding from that source's abstract — a method name, a
+  numeric result, a condition, an experimental setup. Generic-sounding
+  prose with citation tags bolted on is the failure mode this skill
+  exists to prevent. If you cannot pull a specific finding from the
+  abstract, the citation is wrong.
+- Cites `evidence_id`s inline as `[ev_abc123]` (single brackets, no
+  `{}`) directly after the sentence whose claim came from that source.
 - Stays inside the block's `target_chars` from the depth profile.
+  Source-grounded prose is naturally longer than generic prose; if your
+  draft is far below `target_chars`, you are summarising priors instead
+  of integrating sources — go back and re-read abstracts.
 - For matrix blocks: each cell carries a short rationale + at least one
   `evidence_id`. **Never repeat the same rationale string across cells of one
   option** — that's the `release_guard_check` slop signature.
 - For the verdict block: use the `verdict_line_pattern` from the report type
   verbatim (e.g. for feasibility: "Erfolgsaussichten (qualitativ): high|medium|low").
+- **Topic-match check:** the cited source's title/abstract must
+  actually be about the topic of the surrounding paragraph. A
+  cold-spray fabrication paper does not belong in an active-thermography
+  block. Re-read the abstract; if topic mismatches, drop the citation.
 
 Save each draft to a temp file:
 
@@ -294,9 +330,17 @@ make autonomous calls where reasonable.
 
 ## Hard rules — never break these
 
-1. **Cite every non-trivial claim.** Inline `[evidence_id]` references after
-   the sentence. No fabricated DOIs, no fabricated authors, no fabricated
-   study titles. If you can't find evidence, raise an `ask-user` question.
+1. **Source-grounded sentences only.** Inline `[evidence_id]` references
+   after the sentence. Before you write any sentence carrying a
+   citation, you MUST have just read the abstract of that evidence_id
+   via `ctox report evidence-show`. The sentence has to paraphrase or
+   directly reference a specific element of that abstract (method, key
+   parameter, numeric result, conclusion). Generic textbook claims
+   that the abstract does not actually support, with citation tags
+   bolted on, are the failure mode this skill is built to prevent. No
+   fabricated DOIs, no fabricated authors, no fabricated study titles.
+   If the abstract does not support what you want to say, either find
+   a different source or drop the claim.
 2. **No duplicate rationale strings inside one option's matrix row.** The
    `release_guard_check` lint catches it; that's the canonical slop
    signature.

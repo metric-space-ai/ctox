@@ -527,6 +527,118 @@ fn check_release_guard_runs_against_seeded_blocks() {
     // panicking on a populated workspace and persists a row.
 }
 
+// ---------- evidence-show ----------
+
+#[test]
+fn evidence_show_returns_full_content_for_one_evidence() {
+    let root = TestRoot::new().unwrap();
+    let run_id = fresh_run(&root);
+    insert_evidence(
+        root.path(),
+        &run_id,
+        "ev_show_1",
+        "doi",
+        Some("10.0/showtest"),
+        Some("Show Me Paper"),
+        &["Aaa Bbb"],
+        Some(2024),
+    )
+    .unwrap();
+    // insert_evidence does not populate abstract_md by default — patch
+    // it directly.
+    let conn = open(root.path()).unwrap();
+    conn.execute(
+        "UPDATE report_evidence_register SET abstract_md = ?1 \
+         WHERE run_id = ?2 AND evidence_id = ?3",
+        params![
+            "This abstract describes a novel induction method.".to_string(),
+            run_id.clone(),
+            "ev_show_1".to_string(),
+        ],
+    )
+    .unwrap();
+    handle_command(
+        root.path(),
+        &[
+            s("evidence-show"),
+            s("--run-id"),
+            run_id.clone(),
+            s("--evidence-id"),
+            s("ev_show_1"),
+        ],
+    )
+    .expect("evidence-show happy path");
+}
+
+#[test]
+fn evidence_show_json_includes_abstract_md() {
+    let root = TestRoot::new().unwrap();
+    let run_id = fresh_run(&root);
+    insert_evidence(
+        root.path(),
+        &run_id,
+        "ev_json_1",
+        "doi",
+        Some("10.0/jsontest"),
+        Some("JSON Test Paper"),
+        &["Ccc Ddd"],
+        Some(2025),
+    )
+    .unwrap();
+    let conn = open(root.path()).unwrap();
+    conn.execute(
+        "UPDATE report_evidence_register SET abstract_md = ?1 \
+         WHERE run_id = ?2 AND evidence_id = ?3",
+        params![
+            "Specific finding XYZ123 demonstrated under condition ABC.".to_string(),
+            run_id.clone(),
+            "ev_json_1".to_string(),
+        ],
+    )
+    .unwrap();
+    handle_command(
+        root.path(),
+        &[
+            s("evidence-show"),
+            s("--run-id"),
+            run_id,
+            s("--all"),
+            s("--json"),
+        ],
+    )
+    .expect("evidence-show --all --json must succeed");
+}
+
+#[test]
+fn evidence_show_rejects_missing_filter() {
+    let root = TestRoot::new().unwrap();
+    let run_id = fresh_run(&root);
+    let err = handle_command(
+        root.path(),
+        &[s("evidence-show"), s("--run-id"), run_id],
+    )
+    .expect_err("must require --evidence-id or --all");
+    assert!(format!("{err:#}").contains("--evidence-id"));
+}
+
+#[test]
+fn evidence_show_rejects_unknown_evidence_id() {
+    let root = TestRoot::new().unwrap();
+    let run_id = fresh_run(&root);
+    let err = handle_command(
+        root.path(),
+        &[
+            s("evidence-show"),
+            s("--run-id"),
+            run_id,
+            s("--evidence-id"),
+            s("ev_does_not_exist"),
+        ],
+    )
+    .expect_err("must error when no row matches");
+    assert!(format!("{err:#}").to_lowercase().contains("no evidence"));
+}
+
 #[test]
 fn check_release_guard_flags_stub_evidence_cited_by_a_block() {
     // Block cites ev_stub which has no abstract/snippet content.

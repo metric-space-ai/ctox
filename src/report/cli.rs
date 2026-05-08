@@ -25,7 +25,7 @@ use crate::report::render::{
     build_manuscript, render_docx, render_markdown, DocxRenderError, MarkdownRenderOptions,
 };
 use crate::report::schema::{ensure_schema, new_id, now_iso, open, RunStatus};
-use crate::report::sources::{ResolverStack, SourceKind};
+use crate::report::sources::{NormalisedSource, ResolverStack, SourceKind};
 use crate::report::state::{
     abort as state_abort, create_run, finalise as state_finalise, list_runs, load_run,
     CreateRunParams,
@@ -44,6 +44,7 @@ pub fn handle_command(root: &Path, args: &[String]) -> Result<()> {
         Some("list") => cmd_list(root, &args[1..]),
         Some("status") => cmd_status(root, &args[1..]),
         Some("add-evidence") => cmd_add_evidence(root, &args[1..]),
+        Some("evidence-show") => cmd_evidence_show(root, &args[1..]),
         Some("block-stage") => cmd_block_stage(root, &args[1..]),
         Some("block-apply") => cmd_block_apply(root, &args[1..]),
         Some("block-list") => cmd_block_list(root, &args[1..]),
@@ -112,6 +113,64 @@ fn read_markdown_file(path_str: &str) -> Result<String> {
     let body = std::fs::read_to_string(&path)
         .with_context(|| format!("read markdown file {}", path.display()))?;
     Ok(body)
+}
+
+/// Print a multi-line summary of a resolver-fetched source. Goes to stdout
+/// so the harness LLM sees the title + authors + abstract snippet
+/// immediately when it calls `add-evidence --doi`/`--arxiv-id`. Without
+/// this, the resolver path silently drops the abstract content into the
+/// DB and the LLM has no way to incorporate it into block prose.
+fn emit_resolver_summary(evidence_id: &str, source: &NormalisedSource) {
+    println!("evidence_id: {evidence_id}");
+    println!(
+        "kind:        {}",
+        source.kind.as_str()
+    );
+    println!("canonical:   {}", source.canonical_id);
+    if let Some(title) = source.title.as_deref() {
+        println!("title:       {title}");
+    }
+    if !source.authors.is_empty() {
+        println!("authors:     {}", source.authors.join("; "));
+    }
+    if let Some(year) = source.year {
+        println!("year:        {year}");
+    }
+    if let Some(venue) = source.venue.as_deref() {
+        println!("venue:       {venue}");
+    }
+    if let Some(publisher) = source.publisher.as_deref() {
+        println!("publisher:   {publisher}");
+    }
+    if let Some(url) = source.url_canonical.as_deref() {
+        println!("url:         {url}");
+    }
+    println!("resolver:    {}", source.resolver_used.as_str());
+    if let Some(abs_md) = source.abstract_md.as_deref() {
+        let trimmed = abs_md.trim();
+        let chars = trimmed.chars().count();
+        println!("abstract ({chars} chars):");
+        // Stream the whole abstract — the LLM needs every sentence to
+        // ground prose in the source. No truncation.
+        for line in trimmed.lines() {
+            println!("  {}", line);
+        }
+    } else {
+        println!(
+            "abstract:    (none — Crossref/OpenAlex returned no abstract \
+             for this source; use `ctox web read --url <url>` and \
+             `add-evidence --abstract-file` to attach a manual snippet)"
+        );
+    }
+    if let Some(snip) = source.snippet_md.as_deref() {
+        let chars = snip.chars().count();
+        if chars > 0 {
+            println!("snippet ({chars} chars):");
+            for line in snip.lines() {
+                println!("  {}", line);
+            }
+        }
+    }
 }
 
 // ---------- subcommand impls ----------
@@ -369,7 +428,7 @@ fn cmd_add_evidence(root: &Path, args: &[String]) -> Result<()> {
                 let recorded = stack
                     .record_into_register(&source)
                     .context("failed to record resolved DOI into evidence register")?;
-                println!("Recorded DOI {doi} as evidence_id {recorded}");
+                emit_resolver_summary(&recorded, &source);
                 return Ok(());
             }
             Ok(None) => bail!("DOI {doi} did not resolve via Crossref/OpenAlex"),
@@ -385,7 +444,7 @@ fn cmd_add_evidence(root: &Path, args: &[String]) -> Result<()> {
                 let recorded = stack
                     .record_into_register(&source)
                     .context("failed to record resolved arXiv id into evidence register")?;
-                println!("Recorded arXiv {arxiv} as evidence_id {recorded}");
+                emit_resolver_summary(&recorded, &source);
                 return Ok(());
             }
             Ok(None) => bail!("arXiv id {arxiv} did not resolve"),
@@ -486,10 +545,219 @@ fn cmd_add_evidence(root: &Path, args: &[String]) -> Result<()> {
         ],
     )
     .context("failed to insert manual evidence row")?;
-    println!(
-        "Recorded manual evidence as evidence_id {evidence_id} ({} chars abstract, {} chars snippet)",
-        abstract_chars, snippet_chars
+    println!("evidence_id: {evidence_id}");
+    println!("kind:        {kind}");
+    if let Some(t) = title {
+        println!("title:       {t}");
+    }
+    if !authors_vec.is_empty() {
+        println!("authors:     {}", authors_vec.join("; "));
+    }
+    if let Some(y) = year {
+        println!("year:        {y}");
+    }
+    if let Some(v) = venue {
+        println!("venue:       {v}");
+    }
+    if let Some(u) = url {
+        println!("url:         {u}");
+    }
+    println!("resolver:    manual");
+    if let Some(abs_md) = abstract_md.as_deref() {
+        let trimmed = abs_md.trim();
+        println!("abstract ({} chars):", trimmed.chars().count());
+        for line in trimmed.lines() {
+            println!("  {}", line);
+        }
+    }
+    if let Some(snip) = snippet_md.as_deref() {
+        let trimmed = snip.trim();
+        let chars = trimmed.chars().count();
+        if chars > 0 {
+            println!("snippet ({chars} chars):");
+            for line in trimmed.lines() {
+                println!("  {}", line);
+            }
+        }
+    }
+    let _ = (abstract_chars, snippet_chars);
+    Ok(())
+}
+
+/// `ctox report evidence-show --run-id RUN [--evidence-id ID | --all] [--json]`
+///
+/// Read-back path the harness LLM uses to load abstract content into its
+/// working context before drafting a block. Without this, the resolver
+/// path puts content in the DB but the LLM never sees it — which is the
+/// failure mode that produced the previous halluzinated feasibility
+/// study. The skill mandates calling `evidence-show` for every cited
+/// `evidence_id` before `block-stage`.
+fn cmd_evidence_show(root: &Path, args: &[String]) -> Result<()> {
+    let run_id = require_run_id(
+        args,
+        "usage: ctox report evidence-show --run-id RUN [--evidence-id ID | --all] [--json]",
+    )?;
+    let _ = load_run(root, run_id)?;
+    let conn = open(root)?;
+    ensure_schema(&conn)?;
+    let json_out = has_flag(args, "--json");
+    let want_all = has_flag(args, "--all");
+    let one_id = find_flag(args, "--evidence-id");
+    if !want_all && one_id.is_none() {
+        bail!("specify --evidence-id ID or --all");
+    }
+
+    let mut sql = String::from(
+        "SELECT evidence_id, kind, canonical_id, title, authors_json, \
+                venue, year, publisher, url_canonical, url_full_text, \
+                license, abstract_md, snippet_md, resolver_used \
+         FROM report_evidence_register WHERE run_id = ?1",
     );
+    let mut bind: Vec<String> = vec![run_id.to_string()];
+    if let Some(id) = one_id {
+        sql.push_str(" AND evidence_id = ?2");
+        bind.push(id.to_string());
+    }
+    sql.push_str(" ORDER BY retrieved_at ASC");
+
+    let mut stmt = conn.prepare(&sql)?;
+    let params_dyn: Vec<&dyn rusqlite::ToSql> = bind
+        .iter()
+        .map(|s| s as &dyn rusqlite::ToSql)
+        .collect();
+    let rows = stmt
+        .query_map(params_dyn.as_slice(), |row| {
+            let evidence_id: String = row.get(0)?;
+            let kind: String = row.get(1)?;
+            let canonical_id: Option<String> = row.get(2)?;
+            let title: Option<String> = row.get(3)?;
+            let authors_json: Option<String> = row.get(4)?;
+            let venue: Option<String> = row.get(5)?;
+            let year: Option<i64> = row.get(6)?;
+            let publisher: Option<String> = row.get(7)?;
+            let url_canonical: Option<String> = row.get(8)?;
+            let url_full_text: Option<String> = row.get(9)?;
+            let license: Option<String> = row.get(10)?;
+            let abstract_md: Option<String> = row.get(11)?;
+            let snippet_md: Option<String> = row.get(12)?;
+            let resolver_used: Option<String> = row.get(13)?;
+            Ok((
+                evidence_id,
+                kind,
+                canonical_id,
+                title,
+                authors_json,
+                venue,
+                year,
+                publisher,
+                url_canonical,
+                url_full_text,
+                license,
+                abstract_md,
+                snippet_md,
+                resolver_used,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    if rows.is_empty() {
+        bail!("no evidence row matches the filter");
+    }
+
+    if json_out {
+        let payload: Vec<Value> = rows
+            .iter()
+            .map(|r| {
+                let authors: Vec<String> = r
+                    .4
+                    .as_deref()
+                    .and_then(|s| serde_json::from_str(s).ok())
+                    .unwrap_or_default();
+                json!({
+                    "evidence_id": r.0,
+                    "kind": r.1,
+                    "canonical_id": r.2,
+                    "title": r.3,
+                    "authors": authors,
+                    "venue": r.5,
+                    "year": r.6,
+                    "publisher": r.7,
+                    "url_canonical": r.8,
+                    "url_full_text": r.9,
+                    "license": r.10,
+                    "abstract_md": r.11,
+                    "snippet_md": r.12,
+                    "resolver_used": r.13,
+                    "abstract_chars": r.11.as_deref().map(|s| s.chars().count()).unwrap_or(0),
+                    "snippet_chars": r.12.as_deref().map(|s| s.chars().count()).unwrap_or(0),
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&Value::Array(payload))?);
+    } else {
+        for (i, r) in rows.iter().enumerate() {
+            if i > 0 {
+                println!();
+                println!("---");
+            }
+            println!("evidence_id: {}", r.0);
+            println!("kind:        {}", r.1);
+            if let Some(c) = r.2.as_deref() {
+                println!("canonical:   {c}");
+            }
+            if let Some(t) = r.3.as_deref() {
+                println!("title:       {t}");
+            }
+            let authors: Vec<String> = r
+                .4
+                .as_deref()
+                .and_then(|s| serde_json::from_str(s).ok())
+                .unwrap_or_default();
+            if !authors.is_empty() {
+                println!("authors:     {}", authors.join("; "));
+            }
+            if let Some(y) = r.6 {
+                println!("year:        {y}");
+            }
+            if let Some(v) = r.5.as_deref() {
+                println!("venue:       {v}");
+            }
+            if let Some(p) = r.7.as_deref() {
+                println!("publisher:   {p}");
+            }
+            if let Some(u) = r.8.as_deref() {
+                println!("url:         {u}");
+            }
+            if let Some(u) = r.9.as_deref() {
+                println!("full_text:   {u}");
+            }
+            if let Some(l) = r.10.as_deref() {
+                println!("license:     {l}");
+            }
+            if let Some(rv) = r.13.as_deref() {
+                println!("resolver:    {rv}");
+            }
+            if let Some(abs_md) = r.11.as_deref() {
+                let trimmed = abs_md.trim();
+                println!("abstract ({} chars):", trimmed.chars().count());
+                for line in trimmed.lines() {
+                    println!("  {}", line);
+                }
+            } else {
+                println!("abstract:    (none)");
+            }
+            if let Some(snip) = r.12.as_deref() {
+                let trimmed = snip.trim();
+                let c = trimmed.chars().count();
+                if c > 0 {
+                    println!("snippet ({c} chars):");
+                    for line in trimmed.lines() {
+                        println!("  {}", line);
+                    }
+                }
+            }
+        }
+    }
     Ok(())
 }
 
@@ -1120,6 +1388,7 @@ USAGE
         ( --doi DOI | --arxiv-id ID | --url URL )
         [--title T] [--authors \"A1; A2\"] [--year Y] [--venue V]
         [--abstract-file PATH] [--snippet-file PATH] [--license L]
+  ctox report evidence-show --run-id RUN ( --evidence-id ID | --all ) [--json]
 
   ctox report block-stage --run-id RUN --instance-id ID --markdown-file F
         [--doc-id D] [--block-id B] [--title T] [--ord N] [--reason R]
