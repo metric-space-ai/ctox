@@ -527,6 +527,112 @@ fn check_release_guard_runs_against_seeded_blocks() {
     // panicking on a populated workspace and persists a row.
 }
 
+// ---------- full-text persistence ----------
+
+#[test]
+fn evidence_show_surfaces_full_text_when_present() {
+    let root = TestRoot::new().unwrap();
+    let run_id = fresh_run(&root);
+    insert_evidence(
+        root.path(),
+        &run_id,
+        "ev_full_1",
+        "doi",
+        Some("10.0/full"),
+        Some("OA Paper With Full Text"),
+        &["Eee Fff"],
+        Some(2024),
+    )
+    .unwrap();
+    let conn = open(root.path()).unwrap();
+    let body = "## Methods\nWe ran 3 experiments at 5 µm particle size.\n\
+                ## Results\nDetection probability rose from 0.6 to 0.95.";
+    conn.execute(
+        "UPDATE report_evidence_register \
+         SET full_text_md = ?1, full_text_source = ?2, full_text_chars = ?3 \
+         WHERE run_id = ?4 AND evidence_id = ?5",
+        params![
+            body.to_string(),
+            "open_access_pdf".to_string(),
+            body.chars().count() as i64,
+            run_id.clone(),
+            "ev_full_1".to_string(),
+        ],
+    )
+    .unwrap();
+
+    handle_command(
+        root.path(),
+        &[
+            s("evidence-show"),
+            s("--run-id"),
+            run_id.clone(),
+            s("--evidence-id"),
+            s("ev_full_1"),
+            s("--full-text"),
+            s("--json"),
+        ],
+    )
+    .expect("evidence-show --full-text --json must succeed");
+
+    // Verify the columns are queryable independently.
+    let (chars, src, body_back): (i64, String, String) = conn
+        .query_row(
+            "SELECT full_text_chars, full_text_source, full_text_md \
+             FROM report_evidence_register WHERE evidence_id = ?1",
+            params!["ev_full_1"],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert!(chars > 0);
+    assert_eq!(src, "open_access_pdf");
+    assert!(body_back.contains("0.6 to 0.95"));
+}
+
+#[test]
+fn evidence_show_without_full_text_flag_does_not_dump_body() {
+    // Body is large; we don't want every evidence-show call to flood
+    // the LLM with the entire paper unless explicitly asked.
+    let root = TestRoot::new().unwrap();
+    let run_id = fresh_run(&root);
+    insert_evidence(
+        root.path(),
+        &run_id,
+        "ev_full_2",
+        "doi",
+        Some("10.0/big"),
+        Some("Big Paper"),
+        &[],
+        Some(2024),
+    )
+    .unwrap();
+    let conn = open(root.path()).unwrap();
+    conn.execute(
+        "UPDATE report_evidence_register \
+         SET full_text_md = ?1, full_text_source = 'open_access_pdf', \
+             full_text_chars = ?2 \
+         WHERE evidence_id = ?3",
+        params![
+            "x".repeat(50_000),
+            50_000_i64,
+            "ev_full_2".to_string(),
+        ],
+    )
+    .unwrap();
+    // Should succeed without --full-text and not panic on the big body.
+    handle_command(
+        root.path(),
+        &[
+            s("evidence-show"),
+            s("--run-id"),
+            run_id,
+            s("--evidence-id"),
+            s("ev_full_2"),
+        ],
+    )
+    .expect("evidence-show without --full-text must succeed");
+}
+
 // ---------- evidence-show ----------
 
 #[test]

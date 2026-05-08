@@ -129,6 +129,9 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
     migrate_add_column(conn, "report_evidence_register", "raw_payload_json", "TEXT");
     migrate_add_column(conn, "report_evidence_register", "created_at", "TEXT");
     migrate_add_column(conn, "report_evidence_register", "updated_at", "TEXT");
+    migrate_add_column(conn, "report_evidence_register", "full_text_md", "TEXT");
+    migrate_add_column(conn, "report_evidence_register", "full_text_source", "TEXT");
+    migrate_add_column(conn, "report_evidence_register", "full_text_chars", "INTEGER");
     Ok(())
 }
 
@@ -241,6 +244,9 @@ CREATE TABLE IF NOT EXISTS report_evidence_register (
     license             TEXT,
     abstract_md         TEXT,
     snippet_md          TEXT,
+    full_text_md        TEXT,
+    full_text_source    TEXT,
+    full_text_chars     INTEGER,
     retrieved_at        TEXT,
     resolver_used       TEXT,
     integrity_hash      TEXT,

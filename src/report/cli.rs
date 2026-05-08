@@ -25,6 +25,9 @@ use crate::report::render::{
     build_manuscript, render_docx, render_markdown, DocxRenderError, MarkdownRenderOptions,
 };
 use crate::report::schema::{ensure_schema, new_id, now_iso, open, RunStatus};
+use crate::report::sources::full_text::{
+    fetch_full_text, license_permits_open_access, FullTextFetch,
+};
 use crate::report::sources::{NormalisedSource, ResolverStack, SourceKind};
 use crate::report::state::{
     abort as state_abort, create_run, finalise as state_finalise, list_runs, load_run,
@@ -113,6 +116,87 @@ fn read_markdown_file(path_str: &str) -> Result<String> {
     let body = std::fs::read_to_string(&path)
         .with_context(|| format!("read markdown file {}", path.display()))?;
     Ok(body)
+}
+
+/// Try to download the open-access full text of a resolver-fetched
+/// source and persist it to `report_evidence_register.full_text_md`.
+/// Skipped silently when (a) the source has no `url_full_text`, (b) the
+/// license is not recognised as open-access, or (c) the fetch/parse
+/// errors out. Returns the [`FullTextFetch`] on success so the caller
+/// can surface the result to the LLM via the resolver summary.
+fn try_attach_full_text(
+    root: &Path,
+    run_id: &str,
+    evidence_id: &str,
+    source: &NormalisedSource,
+) -> Option<FullTextFetch> {
+    let Some(url) = source.url_full_text.as_deref() else {
+        return None;
+    };
+    if url.trim().is_empty() {
+        return None;
+    }
+    if !license_permits_open_access(source.license.as_deref()) {
+        return None;
+    }
+    let fetch = match fetch_full_text(url) {
+        Ok(f) => f,
+        Err(err) => {
+            eprintln!("warning: full-text fetch from {url} failed: {err}");
+            return None;
+        }
+    };
+    let chars = fetch.markdown.chars().count() as i64;
+    let conn = match open(root) {
+        Ok(c) => c,
+        Err(err) => {
+            eprintln!("warning: could not open store to persist full text: {err}");
+            return None;
+        }
+    };
+    if let Err(err) = ensure_schema(&conn) {
+        eprintln!("warning: ensure_schema before full-text persist failed: {err}");
+        return None;
+    }
+    let now = now_iso();
+    let res = conn.execute(
+        "UPDATE report_evidence_register \
+         SET full_text_md = ?1, full_text_source = ?2, full_text_chars = ?3, \
+             updated_at = ?4 \
+         WHERE run_id = ?5 AND evidence_id = ?6",
+        params![
+            fetch.markdown,
+            fetch.source_label,
+            chars,
+            now,
+            run_id,
+            evidence_id,
+        ],
+    );
+    match res {
+        Ok(_) => Some(fetch),
+        Err(err) => {
+            eprintln!("warning: persisting full-text into evidence register failed: {err}");
+            None
+        }
+    }
+}
+
+/// Print a one-line summary of a successful full-text attachment so the
+/// harness LLM sees that the source is now available at full-text depth,
+/// not just abstract depth.
+fn emit_full_text_note(fetch: Option<&FullTextFetch>) {
+    if let Some(f) = fetch {
+        println!(
+            "full_text:   attached via {} ({} chars). Use `ctox report evidence-show --full-text` to read.",
+            f.source_label,
+            f.markdown.chars().count()
+        );
+    } else {
+        println!(
+            "full_text:   not attached (source carries no open-access full-text URL, or fetch was skipped)"
+        );
+    }
 }
 
 /// Print a multi-line summary of a resolver-fetched source. Goes to stdout
@@ -420,6 +504,8 @@ fn cmd_add_evidence(root: &Path, args: &[String]) -> Result<()> {
     let arxiv_id = find_flag(args, "--arxiv-id");
     let url = find_flag(args, "--url");
 
+    let no_full_text = has_flag(args, "--no-full-text");
+
     if let Some(doi) = doi {
         let stack = ResolverStack::new(root, run_id, None)
             .context("failed to construct resolver stack")?;
@@ -428,7 +514,11 @@ fn cmd_add_evidence(root: &Path, args: &[String]) -> Result<()> {
                 let recorded = stack
                     .record_into_register(&source)
                     .context("failed to record resolved DOI into evidence register")?;
+                let ft = (!no_full_text)
+                    .then(|| try_attach_full_text(root, run_id, &recorded, &source))
+                    .flatten();
                 emit_resolver_summary(&recorded, &source);
+                emit_full_text_note(ft.as_ref());
                 return Ok(());
             }
             Ok(None) => bail!("DOI {doi} did not resolve via Crossref/OpenAlex"),
@@ -444,7 +534,11 @@ fn cmd_add_evidence(root: &Path, args: &[String]) -> Result<()> {
                 let recorded = stack
                     .record_into_register(&source)
                     .context("failed to record resolved arXiv id into evidence register")?;
+                let ft = (!no_full_text)
+                    .then(|| try_attach_full_text(root, run_id, &recorded, &source))
+                    .flatten();
                 emit_resolver_summary(&recorded, &source);
+                emit_full_text_note(ft.as_ref());
                 return Ok(());
             }
             Ok(None) => bail!("arXiv id {arxiv} did not resolve"),
@@ -545,6 +639,49 @@ fn cmd_add_evidence(root: &Path, args: &[String]) -> Result<()> {
         ],
     )
     .context("failed to insert manual evidence row")?;
+    // Manual --url path: when the URL points at a directly-fetchable
+    // open-access HTML/PDF and the caller did not pass --no-full-text,
+    // also pull the full body so the LLM has paper-level depth without
+    // a separate `web read` round-trip.
+    let mut full_text_attached: Option<FullTextFetch> = None;
+    if !no_full_text {
+        if let Some(url) = url {
+            if license_permits_open_access(license)
+                || url.to_ascii_lowercase().contains("arxiv.org")
+                || url.to_ascii_lowercase().ends_with(".pdf")
+            {
+                match fetch_full_text(url) {
+                    Ok(f) => {
+                        let chars = f.markdown.chars().count() as i64;
+                        if let Err(err) = conn.execute(
+                            "UPDATE report_evidence_register \
+                             SET full_text_md = ?1, full_text_source = ?2, \
+                                 full_text_chars = ?3, updated_at = ?4 \
+                             WHERE run_id = ?5 AND evidence_id = ?6",
+                            params![
+                                f.markdown,
+                                f.source_label,
+                                chars,
+                                now_iso(),
+                                run_id,
+                                evidence_id,
+                            ],
+                        ) {
+                            eprintln!(
+                                "warning: persisting full-text from --url failed: {err}"
+                            );
+                        } else {
+                            full_text_attached = Some(f);
+                        }
+                    }
+                    Err(err) => {
+                        eprintln!("warning: full-text fetch from {url} failed: {err}");
+                    }
+                }
+            }
+        }
+    }
+
     println!("evidence_id: {evidence_id}");
     println!("kind:        {kind}");
     if let Some(t) = title {
@@ -580,6 +717,7 @@ fn cmd_add_evidence(root: &Path, args: &[String]) -> Result<()> {
             }
         }
     }
+    emit_full_text_note(full_text_attached.as_ref());
     let _ = (abstract_chars, snippet_chars);
     Ok(())
 }
@@ -607,10 +745,12 @@ fn cmd_evidence_show(root: &Path, args: &[String]) -> Result<()> {
         bail!("specify --evidence-id ID or --all");
     }
 
+    let want_full_text = has_flag(args, "--full-text");
     let mut sql = String::from(
         "SELECT evidence_id, kind, canonical_id, title, authors_json, \
                 venue, year, publisher, url_canonical, url_full_text, \
-                license, abstract_md, snippet_md, resolver_used \
+                license, abstract_md, snippet_md, resolver_used, \
+                full_text_md, full_text_source, full_text_chars \
          FROM report_evidence_register WHERE run_id = ?1",
     );
     let mut bind: Vec<String> = vec![run_id.to_string()];
@@ -641,6 +781,9 @@ fn cmd_evidence_show(root: &Path, args: &[String]) -> Result<()> {
             let abstract_md: Option<String> = row.get(11)?;
             let snippet_md: Option<String> = row.get(12)?;
             let resolver_used: Option<String> = row.get(13)?;
+            let full_text_md: Option<String> = row.get(14)?;
+            let full_text_source: Option<String> = row.get(15)?;
+            let full_text_chars: Option<i64> = row.get(16)?;
             Ok((
                 evidence_id,
                 kind,
@@ -656,6 +799,9 @@ fn cmd_evidence_show(root: &Path, args: &[String]) -> Result<()> {
                 abstract_md,
                 snippet_md,
                 resolver_used,
+                full_text_md,
+                full_text_source,
+                full_text_chars,
             ))
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -688,6 +834,9 @@ fn cmd_evidence_show(root: &Path, args: &[String]) -> Result<()> {
                     "abstract_md": r.11,
                     "snippet_md": r.12,
                     "resolver_used": r.13,
+                    "full_text_md": if want_full_text { r.14.clone() } else { None },
+                    "full_text_source": r.15,
+                    "full_text_chars": r.16,
                     "abstract_chars": r.11.as_deref().map(|s| s.chars().count()).unwrap_or(0),
                     "snippet_chars": r.12.as_deref().map(|s| s.chars().count()).unwrap_or(0),
                 })
@@ -755,6 +904,28 @@ fn cmd_evidence_show(root: &Path, args: &[String]) -> Result<()> {
                         println!("  {}", line);
                     }
                 }
+            }
+            // Full-text presence is always reported; the body itself
+            // is gated on --full-text because it can be hundreds of KB
+            // and would flood the LLM's context if dumped per call.
+            if let Some(label) = r.15.as_deref() {
+                let chars = r.16.unwrap_or(0);
+                println!("full_text:   attached via {label} ({chars} chars)");
+                if want_full_text {
+                    if let Some(body) = r.14.as_deref() {
+                        let trimmed = body.trim();
+                        println!("full_text body:");
+                        for line in trimmed.lines() {
+                            println!("  {}", line);
+                        }
+                    }
+                } else {
+                    println!(
+                        "             (run with --full-text to include the body in this output)"
+                    );
+                }
+            } else {
+                println!("full_text:   (not attached)");
             }
         }
     }
@@ -1388,7 +1559,9 @@ USAGE
         ( --doi DOI | --arxiv-id ID | --url URL )
         [--title T] [--authors \"A1; A2\"] [--year Y] [--venue V]
         [--abstract-file PATH] [--snippet-file PATH] [--license L]
-  ctox report evidence-show --run-id RUN ( --evidence-id ID | --all ) [--json]
+        [--no-full-text]
+  ctox report evidence-show --run-id RUN ( --evidence-id ID | --all )
+        [--full-text] [--json]
 
   ctox report block-stage --run-id RUN --instance-id ID --markdown-file F
         [--doc-id D] [--block-id B] [--title T] [--ord N] [--reason R]

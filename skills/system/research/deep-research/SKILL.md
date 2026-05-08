@@ -184,28 +184,50 @@ the evidence step first.
 
 ### 4. Draft block markdown — MUST load abstracts first
 
-**Hard rule: before drafting any block, load the abstracts of every
-evidence_id you intend to cite into your working context.** The
-resolver path (`add-evidence --doi`) puts the abstract into the SQLite
-DB but it does NOT stay in your conversation context across turns. If
-you write block prose without re-loading the abstracts, you will
-hallucinate from priors and the prose will not actually use the
-sources.
+**Hard rule: before drafting any block, load the source content for
+every evidence_id you intend to cite into your working context.** The
+resolver path (`add-evidence --doi`) writes the metadata + abstract +
+(when the source is open-access) the full PDF text to SQLite, but
+nothing is in your conversation context across turns. If you write
+block prose without re-loading the content, you will hallucinate from
+priors and the prose will not actually use the sources.
+
+For each evidence_id you plan to cite:
 
 ```bash
-# Per evidence id:
+# Default — abstract + metadata. Always returns whether full_text
+# was attached at registration time and how many chars it carries.
 ctox report evidence-show --run-id RUN_ID --evidence-id ev_abc123
 
-# Or for the whole run at once (preferred for multi-block drafting):
+# Full body (for open-access PDFs / HTML the resolver fetched at
+# registration time). Use this whenever full_text was attached, so
+# the prose can cite specific results, parameters, methods — not
+# just the abstract paraphrase.
+ctox report evidence-show --run-id RUN_ID --evidence-id ev_abc123 --full-text
+
+# Whole run at once (JSON, with optional --full-text):
 ctox report evidence-show --run-id RUN_ID --all --json > /tmp/evidences.json
+ctox report evidence-show --run-id RUN_ID --all --full-text --json > /tmp/evidences_full.json
 ```
 
-The output gives you `title`, `authors`, `year`, `venue`, `url`, plus
-the **full `abstract_md`** in the source's own words. Read it before you
-write a single sentence that cites that evidence_id. If the abstract is
-empty (`abstract: (none)`), that source contributes only a citation —
-do not put specific factual claims behind it; either re-fetch the page
-with `ctox web read` and re-register, or pick a different source.
+The output carries `title`, `authors`, `year`, `venue`, `url`,
+`abstract_md`, and (when attached) `full_text_md` with the OA paper
+body in markdown form (PDF text-extracted by ctox-pdf-parse, or HTML
+stripped to plain text). Read the relevant content before you write
+any sentence that cites that evidence_id.
+
+- If `full_text:   attached` is shown, prefer the full body — the
+  abstract alone almost never carries enough specific detail
+  (numerical results, experimental conditions, method-step parameters)
+  for a feasibility-grade claim. Read it via `--full-text`.
+- If only an abstract is present (`full_text: (not attached)`), the
+  source still contributes a citation but specific factual claims
+  (numbers, named methods, experimental protocols) must be backed by
+  a source whose abstract or full text actually states them.
+- If `abstract: (none)` AND `full_text: (not attached)`, the source
+  has no usable content — drop the citation, pick a different one, or
+  fetch the page with `ctox web read` and re-register via
+  `add-evidence --abstract-file`.
 
 For each block in the run's `report_type.block_library_keys[]` (read from
 `references/asset_pack.json`), draft markdown that:

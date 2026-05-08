@@ -20,6 +20,7 @@
 pub mod arxiv;
 pub mod cache;
 pub mod crossref;
+pub mod full_text;
 pub mod openalex;
 pub mod scholarly;
 pub mod web;
