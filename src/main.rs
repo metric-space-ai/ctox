@@ -13,7 +13,6 @@ mod install;
 mod mission;
 mod paths;
 mod persistence;
-mod report;
 mod secrets;
 mod service;
 mod skill_store;
@@ -150,7 +149,6 @@ GOVERNANCE / MISSION
   ctox governance <subcmd>       governance decisions and audits
   ctox channel <subcmd>          communication channels (email, jami, webrtc)
   ctox queue <subcmd>            inspect, repair, and manage the service queue
-  ctox report <subcmd>           deep research report runs (feasibility, …)
   ctox plan <subcmd>             mission plans
   ctox schedule <subcmd>         recurring / deferred work
   ctox strategy <subcmd>         canonical vision / mission / strategic directives
@@ -478,7 +476,6 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
         }
         Some("plan") => plan::handle_plan_command(&root, &args[1..]),
         Some("queue") => queue::handle_queue_command(&root, &args[1..]),
-        Some("report") => report::handle_report_command(&root, &args[1..]),
         Some("scrape") => scrape::handle_scrape_command(&root, &args[1..]),
         Some("secret") => secrets::handle_secret_command(&root, &args[1..]),
         Some("schedule") => schedule::handle_schedule_command(&root, &args[1..]),

@@ -9,12 +9,12 @@
 //! `evidence_id = sha256(canonical_id)`. Re-importing the same DOI updates
 //! the row in place.
 
-use anyhow::bail;
 use anyhow::Context;
 use anyhow::Result;
-use rusqlite::params;
+use anyhow::bail;
 use rusqlite::Connection;
 use rusqlite::OptionalExtension;
+use rusqlite::params;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -69,7 +69,14 @@ pub struct EvidenceView {
     pub resolver: String,
 }
 
-const VALID_KINDS: [&str; 6] = ["doi", "arxiv", "url", "book", "standard", "assumption"];
+const VALID_KINDS: [&str; 6] = [
+    "doi",
+    "arxiv",
+    "url",
+    "book",
+    "standard",
+    "assumption",
+];
 
 pub fn upsert_evidence(
     conn: &Connection,
@@ -87,7 +94,7 @@ pub fn upsert_evidence(
     if input.canonical_id.trim().is_empty() {
         bail!("canonical_id must be non-empty");
     }
-    let evidence_id = derive_evidence_id(run_id, &input.citation_kind, &input.canonical_id);
+    let evidence_id = derive_evidence_id(&input.citation_kind, &input.canonical_id);
     let now = store::now_iso();
     let snippet_for_hash = input.snippet_md.as_deref().unwrap_or("");
     let integrity_hash = sha256_hex(snippet_for_hash);
@@ -134,7 +141,8 @@ pub fn upsert_evidence(
     .context("failed to upsert report_evidence")?;
     state_machine::advance_to(conn, run_id, Status::Gathering)?;
     crate::report::runs::set_next_stage(conn, run_id, Some("score"))?;
-    load_evidence(conn, run_id, &evidence_id)?.context("evidence row missing after upsert")
+    load_evidence(conn, run_id, &evidence_id)?
+        .context("evidence row missing after upsert")
 }
 
 pub fn list_evidence(conn: &Connection, run_id: &str) -> Result<Vec<EvidenceView>> {
@@ -194,8 +202,8 @@ pub fn load_evidence(
     Ok(row)
 }
 
-pub fn derive_evidence_id(run_id: &str, kind: &str, canonical_id: &str) -> String {
-    let basis = format!("{}|{}|{}", run_id, kind, canonical_id.trim());
+pub fn derive_evidence_id(kind: &str, canonical_id: &str) -> String {
+    let basis = format!("{}|{}", kind, canonical_id.trim());
     format!("ev_{}", &sha256_hex(&basis)[..16])
 }
 

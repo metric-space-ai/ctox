@@ -7,16 +7,16 @@
 //! stages produce free prose; they accept structured input from the SKILL
 //! procedure or the operator.
 
-use anyhow::bail;
 use anyhow::Context;
 use anyhow::Result;
-use rusqlite::params;
+use anyhow::bail;
 use rusqlite::Connection;
 use rusqlite::OptionalExtension;
+use rusqlite::params;
 use serde::Deserialize;
 use serde::Serialize;
-use serde_json::json;
 use serde_json::Value;
+use serde_json::json;
 
 use crate::report::blueprints::Blueprint;
 use crate::report::state_machine::{self, Status};
