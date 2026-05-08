@@ -217,6 +217,26 @@ pub fn run_manager(
                         });
                     tool_calls_count += 1;
 
+                    // Forensic breadcrumb: persist a provenance row for
+                    // every tool call so an operator can reconstruct
+                    // exactly what the manager attempted, regardless of
+                    // whether the tool itself wrote anything. Best-effort
+                    // — never let a logging failure abort the loop.
+                    if let Ok(conn) = open(root) {
+                        let payload = json!({
+                            "tool": tool_name,
+                            "args": call.args.clone(),
+                            "ok": envelope.ok,
+                            "user_input_required": envelope.user_input_required,
+                            "error": envelope.error.clone(),
+                            "data_keys": match &envelope.data {
+                                Value::Object(map) => map.keys().take(8).cloned().collect::<Vec<_>>(),
+                                _ => Vec::new(),
+                            },
+                        });
+                        let _ = record_provenance_note(&conn, run_id, "manager_tool_call", payload);
+                    }
+
                     // Track the latest check outcome for the host gate.
                     match tool_name {
                         "completeness_check" => {
