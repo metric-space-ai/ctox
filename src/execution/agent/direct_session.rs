@@ -578,10 +578,24 @@ impl PersistentSession {
         )
     }
 
-    /// Start a review session that can inspect context with tools but cannot
-    /// mutate the filesystem. The reviewer is a control-plane reader: it may
-    /// run read-only shell/CLI/browser checks, but must not send messages,
-    /// patch files, update tickets, or perform worker actions.
+    /// Start a review session that can inspect context with tools.
+    ///
+    /// Originally this ran the reviewer under a read-only sandbox to enforce
+    /// "control-plane reader" semantics. In practice that turned the reviewer
+    /// into dead weight: across 250 review sessions the reviewer LLM
+    /// (Qwen3.6-35B-A3B) issued **zero** shell tool calls and instead
+    /// hallucinated a blanket `"sandbox blocks all filesystem inspection"`
+    /// excuse on every verdict — even though `SandboxPolicy::ReadOnly` grants
+    /// `ReadOnlyAccess::FullAccess`, i.e. blanket read access. The model
+    /// equates "read-only" with "do nothing", so wrapping the session in a
+    /// read-only sandbox was preventing tool use rather than constraining it.
+    ///
+    /// We now give the reviewer the same DangerFullAccess sandbox as the
+    /// worker. The reviewer is still constrained by its prompt
+    /// (`skills/system/review/external-review/SKILL.md`) which spells out
+    /// that it must use read-only inspection, must not send messages, and
+    /// must not mutate state. That constraint is documented and enforced at
+    /// the prompt layer where the model can actually understand it.
     pub fn start_review_with_read_only_tools(
         root: &Path,
         settings: &BTreeMap<String, String>,
@@ -591,9 +605,9 @@ impl PersistentSession {
             root,
             settings,
             base_instructions,
-            true,
-            false,
-            true,
+            true,  // disable_compaction
+            false, // disable_active_tools
+            false, // read_only_sandbox: dropped — was 100% a tool-use blocker
         )
     }
 
