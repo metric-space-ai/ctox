@@ -62,14 +62,14 @@ fn production_turn_loop_stays_model_agnostic() {
 }
 
 #[test]
-fn production_review_sessions_use_read_only_tools() {
+fn production_review_sessions_use_unsandboxed_tools_with_prompt_guardrails() {
     let production = production_source(include_str!("direct_session.rs"));
 
     assert!(
         production.contains("start_review_with_read_only_tools")
-            && production.contains("read_only_sandbox")
-            && production.contains("SandboxMode::ReadOnly")
+            && production.contains("read_only_sandbox: dropped")
+            && production.contains("SandboxMode::DangerFullAccess")
             && production.contains("dynamic_tools: disable_active_tools.then(Vec::new)"),
-        "review sessions must expose tools for inspection while running under a read-only sandbox"
+        "review sessions must expose inspection tools without the read-only sandbox that blocked review evidence collection"
     );
 }

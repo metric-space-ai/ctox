@@ -3089,14 +3089,85 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
                     // declared workspace artifacts, and the validator
                     // decides the real pass/fail. Without this short-circuit
                     // the bench effectively cannot make progress.
-                    push_event(
-                        &state,
-                        format!(
-                            "Completion review skipped for terminal-bench controller artifact job {} — handing slice to outcome_witness + downstream tb-run validator",
-                            job.source_label
-                        ),
-                    );
-                    CompletionReviewDisposition::Approved
+                    //
+                    // SANITY CHECK: never auto-approve a "phantom cycle"
+                    // where the worker delivered ZERO of the declared
+                    // workspace file artifacts. That pattern shows up when
+                    // the worker turn aborts early (timeout, model failure,
+                    // crash) — the slice has nothing to score and approving
+                    // it just lets the bench tally a `handled` row that the
+                    // downstream validator will then mark `model_failed`
+                    // without the worker ever getting a fix-up rework. When
+                    // the contract is non-empty and 0 files were delivered,
+                    // fall back to the standard completion review so the
+                    // reviewer can either rework the slice or escalate.
+                    let expected_artifacts = expected_outcome_artifacts_for_job(&job);
+                    let workspace_expected_count = expected_artifacts
+                        .iter()
+                        .filter(|item| item.kind == ArtifactKind::WorkspaceFile)
+                        .count();
+                    let workspace_delivered_count = if workspace_expected_count == 0 {
+                        0
+                    } else {
+                        delivered_outcome_artifacts_for_job(&root, &job, &expected_artifacts)
+                            .map(|delivered| {
+                                delivered
+                                    .iter()
+                                    .filter(|item| item.kind == ArtifactKind::WorkspaceFile)
+                                    .count()
+                            })
+                            .unwrap_or(0)
+                    };
+                    let runtime_refs_ok = validate_terminal_bench_controller_runtime_refs(
+                        &root,
+                        &job,
+                        &expected_artifacts,
+                    )
+                    .is_ok();
+                    if workspace_expected_count > 0 && workspace_delivered_count == 0 {
+                        push_event(
+                            &state,
+                            format!(
+                                "Completion review NOT skipped for terminal-bench artifact job {} — phantom cycle: 0/{} declared workspace files delivered; running full review",
+                                job.source_label, workspace_expected_count
+                            ),
+                        );
+                        run_completion_review(
+                            &root,
+                            &state,
+                            &job,
+                            reply_text,
+                            conversation_id,
+                            mission_sync_outcome.as_ref(),
+                        )
+                    } else if workspace_expected_count > 0 && !runtime_refs_ok {
+                        push_event(
+                            &state,
+                            format!(
+                                "Completion review NOT skipped for terminal-bench artifact job {} — runtime refs check failed; running full review",
+                                job.source_label
+                            ),
+                        );
+                        run_completion_review(
+                            &root,
+                            &state,
+                            &job,
+                            reply_text,
+                            conversation_id,
+                            mission_sync_outcome.as_ref(),
+                        )
+                    } else {
+                        push_event(
+                            &state,
+                            format!(
+                                "Completion review skipped for terminal-bench controller artifact job {} — handing slice to outcome_witness + downstream tb-run validator (delivered {}/{} workspace files)",
+                                job.source_label,
+                                workspace_delivered_count,
+                                workspace_expected_count
+                            ),
+                        );
+                        CompletionReviewDisposition::Approved
+                    }
                 } else {
                     run_completion_review(
                         &root,
@@ -7382,6 +7453,45 @@ or prove the review wrong with stronger evidence.",
     Ok(view.title)
 }
 
+/// Maximum number of distinct `Review rework: ...` queue tasks the harness
+/// will let stack up against the same thread before refusing to enqueue any
+/// more reworks. Without this cap the rejection loop is unbounded — we
+/// observed individual terminal-bench tasks accumulate >100 review-rework
+/// rounds while the model was stuck in a fix-it loop, burning hours of GPU
+/// time with no convergence. Three rounds is the same budget the founder-
+/// communication checkpoint uses (REVIEW_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD)
+/// applied here at the rework-task layer.
+const MAX_REVIEW_REWORK_ATTEMPTS_PER_THREAD: usize = 3;
+
+/// Count how many `Review rework: ...` queue tasks already exist for the
+/// given `thread_key`, regardless of routing status. Used to cap rework
+/// loops in `handle_actionable_completion_review_rejection`.
+fn count_review_rework_attempts_for_thread(root: &Path, thread_key: &str) -> usize {
+    let trimmed = thread_key.trim();
+    if trimmed.is_empty() {
+        return 0;
+    }
+    let statuses = [
+        "pending",
+        "leased",
+        "handled",
+        "cancelled",
+        "failed",
+        "review_rework",
+        "blocked",
+    ]
+    .iter()
+    .map(|value| (*value).to_string())
+    .collect::<Vec<_>>();
+    match channels::list_queue_tasks(root, &statuses, 512) {
+        Ok(tasks) => tasks
+            .into_iter()
+            .filter(|task| task.thread_key == trimmed && task.title.starts_with("Review rework:"))
+            .count(),
+        Err(_) => 0,
+    }
+}
+
 fn handle_actionable_completion_review_rejection(
     root: &Path,
     state: &Arc<Mutex<SharedState>>,
@@ -7400,6 +7510,30 @@ fn handle_actionable_completion_review_rejection(
             work_id,
             summary: outcome.summary.clone(),
         };
+    }
+    // Rework cap: refuse to enqueue another rework when the same thread
+    // already has MAX_REVIEW_REWORK_ATTEMPTS_PER_THREAD pending/handled/...
+    // rework tasks. This prevents unbounded review-loops where the model
+    // can't converge and the harness keeps queueing fix-it rounds forever.
+    if let Some(thread_key) = job.thread_key.as_deref() {
+        let attempts = count_review_rework_attempts_for_thread(root, thread_key);
+        if attempts >= MAX_REVIEW_REWORK_ATTEMPTS_PER_THREAD {
+            push_event(
+                state,
+                format!(
+                    "Review rework cap reached for {} (thread={}, attempts={}/{}) — holding without enqueueing another rework",
+                    job.source_label, thread_key, attempts, MAX_REVIEW_REWORK_ATTEMPTS_PER_THREAD
+                ),
+            );
+            return CompletionReviewDisposition::Hold {
+                summary: format!(
+                    "Review rework loop capped at {} rounds for thread {}. Latest review verdict: {}",
+                    MAX_REVIEW_REWORK_ATTEMPTS_PER_THREAD,
+                    thread_key,
+                    clip_text(&outcome.summary, 220)
+                ),
+            };
+        }
     }
     match enqueue_review_rework(root, job, outcome) {
         Ok(rework_title) => push_event(state, format!("Review rework enqueued: {rework_title}")),

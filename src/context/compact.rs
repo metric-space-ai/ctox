@@ -162,7 +162,9 @@ impl CompactPolicy {
             // the default at Off (the previous behaviour) silently disabled
             // both layers and let long worker cycles run unprotected until
             // they overflowed the context window.
-            _ => CompactTrigger::Adaptive { self_output_pct: 15 },
+            _ => CompactTrigger::Adaptive {
+                self_output_pct: 15,
+            },
         };
         let mode = match mode_raw
             .map(str::trim)

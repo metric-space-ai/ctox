@@ -950,11 +950,11 @@ Continue the remaining verification work and return the standard review format.\
 
 fn parse_review_report(score: u8, reasons: Vec<String>, report: &str) -> ReviewOutcome {
     let parsed_verdict = parse_verdict(report);
-    let verdict = parsed_verdict.clone().unwrap_or(ReviewVerdict::Partial);
+    let mut verdict = parsed_verdict.clone().unwrap_or(ReviewVerdict::Partial);
     let mission_state = parse_prefixed_line(report, "MISSION_STATE:")
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "UNCLEAR".to_string());
-    let summary = if parsed_verdict.is_none() {
+    let mut summary = if parsed_verdict.is_none() {
         match parse_prefixed_line(report, "SUMMARY:") {
             Some(summary) if !summary.is_empty() => format!(
                 "Review report did not contain an explicit verdict, so the task stays open. {}",
@@ -968,6 +968,26 @@ fn parse_review_report(score: u8, reasons: Vec<String>, report: &str) -> ReviewO
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| clip_text(report, 180))
     };
+    let mut failed_gates = parse_section_items(report, "FAILED_GATES:");
+    let semantic_findings = parse_section_items(report, "FINDINGS:");
+    let categorized_findings = parse_categorized_findings(report);
+    let mut open_items = parse_section_items(report, "OPEN_ITEMS:");
+    let evidence = parse_section_items(report, "EVIDENCE:");
+    if verdict == ReviewVerdict::Pass && review_pass_is_unsubstantiated(score, report, &evidence) {
+        verdict = ReviewVerdict::Partial;
+        summary = format!(
+            "Review PASS was rejected because the reviewer did not produce usable inspection evidence. {}",
+            summary
+        );
+        push_unique_item(
+            &mut failed_gates,
+            "Reviewer pass lacked usable direct evidence.",
+        );
+        push_unique_item(
+            &mut open_items,
+            "Re-run review with direct filesystem, database, log, process, or live-surface evidence before accepting completion.",
+        );
+    }
     ReviewOutcome {
         required: true,
         verdict,
@@ -976,14 +996,47 @@ fn parse_review_report(score: u8, reasons: Vec<String>, report: &str) -> ReviewO
         report: report.trim().to_string(),
         score,
         reasons,
-        failed_gates: parse_section_items(report, "FAILED_GATES:"),
-        semantic_findings: parse_section_items(report, "FINDINGS:"),
-        categorized_findings: parse_categorized_findings(report),
-        open_items: parse_section_items(report, "OPEN_ITEMS:"),
-        evidence: parse_section_items(report, "EVIDENCE:"),
+        failed_gates,
+        semantic_findings,
+        categorized_findings,
+        open_items,
+        evidence,
         handoff: parse_handoff_block(report),
         disposition: parse_disposition(report).unwrap_or_default(),
     }
+}
+
+fn review_pass_is_unsubstantiated(score: u8, report: &str, evidence: &[String]) -> bool {
+    // Production review is only invoked for high-risk slices (score >= 3).
+    // A PASS from that path must be backed by direct checks. If the reviewer
+    // says tools/sandbox blocked inspection, treat the pass as incomplete even
+    // if it still emitted a nominal evidence line.
+    score >= 3 && (evidence.is_empty() || report_mentions_review_access_blocker(report))
+}
+
+fn report_mentions_review_access_blocker(report: &str) -> bool {
+    let lowered = report.to_ascii_lowercase();
+    contains_any(
+        &lowered,
+        &[
+            "sandbox restriction",
+            "sandbox restrictions",
+            "blocked by sandbox",
+            "blocking all filesystem",
+            "filesystem and database inspection",
+            "could not inspect",
+            "couldn't inspect",
+            "unable to inspect",
+            "could not access",
+            "couldn't access",
+            "unable to access",
+            "tools unavailable",
+            "tool access",
+            "without filesystem access",
+            "without database access",
+            "read-only inspection was unavailable",
+        ],
+    )
 }
 
 fn parse_disposition(report: &str) -> Option<ReviewDisposition> {
@@ -1207,6 +1260,12 @@ fn contains_any(haystack: &str, needles: &[&str]) -> bool {
 fn push_unique_reason(reasons: &mut Vec<String>, candidate: &str) {
     if !reasons.iter().any(|existing| existing == candidate) {
         reasons.push(candidate.to_string());
+    }
+}
+
+fn push_unique_item(items: &mut Vec<String>, candidate: &str) {
+    if !items.iter().any(|existing| existing == candidate) {
+        items.push(candidate.to_string());
     }
 }
 
@@ -1571,6 +1630,43 @@ mod tests {
         let report = "VERDICT: PASS\nSUMMARY: looks good.\nDISPOSITION: SEND\n";
         let outcome = parse_review_report(0, vec![], report);
         assert_eq!(outcome.disposition, ReviewDisposition::Send);
+    }
+
+    #[test]
+    fn required_pass_without_evidence_is_downgraded_to_partial() {
+        let report =
+            "VERDICT: PASS\nMISSION_STATE: HEALTHY\nSUMMARY: claims look fine.\nEVIDENCE:\n- none\n";
+        let outcome = parse_review_report(4, vec!["runtime_or_infra_change".to_string()], report);
+
+        assert_eq!(outcome.verdict, ReviewVerdict::Partial);
+        assert!(outcome.summary.contains("PASS was rejected"));
+        assert!(outcome
+            .failed_gates
+            .iter()
+            .any(|gate| gate.contains("lacked usable direct evidence")));
+        assert!(outcome.requires_follow_up());
+    }
+
+    #[test]
+    fn required_pass_with_sandbox_blocker_is_downgraded_to_partial() {
+        let report = "VERDICT: PASS\nMISSION_STATE: HEALTHY\nSUMMARY: sandbox restrictions prevented filesystem inspection, but it seems okay.\nEVIDENCE:\n- worker said tests passed\n";
+        let outcome = parse_review_report(4, vec!["runtime_or_infra_change".to_string()], report);
+
+        assert_eq!(outcome.verdict, ReviewVerdict::Partial);
+        assert!(outcome
+            .open_items
+            .iter()
+            .any(|item| item.contains("Re-run review with direct filesystem")));
+    }
+
+    #[test]
+    fn required_pass_with_direct_evidence_stays_pass() {
+        let report = "VERDICT: PASS\nMISSION_STATE: HEALTHY\nSUMMARY: verified directly.\nEVIDENCE:\n- test -f /tmp/workspace/result.json => exit 0\nDISPOSITION: SEND\n";
+        let outcome = parse_review_report(4, vec!["runtime_or_infra_change".to_string()], report);
+
+        assert_eq!(outcome.verdict, ReviewVerdict::Pass);
+        assert_eq!(outcome.evidence.len(), 1);
+        assert!(!outcome.requires_follow_up());
     }
 
     #[test]
