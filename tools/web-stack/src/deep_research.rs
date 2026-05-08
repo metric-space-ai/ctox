@@ -1,8 +1,8 @@
 use anyhow::Result;
 use scraper::Html;
 use scraper::Selector;
-use serde_json::Value;
 use serde_json::json;
+use serde_json::Value;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::fs;
@@ -15,15 +15,15 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use url::Url;
 
+use crate::scholarly_search::run_ctox_scholarly_search_tool;
+use crate::scholarly_search::ScholarlySearchProvider;
+use crate::scholarly_search::ScholarlySearchRequest;
+use crate::web_search::run_ctox_web_read_tool;
+use crate::web_search::run_ctox_web_search_tool;
 use crate::web_search::CanonicalWebSearchRequest;
 use crate::web_search::ContextSize;
 use crate::web_search::DirectWebReadRequest;
 use crate::web_search::SearchUserLocation;
-use crate::scholarly_search::ScholarlySearchProvider;
-use crate::scholarly_search::ScholarlySearchRequest;
-use crate::scholarly_search::run_ctox_scholarly_search_tool;
-use crate::web_search::run_ctox_web_read_tool;
-use crate::web_search::run_ctox_web_search_tool;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeepResearchRequest {
@@ -1806,16 +1806,12 @@ mod tests {
             }
         })];
         let links = collect_data_links(&sources);
-        assert!(
-            links
-                .iter()
-                .any(|link| link.get("kind").and_then(Value::as_str) == Some("github"))
-        );
-        assert!(
-            links
-                .iter()
-                .any(|link| link.get("kind").and_then(Value::as_str) == Some("dataset"))
-        );
+        assert!(links
+            .iter()
+            .any(|link| link.get("kind").and_then(Value::as_str) == Some("github")));
+        assert!(links
+            .iter()
+            .any(|link| link.get("kind").and_then(Value::as_str) == Some("dataset")));
     }
 
     #[test]

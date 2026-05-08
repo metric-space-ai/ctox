@@ -578,7 +578,8 @@ fn extract_language_code(token: &str) -> Option<String> {
 fn is_file_extension(token: &str) -> bool {
     matches!(
         token,
-        "pdf" | "epub"
+        "pdf"
+            | "epub"
             | "mobi"
             | "azw3"
             | "djvu"
@@ -684,7 +685,26 @@ fn extract_doi(text: &str) -> Option<String> {
     let mut idx = 0;
     while idx + 4 < bytes.len() {
         if bytes[idx] == b'1' && bytes[idx + 1] == b'0' && bytes[idx + 2] == b'.' {
-            let prev_ok = idx == 0 || !is_doi_inner_byte(bytes[idx - 1]);
+            // Left boundary: '/' (after doi.org/), ':' (after doi:), whitespace,
+            // and punctuation are all valid; only adjoining alphanumerics or
+            // '.' / '-' / '_' would mean we're inside another token.
+            let prev_ok = idx == 0
+                || matches!(
+                    bytes[idx - 1],
+                    b' ' | b'\t'
+                        | b'\n'
+                        | b'\r'
+                        | b'/'
+                        | b':'
+                        | b','
+                        | b';'
+                        | b'('
+                        | b'['
+                        | b'{'
+                        | b'<'
+                        | b'"'
+                        | b'\''
+                );
             if prev_ok {
                 let digits_start = idx + 3;
                 let mut p = digits_start;
@@ -713,10 +733,6 @@ fn extract_doi(text: &str) -> Option<String> {
         idx += 1;
     }
     None
-}
-
-fn is_doi_inner_byte(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || matches!(b, b'.' | b'/' | b'-' | b'_')
 }
 
 fn is_doi_suffix_byte(b: u8) -> bool {
@@ -784,7 +800,11 @@ fn resolve_unpaywall_oa_pdf(
         encoded_doi,
         encoded_email
     );
-    let response = match agent.get(&endpoint).set("accept", "application/json").call() {
+    let response = match agent
+        .get(&endpoint)
+        .set("accept", "application/json")
+        .call()
+    {
         Ok(response) => response,
         Err(_) => return Ok(None),
     };
@@ -792,7 +812,10 @@ fn resolve_unpaywall_oa_pdf(
         Ok(payload) => payload,
         Err(_) => return Ok(None),
     };
-    let is_oa = payload.get("is_oa").and_then(Value::as_bool).unwrap_or(false);
+    let is_oa = payload
+        .get("is_oa")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     if !is_oa {
         return Ok(None);
     }
@@ -900,8 +923,14 @@ mod tests {
 
     #[test]
     fn extracts_language_code_from_bracket_notation() {
-        assert_eq!(extract_language_code("English [en]"), Some("en".to_string()));
-        assert_eq!(extract_language_code("Français [fr]"), Some("fr".to_string()));
+        assert_eq!(
+            extract_language_code("English [en]"),
+            Some("en".to_string())
+        );
+        assert_eq!(
+            extract_language_code("Français [fr]"),
+            Some("fr".to_string())
+        );
         assert_eq!(extract_language_code("Plain text"), None);
     }
 
@@ -1250,8 +1279,7 @@ mod tests {
             max_results: Some(10),
             ..Default::default()
         };
-        let response =
-            execute_scholarly_search(&root, &request).expect("execute_scholarly_search");
+        let response = execute_scholarly_search(&root, &request).expect("execute_scholarly_search");
         let _ = server.join();
 
         assert_eq!(response.provider, "annas_archive");
@@ -1263,7 +1291,10 @@ mod tests {
             response.results[0].source_id,
             "0123456789abcdef0123456789abcdef"
         );
-        assert_eq!(response.results[0].title, "Quantum Entanglement: Foundations");
+        assert_eq!(
+            response.results[0].title,
+            "Quantum Entanglement: Foundations"
+        );
         assert!(response.results[0].open_access_pdf.is_none());
 
         let _ = std::fs::remove_dir_all(&root);
@@ -1352,7 +1383,10 @@ mod tests {
 
         assert_eq!(response.results.len(), 1);
         let hit = &response.results[0];
-        assert_eq!(hit.doi.as_deref(), Some("10.1002/j.1538-7305.1948.tb01338.x"));
+        assert_eq!(
+            hit.doi.as_deref(),
+            Some("10.1002/j.1538-7305.1948.tb01338.x")
+        );
         assert_eq!(
             hit.open_access_pdf.as_deref(),
             Some("https://example.org/papers/shannon-1948.pdf"),
@@ -1361,7 +1395,10 @@ mod tests {
         assert_eq!(hit.open_access_license.as_deref(), Some("cc-by"));
 
         let captured = captured_path.lock().expect("captured path read").clone();
-        assert!(captured.contains("10.1002"), "Unpaywall request path should encode DOI: {captured}");
+        assert!(
+            captured.contains("10.1002"),
+            "Unpaywall request path should encode DOI: {captured}"
+        );
         assert!(
             captured.contains("email=ci%40ctox.test") || captured.contains("email=ci@ctox.test"),
             "Unpaywall request must include email: {captured}"

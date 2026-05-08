@@ -4,29 +4,29 @@ use serde_json::Value;
 use std::path::Path;
 use std::path::PathBuf;
 
-use crate::browser::BrowserAutomationRequest;
-use crate::browser::BrowserCaptureRequest;
-use crate::browser::BrowserPrepareOptions;
 use crate::browser::capture_browser_transport;
 use crate::browser::prepare_browser_environment;
 use crate::browser::read_browser_automation_source;
 use crate::browser::run_browser_automation;
+use crate::browser::BrowserAutomationRequest;
+use crate::browser::BrowserCaptureRequest;
+use crate::browser::BrowserPrepareOptions;
+use crate::deep_research::run_ctox_deep_research_tool;
 use crate::deep_research::DeepResearchDepth;
 use crate::deep_research::DeepResearchRequest;
-use crate::deep_research::run_ctox_deep_research_tool;
+use crate::scholarly_search::run_ctox_scholarly_search_tool;
 use crate::scholarly_search::ScholarlySearchProvider;
 use crate::scholarly_search::ScholarlySearchRequest;
-use crate::scholarly_search::run_ctox_scholarly_search_tool;
-use crate::web_search::CanonicalWebSearchRequest;
-use crate::web_search::ContextSize;
-use crate::web_search::DirectWebReadRequest;
-use crate::web_search::SearchUserLocation;
 use crate::web_search::run_ctox_google_bootstrap_doctor_tool;
 use crate::web_search::run_ctox_google_bootstrap_import_tool;
 use crate::web_search::run_ctox_google_bootstrap_refresh_tool;
 use crate::web_search::run_ctox_google_bootstrap_status_tool;
 use crate::web_search::run_ctox_web_read_tool;
 use crate::web_search::run_ctox_web_search_tool;
+use crate::web_search::CanonicalWebSearchRequest;
+use crate::web_search::ContextSize;
+use crate::web_search::DirectWebReadRequest;
+use crate::web_search::SearchUserLocation;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WebScrapeRequest {
