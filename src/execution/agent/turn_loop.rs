@@ -225,7 +225,16 @@ use crate::live_context;
 pub const CHAT_CONVERSATION_ID: i64 = 1;
 const DEFAULT_CONTINUITY_REFRESH_TIMEOUT_SECS: u64 = 45;
 const DEFAULT_REMOTE_CHAT_TURN_TIMEOUT_SECS: u64 = 180;
-const DEFAULT_LOCAL_CHAT_TURN_TIMEOUT_SECS: u64 = 900;
+// Local inference (llama-cli per-call cold-start architecture) needs a much
+// longer turn budget than remote APIs. A single agent turn often involves
+// dozens of tool round-trips, each carrying ~5-15 s GPU model-load overhead
+// plus the actual generation time. With a 900 s ceiling, complex
+// terminal-bench tasks (SWE-Bench, large workspaces) hit
+// "direct session timeout after 900s" mid-turn, the persistent session is
+// dropped and the ggml backend is killed — leaving leases held and 0 passes.
+// 3600 s gives long-running tasks room while still bounding genuinely stuck
+// turns. Operators can override via CTOX_CHAT_TURN_TIMEOUT_SECS.
+const DEFAULT_LOCAL_CHAT_TURN_TIMEOUT_SECS: u64 = 3600;
 const CONTINUITY_REFRESH_FAULT_FILE_ENV_KEY: &str = "CTOX_CONTINUITY_REFRESH_FAULT_FILE";
 const CONTINUITY_REFRESH_TIMEOUT_ENV_KEY: &str = "CTOX_CONTINUITY_REFRESH_TIMEOUT_SECS";
 

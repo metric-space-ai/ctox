@@ -13,9 +13,9 @@ use std::io;
 #[cfg(target_os = "linux")]
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::Arc;
-use std::time::Duration;
+use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::Parser;
@@ -89,9 +89,16 @@ struct Args {
     request_model_alias: Option<String>,
 }
 
-#[derive(Clone)]
+/// Shared state for the in-process backend.
+///
+/// Holds a long-lived `llama-server` subprocess that keeps the GGUF resident
+/// in GPU memory across calls, plus its loopback HTTP endpoint. Each
+/// ResponsesCreate request becomes a single `POST /completion` to that
+/// server — the model is *not* reloaded per turn.
 struct Engine {
     args: Args,
+    server_url: String,
+    llama_server: Mutex<Option<Child>>,
 }
 
 #[tokio::main(flavor = "multi_thread")]
@@ -105,10 +112,122 @@ async fn main() -> Result<()> {
 
     let args = Args::parse();
     ensure_file(&args.model, "model GGUF")?;
-    ensure_file(&args.llama_cli, "llama-cli")?;
+    // The --llama-cli arg points at e.g. `.../bin/llama-completion`. We use
+    // its directory to locate the persistent `llama-server` binary, which
+    // keeps the model loaded and exposes /completion over loopback HTTP.
+    let llama_server_path = derive_llama_server_path(&args.llama_cli)?;
+    ensure_file(&llama_server_path, "llama-server")?;
 
-    let engine = Arc::new(Engine { args });
-    serve(engine).await
+    let port = pick_free_loopback_port()?;
+    let server_url = format!("127.0.0.1:{port}");
+    let child = spawn_llama_server(&args, &llama_server_path, port)?;
+    info!(port, "spawned llama-server; waiting for /health");
+    if let Err(err) = wait_for_llama_server_ready(&server_url, Duration::from_secs(300)) {
+        // Best-effort cleanup so we don't leak a half-loaded backend.
+        let _ = kill_child(child);
+        return Err(err.context("llama-server did not become ready"));
+    }
+    info!(port, "llama-server is ready");
+
+    let engine = Arc::new(Engine {
+        args,
+        server_url,
+        llama_server: Mutex::new(Some(child)),
+    });
+    let result = serve(engine.clone()).await;
+    // Tear down the model-resident subprocess on shutdown.
+    if let Some(child) = engine.llama_server.lock().unwrap().take() {
+        let _ = kill_child(child);
+    }
+    result
+}
+
+fn derive_llama_server_path(llama_cli: &Path) -> Result<PathBuf> {
+    let parent = llama_cli
+        .parent()
+        .ok_or_else(|| anyhow!("--llama-cli has no parent directory: {}", llama_cli.display()))?;
+    Ok(parent.join("llama-server"))
+}
+
+fn pick_free_loopback_port() -> Result<u16> {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")
+        .context("failed to pick a free loopback port for llama-server")?;
+    let port = listener.local_addr()?.port();
+    drop(listener);
+    Ok(port)
+}
+
+fn spawn_llama_server(args: &Args, llama_server: &Path, port: u16) -> Result<Child> {
+    let mut command = Command::new(llama_server);
+    command
+        .arg("-m")
+        .arg(&args.model)
+        .arg("-c")
+        .arg(args.ctx.to_string())
+        .arg("-ngl")
+        .arg(args.gpu_layers.to_string())
+        .arg("-sm")
+        .arg(&args.split_mode)
+        .arg("-ts")
+        .arg(&args.tensor_split)
+        .arg("-t")
+        .arg(args.threads.to_string())
+        .arg("-b")
+        .arg(args.batch.to_string())
+        .arg("-ub")
+        .arg(args.ubatch.to_string())
+        .arg("-fa")
+        .arg("on")
+        .arg("--host")
+        .arg("127.0.0.1")
+        .arg("--port")
+        .arg(port.to_string())
+        .arg("--no-webui")
+        // We render the chat template ourselves and feed raw prompts to
+        // /completion. llama-server's --jinja flag (Boolean, default off)
+        // is left at its default; passing it as `--jinja false` errors out
+        // because it does not take a value.
+        .stdin(Stdio::null())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit());
+    let child = command
+        .spawn()
+        .with_context(|| format!("failed to spawn {}", llama_server.display()))?;
+    Ok(child)
+}
+
+fn wait_for_llama_server_ready(server_url: &str, timeout: Duration) -> Result<()> {
+    let deadline = Instant::now() + timeout;
+    let health_url = format!("http://{server_url}/health");
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_millis(500))
+        .timeout_read(Duration::from_secs(2))
+        .build();
+    let mut last_err: Option<String> = None;
+    while Instant::now() < deadline {
+        match agent.get(&health_url).call() {
+            Ok(resp) if resp.status() == 200 => return Ok(()),
+            Ok(resp) => last_err = Some(format!("status {}", resp.status())),
+            Err(err) => last_err = Some(format!("{err}")),
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    bail!(
+        "llama-server health probe timed out at {} after {:?}: {}",
+        health_url,
+        timeout,
+        last_err.unwrap_or_else(|| "no response".to_string())
+    )
+}
+
+fn kill_child(mut child: Child) -> Result<()> {
+    if let Some(status) = child.try_wait().context("try_wait child")? {
+        debug!(?status, "llama-server already exited");
+        return Ok(());
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    Ok(())
 }
 
 async fn serve(engine: Arc<Engine>) -> Result<()> {
@@ -140,7 +259,7 @@ async fn serve(engine: Arc<Engine>) -> Result<()> {
         socket = %sock.display(),
         model = %engine.args.model_id,
         gguf = %engine.args.model.display(),
-        llama_cli = %engine.args.llama_cli.display(),
+        llama_server = %engine.server_url,
         "qwen36 ggml server listening"
     );
 
@@ -172,8 +291,32 @@ async fn serve(engine: Arc<Engine>) -> Result<()> {
                 break;
             }
             _ = sig_term.recv() => {
-                info!("SIGTERM received; draining");
-                break;
+                // The parent ctox-real sends SIGTERM at the end of every
+                // PersistentSession (per-task), which would otherwise force a
+                // full model reload (~5 GB across 4 GPUs × 2-3 minutes) every
+                // task. Distinguish two cases:
+                //   * Parent reparented to init (ppid == 1): the ctox-real
+                //     service is actually shutting down. Drain and exit.
+                //   * Parent still alive: this is a per-task lifecycle
+                //     cleanup. Stay resident, keep the model in GPU memory,
+                //     re-arm the signal handler, and continue serving the
+                //     next task. This is the whole point of llama-server
+                //     persistence.
+                #[cfg(target_os = "linux")]
+                let ppid = nix::unistd::getppid().as_raw();
+                #[cfg(not(target_os = "linux"))]
+                let ppid: i32 = 1;
+                if ppid == 1 {
+                    info!("SIGTERM received and parent gone (reparented to init); draining");
+                    break;
+                }
+                warn!(
+                    ppid,
+                    "SIGTERM received but parent still alive; staying resident across the task boundary (model kept in GPU memory)"
+                );
+                sig_term = tokio::signal::unix::signal(
+                    tokio::signal::unix::SignalKind::terminate(),
+                )?;
             }
         }
     }
@@ -282,7 +425,7 @@ fn run_turn(engine: Arc<Engine>, req: ResponsesCreateRequest) -> Result<Vec<u8>>
         .max_output_tokens
         .unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS)
         .min(DEFAULT_MAX_OUTPUT_TOKENS);
-    let text = match run_llama(&engine.args, &prompt, max_out) {
+    let text = match run_llama(&engine, &prompt, max_out) {
         Ok(text) => text,
         Err(err) => {
             let failed = ResponseEnvelope {
@@ -558,73 +701,56 @@ fn parse_qwen_json_tool_call(tool_body: &str) -> Option<ParsedToolCall> {
     })
 }
 
-fn run_llama(args: &Args, prompt: &str, max_out: usize) -> Result<String> {
-    let prompt_path = write_prompt_file(prompt)?;
-    let output = Command::new(&args.llama_cli)
-        .arg("-m")
-        .arg(&args.model)
-        .arg("-f")
-        .arg(&prompt_path)
-        .arg("-n")
-        .arg(max_out.to_string())
-        .arg("-c")
-        .arg(args.ctx.to_string())
-        .arg("-t")
-        .arg(args.threads.to_string())
-        .arg("-b")
-        .arg(args.batch.to_string())
-        .arg("-ub")
-        .arg(args.ubatch.to_string())
-        .arg("-ngl")
-        .arg(args.gpu_layers.to_string())
-        .arg("-sm")
-        .arg(&args.split_mode)
-        .arg("-ts")
-        .arg(&args.tensor_split)
-        .arg("-fa")
-        .arg("on")
-        .arg("--temp")
-        .arg(args.temperature.to_string())
-        .arg("--top-p")
-        .arg("0.95")
-        .arg("--top-k")
-        .arg("20")
-        .arg("--presence-penalty")
-        .arg("0.0")
-        .arg("--repeat-penalty")
-        .arg("1.0")
-        .arg("--no-display-prompt")
-        .arg("--simple-io")
-        .arg("-r")
-        .arg("<|im_end|>")
-        .arg("-r")
-        .arg("<|im_start|>")
-        .output()
-        .with_context(|| format!("spawn {}", args.llama_cli.display()));
-    let _ = std::fs::remove_file(&prompt_path);
-    let output = output?;
+fn run_llama(engine: &Engine, prompt: &str, max_out: usize) -> Result<String> {
+    // Single POST to the persistent llama-server. The model stays resident in
+    // GPU memory across calls; only the prompt and KV-cache for this turn are
+    // processed. No per-call cold-start.
+    let url = format!("http://{}/completion", engine.server_url);
+    let body = serde_json::json!({
+        "prompt": prompt,
+        "n_predict": max_out as i64,
+        "temperature": engine.args.temperature,
+        "top_p": 0.95,
+        "top_k": 20,
+        "repeat_penalty": 1.0,
+        "presence_penalty": 0.0,
+        "stream": false,
+        "cache_prompt": true,
+        "stop": ["<|im_end|>", "<|im_start|>"],
+    });
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!(
-            "llama-cli exited with {}: {}",
-            output.status,
-            last_lines(&stderr, 20)
-        );
-    }
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(5))
+        // n_predict ≤ 2048 tokens; even at slow speeds (5 t/s) this caps
+        // around 7 minutes. Allow slack for prompt processing of long
+        // contexts (up to ctx tokens) before the first token.
+        .timeout_read(Duration::from_secs(1800))
+        .build();
 
-    let mut text = String::from_utf8_lossy(&output.stdout).to_string();
-    text = strip_prompt_echo(&text, prompt);
-    Ok(clean_model_output(&text))
-}
-
-fn write_prompt_file(prompt: &str) -> Result<PathBuf> {
-    let path = std::env::temp_dir().join(format!(
-        "ctox-qwen36-prompt-{}.txt",
-        uuid::Uuid::new_v4().simple()
-    ));
-    std::fs::write(&path, prompt).with_context(|| format!("write {}", path.display()))?;
-    Ok(path)
+    let response = match agent.post(&url).send_json(body) {
+        Ok(resp) => resp,
+        Err(ureq::Error::Status(status, resp)) => {
+            let detail = resp
+                .into_string()
+                .unwrap_or_else(|_| "<no body>".to_string());
+            bail!(
+                "llama-server /completion returned status {}: {}",
+                status,
+                last_lines(&detail, 20)
+            );
+        }
+        Err(err) => {
+            bail!("llama-server /completion transport error: {err}");
+        }
+    };
+    let value: serde_json::Value = response
+        .into_json()
+        .context("llama-server /completion returned non-JSON body")?;
+    let content = value
+        .get("content")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| anyhow!("llama-server response missing `content`: {value}"))?;
+    Ok(clean_model_output(content))
 }
 
 fn render_chat_prompt(req: &ResponsesCreateRequest) -> String {
@@ -826,10 +952,6 @@ fn flatten_content_parts(parts: &[Value]) -> String {
         }
     }
     out
-}
-
-fn strip_prompt_echo(text: &str, prompt: &str) -> String {
-    text.strip_prefix(prompt).unwrap_or(text).to_string()
 }
 
 fn clean_model_output(text: &str) -> String {

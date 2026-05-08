@@ -7085,9 +7085,27 @@ fn failed_worker_route_status(
     timeout_worker_message: bool,
     retry_worker_message: bool,
 ) -> &'static str {
-    if agent_failure_threshold_hit || (timeout_worker_message && !retry_worker_message) {
-        "blocked"
-    } else if retry_worker_message {
+    // No worker failure ever lands on `blocked` — `blocked` is reserved for
+    // explicit operator action (`ctox queue block …`) and ticket-spill, both
+    // of which are deliberate quarantine. Worker failures must always remain
+    // recoverable, but they need three distinct lanes so the routing layer
+    // does not lose information about WHY the slice failed:
+    //
+    //   * `agent_failure_threshold_hit` (anti-stuck guard, the same slice
+    //     failed N times in a row): the task goes to `review_rework` so the
+    //     reviewer pathway can examine the loop, give the worker corrective
+    //     guidance, and release it back to `pending`. This avoids the
+    //     pathological "one bad turn → permanently dead task" trap while
+    //     still preventing the runtime from burning tokens in a hot loop.
+    //   * `timeout_worker_message`: turn ran out of time. Workspace state is
+    //     already on disk and `defer_messages_until()` (in the caller) added
+    //     a backoff. Back to `pending` so the next cycle resumes from where
+    //     the workspace left off.
+    //   * `retry_worker_message`: explicit retry signal from the runtime.
+    //   * neither flag: a real non-retryable error → `failed`.
+    if agent_failure_threshold_hit {
+        "review_rework"
+    } else if timeout_worker_message || retry_worker_message {
         "pending"
     } else {
         "failed"
@@ -15993,11 +16011,21 @@ mod tests {
     }
 
     #[test]
-    fn timeout_without_explicit_auto_retry_blocks_instead_of_requeueing() {
-        assert_eq!(failed_worker_route_status(false, true, false), "blocked");
+    fn worker_failures_route_to_recoverable_states_never_blocked() {
+        // Anti-stuck guard fires the reviewer pathway, not a permanent block.
+        assert_eq!(
+            failed_worker_route_status(true, false, false),
+            "review_rework"
+        );
+        assert_eq!(
+            failed_worker_route_status(true, true, true),
+            "review_rework"
+        );
+        // Pure timeout / runtime retry signal stays on the queue.
+        assert_eq!(failed_worker_route_status(false, true, false), "pending");
         assert_eq!(failed_worker_route_status(false, true, true), "pending");
-        assert_eq!(failed_worker_route_status(true, true, true), "blocked");
         assert_eq!(failed_worker_route_status(false, false, true), "pending");
+        // Genuine non-retryable error.
         assert_eq!(failed_worker_route_status(false, false, false), "failed");
     }
 

@@ -2035,6 +2035,14 @@ fn dedupe_socket_backed_backend_processes(
     let preserve_pid = read_pid(pid_path)
         .filter(|pid| matching.contains(pid))
         .or_else(|| matching.first().copied());
+    eprintln!(
+        "[ctox-supervisor] dedupe role={} matching_pids={:?} pid_path_pid={:?} preserve_pid={:?} endpoint={}",
+        spec.display_model,
+        matching,
+        read_pid(pid_path),
+        preserve_pid,
+        spec.transport_endpoint.as_deref().unwrap_or("<none>"),
+    );
     stop_duplicate_socket_backed_backend_processes(root, spec, preserve_pid)
 }
 
@@ -2533,22 +2541,35 @@ fn backend_process_owns_ready_transport(
         return Ok(false);
     }
     if let Some(transport) = spec_local_transport(spec) {
-        if transport_accepts_stably(
+        let probe_ok = transport_accepts_stably(
             &transport,
             BACKEND_READY_STABILITY_PASSES,
             Duration::from_millis(BACKEND_READY_STABILITY_POLL_MILLIS),
-        ) {
-            return socket_backed_process_matches_spec(root, spec, pid);
-        }
-        // A committed local socket backend can be busy serving a turn and briefly
-        // reject new probe connects. Preserve the live workload as long as the
-        // process still matches the expected launch spec and the socket file is
-        // still present.
-        if transport_endpoint_exists(&transport)
-            && socket_backed_process_matches_spec(root, spec, pid)?
-        {
+        );
+        let endpoint_exists = transport_endpoint_exists(&transport);
+        let command_matches = socket_backed_process_matches_spec(root, spec, pid)?;
+        // Probe success is sufficient.
+        if probe_ok && command_matches {
             return Ok(true);
         }
+        // Grace path: a busy local socket backend can briefly reject probe
+        // connects while serving a long-running turn (e.g. blocking llama-cli
+        // subprocess). Preserve the live workload as long as the process is
+        // alive, the socket file is still bound, and the command line still
+        // matches the expected launch spec. Without this, the supervisor will
+        // SIGTERM mid-inference and abort the turn.
+        if endpoint_exists && command_matches {
+            return Ok(true);
+        }
+        eprintln!(
+            "[ctox-supervisor] backend_process_owns_ready_transport=false role={} pid={} probe_ok={} endpoint_exists={} command_matches={} endpoint={}",
+            spec.display_model,
+            pid,
+            probe_ok,
+            endpoint_exists,
+            command_matches,
+            spec.transport_endpoint.as_deref().unwrap_or("<none>"),
+        );
         return Ok(false);
     }
     Ok(listening_pids_for_port(root, spec.port)?.contains(&pid))
@@ -2718,6 +2739,13 @@ fn stop_duplicate_socket_backed_backend_processes(
         if Some(pid) == preserve_pid || pid == std::process::id() {
             continue;
         }
+        eprintln!(
+            "[ctox-supervisor] stop_duplicate role={} pid={} preserve_pid={:?} endpoint={}",
+            spec.display_model,
+            pid,
+            preserve_pid,
+            spec.transport_endpoint.as_deref().unwrap_or("<none>"),
+        );
         terminate_managed_process(root, pid)
             .with_context(|| format!("failed to stop duplicate socket-backed pid {pid}"))?;
         thread::sleep(Duration::from_millis(150));
@@ -3078,6 +3106,13 @@ fn stop_process(root: &Path, pid_path: PathBuf) -> Result<()> {
         return Ok(());
     };
     if process_is_alive(pid) {
+        let bt = std::backtrace::Backtrace::force_capture();
+        eprintln!(
+            "[ctox-supervisor] stop_process pid={} pid_path={} backtrace=\n{}",
+            pid,
+            pid_path.display(),
+            bt
+        );
         terminate_managed_process(root, pid)
             .with_context(|| format!("failed to signal pid {pid}"))?;
         let deadline = Instant::now() + Duration::from_secs(3);
