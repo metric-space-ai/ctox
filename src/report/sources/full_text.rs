@@ -46,6 +46,42 @@ pub fn license_permits_open_access(license: Option<&str>) -> bool {
     permits.iter().any(|needle| lower.contains(needle))
 }
 
+/// URL-pattern allowlist for hosts that publish open-access content
+/// even when the Crossref license field is empty. Used as a fallback
+/// when [`license_permits_open_access`] returns `false` but we still
+/// want to attempt the fetch because the URL points at an OA-by-policy
+/// surface.
+pub fn url_is_open_access_surface(url: &str) -> bool {
+    let lower = url.to_ascii_lowercase();
+    let allow = [
+        // arXiv: every paper is OA by submission terms.
+        "arxiv.org/",
+        "export.arxiv.org/",
+        // NDT.net: OA conference repository.
+        "ndt.net/",
+        // SciELO, OAPEN, DOAJ, J-STAGE: OA aggregators.
+        "scielo.",
+        "oapen.org/",
+        "doaj.org/",
+        "jstage.jst.go.jp/",
+        // OA-by-policy publishers / surfaces.
+        "europepmc.org/",
+        "ncbi.nlm.nih.gov/pmc/",
+        "biorxiv.org/",
+        "medrxiv.org/",
+        "preprints.org/",
+        // Direct PDF URLs are usually meant to be fetched.
+        ".pdf",
+    ];
+    allow.iter().any(|needle| lower.contains(needle))
+}
+
+/// Combined gate. Either the licence string explicitly permits OA, or
+/// the URL is on a known OA-by-policy surface.
+pub fn url_or_license_permits(license: Option<&str>, url: &str) -> bool {
+    license_permits_open_access(license) || url_is_open_access_surface(url)
+}
+
 fn build_agent(timeout: Duration) -> ureq::Agent {
     ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(8))

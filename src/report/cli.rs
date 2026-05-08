@@ -26,7 +26,7 @@ use crate::report::render::{
 };
 use crate::report::schema::{ensure_schema, new_id, now_iso, open, RunStatus};
 use crate::report::sources::full_text::{
-    fetch_full_text, license_permits_open_access, FullTextFetch,
+    fetch_full_text, url_or_license_permits, FullTextFetch,
 };
 use crate::report::sources::{NormalisedSource, ResolverStack, SourceKind};
 use crate::report::state::{
@@ -118,6 +118,98 @@ fn read_markdown_file(path_str: &str) -> Result<String> {
     Ok(body)
 }
 
+/// arXiv resolver-API fallback. When `resolve_arxiv` times out (a
+/// recurring problem from third-party networks), insert a minimal
+/// evidence row pointing at the canonical arXiv URL, then attempt the
+/// direct PDF fetch. The row carries `resolver_used = "arxiv-direct"`
+/// so the operator can later see the lookup was metadata-light.
+fn arxiv_direct_pdf_fallback(
+    root: &Path,
+    run_id: &str,
+    arxiv_id: &str,
+    pdf_url: &str,
+) -> Result<()> {
+    let conn = open(root)?;
+    ensure_schema(&conn)?;
+    // Stable evidence_id derived from "arxiv:<id>" so a later
+    // successful resolve still resolves to the same row.
+    let evidence_id = {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        h.update(b"arxiv:");
+        h.update(arxiv_id.trim().to_ascii_lowercase().as_bytes());
+        let digest = h.finalize();
+        let mut hex = String::with_capacity(2 + 16);
+        hex.push_str("ev_");
+        for byte in digest.iter().take(8) {
+            use std::fmt::Write as _;
+            let _ = write!(&mut hex, "{:02x}", byte);
+        }
+        hex
+    };
+    let abs_url = format!("https://arxiv.org/abs/{arxiv_id}");
+    let now = now_iso();
+    conn.execute(
+        "INSERT OR REPLACE INTO report_evidence_register (
+             evidence_id, run_id, kind, canonical_id, title, authors_json,
+             venue, year, publisher, url_canonical, url_full_text,
+             license, abstract_md, snippet_md, retrieved_at,
+             resolver_used, integrity_hash, raw_payload_json,
+             created_at, updated_at, citations_count
+         ) VALUES (?1, ?2, 'arxiv', ?3, NULL, '[]', 'arXiv', NULL, NULL,
+                   ?4, ?5, NULL, NULL, NULL, ?6, 'arxiv-direct', NULL,
+                   ?7, ?8, ?8, 0)",
+        params![
+            evidence_id,
+            run_id,
+            arxiv_id,
+            abs_url,
+            pdf_url,
+            now,
+            "{\"fallback\":\"arxiv-direct\"}",
+            now,
+        ],
+    )
+    .context("insert arxiv-direct fallback row")?;
+
+    println!("evidence_id: {evidence_id}");
+    println!("kind:        arxiv");
+    println!("canonical:   {arxiv_id}");
+    println!("url:         {abs_url}");
+    println!("resolver:    arxiv-direct (resolver-API failed; metadata-light row)");
+
+    match fetch_full_text(pdf_url) {
+        Ok(f) => {
+            let chars = f.markdown.chars().count() as i64;
+            conn.execute(
+                "UPDATE report_evidence_register \
+                 SET full_text_md = ?1, full_text_source = ?2, \
+                     full_text_chars = ?3, updated_at = ?4 \
+                 WHERE run_id = ?5 AND evidence_id = ?6",
+                params![
+                    f.markdown,
+                    f.source_label,
+                    chars,
+                    now_iso(),
+                    run_id,
+                    evidence_id,
+                ],
+            )
+            .context("persist arxiv-direct full text")?;
+            emit_full_text_note(Some(&f));
+        }
+        Err(err) => {
+            eprintln!("warning: arXiv direct-PDF fetch from {pdf_url} failed: {err}");
+            emit_full_text_note(None);
+            bail!(
+                "arXiv {arxiv_id}: resolver API and direct PDF both failed — \
+                 evidence row was created but carries no abstract or full text"
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Try to download the open-access full text of a resolver-fetched
 /// source and persist it to `report_evidence_register.full_text_md`.
 /// Skipped silently when (a) the source has no `url_full_text`, (b) the
@@ -136,7 +228,7 @@ fn try_attach_full_text(
     if url.trim().is_empty() {
         return None;
     }
-    if !license_permits_open_access(source.license.as_deref()) {
+    if !url_or_license_permits(source.license.as_deref(), url) {
         return None;
     }
     let fetch = match fetch_full_text(url) {
@@ -542,6 +634,18 @@ fn cmd_add_evidence(root: &Path, args: &[String]) -> Result<()> {
                 return Ok(());
             }
             Ok(None) => bail!("arXiv id {arxiv} did not resolve"),
+            // arXiv API timeouts are unfortunately common from third-
+            // party hosts. Fall back to a direct PDF fetch so we still
+            // get the paper body even when metadata lookup failed.
+            Err(err) if !no_full_text => {
+                eprintln!(
+                    "warning: arXiv resolver failed for {arxiv}: {err}; \
+                     falling back to direct PDF fetch"
+                );
+                let pdf_url = format!("https://arxiv.org/pdf/{arxiv}.pdf");
+                arxiv_direct_pdf_fallback(root, run_id, arxiv, &pdf_url)?;
+                return Ok(());
+            }
             Err(err) => bail!("arXiv {arxiv} resolver error: {err}"),
         }
     }
@@ -646,10 +750,7 @@ fn cmd_add_evidence(root: &Path, args: &[String]) -> Result<()> {
     let mut full_text_attached: Option<FullTextFetch> = None;
     if !no_full_text {
         if let Some(url) = url {
-            if license_permits_open_access(license)
-                || url.to_ascii_lowercase().contains("arxiv.org")
-                || url.to_ascii_lowercase().ends_with(".pdf")
-            {
+            if url_or_license_permits(license, url) {
                 match fetch_full_text(url) {
                     Ok(f) => {
                         let chars = f.markdown.chars().count() as i64;
