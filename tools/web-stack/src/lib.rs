@@ -7,7 +7,8 @@
 pub mod browser;
 pub mod deep_research;
 mod google_engine;
-mod runtime_config;
+pub(crate) mod runtime_config;
+pub mod scholarly_search;
 pub mod surface;
 pub mod web_search;
 
@@ -19,6 +20,16 @@ pub use browser::BrowserPrepareOptions;
 pub use deep_research::run_ctox_deep_research_tool;
 pub use deep_research::DeepResearchDepth;
 pub use deep_research::DeepResearchRequest;
+pub use scholarly_search::execute_scholarly_search;
+pub use scholarly_search::run_ctox_scholarly_search_tool;
+pub use scholarly_search::ScholarlyResult;
+pub use scholarly_search::ScholarlySearchProvider;
+pub use scholarly_search::ScholarlySearchRequest;
+pub use scholarly_search::ScholarlySearchResponse;
+pub use scholarly_search::ANNAS_ARCHIVE_CONTENT_TYPES;
+pub use scholarly_search::ANNAS_ARCHIVE_DEFAULT_BASE_URL;
+pub use scholarly_search::ANNAS_ARCHIVE_SORT_VALUES;
+pub use scholarly_search::UNPAYWALL_DEFAULT_BASE_URL;
 pub use surface::handle_web_command;
 pub use surface::WebScrapeRequest;
 pub use web_search::augment_responses_request;
