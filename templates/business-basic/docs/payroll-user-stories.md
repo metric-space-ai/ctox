@@ -35,9 +35,9 @@ Done when:
 ## 01–05 Setup / Master Data
 
 ### US-01 Manual
-As a payroll operator, when I open `/app/payroll` for the first time, I see a seeded period, three components, one structure, and two assignments so that I can verify the workspace is correctly bootstrapped.
+As a payroll operator, when I open `/app/operations/payroll` for the first time, I see a seeded period, three components, one structure, and two assignments so that I can verify the workspace is correctly bootstrapped.
 UI path:
-1. route: `/app/payroll`
+1. route: `/app/operations/payroll`
 2. select: nothing
 3. action: read left intake panel
 4. result: periods, components, assignments visible
@@ -49,8 +49,8 @@ Done when:
 ### US-01 CTOX
 From the workbench header, ask CTOX to `validate-setup` for the current company.
 Context payload:
-- module: payroll
-- submodule: runs
+- module: operations
+- submodule: payroll
 - recordType: payroll_run
 - recordId: (none — workspace-level)
 - selectedFields: { companyId }
@@ -63,7 +63,7 @@ Done when:
 ### US-02 Manual
 As an operator, when I expand `Komponente anlegen` and submit a new component `Sachbezug` (earning, taxable, depends-on-payment-days, account `6024`, formula `fix(50)`), the row appears in the master list so that the next run can use it.
 UI path:
-1. route: `/app/payroll`
+1. route: `/app/operations/payroll`
 2. select: intake → `Komponente anlegen`
 3. action: fill code/label/type/account/formula and submit
 4. result: component listed
@@ -75,8 +75,8 @@ Done when:
 ### US-02 CTOX
 From the right-click menu of an existing component, ask CTOX to `extend-formula` to derive a new component from the selected one.
 Context payload:
-- module: payroll
-- submodule: runs
+- module: operations
+- submodule: payroll
 - recordType: payroll_component
 - recordId: pc-base
 - selectedFields: { code: "base", formulaKind: "fix", formulaAmount: 4000 }
@@ -89,7 +89,7 @@ Done when:
 ### US-03 Manual
 As an operator, when I assign structure `ps-default` to employee `emp-clara` from `2026-04-15` with base salary `3200 EUR`, the assignment appears in the intake panel so that the next run includes Clara.
 UI path:
-1. route: `/app/payroll`
+1. route: `/app/operations/payroll`
 2. select: intake → `Zuweisung anlegen`
 3. action: pick employee/structure, enter base/currency/from-date, submit
 4. result: assignment row visible
@@ -101,8 +101,8 @@ Done when:
 ### US-03 CTOX
 From the assignments panel, ask CTOX to `propose-assignments` for any active employee without one.
 Context payload:
-- module: payroll
-- submodule: runs
+- module: operations
+- submodule: payroll
 - recordType: payroll_structure
 - recordId: ps-default
 - selectedFields: { unassignedEmployees: [...] }
@@ -115,7 +115,7 @@ Done when:
 ### US-04 Manual
 As an operator, when I press `Sperren` next to a period, the period is locked and badge shows `gesperrt` so that no new run can target it.
 UI path:
-1. route: `/app/payroll`
+1. route: `/app/operations/payroll`
 2. select: intake period row
 3. action: click `Sperren`
 4. result: badge flips to `gesperrt`
@@ -127,8 +127,8 @@ Done when:
 ### US-04 CTOX
 From the right-click menu on a period row, ask CTOX to `explain` the impact of locking.
 Context payload:
-- module: payroll
-- submodule: runs
+- module: operations
+- submodule: payroll
 - recordType: payroll_period
 - recordId: period_2026_04
 - selectedFields: { locked: false, runs: [...] }
@@ -141,7 +141,7 @@ Done when:
 ### US-05 Manual
 As an operator, when I expand `Periode anlegen` and submit a new monthly period for the next month, it appears in the period list so that I can run payroll once the current period closes.
 UI path:
-1. route: `/app/payroll`
+1. route: `/app/operations/payroll`
 2. select: intake → `Periode anlegen`
 3. action: fill start/end/frequency, submit
 4. result: new period row visible
@@ -153,8 +153,8 @@ Done when:
 ### US-05 CTOX
 From the period section, ask CTOX to `prepare-period` for the next month based on the current frequency.
 Context payload:
-- module: payroll
-- submodule: runs
+- module: operations
+- submodule: payroll
 - recordType: payroll_period
 - recordId: (latest)
 - selectedFields: { frequency: "monthly", lastEnd: "2026-04-30" }
@@ -169,7 +169,7 @@ Done when:
 ### US-06 Manual
 As an operator, when I select a Draft slip and add a `Zusatzposten` of 250 EUR for component `pc-base`, the slip recomputes and the line reflects the additional so that one-off bonuses appear in the run.
 UI path:
-1. route: `/app/payroll`
+1. route: `/app/operations/payroll`
 2. select: slip row → inspector → `Zusatzposten anlegen`
 3. action: fill component/amount/note, submit (auto-triggers `recompute_run`)
 4. result: line amount increases by 250
@@ -181,8 +181,8 @@ Done when:
 ### US-06 CTOX
 From the slip detail, ask CTOX to `propose-additional` for unbilled bonus from a Workforce variance.
 Context payload:
-- module: payroll
-- submodule: runs
+- module: operations
+- submodule: payroll
 - recordType: payroll_payslip
 - recordId: <slipId>
 - selectedFields: { employeeId, periodId, variance }
@@ -195,7 +195,7 @@ Done when:
 ### US-07 Manual
 As an operator, when I press `Löschen` on a `Zusatzposten` before posting, the row is removed and the next recompute drops the amount from the slip line.
 UI path:
-1. route: `/app/payroll`
+1. route: `/app/operations/payroll`
 2. select: inspector → additional row
 3. action: click `Löschen`
 4. result: row gone
@@ -207,8 +207,8 @@ Done when:
 ### US-07 CTOX
 From the additional row, ask CTOX to `explain` why the additional did not appear in the slip (period mismatch, component disabled, etc.).
 Context payload:
-- module: payroll
-- submodule: runs
+- module: operations
+- submodule: payroll
 - recordType: payroll_additional
 - recordId: <addId>
 - selectedFields: { employeeId, periodId, componentId }
@@ -221,7 +221,7 @@ Done when:
 ### US-08 Manual
 As an operator, when an approved Workforce time entry has been prepared as a payroll candidate (via `prepare_payroll_candidate` on the workforce side), the next payroll run automatically produces a `workforce_hours` slip line with the correct amount, so that hours flow into wages without a separate import step.
 UI path:
-1. route: `/app/payroll/runs`
+1. route: `/app/operations/payroll`
 2. select: run row → click `Run abschicken`
 3. action: open the slip that belongs to the employee whose Workforce candidate was prepared
 4. result: inspector shows a `Freigegebene Workforce-Stunden` line with `hours × hourlyRate` as amount
@@ -233,8 +233,8 @@ Done when:
 ### US-08 CTOX
 Ask CTOX to `reconcile` Workforce hours vs. payroll lines for an employee/period.
 Context payload:
-- module: payroll
-- submodule: runs
+- module: operations
+- submodule: payroll
 - recordType: payroll_payslip
 - recordId: <slipId>
 - selectedFields: { employeeId, periodStart, periodEnd, workforceHours, payrollHours }
@@ -247,7 +247,7 @@ Done when:
 ### US-09 Manual
 As an operator, when I click `Deaktivieren` on a component, the component is hidden from new runs and existing draft slips drop that line on recompute.
 UI path:
-1. route: `/app/payroll`
+1. route: `/app/operations/payroll`
 2. select: intake → component row
 3. action: click `Deaktivieren`
 4. result: badge `deaktiviert`
@@ -259,8 +259,8 @@ Done when:
 ### US-09 CTOX
 From the component row, ask CTOX to `explain` the downstream effect of disabling.
 Context payload:
-- module: payroll
-- submodule: runs
+- module: operations
+- submodule: payroll
 - recordType: payroll_component
 - recordId: <componentId>
 - selectedFields: { code, type, structuresReferenced }
@@ -271,22 +271,23 @@ Done when:
 - approval/recovery: not required
 
 ### US-10 Manual
-As an operator, when I edit the base salary on an assignment from 4000 to 4200 effective `2026-04-01`, the next recompute uses the new value so that the slip reflects the raise.
+As an operator, when I edit the base salary on an assignment from 4000 to 4500 inline on the assignment row, the next `recompute_run` uses the new value so the slip's base line updates.
 UI path:
-1. route: `/app/payroll`
-2. select: intake → assignment row → edit
-3. action: change base, submit
-4. result: assignment shows new base
+1. route: `/app/operations/payroll`
+2. select: intake → Strukturzuweisungen row
+3. action: change base in the inline numeric input and blur (auto-dispatches `update_structure_assignment`)
+4. result: assignment row shows new base; recompute renders updated slip line
 Done when:
-- UI: row updated
-- DB: `payroll_structure_assignment.baseSalary = 4200`
-- event/audit: `payroll_run` event command `update_structure_assignment`
+- UI: numeric input persists the new value; slip line `base` reflects 4500 (`pc-base` is `percent_of(base_salary, 100)`)
+- DB: `payroll_structure_assignment.baseSalary = 4500`
+- event/audit: `payroll_run` event command `update_structure_assignment` recorded
+- proof: `pnpm test:payroll` step 17 (recompute reflects new base)
 
 ### US-10 CTOX
 From the assignment row, ask CTOX to `explain` the gross/net delta after the base change.
 Context payload:
-- module: payroll
-- submodule: runs
+- module: operations
+- submodule: payroll
 - recordType: payroll_structure_assignment
 - recordId: <assignmentId>
 - selectedFields: { oldBase, newBase }
@@ -301,7 +302,7 @@ Done when:
 ### US-11 Manual
 As an operator, when I click `Run abschicken` for a Draft run, the run transitions to Submitted and one slip per assigned employee materializes so that I can review them.
 UI path:
-1. route: `/app/payroll`
+1. route: `/app/operations/payroll`
 2. select: run row in center zone
 3. action: click `Run abschicken`
 4. result: run state Submitted; slip rows visible
@@ -313,8 +314,8 @@ Done when:
 ### US-11 CTOX
 From the run row, ask CTOX to `explain` the run plan before queueing.
 Context payload:
-- module: payroll
-- submodule: runs
+- module: operations
+- submodule: payroll
 - recordType: payroll_run
 - recordId: <runId>
 - selectedFields: { periodId, frequency, employeeIds }
@@ -327,7 +328,7 @@ Done when:
 ### US-12 Manual
 As an operator, when I click `Zur Prüfung` on a Draft slip, it transitions to Review so that I can post it next.
 UI path:
-1. route: `/app/payroll`
+1. route: `/app/operations/payroll`
 2. select: slip row
 3. action: click `Zur Prüfung`
 4. result: slip badge `Review`
@@ -339,8 +340,8 @@ Done when:
 ### US-12 CTOX
 Ask CTOX to `review` the slip and surface anomalies (missing additional, structure mismatch).
 Context payload:
-- module: payroll
-- submodule: runs
+- module: operations
+- submodule: payroll
 - recordType: payroll_payslip
 - recordId: <slipId>
 - selectedFields: { employeeId, gross, net, lines }
@@ -353,7 +354,7 @@ Done when:
 ### US-13 Manual
 As an operator, when I click `Buchen` on a Review slip, a balanced journal entry is created and the slip moves to Posted.
 UI path:
-1. route: `/app/payroll`
+1. route: `/app/operations/payroll`
 2. select: Review slip row
 3. action: click `Buchen`
 4. result: badge `Posted`; journal id shown in inspector
@@ -365,8 +366,8 @@ Done when:
 ### US-13 CTOX
 Ask CTOX to `post` the slip after manual review.
 Context payload:
-- module: payroll
-- submodule: runs
+- module: operations
+- submodule: payroll
 - recordType: payroll_payslip
 - recordId: <slipId>
 - selectedFields: { gross, net, journalLines }
@@ -379,7 +380,7 @@ Done when:
 ### US-14 Manual
 As an operator, when I cancel a Draft slip, no journal is created and the slip is terminal.
 UI path:
-1. route: `/app/payroll`
+1. route: `/app/operations/payroll`
 2. select: Draft slip row
 3. action: click `Stornieren`
 4. result: badge `Cancelled`
@@ -391,8 +392,8 @@ Done when:
 ### US-14 CTOX
 Ask CTOX to `cancel` a Draft slip with an explanation.
 Context payload:
-- module: payroll
-- submodule: runs
+- module: operations
+- submodule: payroll
 - recordType: payroll_payslip
 - recordId: <slipId>
 - selectedFields: { status, reason }
@@ -405,7 +406,7 @@ Done when:
 ### US-15 Manual
 As an operator, when I cancel a Posted slip, a reversing journal is generated automatically.
 UI path:
-1. route: `/app/payroll`
+1. route: `/app/operations/payroll`
 2. select: Posted slip row
 3. action: click `Stornieren`
 4. result: badge `Cancelled`; reversal journal entry id rendered
@@ -417,8 +418,8 @@ Done when:
 ### US-15 CTOX
 Ask CTOX to `cancel` a Posted slip with a recorded reason.
 Context payload:
-- module: payroll
-- submodule: runs
+- module: operations
+- submodule: payroll
 - recordType: payroll_payslip
 - recordId: <slipId>
 - selectedFields: { status: "Posted", reason }
@@ -431,7 +432,7 @@ Done when:
 ### US-16 Manual
 As an operator, when I attempt to create a second non-Cancelled run for the same period+frequency, the API rejects with `run_already_exists_for_period`.
 UI path:
-1. route: `/app/payroll`
+1. route: `/app/operations/payroll`
 2. select: intake new-run form
 3. action: submit duplicate
 4. result: error toast
@@ -443,8 +444,8 @@ Done when:
 ### US-16 CTOX
 Ask CTOX to `explain` why a duplicate run is rejected.
 Context payload:
-- module: payroll
-- submodule: runs
+- module: operations
+- submodule: payroll
 - recordType: payroll_run
 - recordId: <existingRunId>
 - selectedFields: { periodId, status }
@@ -457,7 +458,7 @@ Done when:
 ### US-17 Manual
 As an operator, when I attempt to create a run for a locked period, the API rejects with `period_locked`.
 UI path:
-1. route: `/app/payroll`
+1. route: `/app/operations/payroll`
 2. select: intake new-run form
 3. action: submit against a locked period
 4. result: error toast
@@ -469,8 +470,8 @@ Done when:
 ### US-17 CTOX
 Ask CTOX to `explain` the lock state and propose unlocking.
 Context payload:
-- module: payroll
-- submodule: runs
+- module: operations
+- submodule: payroll
 - recordType: payroll_period
 - recordId: <periodId>
 - selectedFields: { locked: true }
@@ -483,7 +484,7 @@ Done when:
 ### US-18 Manual
 As an operator, when I click `Slips neu berechnen` on a Submitted run after a component change, draft slip lines reflect the new amounts.
 UI path:
-1. route: `/app/payroll`
+1. route: `/app/operations/payroll`
 2. select: run row
 3. action: click `Slips neu berechnen`
 4. result: slip lines updated
@@ -495,8 +496,8 @@ Done when:
 ### US-18 CTOX
 Ask CTOX to `recompute` a slip after a component change.
 Context payload:
-- module: payroll
-- submodule: runs
+- module: operations
+- submodule: payroll
 - recordType: payroll_payslip
 - recordId: <slipId>
 - selectedFields: { changedComponentId }
@@ -507,22 +508,23 @@ Done when:
 - approval/recovery: not required
 
 ### US-19 Manual
-As an operator, when I edit a slip line amount in the inspector (override), the slip totals update and the override persists, as long as the slip is not Posted.
+As an operator, when I edit a Draft/Review slip line via the inline numeric input in the inspector, the override dispatches `update_payslip_line` and the slip totals re-derive.
 UI path:
-1. route: `/app/payroll`
-2. select: Draft/Review slip → inspector → line
-3. action: edit numeric amount
-4. result: totals re-derived
+1. route: `/app/operations/payroll`
+2. select: Draft or Review slip → inspector line
+3. action: edit numeric input and blur
+4. result: line amount + slip totals refresh; status unchanged
 Done when:
-- UI: gross/total_deduction/net update
-- DB: `payroll_payslip_line.amount` updated; status unchanged
+- UI: input renders only when status ∈ {Draft, Review}; on blur the change is dispatched
+- DB: `payroll_payslip_line.amount` and slip totals updated; runtime guards reject same call on Posted/Cancelled slip with `payslip_immutable`
 - event/audit: `payroll_payslip` event command `update_payslip_line`
+- proof: `pnpm test:payroll` step 18 (override + totals recompute)
 
 ### US-19 CTOX
 Ask CTOX to `explain` the override impact on net pay before saving.
 Context payload:
-- module: payroll
-- submodule: runs
+- module: operations
+- submodule: payroll
 - recordType: payroll_payslip_line
 - recordId: <lineId>
 - selectedFields: { oldAmount, newAmount }
@@ -535,7 +537,7 @@ Done when:
 ### US-20 Manual
 As an operator, when I attempt to update a line on a Posted slip, the API rejects with `payslip_immutable`.
 UI path:
-1. route: `/app/payroll`
+1. route: `/app/operations/payroll`
 2. select: Posted slip → inspector → line
 3. action: edit
 4. result: error toast
@@ -547,8 +549,8 @@ Done when:
 ### US-20 CTOX
 Ask CTOX to `explain` why a Posted slip cannot be edited and propose a `payroll_additional` in a later period instead.
 Context payload:
-- module: payroll
-- submodule: runs
+- module: operations
+- submodule: payroll
 - recordType: payroll_payslip
 - recordId: <slipId>
 - selectedFields: { status: "Posted" }
@@ -561,22 +563,23 @@ Done when:
 ## 21–25 Move / Transition / Drag-Drop
 
 ### US-21 Manual
-As an operator, when I move a slip from Review back to Draft, the slip becomes editable again.
+As an operator, when I press `Zurück zu Entwurf` on a Review or Withheld slip, `mark_payslip_draft` runs and the slip becomes editable again.
 UI path:
-1. route: `/app/payroll`
-2. select: Review slip row
+1. route: `/app/operations/payroll`
+2. select: slip row in state Review or Withheld
 3. action: click `Zurück zu Entwurf`
-4. result: badge `Draft`
+4. result: badge `Draft`; line override input becomes editable again
 Done when:
-- UI: badge changed
-- DB: `status = Draft`
-- event/audit: audit `Review → Draft`
+- UI: button enabled only for Review/Withheld
+- DB: slip status `Draft`
+- event/audit: audit `Review → Draft` (or `Withheld → Draft`)
+- proof: `pnpm test:payroll` step 19 (Draft → Review → Draft round-trip)
 
 ### US-21 CTOX
 Ask CTOX to `recompute` the slip after moving back to Draft.
 Context payload:
-- module: payroll
-- submodule: runs
+- module: operations
+- submodule: payroll
 - recordType: payroll_payslip
 - recordId: <slipId>
 - selectedFields: { status }
@@ -587,22 +590,23 @@ Done when:
 - approval/recovery: not required
 
 ### US-22 Manual
-As an operator, when I press a header `Alle zur Prüfung` on a run, all Draft slips transition to Review in one operation.
+As an operator, when I press the run‑header `Alle zur Prüfung`, `bulk_mark_review` flips every Draft slip in the selected run to Review.
 UI path:
-1. route: `/app/payroll`
-2. select: run row
-3. action: click bulk `Alle zur Prüfung`
-4. result: every Draft slip in run is Review
+1. route: `/app/operations/payroll`
+2. select: run row (sets `selectedRunId`)
+3. action: click `Alle zur Prüfung` in the run header
+4. result: every Draft slip badge `Review`
 Done when:
-- UI: badges updated
-- DB: per-slip transition recorded
-- event/audit: one audit row per slip
+- UI: button visible only when a run is selected
+- DB: each affected slip transitions Draft → Review
+- event/audit: per-slip audit row + one `payroll_run` event with `Bulk-Prüfung: <count>`
+- proof: `pnpm test:payroll` step 20 (every slip in run ends Review)
 
 ### US-22 CTOX
 Ask CTOX to `review` all slips in a run and pre-flag anomalies.
 Context payload:
-- module: payroll
-- submodule: runs
+- module: operations
+- submodule: payroll
 - recordType: payroll_run
 - recordId: <runId>
 - selectedFields: { slipIds }
@@ -613,22 +617,23 @@ Done when:
 - approval/recovery: operator chooses to apply
 
 ### US-23 Manual
-As an operator, when I press `Alle buchen` on a run, all Review slips transition to Posted independently; failures stay on the failing slip.
+As an operator, when I press the run‑header `Alle buchen`, `bulk_post_run` posts every Review slip independently; per-slip failures (negative net, validation) leave the failing slip in Review with an error note while sibling slips proceed.
 UI path:
-1. route: `/app/payroll`
+1. route: `/app/operations/payroll`
 2. select: run row
-3. action: click bulk `Alle buchen`
-4. result: each Review slip transitions independently
+3. action: click `Alle buchen`
+4. result: each successful slip transitions Review → Posted; each failure stays Review and gets a `payslip.notes` annotation
 Done when:
-- UI: per-slip badges updated; failed slips remain Review with error
-- DB: per-slip post idempotent
-- event/audit: per-slip audit `Review → Posted` or stays
+- UI: header `Alle buchen` button dispatches the bulk command
+- DB: postedJournals appended for each successfully posted slip; balanced (debit total === credit total)
+- event/audit: `payroll_run` event `Bulk-Buchung: <posted> gebucht, <failed> blockiert`; per-slip `Review → Posted` audit rows
+- proof: `pnpm test:payroll` step 20 (postedSlips.length ≥ 2 for the run)
 
 ### US-23 CTOX
 Ask CTOX to `post` all Review slips with one confirmation.
 Context payload:
-- module: payroll
-- submodule: runs
+- module: operations
+- submodule: payroll
 - recordType: payroll_run
 - recordId: <runId>
 - selectedFields: { reviewSlipIds }
@@ -641,7 +646,7 @@ Done when:
 ### US-24 Manual
 As an operator, when I withhold a slip from posting and later release it, the slip transitions Withheld → Review and is included in the next bulk post.
 UI path:
-1. route: `/app/payroll`
+1. route: `/app/operations/payroll`
 2. select: slip row
 3. action: click `Zurückstellen`, later `Zur Prüfung`
 4. result: badge `Withheld` then `Review`
@@ -653,8 +658,8 @@ Done when:
 ### US-24 CTOX
 Ask CTOX to `withhold` a slip with a recorded reason.
 Context payload:
-- module: payroll
-- submodule: runs
+- module: operations
+- submodule: payroll
 - recordType: payroll_payslip
 - recordId: <slipId>
 - selectedFields: { reason, status }
@@ -667,7 +672,7 @@ Done when:
 ### US-25 Manual
 As an operator, when I cancel an entire run, every non-Posted child slip is also cancelled in the same audit pass; Posted slips are untouched.
 UI path:
-1. route: `/app/payroll`
+1. route: `/app/operations/payroll`
 2. select: run row
 3. action: click `Run abbrechen`
 4. result: run badge `Cancelled`; cascade to non-Posted slips
@@ -679,8 +684,8 @@ Done when:
 ### US-25 CTOX
 Ask CTOX to `cancel` a run and summarise impact on Posted vs. unposted slips.
 Context payload:
-- module: payroll
-- submodule: runs
+- module: operations
+- submodule: payroll
 - recordType: payroll_run
 - recordId: <runId>
 - selectedFields: { postedCount, otherCount }
@@ -693,22 +698,22 @@ Done when:
 ## 26–30 Edit / Rename / Duplicate / Archive / Delete
 
 ### US-26 Manual
-As an operator, when I rename a `payroll_structure` label, only the label changes and assignments stay attached.
+As an operator, when I edit the `payroll_structure` label inline on its row and blur, `update_structure` runs and only the label changes; `componentIds` and assignments stay attached.
 UI path:
-1. route: `/app/payroll`
-2. select: structure row
-3. action: edit label, submit
-4. result: row label updated
+1. route: `/app/operations/payroll`
+2. select: intake → Strukturen row
+3. action: change inline `<input defaultValue={label}>` and blur
+4. result: row shows new label
 Done when:
-- UI: row updated
+- UI: input blur triggers dispatch
 - DB: `payroll_structure.label` changed; `componentIds` unchanged
 - event/audit: structure event command `update_structure`
 
 ### US-26 CTOX
 Ask CTOX to `rename` a structure with consistent naming across the company.
 Context payload:
-- module: payroll
-- submodule: runs
+- module: operations
+- submodule: payroll
 - recordType: payroll_structure
 - recordId: <structureId>
 - selectedFields: { oldLabel }
@@ -719,22 +724,23 @@ Done when:
 - approval/recovery: operator confirms
 
 ### US-27 Manual
-As an operator, when I click `Duplizieren` on a structure, a new structure is created with copied component refs and a `-kopie` suffix.
+As an operator, when I click `Duplizieren` on a structure row, `duplicate_structure` produces a new structure with copied `componentIds` and a ` -kopie` suffix.
 UI path:
-1. route: `/app/payroll`
-2. select: structure row
+1. route: `/app/operations/payroll`
+2. select: intake → Strukturen row
 3. action: click `Duplizieren`
-4. result: new row visible
+4. result: new structure row visible with copied components
 Done when:
-- UI: row added
-- DB: new `payroll_structure`; original untouched
-- event/audit: structure event command `create_structure`
+- UI: new row appears beneath the original
+- DB: new `payroll_structure` with new id; original untouched
+- event/audit: `payroll_run` event command `duplicate_structure`
+- proof: `pnpm test:payroll` step 21 (clone produced with same `componentIds` join)
 
 ### US-27 CTOX
 Ask CTOX to `duplicate` a structure with a custom rate scaling.
 Context payload:
-- module: payroll
-- submodule: runs
+- module: operations
+- submodule: payroll
 - recordType: payroll_structure
 - recordId: <sourceId>
 - selectedFields: { componentIds, scaling }
@@ -755,8 +761,8 @@ Done when:
 ### US-28 CTOX
 Ask CTOX to `recompute` all draft slips after archiving a component.
 Context payload:
-- module: payroll
-- submodule: runs
+- module: operations
+- submodule: payroll
 - recordType: payroll_run
 - recordId: <runId>
 - selectedFields: { affectedComponentId }
@@ -777,8 +783,8 @@ Done when:
 ### US-29 CTOX
 Ask CTOX to `explain` which slips would be affected before deleting.
 Context payload:
-- module: payroll
-- submodule: runs
+- module: operations
+- submodule: payroll
 - recordType: payroll_additional
 - recordId: <addId>
 - selectedFields: { employeeId, periodId, componentId, amount }
@@ -789,22 +795,24 @@ Done when:
 - approval/recovery: operator confirms before delete
 
 ### US-30 Manual
-As an operator, when I attempt to delete a component referenced by an active structure, the API rejects with `component_in_use` and offers a detach path.
+As an operator, when I press `Löschen` on a component referenced by an active `payroll_structure`, `delete_component` rejects with `component_in_use`; the row stays and a confirm dialog warns me before the call.
 UI path:
-1. route: `/app/payroll`
-2. select: component row
-3. action: click `Löschen`
-4. result: error toast
+1. route: `/app/operations/payroll`
+2. select: intake → Komponenten row
+3. action: click `Löschen` and confirm
+4. result: error toast (`component_in_use`); component row unchanged
 Done when:
-- UI: error toast
-- DB: no mutation
+- UI: confirm prompt then error toast
+- DB: component still present; no mutation
+- event/audit: none (rejection)
+- proof: `pnpm test:payroll` step 22 (delete on `pc-base` blocked)
 - event/audit: none
 
 ### US-30 CTOX
 Ask CTOX to `explain` what blocks deletion and how to detach.
 Context payload:
-- module: payroll
-- submodule: runs
+- module: operations
+- submodule: payroll
 - recordType: payroll_component
 - recordId: <componentId>
 - selectedFields: { referencingStructures }
@@ -819,7 +827,7 @@ Done when:
 ### US-31 Manual
 As an operator, when I right-click a `payroll_payslip` row, the context menu exposes Buchen, Stornieren, Markiere zur Prüfung, Zurückstellen, Prompt CTOX.
 UI path:
-1. route: `/app/payroll`
+1. route: `/app/operations/payroll`
 2. select: slip row
 3. action: right-click
 4. result: context menu opens
@@ -831,8 +839,8 @@ Done when:
 ### US-31 CTOX
 From the menu, ask CTOX to `post` the slip; operator confirms.
 Context payload:
-- module: payroll
-- submodule: runs
+- module: operations
+- submodule: payroll
 - recordType: payroll_payslip
 - recordId: <slipId>
 - selectedFields: { gross, net }
@@ -845,7 +853,7 @@ Done when:
 ### US-32 Manual
 As an operator, when I right-click a `payroll_run` row, the context menu exposes Slips neu generieren, Slips neu berechnen, Run absenden, Run abbrechen, Prompt CTOX.
 UI path:
-1. route: `/app/payroll`
+1. route: `/app/operations/payroll`
 2. select: run row
 3. action: right-click
 4. result: menu opens
@@ -857,8 +865,8 @@ Done when:
 ### US-32 CTOX
 From the menu, ask CTOX to `recompute` the run and report total diff.
 Context payload:
-- module: payroll
-- submodule: runs
+- module: operations
+- submodule: payroll
 - recordType: payroll_run
 - recordId: <runId>
 - selectedFields: { totals }
@@ -871,7 +879,7 @@ Done when:
 ### US-33 Manual
 As an operator, when I right-click a `payroll_payslip_line` row, the context menu exposes Komponente anzeigen, Wert überschreiben, Prompt CTOX.
 UI path:
-1. route: `/app/payroll`
+1. route: `/app/operations/payroll`
 2. select: line row in inspector
 3. action: right-click
 4. result: menu opens
@@ -883,8 +891,8 @@ Done when:
 ### US-33 CTOX
 From the menu, ask CTOX to `explain` how the line was computed (formula trace).
 Context payload:
-- module: payroll
-- submodule: runs
+- module: operations
+- submodule: payroll
 - recordType: payroll_payslip_line
 - recordId: <lineId>
 - selectedFields: { componentCode, formulaKind, amount }
@@ -897,7 +905,7 @@ Done when:
 ### US-34 Manual
 As an operator, when I right-click a `payroll_structure_assignment`, the context menu exposes Beenden, Duplizieren, Prompt CTOX.
 UI path:
-1. route: `/app/payroll`
+1. route: `/app/operations/payroll`
 2. select: assignment row
 3. action: right-click
 4. result: menu opens
@@ -909,8 +917,8 @@ Done when:
 ### US-34 CTOX
 From the menu, ask CTOX to `propose-assignments` for re-pointing the employee to a new structure.
 Context payload:
-- module: payroll
-- submodule: runs
+- module: operations
+- submodule: payroll
 - recordType: payroll_structure_assignment
 - recordId: <assignmentId>
 - selectedFields: { employeeId, structureId }
@@ -923,7 +931,7 @@ Done when:
 ### US-35 Manual
 As an operator, when I right-click a `payroll_component`, the context menu exposes Bearbeiten, Deaktivieren, Prompt CTOX.
 UI path:
-1. route: `/app/payroll`
+1. route: `/app/operations/payroll`
 2. select: component row
 3. action: right-click
 4. result: menu opens
@@ -935,8 +943,8 @@ Done when:
 ### US-35 CTOX
 From the menu, ask CTOX to `extend-formula` for a country-specific deduction variant.
 Context payload:
-- module: payroll
-- submodule: runs
+- module: operations
+- submodule: payroll
 - recordType: payroll_component
 - recordId: <componentId>
 - selectedFields: { code, formulaKind, formulaExpression }
@@ -951,20 +959,20 @@ Done when:
 ### US-36 Manual
 As an operator, when I trigger a CTOX-driven `review` from a Draft slip, the resulting queue task carries the full slip context payload.
 UI path:
-1. route: `/app/payroll`
+1. route: `/app/operations/payroll`
 2. select: Draft slip
 3. action: Prompt CTOX → review
 4. result: queue task created
 Done when:
 - UI: queue task confirmation
-- DB: queue task with payload `module=payroll, submodule=runs, recordType=payroll_payslip, recordId=<id>, label=Lohnabrechnung <Name>`
+- DB: queue task with payload `module=operations, submodule=payroll, recordType=payroll_payslip, recordId=<id>, label=Lohnabrechnung <Name>`
 - event/audit: payload emitted by runtime on the originating mutation
 
 ### US-36 CTOX
 CTOX returns a structured review with anomalies + recommended action.
 Context payload:
-- module: payroll
-- submodule: runs
+- module: operations
+- submodule: payroll
 - recordType: payroll_payslip
 - recordId: <slipId>
 - selectedFields: { gross, net, lines, status }
@@ -977,7 +985,7 @@ Done when:
 ### US-37 Manual
 As an operator, when I ask CTOX to `reconcile` a slip against bookkeeping, the response shows debit/credit totals match gross/net and links to ledger entries.
 UI path:
-1. route: `/app/payroll`
+1. route: `/app/operations/payroll`
 2. select: Posted slip
 3. action: Prompt CTOX → reconcile
 4. result: reconciliation summary
@@ -989,8 +997,8 @@ Done when:
 ### US-37 CTOX
 Same. Output is structured JSON consumed by the inspector.
 Context payload:
-- module: payroll
-- submodule: runs
+- module: operations
+- submodule: payroll
 - recordType: payroll_payslip
 - recordId: <slipId>
 - selectedFields: { journalEntryId, gross, net, totalDeduction }
@@ -1001,22 +1009,23 @@ Done when:
 - approval/recovery: not required
 
 ### US-38 Manual
-As an operator, when I ask CTOX to draft a `payroll_additional` for a missing bonus reported via a bug-report context, a queue task with the proposed additional payload exists.
+As an operator, when I press `Prompt CTOX` next to the Zusatzposten‑Form, `propose_additional_via_ctox` runs and emits a `queueProposal=` event note carrying the slip and proposed payload — without creating a `payroll_additional`.
 UI path:
-1. route: `/app/payroll`
-2. select: slip → inspector → Prompt CTOX
-3. action: ask propose-additional
-4. result: queue task pending operator review
+1. route: `/app/operations/payroll`
+2. select: slip → inspector → `Zusatzposten anlegen` → fill form → click `Prompt CTOX`
+3. action: dispatch `propose_additional_via_ctox` instead of `create_additional`
+4. result: event log shows `queueProposal=…`; no `payroll_additional` row yet
 Done when:
-- UI: queue task confirmation
-- DB: queue task with proposed payload (no `payroll_additional` yet)
-- event/audit: none
+- UI: button is next to `Anlegen`; only the proposal path is taken on click
+- DB: no `payroll_additional` mutation
+- event/audit: `payroll_additional` event whose `message` ends with `queueProposal=…`
+- proof: `pnpm test:payroll` step 23 (event note contains `queueProposal=`)
 
 ### US-38 CTOX
 CTOX inserts the proposed additional only after operator confirmation.
 Context payload:
-- module: payroll
-- submodule: runs
+- module: operations
+- submodule: payroll
 - recordType: payroll_payslip
 - recordId: <slipId>
 - selectedFields: { proposedComponent, amount, note }
@@ -1027,22 +1036,23 @@ Done when:
 - approval/recovery: operator confirms
 
 ### US-39 Manual
-As an operator, when I ask CTOX to `explain` the difference between two months for an employee, I get a comparison report grounded in actual snapshot rows (no hallucinated numbers).
+As an operator, when I open the inspector's `Periodenvergleich (letzte 6)` panel for a selected slip, the workbench fetches `GET /api/operations/payroll?view=comparison&employeeId=<id>&periods=6` and renders the rows + Δ Brutto column for that employee.
 UI path:
-1. route: `/app/payroll`
-2. select: slip
-3. action: Prompt CTOX → period-over-period
-4. result: comparison rendered
+1. route: `/app/operations/payroll`
+2. select: slip in inspector
+3. action: open `Periodenvergleich (letzte 6)` details element
+4. result: table renders rows for last N posted slips of the employee
 Done when:
-- UI: comparison rendered
-- DB: read-only against snapshot
-- event/audit: none
+- UI: comparison panel renders without page reload (client fetch)
+- DB: read-only against snapshot's `payroll_payslip` rows where `status === Posted`
+- event/audit: none (read-only)
+- proof: `pnpm test:payroll` step 25 (`comparison.rows.length >= 1`)
 
 ### US-39 CTOX
 CTOX response cites slip ids and amounts; UI surfaces them as deep-links.
 Context payload:
-- module: payroll
-- submodule: runs
+- module: operations
+- submodule: payroll
 - recordType: payroll_payslip
 - recordId: <slipId>
 - selectedFields: { employeeId, periodIds }
@@ -1053,22 +1063,23 @@ Done when:
 - approval/recovery: not required
 
 ### US-40 Manual
-As an operator, when I ask CTOX to suggest additional components for `payroll-de`, I get a structure proposal that can be applied as a draft component set.
+As an operator, when I press `DE‑Pack installieren` in the run header, `install_country_pack { country: "DE" }` imports `@ctox-business/payroll-de` and adds the German 2026 components plus the `pde-default` structure to the snapshot. Re-installing is a no-op (idempotent).
 UI path:
-1. route: `/app/payroll`
-2. select: structure row
-3. action: Prompt CTOX → country pack
-4. result: proposal returned
+1. route: `/app/operations/payroll`
+2. select: any
+3. action: click `DE‑Pack installieren`
+4. result: new components and structure visible in intake
 Done when:
-- UI: preview of proposed components
-- DB: nothing until applied
-- event/audit: none until apply
+- UI: `payroll_component` rows for KV/RV/AV/PV AN, Lohnsteuer, Soli appear; `pde-default` structure appears
+- DB: each component / structure id added once; second install reports 0 added
+- event/audit: `payroll_component` event with `Country pack DE: …`
+- proof: `pnpm test:payroll-de-unit` (gross 4000 EUR → net 2398.40); `pnpm test:payroll` step 24 (`pde-default` structure present, components grew)
 
 ### US-40 CTOX
 Operator can preview the proposal and apply selected components.
 Context payload:
-- module: payroll
-- submodule: runs
+- module: operations
+- submodule: payroll
 - recordType: payroll_structure
 - recordId: <structureId>
 - selectedFields: { country: "DE" }
@@ -1083,7 +1094,7 @@ Done when:
 ### US-41 Manual
 As an operator, when a run fails because an employee lacks an active assignment in the period, the run flips to Failed and the error names the employee.
 UI path:
-1. route: `/app/payroll`
+1. route: `/app/operations/payroll`
 2. select: run row
 3. action: click `Run abschicken`
 4. result: run state Failed; error message visible
@@ -1095,8 +1106,8 @@ Done when:
 ### US-41 CTOX
 Ask CTOX to `propose-assignments` for the named employee.
 Context payload:
-- module: payroll
-- submodule: runs
+- module: operations
+- submodule: payroll
 - recordType: payroll_run
 - recordId: <runId>
 - selectedFields: { error, missingEmployeeId }
@@ -1109,7 +1120,7 @@ Done when:
 ### US-42 Manual
 As an operator, when I fix the missing assignment and re-queue, the run flips back to Submitted and the missing slip is created.
 UI path:
-1. route: `/app/payroll`
+1. route: `/app/operations/payroll`
 2. select: Failed run
 3. action: re-queue (`queue_run` accepts `Failed`)
 4. result: run Submitted; missing slip materialized
@@ -1121,8 +1132,8 @@ Done when:
 ### US-42 CTOX
 Ask CTOX to `recompute` after the fix; confirms slip generated.
 Context payload:
-- module: payroll
-- submodule: runs
+- module: operations
+- submodule: payroll
 - recordType: payroll_run
 - recordId: <runId>
 - selectedFields: { newEmployeeIds }
@@ -1135,7 +1146,7 @@ Done when:
 ### US-43 Manual
 As an operator, when a slip has a negative net (line override + heavy deductions), the post button is disabled and a warning banner appears.
 UI path:
-1. route: `/app/payroll`
+1. route: `/app/operations/payroll`
 2. select: slip row
 3. action: try Buchen (button disabled)
 4. result: warning banner in inspector
@@ -1147,8 +1158,8 @@ Done when:
 ### US-43 CTOX
 Ask CTOX to `explain` which line caused the negative net.
 Context payload:
-- module: payroll
-- submodule: runs
+- module: operations
+- submodule: payroll
 - recordType: payroll_payslip
 - recordId: <slipId>
 - selectedFields: { net, lines }
@@ -1169,8 +1180,8 @@ Done when:
 ### US-44 CTOX
 Ask CTOX to `explain` the imbalance and propose a fix.
 Context payload:
-- module: payroll
-- submodule: runs
+- module: operations
+- submodule: payroll
 - recordType: payroll_payslip
 - recordId: <slipId>
 - selectedFields: { debitTotal, creditTotal }
@@ -1197,8 +1208,8 @@ Done when:
 ### US-45 CTOX
 Ask CTOX to `reconcile` posted payroll JEs with bookkeeping totals for the period.
 Context payload:
-- module: payroll
-- submodule: runs
+- module: operations
+- submodule: payroll
 - recordType: payroll_run
 - recordId: <runId>
 - selectedFields: { jeIds }
@@ -1211,7 +1222,7 @@ Done when:
 ### US-46 Manual
 As an operator, when a structure includes the `pc-workforce-hours` component (auto-ensured by `normalizeSnapshot`), `queue_run` and `recompute_run` pull `workforce.payrollCandidates` for `periodId` via `additionalsWithWorkforce` and fold them into the slip lines, so that approved hours flow into wages without manual import.
 UI path:
-1. route: `/app/payroll/runs`
+1. route: `/app/operations/payroll`
 2. select: run row
 3. action: click `Run abschicken` (or `Slips neu berechnen` when candidates change)
 4. result: each slip whose employee has a prepared candidate shows a `workforce_hours` line whose amount equals `hours × hourlyRate`
@@ -1223,8 +1234,8 @@ Done when:
 ### US-46 CTOX
 Ask CTOX to `reconcile` Workforce hours vs slip amounts.
 Context payload:
-- module: payroll
-- submodule: runs
+- module: operations
+- submodule: payroll
 - recordType: payroll_run
 - recordId: <runId>
 - selectedFields: { workforceHours, payrollHours }
@@ -1237,7 +1248,7 @@ Done when:
 ### US-47 Manual
 As an operator, when I trigger a SEPA proposal from a Posted run, a payment proposal is drafted with slip id, employee IBAN, and net amount.
 UI path:
-1. route: `/app/payroll`
+1. route: `/app/operations/payroll`
 2. select: run row
 3. action: click `SEPA-Vorschlag`
 4. result: proposal preview rendered
@@ -1249,8 +1260,8 @@ Done when:
 ### US-47 CTOX
 Ask CTOX to `prepare` a payment batch for posted slips in a period.
 Context payload:
-- module: payroll
-- submodule: runs
+- module: operations
+- submodule: payroll
 - recordType: payroll_run
 - recordId: <runId>
 - selectedFields: { postedSlipCount }
@@ -1265,7 +1276,7 @@ Done when:
 ### US-48 Manual
 As an operator, when I open a slip's inspector, the audit trail shows Draft → Review → Posted with actor and timestamp.
 UI path:
-1. route: `/app/payroll`
+1. route: `/app/operations/payroll`
 2. select: slip row
 3. action: read inspector audit list
 4. result: ordered list
@@ -1277,8 +1288,8 @@ Done when:
 ### US-48 CTOX
 Ask CTOX to `explain` why a slip was Withheld using audit history.
 Context payload:
-- module: payroll
-- submodule: runs
+- module: operations
+- submodule: payroll
 - recordType: payroll_payslip
 - recordId: <slipId>
 - selectedFields: { auditTrail }
@@ -1289,22 +1300,23 @@ Done when:
 - approval/recovery: not required
 
 ### US-49 Manual
-As an operator, when I export the period's payroll report as CSV, the file contains employee, gross, deductions, net, journal id, status.
+As an operator, when I click `CSV‑Export` in the run header, `GET /api/operations/payroll?view=export&periodId=<id>` streams a CSV file with columns `employee_id,employee_name,gross,deductions,net,journal_id,status`.
 UI path:
-1. route: `/app/payroll`
-2. select: run row
-3. action: click `Export CSV`
-4. result: CSV downloaded
+1. route: `/app/operations/payroll`
+2. select: run row (sets `selectedRunId` whose period is used)
+3. action: click `CSV‑Export` anchor (triggers browser download)
+4. result: file `payroll-<periodId>.csv` saved
 Done when:
-- UI: download triggered
-- DB: read-only against snapshot
-- event/audit: none
+- UI: anchor `<a href=…>` with `download` attribute; visible only when a run is selected
+- DB: read-only against `payroll_payslip` rows of the period
+- event/audit: none (read-only export)
+- proof: `pnpm test:payroll` step 26 (header + ≥3 lines)
 
 ### US-49 CTOX
 Ask CTOX to `explain` outliers in the report (largest deltas vs. previous period).
 Context payload:
-- module: payroll
-- submodule: runs
+- module: operations
+- submodule: payroll
 - recordType: payroll_run
 - recordId: <runId>
 - selectedFields: { csvSummary }
@@ -1325,8 +1337,8 @@ Done when:
 ### US-50 CTOX
 Ask CTOX to run a regression check using stored prior expectations.
 Context payload:
-- module: payroll
-- submodule: runs
+- module: operations
+- submodule: payroll
 - recordType: payroll_run
 - recordId: <runId>
 - selectedFields: { expectedTotals }

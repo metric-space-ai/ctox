@@ -2,6 +2,6 @@
   "id": "operations",
   "name": "Operations",
   "defaultRoute": "/app/operations",
-  "records": ["projects", "work_items", "boards", "wiki_pages", "meetings", "documents", "workforce_people", "workforce_shift_types", "workforce_location_slots", "workforce_assignments", "workforce_time_entries", "workforce_handoffs"],
-  "ctoxSync": ["work_items", "wiki_pages", "project_events", "bug_reports", "workforce_assignment_events", "workforce_time_entry_events"]
+  "records": ["projects", "work_items", "boards", "wiki_pages", "meetings", "documents", "workforce_people", "workforce_shift_types", "workforce_location_slots", "workforce_assignments", "workforce_time_entries", "workforce_handoffs", "payroll_periods", "payroll_components", "payroll_structures", "payroll_structure_assignments", "payroll_runs", "payroll_payslips", "payroll_payslip_lines", "payroll_additionals"],
+  "ctoxSync": ["work_items", "wiki_pages", "project_events", "bug_reports", "workforce_assignment_events", "workforce_time_entry_events", "payroll_run_events", "payroll_payslip_events"]
 }

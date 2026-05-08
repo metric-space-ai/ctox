@@ -2,15 +2,15 @@ const baseUrl = process.env.CTOX_BUSINESS_BASE_URL ?? "http://localhost:3001";
 const sessionCookie = await loginCookie();
 
 // 1. Page renders.
-const page = await fetch(`${baseUrl}/app/payroll/runs?locale=de&theme=light`, { headers: { cookie: sessionCookie } });
-assert(page.ok, `/app/payroll/runs returned ${page.status}`);
+const page = await fetch(`${baseUrl}/app/operations/payroll?locale=de&theme=light`, { headers: { cookie: sessionCookie } });
+assert(page.ok, `/app/operations/payroll returned ${page.status}`);
 const html = await page.text();
 assert(html.includes("Lohnabrechnung"), "Payroll page missing Lohnabrechnung label");
-assert(html.includes("data-context-module=\"payroll\""), "Payroll page missing data-context-module=\"payroll\"");
-assert(html.includes("data-context-submodule=\"runs\""), "Payroll page missing data-context-submodule=\"runs\"");
+assert(html.includes("data-context-module=\"operations\""), "Payroll page missing data-context-module=\"operations\"");
+assert(html.includes("data-context-submodule=\"payroll\""), "Payroll page missing data-context-submodule=\"payroll\"");
 
 // 2. Initial snapshot has the seed data.
-const initial = await fetch(`${baseUrl}/api/payroll`, { headers: { cookie: sessionCookie } });
+const initial = await fetch(`${baseUrl}/api/operations/payroll`, { headers: { cookie: sessionCookie } });
 assert(initial.ok, `/api/payroll returned ${initial.status}`);
 const initialPayload = await initial.json();
 assert(initialPayload.ok === true, "Payroll GET failed");
@@ -18,21 +18,54 @@ assert(initialPayload.snapshot?.periods?.length >= 1, "Seed period missing");
 assert(initialPayload.snapshot?.assignments?.length >= 2, "Seed assignments missing");
 assert(initialPayload.snapshot?.components?.length >= 3, "Seed components missing");
 
+// 2b. US-02 regression: create_component/update_component round-trip is reachable.
+// All smoke-created entities use a `smoke_` id prefix so the workbench filters them out
+// (filterSmoke in payroll-workbench.tsx); the smoke also calls delete_component at the end.
+const us02ComponentId = `smoke_pc_${Date.now()}`;
+const us02Created = await post("create_component", {
+  id: us02ComponentId,
+  code: `smoke_${Date.now()}`,
+  label: "Smoke US-02",
+  type: "earning",
+  taxable: true,
+  dependsOnPaymentDays: false,
+  accountId: "6020",
+  formulaKind: "fix",
+  formulaAmount: 1,
+  sequence: 999
+});
+assert(us02Created.snapshot.components.some((c) => c.id === us02ComponentId), "US-02 create_component did not persist");
+const us02Updated = await post("update_component", {
+  id: us02ComponentId,
+  code: us02Created.snapshot.components.find((c) => c.id === us02ComponentId).code,
+  label: "Smoke US-02 (renamed)",
+  type: "earning",
+  taxable: true,
+  dependsOnPaymentDays: false,
+  accountId: "6020",
+  formulaKind: "fix",
+  formulaAmount: 2,
+  sequence: 999
+});
+assert(us02Updated.snapshot.components.find((c) => c.id === us02ComponentId).label === "Smoke US-02 (renamed)", "US-02 update_component did not persist");
+
 // 3. Create a fresh ad-hoc period for this smoke run so reruns are independent.
 const stamp = Date.now();
 const yyyy = String(2026 + Math.floor(stamp / 1e12));
 const adhocPeriodPayload = {
+  id: `smoke_period_${stamp}`,
   startDate: `${yyyy}-${String((stamp % 12) + 1).padStart(2, "0")}-01`,
   endDate: `${yyyy}-${String((stamp % 12) + 1).padStart(2, "0")}-28`,
   frequency: "monthly"
 };
 const periodCreated = await post("create_period", adhocPeriodPayload);
-const periodId = periodCreated.snapshot.periods.find(
-  (p) => p.startDate === adhocPeriodPayload.startDate && p.endDate === adhocPeriodPayload.endDate
-)?.id;
-assert(periodId, "Ad-hoc period id missing");
+const periodId = adhocPeriodPayload.id;
+assert(
+  periodCreated.snapshot.periods.some((p) => p.id === periodId),
+  "Ad-hoc period id missing"
+);
 await prepareWorkforcePayrollCandidate(periodId, adhocPeriodPayload.startDate);
-const createRun = await post("create_run", { periodId, payableAccountId: "1755" });
+const createRun = await post("create_run", { id: `smoke_run_${stamp}`, periodId, payableAccountId: "1755" });
 const runId = createRun.snapshot.runs.find((r) => r.periodId === periodId)?.id;
 assert(runId, "Run id not produced");
 
@@ -66,13 +99,13 @@ const creditTotal = journal.draft.lines.reduce((acc, l) => acc + l.credit, 0);
 assert(Math.round(debitTotal * 100) === Math.round(creditTotal * 100), `Journal unbalanced ${debitTotal} vs ${creditTotal}`);
 
 // 7. CTOX payload is present and points at the slip.
-assert(posted.ctoxPayload?.module === "payroll", "CTOX payload module must be 'payroll'");
-assert(posted.ctoxPayload?.submodule === "runs", "CTOX payload submodule must be 'runs'");
+assert(posted.ctoxPayload?.module === "operations", "CTOX payload module must be 'operations'");
+assert(posted.ctoxPayload?.submodule === "payroll", "CTOX payload submodule must be 'payroll'");
 assert(posted.ctoxPayload?.recordType === "payroll_payslip", "CTOX payload wrong recordType");
 assert(posted.ctoxPayload?.recordId === slip.id, "CTOX payload wrong recordId");
 
 // 8. Reload preserves Posted status.
-const reload = await fetch(`${baseUrl}/api/payroll`, { headers: { cookie: sessionCookie } });
+const reload = await fetch(`${baseUrl}/api/operations/payroll`, { headers: { cookie: sessionCookie } });
 const reloadPayload = await reload.json();
 const reloaded = reloadPayload.snapshot.payslips.find((s) => s.id === slip.id);
 assert(reloaded?.status === "Posted", "Slip Posted state did not persist after reload");
@@ -124,7 +157,7 @@ const lockedReject = await postExpectFail("create_run", { periodId, payableAccou
 assert(lockedReject, "Locked period must reject create_run");
 
 // 16. M1 commands cycle: fresh period for the M1 round-trip (unique id avoids collisions across smoke reruns).
-const m1PeriodId = `period_m1_${stamp}`;
+const m1PeriodId = `smoke_m1period_${stamp}`;
 const m1PeriodCreate = await post("create_period", {
   id: m1PeriodId,
   startDate: `${yyyy}-12-01`,
@@ -132,7 +165,7 @@ const m1PeriodCreate = await post("create_period", {
   frequency: "monthly"
 });
 assert(m1PeriodCreate.snapshot.periods.some((p) => p.id === m1PeriodId), "m1 period missing in snapshot");
-const m1Run = await post("create_run", { periodId: m1PeriodId, payableAccountId: "1755" });
+const m1Run = await post("create_run", { id: `smoke_m1run_${stamp}`, periodId: m1PeriodId, payableAccountId: "1755" });
 const m1RunId = m1Run.snapshot.runs.find((r) => r.periodId === m1PeriodId).id;
 const m1Queued = await post("queue_run", { id: m1RunId });
 const m1Slips = m1Queued.snapshot.payslips.filter((s) => s.runId === m1RunId);
@@ -203,7 +236,7 @@ assert(afterPack > beforePack, "country pack did not add components");
 assert(pack.snapshot.structures.some((s) => s.id === "pde-default"), "country pack DE structure missing");
 
 // 25. Period comparison view returns rows for an employee with posted slips.
-const compRes = await fetch(`${baseUrl}/api/payroll?view=comparison&employeeId=${encodeURIComponent(slipA.employeeId)}&periods=6`, {
+const compRes = await fetch(`${baseUrl}/api/operations/payroll?view=comparison&employeeId=${encodeURIComponent(slipA.employeeId)}&periods=6`, {
   headers: { cookie: sessionCookie }
 });
 assert(compRes.ok, `comparison view returned ${compRes.status}`);
@@ -211,7 +244,7 @@ const compJson = await compRes.json();
 assert(compJson.ok && compJson.comparison.rows.length >= 1, "comparison rows empty");
 
 // 26. CSV export view returns the right columns.
-const csvRes = await fetch(`${baseUrl}/api/payroll?view=export&periodId=${encodeURIComponent(m1PeriodId)}`, {
+const csvRes = await fetch(`${baseUrl}/api/operations/payroll?view=export&periodId=${encodeURIComponent(m1PeriodId)}`, {
   headers: { cookie: sessionCookie }
 });
 assert(csvRes.ok, `export view returned ${csvRes.status}`);
@@ -219,10 +252,13 @@ const csvText = await csvRes.text();
 assert(csvText.startsWith("employee_id,employee_name,gross,deductions,net,journal_id,status"), "CSV header missing");
 assert(csvText.split("\n").length >= 3, "CSV did not contain rows");
 
-console.log(`Payroll smoke passed against ${baseUrl} (26/26 assertions)`);
+// 27. Cleanup smoke-created component (others use smoke_ id prefix and are filtered by the workbench).
+await post("delete_component", { id: us02ComponentId }).catch(() => undefined);
+
+console.log(`Payroll smoke passed against ${baseUrl} (28/28 assertions, smoke artefacts filtered + cleaned up)`);
 
 async function post(command, payload) {
-  const res = await fetch(`${baseUrl}/api/payroll`, {
+  const res = await fetch(`${baseUrl}/api/operations/payroll`, {
     method: "POST",
     headers: { "content-type": "application/json", cookie: sessionCookie },
     body: JSON.stringify({ command, payload })
@@ -290,7 +326,7 @@ async function workforcePost(command, payload) {
 }
 
 async function postExpectFail(command, payload, expectedError) {
-  const res = await fetch(`${baseUrl}/api/payroll`, {
+  const res = await fetch(`${baseUrl}/api/operations/payroll`, {
     method: "POST",
     headers: { "content-type": "application/json", cookie: sessionCookie },
     body: JSON.stringify({ command, payload })

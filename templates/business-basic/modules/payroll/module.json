@@ -1,7 +1,0 @@
-{
-  "id": "payroll",
-  "name": "Payroll",
-  "defaultRoute": "/app/payroll",
-  "records": ["payroll_periods", "payroll_components", "payroll_structures", "payroll_structure_assignments", "payroll_runs", "payroll_payslips", "payroll_payslip_lines", "payroll_additionals", "payroll_audit", "payroll_employees"],
-  "ctoxSync": ["payroll_run_events", "payroll_payslip_events", "payroll_journal_postings", "bug_reports"]
-}

@@ -36,8 +36,9 @@ try {
   });
 
   // 1. Route render. Wait for the workspace scope (set by [module]/[submodule]/page.tsx) to confirm SSR completed.
-  await page.goto(`${baseUrl}/app/payroll/runs?locale=de&theme=light`, { waitUntil: "domcontentloaded" });
-  await page.waitForSelector(`[data-context-module="payroll"]`, { timeout: 15000 });
+  // Pass showTestData=1 because the proof creates smoke_-prefixed entities that the workbench filters by default.
+  await page.goto(`${baseUrl}/app/operations/payroll?locale=de&theme=light&showTestData=1`, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector(`[data-context-module="operations"]`, { timeout: 15000 });
   const html = await page.content();
   const labelInHtml = html.includes("Lohnabrechnung");
   assert(labelInHtml, "Route did not render with Lohnabrechnung label");
@@ -49,28 +50,32 @@ try {
   const slip = queue.snapshot.payslips.find((s) => s.runId === queue.snapshot.runs.find((r) => r.periodId === periodId).id);
   assert(slip, "Slip not generated");
 
-  // 3. Reload page so the new run is in the SSR DOM.
-  await page.reload({ waitUntil: "networkidle0" });
+  // 3. Reload page so the new run is in the SSR DOM. Keep showTestData=1 across reloads.
+  await page.goto(`${baseUrl}/app/operations/payroll?locale=de&theme=light&showTestData=1`, { waitUntil: "networkidle0" });
 
-  // 4. Select the new run (workbench shows slips only for the selected run).
-  const runRow = await page.$(`[data-context-record-type="payroll_run"][data-context-record-id="${slip.runId}"]`);
-  assert(runRow, `Run row with data-context-record-id=${slip.runId} not in DOM`);
-  await runRow.click();
+  // 4. Select the new run via the run-picker dropdown (no separate run row in the new layout —
+  //    the run picker is a <select> in the board header).
+  await page.select(`select[aria-label="Run auswählen"]`, slip.runId);
+  await new Promise((r) => setTimeout(r, 200));
 
-  // 5. Verify data-context-* on the slip row.
+  // 5. Verify the slip card is in the kanban with `data-context-record-id`.
+  await page.waitForSelector(`[data-context-record-type="payroll_payslip"][data-context-record-id="${slip.id}"]`, { timeout: 10000 });
   const slipRow = await page.$(`[data-context-record-type="payroll_payslip"][data-context-record-id="${slip.id}"]`);
-  assert(slipRow, `Slip row with data-context-record-id=${slip.id} not in DOM`);
+  assert(slipRow, `Slip card with data-context-record-id=${slip.id} not in DOM`);
 
-  // 5. Click the slip row.
+  // 5b. Click the slip card.
   await slipRow.click();
+  await new Promise((r) => setTimeout(r, 200));
 
   // 6. Verify the inspector now shows the slip details.
   const slipDetailVisible = await page.evaluate((id) => document.querySelectorAll(`[data-context-record-id="${id}"]`).length > 0, slip.id);
   assert(slipDetailVisible, "Slip detail did not appear after click");
 
-  // 7. Right-click on the slip row.
-  const box = await slipRow.boundingBox();
-  assert(box, "Slip row has no bounding box");
+  // 7. Right-click on the slip card. Re-query so the handle is fresh.
+  const slipRowFresh = await page.$(`[data-context-record-type="payroll_payslip"][data-context-record-id="${slip.id}"]`);
+  assert(slipRowFresh, "Slip card disappeared before right-click");
+  const box = await slipRowFresh.boundingBox();
+  assert(box, "Slip card has no bounding box");
   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2, { button: "right" });
 
   // 8. Wait briefly for the context-menu-bridge to render its menu, then verify "Prompt CTOX" entry exists.
@@ -83,16 +88,16 @@ try {
 
   // 9. Verify the slip's data-context-record-id is anchored on a CTOX-promptable element.
   const ctoxAnchored = await page.evaluate((id) => {
-    const el = document.querySelector(`[data-context-record-id="${id}"][data-context-module="payroll"]`);
+    const el = document.querySelector(`[data-context-record-id="${id}"][data-context-module="operations"]`);
     return Boolean(el);
   }, slip.id);
   assert(ctoxAnchored, "Selected slip not anchored as CTOX-promptable");
 
-  // 10. Reload preserves snapshot: run row still in DOM, and clicking it brings slip back.
-  await page.reload({ waitUntil: "networkidle0" });
-  const runRowAfterReload = await page.$(`[data-context-record-type="payroll_run"][data-context-record-id="${slip.runId}"]`);
-  assert(runRowAfterReload, "Run row missing after reload");
-  await runRowAfterReload.click();
+  // 10. Reload preserves snapshot: select the same run via the picker again, slip card returns. Keep showTestData=1.
+  await page.goto(`${baseUrl}/app/operations/payroll?locale=de&theme=light&showTestData=1`, { waitUntil: "networkidle0" });
+  await page.select(`select[aria-label="Run auswählen"]`, slip.runId);
+  await new Promise((r) => setTimeout(r, 200));
+  await page.waitForSelector(`[data-context-record-type="payroll_payslip"][data-context-record-id="${slip.id}"]`, { timeout: 10000 });
   const slipStillVisible = await page.evaluate((id) => Boolean(document.querySelector(`[data-context-record-id="${id}"]`)), slip.id);
   assert(slipStillVisible, "Slip not visible after reload + run select");
 
@@ -107,13 +112,13 @@ async function fetchPeriodId(page) {
     startDate: `2027-01-01`,
     endDate: `2027-01-31`,
     frequency: "monthly",
-    id: `period_browser_${stamp}`
+    id: `smoke_browser_period_${stamp}`
   }).then((res) => res.snapshot.periods.at(-1).id);
 }
 
 async function runIdForPeriod(page, periodId) {
   const snap = await page.evaluate(async () => {
-    const r = await fetch("/api/payroll");
+    const r = await fetch("/api/operations/payroll");
     return r.json();
   });
   const run = snap.snapshot.runs.find((r) => r.periodId === periodId && r.status !== "Cancelled");
@@ -123,7 +128,7 @@ async function runIdForPeriod(page, periodId) {
 async function callApi(page, command, payload) {
   return page.evaluate(
     async (cmd, body) => {
-      const res = await fetch("/api/payroll", {
+      const res = await fetch("/api/operations/payroll", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ command: cmd, payload: body })

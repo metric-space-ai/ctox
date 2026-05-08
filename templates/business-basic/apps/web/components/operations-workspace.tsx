@@ -20,6 +20,8 @@ import { OperationsProjectsView } from "./operations/projects-view";
 import { OperationsWorkItemsView } from "./operations/work-items-view";
 import { WorkforceWorkbench } from "./workforce-workbench";
 import { getWorkforceSnapshot } from "../lib/workforce-runtime";
+import { PayrollWorkbench } from "./payroll-workbench";
+import { getPayrollSnapshot } from "../lib/payroll-runtime";
 
 type QueryState = {
   drawer?: string;
@@ -69,6 +71,11 @@ export async function OperationsWorkspace({
   if (normalizedSubmodule === "workforce") {
     const workforce = await getWorkforceSnapshot();
     return <WorkforceWorkbench query={query} snapshot={workforce} />;
+  }
+
+  if (normalizedSubmodule === "payroll") {
+    const payroll = await getPayrollSnapshot();
+    return <PayrollWorkbench query={query} snapshot={payroll} submoduleId="payroll" />;
   }
 
   return <OperationsProjectsView copy={copy} data={data} locale={locale} query={query} submoduleId={submoduleId} />;

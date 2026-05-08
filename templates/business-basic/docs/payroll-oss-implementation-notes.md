@@ -69,7 +69,7 @@ The shared payroll model across the three repos:
    - `formula(<expression-over-named-components>)` — small grammar with `+ - * /`, parentheses, numeric literals, and identifiers that resolve to other components or to whitelisted variables (`base_salary`, `payment_days`, `lwp_days`).
    This matches the OCA `fix/percentage/code` split but replaces `code` with a parser + evaluator that has no host access.
 
-8. **Run drives slip generation**: `POST /api/payroll/runs` queues a run; the runtime materializes one `payroll_payslip` per selected employee and computes lines. Slip rows persist and are individually editable in `Draft`/`Review`. Posting is per-run (atomic per slip; failures move the slip to `Failed`, not the whole run).
+8. **Run drives slip generation**: `POST /api/operations/payroll/runs` queues a run; the runtime materializes one `payroll_payslip` per selected employee and computes lines. Slip rows persist and are individually editable in `Draft`/`Review`. Posting is per-run (atomic per slip; failures move the slip to `Failed`, not the whole run).
 
 9. **Time → wage path**: M0 pulls only `payment_days` and `lwp_days` from a fixed monthly period; M1 ties to approved `workforce_time_entry` for hourly components (mirrors frappe `salary_slip_timesheet`).
 

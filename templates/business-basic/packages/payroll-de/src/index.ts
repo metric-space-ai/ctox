@@ -13,24 +13,25 @@ import type { PayrollComponent, PayrollStructure } from "@ctox-business/payroll"
 export const PAYROLL_DE_VERSION = "2026.1";
 
 export const payrollDeComponents: PayrollComponent[] = [
-  // Earnings
+  // Earnings (DE-namespaced codes; do not collide with seed `base` / `overtime`).
   {
     id: "pde-grundgehalt",
-    code: "base",
-    label: "Grundgehalt",
+    code: "de_grundgehalt",
+    label: "Grundgehalt (DE 2026)",
     type: "earning",
     taxable: true,
     dependsOnPaymentDays: true,
     accountId: "6020",
-    formulaKind: "fix",
-    formulaAmount: 0,
+    formulaKind: "percent_of",
+    formulaBase: "base_salary",
+    formulaPercent: 100,
     sequence: 10,
     disabled: false
   },
   {
     id: "pde-overtime",
-    code: "overtime",
-    label: "Mehrarbeit",
+    code: "de_overtime",
+    label: "Mehrarbeit (DE 2026)",
     type: "earning",
     taxable: true,
     dependsOnPaymentDays: false,
@@ -51,7 +52,7 @@ export const payrollDeComponents: PayrollComponent[] = [
     dependsOnPaymentDays: false,
     accountId: "1742",
     formulaKind: "percent_of",
-    formulaBase: "base",
+    formulaBase: "de_grundgehalt",
     formulaPercent: 8.15,
     sequence: 30,
     disabled: false
@@ -65,7 +66,7 @@ export const payrollDeComponents: PayrollComponent[] = [
     dependsOnPaymentDays: false,
     accountId: "1742",
     formulaKind: "percent_of",
-    formulaBase: "base",
+    formulaBase: "de_grundgehalt",
     formulaPercent: 9.3,
     sequence: 31,
     disabled: false
@@ -79,7 +80,7 @@ export const payrollDeComponents: PayrollComponent[] = [
     dependsOnPaymentDays: false,
     accountId: "1742",
     formulaKind: "percent_of",
-    formulaBase: "base",
+    formulaBase: "de_grundgehalt",
     formulaPercent: 1.3,
     sequence: 32,
     disabled: false
@@ -93,7 +94,7 @@ export const payrollDeComponents: PayrollComponent[] = [
     dependsOnPaymentDays: false,
     accountId: "1742",
     formulaKind: "percent_of",
-    formulaBase: "base",
+    formulaBase: "de_grundgehalt",
     formulaPercent: 2.3,
     sequence: 33,
     disabled: false
@@ -109,7 +110,7 @@ export const payrollDeComponents: PayrollComponent[] = [
     dependsOnPaymentDays: false,
     accountId: "1741",
     formulaKind: "percent_of",
-    formulaBase: "base",
+    formulaBase: "de_grundgehalt",
     formulaPercent: 18,
     sequence: 40,
     disabled: false
@@ -139,7 +140,7 @@ export const payrollDeComponents: PayrollComponent[] = [
     dependsOnPaymentDays: false,
     accountId: "6110",
     formulaKind: "percent_of",
-    formulaBase: "base",
+    formulaBase: "de_grundgehalt",
     formulaPercent: 7.3,
     sequence: 90,
     disabled: true
@@ -153,7 +154,7 @@ export const payrollDeComponents: PayrollComponent[] = [
     dependsOnPaymentDays: false,
     accountId: "6111",
     formulaKind: "percent_of",
-    formulaBase: "base",
+    formulaBase: "de_grundgehalt",
     formulaPercent: 9.3,
     sequence: 91,
     disabled: true

@@ -28,9 +28,10 @@ describe("payroll-de country pack", () => {
   });
 
   it("computes a 4000 EUR base into a plausible 2026 net (DE simplified)", () => {
-    const components: PayrollComponent[] = payrollDeComponents.map((component) =>
-      component.code === "base" ? { ...component, formulaAmount: 4000 } : { ...component, disabled: false }
-    );
+    // pde-grundgehalt is `percent_of(base_salary, 100)`, so the assignment.baseSalary
+    // (4000) drives gross. We just clear formulaAmount for clarity and keep all other
+    // pack components enabled in case downstream tests append earlier disables.
+    const components: PayrollComponent[] = payrollDeComponents.map((component) => ({ ...component, disabled: false }));
     const structure = payrollDeStructures[0];
     const period: PayrollPeriod = {
       id: "p",

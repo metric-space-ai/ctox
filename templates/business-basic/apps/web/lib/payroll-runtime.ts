@@ -29,8 +29,8 @@ export type PayrollPostedJournal = {
 };
 
 export type PayrollCtoxPayload = {
-  module: "payroll";
-  submodule: "runs";
+  module: "operations";
+  submodule: "payroll";
   recordId: string;
   recordType:
     | "payroll_run"
@@ -293,8 +293,8 @@ export async function executePayrollCommand(request: PayrollMutationRequest): Pr
       const queuePayload = {
         proposalId,
         kind: "payroll_additional",
-        moduleId: "payroll",
-        submoduleId: "runs",
+        moduleId: "operations",
+        submoduleId: "payroll",
         recordType: slipId ? "payroll_payslip" : "payroll_additional",
         recordId: slipId ?? proposalId,
         proposed: { employeeId, periodId, componentId, amount, note: stringValue(payload.note) ?? "" }
@@ -551,8 +551,8 @@ export async function executePayrollCommand(request: PayrollMutationRequest): Pr
 
 export function payrollDeepLink(recordId: string, panel = "payroll-payslip") {
   return businessDeepLink({
-    module: "payroll",
-    submodule: "runs",
+    module: "operations",
+    submodule: "payroll",
     recordId,
     panel,
     drawer: "bottom"
@@ -762,8 +762,8 @@ function buildCtoxPayload(snapshot: PayrollSnapshot, payload: Record<string, unk
   const slip = slipId ? snapshot.payslips.find((s) => s.id === slipId) : undefined;
   if (slip) {
     return {
-      module: "payroll",
-      submodule: "runs",
+      module: "operations",
+      submodule: "payroll",
       recordId: slip.id,
       recordType: "payroll_payslip",
       selectedFields: {
@@ -781,8 +781,8 @@ function buildCtoxPayload(snapshot: PayrollSnapshot, payload: Record<string, unk
   const run = runId ? snapshot.runs.find((r) => r.id === runId) : undefined;
   if (run) {
     return {
-      module: "payroll",
-      submodule: "runs",
+      module: "operations",
+      submodule: "payroll",
       recordId: run.id,
       recordType: "payroll_run",
       selectedFields: { period: run.periodId, frequency: run.frequency, status: run.status },

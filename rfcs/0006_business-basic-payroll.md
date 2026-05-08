@@ -1,9 +1,10 @@
 # RFC 0006: Business Basic Payroll
 
-Status: Research and RFC complete, M0 not started
-Target module: `payroll`
+Status: M0 + M1 implemented (48 / 50 stories `done`); 2 stories queued behind adjacent-module work (US‑45 ledger/DATEV, US‑47 SEPA)
+Target submodule: `operations/payroll` (matches Workforce pattern; not a top-level nav entry)
 German UI label: `Lohnabrechnung`
 Created: 2026-05-07
+Last‑touched: 2026-05-08 (top‑level module wiring + workforce hourly bridge + country pack `payroll-de` + DSL feasibility RFC 0007)
 
 ## OSS Evidence Summary
 
@@ -122,19 +123,19 @@ Draft → Review → Posted
 
 All commands route through the existing Business Basic CTOX bridge as queue-backed actions, mirroring how `operations` mutations work today.
 
-- `POST /api/payroll/components` — create/update/disable a `payroll_component`.
-- `POST /api/payroll/structures` — create/update a `payroll_structure` and its component refs.
-- `POST /api/payroll/structure-assignments` — create/end a `payroll_structure_assignment` for an employee.
-- `POST /api/payroll/periods` — create/lock a `payroll_period`.
-- `POST /api/payroll/additionals` — create/update/delete a `payroll_additional` row.
-- `POST /api/payroll/runs` — create a run in `Draft`, queue a `Draft` run, cancel a run.
-- `POST /api/payroll/runs/:id/recompute` — recompute a `Failed` or `Submitted` run's slips that are still in `Draft`.
-- `POST /api/payroll/payslips/:id` — edit `Draft`/`Review` slip, transition Draft↔Review, mark Withheld, post, cancel.
-- `GET  /api/payroll` — list runs with status and totals.
-- `GET  /api/payroll/runs/:id` — full run with slips and totals.
-- `GET  /api/payroll/payslips/:id` — full slip with lines and source data.
-- `GET  /api/payroll/components` — component master data.
-- `GET  /api/payroll/structures` — structure master data with assignments.
+- `POST /api/operations/payroll/components` — create/update/disable a `payroll_component`.
+- `POST /api/operations/payroll/structures` — create/update a `payroll_structure` and its component refs.
+- `POST /api/operations/payroll/structure-assignments` — create/end a `payroll_structure_assignment` for an employee.
+- `POST /api/operations/payroll/periods` — create/lock a `payroll_period`.
+- `POST /api/operations/payroll/additionals` — create/update/delete a `payroll_additional` row.
+- `POST /api/operations/payroll/runs` — create a run in `Draft`, queue a `Draft` run, cancel a run.
+- `POST /api/operations/payroll/runs/:id/recompute` — recompute a `Failed` or `Submitted` run's slips that are still in `Draft`.
+- `POST /api/operations/payroll/payslips/:id` — edit `Draft`/`Review` slip, transition Draft↔Review, mark Withheld, post, cancel.
+- `GET  /api/operations/payroll` — list runs with status and totals.
+- `GET  /api/operations/payroll/runs/:id` — full run with slips and totals.
+- `GET  /api/operations/payroll/payslips/:id` — full slip with lines and source data.
+- `GET  /api/operations/payroll/components` — component master data.
+- `GET  /api/operations/payroll/structures` — structure master data with assignments.
 
 Mutation actions allowed (the same five-verb pattern as Operations elsewhere):
 
@@ -161,7 +162,7 @@ create | update | delete | post | cancel
 
 ## UI Work Surface
 
-`/app/payroll` follows the standard four-zone Business OS layout:
+`/app/operations/payroll` follows the standard four-zone Business OS layout:
 
 - **Left intake/master** — accordion: Periods, Structures, Components, Assignments, Additionals.
 - **Center workbench** — the run table for the current company:
@@ -189,7 +190,7 @@ Every payroll element renders:
 
 ```html
 data-context-module="operations"
-data-context-submodule="payroll"
+data-context-submodule="operations"
 data-context-record-type="payroll_run | payroll_payslip | payroll_payslip_line | payroll_structure_assignment | payroll_component"
 data-context-record-id="<id>"
 data-context-label="<human label, e.g. 'Lohnlauf 2026-04 monatlich' or 'Lohnabrechnung Müller 2026-04'>"
@@ -209,7 +210,7 @@ Prompt CTOX payload schema:
       "recordType": "payroll_payslip",
       "recordId": "<id>",
       "label": "<label>",
-      "href": "/app/payroll?recordId=<id>&drawer=right",
+      "href": "/app/operations/payroll?recordId=<id>&drawer=right",
       "skill": "product_engineering/business-basic-module-development"
     }
   ]
@@ -268,7 +269,7 @@ M1 is the smallest usable payroll module:
 
 Implementation may claim M0 only after:
 
-- `/app/payroll` route renders in the browser.
+- `/app/operations/payroll` route renders in the browser.
 - Period, structure, assignment, and run can be created from the UI and persist after reload.
 - Run materializes one slip per assigned employee with computed `gross_pay`, `total_deduction`, `net_pay`.
 - Slip post creates a journal entry in `business/ledger` and `payroll_payslip.journal_entry_id` is populated.
@@ -304,6 +305,6 @@ To be created at `templates/business-basic/docs/payroll-implementation-map.md` o
 - `templates/business-basic/modules/operations/module.json` — extend `records`/`ctoxSync` with payroll record types.
 - `templates/business-basic/packages/payroll/` — new package with formula DSL, component/structure/assignment, run engine, slip computation, posting hook into `accounting`.
 - `templates/business-basic/apps/web/lib/payroll-runtime.ts` — durable runtime store for M0.
-- `templates/business-basic/apps/web/app/api/payroll/...` — REST surface.
+- `templates/business-basic/apps/web/app/api/operations/payroll/...` — REST surface.
 - `templates/business-basic/apps/web/components/payroll-*.tsx` — workbench, slip drawer, line editor, right-click menus.
 - `templates/business-basic/apps/web/scripts/payroll-smoke.mjs` — end-to-end smoke.
