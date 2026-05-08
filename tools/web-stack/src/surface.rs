@@ -14,6 +14,9 @@ use crate::browser::run_browser_automation;
 use crate::deep_research::DeepResearchDepth;
 use crate::deep_research::DeepResearchRequest;
 use crate::deep_research::run_ctox_deep_research_tool;
+use crate::scholarly_search::ScholarlySearchProvider;
+use crate::scholarly_search::ScholarlySearchRequest;
+use crate::scholarly_search::run_ctox_scholarly_search_tool;
 use crate::web_search::CanonicalWebSearchRequest;
 use crate::web_search::ContextSize;
 use crate::web_search::DirectWebReadRequest;
@@ -136,6 +139,7 @@ pub fn handle_web_command(
             )?;
             print_json(&payload)
         }
+        "scholarly" => handle_scholarly_command(root, &args[1..]),
         "deep-research" => {
             let query = required_flag_value(args, "--query")
                 .or_else(|| args.get(1).map(String::as_str))
@@ -284,7 +288,63 @@ pub fn handle_web_command(
             print_json(&payload)
         }
         _ => anyhow::bail!(
-            "usage:\n  ctox web search --query <text> [--domain <host>]... [--context-size <low|medium|high>] [--cached] [--include-sources]\n  ctox web read --url <url> [--query <text>] [--find <text>]...\n  ctox web deep-research --query <text> [--focus <text>] [--depth <quick|standard|exhaustive>] [--max-sources <n>] [--workspace <path>] [--include-annas-archive] [--no-papers] [--no-workspace]\n  ctox web google-bootstrap-refresh --query <text> [--domain <host>]... [--timeout-ms <n>]\n  ctox web google-bootstrap-status\n  ctox web google-bootstrap-import --file <path>\n  ctox web google-doctor\n  ctox web scrape --target-key <key> --mode <latest|semantic> [--query <text>] [--limit <n>]\n  ctox web browser-prepare [--dir <path>] [--install-reference] [--install-browser] [--skip-npm-install]\n  ctox web browser-automation [--dir <path>] [--timeout-ms <n>] [--script-file <path>] < script.js\n  ctox web browser-capture --url <url> [--dir <path>] [--out-dir <path>] [--timeout-ms <n>]"
+            "usage:\n  ctox web search --query <text> [--domain <host>]... [--context-size <low|medium|high>] [--cached] [--include-sources]\n  ctox web read --url <url> [--query <text>] [--find <text>]...\n  ctox web scholarly search --query <text> [--provider <annas_archive>] [--content-type <type>]... [--language <code>]... [--ext <pdf|epub|...>]... [--sort <newest|oldest|largest|smallest|newest_added|oldest_added|random>] [--max-results <n>] [--page <n>] [--with-oa-pdf] [--only-doi]\n  ctox web deep-research --query <text> [--focus <text>] [--depth <quick|standard|exhaustive>] [--max-sources <n>] [--workspace <path>] [--include-annas-archive] [--no-papers] [--no-workspace]\n  ctox web google-bootstrap-refresh --query <text> [--domain <host>]... [--timeout-ms <n>]\n  ctox web google-bootstrap-status\n  ctox web google-bootstrap-import --file <path>\n  ctox web google-doctor\n  ctox web scrape --target-key <key> --mode <latest|semantic> [--query <text>] [--limit <n>]\n  ctox web browser-prepare [--dir <path>] [--install-reference] [--install-browser] [--skip-npm-install]\n  ctox web browser-automation [--dir <path>] [--timeout-ms <n>] [--script-file <path>] < script.js\n  ctox web browser-capture --url <url> [--dir <path>] [--out-dir <path>] [--timeout-ms <n>]"
+        ),
+    }
+}
+
+fn handle_scholarly_command(root: &Path, args: &[String]) -> Result<()> {
+    let action = args.first().map(String::as_str).unwrap_or("");
+    match action {
+        "search" => {
+            let query = required_flag_value(args, "--query")
+                .or_else(|| args.get(1).map(String::as_str))
+                .context(
+                    "usage: ctox web scholarly search --query <text> [--provider <annas_archive>] [--content-type <type>]... [--language <code>]... [--ext <pdf|epub|...>]... [--sort <newest|oldest|largest|smallest|newest_added|oldest_added|random>] [--max-results <n>] [--page <n>] [--with-oa-pdf] [--only-doi]",
+                )?;
+            let provider = find_flag_value(args, "--provider").map(ScholarlySearchProvider::from_label);
+            let content_types: Vec<String> = find_flag_values(args, "--content-type")
+                .into_iter()
+                .map(ToOwned::to_owned)
+                .collect();
+            let languages: Vec<String> = find_flag_values(args, "--language")
+                .into_iter()
+                .map(ToOwned::to_owned)
+                .collect();
+            let extensions: Vec<String> = find_flag_values(args, "--ext")
+                .into_iter()
+                .map(ToOwned::to_owned)
+                .collect();
+            let sort = find_flag_value(args, "--sort").map(ToOwned::to_owned);
+            let max_results = find_flag_value(args, "--max-results")
+                .map(|raw| raw.parse::<usize>())
+                .transpose()
+                .context("failed to parse --max-results")?;
+            let page = find_flag_value(args, "--page")
+                .map(|raw| raw.parse::<usize>())
+                .transpose()
+                .context("failed to parse --page")?;
+            let with_oa_pdf = args.iter().any(|arg| arg == "--with-oa-pdf");
+            let only_doi = args.iter().any(|arg| arg == "--only-doi");
+            let payload = run_ctox_scholarly_search_tool(
+                root,
+                &ScholarlySearchRequest {
+                    query: query.to_string(),
+                    provider,
+                    content_types,
+                    languages,
+                    extensions,
+                    sort,
+                    max_results,
+                    page,
+                    with_oa_pdf,
+                    only_doi,
+                },
+            )?;
+            print_json(&payload)
+        }
+        _ => anyhow::bail!(
+            "usage: ctox web scholarly search --query <text> [--provider <annas_archive>] [--content-type <type>]... [--language <code>]... [--ext <pdf|epub|...>]... [--sort <newest|oldest|largest|smallest|newest_added|oldest_added|random>] [--max-results <n>] [--page <n>] [--with-oa-pdf] [--only-doi]"
         ),
     }
 }
