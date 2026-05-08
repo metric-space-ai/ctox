@@ -1,41 +1,36 @@
 //! `ctox report …` — deep research report runs.
 //!
-//! This is the Rust backend for the deep-research skill at
-//! `skills/system/research/deep-research/`. The skill defines seven report
-//! types (feasibility_study, market_research, competitive_analysis,
-//! technology_screening, whitepaper, literature_review, decision_brief)
-//! and a manager-loop architecture analogous to the Förderantrag agent.
+//! This module is the deterministic Rust backend behind the
+//! `skills/system/research/deep-research/` skill. The skill itself is the
+//! prompt that drives the harness LLM; this backend exposes a set of
+//! `ctox report …` CLI subcommands the harness LLM calls (via Bash) to
+//! create runs, register evidence, stage and commit block markdown,
+//! run the four deterministic checks, and render the final manuscript.
 //!
-//! Hard rules — encoded by the schema and the manager loop, not by prompt
-//! discipline:
-//! - Manager passes no markdown into tool arguments; only `skill_id` and
-//!   `instance_ids`. Markdown only enters the workspace via sub-skill
-//!   output (schema-validated) plus `apply_block_patch`.
-//! - max 6 instance_ids per write/revise call (schema-enforced).
+//! There is no LLM loop in this backend — every command is a deterministic
+//! transform on the SQLite report store. The intelligence lives in the
+//! harness, not here.
+//!
+//! Schema-encoded hard rules:
+//! - max 6 staged blocks per `block-stage` call.
+//! - Every `instance_id` must resolve to a `block_id` in the run's
+//!   `report_type.block_library_keys[]`.
 //! - All four checks (completeness, character_budget, release_guard,
-//!   narrative_flow) must report `ready_to_finish=true` before a run can
-//!   transition to `Finalised`. The host overrides any LLM `finished`
-//!   verdict that violates this gate.
+//!   narrative_flow) must return `ready_to_finish=true` before
+//!   `ctox report finalise` succeeds.
 
 pub mod asset_pack;
 pub mod schema;
 pub mod state;
 pub mod workspace;
 
-// The following modules are built in subsequent waves. Declared here as
-// `pub mod` placeholders so other waves can drop their files in without
-// touching this file.
 pub mod checks;
 pub mod cli;
-pub mod manager;
-pub mod manager_prompt;
 pub mod mission_hook;
 pub mod patch;
 pub mod render;
 pub mod schemas;
 pub mod sources;
-pub mod sub_skill;
-pub mod tools;
 
 #[cfg(test)]
 mod tests;

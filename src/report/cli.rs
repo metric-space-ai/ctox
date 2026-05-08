@@ -1,40 +1,36 @@
 //! `ctox report …` command surface.
 //!
-//! Top-level dispatcher for every operator-facing deep-research command.
-//! Argument parsing is hand-rolled (consistent with the rest of CTOX —
-//! `src/main.rs` and `src/mission/queue.rs` follow the same pattern). The
-//! commands ultimately call into `crate::report::state`,
-//! `crate::report::manager`, `crate::report::workspace`,
-//! `crate::report::patch`, and `crate::report::render`.
+//! Deterministic CLI subcommands the harness LLM (loaded with the
+//! `skills/system/research/deep-research/` skill) calls via Bash to drive
+//! a deep-research run. There is no LLM loop in this module — every
+//! command is a pure transform on the SQLite report store.
 
-use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use rusqlite::{params, OptionalExtension};
 use serde_json::{json, Value};
 
 use crate::report::asset_pack::AssetPack;
-use crate::report::manager::{run_manager, ManagerConfig, ManagerRunOutcome};
+use crate::report::checks::{
+    record_check_outcome, run_character_budget_check, run_completeness_check,
+    run_release_guard_check, CheckOutcome,
+};
 use crate::report::patch::{
-    apply_block_patch, record_skill_run, stage_pending_blocks, PatchSelection, SkillRunKind,
-    SkillRunRecord, StagedBlock,
+    apply_block_patch, list_pending_blocks, normalise_markdown, record_skill_run,
+    stage_pending_blocks, PatchSelection, SkillRunKind, SkillRunRecord, StagedBlock,
 };
 use crate::report::render::{
     build_manuscript, render_docx, render_markdown, DocxRenderError, MarkdownRenderOptions,
 };
 use crate::report::schema::{ensure_schema, new_id, now_iso, open, RunStatus};
-use crate::report::schemas::parse_write_or_revise;
 use crate::report::sources::{ResolverStack, SourceKind};
 use crate::report::state::{
     abort as state_abort, create_run, finalise as state_finalise, list_runs, load_run,
     CreateRunParams,
 };
-use crate::report::sub_skill::{CtoxSubSkillRunner, DefaultInferenceCallable};
-use crate::report::tools::SubSkillRunner;
-use crate::report::workspace::{SkillMode, Workspace};
+use crate::report::workspace::Workspace;
 
 /// Entry point routed from `src/main.rs`. Mirrors the dispatch shape of
 /// `mission::queue::handle_queue_command`.
@@ -47,10 +43,13 @@ pub fn handle_command(root: &Path, args: &[String]) -> Result<()> {
         Some("new") => cmd_new(root, &args[1..]),
         Some("list") => cmd_list(root, &args[1..]),
         Some("status") => cmd_status(root, &args[1..]),
-        Some("run") => cmd_run(root, &args[1..]),
-        Some("continue") => cmd_continue(root, &args[1..]),
+        Some("add-evidence") => cmd_add_evidence(root, &args[1..]),
+        Some("block-stage") => cmd_block_stage(root, &args[1..]),
+        Some("block-apply") => cmd_block_apply(root, &args[1..]),
+        Some("block-list") => cmd_block_list(root, &args[1..]),
+        Some("check") => cmd_check(root, &args[1..]),
+        Some("ask-user") => cmd_ask_user(root, &args[1..]),
         Some("answer") => cmd_answer(root, &args[1..]),
-        Some("revise") => cmd_revise(root, &args[1..]),
         Some("render") => cmd_render(root, &args[1..]),
         Some("finalise") | Some("finalize") => cmd_finalise(root, &args[1..]),
         Some("abort") => cmd_abort(root, &args[1..]),
@@ -98,32 +97,21 @@ fn first_positional<'a>(args: &'a [String]) -> Option<&'a str> {
         .map(String::as_str)
 }
 
-/// Collect paired `--instance-id ID --goal "..."` flags. Each goal
-/// belongs to the most recently seen `--instance-id`. Returns
-/// `(instance_id, goal)` tuples in the order they appear on the command
-/// line.
-fn collect_instance_goal_pairs(args: &[String]) -> Vec<(String, String)> {
-    let mut out: Vec<(String, String)> = Vec::new();
-    let mut current_id: Option<String> = None;
-    let mut idx = 0;
-    while idx < args.len() {
-        let cur = args[idx].as_str();
-        if cur == "--instance-id" {
-            if let Some(value) = args.get(idx + 1) {
-                current_id = Some(value.trim().to_string());
-                idx += 2;
-                continue;
-            }
-        } else if cur == "--goal" {
-            if let (Some(id), Some(goal)) = (current_id.as_ref(), args.get(idx + 1)) {
-                out.push((id.clone(), goal.trim().to_string()));
-                idx += 2;
-                continue;
-            }
-        }
-        idx += 1;
+fn require_run_id<'a>(args: &'a [String], usage: &str) -> Result<&'a str> {
+    if let Some(id) = find_flag(args, "--run-id") {
+        return Ok(id);
     }
-    out
+    if let Some(id) = first_positional(args) {
+        return Ok(id);
+    }
+    bail!("{}", usage);
+}
+
+fn read_markdown_file(path_str: &str) -> Result<String> {
+    let path = PathBuf::from(path_str);
+    let body = std::fs::read_to_string(&path)
+        .with_context(|| format!("read markdown file {}", path.display()))?;
+    Ok(body)
 }
 
 // ---------- subcommand impls ----------
@@ -350,70 +338,552 @@ fn cmd_status(root: &Path, args: &[String]) -> Result<()> {
     Ok(())
 }
 
-fn cmd_run(root: &Path, args: &[String]) -> Result<()> {
-    run_with_config(root, args, /*continue_check*/ false)
-}
+// ============================================================
+// New deterministic CLI subcommands invoked by the harness LLM.
+// ============================================================
 
-fn cmd_continue(root: &Path, args: &[String]) -> Result<()> {
-    let run_id =
-        first_positional(args).ok_or_else(|| anyhow!("usage: ctox report continue RUN_ID"))?;
-    // Pre-flight: every blocking question must be answered.
+/// `ctox report add-evidence --run-id RUN [--doi DOI | --url URL | --arxiv-id ID]
+///                            [--title T] [--authors "A1; A2"] [--year Y]
+///                            [--venue V] [--abstract-file PATH]
+///                            [--snippet-file PATH] [--license L]`
+///
+/// Adds one row to `report_evidence_register`. If `--doi` (or `--arxiv-id`)
+/// is supplied, the resolver stack is consulted first (Crossref / OpenAlex /
+/// arXiv) to enrich the metadata. Otherwise the explicit flags are used
+/// verbatim.
+fn cmd_add_evidence(root: &Path, args: &[String]) -> Result<()> {
+    let run_id = require_run_id(args, "usage: ctox report add-evidence --run-id RUN ...")?;
+    let _ = load_run(root, run_id)?;
     let conn = open(root)?;
     ensure_schema(&conn)?;
-    let open_count: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM report_questions
-             WHERE run_id = ?1 AND answered_at IS NULL AND allow_fallback = 0",
-            params![run_id],
-            |row| row.get(0),
-        )
-        .context("failed to count open blocking questions")?;
-    if open_count > 0 {
-        bail!(
-            "{open_count} open blocking question(s) — answer them with `ctox report answer` first"
-        );
+
+    let doi = find_flag(args, "--doi");
+    let arxiv_id = find_flag(args, "--arxiv-id");
+    let url = find_flag(args, "--url");
+
+    if let Some(doi) = doi {
+        let stack = ResolverStack::new(root, run_id, None)
+            .context("failed to construct resolver stack")?;
+        match stack.resolve_doi(doi) {
+            Ok(Some(source)) => {
+                let recorded = stack
+                    .record_into_register(&source)
+                    .context("failed to record resolved DOI into evidence register")?;
+                println!("Recorded DOI {doi} as evidence_id {recorded}");
+                return Ok(());
+            }
+            Ok(None) => bail!("DOI {doi} did not resolve via Crossref/OpenAlex"),
+            Err(err) => bail!("DOI {doi} resolver error: {err}"),
+        }
     }
-    run_with_config(root, args, /*continue_check*/ true)
-}
 
-fn run_with_config(root: &Path, args: &[String], continue_check: bool) -> Result<()> {
-    let _ = continue_check; // pre-checks already happened in the caller
-    let run_id = first_positional(args)
-        .ok_or_else(|| anyhow!("usage: ctox report run RUN_ID [--max-turns N] [--no-research] [--no-revision] [--max-duration-min N]"))?;
-    let max_turns: u32 = find_flag(args, "--max-turns")
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(90);
-    let allow_research = !has_flag(args, "--no-research");
-    let allow_revision = !has_flag(args, "--no-revision");
-    let max_duration_min: u32 = find_flag(args, "--max-duration-min")
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(18);
+    if let Some(arxiv) = arxiv_id {
+        let stack = ResolverStack::new(root, run_id, None)
+            .context("failed to construct resolver stack")?;
+        match stack.resolve_arxiv(arxiv) {
+            Ok(Some(source)) => {
+                let recorded = stack
+                    .record_into_register(&source)
+                    .context("failed to record resolved arXiv id into evidence register")?;
+                println!("Recorded arXiv {arxiv} as evidence_id {recorded}");
+                return Ok(());
+            }
+            Ok(None) => bail!("arXiv id {arxiv} did not resolve"),
+            Err(err) => bail!("arXiv {arxiv} resolver error: {err}"),
+        }
+    }
 
-    // Confirm the run exists before constructing the heavyweight pieces.
-    let _ = load_run(root, run_id)?;
+    // Manual evidence card: caller must supply at least --url or --title.
+    let title = find_flag(args, "--title");
+    let authors_raw = find_flag(args, "--authors").unwrap_or("");
+    let year_raw = find_flag(args, "--year");
+    let venue = find_flag(args, "--venue");
+    let abstract_md = find_flag(args, "--abstract-file")
+        .map(read_markdown_file)
+        .transpose()?;
+    let snippet_md = find_flag(args, "--snippet-file")
+        .map(read_markdown_file)
+        .transpose()?;
+    let license = find_flag(args, "--license");
 
-    let config = ManagerConfig {
-        max_turns: max_turns as usize,
-        max_run_duration: Duration::from_secs(u64::from(max_duration_min) * 60),
-        allow_research,
-        allow_research_retry: allow_research,
-        allow_revision,
-        ..ManagerConfig::default()
+    if title.is_none() && url.is_none() {
+        bail!("manual evidence requires at least --title or --url");
+    }
+
+    let kind = if url.is_some() {
+        "url"
+    } else {
+        "manual"
     };
-    let inference_for_runner = DefaultInferenceCallable::new(root);
-    let inference_for_manager = DefaultInferenceCallable::new(root);
-    let runner = CtoxSubSkillRunner::new(root, Box::new(inference_for_runner))
-        .context("failed to construct sub-skill runner")?;
+    let canonical_id = url.or(title).unwrap_or("");
+    let authors_vec: Vec<String> = authors_raw
+        .split(';')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let authors_json = serde_json::to_string(&authors_vec)
+        .context("encode --authors as JSON")?;
+    let year: Option<i64> = year_raw.and_then(|s| s.parse().ok());
+    let evidence_id = new_id("ev");
+    let now = now_iso();
 
-    let outcome = run_manager(root, run_id, config, &runner, &inference_for_manager)?;
-    print_manager_outcome(&outcome);
+    conn.execute(
+        "INSERT OR REPLACE INTO report_evidence_register (
+             evidence_id, run_id, kind, canonical_id, title, authors_json,
+             venue, year, publisher, url_canonical, url_full_text,
+             license, abstract_md, snippet_md, retrieved_at,
+             resolver_used, integrity_hash, citations_count
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9, NULL,
+                   ?10, ?11, ?12, ?13, 'manual', NULL, 0)",
+        params![
+            evidence_id,
+            run_id,
+            kind,
+            canonical_id,
+            title,
+            authors_json,
+            venue,
+            year,
+            url,
+            license,
+            abstract_md,
+            snippet_md,
+            now,
+        ],
+    )
+    .context("failed to insert manual evidence row")?;
+    println!("Recorded manual evidence as evidence_id {evidence_id}");
     Ok(())
 }
 
+/// `ctox report block-stage --run-id RUN --instance-id ID --markdown-file F
+///                          [--doc-id D] [--block-id B] [--title T] [--ord N]
+///                          [--reason R] [--used-reference-ids "ev1,ev2"]`
+///
+/// Stages one block-markdown into `report_pending_blocks` (paired with a
+/// new `report_skill_runs` parent row). The caller — typically the
+/// harness LLM that just authored the markdown — provides every field;
+/// nothing is generated.
+fn cmd_block_stage(root: &Path, args: &[String]) -> Result<()> {
+    let run_id = require_run_id(args, "usage: ctox report block-stage --run-id RUN --instance-id ID --markdown-file F")?;
+    let _ = load_run(root, run_id)?;
+    let instance_id = find_flag(args, "--instance-id")
+        .ok_or_else(|| anyhow!("--instance-id is required"))?
+        .to_string();
+    let markdown_path = find_flag(args, "--markdown-file")
+        .ok_or_else(|| anyhow!("--markdown-file is required"))?;
+    let markdown = normalise_markdown(&read_markdown_file(markdown_path)?);
+    if markdown.trim().is_empty() {
+        bail!("markdown file {markdown_path:?} is empty");
+    }
+
+    // Derive doc_id / block_id from instance_id "doc__block" if not given.
+    let (default_doc, default_block) = match instance_id.split_once("__") {
+        Some((d, b)) => (d.to_string(), b.to_string()),
+        None => (String::from(""), instance_id.clone()),
+    };
+    let doc_id = find_flag(args, "--doc-id")
+        .map(str::to_string)
+        .unwrap_or(default_doc);
+    let block_id = find_flag(args, "--block-id")
+        .map(str::to_string)
+        .unwrap_or(default_block);
+    let title = find_flag(args, "--title").unwrap_or("").to_string();
+    let ord: i64 = find_flag(args, "--ord")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    let reason = find_flag(args, "--reason").unwrap_or("authored").to_string();
+    let used_reference_ids: Vec<String> = find_flag(args, "--used-reference-ids")
+        .map(|raw| {
+            raw.split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let staged = StagedBlock {
+        instance_id: instance_id.clone(),
+        doc_id,
+        block_id: block_id.clone(),
+        block_template_id: block_id,
+        title,
+        ord,
+        markdown,
+        reason,
+        used_reference_ids,
+    };
+
+    let conn = open(root)?;
+    ensure_schema(&conn)?;
+    let skill_run_id = new_id("skill_write");
+    let record = SkillRunRecord {
+        skill_run_id: skill_run_id.clone(),
+        run_id: run_id.to_string(),
+        kind: SkillRunKind::Write,
+        summary: "harness-authored block".to_string(),
+        blocking_reason: None,
+        blocking_questions: Vec::new(),
+        blocks: vec![staged.clone()],
+        raw_output: Value::Null,
+    };
+    record_skill_run(&conn, &record)?;
+    stage_pending_blocks(&conn, run_id, &skill_run_id, SkillRunKind::Write, &[staged])?;
+    println!("Staged {instance_id} (skill_run_id {skill_run_id})");
+    println!("Apply with: ctox report block-apply --run-id {run_id}");
+    Ok(())
+}
+
+/// `ctox report block-apply --run-id RUN [--instance-id ID]...`
+///
+/// Commits all (or the named subset of) currently pending blocks to
+/// `report_blocks`. After this point the blocks are visible to checks +
+/// render.
+fn cmd_block_apply(root: &Path, args: &[String]) -> Result<()> {
+    let run_id = require_run_id(args, "usage: ctox report block-apply --run-id RUN [--instance-id ID]...")?;
+    let _ = load_run(root, run_id)?;
+    let conn = open(root)?;
+    ensure_schema(&conn)?;
+    let instance_filter: Vec<String> = collect_flag(args, "--instance-id");
+    let pending = list_pending_blocks(&conn, run_id)?;
+    if pending.is_empty() {
+        println!("No pending blocks to apply.");
+        return Ok(());
+    }
+    // Find the latest skill_run_id covering any pending row — patch.rs
+    // applies per skill_run_id, so iterate distinct ones.
+    let skill_run_ids: Vec<String> = conn
+        .prepare(
+            "SELECT DISTINCT skill_run_id FROM report_pending_blocks WHERE run_id = ?1",
+        )?
+        .query_map(params![run_id], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    let instance_ids_filter = if instance_filter.is_empty() {
+        None
+    } else {
+        Some(instance_filter.clone())
+    };
+    let mut total_committed = 0usize;
+    for skill_run_id in &skill_run_ids {
+        let selection = PatchSelection {
+            skill_run_id: skill_run_id.clone(),
+            instance_ids: instance_ids_filter.clone(),
+            used_research_ids: Vec::new(),
+        };
+        let outcome = apply_block_patch(&conn, run_id, &selection)?;
+        total_committed += outcome.committed_block_ids.len();
+    }
+    println!("Committed {total_committed} block(s).");
+    Ok(())
+}
+
+/// `ctox report block-list --run-id RUN [--pending] [--json]`
+fn cmd_block_list(root: &Path, args: &[String]) -> Result<()> {
+    let run_id = require_run_id(args, "usage: ctox report block-list --run-id RUN [--pending] [--json]")?;
+    let _ = load_run(root, run_id)?;
+    let conn = open(root)?;
+    ensure_schema(&conn)?;
+    let json_out = has_flag(args, "--json");
+    if has_flag(args, "--pending") {
+        let pending = list_pending_blocks(&conn, run_id)?;
+        if json_out {
+            let payload: Vec<Value> = pending
+                .iter()
+                .map(|b| {
+                    json!({
+                        "instance_id": b.instance_id,
+                        "doc_id": b.doc_id,
+                        "block_id": b.block_id,
+                        "title": b.title,
+                        "ord": b.ord,
+                        "markdown_chars": b.markdown.chars().count(),
+                    })
+                })
+                .collect();
+            println!("{}", serde_json::to_string_pretty(&Value::Array(payload))?);
+        } else {
+            println!("PENDING BLOCKS ({})", pending.len());
+            for b in &pending {
+                println!(
+                    "  {}\tord={}\tchars={}\ttitle={}",
+                    b.instance_id,
+                    b.ord,
+                    b.markdown.chars().count(),
+                    truncate_for_table(&b.title, 60)
+                );
+            }
+        }
+        return Ok(());
+    }
+    // Committed blocks.
+    let mut stmt = conn.prepare(
+        "SELECT instance_id, doc_id, block_id, title, ord, length(markdown), committed_at
+         FROM report_blocks WHERE run_id = ?1 ORDER BY ord ASC, committed_at ASC",
+    )?;
+    let rows: Vec<(String, String, String, String, i64, i64, String)> = stmt
+        .query_map(params![run_id], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+                row.get(6)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    if json_out {
+        let payload: Vec<Value> = rows
+            .iter()
+            .map(|(iid, did, bid, title, ord, len, ts)| {
+                json!({
+                    "instance_id": iid,
+                    "doc_id": did,
+                    "block_id": bid,
+                    "title": title,
+                    "ord": ord,
+                    "markdown_chars": len,
+                    "committed_at": ts,
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&Value::Array(payload))?);
+    } else {
+        println!("COMMITTED BLOCKS ({})", rows.len());
+        for (iid, _did, _bid, title, ord, len, _ts) in &rows {
+            println!(
+                "  {}\tord={}\tchars={}\ttitle={}",
+                iid,
+                ord,
+                len,
+                truncate_for_table(title, 60)
+            );
+        }
+    }
+    Ok(())
+}
+
+/// `ctox report check --run-id RUN <completeness|character_budget|release_guard|narrative_flow> [--json]`
+///
+/// Runs one of the four deterministic checks and persists the outcome to
+/// `report_check_runs`. `narrative_flow` is the structural variant (no
+/// LLM): missing-section / out-of-order / broken-cross-ref detector.
+fn cmd_check(root: &Path, args: &[String]) -> Result<()> {
+    let run_id = require_run_id(args, "usage: ctox report check --run-id RUN <kind> [--json]")?;
+    let _ = load_run(root, run_id)?;
+    let kind = args
+        .iter()
+        .find(|a| {
+            !a.starts_with("--")
+                && *a != run_id
+                && matches!(
+                    a.as_str(),
+                    "completeness" | "character_budget" | "release_guard" | "narrative_flow"
+                )
+        })
+        .map(String::as_str)
+        .ok_or_else(|| {
+            anyhow!(
+                "check kind must be one of: completeness, character_budget, release_guard, narrative_flow"
+            )
+        })?;
+    let json_out = has_flag(args, "--json");
+
+    let workspace = Workspace::load(root, run_id)?;
+    let outcome: CheckOutcome = match kind {
+        "completeness" => run_completeness_check(&workspace)?,
+        "character_budget" => run_character_budget_check(&workspace)?,
+        "release_guard" => run_release_guard_check(&workspace)?,
+        "narrative_flow" => run_structural_narrative_flow(root, run_id, &workspace)?,
+        _ => unreachable!(),
+    };
+
+    let conn = open(root)?;
+    ensure_schema(&conn)?;
+    record_check_outcome(&conn, run_id, &outcome)?;
+
+    if json_out {
+        let payload = json!({
+            "check_kind": outcome.check_kind,
+            "ready_to_finish": outcome.ready_to_finish,
+            "needs_revision": outcome.needs_revision,
+            "summary": outcome.summary,
+            "raw_payload": outcome.raw_payload,
+        });
+        println!("{}", serde_json::to_string_pretty(&payload)?);
+    } else {
+        println!(
+            "{}: ready_to_finish={} needs_revision={}",
+            outcome.check_kind, outcome.ready_to_finish, outcome.needs_revision
+        );
+        if !outcome.summary.trim().is_empty() {
+            println!("Summary: {}", outcome.summary);
+        }
+    }
+    Ok(())
+}
+
+/// Structural narrative-flow check (no LLM). Verifies that the run has
+/// every required block, that block ordinals are monotone-non-decreasing,
+/// and that no committed block is empty. Failures are surfaced via the
+/// regular `CheckOutcome` shape.
+fn run_structural_narrative_flow(
+    root: &Path,
+    run_id: &str,
+    workspace: &Workspace<'_>,
+) -> Result<CheckOutcome> {
+    let report_type_id = workspace.run_metadata()?.report_type_id;
+    let pack = AssetPack::load()?;
+    let report_type = pack
+        .report_type(&report_type_id)
+        .with_context(|| format!("unknown report_type {report_type_id}"))?;
+    // Required block_ids come from the report_type's document_blueprint.
+    let blueprint_id = report_type.document_blueprint_id.as_str();
+    let required: Vec<String> = if blueprint_id.is_empty() {
+        report_type.block_library_keys.clone()
+    } else {
+        match pack.document_blueprint(blueprint_id) {
+            Ok(blueprint) => blueprint
+                .sequence
+                .into_iter()
+                .filter(|entry| entry.required)
+                .map(|entry| entry.block_id)
+                .collect(),
+            Err(_) => report_type.block_library_keys.clone(),
+        }
+    };
+
+    let conn = open(root)?;
+    ensure_schema(&conn)?;
+    let mut stmt = conn.prepare(
+        "SELECT block_id, ord, length(markdown) FROM report_blocks
+         WHERE run_id = ?1 ORDER BY ord ASC",
+    )?;
+    let rows: Vec<(String, i64, i64)> = stmt
+        .query_map(params![run_id], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let committed_block_ids: Vec<String> = rows.iter().map(|(b, _, _)| b.clone()).collect();
+    let missing: Vec<String> = required
+        .iter()
+        .filter(|b| !committed_block_ids.contains(b))
+        .cloned()
+        .collect();
+
+    let mut empty_blocks: Vec<String> = Vec::new();
+    for (block_id, _ord, len) in &rows {
+        if *len < 50 {
+            empty_blocks.push(block_id.clone());
+        }
+    }
+
+    let mut order_violations: Vec<String> = Vec::new();
+    let mut last_ord: i64 = i64::MIN;
+    for (block_id, ord, _len) in &rows {
+        if *ord < last_ord {
+            order_violations.push(block_id.clone());
+        }
+        last_ord = *ord;
+    }
+
+    let ready = missing.is_empty() && empty_blocks.is_empty() && order_violations.is_empty();
+    let needs_revision = !empty_blocks.is_empty() || !order_violations.is_empty();
+    let summary = if ready {
+        "narrative flow OK: required blocks present, ordinals monotone, no empty blocks"
+            .to_string()
+    } else {
+        let mut parts = Vec::new();
+        if !missing.is_empty() {
+            parts.push(format!("missing required blocks: {}", missing.join(", ")));
+        }
+        if !empty_blocks.is_empty() {
+            parts.push(format!("empty blocks: {}", empty_blocks.join(", ")));
+        }
+        if !order_violations.is_empty() {
+            parts.push(format!(
+                "out-of-order blocks: {}",
+                order_violations.join(", ")
+            ));
+        }
+        parts.join("; ")
+    };
+    Ok(CheckOutcome {
+        check_kind: "narrative_flow".to_string(),
+        summary,
+        check_applicable: true,
+        ready_to_finish: ready,
+        needs_revision,
+        candidate_instance_ids: Vec::new(),
+        goals: Vec::new(),
+        reasons: Vec::new(),
+        raw_payload: json!({
+            "committed_block_ids": committed_block_ids,
+            "missing_required": missing,
+            "empty_blocks": empty_blocks,
+            "order_violations": order_violations,
+        }),
+    })
+}
+
+/// `ctox report ask-user --run-id RUN --question "..."` (repeatable)
+///
+/// Records open questions for the operator. Returns the new
+/// question_id(s); the harness LLM should also surface the questions in
+/// its chat reply so the operator sees them immediately.
+fn cmd_ask_user(root: &Path, args: &[String]) -> Result<()> {
+    let run_id = require_run_id(args, "usage: ctox report ask-user --run-id RUN --question \"...\"")?;
+    let _ = load_run(root, run_id)?;
+    let questions: Vec<String> = collect_flag(args, "--question");
+    if questions.is_empty() {
+        bail!("at least one --question \"...\" is required");
+    }
+    let section = find_flag(args, "--section").unwrap_or("ctox report ask-user");
+    let reason = find_flag(args, "--reason").unwrap_or("operator decision required");
+    let allow_fallback = if has_flag(args, "--allow-fallback") {
+        1
+    } else {
+        0
+    };
+    let conn = open(root)?;
+    ensure_schema(&conn)?;
+    let question_id = new_id("q");
+    let questions_json = serde_json::to_string(&questions)
+        .context("encode --question values as JSON")?;
+    conn.execute(
+        "INSERT INTO report_questions (
+             question_id, run_id, section, reason, questions_json,
+             allow_fallback, raised_at, answered_at, answer_text
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, NULL)",
+        params![
+            question_id,
+            run_id,
+            section,
+            reason,
+            questions_json,
+            allow_fallback,
+            now_iso(),
+        ],
+    )
+    .context("failed to insert question row")?;
+    println!("question_id={question_id}");
+    for q in &questions {
+        println!("  - {}", q);
+    }
+    println!(
+        "Operator answers with: ctox report answer {run_id} --question-id {question_id} --answer \"...\""
+    );
+    Ok(())
+}
+
+/// `ctox report answer RUN_ID --question-id Q_ID --answer "..."`
 fn cmd_answer(root: &Path, args: &[String]) -> Result<()> {
-    let run_id = first_positional(args).ok_or_else(|| {
-        anyhow!("usage: ctox report answer RUN_ID --question-id Q_ID --answer \"...\"")
-    })?;
+    let run_id = require_run_id(
+        args,
+        "usage: ctox report answer RUN_ID --question-id Q_ID --answer \"...\"",
+    )?;
     let question_id =
         find_flag(args, "--question-id").ok_or_else(|| anyhow!("--question-id is required"))?;
     let answer = find_flag(args, "--answer").ok_or_else(|| anyhow!("--answer is required"))?;
@@ -430,141 +900,6 @@ fn cmd_answer(root: &Path, args: &[String]) -> Result<()> {
         bail!("no open question {question_id} found for run {run_id}");
     }
     println!("Answered question {question_id}");
-    Ok(())
-}
-
-fn cmd_revise(root: &Path, args: &[String]) -> Result<()> {
-    let run_id = first_positional(args).ok_or_else(|| {
-        anyhow!("usage: ctox report revise RUN_ID --instance-id ID --goal \"...\" [...]")
-    })?;
-    let pairs = collect_instance_goal_pairs(args);
-    if pairs.is_empty() {
-        bail!("at least one --instance-id ID --goal \"...\" pair is required");
-    }
-    // Group goals per instance_id for the sub-skill input.
-    let mut by_instance: HashMap<String, Vec<String>> = HashMap::new();
-    let mut order: Vec<String> = Vec::new();
-    for (id, goal) in pairs {
-        if !by_instance.contains_key(&id) {
-            order.push(id.clone());
-        }
-        by_instance.entry(id).or_default().push(goal);
-    }
-    let instance_ids: Vec<String> = order;
-    let goals: Vec<String> = instance_ids
-        .iter()
-        .filter_map(|id| by_instance.get(id))
-        .flat_map(|gs| gs.iter().cloned())
-        .collect();
-
-    let workspace = Workspace::load(root, run_id)?;
-    let input = workspace.skill_input(SkillMode::Revision, &instance_ids, None, &goals)?;
-
-    let inference = DefaultInferenceCallable::new(root);
-    let runner = CtoxSubSkillRunner::new(root, Box::new(inference))
-        .context("failed to construct sub-skill runner")?;
-    let raw = runner
-        .run_revisor(&input)
-        .context("revisor sub-skill returned an error")?;
-    let parsed =
-        parse_write_or_revise(&raw).context("revisor sub-skill output failed schema validation")?;
-
-    let conn = open(root)?;
-    ensure_schema(&conn)?;
-    let skill_run_id = new_id("skill_revise");
-    let raw_output_json =
-        serde_json::to_value(&parsed).context("encode revisor output for skill run record")?;
-    let blocks: Vec<StagedBlock> = parsed
-        .blocks
-        .iter()
-        .map(|b| StagedBlock {
-            instance_id: b.instance_id.clone(),
-            doc_id: b.doc_id.clone(),
-            block_id: b.block_id.clone(),
-            block_template_id: b.block_id.clone(),
-            title: b.title.clone(),
-            ord: b.order,
-            markdown: b.markdown.clone(),
-            reason: b.reason.clone(),
-            used_reference_ids: b.used_reference_ids.clone(),
-        })
-        .collect();
-    let blocking_reason = if parsed.blocking_reason.trim().is_empty() {
-        None
-    } else {
-        Some(parsed.blocking_reason.clone())
-    };
-    let record = SkillRunRecord {
-        skill_run_id: skill_run_id.clone(),
-        run_id: run_id.to_string(),
-        kind: SkillRunKind::Revision,
-        summary: parsed.summary.clone(),
-        blocking_reason: blocking_reason.clone(),
-        blocking_questions: parsed.blocking_questions.clone(),
-        blocks: blocks.clone(),
-        raw_output: raw_output_json,
-    };
-    record_skill_run(&conn, &record)?;
-    stage_pending_blocks(
-        &conn,
-        run_id,
-        &skill_run_id,
-        SkillRunKind::Revision,
-        &blocks,
-    )?;
-
-    if blocks.is_empty() {
-        if let Some(reason) = blocking_reason {
-            // Persist a question card so `ctox report answer` can follow up.
-            if !parsed.blocking_questions.is_empty() {
-                let question_id = new_id("q");
-                let questions_json = serde_json::to_string(&parsed.blocking_questions)
-                    .context("encode blocking_questions for question card")?;
-                conn.execute(
-                    "INSERT INTO report_questions (
-                         question_id, run_id, section, reason, questions_json,
-                         allow_fallback, raised_at, answered_at, answer_text
-                     ) VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, NULL, NULL)",
-                    params![
-                        question_id,
-                        run_id,
-                        "ctox report revise",
-                        reason,
-                        questions_json,
-                        now_iso(),
-                    ],
-                )
-                .context("failed to persist revise question card")?;
-                println!("Revisor blocked: {reason}");
-                println!(
-                    "New question {question_id} ({} item(s))",
-                    parsed.blocking_questions.len()
-                );
-                println!("Answer with: ctox report answer {run_id} --question-id {question_id} --answer \"...\"");
-                return Ok(());
-            }
-            println!("Revisor blocked: {reason}");
-            return Ok(());
-        }
-        println!("Revisor returned no blocks and no blocking reason.");
-        return Ok(());
-    }
-
-    let selection = PatchSelection {
-        skill_run_id: skill_run_id.clone(),
-        instance_ids: None,
-        used_research_ids: Vec::new(),
-    };
-    let outcome = apply_block_patch(&conn, run_id, &selection)?;
-    println!(
-        "Revised {} block(s); committed {} (skill_run {})",
-        blocks.len(),
-        outcome.committed_block_ids.len(),
-        skill_run_id
-    );
-    if !parsed.summary.trim().is_empty() {
-        println!("Summary: {}", parsed.summary);
-    }
     Ok(())
 }
 
@@ -733,26 +1068,41 @@ fn cmd_help() {
     println!(
         "ctox report — deep research report runs
 
+The intelligence lives in the harness LLM driven by the
+`research/deep-research` skill. These commands are the deterministic
+building blocks the LLM calls to drive the run.
+
 USAGE
   ctox report new <report_type> --domain <id> --depth <id> [--language en|de] --topic \"...\"
                                                  [--reference-doc PATH]... [--seed-doi DOI]...
                                                  [--review-doc PATH]...
   ctox report list [--status STATUS] [--limit N]
   ctox report status RUN_ID [--json]
-  ctox report run RUN_ID [--max-turns N] [--no-research] [--no-revision]
-                          [--max-duration-min N]
-  ctox report continue RUN_ID
+
+  ctox report add-evidence --run-id RUN
+        ( --doi DOI | --arxiv-id ID | --url URL )
+        [--title T] [--authors \"A1; A2\"] [--year Y] [--venue V]
+        [--abstract-file PATH] [--snippet-file PATH] [--license L]
+
+  ctox report block-stage --run-id RUN --instance-id ID --markdown-file F
+        [--doc-id D] [--block-id B] [--title T] [--ord N] [--reason R]
+        [--used-reference-ids \"ev1,ev2\"]
+  ctox report block-apply --run-id RUN [--instance-id ID]...
+  ctox report block-list --run-id RUN [--pending] [--json]
+
+  ctox report check --run-id RUN <completeness|character_budget|release_guard|narrative_flow> [--json]
+
+  ctox report ask-user --run-id RUN --question \"...\" [--question \"...\"]...
+                       [--section S] [--reason R] [--allow-fallback]
   ctox report answer RUN_ID --question-id Q_ID --answer \"...\"
-  ctox report revise RUN_ID --instance-id BLOCK_X --goal \"...\"
-                            [--instance-id BLOCK_Y --goal \"...\"]...
+
   ctox report render RUN_ID --format docx|md|json [--out PATH]
   ctox report finalise RUN_ID
   ctox report abort RUN_ID --reason \"...\"
   ctox report blueprints
   ctox report help
 
-Operator guide: skills/system/research/deep-research/SKILL.md
-                skills/system/research/deep-research/references/setup_guide.md"
+Skill: skills/system/research/deep-research/SKILL.md"
     );
 }
 
@@ -827,29 +1177,6 @@ fn short_check_summary(value: &Value) -> String {
         out.push_str(&truncate_for_table(summary, 80));
     }
     out
-}
-
-fn print_manager_outcome(outcome: &ManagerRunOutcome) {
-    let decision = outcome.decision.as_str();
-    println!("Decision:    {decision}");
-    println!("Turns:       {}", outcome.turns);
-    println!("Tool calls:  {}", outcome.tool_calls);
-    if !outcome.summary.trim().is_empty() {
-        println!("Summary:     {}", outcome.summary);
-    }
-    if !outcome.changed_blocks.is_empty() {
-        println!("Changed:     {}", outcome.changed_blocks.join(", "));
-    }
-    if !outcome.reason.trim().is_empty() {
-        println!("Reason:      {}", outcome.reason);
-    }
-    if !outcome.open_questions.is_empty() {
-        println!("Open Qs ({}):", outcome.open_questions.len());
-        for q in &outcome.open_questions {
-            println!("  - {}", truncate_for_table(q, 100));
-        }
-        println!("Answer with: ctox report answer RUN_ID --question-id Q_ID --answer \"...\"");
-    }
 }
 
 // ---------- DOCX comment extractor ----------

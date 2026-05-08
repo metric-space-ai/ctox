@@ -5,7 +5,6 @@
 
 mod asset_pack_roundtrip;
 mod checks_smoke;
-mod manager_smoke;
 mod rascon_replay;
 mod release_guard_lints;
 mod workspace_smoke;
