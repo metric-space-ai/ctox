@@ -113,6 +113,11 @@ pub fn run_manager(
     let mut last_release_guard: Option<CheckOutcome> = None;
     let mut last_narrative_flow: Option<CheckOutcome> = None;
 
+    // Per-tool counts across the whole run, used by the stall detector
+    // to push the manager forward when it loops on read-only tools.
+    let mut tool_counts: std::collections::HashMap<String, u32> =
+        std::collections::HashMap::new();
+
     let mut next_user_message = initial_user.clone();
     let mut malformed_retry_used = false;
 
@@ -216,6 +221,7 @@ pub fn run_manager(
                             )
                         });
                     tool_calls_count += 1;
+                    *tool_counts.entry(tool_name.to_string()).or_insert(0) += 1;
 
                     // Forensic breadcrumb: persist a provenance row for
                     // every tool call so an operator can reconstruct
@@ -290,9 +296,57 @@ pub fn run_manager(
                     );
                 }
 
-                next_user_message = serde_json::to_string_pretty(&json!({
+                // Stall detector: if the manager has spent too many calls
+                // on read-only tools without taking any productive action,
+                // append a forcing-function directive to the next user
+                // message so the next turn cannot respond with "snapshot
+                // / lookup again".
+                let snapshot_n = *tool_counts.get("workspace_snapshot").unwrap_or(&0);
+                let lookup_n = *tool_counts.get("asset_lookup").unwrap_or(&0);
+                let research_n = *tool_counts.get("public_research").unwrap_or(&0);
+                let write_n = *tool_counts.get("write_with_skill").unwrap_or(&0);
+                let revise_n = *tool_counts.get("revise_with_skill").unwrap_or(&0);
+                let apply_n = *tool_counts.get("apply_block_patch").unwrap_or(&0);
+                let comp_n = *tool_counts.get("completeness_check").unwrap_or(&0);
+                let budget_n = *tool_counts.get("character_budget_check").unwrap_or(&0);
+                let guard_n = *tool_counts.get("release_guard_check").unwrap_or(&0);
+                let flow_n = *tool_counts.get("narrative_flow_check").unwrap_or(&0);
+
+                let stall_directive = derive_stall_directive(
+                    snapshot_n,
+                    lookup_n,
+                    research_n,
+                    write_n,
+                    revise_n,
+                    apply_n,
+                    comp_n,
+                    budget_n,
+                    guard_n,
+                    flow_n,
+                );
+
+                let mut next_payload = json!({
                     "tool_results": envelopes,
-                }))?;
+                    "tool_call_counts": {
+                        "workspace_snapshot": snapshot_n,
+                        "asset_lookup": lookup_n,
+                        "public_research": research_n,
+                        "write_with_skill": write_n,
+                        "revise_with_skill": revise_n,
+                        "apply_block_patch": apply_n,
+                        "completeness_check": comp_n,
+                        "character_budget_check": budget_n,
+                        "release_guard_check": guard_n,
+                        "narrative_flow_check": flow_n,
+                    },
+                });
+                if let Some(directive) = stall_directive {
+                    next_payload
+                        .as_object_mut()
+                        .unwrap()
+                        .insert("required_next_action".to_string(), Value::String(directive));
+                }
+                next_user_message = serde_json::to_string_pretty(&next_payload)?;
             }
         }
     };
@@ -691,6 +745,73 @@ fn extract_questions(envelope: &ToolEnvelope) -> Vec<String> {
         }
     }
     out
+}
+
+/// Forcing function for the stall detector. Returns Some(directive) when
+/// the manager has taken read-only actions without progressing; None when
+/// the run is on the productive path.
+#[allow(clippy::too_many_arguments)]
+fn derive_stall_directive(
+    snapshot_n: u32,
+    lookup_n: u32,
+    research_n: u32,
+    write_n: u32,
+    _revise_n: u32,
+    apply_n: u32,
+    comp_n: u32,
+    budget_n: u32,
+    guard_n: u32,
+    flow_n: u32,
+) -> Option<String> {
+    // Stage 1: bootstrap. After 1 snapshot + 1 lookup, no further reads
+    // before public_research.
+    if research_n == 0 && (snapshot_n >= 2 || lookup_n >= 2) {
+        return Some(
+            "STALL: you have already inspected workspace and asset_pack. \
+             Do NOT call workspace_snapshot or asset_lookup again before \
+             apply_block_patch. Required next call: \
+             public_research with concrete topic-specific queries."
+                .to_string(),
+        );
+    }
+    // Stage 2: research_n>=1 but no write yet → push to write_with_skill.
+    if research_n >= 1 && write_n == 0 {
+        return Some(
+            "STALL: research has started but no blocks have been drafted. \
+             Required next call: write_with_skill with up to 6 instance_ids \
+             from report_type.block_library_keys[]."
+                .to_string(),
+        );
+    }
+    // Stage 3: write_n>=1 but no apply yet → push to apply_block_patch.
+    if write_n >= 1 && apply_n == 0 {
+        return Some(
+            "STALL: blocks have been drafted via write_with_skill but \
+             never committed. Required next call: apply_block_patch \
+             on the staged instance_ids."
+                .to_string(),
+        );
+    }
+    // Stage 4: at least one block applied → run the four checks.
+    if apply_n >= 1 {
+        if comp_n == 0 {
+            return Some(
+                "Required next call: completeness_check (run after each \
+                 apply_block_patch)."
+                    .to_string(),
+            );
+        }
+        if budget_n == 0 {
+            return Some("Required next call: character_budget_check.".to_string());
+        }
+        if guard_n == 0 {
+            return Some("Required next call: release_guard_check.".to_string());
+        }
+        if flow_n == 0 {
+            return Some("Required next call: narrative_flow_check.".to_string());
+        }
+    }
+    None
 }
 
 fn record_provenance_note(

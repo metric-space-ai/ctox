@@ -127,6 +127,22 @@ missing or not ready.
 - never pass markdown into a tool argument; markdown only enters via
   validated sub-skill output and `apply_block_patch`.
 
+## Forward-momentum rule (host-enforced)
+
+`workspace_snapshot` and `asset_lookup` are READ-ONLY. Call each AT MOST
+ONCE per run during bootstrap, then move on. Repeating them does not
+advance the run and the host detects the loop. Each turn after the first
+two carries a `tool_call_counts` map and (when stalled) a
+`required_next_action` directive in the user message — when present, that
+directive is the next call you MUST make. Do not re-inspect state to
+re-verify unless the host has just committed a block via
+`apply_block_patch`.
+
+Productive path (mandatory after bootstrap): `public_research` →
+`write_with_skill` → `apply_block_patch` → checks (completeness,
+character_budget, release_guard, narrative_flow). Repeat write/apply per
+block packet until completeness reports `ready_to_finish=true`.
+
 ## Antwort-Format / Response shape
 
 Jede Antwort ist GENAU ein JSON-Objekt — kein Markdown, kein Code-Fence
