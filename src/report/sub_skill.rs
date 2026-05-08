@@ -271,7 +271,17 @@ impl InferenceCallable for DefaultInferenceCallable {
             ],
         });
 
-        let url = format!("{}/v1/chat/completions", upstream.trim_end_matches('/'));
+        // The configured base URL may either end at the host root (e.g.
+        // OpenAI: `https://api.openai.com`) or already include the API
+        // version path (e.g. Azure Foundry:
+        // `https://<resource>.cognitiveservices.azure.com/openai/v1`).
+        // Detect the latter to avoid emitting `/openai/v1/v1/chat/...`.
+        let base = upstream.trim_end_matches('/');
+        let url = if base.ends_with("/v1") || base.ends_with("/openai") {
+            format!("{}/chat/completions", base)
+        } else {
+            format!("{}/v1/chat/completions", base)
+        };
         let body_text = serde_json::to_string(&body)
             .context("failed to encode chat-completions request body")?;
         let agent = ureq::AgentBuilder::new()
