@@ -11,7 +11,7 @@ assert(html.includes("data-context-submodule=\"payroll\""), "Payroll page missin
 
 // 2. Initial snapshot has the seed data.
 const initial = await fetch(`${baseUrl}/api/operations/payroll`, { headers: { cookie: sessionCookie } });
-assert(initial.ok, `/api/payroll returned ${initial.status}`);
+assert(initial.ok, `/api/operations/payroll returned ${initial.status}`);
 const initialPayload = await initial.json();
 assert(initialPayload.ok === true, "Payroll GET failed");
 assert(initialPayload.snapshot?.periods?.length >= 1, "Seed period missing");

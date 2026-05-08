@@ -25,13 +25,13 @@ Current status: M0 + M1 implemented. Acceptance matrix: 48 / 50 `done`, 2 `queue
 
 | Step | Required behavior | Files touched | Proof |
 |---|---|---|---|
-| 1 | Add `payroll` as TOP-LEVEL module to navigation registry plus `BusinessModuleId` type. | [`packages/ui/src/navigation/model.ts`](../packages/ui/src/navigation/model.ts) | Visible in nav/deeplink: `/app/operations/payroll`. |
-| 2 | Create `modules/payroll/module.json` and `modules/payroll/README.md` per Skill §5. | [`modules/payroll/module.json`](../modules/payroll/module.json), [`modules/payroll/README.md`](../modules/payroll/README.md) | Module manifest exists at top level alongside Sales/Marketing/Operations/Business/CTOX. |
-| 2b | Add `[data-module="operations"]` accent token to global theme. | [`packages/ui/src/theme/theme.css`](../packages/ui/src/theme/theme.css) | Module-scoped color variable applied. |
+| 1 | Register `payroll` as a submodule of `operations` (matches the Workforce pattern; **not** a top-level nav entry). | [`packages/ui/src/navigation/model.ts`](../packages/ui/src/navigation/model.ts) | `/app/operations/payroll` visible in the Betrieb sub-nav as `Lohnabrechnung`. |
+| 2 | Extend the Operations module manifest with payroll record types and CTOX sync events (no separate `modules/payroll/`). | [`modules/operations/module.json`](../modules/operations/module.json) | `records[]` includes `payroll_periods`/`_components`/`_structures`/`_runs`/`_payslips`/…; `ctoxSync[]` includes `payroll_run_events`/`payroll_payslip_events`. |
+| 2b | Reuse the existing Workforce CSS contract (`.wf2-shell`, `.wf2-rail`, `.wf2-board`, `.wf2-side-drawer`, `.wf2-bottom`). | [`packages/ui/src/theme/theme.css`](../packages/ui/src/theme/theme.css), `apps/web/app/globals.css` (`.wf2-…` block) | Operations module accent applies; no separate `[data-module="payroll"]` rule needed because Payroll is an Operations submodule. |
 | 3 | Self-contained engine package with formula DSL, computation, and journal builder; unit tests for both. | [`packages/payroll/`](../packages/payroll/) | `pnpm --filter @ctox-business/payroll test` → 13 / 13 green. |
 | 4 | Durable JSON-backed runtime with seed (1 period, 3 components, 1 structure, 2 employees, 2 assignments). | [`apps/web/lib/payroll-runtime.ts`](../apps/web/lib/payroll-runtime.ts) | GET `/api/operations/payroll` returns seed snapshot. |
 | 5 | REST surface with `command + payload` envelope. | [`apps/web/app/api/operations/payroll/route.ts`](../apps/web/app/api/operations/payroll/route.ts) | Dispatcher accepts the documented commands and rejects unknown ones. |
-| 6 | Workbench renders left intake, center run + slip tables, right inspector with line breakdown and audit. | [`apps/web/components/payroll-workbench.tsx`](../apps/web/components/payroll-workbench.tsx), [`apps/web/components/payroll-workspace.tsx`](../apps/web/components/payroll-workspace.tsx), [`apps/web/app/app/[module]/[submodule]/page.tsx`](../apps/web/app/app/%5Bmodule%5D/%5Bsubmodule%5D/page.tsx) | Route `/app/operations/payroll` renders the workbench; `[module]/[submodule]/page.tsx` dispatches `isPayroll`. |
+| 6 | Workbench follows the Workforce layout: left rail (Eingang/Lohnläufe & Stamm + "Verwalten"), central main view (Status-Kanban for the selected run), right rail (Prüfung & Buchung + "Übergaben"); selected slip opens a `BottomPayslipDrawer`; master data + handoff in side-drawers. | [`apps/web/components/payroll-workbench.tsx`](../apps/web/components/payroll-workbench.tsx), [`apps/web/components/operations-workspace.tsx`](../apps/web/components/operations-workspace.tsx) | Route `/app/operations/payroll` renders the workbench; `OperationsWorkspace` dispatches `submoduleId === "payroll"`. |
 | 7 | `data-context-*` attributes on every clickable record (run, slip, line). | `payroll-workbench.tsx` | Right-click `Prompt CTOX` payload contains module/submodule/recordType/recordId/label. |
 | 8 | Smoke script exercises load → run → review → post → ledger → reload → audit → idempotent re-post. | [`apps/web/scripts/payroll-smoke.mjs`](../apps/web/scripts/payroll-smoke.mjs) | `pnpm test:payroll` exits 0 against running dev server. |
 | 9 | Web typecheck passes. | `pnpm --filter @ctox-business/web typecheck` | No errors. |
@@ -79,26 +79,23 @@ templates/business-basic/
 │           └── tests/
 │               ├── formula.test.ts
 │               └── engine.test.ts
-├── modules/
-│   └── payroll/
-│       ├── module.json           # top-level module manifest
-│       └── README.md
+├── modules/operations/module.json   # records[] + ctoxSync[] include payroll_*
 ├── apps/
 │   └── web/
 │       ├── lib/payroll-runtime.ts
-│       ├── components/payroll-workspace.tsx     # PayrollWorkspace + PayrollPanel route entry
-│       ├── components/payroll-workbench.tsx     # 3-zone work surface
-│       ├── app/payroll/page.tsx                 # redirects /app/operations/payroll → /app/operations/payroll
-│       ├── app/api/operations/payroll/route.ts             # REST surface
+│       ├── components/payroll-workbench.tsx     # `.wf2-…` rails + kanban + drawers
+│       ├── components/operations-workspace.tsx  # dispatches submoduleId === "payroll"
+│       ├── app/api/operations/payroll/route.ts  # REST surface (commands + view=comparison + view=export)
 │       └── scripts/
 │           ├── payroll-smoke.mjs
-│           └── payroll-browser-proof.mjs
+│           ├── payroll-browser-proof.mjs
+│           └── payroll-screenshot.mjs
 ├── docs/
 │   ├── payroll-oss-implementation-notes.md
 │   ├── payroll-implementation-map.md
 │   ├── payroll-user-stories.md
 │   └── payroll-acceptance-matrix.md
-└── packages/ui/src/navigation/model.ts          # payroll added as 6th top-level module
+└── packages/ui/src/navigation/model.ts          # operations.submodules.payroll (Lohnabrechnung)
 ```
 
 ## Required CTOX Context
