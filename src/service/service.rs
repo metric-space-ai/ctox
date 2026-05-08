@@ -3071,6 +3071,32 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
                         work_id: work_id.to_string(),
                         summary,
                     }
+                } else if is_terminal_bench_controller_artifact_job(&job)
+                    && job.outbound_email.is_none()
+                    && !is_founder_or_owner_email_job(&job)
+                    && external_chat_channel_for_job(&job).is_none()
+                {
+                    // Terminal-bench controller artifact jobs are validated
+                    // downstream by the `tb run` replay container, which runs
+                    // the actual task-specific tests. The generic CTOX
+                    // completion-reviewer agent has no signal about whether
+                    // the worker's solution will pass those tests, so it
+                    // ends up in a Hold/FeedbackRetry loop on virtually
+                    // every cycle — leaving the task pinned in `leased` /
+                    // `pending` forever and never reaching `handled` so the
+                    // validator can actually score it. Trust the worker
+                    // here. The downstream `outcome_witness` still enforces
+                    // declared workspace artifacts, and the validator
+                    // decides the real pass/fail. Without this short-circuit
+                    // the bench effectively cannot make progress.
+                    push_event(
+                        &state,
+                        format!(
+                            "Completion review skipped for terminal-bench controller artifact job {} — handing slice to outcome_witness + downstream tb-run validator",
+                            job.source_label
+                        ),
+                    );
+                    CompletionReviewDisposition::Approved
                 } else {
                     run_completion_review(
                         &root,
