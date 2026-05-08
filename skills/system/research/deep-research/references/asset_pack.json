@@ -1,0 +1,3397 @@
+{
+  "manifest": {
+    "asset_pack_id": "ctox-deep-research-assets",
+    "version": "0.1.0",
+    "title": "Asset-Pack für CTOX Deep-Research-Skill (Machbarkeitsstudien & evidenzbasierte Berichte)",
+    "purpose": "Domänenprofile, Tiefenstufen, Block-Katalog, Referenz-Resources und Stilregeln für die autonome Erstellung von Machbarkeitsstudien, technischen Bewertungen und vergleichbaren evidenzbasierten Berichten.",
+    "derived_from": [
+      "Machbarkeitsstudie_RASCON_Blitsschutzgitter_kontaktlose_Pruefung.docx",
+      "Foerdervorhaben-Agent.html (Strukturtemplate, Asset-Pack-Architektur)"
+    ]
+  },
+  "report_types": [
+    {
+      "id": "feasibility_study",
+      "label": "Feasibility Study / Machbarkeitsstudie",
+      "purpose": "Evidence-based decision-grade assessment of whether a method/technology/concept can deliver against requirements.",
+      "block_library_keys": [
+        "study_title_block",
+        "scope_disclaimer",
+        "abbreviations",
+        "management_summary",
+        "context_and_question",
+        "component_layout",
+        "requirements",
+        "screening_logic",
+        "screening_matrix",
+        "scenario_matrix",
+        "short_assessment_other_methods",
+        "detail_assessment_per_option",
+        "experiment_design",
+        "risk_register",
+        "recommendation",
+        "appendix_sources"
+      ],
+      "document_blueprint_id": "feasibility_single",
+      "default_modules": [
+        "abbreviations",
+        "experiment_design",
+        "scenario_matrix"
+      ],
+      "verdict_vocabulary": [
+        "niedrig",
+        "niedrig–mittel",
+        "mittel",
+        "mittel–hoch",
+        "hoch",
+        "sehr hoch"
+      ],
+      "verdict_line_pattern": "Erfolgsaussichten (qualitativ): <level> für <subject>; …",
+      "min_sections": 9,
+      "typical_chars": 30945,
+      "reference_archetype_ids": [
+        "rascon_archetype"
+      ]
+    },
+    {
+      "id": "market_research",
+      "label": "Market Research / Marktanalyse",
+      "purpose": "Decision-grade view of a market: sizing, segments, competitors, drivers, barriers, entry options.",
+      "block_library_keys": [
+        "market_overview",
+        "market_sizing",
+        "segments",
+        "customer_jobs",
+        "value_chain",
+        "demand_drivers",
+        "barriers_and_risks",
+        "competitor_landscape",
+        "entry_options",
+        "recommendation_market"
+      ],
+      "document_blueprint_id": "market_research_single",
+      "default_modules": [
+        "abbreviations",
+        "competitor_matrix"
+      ],
+      "verdict_vocabulary": [
+        "weak",
+        "moderate",
+        "strong"
+      ],
+      "verdict_line_pattern": "Marktattraktivität (qualitativ): <level> für <segment>; …",
+      "min_sections": 8,
+      "typical_chars": 28000,
+      "reference_archetype_ids": []
+    },
+    {
+      "id": "competitive_analysis",
+      "label": "Competitive Analysis / Wettbewerbsanalyse",
+      "purpose": "Structured comparison of competitors against own offering on capability, price, channel, defensibility.",
+      "block_library_keys": [
+        "competitor_set",
+        "capability_axes",
+        "competitor_matrix",
+        "price_position_map",
+        "channel_overlap",
+        "moat_assessment",
+        "gap_to_close",
+        "recommendation_competitive"
+      ],
+      "document_blueprint_id": "competitive_analysis_single",
+      "default_modules": [
+        "abbreviations",
+        "positioning_map"
+      ],
+      "verdict_vocabulary": [
+        "weak",
+        "moderate",
+        "strong",
+        "leading"
+      ],
+      "verdict_line_pattern": "Wettbewerbsstellung: <level> in <dimension>; …",
+      "min_sections": 7,
+      "typical_chars": 22000,
+      "reference_archetype_ids": []
+    },
+    {
+      "id": "technology_screening",
+      "label": "Technology Screening",
+      "purpose": "Fast first-pass narrowing of a technology option set against a requirement set; lighter than feasibility, focused on shortlist.",
+      "block_library_keys": [
+        "target_use_case",
+        "screening_criteria",
+        "option_inventory",
+        "screening_matrix_short",
+        "shortlist",
+        "next_step_design"
+      ],
+      "document_blueprint_id": "technology_screening_single",
+      "default_modules": [
+        "abbreviations",
+        "screening_matrix"
+      ],
+      "verdict_vocabulary": [
+        "niedrig",
+        "mittel",
+        "hoch"
+      ],
+      "verdict_line_pattern": "Eignung (qualitativ): <level> für <use case>; …",
+      "min_sections": 6,
+      "typical_chars": 14000,
+      "reference_archetype_ids": []
+    },
+    {
+      "id": "whitepaper",
+      "label": "Whitepaper / Konzept-Memo",
+      "purpose": "Argument-driven exposition of a position, concept, or thesis with supporting evidence; less matrix-heavy than feasibility.",
+      "block_library_keys": [
+        "thesis",
+        "context_and_problem",
+        "argument_section",
+        "counter_arguments",
+        "implications",
+        "closing_position"
+      ],
+      "document_blueprint_id": "whitepaper_single",
+      "default_modules": [
+        "abbreviations"
+      ],
+      "verdict_vocabulary": [],
+      "verdict_line_pattern": null,
+      "min_sections": 5,
+      "typical_chars": 18000,
+      "reference_archetype_ids": []
+    },
+    {
+      "id": "literature_review",
+      "label": "Literature Review",
+      "purpose": "Structured synthesis of the research landscape on a defined topic, organised by theme rather than by competing options.",
+      "block_library_keys": [
+        "scope_and_method",
+        "theme_overview",
+        "theme_section",
+        "synthesis",
+        "gaps_and_open_questions",
+        "appendix_sources_review"
+      ],
+      "document_blueprint_id": "literature_review_single",
+      "default_modules": [
+        "abbreviations",
+        "theme_map"
+      ],
+      "verdict_vocabulary": [],
+      "verdict_line_pattern": null,
+      "min_sections": 6,
+      "typical_chars": 22000,
+      "reference_archetype_ids": []
+    },
+    {
+      "id": "decision_brief",
+      "label": "Decision Brief / Entscheidungsvorlage",
+      "purpose": "Compact recommendation document for a specific decision: situation, options, criteria, recommendation.",
+      "block_library_keys": [
+        "decision_at_stake",
+        "situation",
+        "options_summary",
+        "criteria",
+        "evaluation",
+        "recommendation_brief",
+        "caveats_and_next_steps"
+      ],
+      "document_blueprint_id": "decision_brief_single",
+      "default_modules": [],
+      "verdict_vocabulary": [
+        "recommend",
+        "recommend with caveats",
+        "not recommended"
+      ],
+      "verdict_line_pattern": "Empfehlung: <level>; …",
+      "min_sections": 5,
+      "typical_chars": 8000,
+      "reference_archetype_ids": []
+    }
+  ],
+  "reference_archetypes": [
+    {
+      "id": "rascon_archetype",
+      "report_type_id": "feasibility_study",
+      "source_doc": "/Users/michaelwelsch/Downloads/Machbarkeitsstudie_RASCON_Blitsschutzgitter_kontaktlose_Pruefung.docx",
+      "domain_profile_id": "ndt_aerospace",
+      "structural_summary": "16-chapter feasibility study on contactless inspection of LSP grid in CFRP composites.",
+      "uses_resource_ids": [
+        "rascon_title_pattern",
+        "rascon_scope_disclaimer",
+        "rascon_abbreviation_pattern",
+        "rascon_management_summary_zielsatz",
+        "rascon_management_summary_bullets",
+        "rascon_management_summary_risiko",
+        "rascon_problem_setup_lsp",
+        "rascon_leitfragen",
+        "rascon_layout_anchor_schichtaufbau",
+        "rascon_layout_gitter_mesh",
+        "rascon_layout_eindringbereich",
+        "rascon_requirement_kontaktlos",
+        "rascon_requirement_einseitig",
+        "rascon_requirement_defekte",
+        "rascon_screening_logic",
+        "rascon_screening_matrix_intro",
+        "rascon_screening_matrix_legende",
+        "rascon_scenario_matrix_intro",
+        "rascon_scenario_matrix_fussnote",
+        "rascon_short_assessment_other",
+        "rascon_verdict_eddy_current",
+        "rascon_verdict_induktions_thermografie",
+        "rascon_verdict_terahertz",
+        "rascon_verdict_hyperspektral",
+        "rascon_verdict_mmwave",
+        "rascon_experiment_phase0_klaerung",
+        "rascon_experiment_phase1_coupons",
+        "rascon_experiment_phase1_defektkatalog_intro",
+        "rascon_experiment_phase1_messgroessen",
+        "rascon_experiment_phase2_prototype",
+        "rascon_risk_r1_abschirmung",
+        "rascon_risk_r2_liftoff",
+        "rascon_risk_r3_anisotropie",
+        "rascon_risk_r4_thermisch",
+        "rascon_risk_r5_operativ",
+        "rascon_recommendation_konsolidierung",
+        "rascon_recommendation_priorisierung",
+        "rascon_appendix_pattern"
+      ]
+    }
+  ],
+  "domain_profiles": [
+    {
+      "id": "ndt_aerospace",
+      "label": "Zerstörungsfreie Prüfung in Luft- und Raumfahrt",
+      "study_heading": "Machbarkeitsstudie kontaktloses NDT-Verfahren",
+      "study_doc_title": "Machbarkeitsstudie – kontaktlose Prüfung von CFK-Strukturen mit eingebetteten Funktionsschichten",
+      "default_modules": [
+        "abbreviations",
+        "scope_disclaimer",
+        "scenario_matrix",
+        "experiment_design"
+      ],
+      "notes": [
+        "Referenzfall RASCON: Bewertung kontaktloser Verfahren zur Abbildung eines Blitzschutz-Kupfergitters (LSP) unter Lack-/Primer-/Surfacer-Schichten.",
+        "Domänentypisch sind: einseitiger Zugang, Lift-off-/Standoff-Effekte, Dominanz der ersten leitfähigen Schicht, Anforderung an Single-Shot- bzw. Flächenleistung, regulatorische Aspekte (Strahlenschutz bei Röntgen).",
+        "Methodensets, die durchgehend zu prüfen sind: Eddy Current/Induktion, Induktions-Thermografie (ECPT), Terahertz, Hyperspektral, Mikrowelle/mmWave, aktive Thermografie, Röntgen, Shearografie, Laser-/Luft-Ultraschall."
+      ]
+    },
+    {
+      "id": "materials_method_assessment",
+      "label": "Material-/Verfahrensbewertung",
+      "study_heading": "Machbarkeitsstudie neues Material- oder Verfahrenskonzept",
+      "study_doc_title": "Machbarkeitsstudie – Bewertung eines neuen Material- bzw. Verfahrensansatzes",
+      "default_modules": [
+        "abbreviations",
+        "scope_disclaimer",
+        "scenario_matrix"
+      ],
+      "notes": [
+        "Domäne umfasst Bewertungen, in denen mehrere Material-, Verfahrens- oder Prozessvarianten gegeneinander gestellt werden, ohne dass bereits eine Vorauswahl feststeht.",
+        "Häufige Achsen: Reifegrad (TRL), Kosten, Skalierbarkeit, Energieaufwand, Ressourcenbasis, regulatorische Lage, Einfügbarkeit in bestehende Prozesse.",
+        "Risikoschwerpunkte: undokumentierte Wechselwirkungen mit Bestandsmaterialien, Lebensdauer/Alterung, Messbarkeit der Zielgröße."
+      ]
+    },
+    {
+      "id": "manufacturing_process",
+      "label": "Produktions- und Fertigungsprozess",
+      "study_heading": "Machbarkeitsstudie Fertigungsprozess",
+      "study_doc_title": "Machbarkeitsstudie – Einführung eines neuen Fertigungs- bzw. Produktionsprozesses",
+      "default_modules": [
+        "abbreviations",
+        "scope_disclaimer",
+        "scenario_matrix",
+        "experiment_design"
+      ],
+      "notes": [
+        "Bezieht Linientakt, Durchsatz, Ausschussrate, Inline-Prüfbarkeit und Anlagenverfügbarkeit als harte Bewertungsachsen ein.",
+        "Schichtaufbau-äquivalentes Konzept: aktuelle Linienkonfiguration, Materialfluss und Pufferlogik müssen vor jeder Methodenwahl verifiziert sein.",
+        "Risikoschwerpunkte: Abschirmung neuer Schritte durch Bestandsanlagen, Variantenexplosion, fehlende digitale Rückkopplung."
+      ]
+    },
+    {
+      "id": "biotech_method",
+      "label": "Biotech-/Laborverfahren",
+      "study_heading": "Machbarkeitsstudie Laborverfahren",
+      "study_doc_title": "Machbarkeitsstudie – Bewertung eines neuen Labor- oder biotechnologischen Verfahrens",
+      "default_modules": [
+        "abbreviations",
+        "scope_disclaimer",
+        "scenario_matrix",
+        "experiment_design"
+      ],
+      "notes": [
+        "Bewertungslogik analog zu kontaktlosen NDT-Verfahren: Sensitivität, Spezifität, Durchsatz, Reifegrad, Robustheit, regulatorischer Pfad.",
+        "Methodenraum umfasst typischerweise: Massenspektrometrie, PCR/qPCR, ELISA, Spektroskopie (Raman/FTIR), bildgebende Verfahren, kultivierbare und kultivierungsfreie Ansätze.",
+        "Risiken konzentrieren sich auf Probenmatrix, Kontamination, Variabilität zwischen Labors, Validierungsanforderungen (z. B. ISO 17025, GxP)."
+      ]
+    },
+    {
+      "id": "industrial_inspection",
+      "label": "Industrielle Inline-Inspektion",
+      "study_heading": "Machbarkeitsstudie Inline-Inspektion",
+      "study_doc_title": "Machbarkeitsstudie – Inline-/Produktionsinspektion mit kontaktlosen Methoden",
+      "default_modules": [
+        "abbreviations",
+        "scope_disclaimer",
+        "scenario_matrix",
+        "experiment_design"
+      ],
+      "notes": [
+        "Kombiniert die NDT-Methodenmatrix mit harten Anforderungen aus Linienbetrieb (Taktzeit, Verfügbarkeit, Bedienkonzept, Wartbarkeit).",
+        "Erfolgskriterien sind in der Regel POD, Falschalarmrate, minimale detektierbare Defektgröße, Durchsatz in m²/h und Robustheit gegen Maschinenvibration und Temperaturdrift.",
+        "Risikoschwerpunkte: elektromagnetische Störquellen, Werkstücklagevariation, Mehrproduktbetrieb, Qualifizierungsaufwand der Bediener."
+      ]
+    }
+  ],
+  "depth_profiles": [
+    {
+      "id": "orienting",
+      "label": "Orientierende Studie",
+      "description": "Schnelles Scoping, niedrige Evidenzschwelle, ausreichend für Go/No-Go vor einem Detailprojekt.",
+      "evidence_floor": {
+        "min_sources": 6,
+        "min_methods_screened": 4,
+        "scenario_branches_required": 1,
+        "experiment_phases_required": 1
+      },
+      "generation_notes": [
+        "Bewertungsmatrix darf qualitativ bleiben; die wichtigsten Methodenklassen müssen aber alle wenigstens kurz behandelt sein.",
+        "Detailbewertung pro Methode darf knapper ausfallen, jedoch immer mit explizitem Verdikt 'Erfolgsaussichten (qualitativ): …'.",
+        "Versuchsdesign kann auf eine einzige Coupon-Phase verdichtet werden, wenn die Risiken überschaubar sind."
+      ]
+    },
+    {
+      "id": "standard",
+      "label": "Entscheidungsfähige Studie",
+      "description": "Vollständige RASCON-äquivalente Tiefe; kann eine Investitions- oder Projektentscheidung tragen.",
+      "evidence_floor": {
+        "min_sources": 12,
+        "min_methods_screened": 7,
+        "scenario_branches_required": 3,
+        "experiment_phases_required": 3
+      },
+      "generation_notes": [
+        "Bewertungsmatrix mit Achsen Fläche, Strukturbild, Defektsensitivität, Sekundäreffekt-Sensitivität und Reifegrad.",
+        "Mindestens drei Schichtaufbau- bzw. Konfigurationsszenarien (Variante A/B/C) müssen separat eingeordnet werden.",
+        "Detailbewertung pro priorisierter Methode mit mindestens zwei Absätzen und qualitativem Verdikt.",
+        "Phase 0 (Realitätscheck Schichtaufbau), Phase 1 (Coupons mit Defektkatalog), Phase 2 (prototypische Systemintegration) sind alle auszuarbeiten.",
+        "Risikoregister mit mindestens fünf kodierten Einträgen (R1–R5)."
+      ]
+    },
+    {
+      "id": "decision_grade",
+      "label": "Belastbare Investitionsstudie",
+      "description": "Maximaltiefe für Investitions-, Zertifizierungs- oder regulatorische Entscheidungen.",
+      "evidence_floor": {
+        "min_sources": 20,
+        "min_methods_screened": 9,
+        "scenario_branches_required": 4,
+        "experiment_phases_required": 3
+      },
+      "generation_notes": [
+        "Bewertungsmatrix wird qualitativ und um mindestens eine semi-quantitative Achse (z. B. erwartete POD-Range, erwartete Defektgrößenklassen) erweitert.",
+        "Mindestens vier Konfigurations- bzw. Schichtaufbau-Szenarien (A/B/C/D), inklusive worst-case-Variante mit dominanter Abschirmung.",
+        "Pro priorisierter Methode mindestens drei Absätze, getrennte Behandlung von physikalischer Wirklogik, Empfindlichkeit gegen Sekundäreffekte und industrieller Handhabbarkeit.",
+        "Versuchsdesign mit Phase 0/1/2, vollständigem Defektkatalog (mindestens sechs Klassen), benannten Messgrößen und Mindeststichprobenzahlen.",
+        "Risikoregister mit mindestens sieben Einträgen, jeweils Mitigation und Restrisikoeinschätzung.",
+        "Empfehlung mit klarer Priorisierung der nächsten Phase und benannten No-Go-Kriterien."
+      ]
+    }
+  ],
+  "reference_profiles": [
+    {
+      "id": "auto",
+      "label": "Automatisch",
+      "style_profile_id": "scientific_engineering_dossier",
+      "recommended_reference_ids": [],
+      "suggested_modules": []
+    },
+    {
+      "id": "ndt_aerospace",
+      "label": "NDT / Luftfahrt-Verbundstrukturen",
+      "style_profile_id": "scientific_engineering_dossier",
+      "recommended_reference_ids": [
+        "rascon_problem_setup_lsp",
+        "rascon_layout_anchor_schichtaufbau",
+        "rascon_screening_logic",
+        "rascon_verdict_eddy_current",
+        "rascon_verdict_induktions_thermografie",
+        "rascon_experiment_phase1_coupons",
+        "rascon_risk_r1_abschirmung",
+        "rascon_recommendation_priorisierung"
+      ],
+      "suggested_modules": [
+        "abbreviations",
+        "scope_disclaimer",
+        "scenario_matrix",
+        "experiment_design"
+      ]
+    },
+    {
+      "id": "method_assessment",
+      "label": "Material- oder Verfahrensbewertung",
+      "style_profile_id": "scientific_engineering_dossier",
+      "recommended_reference_ids": [
+        "rascon_problem_setup_lsp",
+        "rascon_screening_logic",
+        "rascon_short_assessment_other",
+        "rascon_risk_r3_anisotropie"
+      ],
+      "suggested_modules": [
+        "abbreviations",
+        "scope_disclaimer",
+        "scenario_matrix"
+      ]
+    },
+    {
+      "id": "process_inline",
+      "label": "Produktion / Inline-Inspektion",
+      "style_profile_id": "scientific_engineering_dossier",
+      "recommended_reference_ids": [
+        "rascon_requirement_kontaktlos",
+        "rascon_screening_logic",
+        "rascon_verdict_induktions_thermografie",
+        "rascon_experiment_phase2_prototype",
+        "rascon_risk_r4_thermisch"
+      ],
+      "suggested_modules": [
+        "abbreviations",
+        "scope_disclaimer",
+        "scenario_matrix",
+        "experiment_design"
+      ]
+    },
+    {
+      "id": "biotech",
+      "label": "Biotech-/Laborverfahren",
+      "style_profile_id": "scientific_engineering_dossier",
+      "recommended_reference_ids": [
+        "rascon_screening_logic",
+        "rascon_experiment_phase1_coupons",
+        "rascon_risk_r5_operativ"
+      ],
+      "suggested_modules": [
+        "abbreviations",
+        "scope_disclaimer",
+        "experiment_design"
+      ]
+    }
+  ],
+  "optional_modules": [
+    {
+      "id": "abbreviations",
+      "label": "Abkürzungsverzeichnis",
+      "block_ids": [
+        "abbreviations"
+      ],
+      "description": "Domänen-Akronymtabelle. Wird vor dem Management Summary geführt und enthält nur Akronyme, die im Fließtext tatsächlich auftauchen."
+    },
+    {
+      "id": "scope_disclaimer",
+      "label": "Scope-Hinweis / Validierungsvorbehalt",
+      "block_ids": [
+        "scope_disclaimer"
+      ],
+      "description": "Expliziter Hinweis auf die Quellenbasis (öffentliche Literatur, Plausibilitätsannahmen) und die Notwendigkeit experimenteller Validierung."
+    },
+    {
+      "id": "scenario_matrix",
+      "label": "Szenarien-Matrix",
+      "block_ids": [
+        "scenario_matrix"
+      ],
+      "description": "Tabellarische Bewertung der Methoden je Konfigurationsszenario (z. B. Schichtaufbau A/B/C). Wird ergänzend zur Hauptmatrix geführt."
+    },
+    {
+      "id": "experiment_design",
+      "label": "Versuchsdesign / Validierungsplan",
+      "block_ids": [
+        "experiment_design"
+      ],
+      "description": "Mehrphasiger Validierungsplan mit Coupon-Studie, Defektkatalog und prototypischer Systemintegration."
+    },
+    {
+      "id": "short_assessment_other",
+      "label": "Kurzbewertung weiterer Verfahren",
+      "block_ids": [
+        "short_assessment_other_methods"
+      ],
+      "description": "Knappe Einordnung sekundärer Methoden, die nicht in die Detailbewertung wandern, aber für Vollständigkeit erwähnt werden müssen."
+    }
+  ],
+  "document_blueprints": {
+    "feasibility_single": {
+      "base_docs": [
+        {
+          "id": "doc_study",
+          "title": "Machbarkeitsstudie – Hauptdokument"
+        }
+      ],
+      "sequence": [
+        {
+          "block_id": "study_title_block",
+          "doc_id": "doc_study",
+          "required": true,
+          "order": 10
+        },
+        {
+          "block_id": "scope_disclaimer",
+          "doc_id": "doc_study",
+          "required": false,
+          "order": 20,
+          "module": "scope_disclaimer"
+        },
+        {
+          "block_id": "abbreviations",
+          "doc_id": "doc_study",
+          "required": false,
+          "order": 30,
+          "module": "abbreviations"
+        },
+        {
+          "block_id": "management_summary",
+          "doc_id": "doc_study",
+          "required": true,
+          "order": 40
+        },
+        {
+          "block_id": "context_and_question",
+          "doc_id": "doc_study",
+          "required": true,
+          "order": 50
+        },
+        {
+          "block_id": "component_layout",
+          "doc_id": "doc_study",
+          "required": true,
+          "order": 60
+        },
+        {
+          "block_id": "requirements",
+          "doc_id": "doc_study",
+          "required": true,
+          "order": 70
+        },
+        {
+          "block_id": "screening_logic",
+          "doc_id": "doc_study",
+          "required": true,
+          "order": 80
+        },
+        {
+          "block_id": "screening_matrix",
+          "doc_id": "doc_study",
+          "required": true,
+          "order": 90
+        },
+        {
+          "block_id": "scenario_matrix",
+          "doc_id": "doc_study",
+          "required": false,
+          "order": 100,
+          "module": "scenario_matrix"
+        },
+        {
+          "block_id": "short_assessment_other_methods",
+          "doc_id": "doc_study",
+          "required": false,
+          "order": 110,
+          "module": "short_assessment_other"
+        },
+        {
+          "block_id": "detail_assessment_per_option",
+          "doc_id": "doc_study",
+          "required": true,
+          "order": 120
+        },
+        {
+          "block_id": "experiment_design",
+          "doc_id": "doc_study",
+          "required": false,
+          "order": 130,
+          "module": "experiment_design"
+        },
+        {
+          "block_id": "risk_register",
+          "doc_id": "doc_study",
+          "required": true,
+          "order": 140
+        },
+        {
+          "block_id": "recommendation",
+          "doc_id": "doc_study",
+          "required": true,
+          "order": 150
+        },
+        {
+          "block_id": "appendix_sources",
+          "doc_id": "doc_study",
+          "required": true,
+          "order": 200
+        }
+      ]
+    },
+    "market_research_single": {
+      "base_docs": [
+        {
+          "id": "doc_market",
+          "title": "Market Research Report – Hauptdokument"
+        }
+      ],
+      "sequence": [
+        {
+          "block_id": "study_title_block",
+          "doc_id": "doc_market",
+          "required": true,
+          "order": 10
+        },
+        {
+          "block_id": "scope_disclaimer",
+          "doc_id": "doc_market",
+          "required": false,
+          "order": 20,
+          "module": "scope_disclaimer"
+        },
+        {
+          "block_id": "abbreviations",
+          "doc_id": "doc_market",
+          "required": false,
+          "order": 30,
+          "module": "abbreviations"
+        },
+        {
+          "block_id": "management_summary",
+          "doc_id": "doc_market",
+          "required": true,
+          "order": 40
+        },
+        {
+          "block_id": "market_overview",
+          "doc_id": "doc_market",
+          "required": true,
+          "order": 50
+        },
+        {
+          "block_id": "market_sizing",
+          "doc_id": "doc_market",
+          "required": true,
+          "order": 60
+        },
+        {
+          "block_id": "segments",
+          "doc_id": "doc_market",
+          "required": true,
+          "order": 70
+        },
+        {
+          "block_id": "customer_jobs",
+          "doc_id": "doc_market",
+          "required": true,
+          "order": 80
+        },
+        {
+          "block_id": "value_chain",
+          "doc_id": "doc_market",
+          "required": true,
+          "order": 90
+        },
+        {
+          "block_id": "demand_drivers",
+          "doc_id": "doc_market",
+          "required": true,
+          "order": 100
+        },
+        {
+          "block_id": "barriers_and_risks",
+          "doc_id": "doc_market",
+          "required": true,
+          "order": 110
+        },
+        {
+          "block_id": "competitor_landscape",
+          "doc_id": "doc_market",
+          "required": true,
+          "order": 120
+        },
+        {
+          "block_id": "entry_options",
+          "doc_id": "doc_market",
+          "required": true,
+          "order": 130
+        },
+        {
+          "block_id": "recommendation_market",
+          "doc_id": "doc_market",
+          "required": true,
+          "order": 140
+        },
+        {
+          "block_id": "appendix_sources",
+          "doc_id": "doc_market",
+          "required": true,
+          "order": 200
+        }
+      ]
+    },
+    "competitive_analysis_single": {
+      "base_docs": [
+        {
+          "id": "doc_competitive",
+          "title": "Competitive Analysis – Hauptdokument"
+        }
+      ],
+      "sequence": [
+        {
+          "block_id": "study_title_block",
+          "doc_id": "doc_competitive",
+          "required": true,
+          "order": 10
+        },
+        {
+          "block_id": "scope_disclaimer",
+          "doc_id": "doc_competitive",
+          "required": false,
+          "order": 20,
+          "module": "scope_disclaimer"
+        },
+        {
+          "block_id": "abbreviations",
+          "doc_id": "doc_competitive",
+          "required": false,
+          "order": 30,
+          "module": "abbreviations"
+        },
+        {
+          "block_id": "management_summary",
+          "doc_id": "doc_competitive",
+          "required": true,
+          "order": 40
+        },
+        {
+          "block_id": "competitor_set",
+          "doc_id": "doc_competitive",
+          "required": true,
+          "order": 50
+        },
+        {
+          "block_id": "capability_axes",
+          "doc_id": "doc_competitive",
+          "required": true,
+          "order": 60
+        },
+        {
+          "block_id": "competitor_matrix",
+          "doc_id": "doc_competitive",
+          "required": true,
+          "order": 70
+        },
+        {
+          "block_id": "price_position_map",
+          "doc_id": "doc_competitive",
+          "required": true,
+          "order": 80
+        },
+        {
+          "block_id": "channel_overlap",
+          "doc_id": "doc_competitive",
+          "required": true,
+          "order": 90
+        },
+        {
+          "block_id": "moat_assessment",
+          "doc_id": "doc_competitive",
+          "required": true,
+          "order": 100
+        },
+        {
+          "block_id": "gap_to_close",
+          "doc_id": "doc_competitive",
+          "required": true,
+          "order": 110
+        },
+        {
+          "block_id": "recommendation_competitive",
+          "doc_id": "doc_competitive",
+          "required": true,
+          "order": 120
+        },
+        {
+          "block_id": "appendix_sources",
+          "doc_id": "doc_competitive",
+          "required": true,
+          "order": 200
+        }
+      ]
+    },
+    "technology_screening_single": {
+      "base_docs": [
+        {
+          "id": "doc_screening",
+          "title": "Technology Screening – Hauptdokument"
+        }
+      ],
+      "sequence": [
+        {
+          "block_id": "study_title_block",
+          "doc_id": "doc_screening",
+          "required": true,
+          "order": 10
+        },
+        {
+          "block_id": "scope_disclaimer",
+          "doc_id": "doc_screening",
+          "required": false,
+          "order": 20,
+          "module": "scope_disclaimer"
+        },
+        {
+          "block_id": "abbreviations",
+          "doc_id": "doc_screening",
+          "required": false,
+          "order": 30,
+          "module": "abbreviations"
+        },
+        {
+          "block_id": "management_summary",
+          "doc_id": "doc_screening",
+          "required": true,
+          "order": 40
+        },
+        {
+          "block_id": "target_use_case",
+          "doc_id": "doc_screening",
+          "required": true,
+          "order": 50
+        },
+        {
+          "block_id": "screening_criteria",
+          "doc_id": "doc_screening",
+          "required": true,
+          "order": 60
+        },
+        {
+          "block_id": "option_inventory",
+          "doc_id": "doc_screening",
+          "required": true,
+          "order": 70
+        },
+        {
+          "block_id": "screening_matrix_short",
+          "doc_id": "doc_screening",
+          "required": true,
+          "order": 80
+        },
+        {
+          "block_id": "shortlist",
+          "doc_id": "doc_screening",
+          "required": true,
+          "order": 90
+        },
+        {
+          "block_id": "next_step_design",
+          "doc_id": "doc_screening",
+          "required": true,
+          "order": 100
+        },
+        {
+          "block_id": "appendix_sources",
+          "doc_id": "doc_screening",
+          "required": true,
+          "order": 200
+        }
+      ]
+    },
+    "whitepaper_single": {
+      "base_docs": [
+        {
+          "id": "doc_whitepaper",
+          "title": "Whitepaper – Hauptdokument"
+        }
+      ],
+      "sequence": [
+        {
+          "block_id": "study_title_block",
+          "doc_id": "doc_whitepaper",
+          "required": true,
+          "order": 10
+        },
+        {
+          "block_id": "abbreviations",
+          "doc_id": "doc_whitepaper",
+          "required": false,
+          "order": 20,
+          "module": "abbreviations"
+        },
+        {
+          "block_id": "thesis",
+          "doc_id": "doc_whitepaper",
+          "required": true,
+          "order": 30
+        },
+        {
+          "block_id": "context_and_problem",
+          "doc_id": "doc_whitepaper",
+          "required": true,
+          "order": 40
+        },
+        {
+          "block_id": "argument_section",
+          "doc_id": "doc_whitepaper",
+          "required": true,
+          "order": 50
+        },
+        {
+          "block_id": "counter_arguments",
+          "doc_id": "doc_whitepaper",
+          "required": true,
+          "order": 60
+        },
+        {
+          "block_id": "implications",
+          "doc_id": "doc_whitepaper",
+          "required": true,
+          "order": 70
+        },
+        {
+          "block_id": "closing_position",
+          "doc_id": "doc_whitepaper",
+          "required": true,
+          "order": 80
+        },
+        {
+          "block_id": "appendix_sources",
+          "doc_id": "doc_whitepaper",
+          "required": true,
+          "order": 200
+        }
+      ]
+    },
+    "literature_review_single": {
+      "base_docs": [
+        {
+          "id": "doc_literature_review",
+          "title": "Literature Review – Hauptdokument"
+        }
+      ],
+      "sequence": [
+        {
+          "block_id": "study_title_block",
+          "doc_id": "doc_literature_review",
+          "required": true,
+          "order": 10
+        },
+        {
+          "block_id": "abbreviations",
+          "doc_id": "doc_literature_review",
+          "required": false,
+          "order": 20,
+          "module": "abbreviations"
+        },
+        {
+          "block_id": "management_summary",
+          "doc_id": "doc_literature_review",
+          "required": true,
+          "order": 30
+        },
+        {
+          "block_id": "scope_and_method",
+          "doc_id": "doc_literature_review",
+          "required": true,
+          "order": 40
+        },
+        {
+          "block_id": "theme_overview",
+          "doc_id": "doc_literature_review",
+          "required": true,
+          "order": 50
+        },
+        {
+          "block_id": "theme_section",
+          "doc_id": "doc_literature_review",
+          "required": true,
+          "order": 60
+        },
+        {
+          "block_id": "synthesis",
+          "doc_id": "doc_literature_review",
+          "required": true,
+          "order": 70
+        },
+        {
+          "block_id": "gaps_and_open_questions",
+          "doc_id": "doc_literature_review",
+          "required": true,
+          "order": 80
+        },
+        {
+          "block_id": "appendix_sources_review",
+          "doc_id": "doc_literature_review",
+          "required": true,
+          "order": 200
+        }
+      ]
+    },
+    "decision_brief_single": {
+      "base_docs": [
+        {
+          "id": "doc_decision_brief",
+          "title": "Decision Brief – Hauptdokument"
+        }
+      ],
+      "sequence": [
+        {
+          "block_id": "study_title_block",
+          "doc_id": "doc_decision_brief",
+          "required": true,
+          "order": 10
+        },
+        {
+          "block_id": "decision_at_stake",
+          "doc_id": "doc_decision_brief",
+          "required": true,
+          "order": 20
+        },
+        {
+          "block_id": "situation",
+          "doc_id": "doc_decision_brief",
+          "required": true,
+          "order": 30
+        },
+        {
+          "block_id": "options_summary",
+          "doc_id": "doc_decision_brief",
+          "required": true,
+          "order": 40
+        },
+        {
+          "block_id": "criteria",
+          "doc_id": "doc_decision_brief",
+          "required": true,
+          "order": 50
+        },
+        {
+          "block_id": "evaluation",
+          "doc_id": "doc_decision_brief",
+          "required": true,
+          "order": 60
+        },
+        {
+          "block_id": "recommendation_brief",
+          "doc_id": "doc_decision_brief",
+          "required": true,
+          "order": 70
+        },
+        {
+          "block_id": "caveats_and_next_steps",
+          "doc_id": "doc_decision_brief",
+          "required": true,
+          "order": 80
+        },
+        {
+          "block_id": "appendix_sources",
+          "doc_id": "doc_decision_brief",
+          "required": false,
+          "order": 200
+        }
+      ]
+    }
+  },
+  "block_library": {
+    "study_title_block": {
+      "title": "Titel- und Statusblock",
+      "goal": "Eindeutige Identifikation der Studie inklusive Untertitel, Versionshinweis und Arbeitsfassung-Status.",
+      "must_have": [
+        "Sachtitel der Studie (z. B. 'Machbarkeitsstudie')",
+        "präziser Untertitel mit Prüfobjekt, Domäne und Studienzweck",
+        "Versionslabel oder Datum (z. B. 'Arbeitsfassung | Stand: TT.MM.JJJJ')",
+        "übergeordneter Projektkontext, falls die Studie in einem größeren Vorhaben steht"
+      ],
+      "style_rules": [
+        "Untertitel muss Prüfobjekt, Methodenraum und Studienzweck in einem Satz benennen, ohne Marketingvokabular.",
+        "Statusangabe als 'Arbeitsfassung' oder 'Stand: …' ausweisen, sobald die Studie noch nicht abgenommen ist; nicht so tun, als wäre die Studie final.",
+        "Keine Fördersprache, keine 'Vorstudie zur Innovationsförderung'-Floskeln; der Titel benennt das technische Vorhaben."
+      ],
+      "min_chars": 180,
+      "reference_ids": [
+        "rascon_title_pattern"
+      ]
+    },
+    "scope_disclaimer": {
+      "title": "Scope-Hinweis / Validierungsvorbehalt",
+      "goal": "Expliziter, kurzer Hinweis auf Quellenbasis, Plausibilitätsannahmen und Validierungsbedarf.",
+      "must_have": [
+        "Quellenbasis (z. B. öffentlich zugängliche Literatur, interne Plausibilitätsannahmen)",
+        "Annahmen über Material- bzw. Schichtaufbau, soweit für die Bewertung tragend",
+        "expliziter Hinweis, dass eine belastbare Aussage Validierung an repräsentativen Proben erfordert"
+      ],
+      "style_rules": [
+        "Maximal drei bis vier Sätze, eng am tatsächlichen Studienscope.",
+        "Keine schwammigen Distanzformeln ('soweit beigefügt', 'falls vorhanden'); der Disclaimer benennt aktiv die Annahmen.",
+        "Validierungsbedarf konkret machen: was muss an welchem Probentyp gemessen werden, damit die Aussage belastbar wird."
+      ],
+      "min_chars": 240,
+      "reference_ids": [
+        "rascon_scope_disclaimer"
+      ]
+    },
+    "abbreviations": {
+      "title": "Abkürzungsverzeichnis",
+      "goal": "Domänen-Akronymtabelle, in der jedes im Fließtext verwendete Akronym genau einmal aufgelöst ist.",
+      "must_have": [
+        "Tabellenkopf 'Abk.' / 'Bedeutung'",
+        "alphabetische oder thematisch gruppierte Auflistung",
+        "deutsche Auflösung mit englischer Originalbezeichnung in Klammern, wo etabliert"
+      ],
+      "style_rules": [
+        "Tabelle nur aufnehmen, wenn das Dokument mindestens fünf Akronyme tatsächlich nutzt.",
+        "Keine Akronyme erfinden; was nicht im Fließtext erscheint, gehört nicht in die Tabelle.",
+        "min_chars-Schwelle gilt als Mindestzeilenzahl (8) statt als Textlänge; eine kurze Zeile ist legitim, solange ausreichend Zeilen vorhanden sind."
+      ],
+      "min_chars": 320,
+      "min_rows": 8,
+      "reference_ids": [
+        "rascon_abbreviation_pattern"
+      ]
+    },
+    "management_summary": {
+      "title": "Management Summary",
+      "goal": "Verdichtete Kernaussagen der Studie inklusive Methoden-Empfehlungen und benannter Hauptrisiken.",
+      "must_have": [
+        "Zielsatz, der das Studienziel in einem Satz benennt",
+        "fünf bis sieben Kernaussagen als Aufzählung, jede mit konkretem Methodenbezug und qualitativer Einordnung",
+        "abschließender Risikoabsatz, der den dominanten technischen Engpass benennt",
+        "kein Verweis auf nicht gelieferte Belege, kein Förderdeutsch"
+      ],
+      "style_rules": [
+        "Kernaussagen sind volle Sätze mit Methodennamen, nicht Stub-Bullets vom Typ 'Methode X ist gut'.",
+        "Mindestens eine Kernaussage muss eine Negativeinordnung enthalten (Methode mit niedriger Erfolgswahrscheinlichkeit) – das Summary ist keine Verkaufsfolie.",
+        "Risikoabsatz benennt einen physikalischen, materialspezifischen oder operativen Engpass; keine generische Risikoprosa.",
+        "Nicht mit 'Im Folgenden werden …' oder 'Vor diesem Hintergrund …' eröffnen.",
+        "Reihenfolge der Kernaussagen folgt der späteren Detailbewertung, damit das Dokument einen roten Faden hat."
+      ],
+      "min_chars": 950,
+      "reference_ids": [
+        "rascon_management_summary_zielsatz",
+        "rascon_management_summary_bullets",
+        "rascon_management_summary_risiko"
+      ]
+    },
+    "context_and_question": {
+      "title": "Ausgangslage und Fragestellung",
+      "goal": "Setzung der Forschungsfrage, Einordnung des Prüfobjekts und Liste der Leitfragen.",
+      "must_have": [
+        "Einordnung in das übergeordnete Vorhaben oder den betrieblichen Kontext",
+        "präzise Beschreibung des Prüfobjekts inklusive Material- und Funktionsschichten",
+        "Studienziel als ein bis zwei klare Sätze",
+        "Leitfragen als nummerierte Liste (mindestens drei, typischerweise vier bis fünf)"
+      ],
+      "style_rules": [
+        "Mit dem Kontext eröffnen, in den die Studie eingebettet ist (Forschungsprogramm, Linienprojekt, Zertifizierungspfad), ohne in Förderprosa abzugleiten.",
+        "Prüfobjekt mit Material und Funktionsschicht benennen, sodass auch Leser ohne Vorwissen wissen, worum es geht.",
+        "Leitfragen müssen beantwortbar formuliert sein und sich später im Dokument tatsächlich wiederfinden – keine rhetorischen Sammelfragen.",
+        "Keine 'im Rahmen dieser Studie'-Floskeln; die Studienlogik wird durch die Frage selbst transportiert."
+      ],
+      "min_chars": 720,
+      "reference_ids": [
+        "rascon_problem_setup_lsp",
+        "rascon_leitfragen"
+      ]
+    },
+    "component_layout": {
+      "title": "Bauteilaufbau / Systemkontext",
+      "goal": "Beschreibung des physischen oder systemischen Aufbaus, den die Studie bewertet, mit Abbildungsbezügen.",
+      "must_have": [
+        "Beschreibung des Schichtaufbaus bzw. Systemlayouts in mindestens zwei Absätzen",
+        "explizite Benennung der für die Prüfbarkeit kritischen Konfigurationsfrage (z. B. offene Gitterstruktur vs. geschlossene Folie)",
+        "mindestens zwei Abbildungsverweise mit Bildunterschrift inkl. Quellenangabe",
+        "qualitativer Hinweis auf typische Eindring- bzw. Wirkbereiche der Methoden"
+      ],
+      "style_rules": [
+        "Abbildungsunterschriften enthalten den Charakter der Abbildung ('schematisch', 'Simulation/Illustration', 'eigene Darstellung') und eine Quellenangabe.",
+        "Nicht eine geschlossene Theorie behaupten, wo der Aufbau in Varianten existiert; stattdessen die Varianten benennen und die Konfigurationsfrage offen ausweisen.",
+        "Keine erfundenen Maße; wenn keine Schichtdicken belegt sind, qualitative Beschreibung statt fingierter Zahlen.",
+        "Alle Abbildungen, die im Text referenziert werden, müssen tatsächlich in den Bildbestand der Studie aufgenommen sein."
+      ],
+      "min_chars": 720,
+      "reference_ids": [
+        "rascon_layout_anchor_schichtaufbau",
+        "rascon_layout_gitter_mesh",
+        "rascon_layout_eindringbereich"
+      ]
+    },
+    "requirements": {
+      "title": "Anforderungen und Randbedingungen",
+      "goal": "Konkrete Liste der Bewertungsanforderungen aus Produktion, Instandhaltung oder Anwendung.",
+      "must_have": [
+        "Anforderungsliste als Aufzählung",
+        "abdeckte Achsen: Kontaktfreiheit, Zugang, Standoff, Flächenleistung, Defektklassen, Robustheit, regulatorische Aspekte",
+        "jede Anforderung mit konkretem Wirkparameter (z. B. 'Standoff im mm- bis cm-Bereich' statt 'kontaktlos')"
+      ],
+      "style_rules": [
+        "Anforderungen werden als operative Bedingungen formuliert, nicht als Wunschliste.",
+        "Wo eine Achse domänenspezifisch eng ist (z. B. einseitiger Zugang in der Luftfahrt), die Begründung in einem halben Satz mitliefern.",
+        "Keine Anforderungen erfinden, die später in der Bewertung nicht aufgegriffen werden."
+      ],
+      "min_chars": 520,
+      "reference_ids": [
+        "rascon_requirement_kontaktlos",
+        "rascon_requirement_einseitig",
+        "rascon_requirement_defekte"
+      ]
+    },
+    "screening_logic": {
+      "title": "Bewertungslogik",
+      "goal": "Erklärt, wie die qualitative Methodenmatrix gebaut ist und welche Achsen sie verwendet.",
+      "must_have": [
+        "Liste der Bewertungsachsen (typischerweise fünf bis sechs)",
+        "kurzer Satz dazu, warum die Bewertung qualitativ bleibt und welche Kennwerte experimentell zu bestimmen sind",
+        "Verweis auf die folgende Matrix"
+      ],
+      "style_rules": [
+        "Achsen werden mit jeweils einem Halbsatz definiert, sodass die Matrix ohne Rückfragen lesbar ist.",
+        "Qualitativen Charakter nicht entschuldigen, sondern als bewusste Entscheidung benennen: 'numerische Kennwerte … müssen experimentell bestimmt werden'.",
+        "Keine Phrasen wie 'im Folgenden werden …'; stattdessen die Bewertungslogik selbst aussprechen."
+      ],
+      "min_chars": 380,
+      "reference_ids": [
+        "rascon_screening_logic"
+      ]
+    },
+    "screening_matrix": {
+      "title": "Bewertungsmatrix (qualitativ)",
+      "goal": "Hauptmatrix der Methodenbewertung über alle Achsen.",
+      "must_have": [
+        "Tabellenspalten: Verfahren plus jede in der Bewertungslogik definierte Achse",
+        "mindestens sieben Methoden, davon die in den Achsen genannten Hauptkandidaten",
+        "Legende mit Erklärung der Achsen-Begriffe und einer Fußnote zu allen Sternchen-Markierungen",
+        "Zeilen mit Negativeinordnungen (mindestens eine 'niedrig'-Zelle) – die Matrix ist keine Werbeliste"
+      ],
+      "style_rules": [
+        "Bewertungswerte beschränken sich auf eine kleine, kontrollierte Wertemenge (z. B. niedrig / mittel / hoch / sehr hoch).",
+        "Sternchen-Markierungen sind in der Legende aufzulösen; eine Sternchen-Zelle ohne Fußnote ist ein Fehler.",
+        "Identische Bewertungen über alle Achsen hinweg sind ein Warnsignal – jede Methode soll wenigstens auf einer Achse abweichen.",
+        "Keine erfundenen TRL-Werte; Reifegrad nur dort eintragen, wo er aus den Quellen ableitbar ist."
+      ],
+      "min_chars": 480,
+      "reference_ids": [
+        "rascon_screening_matrix_intro",
+        "rascon_screening_matrix_legende"
+      ]
+    },
+    "scenario_matrix": {
+      "title": "Erfolgsaussichten nach Konfiguration / Schichtaufbau (Szenarien)",
+      "goal": "Zweite, schmalere Matrix, in der die priorisierten Methoden je Konfigurationsszenario erneut eingeordnet werden.",
+      "must_have": [
+        "Szenarien (mindestens A/B/C) mit prägnanten Namen, die die jeweilige Konfiguration beschreiben",
+        "Tabellenzeilen für die priorisierten Methoden",
+        "Bewertungswerte pro Methode/Szenario",
+        "Legende oder Fußnote zu Sonderfällen (z. B. wenn eine Methode in einem Szenario nur indirekt detektiert)"
+      ],
+      "style_rules": [
+        "Die Szenarien müssen den Konfigurationsraum aus dem Bauteilaufbau-Block abbilden, nicht beliebige Hilfsszenarien.",
+        "Szenario B (worst case / dominante Abschirmung) muss als eigenständige Spalte erscheinen, sobald in der Anwendungslage plausibel.",
+        "Bewertungswerte können hier feiner gestuft werden (z. B. 'niedrig–mittel'), wenn das den Unterschied zwischen Szenarien tatsächlich trägt."
+      ],
+      "min_chars": 420,
+      "reference_ids": [
+        "rascon_scenario_matrix_intro",
+        "rascon_scenario_matrix_fussnote"
+      ]
+    },
+    "short_assessment_other_methods": {
+      "title": "Kurzbewertung weiterer Verfahren",
+      "goal": "Knappe Einordnung sekundärer Methoden, die nicht in die Detailbewertung wandern, aber für Vollständigkeit benannt werden müssen.",
+      "must_have": [
+        "Aufzählung weiterer Methoden mit jeweils einem zwei- bis dreizeiligen Eintrag",
+        "klare Aussage, warum die Methode nicht in die Detailbewertung gehoben wird",
+        "Hinweis auf eventuelle Teilrelevanz (z. B. als Ergänzungssensor)"
+      ],
+      "style_rules": [
+        "Jeder Eintrag enthält Methode, Wirkprinzip in einem Halbsatz und ein begründetes Verdikt.",
+        "Keine Methoden aufnehmen, die in der Hauptmatrix bereits stehen.",
+        "Keine 'könnte potenziell …'-Hedges; entweder die Methode hat einen umrissenen Teilbeitrag, oder sie wird klar abgelehnt."
+      ],
+      "min_chars": 540,
+      "reference_ids": [
+        "rascon_short_assessment_other"
+      ]
+    },
+    "detail_assessment_per_option": {
+      "title": "Detailbewertung pro Methode",
+      "goal": "Pro priorisierter Methode mindestens zwei Absätze plus explizites qualitatives Verdikt.",
+      "must_have": [
+        "Wirkprinzip der Methode in einem Absatz",
+        "Sensitivität und Robustheit für die in den Anforderungen genannten Defektklassen",
+        "explizite Verdikt-Zeile im Format 'Erfolgsaussichten (qualitativ): … für …; … für …'",
+        "Risiken bzw. Randbedingungen, die für diese Methode kritisch sind",
+        "ggf. Abbildungsbezug, falls eine Prinzipdarstellung die Bewertung trägt"
+      ],
+      "style_rules": [
+        "Verdikt-Zeile ist verpflichtend; sie nennt mindestens zwei Achsen mit unterschiedlicher Einordnung (z. B. 'sehr hoch für Gitterabbildung; mittel für reine Delamination').",
+        "Wirkprinzip wird auf die konkrete Anwendung ausgerichtet – nicht generische Lehrbuchformulierungen.",
+        "Risiken sind nicht 'könnte schwierig sein', sondern benannte physikalische, geometrische oder operative Effekte (Lift-off, Abschirmung, Wärmeleitung).",
+        "Mindestens eine Methode der Detailbewertung muss eine kritische Negativeinordnung mit Begründung enthalten – die Detailbewertung ist keine Verkaufsfolie.",
+        "Pro Methode min_chars: 800 – Stub-Absätze sind nicht akzeptabel."
+      ],
+      "min_chars": 3200,
+      "min_chars_per_option": 800,
+      "reference_ids": [
+        "rascon_verdict_eddy_current",
+        "rascon_verdict_induktions_thermografie",
+        "rascon_verdict_terahertz",
+        "rascon_verdict_hyperspektral",
+        "rascon_verdict_mmwave"
+      ]
+    },
+    "experiment_design": {
+      "title": "Versuchsdesign / Validierungsplan",
+      "goal": "Mehrphasiger Validierungsplan mit Defektkatalog und Messgrößen.",
+      "must_have": [
+        "Phase 0: Realitätscheck der zentralen Konfigurationsannahme (z. B. Schichtaufbau, Materialvariante)",
+        "Phase 1: Coupon-Studie mit Defektkatalog und Ground Truth",
+        "Phase 2: prototypische Systemintegration auf repräsentativer Geometrie",
+        "Defektkatalog als Tabelle mit ID, Beschreibung und – wo möglich – Erzeugungsmethode",
+        "benannte Messgrößen (POD, Falschalarmrate, minimale detektierbare Defektgröße, Durchsatz, Robustheit)"
+      ],
+      "style_rules": [
+        "Phase 0 ist verpflichtend, sobald die Bewertung von einer kritischen Konfigurationsannahme abhängt – der Plan beginnt nicht damit, eine offene Frage zu überspringen.",
+        "Defektkatalog enthält mindestens fünf Klassen, in der decision_grade-Variante mindestens sechs.",
+        "Messgrößen werden konkret aufgeführt, nicht hinter dem Sammelbegriff 'Performance' versteckt.",
+        "Phasen-Übergänge benennen das Entscheidungskriterium (welche Coupon-Ergebnisse rechtfertigen Phase 2)."
+      ],
+      "min_chars": 1100,
+      "reference_ids": [
+        "rascon_experiment_phase0_klaerung",
+        "rascon_experiment_phase1_coupons",
+        "rascon_experiment_phase1_defektkatalog_intro",
+        "rascon_experiment_phase1_messgroessen",
+        "rascon_experiment_phase2_prototype"
+      ]
+    },
+    "risk_register": {
+      "title": "Risiken, Abhängigkeiten und Mitigation",
+      "goal": "Kodierte Liste der wichtigsten technischen und operativen Risiken mit Mitigationen.",
+      "must_have": [
+        "Risiken sind durchnummeriert (R1, R2, …) mit prägnantem Titel",
+        "jeder Eintrag enthält Beschreibung der Wirkung und konkrete Mitigation",
+        "mindestens fünf Einträge im Standard-Profil, sieben im decision_grade-Profil",
+        "Risiken decken physikalische, geometrische, material- und betriebliche Effekte ab"
+      ],
+      "style_rules": [
+        "Risikobeschreibungen benennen den physikalischen oder operativen Mechanismus (z. B. 'Abschirmung durch geschlossene Metallfolie'), nicht nur die Folge.",
+        "Mitigation ist konkret: Frequenzwahl, Coil-Design, Kalibrierung, Stichprobenstrategie, Lock-in-Auswertung etc.",
+        "Risiken nicht doppeln; wenn zwei Effekte denselben Mechanismus haben, in einer Zeile mit klarer Differenzierung führen.",
+        "Mindestens ein Risiko muss einen regulatorischen oder Strahlenschutz-Aspekt adressieren, sobald ionisierende Verfahren Teil der Methodenliste sind."
+      ],
+      "min_chars": 920,
+      "reference_ids": [
+        "rascon_risk_r1_abschirmung",
+        "rascon_risk_r2_liftoff",
+        "rascon_risk_r3_anisotropie",
+        "rascon_risk_r4_thermisch",
+        "rascon_risk_r5_operativ"
+      ]
+    },
+    "recommendation": {
+      "title": "Fazit und Empfehlung",
+      "goal": "Verdichteter Schlusspunkt mit priorisierter Methodenempfehlung.",
+      "must_have": [
+        "ein bis zwei Sätze, die das Gesamturteil konsolidieren",
+        "priorisierte Liste der nächsten Schritte (typischerweise drei bis vier Einträge)",
+        "Hinweis auf die Bedingung, unter der die Empfehlung gilt (Schichtaufbau-Realitätscheck, Coupon-Ergebnisse etc.)"
+      ],
+      "style_rules": [
+        "Die Empfehlung benennt Methode plus Rolle (z. B. 'Flächenscreening', 'lokale Charakterisierung', 'Verifikationsschritt').",
+        "Optionalen Bestandteilen wird der Optional-Status nicht ausgespart, sondern explizit zugewiesen.",
+        "Keine generischen 'Es wird empfohlen, weitere Untersuchungen durchzuführen'-Sätze – die Empfehlung benennt konkret die nächste Phase.",
+        "Konsolidierungssatz darf eine Negativeinordnung enthalten, wenn eine populäre Methode aus physikalischen Gründen ausgeschlossen wird."
+      ],
+      "min_chars": 620,
+      "reference_ids": [
+        "rascon_recommendation_konsolidierung",
+        "rascon_recommendation_priorisierung"
+      ]
+    },
+    "appendix_sources": {
+      "title": "Anhang – Quellen und Literatur",
+      "goal": "Nummerierte Liste aller im Text zitierten Quellen.",
+      "must_have": [
+        "Quellen sind durchnummeriert ([1], [2], …) und in der Reihenfolge ihres ersten Auftretens im Text geführt",
+        "jede Quelle mit Autor(en) bzw. Herausgeber, Titel, Erscheinungsort/Journal, Jahr und – falls vorhanden – DOI/URL",
+        "Quellenmenge passt zur depth_profile-Untergrenze (orienting ≥6, standard ≥12, decision_grade ≥20)",
+        "alle im Fließtext oder in Bildunterschriften referenzierten Quellen müssen hier auftauchen"
+      ],
+      "style_rules": [
+        "Keine erfundenen DOIs, keine fingierten Autoren; lieber den Hinweis 'in Vorbereitung' oder den Eintrag weglassen, als eine Quelle zu fingieren.",
+        "Open-Access-Quellen werden ausgewiesen, wenn der Hinweis aus den Originaldaten hervorgeht.",
+        "Quellen sind so präzise zitiert, dass sie ohne Suchhilfe auffindbar sind."
+      ],
+      "min_chars": 720,
+      "min_rows": 12,
+      "reference_ids": [
+        "rascon_appendix_pattern"
+      ]
+    },
+    "market_overview": {
+      "title": "Marktüberblick / Market Overview",
+      "goal": "Verdichteter Einstieg in den Markt: Definition des Marktes, Abgrenzung, dominante Spielregeln in zwei bis drei Absätzen.",
+      "must_have": [
+        "präzise Marktdefinition (Produkt-/Service-Klasse, Geographie, Zielkundenklasse)",
+        "Abgrenzung gegenüber benachbarten Märkten, in einem Halbsatz pro Abgrenzung",
+        "drei bis fünf dominante Spielregeln (Preisanker, Distributionslogik, Zertifizierungspfad, Käufertyp)",
+        "expliziter Hinweis auf Stichdatum bzw. Bezugsjahr der Aussagen"
+      ],
+      "style_rules": [
+        "Nicht mit 'Der Markt für … wächst dynamisch …' eröffnen; stattdessen die Marktdefinition als ersten Satz benennen.",
+        "Spielregeln werden als operative Mechaniken formuliert (z. B. 'Käufer entscheidet anhand X-Zertifikat'), nicht als Trendformeln.",
+        "Keine 'es zeichnet sich ein klarer Trend ab'-Phrasen – Spielregeln sind beobachtbare Mechanismen, keine Trendaussagen.",
+        "Section-role: Der Marktüberblick ist nicht Marketing-Folie, sondern die Sektion, in der die Spielregeln des Marktes zum ersten Mal namentlich genannt werden."
+      ],
+      "min_chars": 720,
+      "reference_ids": []
+    },
+    "market_sizing": {
+      "title": "Marktgröße und Wachstumsannahmen",
+      "goal": "Quantifizierte Sicht auf TAM/SAM/SOM oder vergleichbare Größenmaße inklusive Quelle und Annahmenpfad.",
+      "must_have": [
+        "mindestens eine harte Größenangabe (Volumen oder Umsatz) mit Bezugsjahr und Quelle",
+        "Top-down- und Bottom-up-Pfad, sobald beide möglich sind, oder explizite Begründung, warum nur einer geführt wird",
+        "Wachstumsannahme als CAGR oder Bandbreite, ebenfalls mit Quelle bzw. Annahmenkette",
+        "expliziter Hinweis auf Annahmen, die das Sizing tragen (Penetrationsrate, Preisniveau, Geographie)"
+      ],
+      "style_rules": [
+        "Jede Zahl nennt Bezugsjahr und Quelle – unbelegte Zahlen werden als Annahme markiert oder weggelassen.",
+        "Bandbreiten ('USD 1.8–2.4 Mrd. 2025') sind erlaubt und meistens ehrlicher als ein Punktwert; die Bandbreitenherleitung wird in einem Halbsatz erklärt.",
+        "Keine 'we believe' / 'unsere Schätzung'-Stimme – die Annahme wird genannt, nicht als Glaubensbekenntnis verkauft.",
+        "Section-role: Die Sizing-Sektion ist nicht ein Zahlentableau, sondern die Sektion, in der jede Zahl an einen Annahmenpfad zurückgebunden wird."
+      ],
+      "min_chars": 820,
+      "reference_ids": []
+    },
+    "segments": {
+      "title": "Segmentierung",
+      "goal": "Strukturierte Zerlegung des Marktes in Segmente, die sich in Bedarf, Preisbereitschaft oder Distributionslogik unterscheiden.",
+      "must_have": [
+        "Segmente als nummerierte oder benannte Liste (typischerweise drei bis sechs)",
+        "pro Segment: Name, Definitionskriterium, geschätzter Anteil, charakteristische Spielregel",
+        "Hinweis darauf, welches Segment für das eigene Vorhaben Zielsegment ist, falls bereits entschieden",
+        "Negativabgrenzung: mindestens ein Segment, das bewusst nicht adressiert wird"
+      ],
+      "style_rules": [
+        "Segmente werden über ein konsistentes Definitionskriterium gebildet (z. B. Käufertyp ODER Anwendungsfall ODER Preisniveau), nicht beliebig gemischt.",
+        "Segmentanteile addieren sich zu rund 100 % – Restkategorie 'Sonstige' nur dort, wo sie tatsächlich klein ist.",
+        "Keine 'value pools' / 'white space'-Floskeln; Segmente sind benannt, nicht durch Berater-Vokabular ersetzt.",
+        "Section-role: Die Segmentierung ist die Sektion, in der zum ersten Mal explizit ausgesprochen wird, an welche Käufergruppe das Vorhaben sich nicht richtet."
+      ],
+      "min_chars": 720,
+      "reference_ids": []
+    },
+    "customer_jobs": {
+      "title": "Kundenbedarf und Jobs-to-be-Done",
+      "goal": "Beschreibt, wofür Kundinnen und Kunden im Zielsegment tatsächlich bezahlen, getrennt nach funktionalem, ökonomischem und sozialem Bedarf.",
+      "must_have": [
+        "Top-3 funktionale Jobs des Zielsegments",
+        "ökonomischer Druck pro Job (Kostenposten, Risiko, Compliance)",
+        "Hinweis auf bestehende Workarounds und ihre Schmerzpunkte",
+        "klare Negativaussage zu Bedürfnissen, die das Vorhaben nicht adressiert"
+      ],
+      "style_rules": [
+        "Jobs werden in der Sprache des Kunden formuliert, nicht in der Sprache des Anbieters ('benötige Audit-Nachweis innerhalb 24 h', nicht 'Lösung für Compliance-Tracking').",
+        "Workarounds werden namentlich benannt (Excel, Dienstleister X, Hotline-Anruf) – keine generischen 'manuellen Prozesse'.",
+        "Keine 'pain points'-Aufzählung ohne ökonomische Folge; jedem Job folgt der Kostenposten oder das Risiko, das er trägt.",
+        "Section-role: Diese Sektion ist die Sektion, in der die Marktanalyse aufhört, über sich selbst zu sprechen, und stattdessen über das Kundenproblem spricht."
+      ],
+      "min_chars": 620,
+      "reference_ids": []
+    },
+    "value_chain": {
+      "title": "Wertschöpfungs- und Kanalstruktur",
+      "goal": "Beschreibt, wie der Markt aktuell vom Hersteller zum Endkunden bedient wird, mit Margenanker und Gatekeepern.",
+      "must_have": [
+        "Stufen der Wertschöpfungskette als kurze Liste (Hersteller, Distribution, Reseller, Integrator, Endkunde)",
+        "Margenniveau pro Stufe als Bandbreite oder qualitative Einordnung",
+        "Benennung der Gatekeeper, die den Marktzugang faktisch regeln",
+        "Hinweis auf Kanalkonflikte oder Lock-ins, die Markteintritt erschweren"
+      ],
+      "style_rules": [
+        "Margen werden mit Bandbreite und Quelle angegeben oder als 'qualitativ' markiert – kein Punktwert ohne Beleg.",
+        "Gatekeeper werden benannt (Plattform X, Einkaufsverbund Y), nicht abstrahiert ('relevante Akteure').",
+        "Keine 'ecosystem'-Floskel; die Wertschöpfungskette ist eine Mechanik, keine Marketing-Erzählung.",
+        "Section-role: Die Sektion ist die Sektion, in der die Frage 'wer entscheidet faktisch über den Marktzugang' explizit beantwortet wird."
+      ],
+      "min_chars": 620,
+      "reference_ids": []
+    },
+    "demand_drivers": {
+      "title": "Nachfrage- und Angebotsdynamik",
+      "goal": "Strukturierte Liste der Treiber und Bremser des Marktes über die Bewertungsperiode.",
+      "must_have": [
+        "drei bis sechs Nachfragetreiber (Regulatorik, Demografie, Substitution, Technologiewechsel, Preisniveau)",
+        "drei bis sechs Bremser oder Risikofaktoren",
+        "qualitative Wirkungsstärke pro Treiber (schwach / moderat / stark) mit Begründung",
+        "Hinweis auf Treiber, die kurzfristig (≤ 12 Monate) wirken, vs. solche, die strukturell wirken"
+      ],
+      "style_rules": [
+        "Treiber sind belegbare Mechanismen mit Quelle oder logischer Ableitung – keine 'Megatrend'-Behauptungen.",
+        "Wirkungsstärke wird begründet, nicht behauptet; eine Bewertung 'stark' ohne Begründung ist eine Lücke.",
+        "Keine 'im Zuge der Digitalisierung'-Floskeln und keine 'paradigm shift'-Phrasen.",
+        "Section-role: Treiberliste ist die Sektion, in der die Trendsprache ersetzt wird durch konkrete, datierte Mechanismen."
+      ],
+      "min_chars": 720,
+      "reference_ids": []
+    },
+    "barriers_and_risks": {
+      "title": "Eintritts- und Wachstumsbarrieren",
+      "goal": "Liste der Hürden, die Markteintritt oder Skalierung verzögern oder verhindern.",
+      "must_have": [
+        "regulatorische Hürden (Zertifizierungen, Lizenzen, Datenschutz)",
+        "ökonomische Hürden (Mindeststückzahlen, CAC, Vendor-Lock-in)",
+        "operative Hürden (Talente, Lieferkette, Kanalzugang)",
+        "Mitigation pro Barriere oder explizit 'keine wirtschaftliche Mitigation in Sicht'"
+      ],
+      "style_rules": [
+        "Barrieren werden als beobachtbare Hindernisse formuliert, nicht als generische Risiken.",
+        "Mitigation ist konkret oder explizit verneint – keine 'kann durch geeignete Maßnahmen adressiert werden'-Hülsen.",
+        "Keine 'strategic alignment'-Phrasen; Barrieren sind Mechanismen, keine Frameworks.",
+        "Section-role: Diese Sektion ist die Sektion, in der die Marktanalyse zugibt, was sie nicht weiß bzw. nicht ohne Aufwand mitigieren kann."
+      ],
+      "min_chars": 620,
+      "reference_ids": []
+    },
+    "competitor_landscape": {
+      "title": "Wettbewerbsumfeld",
+      "goal": "Strukturierte Sicht auf die wesentlichen Wettbewerber im Zielsegment, einschließlich indirekter Substitution.",
+      "must_have": [
+        "Top-Wettbewerber namentlich (mindestens drei direkte Wettbewerber)",
+        "indirekte Substitute (DIY, Eigenentwicklung, Status-quo-Workaround)",
+        "qualitative Einordnung der Marktattraktivität pro Segment-Wettbewerber-Schnittmenge",
+        "Verdikt-Zeile im Schema 'Marktattraktivität (qualitativ): <level> für <segment>'"
+      ],
+      "style_rules": [
+        "Wettbewerber werden namentlich genannt, nicht als 'einige Anbieter im Markt'.",
+        "Substitute sind explizit ausgewiesen – Eigenentwicklung und Status quo zählen als ernsthafte Wettbewerber.",
+        "Verdikt-Zeile ist verpflichtend; sie nennt mindestens zwei Segmente mit unterschiedlicher Einordnung.",
+        "Section-role: Diese Sektion ist die Sektion, in der die Marktanalyse aufhört, über den Markt insgesamt zu sprechen, und stattdessen Anbieter-Schnittmengen einordnet."
+      ],
+      "min_chars": 820,
+      "reference_ids": []
+    },
+    "entry_options": {
+      "title": "Markteintritts- bzw. Skalierungsoptionen",
+      "goal": "Konkrete Optionen, mit denen das Vorhaben den Markt bedient: Direktvertrieb, Partner, Plattform, M&A.",
+      "must_have": [
+        "drei bis fünf Markteintrittsoptionen mit kurzem Beschreibungssatz",
+        "Aufwand und Zeit-bis-Umsatz pro Option (qualitativ oder Bandbreite)",
+        "Nennung des Hauptrisikos pro Option",
+        "Verweis auf die Empfehlung im nächsten Block"
+      ],
+      "style_rules": [
+        "Optionen sind operativ formuliert (Vertriebspartner X, Reseller-Programm, eigene Field-Sales-Mannschaft) – keine 'go-to-market lever'-Sammelbegriffe.",
+        "Aufwand und Time-to-Revenue werden quantifiziert oder als Bandbreite genannt – keine 'mittelfristig'-Phrase ohne Bezugspunkt.",
+        "Keine 'north star'-Sprache; jede Option steht für eine konkrete Architektur.",
+        "Section-role: Diese Sektion ist die Sektion, in der die Marktanalyse die Brücke zur Entscheidung schlägt."
+      ],
+      "min_chars": 720,
+      "reference_ids": []
+    },
+    "recommendation_market": {
+      "title": "Markt-Empfehlung",
+      "goal": "Verdichtete Empfehlung: priorisiertes Zielsegment, Eintrittsoption und Bedingungen, unter denen die Empfehlung gilt.",
+      "must_have": [
+        "Konsolidierungssatz mit priorisiertem Segment und priorisierter Eintrittsoption",
+        "drei bis vier No-Regret-Schritte für die nächsten 90 Tage",
+        "explizit benannte Bedingungen / Kill-Kriterien",
+        "Hinweis darauf, welche zusätzlichen Daten die Empfehlung kippen würden"
+      ],
+      "style_rules": [
+        "Empfehlung benennt Segment plus Rolle (z. B. 'Direktvertrieb in DACH-Mid-Market', 'Reseller in EU-Enterprise') – keine flachen Listen.",
+        "Bedingungen sind operativ ('CAC < X bei Pilotkunden Y') – keine 'unter günstigen Marktbedingungen'-Hülsen.",
+        "Kein 'transformational' oder 'actionable insights'-Vokabular; die Empfehlung trägt sich durch Konkretheit.",
+        "Section-role: Empfehlung ist die Sektion, in der die Marktanalyse eine Architektur vorschlägt, kein Optionsfeuerwerk."
+      ],
+      "min_chars": 620,
+      "reference_ids": []
+    },
+    "competitor_set": {
+      "title": "Wettbewerber-Set",
+      "goal": "Begründete Auswahl der Wettbewerber, die in die Analyse eingehen.",
+      "must_have": [
+        "Liste der direkten Wettbewerber (mindestens drei) mit kurzem Profil",
+        "Liste der indirekten Wettbewerber und Substitute",
+        "Begründung für die Aufnahme bzw. Nicht-Aufnahme",
+        "Stichdatum der Wettbewerberauswahl"
+      ],
+      "style_rules": [
+        "Wettbewerber namentlich, nicht als 'führende Anbieter'.",
+        "Aufnahme-Kriterien explizit (Umsatz, Geographie, Produktklasse) – Auswahl darf nicht beliebig wirken.",
+        "Keine 'best-in-class'-Etiketten; Profile werden über Fakten getragen, nicht über Adjektive.",
+        "Section-role: Diese Sektion ist die Sektion, in der zum ersten Mal namentlich aufgeführt wird, gegen wen man tatsächlich antritt."
+      ],
+      "min_chars": 620,
+      "reference_ids": []
+    },
+    "capability_axes": {
+      "title": "Vergleichsachsen",
+      "goal": "Definiert die Achsen, auf denen Wettbewerber gegen das eigene Angebot verglichen werden.",
+      "must_have": [
+        "fünf bis sieben Achsen (Funktion, Performance, Preis, Kanalbreite, Service, Compliance, Defensibility)",
+        "pro Achse ein Halbsatz, was sie misst",
+        "Hinweis darauf, welche Achse für das Zielsegment entscheidend ist"
+      ],
+      "style_rules": [
+        "Achsen werden als Mess-Spezifikationen formuliert – nicht als Marketingvokabular.",
+        "Keine doppelten Achsen ('Performance' und 'Speed' nebeneinander) – Achsen sind orthogonal.",
+        "Keine 'levers'-Sprache; Achsen sind Bewertungsdimensionen, keine Hebel.",
+        "Section-role: Diese Sektion ist die Achsen-Definition, ohne die die Wettbewerbsmatrix unverständlich bleibt."
+      ],
+      "min_chars": 520,
+      "reference_ids": []
+    },
+    "competitor_matrix": {
+      "title": "Wettbewerbsmatrix",
+      "goal": "Hauptmatrix der qualitativen Bewertung pro Wettbewerber je Vergleichsachse.",
+      "must_have": [
+        "Tabellenspalten: Wettbewerber plus jede Achse aus 'capability_axes'",
+        "Bewertungswerte aus enger Wertemenge (weak / moderate / strong / leading)",
+        "Legende mit Erklärung der Achsen und Auflösung etwaiger Sonderzeichen",
+        "mindestens eine Zelle mit 'weak' – die Matrix ist keine Wettbewerbs-Werbeliste"
+      ],
+      "style_rules": [
+        "Identische Bewertungen über alle Achsen sind ein Warnsignal; jede Methode soll auf einer Achse abweichen.",
+        "Sonderzeichen oder Sternchen werden in der Legende mit Bedingungssatz aufgelöst.",
+        "Keine 'leading'-Bewertung ohne Begründung im Folgeabschnitt.",
+        "Section-role: Die Wettbewerbsmatrix ist der Drehpunkt der Analyse; alles davor bereitet sie vor, alles danach präzisiert sie."
+      ],
+      "min_chars": 520,
+      "reference_ids": []
+    },
+    "price_position_map": {
+      "title": "Preis-/Positionierungsmatrix",
+      "goal": "Zweidimensionale Karte aus Preisniveau und Leistungsachse, in die alle Wettbewerber plus eigenes Angebot eingetragen werden.",
+      "must_have": [
+        "Beschreibung beider Achsen mit Skala",
+        "Eintrag pro Wettbewerber mit Preisniveau (Bandbreite) und Leistungsclaim",
+        "Visualisierungs-Skizze oder Tabelle mit Quadranten-Zuordnung",
+        "kurzer Lesehinweis darauf, in welchem Quadranten das eigene Angebot landet"
+      ],
+      "style_rules": [
+        "Preisniveau wird als Bandbreite mit Bezugsjahr genannt – keine Einzelpreise ohne Datum.",
+        "Quadranten werden namentlich beschrieben (Premium / Mid-tier / Budget / Cost-leader), nicht numerisch durchgezählt.",
+        "Keine 'value-for-money'-Floskeln; Positionierung ist eine Aussage über Preis und Leistung, nicht ein Slogan.",
+        "Section-role: Diese Sektion ist die Sektion, in der das eigene Angebot zum ersten Mal in einem Marktraum verortet wird."
+      ],
+      "min_chars": 520,
+      "reference_ids": []
+    },
+    "channel_overlap": {
+      "title": "Kanal- und Zielgruppen-Überlappung",
+      "goal": "Sicht darauf, in welchen Vertriebskanälen und Kundensegmenten man tatsächlich auf Wettbewerber trifft.",
+      "must_have": [
+        "Liste der Vertriebskanäle (direkt, Reseller, Plattform, Marketplace, Ausschreibung)",
+        "Wettbewerber pro Kanal",
+        "Hinweis auf Kanäle, in denen man dem Wettbewerb ausweichen kann"
+      ],
+      "style_rules": [
+        "Kanäle werden namentlich benannt; keine 'verschiedene digitale Kanäle'-Sammelbegriffe.",
+        "Ausweich-Kanäle werden mit Begründung genannt (Wer ist dort schwach? Warum?).",
+        "Keine 'channel synergy'-Phrasen; Überlappung ist eine reale Tatsache, kein Buzz.",
+        "Section-role: Diese Sektion ist die Sektion, in der die Wettbewerbsanalyse von Produktvergleich auf Vertriebsrealität umschwenkt."
+      ],
+      "min_chars": 520,
+      "reference_ids": []
+    },
+    "moat_assessment": {
+      "title": "Defensibility / Moat",
+      "goal": "Bewertung, wie verteidigbar die Position der einzelnen Wettbewerber bzw. der eigenen Lösung ist.",
+      "must_have": [
+        "Moat-Quellen pro Anbieter (Skalen-, Netzwerk-, Daten-, Switching-Cost-, Brand-, Regulierungseffekt)",
+        "qualitative Stärke pro Moat (weak / moderate / strong)",
+        "Hinweis auf Moats, die in 12–24 Monaten erodieren können",
+        "explizite Aussage über den eigenen Moat, einschließlich Schwächen"
+      ],
+      "style_rules": [
+        "Moats werden über Mechanismen begründet (Datenmenge X, Netzwerkknoten Y), nicht über Adjektive.",
+        "Schwache Moats werden offen als schwach benannt – die Analyse ist keine Selbstvergewisserung.",
+        "Keine 'competitive advantage'-Floskel; Moat ist ein benennbarer Mechanismus.",
+        "Section-role: Diese Sektion ist die Sektion, in der die Wettbewerbsanalyse über kurzfristige Feature-Vergleiche hinaus die Frage 'wie hält das?' beantwortet."
+      ],
+      "min_chars": 620,
+      "reference_ids": []
+    },
+    "gap_to_close": {
+      "title": "Lücke zur Wettbewerbsspitze",
+      "goal": "Konkrete Liste der Lücken, die das eigene Angebot gegenüber den stärksten Wettbewerbern schließen muss.",
+      "must_have": [
+        "Top-3 bis Top-5 Lücken in absteigender Wirkung",
+        "Aufwand pro Lücke (qualitativ: niedrig / mittel / hoch)",
+        "Zeithorizont (kurzfristig ≤ 6 Monate, mittel 6–18 Monate, lang ≥ 18 Monate)",
+        "Hinweis auf Lücken, die strukturell nicht aufholbar sind und akzeptiert werden"
+      ],
+      "style_rules": [
+        "Lücken werden konkret formuliert (Feature X, Zertifizierung Y, Kanalpartnerschaft Z) – keine 'bessere User Experience'-Phrase.",
+        "Strukturell nicht aufholbare Lücken werden offen markiert – sie sind keine Roadmap-Items.",
+        "Keine 'transformational gap'-Sprache; eine Lücke ist eine konkrete Differenz.",
+        "Section-role: Diese Sektion ist die Sektion, in der die Wettbewerbsanalyse von Bestandsaufnahme zu Handlung wechselt."
+      ],
+      "min_chars": 520,
+      "reference_ids": []
+    },
+    "recommendation_competitive": {
+      "title": "Wettbewerbs-Empfehlung",
+      "goal": "Konsolidierte Empfehlung: gegen wen man tritt, wo man ausweicht, wo man investiert.",
+      "must_have": [
+        "ein bis zwei Sätze konsolidiertes Urteil über die eigene Wettbewerbsstellung",
+        "priorisierte Liste der nächsten Schritte (drei bis fünf)",
+        "explizit benannte Wettbewerber, gegen die man bewusst nicht antritt",
+        "Bedingungen, unter denen die Empfehlung erneut zu prüfen ist"
+      ],
+      "style_rules": [
+        "Empfehlung enthält mindestens eine Negativaussage (Nicht-Wettbewerb, Kanalverzicht, Featureverzicht).",
+        "Nächste Schritte werden mit Verantwortung und Zeithorizont versehen.",
+        "Kein 'best-in-class' oder 'leading position'-Vokabular; Position wird über Achsen beschrieben.",
+        "Section-role: Empfehlung ist die Architekturentscheidung, nicht eine Wunschliste."
+      ],
+      "min_chars": 620,
+      "reference_ids": []
+    },
+    "target_use_case": {
+      "title": "Ziel-Use-Case",
+      "goal": "Beschreibt den konkreten Anwendungsfall, gegen den Technologiekandidaten gescreent werden.",
+      "must_have": [
+        "Anwendungskontext in einem Absatz (System, Nutzergruppe, Lasten)",
+        "Erfolgskriterium für den Use-Case in einem Satz",
+        "harte Randbedingungen (Latenz, Datenmenge, Compliance, Kosten)",
+        "explizite Negativabgrenzung: was der Use-Case ausdrücklich nicht abdeckt"
+      ],
+      "style_rules": [
+        "Use-Case-Beschreibung beginnt mit dem operativen Ziel, nicht mit der Technologie.",
+        "Randbedingungen sind Filterregeln auf die Methodenliste – sie schließen Methodenklassen explizit aus.",
+        "Keine 'next-generation use case'-Phrase; der Use-Case ist eine Anwendung, kein Slogan.",
+        "Section-role: Der Ziel-Use-Case ist die Sektion, in der ausgesprochen wird, woran Erfolg gemessen wird."
+      ],
+      "min_chars": 520,
+      "reference_ids": []
+    },
+    "screening_criteria": {
+      "title": "Screening-Kriterien",
+      "goal": "Liste der Kriterien, gegen die Technologiekandidaten verglichen werden.",
+      "must_have": [
+        "fünf bis acht Kriterien (technische Eignung, Reife, Lizenz, Operational Cost, Sicherheit, Skalierbarkeit, Lock-in)",
+        "Halbsatz pro Kriterium, was es misst und wie es bewertet wird",
+        "Hinweis darauf, welche Kriterien K.O.-Kriterien sind"
+      ],
+      "style_rules": [
+        "Kriterien sind orthogonal – keine doppelten Aspekte.",
+        "K.O.-Kriterien sind als solche markiert; eine Methode, die ein K.O.-Kriterium reißt, fällt aus dem Screening.",
+        "Keine 'modern' / 'state-of-the-art'-Etiketten als Kriterium.",
+        "Section-role: Die Kriterien-Sektion ist die Achsen-Definition für die Screening-Matrix."
+      ],
+      "min_chars": 420,
+      "reference_ids": []
+    },
+    "option_inventory": {
+      "title": "Optionsinventar",
+      "goal": "Vollständige Auflistung der zu screenenden Technologiekandidaten.",
+      "must_have": [
+        "mindestens fünf Kandidaten",
+        "Name, Anbieter/Variante, Lizenzmodell pro Kandidat",
+        "kurzer Wirkmechanismus-Satz pro Kandidat",
+        "Stand des Inventars (Datum, Quelle der Auswahl)"
+      ],
+      "style_rules": [
+        "Auswahl-Kriterium für das Inventar wird im ersten Satz benannt (z. B. 'aktiv gepflegte Open-Source-Projekte mit Apache-2.0-Lizenz').",
+        "Kandidaten werden nicht beworben – Wirkmechanismus statt Marketing.",
+        "Keine 'leading solutions'-Liste – Auswahl ist begründet.",
+        "Section-role: Das Inventar ist die Sektion, in der das Screening seinen Suchraum offenlegt."
+      ],
+      "min_chars": 520,
+      "reference_ids": []
+    },
+    "screening_matrix_short": {
+      "title": "Screening-Matrix (kurz)",
+      "goal": "Qualitative Matrix mit Kandidaten als Zeilen und Kriterien als Spalten.",
+      "must_have": [
+        "Tabelle mit Kandidaten × Kriterien",
+        "kontrollierte Wertemenge (niedrig / mittel / hoch oder pass / fail / partial)",
+        "Legende und Auflösung etwaiger Sonderzeichen",
+        "mindestens eine 'fail'-Zelle, sonst hat das Screening nicht gefiltert"
+      ],
+      "style_rules": [
+        "Wertemenge bleibt klein und kontrolliert – keine zehnstufige Skala.",
+        "K.O.-Kriterien-Reißer werden in der Legende explizit ausgewiesen.",
+        "Keine 'all options pass' Matrizen; ein Screening, das nichts ausschließt, ist kein Screening.",
+        "Section-role: Die Screening-Matrix ist der Drehpunkt – alles davor bereitet sie vor, alles danach grenzt die Shortlist ein."
+      ],
+      "min_chars": 420,
+      "reference_ids": []
+    },
+    "shortlist": {
+      "title": "Shortlist und Begründung",
+      "goal": "Liste der Kandidaten, die in die nächste Bewertungsstufe gehen, mit Begründung.",
+      "must_have": [
+        "drei bis fünf Shortlist-Kandidaten",
+        "ein bis zwei Begründungssätze pro Kandidat",
+        "explizite Erwähnung der ausgeschlossenen Kandidaten und Ausschlussgrund",
+        "Hinweis darauf, ob die Shortlist mit der Verdikt-Vokabular-Aussage 'Eignung (qualitativ): …' versehen ist"
+      ],
+      "style_rules": [
+        "Begründung verweist auf die Matrix, nicht auf 'Bauchgefühl'.",
+        "Ausschlussgrund ist konkret (welches Kriterium auf welchem Niveau).",
+        "Keine 'promising candidate'-Floskel; Begründung steht für sich.",
+        "Section-role: Shortlist ist die Sektion, in der das Screening seine Filterleistung offenlegt."
+      ],
+      "min_chars": 520,
+      "reference_ids": []
+    },
+    "next_step_design": {
+      "title": "Nächster Schritt / Detailbewertungs-Design",
+      "goal": "Beschreibt, wie die Shortlist-Kandidaten in einer tieferen Bewertung (Feasibility, Pilot) geprüft werden.",
+      "must_have": [
+        "operatives Ziel der nächsten Stufe (z. B. POC, Pilot, Feasibility-Studie)",
+        "benannte Messgrößen für den nächsten Schritt",
+        "Zeit- und Aufwandsbudget als Bandbreite",
+        "Abbruchkriterien"
+      ],
+      "style_rules": [
+        "Ziel ist operativ (POC mit Mess-Setup A/B), nicht 'weitere Untersuchungen durchführen'.",
+        "Abbruchkriterien sind konkret – nicht 'wenn die Ergebnisse nicht zufriedenstellend sind'.",
+        "Keine 'roadmap to excellence'-Phrase; der nächste Schritt ist eine Versuchsplanung.",
+        "Section-role: Diese Sektion ist die Brücke vom Screening zur Detailbewertung."
+      ],
+      "min_chars": 420,
+      "reference_ids": []
+    },
+    "thesis": {
+      "title": "These",
+      "goal": "Eine ungeschützte, präzise These in einem bis drei Sätzen, an der das gesamte Whitepaper hängt.",
+      "must_have": [
+        "These als Aussagesatz (kein Frage- oder Konjunktivsatz)",
+        "Geltungsbereich (für wen, in welchem Zeithorizont, unter welchen Bedingungen)",
+        "Negativabgrenzung (was die These nicht behauptet)"
+      ],
+      "style_rules": [
+        "Die These steht ohne Hedges – kein 'könnte', 'möglicherweise', 'unter Umständen'.",
+        "Geltungsbereich wird im Satz mitgenannt, nicht als Disclaimer in einer Fußnote versteckt.",
+        "Keine 'paradigm shift'-Sprache und kein 'we believe'.",
+        "Section-role: Die These ist nicht ein Themen-Hinweis, sondern die zentrale Aussage, gegen die der Rest argumentiert."
+      ],
+      "min_chars": 420,
+      "reference_ids": []
+    },
+    "context_and_problem": {
+      "title": "Kontext und Problem",
+      "goal": "Beschreibt das Problem, das die These adressiert, und warum gängige Antworten nicht ausreichen.",
+      "must_have": [
+        "Beschreibung des Problems mit datierten Quellen oder belegten Beobachtungen",
+        "Status quo der Antworten (was wird heute gemacht und woran scheitert es)",
+        "Hinweis darauf, warum genau jetzt eine neue Position nötig ist"
+      ],
+      "style_rules": [
+        "Problem wird mit konkretem Nachweis belegt – keine 'wachsenden Herausforderungen'-Behauptungen.",
+        "Status quo wird namentlich genannt; gängige Lösungen werden konkret zitiert.",
+        "Keine 'in today's fast-paced world'-Floskel.",
+        "Section-role: Diese Sektion ist die Sektion, in der die These an eine reale, datierte Lage zurückgebunden wird."
+      ],
+      "min_chars": 620,
+      "reference_ids": []
+    },
+    "argument_section": {
+      "title": "Argument-Abschnitt",
+      "goal": "Ein einzelner Argument-Abschnitt, der einen Belegpfad zugunsten der These trägt; das Whitepaper enthält drei bis fünf solcher Abschnitte.",
+      "must_have": [
+        "Behauptungssatz an der Spitze",
+        "ein bis drei stützende Belege (Daten, Beobachtungen, Mechanismen) mit Quellenangabe",
+        "Schlusssatz, der die Behauptung in die These einordnet"
+      ],
+      "style_rules": [
+        "Jedes Argument hat genau eine Behauptung – keine vermischten Doppelthesen.",
+        "Belege werden mit Datierung und Quelle eingeführt; eine Behauptung ohne Beleg ist eine Lücke.",
+        "Keine 'best-in-class'-Slogans; Argument trägt sich durch Mechanismus.",
+        "Section-role: Der Argument-Abschnitt ist eine Mini-These mit Belegen, nicht ein Marketing-Absatz."
+      ],
+      "min_chars": 520,
+      "repeatable": true,
+      "typical_count_range": [
+        3,
+        5
+      ],
+      "reference_ids": []
+    },
+    "counter_arguments": {
+      "title": "Gegenargumente und Einwände",
+      "goal": "Sektion, die die stärksten Einwände gegen die These benennt und beantwortet.",
+      "must_have": [
+        "zwei bis vier ernstzunehmende Einwände, jeweils namentlich oder mit Quelle",
+        "differenzierte Antwort pro Einwand (akzeptiert / teilweise akzeptiert / abgelehnt mit Begründung)",
+        "explizite Markierung von Einwänden, gegen die die These nicht hält"
+      ],
+      "style_rules": [
+        "Einwände werden in der stärksten Form gebracht, nicht als Strohmann.",
+        "Antworten benennen den Mechanismus, nicht das Ergebnis.",
+        "Keine 'admittedly'-Floskel ohne Substanz – Zugeständnisse werden mit Konsequenz versehen.",
+        "Section-role: Diese Sektion ist die Sektion, in der das Whitepaper seine eigene Schwäche nennt, nicht überspielt."
+      ],
+      "min_chars": 520,
+      "reference_ids": []
+    },
+    "implications": {
+      "title": "Implikationen",
+      "goal": "Konkrete Folgerungen aus der These für Leser bestimmter Rollen.",
+      "must_have": [
+        "rollen-spezifische Implikationen (z. B. CTO, Operations, Procurement, Policy)",
+        "ein bis zwei konkrete Handlungsempfehlungen pro Rolle",
+        "Zeit- und Aufwandshorizont pro Empfehlung"
+      ],
+      "style_rules": [
+        "Empfehlungen sind operativ; sie nennen Verantwortung und Zeithorizont.",
+        "Keine 'leverage', 'transform', 'reimagine'-Verben ohne Substanz.",
+        "Wenn eine Rolle keine sinnvolle Implikation hat, wird sie weggelassen, nicht aufgefüllt.",
+        "Section-role: Implikationen sind die Sektion, in der die These in Handeln übersetzt wird."
+      ],
+      "min_chars": 420,
+      "reference_ids": []
+    },
+    "closing_position": {
+      "title": "Schlussposition",
+      "goal": "Schlussabsatz, der die These erneut in voller Schärfe formuliert und sie an die Bedingungen ihres Geltungsbereichs zurückbindet.",
+      "must_have": [
+        "verdichtete Wiederholung der These ohne neue Hedges",
+        "Hinweis auf die Bedingung, unter der die These hält",
+        "Hinweis auf das Datum bzw. die Quellenlage, die die These trägt"
+      ],
+      "style_rules": [
+        "Schlusssatz kein 'in conclusion' und kein 'es bleibt zu hoffen'.",
+        "Keine neuen Argumente im Schluss – nur Verdichtung.",
+        "Keine 'journey continues'-Phrase.",
+        "Section-role: Schlussposition ist die Sektion, in der die These ihren ganzen Geltungsbereich noch einmal in einem Atemzug nennt."
+      ],
+      "min_chars": 320,
+      "reference_ids": []
+    },
+    "scope_and_method": {
+      "title": "Scope und Methode",
+      "goal": "Beschreibt das Thema, die Suchstrategie und das Ein-/Ausschlusskriterium der Literaturauswahl.",
+      "must_have": [
+        "Themenstellung in einem bis zwei Sätzen",
+        "Suchquellen (Datenbanken, Suchstrings, Zeitfenster)",
+        "Ein- und Ausschlusskriterien",
+        "Anzahl der eingeschlossenen Werke und Stichdatum"
+      ],
+      "style_rules": [
+        "Suchstrategie ist reproduzierbar – Datenbanken und Suchstrings werden genannt.",
+        "Ausschlusskriterien sind konkret (Sprachen, Studientypen, Zeitfenster).",
+        "Keine 'systematic'-Etikette ohne tatsächliche Methode.",
+        "Section-role: Scope-und-Methode ist die Sektion, in der die Review ihre Reproduzierbarkeit etabliert."
+      ],
+      "min_chars": 520,
+      "reference_ids": []
+    },
+    "theme_overview": {
+      "title": "Themen-Landkarte",
+      "goal": "Übersicht der identifizierten Themen, in die die Literatur strukturiert ist.",
+      "must_have": [
+        "vier bis sieben Themencluster mit kurzem Beschreibungssatz",
+        "Hinweis darauf, wie die Themen voneinander abgegrenzt werden",
+        "Anzahl der Werke pro Cluster"
+      ],
+      "style_rules": [
+        "Themen sind orthogonal abgegrenzt; ein Werk darf primär in genau einem Cluster liegen.",
+        "Cluster-Namen sind beschreibend, nicht stilisiert ('Sample Efficiency', nicht 'Smart Learning').",
+        "Keine 'emerging themes'-Floskel ohne Daten.",
+        "Section-role: Themen-Landkarte ist die Achsen-Definition, ohne die die Theme-Sektionen unverständlich bleiben."
+      ],
+      "min_chars": 520,
+      "reference_ids": []
+    },
+    "theme_section": {
+      "title": "Themen-Abschnitt",
+      "goal": "Synthese der Literatur eines Themas; das Dokument enthält pro Themencluster einen solchen Abschnitt.",
+      "must_have": [
+        "Themen-Definition zu Beginn",
+        "Synthese der Hauptpositionen mit Quellenangaben (mindestens fünf Quellen pro Cluster im standard-Profil)",
+        "Trennung Konsens / Kontroverse / offene Frage",
+        "kurzer Übergangssatz zum nächsten Themen-Cluster"
+      ],
+      "style_rules": [
+        "Synthese ist nicht ein Werk-pro-Werk-Listing; sie strukturiert die Positionen.",
+        "Konsens und Kontroverse werden namentlich gemacht – wer vertritt was?",
+        "Keine 'the literature suggests'-Floskel als Pauschal-Bezug.",
+        "Section-role: Theme-Abschnitt ist eine kuratierte Synthese, kein annotiertes Literaturverzeichnis."
+      ],
+      "min_chars": 720,
+      "repeatable": true,
+      "typical_count_range": [
+        4,
+        7
+      ],
+      "reference_ids": []
+    },
+    "synthesis": {
+      "title": "Übergreifende Synthese",
+      "goal": "Querschnitts-Synthese, die Verbindungen zwischen den Themen herstellt.",
+      "must_have": [
+        "drei bis fünf Querverbindungen zwischen Themen",
+        "Hinweis auf widersprüchliche Befunde quer durch die Themen",
+        "Hinweis auf Methoden-Lücken, die mehreren Themen gemeinsam sind"
+      ],
+      "style_rules": [
+        "Querverbindungen sind belegt – jede Verbindung verweist auf Werke aus zwei oder mehr Clustern.",
+        "Widersprüche werden nicht weichgespült.",
+        "Keine 'holistic view'-Floskel; Synthese ist eine konkrete Aussage über Zusammenhänge.",
+        "Section-role: Diese Sektion ist die Sektion, in der die Review aufhört, Themen aneinanderzureihen, und stattdessen Verbindungen zieht."
+      ],
+      "min_chars": 620,
+      "reference_ids": []
+    },
+    "gaps_and_open_questions": {
+      "title": "Lücken und offene Forschungsfragen",
+      "goal": "Liste der Lücken, die die Literatur nicht beantwortet, und Forschungsfragen, die offen bleiben.",
+      "must_have": [
+        "fünf bis sieben Lücken oder offene Fragen",
+        "pro Lücke: Beschreibung und vermuteter Grund (Methodik, Datenmangel, regulatorisch)",
+        "Hinweis auf Lücken, die in der eigenen Forschungsagenda priorisiert werden"
+      ],
+      "style_rules": [
+        "Lücken werden nicht verallgemeinert ('mehr Forschung nötig'); sie werden mit Mechanismus benannt.",
+        "Vermuteter Grund ist konkret und falsifizierbar.",
+        "Keine 'further research is needed'-Sammelphrase ohne spezifische Frage.",
+        "Section-role: Diese Sektion ist die Sektion, in der die Review zukünftige Arbeit anstößt, statt sich selbst zu schließen."
+      ],
+      "min_chars": 520,
+      "reference_ids": []
+    },
+    "appendix_sources_review": {
+      "title": "Anhang – Quellen der Review",
+      "goal": "Vollständige nummerierte Liste der eingeschlossenen Werke, getrennt von kontextuellen Quellen.",
+      "must_have": [
+        "Werke nach Cluster oder alphabetisch geordnet",
+        "vollständige Zitation pro Werk",
+        "Hinweis auf Open-Access-Status, wo bekannt",
+        "Trennung zwischen 'eingeschlossen in Synthese' und 'kontextuell zitiert'"
+      ],
+      "style_rules": [
+        "Keine erfundenen Quellen oder DOIs.",
+        "Open-Access-Hinweis nur, wenn er aus den Originaldaten hervorgeht.",
+        "Quellen sind so präzise, dass sie ohne Suche auffindbar sind.",
+        "Section-role: Der Anhang ist nicht eine Marketing-Liste; er ist die Datengrundlage der Review."
+      ],
+      "min_chars": 720,
+      "min_rows": 12,
+      "reference_ids": []
+    },
+    "decision_at_stake": {
+      "title": "Zu treffende Entscheidung",
+      "goal": "Eine bis drei Sätze, die die genaue Entscheidung benennen, deren Trägerin und den Stichtag.",
+      "must_have": [
+        "Entscheidungsfrage als Aussagesatz",
+        "Entscheidungsträgerin namentlich oder funktionell",
+        "Stichtag oder Frist",
+        "Konsequenz des Nicht-Entscheidens"
+      ],
+      "style_rules": [
+        "Frage ist binär oder N-aus-M – keine 'strategischen Themen' ohne Entscheidung.",
+        "Konsequenz des Nicht-Entscheidens ist explizit; Default ist nicht 'wir bleiben gleich' ohne Begründung.",
+        "Keine 'strategic alignment'-Phrase.",
+        "Section-role: Die Entscheidungsfrage ist die Sektion, in der das Brief seine Existenzberechtigung benennt."
+      ],
+      "min_chars": 320,
+      "reference_ids": []
+    },
+    "situation": {
+      "title": "Lage",
+      "goal": "Knappe Situationsbeschreibung, die alle entscheidungsrelevanten Tatsachen enthält und keine Hintergrunderzählung.",
+      "must_have": [
+        "fünf bis acht entscheidungsrelevante Fakten in Stichpunktform",
+        "pro Fakt eine Quelle oder eine 'Annahme'-Markierung",
+        "Hinweis auf den Zeitpunkt der Lagefeststellung"
+      ],
+      "style_rules": [
+        "Fakten werden nicht in Geschichten eingebettet; jede Zeile steht für sich.",
+        "Annahmen sind als Annahmen markiert; sie sind keine Fakten.",
+        "Keine 'as you know'-Phrase.",
+        "Section-role: Die Lage ist nicht ein Hintergrund-Kapitel; sie ist die Liste dessen, was für die Entscheidung wirklich gewusst werden muss."
+      ],
+      "min_chars": 420,
+      "reference_ids": []
+    },
+    "options_summary": {
+      "title": "Optionen",
+      "goal": "Knappe Liste der zur Wahl stehenden Optionen, jeweils in zwei bis vier Sätzen.",
+      "must_have": [
+        "drei bis fünf Optionen, davon eine 'Status quo / nichts tun'-Option",
+        "pro Option: Beschreibung, Hauptvorteil, Hauptnachteil, Aufwand",
+        "Markierung der von der Empfehlung unterstützten Option"
+      ],
+      "style_rules": [
+        "Status-quo-Option ist immer mitzuführen, auch wenn sie unattraktiv ist.",
+        "Hauptvorteil und Hauptnachteil sind konkret – keine 'Flexibilität' / 'Komplexität'-Etiketten.",
+        "Keine 'best-of-breed'-Floskel.",
+        "Section-role: Optionen sind die Sektion, die das Brief davor schützt, eine Entscheidungsvorlage mit nur einer Option zu sein."
+      ],
+      "min_chars": 520,
+      "reference_ids": []
+    },
+    "criteria": {
+      "title": "Entscheidungskriterien",
+      "goal": "Liste der Kriterien, gegen die die Optionen verglichen werden, mit Gewichtung.",
+      "must_have": [
+        "vier bis sieben Kriterien",
+        "Halbsatz pro Kriterium, was es misst",
+        "qualitative Gewichtung (hoch / mittel / niedrig) mit Begründung",
+        "Hinweis auf K.O.-Kriterien"
+      ],
+      "style_rules": [
+        "Kriterien sind orthogonal und entscheidungsrelevant – keine 'Innovativität'-Etiketten.",
+        "Gewichtung wird begründet, nicht behauptet.",
+        "Keine 'synergy potential'-Phrase als Kriterium.",
+        "Section-role: Kriterien sind die Achsen-Definition für die Bewertung."
+      ],
+      "min_chars": 420,
+      "reference_ids": []
+    },
+    "evaluation": {
+      "title": "Bewertung",
+      "goal": "Bewertungstabelle Optionen × Kriterien plus zwei bis drei zusammenfassende Sätze.",
+      "must_have": [
+        "Tabelle Optionen × Kriterien mit kontrollierter Wertemenge",
+        "Konsolidierung in zwei bis drei Sätzen, die das Bewertungsbild zusammenführt",
+        "Hinweis auf K.O.-Kriterien-Reißer, falls vorhanden",
+        "explizite Trade-off-Aussage (welche Option opfert was zugunsten welcher Achse)"
+      ],
+      "style_rules": [
+        "Wertemenge ist klein und kontrolliert.",
+        "Trade-off wird offen benannt – ein Brief, der keinen Trade-off zeigt, hat das Bewertungsproblem nicht erfasst.",
+        "Keine 'all options viable'-Aussage; das Brief filtert.",
+        "Section-role: Bewertung ist der Drehpunkt des Briefs; die Empfehlung ist daran gebunden."
+      ],
+      "min_chars": 420,
+      "reference_ids": []
+    },
+    "recommendation_brief": {
+      "title": "Empfehlung",
+      "goal": "Eine klare Empfehlung in einem Satz plus drei bis fünf Begründungs-Bullets.",
+      "must_have": [
+        "Empfehlungssatz im Schema 'Empfehlung: <recommend|recommend with caveats|not recommended>'",
+        "drei bis fünf Begründungs-Bullets mit Verweis auf Bewertung",
+        "Hinweis auf das benötigte Mandat (Budget, Personal, Zeitfenster)",
+        "Liste der Personen, die die Empfehlung mittragen oder ablehnen"
+      ],
+      "style_rules": [
+        "Empfehlung ist ungeschützt – keine 'man könnte erwägen'-Hülsen.",
+        "Begründungen sind an die Bewertungstabelle gekoppelt; jeder Bullet verweist auf eine Achse.",
+        "Keine 'transformational opportunity'-Floskel.",
+        "Section-role: Empfehlung ist eine Architekturentscheidung, kein Optionsfeuerwerk."
+      ],
+      "min_chars": 420,
+      "reference_ids": []
+    },
+    "caveats_and_next_steps": {
+      "title": "Caveats und nächste Schritte",
+      "goal": "Liste der Bedingungen, unter denen die Empfehlung kippt, und der nächsten 30/60/90-Tage-Schritte.",
+      "must_have": [
+        "drei bis fünf Bedingungen, unter denen die Empfehlung neu zu prüfen ist",
+        "Liste 30/60/90 Tage mit operativen Schritten, Verantwortung und KPI",
+        "Hinweis auf Eskalationspfad bei verfehlten KPIs"
+      ],
+      "style_rules": [
+        "Bedingungen sind operativ messbar (z. B. 'CAC > X bei Pilotkunde Y nach 60 Tagen').",
+        "Schritte sind nicht 'Roadmap erstellen', sondern konkrete Liefergegenstände.",
+        "Keine 'monitor closely'-Phrase ohne Eskalationspfad.",
+        "Section-role: Caveats und nächste Schritte sind die Sektion, in der das Brief sich selbst Bedingungen setzt."
+      ],
+      "min_chars": 420,
+      "reference_ids": []
+    }
+  },
+  "reference_resources": [
+    {
+      "id": "rascon_title_pattern",
+      "source_file": "Machbarkeitsstudie_RASCON_Blitsschutzgitter_kontaktlose_Pruefung.docx",
+      "story_role": "title_pattern",
+      "block_template_ids": [
+        "study_title_block"
+      ],
+      "excerpt": "Kontaktlose Prüfung des Blitzschutz-Kupfergitters (LSP) in CFK-Strukturen– Technologiebewertung und Vorschlag für ein Forschungs- und Versuchsdesign",
+      "why_it_works": [
+        "Untertitel benennt Prüfobjekt (Blitzschutz-Kupfergitter), Materialdomäne (CFK), Studienzweck (Technologiebewertung) und Liefergegenstand (Versuchsdesign) in einem Satz.",
+        "Versionsstatus 'Arbeitsfassung' signalisiert ehrlich, dass das Dokument iterativ entsteht – das schützt vor falschem Anspruchsbild."
+      ],
+      "reuse_moves": [
+        "Untertitel als 'Prüfobjekt – Methodenraum – Liefergegenstand' bauen.",
+        "Statushinweis ('Arbeitsfassung | Stand: …') und Kontextzeile ('Kontext: … erweitertes Forschungskonzept') konsequent direkt unter dem Untertitel führen."
+      ]
+    },
+    {
+      "id": "rascon_scope_disclaimer",
+      "source_file": "Machbarkeitsstudie_RASCON_Blitsschutzgitter_kontaktlose_Pruefung.docx",
+      "story_role": "scope_disclaimer",
+      "block_template_ids": [
+        "scope_disclaimer"
+      ],
+      "excerpt": "Hinweis: Diese Studie basiert auf öffentlich zugänglichen Informationen, Plausibilitätsannahmen und typischen Material-/Schichtsystemen. Eine belastbare Aussage zur Detektierbarkeit erfordert Validierung an repräsentativen Proben (Schichtaufbau, Gittergeometrie, Defektkatalog).",
+      "why_it_works": [
+        "Drei Sätze, drei Aussagen: Quellenbasis, Annahmen, Validierungsbedarf – alles ohne schwammige Distanzformeln.",
+        "Validierungsbedarf wird konkret an Probentypen festgemacht (Schichtaufbau, Gittergeometrie, Defektkatalog) und ist damit operativ verwertbar."
+      ],
+      "reuse_moves": [
+        "Disclaimer immer in der Reihenfolge 'Quellenbasis → tragende Annahmen → Validierungsbedarf' aufbauen.",
+        "Validierungsbedarf an konkrete Probentypen oder Messgrößen knüpfen, nicht an die Phrase 'weitere Untersuchungen'."
+      ]
+    },
+    {
+      "id": "rascon_abbreviation_pattern",
+      "source_file": "Machbarkeitsstudie_RASCON_Blitsschutzgitter_kontaktlose_Pruefung.docx",
+      "story_role": "abbreviations_pattern",
+      "block_template_ids": [
+        "abbreviations"
+      ],
+      "excerpt": "Eddy Current Pulsed Thermography (Wirbelstrom-Puls-Thermografie)",
+      "why_it_works": [
+        "Eine Zeile aus der Akronymtabelle, die das Muster trägt: englische Originalbezeichnung, dahinter die deutsche Auflösung in Klammern – sodass im Fließtext beide Formen referenziert werden können.",
+        "Diese Doppelform spart spätere Erklärungen im Fließtext und stellt zugleich sicher, dass deutsche und internationale Reviewer dieselbe Abkürzung lesen können."
+      ],
+      "reuse_moves": [
+        "Akronyme im Verzeichnis im Format 'Originalbezeichnung (deutsche Auflösung)' führen.",
+        "Im Verzeichnis gleiche Wortklassen (Methoden, Kennwerte, Reifegradkonzepte) gemeinsam aufnehmen, damit die Tabelle nicht zu einer reinen Methodenliste schrumpft."
+      ]
+    },
+    {
+      "id": "rascon_management_summary_zielsatz",
+      "source_file": "Machbarkeitsstudie_RASCON_Blitsschutzgitter_kontaktlose_Pruefung.docx",
+      "story_role": "management_summary_zielsatz",
+      "block_template_ids": [
+        "management_summary"
+      ],
+      "excerpt": "Ziel dieser Machbarkeitsstudie ist die Bewertung kontaktloser Prüfverfahren, mit denen die Struktur eines in CFK eingebetteten Blitzschutz-Kupfergitters (Lightning Strike Protection, LSP) durch Deckschichten (Lack, Primer, Surfacer usw.) sichtbar gemacht und Anomalien (z.B. Unterbrechungen, Fehlstellen, Ablösung) detektiert werden können – idealerweise flächig und mit hoher Geschwindigkeit.",
+      "why_it_works": [
+        "Ein Satz, der Methodenraum (kontaktlose Prüfverfahren), Prüfobjekt (LSP-Gitter in CFK), zu durchdringende Schichten (Lack, Primer, Surfacer) und Detektionsziel (Anomalien) verbindet.",
+        "Operative Eckpunkte ('flächig', 'mit hoher Geschwindigkeit') werden im Zielsatz mitgenannt, sodass die spätere Bewertungslogik logisch vorbereitet ist."
+      ],
+      "reuse_moves": [
+        "Zielsatz im Format 'Ziel ist die Bewertung von … mit denen … unter … detektiert werden können – idealerweise …' anwenden.",
+        "Operative Eckpunkte (Flächenleistung, Single-Shot, Standoff) bereits in den Zielsatz einbauen, damit das Summary nicht beim Verfahren stehenbleibt."
+      ]
+    },
+    {
+      "id": "rascon_management_summary_bullets",
+      "source_file": "Machbarkeitsstudie_RASCON_Blitsschutzgitter_kontaktlose_Pruefung.docx",
+      "story_role": "management_summary_bullets",
+      "block_template_ids": [
+        "management_summary"
+      ],
+      "excerpt": "Induktions-Thermografie (Wirbelstrom-Anregung + IR-Vollfeldkamera) hat sehr gute Erfolgsaussichten für ein flächiges Screening, weil Leiterdefekte Hotspots und Disbond/Delamination eine veränderte Wärmeabfuhr erzeugen.",
+      "why_it_works": [
+        "Bullet ist ein vollständiger Satz: Methode + qualitatives Verdikt + Wirkmechanismus, der das Verdikt trägt.",
+        "Negativeinordnungen sind möglich, weil das Format 'Methode … hat … Erfolgsaussichten … weil …' Spielraum für 'niedrige Erfolgsaussichten' lässt – ein Bulletset darf gemischt sein."
+      ],
+      "reuse_moves": [
+        "Jedes Summary-Bullet als ein Satz im Schema 'Methode … hat … Erfolgsaussichten für …, weil …' bauen.",
+        "Mindestens eine Bulletzeile mit Negativeinordnung führen, damit das Summary keine Verkaufsfolie wird."
+      ]
+    },
+    {
+      "id": "rascon_management_summary_risiko",
+      "source_file": "Machbarkeitsstudie_RASCON_Blitsschutzgitter_kontaktlose_Pruefung.docx",
+      "story_role": "management_summary_risiko",
+      "block_template_ids": [
+        "management_summary"
+      ],
+      "excerpt": "Die größten technischen Risiken liegen in der genauen Ausprägung des Schichtaufbaus: Insbesondere eine zusätzliche, nahezu geschlossene metallische Folie in der Blitzschutzlage kann THz- und Mikrowellenverfahren sowie bestimmte induktive Messgeometrien stark beeinflussen (Abschirmung/Dominanz der obersten leitfähigen Schicht).",
+      "why_it_works": [
+        "Risikoabsatz benennt einen physikalisch greifbaren Mechanismus (Abschirmung durch geschlossene Folie) und nennt die konkret betroffenen Verfahren.",
+        "Statt allgemeiner Risikoprosa wird das Hauptrisiko an die kritische Konfigurationsfrage des Bauteils gekoppelt – das Summary-Risiko und der Bauteilaufbau-Block stützen einander."
+      ],
+      "reuse_moves": [
+        "Risikoabsatz im Summary an die kritische Konfigurationsfrage knüpfen, nicht an eine generische Liste.",
+        "Effekt benennen ('Abschirmung', 'Dominanz', 'Lift-off'), Verfahren benennen, beides verbinden."
+      ]
+    },
+    {
+      "id": "rascon_problem_setup_lsp",
+      "source_file": "Machbarkeitsstudie_RASCON_Blitsschutzgitter_kontaktlose_Pruefung.docx",
+      "story_role": "problem_setup",
+      "block_template_ids": [
+        "context_and_question",
+        "component_layout"
+      ],
+      "excerpt": "Im Rahmen von RASCON wird ein erweitertes Forschungskonzept zur Prüfung von Blitzschutzstrukturen in Luftfahrtverbundbauteilen entwickelt. Der Blitzschutz wird durch ein in kohlenstofffaserverstärktem Kunststoff (CFK) eingebettetes Kupfergitter bzw. eine Kupfer-Expanded-Metal-Foil (EMF) realisiert. Die Inspektion soll Anomalien der Leiterstruktur unter Deckschichten erkennen – möglichst kontaktlos und flächig (Single-Shot oder sehr schnelle Flächenerfassung).",
+      "why_it_works": [
+        "Drei Sätze setzen das Problem in einem Forschungskonzept, beschreiben das Prüfobjekt material- und funktionsgenau und definieren das operative Detektionsziel.",
+        "Die Variante 'Kupfergitter bzw. EMF' macht früh transparent, dass es zwei reale Konfigurationen gibt – die spätere Szenarien-Logik wird damit vorbereitet."
+      ],
+      "reuse_moves": [
+        "Studienkontext immer in einen Satz fassen, dann Prüfobjekt material- und funktionsgenau beschreiben, dann das operative Detektionsziel.",
+        "Wenn das Prüfobjekt in Varianten existiert, die Varianten bereits im Setup-Absatz benennen ('Gitter bzw. EMF') – nicht erst in der Szenarien-Tabelle."
+      ]
+    },
+    {
+      "id": "rascon_leitfragen",
+      "source_file": "Machbarkeitsstudie_RASCON_Blitsschutzgitter_kontaktlose_Pruefung.docx",
+      "story_role": "leitfragen",
+      "block_template_ids": [
+        "context_and_question"
+      ],
+      "excerpt": "Welche kontaktlosen Technologien eignen sich, um die Gitterstruktur durch Lack/Primer/Surfacer sichtbar zu machen? Welche Verfahren sind sensitiv auf typische Blitzschutzdefekte (Unterbrechungen, fehlende Stege, lokale Überhitzung/Abbrand, Ablösung)? Wie hoch sind die Erfolgsaussichten unter realistischen Randbedingungen (Standoff, einseitiger Zugang, Industrieumgebung)? Welches Versuchsdesign minimiert Risiko und liefert schnell belastbare Aussagen für die Projektplanung?",
+      "why_it_works": [
+        "Vier Leitfragen, die genau die vier Hauptachsen der späteren Bewertung abbilden – Methodenkandidaten, Defektklassen, operative Erfolgsaussichten, Versuchsdesign.",
+        "Jede Frage ist beantwortbar formuliert; sie leitet später eine konkrete Sektion an, statt rhetorisch zu bleiben."
+      ],
+      "reuse_moves": [
+        "Leitfragen so formulieren, dass jede Frage eine spätere Sektion direkt anleitet (Methoden, Defektsensitivität, Erfolgsaussichten, Versuchsdesign).",
+        "Anzahl der Leitfragen so wählen, dass sie die zentralen Sektionen des Studienaufbaus abdeckt – typischerweise vier bis fünf."
+      ]
+    },
+    {
+      "id": "rascon_layout_anchor_schichtaufbau",
+      "source_file": "Machbarkeitsstudie_RASCON_Blitsschutzgitter_kontaktlose_Pruefung.docx",
+      "story_role": "layout_anchor",
+      "block_template_ids": [
+        "component_layout"
+      ],
+      "excerpt": "Abbildung 1 zeigt einen beispielhaften Schichtaufbau aus öffentlichen Quellen: Lack und Primer liegen über Surfacing-/Glasfaserlagen; die Blitzschutzlage wird als metallische Schicht (z.B. Kupfergitter oder EMF) in/auf Verbundlagen integriert. Für die Prüfbarkeit ist entscheidend, ob die Blitzschutzlage eine offene Gitterstruktur ist oder ob zusätzlich eine weitgehend geschlossene Metallfolie vorhanden ist.",
+      "why_it_works": [
+        "Erklärt den Schichtaufbau in einem Satz und schließt direkt mit der entscheidungstragenden Konfigurationsfrage – das ist der Drehpunkt der gesamten Studie.",
+        "Macht den Schritt von 'beispielhaftem Schichtaufbau' zur 'für die Prüfbarkeit entscheidenden Frage' explizit, ohne Distanzformeln."
+      ],
+      "reuse_moves": [
+        "Bauteilaufbau immer mit dem Satz 'Für die Prüfbarkeit ist entscheidend, ob …' verankern – das macht aus einer Beschreibung eine Bewertungsbasis.",
+        "Beim Schichtaufbau Schichten von außen nach innen aufzählen, dann die kritische Funktionsschicht und ihre Variante benennen."
+      ]
+    },
+    {
+      "id": "rascon_layout_gitter_mesh",
+      "source_file": "Machbarkeitsstudie_RASCON_Blitsschutzgitter_kontaktlose_Pruefung.docx",
+      "story_role": "layout_anchor",
+      "block_template_ids": [
+        "component_layout"
+      ],
+      "excerpt": "Abbildung 2 illustriert die Blitzschutzlage als gitterartige Struktur (Beispielsimulation). Das Prüfzielszenario umfasst insbesondere die Erkennung von Fehlstellen/Unterbrechungen im Gitter sowie Kopplungs-/Haftungsprobleme zwischen Blitzschutzlage und Verbund (z.B. Disbond).",
+      "why_it_works": [
+        "Bildunterschrift und Folgesatz übersetzen die Geometrie sofort in das Prüfziel – die Abbildung wird begründet, nicht nur eingestellt.",
+        "Defektklassen werden bereits hier benannt (Fehlstellen, Unterbrechungen, Disbond) und tauchen später im Defektkatalog wieder auf."
+      ],
+      "reuse_moves": [
+        "Jede Abbildung mit einem Satz begleiten, der die Abbildung in das spätere Prüfziel übersetzt.",
+        "Defektklassen bereits in der Layout-Sektion einführen, damit sie im Defektkatalog nicht plötzlich wirken."
+      ]
+    },
+    {
+      "id": "rascon_layout_eindringbereich",
+      "source_file": "Machbarkeitsstudie_RASCON_Blitsschutzgitter_kontaktlose_Pruefung.docx",
+      "story_role": "layout_anchor",
+      "block_template_ids": [
+        "component_layout"
+      ],
+      "excerpt": "Zur Einordnung der Methoden zeigt Abbildung 3 qualitativ, welche Verfahren typischerweise nur oberflächennahe Informationen liefern und welche bis zur ersten leitfähigen Schicht bzw. durch Mehrschichtaufbauten messen können.",
+      "why_it_works": [
+        "Verbindet das geometrische Bild mit der Methoden-Tiefenwirkung – die Abbildung leitet die Bewertungsmatrix logisch ein.",
+        "'Qualitativ' ist explizit ausgewiesen, damit kein Leser eine quantitative Tiefenangabe unterstellt."
+      ],
+      "reuse_moves": [
+        "In der Layout-Sektion eine Übergangs-Abbildung einplanen, die geometrisches Bild und Methodenklassen zusammenführt.",
+        "Den qualitativen Charakter solcher Übersichten explizit ausweisen ('zeigt qualitativ …'), nicht implizit lassen."
+      ]
+    },
+    {
+      "id": "rascon_requirement_kontaktlos",
+      "source_file": "Machbarkeitsstudie_RASCON_Blitsschutzgitter_kontaktlose_Pruefung.docx",
+      "story_role": "requirement_anchor",
+      "block_template_ids": [
+        "requirements"
+      ],
+      "excerpt": "Kontaktloser Betrieb; keine Koppelmittel (z.B. Wasser/Gel) und kein direkter Sensor-Kontakt mit der Oberfläche.",
+      "why_it_works": [
+        "Eine Anforderung, drei Aussagen: Kontaktfreiheit, kein Koppelmittel, kein direkter Sensorkontakt – jede Aussage schließt eine Methodenklasse explizit aus.",
+        "Die Anforderung ist nicht bloß eine Wunschformel, sondern bereits eine Filterregel für die Methodenliste."
+      ],
+      "reuse_moves": [
+        "Anforderungen so schreiben, dass sie wirken wie Filterregeln auf die Methodenliste, nicht wie Wunschsätze.",
+        "Wenn eine Anforderung mehrere Implementationsdetails ausschließt, sie alle explizit nennen ('keine Koppelmittel', 'kein Sensor-Kontakt')."
+      ]
+    },
+    {
+      "id": "rascon_requirement_einseitig",
+      "source_file": "Machbarkeitsstudie_RASCON_Blitsschutzgitter_kontaktlose_Pruefung.docx",
+      "story_role": "requirement_anchor",
+      "block_template_ids": [
+        "requirements"
+      ],
+      "excerpt": "Einseitiger Zugang (typisch bei Luftfahrzeugen/Strukturbauteilen). Standoff (Sensorabstand) im mm- bis cm-Bereich je nach Verfahren; möglichst tolerant gegenüber Abstandsschwankungen.",
+      "why_it_works": [
+        "Knüpft die Randbedingung 'einseitiger Zugang' direkt an die Anwendungsdomäne und macht damit klar, warum die Anforderung nicht verhandelbar ist.",
+        "Standoff-Anforderung wird mit Größenordnung (mm- bis cm-Bereich) und Robustheitsbedingung (Toleranz gegen Abstandsschwankungen) versehen – das wird später beim Lift-off-Risiko aufgegriffen."
+      ],
+      "reuse_moves": [
+        "Wo eine Anforderung anwendungstypisch streng ist, den Anwendungsbezug in einem Halbsatz mitliefern.",
+        "Standoff-/Geometrie-Anforderungen als 'Größenordnung + Robustheitsbedingung' formulieren, damit sie messbar werden."
+      ]
+    },
+    {
+      "id": "rascon_requirement_defekte",
+      "source_file": "Machbarkeitsstudie_RASCON_Blitsschutzgitter_kontaktlose_Pruefung.docx",
+      "story_role": "requirement_anchor",
+      "block_template_ids": [
+        "requirements"
+      ],
+      "excerpt": "Detektion von (i) Gitterunterbrechungen/fehlenden Stegen, (ii) lokalen Blitzschäden/Abbrand, (iii) Ablösung/Delamination in der Nähe der Blitzschutzlage.",
+      "why_it_works": [
+        "Drei Defektklassen werden mit römischen Ziffern strukturiert; jede Klasse ist beobachtungsfähig und damit testbar.",
+        "Die Auswahl deckt elektrische, thermische und mechanische Defektmechanismen ab – die spätere Methodenbewertung kann Empfindlichkeit pro Mechanismus bewerten."
+      ],
+      "reuse_moves": [
+        "Defektklassen so auswählen, dass sie unterschiedliche physikalische Mechanismen abdecken (elektrisch, thermisch, mechanisch, geometrisch).",
+        "Defektklassen früh nummerieren oder mit (i), (ii), (iii) markieren – das macht spätere Querverweise schnell."
+      ]
+    },
+    {
+      "id": "rascon_screening_logic",
+      "source_file": "Machbarkeitsstudie_RASCON_Blitsschutzgitter_kontaktlose_Pruefung.docx",
+      "story_role": "screening_logic",
+      "block_template_ids": [
+        "screening_logic"
+      ],
+      "excerpt": "Bewertet wurden insbesondere: (a) Fähigkeit, die Leiterstruktur abzubilden, (b) Sensitivität gegenüber typischen Defekten, (c) Flächenleistung/Single-Shot-Potenzial, (d) Robustheit/Integrationsaufwand, (e) Reifegrad (TRL/Industrieeinsatz).",
+      "why_it_works": [
+        "Fünf Achsen mit klar markierten Buchstaben (a)–(e); jede Achse trifft einen anderen Bewertungsaspekt – kein Überlapp.",
+        "Die Reihenfolge ist nicht zufällig: Sie geht vom inhaltlichen Kernbeitrag (Strukturabbildung, Defektsensitivität) über Anwendungs-Charakteristika (Flächenleistung, Robustheit) zum Reifegrad."
+      ],
+      "reuse_moves": [
+        "Bewertungsachsen in der Reihenfolge 'Kernbeitrag → Anwendungsbedingungen → Reifegrad' anordnen.",
+        "Achsen mit (a), (b), … markieren, damit die spätere Matrix-Legende kompakt bleibt."
+      ]
+    },
+    {
+      "id": "rascon_screening_matrix_intro",
+      "source_file": "Machbarkeitsstudie_RASCON_Blitsschutzgitter_kontaktlose_Pruefung.docx",
+      "story_role": "screening_matrix",
+      "block_template_ids": [
+        "screening_matrix"
+      ],
+      "excerpt": "Dieses Kapitel fasst die wichtigsten kontaktlosen Verfahren zusammen und bewertet deren Eignung für die Abbildung der Blitzschutzstruktur unter Deckschichten. Die Bewertung ist qualitativ; numerische Kennwerte (POD, Falschalarme, Auflösung, Durchsatz) müssen experimentell bestimmt werden.",
+      "why_it_works": [
+        "Der Einleitungsabsatz vor der Matrix benennt zwei Dinge in zwei Sätzen: was die Matrix abbildet, und was sie bewusst nicht abbildet (numerische Kennwerte).",
+        "Die explizite Markierung 'Die Bewertung ist qualitativ' erspart spätere Verteidigungssätze und schützt die Matrix vor Fehlinterpretation."
+      ],
+      "reuse_moves": [
+        "Vor der Matrix einen Zwei-Satz-Rahmen setzen: 'was bildet die Matrix ab' und 'was bildet sie bewusst nicht ab'.",
+        "Den qualitativen Charakter der Matrix explizit ausweisen und die experimentell zu bestimmenden Kennwerte direkt benennen."
+      ]
+    },
+    {
+      "id": "rascon_screening_matrix_legende",
+      "source_file": "Machbarkeitsstudie_RASCON_Blitsschutzgitter_kontaktlose_Pruefung.docx",
+      "story_role": "screening_matrix",
+      "block_template_ids": [
+        "screening_matrix"
+      ],
+      "excerpt": "Legende: „Fläche“ = Single-Shot-/Flächenleistungspotenzial; „Gitterbild“ = direkte Abbildung der Leitergeometrie; „Gitterdefekt“ = Sensitivität für Unterbrechungen/Fehlstellen; „Delamination“ = Sensitivität für Disbond/Delamination. Hinweis (*): THz kann eine Gitterstruktur sehr gut kontrastieren, sofern die Blitzschutzlage die erste dominante leitfähige Schicht ist bzw. keine geschlossene Folie das Signal vollständig reflektiert.",
+      "why_it_works": [
+        "Legende definiert jede Achse in einem Halbsatz und löst die Sternchen-Markierung in einer eigenen Fußnote auf – eine Sternchen-Bewertung ohne Auflösung wäre sonst inhaltsleer.",
+        "Die Sternchen-Fußnote ist nicht generisch ('Methode kann gut sein'), sondern beschreibt die genaue Konfigurationsbedingung, unter der der Bestwert gilt."
+      ],
+      "reuse_moves": [
+        "Jede Achse in der Legende mit einem Halbsatz definieren – nicht erwarten, dass die Spaltenbeschriftung allein verständlich ist.",
+        "Sternchen oder Sondermarkierungen immer mit Bedingungssatz auflösen ('… sofern …'), nicht mit allgemeinen Hinweisen."
+      ]
+    },
+    {
+      "id": "rascon_scenario_matrix_intro",
+      "source_file": "Machbarkeitsstudie_RASCON_Blitsschutzgitter_kontaktlose_Pruefung.docx",
+      "story_role": "scenario_matrix",
+      "block_template_ids": [
+        "scenario_matrix"
+      ],
+      "excerpt": "Da in der Praxis häufig Varianten der Blitzschutzlage existieren (Kupfergitter, EMF, zusätzliche metallische Folie), werden die wichtigsten Kandidaten hier szenarienabhängig eingeordnet:",
+      "why_it_works": [
+        "Der Einleitungssatz vor der Szenarien-Matrix begründet, warum sie überhaupt existiert: weil die Praxis Varianten kennt, die das Hauptergebnis verschieben.",
+        "Die drei Konfigurationsvarianten werden im Klammerausdruck konkret benannt – das schützt die Szenarien vor Hilfsszenarien-Vorwurf."
+      ],
+      "reuse_moves": [
+        "Szenarien-Matrix immer mit einem Begründungssatz öffnen, der die reale Variantenlage benennt.",
+        "Konfigurationsvarianten im Begründungssatz konkret benennen, damit die Szenarien nicht beliebig wirken."
+      ]
+    },
+    {
+      "id": "rascon_scenario_matrix_fussnote",
+      "source_file": "Machbarkeitsstudie_RASCON_Blitsschutzgitter_kontaktlose_Pruefung.docx",
+      "story_role": "scenario_matrix",
+      "block_template_ids": [
+        "scenario_matrix"
+      ],
+      "excerpt": "Hinweis (*): Auch bei dominanter Folie kann die thermische bzw. magnetische Signatur von Leiteranomalien detektierbar bleiben, weil Unterbrechungen/Engstellen die Stromverteilung und Joule-Erwärmung beeinflussen. Für THz gilt hingegen: Eine geschlossene Metallschicht wirkt i.d.R. als starke Reflexions-/Abschirmbarriere.",
+      "why_it_works": [
+        "Sternchen-Fußnote unterscheidet sauber zwei physikalische Mechanismen (thermisch/magnetisch vs. elektromagnetische Reflexion) und erklärt, warum dieselbe Konfiguration für die eine Methode noch funktioniert und für die andere nicht.",
+        "Die Fußnote ist physikalisch konkret ('Stromverteilung und Joule-Erwärmung', 'Reflexions-/Abschirmbarriere') und damit nicht austauschbar."
+      ],
+      "reuse_moves": [
+        "Sternchen-Fußnoten zur Szenarien-Matrix immer auf den physikalischen Mechanismus zurückführen, der die Differenz zwischen Methoden erklärt.",
+        "Wenn dieselbe Konfiguration für eine Methode positiv und für eine andere negativ wirkt, beide Effekte in einer einzigen Fußnote gegenüberstellen."
+      ]
+    },
+    {
+      "id": "rascon_short_assessment_other",
+      "source_file": "Machbarkeitsstudie_RASCON_Blitsschutzgitter_kontaktlose_Pruefung.docx",
+      "story_role": "short_assessment_other",
+      "block_template_ids": [
+        "short_assessment_other_methods"
+      ],
+      "excerpt": "Magnetische Induktionstomografie (MIT): Kontaktloses Leitfähigkeitsbild; in der Praxis oft begrenzte Auflösung für feine Gitter, aber als Forschungsansatz interessant.",
+      "why_it_works": [
+        "Ein Eintrag in der typischen Drei-Teile-Form: Methodenname plus Klasse, Wirkprinzip in einem Halbsatz, Verdikt mit Begründung.",
+        "Verzichtet auf weiche Hedges – die Methode wird offen als auflösungsbegrenzt eingeordnet, gleichzeitig wird ein Forschungsbezug benannt, statt sie nur abzuwerten."
+      ],
+      "reuse_moves": [
+        "Format pro Kurzeintrag: 'Methodenname (Klasse): Wirkprinzip-Halbsatz; Verdikt mit Begründung.'",
+        "Auflösungs-, Reifegrad- oder Verfügbarkeitsbeschränkungen explizit benennen, damit nachvollziehbar wird, warum die Methode nicht in die Detailbewertung wandert."
+      ]
+    },
+    {
+      "id": "rascon_verdict_eddy_current",
+      "source_file": "Machbarkeitsstudie_RASCON_Blitsschutzgitter_kontaktlose_Pruefung.docx",
+      "story_role": "verdict_pattern",
+      "block_template_ids": [
+        "detail_assessment_per_option"
+      ],
+      "excerpt": "Erfolgsaussichten (qualitativ): sehr hoch für Gitterabbildung und Gitterdefekte; mittel für reine Delamination ohne elektrische Auswirkung. Wesentliche Randbedingung ist der Sensorabstand (Lift-off) und die genaue Auslegung von Frequenz und Sondengeometrie. Mehrfrequenz-Ansätze können helfen, Lift-off-Effekte zu kompensieren und Robustheit zu erhöhen.",
+      "why_it_works": [
+        "Verdikt-Zeile differenziert zwischen Stärkeachse (Gitterabbildung/-defekte) und Schwächeachse (reine Delamination) und schreibt die Bedingung dazu.",
+        "Folgesatz benennt die genaue Randbedingung (Lift-off, Frequenz, Sondengeometrie) und verweist auf eine Mitigation – das verbindet Detailbewertung und Risikoregister direkt."
+      ],
+      "reuse_moves": [
+        "Verdikt-Zeile immer als 'Erfolgsaussichten (qualitativ): … für …; … für …' formulieren – mit mindestens zwei differenzierten Bewertungen.",
+        "Direkt nach dem Verdikt die kritische Randbedingung benennen und ggf. eine Mitigation andeuten – das verzahnt Detailbewertung und Risikoregister."
+      ]
+    },
+    {
+      "id": "rascon_verdict_induktions_thermografie",
+      "source_file": "Machbarkeitsstudie_RASCON_Blitsschutzgitter_kontaktlose_Pruefung.docx",
+      "story_role": "verdict_pattern",
+      "block_template_ids": [
+        "detail_assessment_per_option"
+      ],
+      "excerpt": "Erfolgsaussichten (qualitativ): hoch bis sehr hoch für Gitter und Defekte, hoch für Delamination nahe der Blitzschutzlage. Risiken: Überlagerung durch andere leitfähige Schichten (z.B. zusätzliche Folie) und Wärmeleitung in Decklagen; erfordert geeignete Anregungsfrequenz und Spulengeometrie.",
+      "why_it_works": [
+        "Verdikt nutzt eine Bandbreite ('hoch bis sehr hoch'), die ehrlicher ist als ein Punktwert, wenn die Erfolgsaussicht von der Konfiguration abhängt.",
+        "Risiko-Halbsatz wird direkt nach dem Verdikt eingeführt, nicht ans Ende des Absatzes verschoben – das macht das Verdikt operativ verwertbar."
+      ],
+      "reuse_moves": [
+        "Bandbreiten ('hoch bis sehr hoch') sind erlaubt, wenn die Spannweite physikalisch begründet ist – sie sind ehrlicher als ein Punktwert.",
+        "Risiko und Wirkungs-Bedingung direkt im Anschluss ans Verdikt benennen, nicht an einen späteren Risikoblock vertagen."
+      ]
+    },
+    {
+      "id": "rascon_verdict_terahertz",
+      "source_file": "Machbarkeitsstudie_RASCON_Blitsschutzgitter_kontaktlose_Pruefung.docx",
+      "story_role": "verdict_pattern",
+      "block_template_ids": [
+        "detail_assessment_per_option"
+      ],
+      "excerpt": "Erfolgsaussichten (qualitativ): hoch für die Lokalisierung der ersten Metallschicht; mittel bis hoch für die Abbildung einer Gitterstruktur, sofern keine geschlossene Folie als erste Metallschicht wirkt. Single-Shot ist abhängig von der verfügbaren Kameratechnik; rasternde Systeme sind verbreitet, jedoch zeigen Forschungsarbeiten Fortschritte in High-Throughput-THz-Imaging.",
+      "why_it_works": [
+        "Verdikt zwingt sich, zwischen 'Lokalisierung der ersten Metallschicht' (hoch) und 'Abbildung des Gitters' (konditional) zu trennen – ohne diese Trennung wäre die Aussage falsch.",
+        "Die Konditional-Klausel ('sofern keine geschlossene Folie …') macht den Übergang zur Szenarien-Tabelle transparent."
+      ],
+      "reuse_moves": [
+        "Verdikt nach Detektionsobjekt aufsplitten, sobald eine Methode für unterschiedliche Detektionsziele unterschiedlich performt.",
+        "Konditionale Verdikte explizit als 'sofern …' formulieren – nicht 'könnte unter Umständen' o. ä."
+      ]
+    },
+    {
+      "id": "rascon_verdict_hyperspektral",
+      "source_file": "Machbarkeitsstudie_RASCON_Blitsschutzgitter_kontaktlose_Pruefung.docx",
+      "story_role": "verdict_pattern",
+      "block_template_ids": [
+        "detail_assessment_per_option"
+      ],
+      "excerpt": "Hyperspektrale Kameras sind primär Oberflächen- und Beschichtungssensoren. Unter typischen Luftfahrtlacksystemen ist die optische Eindringtiefe begrenzt; eine direkte geometrische Abbildung eines Kupfergitters unter Lack/Primer ist daher nur in Sonderfällen zu erwarten (z.B. sehr dünne, teiltransparente Schichten oder starke sekundäre Oberflächeneffekte).",
+      "why_it_works": [
+        "Negativeinordnung wird sauber begründet: physikalische Charakteristik (Oberflächensensorik), Anwendungslage (typische Lacksysteme), und Ausnahmefall werden alle benannt.",
+        "Statt der Methode 'niedrige Erfolgsaussichten' zu attestieren, wird die Methode auf eine Rolle verschoben ('primär Oberflächen- und Beschichtungssensoren') – das ist konstruktiver."
+      ],
+      "reuse_moves": [
+        "Negativeinordnungen so formulieren, dass die Methode auf ihre tatsächliche Rolle verschoben wird – nicht einfach abqualifiziert.",
+        "Ausnahmefälle ('z.B. sehr dünne, teiltransparente Schichten') benennen, sobald sie real existieren – das schützt die Studie vor Über-Pauschalisierung."
+      ]
+    },
+    {
+      "id": "rascon_verdict_mmwave",
+      "source_file": "Machbarkeitsstudie_RASCON_Blitsschutzgitter_kontaktlose_Pruefung.docx",
+      "story_role": "verdict_pattern",
+      "block_template_ids": [
+        "detail_assessment_per_option"
+      ],
+      "excerpt": "Mikrowellen- und Millimeterwellenverfahren können größere Sensorabstände erlauben und sind hardwareseitig oft robuster als THz. Die erreichbare Auflösung ist jedoch geringer; zudem ist CFK im RF-/MW-Bereich anisotrop leitfähig und verlustbehaftet, was die Auswertung erschweren kann. Als Fallback kann mmWave für großskalige Fehlstellen oder zur schnellen Vordetektion sinnvoll sein.",
+      "why_it_works": [
+        "Vorteil/Nachteil-Trennung in zwei klaren Sätzen, dann ein konkreter Anwendungs-Vorschlag ('als Fallback für großskalige Fehlstellen').",
+        "Materialcharakteristik (CFK anisotrop und verlustbehaftet) wird als physikalische Bewertungsbasis genannt – nicht als pauschales 'könnte schwierig sein'."
+      ],
+      "reuse_moves": [
+        "Wenn eine Methode klare Vorteile und klare Nachteile hat, die beiden Seiten in zwei kurzen Sätzen trennen und mit einem Rollen-Vorschlag abschließen.",
+        "Materialcharakteristika ('anisotrop leitfähig und verlustbehaftet') sind belastbarer als Adjektive – sie immer dort einsetzen, wo sie das Verdikt tragen."
+      ]
+    },
+    {
+      "id": "rascon_experiment_phase0_klaerung",
+      "source_file": "Machbarkeitsstudie_RASCON_Blitsschutzgitter_kontaktlose_Pruefung.docx",
+      "story_role": "experiment_design",
+      "block_template_ids": [
+        "experiment_design"
+      ],
+      "excerpt": "Vor einer sensortechnischen Festlegung sollte der reale Schichtaufbau verifiziert werden (insbesondere: Gitter vs. EMF, zusätzliche metallische Folie, Lage und Dicke der leitfähigen Lagen). Empfohlen: Schliff/Querschliff an repräsentativen Coupons oder eine einfache elektrische Durchgangs- bzw. Flächenwiderstandsmessung als erster Plausibilitätscheck.",
+      "why_it_works": [
+        "Macht Phase 0 als 'Realitätscheck der zentralen Konfigurationsannahme' explizit – das schützt das gesamte Versuchsdesign vor falschen Voraussetzungen.",
+        "Schlägt zwei sehr unterschiedlich aufwendige Methoden vor (Querschliff vs. einfache Widerstandsmessung) – damit ist die Phase 0 unabhängig vom Probenzugang umsetzbar."
+      ],
+      "reuse_moves": [
+        "Phase 0 immer als 'Realitätscheck der kritischen Konfigurationsannahme' formulieren – sie ist der Risikofilter vor allen anderen Phasen.",
+        "Mindestens zwei alternative Methoden für Phase 0 anbieten, damit die Phase auch bei Probenknappheit ausführbar bleibt."
+      ]
+    },
+    {
+      "id": "rascon_experiment_phase1_coupons",
+      "source_file": "Machbarkeitsstudie_RASCON_Blitsschutzgitter_kontaktlose_Pruefung.docx",
+      "story_role": "experiment_design",
+      "block_template_ids": [
+        "experiment_design"
+      ],
+      "excerpt": "Ziel ist eine schnelle, quantitative Aussage zur Detektierbarkeit relevanter Defekte. Empfohlen wird ein Satz repräsentativer Coupons mit definierten Defektklassen und Ground Truth.",
+      "why_it_works": [
+        "Phase 1 wird durch ein operatives Ziel definiert ('schnelle, quantitative Aussage'), nicht durch Methodendetails – das hält den Plan offen für die in Phase 0 priorisierten Verfahren.",
+        "Kerngrößen ('repräsentative Coupons', 'definierte Defektklassen', 'Ground Truth') sind in einem Satz benannt und damit prüfbar."
+      ],
+      "reuse_moves": [
+        "Phasenziele immer operativ formulieren ('quantitative Aussage zu …'), nicht methodisch ('THz-Messung durchführen').",
+        "Ground-Truth-Bedingung explizit machen – ohne Ground Truth ist eine Coupon-Studie keine Validierungs-Coupon-Studie."
+      ]
+    },
+    {
+      "id": "rascon_experiment_phase1_defektkatalog_intro",
+      "source_file": "Machbarkeitsstudie_RASCON_Blitsschutzgitter_kontaktlose_Pruefung.docx",
+      "story_role": "experiment_design",
+      "block_template_ids": [
+        "experiment_design"
+      ],
+      "excerpt": "Lokaler Abbrand/Überhitzung (simuliert, z.B. durch definierte Erwärmung/Materialentfernung)",
+      "why_it_works": [
+        "Ein Defekt-Eintrag, der nicht nur den Defekt benennt, sondern auch eine reproduzierbare Erzeugungsmethode mitliefert – ohne diese Information ist die Coupon-Studie nicht konstruierbar.",
+        "Der Eintrag zeigt, dass Defekte für die Coupon-Studie aktiv erzeugt werden müssen, statt auf zufällige Vorkommen zu warten."
+      ],
+      "reuse_moves": [
+        "Jeden Defekt-Eintrag im Katalog mit einer reproduzierbaren Erzeugungsmethode versehen – nicht nur den Defekt benennen.",
+        "Defektkatalog als Mischung aus physikalisch unterscheidbaren Mechanismen anlegen (mechanisch, thermisch, Grenzfläche, Konfigurations-Stresstest)."
+      ]
+    },
+    {
+      "id": "rascon_experiment_phase1_messgroessen",
+      "source_file": "Machbarkeitsstudie_RASCON_Blitsschutzgitter_kontaktlose_Pruefung.docx",
+      "story_role": "experiment_design",
+      "block_template_ids": [
+        "experiment_design"
+      ],
+      "excerpt": "Messgrößen (Beispiele): Detektionswahrscheinlichkeit (POD), Falschalarme, Lokalisierungsfehler, minimale detektierbare Defektgröße, Durchsatz (m²/h) und Robustheit gegenüber Abstand/Neigung.",
+      "why_it_works": [
+        "Sechs Messgrößen, die Detektionsleistung (POD, minimale Defektgröße), Fehlbewertung (Falschalarme, Lokalisierungsfehler) und Anwendungstauglichkeit (Durchsatz, Robustheit) gemeinsam abbilden.",
+        "Die Liste verzichtet auf Sammelbegriffe wie 'Performance' – jede Messgröße ist quantifizierbar und vergleichbar."
+      ],
+      "reuse_moves": [
+        "Messgrößenliste so wählen, dass sie Detektionsleistung, Fehlbewertung und Anwendungstauglichkeit gemeinsam abdeckt – nicht nur eine dieser Achsen.",
+        "Sammelbegriffe wie 'Performance' oder 'Genauigkeit' vermeiden; lieber drei oder vier konkrete Messgrößen nennen."
+      ]
+    },
+    {
+      "id": "rascon_experiment_phase2_prototype",
+      "source_file": "Machbarkeitsstudie_RASCON_Blitsschutzgitter_kontaktlose_Pruefung.docx",
+      "story_role": "experiment_design",
+      "block_template_ids": [
+        "experiment_design"
+      ],
+      "excerpt": "Auf Basis der Coupon-Ergebnisse werden 1–2 Verfahren priorisiert (z.B. Induktions-Thermografie + Eddy-Current-Array oder Induktions-Thermografie + THz) und in einem prototypischen Prüfaufbau zusammengeführt. Ziel: Demonstration auf repräsentativen Bauteilgeometrien (Krümmung, Kanten, Stringer-Nähe) und Bewertung der industriellen Handhabbarkeit (Standoff, Geschwindigkeit, Bedienkonzept).",
+      "why_it_works": [
+        "Phase 2 wird ausdrücklich an die Phase-1-Ergebnisse gekoppelt ('Auf Basis der Coupon-Ergebnisse') und priorisiert auf eine sehr enge Methodenauswahl (1–2 Verfahren).",
+        "Die Prüfung erfolgt nicht abstrakt, sondern auf 'repräsentativen Bauteilgeometrien' mit drei konkreten Geometrie-Stressoren (Krümmung, Kanten, Stringer-Nähe)."
+      ],
+      "reuse_moves": [
+        "Phase 2 immer auf maximal 1–2 Verfahren priorisieren und das Auswahlkriterium ('Auf Basis der Coupon-Ergebnisse') explizit nennen.",
+        "Prototypen auf realen Geometrie-Stressoren testen – Krümmung, Kanten, Anschlussbereiche – nicht nur auf flachen Coupons."
+      ]
+    },
+    {
+      "id": "rascon_risk_r1_abschirmung",
+      "source_file": "Machbarkeitsstudie_RASCON_Blitsschutzgitter_kontaktlose_Pruefung.docx",
+      "story_role": "risk_pattern",
+      "block_template_ids": [
+        "risk_register"
+      ],
+      "excerpt": "R1: Abschirmung durch geschlossene Metallfolie: THz/MW und bestimmte induktive Geometrien sehen primär die erste leitfähige Schicht. Mitigation: Schichtaufbau verifizieren; Anregungsfrequenz/Coil-Design anpassen; ggf. auf thermische Signaturen (Induktions-Thermografie) ausweichen.",
+      "why_it_works": [
+        "Risikoeintrag mit klarem Code (R1), Effekt-Beschreibung (welche Methoden wie betroffen sind) und drei konkreten Mitigationen, die unterschiedliche Eingriffstiefen haben (Verifikation, Parametertuning, Methodenwechsel).",
+        "Verzichtet auf weiche Risikoprosa wie 'es besteht das Risiko, dass …' – der Effekt steht direkt an der Stelle des Risikotitels."
+      ],
+      "reuse_moves": [
+        "Risikoeinträge mit Code, Titel, Effekt und Mitigation in dieser Reihenfolge aufbauen.",
+        "Mindestens zwei oder drei alternative Mitigationen anbieten, damit das Risiko bei einer fehlgeschlagenen Mitigation nicht erneut offen ist."
+      ]
+    },
+    {
+      "id": "rascon_risk_r2_liftoff",
+      "source_file": "Machbarkeitsstudie_RASCON_Blitsschutzgitter_kontaktlose_Pruefung.docx",
+      "story_role": "risk_pattern",
+      "block_template_ids": [
+        "risk_register"
+      ],
+      "excerpt": "R2: Variabler Sensorabstand (Lift-off): ECT-Signale reagieren stark auf Abstand. Mitigation: mechanische Abstandshilfe, Kalibrierung, Mehrfrequenz-Auswertung, oder kamera-basierte Distanzmessung zur Korrektur.",
+      "why_it_works": [
+        "Mitigation-Liste nutzt vier verschiedene Wirkprinzipien (mechanisch, kalibrierungstechnisch, signaltechnisch, sensortechnisch) – das verteilt das Risiko auf mehrere Eingriffspunkte.",
+        "Der Effekt ist quantifizierbar in einem Halbsatz ('reagiert stark auf Abstand'), was ein Risikoregister belastbar macht."
+      ],
+      "reuse_moves": [
+        "Mitigationen so anlegen, dass sie unterschiedlichen Wirkprinzipien folgen – das macht den Risikoeintrag widerstandsfähig.",
+        "Effekte als physikalische Reaktionen ('reagiert stark auf …') beschreiben, nicht als organisatorische Probleme."
+      ]
+    },
+    {
+      "id": "rascon_risk_r3_anisotropie",
+      "source_file": "Machbarkeitsstudie_RASCON_Blitsschutzgitter_kontaktlose_Pruefung.docx",
+      "story_role": "risk_pattern",
+      "block_template_ids": [
+        "risk_register"
+      ],
+      "excerpt": "R3: CFK-Leitfähigkeit/Anisotropie: Kann EM-Messungen beeinflussen. Mitigation: Fokus auf Kupferdominanz; geeignete Frequenzen; Referenzmessungen in unkritischen Bereichen.",
+      "why_it_works": [
+        "Material-bezogenes Risiko, das eine Eigenschaft des Bauteils selbst (Anisotropie des CFK) als Störer formuliert – das ist häufig das schwierigste Risiko, weil es nicht durch Geräteparameter wegmitigierbar ist.",
+        "Mitigation enthält eine Referenzmessungs-Strategie ('Referenzmessungen in unkritischen Bereichen'), die ohne zusätzliches Gerät auskommt."
+      ],
+      "reuse_moves": [
+        "Material- bzw. Bauteil-bezogene Risiken explizit von Methoden-bezogenen Risiken trennen – sie haben andere Mitigationsmechanismen.",
+        "Referenzmessungen als Mitigation immer in Betracht ziehen, sobald die Bauteil-Variabilität schwer kontrollierbar ist."
+      ]
+    },
+    {
+      "id": "rascon_risk_r4_thermisch",
+      "source_file": "Machbarkeitsstudie_RASCON_Blitsschutzgitter_kontaktlose_Pruefung.docx",
+      "story_role": "risk_pattern",
+      "block_template_ids": [
+        "risk_register"
+      ],
+      "excerpt": "R4: Thermische Randbedingungen: Thermografie/Induktion hängt von Konvektion, Emissivität, Umgebungsbedingungen ab. Mitigation: kontrollierte Anregung, kurze Messzeiten, Emissivitätskorrektur, Lock-in-Auswertung, Referenzflächen.",
+      "why_it_works": [
+        "Risiko zählt drei voneinander unabhängige Störeinflüsse auf (Konvektion, Emissivität, Umgebungsbedingungen) und benennt fünf konkrete Mitigationen – das spiegelt die Komplexität thermografischer Verfahren wider.",
+        "Lock-in-Auswertung wird als signaltechnische Mitigation explizit genannt – das verbindet das Risikoregister mit der Detailbewertung der Induktions-Thermografie."
+      ],
+      "reuse_moves": [
+        "Bei Verfahren mit mehreren orthogonalen Störquellen jede Störquelle benennen und für jede mindestens eine Mitigation führen.",
+        "Wo signaltechnische Verfahren (Lock-in, Mehrfrequenz) als Mitigation taugen, sie explizit benennen, damit Detailbewertung und Risikoregister zusammenpassen."
+      ]
+    },
+    {
+      "id": "rascon_risk_r5_operativ",
+      "source_file": "Machbarkeitsstudie_RASCON_Blitsschutzgitter_kontaktlose_Pruefung.docx",
+      "story_role": "risk_pattern",
+      "block_template_ids": [
+        "risk_register"
+      ],
+      "excerpt": "R5: Operative Restriktionen (Röntgen): Strahlenschutz, Logistik, Durchsatz. Mitigation: Röntgen nur als Verifikations-/Stichprobenverfahren in Stufe C vorsehen.",
+      "why_it_works": [
+        "Operatives/regulatorisches Risiko wird sauber von technischen Risiken getrennt; die Mitigation ist eine Architekturentscheidung ('nur als Verifikations-/Stichprobenverfahren') statt eine Geräteeinstellung.",
+        "Verbindet das Risikoregister mit dem Empfehlungsblock, indem die mehrstufige Inspektionsarchitektur (Stufe C) explizit referenziert wird."
+      ],
+      "reuse_moves": [
+        "Operative und regulatorische Risiken immer als eigenen Eintrag führen – sie haben Architekturentscheidungen als Mitigation, nicht Geräteeinstellungen.",
+        "Mitigationen, die in der Empfehlung architektonisch verankert sind, im Risikoeintrag namentlich nennen ('Stufe C', 'Phase 2'), damit beide Sektionen sich gegenseitig stützen."
+      ]
+    },
+    {
+      "id": "rascon_recommendation_konsolidierung",
+      "source_file": "Machbarkeitsstudie_RASCON_Blitsschutzgitter_kontaktlose_Pruefung.docx",
+      "story_role": "recommendation_pattern",
+      "block_template_ids": [
+        "recommendation"
+      ],
+      "excerpt": "Unter der Randbedingung „kontaktlos“ sind elektrische/magnetische Verfahren (Eddy Current/Induktion) und insbesondere Induktions-Thermografie die aussichtsreichsten Kandidaten für eine robuste Detektion von Gitteranomalien unter Beschichtung. THz-Imaging ist eine sehr interessante Ergänzung für Schicht-/Grenzflächeninformation, sofern der Schichtaufbau keine geschlossene Metallfolie als erste reflektierende Schicht enthält. Hyperspektral wird als Ergänzung für den Beschichtungszustand empfohlen, jedoch nicht als Primärsensor zur Abbildung des Kupfergitters.",
+      "why_it_works": [
+        "Konsolidierungssatz beginnt mit der Randbedingung ('Unter der Randbedingung „kontaktlos“ …') – das hängt die Empfehlung an die Anforderungen zurück.",
+        "Drei Kandidatenklassen (priorisiert / konditional / Rolle als Ergänzung) werden in drei Sätzen klar getrennt – die Empfehlung ist gestaffelt, nicht alle Methoden werden gleichgewichtig behandelt."
+      ],
+      "reuse_moves": [
+        "Empfehlung mit Randbedingungssatz öffnen, damit sie immer an die Anforderungs-Sektion anschließt.",
+        "Methoden in der Empfehlung gestaffelt behandeln (Primär / Ergänzung mit Bedingung / Ergänzung mit klar begrenztem Zweck) – nicht als gleichwertige Liste."
+      ]
+    },
+    {
+      "id": "rascon_recommendation_priorisierung",
+      "source_file": "Machbarkeitsstudie_RASCON_Blitsschutzgitter_kontaktlose_Pruefung.docx",
+      "story_role": "recommendation_pattern",
+      "block_template_ids": [
+        "recommendation"
+      ],
+      "excerpt": "THz (Reflexion/TDS) als Ergänzung, abhängig vom realen Schichtaufbau.",
+      "why_it_works": [
+        "Ein Bullet aus der Priorisierungsliste, der das Muster 'Methode (Variante) als Rolle, Bedingung' trägt – ohne den Bedingungssatz wäre die Methodenrolle nicht entscheidungsfähig.",
+        "Die Bedingung ('abhängig vom realen Schichtaufbau') stellt die Verbindung zur Phase-0-Klärung her und macht die Empfehlungsarchitektur damit konsistent."
+      ],
+      "reuse_moves": [
+        "Empfehlungspunkte im Format 'Methode (Variante) als Rolle, Bedingung' formulieren – damit die Empfehlung als Architektur lesbar bleibt.",
+        "Konditional empfohlene Methoden mit der genauen Bedingung versehen, die im Versuchsdesign bzw. Risikoregister geprüft wird."
+      ]
+    },
+    {
+      "id": "rascon_appendix_pattern",
+      "source_file": "Machbarkeitsstudie_RASCON_Blitsschutzgitter_kontaktlose_Pruefung.docx",
+      "story_role": "appendix_pattern",
+      "block_template_ids": [
+        "appendix_sources"
+      ],
+      "excerpt": "[3] Towsyfyan, H.; Biguri, A.; Boardman, R.; Blumensath, T. Successes and challenges in non-destructive testing of aircraft composite structures. Chinese Journal of Aeronautics 33(3) (2020) 771–791. https://doi.org/10.1016/j.cja.2019.09.017",
+      "why_it_works": [
+        "Ein Quelleneintrag im Format 'Autoren · Titel · Journal Jahrgang(Heft) (Jahr) Seiten · DOI/URL' – alle Felder sind besetzt und identifizieren die Quelle eindeutig.",
+        "Die Nummerierung [3] verbindet den Eintrag mit dem Fließtextzitat 'in Anlehnung an … Towsyfyan et al. (2020)' – die Quellenliste ist nicht selbst-stehend, sondern an konkrete Textstellen gekoppelt."
+      ],
+      "reuse_moves": [
+        "Quelleneinträge so vollständig führen, dass sie ohne weiteren Suchaufwand auffindbar sind – Autoren, Titel, Publikationsort, Jahr, Seitenangabe und DOI/URL.",
+        "Quellennummerierung als Brücke zwischen Fließtext und Anhang nutzen – jede Nummer im Anhang muss mindestens einer Stelle im Text entsprechen."
+      ]
+    }
+  ],
+  "reference_patterns": [
+    {
+      "id": "rascon_pattern_full_feasibility",
+      "label": "Vollständige Machbarkeitsstudie (RASCON-Architektur)",
+      "source_files": [
+        "Machbarkeitsstudie_RASCON_Blitsschutzgitter_kontaktlose_Pruefung.docx"
+      ],
+      "best_for": [
+        "Methoden-Screenings im NDT-Umfeld",
+        "Materialprüfung mit kontaktlosen Verfahren",
+        "Studien, in denen mehrere Methoden gegen mehrere Konfigurationsvarianten zu bewerten sind"
+      ],
+      "structure_signals": [
+        "Titel + Untertitel + Statusvermerk + Kontextzeile",
+        "Scope-Disclaimer mit Quellenbasis und Validierungsvorbehalt",
+        "Abkürzungsverzeichnis vor dem Management Summary",
+        "Management Summary mit Zielsatz, Bullet-Findings und Risikoabsatz",
+        "Ausgangslage und Fragestellung mit nummerierten Leitfragen",
+        "Bauteilaufbau mit Abbildungen und Konfigurationsfrage",
+        "Anforderungen als Filterregeln auf den Methodenraum",
+        "Bewertungslogik mit fünf Achsen, gefolgt von der Hauptmatrix",
+        "Szenarien-Matrix als zweite Tabelle",
+        "Kurzbewertung weiterer Verfahren",
+        "Detailbewertung pro priorisierter Methode mit Verdikt-Zeile",
+        "Versuchsdesign in drei Phasen mit Defektkatalog und Messgrößen",
+        "Risikoregister mit kodierten Einträgen R1–R5",
+        "Fazit/Empfehlung mit priorisierter Methodenrolle",
+        "Anhang Quellen mit nummerierten Literaturangaben"
+      ],
+      "content_cues": [
+        "Konfigurationsfrage des Bauteils (z. B. Schichtaufbau, Materialvariante) ist der Drehpunkt der Studie",
+        "Bewertung bleibt qualitativ, aber differenziert; numerische Kennwerte werden als experimentell zu bestimmen ausgewiesen",
+        "Methodenliste enthält bewusst eine Negativeinordnung",
+        "Versuchsdesign beginnt mit einer Phase 0, die genau die kritische Konfigurationsannahme prüft",
+        "Risikoregister deckt physikalische, geometrische, material- und operative Effekte ab"
+      ],
+      "resource_ids": [
+        "rascon_title_pattern",
+        "rascon_scope_disclaimer",
+        "rascon_abbreviation_pattern",
+        "rascon_management_summary_zielsatz",
+        "rascon_management_summary_bullets",
+        "rascon_management_summary_risiko",
+        "rascon_problem_setup_lsp",
+        "rascon_leitfragen",
+        "rascon_layout_anchor_schichtaufbau",
+        "rascon_layout_gitter_mesh",
+        "rascon_layout_eindringbereich",
+        "rascon_requirement_kontaktlos",
+        "rascon_requirement_einseitig",
+        "rascon_requirement_defekte",
+        "rascon_screening_logic",
+        "rascon_screening_matrix_intro",
+        "rascon_screening_matrix_legende",
+        "rascon_scenario_matrix_intro",
+        "rascon_scenario_matrix_fussnote",
+        "rascon_short_assessment_other",
+        "rascon_verdict_eddy_current",
+        "rascon_verdict_induktions_thermografie",
+        "rascon_verdict_terahertz",
+        "rascon_verdict_hyperspektral",
+        "rascon_verdict_mmwave",
+        "rascon_experiment_phase0_klaerung",
+        "rascon_experiment_phase1_coupons",
+        "rascon_experiment_phase1_defektkatalog_intro",
+        "rascon_experiment_phase1_messgroessen",
+        "rascon_experiment_phase2_prototype",
+        "rascon_risk_r1_abschirmung",
+        "rascon_risk_r2_liftoff",
+        "rascon_risk_r3_anisotropie",
+        "rascon_risk_r4_thermisch",
+        "rascon_risk_r5_operativ",
+        "rascon_recommendation_konsolidierung",
+        "rascon_recommendation_priorisierung",
+        "rascon_appendix_pattern"
+      ],
+      "cautions": [
+        "Die Architektur ist für Methoden-Screenings optimiert – bei rein wirtschaftlichen Machbarkeitsstudien (z. B. Geschäftsmodell-Bewertung) muss die Methodenmatrix durch eine Optionsmatrix ersetzt werden, nicht zusätzlich angefügt.",
+        "Die Verdikt-Zeile 'Erfolgsaussichten (qualitativ): …' darf nicht zur Floskel verkommen; jeder Detailblock muss eine eigene, differenzierte Verdikt-Zeile haben.",
+        "Defektkatalog nicht als Sammelliste verwenden; jeder Eintrag muss einen anderen physikalischen Mechanismus repräsentieren."
+      ],
+      "style_samples": [
+        {
+          "source_file": "Machbarkeitsstudie_RASCON_Blitsschutzgitter_kontaktlose_Pruefung.docx",
+          "excerpt": "Erfolgsaussichten (qualitativ): hoch bis sehr hoch für Gitter und Defekte, hoch für Delamination nahe der Blitzschutzlage.",
+          "takeaway": "Verdikt-Zeile differenziert mehrere Detektionsachsen in einem Satz und nutzt Bandbreiten, wo eine Punktbewertung künstlich wäre."
+        },
+        {
+          "source_file": "Machbarkeitsstudie_RASCON_Blitsschutzgitter_kontaktlose_Pruefung.docx",
+          "excerpt": "Für die Prüfbarkeit ist entscheidend, ob die Blitzschutzlage eine offene Gitterstruktur ist oder ob zusätzlich eine weitgehend geschlossene Metallfolie vorhanden ist.",
+          "takeaway": "Die Konfigurationsfrage wird im Layout-Block ausgesprochen und trägt damit die gesamte spätere Szenarien- und Risikoarchitektur."
+        },
+        {
+          "source_file": "Machbarkeitsstudie_RASCON_Blitsschutzgitter_kontaktlose_Pruefung.docx",
+          "excerpt": "Vor einer sensortechnischen Festlegung sollte der reale Schichtaufbau verifiziert werden (insbesondere: Gitter vs. EMF, zusätzliche metallische Folie, Lage und Dicke der leitfähigen Lagen).",
+          "takeaway": "Phase 0 als Realitätscheck der kritischen Konfigurationsannahme – ohne diese Phase ruht der Plan auf einer ungetesteten Voraussetzung."
+        }
+      ]
+    }
+  ],
+  "reference_length_stats": {
+    "source_corpus": "RASCON-Referenzdokument (vollständige Machbarkeitsstudie)",
+    "document_count": 1,
+    "average_chars": 16380,
+    "min_chars": 16380,
+    "max_chars": 16380,
+    "total_chars": 16380,
+    "calculation_note": "Ermittelt aus word/document.xml der DOCX via Python-Walkthrough (alle w:t-Texte aller w:p-Knoten, ohne Bilddateien und ohne Inhaltsverzeichnis-Hidden-Felder). Die Studie umfasst neun Hauptkapitel plus Anhang und liegt damit oberhalb des entscheidungsfähigen Tiefenstandards."
+  },
+  "verdict_patterns": [
+    {
+      "report_type_id": "feasibility_study",
+      "block_id": "detail_assessment_per_option",
+      "pattern": "Erfolgsaussichten (qualitativ): <level> für <subject>; <level> für <subject>.",
+      "vocabulary": [
+        "niedrig",
+        "niedrig–mittel",
+        "mittel",
+        "mittel–hoch",
+        "hoch",
+        "sehr hoch"
+      ],
+      "notes": "Verpflichtend pro priorisierter Methode; mindestens zwei Achsen mit unterschiedlicher Einordnung."
+    },
+    {
+      "report_type_id": "market_research",
+      "block_id": "competitor_landscape",
+      "pattern": "Marktattraktivität (qualitativ): <level> für <segment>; <level> für <segment>.",
+      "vocabulary": [
+        "weak",
+        "moderate",
+        "strong"
+      ],
+      "notes": "Mindestens zwei Segmente mit unterschiedlicher Einordnung – ein flacher Block 'überall strong' fällt durch."
+    },
+    {
+      "report_type_id": "market_research",
+      "block_id": "recommendation_market",
+      "pattern": "Markt-Empfehlung: <level> für <segment×eintrittsoption>; Bedingung: <condition>.",
+      "vocabulary": [
+        "weak",
+        "moderate",
+        "strong"
+      ],
+      "notes": "Empfehlung trägt die Bedingung im Satz – nicht in einer Fußnote."
+    },
+    {
+      "report_type_id": "competitive_analysis",
+      "block_id": "competitor_matrix",
+      "pattern": "Wettbewerbsstellung: <level> in <dimension>; <level> in <dimension>.",
+      "vocabulary": [
+        "weak",
+        "moderate",
+        "strong",
+        "leading"
+      ],
+      "notes": "Pro Wettbewerber mindestens zwei Dimensionen; flache 'leading'-Reihen sind ein Lint-Fehler."
+    },
+    {
+      "report_type_id": "competitive_analysis",
+      "block_id": "moat_assessment",
+      "pattern": "Defensibility: <level> auf Basis <mechanism>; Erosionsfenster: <horizon>.",
+      "vocabulary": [
+        "weak",
+        "moderate",
+        "strong"
+      ],
+      "notes": "Mechanismus muss benannt werden; ein 'strong moat' ohne Mechanismus ist ungültig."
+    },
+    {
+      "report_type_id": "technology_screening",
+      "block_id": "shortlist",
+      "pattern": "Eignung (qualitativ): <level> für <use case>; K.O.-Kriterien: <list|none>.",
+      "vocabulary": [
+        "niedrig",
+        "mittel",
+        "hoch"
+      ],
+      "notes": "Verpflichtend für jeden Shortlist-Kandidaten."
+    },
+    {
+      "report_type_id": "whitepaper",
+      "block_id": "thesis",
+      "pattern": null,
+      "vocabulary": [],
+      "notes": "Whitepaper trägt keine Verdikt-Skala; die These selbst ist die belastbare Aussage. LINT-VERDICT-MISMATCH ist hier neutral."
+    },
+    {
+      "report_type_id": "literature_review",
+      "block_id": "synthesis",
+      "pattern": null,
+      "vocabulary": [],
+      "notes": "Literature Review trägt keine quantifizierte Verdikt-Skala; verbindliche Synthese-Aussagen ersetzen das Verdikt."
+    },
+    {
+      "report_type_id": "decision_brief",
+      "block_id": "recommendation_brief",
+      "pattern": "Empfehlung: <recommend|recommend with caveats|not recommended>; Bedingung: <condition>.",
+      "vocabulary": [
+        "recommend",
+        "recommend with caveats",
+        "not recommended"
+      ],
+      "notes": "Verpflichtend; Empfehlung ohne benannte Bedingung fällt durch."
+    }
+  ],
+  "style_profiles": [
+    {
+      "id": "scientific_engineering_dossier",
+      "label": "Wissenschaftlich-technisches Dossier",
+      "use_when": [
+        "Machbarkeitsstudien zu technischen Verfahren oder Methoden",
+        "evidenzbasierte Bewertungen von Material-, Prozess- oder Inspektionsoptionen",
+        "Berichte mit Methoden-Screening und Versuchsdesign"
+      ],
+      "directives": [
+        "schreibe nüchtern, präzise und fachlich; nicht beratend, nicht werbend, nicht förmlich-behördlich",
+        "stütze jede qualitative Aussage auf einen physikalischen, geometrischen oder material-bezogenen Mechanismus",
+        "trenne Beschreibung, Bewertung und Empfehlung sichtbar; eine Verdikt-Zeile pro Methode ist verpflichtend",
+        "nutze deutsche Fachbegriffe in einer konsistenten Schreibweise; englische Originalbegriffe in Klammern, wo etabliert",
+        "zeige Negativeinordnungen offen – eine Studie, die jede Methode hochstuft, ist nicht entscheidungsfähig"
+      ]
+    },
+    {
+      "id": "lab_method_dossier",
+      "label": "Labor-/Verfahrensdossier",
+      "use_when": [
+        "Bewertung von Laborverfahren oder analytischen Methoden",
+        "Studien mit Probenmatrix-Diskussion, Validierungsanforderungen und regulatorischem Pfad"
+      ],
+      "directives": [
+        "behandle Probenmatrix, Robustheit zwischen Labors und regulatorische Validierungsanforderungen als eigene Bewertungsachsen",
+        "trenne Sensitivität (analytische Leistungsfähigkeit) von Spezifität (Selektivität gegenüber Matrixstoffen) sauber",
+        "benenne Reifegrad und Standardisierungsstatus pro Methode (z. B. Pharmakopöe-Eintrag, ISO-Norm)"
+      ]
+    },
+    {
+      "id": "process_inline_dossier",
+      "label": "Inline-/Produktionsdossier",
+      "use_when": [
+        "Bewertung von Inline-Inspektion und produktionsnaher Methodik",
+        "Studien, in denen Linientakt, Verfügbarkeit und Bedienkonzept harte Bewertungsachsen sind"
+      ],
+      "directives": [
+        "ergänze die methodische Bewertung um Linien-bezogene Achsen (Taktzeit, Verfügbarkeit, Wartbarkeit, Bedienkonzept)",
+        "bewerte Methoden auch nach ihrer Einfügbarkeit in eine bestehende Linie – nicht nur nach physikalischer Eignung",
+        "behandle Schicht- und Variantenbetrieb als eigene Risiko-Dimension"
+      ]
+    },
+    {
+      "id": "market_analyst_dossier",
+      "label": "Markt-Analystinnen-Dossier",
+      "use_when": [
+        "Marktanalysen für Investitions- oder Markteintrittsentscheidungen",
+        "Wettbewerbsanalysen, in denen Anbieter, Segmente und Kanäle namentlich auftauchen",
+        "Berichte mit Sizing, Segmentierung und Eintrittsoptionen"
+      ],
+      "directives": [
+        "schreibe nüchtern und benenne Wettbewerber, Segmente und Kanäle namentlich – keine 'führenden Anbieter'-Sammelbegriffe",
+        "binde jede Größenangabe an Bezugsjahr und Quelle; Bandbreiten sind ehrlicher als Punktwerte und werden in einem Halbsatz hergeleitet",
+        "vermeide Berater-Floskeln wie 'lever', 'value pool', 'north star', 'white space' – sie ersetzen Substanz durch Vokabular",
+        "trenne Treiber, Bremser und Mechanismen sichtbar; eine Treiberliste ist keine Trendaufzählung",
+        "zeige mindestens eine Negativaussage je Hauptsektion – ein Marktanalyse-Bericht, der nichts ausschließt, hat nicht gefiltert"
+      ]
+    },
+    {
+      "id": "policy_brief_dossier",
+      "label": "Policy-Brief-/Whitepaper-Dossier",
+      "use_when": [
+        "Whitepapers, die eine Position öffentlich vertreten",
+        "Decision Briefs in regulierten oder politiknahen Kontexten",
+        "argumentgetragene Berichte mit klarer These und Rolle der Adressat:innen"
+      ],
+      "directives": [
+        "formuliere die These ohne Hedges; sie steht ungeschützt mit Geltungsbereich und Negativabgrenzung",
+        "trage die Argumentation als Belegpfad; jede Behauptung wird mit datierter Quelle oder benanntem Mechanismus gestützt",
+        "behandle Gegenargumente in ihrer stärksten Form, nicht als Strohmann; markiere Einwände, gegen die die These nicht hält",
+        "vermeide 'paradigm shift', 'next-generation', 'best-in-class', 'transformational' – sie ersetzen Argument durch Slogan",
+        "schreibe Implikationen rollenpräzise; eine Empfehlung ohne benannte Verantwortung und Zeithorizont fällt durch"
+      ]
+    },
+    {
+      "id": "academic_review_dossier",
+      "label": "Akademisches Review-Dossier",
+      "use_when": [
+        "Literature Reviews und Forschungsstand-Synthesen",
+        "Berichte, die nach Themen statt nach konkurrierenden Optionen strukturiert sind",
+        "Texte mit reproduzierbarer Suchmethode und Ein-/Ausschlusskriterien"
+      ],
+      "directives": [
+        "schreibe in dritter Person und ohne Erstellerstimme; Synthese ersetzt Werk-pro-Werk-Annotation",
+        "benenne Konsens, Kontroverse und offene Frage namentlich – wer vertritt was, mit Quellenverweis",
+        "trenne 'in Synthese eingeschlossen' von 'kontextuell zitiert' im Quellenverzeichnis",
+        "vermeide 'the literature suggests' als Pauschal-Bezug; konkrete Werke werden konkret zitiert",
+        "verallgemeinere Lücken nicht zu 'further research is needed'; Lücken werden mit Mechanismus und vermutetem Grund benannt"
+      ]
+    }
+  ],
+  "style_guidance": {
+    "reader_effect": [
+      "Der Leser soll merken, dass die Studie das Prüfobjekt, den Methodenraum und die Konfigurationsfrage tatsächlich verstanden hat.",
+      "Die Studie soll nach einer ehrlichen Methoden-Bewertung klingen, nicht nach einem Verkaufstext für eine vorab gewählte Methode.",
+      "Eine Fachreviewerin soll an mehreren Stellen denken können: 'Genau, das ist die richtige Achse, das ist die richtige Bedingung.'"
+    ],
+    "preferred_moves": [
+      "Jede Methodenaussage mit dem zugrundeliegenden physikalischen Mechanismus belegen, nicht nur mit einem Adjektiv.",
+      "Bewertungen pro Methode auf mehrere Achsen aufsplitten, sobald die Methode auf den Achsen unterschiedlich performt.",
+      "Konfigurationsfragen früh aussprechen und sie über Bauteilaufbau, Szenarien-Matrix, Versuchsdesign und Risikoregister konsequent durchziehen.",
+      "Defektklassen früh einführen und über Anforderungen, Bewertungsmatrix, Detailbewertung, Defektkatalog und Risikoregister hindurch wiederholbar verwenden.",
+      "Negativeinordnungen so führen, dass sie die Methode auf ihre tatsächliche Rolle verschieben, statt sie pauschal abzuwerten."
+    ],
+    "document_arc": [
+      "Die Frage zuerst – Domänenmodell zweitens. Erst die Forschungsfrage öffnet das Dokument; das Domänenmodell (Bauteilaufbau, Funktionsschichten) folgt direkt.",
+      "Anforderungen sind Filterregeln, nicht Wunschzettel. Sie reduzieren den Methodenraum auf das, was operativ überhaupt in Frage kommt.",
+      "Die Bewertungsmatrix ist der Drehpunkt der Studie; alles davor bereitet sie vor, alles danach präzisiert sie.",
+      "Detailbewertung, Versuchsdesign, Risikoregister und Empfehlung müssen sichtbar miteinander verzahnt sein – Risiken aus dem Register tauchen in der Detailbewertung auf, Mitigationen aus dem Register tauchen im Versuchsdesign auf."
+    ],
+    "section_bridging": [
+      "Sektionen nicht als unabhängige Inseln formulieren; jeder Abschnitt nimmt mindestens einen Begriff aus dem vorherigen wieder auf.",
+      "Defektklassen, die in den Anforderungen genannt werden, müssen in der Detailbewertung und im Defektkatalog wiederkehren – nicht zwei getrennte Listen führen.",
+      "Wenn eine Methode in der Hauptmatrix mit Sternchen markiert ist, muss die Detailbewertung dieselbe Bedingung explizit aufgreifen.",
+      "Wenn ein Risiko im Register kodiert wird, soll mindestens eine Mitigation im Versuchsdesign oder in der Empfehlung erscheinen."
+    ],
+    "reference_handling": [
+      "Eingebettete Referenz-Resources sind Kalibrierung für Verdikt-Zeilen, Risikoeinträge und Phasen-Definitionen; sie dürfen nicht als Vorlage für andere Domänen kopiert werden, ohne dass die Mechanismen für die neue Domäne eigenständig gedacht sind.",
+      "Aus den Referenzen ist vor allem die Mechanik zu übernehmen: wie Methoden gegeneinander gestellt werden, wie Verdikte differenziert werden, wie Phase 0 die kritische Konfigurationsannahme prüft.",
+      "Wenn eine Referenz inhaltlich nicht passt, sind ihr struktureller Aufbau und ihr Argumentations-Mechanismus wichtiger als das Vokabular."
+    ],
+    "dossier_story_model": [
+      "Frage: Die Studie öffnet mit einer beantwortbaren Forschungsfrage und benennt das Prüfobjekt material- und funktionsgenau.",
+      "Domänenmodell: Bauteilaufbau, Schichten oder Systemkomponenten werden so beschrieben, dass die kritische Konfigurationsfrage direkt erkennbar wird.",
+      "Anforderungen: Operative Randbedingungen werden als Filterregeln auf den Methodenraum formuliert.",
+      "Optionsraum: Der Methodenraum wird vollständig geöffnet; auch sekundäre Methoden werden mindestens kurz benannt.",
+      "Bewertungslogik: Achsen werden eingeführt, bevor die Matrix kommt – die Matrix wird damit lesbar.",
+      "Matrix: Die qualitative Hauptmatrix wird gefüllt und mit Legende versehen.",
+      "Szenarien: Konfigurationsabhängige Differenzen werden in einer zweiten Matrix sichtbar gemacht.",
+      "Detailbewertung: Pro priorisierter Methode mindestens zwei Absätze plus Verdikt-Zeile.",
+      "Risiken: Kodiertes Risikoregister mit Mitigationen, das physikalische, geometrische, material- und operative Effekte abdeckt.",
+      "Empfehlung: Konsolidierter Schlussabschnitt mit priorisierter Methodenrolle und benannter Bedingung."
+    ],
+    "section_role_guidance": [
+      "Das Management Summary ist nicht der Ort für Marketing; es ist der Ort, an dem die wichtigsten Methoden-Verdikte und das dominierende Risiko in voller Satzform stehen.",
+      "Der Bauteilaufbau-Block ist nicht eine Ingenieurszeichnung in Worten; er ist die Sektion, in der die kritische Konfigurationsfrage zum ersten Mal ausgesprochen wird.",
+      "Die Bewertungslogik-Sektion ist nicht eine Methodenliste; sie ist die Achsen-Definition, ohne die die Matrix unverständlich bleibt.",
+      "Die Detailbewertung pro Methode ist nicht eine Methodenbeschreibung; sie ist die Sektion, in der die qualitativen Verdikte auf ihre Wirkmechanismen zurückgeführt werden.",
+      "Das Risikoregister ist nicht eine Worry-Liste; es ist eine Sammlung benannter physikalischer, geometrischer und operativer Effekte mit Mitigationen.",
+      "Die Empfehlung ist nicht ein Marketingschluss; sie ist eine Architektur, die jede Methode auf ihre Rolle festlegt."
+    ],
+    "no_reference_strategy": [
+      "Wenn keine Referenz-Resources verfügbar sind, ersetzt das Reasoning aus der Bewertungslogik und dem Risikoregister die Kalibrierung – jeder Schritt der Studie wird vom davorliegenden Schritt abgeleitet.",
+      "Auch ohne Referenzmuster bleibt verpflichtend: Verdikt-Zeile pro Methode, kodiertes Risikoregister, Phase 0 als Realitätscheck, Defektkatalog mit physikalisch unterscheidbaren Mechanismen.",
+      "Lieber wenige starke Aussagen sauber durch das Dokument tragen als viele mittelgute Aussagen blockweise abarbeiten."
+    ],
+    "internal_perspective_rules": [
+      "Schreibe in einer ruhigen, fachlich neutralen Stimme; keine 'Wir empfehlen Ihnen …'-Beraterstimme, keine 'Aus meiner Sicht …'-Erstellerstimme.",
+      "Die Studie spricht über das Prüfobjekt und über Methoden, nicht über die eigene Studie ('In dieser Studie wird gezeigt …' ist redundant).",
+      "Eine einmal gewählte Stimme im gesamten Dokument durchhalten; nicht zwischen passivem Bericht und aktiver Empfehlungsstimme springen, ausgenommen der Empfehlungsblock am Schluss."
+    ],
+    "evidence_gap_policy": [
+      "Wenn ein Fakt nicht belegt ist, lasse ihn weg oder hebe ihn als blocking_question hervor – schreibe nicht 'möglicherweise', 'in bestimmten Fällen' oder 'unter Umständen' darüber hinweg.",
+      "Wenn eine Methode in der Detailbewertung mangels Quellen nicht ausreichend tief geführt werden kann, gehört sie in die Kurzbewertung oder als Forschungsansatz benannt – nicht halbherzig in die Detailbewertung.",
+      "Wenn der Schichtaufbau oder ein anderer kritischer Konfigurationsparameter unbekannt ist, ist Phase 0 verpflichtend; die Studie überspringt nicht die offene Frage."
+    ],
+    "domain_tone_rules": [
+      "Ton ist wissenschaftlich-technisch, nicht beratend. 'Empfohlen wird …' ist akzeptabel; 'Wir würden Ihnen vorschlagen …' nicht.",
+      "Quantitative Aussagen sind nur dann zulässig, wenn die Quelle belegt ist – qualitative Aussagen sind explizit als 'qualitativ' zu markieren ('Erfolgsaussichten (qualitativ): …').",
+      "Materialdomäne und Methodendomäne werden nicht vermischt: über CFK spricht man als Material, über Eddy Current spricht man als Verfahren, beides wird nicht als 'Lösung' verklammert."
+    ],
+    "terminology_consistency_rules": [
+      "Methoden-Akronyme genau in der Schreibweise des Abkürzungsverzeichnisses führen (z. B. ECT, ECPT, THz, HSI) – keine Mischformen ('THZ', 'Thz', 'EC-PT').",
+      "Material- und Funktionsschichten in einer Schreibweise führen (z. B. CFK, GFK, EMF, LSP) – die englische Originalform nur dort, wo sie etabliert ist.",
+      "Defektklassen mit ihrer Codierung (D1, D2, …) konsequent durchziehen, sobald der Defektkatalog steht."
+    ],
+    "numbers_freshness_rules": [
+      "Wenn quantitative Werte aus einer Quelle übernommen werden (z. B. POD-Bereiche, Durchsatz in m²/h, TRL-Stufen), die Quelle und das Bezugsjahr direkt nennen.",
+      "Wenn die Studie zwischen Original-Referenzwerten und eigenen Plausibilitätsannahmen wechselt, das im Disclaimer und in den jeweiligen Sektionen ausweisen.",
+      "Wenn eine Methode innerhalb von zwei bis drei Jahren signifikante Reifegradsprünge gemacht hat (z. B. High-Throughput-THz), das mit Quelle und Jahr benennen, sonst weglassen."
+    ],
+    "consultant_phrases_to_soften": [
+      "robuste Detektion",
+      "ganzheitliches Konzept",
+      "wesentlicher Treiber",
+      "vielversprechend",
+      "next level",
+      "industrietauglich",
+      "transformatorisch",
+      "lever",
+      "north star",
+      "value pool",
+      "white space",
+      "vision",
+      "journey",
+      "ecosystem",
+      "framework",
+      "go-to-market motion",
+      "operating rhythm",
+      "value-for-money",
+      "leading position"
+    ],
+    "dead_phrases_to_avoid": [
+      "im Folgenden werden",
+      "es ist anzumerken, dass",
+      "im Rahmen dieser Studie",
+      "vor diesem Hintergrund",
+      "die folgenden Abschnitte beleuchten",
+      "stellt einen wesentlichen Baustein dar",
+      "zielt darauf ab",
+      "um den Anforderungen der Zukunft gerecht zu werden",
+      "weist eine hohe Relevanz auf",
+      "der Markt ist hochdynamisch",
+      "im Zuge der Digitalisierung",
+      "es zeichnet sich ein klarer Trend ab",
+      "we believe",
+      "our view",
+      "paradigm shift",
+      "in today's fast-paced",
+      "best-in-class",
+      "next-generation",
+      "strategic alignment",
+      "synergy potential",
+      "transformational",
+      "actionable insights",
+      "as you know"
+    ],
+    "forbidden_meta_phrases": [
+      "öffentlich belastbare Hinweise",
+      "soweit beigefügt",
+      "nicht gesondert belegt",
+      "nach dem vorliegenden Kontext",
+      "falls vorhanden",
+      "sofern beigefügt",
+      "soweit aus den vorliegenden Unterlagen erkennbar",
+      "liegt derzeit nicht vor",
+      "ohne weitere Belege",
+      "based on our analysis",
+      "in our experience",
+      "industry sources suggest",
+      "the market suggests",
+      "experts agree that",
+      "as the literature shows",
+      "all signs point to",
+      "it is widely accepted"
+    ],
+    "revision_checklist": [
+      "Hat jede in der Detailbewertung geführte Methode eine eigene, differenzierte Verdikt-Zeile im Format 'Erfolgsaussichten (qualitativ): …'?",
+      "Steht im Bauteilaufbau die kritische Konfigurationsfrage explizit drin und wird sie in Szenarien-Matrix, Versuchsdesign Phase 0 und Risikoregister wieder aufgegriffen?",
+      "Erscheinen Defektklassen aus den Anforderungen sowohl in der Bewertungsmatrix als auch im Defektkatalog des Versuchsdesigns?",
+      "Hat die Hauptmatrix mindestens eine Negativeinordnung ('niedrig') und ist deren Begründung in der Detailbewertung oder in einer Fußnote rückverfolgbar?",
+      "Ist jede Sternchen-Markierung in der Hauptmatrix oder Szenarien-Matrix in der Legende mit physikalischer Bedingung aufgelöst?",
+      "Sind alle Risikoeinträge mit Code (R1, R2, …), Effekt-Beschreibung und mindestens einer konkreten Mitigation versehen?",
+      "Ist Phase 0 als Realitätscheck der kritischen Konfigurationsannahme verpflichtend formuliert, sobald die Bewertung von einer offenen Konfigurationsfrage abhängt?",
+      "Enthält die Empfehlung gestaffelte Methodenrollen (Primär / Ergänzung mit Bedingung / Optional) statt einer flachen Liste?",
+      "Sind alle im Fließtext referenzierten Quellen im Anhang nummeriert geführt – und enthält der Anhang nur tatsächlich zitierte Quellen?",
+      "Sind alle Akronyme im Verzeichnis tatsächlich im Text verwendet, und ist jede Schreibweise im gesamten Dokument konsistent?",
+      "Ist im gesamten Dokument keine forbidden_meta_phrase und keine dead_phrase aus den jeweiligen Listen verwendet?",
+      "Ist die Studienstimme einheitlich – keine Mischung aus Beratersprache, Akten-Stimme und 'Wir empfehlen Ihnen …'-Ton?",
+      "Falls der Bericht kein Feasibility-Study-Typ ist: Wurde der korrekte verdict_pattern aus 'verdict_patterns' verwendet (oder, bei Whitepaper/Literature Review, dokumentiert, dass kein quantifiziertes Verdikt erforderlich ist)?"
+    ],
+    "micro_examples": [
+      {
+        "id": "example_verdict_line",
+        "label": "Differenzierte Verdikt-Zeile statt Pauschalurteil",
+        "prefer": "Erfolgsaussichten (qualitativ): sehr hoch für Gitterabbildung und Gitterdefekte; mittel für reine Delamination ohne elektrische Auswirkung.",
+        "avoid": "Erfolgsaussichten: vielversprechend; das Verfahren könnte potenziell für die meisten Defektklassen geeignet sein.",
+        "why": "Das Pauschalurteil 'vielversprechend / könnte potenziell' transportiert keine entscheidungsfähige Information; das differenzierte Verdikt benennt Stärke- und Schwächeachse mit Begründung."
+      },
+      {
+        "id": "example_layout_anchor",
+        "label": "Konfigurationsfrage explizit machen",
+        "prefer": "Für die Prüfbarkeit ist entscheidend, ob die Blitzschutzlage eine offene Gitterstruktur ist oder ob zusätzlich eine weitgehend geschlossene Metallfolie vorhanden ist.",
+        "avoid": "Der Schichtaufbau ist komplex; verschiedene Konfigurationen sind grundsätzlich möglich und müssen berücksichtigt werden.",
+        "why": "Der Avoid-Satz ist eine Allgemeinplatz-Hülle ohne entscheidungsrelevante Information; der Prefer-Satz nennt die genaue Konfigurationsfrage, die alle weiteren Sektionen trägt."
+      },
+      {
+        "id": "example_risk_entry",
+        "label": "Risikoeintrag mit Mechanismus, nicht mit Sorge",
+        "prefer": "R2: Variabler Sensorabstand (Lift-off): ECT-Signale reagieren stark auf Abstand. Mitigation: mechanische Abstandshilfe, Kalibrierung, Mehrfrequenz-Auswertung.",
+        "avoid": "Es besteht das Risiko, dass die Messung durch verschiedene Faktoren beeinträchtigt werden könnte und die Ergebnisse möglicherweise nicht zuverlässig sind.",
+        "why": "Der Avoid-Eintrag ist eine generische Worry, der Prefer-Eintrag benennt physikalischen Effekt, betroffene Methode und drei orthogonale Mitigationen."
+      },
+      {
+        "id": "example_axis_consistency",
+        "label": "Achsen differenzieren statt parallelisieren",
+        "prefer": "Hyperspektral (VIS/NIR/SWIR): Fläche hoch, Gitterbild niedrig, Gitterdefekt niedrig, Delamination mittel, Reifegrad hoch.",
+        "avoid": "Hyperspektral: alle Achsen gleichermaßen geeignet, da es sich um ein flexibles und modernes Verfahren handelt.",
+        "why": "Identische Bewertung über alle Achsen ist fast immer ein Bewertungsfehler; eine Methode performt typischerweise auf jeder Achse anders, und genau diese Differenz ist die Aussagekraft der Matrix."
+      },
+      {
+        "id": "example_phase0_check",
+        "label": "Phase 0 als Realitätscheck der zentralen Annahme",
+        "prefer": "Vor einer sensortechnischen Festlegung sollte der reale Schichtaufbau verifiziert werden (Gitter vs. EMF, zusätzliche metallische Folie, Lage und Dicke der leitfähigen Lagen) – Empfohlen: Querschliff oder Flächenwiderstandsmessung als Plausibilitätscheck.",
+        "avoid": "Im Rahmen einer ersten Phase könnten weitere Untersuchungen durchgeführt werden, um den Schichtaufbau besser zu verstehen.",
+        "why": "Der Avoid-Satz ist eine Förderdeutsch-Hülle; der Prefer-Satz benennt die offene Frage, die zu prüfenden Konfigurationsparameter und zwei alternative Methoden zur Beantwortung."
+      },
+      {
+        "id": "example_evidence_gap",
+        "label": "Evidenzlücke nicht überschreiben",
+        "prefer": "Die exakte POD-Range hängt von Coil-Geometrie und Frequenzwahl ab und ist experimentell zu bestimmen (siehe Phase 1, Defektkatalog D1–D4).",
+        "avoid": "Die Methode erreicht möglicherweise hohe POD-Werte; in bestimmten Fällen können auch sehr kleine Defekte unter Umständen detektiert werden.",
+        "why": "Der Avoid-Satz häuft drei Hedges ('möglicherweise', 'in bestimmten Fällen', 'unter Umständen') und liefert keine entscheidungsfähige Information; der Prefer-Satz markiert die Lücke explizit und verweist auf den Mechanismus, mit dem sie geschlossen werden soll."
+      },
+      {
+        "id": "example_meta_phrase",
+        "label": "Verbotene Meta-Phrase entschärfen",
+        "prefer": "Eine geschlossene Metallschicht wirkt i.d.R. als starke Reflexions-/Abschirmbarriere; THz-Imaging ist in diesem Szenario nicht aussichtsreich.",
+        "avoid": "Nach dem vorliegenden Kontext und soweit beigefügt deuten öffentlich belastbare Hinweise darauf hin, dass THz nicht uneingeschränkt geeignet sein dürfte.",
+        "why": "Der Avoid-Satz häuft drei verbotene Meta-Formeln ('nach dem vorliegenden Kontext', 'soweit beigefügt', 'öffentlich belastbare Hinweise') und kommt zu einer schwächeren Aussage; der Prefer-Satz steht direkt zum Mechanismus."
+      },
+      {
+        "id": "example_market_sizing",
+        "label": "Marktgröße mit Annahmenpfad statt Punktwert",
+        "prefer": "Der EU-Mid-Market für Cloud-DLP wird auf USD 1.8–2.4 Mrd. (2025) geschätzt; Top-down via Gartner 2024 (USD 7.6 Mrd. globaler DLP-Markt × ~28 % EU-Anteil aus IDC 2024 × ~85 % Mid-Market-Penetration laut Forrester 2024).",
+        "avoid": "Der Markt für Cloud-DLP ist hochdynamisch und wächst stark; die Marktgröße ist signifikant und bietet erhebliches Potenzial.",
+        "why": "Der Avoid-Satz häuft drei Trendformeln und liefert keine Zahl; der Prefer-Satz nennt Bandbreite, Bezugsjahr und drei explizite Quellen mit Multiplikatoren."
+      },
+      {
+        "id": "example_competitor_naming",
+        "label": "Wettbewerber namentlich, nicht als Sammelkategorie",
+        "prefer": "Direkte Wettbewerber im EU-Mid-Market: CrowdStrike Falcon Cloud Security (leading in Endpoint-Anker), Microsoft Purview (strong in Office-365-Integration), Forcepoint ONE (moderate in Mid-Market-Pricing); indirektes Substitut: Eigenentwicklung auf Open-Source-DLP.",
+        "avoid": "Es gibt einige führende Anbieter im Markt sowie diverse Nischenanbieter, die best-in-class-Lösungen für unterschiedliche Anwendungsfälle bereitstellen.",
+        "why": "Der Avoid-Satz tut so, als wäre der Wettbewerb eine diffuse Wolke; der Prefer-Satz nennt drei direkte Wettbewerber namentlich, ordnet sie pro Achse ein und benennt das stärkste Substitut."
+      },
+      {
+        "id": "example_whitepaper_thesis",
+        "label": "Whitepaper-These ungeschützt",
+        "prefer": "These: Audit-Trails von LLM-Anwendungen müssen bis 2027 für jede regulierte Branche in der EU zertifizierbar sein; ohne kryptografisch verankerte Provenienz-Spuren wird der EU-AI-Act-Compliance-Pfad für GenAI-Workflows in Banking, Healthcare und Public Sector nicht haltbar.",
+        "avoid": "In einer sich rasant wandelnden KI-Landschaft eröffnen sich next-generation Möglichkeiten, die einen paradigm shift in der Audit-Logik nahelegen könnten.",
+        "why": "Der Avoid-Satz wirkt wie ein Slogan und wagt keine Aussage; der Prefer-Satz nennt Branche, Frist, Mechanismus und Geltungsbereich – er ist falsifizierbar und damit eine echte These."
+      },
+      {
+        "id": "example_decision_brief_recommendation",
+        "label": "Decision-Brief-Empfehlung mit Bedingung",
+        "prefer": "Empfehlung: recommend with caveats – Reseller-Modell mit Partner X für DACH-Mid-Market starten, sofern CAC im 60-Tage-Pilot < EUR 4.5k bleibt und Partner X ≥ 8 Pilotkunden beibringt; ansonsten Direktvertrieb prüfen.",
+        "avoid": "Empfehlung: Wir sehen erhebliches transformationales Potenzial und empfehlen, eine strategische Partnerschaft mit Synergie-Potenzial zu prüfen.",
+        "why": "Der Avoid-Satz häuft drei verbotene Floskeln und trifft keine Entscheidung; der Prefer-Satz wählt eine Option, beziffert die Bedingungen und benennt den Default-Pfad bei Bedingungsbruch."
+      }
+    ]
+  }
+}

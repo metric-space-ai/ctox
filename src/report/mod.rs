@@ -1,32 +1,41 @@
-//! `ctox report` — deep research report runs (feasibility, market research, …).
+//! `ctox report …` — deep research report runs.
 //!
-//! Architecture: see CLAUDE.md and the design notes in
-//! `skills/system/research/deep-research/references/stage_contracts.md`.
+//! This is the Rust backend for the deep-research skill at
+//! `skills/system/research/deep-research/`. The skill defines seven report
+//! types (feasibility_study, market_research, competitive_analysis,
+//! technology_screening, whitepaper, literature_review, decision_brief)
+//! and a manager-loop architecture analogous to the Förderantrag agent.
 //!
-//! Hard rules enforced here, not by prompt discipline:
-//! - All durable state lives in `runtime/ctox.sqlite3` under `report_*` tables.
-//! - Claims are first-class DB rows with FK to evidence, never free prose.
-//! - `draft` is deterministic; it cannot invent prose.
-//! - `render` refuses without a prior `check overall_pass=1` for that version.
-//! - `revise` requires a body-hash change (witness of progress).
+//! Hard rules — encoded by the schema and the manager loop, not by prompt
+//! discipline:
+//! - Manager passes no markdown into tool arguments; only `skill_id` and
+//!   `instance_ids`. Markdown only enters the workspace via sub-skill
+//!   output (schema-validated) plus `apply_block_patch`.
+//! - max 6 instance_ids per write/revise call (schema-enforced).
+//! - All four checks (completeness, character_budget, release_guard,
+//!   narrative_flow) must report `ready_to_finish=true` before a run can
+//!   transition to `Finalised`. The host overrides any LLM `finished`
+//!   verdict that violates this gate.
 
-pub mod blueprints;
-pub mod check;
+pub mod asset_pack;
+pub mod schema;
+pub mod state;
+pub mod workspace;
+
+// The following modules are built in subsequent waves. Declared here as
+// `pub mod` placeholders so other waves can drop their files in without
+// touching this file.
+pub mod checks;
 pub mod cli;
-pub mod claims;
-pub mod critique;
-pub mod draft;
-pub mod evidence;
-pub mod manuscript;
+pub mod manager;
+pub mod manager_prompt;
+pub mod mission_hook;
+pub mod patch;
 pub mod render;
-pub mod runs;
-pub mod scope;
-pub mod scoring;
+pub mod schemas;
 pub mod sources;
-pub mod state_machine;
-pub mod store;
-
-pub use cli::handle_report_command;
+pub mod sub_skill;
+pub mod tools;
 
 #[cfg(test)]
-pub mod tests;
+mod tests;

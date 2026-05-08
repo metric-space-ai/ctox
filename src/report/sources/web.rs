@@ -7,7 +7,7 @@ use anyhow::Result;
 use serde_json::Value;
 use std::path::Path;
 
-use ctox_web_stack::{DeepResearchDepth, DeepResearchRequest, run_ctox_deep_research_tool};
+use ctox_web_stack::{run_ctox_deep_research_tool, DeepResearchDepth, DeepResearchRequest};
 
 /// Run a deep_research call rooted in the run topic. Returns the raw evidence
 /// bundle; the evidence stage is responsible for normalising the bundle into
