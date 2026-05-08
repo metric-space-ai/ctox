@@ -799,6 +799,283 @@ fn check_release_guard_flags_stub_evidence_cited_by_a_block() {
     );
 }
 
+// ---------- Layer 1: figures ----------
+
+#[test]
+fn figure_add_image_file_persists_row_and_copies_image() {
+    let root = TestRoot::new().unwrap();
+    let run_id = fresh_run(&root);
+    // Make a tiny valid PNG file (1x1 white pixel).
+    let png_src = root.path().join("src.png");
+    let one_pixel_png: [u8; 69] = [
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90,
+        0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x08, 0xD7, 0x63, 0xF8,
+        0xCF, 0xC0, 0x00, 0x00, 0x00, 0x03, 0x00, 0x01, 0x5B, 0x6E, 0x7B, 0x65, 0x00, 0x00, 0x00,
+        0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    ];
+    fs::write(&png_src, one_pixel_png).unwrap();
+
+    let args = vec![
+        s("figure-add"),
+        s("--run-id"),
+        run_id.clone(),
+        s("--kind"),
+        s("schematic"),
+        s("--caption"),
+        s("Test schematic"),
+        s("--source"),
+        s("eigene Darstellung"),
+        s("--image-file"),
+        png_src.to_string_lossy().to_string(),
+    ];
+    handle_command(root.path(), &args).expect("figure-add image-file happy path");
+
+    let conn = open(root.path()).unwrap();
+    let (kind, caption, source, code_kind, has_image): (
+        String,
+        String,
+        String,
+        Option<String>,
+        i64,
+    ) = conn
+        .query_row(
+            "SELECT kind, caption, source_label, code_kind, \
+                    CASE WHEN length(image_path) > 0 THEN 1 ELSE 0 END \
+             FROM report_figures WHERE run_id = ?1",
+            params![run_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+        )
+        .unwrap();
+    assert_eq!(kind, "schematic");
+    assert_eq!(caption, "Test schematic");
+    assert_eq!(source, "eigene Darstellung");
+    assert!(code_kind.is_none());
+    assert_eq!(has_image, 1);
+}
+
+#[test]
+fn figure_add_rejects_unknown_kind() {
+    let root = TestRoot::new().unwrap();
+    let run_id = fresh_run(&root);
+    let args = vec![
+        s("figure-add"),
+        s("--run-id"),
+        run_id,
+        s("--kind"),
+        s("not_a_kind"),
+        s("--caption"),
+        s("..."),
+        s("--source"),
+        s("..."),
+        s("--image-file"),
+        s("/nonexistent.png"),
+    ];
+    let err = handle_command(root.path(), &args).expect_err("must reject unknown kind");
+    assert!(format!("{err:#}").contains("--kind"));
+}
+
+#[test]
+fn figure_add_requires_a_source_mode() {
+    let root = TestRoot::new().unwrap();
+    let run_id = fresh_run(&root);
+    let args = vec![
+        s("figure-add"),
+        s("--run-id"),
+        run_id,
+        s("--kind"),
+        s("schematic"),
+        s("--caption"),
+        s("..."),
+        s("--source"),
+        s("..."),
+    ];
+    let err = handle_command(root.path(), &args).expect_err("must require source mode");
+    assert!(format!("{err:#}").contains("--code-mermaid"));
+}
+
+// ---------- Layer 2: tables ----------
+
+#[test]
+fn table_add_persists_csv_into_structured_row() {
+    let root = TestRoot::new().unwrap();
+    let run_id = fresh_run(&root);
+    let csv_path = root.path().join("matrix.csv");
+    let csv = "Verfahren,Fläche,Gitterbild,Defekt\nECT,mittel,sehr hoch,sehr hoch\nThz,mittel,hoch*,mittel\nIRT,hoch,hoch,hoch\n";
+    fs::write(&csv_path, csv).unwrap();
+    let args = vec![
+        s("table-add"),
+        s("--run-id"),
+        run_id.clone(),
+        s("--kind"),
+        s("matrix"),
+        s("--caption"),
+        s("Bewertungsmatrix (qualitativ)"),
+        s("--legend"),
+        s("Legende: Fläche = Single-Shot-Potenzial."),
+        s("--csv-file"),
+        csv_path.to_string_lossy().to_string(),
+    ];
+    handle_command(root.path(), &args).expect("table-add happy path");
+
+    let conn = open(root.path()).unwrap();
+    let (kind, caption, header_json, rows_json, legend): (
+        String,
+        String,
+        String,
+        String,
+        Option<String>,
+    ) = conn
+        .query_row(
+            "SELECT kind, caption, header_json, rows_json, legend \
+             FROM report_tables WHERE run_id = ?1",
+            params![run_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+        )
+        .unwrap();
+    assert_eq!(kind, "matrix");
+    assert!(caption.contains("Bewertungsmatrix"));
+    assert!(legend.unwrap().contains("Single-Shot"));
+    let header: Vec<String> = serde_json::from_str(&header_json).unwrap();
+    assert_eq!(header, vec!["Verfahren", "Fläche", "Gitterbild", "Defekt"]);
+    let rows: Vec<Vec<String>> = serde_json::from_str(&rows_json).unwrap();
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows[0][0], "ECT");
+    assert_eq!(rows[1][2], "hoch*");
+}
+
+#[test]
+fn table_add_rejects_csv_with_only_header() {
+    let root = TestRoot::new().unwrap();
+    let run_id = fresh_run(&root);
+    let csv_path = root.path().join("only_header.csv");
+    fs::write(&csv_path, "a,b,c\n").unwrap();
+    let args = vec![
+        s("table-add"),
+        s("--run-id"),
+        run_id,
+        s("--kind"),
+        s("matrix"),
+        s("--caption"),
+        s("..."),
+        s("--csv-file"),
+        csv_path.to_string_lossy().to_string(),
+    ];
+    let err = handle_command(root.path(), &args).expect_err("must reject header-only");
+    assert!(format!("{err:#}").contains("at least one"));
+}
+
+// ---------- Layer 3: storyline + arc_position ----------
+
+#[test]
+fn storyline_set_then_show_round_trip() {
+    let root = TestRoot::new().unwrap();
+    let run_id = fresh_run(&root);
+    let p = root.path().join("story.md");
+    let body = "Diese Studie folgt zwei Spannungsbögen. Erstens: die offensichtliche \
+        Antwort auf die Frage X ist Methode A, aber A scheitert an Y, was in §5.3 \
+        durch Quellen 1+2 gezeigt wird. Zweitens: die Auflösung ist nicht eine \
+        einzelne bessere Methode, sondern eine Architektur, in der A und B \
+        komplementär arbeiten. §1 deutet das an, §6 vertieft die Komplementarität, \
+        §7 macht daraus eine konkrete Roadmap, §9 ratifiziert die Empfehlung.";
+    fs::write(&p, body).unwrap();
+    let args = vec![
+        s("storyline-set"),
+        s("--run-id"),
+        run_id.clone(),
+        s("--markdown-file"),
+        p.to_string_lossy().to_string(),
+    ];
+    handle_command(root.path(), &args).expect("storyline-set");
+    handle_command(
+        root.path(),
+        &[s("storyline-show"), s("--run-id"), run_id.clone()],
+    )
+    .expect("storyline-show");
+
+    let conn = open(root.path()).unwrap();
+    let (md, set_at): (String, String) = conn
+        .query_row(
+            "SELECT storyline_md, storyline_set_at FROM report_runs WHERE run_id = ?1",
+            params![run_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert!(md.contains("Spannungsbögen"));
+    assert!(!set_at.is_empty());
+}
+
+#[test]
+fn storyline_set_rejects_too_short_text() {
+    let root = TestRoot::new().unwrap();
+    let run_id = fresh_run(&root);
+    let p = root.path().join("short.md");
+    fs::write(&p, "Zu kurz.").unwrap();
+    let args = vec![
+        s("storyline-set"),
+        s("--run-id"),
+        run_id,
+        s("--markdown-file"),
+        p.to_string_lossy().to_string(),
+    ];
+    let err = handle_command(root.path(), &args).expect_err("too short");
+    assert!(format!("{err:#}").contains("400 chars"));
+}
+
+#[test]
+fn block_stage_records_arc_position_when_supplied() {
+    let root = TestRoot::new().unwrap();
+    let run_id = fresh_run(&root);
+    let p = root.path().join("b.md");
+    fs::write(
+        &p,
+        "# Management Summary\n\nDie Studie öffnet die Spannung X [ev_test].",
+    )
+    .unwrap();
+    let args = vec![
+        s("block-stage"),
+        s("--run-id"),
+        run_id.clone(),
+        s("--instance-id"),
+        s("doc_study__management_summary"),
+        s("--markdown-file"),
+        p.to_string_lossy().to_string(),
+        s("--arc-position"),
+        s("tension_open"),
+    ];
+    handle_command(root.path(), &args).expect("block-stage with arc_position");
+    let conn = open(root.path()).unwrap();
+    let pos: String = conn
+        .query_row(
+            "SELECT arc_position FROM report_pending_blocks WHERE run_id = ?1",
+            params![run_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(pos, "tension_open");
+}
+
+#[test]
+fn block_stage_rejects_unknown_arc_position() {
+    let root = TestRoot::new().unwrap();
+    let run_id = fresh_run(&root);
+    let p = root.path().join("b.md");
+    fs::write(&p, "# T\n\nx [ev_y].").unwrap();
+    let args = vec![
+        s("block-stage"),
+        s("--run-id"),
+        run_id,
+        s("--instance-id"),
+        s("doc_study__x"),
+        s("--markdown-file"),
+        p.to_string_lossy().to_string(),
+        s("--arc-position"),
+        s("not_a_real_position"),
+    ];
+    let err = handle_command(root.path(), &args).expect_err("rejects unknown arc-position");
+    assert!(format!("{err:#}").contains("arc-position"));
+}
+
 // ---------- ask-user / answer round-trip ----------
 
 #[test]

@@ -132,6 +132,15 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
     migrate_add_column(conn, "report_evidence_register", "full_text_md", "TEXT");
     migrate_add_column(conn, "report_evidence_register", "full_text_source", "TEXT");
     migrate_add_column(conn, "report_evidence_register", "full_text_chars", "INTEGER");
+    // Storyline lives directly on the run row — single-source-of-truth
+    // narrative spine.
+    migrate_add_column(conn, "report_runs", "storyline_md", "TEXT");
+    migrate_add_column(conn, "report_runs", "storyline_set_at", "TEXT");
+    // arc_position: dramatic position of the block in the document arc
+    // ('tension_open' | 'tension_deepen' | 'complication' | 'turning_point'
+    //  | 'resolution_construct' | 'resolution_ratify' | 'support').
+    migrate_add_column(conn, "report_blocks", "arc_position", "TEXT");
+    migrate_add_column(conn, "report_pending_blocks", "arc_position", "TEXT");
     Ok(())
 }
 
@@ -360,4 +369,53 @@ CREATE INDEX IF NOT EXISTS idx_report_review_feedback_run
     ON report_review_feedback(run_id, imported_at DESC);
 CREATE INDEX IF NOT EXISTS idx_report_review_feedback_instance
     ON report_review_feedback(run_id, instance_id);
+
+-- Figures: schematic drawings, charts, diagrams attached to a run.
+-- The DOCX renderer embeds these as native images; markdown emits
+-- ![](path). Cross-references use {{fig:<figure_id>}} tokens in block
+-- markdown that the renderer resolves to the auto-numbered figure.
+CREATE TABLE IF NOT EXISTS report_figures (
+    figure_id           TEXT PRIMARY KEY,
+    run_id              TEXT NOT NULL,
+    fig_number          INTEGER,           -- assigned at render time
+    kind                TEXT NOT NULL,     -- 'schematic'|'chart'|'photo'|'extracted'
+    instance_id         TEXT,              -- block this figure belongs to
+    image_path          TEXT NOT NULL,     -- absolute path on disk
+    caption             TEXT NOT NULL,
+    source_label        TEXT NOT NULL,     -- e.g. 'eigene Darstellung' or DOI
+    code_kind           TEXT,              -- 'mermaid'|'matplotlib'|'graphviz'|null
+    code_md             TEXT,              -- source code if generated
+    width_px            INTEGER,
+    height_px           INTEGER,
+    created_at          TEXT NOT NULL,
+    FOREIGN KEY (run_id) REFERENCES report_runs(run_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_report_figures_run
+    ON report_figures(run_id, created_at ASC);
+CREATE INDEX IF NOT EXISTS idx_report_figures_instance
+    ON report_figures(run_id, instance_id);
+
+-- Real Word tables: structured rows + header + caption + legend. The
+-- DOCX renderer emits a native Word table with the asset_pack's matrix
+-- style. Markdown renderer emits a GFM pipe table. Cross-refs use
+-- {{tbl:<table_id>}} tokens.
+CREATE TABLE IF NOT EXISTS report_tables (
+    table_id            TEXT PRIMARY KEY,
+    run_id              TEXT NOT NULL,
+    tbl_number          INTEGER,           -- assigned at render time
+    kind                TEXT NOT NULL,     -- 'matrix'|'scenario'|'defect_catalog'|'risk_register'|'abbreviations'|'generic'
+    instance_id         TEXT,              -- block this table belongs to
+    caption             TEXT NOT NULL,
+    legend              TEXT,
+    header_json         TEXT NOT NULL,     -- ["col1","col2",...]
+    rows_json           TEXT NOT NULL,     -- [["v11","v12",...], ...]
+    created_at          TEXT NOT NULL,
+    FOREIGN KEY (run_id) REFERENCES report_runs(run_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_report_tables_run
+    ON report_tables(run_id, created_at ASC);
+CREATE INDEX IF NOT EXISTS idx_report_tables_instance
+    ON report_tables(run_id, instance_id);
 "#;

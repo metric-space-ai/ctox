@@ -7,6 +7,9 @@ edition = "2021"
 anyhow = "1"
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
+csv = "1"
+image = { version = "0.25", default-features = false, features = ["png"] }
+tempfile = "3"
 ctox-doc-stack = { path = "tools/doc-stack" }
 ctox-pdf-parse = { path = "tools/pdf-parse" }
 ctox-qwen3-embedding-0-6b = { path = "src/inference/models/qwen3_embedding_0_6b" }

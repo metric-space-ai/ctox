@@ -48,6 +48,12 @@ pub fn handle_command(root: &Path, args: &[String]) -> Result<()> {
         Some("status") => cmd_status(root, &args[1..]),
         Some("add-evidence") => cmd_add_evidence(root, &args[1..]),
         Some("evidence-show") => cmd_evidence_show(root, &args[1..]),
+        Some("figure-add") => cmd_figure_add(root, &args[1..]),
+        Some("figure-list") => cmd_figure_list(root, &args[1..]),
+        Some("table-add") => cmd_table_add(root, &args[1..]),
+        Some("table-list") => cmd_table_list(root, &args[1..]),
+        Some("storyline-set") => cmd_storyline_set(root, &args[1..]),
+        Some("storyline-show") => cmd_storyline_show(root, &args[1..]),
         Some("block-stage") => cmd_block_stage(root, &args[1..]),
         Some("block-apply") => cmd_block_apply(root, &args[1..]),
         Some("block-list") => cmd_block_list(root, &args[1..]),
@@ -1036,6 +1042,579 @@ fn cmd_evidence_show(root: &Path, args: &[String]) -> Result<()> {
 /// `ctox report block-stage --run-id RUN --instance-id ID --markdown-file F
 ///                          [--doc-id D] [--block-id B] [--title T] [--ord N]
 ///                          [--reason R] [--used-reference-ids "ev1,ev2"]`
+// ============================================================
+// Layer 1: Figures
+// ============================================================
+
+/// `ctox report figure-add --run-id RUN --kind <schematic|chart|photo|extracted>
+///   --caption "..." --source "..." [--instance-id ID]
+///   ( --code-mermaid FILE | --code-python FILE | --code-graphviz FILE
+///   | --image-file FILE | --extract-from-evidence ev_X --page N )`
+///
+/// Generates or imports a figure for the run. Code-driven modes render
+/// the source to a PNG via the relevant tool (mmdc / python /
+/// graphviz). Extract mode pulls a page-image from a stored OA-PDF in
+/// the evidence register. The PNG is persisted under the run's figure
+/// dir; the row in `report_figures` carries the path, caption, source
+/// label, and optional original source code.
+fn cmd_figure_add(root: &Path, args: &[String]) -> Result<()> {
+    let run_id = require_run_id(args, "usage: ctox report figure-add --run-id RUN ...")?;
+    let _ = load_run(root, run_id)?;
+    let kind = find_flag(args, "--kind").unwrap_or("schematic");
+    if !matches!(kind, "schematic" | "chart" | "photo" | "extracted") {
+        bail!(
+            "--kind must be one of: schematic, chart, photo, extracted (got {kind:?})"
+        );
+    }
+    let caption = find_flag(args, "--caption")
+        .ok_or_else(|| anyhow!("--caption \"...\" is required"))?
+        .to_string();
+    let source_label = find_flag(args, "--source")
+        .ok_or_else(|| anyhow!("--source \"...\" is required (e.g. 'eigene Darstellung' or DOI)"))?
+        .to_string();
+    let instance_id = find_flag(args, "--instance-id").map(str::to_string);
+
+    let figures_dir = root.join("runtime").join("report_figures").join(run_id);
+    std::fs::create_dir_all(&figures_dir).context("create figures dir")?;
+    let figure_id = new_id("fig");
+    let png_path = figures_dir.join(format!("{figure_id}.png"));
+
+    // Determine source mode and produce the PNG.
+    let (code_kind, code_md) = if let Some(path) = find_flag(args, "--code-mermaid") {
+        let code = read_markdown_file(path)?;
+        render_mermaid_to_png(&code, &png_path)?;
+        (Some("mermaid".to_string()), Some(code))
+    } else if let Some(path) = find_flag(args, "--code-python") {
+        let code = read_markdown_file(path)?;
+        render_python_to_png(&code, &png_path)?;
+        (Some("matplotlib".to_string()), Some(code))
+    } else if let Some(path) = find_flag(args, "--code-graphviz") {
+        let code = read_markdown_file(path)?;
+        render_graphviz_to_png(&code, &png_path)?;
+        (Some("graphviz".to_string()), Some(code))
+    } else if let Some(path) = find_flag(args, "--image-file") {
+        std::fs::copy(path, &png_path)
+            .with_context(|| format!("copy image-file {path} to figures dir"))?;
+        (None, None)
+    } else if let Some(ev_id) = find_flag(args, "--extract-from-evidence") {
+        let page: i64 = find_flag(args, "--page")
+            .and_then(|s| s.parse().ok())
+            .ok_or_else(|| anyhow!("--page N is required with --extract-from-evidence"))?;
+        extract_pdf_page_to_png(root, run_id, ev_id, page, &png_path)?;
+        (Some("pdf-extract".to_string()), None)
+    } else {
+        bail!(
+            "specify one of: --code-mermaid, --code-python, --code-graphviz, --image-file, --extract-from-evidence"
+        );
+    };
+
+    // Best-effort image dimension probe for the renderer.
+    let (w_px, h_px) = match image::open(&png_path) {
+        Ok(img) => (Some(img.width() as i64), Some(img.height() as i64)),
+        Err(_) => (None, None),
+    };
+
+    let conn = open(root)?;
+    ensure_schema(&conn)?;
+    let now = now_iso();
+    conn.execute(
+        "INSERT INTO report_figures (
+            figure_id, run_id, fig_number, kind, instance_id, image_path,
+            caption, source_label, code_kind, code_md, width_px, height_px,
+            created_at
+         ) VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+        params![
+            figure_id,
+            run_id,
+            kind,
+            instance_id,
+            png_path.to_string_lossy().to_string(),
+            caption,
+            source_label,
+            code_kind,
+            code_md,
+            w_px,
+            h_px,
+            now,
+        ],
+    )
+    .context("insert figure row")?;
+
+    println!("figure_id:   {figure_id}");
+    println!("kind:        {kind}");
+    println!("path:        {}", png_path.display());
+    if let (Some(w), Some(h)) = (w_px, h_px) {
+        println!("size:        {w}x{h} px");
+    }
+    println!("caption:     {caption}");
+    println!("source:      {source_label}");
+    println!(
+        "Cite from a block via the token {{{{fig:{figure_id}}}}} — the renderer assigns a fig_number."
+    );
+    Ok(())
+}
+
+fn render_mermaid_to_png(code: &str, out: &Path) -> Result<()> {
+    use std::io::Write;
+    use std::process::Command;
+    let tmp_dir = tempfile::tempdir().context("tempdir for mermaid")?;
+    let src = tmp_dir.path().join("diagram.mmd");
+    std::fs::File::create(&src)?
+        .write_all(code.as_bytes())
+        .context("write mermaid source")?;
+    let status = Command::new("mmdc")
+        .arg("-i")
+        .arg(&src)
+        .arg("-o")
+        .arg(out)
+        .arg("--quiet")
+        .status();
+    match status {
+        Ok(s) if s.success() => Ok(()),
+        Ok(s) => bail!("mmdc exited with {}", s.code().unwrap_or(-1)),
+        Err(err) => bail!(
+            "mmdc not available ({err}); install @mermaid-js/mermaid-cli or use --code-python instead"
+        ),
+    }
+}
+
+fn render_python_to_png(code: &str, out: &Path) -> Result<()> {
+    use std::io::Write;
+    use std::process::Command;
+    let tmp_dir = tempfile::tempdir().context("tempdir for python")?;
+    let src = tmp_dir.path().join("diagram.py");
+    // Append a small footer that saves the current figure to `out` so
+    // the LLM-supplied script can use plt.* without worrying about
+    // savefig wiring.
+    let mut full = String::from(
+        "# CTOX figure-add wrapper: matplotlib must use Agg backend.\n\
+         import matplotlib\n\
+         matplotlib.use('Agg')\n\
+         import matplotlib.pyplot as plt\n\
+         _OUT = ",
+    );
+    full.push('"');
+    full.push_str(&out.to_string_lossy());
+    full.push('"');
+    full.push_str("\n\n");
+    full.push_str(code);
+    full.push_str(
+        "\n\n# Save the current figure (or all of them concatenated, last wins).\n\
+         try:\n    plt.savefig(_OUT, dpi=150, bbox_inches='tight')\n\
+         except Exception as _err:\n    raise SystemExit(f'matplotlib savefig failed: {_err}')\n",
+    );
+    std::fs::File::create(&src)?
+        .write_all(full.as_bytes())
+        .context("write python source")?;
+    let status = Command::new("python3")
+        .arg(&src)
+        .status()
+        .context("python3 not available")?;
+    if !status.success() {
+        bail!("python3 exited with {}", status.code().unwrap_or(-1));
+    }
+    if !out.exists() {
+        bail!("python script ran but did not produce {}", out.display());
+    }
+    Ok(())
+}
+
+fn render_graphviz_to_png(code: &str, out: &Path) -> Result<()> {
+    use std::io::Write;
+    use std::process::Command;
+    let tmp_dir = tempfile::tempdir().context("tempdir for graphviz")?;
+    let src = tmp_dir.path().join("diagram.dot");
+    std::fs::File::create(&src)?
+        .write_all(code.as_bytes())
+        .context("write graphviz source")?;
+    let status = Command::new("dot")
+        .arg("-Tpng")
+        .arg(&src)
+        .arg("-o")
+        .arg(out)
+        .status();
+    match status {
+        Ok(s) if s.success() => Ok(()),
+        Ok(s) => bail!("dot exited with {}", s.code().unwrap_or(-1)),
+        Err(err) => bail!("dot not available ({err}); install graphviz"),
+    }
+}
+
+fn extract_pdf_page_to_png(
+    root: &Path,
+    run_id: &str,
+    evidence_id: &str,
+    page_index: i64,
+    out: &Path,
+) -> Result<()> {
+    let conn = open(root)?;
+    let row: Option<(String, String)> = conn
+        .query_row(
+            "SELECT canonical_id, COALESCE(url_full_text, '') FROM report_evidence_register \
+             WHERE run_id = ?1 AND evidence_id = ?2",
+            params![run_id, evidence_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    let (_canonical, url) = row.ok_or_else(|| {
+        anyhow!("evidence_id {evidence_id} not found in run {run_id}")
+    })?;
+    if url.trim().is_empty() {
+        bail!(
+            "evidence {evidence_id} has no url_full_text — cannot extract a page"
+        );
+    }
+    // Use ureq directly here rather than the OA pipeline so we don't
+    // care about license here — the operator has already opted in by
+    // running figure-add.
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(std::time::Duration::from_secs(8))
+        .timeout_read(std::time::Duration::from_secs(60))
+        .build();
+    let resp = agent
+        .get(&url)
+        .call()
+        .with_context(|| format!("fetch PDF {url}"))?;
+    let mut bytes: Vec<u8> = Vec::new();
+    use std::io::Read as _;
+    resp.into_reader()
+        .read_to_end(&mut bytes)
+        .context("read PDF body")?;
+    // Use ctox-pdf-parse's page-render hook — for now the simplest
+    // reliable extraction is a Python/poppler shell-out.
+    let tmp_dir = tempfile::tempdir().context("tempdir for pdf extract")?;
+    let pdf_path = tmp_dir.path().join("source.pdf");
+    std::fs::write(&pdf_path, &bytes).context("write source pdf")?;
+    use std::process::Command;
+    let prefix = tmp_dir.path().join("page");
+    let status = Command::new("pdftoppm")
+        .arg("-png")
+        .arg("-f")
+        .arg(format!("{}", page_index))
+        .arg("-l")
+        .arg(format!("{}", page_index))
+        .arg("-r")
+        .arg("150")
+        .arg(&pdf_path)
+        .arg(&prefix)
+        .status()
+        .context("pdftoppm not available; install poppler-utils")?;
+    if !status.success() {
+        bail!("pdftoppm exited with {}", status.code().unwrap_or(-1));
+    }
+    // pdftoppm names the output e.g. `page-1.png` or `page-01.png`.
+    for entry in std::fs::read_dir(tmp_dir.path())? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name_s = name.to_string_lossy();
+        if name_s.starts_with("page-") && name_s.ends_with(".png") {
+            std::fs::copy(entry.path(), out).context("copy extracted page")?;
+            return Ok(());
+        }
+    }
+    bail!("pdftoppm produced no output");
+}
+
+/// `ctox report figure-list --run-id RUN [--json]`
+fn cmd_figure_list(root: &Path, args: &[String]) -> Result<()> {
+    let run_id = require_run_id(args, "usage: ctox report figure-list --run-id RUN [--json]")?;
+    let _ = load_run(root, run_id)?;
+    let json_out = has_flag(args, "--json");
+    let conn = open(root)?;
+    let mut stmt = conn.prepare(
+        "SELECT figure_id, kind, instance_id, image_path, caption, source_label, \
+                code_kind, width_px, height_px \
+         FROM report_figures WHERE run_id = ?1 ORDER BY created_at ASC",
+    )?;
+    let rows: Vec<(
+        String,
+        String,
+        Option<String>,
+        String,
+        String,
+        String,
+        Option<String>,
+        Option<i64>,
+        Option<i64>,
+    )> = stmt
+        .query_map(params![run_id], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+                row.get(6)?,
+                row.get(7)?,
+                row.get(8)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    if json_out {
+        let payload: Vec<Value> = rows
+            .iter()
+            .map(|r| {
+                json!({
+                    "figure_id": r.0,
+                    "kind": r.1,
+                    "instance_id": r.2,
+                    "image_path": r.3,
+                    "caption": r.4,
+                    "source_label": r.5,
+                    "code_kind": r.6,
+                    "width_px": r.7,
+                    "height_px": r.8,
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&Value::Array(payload))?);
+    } else {
+        println!("FIGURES ({})", rows.len());
+        for r in &rows {
+            println!(
+                "  {}\tkind={}\tcite as {{{{fig:{}}}}}\t{}",
+                r.0,
+                r.1,
+                r.0,
+                truncate_for_table(&r.4, 60)
+            );
+        }
+    }
+    Ok(())
+}
+
+// ============================================================
+// Layer 2: Real Word tables
+// ============================================================
+
+/// `ctox report table-add --run-id RUN --kind <kind> --caption "..."
+///   --csv-file F [--instance-id ID] [--legend "..."]`
+///
+/// Persists a structured table into `report_tables`. CSV first row is
+/// the header, subsequent rows are data. The DOCX renderer emits this
+/// as a native Word table; the Markdown renderer emits a GFM pipe
+/// table. Cite from a block via `{{tbl:<table_id>}}`.
+fn cmd_table_add(root: &Path, args: &[String]) -> Result<()> {
+    let run_id = require_run_id(args, "usage: ctox report table-add --run-id RUN ...")?;
+    let _ = load_run(root, run_id)?;
+    let kind = find_flag(args, "--kind").unwrap_or("generic");
+    if !matches!(
+        kind,
+        "matrix" | "scenario" | "defect_catalog" | "risk_register" | "abbreviations" | "generic"
+    ) {
+        bail!(
+            "--kind must be one of: matrix, scenario, defect_catalog, risk_register, abbreviations, generic (got {kind:?})"
+        );
+    }
+    let caption = find_flag(args, "--caption")
+        .ok_or_else(|| anyhow!("--caption \"...\" is required"))?
+        .to_string();
+    let csv_path = find_flag(args, "--csv-file")
+        .ok_or_else(|| anyhow!("--csv-file PATH is required"))?;
+    let instance_id = find_flag(args, "--instance-id").map(str::to_string);
+    let legend = find_flag(args, "--legend").map(str::to_string);
+
+    let raw = std::fs::read_to_string(csv_path)
+        .with_context(|| format!("read csv file {csv_path}"))?;
+    let mut rdr = csv::ReaderBuilder::new()
+        .has_headers(false)
+        .flexible(true)
+        .from_reader(raw.as_bytes());
+    let mut all_rows: Vec<Vec<String>> = Vec::new();
+    for record in rdr.records() {
+        let record = record.context("parse csv record")?;
+        all_rows.push(record.iter().map(|s| s.to_string()).collect());
+    }
+    if all_rows.len() < 2 {
+        bail!("CSV must have at least one header row and one data row");
+    }
+    let header = all_rows.remove(0);
+    let header_json = serde_json::to_string(&header)?;
+    let rows_json = serde_json::to_string(&all_rows)?;
+
+    let conn = open(root)?;
+    ensure_schema(&conn)?;
+    let table_id = new_id("tbl");
+    let now = now_iso();
+    conn.execute(
+        "INSERT INTO report_tables (
+            table_id, run_id, tbl_number, kind, instance_id, caption,
+            legend, header_json, rows_json, created_at
+         ) VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![
+            table_id,
+            run_id,
+            kind,
+            instance_id,
+            caption,
+            legend,
+            header_json,
+            rows_json,
+            now,
+        ],
+    )
+    .context("insert table row")?;
+    println!("table_id:   {table_id}");
+    println!("kind:       {kind}");
+    println!("rows:       {} (plus header)", all_rows.len());
+    println!("cols:       {}", header.len());
+    println!("caption:    {caption}");
+    println!(
+        "Cite from a block via the token {{{{tbl:{table_id}}}}} — the renderer assigns a tbl_number."
+    );
+    Ok(())
+}
+
+/// `ctox report table-list --run-id RUN [--json]`
+fn cmd_table_list(root: &Path, args: &[String]) -> Result<()> {
+    let run_id = require_run_id(args, "usage: ctox report table-list --run-id RUN [--json]")?;
+    let _ = load_run(root, run_id)?;
+    let json_out = has_flag(args, "--json");
+    let conn = open(root)?;
+    let mut stmt = conn.prepare(
+        "SELECT table_id, kind, instance_id, caption, legend, header_json, rows_json \
+         FROM report_tables WHERE run_id = ?1 ORDER BY created_at ASC",
+    )?;
+    let rows: Vec<(
+        String,
+        String,
+        Option<String>,
+        String,
+        Option<String>,
+        String,
+        String,
+    )> = stmt
+        .query_map(params![run_id], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+                row.get(6)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    if json_out {
+        let payload: Vec<Value> = rows
+            .iter()
+            .map(|r| {
+                let header: Vec<String> = serde_json::from_str(&r.5).unwrap_or_default();
+                let data: Vec<Vec<String>> = serde_json::from_str(&r.6).unwrap_or_default();
+                json!({
+                    "table_id": r.0,
+                    "kind": r.1,
+                    "instance_id": r.2,
+                    "caption": r.3,
+                    "legend": r.4,
+                    "header": header,
+                    "rows": data,
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&Value::Array(payload))?);
+    } else {
+        println!("TABLES ({})", rows.len());
+        for r in &rows {
+            let cols: Vec<String> = serde_json::from_str(&r.5).unwrap_or_default();
+            let data: Vec<Vec<String>> = serde_json::from_str(&r.6).unwrap_or_default();
+            println!(
+                "  {}\tkind={}\trows={}x{}\tcite as {{{{tbl:{}}}}}\t{}",
+                r.0,
+                r.1,
+                data.len(),
+                cols.len(),
+                r.0,
+                truncate_for_table(&r.3, 50)
+            );
+        }
+    }
+    Ok(())
+}
+
+// ============================================================
+// Layer 3: Storyline + arc_position
+// ============================================================
+
+/// `ctox report storyline-set --run-id RUN --markdown-file F`
+///
+/// Persists the run-wide narrative spine. The Skill mandates that this
+/// is set after the evidence pass and before any block-stage. The text
+/// is a free-form narrative treatment in prose: the central tensions,
+/// the naïve answer that gets overturned, the turning point, the
+/// resolution as architecture.
+fn cmd_storyline_set(root: &Path, args: &[String]) -> Result<()> {
+    let run_id = require_run_id(args, "usage: ctox report storyline-set --run-id RUN --markdown-file F")?;
+    let _ = load_run(root, run_id)?;
+    let path = find_flag(args, "--markdown-file")
+        .ok_or_else(|| anyhow!("--markdown-file PATH is required"))?;
+    let body = std::fs::read_to_string(path)
+        .with_context(|| format!("read storyline file {path}"))?;
+    let trimmed = body.trim();
+    if trimmed.chars().count() < 400 {
+        bail!(
+            "storyline must be at least ~400 chars of narrative prose (got {}). Cover: \
+             central tension(s), naive answer + why it fails, turning-point finding, \
+             resolution as architecture, block-arc role hints.",
+            trimmed.chars().count()
+        );
+    }
+    let conn = open(root)?;
+    ensure_schema(&conn)?;
+    let now = now_iso();
+    let updated = conn.execute(
+        "UPDATE report_runs SET storyline_md = ?1, storyline_set_at = ?2 \
+         WHERE run_id = ?3",
+        params![trimmed.to_string(), now, run_id],
+    )?;
+    if updated == 0 {
+        bail!("run {run_id} not found");
+    }
+    println!("storyline persisted ({} chars)", trimmed.chars().count());
+    println!("View with: ctox report storyline-show --run-id {run_id}");
+    Ok(())
+}
+
+/// `ctox report storyline-show --run-id RUN [--json]`
+fn cmd_storyline_show(root: &Path, args: &[String]) -> Result<()> {
+    let run_id = require_run_id(args, "usage: ctox report storyline-show --run-id RUN [--json]")?;
+    let _ = load_run(root, run_id)?;
+    let conn = open(root)?;
+    let row: Option<(Option<String>, Option<String>)> = conn
+        .query_row(
+            "SELECT storyline_md, storyline_set_at FROM report_runs WHERE run_id = ?1",
+            params![run_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    let (story, set_at) = row.ok_or_else(|| anyhow!("run {run_id} not found"))?;
+    let story = story.unwrap_or_default();
+    if has_flag(args, "--json") {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "run_id": run_id,
+                "storyline_md": story,
+                "storyline_set_at": set_at,
+                "chars": story.chars().count(),
+            }))?
+        );
+    } else if story.is_empty() {
+        println!("(no storyline set yet — use `ctox report storyline-set`)");
+    } else {
+        println!(
+            "storyline ({} chars, set {}):",
+            story.chars().count(),
+            set_at.as_deref().unwrap_or("?")
+        );
+        println!();
+        println!("{}", story);
+    }
+    Ok(())
+}
+
 ///
 /// Stages one block-markdown into `report_pending_blocks` (paired with a
 /// new `report_skill_runs` parent row). The caller — typically the
@@ -1106,6 +1685,32 @@ fn cmd_block_stage(root: &Path, args: &[String]) -> Result<()> {
     };
     record_skill_run(&conn, &record)?;
     stage_pending_blocks(&conn, run_id, &skill_run_id, SkillRunKind::Write, &[staged])?;
+
+    // Optional: thread arc_position through to the pending row so the
+    // renderer + flow check see the dramatic role of this block.
+    if let Some(pos) = find_flag(args, "--arc-position") {
+        if !matches!(
+            pos,
+            "tension_open"
+                | "tension_deepen"
+                | "complication"
+                | "turning_point"
+                | "resolution_construct"
+                | "resolution_ratify"
+                | "support"
+        ) {
+            bail!(
+                "--arc-position must be one of: tension_open, tension_deepen, complication, turning_point, resolution_construct, resolution_ratify, support (got {pos:?})"
+            );
+        }
+        conn.execute(
+            "UPDATE report_pending_blocks SET arc_position = ?1 \
+             WHERE run_id = ?2 AND instance_id = ?3 AND skill_run_id = ?4",
+            params![pos, run_id, instance_id, skill_run_id],
+        )
+        .context("set arc_position on pending block")?;
+    }
+
     println!("Staged {instance_id} (skill_run_id {skill_run_id})");
     println!("Apply with: ctox report block-apply --run-id {run_id}");
     Ok(())
@@ -1140,6 +1745,18 @@ fn cmd_block_apply(root: &Path, args: &[String]) -> Result<()> {
     } else {
         Some(instance_filter.clone())
     };
+    // Snapshot pending arc_positions before patch.rs drains them.
+    let arc_map: std::collections::HashMap<String, String> = conn
+        .prepare(
+            "SELECT instance_id, arc_position FROM report_pending_blocks \
+             WHERE run_id = ?1 AND arc_position IS NOT NULL",
+        )?
+        .query_map(params![run_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
+
     let mut total_committed = 0usize;
     for skill_run_id in &skill_run_ids {
         let selection = PatchSelection {
@@ -1150,6 +1767,16 @@ fn cmd_block_apply(root: &Path, args: &[String]) -> Result<()> {
         let outcome = apply_block_patch(&conn, run_id, &selection)?;
         total_committed += outcome.committed_block_ids.len();
     }
+
+    // Propagate arc_positions to the committed rows.
+    for (instance_id, pos) in &arc_map {
+        let _ = conn.execute(
+            "UPDATE report_blocks SET arc_position = ?1 \
+             WHERE run_id = ?2 AND instance_id = ?3",
+            params![pos, run_id, instance_id],
+        );
+    }
+
     println!("Committed {total_committed} block(s).");
     Ok(())
 }
@@ -1666,7 +2293,23 @@ USAGE
 
   ctox report block-stage --run-id RUN --instance-id ID --markdown-file F
         [--doc-id D] [--block-id B] [--title T] [--ord N] [--reason R]
-        [--used-reference-ids \"ev1,ev2\"]
+        [--used-reference-ids \"ev1,ev2\"] [--arc-position <pos>]
+        (arc_position one of: tension_open | tension_deepen | complication
+         | turning_point | resolution_construct | resolution_ratify | support)
+
+  ctox report figure-add --run-id RUN --kind <schematic|chart|photo|extracted>
+        --caption \"...\" --source \"...\" [--instance-id ID]
+        ( --code-mermaid F | --code-python F | --code-graphviz F
+        | --image-file F | --extract-from-evidence ev_X --page N )
+  ctox report figure-list --run-id RUN [--json]
+
+  ctox report table-add --run-id RUN
+        --kind <matrix|scenario|defect_catalog|risk_register|abbreviations|generic>
+        --caption \"...\" --csv-file F [--instance-id ID] [--legend \"...\"]
+  ctox report table-list --run-id RUN [--json]
+
+  ctox report storyline-set --run-id RUN --markdown-file F
+  ctox report storyline-show --run-id RUN [--json]
   ctox report block-apply --run-id RUN [--instance-id ID]...
   ctox report block-list --run-id RUN [--pending] [--json]
 
