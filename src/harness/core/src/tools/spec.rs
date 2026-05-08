@@ -1165,6 +1165,116 @@ fn create_ctox_web_read_tool() -> ToolSpec {
     })
 }
 
+fn create_ctox_scholarly_search_tool() -> ToolSpec {
+    let properties = BTreeMap::from([
+        (
+            "query".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Scholarly query (book/paper title, author, ISBN, DOI, or topic)."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "provider".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Optional scholarly provider: `annas_archive` (default)."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "content_types".to_string(),
+            JsonSchema::Array {
+                description: Some(
+                    "Optional Anna's Archive content filters: book_fiction, book_nonfiction, book_unknown, book_comic, magazine, standards_document."
+                        .to_string(),
+                ),
+                items: Box::new(JsonSchema::String { description: None }),
+            },
+        ),
+        (
+            "languages".to_string(),
+            JsonSchema::Array {
+                description: Some(
+                    "Optional ISO language codes (e.g. `en`, `de`, `ru`).".to_string(),
+                ),
+                items: Box::new(JsonSchema::String { description: None }),
+            },
+        ),
+        (
+            "extensions".to_string(),
+            JsonSchema::Array {
+                description: Some(
+                    "Optional file-extension filters such as pdf, epub, djvu.".to_string(),
+                ),
+                items: Box::new(JsonSchema::String { description: None }),
+            },
+        ),
+        (
+            "sort".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Optional sort: newest, oldest, largest, smallest, newest_added, oldest_added, random. Default: relevance."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "max_results".to_string(),
+            JsonSchema::Number {
+                description: Some(
+                    "Optional cap on returned results (default 10, max 50).".to_string(),
+                ),
+                minimum: Some(1.0),
+                maximum: Some(50.0),
+            },
+        ),
+        (
+            "page".to_string(),
+            JsonSchema::Number {
+                description: Some("Optional 1-based page number.".to_string()),
+                minimum: Some(1.0),
+                maximum: None,
+            },
+        ),
+        (
+            "with_oa_pdf".to_string(),
+            JsonSchema::Boolean {
+                description: Some(
+                    "When true, results that carry a DOI are augmented with a legal open-access PDF URL via the Unpaywall resolver. The OA PDF URL is then suitable for download via ctox_web_read."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "only_doi".to_string(),
+            JsonSchema::Boolean {
+                description: Some(
+                    "When true, drop records without an extractable DOI (paper-only mode)."
+                        .to_string(),
+                ),
+            },
+        ),
+    ]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "ctox_scholarly_search".to_string(),
+        description: "Searches scholarly / shadow-archive metadata (Anna's Archive) for books, papers, magazines, and standards documents. Returns metadata-only records (title, authors, year, language, file format, file size, ISBN, DOI, MD5, detail URL, thumbnail). For DOI-bearing records, set with_oa_pdf=true to additionally resolve a legal open-access PDF URL via Unpaywall - that URL can then be passed to ctox_web_read for full-text extraction. Does not download from unauthorized mirrors."
+            .to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["query".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+        output_schema: None,
+    })
+}
+
 fn create_ctox_deep_research_tool() -> ToolSpec {
     let properties = BTreeMap::from([
         (
@@ -3891,6 +4001,12 @@ pub(crate) fn build_specs_with_discoverable_tools(
         );
         push_tool_spec(
             &mut builder,
+            create_ctox_scholarly_search_tool(),
+            /*supports_parallel_tool_calls*/ false,
+            config.code_mode_enabled,
+        );
+        push_tool_spec(
+            &mut builder,
             create_ctox_deep_research_tool(),
             /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
@@ -3903,6 +4019,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
         );
         builder.register_handler("ctox_web_search", ctox_web_handler.clone());
         builder.register_handler("ctox_web_read", ctox_web_handler.clone());
+        builder.register_handler("ctox_scholarly_search", ctox_web_handler.clone());
         builder.register_handler("ctox_deep_research", ctox_web_handler.clone());
         builder.register_handler("ctox_web_scrape", ctox_web_handler.clone());
         push_tool_spec(

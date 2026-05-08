@@ -42,6 +42,30 @@ struct CtoxWebReadArgs {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct CtoxScholarlySearchArgs {
+    query: String,
+    #[serde(default)]
+    provider: Option<String>,
+    #[serde(default)]
+    content_types: Vec<String>,
+    #[serde(default)]
+    languages: Vec<String>,
+    #[serde(default)]
+    extensions: Vec<String>,
+    #[serde(default)]
+    sort: Option<String>,
+    #[serde(default)]
+    max_results: Option<u64>,
+    #[serde(default)]
+    page: Option<u64>,
+    #[serde(default)]
+    with_oa_pdf: bool,
+    #[serde(default)]
+    only_doi: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CtoxDeepResearchArgs {
     query: String,
     #[serde(default)]
@@ -147,6 +171,42 @@ impl ToolHandler for CtoxWebHandler {
                 }
                 for pattern in args.find {
                     command.arg("--find").arg(pattern);
+                }
+            }
+            "ctox_scholarly_search" => {
+                let args: CtoxScholarlySearchArgs = parse_arguments(&arguments)?;
+                command
+                    .arg("web")
+                    .arg("scholarly")
+                    .arg("search")
+                    .arg("--query")
+                    .arg(args.query);
+                if let Some(provider) = args.provider {
+                    command.arg("--provider").arg(provider);
+                }
+                for content_type in args.content_types {
+                    command.arg("--content-type").arg(content_type);
+                }
+                for language in args.languages {
+                    command.arg("--language").arg(language);
+                }
+                for ext in args.extensions {
+                    command.arg("--ext").arg(ext);
+                }
+                if let Some(sort) = args.sort {
+                    command.arg("--sort").arg(sort);
+                }
+                if let Some(max_results) = args.max_results {
+                    command.arg("--max-results").arg(max_results.to_string());
+                }
+                if let Some(page) = args.page {
+                    command.arg("--page").arg(page.to_string());
+                }
+                if args.with_oa_pdf {
+                    command.arg("--with-oa-pdf");
+                }
+                if args.only_doi {
+                    command.arg("--only-doi");
                 }
             }
             "ctox_deep_research" => {
