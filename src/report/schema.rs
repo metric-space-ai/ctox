@@ -123,7 +123,18 @@ pub fn open(root: &Path) -> Result<Connection> {
 pub fn ensure_schema(conn: &Connection) -> Result<()> {
     conn.execute_batch(SCHEMA_SQL)
         .context("failed to ensure deep-research report schema")?;
+    // Soft migrations for tables created by an older binary that did not
+    // know about the canonical column set. Each ALTER TABLE is idempotent
+    // (we swallow "duplicate column" errors).
+    migrate_add_column(conn, "report_evidence_register", "raw_payload_json", "TEXT");
+    migrate_add_column(conn, "report_evidence_register", "created_at", "TEXT");
+    migrate_add_column(conn, "report_evidence_register", "updated_at", "TEXT");
     Ok(())
+}
+
+fn migrate_add_column(conn: &Connection, table: &str, column: &str, decl: &str) {
+    let sql = format!("ALTER TABLE {table} ADD COLUMN {column} {decl}");
+    let _ = conn.execute(&sql, []);
 }
 
 /// Current UTC timestamp in RFC3339, used as the canonical clock for
@@ -233,6 +244,9 @@ CREATE TABLE IF NOT EXISTS report_evidence_register (
     retrieved_at        TEXT,
     resolver_used       TEXT,
     integrity_hash      TEXT,
+    raw_payload_json    TEXT,
+    created_at          TEXT,
+    updated_at          TEXT,
     citations_count     INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY (run_id) REFERENCES report_runs(run_id) ON DELETE CASCADE
 );

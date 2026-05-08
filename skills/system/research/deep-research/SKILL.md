@@ -114,44 +114,73 @@ read those for block scaffolding and writing rubrics:
 ### 3. Build the evidence register
 
 You need at least the depth profile's `min_evidence_count` evidences in the
-register before you start drafting blocks. Use the harness web stack:
+register before you start drafting blocks. **Stub evidences (title only,
+no real source content) are rejected by the tool** — every entry must
+carry either a resolver-fetched abstract, or a manually-supplied
+abstract/snippet of at least 200 characters from `ctox web read`.
+
+#### a) Resolver path (preferred, when a DOI or arXiv id is known)
 
 ```bash
-# Topical web search
-ctox web search "<query>" --limit 8 --json
-
-# Scholarly search across Crossref + OpenAlex + arXiv + Anna's Archive
-ctox web scholarly --query "<query>" --providers all --limit 12 --json
-
-# Read a specific URL or DOI
-ctox web read --url "<url>" --markdown
-```
-
-Then register each useful source into the run's evidence register:
-
-```bash
-# By DOI (resolver pulls Crossref + OpenAlex metadata + OA PDF if available)
+# By DOI — resolver pulls Crossref + OpenAlex metadata, including the
+# abstract. Use this path whenever a DOI exists.
 ctox report add-evidence --run-id RUN_ID --doi "10.1016/j.compstruct.2020.112345"
 
-# By arXiv id
+# By arXiv id — resolver pulls the arXiv summary (often the canonical
+# abstract for preprints).
 ctox report add-evidence --run-id RUN_ID --arxiv-id "2401.12345"
-
-# Manual (book, standard, magazine — no DOI)
-ctox report add-evidence --run-id RUN_ID \
-    --title "DIN EN ISO 17636-1:2022" \
-    --authors "Deutsches Institut für Normung" \
-    --year 2022 \
-    --venue "Beuth Verlag"
-
-# Free-text URL with extracted abstract
-ctox report add-evidence --run-id RUN_ID \
-    --url "https://www.nasa.gov/sti/...." \
-    --title "Lightning protection of CFRP structures" \
-    --abstract-file /tmp/abstract.md
 ```
 
-Each `add-evidence` prints the new `evidence_id` (`ev_<hex>`). Keep a notes
-file mapping `evidence_id → topic` so you can later cite the right ones.
+Both paths populate `abstract_md` from the source automatically.
+
+#### b) Manual path (book, standard, magazine, web page)
+
+For sources without a DOI / arXiv id, you must fetch the content yourself
+with `ctox web read` and pass it via `--abstract-file`:
+
+```bash
+# 1. fetch the source page
+ctox web read --url "https://www.nasa.gov/sti/some-paper" \
+    > /tmp/nasa_lightning_raw.json
+# 2. extract the abstract / key excerpts into /tmp/nasa_lightning_abs.md
+#    (you do this — strip JSON envelope, keep the textual content)
+# 3. register
+ctox report add-evidence --run-id RUN_ID \
+    --title "Lightning protection of CFRP structures" \
+    --authors "Smith, A; Doe, J" \
+    --year 2024 \
+    --url "https://www.nasa.gov/sti/some-paper" \
+    --abstract-file /tmp/nasa_lightning_abs.md
+```
+
+The CLI **rejects** every manual call where neither `--abstract-file` nor
+`--snippet-file` carries at least 200 characters of real source content.
+Title-only entries are not citable — that's what produced the previous
+fake feasibility study.
+
+#### Available web tools
+
+```bash
+# Topical web search — returns URLs + snippets
+ctox web search --query "<query>"
+
+# Scholarly search across Crossref + OpenAlex + arXiv + Anna's Archive
+ctox web scholarly search --query "<query>" --max-results 12
+
+# Fetch a specific URL and return markdown-extracted content
+ctox web read --url "<url>"
+```
+
+Each `add-evidence` prints the new `evidence_id` (`ev_<hex>`) plus the
+abstract/snippet length actually stored. Keep a notes file mapping
+`evidence_id → topic` so you can later cite the right ones.
+
+**Verify before drafting:** after registering N evidences, run
+`ctox report status RUN_ID --json` and check that
+`evidence_register_size >= depth_profile.min_evidence_count`. If the
+register is full of titles but no abstracts, the prose you'll write will
+be hallucinated — the lint engine catches that, but it's faster to fix
+the evidence step first.
 
 ### 4. Draft block markdown
 

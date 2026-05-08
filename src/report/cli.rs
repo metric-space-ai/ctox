@@ -393,7 +393,14 @@ fn cmd_add_evidence(root: &Path, args: &[String]) -> Result<()> {
         }
     }
 
-    // Manual evidence card: caller must supply at least --url or --title.
+    // Manual evidence card.
+    //
+    // Hard rule: stub evidences are forbidden. Every manual row must carry
+    // *real* source content — either an --abstract-file with >=200 chars
+    // pulled from `ctox web read URL` (or any other tool that produces
+    // markdown), or a --snippet-file of similar length. Title-only rows
+    // are rejected: that path was the loophole that produced the previous
+    // fake feasibility study.
     let title = find_flag(args, "--title");
     let authors_raw = find_flag(args, "--authors").unwrap_or("");
     let year_raw = find_flag(args, "--year");
@@ -407,14 +414,30 @@ fn cmd_add_evidence(root: &Path, args: &[String]) -> Result<()> {
     let license = find_flag(args, "--license");
 
     if title.is_none() && url.is_none() {
-        bail!("manual evidence requires at least --title or --url");
+        bail!("manual evidence requires --title and --url at minimum");
+    }
+    if title.is_none() {
+        bail!("manual evidence requires --title");
+    }
+    let abstract_chars = abstract_md
+        .as_deref()
+        .map(|s| s.chars().count())
+        .unwrap_or(0);
+    let snippet_chars = snippet_md
+        .as_deref()
+        .map(|s| s.chars().count())
+        .unwrap_or(0);
+    if abstract_chars < 200 && snippet_chars < 200 {
+        bail!(
+            "manual evidence requires --abstract-file or --snippet-file with at least 200 chars \
+             of real source content. Stub evidences are rejected. Use \
+             `ctox web read --url <url>` to fetch the page first, then pass \
+             the result via --abstract-file. For papers with a DOI, prefer \
+             `ctox report add-evidence --doi <DOI>` instead."
+        );
     }
 
-    let kind = if url.is_some() {
-        "url"
-    } else {
-        "manual"
-    };
+    let kind = if url.is_some() { "url" } else { "manual" };
     let canonical_id = url.or(title).unwrap_or("");
     let authors_vec: Vec<String> = authors_raw
         .split(';')
@@ -426,15 +449,24 @@ fn cmd_add_evidence(root: &Path, args: &[String]) -> Result<()> {
     let year: Option<i64> = year_raw.and_then(|s| s.parse().ok());
     let evidence_id = new_id("ev");
     let now = now_iso();
+    // raw_payload_json captures the manual provenance so the resolver
+    // path and the manual path share the same row shape.
+    let raw_payload_json = serde_json::to_string(&json!({
+        "manual": true,
+        "source_url": url,
+        "supplied_via_cli": true,
+    }))
+    .context("encode raw_payload_json")?;
 
     conn.execute(
         "INSERT OR REPLACE INTO report_evidence_register (
              evidence_id, run_id, kind, canonical_id, title, authors_json,
              venue, year, publisher, url_canonical, url_full_text,
              license, abstract_md, snippet_md, retrieved_at,
-             resolver_used, integrity_hash, citations_count
+             resolver_used, integrity_hash, raw_payload_json,
+             created_at, updated_at, citations_count
          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9, NULL,
-                   ?10, ?11, ?12, ?13, 'manual', NULL, 0)",
+                   ?10, ?11, ?12, ?13, 'manual', NULL, ?14, ?15, ?15, 0)",
         params![
             evidence_id,
             run_id,
@@ -449,10 +481,15 @@ fn cmd_add_evidence(root: &Path, args: &[String]) -> Result<()> {
             abstract_md,
             snippet_md,
             now,
+            raw_payload_json,
+            now,
         ],
     )
     .context("failed to insert manual evidence row")?;
-    println!("Recorded manual evidence as evidence_id {evidence_id}");
+    println!(
+        "Recorded manual evidence as evidence_id {evidence_id} ({} chars abstract, {} chars snippet)",
+        abstract_chars, snippet_chars
+    );
     Ok(())
 }
 

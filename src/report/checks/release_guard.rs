@@ -105,7 +105,7 @@ pub trait Lint {
 /// instance_id)` before assembling the payload.
 fn build_catalogue() -> Vec<Box<dyn Lint>> {
     let mut out: Vec<Box<dyn Lint>> = Vec::with_capacity(34);
-    // Evidence integrity (8)
+    // Evidence integrity (9)
     out.push(Box::new(LintFabDoi));
     out.push(Box::new(LintFabArxiv));
     out.push(Box::new(LintFabAuthor));
@@ -114,6 +114,7 @@ fn build_catalogue() -> Vec<Box<dyn Lint>> {
     out.push(Box::new(LintDoiNotResolved));
     out.push(Box::new(LintEvidenceFloor));
     out.push(Box::new(LintEvidenceConcentration));
+    out.push(Box::new(LintStubEvidence));
     // Anti-slop language (6)
     out.push(Box::new(LintDeadPhrase));
     out.push(Box::new(LintMetaPhrase));
@@ -916,6 +917,77 @@ impl Lint for LintDoiNotResolved {
                     ref_id = ref_id,
                 ),
             });
+        }
+        out
+    }
+}
+
+/// LINT-STUB-EVIDENCE — cited evidence must carry real source content
+/// (abstract_md or snippet_md, ≥200 chars combined).
+///
+/// Catches the failure mode where the agent registered evidence rows
+/// from titles only, then cited them. Without real source content the
+/// agent cannot have *read* anything, so any prose claim attached to
+/// such an evidence_id is necessarily fabricated. The CLI guard in
+/// `add-evidence` already rejects new stub rows; this lint also catches
+/// pre-existing stubs imported from older runs.
+struct LintStubEvidence;
+
+impl Lint for LintStubEvidence {
+    fn id(&self) -> &'static str {
+        "LINT-STUB-EVIDENCE"
+    }
+    fn applies(&self, _ctx: &LintContext) -> bool {
+        true
+    }
+    fn severity(&self) -> LintSeverity {
+        LintSeverity::Hard
+    }
+    fn check(&self, ctx: &LintContext) -> Vec<LintIssue> {
+        // Build a quick lookup of evidence_id → content_chars.
+        let mut content_chars: HashMap<&str, usize> = HashMap::new();
+        for entry in ctx.evidence_register {
+            let abs_len = entry
+                .abstract_md
+                .as_deref()
+                .map(|s| s.chars().count())
+                .unwrap_or(0);
+            let snip_len = entry
+                .snippet_md
+                .as_deref()
+                .map(|s| s.chars().count())
+                .unwrap_or(0);
+            content_chars.insert(entry.evidence_id.as_str(), abs_len + snip_len);
+        }
+
+        let mut out: Vec<LintIssue> = Vec::new();
+        let mut already_flagged: HashSet<String> = HashSet::new();
+        for block in ctx.committed_blocks {
+            for ref_id in &block.used_reference_ids {
+                let chars = content_chars.get(ref_id.as_str()).copied().unwrap_or(0);
+                if chars >= 200 {
+                    continue;
+                }
+                if !already_flagged.insert(ref_id.clone()) {
+                    continue;
+                }
+                out.push(LintIssue {
+                    lint_id: self.id(),
+                    severity: self.severity(),
+                    instance_ids: vec![block.instance_id.clone()],
+                    reason: format!(
+                        "Block {title} zitiert {ref_id}, deren Eintrag im Evidence-Register weniger als 200 Zeichen Quellinhalt trägt ({chars} chars).",
+                        title = block.title,
+                        ref_id = ref_id,
+                        chars = chars,
+                    ),
+                    goal: format!(
+                        "Lade die Quelle für {ref_id} mit `ctox web read` und re-registriere via `ctox report add-evidence --abstract-file`, oder ersetze die Zitation in {title} durch eine Evidenz mit echtem Inhalt.",
+                        ref_id = ref_id,
+                        title = block.title,
+                    ),
+                });
+            }
         }
         out
     }
