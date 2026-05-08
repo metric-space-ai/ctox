@@ -10,8 +10,9 @@ use std::fmt::Write as _;
 
 use crate::report::render::manuscript::{
     AbbreviationRow, Manuscript, ManuscriptBlock, ManuscriptBlockKind, ManuscriptDoc,
-    ManuscriptTable, ReferenceEntry,
+    ManuscriptTable, ReferenceEntry, StructuredFigure, StructuredTable,
 };
+use std::collections::HashMap;
 
 /// Toggleable rendering options. Defaults are conservative: TOC marker
 /// off, frontmatter off, numeric citations on.
@@ -65,8 +66,66 @@ pub fn render_markdown(manuscript: &Manuscript, opts: &MarkdownRenderOptions) ->
         write_abbreviations(&mut out, &manuscript.abbreviations);
     }
 
+    // Build {{fig:ID}} / {{tbl:ID}} → "Abbildung N" / "Tabelle N" maps
+    // and instance_id → figures/tables maps so we can both resolve the
+    // inline cross-refs and append the artefacts at the right block.
+    let fig_token_map: HashMap<String, u32> = manuscript
+        .structured_figures
+        .iter()
+        .map(|f| (f.figure_id.clone(), f.fig_number))
+        .collect();
+    let tbl_token_map: HashMap<String, u32> = manuscript
+        .structured_tables
+        .iter()
+        .map(|t| (t.table_id.clone(), t.tbl_number))
+        .collect();
+    let mut figs_by_instance: HashMap<String, Vec<&StructuredFigure>> = HashMap::new();
+    for f in &manuscript.structured_figures {
+        if let Some(iid) = f.instance_id.as_deref() {
+            figs_by_instance.entry(iid.to_string()).or_default().push(f);
+        }
+    }
+    let mut tbls_by_instance: HashMap<String, Vec<&StructuredTable>> = HashMap::new();
+    for t in &manuscript.structured_tables {
+        if let Some(iid) = t.instance_id.as_deref() {
+            tbls_by_instance.entry(iid.to_string()).or_default().push(t);
+        }
+    }
+
     for doc in &manuscript.docs {
-        write_doc(&mut out, doc);
+        write_doc(
+            &mut out,
+            doc,
+            &fig_token_map,
+            &tbl_token_map,
+            &figs_by_instance,
+            &tbls_by_instance,
+        );
+    }
+
+    // Orphan figures/tables (no instance_id binding) get appended at
+    // the end so they're not silently lost.
+    let orphan_figs: Vec<&StructuredFigure> = manuscript
+        .structured_figures
+        .iter()
+        .filter(|f| f.instance_id.is_none())
+        .collect();
+    if !orphan_figs.is_empty() {
+        out.push_str("## Abbildungen\n\n");
+        for f in orphan_figs {
+            write_figure(&mut out, f);
+        }
+    }
+    let orphan_tbls: Vec<&StructuredTable> = manuscript
+        .structured_tables
+        .iter()
+        .filter(|t| t.instance_id.is_none())
+        .collect();
+    if !orphan_tbls.is_empty() {
+        out.push_str("## Tabellen\n\n");
+        for t in orphan_tbls {
+            write_structured_table(&mut out, t);
+        }
     }
 
     if !manuscript.references.is_empty() {
@@ -138,12 +197,156 @@ fn write_abbreviations(out: &mut String, rows: &[AbbreviationRow]) {
     out.push('\n');
 }
 
-fn write_doc(out: &mut String, doc: &ManuscriptDoc) {
+fn write_doc(
+    out: &mut String,
+    doc: &ManuscriptDoc,
+    fig_tokens: &HashMap<String, u32>,
+    tbl_tokens: &HashMap<String, u32>,
+    figs_by_instance: &HashMap<String, Vec<&StructuredFigure>>,
+    tbls_by_instance: &HashMap<String, Vec<&StructuredTable>>,
+) {
     let _ = writeln!(out, "## {}", ascii_dashes(&doc.title));
     out.push('\n');
     for block in &doc.blocks {
-        write_block(out, block);
+        write_block_with_artefacts(
+            out,
+            block,
+            fig_tokens,
+            tbl_tokens,
+            figs_by_instance,
+            tbls_by_instance,
+        );
     }
+}
+
+fn write_block_with_artefacts(
+    out: &mut String,
+    block: &ManuscriptBlock,
+    fig_tokens: &HashMap<String, u32>,
+    tbl_tokens: &HashMap<String, u32>,
+    figs_by_instance: &HashMap<String, Vec<&StructuredFigure>>,
+    tbls_by_instance: &HashMap<String, Vec<&StructuredTable>>,
+) {
+    // Resolve the cross-ref tokens before we hand the markdown to the
+    // existing block writer.
+    let resolved = resolve_xrefs(&block.markdown, fig_tokens, tbl_tokens);
+    let block_with_resolved = ManuscriptBlock {
+        markdown: resolved,
+        ..block.clone()
+    };
+    write_block(out, &block_with_resolved);
+
+    // Append any figures + tables bound to this instance after the
+    // block body, so the reader sees the prose then the artefact.
+    if let Some(figs) = figs_by_instance.get(&block.instance_id) {
+        for f in figs {
+            write_figure(out, f);
+        }
+    }
+    if let Some(tbls) = tbls_by_instance.get(&block.instance_id) {
+        for t in tbls {
+            write_structured_table(out, t);
+        }
+    }
+}
+
+fn resolve_xrefs(
+    markdown: &str,
+    fig_tokens: &HashMap<String, u32>,
+    tbl_tokens: &HashMap<String, u32>,
+) -> String {
+    // Replace `{{fig:ID}}` and `{{tbl:ID}}` tokens with "Abbildung N"
+    // and "Tabelle N". Unknown tokens are left untouched (a renderer
+    // warning at the layer above can flag those at a later wave).
+    let mut out = String::with_capacity(markdown.len());
+    let mut rest = markdown;
+    while let Some(start) = rest.find("{{") {
+        out.push_str(&rest[..start]);
+        let after_open = &rest[start + 2..];
+        if let Some(close) = after_open.find("}}") {
+            let token = &after_open[..close];
+            let rest_after_close = &after_open[close + 2..];
+            if let Some(id) = token.strip_prefix("fig:") {
+                if let Some(n) = fig_tokens.get(id) {
+                    out.push_str(&format!("Abbildung {n}"));
+                } else {
+                    out.push_str("{{");
+                    out.push_str(token);
+                    out.push_str("}}");
+                }
+            } else if let Some(id) = token.strip_prefix("tbl:") {
+                if let Some(n) = tbl_tokens.get(id) {
+                    out.push_str(&format!("Tabelle {n}"));
+                } else {
+                    out.push_str("{{");
+                    out.push_str(token);
+                    out.push_str("}}");
+                }
+            } else {
+                out.push_str("{{");
+                out.push_str(token);
+                out.push_str("}}");
+            }
+            rest = rest_after_close;
+        } else {
+            out.push_str("{{");
+            rest = after_open;
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+fn write_figure(out: &mut String, f: &StructuredFigure) {
+    let _ = writeln!(
+        out,
+        "![Abbildung {}: {}]({})",
+        f.fig_number,
+        ascii_dashes(&f.caption),
+        f.image_path,
+    );
+    let _ = writeln!(
+        out,
+        "*Abbildung {}: {} (Quelle: {})*",
+        f.fig_number,
+        ascii_dashes(&f.caption),
+        ascii_dashes(&f.source_label),
+    );
+    out.push('\n');
+}
+
+fn write_structured_table(out: &mut String, t: &StructuredTable) {
+    let _ = writeln!(
+        out,
+        "*Tabelle {}: {}*",
+        t.tbl_number,
+        ascii_dashes(&t.caption)
+    );
+    out.push('\n');
+    if !t.headers.is_empty() {
+        let _ = write!(out, "|");
+        for h in &t.headers {
+            let _ = write!(out, " {} |", escape_pipe(&ascii_dashes(h)));
+        }
+        out.push('\n');
+        let _ = write!(out, "|");
+        for _ in &t.headers {
+            out.push_str(" --- |");
+        }
+        out.push('\n');
+    }
+    for row in &t.rows {
+        let _ = write!(out, "|");
+        for cell in row {
+            let _ = write!(out, " {} |", escape_pipe(&ascii_dashes(cell)));
+        }
+        out.push('\n');
+    }
+    if let Some(legend) = &t.legend {
+        out.push('\n');
+        let _ = writeln!(out, "{}", ascii_dashes(legend));
+    }
+    out.push('\n');
 }
 
 fn write_block(out: &mut String, block: &ManuscriptBlock) {

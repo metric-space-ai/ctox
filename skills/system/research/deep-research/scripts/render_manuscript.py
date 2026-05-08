@@ -71,7 +71,7 @@ def _load_python_docx():
     """Import python-docx lazily so the missing-dep path is clean."""
     try:
         import docx  # type: ignore
-        from docx.shared import Pt, Cm, RGBColor  # type: ignore
+        from docx.shared import Pt, Cm, Inches, RGBColor  # type: ignore
         from docx.enum.text import WD_ALIGN_PARAGRAPH  # type: ignore
         from docx.enum.table import WD_ALIGN_VERTICAL  # type: ignore
         from docx.oxml.ns import qn  # type: ignore
@@ -83,6 +83,7 @@ def _load_python_docx():
         "docx": docx,
         "Pt": Pt,
         "Cm": Cm,
+        "Inches": Inches,
         "RGBColor": RGBColor,
         "WD_ALIGN_PARAGRAPH": WD_ALIGN_PARAGRAPH,
         "WD_ALIGN_VERTICAL": WD_ALIGN_VERTICAL,
@@ -393,7 +394,7 @@ def _add_toc_field(document, deps) -> None:
     hint_run.italic = True
 
 
-def _render_block(document, block: dict, references: list, deps) -> None:
+def _render_block(document, block: dict, references: list, deps, ctx: dict | None = None) -> None:
     title = block.get("title") or ""
     level = block.get("level")
     if level is None:
@@ -404,6 +405,17 @@ def _render_block(document, block: dict, references: list, deps) -> None:
         level_int = 2
     level_int = max(1, min(level_int, 9))
     document.add_heading(_ascii_dashes(str(title)), level=level_int)
+    # Resolve {{fig:ID}} / {{tbl:ID}} tokens in the markdown before
+    # rendering. The renderer auto-numbers figures/tables across the
+    # whole document; the token resolution turns a token into a stable
+    # "Abbildung N" / "Tabelle N" cross-ref string.
+    if ctx is not None and block.get("markdown"):
+        block = dict(block)
+        block["markdown"] = _resolve_xref_tokens(
+            block["markdown"],
+            ctx.get("fig_tokens", {}),
+            ctx.get("tbl_tokens", {}),
+        )
     kind = block.get("kind") or "narrative"
     if kind == "narrative":
         _render_narrative(document, block, references, deps)
@@ -428,6 +440,107 @@ def _render_block(document, block: dict, references: list, deps) -> None:
     else:
         # Unknown kind -> treat as narrative, do not crash.
         _render_narrative(document, block, references, deps)
+
+    # Append any structured figures / tables bound to this block.
+    if ctx is not None:
+        instance_id = block.get("instance_id") or ""
+        for fig in ctx.get("figs_by_instance", {}).get(instance_id, []):
+            _render_structured_figure(document, fig, deps)
+        for tbl in ctx.get("tbls_by_instance", {}).get(instance_id, []):
+            _render_structured_table(document, tbl, deps)
+
+
+# ---- structured figure / table rendering -------------------------------
+
+_TOKEN_RE = re.compile(r"\{\{(fig|tbl):([^}\s]+)\}\}")
+
+
+def _resolve_xref_tokens(markdown: str, fig_tokens: dict, tbl_tokens: dict) -> str:
+    """Replace `{{fig:ID}}` / `{{tbl:ID}}` tokens with their numbered
+    cross-ref text. Unknown tokens are left untouched so the operator
+    can spot them in the output."""
+
+    def _sub(m):
+        kind, ref_id = m.group(1), m.group(2)
+        n = (fig_tokens if kind == "fig" else tbl_tokens).get(ref_id)
+        if n is None:
+            return m.group(0)
+        return f"Abbildung {n}" if kind == "fig" else f"Tabelle {n}"
+
+    return _TOKEN_RE.sub(_sub, markdown)
+
+
+def _render_structured_figure(document, fig: dict, deps) -> None:
+    """Embed a figure as a Word picture, then a caption paragraph."""
+    Inches = deps["Inches"]
+    Pt = deps["Pt"]
+    image_path = fig.get("image_path") or ""
+    fig_n = fig.get("fig_number") or 0
+    caption = fig.get("caption") or ""
+    source_label = fig.get("source_label") or ""
+    if image_path and Path(image_path).is_file():
+        try:
+            document.add_picture(image_path, width=Inches(5.5))
+        except Exception as err:
+            sys.stderr.write(
+                f"render_manuscript.py: figure embed failed for {image_path}: {err}\n"
+            )
+    cap = document.add_paragraph()
+    cap_run = cap.add_run(
+        f"Abbildung {fig_n}: {_ascii_dashes(caption)}"
+    )
+    cap_run.italic = True
+    cap_run.font.size = Pt(9)
+    if source_label:
+        src_run = cap.add_run(f" (Quelle: {_ascii_dashes(source_label)})")
+        src_run.italic = True
+        src_run.font.size = Pt(9)
+
+
+def _render_structured_table(document, tbl: dict, deps) -> None:
+    """Render a structured table as a native Word table with a numbered
+    caption above and an optional legend below."""
+    Pt = deps["Pt"]
+    WD_ALIGN_VERTICAL = deps["WD_ALIGN_VERTICAL"]
+    tbl_n = tbl.get("tbl_number") or 0
+    caption = tbl.get("caption") or ""
+    cap = document.add_paragraph()
+    cap_run = cap.add_run(f"Tabelle {tbl_n}: {_ascii_dashes(caption)}")
+    cap_run.italic = True
+    cap_run.font.size = Pt(9)
+
+    headers = tbl.get("headers") or []
+    rows = tbl.get("rows") or []
+    if not headers or not rows:
+        return
+    table = document.add_table(rows=1 + len(rows), cols=len(headers))
+    table.style = "Light Grid"
+    hdr_cells = table.rows[0].cells
+    for idx, hdr in enumerate(headers):
+        cell = hdr_cells[idx]
+        cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
+        cell.text = ""
+        p = cell.paragraphs[0]
+        run = p.add_run(_ascii_dashes(str(hdr)))
+        run.bold = True
+        run.font.size = Pt(10)
+    for r_idx, row in enumerate(rows, start=1):
+        cells = table.rows[r_idx].cells
+        for c_idx, value in enumerate(row[: len(headers)]):
+            cell = cells[c_idx]
+            cell.vertical_alignment = WD_ALIGN_VERTICAL.TOP
+            cell.text = ""
+            p = cell.paragraphs[0]
+            run = p.add_run(_ascii_dashes(str(value)))
+            run.font.size = Pt(10)
+
+    legend = tbl.get("legend") or ""
+    if legend:
+        leg = document.add_paragraph()
+        leg_run = leg.add_run(_ascii_dashes(legend))
+        leg_run.italic = True
+        leg_run.font.size = Pt(9)
+    document.add_paragraph()  # spacer
 
 
 def _render_title_block(document, manuscript: dict, deps) -> None:
@@ -522,7 +635,7 @@ def _lint_forbidden_phrases(document, phrases: list) -> None:
         )
 
 
-def _render_doc(document, doc: dict, references: list, deps) -> None:
+def _render_doc(document, doc: dict, references: list, deps, ctx: dict | None = None) -> None:
     blocks = doc.get("blocks") or []
     if not blocks:
         return
@@ -531,7 +644,7 @@ def _render_doc(document, doc: dict, references: list, deps) -> None:
         document.add_heading(_ascii_dashes(str(doc_title)), level=1)
     blocks_sorted = sorted(blocks, key=lambda b: (b.get("ord", 0), b.get("instance_id") or ""))
     for block in blocks_sorted:
-        _render_block(document, block, references, deps)
+        _render_block(document, block, references, deps, ctx)
 
 
 def render(manuscript: dict, output_path: Path, report_type: str, language: str) -> int:
@@ -554,6 +667,30 @@ def render(manuscript: dict, output_path: Path, report_type: str, language: str)
 
     references = manuscript.get("references") or []
     docs = manuscript.get("docs") or []
+
+    # Build cross-ref maps + per-instance figure/table maps once for
+    # the whole render pass.
+    structured_figures = manuscript.get("structured_figures") or []
+    structured_tables = manuscript.get("structured_tables") or []
+    fig_tokens = {f.get("figure_id"): f.get("fig_number") for f in structured_figures if f.get("figure_id")}
+    tbl_tokens = {t.get("table_id"): t.get("tbl_number") for t in structured_tables if t.get("table_id")}
+    figs_by_instance: dict = {}
+    for f in structured_figures:
+        iid = f.get("instance_id")
+        if iid:
+            figs_by_instance.setdefault(iid, []).append(f)
+    tbls_by_instance: dict = {}
+    for t in structured_tables:
+        iid = t.get("instance_id")
+        if iid:
+            tbls_by_instance.setdefault(iid, []).append(t)
+    ctx = {
+        "fig_tokens": fig_tokens,
+        "tbl_tokens": tbl_tokens,
+        "figs_by_instance": figs_by_instance,
+        "tbls_by_instance": tbls_by_instance,
+    }
+
     if not docs:
         # Tolerate flat manuscripts without a docs[] wrapper by treating
         # the top-level `blocks` field as a single doc.
@@ -564,10 +701,24 @@ def render(manuscript: dict, output_path: Path, report_type: str, language: str)
                 {"doc_id": "doc_main", "title": manuscript.get("title") or "", "blocks": flat_blocks},
                 references,
                 deps,
+                ctx,
             )
     else:
         for doc in docs:
-            _render_doc(document, doc, references, deps)
+            _render_doc(document, doc, references, deps, ctx)
+
+    # Orphan figures/tables (no instance_id binding) get rendered at
+    # the end so they're visible somewhere.
+    orphan_figs = [f for f in structured_figures if not f.get("instance_id")]
+    if orphan_figs:
+        document.add_heading("Abbildungen", level=1)
+        for f in orphan_figs:
+            _render_structured_figure(document, f, deps)
+    orphan_tbls = [t for t in structured_tables if not t.get("instance_id")]
+    if orphan_tbls:
+        document.add_heading("Tabellen", level=1)
+        for t in orphan_tbls:
+            _render_structured_table(document, t, deps)
 
     if references:
         document.add_heading("Anhang — Quellen", level=1)

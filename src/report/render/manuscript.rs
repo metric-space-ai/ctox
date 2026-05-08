@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use crate::report::asset_pack::{
     AssetPack, BlockLibraryEntry, BlueprintSequenceEntry, DocumentBaseDoc, OptionalModule,
 };
-use crate::report::workspace::{BlockRecord, EvidenceEntry, Workspace};
+use crate::report::workspace::{BlockRecord, EvidenceEntry, FigureRow, TableRow, Workspace};
 
 /// Top-level manuscript shape consumed by the renderers. All fields are
 /// derived from the workspace + asset pack at render time; nothing is
@@ -38,6 +38,46 @@ pub struct Manuscript {
     pub references: Vec<ReferenceEntry>,
     #[serde(default)]
     pub figures: Vec<FigurePlaceholder>,
+    /// Figures registered via `ctox report figure-add`. Resolved
+    /// against `{{fig:<figure_id>}}` tokens in block markdown by both
+    /// renderers; auto-numbered in document order.
+    #[serde(default)]
+    pub structured_figures: Vec<StructuredFigure>,
+    /// Tables registered via `ctox report table-add`. Resolved against
+    /// `{{tbl:<table_id>}}` tokens; auto-numbered in document order.
+    #[serde(default)]
+    pub structured_tables: Vec<StructuredTable>,
+}
+
+/// Figure registered via `figure-add`. The `fig_number` is assigned at
+/// build_manuscript time in document order so cross-refs are stable.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StructuredFigure {
+    pub figure_id: String,
+    pub fig_number: u32,
+    pub kind: String,
+    pub instance_id: Option<String>,
+    pub image_path: String,
+    pub caption: String,
+    pub source_label: String,
+    #[serde(default)]
+    pub width_px: Option<i64>,
+    #[serde(default)]
+    pub height_px: Option<i64>,
+}
+
+/// Table registered via `table-add`. Auto-numbered in document order.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StructuredTable {
+    pub table_id: String,
+    pub tbl_number: u32,
+    pub kind: String,
+    pub instance_id: Option<String>,
+    pub caption: String,
+    #[serde(default)]
+    pub legend: Option<String>,
+    pub headers: Vec<String>,
+    pub rows: Vec<Vec<String>>,
 }
 
 /// Metadata block surfaced as YAML-frontmatter / DOCX manifest.
@@ -231,6 +271,40 @@ pub fn build_manuscript(workspace: &Workspace<'_>) -> Result<Manuscript> {
 
     let references = build_references(&used_reference_ids_in_order, &evidence_by_id);
 
+    // Load structured figures + tables from the run and assign
+    // deterministic numbers in document (insertion) order.
+    let figure_rows = workspace.figures().unwrap_or_default();
+    let structured_figures: Vec<StructuredFigure> = figure_rows
+        .into_iter()
+        .enumerate()
+        .map(|(idx, row): (usize, FigureRow)| StructuredFigure {
+            figure_id: row.figure_id,
+            fig_number: (idx + 1) as u32,
+            kind: row.kind,
+            instance_id: row.instance_id,
+            image_path: row.image_path,
+            caption: row.caption,
+            source_label: row.source_label,
+            width_px: row.width_px,
+            height_px: row.height_px,
+        })
+        .collect();
+    let table_rows = workspace.tables().unwrap_or_default();
+    let structured_tables: Vec<StructuredTable> = table_rows
+        .into_iter()
+        .enumerate()
+        .map(|(idx, row): (usize, TableRow)| StructuredTable {
+            table_id: row.table_id,
+            tbl_number: (idx + 1) as u32,
+            kind: row.kind,
+            instance_id: row.instance_id,
+            caption: row.caption,
+            legend: row.legend,
+            headers: row.headers,
+            rows: row.rows,
+        })
+        .collect();
+
     Ok(Manuscript {
         manifest: ManuscriptManifest {
             run_id: metadata.run_id.clone(),
@@ -250,6 +324,8 @@ pub fn build_manuscript(workspace: &Workspace<'_>) -> Result<Manuscript> {
         docs,
         references,
         figures: Vec::new(),
+        structured_figures,
+        structured_tables,
     })
 }
 

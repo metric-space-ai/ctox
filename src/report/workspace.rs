@@ -110,6 +110,32 @@ pub struct BlockRecord {
     pub skill_run_id: Option<String>, // populated for pending_blocks
 }
 
+/// Figure row exposed by [`Workspace::figures`].
+#[derive(Debug, Clone)]
+pub struct FigureRow {
+    pub figure_id: String,
+    pub kind: String,
+    pub instance_id: Option<String>,
+    pub image_path: String,
+    pub caption: String,
+    pub source_label: String,
+    pub code_kind: Option<String>,
+    pub width_px: Option<i64>,
+    pub height_px: Option<i64>,
+}
+
+/// Table row exposed by [`Workspace::tables`].
+#[derive(Debug, Clone)]
+pub struct TableRow {
+    pub table_id: String,
+    pub kind: String,
+    pub instance_id: Option<String>,
+    pub caption: String,
+    pub legend: Option<String>,
+    pub headers: Vec<String>,
+    pub rows: Vec<Vec<String>>,
+}
+
 /// Owned handle on a single run. Holds a connection plus the cached
 /// asset pack reference; all builders read off these.
 ///
@@ -158,6 +184,55 @@ impl<'a> Workspace<'a> {
 
     pub fn pending_blocks(&self) -> Result<Vec<BlockRecord>> {
         load_blocks(&self.conn, &self.run.run_id, true)
+    }
+
+    /// Figures registered via `ctox report figure-add`. Ordered by
+    /// insertion time so the renderer can assign deterministic
+    /// `fig_number` values.
+    pub fn figures(&self) -> Result<Vec<FigureRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT figure_id, kind, instance_id, image_path, caption, source_label, \
+                    code_kind, width_px, height_px \
+             FROM report_figures WHERE run_id = ?1 ORDER BY created_at ASC",
+        )?;
+        let rows = stmt.query_map(params![self.run.run_id], |row| {
+            Ok(FigureRow {
+                figure_id: row.get(0)?,
+                kind: row.get(1)?,
+                instance_id: row.get(2)?,
+                image_path: row.get(3)?,
+                caption: row.get(4)?,
+                source_label: row.get(5)?,
+                code_kind: row.get(6)?,
+                width_px: row.get(7)?,
+                height_px: row.get(8)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// Tables registered via `ctox report table-add`.
+    pub fn tables(&self) -> Result<Vec<TableRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT table_id, kind, instance_id, caption, legend, header_json, rows_json \
+             FROM report_tables WHERE run_id = ?1 ORDER BY created_at ASC",
+        )?;
+        let rows = stmt.query_map(params![self.run.run_id], |row| {
+            let header_json: String = row.get(5)?;
+            let rows_json: String = row.get(6)?;
+            let headers: Vec<String> = serde_json::from_str(&header_json).unwrap_or_default();
+            let data: Vec<Vec<String>> = serde_json::from_str(&rows_json).unwrap_or_default();
+            Ok(TableRow {
+                table_id: row.get(0)?,
+                kind: row.get(1)?,
+                instance_id: row.get(2)?,
+                caption: row.get(3)?,
+                legend: row.get(4)?,
+                headers,
+                rows: data,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
     pub fn evidence_register(&self) -> Result<Vec<EvidenceEntry>> {
