@@ -155,7 +155,14 @@ impl CompactPolicy {
                     CompactTrigger::FixedTurns { n }
                 }
             }
-            _ => CompactTrigger::Off,
+            Some("off") => CompactTrigger::Off,
+            // Default = Adaptive(15%). The adaptive output/input drift signal
+            // is the only mid-task trigger that catches drift before the
+            // per-call input grows large enough to need an emergency. Leaving
+            // the default at Off (the previous behaviour) silently disabled
+            // both layers and let long worker cycles run unprotected until
+            // they overflowed the context window.
+            _ => CompactTrigger::Adaptive { self_output_pct: 15 },
         };
         let mode = match mode_raw
             .map(str::trim)
@@ -213,9 +220,17 @@ impl CompactPolicy {
                     return CompactDecision::Continue;
                 }
                 // Layer 1: Emergency — per-call input approaching window.
-                // Mid-task compaction is deliberately excluded. Its adaptive
-                // trigger is output-vs-read drift, not raw input pressure.
-                if self.mode != CompactMode::MidTask && self.context_window > 0 {
+                // Fires in BOTH modes: a per-call input near the context limit
+                // is a hard overflow risk regardless of whether the cycle is
+                // mid-task or at a clean break. The previous implementation
+                // skipped the check in MidTask mode, which let long
+                // tool-loops (SWE-Bench, large workspaces) climb past 100% of
+                // the window and crash the inference call with a 400
+                // exceed_context_size_error. With this guard active, MidTask
+                // compaction triggers a ThreadCompactStart and ForcedFollowup
+                // triggers a clean-break unsubscribe — both handled in the
+                // direct-session loop.
+                if self.context_window > 0 {
                     let fill = (self.last_call_input_tokens as f64) / (self.context_window as f64);
                     if fill >= self.emergency_fill_ratio {
                         return CompactDecision::Compact {
@@ -443,14 +458,29 @@ mod tests {
     }
 
     #[test]
-    fn midtask_does_not_compact_only_because_input_exceeds_fallback_window() {
+    fn midtask_emergency_fires_when_per_call_input_exceeds_window_fill() {
+        // Updated semantics: emergency fires in BOTH MidTask and
+        // ForcedFollowup modes. Per-call input over the configured fill
+        // ratio is a real overflow risk regardless of mode, and skipping
+        // the check in MidTask used to let tool-heavy turns crash the
+        // inference call with exceed_context_size_error.
         let mut p = CompactPolicy::new(CompactTrigger::Off, CompactMode::MidTask);
         p.context_window = 32_768;
 
+        // First call sets baseline (small input → no fire).
         assert_eq!(
-            p.evaluate(&token_event(37_404, 300, 37_404, 300, 32_768)),
+            p.evaluate(&token_event(5_000, 300, 5_000, 300, 32_768)),
             CompactDecision::Continue
         );
+        // Per-call input climbs over 75% of 32_768 (= 24_576) → EMERGENCY
+        // even in MidTask mode.
+        let dec = p.evaluate(&token_event(37_404, 600, 26_000, 300, 32_768));
+        assert!(matches!(
+            dec,
+            CompactDecision::Compact {
+                reason: CompactReason::Emergency { .. }
+            }
+        ));
     }
 
     #[test]

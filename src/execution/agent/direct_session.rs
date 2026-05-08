@@ -641,8 +641,18 @@ impl PersistentSession {
                 .map(String::as_str),
         );
         if disable_compaction {
+            // Reviewer sessions: turn off the adaptive output/input drift
+            // trigger (the reviewer's reads/writes look very different from
+            // a regular agent and would mis-fire), but keep the emergency
+            // fill ratio at its default. A reviewer prompt that climbs near
+            // the context limit must still be compacted via
+            // ThreadCompactStart — otherwise it crashes the inference call
+            // with exceed_context_size_error. The reviewer pathway does not
+            // run the lcm context-engine rebuild (that only happens at the
+            // start of a mission worker cycle in turn_loop.rs), so this
+            // ThreadCompactStart only affects the harness-internal
+            // conversation buffer, exactly as intended for a review run.
             policy.trigger = CompactTrigger::Off;
-            policy.emergency_fill_ratio = 2.0;
         }
         let ctx_log = ContextLogger::open(root);
         let mut ctx_log = ctx_log.with_session_kind(if disable_compaction {
