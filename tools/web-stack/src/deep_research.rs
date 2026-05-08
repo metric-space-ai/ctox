@@ -19,6 +19,9 @@ use crate::web_search::CanonicalWebSearchRequest;
 use crate::web_search::ContextSize;
 use crate::web_search::DirectWebReadRequest;
 use crate::web_search::SearchUserLocation;
+use crate::scholarly_search::ScholarlySearchProvider;
+use crate::scholarly_search::ScholarlySearchRequest;
+use crate::scholarly_search::run_ctox_scholarly_search_tool;
 use crate::web_search::run_ctox_web_read_tool;
 use crate::web_search::run_ctox_web_search_tool;
 
@@ -129,6 +132,17 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
     let mut search_runs = Vec::new();
 
     for plan in &plans {
+        if plan.label == "annas_archive_metadata" {
+            run_annas_archive_plan(
+                root,
+                plan,
+                request,
+                &mut seen_urls,
+                &mut sources,
+                &mut search_runs,
+            );
+            continue;
+        }
         let payload = match run_ctox_web_search_tool(
             root,
             &CanonicalWebSearchRequest {
@@ -620,6 +634,184 @@ fn collect_search_sources(
             "is_pdf": result.get("is_pdf").cloned().unwrap_or(Value::Bool(false)),
             "pdf_total_pages": result.get("pdf_total_pages").cloned().unwrap_or(Value::Null),
         }));
+    }
+}
+
+fn run_annas_archive_plan(
+    root: &Path,
+    plan: &ResearchSearchPlan,
+    request: &DeepResearchRequest,
+    seen_urls: &mut BTreeSet<String>,
+    sources: &mut Vec<Value>,
+    search_runs: &mut Vec<Value>,
+) {
+    let max_results = scholarly_max_results(request);
+    // with_oa_pdf is the bridge that lets deep-research actually pull paper
+    // PDFs: any AA record with a DOI is augmented with a legal Unpaywall PDF
+    // URL, and that URL becomes the source's read target instead of the AA
+    // metadata page.
+    let scholarly_request = ScholarlySearchRequest {
+        query: plan.query.clone(),
+        provider: Some(ScholarlySearchProvider::AnnasArchive),
+        max_results: Some(max_results),
+        with_oa_pdf: true,
+        ..Default::default()
+    };
+    match run_ctox_scholarly_search_tool(root, &scholarly_request) {
+        Ok(payload) => {
+            search_runs.push(json!({
+                "label": plan.label,
+                "query": plan.query,
+                "domains": plan.domains,
+                "scholarly": plan.scholarly,
+                "metadata_only": plan.metadata_only,
+                "ok": payload.get("ok").and_then(Value::as_bool).unwrap_or(false),
+                "provider": payload.get("provider").cloned().unwrap_or(Value::Null),
+                "result_count": payload
+                    .get("results")
+                    .and_then(Value::as_array)
+                    .map(Vec::len)
+                    .unwrap_or(0),
+                "executed_url": payload.get("executed_url").cloned().unwrap_or(Value::Null),
+            }));
+            collect_scholarly_search_sources(&payload, plan, seen_urls, sources);
+        }
+        Err(err) => {
+            search_runs.push(json!({
+                "label": plan.label,
+                "query": plan.query,
+                "domains": plan.domains,
+                "scholarly": plan.scholarly,
+                "metadata_only": plan.metadata_only,
+                "ok": false,
+                "error": err.to_string(),
+                "result_count": 0,
+            }));
+        }
+    }
+}
+
+fn scholarly_max_results(request: &DeepResearchRequest) -> usize {
+    match request.depth {
+        DeepResearchDepth::Quick => 8,
+        DeepResearchDepth::Standard => 16,
+        DeepResearchDepth::Exhaustive => 32,
+    }
+}
+
+fn collect_scholarly_search_sources(
+    payload: &Value,
+    plan: &ResearchSearchPlan,
+    seen_urls: &mut BTreeSet<String>,
+    sources: &mut Vec<Value>,
+) {
+    let Some(results) = payload.get("results").and_then(Value::as_array) else {
+        return;
+    };
+    let provider = payload
+        .get("provider")
+        .cloned()
+        .unwrap_or(Value::String("annas_archive".to_string()));
+    for result in results {
+        let Some(detail_url) = result.get("detail_url").and_then(Value::as_str) else {
+            continue;
+        };
+        let oa_pdf = result
+            .get("open_access_pdf")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty());
+
+        // When an OA PDF is available, point the source at the PDF URL so
+        // dedup, normalisation, and the read pipeline all key off that URL.
+        // Otherwise stay at the AA detail page (metadata-only).
+        let source_url = oa_pdf.unwrap_or(detail_url);
+        let normalized = normalize_url_key(source_url);
+        if normalized.is_empty() || !seen_urls.insert(normalized) {
+            continue;
+        }
+        let source_type = if oa_pdf.is_some() {
+            "open_access_paper"
+        } else {
+            "annas_archive_metadata"
+        };
+        let metadata_only = source_type == "annas_archive_metadata";
+        let snippet = scholarly_snippet(result);
+
+        let mut entry = json!({
+            "title": result.get("title").cloned().unwrap_or(Value::Null),
+            "url": source_url,
+            "domain": domain_for_url(source_url),
+            "snippet": snippet,
+            "rank": result.get("rank").cloned().unwrap_or(Value::Null),
+            "source": provider.clone(),
+            "source_type": source_type,
+            "search_label": plan.label,
+            "scholarly": true,
+            "metadata_only": metadata_only,
+            "scholarly_metadata": {
+                "source_id": result.get("source_id").cloned().unwrap_or(Value::Null),
+                "annas_archive_url": detail_url,
+                "authors": result.get("authors").cloned().unwrap_or(Value::Null),
+                "publisher": result.get("publisher").cloned().unwrap_or(Value::Null),
+                "year": result.get("year").cloned().unwrap_or(Value::Null),
+                "language": result.get("language").cloned().unwrap_or(Value::Null),
+                "file_format": result.get("file_format").cloned().unwrap_or(Value::Null),
+                "file_size_label": result.get("file_size_label").cloned().unwrap_or(Value::Null),
+                "isbn": result.get("isbn").cloned().unwrap_or(Value::Null),
+                "doi": result.get("doi").cloned().unwrap_or(Value::Null),
+                "thumbnail_url": result.get("thumbnail_url").cloned().unwrap_or(Value::Null),
+                "tags": result.get("tags").cloned().unwrap_or_else(|| json!([])),
+            },
+            "summary": Value::Null,
+            "excerpts": json!([]),
+            "is_pdf": Value::Bool(oa_pdf.is_some()),
+            "pdf_total_pages": Value::Null,
+        });
+        // open_access_pdf is the field source_read_url() prefers, so set it
+        // explicitly at top level when we have one.
+        if let Some(pdf) = oa_pdf {
+            entry["open_access_pdf"] = Value::String(pdf.to_string());
+            if let Some(license) = result.get("open_access_license").cloned() {
+                entry["open_access_license"] = license;
+            }
+        }
+        sources.push(entry);
+    }
+}
+
+fn scholarly_snippet(result: &Value) -> Value {
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(authors) = result.get("authors").and_then(Value::as_str) {
+        parts.push(authors.to_string());
+    }
+    if let Some(publisher) = result.get("publisher").and_then(Value::as_str) {
+        parts.push(publisher.to_string());
+    }
+    if let Some(year) = result.get("year").and_then(Value::as_i64) {
+        parts.push(year.to_string());
+    }
+    if let Some(language) = result.get("language").and_then(Value::as_str) {
+        parts.push(format!("lang={language}"));
+    }
+    if let Some(format) = result.get("file_format").and_then(Value::as_str) {
+        parts.push(format.to_string());
+    }
+    if let Some(size) = result.get("file_size_label").and_then(Value::as_str) {
+        parts.push(size.to_string());
+    }
+    if let Some(isbn) = result.get("isbn").and_then(Value::as_str) {
+        parts.push(format!("ISBN={isbn}"));
+    }
+    if let Some(doi) = result.get("doi").and_then(Value::as_str) {
+        parts.push(format!("DOI={doi}"));
+    }
+    if let Some(snippet) = result.get("snippet").and_then(Value::as_str) {
+        parts.push(snippet.to_string());
+    }
+    if parts.is_empty() {
+        Value::Null
+    } else {
+        Value::String(parts.join(" · "))
     }
 }
 
