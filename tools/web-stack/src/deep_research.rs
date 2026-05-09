@@ -493,7 +493,7 @@ fn build_research_search_plan(
         });
     }
 
-    if request.include_papers {
+    if request.include_papers && is_lsp_composite_topic(query) {
         plans.extend([
             ResearchSearchPlan {
                 label: "eddy_current_lsp",
@@ -585,6 +585,54 @@ fn build_research_search_plan(
                 metadata_only: false,
             },
         ]);
+    } else if request.include_papers {
+        plans.extend([
+            ResearchSearchPlan {
+                label: "topic_literature",
+                query: format!("{query} literature review technical report dataset"),
+                domains: Vec::new(),
+                scholarly: true,
+                metadata_only: false,
+            },
+            ResearchSearchPlan {
+                label: "topic_measurement_data",
+                query: format!("{query} measured data experimental dataset benchmark"),
+                domains: Vec::new(),
+                scholarly: true,
+                metadata_only: false,
+            },
+            ResearchSearchPlan {
+                label: "topic_open_access",
+                query: format!("{query} open access PDF data repository"),
+                domains: vec![
+                    "arxiv.org".to_string(),
+                    "zenodo.org".to_string(),
+                    "figshare.com".to_string(),
+                    "dataverse.harvard.edu".to_string(),
+                    "osti.gov".to_string(),
+                    "nasa.gov".to_string(),
+                ],
+                scholarly: true,
+                metadata_only: false,
+            },
+            ResearchSearchPlan {
+                label: "topic_patents_industry",
+                query: format!("{query} patent manufacturer datasheet manual specification"),
+                domains: vec![
+                    "patents.google.com".to_string(),
+                    "github.com".to_string(),
+                ],
+                scholarly: false,
+                metadata_only: false,
+            },
+            ResearchSearchPlan {
+                label: "topic_reports_standards",
+                query: format!("{query} government technical report standard guidance"),
+                domains: Vec::new(),
+                scholarly: false,
+                metadata_only: false,
+            },
+        ]);
     }
 
     if request.include_annas_archive {
@@ -598,6 +646,17 @@ fn build_research_search_plan(
     }
 
     plans
+}
+
+fn is_lsp_composite_topic(query: &str) -> bool {
+    let lowered = query.to_ascii_lowercase();
+    let has_lsp = ["lightning strike protection", "blitzschutz", " lsp "]
+        .iter()
+        .any(|needle| lowered.contains(needle));
+    let has_composite = ["cfrp", "cfk", "carbon fiber", "composite", "kupfergitter", "copper mesh"]
+        .iter()
+        .any(|needle| lowered.contains(needle));
+    has_lsp && has_composite
 }
 
 fn collect_search_sources(
@@ -1750,6 +1809,29 @@ mod tests {
             .expect("annas metadata plan");
         assert!(annas.metadata_only);
         assert_eq!(annas.domains, vec!["annas-archive.org"]);
+    }
+
+    #[test]
+    fn generic_topics_do_not_receive_lsp_specific_search_plans() {
+        let request = DeepResearchRequest {
+            query: "drone UAS UAV sUAS up to 25 kg payload capacity MTOW load data sources"
+                .to_string(),
+            focus: Some("scope_terms".to_string()),
+            depth: DeepResearchDepth::Standard,
+            max_sources: 20,
+            include_annas_archive: false,
+            include_papers: true,
+            workspace: None,
+            persist_workspace: false,
+        };
+        let plans = build_research_search_plan(&request.query, &request);
+        let labels = plans
+            .iter()
+            .map(|plan| plan.label)
+            .collect::<Vec<_>>();
+        assert!(labels.contains(&"topic_literature"));
+        assert!(!labels.contains(&"eddy_current_lsp"));
+        assert!(!labels.contains(&"aircraft_composites_ndt"));
     }
 
     #[test]

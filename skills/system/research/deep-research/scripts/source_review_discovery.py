@@ -33,84 +33,155 @@ def slugify(value: str) -> str:
 
 def default_query_plan(topic: str) -> list[QuerySpec]:
     t = topic.strip()
+    q = normalized_topic_for_query(t)
     families: list[tuple[str, list[str]]] = [
         (
             "web",
             [
-                f"{t} data sources",
-                f"{t} technical data",
-                f"{t} measurements dataset",
-                f"{t} operating limits",
-                f"{t} failure loads vibration wind thermal mechanical",
+                f"{q} data sources",
+                f"{q} technical data",
+                f"{q} measurements dataset",
+                f"{q} operating limits",
+                f"{q} failure loads vibration wind thermal mechanical",
             ],
         ),
         (
             "scholarly",
             [
-                f"{t} review paper",
-                f"{t} experimental study data",
-                f"{t} model validation dataset",
-                f"{t} measurement campaign",
-                f"{t} load estimation response identification",
-                f"{t} open data DOI",
+                f"{q} review paper",
+                f"{q} experimental study data",
+                f"{q} model validation dataset",
+                f"{q} measurement campaign",
+                f"{q} load estimation response identification",
+                f"{q} open data DOI",
             ],
         ),
         (
             "agency",
             [
-                f"{t} FAA EASA NASA DoD report",
-                f"{t} government technical report",
-                f"{t} regulatory guidance data",
-                f"{t} safety assessment authority",
-                f"{t} public agency dataset",
+                f"{q} FAA EASA NASA DoD report",
+                f"{q} government technical report",
+                f"{q} regulatory guidance data",
+                f"{q} safety assessment authority",
+                f"{q} public agency dataset",
             ],
         ),
         (
             "standards",
             [
-                f"{t} ASTM ISO IEC SAE RTCA standard",
-                f"{t} MIL STD NATO STANAG standard",
-                f"{t} standard test method load vibration environmental",
-                f"{t} qualification test standard",
+                f"{q} ASTM ISO IEC SAE RTCA standard",
+                f"{q} MIL STD NATO STANAG standard",
+                f"{q} standard test method load vibration environmental",
+                f"{q} qualification test standard",
             ],
         ),
         (
             "reports",
             [
-                f"{t} technical report PDF",
-                f"{t} thesis dissertation data",
-                f"{t} DTIC NTRS technical report",
-                f"{t} conference proceedings dataset",
-                f"{t} benchmark report",
+                f"{q} technical report PDF",
+                f"{q} thesis dissertation data",
+                f"{q} DTIC NTRS technical report",
+                f"{q} conference proceedings dataset",
+                f"{q} benchmark report",
             ],
         ),
         (
             "dataset",
             [
-                f"{t} dataset repository",
-                f"{t} GitHub data csv",
-                f"{t} Zenodo Figshare Dataverse",
-                f"{t} telemetry log data",
-                f"{t} benchmark database",
+                f"{q} dataset repository",
+                f"{q} GitHub data csv",
+                f"{q} Zenodo Figshare Dataverse",
+                f"{q} telemetry log data",
+                f"{q} benchmark database",
             ],
         ),
         (
             "industry",
             [
-                f"{t} manufacturer datasheet",
-                f"{t} product manual limits",
-                f"{t} application note data",
-                f"{t} OEM specification payload load vibration",
+                f"{q} manufacturer datasheet",
+                f"{q} product manual limits",
+                f"{q} application note data",
+                f"{q} OEM specification payload load vibration",
             ],
         ),
         (
             "patent",
             [
-                f"{t} patent load data",
-                f"{t} patent technical report",
-                f"{t} invention measurement system",
+                f"{q} patent load data",
+                f"{q} patent technical report",
+                f"{q} invention measurement system",
             ],
         ),
+    ]
+    plan = [QuerySpec(focus, query) for focus, queries in families for query in queries]
+    plan.extend(topic_specific_query_plan(t))
+    return dedupe_query_plan(plan)
+
+
+def normalized_topic_for_query(topic: str) -> str:
+    compact = re.sub(r"\s+", " ", topic).strip()
+    compact = re.sub(r"(?i)^research into sources of\s+", "", compact)
+    compact = re.sub(r"(?i)^sources of\s+", "", compact)
+    compact = re.sub(r"(?i)^find sources for\s+", "", compact)
+    return compact or topic.strip()
+
+
+def dedupe_query_plan(plan: list[QuerySpec]) -> list[QuerySpec]:
+    seen: set[tuple[str, str]] = set()
+    out: list[QuerySpec] = []
+    for item in plan:
+        key = (item.focus.strip().lower(), re.sub(r"\s+", " ", item.query.strip().lower()))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(item)
+    return out
+
+
+def topic_specific_query_plan(topic: str) -> list[QuerySpec]:
+    """Add deterministic query families for high-ambiguity technical data topics."""
+
+    text = topic.lower()
+    if not any(term in text for term in ("drone", "uas", "uav", "suas", "unmanned aerial")):
+        return []
+    if not any(term in text for term in ("load", "payload", "takeoff", "mtow", "weight", "thrust")):
+        return []
+
+    scopes = [
+        "drone UAS UAV sUAS up to 25 kg",
+        "DoD Group 1 Group 2 UAS classification",
+        "small unmanned aircraft MTOW payload capacity",
+    ]
+    variables = [
+        "payload capacity MTOW AUW datasheet",
+        "thrust stand load cell force moment dataset",
+        "flight log telemetry current draw motor output dataset",
+        "rotor propeller aerodynamic loads experimental data",
+        "airframe structural loads small UAV technical report",
+    ]
+    repositories = [
+        "NASA NTRS small UAV load data",
+        "DTIC small UAS payload load technical report",
+        "FAA EASA small UAS weight payload data",
+        "PX4 ArduPilot drone flight log dataset payload",
+        "Zenodo Figshare GitHub UAV thrust dataset",
+    ]
+    oems = [
+        "small UAV manufacturer datasheet payload MTOW",
+        "multirotor drone payload capacity technical specifications",
+        "fixed wing UAV payload endurance MTOW datasheet",
+    ]
+    standards = [
+        "ASTM small UAS standard payload weight",
+        "NATO STANAG UAS classification Group 1 Group 2",
+        "DoD UAS groups maximum gross takeoff weight",
+    ]
+    families = [
+        ("scope_terms", scopes),
+        ("measured_variables", variables),
+        ("datasets_repositories", repositories),
+        ("oem_specs", oems),
+        ("classification_standards", standards),
     ]
     return [QuerySpec(focus, query) for focus, queries in families for query in queries]
 

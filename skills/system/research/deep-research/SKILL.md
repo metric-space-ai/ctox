@@ -346,6 +346,42 @@ Mandatory source-review discovery passes:
    terminology. Stop only when the next pass yields no material new source
    families or the depth target is met.
 
+For `technical_data_sources` source reviews, treat the deliverable as a
+source-map, not a bibliography. Before running discovery, write a short data
+need map with:
+
+- target object/class, operating range and exclusions;
+- the exact measured variables sought;
+- source families likely to contain those variables;
+- synonyms and classification terms that change the search result set;
+- "direct data", "proxy data" and "context-only" criteria.
+
+For drone/UAS load-data research, do not assume one meaning of "load". Cover
+and label at least these meanings where relevant: payload/cargo mass, takeoff
+weight/MTOW/AUW, thrust/force/load-cell measurements, rotor/propeller loads,
+airframe/aerodynamic loads, flight-log load proxies such as current draw or
+motor output, and regulatory or military class definitions. For Class 1/2 or
+up-to-25 kg scope, explicitly include terms such as `sUAS`, `UAS`, `UAV`,
+`drone`, `multirotor`, `fixed-wing`, `eVTOL`, `Group 1`, `Group 2`, `DoD UAS
+classification`, `MTOW`, `maximum takeoff weight`, `payload capacity`, `load
+cell`, `thrust stand`, `force moment`, `flight log`, `PX4`, `ArduPilot`,
+`NASA`, `FAA`, `EASA`, `DTIC`, `DoD`, `NATO`, `ASTM`, `manufacturer
+datasheet`, `technical report`, `dataset`, and `GitHub`.
+
+The source catalog for technical data-source reviews must expose usefulness, not
+just existence. Add columns where the final table format allows it:
+
+- `Data type`: measured data, dataset, specification, regulation, standard,
+  technical report, paper, repository, manual, or proxy.
+- `Variables available`: e.g. mass, payload, thrust, current, forces/moments,
+  speed, endurance, dimensions, test setup.
+- `Vehicle scope`: platform type, size/weight class, example vehicles.
+- `Access`: public download, public page only, paywalled, restricted, unclear.
+- `Extraction effort`: ready dataset, table/PDF extraction, manual reading,
+  scraping/API, or not extractable.
+- `Best use`: primary quantitative source, triangulation, terminology,
+  legal/classification context, or exclusion.
+
 For standard depth, persisted research logs should cover roughly 1000+
 reviewed candidate hits unless the operator explicitly requested a narrow
 search. If the real reachable corpus is smaller, say that explicitly and let
