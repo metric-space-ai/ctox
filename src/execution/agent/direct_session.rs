@@ -1338,7 +1338,7 @@ impl PersistentSession {
                                                 &reason,
                                                 policy,
                                             );
-                                            policy.note_compacted();
+                                            anyhow::bail!("mid-task compaction failed: {err}");
                                         }
                                         Err(_) => {
                                             eprintln!(
@@ -1415,12 +1415,33 @@ impl PersistentSession {
                             EventMsg::TurnComplete(tc) if tc.turn_id == turn_id => break,
                             EventMsg::Error(ref err) => {
                                 let msg_str = format!("{:?}", err);
-                                // Compaction errors are non-fatal — the model
-                                // may not produce the exact JSON format ctox-core
-                                // expects for compaction. Log and continue.
-                                if msg_str.contains("compaction")
+                                let structured_compaction_parse_error = msg_str
+                                    .contains("failed to parse structured compaction response")
+                                    || (msg_str.contains("compaction")
+                                        && msg_str.contains("expected value at line"));
+                                if structured_compaction_parse_error {
+                                    eprintln!(
+                                        "[ctox direct-session] compaction error (fatal): {}",
+                                        msg_str
+                                    );
+                                    ctx_log.log(
+                                        "compaction_error_fatal",
+                                        &format!(
+                                            "\"message\":\"{}\"",
+                                            msg_str
+                                                .replace('"', "'")
+                                                .chars()
+                                                .take(200)
+                                                .collect::<String>()
+                                        ),
+                                    );
+                                    anyhow::bail!("mid-task compaction failed: {msg_str}");
+                                } else if msg_str.contains("compaction")
                                     || msg_str.contains("revisedTitle")
                                 {
+                                    // Title-only compaction side effects are non-fatal. The
+                                    // structured compaction itself must not be ignored: if it
+                                    // fails, continuing can overflow the local backend context.
                                     eprintln!(
                                         "[ctox direct-session] compaction error (non-fatal): {}",
                                         msg_str
@@ -1459,7 +1480,9 @@ impl PersistentSession {
         );
 
         if forced_followup_fired {
-            Ok(final_message.unwrap_or_default())
+            final_message.ok_or_else(|| {
+                anyhow::anyhow!("forced follow-up compaction fired before assistant message")
+            })
         } else {
             final_message.ok_or_else(|| anyhow::anyhow!("turn completed without assistant message"))
         }

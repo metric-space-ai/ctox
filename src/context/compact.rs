@@ -21,7 +21,9 @@ use ctox_protocol::protocol::EventMsg;
 
 /// Emergency compaction fires at this fraction of context_window.
 /// 0.75 means: when the per-call input reaches 75% of the window, compact
-/// immediately. This leaves 25% headroom for the current turn to finish.
+/// immediately. This leaves headroom for large tool outputs and local backend
+/// tokenization drift before the next request is assembled without aborting
+/// normal large task prompts before the model can answer.
 /// Works at any window size (128K, 256K, etc.).
 const DEFAULT_EMERGENCY_FILL_RATIO: f64 = 0.75;
 const DEFAULT_ADAPTIVE_MIN_OUTPUT_TOKENS: i64 = 4_096;
@@ -422,8 +424,8 @@ mod tests {
             p.evaluate(&token_event(10000, 500, 10000, 500, 131072)),
             CompactDecision::Continue
         );
-        // Per-call input reaches 100K (> 98304) → EMERGENCY
-        let dec = p.evaluate(&token_event(200000, 5000, 100000, 500, 131072));
+        // Per-call input reaches 100K (> 98304) -> EMERGENCY
+        let dec = p.evaluate(&token_event(200000, 5000, 100_000, 500, 131072));
         assert!(matches!(
             dec,
             CompactDecision::Compact {
@@ -436,14 +438,14 @@ mod tests {
     fn emergency_does_not_refire_while_in_flight() {
         let mut p = CompactPolicy::new(CompactTrigger::Off, CompactMode::ForcedFollowup);
         p.evaluate(&token_event(10000, 500, 10000, 500, 131072)); // baseline
-        let _ = p.evaluate(&token_event(200000, 5000, 100000, 500, 131072)); // fires
+        let _ = p.evaluate(&token_event(200000, 5000, 100_000, 500, 131072)); // fires
         p.note_compacted();
         // Still at 100K but in-flight → suppressed
         assert_eq!(
-            p.evaluate(&token_event(210000, 5500, 100000, 500, 131072)),
+            p.evaluate(&token_event(210000, 5500, 100_000, 500, 131072)),
             CompactDecision::Continue
         );
-        // Drops to 50K → still suppressed until turn end, so no re-fire.
+        // Drops below the threshold → still suppressed until turn end, so no re-fire.
         assert_eq!(
             p.evaluate(&token_event(260000, 6000, 50000, 500, 131072)),
             CompactDecision::Continue
@@ -474,9 +476,9 @@ mod tests {
             p.evaluate(&token_event(5_000, 300, 5_000, 300, 32_768)),
             CompactDecision::Continue
         );
-        // Per-call input climbs over 75% of 32_768 (= 24_576) → EMERGENCY
+        // Per-call input climbs over 75% of 32_768 (= 24_576) -> EMERGENCY
         // even in MidTask mode.
-        let dec = p.evaluate(&token_event(37_404, 600, 26_000, 300, 32_768));
+        let dec = p.evaluate(&token_event(37_404, 600, 30_000, 300, 32_768));
         assert!(matches!(
             dec,
             CompactDecision::Compact {
