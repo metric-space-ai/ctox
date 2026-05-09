@@ -3447,9 +3447,6 @@ fn text_from_xml_node(node: roxmltree::Node<'_, '_>) -> String {
         .descendants()
         .filter(|n| n.is_element() && n.tag_name().name() == "t")
     {
-        if !text.is_empty() {
-            text.push(' ');
-        }
         text.push_str(t.text().unwrap_or_default());
     }
     text.split_whitespace().collect::<Vec<_>>().join(" ")
