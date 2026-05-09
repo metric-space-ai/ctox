@@ -484,7 +484,7 @@ where
         health.overall_score
     ));
     emit("render-prompt");
-    let rendered_prompt = live_context::render_runtime_prompt(
+    let mut rendered_prompt = live_context::render_runtime_prompt(
         root,
         &snapshot,
         &continuity,
@@ -494,6 +494,18 @@ where
         &health,
         suggested_skill,
     )?;
+    let current_prompt = prompt.trim();
+    let latest_empty = rendered_prompt.latest_user_prompt.trim().is_empty();
+    let missing_current_prompt =
+        !current_prompt.is_empty() && !rendered_prompt.prompt.contains(current_prompt);
+    if latest_empty || missing_current_prompt {
+        emit(&format!(
+            "context-selection fallback-current-prompt latest_empty={} missing_current={}",
+            latest_empty, missing_current_prompt
+        ));
+        rendered_prompt.prompt = render_current_prompt_fallback(&rendered_prompt.prompt, prompt);
+        rendered_prompt.latest_user_prompt = prompt.to_string();
+    }
     emit(&format!(
         "context-selection rendered={} omitted={}",
         rendered_prompt.rendered_context_items, rendered_prompt.omitted_context_items
@@ -1025,6 +1037,10 @@ pub fn hard_runtime_blocker_retry_cooldown_secs(content: &str) -> Option<u64> {
         || lower.contains("no assistant message")
         || lower.contains("empty assistant message")
         || lower.contains("terminal-bench preflight violation")
+        || lower.contains("mid-task compaction failed")
+        || lower.contains("failed to parse structured compaction response")
+        || lower.contains("exceed_context_size_error")
+        || lower.contains("exceeds the available context size")
     {
         return Some(60);
     }
@@ -1145,6 +1161,19 @@ fn summarize_known_infra_error(content: &str) -> Option<String> {
     None
 }
 
+fn render_current_prompt_fallback(rendered_prompt: &str, current_prompt: &str) -> String {
+    let current_prompt = current_prompt.trim();
+    if current_prompt.is_empty() {
+        return rendered_prompt.to_string();
+    }
+
+    format!(
+        "CURRENT REQUEST (authoritative)\n{}\n\n{}",
+        current_prompt,
+        rendered_prompt.trim_start()
+    )
+}
+
 fn read_usize_setting(settings: &BTreeMap<String, String>, key: &str, default: usize) -> usize {
     settings
         .get(key)
@@ -1198,5 +1227,17 @@ mod tests {
             Some(&TomlValue::Boolean(false))
         );
         assert!(!overrides.contains_key("model_providers.ctox_core_api.env_key"));
+    }
+
+    #[test]
+    fn current_prompt_fallback_preserves_authoritative_prompt() {
+        let rendered = "CURRENT REQUEST\n- User asked:\n\nRECENT CONVERSATION EVIDENCE\n- none\n";
+        let prompt = "Do the queued work in /tmp/worktree.";
+
+        let fallback = render_current_prompt_fallback(rendered, prompt);
+
+        assert!(fallback.starts_with("CURRENT REQUEST (authoritative)\n"));
+        assert!(fallback.contains(prompt));
+        assert!(fallback.contains(rendered.trim_start()));
     }
 }
