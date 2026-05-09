@@ -200,8 +200,12 @@ and treat it as a release contract:
   funding prose. Use research to make statements specific, then translate it
   into smooth Fördervorhaben prose without exposing the research mechanics;
 - when Laufzeit, Status, Budget or Kostenblöcke are known, add a compact
-  project-scope table with `ctox report table-add` and bind it to the
-  `project_scope_budget_timeline` instance;
+  project-scope table. Prefer the deterministic helper
+  `ctox report project-description-sync --run-id RUN_ID`; it extracts
+  Laufzeit, Status, Budget and Kostenblöcke from the run topic / committed
+  project-scope prose and binds the resulting native table to
+  `project_scope_budget_timeline`. Use manual `table-add` only when the helper
+  cannot parse the supplied framing;
 - if a reference DOCX contains Word comments, treat comments as revision
   criteria for storyline, readability and structure. Do not copy the comments
   into the final document.

@@ -51,6 +51,7 @@ pub fn handle_command(root: &Path, args: &[String]) -> Result<()> {
         Some("figure-list") => cmd_figure_list(root, &args[1..]),
         Some("table-add") => cmd_table_add(root, &args[1..]),
         Some("table-list") => cmd_table_list(root, &args[1..]),
+        Some("project-description-sync") => cmd_project_description_sync(root, &args[1..]),
         Some("source-review-sync") => cmd_source_review_sync(root, &args[1..]),
         Some("storyline-set") => cmd_storyline_set(root, &args[1..]),
         Some("storyline-show") => cmd_storyline_show(root, &args[1..]),
@@ -1740,6 +1741,133 @@ fn cmd_table_list(root: &Path, args: &[String]) -> Result<()> {
     Ok(())
 }
 
+/// `ctox report project-description-sync --run-id RUN`
+///
+/// Generates deterministic project-description attachments from the run
+/// contract. The first supported attachment is the project-scope table:
+/// Laufzeit, Status, Budget and Kostenbloecke are extracted from the raw topic
+/// and committed project-scope prose, then stored as a native Word table.
+fn cmd_project_description_sync(root: &Path, args: &[String]) -> Result<()> {
+    let run_id = require_run_id(
+        args,
+        "usage: ctox report project-description-sync --run-id RUN",
+    )?;
+    let _ = load_run(root, run_id)?;
+    let workspace = Workspace::load(root, run_id)?;
+    let metadata = workspace.run_metadata()?;
+    if metadata.report_type_id != "project_description" {
+        bail!(
+            "project-description-sync only applies to report_type project_description, got {}",
+            metadata.report_type_id
+        );
+    }
+
+    let mut source_text = metadata.raw_topic.clone();
+    for block in workspace.committed_blocks().unwrap_or_default() {
+        if block.block_id == "project_scope_budget_timeline"
+            || block.block_id == "project_implementation_focus"
+            || block.block_id == "project_innovation_project"
+        {
+            source_text.push('\n');
+            source_text.push_str(&block.markdown);
+        }
+    }
+
+    let rows = project_scope_rows_from_text(&source_text);
+    if rows.is_empty() {
+        bail!(
+            "project-description-sync found no Laufzeit/Status/Budget/Kostenbloecke facts in topic or committed project-scope prose"
+        );
+    }
+
+    let conn = open(root)?;
+    ensure_schema(&conn)?;
+    conn.execute(
+        "DELETE FROM report_tables
+         WHERE run_id = ?1
+           AND instance_id = 'doc_project_description__project_scope_budget_timeline'
+           AND lower(caption) IN ('projektumfang auf einen blick', 'projektrahmen auf einen blick')",
+        params![run_id],
+    )
+    .context("delete prior generated project-description scope table")?;
+
+    let headers = vec![
+        "Rahmenparameter".to_string(),
+        "Angabe".to_string(),
+        "Herkunft".to_string(),
+    ];
+    let table_id = insert_report_table(
+        &conn,
+        run_id,
+        "generic",
+        Some("doc_project_description__project_scope_budget_timeline"),
+        "Projektumfang auf einen Blick",
+        Some("Aus dem Aufgabenrahmen bzw. dem committeten Projektumfang extrahiert; keine neuen Zahlen wurden ergaenzt."),
+        &headers,
+        &rows,
+    )?;
+    println!("Synced project-description scope table.");
+    println!("table_id: {table_id}");
+    println!("rows: {}", rows.len());
+    Ok(())
+}
+
+fn project_scope_rows_from_text(source: &str) -> Vec<Vec<String>> {
+    let fields = [
+        (
+            "Laufzeit",
+            &["laufzeit", "umsetzungszeitraum", "projektlaufzeit"][..],
+        ),
+        ("Status", &["status", "vorhabenstatus", "projektstatus"][..]),
+        ("Budget", &["budget", "gesamtbudget", "projektbudget"][..]),
+        (
+            "Kostenbloecke",
+            &["kostenblöcke", "kostenbloecke", "kostenpositionen"][..],
+        ),
+    ];
+    let mut rows = Vec::new();
+    for (label, needles) in fields {
+        if let Some(value) = extract_project_scope_value(source, needles) {
+            rows.push(vec![
+                label.to_string(),
+                value,
+                "Aufgabenrahmen / Projektangaben".to_string(),
+            ]);
+        }
+    }
+    rows
+}
+
+fn extract_project_scope_value(source: &str, needles: &[&str]) -> Option<String> {
+    for line in source.lines() {
+        let cleaned = line
+            .trim()
+            .trim_start_matches(['-', '*'])
+            .trim()
+            .trim_start_matches(|ch: char| ch.is_ascii_digit() || ch == '.' || ch == ')')
+            .trim();
+        if cleaned.is_empty() {
+            continue;
+        }
+        let lower = cleaned.to_lowercase();
+        if !needles.iter().any(|needle| lower.contains(needle)) {
+            continue;
+        }
+        let value = cleaned
+            .split_once(':')
+            .map(|(_, value)| value.trim())
+            .or_else(|| cleaned.split_once('-').map(|(_, value)| value.trim()))
+            .unwrap_or(cleaned)
+            .trim_matches(['.', ';']);
+        let value = value.trim();
+        if value.is_empty() || value.eq_ignore_ascii_case(cleaned) {
+            continue;
+        }
+        return Some(value.to_string());
+    }
+    None
+}
+
 /// `ctox report source-review-sync --run-id RUN`
 ///
 /// Rebuilds the release-critical source-review tables from persisted state
@@ -3055,6 +3183,8 @@ USAGE
         --kind <matrix|scenario|defect_catalog|risk_register|abbreviations|generic>
         --caption \"...\" --csv-file F [--instance-id ID] [--legend \"...\"]
   ctox report table-list --run-id RUN [--json]
+  ctox report project-description-sync --run-id RUN
+        (creates the project-scope table from persisted project facts)
   ctox report source-review-sync --run-id RUN
         (rebuilds search protocol, scoring model, and grouped source tables
          from persisted research logs and evidence)

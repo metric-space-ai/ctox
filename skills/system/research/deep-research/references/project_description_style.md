@@ -98,9 +98,39 @@ not expose the fact-transfer ledger. If a category cannot be substantiated,
 write conservatively and keep the limitation in internal notes.
 
 For the budget/timeline/status section, create one compact native Word table
-via `ctox report table-add` whenever the operator provides Laufzeit, Status,
-Budget or Kostenblöcke. This table is part of the client document. The
-research/source ledger is not.
+whenever the operator provides Laufzeit, Status, Budget or Kostenblöcke. Prefer
+the deterministic helper:
+
+```bash
+ctox report project-description-sync --run-id RUN_ID
+```
+
+It extracts the project-scope facts from the run topic and committed
+project-scope prose, then creates a native table bound to
+`project_scope_budget_timeline`. Use manual `ctox report table-add` only if
+the helper cannot parse a supplied framing. This table is part of the client
+document. The research/source ledger is not.
+
+## Drafting workflow
+
+Do not write the eight chapters as independent mini-essays. Work through this
+sequence:
+
+1. Read the reference style and comments, then write a one-paragraph target
+   document thesis: why this company needs this project now.
+2. Build the internal fact-transfer ledger and mark each fact as one of:
+   company, product/service, customer/market, technical baseline, project
+   scope, economic mechanism.
+3. Draft only the company/outcome spine first: company capability -> present
+   bottleneck -> innovation jump -> target operating model.
+4. Draft implementation and scope only after the problem/target chain is clear.
+5. Run `project-description-sync` after the scope block exists.
+6. Revise for client voice: remove analysis scaffolding, source language,
+   evidence wording, and duplicated claims.
+
+If a chapter cannot be made specific, do not fill it with generic funding
+language. Go back to research or state the project assumption conservatively in
+the internal notes, then write only the client-relevant consequence.
 
 ## Recommended document spine
 
@@ -168,3 +198,7 @@ Before rendering, the document must answer yes to all:
 - Are budget, timeline and project status present without invented numbers?
 - Is the economic benefit a mechanism, not a vague promise?
 - Are visible citations, source appendix and internal tooling language absent?
+- Would the document still make sense if printed without any source appendix
+  or research notes?
+- Does every requested chapter earn its place, or is it repeating another
+  chapter in different words?
