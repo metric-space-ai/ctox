@@ -227,12 +227,9 @@ impl ResolverStack {
                 // inverted-index abstracts for most DOIs and we merge
                 // its abstract back in. Authors / venue / year stay
                 // from Crossref since that is the canonical source.
-                let abstract_chars =
-                    s.abstract_md.as_deref().map(|a| a.len()).unwrap_or(0);
+                let abstract_chars = s.abstract_md.as_deref().map(|a| a.len()).unwrap_or(0);
                 if abstract_chars < 200 {
-                    if let Ok(Some(openalex_record)) =
-                        self.openalex.fetch_work_by_doi(&trimmed)
-                    {
+                    if let Ok(Some(openalex_record)) = self.openalex.fetch_work_by_doi(&trimmed) {
                         if let Some(openalex_abs) = openalex_record.abstract_md {
                             if openalex_abs.len() > abstract_chars {
                                 s.abstract_md = Some(openalex_abs);

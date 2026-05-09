@@ -53,11 +53,17 @@ lint may fire on several blocks; each firing is one issue. Severity rules
 
 ## Lint applicability matrix
 
-This catalogue serves seven report types defined in the asset-pack
+This catalogue serves nine report types defined in the asset-pack
 `report_types[]` array (see `references/asset_pack.json`):
 
 - `feasibility_study` — qualitative, axis-and-matrix scored, scenario-
   conditional verdicts, RASCON archetype (see `rascon_archetype.md`).
+- `project_description` — company and project narrative for innovation,
+  funding or financing contexts: problem, innovation leap, implementation,
+  scope/budget/timeline and economic benefit.
+- `source_review` — systematic source and data-source discovery:
+  documented search strategy, source groups, source catalogue, extracted
+  data, coverage assessment and gaps.
 - `market_research` — TAM/SAM/SOM, segments, competitor landscape,
   growth/method-bound numerics.
 - `competitive_analysis` — competitor profiles, capability matrix,

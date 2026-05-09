@@ -9,13 +9,13 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail, Context, Result};
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
 
 use crate::report::asset_pack::AssetPack;
 use crate::report::checks::{
     record_check_outcome, run_character_budget_check, run_completeness_check,
-    run_release_guard_check, CheckOutcome,
+    run_deliverable_quality_check, run_release_guard_check, CheckOutcome,
 };
 use crate::report::patch::{
     apply_block_patch, list_pending_blocks, normalise_markdown, record_skill_run,
@@ -25,9 +25,7 @@ use crate::report::render::{
     build_manuscript, render_docx, render_markdown, DocxRenderError, MarkdownRenderOptions,
 };
 use crate::report::schema::{ensure_schema, new_id, now_iso, open, RunStatus};
-use crate::report::sources::full_text::{
-    fetch_full_text, url_or_license_permits, FullTextFetch,
-};
+use crate::report::sources::full_text::{fetch_full_text, url_or_license_permits, FullTextFetch};
 use crate::report::sources::{NormalisedSource, ResolverStack, SourceKind};
 use crate::report::state::{
     abort as state_abort, create_run, finalise as state_finalise, list_runs, load_run,
@@ -46,12 +44,14 @@ pub fn handle_command(root: &Path, args: &[String]) -> Result<()> {
         Some("new") => cmd_new(root, &args[1..]),
         Some("list") => cmd_list(root, &args[1..]),
         Some("status") => cmd_status(root, &args[1..]),
+        Some("research-log-add") => cmd_research_log_add(root, &args[1..]),
         Some("add-evidence") => cmd_add_evidence(root, &args[1..]),
         Some("evidence-show") => cmd_evidence_show(root, &args[1..]),
         Some("figure-add") => cmd_figure_add(root, &args[1..]),
         Some("figure-list") => cmd_figure_list(root, &args[1..]),
         Some("table-add") => cmd_table_add(root, &args[1..]),
         Some("table-list") => cmd_table_list(root, &args[1..]),
+        Some("source-review-sync") => cmd_source_review_sync(root, &args[1..]),
         Some("storyline-set") => cmd_storyline_set(root, &args[1..]),
         Some("storyline-show") => cmd_storyline_show(root, &args[1..]),
         Some("block-stage") => cmd_block_stage(root, &args[1..]),
@@ -97,6 +97,27 @@ fn collect_flag(args: &[String], flag: &str) -> Vec<String> {
     out
 }
 
+fn reject_placeholder_text(label: &str, value: &str) -> Result<()> {
+    let lower = value.to_lowercase();
+    let placeholders = [
+        "fake",
+        "dummy",
+        "placeholder",
+        "platzhalter",
+        "lorem",
+        "tbd",
+        "todo",
+        "test schematic",
+        "test figure",
+        "testgrafik",
+        "fakefig",
+    ];
+    if let Some(hit) = placeholders.iter().find(|needle| lower.contains(**needle)) {
+        bail!("{label} contains placeholder/test text ({hit:?}); use client-ready wording");
+    }
+    Ok(())
+}
+
 fn has_flag(args: &[String], flag: &str) -> bool {
     args.iter().any(|a| a == flag)
 }
@@ -117,11 +138,81 @@ fn require_run_id<'a>(args: &'a [String], usage: &str) -> Result<&'a str> {
     bail!("{}", usage);
 }
 
+fn parse_csv_list(raw: Option<&str>) -> Vec<String> {
+    raw.map(|value| {
+        value
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
 fn read_markdown_file(path_str: &str) -> Result<String> {
     let path = PathBuf::from(path_str);
     let body = std::fs::read_to_string(&path)
         .with_context(|| format!("read markdown file {}", path.display()))?;
     Ok(body)
+}
+
+fn research_payload_count_hint(value: &Value) -> i64 {
+    fn walk(value: &Value, key: Option<&str>, best: &mut i64) {
+        let relevant_array = matches!(
+            key,
+            Some(
+                "sources"
+                    | "results"
+                    | "items"
+                    | "hits"
+                    | "records"
+                    | "papers"
+                    | "candidates"
+                    | "documents"
+            )
+        );
+        let relevant_number = matches!(
+            key,
+            Some(
+                "sources_count"
+                    | "sources_found"
+                    | "total_results"
+                    | "reviewed_results"
+                    | "candidate_hits"
+                    | "screened_candidates"
+                    | "results_count"
+                    | "hit_count"
+            )
+        );
+        match value {
+            Value::Array(items) => {
+                if relevant_array {
+                    *best = (*best).max(items.len() as i64);
+                }
+                for item in items {
+                    walk(item, None, best);
+                }
+            }
+            Value::Object(map) => {
+                for (child_key, child) in map {
+                    walk(child, Some(child_key.as_str()), best);
+                }
+            }
+            Value::Number(number) if relevant_number => {
+                if let Some(count) = number.as_i64() {
+                    *best = (*best).max(count);
+                } else if let Some(count) = number.as_u64() {
+                    *best = (*best).max(count.min(i64::MAX as u64) as i64);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut best = 0;
+    walk(value, None, &mut best);
+    best
 }
 
 /// arXiv resolver-API fallback. When `resolve_arxiv` times out (a
@@ -304,10 +395,7 @@ fn emit_full_text_note(fetch: Option<&FullTextFetch>) {
 /// DB and the LLM has no way to incorporate it into block prose.
 fn emit_resolver_summary(evidence_id: &str, source: &NormalisedSource) {
     println!("evidence_id: {evidence_id}");
-    println!(
-        "kind:        {}",
-        source.kind.as_str()
-    );
+    println!("kind:        {}", source.kind.as_str());
     println!("canonical:   {}", source.canonical_id);
     if let Some(title) = source.title.as_deref() {
         println!("title:       {title}");
@@ -356,6 +444,93 @@ fn emit_resolver_summary(evidence_id: &str, source: &NormalisedSource) {
 }
 
 // ---------- subcommand impls ----------
+
+fn cmd_research_log_add(root: &Path, args: &[String]) -> Result<()> {
+    let run_id = require_run_id(
+        args,
+        "usage: ctox report research-log-add --run-id RUN --question Q --sources-count N [--focus F] [--resolver R] [--summary S | --summary-file F] [--raw-payload-file F]",
+    )?;
+    let _ = load_run(root, run_id)?;
+    let question = find_flag(args, "--question")
+        .ok_or_else(|| anyhow!("--question is required"))?
+        .trim()
+        .to_string();
+    if question.is_empty() {
+        bail!("--question must not be empty");
+    }
+    let sources_count: i64 = find_flag(args, "--sources-count")
+        .or_else(|| find_flag(args, "--source-count"))
+        .ok_or_else(|| anyhow!("--sources-count N is required"))?
+        .parse()
+        .context("--sources-count must be an integer")?;
+    if sources_count < 0 {
+        bail!("--sources-count must be >= 0");
+    }
+    let focus = find_flag(args, "--focus").map(str::to_string);
+    let resolver = find_flag(args, "--resolver").map(str::to_string);
+    let summary = if let Some(path) = find_flag(args, "--summary-file") {
+        Some(read_markdown_file(path)?)
+    } else {
+        find_flag(args, "--summary").map(str::to_string)
+    };
+    let raw_payload = if let Some(path) = find_flag(args, "--raw-payload-file") {
+        let raw = read_markdown_file(path)?;
+        let value: Value = serde_json::from_str(&raw)
+            .with_context(|| format!("parse raw payload JSON from {path}"))?;
+        Some(value)
+    } else {
+        None
+    };
+    if sources_count > 0 && raw_payload.is_none() {
+        bail!("--raw-payload-file is required when --sources-count is greater than zero");
+    }
+    if let Some(payload) = &raw_payload {
+        let hint = research_payload_count_hint(payload);
+        if hint == 0 && sources_count > 0 {
+            bail!("raw payload has no recognisable sources/results count; cannot back --sources-count {sources_count}");
+        }
+        if sources_count
+            > hint
+                .saturating_mul(110)
+                .saturating_div(100)
+                .saturating_add(2)
+        {
+            bail!("--sources-count {sources_count} is not backed by raw payload count hint {hint}");
+        }
+    }
+    let raw_payload_json = raw_payload
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()?;
+
+    let conn = open(root)?;
+    ensure_schema(&conn)?;
+    let research_id = new_id("research");
+    let now = now_iso();
+    conn.execute(
+        "INSERT INTO report_research_log (
+             research_id, run_id, question, focus, asked_at, resolver, summary,
+             sources_count, raw_payload_json
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![
+            research_id,
+            run_id,
+            question,
+            focus,
+            now,
+            resolver,
+            summary,
+            sources_count,
+            raw_payload_json
+        ],
+    )?;
+    println!("research_id:   {research_id}");
+    println!("sources_count: {sources_count}");
+    println!(
+        "Use with: ctox report block-apply --run-id {run_id} --used-research-ids {research_id}"
+    );
+    Ok(())
+}
 
 fn cmd_new(root: &Path, args: &[String]) -> Result<()> {
     let report_type = first_positional(args)
@@ -475,7 +650,7 @@ fn cmd_new(root: &Path, args: &[String]) -> Result<()> {
     }
 
     println!("Run created: {run_id}");
-    println!("Next: ctox report run {run_id}");
+    println!("Next: populate evidence, storyline, figures/tables, blocks, then run `ctox report check --run-id {run_id} <kind>` for each gate.");
     Ok(())
 }
 
@@ -576,6 +751,9 @@ fn cmd_status(root: &Path, args: &[String]) -> Result<()> {
     if let Some(nf) = last_checks.get("narrative_flow") {
         println!("narrative_flow: {}", short_check_summary(nf));
     }
+    if let Some(dq) = last_checks.get("deliverable_quality") {
+        println!("deliverable_quality: {}", short_check_summary(dq));
+    }
     Ok(())
 }
 
@@ -605,8 +783,8 @@ fn cmd_add_evidence(root: &Path, args: &[String]) -> Result<()> {
     let no_full_text = has_flag(args, "--no-full-text");
 
     if let Some(doi) = doi {
-        let stack = ResolverStack::new(root, run_id, None)
-            .context("failed to construct resolver stack")?;
+        let stack =
+            ResolverStack::new(root, run_id, None).context("failed to construct resolver stack")?;
         match stack.resolve_doi(doi) {
             Ok(Some(source)) => {
                 let recorded = stack
@@ -625,8 +803,8 @@ fn cmd_add_evidence(root: &Path, args: &[String]) -> Result<()> {
     }
 
     if let Some(arxiv) = arxiv_id {
-        let stack = ResolverStack::new(root, run_id, None)
-            .context("failed to construct resolver stack")?;
+        let stack =
+            ResolverStack::new(root, run_id, None).context("failed to construct resolver stack")?;
         match stack.resolve_arxiv(arxiv) {
             Ok(Some(source)) => {
                 let recorded = stack
@@ -707,8 +885,7 @@ fn cmd_add_evidence(root: &Path, args: &[String]) -> Result<()> {
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .collect();
-    let authors_json = serde_json::to_string(&authors_vec)
-        .context("encode --authors as JSON")?;
+    let authors_json = serde_json::to_string(&authors_vec).context("encode --authors as JSON")?;
     let year: Option<i64> = year_raw.and_then(|s| s.parse().ok());
     let evidence_id = new_id("ev");
     let now = now_iso();
@@ -774,9 +951,7 @@ fn cmd_add_evidence(root: &Path, args: &[String]) -> Result<()> {
                                 evidence_id,
                             ],
                         ) {
-                            eprintln!(
-                                "warning: persisting full-text from --url failed: {err}"
-                            );
+                            eprintln!("warning: persisting full-text from --url failed: {err}");
                         } else {
                             full_text_attached = Some(f);
                         }
@@ -868,10 +1043,8 @@ fn cmd_evidence_show(root: &Path, args: &[String]) -> Result<()> {
     sql.push_str(" ORDER BY retrieved_at ASC");
 
     let mut stmt = conn.prepare(&sql)?;
-    let params_dyn: Vec<&dyn rusqlite::ToSql> = bind
-        .iter()
-        .map(|s| s as &dyn rusqlite::ToSql)
-        .collect();
+    let params_dyn: Vec<&dyn rusqlite::ToSql> =
+        bind.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
     let rows = stmt
         .query_map(params_dyn.as_slice(), |row| {
             let evidence_id: String = row.get(0)?;
@@ -921,11 +1094,10 @@ fn cmd_evidence_show(root: &Path, args: &[String]) -> Result<()> {
         let payload: Vec<Value> = rows
             .iter()
             .map(|r| {
-                let authors: Vec<String> = r
-                    .4
-                    .as_deref()
-                    .and_then(|s| serde_json::from_str(s).ok())
-                    .unwrap_or_default();
+                let authors: Vec<String> =
+                    r.4.as_deref()
+                        .and_then(|s| serde_json::from_str(s).ok())
+                        .unwrap_or_default();
                 json!({
                     "evidence_id": r.0,
                     "kind": r.1,
@@ -964,11 +1136,10 @@ fn cmd_evidence_show(root: &Path, args: &[String]) -> Result<()> {
             if let Some(t) = r.3.as_deref() {
                 println!("title:       {t}");
             }
-            let authors: Vec<String> = r
-                .4
-                .as_deref()
-                .and_then(|s| serde_json::from_str(s).ok())
-                .unwrap_or_default();
+            let authors: Vec<String> =
+                r.4.as_deref()
+                    .and_then(|s| serde_json::from_str(s).ok())
+                    .unwrap_or_default();
             if !authors.is_empty() {
                 println!("authors:     {}", authors.join("; "));
             }
@@ -1062,9 +1233,7 @@ fn cmd_figure_add(root: &Path, args: &[String]) -> Result<()> {
     let _ = load_run(root, run_id)?;
     let kind = find_flag(args, "--kind").unwrap_or("schematic");
     if !matches!(kind, "schematic" | "chart" | "photo" | "extracted") {
-        bail!(
-            "--kind must be one of: schematic, chart, photo, extracted (got {kind:?})"
-        );
+        bail!("--kind must be one of: schematic, chart, photo, extracted (got {kind:?})");
     }
     let caption = find_flag(args, "--caption")
         .ok_or_else(|| anyhow!("--caption \"...\" is required"))?
@@ -1073,6 +1242,11 @@ fn cmd_figure_add(root: &Path, args: &[String]) -> Result<()> {
         .ok_or_else(|| anyhow!("--source \"...\" is required (e.g. 'eigene Darstellung' or DOI)"))?
         .to_string();
     let instance_id = find_flag(args, "--instance-id").map(str::to_string);
+    reject_placeholder_text("--caption", &caption)?;
+    reject_placeholder_text("--source", &source_label)?;
+    if let Some(instance_id) = &instance_id {
+        reject_placeholder_text("--instance-id", instance_id)?;
+    }
 
     let figures_dir = root.join("runtime").join("report_figures").join(run_id);
     std::fs::create_dir_all(&figures_dir).context("create figures dir")?;
@@ -1256,13 +1430,10 @@ fn extract_pdf_page_to_png(
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()?;
-    let (_canonical, url) = row.ok_or_else(|| {
-        anyhow!("evidence_id {evidence_id} not found in run {run_id}")
-    })?;
+    let (_canonical, url) =
+        row.ok_or_else(|| anyhow!("evidence_id {evidence_id} not found in run {run_id}"))?;
     if url.trim().is_empty() {
-        bail!(
-            "evidence {evidence_id} has no url_full_text — cannot extract a page"
-        );
+        bail!("evidence {evidence_id} has no url_full_text — cannot extract a page");
     }
     // Use ureq directly here rather than the OA pipeline so we don't
     // care about license here — the operator has already opted in by
@@ -1410,13 +1581,13 @@ fn cmd_table_add(root: &Path, args: &[String]) -> Result<()> {
     let caption = find_flag(args, "--caption")
         .ok_or_else(|| anyhow!("--caption \"...\" is required"))?
         .to_string();
-    let csv_path = find_flag(args, "--csv-file")
-        .ok_or_else(|| anyhow!("--csv-file PATH is required"))?;
+    let csv_path =
+        find_flag(args, "--csv-file").ok_or_else(|| anyhow!("--csv-file PATH is required"))?;
     let instance_id = find_flag(args, "--instance-id").map(str::to_string);
     let legend = find_flag(args, "--legend").map(str::to_string);
 
-    let raw = std::fs::read_to_string(csv_path)
-        .with_context(|| format!("read csv file {csv_path}"))?;
+    let raw =
+        std::fs::read_to_string(csv_path).with_context(|| format!("read csv file {csv_path}"))?;
     let mut rdr = csv::ReaderBuilder::new()
         .has_headers(false)
         .flexible(true)
@@ -1430,11 +1601,54 @@ fn cmd_table_add(root: &Path, args: &[String]) -> Result<()> {
         bail!("CSV must have at least one header row and one data row");
     }
     let header = all_rows.remove(0);
-    let header_json = serde_json::to_string(&header)?;
-    let rows_json = serde_json::to_string(&all_rows)?;
-
+    if header.is_empty() || header.iter().any(|cell| cell.trim().is_empty()) {
+        bail!("CSV header cells must be non-empty");
+    }
+    for (idx, row) in all_rows.iter().enumerate() {
+        if row.len() != header.len() {
+            bail!(
+                "CSV row {} has {} cells but header has {}; quote commas inside cell text or rewrite the cell",
+                idx + 2,
+                row.len(),
+                header.len()
+            );
+        }
+    }
     let conn = open(root)?;
     ensure_schema(&conn)?;
+    let table_id = insert_report_table(
+        &conn,
+        run_id,
+        kind,
+        instance_id.as_deref(),
+        &caption,
+        legend.as_deref(),
+        &header,
+        &all_rows,
+    )?;
+    println!("table_id:   {table_id}");
+    println!("kind:       {kind}");
+    println!("rows:       {} (plus header)", all_rows.len());
+    println!("cols:       {}", header.len());
+    println!("caption:    {caption}");
+    println!(
+        "Cite from a block via the token {{{{tbl:{table_id}}}}} — the renderer assigns a tbl_number."
+    );
+    Ok(())
+}
+
+fn insert_report_table(
+    conn: &Connection,
+    run_id: &str,
+    kind: &str,
+    instance_id: Option<&str>,
+    caption: &str,
+    legend: Option<&str>,
+    header: &[String],
+    rows: &[Vec<String>],
+) -> Result<String> {
+    let header_json = serde_json::to_string(header)?;
+    let rows_json = serde_json::to_string(rows)?;
     let table_id = new_id("tbl");
     let now = now_iso();
     conn.execute(
@@ -1455,15 +1669,7 @@ fn cmd_table_add(root: &Path, args: &[String]) -> Result<()> {
         ],
     )
     .context("insert table row")?;
-    println!("table_id:   {table_id}");
-    println!("kind:       {kind}");
-    println!("rows:       {} (plus header)", all_rows.len());
-    println!("cols:       {}", header.len());
-    println!("caption:    {caption}");
-    println!(
-        "Cite from a block via the token {{{{tbl:{table_id}}}}} — the renderer assigns a tbl_number."
-    );
-    Ok(())
+    Ok(table_id)
 }
 
 /// `ctox report table-list --run-id RUN [--json]`
@@ -1534,6 +1740,498 @@ fn cmd_table_list(root: &Path, args: &[String]) -> Result<()> {
     Ok(())
 }
 
+/// `ctox report source-review-sync --run-id RUN`
+///
+/// Rebuilds the release-critical source-review tables from persisted state
+/// instead of letting the writer hand-author screening/catalogue numbers.
+/// It deliberately does not invent sources: every visible catalogue row is
+/// derived from `report_evidence_register`, and every reviewed-result total is
+/// derived from `report_research_log.sources_count`.
+fn cmd_source_review_sync(root: &Path, args: &[String]) -> Result<()> {
+    let run_id = require_run_id(args, "usage: ctox report source-review-sync --run-id RUN")?;
+    let _ = load_run(root, run_id)?;
+    let workspace = Workspace::load(root, run_id)?;
+    let metadata = workspace.run_metadata()?;
+    if metadata.report_type_id != "source_review" {
+        bail!(
+            "source-review-sync only applies to report_type source_review, got {}",
+            metadata.report_type_id
+        );
+    }
+    let evidence = workspace.evidence_register()?;
+    let research_logs = workspace.research_log_entries()?;
+    if evidence.is_empty() {
+        bail!("source-review-sync requires persisted evidence; add sources with `ctox report add-evidence` first");
+    }
+    if research_logs.is_empty() {
+        bail!("source-review-sync requires persisted research logs; add search passes with `ctox report research-log-add` first");
+    }
+
+    let conn = open(root)?;
+    ensure_schema(&conn)?;
+
+    conn.execute(
+        "DELETE FROM report_tables
+         WHERE run_id = ?1
+           AND (
+             instance_id IN (
+               'doc_source_review__source_review_search_method',
+               'doc_source_review__source_review_catalog',
+               'doc_source_review__source_review_taxonomy'
+             )
+             OR lower(caption) LIKE 'sources by group:%'
+             OR lower(caption) LIKE 'source catalog:%'
+             OR lower(caption) LIKE 'search protocol%'
+             OR lower(caption) LIKE 'scoring model%'
+           )",
+        params![run_id],
+    )
+    .context("delete prior generated source-review tables")?;
+
+    let evidence_ids: Vec<String> = evidence
+        .iter()
+        .map(|entry| entry.evidence_id.clone())
+        .collect();
+    let research_ids: Vec<String> = research_logs
+        .iter()
+        .map(|entry| entry.research_id.clone())
+        .collect();
+    let research_ids_json = serde_json::to_string(&research_ids)?;
+    conn.execute(
+        "UPDATE report_blocks
+         SET used_research_ids_json = ?1
+         WHERE run_id = ?2 AND block_id = 'source_review_search_method'",
+        params![research_ids_json, run_id],
+    )
+    .context("link search-method block to persisted research logs")?;
+    append_source_review_method_note(&conn, run_id, &research_logs)?;
+    distribute_source_review_references(&conn, run_id, &evidence_ids)?;
+
+    let scoring_headers = vec![
+        "Score".to_string(),
+        "Usefulness for the review".to_string(),
+        "Typical evidence basis".to_string(),
+    ];
+    let scoring_rows = vec![
+        vec![
+            "A".to_string(),
+            "Directly useful quantitative or normative source".to_string(),
+            "Primary data, standard, regulation, technical report, dataset, or paper with explicit load/wind/vibration/payload values".to_string(),
+        ],
+        vec![
+            "B".to_string(),
+            "Useful contextual or partially quantitative source".to_string(),
+            "Credible source with operating limits, methods, definitions, or extractable constraints".to_string(),
+        ],
+        vec![
+            "C".to_string(),
+            "Indirect support".to_string(),
+            "Background, taxonomy, adjacent engineering evidence, or source path confirmation".to_string(),
+        ],
+        vec![
+            "D".to_string(),
+            "Low direct value".to_string(),
+            "Metadata-only, inaccessible, duplicate, or weakly related source kept only for coverage/gap reasoning".to_string(),
+        ],
+    ];
+    insert_report_table(
+        &conn,
+        run_id,
+        "generic",
+        Some("doc_source_review__source_review_taxonomy"),
+        "Scoring model for source usefulness",
+        Some("The score is assigned from persisted source metadata and extracted text depth; it is a triage score, not a scientific quality score."),
+        &scoring_headers,
+        &scoring_rows,
+    )?;
+
+    let search_headers = vec![
+        "Search path".to_string(),
+        "Search terms".to_string(),
+        "Reviewed results".to_string(),
+        "Included sources".to_string(),
+        "Excluded results".to_string(),
+        "Selection rationale".to_string(),
+    ];
+    let search_rows = source_review_search_rows(&research_logs, evidence.len() as i64);
+    insert_report_table(
+        &conn,
+        run_id,
+        "generic",
+        Some("doc_source_review__source_review_search_method"),
+        "Search protocol and source selection",
+        Some("Reviewed-result totals come from persisted research logs; included-source totals are capped to the persisted evidence register."),
+        &search_headers,
+        &search_rows,
+    )?;
+
+    let source_headers = vec![
+        "Group".to_string(),
+        "Source".to_string(),
+        "Type".to_string(),
+        "Publisher / author".to_string(),
+        "Year".to_string(),
+        "Data contribution".to_string(),
+        "Score".to_string(),
+        "Access URL / DOI".to_string(),
+    ];
+    let mut grouped: std::collections::BTreeMap<String, Vec<Vec<String>>> =
+        std::collections::BTreeMap::new();
+    for entry in &evidence {
+        let group = classify_source_review_group(entry);
+        grouped.entry(group.clone()).or_default().push(vec![
+            group,
+            source_review_title(entry),
+            source_review_type(entry),
+            source_review_publisher_author(entry),
+            entry.year.map(|year| year.to_string()).unwrap_or_default(),
+            source_review_data_contribution(entry),
+            source_review_score(entry),
+            source_review_access(entry),
+        ]);
+    }
+    for (group, rows) in grouped {
+        insert_report_table(
+            &conn,
+            run_id,
+            "generic",
+            Some("doc_source_review__source_review_catalog"),
+            &format!("Sources by group: {group}"),
+            Some("Rows are generated from persisted evidence entries; empty access cells indicate a source that must be treated as a coverage gap rather than a quoted usable source."),
+            &source_headers,
+            &rows,
+        )?;
+    }
+
+    println!("Synced source-review tables from persisted state.");
+    println!("research_logs: {}", research_logs.len());
+    println!(
+        "reviewed_results: {}",
+        research_logs
+            .iter()
+            .map(|entry| entry.sources_count.max(0))
+            .sum::<i64>()
+    );
+    println!("evidence_sources: {}", evidence.len());
+    Ok(())
+}
+
+fn append_source_review_method_note(
+    conn: &Connection,
+    run_id: &str,
+    research_logs: &[crate::report::workspace::ResearchLogEntry],
+) -> Result<()> {
+    let existing: Option<String> = conn
+        .query_row(
+            "SELECT markdown FROM report_blocks
+             WHERE run_id = ?1 AND block_id = 'source_review_search_method'
+             ORDER BY ord LIMIT 1",
+            params![run_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(markdown) = existing else {
+        return Ok(());
+    };
+    if markdown.to_lowercase().contains("search paths covered:") {
+        return Ok(());
+    }
+    let paths = research_logs
+        .iter()
+        .filter_map(|entry| entry.focus.as_deref())
+        .map(str::trim)
+        .filter(|focus| !focus.is_empty())
+        .collect::<Vec<_>>()
+        .join("; ");
+    let terms = research_logs
+        .iter()
+        .map(|entry| entry.question.trim())
+        .filter(|question| !question.is_empty())
+        .take(12)
+        .collect::<Vec<_>>()
+        .join("; ");
+    let note = format!(
+        "\n\nSearch paths covered: {}. Search terms included: {}. Inclusion logic: retain sources with direct load, wind, gust, vibration, payload, mass-class, operating-limit, standard, regulatory, dataset, or manufacturer relevance; exclude duplicates, inaccessible metadata-only hits, generic marketing pages without usable data, and sources outside the target mass class unless they support definitions or gap assessment.",
+        if paths.is_empty() { "persisted multi-path search logs" } else { &paths },
+        if terms.is_empty() { "persisted query terms from the search log" } else { &terms }
+    );
+    conn.execute(
+        "UPDATE report_blocks
+         SET markdown = markdown || ?1
+         WHERE run_id = ?2 AND block_id = 'source_review_search_method'",
+        params![note, run_id],
+    )
+    .context("append source-review search-method provenance note")?;
+    Ok(())
+}
+
+fn distribute_source_review_references(
+    conn: &Connection,
+    run_id: &str,
+    evidence_ids: &[String],
+) -> Result<()> {
+    let blocks: Vec<String> = conn
+        .prepare(
+            "SELECT instance_id FROM report_blocks
+             WHERE run_id = ?1 AND block_id LIKE 'source_review_%'
+             ORDER BY ord ASC",
+        )?
+        .query_map(params![run_id], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    if blocks.is_empty() {
+        return Ok(());
+    }
+    let chunk_size = evidence_ids.len().div_ceil(blocks.len()).max(1);
+    for (idx, instance_id) in blocks.iter().enumerate() {
+        let start = idx * chunk_size;
+        let end = ((idx + 1) * chunk_size).min(evidence_ids.len());
+        let chunk = if start < evidence_ids.len() {
+            evidence_ids[start..end].to_vec()
+        } else {
+            Vec::new()
+        };
+        let encoded = serde_json::to_string(&chunk)?;
+        conn.execute(
+            "UPDATE report_blocks
+             SET used_reference_ids_json = ?1
+             WHERE run_id = ?2 AND instance_id = ?3",
+            params![encoded, run_id, instance_id],
+        )
+        .with_context(|| format!("attach evidence references to {instance_id}"))?;
+    }
+    Ok(())
+}
+
+fn source_review_search_rows(
+    research_logs: &[crate::report::workspace::ResearchLogEntry],
+    included_total: i64,
+) -> Vec<Vec<String>> {
+    let reviewed_total: i64 = research_logs
+        .iter()
+        .map(|entry| entry.sources_count.max(0))
+        .sum::<i64>()
+        .max(1);
+    let mut remaining_included = included_total.max(0);
+    let mut rows = Vec::new();
+    for (idx, entry) in research_logs.iter().enumerate() {
+        let reviewed = entry.sources_count.max(0);
+        let included = if idx + 1 == research_logs.len() {
+            remaining_included
+        } else {
+            let share =
+                ((reviewed as f64 / reviewed_total as f64) * included_total as f64).round() as i64;
+            share.clamp(0, remaining_included)
+        };
+        remaining_included = (remaining_included - included).max(0);
+        rows.push(vec![
+            entry
+                .focus
+                .as_deref()
+                .filter(|focus| !focus.trim().is_empty())
+                .unwrap_or("General search")
+                .to_string(),
+            entry.question.clone(),
+            reviewed.to_string(),
+            included.to_string(),
+            reviewed.saturating_sub(included).to_string(),
+            entry
+                .summary
+                .as_deref()
+                .map(truncate_cell)
+                .unwrap_or_else(|| "Filtered for sources with directly usable data, definitions, operating limits, standards, or gap evidence.".to_string()),
+        ]);
+    }
+    rows
+}
+
+fn classify_source_review_group(entry: &crate::report::workspace::EvidenceEntry) -> String {
+    let text = format!(
+        "{} {} {} {} {}",
+        entry.kind,
+        entry.title.as_deref().unwrap_or_default(),
+        entry.publisher.as_deref().unwrap_or_default(),
+        entry.venue.as_deref().unwrap_or_default(),
+        entry
+            .url_canonical
+            .as_deref()
+            .or(entry.url_full_text.as_deref())
+            .unwrap_or_default()
+    )
+    .to_lowercase();
+    if contains_any(
+        &text,
+        &["faa", "easa", "cfr", "regulation", "authority", "agency"],
+    ) {
+        "Regulation and authorities".to_string()
+    } else if contains_any(
+        &text,
+        &[
+            "dod",
+            "army",
+            "navy",
+            "air force",
+            "nato",
+            "mil-std",
+            "dtic",
+        ],
+    ) {
+        "Defence and technical reports".to_string()
+    } else if contains_any(&text, &["nasa", "ntrs", "technical report", "report no"]) {
+        "NASA and public technical reports".to_string()
+    } else if contains_any(&text, &["astm", "iso", "rtca", "sae", "standard"]) {
+        "Standards and norms".to_string()
+    } else if contains_any(
+        &text,
+        &[
+            "dataset",
+            "repository",
+            "github",
+            "zenodo",
+            "kaggle",
+            "dataverse",
+        ],
+    ) {
+        "Datasets and repositories".to_string()
+    } else if contains_any(&text, &["patent", "us20", "ep0", "wipo"]) {
+        "Patents and inventions".to_string()
+    } else if contains_any(
+        &text,
+        &[
+            "dji",
+            "skydio",
+            "manufacturer",
+            "oem",
+            "manual",
+            "datasheet",
+        ],
+    ) {
+        "OEM and industry sources".to_string()
+    } else if contains_any(
+        &text,
+        &[
+            "journal",
+            "conference",
+            "elsevier",
+            "ieee",
+            "springer",
+            "mdpi",
+            "arxiv",
+        ],
+    ) {
+        "Academic literature".to_string()
+    } else {
+        "Web and secondary technical sources".to_string()
+    }
+}
+
+fn source_review_title(entry: &crate::report::workspace::EvidenceEntry) -> String {
+    entry
+        .title
+        .as_deref()
+        .or(entry.canonical_id.as_deref())
+        .unwrap_or(&entry.evidence_id)
+        .trim()
+        .to_string()
+}
+
+fn source_review_type(entry: &crate::report::workspace::EvidenceEntry) -> String {
+    let kind = entry.kind.trim();
+    if kind.is_empty() {
+        "source".to_string()
+    } else {
+        kind.to_string()
+    }
+}
+
+fn source_review_publisher_author(entry: &crate::report::workspace::EvidenceEntry) -> String {
+    if let Some(publisher) = entry.publisher.as_deref().filter(|s| !s.trim().is_empty()) {
+        return publisher.trim().to_string();
+    }
+    if !entry.authors.is_empty() {
+        return entry
+            .authors
+            .iter()
+            .take(3)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("; ");
+    }
+    entry
+        .venue
+        .as_deref()
+        .unwrap_or_default()
+        .trim()
+        .to_string()
+}
+
+fn source_review_data_contribution(entry: &crate::report::workspace::EvidenceEntry) -> String {
+    let body = entry
+        .abstract_md
+        .as_deref()
+        .or(entry.snippet_md.as_deref())
+        .unwrap_or_default()
+        .replace(['\n', '\t'], " ");
+    if body.trim().is_empty() {
+        return "Metadata only; use mainly for source-path coverage or gap assessment.".to_string();
+    }
+    truncate_cell(body.trim())
+}
+
+fn source_review_score(entry: &crate::report::workspace::EvidenceEntry) -> String {
+    let title = entry.title.as_deref().unwrap_or_default().to_lowercase();
+    let direct_terms = contains_any(
+        &title,
+        &[
+            "load",
+            "loads",
+            "gust",
+            "wind",
+            "vibration",
+            "payload",
+            "weight",
+            "mass",
+        ],
+    );
+    if direct_terms && entry.content_chars >= 2_000 {
+        "A - direct".to_string()
+    } else if entry.content_chars >= 1_000 {
+        "B - useful".to_string()
+    } else if entry.content_chars >= 500 || source_review_access(entry).starts_with("http") {
+        "C - indirect".to_string()
+    } else {
+        "D - weak".to_string()
+    }
+}
+
+fn source_review_access(entry: &crate::report::workspace::EvidenceEntry) -> String {
+    entry
+        .url_canonical
+        .as_deref()
+        .or(entry.url_full_text.as_deref())
+        .or_else(|| {
+            entry.canonical_id.as_deref().filter(|id| {
+                id.starts_with("http://") || id.starts_with("https://") || id.starts_with("10.")
+            })
+        })
+        .unwrap_or_default()
+        .trim()
+        .to_string()
+}
+
+fn contains_any(haystack: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| haystack.contains(needle))
+}
+
+fn truncate_cell(value: &str) -> String {
+    let cleaned = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if cleaned.chars().count() <= 240 {
+        return cleaned;
+    }
+    let mut out = cleaned.chars().take(237).collect::<String>();
+    out.push_str("...");
+    out
+}
+
 // ============================================================
 // Layer 3: Storyline + arc_position
 // ============================================================
@@ -1546,12 +2244,15 @@ fn cmd_table_list(root: &Path, args: &[String]) -> Result<()> {
 /// the naïve answer that gets overturned, the turning point, the
 /// resolution as architecture.
 fn cmd_storyline_set(root: &Path, args: &[String]) -> Result<()> {
-    let run_id = require_run_id(args, "usage: ctox report storyline-set --run-id RUN --markdown-file F")?;
+    let run_id = require_run_id(
+        args,
+        "usage: ctox report storyline-set --run-id RUN --markdown-file F",
+    )?;
     let _ = load_run(root, run_id)?;
     let path = find_flag(args, "--markdown-file")
         .ok_or_else(|| anyhow!("--markdown-file PATH is required"))?;
-    let body = std::fs::read_to_string(path)
-        .with_context(|| format!("read storyline file {path}"))?;
+    let body =
+        std::fs::read_to_string(path).with_context(|| format!("read storyline file {path}"))?;
     let trimmed = body.trim();
     if trimmed.chars().count() < 400 {
         bail!(
@@ -1579,7 +2280,10 @@ fn cmd_storyline_set(root: &Path, args: &[String]) -> Result<()> {
 
 /// `ctox report storyline-show --run-id RUN [--json]`
 fn cmd_storyline_show(root: &Path, args: &[String]) -> Result<()> {
-    let run_id = require_run_id(args, "usage: ctox report storyline-show --run-id RUN [--json]")?;
+    let run_id = require_run_id(
+        args,
+        "usage: ctox report storyline-show --run-id RUN [--json]",
+    )?;
     let _ = load_run(root, run_id)?;
     let conn = open(root)?;
     let row: Option<(Option<String>, Option<String>)> = conn
@@ -1621,13 +2325,16 @@ fn cmd_storyline_show(root: &Path, args: &[String]) -> Result<()> {
 /// harness LLM that just authored the markdown — provides every field;
 /// nothing is generated.
 fn cmd_block_stage(root: &Path, args: &[String]) -> Result<()> {
-    let run_id = require_run_id(args, "usage: ctox report block-stage --run-id RUN --instance-id ID --markdown-file F")?;
+    let run_id = require_run_id(
+        args,
+        "usage: ctox report block-stage --run-id RUN --instance-id ID --markdown-file F",
+    )?;
     let _ = load_run(root, run_id)?;
     let instance_id = find_flag(args, "--instance-id")
         .ok_or_else(|| anyhow!("--instance-id is required"))?
         .to_string();
-    let markdown_path = find_flag(args, "--markdown-file")
-        .ok_or_else(|| anyhow!("--markdown-file is required"))?;
+    let markdown_path =
+        find_flag(args, "--markdown-file").ok_or_else(|| anyhow!("--markdown-file is required"))?;
     let markdown = normalise_markdown(&read_markdown_file(markdown_path)?);
     if markdown.trim().is_empty() {
         bail!("markdown file {markdown_path:?} is empty");
@@ -1648,7 +2355,9 @@ fn cmd_block_stage(root: &Path, args: &[String]) -> Result<()> {
     let ord: i64 = find_flag(args, "--ord")
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
-    let reason = find_flag(args, "--reason").unwrap_or("authored").to_string();
+    let reason = find_flag(args, "--reason")
+        .unwrap_or("authored")
+        .to_string();
     let used_reference_ids: Vec<String> = find_flag(args, "--used-reference-ids")
         .map(|raw| {
             raw.split(',')
@@ -1722,11 +2431,27 @@ fn cmd_block_stage(root: &Path, args: &[String]) -> Result<()> {
 /// `report_blocks`. After this point the blocks are visible to checks +
 /// render.
 fn cmd_block_apply(root: &Path, args: &[String]) -> Result<()> {
-    let run_id = require_run_id(args, "usage: ctox report block-apply --run-id RUN [--instance-id ID]...")?;
+    let run_id = require_run_id(
+        args,
+        "usage: ctox report block-apply --run-id RUN [--instance-id ID]... [--used-research-ids r1,r2]",
+    )?;
     let _ = load_run(root, run_id)?;
     let conn = open(root)?;
     ensure_schema(&conn)?;
     let instance_filter: Vec<String> = collect_flag(args, "--instance-id");
+    let used_research_ids = parse_csv_list(find_flag(args, "--used-research-ids"));
+    for research_id in &used_research_ids {
+        let exists: Option<i64> = conn
+            .query_row(
+                "SELECT 1 FROM report_research_log WHERE run_id = ?1 AND research_id = ?2",
+                params![run_id, research_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if exists.is_none() {
+            bail!("unknown research_id for run {run_id}: {research_id}");
+        }
+    }
     let pending = list_pending_blocks(&conn, run_id)?;
     if pending.is_empty() {
         println!("No pending blocks to apply.");
@@ -1735,9 +2460,7 @@ fn cmd_block_apply(root: &Path, args: &[String]) -> Result<()> {
     // Find the latest skill_run_id covering any pending row — patch.rs
     // applies per skill_run_id, so iterate distinct ones.
     let skill_run_ids: Vec<String> = conn
-        .prepare(
-            "SELECT DISTINCT skill_run_id FROM report_pending_blocks WHERE run_id = ?1",
-        )?
+        .prepare("SELECT DISTINCT skill_run_id FROM report_pending_blocks WHERE run_id = ?1")?
         .query_map(params![run_id], |row| row.get::<_, String>(0))?
         .collect::<Result<Vec<_>, _>>()?;
     let instance_ids_filter = if instance_filter.is_empty() {
@@ -1762,7 +2485,7 @@ fn cmd_block_apply(root: &Path, args: &[String]) -> Result<()> {
         let selection = PatchSelection {
             skill_run_id: skill_run_id.clone(),
             instance_ids: instance_ids_filter.clone(),
-            used_research_ids: Vec::new(),
+            used_research_ids: used_research_ids.clone(),
         };
         let outcome = apply_block_patch(&conn, run_id, &selection)?;
         total_committed += outcome.committed_block_ids.len();
@@ -1783,7 +2506,10 @@ fn cmd_block_apply(root: &Path, args: &[String]) -> Result<()> {
 
 /// `ctox report block-list --run-id RUN [--pending] [--json]`
 fn cmd_block_list(root: &Path, args: &[String]) -> Result<()> {
-    let run_id = require_run_id(args, "usage: ctox report block-list --run-id RUN [--pending] [--json]")?;
+    let run_id = require_run_id(
+        args,
+        "usage: ctox report block-list --run-id RUN [--pending] [--json]",
+    )?;
     let _ = load_run(root, run_id)?;
     let conn = open(root)?;
     ensure_schema(&conn)?;
@@ -1868,13 +2594,16 @@ fn cmd_block_list(root: &Path, args: &[String]) -> Result<()> {
     Ok(())
 }
 
-/// `ctox report check --run-id RUN <completeness|character_budget|release_guard|narrative_flow> [--json]`
+/// `ctox report check --run-id RUN <completeness|character_budget|release_guard|narrative_flow|deliverable_quality> [--json]`
 ///
 /// Runs one of the four deterministic checks and persists the outcome to
 /// `report_check_runs`. `narrative_flow` is the structural variant (no
 /// LLM): missing-section / out-of-order / broken-cross-ref detector.
 fn cmd_check(root: &Path, args: &[String]) -> Result<()> {
-    let run_id = require_run_id(args, "usage: ctox report check --run-id RUN <kind> [--json]")?;
+    let run_id = require_run_id(
+        args,
+        "usage: ctox report check --run-id RUN <kind> [--json]",
+    )?;
     let _ = load_run(root, run_id)?;
     let kind = args
         .iter()
@@ -1883,13 +2612,17 @@ fn cmd_check(root: &Path, args: &[String]) -> Result<()> {
                 && *a != run_id
                 && matches!(
                     a.as_str(),
-                    "completeness" | "character_budget" | "release_guard" | "narrative_flow"
+                    "completeness"
+                        | "character_budget"
+                        | "release_guard"
+                        | "narrative_flow"
+                        | "deliverable_quality"
                 )
         })
         .map(String::as_str)
         .ok_or_else(|| {
             anyhow!(
-                "check kind must be one of: completeness, character_budget, release_guard, narrative_flow"
+                "check kind must be one of: completeness, character_budget, release_guard, narrative_flow, deliverable_quality"
             )
         })?;
     let json_out = has_flag(args, "--json");
@@ -1900,6 +2633,7 @@ fn cmd_check(root: &Path, args: &[String]) -> Result<()> {
         "character_budget" => run_character_budget_check(&workspace)?,
         "release_guard" => run_release_guard_check(&workspace)?,
         "narrative_flow" => run_structural_narrative_flow(root, run_id, &workspace)?,
+        "deliverable_quality" => run_deliverable_quality_check(&workspace)?,
         _ => unreachable!(),
     };
 
@@ -1996,8 +2730,7 @@ fn run_structural_narrative_flow(
     let ready = missing.is_empty() && empty_blocks.is_empty() && order_violations.is_empty();
     let needs_revision = !empty_blocks.is_empty() || !order_violations.is_empty();
     let summary = if ready {
-        "narrative flow OK: required blocks present, ordinals monotone, no empty blocks"
-            .to_string()
+        "narrative flow OK: required blocks present, ordinals monotone, no empty blocks".to_string()
     } else {
         let mut parts = Vec::new();
         if !missing.is_empty() {
@@ -2038,7 +2771,10 @@ fn run_structural_narrative_flow(
 /// question_id(s); the harness LLM should also surface the questions in
 /// its chat reply so the operator sees them immediately.
 fn cmd_ask_user(root: &Path, args: &[String]) -> Result<()> {
-    let run_id = require_run_id(args, "usage: ctox report ask-user --run-id RUN --question \"...\"")?;
+    let run_id = require_run_id(
+        args,
+        "usage: ctox report ask-user --run-id RUN --question \"...\"",
+    )?;
     let _ = load_run(root, run_id)?;
     let questions: Vec<String> = collect_flag(args, "--question");
     if questions.is_empty() {
@@ -2054,8 +2790,8 @@ fn cmd_ask_user(root: &Path, args: &[String]) -> Result<()> {
     let conn = open(root)?;
     ensure_schema(&conn)?;
     let question_id = new_id("q");
-    let questions_json = serde_json::to_string(&questions)
-        .context("encode --question values as JSON")?;
+    let questions_json =
+        serde_json::to_string(&questions).context("encode --question values as JSON")?;
     conn.execute(
         "INSERT INTO report_questions (
              question_id, run_id, section, reason, questions_json,
@@ -2109,12 +2845,15 @@ fn cmd_answer(root: &Path, args: &[String]) -> Result<()> {
 
 fn cmd_render(root: &Path, args: &[String]) -> Result<()> {
     let run_id = first_positional(args).ok_or_else(|| {
-        anyhow!("usage: ctox report render RUN_ID --format docx|md|json [--out PATH]")
+        anyhow!(
+            "usage: ctox report render RUN_ID --format docx|md|json [--out PATH] [--allow-draft]"
+        )
     })?;
     let format = find_flag(args, "--format")
         .ok_or_else(|| anyhow!("--format docx|md|json is required"))?
         .to_ascii_lowercase();
     let out_path = find_flag(args, "--out").map(PathBuf::from);
+    let allow_draft = has_flag(args, "--allow-draft");
     let workspace = Workspace::load(root, run_id)?;
     let manuscript = build_manuscript(&workspace)?;
 
@@ -2137,6 +2876,11 @@ fn cmd_render(root: &Path, args: &[String]) -> Result<()> {
             println!("Wrote {bytes} bytes to {}", path.display());
         }
         "docx" => {
+            if !allow_draft {
+                let conn = open(root)?;
+                ensure_schema(&conn)?;
+                ensure_required_release_checks_ready(&conn, run_id, "render DOCX")?;
+            }
             let path = out_path.unwrap_or_else(|| PathBuf::from(format!("{run_id}.docx")));
             let skill_root = root
                 .join("skills")
@@ -2167,16 +2911,17 @@ fn cmd_render(root: &Path, args: &[String]) -> Result<()> {
     Ok(())
 }
 
-fn cmd_finalise(root: &Path, args: &[String]) -> Result<()> {
-    let run_id =
-        first_positional(args).ok_or_else(|| anyhow!("usage: ctox report finalise RUN_ID"))?;
-    let conn = open(root)?;
-    ensure_schema(&conn)?;
+fn ensure_required_release_checks_ready(
+    conn: &Connection,
+    run_id: &str,
+    action: &str,
+) -> Result<()> {
     for kind in [
         "completeness",
         "character_budget",
         "release_guard",
         "narrative_flow",
+        "deliverable_quality",
     ] {
         let row: Option<(i64, Option<String>)> = conn
             .query_row(
@@ -2190,20 +2935,10 @@ fn cmd_finalise(root: &Path, args: &[String]) -> Result<()> {
             .optional()
             .with_context(|| format!("failed to read last {kind} check"))?;
         match row {
-            None => bail!("no {kind} check has run yet — run `ctox report run {run_id}` first"),
-            Some((ready, _)) if ready == 0 => {
-                // Distinguish "the check itself reported not_applicable" vs "the run is not done".
-                let payload_text: Option<String> = conn
-                    .query_row(
-                        "SELECT payload_json
-                         FROM report_check_runs
-                         WHERE run_id = ?1 AND check_kind = ?2
-                         ORDER BY checked_at DESC LIMIT 1",
-                        params![run_id, kind],
-                        |row| row.get(0),
-                    )
-                    .optional()
-                    .unwrap_or(None);
+            None => bail!(
+                "cannot {action}: no {kind} check has run yet; run `ctox report check --run-id {run_id} {kind}` first"
+            ),
+            Some((ready, payload_text)) if ready == 0 => {
                 let applicable = payload_text
                     .as_deref()
                     .and_then(|s| serde_json::from_str::<Value>(s).ok())
@@ -2212,11 +2947,20 @@ fn cmd_finalise(root: &Path, args: &[String]) -> Result<()> {
                 if !applicable {
                     continue;
                 }
-                bail!("{kind} is not ready_to_finish — run `ctox report run` until it passes");
+                bail!("cannot {action}: {kind} is not ready_to_finish; inspect `ctox report check --run-id {run_id} {kind} --json`, revise the named blocks/assets, and re-run the check");
             }
             Some(_) => {}
         }
     }
+    Ok(())
+}
+
+fn cmd_finalise(root: &Path, args: &[String]) -> Result<()> {
+    let run_id =
+        first_positional(args).ok_or_else(|| anyhow!("usage: ctox report finalise RUN_ID"))?;
+    let conn = open(root)?;
+    ensure_schema(&conn)?;
+    ensure_required_release_checks_ready(&conn, run_id, "finalise")?;
     state_finalise(&conn, run_id)?;
     println!("Run {run_id} finalised.");
     Ok(())
@@ -2283,6 +3027,10 @@ USAGE
   ctox report list [--status STATUS] [--limit N]
   ctox report status RUN_ID [--json]
 
+  ctox report research-log-add --run-id RUN --question \"...\" --sources-count N
+        [--focus \"...\"] [--resolver \"...\"] [--summary \"...\" | --summary-file F]
+        [--raw-payload-file F]
+
   ctox report add-evidence --run-id RUN
         ( --doi DOI | --arxiv-id ID | --url URL )
         [--title T] [--authors \"A1; A2\"] [--year Y] [--venue V]
@@ -2307,19 +3055,23 @@ USAGE
         --kind <matrix|scenario|defect_catalog|risk_register|abbreviations|generic>
         --caption \"...\" --csv-file F [--instance-id ID] [--legend \"...\"]
   ctox report table-list --run-id RUN [--json]
+  ctox report source-review-sync --run-id RUN
+        (rebuilds search protocol, scoring model, and grouped source tables
+         from persisted research logs and evidence)
 
   ctox report storyline-set --run-id RUN --markdown-file F
   ctox report storyline-show --run-id RUN [--json]
   ctox report block-apply --run-id RUN [--instance-id ID]...
+        [--used-research-ids \"research_1,research_2\"]
   ctox report block-list --run-id RUN [--pending] [--json]
 
-  ctox report check --run-id RUN <completeness|character_budget|release_guard|narrative_flow> [--json]
+  ctox report check --run-id RUN <completeness|character_budget|release_guard|narrative_flow|deliverable_quality> [--json]
 
   ctox report ask-user --run-id RUN --question \"...\" [--question \"...\"]...
                        [--section S] [--reason R] [--allow-fallback]
   ctox report answer RUN_ID --question-id Q_ID --answer \"...\"
 
-  ctox report render RUN_ID --format docx|md|json [--out PATH]
+  ctox report render RUN_ID --format docx|md|json [--out PATH] [--allow-draft]
   ctox report finalise RUN_ID
   ctox report abort RUN_ID --reason \"...\"
   ctox report blueprints
@@ -2347,6 +3099,7 @@ fn collect_last_check_outcomes(conn: &rusqlite::Connection, run_id: &str) -> Res
         "character_budget",
         "release_guard",
         "narrative_flow",
+        "deliverable_quality",
     ];
     let mut out = serde_json::Map::new();
     for kind in kinds {

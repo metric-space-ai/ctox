@@ -90,6 +90,17 @@ pub struct EvidenceEntry {
     pub resolver_used: Option<String>,
     pub integrity_hash: Option<String>,
     pub citations_count: i64,
+    pub content_chars: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResearchLogEntry {
+    pub research_id: String,
+    pub question: String,
+    pub focus: Option<String>,
+    pub resolver: Option<String>,
+    pub summary: Option<String>,
+    pub sources_count: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -239,7 +250,8 @@ impl<'a> Workspace<'a> {
         let mut stmt = self.conn.prepare(
             "SELECT evidence_id, kind, canonical_id, title, authors_json, venue, year,
                     publisher, url_canonical, url_full_text, license, abstract_md,
-                    snippet_md, retrieved_at, resolver_used, integrity_hash, citations_count
+                    snippet_md, retrieved_at, resolver_used, integrity_hash, citations_count,
+                    length(coalesce(full_text_md, abstract_md, snippet_md, ''))
              FROM report_evidence_register WHERE run_id = ?1
              ORDER BY retrieved_at DESC",
         )?;
@@ -267,6 +279,31 @@ impl<'a> Workspace<'a> {
                 resolver_used: row.get(14)?,
                 integrity_hash: row.get(15)?,
                 citations_count: row.get(16)?,
+                content_chars: row.get(17)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    pub fn research_log_entries(&self) -> Result<Vec<ResearchLogEntry>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT research_id, question, focus, resolver, summary, sources_count
+             FROM report_research_log
+             WHERE run_id = ?1
+             ORDER BY asked_at ASC",
+        )?;
+        let rows = stmt.query_map(params![self.run.run_id], |row| {
+            Ok(ResearchLogEntry {
+                research_id: row.get(0)?,
+                question: row.get(1)?,
+                focus: row.get(2)?,
+                resolver: row.get(3)?,
+                summary: row.get(4)?,
+                sources_count: row.get(5)?,
             })
         })?;
         let mut out = Vec::new();
@@ -281,7 +318,35 @@ impl<'a> Workspace<'a> {
         let report_type = self.asset_pack.report_type(&self.run.report_type_id)?;
         let target = report_type.typical_chars as usize;
         let committed = self.committed_blocks()?;
-        let actual: usize = committed.iter().map(|b| b.markdown.chars().count()).sum();
+        let block_chars: usize = committed.iter().map(|b| b.markdown.chars().count()).sum();
+        let table_chars: usize = self
+            .tables()
+            .unwrap_or_default()
+            .iter()
+            .map(|table| {
+                let caption = table.caption.trim().chars().count();
+                let legend = table
+                    .legend
+                    .as_deref()
+                    .unwrap_or_default()
+                    .trim()
+                    .chars()
+                    .count();
+                let headers: usize = table
+                    .headers
+                    .iter()
+                    .map(|cell| cell.trim().chars().count())
+                    .sum();
+                let rows: usize = table
+                    .rows
+                    .iter()
+                    .flatten()
+                    .map(|cell| cell.trim().chars().count())
+                    .sum();
+                caption + legend + headers + rows
+            })
+            .sum();
+        let actual = block_chars + table_chars;
         let delta: i64 = actual as i64 - target as i64;
         // Default tolerance: 20% of target unless target == 0 (no committed
         // blocks yet); kept consistent with the snapshot's tolerance field.
@@ -1346,6 +1411,27 @@ fn report_type_arc(report_type_id: &str) -> Vec<&'static str> {
             "offene Forschungsfragen",
         ],
         "decision_brief" => vec!["Entscheidungsfrage", "Optionen", "Bewertung", "Empfehlung"],
+        "project_description" => vec![
+            "Unternehmen",
+            "Problem",
+            "Innovationsvorhaben",
+            "Zielbild",
+            "Marktabgrenzung",
+            "Umsetzung",
+            "Umfang",
+            "wirtschaftlicher Nutzen",
+        ],
+        "source_review" => vec![
+            "Suchauftrag",
+            "Suchstrategie",
+            "Taxonomie",
+            "Quellenlandschaft",
+            "Quellenkatalog",
+            "Datenextraktion",
+            "Gruppensynthese",
+            "Abdeckung/Luecken",
+            "Priorisierung",
+        ],
         _ => Vec::new(),
     }
 }

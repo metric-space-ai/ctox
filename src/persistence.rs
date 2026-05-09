@@ -27,8 +27,8 @@ pub fn sqlite_busy_timeout_duration() -> Duration {
     let millis = std::env::var("CTOX_SQLITE_BUSY_TIMEOUT_MS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
-        .filter(|value| (1..=5_000).contains(value))
-        .unwrap_or(5_000);
+        .filter(|value| (1..=120_000).contains(value))
+        .unwrap_or(30_000);
     Duration::from_millis(millis)
 }
 

@@ -9,6 +9,8 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::path::Path;
 
+use crate::persistence::{sqlite_busy_timeout_duration, sqlite_busy_timeout_millis};
+
 const USAGE: &str = "Usage:
   ctox harness-flow [--latest] [--message-key <key>] [--work-id <id>] [--width <n>] [--json]
   ctox harness-flow init
@@ -312,6 +314,8 @@ fn build_flow(
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
     .with_context(|| format!("failed to open {}", db_path.display()))?;
+    conn.busy_timeout(sqlite_busy_timeout_duration())
+        .context("failed to configure SQLite busy_timeout for harness flow")?;
 
     let seed_work = match work_id {
         Some(id) => load_self_work(&conn, id)?,
@@ -1295,7 +1299,17 @@ fn open_event_connection(root: &Path) -> Result<Connection> {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
-    Connection::open(&db_path).with_context(|| format!("failed to open {}", db_path.display()))
+    let conn = Connection::open(&db_path)
+        .with_context(|| format!("failed to open {}", db_path.display()))?;
+    conn.busy_timeout(sqlite_busy_timeout_duration())
+        .context("failed to configure SQLite busy_timeout for harness flow")?;
+    let busy_timeout_ms = sqlite_busy_timeout_millis();
+    conn.execute_batch(&format!(
+        "PRAGMA journal_mode=WAL;
+         PRAGMA busy_timeout={busy_timeout_ms};"
+    ))
+    .context("failed to apply harness flow SQLite PRAGMA")?;
+    Ok(conn)
 }
 
 fn ensure_event_schema(conn: &Connection) -> Result<()> {
@@ -1338,6 +1352,8 @@ fn load_flow_events(
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
     .with_context(|| format!("failed to open {}", db_path.display()))?;
+    conn.busy_timeout(sqlite_busy_timeout_duration())
+        .context("failed to configure SQLite busy_timeout for harness flow")?;
     let has_table = conn
         .query_row(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ctox_harness_flow_events'",

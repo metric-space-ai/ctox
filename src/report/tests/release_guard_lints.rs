@@ -318,3 +318,88 @@ fn release_guard_evidence_floor_fires_when_register_undersized() {
         "thin evidence register must block release"
     );
 }
+
+#[test]
+fn release_guard_accepts_doi_embedded_in_url_evidence() {
+    let root = TestRoot::new().expect("temp root");
+    let run_id = create_run(root.path(), rascon_create_params()).expect("create_run");
+    for i in 0..25 {
+        let id = format!("ev_seed_{i:02}");
+        insert_evidence(
+            root.path(),
+            &run_id,
+            &id,
+            "doi",
+            Some(&format!("10.1234/seed.{i:04}")),
+            Some(&format!("Seed {i}")),
+            &["Seed"],
+            Some(2020),
+        )
+        .expect("seed evidence");
+    }
+    insert_evidence(
+        root.path(),
+        &run_id,
+        "ev_url_doi",
+        "url",
+        Some("https://link.springer.com/article/10.1007/s13272-023-00702-w"),
+        Some("Free fall drag estimation of small-scale multirotor unmanned aircraft systems"),
+        &["Author"],
+        Some(2023),
+    )
+    .expect("url evidence with DOI");
+    insert_committed_block(
+        root.path(),
+        &run_id,
+        "doc_study",
+        "scope_disclaimer",
+        "Scope-Hinweis",
+        20,
+        "Annahme: Schichtaufbau Variante A. Validierung an Coupons ist erforderlich. \
+         Grenze: Inline-Pruefung wurde nicht beruecksichtigt.",
+        &[],
+    )
+    .expect("scope_disclaimer");
+    insert_committed_block(
+        root.path(),
+        &run_id,
+        "doc_study",
+        "context_and_question",
+        "Kontext",
+        50,
+        "Die Drag-Quelle wird als URL-Evidence registriert, nennt aber sichtbar die DOI \
+         10.1007/s13272-023-00702-w. Kontaktlose Pruefung des Kupfergitters wird sachlich \
+         beschrieben. Schichtaufbau-Variante A bleibt der Bezug; Aerospace-konforme \
+         Toleranzen gelten als gegeben. Die Methodenklasse haengt vom Probenkopf ab. \
+         Sekundaereffekte sind ausgewiesen. Kontaktlose Pruefung des Kupfergitters wird \
+         sachlich beschrieben. Schichtaufbau-Variante A bleibt der Bezug; Aerospace-konforme \
+         Toleranzen gelten als gegeben. Die Methodenklasse haengt vom Probenkopf ab. \
+         Sekundaereffekte sind ausgewiesen. Kontaktlose Pruefung des Kupfergitters wird \
+         sachlich beschrieben. Schichtaufbau-Variante A bleibt der Bezug; Aerospace-konforme \
+         Toleranzen gelten als gegeben. Die Methodenklasse haengt vom Probenkopf ab. \
+         Sekundaereffekte sind ausgewiesen.",
+        &["ev_url_doi"],
+    )
+    .expect("body block");
+    let workspace = Workspace::load(root.path(), &run_id).expect("workspace");
+    let outcome = run_release_guard_check(&workspace).expect("release_guard");
+    let lint_ids: Vec<String> = outcome
+        .raw_payload
+        .get("issues")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|i| {
+                    i.get("lint_id")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(
+        !lint_ids.iter().any(|id| id == "LINT-FAB-DOI"),
+        "DOI embedded in URL evidence should count as registered evidence; got {:?}",
+        lint_ids
+    );
+}

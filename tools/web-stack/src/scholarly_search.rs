@@ -179,7 +179,18 @@ pub fn execute_scholarly_search(
     }
     let provider = resolve_provider(root, request.provider);
     match provider {
-        ScholarlySearchProvider::Auto => unreachable!("auto provider must be resolved"),
+        ScholarlySearchProvider::Auto => match annas_archive_search(root, request) {
+            Ok(response) => Ok(response),
+            Err(err) => Ok(ScholarlySearchResponse {
+                provider: ScholarlySearchProvider::Auto.as_str().to_string(),
+                query: request.query.trim().to_string(),
+                results: Vec::new(),
+                executed_url: "auto:annas_archive_unavailable".to_string(),
+                source_policy: format!(
+                    "{SOURCE_POLICY_NOTICE} Scholarly auto-discovery returned no records because the configured metadata backend was unavailable: {err}"
+                ),
+            }),
+        },
         ScholarlySearchProvider::AnnasArchive => annas_archive_search(root, request),
     }
 }
@@ -193,10 +204,7 @@ fn resolve_provider(
             .map(|raw| ScholarlySearchProvider::from_label(&raw))
             .unwrap_or(ScholarlySearchProvider::Auto)
     });
-    match provider {
-        ScholarlySearchProvider::Auto => ScholarlySearchProvider::AnnasArchive,
-        other => other,
-    }
+    provider
 }
 
 fn is_enabled(root: &Path) -> bool {

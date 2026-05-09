@@ -131,7 +131,12 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
     migrate_add_column(conn, "report_evidence_register", "updated_at", "TEXT");
     migrate_add_column(conn, "report_evidence_register", "full_text_md", "TEXT");
     migrate_add_column(conn, "report_evidence_register", "full_text_source", "TEXT");
-    migrate_add_column(conn, "report_evidence_register", "full_text_chars", "INTEGER");
+    migrate_add_column(
+        conn,
+        "report_evidence_register",
+        "full_text_chars",
+        "INTEGER",
+    );
     // Storyline lives directly on the run row — single-source-of-truth
     // narrative spine.
     migrate_add_column(conn, "report_runs", "storyline_md", "TEXT");

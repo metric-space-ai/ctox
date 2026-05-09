@@ -1,4 +1,4 @@
-//! The four loop-end checks of the deep-research backend.
+//! The loop-end checks of the deep-research backend.
 //!
 //! Three are deterministic (no LLM): [`completeness`],
 //! [`character_budget`], [`release_guard`]. The fourth,
@@ -20,11 +20,13 @@ use crate::report::schema::{new_id, now_iso};
 
 pub mod character_budget;
 pub mod completeness;
+pub mod deliverable_quality;
 pub mod narrative_flow;
 pub mod release_guard;
 
 pub use character_budget::run_character_budget_check;
 pub use completeness::run_completeness_check;
+pub use deliverable_quality::run_deliverable_quality_check;
 pub use narrative_flow::{
     run_narrative_flow_check, DefaultInputProvider, NarrativeFlowDispatcher, NarrativeFlowInput,
     NarrativeFlowInputProvider, NarrativeFlowOutput, UnimplementedDispatcher,

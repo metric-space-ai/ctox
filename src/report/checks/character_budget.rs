@@ -1,13 +1,13 @@
 //! Deterministic character-budget check.
 //!
-//! Compares the run's actual character count (sum of trimmed
-//! committed-block markdown) against the report-type's
+//! Compares the run's actual character count (trimmed committed-block
+//! markdown plus structured table text) against the report-type's
 //! `typical_chars` target. Fires `ready_to_finish = false` only when
 //! the delta is severe (±50%); minor over/undershoots inside ±20% are
 //! acceptable for a finished verdict.
 
 use anyhow::Result;
-use serde_json::{json, Value};
+use serde_json::json;
 
 use crate::report::checks::{dedupe_keep_order, CheckOutcome};
 use crate::report::workspace::{BlockRecord, Workspace};
@@ -21,10 +21,43 @@ pub fn run_character_budget_check(workspace: &Workspace) -> Result<CheckOutcome>
     let target_chars = report_type.typical_chars as i64;
 
     let committed = workspace.committed_blocks()?;
-    let actual_chars: i64 = committed
+    let block_chars: i64 = committed
         .iter()
         .map(|b| b.markdown.trim().chars().count() as i64)
         .sum();
+    let table_chars: i64 = workspace
+        .tables()
+        .unwrap_or_default()
+        .iter()
+        .map(|table| {
+            let caption = table.caption.trim().chars().count();
+            let legend = table
+                .legend
+                .as_deref()
+                .unwrap_or_default()
+                .trim()
+                .chars()
+                .count();
+            let headers: usize = table
+                .headers
+                .iter()
+                .map(|cell| cell.trim().chars().count())
+                .sum();
+            let rows: usize = table
+                .rows
+                .iter()
+                .flatten()
+                .map(|cell| cell.trim().chars().count())
+                .sum();
+            (caption + legend + headers + rows) as i64
+        })
+        .sum();
+    let table_chars_counted = metadata.report_type_id != "source_review";
+    let actual_chars = if table_chars_counted {
+        block_chars + table_chars
+    } else {
+        block_chars
+    };
     let delta_chars: i64 = actual_chars - target_chars;
 
     if committed.is_empty() {
@@ -173,6 +206,9 @@ pub fn run_character_budget_check(workspace: &Workspace) -> Result<CheckOutcome>
     let payload = json!({
         "target_chars": target_chars,
         "actual_chars": actual_chars,
+        "block_chars": block_chars,
+        "structured_table_chars": table_chars,
+        "structured_table_chars_counted": table_chars_counted,
         "delta_chars": delta_chars,
         "tolerance": 0.20_f64,
         "within_tolerance": within_tolerance,

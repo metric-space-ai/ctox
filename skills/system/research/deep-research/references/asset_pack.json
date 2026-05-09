@@ -210,6 +210,61 @@
       "min_sections": 5,
       "typical_chars": 8000,
       "reference_archetype_ids": []
+    },
+    {
+      "id": "project_description",
+      "label": "Projektbeschreibung / Fördervorhabenbeschreibung",
+      "purpose": "Beschreibung eines Innovations-, Digitalisierungs-, Produktions- oder Investitionsvorhabens für Förderung, Finanzierung oder interne Freigabe: Unternehmen, Ausgangslage, Problem, Innovation, Umsetzung, Budget, Zeitplan und wirtschaftlicher Nutzen.",
+      "block_library_keys": [
+        "project_company_context",
+        "project_problem_statement",
+        "project_innovation_project",
+        "project_target_picture",
+        "project_market_delimitation",
+        "project_implementation_focus",
+        "project_scope_budget_timeline",
+        "project_economic_benefit"
+      ],
+      "document_blueprint_id": "project_description_single",
+      "default_modules": [],
+      "verdict_vocabulary": [
+        "plausibel",
+        "plausibel mit Auflagen",
+        "kritisch"
+      ],
+      "verdict_line_pattern": "Projektplausibilität (qualitativ): <level>; Förderlogik: <condition>.",
+      "min_sections": 8,
+      "typical_chars": 28000,
+      "reference_archetype_ids": []
+    },
+    {
+      "id": "source_review",
+      "label": "Source Review",
+      "purpose": "Systematic internet and literature source review focused on completeness of source discovery, categorisation, data extraction, coverage assessment and source prioritisation.",
+      "block_library_keys": [
+        "source_review_scope",
+        "source_review_search_method",
+        "source_review_taxonomy",
+        "source_review_landscape",
+        "source_review_catalog",
+        "source_review_data_extraction",
+        "source_review_group_synthesis",
+        "source_review_coverage_gaps",
+        "source_review_priority_next_steps",
+        "appendix_sources_source_review"
+      ],
+      "document_blueprint_id": "source_review_single",
+      "default_modules": [],
+      "verdict_vocabulary": [
+        "niedrig",
+        "mittel",
+        "hoch",
+        "sehr hoch"
+      ],
+      "verdict_line_pattern": "Quellenabdeckung (qualitativ): <level>; Hauptluecken: <gaps>.",
+      "min_sections": 8,
+      "typical_chars": 26000,
+      "reference_archetype_ids": []
     }
   ],
   "reference_archetypes": [
@@ -345,6 +400,31 @@
         "Erfolgskriterien sind in der Regel POD, Falschalarmrate, minimale detektierbare Defektgröße, Durchsatz in m²/h und Robustheit gegen Maschinenvibration und Temperaturdrift.",
         "Risikoschwerpunkte: elektromagnetische Störquellen, Werkstücklagevariation, Mehrproduktbetrieb, Qualifizierungsaufwand der Bediener."
       ]
+    },
+    {
+      "id": "innovation_funding_project",
+      "label": "Innovations- und Fördervorhaben",
+      "study_heading": "Projektbeschreibung / Fördervorhabenbeschreibung",
+      "study_doc_title": "Projektbeschreibung – Innovations- und Fördervorhaben",
+      "default_modules": [],
+      "notes": [
+        "Geeignet für Fördervorhabenbeschreibungen, Innovationsprogramme, Digitalisierungsprojekte, Produktions- und Dienstleistungsinnovationen.",
+        "Recherche ist weniger wissenschaftlich als bei Machbarkeitsstudien: priorisiere Unternehmenswebsite, Produkt-/Serviceinformationen, Handelsregister-/Bundesanzeiger-nahe Fakten, Branchenquellen, Wettbewerber-/Marktbelege, Förderprogramm-Kontext und belastbare Sekundärquellen.",
+        "Der rote Faden ist nicht Optionsvergleich, sondern Förderlogik: Ausgangslage -> Engpass -> Innovationssprung -> konkrete Umsetzung -> wirtschaftlicher Nutzen -> Budget/Zeitraum."
+      ]
+    },
+    {
+      "id": "technical_data_sources",
+      "label": "Technische Daten- und Quellenrecherche",
+      "study_heading": "Quellenreview / Datenquellen-Kompendium",
+      "study_doc_title": "Quellenreview – technische Datenquellen und Informationslage",
+      "default_modules": [],
+      "notes": [
+        "Geeignet fuer Aufgaben, bei denen moeglichst alle auffindbaren Datenquellen, Standards, Datenblaetter, Behoerden-/Militaer-/Industriequellen, Datensaetze, Studien, Patente und belastbare Webquellen gefunden und aufbereitet werden sollen.",
+        "Der rote Faden ist Suchvollstaendigkeit: Suchraum definieren -> Begriffe/Klassifikation klaeren -> Suchstrategie dokumentieren -> Quellen sammeln -> Quellen kategorisieren -> Daten extrahieren -> Abdeckung und Luecken bewerten.",
+        "Nicht primaer als wissenschaftliches Literaturreview fahren: akademische Paper sind nur eine Quellengruppe neben Standards, Regulatorik, technischen Reports, Dataset-Repositories, Hersteller-/Anbieterinformationen und Branchenquellen.",
+        "Nie behaupten, das gesamte Internet sei vollstaendig erfasst. Stattdessen die Suchstrategie, Abdeckung, nicht zugängliche Quellen und verbleibende Luecken transparent machen."
+      ]
     }
   ],
   "depth_profiles": [
@@ -407,6 +487,13 @@
       "id": "auto",
       "label": "Automatisch",
       "style_profile_id": "scientific_engineering_dossier",
+      "recommended_reference_ids": [],
+      "suggested_modules": []
+    },
+    {
+      "id": "innovation_funding_project",
+      "label": "Innovations- und Fördervorhaben",
+      "style_profile_id": "project_funding_description",
       "recommended_reference_ids": [],
       "suggested_modules": []
     },
@@ -1096,6 +1183,134 @@
           "doc_id": "doc_decision_brief",
           "required": false,
           "order": 200
+        }
+      ]
+    },
+    "project_description_single": {
+      "base_docs": [
+        {
+          "id": "doc_project_description",
+          "title": "Projektbeschreibung – Hauptdokument"
+        }
+      ],
+      "sequence": [
+        {
+          "block_id": "project_company_context",
+          "doc_id": "doc_project_description",
+          "required": true,
+          "order": 10
+        },
+        {
+          "block_id": "project_problem_statement",
+          "doc_id": "doc_project_description",
+          "required": true,
+          "order": 20
+        },
+        {
+          "block_id": "project_innovation_project",
+          "doc_id": "doc_project_description",
+          "required": true,
+          "order": 30
+        },
+        {
+          "block_id": "project_target_picture",
+          "doc_id": "doc_project_description",
+          "required": true,
+          "order": 40
+        },
+        {
+          "block_id": "project_market_delimitation",
+          "doc_id": "doc_project_description",
+          "required": true,
+          "order": 50
+        },
+        {
+          "block_id": "project_implementation_focus",
+          "doc_id": "doc_project_description",
+          "required": true,
+          "order": 60
+        },
+        {
+          "block_id": "project_scope_budget_timeline",
+          "doc_id": "doc_project_description",
+          "required": true,
+          "order": 70
+        },
+        {
+          "block_id": "project_economic_benefit",
+          "doc_id": "doc_project_description",
+          "required": true,
+          "order": 80
+        }
+      ]
+    },
+    "source_review_single": {
+      "base_docs": [
+        {
+          "id": "doc_source_review",
+          "title": "Quellenreview – Hauptdokument"
+        }
+      ],
+      "sequence": [
+        {
+          "block_id": "source_review_scope",
+          "doc_id": "doc_source_review",
+          "required": true,
+          "order": 10
+        },
+        {
+          "block_id": "source_review_search_method",
+          "doc_id": "doc_source_review",
+          "required": true,
+          "order": 20
+        },
+        {
+          "block_id": "source_review_taxonomy",
+          "doc_id": "doc_source_review",
+          "required": true,
+          "order": 30
+        },
+        {
+          "block_id": "source_review_landscape",
+          "doc_id": "doc_source_review",
+          "required": true,
+          "order": 40
+        },
+        {
+          "block_id": "source_review_catalog",
+          "doc_id": "doc_source_review",
+          "required": true,
+          "order": 50
+        },
+        {
+          "block_id": "source_review_data_extraction",
+          "doc_id": "doc_source_review",
+          "required": true,
+          "order": 60
+        },
+        {
+          "block_id": "source_review_group_synthesis",
+          "doc_id": "doc_source_review",
+          "required": true,
+          "order": 70
+        },
+        {
+          "block_id": "source_review_coverage_gaps",
+          "doc_id": "doc_source_review",
+          "required": true,
+          "order": 80
+        },
+        {
+          "block_id": "source_review_priority_next_steps",
+          "doc_id": "doc_source_review",
+          "required": true,
+          "order": 90
+        },
+        {
+          "block_id": "appendix_sources_source_review",
+          "doc_id": "doc_source_review",
+          "required": true,
+          "order": 100
         }
       ]
     }
@@ -2205,6 +2420,325 @@
       ],
       "min_chars": 420,
       "reference_ids": []
+    },
+    "project_company_context": {
+      "title": "Unternehmensausgangslage",
+      "goal": "Beschreibt Unternehmen, Geschäftsmodell, Standort, Leistungsportfolio, Marktrolle und Ausgangssituation so, dass das Vorhaben aus dem Unternehmen heraus plausibel wird.",
+      "must_have": [
+        "Name, Rechtsform und Rolle der Antragstellerin bzw. Projektträgerin, soweit aus Prompt oder Recherche belegbar",
+        "konkrete recherchierte Anker zu Standort, Historie, Register-/Rechtskontext, Management, Produktlinien, Kunden- oder Leistungssegmenten, sofern verfügbar",
+        "Geschäftsmodell, Produkte/Services, Zielkunden und Wertschöpfungslogik",
+        "heutige technische, organisatorische oder marktliche Ausgangssituation",
+        "keine reine Imagebroschüre: jedes Unternehmensdetail muss die spätere Projektlogik vorbereiten"
+      ],
+      "style_rules": [
+        "Beginne mit einem präzisen Einordnungssatz zum Unternehmen, nicht mit Werbeadjektiven.",
+        "Nutze öffentliche Unternehmens- und Branchenquellen; kennzeichne Annahmen zurückhaltend.",
+        "Historie nur aufnehmen, wenn sie für Innovationsfähigkeit, Marktposition oder Projektbedarf relevant ist."
+      ],
+      "min_chars": 1400,
+      "reference_ids": []
+    },
+    "project_problem_statement": {
+      "title": "Problemstellung",
+      "goal": "Leitet konkrete betriebliche, technische, digitale, marktliche oder kapazitive Engpässe her, die das Vorhaben notwendig machen.",
+      "must_have": [
+        "Ist-Zustand und konkrete Begrenzung des heutigen Systems/Prozesses/Produkts",
+        "mindestens zwei konkrete heutige Produkt-, Service-, Prozess- oder Marktanker aus Prompt oder Recherche, an denen der Engpass sichtbar wird",
+        "Folgen des Nicht-Handelns für Effizienz, Qualität, Skalierbarkeit, Kundenservice, Nachhaltigkeit oder Wettbewerbsfähigkeit",
+        "Problem nicht als allgemeine Trendbehauptung formulieren, sondern als projektauslösenden Mechanismus",
+        "mindestens zwei belegte externe oder interne Kontextanker, sofern recherchierbar"
+      ],
+      "style_rules": [
+        "Keine pauschalen Digitalisierungsfloskeln; jede Aussage muss zeigen, wodurch der Engpass entsteht.",
+        "Trenne Symptom, Ursache und betriebliche Wirkung."
+      ],
+      "min_chars": 1700,
+      "reference_ids": []
+    },
+    "project_innovation_project": {
+      "title": "Innovationsvorhaben",
+      "goal": "Beschreibt den Innovationskern des Projekts und macht klar, warum das Vorhaben mehr ist als Ersatzbeschaffung, Standard-IT oder bloße Kapazitätserweiterung.",
+      "must_have": [
+        "Kurzname und präziser Gegenstand des Vorhabens",
+        "Innovationssprung gegenüber dem bisherigen Zustand",
+        "benannte Module, Komponenten, Systeme, Partner, Datenflüsse oder Prozessbausteine, sofern aus Prompt oder Recherche verfügbar",
+        "technische, digitale, prozessuale oder dienstleistungsbezogene Neuheitselemente",
+        "Zusammenspiel von Hardware, Software, Prozess, Organisation und Daten, soweit relevant",
+        "Abgrenzung zwischen förderfähigem Entwicklungs-/Innovationsanteil und reinem Investitionsanteil"
+      ],
+      "style_rules": [
+        "Innovation als Wirklogik formulieren: was wird neu kombiniert, automatisiert, vernetzt, messbar oder skalierbar?",
+        "Keine Patent-/Weltneuheitsbehauptung ohne Quelle."
+      ],
+      "min_chars": 2200,
+      "reference_ids": []
+    },
+    "project_target_picture": {
+      "title": "Zielbild",
+      "goal": "Verdichtet den angestrebten Soll-Zustand nach Projektabschluss mit Zielzuständen, Fähigkeiten und messbaren Nutzenachsen.",
+      "must_have": [
+        "Soll-Prozess bzw. Soll-Produkt nach Projektabschluss",
+        "neue Fähigkeiten gegenüber dem Ausgangszustand",
+        "konkrete Zielanker aus Produkt-, Service-, Kunden-, Daten- oder Betriebslogik; keine reine Vision ohne operative Anbindung",
+        "messbare oder zumindest plausibel qualifizierte Zielgrößen",
+        "Nutzer-, Kunden-, Service-, Produktions- oder Betriebswirkung"
+      ],
+      "style_rules": [
+        "Zielbild nicht als Wunschliste, sondern als zukünftiges Betriebsmodell schreiben.",
+        "Wenn Kennzahlen fehlen, qualitative Zielgrößen mit klarer Richtung nennen."
+      ],
+      "min_chars": 1600,
+      "reference_ids": []
+    },
+    "project_market_delimitation": {
+      "title": "Abgrenzung zum Markt",
+      "goal": "Ordnet das Vorhaben gegenüber marktüblichen Lösungen, Wettbewerbern, Standardprodukten oder bestehenden Prozessen ein.",
+      "must_have": [
+        "relevantes Markt-/Wettbewerbsumfeld oder verfügbare Standardlösungen",
+        "konkrete Marktanker wie Anbieter, Standardfunktionen, Produktklassen, Norm-/Regelkontexte oder Branchenanforderungen, sofern recherchierbar",
+        "Unterschied zwischen dem geplanten Vorhaben und marktüblicher Beschaffung/Standardsoftware/Standardgerät",
+        "warum die eigene Lösung für das Unternehmen oder Kundensegment spezifisch notwendig ist",
+        "keine überzogene Alleinstellungsbehauptung ohne Beleg"
+      ],
+      "style_rules": [
+        "Recherche hier breit und praxisnah: Anbieterwebsites, Produktdaten, Branchenartikel, Standards, Kundenanforderungen.",
+        "Abgrenzung nicht als aggressive Wettbewerbswerbung schreiben."
+      ],
+      "min_chars": 1800,
+      "reference_ids": []
+    },
+    "project_implementation_focus": {
+      "title": "Umsetzungsschwerpunkte",
+      "goal": "Beschreibt Arbeitspakete, Entwicklungsstränge und organisatorische Maßnahmen, mit denen das Zielbild realisiert wird.",
+      "must_have": [
+        "drei bis sechs Umsetzungsschwerpunkte oder Arbeitspakete",
+        "je Schwerpunkt: Inhalt, Zweck und Beitrag zur Innovationslogik",
+        "konkrete Zuordnung zu benannten Kostenblöcken, technischen Modulen, Prozessbereichen, Schnittstellen oder Betriebsfunktionen, sofern verfügbar",
+        "Abhängigkeiten zwischen technischen, organisatorischen und wirtschaftlichen Schritten",
+        "bei Software-/Plattformprojekten: Daten, Schnittstellen, Geräte-/Serviceintegration und Betrieb berücksichtigen"
+      ],
+      "style_rules": [
+        "Arbeitspakete als Entwicklungslogik formulieren, nicht als Einkaufsliste.",
+        "Wenn der Prompt Kostenblöcke nennt, müssen diese hier fachlich wieder auftauchen."
+      ],
+      "min_chars": 2600,
+      "reference_ids": []
+    },
+    "project_scope_budget_timeline": {
+      "title": "Projektumfang",
+      "goal": "Fasst Laufzeit, Status, Budget, Kostenblöcke, Projektgrenzen und organisatorischen Umfang belastbar zusammen.",
+      "must_have": [
+        "Laufzeit oder geplanter Zeitraum",
+        "Projektstatus, insbesondere ob begonnen oder noch nicht begonnen",
+        "Gesamtbudget mit Einheit und, falls gegeben, Kostenblöcke",
+        "Kostenblöcke fachlich erläutern und an konkrete Projektbestandteile, Systeme, Produkte, Software, Organisation oder Umfinanzierung koppeln",
+        "Abgrenzung, was im Projektumfang enthalten ist und was nicht",
+        "eine kompakte native Tabelle zu Laufzeit/Status/Budget/Kostenblöcken per ctox report table-add, wenn die Informationen verfügbar sind"
+      ],
+      "style_rules": [
+        "Zahlen aus dem Prompt unverändert übernehmen; nicht umrechnen, runden oder neue Budgets erfinden.",
+        "Wenn Laufzeit, Status, Budget oder Kostenblöcke bekannt sind, muss der Block eine echte Projektumfang-Tabelle bekommen, nicht nur Fließtext.",
+        "Kostenblöcke nicht nur listen, sondern ihrer Projektfunktion zuordnen."
+      ],
+      "min_chars": 900,
+      "reference_ids": []
+    },
+    "project_economic_benefit": {
+      "title": "Wirtschaftlicher Nutzen",
+      "goal": "Leitet aus Projektwirkung und Umsetzungsschwerpunkten den betriebswirtschaftlichen Nutzen und die Förderwürdigkeit ab.",
+      "must_have": [
+        "Nutzen für Umsatz, Kosten, Marge, Skalierung, Servicequalität, Kundenbindung, Resilienz oder Marktzugang",
+        "Wirkmechanismus zwischen Innovationsvorhaben und wirtschaftlichem Effekt",
+        "mindestens drei konkrete Nutzenhebel aus recherchierten Produkt-, Kunden-, Service-, Markt- oder Prozessfakten ableiten, sofern verfügbar",
+        "Nutzen für Beschäftigung, Standort, Nachhaltigkeit oder Wettbewerbsfähigkeit, sofern plausibel",
+        "abschließende Projektplausibilitätslinie im Muster: Projektplausibilität (qualitativ): <level>; Förderlogik: <condition>."
+      ],
+      "style_rules": [
+        "Keine garantierten Umsatzzuwächse ohne belastbare Quelle; mit Potenzialen, Hebeln und Voraussetzungen arbeiten.",
+        "Der Schluss muss die Förderlogik konsolidieren: Problem, Innovation, Umsetzung, Nutzen, Budget/Zeitraum."
+      ],
+      "min_chars": 1600,
+      "reference_ids": []
+    },
+    "appendix_sources_project": {
+      "title": "Anhang – Quellen und Recherchebasis",
+      "goal": "Dokumentiert die für Unternehmens-, Markt-, Technologie- und Förderkontext genutzten Quellen.",
+      "must_have": [
+        "Quellen sind nach Unternehmensquellen, Markt-/Wettbewerbsquellen, Technologie-/Branchenquellen und Förder-/Rahmenkontext unterscheidbar",
+        "keine Roh-URLs ohne Titel oder Kontext",
+        "keine wissenschaftliche Scheingenauigkeit, wenn die Quelle eine Unternehmens- oder Anbieterquelle ist"
+      ],
+      "style_rules": [
+        "Quellenanhang knapp halten; im Fließtext zählen die Aussagen, nicht die Bibliographie-Länge.",
+        "Quellencharakter transparent machen: Unternehmensquelle, Anbieterquelle, Branchenquelle, amtliche/programmatische Quelle."
+      ],
+      "min_chars": 450,
+      "reference_ids": []
+    },
+    "source_review_scope": {
+      "title": "Scope and Search Boundary",
+      "goal": "Klaert die Recherchefrage, Grenzen des Suchraums, Zielobjekte, Einheiten/Klassen und welche Quellentypen als relevant gelten.",
+      "must_have": [
+        "Recherchefrage in einem praezisen Satz",
+        "Scope-Grenzen: Objekt, Gewichts-/Groessenklasse, Region/Klassifikation, Datenart und Zeitraum",
+        "Definition, was als Quelle zaehlt: Standard, Report, Paper, Datensatz, technische Dokumentation, Hersteller-/Regulierungsquelle etc.",
+        "explizite Nicht-Behauptung absoluter Vollstaendigkeit; Ziel ist nachvollziehbare maximale Abdeckung mit Suchlogik"
+      ],
+      "style_rules": [
+        "Nicht mit einem allgemeinen Themenaufsatz beginnen; der erste Absatz definiert den Suchauftrag.",
+        "Begriffe und Grenzen so setzen, dass spaetere Quellen ein- oder ausgeschlossen werden koennen."
+      ],
+      "min_chars": 900,
+      "reference_ids": []
+    },
+    "source_review_search_method": {
+      "title": "Search Strategy and Protocol",
+      "goal": "Dokumentiert Suchwege, Suchbegriffe, Datenbanken/Plattformen und Einschluss-/Ausschlusslogik so, dass die Vollstaendigkeitsbehauptung pruefbar wird.",
+      "must_have": [
+        "mindestens vier Suchpfade: Web, wissenschaftliche Suche, Standards/Regulatorik/Behoerden, Datensaetze/Repositories/Industriequellen",
+        "mehrsprachige oder synonyme Suchbegriffe, wenn fachlich relevant",
+        "Einschluss-/Ausschlusskriterien fuer Quellen",
+        "Hinweis auf Suchdatum und erkennbare Zugangsluecken"
+      ],
+      "style_rules": [
+        "Suchstrategie nicht als Fliesstext verstecken; mit klarer Liste oder Tabelle arbeiten.",
+        "Begriffe aus dem Auftrag in englische Fachbegriffe uebersetzen, sofern die Quelllage international ist."
+      ],
+      "min_chars": 1300,
+      "reference_ids": []
+    },
+    "source_review_taxonomy": {
+      "title": "Terminology, Classification and Source Groups",
+      "goal": "Erstellt eine fachliche Taxonomie, nach der Quellen spaeter gruppiert und Daten vergleichbar gemacht werden.",
+      "must_have": [
+        "relevante Fachbegriffe und Synonyme",
+        "Klassifikationen, Normen oder Gewichts-/Leistungsklassen, sofern relevant",
+        "Quellengruppen mit jeweiligem Informationswert",
+        "Datenfelder, die aus Quellen extrahiert werden sollen",
+        "Scoring-Modell mit Kriterien, Skala und Bedeutung der Score-Stufen, sofern der Nutzer kein Modell vorgegeben hat"
+      ],
+      "style_rules": [
+        "Taxonomie soll die Recherche strukturieren, nicht ein Glossar ohne Funktion sein.",
+        "Uneinheitliche Begriffe aus Quellen offenlegen und normalisieren."
+      ],
+      "min_chars": 1300,
+      "reference_ids": []
+    },
+    "source_review_landscape": {
+      "title": "Source Landscape Overview",
+      "goal": "Gibt einen strukturierten Überblick, welche Quellentypen gefunden wurden, wie ergiebig sie sind und welche Rollen sie in der Informationslage spielen.",
+      "must_have": [
+        "Gruppierung der gefundenen Quellen nach Quellentyp und Relevanz",
+        "kurze Bewertung der Ergiebigkeit pro Gruppe",
+        "Trennung von Primaerquellen, Sekundaerquellen und Indizienquellen",
+        "Hinweis auf Quellen, die wahrscheinlich wichtig sind, aber nicht frei zugaenglich waren"
+      ],
+      "style_rules": [
+        "Quellenlandschaft nicht als Bibliographie wiederholen; sie erklaert, welche Quellenfamilien was leisten.",
+        "Bei schwacher Quellenlage offen sagen, was nicht gefunden wurde."
+      ],
+      "min_chars": 1700,
+      "reference_ids": []
+    },
+    "source_review_catalog": {
+      "title": "Source Catalog",
+      "goal": "Tabellarischer Katalog der wichtigsten Quellen mit Typ, Herkunft, Dateninhalt, Relevanz, Zugriff und Nutzungswert.",
+      "must_have": [
+        "echte Tabelle mit mindestens den Spalten Gruppe, Quelle, Typ, Herausgeber/Autor, Jahr, Dateninhalt, Score, Score-Begruendung, Zugriff/URL oder DOI",
+        "mindestens eine Quelle pro zentraler Quellengruppe, sofern auffindbar",
+        "klare Kennzeichnung von Primaerquelle vs. Sekundaerquelle",
+        "keine Roh-URL-Liste ohne Auswertung",
+        "jede Quelle mit direktem Link/DOI/Zugriffshinweis und einer knappen Bewertung, was aus der Quelle wirklich fuer die Recherchefrage extrahiert wurde"
+      ],
+      "style_rules": [
+        "Der Quellenkatalog ist das Last-bearing Artefakt dieses Report-Typs; er muss als echte Tabelle rendern.",
+        "Relevanzspalte konkret schreiben: welche Daten liefert die Quelle fuer den Suchauftrag?",
+        "Score-Begruendungen muessen zwischen direkten Datenquellen, Kontextquellen, Modellquellen, Sekundaerquellen und nicht oeffentlich voll nutzbaren Quellen unterscheiden."
+      ],
+      "min_chars": 900,
+      "min_rows": 80,
+      "reference_ids": []
+    },
+    "source_review_data_extraction": {
+      "title": "Extracted Data and Defensible Findings",
+      "goal": "Bereitet die in Quellen gefundenen Datenpunkte, Messwerte, Klassen, Lastannahmen, Grenzwerte oder Informationsfragmente vergleichbar auf.",
+      "must_have": [
+        "tabellarische oder klar gegliederte Extraktion zentraler Datenpunkte",
+        "Angabe der Quelle je Datenpunkt",
+        "Einheiten, Definitionen und Kontext jeder Datenangabe",
+        "Kennzeichnung von direkt gemessenen, modellierten, normativen oder abgeleiteten Daten"
+      ],
+      "style_rules": [
+        "Nicht nur Quellen beschreiben; konkrete Daten und Aussagen extrahieren.",
+        "Wenn Quellen keine direkten Daten liefern, den Negativbefund explizit dokumentieren."
+      ],
+      "min_chars": 2200,
+      "reference_ids": []
+    },
+    "source_review_group_synthesis": {
+      "title": "Synthesis by Source Group",
+      "goal": "Verdichtet die Quellen nach Gruppen und zeigt, welche Aussagen robust, widerspruechlich oder nur indikativ sind.",
+      "must_have": [
+        "Synthese pro Quellengruppe oder Themencluster",
+        "Konvergenzen und Widersprueche zwischen Quellen",
+        "Qualitaets-/Vertrauensniveau pro Gruppe",
+        "Bezug zur Recherchefrage statt allgemeiner Zusammenfassung",
+        "gruppenspezifische Quellentabellen mit Link/DOI, Score und Nutzungshinweis fuer die wichtigsten Quellen jeder Gruppe"
+      ],
+      "style_rules": [
+        "Gruppieren heisst bewerten: Welche Quellen tragen harte Daten, welche nur Kontext?",
+        "Nicht jede Quelle gleich gewichten; Quellenqualitaet offen unterscheiden."
+      ],
+      "min_chars": 2200,
+      "reference_ids": []
+    },
+    "source_review_coverage_gaps": {
+      "title": "Coverage, Gaps and Completeness Assessment",
+      "goal": "Bewertet, wie vollstaendig die Quellenlage nach der dokumentierten Suche ist und welche Luecken bleiben.",
+      "must_have": [
+        "Coverage-Bewertung nach Quellengruppen und Datenfeldern",
+        "explizite Hauptluecken und moegliche Gruende fuer Nicht-Auffindbarkeit",
+        "Unterscheidung zwischen nicht vorhanden, nicht auffindbar, nicht frei zugaenglich und nicht eindeutig",
+        "Schlusslinie im Muster: Quellenabdeckung (qualitativ): <level>; Hauptluecken: <gaps>."
+      ],
+      "style_rules": [
+        "Keine absolute Vollstaendigkeitsbehauptung; die Bewertung ist relativ zur dokumentierten Suchstrategie.",
+        "Luecken sind Ergebnis, kein Makel: sie zeigen, wo weitere Beschaffung oder Expertenzugang noetig ist."
+      ],
+      "min_chars": 1700,
+      "reference_ids": []
+    },
+    "source_review_priority_next_steps": {
+      "title": "Prioritised Sources and Next Steps",
+      "goal": "Priorisiert die besten Quellen und nennt konkrete Folgeschritte fuer Datenbeschaffung, Validierung oder Vertiefung.",
+      "must_have": [
+        "Top-Quellenliste mit Grund der Priorisierung",
+        "welche Quellen zuerst beschafft, gelesen oder kontaktiert werden sollten",
+        "welche Datensaetze/Standards/Reports gegebenenfalls kostenpflichtig oder nicht oeffentlich sind",
+        "konkrete naechste Such- oder Beschaffungsschritte"
+      ],
+      "style_rules": [
+        "Priorisierung operativ formulieren: was tun, nicht nur was wichtig ist.",
+        "Zwischen sofort nutzbaren Quellen und Quellen mit Beschaffungshuerde unterscheiden."
+      ],
+      "min_chars": 1200,
+      "reference_ids": []
+    },
+    "appendix_sources_source_review": {
+      "title": "Appendix - Complete Source List",
+      "goal": "Fuehrt die im Review verwendeten Quellen mit stabilen Identifikatoren und kurzen Nutzungshinweisen auf.",
+      "must_have": [
+        "alle zitierten Quellen mit Titel, Herausgeber/Autor, Jahr, URL/DOI soweit verfuegbar",
+        "kurzer Nutzungshinweis fuer besonders wichtige Quellen",
+        "keine unkommentierte URL-Halde"
+      ],
+      "style_rules": [
+        "Quellenanhang knapp, aber vollstaendig fuer die verwendete Evidenz halten.",
+        "Bei Webquellen Abruf-/Suchdatum im Reportkontext nennen, wenn das Tool dies verfuegbar macht."
+      ],
+      "min_chars": 700,
+      "reference_ids": []
     }
   },
   "reference_resources": [
@@ -3060,9 +3594,48 @@
         "not recommended"
       ],
       "notes": "Verpflichtend; Empfehlung ohne benannte Bedingung fällt durch."
+    },
+    {
+      "report_type_id": "project_description",
+      "block_id": "project_economic_benefit",
+      "pattern": "Projektplausibilität (qualitativ): <plausibel|plausibel mit Auflagen|kritisch>; Förderlogik: <condition>.",
+      "vocabulary": [
+        "plausibel",
+        "plausibel mit Auflagen",
+        "kritisch"
+      ],
+      "notes": "Verpflichtend im Schlussblock; die Bedingung nennt mindestens eine Voraussetzung wie Projektfreigabe, Budgetklarheit, technische Spezifikation oder Marktabgrenzung."
+    },
+    {
+      "report_type_id": "source_review",
+      "block_id": "source_review_coverage_gaps",
+      "pattern": "Quellenabdeckung (qualitativ): <niedrig|mittel|hoch|sehr hoch>; Hauptluecken: <gaps>.",
+      "vocabulary": [
+        "niedrig",
+        "mittel",
+        "hoch",
+        "sehr hoch"
+      ],
+      "notes": "Verpflichtend im Coverage/Gaps-Block; keine absolute Vollstaendigkeitsbehauptung, sondern Bewertung relativ zur dokumentierten Suchstrategie."
     }
   ],
   "style_profiles": [
+    {
+      "id": "project_funding_description",
+      "label": "Fördervorhaben- und Projektbeschreibungsdossier",
+      "use_when": [
+        "Projektbeschreibungen für Förder-, Finanzierungs- oder Freigabeunterlagen",
+        "Innovations- und Digitalisierungsvorhaben mit Unternehmens-, Projekt- und Nutzenlogik",
+        "Dokumente, in denen Recherche nur die Formulierung stützt, aber nicht als wissenschaftlicher Apparat sichtbar werden soll"
+      ],
+      "directives": [
+        "schreibe als Fördervorhaben- bzw. Projektbeschreibung, nicht als Studie, Quellenreview oder wissenschaftliches Paper",
+        "führe vom Unternehmen über Ausgangslage und Engpass zum Zielbild, zur Umsetzung und zum wirtschaftlichen Nutzen",
+        "integriere recherchierte Fakten unsichtbar in die Formulierung; keine sichtbaren Zitationsketten, DOI-Listen oder Quellenanhänge ohne ausdrücklichen Auftrag",
+        "nutze konkrete Unternehmens-, Produkt-, Kunden-, Prozess-, Budget- und Zeitbezüge; vermeide generische Digitalisierungsfloskeln",
+        "verbinde Herausforderungen, Ziele und Umsetzungsschwerpunkte zu einem roten Faden; Arbeitspakete dürfen als Fließtext beschrieben werden"
+      ]
+    },
     {
       "id": "scientific_engineering_dossier",
       "label": "Wissenschaftlich-technisches Dossier",

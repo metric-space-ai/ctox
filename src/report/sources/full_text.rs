@@ -87,7 +87,9 @@ fn build_agent(timeout: Duration) -> ureq::Agent {
         .timeout_connect(Duration::from_secs(8))
         .timeout_read(timeout)
         .timeout_write(Duration::from_secs(15))
-        .user_agent("CTOX deep-research full-text fetcher (+https://github.com/metric-space-ai/ctox)")
+        .user_agent(
+            "CTOX deep-research full-text fetcher (+https://github.com/metric-space-ai/ctox)",
+        )
         .build()
 }
 
@@ -107,8 +109,7 @@ pub fn fetch_full_text(url: &str) -> Result<FullTextFetch> {
         .map(|s| s.to_ascii_lowercase())
         .unwrap_or_default();
     let url_lower = url.to_ascii_lowercase();
-    let looks_pdf =
-        content_type.contains("application/pdf") || url_lower.ends_with(".pdf");
+    let looks_pdf = content_type.contains("application/pdf") || url_lower.ends_with(".pdf");
 
     if looks_pdf {
         let mut bytes: Vec<u8> = Vec::new();

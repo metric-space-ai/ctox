@@ -176,9 +176,12 @@ def _add_inline_runs(paragraph, text: str, references: list, deps) -> None:
         paragraph.add_run("")
         return
 
-    # tokenize: ** ... **, _ ... _, [ ... ]
+    # tokenize: ** ... **, _ ... _, [evidence markers]. Citation
+    # groups such as [ev_a; ev_b] are intentionally accepted here:
+    # block authors cite evidence IDs, while the client-facing document
+    # must show only stable numeric references.
     pattern = re.compile(
-        r"(\*\*[^*]+\*\*|_[^_]+_|\[[A-Za-z0-9_\-:]+\])"
+        r"(\*\*[^*]+\*\*|_[^_]+_|\[[^\]\n]{1,500}\]|\bev_?[A-Fa-f0-9]{12,}\b)"
     )
     pos = 0
     for match in pattern.finditer(text):
@@ -193,17 +196,70 @@ def _add_inline_runs(paragraph, text: str, references: list, deps) -> None:
             run.italic = True
         elif token.startswith("[") and token.endswith("]"):
             marker = token[1:-1]
-            ref_n = _lookup_ref_n(marker, references)
-            if ref_n is not None:
-                run = paragraph.add_run(f"[{ref_n}]")
+            ref_nums = _lookup_ref_nums(marker, references)
+            if ref_nums:
+                joined = ", ".join(str(n) for n in ref_nums)
+                run = paragraph.add_run(f"[{joined}]")
                 run.font.superscript = True
             else:
                 paragraph.add_run(token)
+        elif re.match(r"(?i)^ev_?[a-f0-9]{12,}$", token):
+            ref_n = _lookup_ref_n(token, references)
+            if ref_n is None:
+                paragraph.add_run(token)
+            else:
+                run = paragraph.add_run(f"[{ref_n}]")
+                run.font.superscript = True
         else:
             paragraph.add_run(token)
         pos = match.end()
     if pos < len(text):
         paragraph.add_run(text[pos:])
+
+
+def _lookup_ref_nums(marker: str, references: list):
+    parts = [
+        p.strip()
+        for p in re.split(r"[;,]", marker)
+        if p.strip()
+    ]
+    if not parts:
+        return None
+    nums = []
+    for part in parts:
+        ref_n = _lookup_ref_n(part, references)
+        if ref_n is None:
+            return None
+        nums.append(ref_n)
+    return nums
+
+
+def _replace_reference_markers(text: str, references: list) -> str:
+    """Replace bracketed evidence IDs in plain strings.
+
+    Figure captions and structured table cells are not rendered through
+    the rich inline-run path, but they still must not leak internal
+    evidence IDs into the client-facing document.
+    """
+    text = _ascii_dashes(text or "")
+    if not text:
+        return text
+
+    def _sub(match):
+        nums = _lookup_ref_nums(match.group(1), references)
+        if not nums:
+            return match.group(0)
+        return "[" + ", ".join(str(n) for n in nums) + "]"
+
+    text = re.sub(r"\[([^\]\n]{1,500})\]", _sub, text)
+
+    def _bare_sub(match):
+        ref_n = _lookup_ref_n(match.group(0), references)
+        if ref_n is None:
+            return match.group(0)
+        return f"[{ref_n}]"
+
+    return re.sub(r"\bev_?[A-Fa-f0-9]{12,}\b", _bare_sub, text)
 
 
 def _lookup_ref_n(marker: str, references: list):
@@ -235,6 +291,33 @@ def _add_paragraph_with_runs(document, text: str, references: list, deps,
         p.alignment = alignment
     _add_inline_runs(p, text, references, deps)
     return p
+
+
+def _label(key: str, language: str = "de") -> str:
+    lang = (language or "de").lower()
+    english = lang.startswith("en")
+    labels = {
+        "toc": ("Inhaltsverzeichnis", "Table of Contents"),
+        "toc_hint": (
+            'Inhaltsverzeichnis (mit Rechtsklick aktualisieren).',
+            "Table of contents (update field on open if empty).",
+        ),
+        "toc_hint_p": (
+            'Hinweis: Falls das Inhaltsverzeichnis leer erscheint, mit Rechtsklick -> "Feld aktualisieren" aktualisieren.',
+            'Note: If the table of contents appears empty, update the field in Word.',
+        ),
+        "figure": ("Abbildung", "Figure"),
+        "figures": ("Abbildungen", "Figures"),
+        "table": ("Tabelle", "Table"),
+        "tables": ("Tabellen", "Tables"),
+        "source": ("Quelle", "Source"),
+        "references": ("Anhang - Quellen", "Appendix - References"),
+        "abbreviations": ("Abkuerzungsverzeichnis", "Abbreviations"),
+        "abbr": ("Abkuerzung", "Abbreviation"),
+        "meaning": ("Bedeutung", "Meaning"),
+    }
+    de, en = labels.get(key, (key, key))
+    return en if english else de
 
 
 def _render_narrative(document, block: dict, references: list, deps) -> None:
@@ -361,7 +444,7 @@ def _render_evidence_register(document, references: list, deps) -> None:
         _add_inline_runs(p, _ascii_dashes(text), [], deps)
 
 
-def _add_toc_field(document, deps) -> None:
+def _add_toc_field(document, deps, language: str = "de") -> None:
     """Insert a Word TOC field. Word will populate on first open;
     LibreOffice fills it on conversion. Add a hint paragraph.
     """
@@ -377,7 +460,7 @@ def _add_toc_field(document, deps) -> None:
     fldChar2 = OxmlElement("w:fldChar")
     fldChar2.set(qn("w:fldCharType"), "separate")
     fldChar3 = OxmlElement("w:t")
-    fldChar3.text = "Inhaltsverzeichnis (mit Rechtsklick aktualisieren)."
+    fldChar3.text = _label("toc_hint", language)
     fldChar4 = OxmlElement("w:fldChar")
     fldChar4.set(qn("w:fldCharType"), "end")
     r_element = run._r
@@ -388,8 +471,7 @@ def _add_toc_field(document, deps) -> None:
     r_element.append(fldChar4)
     hint = document.add_paragraph()
     hint_run = hint.add_run(
-        "Hinweis: Falls das Inhaltsverzeichnis leer erscheint, "
-        'mit Rechtsklick -> "Feld aktualisieren" aktualisieren.'
+        _label("toc_hint_p", language)
     )
     hint_run.italic = True
 
@@ -415,6 +497,7 @@ def _render_block(document, block: dict, references: list, deps, ctx: dict | Non
             block["markdown"],
             ctx.get("fig_tokens", {}),
             ctx.get("tbl_tokens", {}),
+            ctx.get("language", "de"),
         )
     kind = block.get("kind") or "narrative"
     if kind == "narrative":
@@ -445,9 +528,9 @@ def _render_block(document, block: dict, references: list, deps, ctx: dict | Non
     if ctx is not None:
         instance_id = block.get("instance_id") or ""
         for fig in ctx.get("figs_by_instance", {}).get(instance_id, []):
-            _render_structured_figure(document, fig, deps)
+            _render_structured_figure(document, fig, deps, references, ctx.get("language", "de"))
         for tbl in ctx.get("tbls_by_instance", {}).get(instance_id, []):
-            _render_structured_table(document, tbl, deps)
+            _render_structured_table(document, tbl, deps, references, ctx.get("language", "de"))
 
 
 # ---- structured figure / table rendering -------------------------------
@@ -455,7 +538,7 @@ def _render_block(document, block: dict, references: list, deps, ctx: dict | Non
 _TOKEN_RE = re.compile(r"\{\{(fig|tbl):([^}\s]+)\}\}")
 
 
-def _resolve_xref_tokens(markdown: str, fig_tokens: dict, tbl_tokens: dict) -> str:
+def _resolve_xref_tokens(markdown: str, fig_tokens: dict, tbl_tokens: dict, language: str = "de") -> str:
     """Replace `{{fig:ID}}` / `{{tbl:ID}}` tokens with their numbered
     cross-ref text. Unknown tokens are left untouched so the operator
     can spot them in the output."""
@@ -465,19 +548,19 @@ def _resolve_xref_tokens(markdown: str, fig_tokens: dict, tbl_tokens: dict) -> s
         n = (fig_tokens if kind == "fig" else tbl_tokens).get(ref_id)
         if n is None:
             return m.group(0)
-        return f"Abbildung {n}" if kind == "fig" else f"Tabelle {n}"
+            return f"{_label('figure', language)} {n}" if kind == "fig" else f"{_label('table', language)} {n}"
 
     return _TOKEN_RE.sub(_sub, markdown)
 
 
-def _render_structured_figure(document, fig: dict, deps) -> None:
+def _render_structured_figure(document, fig: dict, deps, references: list | None = None, language: str = "de") -> None:
     """Embed a figure as a Word picture, then a caption paragraph."""
     Inches = deps["Inches"]
     Pt = deps["Pt"]
     image_path = fig.get("image_path") or ""
     fig_n = fig.get("fig_number") or 0
     caption = fig.get("caption") or ""
-    source_label = fig.get("source_label") or ""
+    source_label = _replace_reference_markers(fig.get("source_label") or "", references or [])
     if image_path and Path(image_path).is_file():
         try:
             document.add_picture(image_path, width=Inches(5.5))
@@ -487,17 +570,17 @@ def _render_structured_figure(document, fig: dict, deps) -> None:
             )
     cap = document.add_paragraph()
     cap_run = cap.add_run(
-        f"Abbildung {fig_n}: {_ascii_dashes(caption)}"
+        f"{_label('figure', language)} {fig_n}: {_ascii_dashes(caption)}"
     )
     cap_run.italic = True
     cap_run.font.size = Pt(9)
     if source_label:
-        src_run = cap.add_run(f" (Quelle: {_ascii_dashes(source_label)})")
+        src_run = cap.add_run(f" ({_label('source', language)}: {_ascii_dashes(source_label)})")
         src_run.italic = True
         src_run.font.size = Pt(9)
 
 
-def _render_structured_table(document, tbl: dict, deps) -> None:
+def _render_structured_table(document, tbl: dict, deps, references: list | None = None, language: str = "de") -> None:
     """Render a structured table as a native Word table with a numbered
     caption above and an optional legend below."""
     Pt = deps["Pt"]
@@ -505,7 +588,9 @@ def _render_structured_table(document, tbl: dict, deps) -> None:
     tbl_n = tbl.get("tbl_number") or 0
     caption = tbl.get("caption") or ""
     cap = document.add_paragraph()
-    cap_run = cap.add_run(f"Tabelle {tbl_n}: {_ascii_dashes(caption)}")
+    cap_run = cap.add_run(
+        f"{_label('table', language)} {tbl_n}: {_replace_reference_markers(caption, references or [])}"
+    )
     cap_run.italic = True
     cap_run.font.size = Pt(9)
 
@@ -531,13 +616,13 @@ def _render_structured_table(document, tbl: dict, deps) -> None:
             cell.vertical_alignment = WD_ALIGN_VERTICAL.TOP
             cell.text = ""
             p = cell.paragraphs[0]
-            run = p.add_run(_ascii_dashes(str(value)))
+            run = p.add_run(_replace_reference_markers(str(value), references or []))
             run.font.size = Pt(10)
 
     legend = tbl.get("legend") or ""
     if legend:
         leg = document.add_paragraph()
-        leg_run = leg.add_run(_ascii_dashes(legend))
+        leg_run = leg.add_run(_replace_reference_markers(legend, references or []))
         leg_run.italic = True
         leg_run.font.size = Pt(9)
     document.add_paragraph()  # spacer
@@ -579,16 +664,16 @@ def _render_title_block(document, manuscript: dict, deps) -> None:
         run.italic = True
 
 
-def _render_abbreviations(document, manuscript: dict, references: list, deps) -> None:
+def _render_abbreviations(document, manuscript: dict, references: list, deps, language: str = "de") -> None:
     abbreviations = manuscript.get("abbreviations") or []
     if not abbreviations:
         return
-    document.add_heading("Abkuerzungsverzeichnis", level=1)
+    document.add_heading(_label("abbreviations", language), level=1)
     table = document.add_table(rows=1 + len(abbreviations), cols=2)
     table.style = "Light Grid"
     hdr = table.rows[0].cells
     Pt = deps["Pt"]
-    for col, label in enumerate(["Abkuerzung", "Bedeutung"]):
+    for col, label in enumerate([_label("abbr", language), _label("meaning", language)]):
         hdr[col].text = ""
         p = hdr[col].paragraphs[0]
         run = p.add_run(label)
@@ -659,11 +744,11 @@ def render(manuscript: dict, output_path: Path, report_type: str, language: str)
     _render_title_block(document, manuscript, deps)
     document.add_page_break()
 
-    document.add_heading("Inhaltsverzeichnis", level=1)
-    _add_toc_field(document, deps)
+    document.add_heading(_label("toc", language), level=1)
+    _add_toc_field(document, deps, language)
     document.add_page_break()
 
-    _render_abbreviations(document, manuscript, manuscript.get("references") or [], deps)
+    _render_abbreviations(document, manuscript, manuscript.get("references") or [], deps, language)
 
     references = manuscript.get("references") or []
     docs = manuscript.get("docs") or []
@@ -689,6 +774,7 @@ def render(manuscript: dict, output_path: Path, report_type: str, language: str)
         "tbl_tokens": tbl_tokens,
         "figs_by_instance": figs_by_instance,
         "tbls_by_instance": tbls_by_instance,
+        "language": language,
     }
 
     if not docs:
@@ -711,17 +797,17 @@ def render(manuscript: dict, output_path: Path, report_type: str, language: str)
     # the end so they're visible somewhere.
     orphan_figs = [f for f in structured_figures if not f.get("instance_id")]
     if orphan_figs:
-        document.add_heading("Abbildungen", level=1)
+        document.add_heading(_label("figures", language), level=1)
         for f in orphan_figs:
-            _render_structured_figure(document, f, deps)
+            _render_structured_figure(document, f, deps, references, language)
     orphan_tbls = [t for t in structured_tables if not t.get("instance_id")]
     if orphan_tbls:
-        document.add_heading("Tabellen", level=1)
+        document.add_heading(_label("tables", language), level=1)
         for t in orphan_tbls:
-            _render_structured_table(document, t, deps)
+            _render_structured_table(document, t, deps, references, language)
 
     if references:
-        document.add_heading("Anhang — Quellen", level=1)
+        document.add_heading(_label("references", language), level=1)
         _render_evidence_register(document, references, deps)
 
     forbidden = _load_forbidden_phrases()

@@ -81,6 +81,7 @@ impl<'de> Deserialize<'de> for LintSeverity {
 /// Compact context handed to every lint.
 pub struct LintContext<'a> {
     pub report_type_id: &'a str,
+    pub depth_profile_id: &'a str,
     pub report_type: &'a ReportType,
     pub style_guidance: &'a StyleGuidance,
     pub committed_blocks: &'a [BlockRecord],
@@ -194,6 +195,7 @@ pub fn run_release_guard_check(workspace: &Workspace) -> Result<CheckOutcome> {
     let style_guidance = asset_pack.style_guidance();
     let ctx = LintContext {
         report_type_id: &metadata.report_type_id,
+        depth_profile_id: &metadata.depth_profile_id,
         report_type,
         style_guidance,
         committed_blocks: &committed,
@@ -479,16 +481,27 @@ fn author_year_regex() -> &'static Regex {
 fn extract_dois(text: &str) -> Vec<String> {
     doi_regex()
         .find_iter(text)
-        .map(|m| {
-            let mut s = m.as_str().to_string();
-            // Strip leading https?://(dx\.)?doi\.org/ if present (the
-            // regex itself does not consume it; the DOI starts at
-            // 10.).
-            // Lowercase for canonical comparison.
-            s.make_ascii_lowercase();
-            s
-        })
+        .filter_map(|m| normalize_doi_fragment(m.as_str()))
         .collect()
+}
+
+fn normalize_doi_fragment(raw: &str) -> Option<String> {
+    let mut doi = raw
+        .trim()
+        .trim_start_matches("doi:")
+        .trim_start_matches("DOI:")
+        .to_ascii_lowercase();
+    while matches!(
+        doi.chars().last(),
+        Some('.' | ',' | ';' | ':' | ')' | ']' | '}' | '>')
+    ) {
+        doi.pop();
+    }
+    if doi.starts_with("10.") {
+        Some(doi)
+    } else {
+        None
+    }
 }
 
 fn extract_arxiv_ids(text: &str) -> Vec<String> {
@@ -502,12 +515,29 @@ fn extract_arxiv_ids(text: &str) -> Vec<String> {
 }
 
 fn evidence_dois(register: &[EvidenceEntry]) -> HashSet<String> {
-    register
-        .iter()
-        .filter(|e| e.kind.eq_ignore_ascii_case("doi"))
-        .filter_map(|e| e.canonical_id.as_ref())
-        .map(|id| id.to_lowercase())
-        .collect()
+    let mut out = HashSet::new();
+    for entry in register {
+        if entry.kind.eq_ignore_ascii_case("doi") {
+            if let Some(id) = entry
+                .canonical_id
+                .as_deref()
+                .and_then(normalize_doi_fragment)
+            {
+                out.insert(id);
+            }
+        }
+        for value in [
+            entry.canonical_id.as_deref(),
+            entry.url_canonical.as_deref(),
+            entry.url_full_text.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            out.extend(extract_dois(value));
+        }
+    }
+    out
 }
 
 fn evidence_arxiv_ids(register: &[EvidenceEntry]) -> HashSet<String> {
@@ -1013,34 +1043,21 @@ impl Lint for LintEvidenceFloor {
         LintSeverity::Hard
     }
     fn check(&self, ctx: &LintContext) -> Vec<LintIssue> {
-        // Determine required floor from the depth profile bound to
-        // the run. The workspace already merges `evidence_floor.min_sources`
-        // into `min_evidence_count`.
         let actual = ctx.evidence_register.len() as u32;
-        // We don't have a direct handle on the run's depth_profile_id
-        // here; pull from the asset pack via the heuristic that all
-        // depth_profiles' floors are >= 1.
-        let mut required: u32 = 0;
-        for depth in &ctx.asset_pack.depth_profiles {
-            if let Some(min) = depth.min_evidence_count {
-                if min > required {
-                    required = min;
-                }
-            }
-            if let Some(min) = depth
-                .evidence_floor
-                .get("min_sources")
-                .and_then(Value::as_u64)
-            {
-                if (min as u32) > required {
-                    required = min as u32;
-                }
-            }
-        }
-        // Without the run's depth_profile_id we conservatively use
-        // the maximum floor across known profiles. This is a
-        // lower-bound proxy; the manager wave will refine the lookup
-        // by passing the resolved depth profile via `LintContext`.
+        let required = ctx
+            .asset_pack
+            .depth_profile(ctx.depth_profile_id)
+            .ok()
+            .and_then(|depth| {
+                depth.min_evidence_count.or_else(|| {
+                    depth
+                        .evidence_floor
+                        .get("min_sources")
+                        .and_then(Value::as_u64)
+                        .map(|min| min as u32)
+                })
+            })
+            .unwrap_or(0);
         if required == 0 {
             return Vec::new();
         }

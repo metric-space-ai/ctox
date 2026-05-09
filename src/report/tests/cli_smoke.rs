@@ -304,12 +304,7 @@ fn block_stage_then_apply_then_list_happy_path() {
     .expect("block-list must succeed");
     handle_command(
         root.path(),
-        &[
-            s("block-list"),
-            s("--run-id"),
-            run_id.clone(),
-            s("--json"),
-        ],
+        &[s("block-list"), s("--run-id"), run_id.clone(), s("--json")],
     )
     .expect("block-list --json must succeed");
 }
@@ -361,12 +356,7 @@ fn check_completeness_on_empty_run_is_not_ready() {
     let run_id = fresh_run(&root);
     handle_command(
         root.path(),
-        &[
-            s("check"),
-            s("--run-id"),
-            run_id.clone(),
-            s("completeness"),
-        ],
+        &[s("check"), s("--run-id"), run_id.clone(), s("completeness")],
     )
     .expect("completeness check must execute");
     let conn = open(root.path()).unwrap();
@@ -419,12 +409,7 @@ fn check_rejects_unknown_kind() {
     let run_id = fresh_run(&root);
     let err = handle_command(
         root.path(),
-        &[
-            s("check"),
-            s("--run-id"),
-            run_id,
-            s("not_a_real_check"),
-        ],
+        &[s("check"), s("--run-id"), run_id, s("not_a_real_check")],
     )
     .expect_err("must reject unknown check kind");
     assert!(format!("{err:#}").contains("check kind"));
@@ -612,11 +597,7 @@ fn evidence_show_without_full_text_flag_does_not_dump_body() {
          SET full_text_md = ?1, full_text_source = 'open_access_pdf', \
              full_text_chars = ?2 \
          WHERE evidence_id = ?3",
-        params![
-            "x".repeat(50_000),
-            50_000_i64,
-            "ev_full_2".to_string(),
-        ],
+        params!["x".repeat(50_000), 50_000_i64, "ev_full_2".to_string(),],
     )
     .unwrap();
     // Should succeed without --full-text and not panic on the big body.
@@ -719,11 +700,8 @@ fn evidence_show_json_includes_abstract_md() {
 fn evidence_show_rejects_missing_filter() {
     let root = TestRoot::new().unwrap();
     let run_id = fresh_run(&root);
-    let err = handle_command(
-        root.path(),
-        &[s("evidence-show"), s("--run-id"), run_id],
-    )
-    .expect_err("must require --evidence-id or --all");
+    let err = handle_command(root.path(), &[s("evidence-show"), s("--run-id"), run_id])
+        .expect_err("must require --evidence-id or --all");
     assert!(format!("{err:#}").contains("--evidence-id"));
 }
 
@@ -844,7 +822,15 @@ fn figure_add_image_file_persists_row_and_copies_image() {
                     CASE WHEN length(image_path) > 0 THEN 1 ELSE 0 END \
              FROM report_figures WHERE run_id = ?1",
             params![run_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
         )
         .unwrap();
     assert_eq!(kind, "schematic");
@@ -930,7 +916,15 @@ fn table_add_persists_csv_into_structured_row() {
             "SELECT kind, caption, header_json, rows_json, legend \
              FROM report_tables WHERE run_id = ?1",
             params![run_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
         )
         .unwrap();
     assert_eq!(kind, "matrix");

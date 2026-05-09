@@ -8,9 +8,11 @@
 //! omitted from the manuscript (the manager's completeness check is
 //! responsible for catching that case before render time).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::OnceLock;
 
 use anyhow::{Context, Result};
+use regex::{Captures, Regex};
 use serde::{Deserialize, Serialize};
 
 use crate::report::asset_pack::{
@@ -147,6 +149,7 @@ pub struct ManuscriptTable {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReferenceEntry {
     pub ref_n: u32,
+    pub evidence_id: String,
     pub kind: String,
     pub authors: String,
     pub year: Option<i32>,
@@ -214,9 +217,9 @@ pub fn build_manuscript(workspace: &Workspace<'_>) -> Result<Manuscript> {
     let stamp_date = now.format("%Y-%m-%d").to_string();
     let language_short = short_language_tag(&metadata.language);
     let version_line = if language_short == "de" {
-        format!("Working draft | Stand: {stamp_date}")
+        format!("Stand: {stamp_date}")
     } else {
-        format!("Working draft | {stamp_date}")
+        format!("Report date: {stamp_date}")
     };
 
     // package_summary may carry an operator-supplied context_line.
@@ -230,14 +233,21 @@ pub fn build_manuscript(workspace: &Workspace<'_>) -> Result<Manuscript> {
         })
     });
 
-    let title = build_title(&report_type.label, &metadata.raw_topic);
-    let subtitle = if !report_type.purpose.is_empty() {
+    let title = build_title(
+        &metadata.report_type_id,
+        &report_type.label,
+        &metadata.raw_topic,
+    );
+    let subtitle = if metadata.report_type_id == "project_description" {
+        None
+    } else if !report_type.purpose.is_empty() {
         Some(report_type.purpose.clone())
     } else {
         None
     };
 
-    let scope_disclaimer = build_scope_disclaimer(&language_short, &report_type.label);
+    let scope_disclaimer =
+        build_scope_disclaimer(&language_short, &report_type.id, &report_type.label);
 
     // Walk the blueprint sequence in declaration order, grouped by doc.
     let mut docs: Vec<ManuscriptDoc> = Vec::with_capacity(blueprint.base_docs.len());
@@ -264,12 +274,18 @@ pub fn build_manuscript(workspace: &Workspace<'_>) -> Result<Manuscript> {
         }
         docs.push(ManuscriptDoc {
             doc_id: base_doc.id.clone(),
-            title: base_doc.title.clone(),
+            title: localized_doc_title(&metadata.report_type_id, &base_doc.title, &language_short),
             blocks: doc_blocks,
         });
     }
 
-    let references = build_references(&used_reference_ids_in_order, &evidence_by_id);
+    let references = if metadata.report_type_id == "project_description" {
+        strip_reference_markers_from_docs(&mut docs, &used_reference_ids_in_order);
+        Vec::new()
+    } else {
+        build_references(&used_reference_ids_in_order, &evidence_by_id)
+    };
+    let block_instance_ids = collect_block_instance_ids(&docs);
 
     // Load structured figures + tables from the run and assign
     // deterministic numbers in document (insertion) order.
@@ -281,7 +297,7 @@ pub fn build_manuscript(workspace: &Workspace<'_>) -> Result<Manuscript> {
             figure_id: row.figure_id,
             fig_number: (idx + 1) as u32,
             kind: row.kind,
-            instance_id: row.instance_id,
+            instance_id: normalize_attachment_instance_id(row.instance_id, &block_instance_ids),
             image_path: row.image_path,
             caption: row.caption,
             source_label: row.source_label,
@@ -297,7 +313,7 @@ pub fn build_manuscript(workspace: &Workspace<'_>) -> Result<Manuscript> {
             table_id: row.table_id,
             tbl_number: (idx + 1) as u32,
             kind: row.kind,
-            instance_id: row.instance_id,
+            instance_id: normalize_attachment_instance_id(row.instance_id, &block_instance_ids),
             caption: row.caption,
             legend: row.legend,
             headers: row.headers,
@@ -313,7 +329,7 @@ pub fn build_manuscript(workspace: &Workspace<'_>) -> Result<Manuscript> {
             domain_profile_label: domain_label,
             language: metadata.language.clone(),
             rendered_at,
-            version_label: "draft".to_string(),
+            version_label: "report".to_string(),
         },
         title,
         subtitle,
@@ -425,6 +441,36 @@ fn collect_doc_blocks(
         });
     }
     Ok(blocks)
+}
+
+fn collect_block_instance_ids(docs: &[ManuscriptDoc]) -> HashSet<String> {
+    docs.iter()
+        .flat_map(|doc| doc.blocks.iter().map(|block| block.instance_id.clone()))
+        .collect()
+}
+
+fn normalize_attachment_instance_id(
+    instance_id: Option<String>,
+    block_instance_ids: &HashSet<String>,
+) -> Option<String> {
+    let Some(raw) = instance_id else {
+        return None;
+    };
+    if block_instance_ids.contains(&raw) {
+        return Some(raw);
+    }
+    let mut matches: Vec<&String> = block_instance_ids
+        .iter()
+        .filter(|candidate| raw.starts_with(candidate.as_str()))
+        .filter(|candidate| {
+            raw.as_bytes()
+                .get(candidate.len())
+                .map(|b| *b == b'_' || *b == b'-' || *b == b'.')
+                .unwrap_or(false)
+        })
+        .collect();
+    matches.sort_by_key(|candidate| std::cmp::Reverse(candidate.len()));
+    matches.first().map(|candidate| (*candidate).clone())
 }
 
 /// Title resolution: the committed block carries the canonical title;
@@ -607,6 +653,7 @@ fn build_references(
         if let Some(entry) = evidence_by_id.get(ref_id) {
             out.push(ReferenceEntry {
                 ref_n: n,
+                evidence_id: ref_id.clone(),
                 kind: entry.kind.clone(),
                 authors: entry.authors.join("; "),
                 year: entry.year.map(|y| y as i32),
@@ -623,6 +670,7 @@ fn build_references(
             // empty so the renderer can still print [n] markers.
             out.push(ReferenceEntry {
                 ref_n: n,
+                evidence_id: ref_id.clone(),
                 kind: String::new(),
                 authors: String::new(),
                 year: None,
@@ -643,8 +691,25 @@ fn short_language_tag(language: &str) -> String {
         .to_ascii_lowercase()
 }
 
-fn build_title(report_type_label: &str, raw_topic: &str) -> String {
+fn build_title(report_type_id: &str, report_type_label: &str, raw_topic: &str) -> String {
     let topic = raw_topic.trim();
+    if report_type_id == "project_description" {
+        if let Some(project_name) = quoted_project_name(topic) {
+            return format!("Fördervorhabenbeschreibung: {project_name}");
+        }
+        let short_topic = topic
+            .split(';')
+            .next()
+            .unwrap_or(topic)
+            .trim()
+            .chars()
+            .take(140)
+            .collect::<String>();
+        if short_topic.is_empty() {
+            return "Projektbeschreibung".to_string();
+        }
+        return format!("Projektbeschreibung: {short_topic}");
+    }
     if topic.is_empty() {
         report_type_label.to_string()
     } else if report_type_label.is_empty() {
@@ -654,17 +719,123 @@ fn build_title(report_type_label: &str, raw_topic: &str) -> String {
     }
 }
 
-fn build_scope_disclaimer(language_short: &str, report_type_label: &str) -> String {
+fn quoted_project_name(topic: &str) -> Option<String> {
+    let openers = [('\'', '\''), ('„', '“'), ('"', '"')];
+    for (open, close) in openers {
+        if let Some(start) = topic.find(open) {
+            let rest = &topic[start + open.len_utf8()..];
+            if let Some(end) = rest.find(close) {
+                let value = rest[..end].trim();
+                if !value.is_empty() {
+                    return Some(value.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+fn strip_reference_markers_from_docs(docs: &mut [ManuscriptDoc], reference_ids: &[String]) {
+    let reference_id_set: HashSet<&str> = reference_ids.iter().map(String::as_str).collect();
+    for doc in docs {
+        for block in &mut doc.blocks {
+            block.markdown = strip_reference_markers(&block.markdown, &reference_id_set);
+        }
+    }
+}
+
+fn strip_reference_markers(text: &str, reference_ids: &HashSet<&str>) -> String {
+    static BRACKET_RE: OnceLock<Regex> = OnceLock::new();
+    static BARE_EV_RE: OnceLock<Regex> = OnceLock::new();
+    static SPACE_BEFORE_PUNCT_RE: OnceLock<Regex> = OnceLock::new();
+    static MULTI_SPACE_RE: OnceLock<Regex> = OnceLock::new();
+
+    let bracket_re = BRACKET_RE.get_or_init(|| Regex::new(r"\[([^\]\n]{1,500})\]").unwrap());
+    let bare_ev_re = BARE_EV_RE.get_or_init(|| Regex::new(r"(?i)\bev_?[a-f0-9]{8,}\b").unwrap());
+    let space_before_punct_re =
+        SPACE_BEFORE_PUNCT_RE.get_or_init(|| Regex::new(r"\s+([,.;:])").unwrap());
+    let multi_space_re = MULTI_SPACE_RE.get_or_init(|| Regex::new(r"[ \t]{2,}").unwrap());
+
+    let without_brackets = bracket_re.replace_all(text, |caps: &Captures<'_>| {
+        let marker = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+        if is_reference_marker_group(marker, reference_ids) {
+            String::new()
+        } else {
+            caps.get(0)
+                .map(|m| m.as_str().to_string())
+                .unwrap_or_default()
+        }
+    });
+    let without_bare = bare_ev_re.replace_all(&without_brackets, "");
+    let cleaned = space_before_punct_re.replace_all(&without_bare, "$1");
+    multi_space_re.replace_all(&cleaned, " ").to_string()
+}
+
+fn is_reference_marker_group(marker: &str, reference_ids: &HashSet<&str>) -> bool {
+    let parts: Vec<&str> = marker
+        .split(|ch| ch == ',' || ch == ';')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .collect();
+    !parts.is_empty()
+        && parts
+            .iter()
+            .all(|part| is_reference_marker(part, reference_ids))
+}
+
+fn is_reference_marker(marker: &str, reference_ids: &HashSet<&str>) -> bool {
+    static NUMERIC_RE: OnceLock<Regex> = OnceLock::new();
+    static EV_RE: OnceLock<Regex> = OnceLock::new();
+    static SHORT_REF_RE: OnceLock<Regex> = OnceLock::new();
+
+    let marker = marker.trim();
+    reference_ids.contains(marker)
+        || NUMERIC_RE
+            .get_or_init(|| Regex::new(r"^\d{1,3}$").unwrap())
+            .is_match(marker)
+        || EV_RE
+            .get_or_init(|| Regex::new(r"(?i)^ev_?[a-f0-9]{8,}$").unwrap())
+            .is_match(marker)
+        || SHORT_REF_RE
+            .get_or_init(|| Regex::new(r"(?i)^(e|ref)[_-]?\d{1,4}$").unwrap())
+            .is_match(marker)
+}
+
+fn build_scope_disclaimer(
+    language_short: &str,
+    report_type_id: &str,
+    report_type_label: &str,
+) -> String {
+    if report_type_id == "project_description" {
+        if language_short == "de" {
+            return "Hinweis: Dieses Dokument beschreibt das geplante Vorhaben auf Basis der vorliegenden Unternehmens-, Projekt- und Kontextinformationen.".to_string();
+        }
+        return "Note: This document describes the planned project on the basis of the available company, project and context information.".to_string();
+    }
     if language_short == "de" {
         format!(
-            "Vertraulicher Arbeitsentwurf ({report_type_label}). Inhalte basieren \
-             ausschliesslich auf der zum Stand des Renderings im Workspace befindlichen \
-             Evidenz."
+            "Hinweis zum Umfang ({report_type_label}): Die Aussagen beruhen auf den im \
+             Bericht dokumentierten Quellen, Suchwegen und Abgrenzungen."
         )
     } else {
         format!(
-            "Confidential working draft ({report_type_label}). Contents reflect only \
-             the evidence committed to the workspace at render time."
+            "Scope note ({report_type_label}): The findings are limited to the \
+             documented sources, search paths and exclusions described in this report."
         )
+    }
+}
+
+fn localized_doc_title(report_type_id: &str, fallback: &str, language_short: &str) -> String {
+    if language_short == "de" {
+        if report_type_id == "project_description" {
+            return String::new();
+        }
+        return fallback.to_string();
+    }
+    match report_type_id {
+        "source_review" => "Source Review - Main Report".to_string(),
+        "project_description" => "Project Description - Main Report".to_string(),
+        "feasibility_study" => "Feasibility Study - Main Report".to_string(),
+        _ => fallback.to_string(),
     }
 }

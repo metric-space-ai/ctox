@@ -1,6 +1,6 @@
 ---
 name: deep-research
-description: Produces decision-grade reports across seven types — Machbarkeitsstudien (feasibility), Marktanalyse (market research), Wettbewerbsanalyse, Technologie-Screening, Whitepaper, Stand-der-Technik (literature review), Entscheidungsvorlage (decision brief). The harness LLM drives the run by calling deterministic `ctox report …` CLI subcommands.
+description: Produces decision-grade reports across nine types — Machbarkeitsstudien (feasibility), Projekt-/Fördervorhabenbeschreibungen, Quellenreviews/Quellenkompendien, Marktanalyse (market research), Wettbewerbsanalyse, Technologie-Screening, Whitepaper, Stand-der-Technik (literature review), Entscheidungsvorlage (decision brief). The harness LLM drives the run by calling deterministic `ctox report …` CLI subcommands.
 class: system
 state: active
 cluster: research
@@ -25,6 +25,8 @@ Trigger phrases (German + English):
 - "berührungslose Prüfverfahren für …" / "contactless inspection method assessment for …"
 - "Materialprüfungs-Methodenvergleich …" / "materials testing method comparison …"
 - "Technologie-Screening …" / "technology screening for …"
+- "Projektbeschreibung / Fördervorhabenbeschreibung zu …" / "project description / funding project description for …"
+- "Quellenreview / Quellenkompendium / möglichst alle Quellen zu …" / "source review / source compendium / find all sources on …"
 - "Marktstudie / Marktrecherche zu …" / "market study / market research on …"
 - "Wettbewerbsanalyse mit Bewertungsmatrix …" / "competitive analysis with scoring matrix …"
 - "Entscheidungsvorlage mit Optionsbewertung …" / "decision memo with option evaluation …"
@@ -35,11 +37,13 @@ explanations, or anything that does not need a multi-section cited report.
 
 ## Report types
 
-Every run is bound to exactly one `report_type_id`. Pick from these seven:
+Every run is bound to exactly one `report_type_id`. Pick from these nine:
 
 | `report_type_id`         | When                                                                    | Typical chars | Min sections |
 | ------------------------ | ----------------------------------------------------------------------- | ------------- | ------------ |
 | `feasibility_study`      | "Geht das Verfahren X für Anwendung Y?" — option matrix + verdict       | ~30 000       | 9            |
+| `project_description`    | "Beschreibe Förder-/Innovationsvorhaben X" — company, problem, innovation, implementation, budget, benefit | ~22 000 | 8 |
+| `source_review`          | "Finde möglichst alle Quellen/Daten zu X" — search log + source catalog + coverage/gaps | ~26 000 | 8 |
 | `market_research`        | "Wie groß ist Markt X, wer kauft, was zahlen sie?"                      | ~25 000       | 7            |
 | `competitive_analysis`   | "Wer sind die Anbieter, wie schneiden sie ab?"                          | ~20 000       | 8            |
 | `technology_screening`   | "Welche Methoden gibt es überhaupt, welche schaffen es in die Shortlist?" | ~22 000     | 8            |
@@ -51,7 +55,10 @@ Cross-type invariants for every report:
 
 - Length aligned to the type's `typical_chars` (±15% tolerance).
 - Every non-trivial claim cites at least one entry from the run's evidence
-  register by `evidence_id`.
+  register by `evidence_id`, except `project_description`: for
+  Fördervorhaben-/project-description deliverables the evidence register is a
+  silent drafting ledger. Its facts shape the wording, but the final Word file
+  must read like an applicant/project document, not like a scientific report.
 - For types with a matrix block (feasibility, competitive, technology screening,
   decision brief): every cell carries a short rationale plus an `evidence_id`.
   The same rationale string MUST NOT appear in two cells of the same option.
@@ -60,17 +67,47 @@ Cross-type invariants for every report:
 
 ## How to run a report — the actual commands
 
-Read the run state, do research, draft markdown, stage it, apply, run the
-checks, render, finalise. All via Bash.
+Read the run state, do research, draft exactly one durable unit at a time,
+stage it immediately, verify the state, then move on. All via Bash.
+
+**Context and checkpoint discipline is mandatory.** Do not hold a whole
+study, raw source dumps, or long scratch drafts in your conversation context.
+The CTOX report database is the state machine. After every phase below, run
+`ctox report status RUN_ID --json` and confirm the durable state changed
+before continuing. If the state did not change, fix that transition first.
+
+Never install OS or Python packages during a report run. Use the existing
+CLI, Mermaid, structured tables, and built-in renderers. Package setup is not
+research and it consumes the same execution budget needed for the deliverable.
 
 ### 1. Create the run
 
 ```bash
-ctox report new feasibility_study \
-    --domain ndt_aerospace \
+ctox report new <report_type_id> \
+    --domain <domain_id_from_blueprints> \
     --depth standard \
     --language de \
-    --topic "Kontaktlose Prüfung des Blitzschutz-Kupfergitters in CFK-Strukturen"
+    --topic "<konkretes Thema und Rahmenbedingungen>"
+```
+
+For a Fördervorhabenbeschreibung use:
+
+```bash
+ctox report new project_description \
+    --domain innovation_funding_project \
+    --depth standard \
+    --language de \
+    --topic "Fördervorhabenbeschreibung für <Unternehmen> zum Vorhaben <Projektname>; Laufzeit/Budget/Status/Kostenblöcke: <Angaben>"
+```
+
+For a Quellenreview / Quellenkompendium use:
+
+```bash
+ctox report new source_review \
+    --domain technical_data_sources \
+    --depth standard \
+    --language de \
+    --topic "Quellenreview zu <Daten-/Informationsfrage>; Scope: <Objekt/Klassen/Zeitraum/Region>"
 ```
 
 Capture the printed `run_id` (`run_<hex>`). Use it on every subsequent call,
@@ -108,8 +145,66 @@ read those for block scaffolding and writing rubrics:
 - `references/release_guard_lints.md` — every lint the structural
   release_guard_check enforces; if a draft would trip a lint, fix it before
   staging.
-- `references/rascon_archetype.md` — worked example of a feasibility study
-  that passes all checks.
+- `references/project_description_style.md` — mandatory for
+  `project_description`; describes the Fördervorhaben writing process,
+  structure, client-facing style and anti-patterns.
+
+Do not use historical pseudo-tool documentation such as `check_contracts.md`
+as an operating manual. The only executable interface in this skill is the
+`ctox report ...` and `ctox web ...` CLI shown here.
+
+Do not load or imitate topic-specific historical examples as a template for a
+new study. A feasibility study can be about aircraft inspection, baking,
+software architecture, chemistry, finance, or any other domain. The process is
+generic; only the evidence, options, figures, and recommendations change.
+
+For `source_review`, do not collapse the work into "find 20 citations". A
+source review must separate three quantities:
+
+- **Candidate hits screened**: the broad search-result pool, documented in a
+  search-log table.
+- **Usable sources**: sources that contain relevant information after screening.
+- **Cited evidence**: the subset registered with `add-evidence` and cited in
+  blocks/tables.
+
+At `standard` depth, document roughly 1000+ screened candidate hits across
+multiple search paths before claiming broad coverage. The final deliverable
+must not stop at a small citation sample: it needs a large, grouped source
+catalog with direct URL/DOI/access links. If the search protocol says hundreds
+of sources were relevant or included, the catalog must show those sources in
+the same order of magnitude, or the counts must be corrected downward.
+
+When the source domain is international or the operator's prompt is in
+English, create the run with `--language en`, write the prompt in English, and
+stage English section titles via `--title`. Do not leave German headings in an
+English source review.
+
+For `project_description`, research is input, not the visible product. Do not
+write a literature review, scientific paper, source review or citation-heavy
+market study. Read `references/project_description_style.md` before drafting
+and treat it as a release contract:
+
+- final Word text has no bracket citations such as `[1][2]`, no DOI/reference
+  list and no "Quellen und Recherchebasis" appendix unless the operator
+  explicitly requests an annotated source appendix;
+- write from the applicant/project perspective with a clear funding narrative:
+  company development -> status quo / bottleneck -> innovation jump -> target
+  operating model -> implementation -> costs/timeline -> economic benefit;
+- create an internal `fact-transfer-ledger.md` before drafting. Extract
+  concrete facts from the evidence register and map them to target chapters:
+  company/legal/location/history, products/services, customers/segments,
+  technical data, market/competitor baseline, project scope and economic
+  mechanisms. At standard depth, transfer at least twelve non-prompt facts
+  when available; richer evidence needs a correspondingly richer narrative;
+- every major chapter must contain concrete researched facts, not only generic
+  funding prose. Use research to make statements specific, then translate it
+  into smooth Fördervorhaben prose without exposing the research mechanics;
+- when Laufzeit, Status, Budget or Kostenblöcke are known, add a compact
+  project-scope table with `ctox report table-add` and bind it to the
+  `project_scope_budget_timeline` instance;
+- if a reference DOCX contains Word comments, treat comments as revision
+  criteria for storyline, readability and structure. Do not copy the comments
+  into the final document.
 
 ### 3. Build the evidence register
 
@@ -132,6 +227,14 @@ ctox report add-evidence --run-id RUN_ID --arxiv-id "2401.12345"
 ```
 
 Both paths populate `abstract_md` from the source automatically.
+
+If a web page URL contains a DOI (for example a publisher URL ending in
+`/10.xxxx/...`), still prefer registering the DOI with `--doi` as a separate
+evidence item. If the DOI resolver fails but the URL page/PDF is readable, add
+the URL evidence with real extracted content and do not cite the bare DOI in
+the prose unless the release guard recognises it as registered evidence. Never
+leave a DOI string in a block that is not backed by the current run's evidence
+register.
 
 #### b) Manual path (book, standard, magazine, web page)
 
@@ -164,12 +267,117 @@ fake feasibility study.
 # Topical web search — returns URLs + snippets
 ctox web search --query "<query>"
 
-# Scholarly search across Crossref + OpenAlex + arXiv + Anna's Archive
+# Primary evidence discovery. This combines web search, scholarly metadata
+# and readable-source collection, and is more robust than calling a single
+# scholarly backend directly.
+ctox web deep-research --query "<query>" --depth standard --max-sources 12
+
+# Optional metadata-only scholarly search. Treat empty results as non-fatal:
+# continue with ctox web search/deep-research instead of stopping.
 ctox web scholarly search --query "<query>" --max-results 12
 
 # Fetch a specific URL and return markdown-extracted content
 ctox web read --url "<url>"
 ```
+
+#### Source-review search ledger
+
+For every `source_review`, the search protocol is not a prose task. It is a
+state-machine task. You must persist each search path before drafting and you
+may only put counts in the Word table that are backed by these persisted logs.
+
+Use the bundled discovery runner. It creates a broad query plan, executes
+`ctox web deep-research` for each query family, saves every raw JSON payload,
+deduplicates sources, writes `search_protocol.csv` and `candidate_sources.csv`,
+and calls `ctox report research-log-add` for every executed query.
+
+```bash
+python3 skills/system/research/deep-research/scripts/source_review_discovery.py \
+  --topic "<source-review topic and scope>" \
+  --run-id RUN_ID \
+  --out-dir "/tmp/RUN_ID_source_discovery" \
+  --max-sources-per-query 80 \
+  --target-reviewed 1000 \
+  --snowball-rounds 1
+```
+
+If the generated query plan is too generic for the topic, create a CSV with
+columns `focus,query` and pass it via `--queries-file`. Do not reduce the
+query count just to save time. Increase queries or `--snowball-rounds` when
+the output reports fewer than the requested reviewed-result target.
+
+Do not invent `sources-count`. The `research-log-add` command now requires a
+raw payload file and rejects counts that are not backed by the payload's
+source/result records. If the tool returns only 47 reviewed results, log 47.
+To reach broad coverage, run more query families; never fill the gap with
+rounded estimates. The final search-protocol and source-catalog tables are
+generated from CTOX state, not from memory or desired coverage. After all
+research logs and evidence sources are persisted, run:
+
+```bash
+ctox report source-review-sync --run-id RUN_ID
+```
+
+This command rebuilds the search protocol, scoring model and grouped source
+tables from `report_research_log` and `report_evidence_register`. If the
+generated tables are too small, the answer is more discovery and more
+persisted evidence, not hand-written count inflation.
+
+Mandatory source-review discovery passes:
+
+1. Broad web and domain synonyms.
+2. Scholarly metadata / OpenAlex / DOI-oriented queries.
+3. Agencies and regulators.
+4. Standards and public standards metadata.
+5. Technical reports, government repositories and institutional libraries.
+6. Datasets, repositories and telemetry/data portals.
+7. OEM / industry manuals and datasheets.
+8. Patents and adjacent technical reports.
+9. Citation snowballing: take the strongest papers/reports found so far,
+   inspect references/cited-by metadata where available, then run follow-up
+   queries for recurring authors, datasets, report numbers, standards and
+   terminology. Stop only when the next pass yields no material new source
+   families or the depth target is met.
+
+For standard depth, persisted research logs should cover roughly 1000+
+reviewed candidate hits unless the operator explicitly requested a narrow
+search. If the real reachable corpus is smaller, say that explicitly and let
+the counts remain smaller; do not create a fake 1000+ table.
+
+Client-facing wording must be plain: use "search protocol", "search path",
+"search term", "reviewed results", "excluded results" and
+"included/relevant sources". Do not use internal phrases such as "ledger",
+"screened candidate", "usable/cited", `source_review`, raw evidence IDs or
+run/workspace terms in the visible report.
+
+After the discovery pass, create source tables before writing synthesis by
+running `ctox report source-review-sync --run-id RUN_ID`. The generated tables
+must then be cited, summarized and interpreted in the prose:
+
+1. A short coverage summary table by source group.
+2. A scoring model table. If the operator did not provide one, define a
+   task-specific A-D or 0-5 scheme before scoring sources. Typical criteria:
+   directness of the data for the question, public verifiability, data
+   granularity, topical fit, recency/currentness, and access friction.
+3. A grouped source catalog with at least: `Group`, `Source`,
+   `Publisher/author`, `Year`, `Type`, `Data contribution`,
+   `Direct URL/DOI`, and `Score`.
+4. Group-specific source tables for the main groups. For technical source
+   reviews this normally means regulation/agencies, military/DoD/NATO,
+   standards, NASA/DTIC/technical reports, academic literature,
+   datasets/repositories, OEM/industry/manuals, patents/other.
+
+Every source table row must be traceable with a direct URL, DOI, arXiv link,
+repository URL, standards identifier with access page, or a clear "not public /
+paywalled" access note. A visible table with 50 example sources is not a
+complete source review when the search protocol says hundreds of useful
+sources were found.
+
+Every source table row must also be scored. Do not use "registered" or
+"included" as a substitute for a score. The score rationale must say what was
+actually learned from the source, not only that the source exists. Example:
+"A - direct six-axis rotor force/moment data with public XLSX files" is
+useful; "A - relevant source" is not.
 
 Each `add-evidence` prints the new `evidence_id` (`ev_<hex>`) plus the
 abstract/snippet length actually stored. Keep a notes file mapping
@@ -181,6 +389,51 @@ abstract/snippet length actually stored. Keep a notes file mapping
 register is full of titles but no abstracts, the prose you'll write will
 be hallucinated — the lint engine catches that, but it's faster to fix
 the evidence step first.
+
+For `source_review`, also verify before drafting:
+
+```bash
+ctox report status RUN_ID --json
+```
+
+The status must show non-empty `available_research_ids`. When committing the
+search-method block, attach the relevant IDs:
+
+```bash
+ctox report block-apply --run-id RUN_ID \
+  --instance-id doc_source_review__source_review_search_method \
+  --used-research-ids "research_..."
+```
+
+If the search table claims candidate counts but the block is not linked to
+research IDs, the deliverable-quality gate fails. This is intentional: a
+search protocol without provenance is fake research.
+
+### 3x. Mandatory small-stage workflow
+
+From this point on, work in small durable stages. Do not draft the whole
+report in one hidden scratch buffer and do not wait until the end to persist.
+
+Required loop:
+
+1. Pick one artifact or one report block only.
+2. Load only the evidence needed for that unit with `ctox report evidence-show`.
+3. Write the artifact/block to a temp file.
+4. Immediately persist it with `storyline-set`, `figure-add`, `table-add`, or
+   `block-stage`.
+5. Immediately verify with `ctox report status RUN_ID --json`, `block-list`,
+   `figure-list`, or `table-list`.
+6. Only then move to the next unit.
+
+For block prose, stage one block at a time and run `ctox report block-apply`
+after every one to three staged blocks. Never carry more than three unstaged
+blocks in context. If context grows large, stop adding new source text, write
+a short handoff note in `synthesis/context-handoff.md`, and continue from the
+durable report state.
+
+The final document is allowed only after durable content exists. Rendering a
+DOCX/PDF before at least the required blocks, figures, tables, and checks are
+present is a workflow failure.
 
 ### 3a. Storyline — write the dramatic spine BEFORE any block
 
@@ -365,6 +618,8 @@ For each block in the run's `report_type.block_library_keys[]` (read from
   abstract, the citation is wrong.
 - Cites `evidence_id`s inline as `[ev_abc123]` (single brackets, no
   `{}`) directly after the sentence whose claim came from that source.
+  Never write bare `ev...` IDs in prose or tables; bracketed IDs are rendered
+  as numbered references, bare IDs are a client-facing defect.
 - Stays inside the block's `target_chars` from the depth profile.
   Source-grounded prose is naturally longer than generic prose; if your
   draft is far below `target_chars`, you are summarising priors instead
@@ -379,12 +634,11 @@ For each block in the run's `report_type.block_library_keys[]` (read from
   cold-spray fabrication paper does not belong in an active-thermography
   block. Re-read the abstract; if topic mismatches, drop the citation.
 
-Save each draft to a temp file:
+Save each draft to a temp file. The markdown body must not contain a duplicate
+heading line; the block title is already passed via `--title`.
 
 ```bash
 cat > /tmp/block_executive_summary.md <<'EOF'
-# Executive Summary
-
 … your prose, with [ev_abc123] citations …
 
 EOF
@@ -414,10 +668,13 @@ from the report type's `block_library_keys[]` and `doc_id` is the run's
 primary document (typically the report_type's id with `_main` suffix; check
 `document_blueprint.sequence[]` for the canonical doc_ids).
 
-When you have staged a few blocks, commit them:
+After staging the current block, inspect pending state. Apply immediately
+unless you are intentionally batching at most three related blocks:
 
 ```bash
+ctox report block-list --run-id RUN_ID --pending --json
 ctox report block-apply --run-id RUN_ID
+ctox report status RUN_ID --json
 ```
 
 To inspect:
@@ -427,9 +684,13 @@ ctox report block-list --run-id RUN_ID --pending --json
 ctox report block-list --run-id RUN_ID --json
 ```
 
-### 6. Run the four deterministic checks
+If `status` still shows zero completed blocks after you believe you drafted
+content, stop writing prose. The transition failed; fix `block-stage` /
+`block-apply` usage before doing more research or rendering.
 
-After every block-apply, run each check. All four must report
+### 6. Run the five deterministic checks
+
+After every block-apply, run each check. All five must report
 `ready_to_finish=true` (or `check_applicable=false`) before you can
 finalise.
 
@@ -438,6 +699,7 @@ ctox report check --run-id RUN_ID completeness --json
 ctox report check --run-id RUN_ID character_budget --json
 ctox report check --run-id RUN_ID release_guard --json
 ctox report check --run-id RUN_ID narrative_flow --json
+ctox report check --run-id RUN_ID deliverable_quality --json
 ```
 
 Each prints a `CheckOutcome`:
@@ -452,18 +714,44 @@ When a check flags failures, revise the implicated block: re-draft the
 markdown, re-`block-stage` (which replaces the prior pending), `block-apply`,
 re-run the failed check.
 
+Treat a failed check as a transition to the revision state, not as the end of
+the run. In particular:
+
+- `LINT-FAB-DOI`: for every DOI in the goals, first try
+  `ctox report add-evidence --run-id RUN_ID --doi "<doi>"`. If it resolves,
+  re-run `release_guard`. If it does not resolve, remove the DOI string from
+  the implicated block or replace it with the already-registered URL/source
+  citation and re-stage that block.
+- `LINT-CITED-BUT-MISSING` / `LINT-FAB-AUTHOR`: rewrite the sentence so it
+  cites only evidence ids present in `ctox report evidence-show --all`.
+- `LINT-MIN-CHARS` / `LINT-MAX-CHARS` / duplicate openings: revise form only;
+  do not add facts unless an evidence-integrity lint also requires it.
+
+Do not call final DOCX `render` or `finalise` while any of the five checks has
+`ready_to_finish=false`. If you need a visual draft during revision, use
+`ctox report render RUN_ID --format docx --allow-draft --out /tmp/draft.docx`
+and keep it out of the final output path. If a render/finalise call fails,
+inspect the failed gate, revise, and continue; do not mark the queue task
+failed until the same blocking lint has failed three revision attempts.
+
 ### 7. Render and finalise
 
-Once all four checks are ready:
+Once all five checks are ready:
 
 ```bash
 ctox report render RUN_ID --format md --out /tmp/feasibility_study.md
 ctox report render RUN_ID --format docx --out /tmp/feasibility_study.docx
+python3 skills/system/research/deep-research/scripts/render_check.py \
+    --docx /tmp/feasibility_study.docx \
+    --out-dir /tmp/feasibility_study_render_check
 ctox report finalise RUN_ID
 ```
 
-Show the operator the markdown render and the docx path. The run is now
-sealed.
+The DOCX render automatically applies the bundled layout-polish pass
+(`scripts/polish_docx_layout.py`) after the semantic manuscript render. Do
+not replace it with an ad-hoc DOCX builder. Show the operator the markdown
+render, the polished DOCX path, and the visual-check output path. The run is
+now sealed.
 
 ## Asking the operator for input
 
@@ -506,7 +794,7 @@ make autonomous calls where reasonable.
 5. **Form-revision keeps facts unchanged.** When a check flags
    `needs_revision` and `goals` mention only length/order/clarity, do not
    introduce new claims in the rewrite.
-6. **All four gates green before `finalise`.** `ctox report finalise` will
+6. **All five gates green before `finalise`.** `ctox report finalise` will
    refuse otherwise.
 
 ## When to abort instead of revising
@@ -523,10 +811,10 @@ make autonomous calls where reasonable.
 
 ## What this skill explicitly does not do
 
-- **Does not invent figures or photographs.** Figures must come from cited
-  sources with usage rights, or be marked `to be drafted by operator` with
-  a one-sentence description.
+- **Does not invent photographs or fake source figures.** Figures must come
+  from cited sources with usage rights, or be technical schematics/charts
+  created from the report's own evidence and labelled as "own depiction".
 - **Does not skip the evidence register.** The `release_guard_check` will
   flag claims with no `evidence_id`.
-- **Does not finalise without all four checks green.** `ctox report
+- **Does not finalise without all five checks green.** `ctox report
   finalise` enforces this.
