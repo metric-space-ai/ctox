@@ -178,7 +178,7 @@ impl CompactPolicy {
         };
         let emergency_ratio = emergency_ratio_raw
             .and_then(|v| v.trim().parse::<f64>().ok())
-            .filter(|v| *v > 0.0 && *v <= 1.0)
+            .filter(|v| *v >= 0.5 && *v <= 1.0)
             .unwrap_or(DEFAULT_EMERGENCY_FILL_RATIO);
         let context_window = context_window_raw
             .and_then(|v| v.trim().parse::<i64>().ok())
@@ -432,6 +432,20 @@ mod tests {
                 reason: CompactReason::Emergency { .. }
             }
         ));
+    }
+
+    #[test]
+    fn emergency_ratio_override_rejects_too_low_values() {
+        let p = CompactPolicy::from_settings(
+            Some("off"),
+            Some("forced-followup"),
+            None,
+            None,
+            Some("0.20"),
+            Some("131072"),
+        );
+
+        assert_eq!(p.emergency_fill_ratio, DEFAULT_EMERGENCY_FILL_RATIO);
     }
 
     #[test]
