@@ -52,6 +52,7 @@ pub fn handle_command(root: &Path, args: &[String]) -> Result<()> {
         Some("table-add") => cmd_table_add(root, &args[1..]),
         Some("table-list") => cmd_table_list(root, &args[1..]),
         Some("project-description-sync") => cmd_project_description_sync(root, &args[1..]),
+        Some("review-import") | Some("review") => cmd_review_import(root, &args[1..]),
         Some("source-review-sync") => cmd_source_review_sync(root, &args[1..]),
         Some("storyline-set") => cmd_storyline_set(root, &args[1..]),
         Some("storyline-show") => cmd_storyline_show(root, &args[1..]),
@@ -622,37 +623,60 @@ fn cmd_new(root: &Path, args: &[String]) -> Result<()> {
 
     // Import review docs as report_review_feedback rows. Best-effort.
     if !review_docs.is_empty() {
-        let conn = open(root)?;
-        ensure_schema(&conn)?;
-        for path in &review_docs {
-            match extract_docx_comments(Path::new(path)) {
-                Ok(comments) if comments.is_empty() => {
-                    eprintln!("warning: review doc {path} contained no comments");
-                }
-                Ok(comments) => {
-                    let now = now_iso();
-                    for (instance_hint, body) in comments {
-                        let feedback_id = new_id("feedback");
-                        let res = conn.execute(
-                            "INSERT INTO report_review_feedback (
-                                 feedback_id, run_id, source_file, instance_id,
-                                 form_only, body, imported_at
-                             ) VALUES (?1, ?2, ?3, ?4, 0, ?5, ?6)",
-                            params![feedback_id, run_id, path, instance_hint, body, now,],
-                        );
-                        if let Err(err) = res {
-                            eprintln!("warning: failed to import review note from {path}: {err}");
-                        }
-                    }
-                }
-                Err(err) => eprintln!("warning: review doc {path} parse error: {err}"),
-            }
-        }
+        import_review_docs(root, &run_id, &review_docs)?;
     }
 
     println!("Run created: {run_id}");
     println!("Next: populate evidence, storyline, figures/tables, blocks, then run `ctox report check --run-id {run_id} <kind>` for each gate.");
     Ok(())
+}
+
+fn cmd_review_import(root: &Path, args: &[String]) -> Result<()> {
+    let run_id = require_run_id(
+        args,
+        "usage: ctox report review-import --run-id RUN --review-doc PATH",
+    )?;
+    let _ = load_run(root, run_id)?;
+    let review_docs = collect_flag(args, "--review-doc");
+    if review_docs.is_empty() {
+        bail!("--review-doc PATH is required");
+    }
+    let imported = import_review_docs(root, run_id, &review_docs)?;
+    println!("Imported {imported} review feedback note(s).");
+    Ok(())
+}
+
+fn import_review_docs(root: &Path, run_id: &str, review_docs: &[String]) -> Result<usize> {
+    let conn = open(root)?;
+    ensure_schema(&conn)?;
+    let mut imported = 0usize;
+    for path in review_docs {
+        match extract_docx_comments(Path::new(path)) {
+            Ok(comments) if comments.is_empty() => {
+                eprintln!("warning: review doc {path} contained no comments");
+            }
+            Ok(comments) => {
+                let now = now_iso();
+                for (instance_hint, body) in comments {
+                    let feedback_id = new_id("feedback");
+                    let res = conn.execute(
+                        "INSERT INTO report_review_feedback (
+                             feedback_id, run_id, source_file, instance_id,
+                             form_only, body, imported_at
+                         ) VALUES (?1, ?2, ?3, ?4, 0, ?5, ?6)",
+                        params![feedback_id, run_id, path, instance_hint, body, now,],
+                    );
+                    if let Err(err) = res {
+                        eprintln!("warning: failed to import review note from {path}: {err}");
+                    } else {
+                        imported += 1;
+                    }
+                }
+            }
+            Err(err) => eprintln!("warning: review doc {path} parse error: {err}"),
+        }
+    }
+    Ok(imported)
 }
 
 fn cmd_list(root: &Path, args: &[String]) -> Result<()> {
@@ -3185,6 +3209,8 @@ USAGE
   ctox report table-list --run-id RUN [--json]
   ctox report project-description-sync --run-id RUN
         (creates the project-scope table from persisted project facts)
+  ctox report review-import --run-id RUN --review-doc PATH [--review-doc PATH]...
+        (imports Word comments as review feedback, anchored when possible)
   ctox report source-review-sync --run-id RUN
         (rebuilds search protocol, scoring model, and grouped source tables
          from persisted research logs and evidence)
@@ -3287,10 +3313,12 @@ fn short_check_summary(value: &Value) -> String {
 
 // ---------- DOCX comment extractor ----------
 //
-// Pulls `(anchor, body)` pairs from a `.docx` file's `word/comments.xml`
-// part. `anchor` is the comment's `w:initials` or `w:author` (best-effort
-// instance hint); `body` is the concatenated comment text. Failures are
-// surfaced as anyhow errors and logged at the call site.
+// Pulls `(instance_hint, body)` pairs from a `.docx` file's comments. For
+// reviewed Fördervorhaben reference documents, the extractor also reads
+// `word/document.xml`, finds the paragraph carrying each comment marker, and
+// maps known FVH block anchors to the nearest project_description instance.
+// The comment body keeps a short anchor excerpt so form/style feedback remains
+// actionable even when no exact instance mapping exists.
 
 fn extract_docx_comments(path: &Path) -> Result<Vec<(Option<String>, String)>> {
     let file =
@@ -3298,6 +3326,7 @@ fn extract_docx_comments(path: &Path) -> Result<Vec<(Option<String>, String)>> {
     let mut archive = zip::ZipArchive::new(file)
         .with_context(|| format!("read docx archive {}", path.display()))?;
     let mut comments_xml = String::new();
+    let mut document_xml = String::new();
     let mut found = false;
     if let Ok(mut entry) = archive.by_name("word/comments.xml") {
         entry
@@ -3305,9 +3334,15 @@ fn extract_docx_comments(path: &Path) -> Result<Vec<(Option<String>, String)>> {
             .context("read word/comments.xml")?;
         found = true;
     }
+    if let Ok(mut entry) = archive.by_name("word/document.xml") {
+        entry
+            .read_to_string(&mut document_xml)
+            .context("read word/document.xml")?;
+    }
     if !found {
         return Ok(Vec::new());
     }
+    let anchors = extract_docx_comment_anchors(&document_xml);
     let doc =
         roxmltree::Document::parse(&comments_xml).context("parse word/comments.xml as XML")?;
     let mut out: Vec<(Option<String>, String)> = Vec::new();
@@ -3315,23 +3350,182 @@ fn extract_docx_comments(path: &Path) -> Result<Vec<(Option<String>, String)>> {
         .descendants()
         .filter(|n| n.tag_name().name() == "comment")
     {
-        let initials = comment.attribute("initials").map(str::to_string);
-        let author = comment.attribute("author").map(str::to_string);
-        let mut text = String::new();
-        for t in comment.descendants().filter(|n| n.tag_name().name() == "t") {
-            if !text.is_empty() {
-                text.push(' ');
-            }
-            text.push_str(t.text().unwrap_or_default());
-        }
+        let id = attr_local(comment, "id").unwrap_or_default();
+        let text = text_from_xml_node(comment);
         let trimmed = text.trim().to_string();
         if trimmed.is_empty() {
             continue;
         }
-        let hint = initials.filter(|s| !s.is_empty()).or(author);
-        out.push((hint, trimmed));
+        let anchor = anchors.iter().find(|a| a.comment_id == id);
+        let instance_hint = anchor.and_then(|a| a.instance_id.clone()).or_else(|| {
+            map_review_anchor_to_project_instance(
+                anchor.map(|a| a.anchor_text.as_str()).unwrap_or(""),
+            )
+        });
+        let body = if let Some(anchor) = anchor {
+            format!(
+                "Reference anchor: {} | Reviewer comment: {}",
+                truncate_for_table(&anchor.anchor_text, 260),
+                trimmed
+            )
+        } else {
+            trimmed
+        };
+        out.push((instance_hint, body));
     }
     Ok(out)
+}
+
+#[derive(Debug, Clone)]
+struct DocxCommentAnchor {
+    comment_id: String,
+    anchor_text: String,
+    instance_id: Option<String>,
+}
+
+fn extract_docx_comment_anchors(document_xml: &str) -> Vec<DocxCommentAnchor> {
+    if document_xml.trim().is_empty() {
+        return Vec::new();
+    }
+    let Ok(doc) = roxmltree::Document::parse(document_xml) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    let mut current_fvh_block: Option<String> = None;
+    for para in doc
+        .descendants()
+        .filter(|n| n.is_element() && n.tag_name().name() == "p")
+    {
+        let text = text_from_xml_node(para);
+        if let Some(block) = fvh_block_marker(&text) {
+            current_fvh_block = Some(block);
+        }
+        let mut comment_ids = Vec::new();
+        for marker in para.descendants().filter(|n| {
+            n.is_element()
+                && (n.tag_name().name() == "commentRangeStart"
+                    || n.tag_name().name() == "commentReference")
+        }) {
+            if let Some(id) = attr_local(marker, "id") {
+                if !comment_ids.iter().any(|known| known == &id) {
+                    comment_ids.push(id);
+                }
+            }
+        }
+        if comment_ids.is_empty() {
+            continue;
+        }
+        let instance_id = current_fvh_block
+            .as_deref()
+            .and_then(map_fvh_block_to_project_instance)
+            .or_else(|| map_review_anchor_to_project_instance(&text));
+        let anchor_text = if text.trim().is_empty() {
+            current_fvh_block.clone().unwrap_or_default()
+        } else {
+            text.trim().to_string()
+        };
+        for comment_id in comment_ids {
+            out.push(DocxCommentAnchor {
+                comment_id,
+                anchor_text: anchor_text.clone(),
+                instance_id: instance_id.clone(),
+            });
+        }
+    }
+    out
+}
+
+fn attr_local(node: roxmltree::Node<'_, '_>, local: &str) -> Option<String> {
+    node.attributes()
+        .find(|attr| attr.name() == local)
+        .map(|attr| attr.value().to_string())
+}
+
+fn text_from_xml_node(node: roxmltree::Node<'_, '_>) -> String {
+    let mut text = String::new();
+    for t in node
+        .descendants()
+        .filter(|n| n.is_element() && n.tag_name().name() == "t")
+    {
+        if !text.is_empty() {
+            text.push(' ');
+        }
+        text.push_str(t.text().unwrap_or_default());
+    }
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn fvh_block_marker(text: &str) -> Option<String> {
+    let start = text.find("[[FVH_BLOCK:")? + "[[FVH_BLOCK:".len();
+    let rest = &text[start..];
+    let end = rest.find("]]")?;
+    Some(rest[..end].trim().to_string())
+}
+
+fn map_fvh_block_to_project_instance(block: &str) -> Option<String> {
+    let target = match block {
+        "doc_company::company_legal"
+        | "doc_company::company_profile"
+        | "doc_company::company_organigramm"
+        | "doc_company::company_history"
+        | "doc_company::company_portfolio"
+        | "doc_company::company_event_context" => {
+            "doc_project_description__project_company_context"
+        }
+        "doc_project::project_intro" | "doc_project::project_01_title_scope" => {
+            "doc_project_description__project_innovation_project"
+        }
+        "doc_project::project_01_current_state" => {
+            "doc_project_description__project_problem_statement"
+        }
+        "doc_project::project_01_development_goal" => {
+            "doc_project_description__project_target_picture"
+        }
+        "doc_project::project_01_state_of_art" => {
+            "doc_project_description__project_market_delimitation"
+        }
+        "doc_project::project_01_challenges_measures" | "doc_project::project_01_workpackages" => {
+            "doc_project_description__project_implementation_focus"
+        }
+        "doc_project::project_01_costs_timeline" => {
+            "doc_project_description__project_scope_budget_timeline"
+        }
+        _ => return None,
+    };
+    Some(target.to_string())
+}
+
+fn map_review_anchor_to_project_instance(anchor: &str) -> Option<String> {
+    let lower = anchor.to_lowercase();
+    let target = if lower.contains("gesellschaft")
+        || lower.contains("unternehmensprofil")
+        || lower.contains("historie")
+        || lower.contains("produkte / leistungen")
+    {
+        "doc_project_description__project_company_context"
+    } else if lower.contains("problembereich")
+        || lower.contains("problemstellung")
+        || lower.contains("status quo")
+        || lower.contains("derzeitiger stand")
+    {
+        "doc_project_description__project_problem_statement"
+    } else if lower.contains("entwicklungsziel") || lower.contains("zielbild") {
+        "doc_project_description__project_target_picture"
+    } else if lower.contains("abgrenzung") || lower.contains("stand der technik") {
+        "doc_project_description__project_market_delimitation"
+    } else if lower.contains("herausforderung")
+        || lower.contains("maßnahmen")
+        || lower.contains("massnahmen")
+        || lower.contains("arbeitspakete")
+        || lower.contains("umsetzung")
+    {
+        "doc_project_description__project_implementation_focus"
+    } else if lower.contains("kosten") || lower.contains("zeitraum") || lower.contains("budget") {
+        "doc_project_description__project_scope_budget_timeline"
+    } else {
+        return None;
+    };
+    Some(target.to_string())
 }
 
 // Keep `RunStatus` / `SourceKind` linked even if a particular CLI build

@@ -207,8 +207,11 @@ and treat it as a release contract:
   `project_scope_budget_timeline`. Use manual `table-add` only when the helper
   cannot parse the supplied framing;
 - if a reference DOCX contains Word comments, treat comments as revision
-  criteria for storyline, readability and structure. Do not copy the comments
-  into the final document.
+  criteria for storyline, readability and structure. Pass commented reference
+  files as `--review-doc` at `ctox report new` time, or immediately import
+  them with `ctox report review-import --run-id RUN_ID --review-doc PATH`.
+  Do not rely on a path mentioned only in prose; the comments must be present
+  in `review_feedback`. Do not copy the comments into the final document.
 
 ### 3. Build the evidence register
 

@@ -118,6 +118,10 @@ sequence:
 
 1. Read the reference style and comments, then write a one-paragraph target
    document thesis: why this company needs this project now.
+   If the reference is a commented DOCX, first make sure the comments were
+   imported as `review_feedback` via `--review-doc` or
+   `ctox report review-import`; a visible path in the operator prompt is not
+   enough.
 2. Build the internal fact-transfer ledger and mark each fact as one of:
    company, product/service, customer/market, technical baseline, project
    scope, economic mechanism.
