@@ -114,7 +114,9 @@ const FOUNDER_COMMUNICATION_REWORK_KIND: &str = "founder-communication-rework";
 const RUNTIME_API_RETRY_KIND: &str = "runtime-api-retry";
 const FOUNDER_REWORK_REQUEUE_BLOCK_THRESHOLD: usize = 2;
 const REVIEW_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD: usize = 2;
+const REVIEW_REWORK_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD: usize = 5;
 const MAX_REVIEW_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD: usize = 10;
+const MAX_REVIEW_REWORK_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD: usize = 20;
 const SERVICE_SHUTDOWN_TIMEOUT_SECS: u64 = 15;
 const SERVICE_SHUTDOWN_POLL_MILLIS: u64 = 150;
 const SYSTEMCTL_USER_TIMEOUT_SECS: u64 = 5;
@@ -3071,103 +3073,6 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
                         work_id: work_id.to_string(),
                         summary,
                     }
-                } else if is_terminal_bench_controller_artifact_job(&job)
-                    && job.outbound_email.is_none()
-                    && !is_founder_or_owner_email_job(&job)
-                    && external_chat_channel_for_job(&job).is_none()
-                {
-                    // Terminal-bench controller artifact jobs are validated
-                    // downstream by the `tb run` replay container, which runs
-                    // the actual task-specific tests. The generic CTOX
-                    // completion-reviewer agent has no signal about whether
-                    // the worker's solution will pass those tests, so it
-                    // ends up in a Hold/FeedbackRetry loop on virtually
-                    // every cycle — leaving the task pinned in `leased` /
-                    // `pending` forever and never reaching `handled` so the
-                    // validator can actually score it. Trust the worker
-                    // here. The downstream `outcome_witness` still enforces
-                    // declared workspace artifacts, and the validator
-                    // decides the real pass/fail. Without this short-circuit
-                    // the bench effectively cannot make progress.
-                    //
-                    // SANITY CHECK: never auto-approve a "phantom cycle"
-                    // where the worker delivered ZERO of the declared
-                    // workspace file artifacts. That pattern shows up when
-                    // the worker turn aborts early (timeout, model failure,
-                    // crash) — the slice has nothing to score and approving
-                    // it just lets the bench tally a `handled` row that the
-                    // downstream validator will then mark `model_failed`
-                    // without the worker ever getting a fix-up rework. When
-                    // the contract is non-empty and 0 files were delivered,
-                    // fall back to the standard completion review so the
-                    // reviewer can either rework the slice or escalate.
-                    let expected_artifacts = expected_outcome_artifacts_for_job(&job);
-                    let workspace_expected_count = expected_artifacts
-                        .iter()
-                        .filter(|item| item.kind == ArtifactKind::WorkspaceFile)
-                        .count();
-                    let workspace_delivered_count = if workspace_expected_count == 0 {
-                        0
-                    } else {
-                        delivered_outcome_artifacts_for_job(&root, &job, &expected_artifacts)
-                            .map(|delivered| {
-                                delivered
-                                    .iter()
-                                    .filter(|item| item.kind == ArtifactKind::WorkspaceFile)
-                                    .count()
-                            })
-                            .unwrap_or(0)
-                    };
-                    let runtime_refs_ok = validate_terminal_bench_controller_runtime_refs(
-                        &root,
-                        &job,
-                        &expected_artifacts,
-                    )
-                    .is_ok();
-                    if workspace_expected_count > 0 && workspace_delivered_count == 0 {
-                        push_event(
-                            &state,
-                            format!(
-                                "Completion review NOT skipped for terminal-bench artifact job {} — phantom cycle: 0/{} declared workspace files delivered; running full review",
-                                job.source_label, workspace_expected_count
-                            ),
-                        );
-                        run_completion_review(
-                            &root,
-                            &state,
-                            &job,
-                            reply_text,
-                            conversation_id,
-                            mission_sync_outcome.as_ref(),
-                        )
-                    } else if workspace_expected_count > 0 && !runtime_refs_ok {
-                        push_event(
-                            &state,
-                            format!(
-                                "Completion review NOT skipped for terminal-bench artifact job {} — runtime refs check failed; running full review",
-                                job.source_label
-                            ),
-                        );
-                        run_completion_review(
-                            &root,
-                            &state,
-                            &job,
-                            reply_text,
-                            conversation_id,
-                            mission_sync_outcome.as_ref(),
-                        )
-                    } else {
-                        push_event(
-                            &state,
-                            format!(
-                                "Completion review skipped for terminal-bench controller artifact job {} — handing slice to outcome_witness + downstream tb-run validator (delivered {}/{} workspace files)",
-                                job.source_label,
-                                workspace_delivered_count,
-                                workspace_expected_count
-                            ),
-                        );
-                        CompletionReviewDisposition::Approved
-                    }
                 } else {
                     run_completion_review(
                         &root,
@@ -3401,9 +3306,16 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
                             let held_founder_review = founder_reply_key.is_some()
                                 || proactive_founder_action.is_some()
                                 || is_founder_or_owner_email_job(&job);
+                            let held_completion_review = matches!(
+                                &review_disposition,
+                                CompletionReviewDisposition::Hold { .. }
+                            );
                             let retry_status = if outcome_witness_error.is_some() {
                                 outcome_witness_retry_route_status_for_job(&root, &job)
-                            } else if held_founder_review || held_benchmark_controller {
+                            } else if held_founder_review
+                                || held_benchmark_controller
+                                || held_completion_review
+                            {
                                 "review_rework"
                             } else {
                                 "pending"
@@ -7194,15 +7106,18 @@ fn failed_worker_route_status(
     //     guidance, and release it back to `pending`. This avoids the
     //     pathological "one bad turn → permanently dead task" trap while
     //     still preventing the runtime from burning tokens in a hot loop.
-    //   * `timeout_worker_message`: turn ran out of time. Workspace state is
-    //     already on disk and `defer_messages_until()` (in the caller) added
-    //     a backoff. Back to `pending` so the next cycle resumes from where
-    //     the workspace left off.
+    //   * `timeout_worker_message`: turn ran out of time. Queue-level report
+    //     jobs are not guaranteed to resume the exact report run; sending them
+    //     straight back to `pending` can create duplicate "created" report
+    //     runs. Route to `review_rework` so an operator or corrective harness
+    //     can decide whether to resume the last run or start a fresh one.
     //   * `retry_worker_message`: explicit retry signal from the runtime.
     //   * neither flag: a real non-retryable error → `failed`.
     if agent_failure_threshold_hit {
         "review_rework"
-    } else if timeout_worker_message || retry_worker_message {
+    } else if timeout_worker_message {
+        "review_rework"
+    } else if retry_worker_message {
         "pending"
     } else {
         "failed"
@@ -7334,11 +7249,12 @@ fn enqueue_review_rework(
     job: &QueuedPrompt,
     outcome: &review::ReviewOutcome,
 ) -> Result<String> {
-    if let Some(existing) = find_superseding_corrective_queue_task(
+    if let Some(existing) = find_superseding_corrective_queue_task_ignoring(
         root,
         job.thread_key.as_deref(),
         job.workspace_root.as_deref(),
         &["review rework"],
+        &job.leased_message_keys,
     )? {
         anyhow::bail!(
             "superseded by runnable corrective work already in queue: {} ({})",
@@ -7425,7 +7341,7 @@ or prove the review wrong with stronger evidence.",
         .clone()
         .filter(|t| !t.trim().is_empty())
         .unwrap_or_else(|| format!("review-rework:{}", job.source_label));
-    let view = create_self_work_backed_queue_task(
+    let view = create_self_work_backed_queue_task_ignoring(
         root,
         DurableSelfWorkQueueRequest {
             kind: "review-rework".to_string(),
@@ -7449,6 +7365,7 @@ or prove the review wrong with stronger evidence.",
                 "origin_source_label": job.source_label,
             }),
         },
+        &job.leased_message_keys,
     )?;
     Ok(view.title)
 }
@@ -9935,6 +9852,10 @@ fn runtime_error_is_transient_api_failure(error: &str) -> bool {
         || normalized.contains("no assistant message")
         || normalized.contains("empty assistant message")
         || normalized.contains("terminal-bench preflight violation")
+        || normalized.contains("mid-task compaction failed")
+        || normalized.contains("failed to parse structured compaction response")
+        || normalized.contains("exceed_context_size_error")
+        || normalized.contains("exceeds the available context size")
         || normalized.contains("too many requests")
         || normalized.contains("rate limit")
         || normalized.contains("rate_limit")
@@ -10299,6 +10220,21 @@ fn is_bounded_stateful_product_execution_job(job: &QueuedPrompt) -> bool {
 }
 
 fn is_bounded_benchmark_or_runtime_execution_job(job: &QueuedPrompt) -> bool {
+    let thread_key = job
+        .thread_key
+        .as_deref()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    let workspace_root = job
+        .workspace_root
+        .as_deref()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    if thread_key.starts_with("tbq-") || workspace_root.contains("/runtime/workspaces/tbq-") {
+        return true;
+    }
     let haystack = format!(
         "{}\n{}\n{}\n{}\n{}",
         job.prompt,
@@ -11093,21 +11029,19 @@ fn task_matches_scope(
     thread_key: Option<&str>,
     workspace_root: Option<&str>,
 ) -> bool {
-    if let Some(thread_key) = thread_key {
-        if task.thread_key == thread_key {
-            return true;
-        }
-    }
-    if let (Some(lhs), Some(rhs)) = (
-        workspace_root
-            .map(str::trim)
-            .filter(|value| !value.is_empty()),
-        task.workspace_root
+    if let Some(lhs) = workspace_root
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return task
+            .workspace_root
             .as_deref()
             .map(str::trim)
-            .filter(|value| !value.is_empty()),
-    ) {
-        if lhs == rhs {
+            .filter(|value| !value.is_empty())
+            == Some(lhs);
+    }
+    if let Some(thread_key) = thread_key {
+        if task.thread_key == thread_key {
             return true;
         }
     }
@@ -11127,10 +11061,31 @@ fn find_superseding_corrective_queue_task(
     workspace_root: Option<&str>,
     blocked_labels: &[&str],
 ) -> Result<Option<channels::QueueTaskView>> {
+    find_superseding_corrective_queue_task_ignoring(
+        root,
+        thread_key,
+        workspace_root,
+        blocked_labels,
+        &[],
+    )
+}
+
+fn find_superseding_corrective_queue_task_ignoring(
+    root: &Path,
+    thread_key: Option<&str>,
+    workspace_root: Option<&str>,
+    blocked_labels: &[&str],
+    ignored_message_keys: &[String],
+) -> Result<Option<channels::QueueTaskView>> {
     let tasks =
         channels::list_queue_tasks(root, &["pending".to_string(), "leased".to_string()], 128)?;
     Ok(tasks
         .into_iter()
+        .filter(|task| {
+            !ignored_message_keys
+                .iter()
+                .any(|key| key == &task.message_key)
+        })
         .filter(|task| task_matches_scope(task, thread_key, workspace_root))
         .filter(|task| !task_matches_blocked_labels(task, blocked_labels))
         .max_by_key(|task| queue_priority_rank(&task.priority)))
@@ -11278,7 +11233,12 @@ fn queue_ticket_self_work_item_ignoring(
     {
         return Ok(Some(existing));
     }
-    if runnable_thread_task_exists_ignoring(root, &thread_key, ignored_message_keys)? {
+    if runnable_scoped_task_exists_ignoring(
+        root,
+        Some(thread_key.as_str()),
+        ticket_self_work_workspace_root(item).as_deref(),
+        ignored_message_keys,
+    )? {
         return Ok(None);
     }
     let mut extra_metadata = serde_json::json!({
@@ -11369,10 +11329,19 @@ fn find_runnable_thread_task_ignoring(
     thread_key: &str,
     ignored_message_keys: &[String],
 ) -> Result<Option<channels::QueueTaskView>> {
+    find_runnable_scoped_task_ignoring(root, Some(thread_key), None, ignored_message_keys)
+}
+
+fn find_runnable_scoped_task_ignoring(
+    root: &Path,
+    thread_key: Option<&str>,
+    workspace_root: Option<&str>,
+    ignored_message_keys: &[String],
+) -> Result<Option<channels::QueueTaskView>> {
     let tasks =
         channels::list_queue_tasks(root, &["pending".to_string(), "leased".to_string()], 64)?;
     Ok(tasks.into_iter().find(|task| {
-        task.thread_key == thread_key
+        task_matches_scope(task, thread_key, workspace_root)
             && !ignored_message_keys
                 .iter()
                 .any(|key| key == &task.message_key)
@@ -11389,10 +11358,18 @@ fn requeue_review_rejected_self_work(
         block_ticket_self_work_item(root, work_id, &note);
         return Ok(None);
     }
-    if let Some(note) = review_checkpoint_loop_block_note(root, work_id, summary)? {
-        block_self_work_queue_tasks_for_work(root, work_id, &note)?;
-        if !review_checkpoint_loop_block_already_active(root, work_id)? {
-            block_ticket_self_work_item(root, work_id, &note);
+    if let Some(disposition) = review_checkpoint_loop_disposition(root, work_id, summary)? {
+        match disposition {
+            ReviewCheckpointLoopDisposition::Block { note } => {
+                block_self_work_queue_tasks_for_work(root, work_id, &note)?;
+                if !review_checkpoint_loop_block_already_active(root, work_id)? {
+                    block_ticket_self_work_item(root, work_id, &note);
+                }
+            }
+            ReviewCheckpointLoopDisposition::Fail { note } => {
+                fail_self_work_queue_tasks_for_work(root, work_id, &note)?;
+                fail_ticket_self_work_item(root, work_id, &note);
+            }
         }
         return Ok(None);
     }
@@ -11428,6 +11405,11 @@ fn requeue_review_rejected_self_work(
     queue_ticket_self_work_item(root, &item)
 }
 
+enum ReviewCheckpointLoopDisposition {
+    Block { note: String },
+    Fail { note: String },
+}
+
 fn runtime_api_retry_review_rejection_block_note(
     root: &Path,
     work_id: &str,
@@ -11456,25 +11438,56 @@ fn review_checkpoint_requeue_block_threshold() -> usize {
     }
 }
 
-fn review_checkpoint_loop_block_note(
+fn review_rework_checkpoint_requeue_block_threshold() -> usize {
+    match std::env::var("CTOX_REVIEW_REWORK_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD") {
+        Ok(value) => match value.trim().parse::<usize>() {
+            Ok(parsed) if parsed > 0 => {
+                parsed.min(MAX_REVIEW_REWORK_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD)
+            }
+            _ => REVIEW_REWORK_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD,
+        },
+        Err(_) => REVIEW_REWORK_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD,
+    }
+}
+
+fn review_checkpoint_requeue_block_threshold_for_kind(kind: &str) -> usize {
+    if kind == "review-rework" {
+        review_rework_checkpoint_requeue_block_threshold()
+    } else {
+        review_checkpoint_requeue_block_threshold()
+    }
+}
+
+fn review_checkpoint_loop_disposition(
     root: &Path,
     work_id: &str,
     summary: &str,
-) -> Result<Option<String>> {
+) -> Result<Option<ReviewCheckpointLoopDisposition>> {
     let Some(item) = tickets::load_ticket_self_work_item(root, work_id)? else {
         return Ok(None);
     };
     let attempts = review_checkpoint_requeue_attempt_count(root, work_id)?;
-    let threshold = review_checkpoint_requeue_block_threshold();
+    let threshold = review_checkpoint_requeue_block_threshold_for_kind(&item.kind);
     if attempts < threshold {
         return Ok(None);
     }
-    Ok(Some(format!(
-        "Dieses Work Item `{}` ({}) wurde {attempts} Mal vom Review-Checkpoint zur Nacharbeit zurueckgegeben. Die Requeue-Schranke ({threshold}) ist erreicht; der Harness blockt weitere automatische Review-Requeues, damit kein unendlicher Self-Rework-Loop entstehen kann. Fuehre erst neue belastbare Arbeit oder Evidenz in einem separaten fachlichen Task zu. Letzter Review-Hinweis: {}",
-        item.work_id,
-        item.kind,
-        clip_text(summary, 220)
-    )))
+    if item.kind == "review-rework" {
+        return Ok(Some(ReviewCheckpointLoopDisposition::Fail {
+            note: format!(
+                "Dieses Review-Rework-Item `{}` wurde {attempts} Mal vom Review-Checkpoint zur Nacharbeit zurueckgegeben. Die Rework-Schranke ({threshold}) ist erreicht; der Harness beendet diese Nacharbeit terminal als failed statt sie zu blockieren. Lege bei Bedarf eine neue fachliche Aufgabe mit neuer Evidenz an. Letzter Review-Hinweis: {}",
+                item.work_id,
+                clip_text(summary, 220)
+            ),
+        }));
+    }
+    Ok(Some(ReviewCheckpointLoopDisposition::Block {
+        note: format!(
+            "Dieses Work Item `{}` ({}) wurde {attempts} Mal vom Review-Checkpoint zur Nacharbeit zurueckgegeben. Die Requeue-Schranke ({threshold}) ist erreicht; der Harness blockt weitere automatische Review-Requeues, damit kein unendlicher Self-Rework-Loop entstehen kann. Fuehre erst neue belastbare Arbeit oder Evidenz in einem separaten fachlichen Task zu. Letzter Review-Hinweis: {}",
+            item.work_id,
+            item.kind,
+            clip_text(summary, 220)
+        ),
+    }))
 }
 
 fn review_checkpoint_loop_block_already_active(root: &Path, work_id: &str) -> Result<bool> {
@@ -11685,6 +11698,19 @@ fn block_founder_rework_queue_tasks_for_work(
 }
 
 fn block_self_work_queue_tasks_for_work(root: &Path, work_id: &str, note: &str) -> Result<usize> {
+    set_self_work_queue_tasks_route_status(root, work_id, "blocked", note)
+}
+
+fn fail_self_work_queue_tasks_for_work(root: &Path, work_id: &str, note: &str) -> Result<usize> {
+    set_self_work_queue_tasks_route_status(root, work_id, "failed", note)
+}
+
+fn set_self_work_queue_tasks_route_status(
+    root: &Path,
+    work_id: &str,
+    route_status: &str,
+    note: &str,
+) -> Result<usize> {
     let db_path = crate::paths::core_db(&root);
     let conn = channels::open_channel_db(&db_path)?;
     let mut statement = conn.prepare(
@@ -11705,20 +11731,20 @@ fn block_self_work_queue_tasks_for_work(root: &Path, work_id: &str, note: &str) 
     drop(statement);
     drop(conn);
 
-    let mut blocked = 0usize;
+    let mut updated = 0usize;
     for message_key in message_keys {
         channels::update_queue_task(
             root,
             channels::QueueTaskUpdateRequest {
                 message_key,
-                route_status: Some("blocked".to_string()),
+                route_status: Some(route_status.to_string()),
                 status_note: Some(note.to_string()),
                 ..Default::default()
             },
         )?;
-        blocked += 1;
+        updated += 1;
     }
-    Ok(blocked)
+    Ok(updated)
 }
 
 fn create_self_work_backed_queue_task(
@@ -11776,9 +11802,10 @@ fn create_self_work_backed_queue_task_ignoring(
     if let Some(view) = queue_ticket_self_work_item_ignoring(root, &item, ignored_message_keys)? {
         return Ok(view);
     }
-    find_runnable_thread_task_ignoring(
+    find_runnable_scoped_task_ignoring(
         root,
-        &ticket_self_work_thread_key(&item),
+        Some(ticket_self_work_thread_key(&item).as_str()),
+        ticket_self_work_workspace_root(&item).as_deref(),
         ignored_message_keys,
     )?
     .context("failed to queue durable self-work follow-up")
@@ -11811,6 +11838,17 @@ fn block_ticket_self_work_item(root: &Path, work_id: &str, note: &str) {
         root,
         work_id,
         "blocked",
+        "ctox-service",
+        Some(note),
+        "internal",
+    );
+}
+
+fn fail_ticket_self_work_item(root: &Path, work_id: &str, note: &str) {
+    let _ = tickets::transition_ticket_self_work_item(
+        root,
+        work_id,
+        "failed",
         "ctox-service",
         Some(note),
         "internal",
@@ -12721,6 +12759,8 @@ fn is_turn_timeout_blocker(value: &str) -> bool {
 fn is_compaction_blocker(value: &str) -> bool {
     let lowered = value.to_ascii_lowercase();
     lowered.contains("mid-task compaction timeout")
+        || lowered.contains("mid-task compaction failed")
+        || lowered.contains("failed to parse structured compaction response")
         || lowered.contains("compaction timeout")
         || lowered.contains("compact_followup")
 }
@@ -12925,10 +12965,19 @@ fn runnable_thread_task_exists_ignoring(
     thread_key: &str,
     ignored_message_keys: &[String],
 ) -> Result<bool> {
+    runnable_scoped_task_exists_ignoring(root, Some(thread_key), None, ignored_message_keys)
+}
+
+fn runnable_scoped_task_exists_ignoring(
+    root: &Path,
+    thread_key: Option<&str>,
+    workspace_root: Option<&str>,
+    ignored_message_keys: &[String],
+) -> Result<bool> {
     let tasks =
         channels::list_queue_tasks(root, &["pending".to_string(), "leased".to_string()], 64)?;
     Ok(tasks.into_iter().any(|task| {
-        task.thread_key == thread_key
+        task_matches_scope(&task, thread_key, workspace_root)
             && !ignored_message_keys
                 .iter()
                 .any(|key| key == &task.message_key)
@@ -15807,6 +15856,71 @@ mod tests {
     }
 
     #[test]
+    fn review_rework_dedupe_does_not_treat_other_workspace_in_same_thread_as_superseder() {
+        let root = temp_root("ctox-review-rework-workspace-scope");
+        channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Workspace task 002: other".to_string(),
+                prompt: "Work only in /tmp/ctox-review-other".to_string(),
+                thread_key: "terminal-bench-run".to_string(),
+                workspace_root: Some("/tmp/ctox-review-other".to_string()),
+                priority: "high".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to seed sibling workspace task");
+        let current = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Workspace task 001: current".to_string(),
+                prompt: "Work only in /tmp/ctox-review-current".to_string(),
+                thread_key: "terminal-bench-run".to_string(),
+                workspace_root: Some("/tmp/ctox-review-current".to_string()),
+                priority: "high".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to seed current workspace task");
+        let job = QueuedPrompt {
+            prompt: "Work only in /tmp/ctox-review-current".to_string(),
+            goal: "finish current workspace task".to_string(),
+            preview: "Workspace task 001: current".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: None,
+            leased_message_keys: vec![current.message_key.clone()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("terminal-bench-run".to_string()),
+            workspace_root: Some("/tmp/ctox-review-current".to_string()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+        let mut outcome = review::ReviewOutcome::skipped("current workspace still needs proof");
+        outcome.required = true;
+        outcome.verdict = review::ReviewVerdict::Partial;
+        outcome.open_items = vec!["Add direct validation evidence for this workspace.".to_string()];
+
+        let title = enqueue_review_rework(&root, &job, &outcome)
+            .expect("sibling workspace must not suppress current review rework");
+
+        assert!(title.starts_with("Review rework:"));
+        let tasks =
+            channels::list_queue_tasks(&root, &["pending".to_string(), "leased".to_string()], 10)
+                .expect("failed to list pending queue tasks");
+        assert_eq!(tasks.len(), 3);
+        assert!(tasks.iter().any(|task| {
+            task.title.starts_with("Review rework:")
+                && task.workspace_root.as_deref() == Some("/tmp/ctox-review-current")
+        }));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn timeout_blocker_suppresses_continuation_and_records_governance_event() {
         let root = std::env::temp_dir().join(format!(
             "ctox-timeout-followup-test-{}",
@@ -16656,6 +16770,107 @@ mod tests {
     }
 
     #[test]
+    fn review_rework_uses_extended_checkpoint_requeue_threshold() {
+        let root = temp_root("ctox-review-rework-extended-threshold");
+        let item = tickets::put_ticket_self_work_item(
+            &root,
+            tickets::TicketSelfWorkUpsertInput {
+                source_system: "local".to_string(),
+                kind: "review-rework".to_string(),
+                title: "Review rework: continue workspace repair".to_string(),
+                body_text: "Address the persisted review findings.".to_string(),
+                state: "open".to_string(),
+                metadata: serde_json::json!({
+                    "thread_key": "queue/review-rework-threshold",
+                    "priority": "high",
+                    "skill": "follow-up-orchestrator",
+                    "dedupe_key": "review-rework:queue/review-rework-threshold:test",
+                }),
+            },
+            false,
+        )
+        .expect("failed to create review-rework self-work");
+
+        let generic_threshold = review_checkpoint_requeue_block_threshold();
+        let rework_threshold = review_rework_checkpoint_requeue_block_threshold();
+        assert!(rework_threshold > generic_threshold);
+
+        for attempt in 0..generic_threshold {
+            let task = requeue_review_rejected_self_work(
+                &root,
+                &item.work_id,
+                &format!("review-rework rejection {}", attempt + 1),
+            )
+            .expect("review-rework requeue should succeed before extended threshold")
+            .expect("review-rework should stay runnable beyond generic threshold");
+            channels::update_queue_task(
+                &root,
+                channels::QueueTaskUpdateRequest {
+                    message_key: task.message_key,
+                    route_status: Some("handled".to_string()),
+                    ..Default::default()
+                },
+            )
+            .expect("failed to settle intermediate review-rework queue task");
+        }
+
+        let still_runnable = requeue_review_rejected_self_work(
+            &root,
+            &item.work_id,
+            "one more review-rework rejection after generic threshold",
+        )
+        .expect("review-rework should not use generic threshold")
+        .expect("review-rework should still be runnable at generic threshold");
+        channels::update_queue_task(
+            &root,
+            channels::QueueTaskUpdateRequest {
+                message_key: still_runnable.message_key,
+                route_status: Some("handled".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("failed to settle post-generic-threshold review-rework queue task");
+
+        for attempt in (generic_threshold + 1)..rework_threshold {
+            let task = requeue_review_rejected_self_work(
+                &root,
+                &item.work_id,
+                &format!("review-rework rejection {}", attempt + 1),
+            )
+            .expect("review-rework requeue should succeed before extended threshold")
+            .expect("review-rework should stay runnable before extended threshold");
+            channels::update_queue_task(
+                &root,
+                channels::QueueTaskUpdateRequest {
+                    message_key: task.message_key,
+                    route_status: Some("handled".to_string()),
+                    ..Default::default()
+                },
+            )
+            .expect("failed to settle review-rework queue task");
+        }
+
+        let terminal = requeue_review_rejected_self_work(
+            &root,
+            &item.work_id,
+            "review-rework rejection at extended threshold",
+        )
+        .expect("extended threshold terminal failure should be handled");
+        assert!(terminal.is_none());
+
+        let reloaded = tickets::load_ticket_self_work_item(&root, &item.work_id)
+            .expect("failed to reload review-rework self-work")
+            .expect("missing review-rework self-work");
+        assert_eq!(reloaded.state, "failed");
+
+        let blocked_tasks = channels::list_queue_tasks(&root, &["blocked".to_string()], 10)
+            .expect("failed to list blocked queue tasks");
+        assert!(!blocked_tasks
+            .iter()
+            .any(|task| task.ticket_self_work_id.as_deref() == Some(item.work_id.as_str())));
+    }
+
+    #[test]
     fn runtime_api_retry_review_rejection_blocks_without_requeue() {
         let root = temp_root("ctox-runtime-api-retry-review-block");
         let item = tickets::put_ticket_self_work_item(
@@ -17309,6 +17524,68 @@ Start now by using shell/tools to create RUN_DIR artifacts and verify runtime/co
                 .expect("failed to list queue tasks");
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0].title, "Terminal-Bench 2 controller Qwen3.6 128k");
+
+        let items = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
+            .expect("failed to list self-work");
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn terminal_bench_queue_workspace_task_does_not_reroute_to_strategy_setup() {
+        let root = temp_root("ctox-terminal-bench-tbq-workspace-no-strategy-reroute");
+        let queue_task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Workspace task 050: solana-data".to_string(),
+                prompt: "Work only inside this workspace: /home/metricspace/ctox/runtime/workspaces/tbq-20260508T2217Z-qwen36-fresh-050-solana-data\n\
+Use this workspace as the current directory for the task.\n\
+Return a local server that connects to the Solana blockchain and provides endpoints to retrieve account data."
+                    .to_string(),
+                thread_key: "tbq-qwen36/tbq-20260508T2217Z-qwen36-fresh/050-solana-data"
+                    .to_string(),
+                workspace_root: Some(
+                    "/home/metricspace/ctox/runtime/workspaces/tbq-20260508T2217Z-qwen36-fresh-050-solana-data"
+                        .to_string(),
+                ),
+                priority: "high".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to seed Terminal-Bench workspace queue task");
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        let job = QueuedPrompt {
+            prompt: queue_task.prompt.clone(),
+            goal: queue_task.title.clone(),
+            preview: queue_task.title.clone(),
+            source_label: "queue".to_string(),
+            suggested_skill: None,
+            leased_message_keys: vec![queue_task.message_key.clone()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some(
+                "tbq-qwen36/tbq-20260508T2217Z-qwen36-fresh/050-solana-data".to_string(),
+            ),
+            workspace_root: Some(
+                "/home/metricspace/ctox/runtime/workspaces/tbq-20260508T2217Z-qwen36-fresh-050-solana-data"
+                    .to_string(),
+            ),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        assert!(is_bounded_benchmark_or_runtime_execution_job(&job));
+        assert!(!is_owner_visible_strategic_job(&job));
+        let redirected = maybe_redirect_owner_visible_work_to_strategy_setup(&root, &state, &job)
+            .expect("strategy evaluation should succeed");
+        assert!(!redirected);
+
+        let tasks =
+            channels::list_queue_tasks(&root, &["pending".to_string(), "leased".to_string()], 10)
+                .expect("failed to list queue tasks");
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].title, "Workspace task 050: solana-data");
 
         let items = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
             .expect("failed to list self-work");
@@ -17988,6 +18265,30 @@ Required artifacts. You must create and maintain exactly these durable files in 
         assert!(prompt.contains("/tmp/tb/ticket-map.jsonl"));
         assert!(prompt.contains("/tmp/tb/preparation-tickets.jsonl"));
         assert!(prompt.contains("Do not satisfy this retry with substitute files"));
+    }
+
+    #[test]
+    fn local_context_overflow_is_retryable_runtime_failure() {
+        let error = "stream disconnected before completion: llama-server /completion returned status 400: {\"error\":{\"type\":\"exceed_context_size_error\",\"message\":\"request (132458 tokens) exceeds the available context size (131072 tokens)\"}}";
+        assert_eq!(
+            turn_loop::hard_runtime_blocker_retry_cooldown_secs(error),
+            Some(60)
+        );
+        assert!(runtime_error_is_transient_api_failure(error));
+    }
+
+    #[test]
+    fn compaction_parse_failure_is_retryable_runtime_failure() {
+        let error = "mid-task compaction failed: failed to parse structured compaction response: expected value at line 1 column 1";
+        assert_eq!(
+            turn_loop::hard_runtime_blocker_retry_cooldown_secs(error),
+            Some(60)
+        );
+        assert!(runtime_error_is_transient_api_failure(error));
+        assert_eq!(
+            classify_agent_failure(error),
+            crate::lcm::AgentOutcome::Aborted
+        );
     }
 
     #[test]

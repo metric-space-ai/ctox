@@ -423,6 +423,10 @@ fn run_external_review_legs(
         let handoff = parse_handoff_block(&report);
         last_report = report;
 
+        if verdict.is_none() && leg + 1 < REVIEW_MAX_LEGS {
+            prompt = build_review_format_retry_prompt(request, &last_report);
+            continue;
+        }
         if !matches!(verdict, Some(ReviewVerdict::Partial)) {
             break;
         }
@@ -524,6 +528,14 @@ fn assess_review_requirement(
             &lowered,
             &["smoke", "qwen36-local", "response adapter", "local backend"],
         );
+    let workspace_backed_queue_task = request.source_label.eq_ignore_ascii_case("queue")
+        && !request.workspace_root.trim().is_empty()
+        && request.artifact_action.is_none()
+        && !founder_or_owner_email;
+    if workspace_backed_queue_task && !internal_smoke_artifact_slice {
+        score = score.saturating_add(3);
+        push_unique_reason(&mut reasons, "workspace_backed_queue_task");
+    }
 
     let closure_claim = contains_any(
         &lowered,
@@ -697,6 +709,10 @@ fn build_review_prompt(request: &CompletionReviewRequest, reasons: &[String]) ->
                 .contains("external_chat_quick_response")
         })
         .unwrap_or(false);
+    let workspace_backed_queue_task = request.source_label.eq_ignore_ascii_case("queue")
+        && !request.workspace_root.trim().is_empty()
+        && request.artifact_action.is_none()
+        && !founder_artifact;
     let artifact_kind = if founder_artifact {
         "founder_or_owner_outbound_email_draft"
     } else if external_chat_artifact {
@@ -800,6 +816,16 @@ External chat quick-response gate:\n\
 
     let artifact_review_work = if founder_artifact {
         ""
+    } else if workspace_backed_queue_task {
+        "\
+Workspace-backed task review gate:\n\
+- inspect the workspace root directly and evaluate the full task result against the original task contract, not just the final response text\n\
+- inspect changed, added, and deleted files relevant to the task; compare implementation behavior against the requested outcome\n\
+- run safe read-only checks where possible, such as `test -f`, `find`, `git diff --stat`, targeted file reads, import checks, command help/version checks, or existing non-mutating smoke/test commands\n\
+- if tests/checks are available but cannot be run safely in read-only review, mark PARTIAL and name the exact missing verification instead of PASS\n\
+- PASS only when the workspace state and direct evidence support the completion claim; FAIL when required files, implementation changes, or task-specific behavior are missing or contradicted by evidence\n\
+- do not approve merely because the worker claimed success, produced a plausible summary, or created some unrelated artifact\n\
+"
     } else {
         "\
 Internal artifact review gate:\n\
@@ -945,6 +971,61 @@ Prior handoff:\n\
 Continue the remaining verification work and return the standard review format.\n",
         request.conversation_id,
         handoff.trim()
+    )
+}
+
+fn build_review_format_retry_prompt(
+    request: &CompletionReviewRequest,
+    prior_report: &str,
+) -> String {
+    let thread_key = if request.thread_key.trim().is_empty() {
+        "(none recorded)"
+    } else {
+        request.thread_key.trim()
+    };
+    let workspace_root = if request.workspace_root.trim().is_empty() {
+        "(none recorded)"
+    } else {
+        request.workspace_root.trim()
+    };
+    let prior = if prior_report.trim().is_empty() {
+        "(review returned an empty response)"
+    } else {
+        prior_report.trim()
+    };
+
+    format!(
+        "== REVIEW FORMAT RETRY ==\n\
+\n\
+The previous review response did not include a parseable `VERDICT:` line. Continue the same read-only review and return the required structured format exactly.\n\
+\n\
+Thread key: {thread_key}\n\
+Workspace root: {workspace_root}\n\
+\n\
+Previous malformed review response:\n\
+--- BEGIN PRIOR REVIEW ---\n\
+{}\n\
+--- END PRIOR REVIEW ---\n\
+\n\
+Do not do worker actions. Inspect only as needed to produce a real verdict. Return exactly:\n\
+VERDICT: PASS|FAIL|PARTIAL\n\
+MISSION_STATE: HEALTHY|UNHEALTHY|UNCLEAR\n\
+SUMMARY: <one sentence>\n\
+FAILED_GATES:\n\
+- <plain rule that failed or \"none\">\n\
+FINDINGS:\n\
+- <semantic finding or \"none\">\n\
+CATEGORIZED_FINDINGS:\n\
+- id: <id> | category: rewrite|rework|stale_refresh|stale_obsolete|stale_consolidate | evidence: \"<evidence>\" | corrective_action: \"<corrective action>\"\n\
+- <or \"none\">\n\
+OPEN_ITEMS:\n\
+- <concrete rework item or \"none\">\n\
+EVIDENCE:\n\
+- <check> => <observed result>\n\
+HANDOFF:\n\
+- none\n\
+DISPOSITION: SEND|NO_SEND\n",
+        clip_text(prior, 2_000)
     )
 }
 
@@ -1356,6 +1437,26 @@ mod tests {
         assert!(reasons
             .iter()
             .any(|reason| reason == "smoke_runtime_feedback_ignored"));
+    }
+
+    #[test]
+    fn requires_review_for_workspace_backed_queue_task() {
+        let request = CompletionReviewRequest {
+            task_goal: "Implement the requested CLI behavior.".to_string(),
+            task_prompt: "Work only inside this workspace: /tmp/ctox-workspaces/task-001\nUse this workspace as the current directory for the task.\n\nImplement a command line tool and verify it.".to_string(),
+            preview: "Workspace task 001: cli-tool".to_string(),
+            source_label: "queue".to_string(),
+            owner_visible: false,
+            workspace_root: "/tmp/ctox-workspaces/task-001".to_string(),
+            ..CompletionReviewRequest::default()
+        };
+        let (required, score, reasons) =
+            assess_review_requirement(&request, "Done. Implemented and verified.");
+        assert!(required);
+        assert!(score >= 3);
+        assert!(reasons
+            .iter()
+            .any(|reason| reason == "workspace_backed_queue_task"));
     }
 
     #[test]
