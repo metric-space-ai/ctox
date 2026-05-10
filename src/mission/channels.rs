@@ -6295,6 +6295,79 @@ fn set_routing_status(
     Ok(())
 }
 
+pub(crate) fn current_queue_route_status(conn: &Connection, message_key: &str) -> Result<String> {
+    conn.query_row(
+        "SELECT route_status FROM communication_routing_state WHERE message_key = ?1 LIMIT 1",
+        params![message_key],
+        |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .map(|value| value.unwrap_or_else(|| "pending".to_string()))
+    .map_err(anyhow::Error::from)
+}
+
+pub(crate) fn enforce_queue_route_status_transition(
+    conn: &Connection,
+    message_key: &str,
+    from_route_status: &str,
+    to_route_status: &str,
+    actor: &str,
+    reason: &str,
+) -> Result<()> {
+    let from_state = queue_route_status_core_state(from_route_status)?;
+    let to_state = queue_route_status_core_state(to_route_status)?;
+    if from_state == to_state {
+        return Ok(());
+    }
+    let mut metadata = BTreeMap::new();
+    metadata.insert(
+        "from_route_status".to_string(),
+        from_route_status.to_string(),
+    );
+    metadata.insert("to_route_status".to_string(), to_route_status.to_string());
+    metadata.insert("reason".to_string(), reason.to_string());
+    enforce_core_transition(
+        conn,
+        &CoreTransitionRequest {
+            entity_type: CoreEntityType::QueueItem,
+            entity_id: message_key.to_string(),
+            lane: RuntimeLane::P2MissionDelivery,
+            from_state,
+            to_state,
+            event: queue_route_status_core_event(to_route_status),
+            actor: actor.to_string(),
+            evidence: CoreEvidenceRefs::default(),
+            metadata,
+        },
+    )?;
+    Ok(())
+}
+
+fn queue_route_status_core_state(route_status: &str) -> Result<CoreState> {
+    match route_status.trim().to_ascii_lowercase().as_str() {
+        "" | "pending" => Ok(CoreState::Pending),
+        "leased" => Ok(CoreState::Leased),
+        "running" => Ok(CoreState::Running),
+        "blocked" | "review_rework" | "approval-nag-handled" => Ok(CoreState::Blocked),
+        "failed" => Ok(CoreState::Failed),
+        "handled" | "completed" => Ok(CoreState::Completed),
+        "cancelled" | "superseded" => Ok(CoreState::Superseded),
+        other => anyhow::bail!("queue route status is not mapped to core state machine: {other}"),
+    }
+}
+
+fn queue_route_status_core_event(route_status: &str) -> CoreEvent {
+    match route_status.trim().to_ascii_lowercase().as_str() {
+        "leased" => CoreEvent::Lease,
+        "pending" => CoreEvent::Release,
+        "blocked" | "review_rework" | "approval-nag-handled" => CoreEvent::Block,
+        "failed" => CoreEvent::Fail,
+        "cancelled" | "superseded" => CoreEvent::Supersede,
+        "handled" | "completed" => CoreEvent::Complete,
+        _ => CoreEvent::Retry,
+    }
+}
+
 fn canonical_queue_priority(raw: &str) -> Result<String> {
     let normalized = raw.trim().to_lowercase();
     match normalized.as_str() {
