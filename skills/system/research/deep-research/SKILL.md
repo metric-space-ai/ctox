@@ -340,6 +340,35 @@ highest-scoring source families and perform a targeted reading/extraction pass
 against source pages, PDFs, datasets and tables before writing a client-facing
 research report.
 
+Use the bundled reading runner for that pass. It resolves OpenAlex open-access
+locations, tries direct PDF/HTML extraction plus `ctox web read`, writes a
+readability ledger, and extracts measurement snippets into a separate evidence
+table. A client-facing report must not claim full-text review for sources that
+are only `metadata_only` or `blocked`.
+
+```bash
+python3 skills/system/research/deep-research/scripts/source_review_reading.py \
+  --discovery-dir "/tmp/RUN_ID_source_discovery" \
+  --out-dir "/tmp/RUN_ID_source_reading" \
+  --limit 80 \
+  --max-urls-per-source 6 \
+  --read-timeout-sec 30
+```
+
+Mandatory reading artifacts:
+
+- `reading_status.csv`: one row per selected source with `extracted`,
+  `readable_no_measurements`, `metadata_only`, or `blocked`.
+- `extracted_measurements.csv`: normalized evidence rows with value, unit,
+  measurement family and source snippet.
+- `reading_graph.json`: source-to-evidence graph for later report figures and
+  audit.
+
+If fewer than 15 selected sources are actually readable, continue source
+resolution and targeted follow-up before drafting the report, or state the
+access limitation explicitly. Do not turn a metadata-only corpus into a
+research report.
+
 Do not invent `sources-count`. The `research-log-add` command now requires a
 raw payload file and rejects counts that are not backed by the payload's
 source/result records. If the tool returns only 47 reviewed results, log 47.
