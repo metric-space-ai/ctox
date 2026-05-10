@@ -4003,8 +4003,8 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
 /// evidence and must not become a new review-owned worker task.
 ///
 /// Failures inside the review path (session start errors, gateway timeouts) are
-/// swallowed and surfaced as events: the slice falls through unjudged rather
-/// than blocking the worker.
+/// fail-closed for review-required work. A missing reviewer verdict is not a
+/// worker success proof.
 fn run_completion_review(
     root: &Path,
     state: &Arc<Mutex<SharedState>>,
@@ -4606,8 +4606,12 @@ fn completion_review_unavailable_disposition(
     _job: &QueuedPrompt,
     summary: &str,
 ) -> CompletionReviewDisposition {
-    let _ = summary;
-    CompletionReviewDisposition::None
+    CompletionReviewDisposition::Hold {
+        summary: format!(
+            "{}\n\nCompletion review is required for this slice, but the reviewer did not produce a verdict. The worker result must remain open until review succeeds or explicit operator policy resolves it.",
+            summary.trim()
+        ),
+    }
 }
 
 fn completion_review_is_reviewer_limited_internal_work(
@@ -18471,7 +18475,7 @@ Preserve and update controller.json and logbook.md."
     }
 
     #[test]
-    fn unavailable_review_does_not_requeue_generic_artifact_job() {
+    fn unavailable_review_holds_generic_artifact_job_fail_closed() {
         let job = QueuedPrompt {
             prompt: "RUN_DIR=\"/tmp/ctox-smoke\". Initialisiere die Datei required-smoke.json."
                 .to_string(),
@@ -18489,13 +18493,16 @@ Preserve and update controller.json and logbook.md."
         };
 
         assert!(!is_terminal_bench_controller_artifact_job(&job));
-        assert!(matches!(
-            completion_review_unavailable_disposition(
-                &job,
-                "completion review leg did not produce a verdict within 900s"
-            ),
-            CompletionReviewDisposition::None
-        ));
+        match completion_review_unavailable_disposition(
+            &job,
+            "completion review leg did not produce a verdict within 900s",
+        ) {
+            CompletionReviewDisposition::Hold { summary } => {
+                assert!(summary.contains("did not produce a verdict"));
+                assert!(summary.contains("must remain open"));
+            }
+            other => panic!("unavailable review must fail closed, got {other:?}"),
+        }
     }
 
     #[test]
