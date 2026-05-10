@@ -293,10 +293,17 @@ For every `source_review`, the search protocol is not a prose task. It is a
 state-machine task. You must persist each search path before drafting and you
 may only put counts in the Word table that are backed by these persisted logs.
 
-Use the bundled discovery runner. It creates a broad query plan, executes
-`ctox web deep-research` for each query family, saves every raw JSON payload,
-deduplicates sources, writes `search_protocol.csv` and `candidate_sources.csv`,
-and calls `ctox report research-log-add` for every executed query.
+Use the bundled discovery runner. It creates a broad query plan, saves every
+raw JSON payload, deduplicates sources, writes `search_protocol.csv` and
+`candidate_sources.csv`, and calls `ctox report research-log-add` for every
+executed query.
+
+For broad source-discovery tasks where the user expects hundreds or thousands
+of screened sources, start with `--discovery-backend open-metadata`. It queries
+OpenAlex and Crossref directly and is the correct first pass for corpus-scale
+screening. Use `ctox web deep-research` afterwards only for targeted follow-up
+reading and evidence extraction, not as the only mechanism for a 1000+ source
+ledger.
 
 ```bash
 python3 skills/system/research/deep-research/scripts/source_review_discovery.py \
@@ -305,6 +312,8 @@ python3 skills/system/research/deep-research/scripts/source_review_discovery.py 
   --out-dir "/tmp/RUN_ID_source_discovery" \
   --max-sources-per-query 80 \
   --target-reviewed 1000 \
+  --discovery-backend open-metadata \
+  --query-timeout-sec 25 \
   --snowball-rounds 1
 ```
 
