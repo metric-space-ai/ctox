@@ -11108,51 +11108,120 @@ fn queue_ticket_self_work_item_ignoring(
     item: &tickets::TicketSelfWorkItemView,
     ignored_message_keys: &[String],
 ) -> Result<Option<channels::QueueTaskView>> {
-    let thread_key = ticket_self_work_thread_key(item);
-    if let Some(existing) = find_runnable_self_work_task_ignoring(root, item, ignored_message_keys)?
+    let mut item = item.clone();
+    let thread_key = ticket_self_work_thread_key(&item);
+    if let Some(existing) =
+        find_runnable_self_work_task_ignoring(root, &item, ignored_message_keys)?
     {
         return Ok(Some(existing));
     }
     if runnable_scoped_task_exists_ignoring(
         root,
         Some(thread_key.as_str()),
-        ticket_self_work_workspace_root(item).as_deref(),
+        ticket_self_work_workspace_root(&item).as_deref(),
         ignored_message_keys,
     )? {
         return Ok(None);
     }
+    item = transition_self_work_for_queue_execution(root, &item, "ctox-service")?;
     let mut extra_metadata = serde_json::json!({
         "ticket_self_work_id": item.work_id.clone(),
         "ticket_self_work_kind": item.kind.clone(),
         "ticket_self_work_source_system": item.source_system.clone(),
     });
-    merge_metadata_value(&mut extra_metadata, ticket_self_work_queue_metadata(item));
+    merge_metadata_value(&mut extra_metadata, ticket_self_work_queue_metadata(&item));
     let queue_task = channels::create_queue_task_with_metadata(
         root,
         channels::QueueTaskCreateRequest {
             title: item.title.trim().to_string(),
-            prompt: render_ticket_self_work_prompt(root, item),
+            prompt: render_ticket_self_work_prompt(root, &item),
             thread_key: thread_key.clone(),
-            workspace_root: ticket_self_work_workspace_root(item),
-            priority: ticket_self_work_priority(item),
+            workspace_root: ticket_self_work_workspace_root(&item),
+            priority: ticket_self_work_priority(&item),
             suggested_skill: item.suggested_skill.clone(),
-            parent_message_key: ticket_self_work_parent_message_key(item),
+            parent_message_key: ticket_self_work_parent_message_key(&item),
             extra_metadata: Some(extra_metadata),
         },
     )?;
-    let note = format!(
-        "Queued for active execution on thread `{}` as queue task `{}`.",
-        thread_key, queue_task.title
-    );
-    let _ = tickets::transition_ticket_self_work_item(
-        root,
-        &item.work_id,
-        "queued",
-        "ctox-service",
-        Some(&note),
-        "internal",
-    );
     Ok(Some(queue_task))
+}
+
+fn transition_self_work_for_queue_execution(
+    root: &Path,
+    item: &tickets::TicketSelfWorkItemView,
+    actor: &str,
+) -> Result<tickets::TicketSelfWorkItemView> {
+    let note = "Queued for active execution by the service dispatcher.";
+    match normalize_token(&item.state).as_str() {
+        "" | "created" | "open" | "queued" | "restored" | "publishing" => {
+            tickets::transition_ticket_self_work_item(
+                root,
+                &item.work_id,
+                "queued",
+                actor,
+                Some(note),
+                "internal",
+            )
+        }
+        "blocked" => tickets::transition_ticket_self_work_item(
+            root,
+            &item.work_id,
+            "queued",
+            actor,
+            Some(note),
+            "internal",
+        ),
+        "rework_required" | "review_rework" | "rework" => {
+            tickets::transition_ticket_self_work_item(
+                root,
+                &item.work_id,
+                "published",
+                actor,
+                Some(note),
+                "internal",
+            )
+        }
+        "published" | "running" | "executing" | "in_progress" => {
+            tickets::transition_ticket_self_work_item(
+                root,
+                &item.work_id,
+                "published",
+                actor,
+                Some(note),
+                "internal",
+            )
+        }
+        "awaiting_review" | "review" | "reviewing" => {
+            let rework = tickets::transition_ticket_self_work_item(
+                root,
+                &item.work_id,
+                "rework_required",
+                actor,
+                Some("Review checkpoint returned this work item for rework before queueing."),
+                "internal",
+            )?;
+            tickets::transition_ticket_self_work_item(
+                root,
+                &rework.work_id,
+                "published",
+                actor,
+                Some(note),
+                "internal",
+            )
+        }
+        "failed" | "closed" | "done" | "completed" | "handled" | "cancelled" | "superseded" => {
+            anyhow::bail!(
+                "cannot queue terminal ticket self-work item {} in state {}",
+                item.work_id,
+                item.state
+            )
+        }
+        other => anyhow::bail!(
+            "cannot queue ticket self-work item {} because state `{}` is not mapped",
+            item.work_id,
+            other
+        ),
+    }
 }
 
 fn find_runnable_self_work_task_ignoring(
@@ -11250,14 +11319,7 @@ fn requeue_review_rejected_self_work(
         "External review rejected the last slice. Summary: {}. Resume this existing work item, consult the persisted review verdict/evidence, and address the failed gates before closing it.",
         clip_text(summary, 220)
     );
-    let item = tickets::transition_ticket_self_work_item(
-        root,
-        work_id,
-        "queued",
-        "ctox-review",
-        Some(&note),
-        "internal",
-    )?;
+    let item = transition_self_work_after_review_rejection(root, work_id, &note)?;
     if let Some(reason) = suppress_self_work_reason(root, &item)? {
         supersede_ticket_self_work_item(
             root,
@@ -11269,6 +11331,109 @@ fn requeue_review_rejected_self_work(
         return Ok(None);
     }
     queue_ticket_self_work_item(root, &item)
+}
+
+fn transition_self_work_after_review_rejection(
+    root: &Path,
+    work_id: &str,
+    note: &str,
+) -> Result<tickets::TicketSelfWorkItemView> {
+    let item = tickets::load_ticket_self_work_item(root, work_id)?
+        .with_context(|| format!("ticket self-work item {work_id} not found"))?;
+    match normalize_token(&item.state).as_str() {
+        "" | "created" => {
+            let planned = tickets::transition_ticket_self_work_item(
+                root,
+                work_id,
+                "queued",
+                "ctox-review",
+                Some("Review rejection arrived before the work item had a planned state; moving it through the normal queue lifecycle."),
+                "internal",
+            )?;
+            transition_planned_self_work_after_review_rejection(root, &planned, note)
+        }
+        "open" | "queued" | "restored" | "publishing" => {
+            transition_planned_self_work_after_review_rejection(root, &item, note)
+        }
+        "blocked" => {
+            let planned = tickets::transition_ticket_self_work_item(
+                root,
+                work_id,
+                "queued",
+                "ctox-review",
+                Some("Review rejection reopened blocked self-work for bounded rework."),
+                "internal",
+            )?;
+            transition_planned_self_work_after_review_rejection(root, &planned, note)
+        }
+        "published" | "running" | "executing" | "in_progress" => {
+            transition_executing_self_work_after_review_rejection(root, &item, note)
+        }
+        "awaiting_review" | "review" | "reviewing" => tickets::transition_ticket_self_work_item(
+            root,
+            work_id,
+            "rework_required",
+            "ctox-review",
+            Some(note),
+            "internal",
+        ),
+        "rework_required" | "review_rework" | "rework" => tickets::transition_ticket_self_work_item(
+            root,
+            work_id,
+            "rework_required",
+            "ctox-review",
+            Some(note),
+            "internal",
+        ),
+        "failed" | "closed" | "done" | "completed" | "handled" | "cancelled" | "superseded" => {
+            anyhow::bail!(
+                "cannot requeue review-rejected terminal ticket self-work item {work_id} in state {}",
+                item.state
+            )
+        }
+        other => anyhow::bail!(
+            "cannot requeue review-rejected ticket self-work item {work_id} because state `{other}` is not mapped"
+        ),
+    }
+}
+
+fn transition_planned_self_work_after_review_rejection(
+    root: &Path,
+    item: &tickets::TicketSelfWorkItemView,
+    note: &str,
+) -> Result<tickets::TicketSelfWorkItemView> {
+    let executing = tickets::transition_ticket_self_work_item(
+        root,
+        &item.work_id,
+        "published",
+        "ctox-review",
+        Some("Review rejection applies to the just-executed queue slice; entering execution before review checkpoint state."),
+        "internal",
+    )?;
+    transition_executing_self_work_after_review_rejection(root, &executing, note)
+}
+
+fn transition_executing_self_work_after_review_rejection(
+    root: &Path,
+    item: &tickets::TicketSelfWorkItemView,
+    note: &str,
+) -> Result<tickets::TicketSelfWorkItemView> {
+    let awaiting_review = tickets::transition_ticket_self_work_item(
+        root,
+        &item.work_id,
+        "awaiting_review",
+        "ctox-review",
+        Some("Execution slice reached the completion-review checkpoint."),
+        "internal",
+    )?;
+    tickets::transition_ticket_self_work_item(
+        root,
+        &awaiting_review.work_id,
+        "rework_required",
+        "ctox-review",
+        Some(note),
+        "internal",
+    )
 }
 
 enum ReviewCheckpointLoopDisposition {
@@ -16395,7 +16560,7 @@ mod tests {
         let reloaded = tickets::load_ticket_self_work_item(&root, &parent.work_id)
             .expect("failed to reload self-work")
             .expect("missing self-work");
-        assert_eq!(reloaded.state, "queued");
+        assert_eq!(reloaded.state, "published");
         assert_eq!(queued.thread_key, "queue/mission-1");
         assert!(queued
             .title
@@ -16404,6 +16569,84 @@ mod tests {
         let items = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
             .expect("failed to list self-work");
         assert_eq!(items.len(), 1);
+    }
+
+    #[test]
+    fn published_review_rework_requeues_through_legal_core_review_path() {
+        let root = temp_root("ctox-published-review-rework-core-path");
+        let item = tickets::put_ticket_self_work_item(
+            &root,
+            tickets::TicketSelfWorkUpsertInput {
+                source_system: "local".to_string(),
+                kind: "review-rework".to_string(),
+                title: "Review rework: repair workspace after validator failure".to_string(),
+                body_text: "Address the persisted review findings in the workspace.".to_string(),
+                state: "open".to_string(),
+                metadata: serde_json::json!({
+                    "thread_key": "queue/review-rework-core-path",
+                    "workspace_root": "/tmp/ctox-review-rework-core-path",
+                    "priority": "high",
+                    "skill": "follow-up-orchestrator",
+                    "dedupe_key": "review-rework:queue/review-rework-core-path:test",
+                }),
+            },
+            false,
+        )
+        .expect("failed to create review-rework self-work");
+        let published = tickets::transition_ticket_self_work_item(
+            &root,
+            &item.work_id,
+            "published",
+            "ctox-test",
+            Some("Simulate a live review-rework slice that was executing when review rejected it."),
+            "internal",
+        )
+        .expect("failed to publish review-rework self-work");
+
+        let queued = requeue_review_rejected_self_work(
+            &root,
+            &published.work_id,
+            "Validator still fails because the expected artifact is missing.",
+        )
+        .expect("published review-rework should requeue through core")
+        .expect("expected a new queue task");
+
+        assert_eq!(
+            queued.ticket_self_work_id.as_deref(),
+            Some(published.work_id.as_str())
+        );
+        let reloaded = tickets::load_ticket_self_work_item(&root, &published.work_id)
+            .expect("failed to reload review-rework")
+            .expect("missing review-rework");
+        assert_eq!(reloaded.state, "published");
+
+        let conn = channels::open_channel_db(&crate::paths::core_db(&root))
+            .expect("failed to open core db");
+        for (from_state, to_state) in [
+            ("Executing", "AwaitingReview"),
+            ("AwaitingReview", "ReworkRequired"),
+            ("ReworkRequired", "Executing"),
+        ] {
+            let count: i64 = conn
+                .query_row(
+                    r#"
+                    SELECT COUNT(*)
+                    FROM ctox_core_transition_proofs
+                    WHERE entity_type = 'WorkItem'
+                      AND entity_id = ?1
+                      AND from_state = ?2
+                      AND to_state = ?3
+                      AND accepted = 1
+                    "#,
+                    params![published.work_id.as_str(), from_state, to_state],
+                    |row| row.get(0),
+                )
+                .expect("failed to count core transition proofs");
+            assert_eq!(
+                count, 1,
+                "missing accepted core proof for {from_state} -> {to_state}"
+            );
+        }
     }
 
     #[test]
