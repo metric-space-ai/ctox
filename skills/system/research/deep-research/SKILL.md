@@ -300,7 +300,8 @@ research-log-add` for every executed query. `candidate_sources.csv` is not a
 raw metadata dump: every row must pass the topic-specific acceptance gate and
 must carry a numeric relevance score. The full audit trail lives in
 `screened_sources.csv`; rejected/off-topic hits live in `rejected_sources.csv`.
-Never hand the raw screened catalog to the user as the source catalog.
+The paper/citation traversal lives in `discovery_graph.json`. Never hand the
+raw screened catalog to the user as the source catalog.
 
 For broad source-discovery tasks where the user expects hundreds or thousands
 of screened sources, start with `--discovery-backend open-metadata`. It queries
@@ -333,6 +334,11 @@ screening depth, not a reason to avoid references/cited-by discovery. When
 OpenAlex IDs are available, the snowball pass must use OpenAlex
 `referenced_works`, `related_works` and `cites:` paths rather than merely
 turning a DOI into another broad search string.
+
+Discovery is not the same as reading. After the graph exists, select the
+highest-scoring source families and perform a targeted reading/extraction pass
+against source pages, PDFs, datasets and tables before writing a client-facing
+research report.
 
 Do not invent `sources-count`. The `research-log-add` command now requires a
 raw payload file and rejects counts that are not backed by the payload's

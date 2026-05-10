@@ -824,6 +824,98 @@ def write_outputs(
     (out_dir / "research_ids.txt").write_text("\n".join(r for r in research_ids if r) + "\n", encoding="utf-8")
 
 
+def write_discovery_graph(
+    out_dir: Path,
+    protocol_rows: list[dict[str, Any]],
+    candidates: list[dict[str, str]],
+) -> None:
+    accepted_keys = {source_key(row) for row in candidates}
+    candidate_by_key = {source_key(row): row for row in candidates}
+    nodes: dict[str, dict[str, Any]] = {}
+    edges: list[dict[str, Any]] = []
+
+    def graph_id(raw: str) -> str:
+        return normalize_openalex_work_id(raw) or raw.strip()
+
+    def node_label_for_openalex_id(openalex_id: str) -> str:
+        needle = graph_id(openalex_id)
+        for row in candidates:
+            if graph_id(row.get("openalex_id", "")) == needle:
+                return row.get("title") or needle
+        return needle
+
+    for row in protocol_rows:
+        focus = str(row.get("focus") or "")
+        query = str(row.get("query") or "")
+        raw_payload = str(row.get("raw_payload") or "")
+        if not focus.startswith("snowball_openalex_") or ":" not in query or not raw_payload:
+            continue
+        relation = focus.replace("snowball_openalex_", "")
+        _, raw_seed_id = query.split(":", 1)
+        seed_id = graph_id(raw_seed_id)
+        if not seed_id:
+            continue
+        nodes.setdefault(
+            seed_id,
+            {"id": seed_id, "kind": "seed", "label": node_label_for_openalex_id(seed_id), "accepted": True},
+        )
+        raw_path = Path(raw_payload)
+        if not raw_path.exists():
+            continue
+        try:
+            payload = json.loads(raw_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            continue
+        for record in source_records(payload):
+            child_id = graph_id(str(record.get("openalex_id") or "")) or source_key(record)
+            if not child_id:
+                continue
+            key = source_key(record)
+            accepted = key in accepted_keys
+            accepted_row = candidate_by_key.get(key, {})
+            nodes.setdefault(
+                child_id,
+                {
+                    "id": child_id,
+                    "kind": "accepted_child" if accepted else "screened_child",
+                    "label": str(record.get("title") or record.get("name") or child_id).strip(),
+                    "accepted": accepted,
+                    "score": accepted_row.get("relevance_score") if accepted_row else None,
+                    "doi": extract_doi(record),
+                    "url": extract_url(record),
+                },
+            )
+            if accepted:
+                nodes[child_id]["kind"] = "accepted_child"
+                nodes[child_id]["accepted"] = True
+                nodes[child_id]["score"] = accepted_row.get("relevance_score")
+            edges.append({"from": seed_id, "to": child_id, "relation": relation, "accepted": accepted})
+
+    relation_counts: dict[str, int] = {}
+    accepted_relation_counts: dict[str, int] = {}
+    for edge in edges:
+        relation = str(edge["relation"])
+        relation_counts[relation] = relation_counts.get(relation, 0) + 1
+        if edge["accepted"]:
+            accepted_relation_counts[relation] = accepted_relation_counts.get(relation, 0) + 1
+
+    graph = {
+        "summary": {
+            "seed_papers": len([node for node in nodes.values() if node["kind"] == "seed"]),
+            "nodes": len(nodes),
+            "edges": len(edges),
+            "accepted_child_nodes": len([node for node in nodes.values() if node["kind"] == "accepted_child"]),
+            "accepted_edges": len([edge for edge in edges if edge["accepted"]]),
+            "relations": relation_counts,
+            "accepted_relations": accepted_relation_counts,
+            "limitation": "metadata/abstract-level citation graph; full-text/PDF/table reading is a separate follow-up stage",
+        },
+        "nodes": list(nodes.values()),
+        "edges": edges,
+    }
+    (out_dir / "discovery_graph.json").write_text(json.dumps(graph, indent=2) + "\n", encoding="utf-8")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--topic", required=True)
@@ -930,6 +1022,7 @@ def main() -> int:
             queue.extend(build_snowball_queries(args.topic, candidates, args.snowball_limit))
 
     write_outputs(out_dir, protocol_rows, candidates, screened_sources, rejected_sources, query_plan, research_ids)
+    write_discovery_graph(out_dir, protocol_rows, candidates)
     summary_obj = {
         "out_dir": str(out_dir),
         "queries_run": len(protocol_rows),
@@ -943,6 +1036,7 @@ def main() -> int:
         "candidate_sources_csv": str(out_dir / "candidate_sources.csv"),
         "screened_sources_csv": str(out_dir / "screened_sources.csv"),
         "rejected_sources_csv": str(out_dir / "rejected_sources.csv"),
+        "discovery_graph_json": str(out_dir / "discovery_graph.json"),
     }
     (out_dir / "summary.json").write_text(json.dumps(summary_obj, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(summary_obj, indent=2))
