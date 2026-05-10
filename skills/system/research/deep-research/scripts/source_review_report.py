@@ -88,6 +88,47 @@ def add_table(document: Any, headers: list[str], rows: list[list[str]], widths: 
     document.add_paragraph()
 
 
+def infer_mass_limit_kg(topic: str) -> float | None:
+    patterns = [
+        r"(?:up to|under|below|<=|≤|max(?:imum)?)\s*(\d+(?:\.\d+)?)\s*kg",
+        r"(\d+(?:\.\d+)?)\s*kg\s*(?:or less|and below|and under)",
+    ]
+    lowered = topic.lower()
+    for pattern in patterns:
+        match = re.search(pattern, lowered)
+        if match:
+            try:
+                return float(match.group(1))
+            except Exception:
+                return None
+    return None
+
+
+def mass_values_kg(row: dict[str, str]) -> list[float]:
+    if row.get("family") != "mass_payload":
+        return []
+    unit = clean(row.get("unit")).lower()
+    if unit not in {"kg", "g", "lb", "lbs"}:
+        return []
+    values = [float(item) for item in re.findall(r"-?\d+(?:\.\d+)?", clean(row.get("value")).replace(",", ""))]
+    if unit == "g":
+        return [value / 1000 for value in values]
+    if unit in {"lb", "lbs"}:
+        return [value * 0.45359237 for value in values]
+    return values
+
+
+def measurement_scope(row: dict[str, str], mass_limit_kg: float | None) -> str:
+    masses = mass_values_kg(row)
+    if not masses or mass_limit_kg is None:
+        return "not_mass_scoped"
+    if any(value < 0 for value in masses):
+        return "invalid_or_context"
+    if any(value > mass_limit_kg for value in masses):
+        return "outside_mass_scope"
+    return "inside_mass_scope"
+
+
 def set_doc_style(document: Any) -> None:
     from docx.shared import Pt
 
@@ -105,7 +146,7 @@ def add_bullets(document: Any, bullets: list[str]) -> None:
         document.add_paragraph(item, style="List Bullet")
 
 
-def build_interpretation(topic: str, candidate_rows: list[dict[str, str]], measurement_rows: list[dict[str, str]]) -> list[str]:
+def build_interpretation(topic: str, candidate_rows: list[dict[str, str]], measurement_rows: list[dict[str, str]], off_scope_rows: list[dict[str, str]]) -> list[str]:
     families = Counter(row.get("family", "unknown") for row in measurement_rows)
     accepted = len(candidate_rows)
     bullets = [
@@ -115,6 +156,10 @@ def build_interpretation(topic: str, candidate_rows: list[dict[str, str]], measu
     if families:
         strongest = ", ".join(f"{family} ({count})" for family, count in families.most_common(4))
         bullets.append(f"The strongest extracted measurement families in the current reading pass are: {strongest}.")
+    if off_scope_rows:
+        bullets.append(
+            f"{len(off_scope_rows)} extracted mass rows were kept out of the main evidence table because they are outside the requested mass scope or context-only."
+        )
     lowered = topic.lower()
     if any(term in lowered for term in ["drone", "uav", "uas", "unmanned"]):
         bullets.extend(
@@ -147,7 +192,15 @@ def build_docx(
     discovery_graph = load_json(discovery_dir / "discovery_graph.json")
     reading_rows = load_csv(reading_dir / "reading_status.csv")
     measurements = load_csv(reading_dir / "extracted_measurements.csv")
+    discovery_summary = load_json(discovery_dir / "summary.json")
     reading_summary = load_json(reading_dir / "reading_summary.json")
+    mass_limit_kg = infer_mass_limit_kg(topic)
+    scoped_measurements = [
+        row for row in measurements if measurement_scope(row, mass_limit_kg) not in {"outside_mass_scope", "invalid_or_context"}
+    ]
+    off_scope_measurements = [
+        row for row in measurements if measurement_scope(row, mass_limit_kg) in {"outside_mass_scope", "invalid_or_context"}
+    ]
 
     doc = Document()
     set_doc_style(doc)
@@ -163,19 +216,20 @@ def build_docx(
 
     doc.add_heading("Executive Summary", level=1)
     accepted_count = len(candidates)
-    reviewed_count = len(screened) or len(candidates) + len(rejected)
+    reviewed_result_records = int_or_zero(discovery_summary.get("reviewed_results"))
+    screened_unique_count = int_or_zero(discovery_summary.get("screened_unique_sources")) or len(screened) or len(candidates) + len(rejected)
     rejected_count = len(rejected)
     readable = int_or_zero(reading_summary.get("readable_sources"))
     metadata_only = int_or_zero(reading_summary.get("metadata_only_sources"))
     blocked = int_or_zero(reading_summary.get("blocked_sources"))
     extracted_sources = int_or_zero(reading_summary.get("extracted_sources"))
-    measurement_count = len(measurements)
+    measurement_count = len(scoped_measurements)
     add_bullets(
         doc,
         [
-            f"Screened source records: {reviewed_count}. Accepted relevant sources: {accepted_count}. Rejected/off-topic records: {rejected_count}.",
+            f"Reviewed result records: {reviewed_result_records or screened_unique_count}. Unique screened sources: {screened_unique_count}. Accepted relevant sources: {accepted_count}. Rejected/off-topic records: {rejected_count}.",
             f"Targeted reading pass: {readable} readable sources, {metadata_only} metadata-only sources and {blocked} blocked sources.",
-            f"Extracted measurement evidence: {measurement_count} evidence rows from {extracted_sources} sources.",
+            f"In-scope extracted measurement evidence: {measurement_count} evidence rows from {extracted_sources} sources.",
             "The report distinguishes discovery coverage from source readability and extracted evidence; inaccessible sources are not treated as reviewed full text.",
         ],
     )
@@ -191,15 +245,17 @@ def build_docx(
         ["Metric", "Value"],
         [
             ["Search/query paths", str(len(search_protocol))],
-            ["Screened records", str(reviewed_count)],
+            ["Reviewed result records", str(reviewed_result_records or "not logged")],
+            ["Unique screened sources", str(screened_unique_count)],
             ["Accepted sources", str(accepted_count)],
             ["Rejected records", str(rejected_count)],
-            ["Discovery graph nodes", str(len(discovery_graph.get("nodes", [])))],
-            ["Discovery graph edges", str(len(discovery_graph.get("edges", [])))],
+            ["Discovery graph nodes", str(len(discovery_graph.get("nodes", []))) if discovery_graph else "not generated"],
+            ["Discovery graph edges", str(len(discovery_graph.get("edges", []))) if discovery_graph else "not generated"],
             ["Readable sources", str(readable)],
             ["Metadata-only sources", str(metadata_only)],
             ["Blocked sources", str(blocked)],
-            ["Measurement rows", str(measurement_count)],
+            ["In-scope measurement rows", str(measurement_count)],
+            ["Off-scope/context measurement rows excluded", str(len(off_scope_measurements))],
         ],
     )
 
@@ -223,14 +279,14 @@ def build_docx(
     )
 
     doc.add_heading("Findings", level=1)
-    add_bullets(doc, build_interpretation(topic, candidates, measurements))
+    add_bullets(doc, build_interpretation(topic, candidates, scoped_measurements, off_scope_measurements))
 
     doc.add_heading("Extracted Measurement Evidence", level=1)
-    if measurements:
-        family_counts = Counter(row.get("family", "unknown") for row in measurements)
+    if scoped_measurements:
+        family_counts = Counter(row.get("family", "unknown") for row in scoped_measurements)
         add_table(doc, ["Measurement family", "Evidence rows"], [[k, str(v)] for k, v in family_counts.most_common()])
         measurement_table = []
-        for row in measurements[:35]:
+        for row in scoped_measurements[:35]:
             measurement_table.append(
                 [
                     clean(row.get("family"), 32),
@@ -242,6 +298,24 @@ def build_docx(
         add_table(doc, ["Family", "Value", "Source", "Evidence snippet"], measurement_table)
     else:
         doc.add_paragraph("No measurement rows were extracted in the current reading pass.")
+
+    if off_scope_measurements:
+        doc.add_heading("Excluded Measurement Rows", level=2)
+        doc.add_paragraph(
+            "These rows were extracted by the reader but kept out of the main evidence table because they are outside the requested mass scope or context-only."
+        )
+        add_table(
+            doc,
+            ["Scope reason", "Value", "Source"],
+            [
+                [
+                    measurement_scope(row, mass_limit_kg),
+                    clean(f"{row.get('value', '')} {row.get('unit', '')}", 24),
+                    clean(row.get("title"), 95),
+                ]
+                for row in off_scope_measurements[:20]
+            ],
+        )
 
     doc.add_heading("Priority Source Catalog", level=1)
     index = status_index(reading_rows)
@@ -287,11 +361,13 @@ def build_docx(
     return {
         "docx": str(out_path),
         "accepted_sources": accepted_count,
-        "screened_records": reviewed_count,
+        "reviewed_result_records": reviewed_result_records,
+        "screened_unique_sources": screened_unique_count,
         "readable_sources": readable,
         "metadata_only_sources": metadata_only,
         "blocked_sources": blocked,
-        "measurement_rows": measurement_count,
+        "in_scope_measurement_rows": measurement_count,
+        "off_scope_measurement_rows": len(off_scope_measurements),
     }
 
 
