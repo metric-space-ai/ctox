@@ -369,6 +369,28 @@ resolution and targeted follow-up before drafting the report, or state the
 access limitation explicitly. Do not turn a metadata-only corpus into a
 research report.
 
+After discovery and reading are complete, produce a final client-facing report
+artifact. The report generator consumes the accepted source catalog, reading
+ledger and extracted-measurement table; it creates a DOCX report and optional
+XLSX workbook. Do not deliver only CSV/JSON for a `source_review` unless the
+operator explicitly asks for raw artifacts only.
+
+```bash
+python3 skills/system/research/deep-research/scripts/source_review_report.py \
+  --topic "<source-review topic and scope>" \
+  --title "<client-facing report title>" \
+  --discovery-dir "/tmp/RUN_ID_source_discovery" \
+  --reading-dir "/tmp/RUN_ID_source_reading" \
+  --out-docx "output/doc/RUN_ID_source_review_report.docx" \
+  --out-xlsx "output/doc/RUN_ID_source_review_workbook.xlsx"
+```
+
+The final report must include: executive summary, method, search/reading
+counts, source landscape, extracted measurement evidence, priority source
+catalog, coverage gaps and companion artifact list. If the reading stage has
+too little full-text evidence, the report must say so plainly and recommend
+the next reading pass instead of pretending the corpus was fully reviewed.
+
 Do not invent `sources-count`. The `research-log-add` command now requires a
 raw payload file and rejects counts that are not backed by the payload's
 source/result records. If the tool returns only 47 reviewed results, log 47.
