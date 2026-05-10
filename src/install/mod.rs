@@ -479,6 +479,14 @@ pub fn handle_doctor_command(root: &Path) -> Result<()> {
 }
 
 pub fn handle_update_command(root: &Path, args: &[String]) -> Result<()> {
+    if args
+        .iter()
+        .any(|arg| matches!(arg.as_str(), "--help" | "-h"))
+    {
+        print_update_help(args);
+        return Ok(());
+    }
+
     // `ctox update` / `ctox upgrade` one-shot path. Accepts --stable (default)
     // or --dev (track the main branch, source build) as the only args.
     let top_flags_only = !args.is_empty()
@@ -621,9 +629,60 @@ pub fn handle_update_command(root: &Path, args: &[String]) -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&result)?);
             Ok(())
         }
-        _ => anyhow::bail!(
-            "usage: ctox update status | ctox update check | ctox update channel <show|set-github|clear> ... | ctox update adopt [--install-root <path>] [--state-root <path>] [--release <name>] [--skip-build] [--force] | ctox update apply --source <path> [--release <name>] [--force] [--keep-failed-release] | ctox update apply --latest [--force] [--keep-failed-release] [--from-source] | ctox update apply --version <tag> [--force] [--keep-failed-release] [--from-source] | ctox update rollback"
-        ),
+        _ => anyhow::bail!("{}", UPDATE_USAGE),
+    }
+}
+
+const UPGRADE_USAGE: &str = "\
+usage: ctox upgrade [--stable|--dev]
+
+Options:
+  --stable    Upgrade to the latest configured release (default)
+  --dev       Upgrade from the main branch source archive
+  -h, --help  Show this help without starting an upgrade
+";
+
+const UPDATE_APPLY_USAGE: &str = "\
+usage: ctox update apply --source <path> [--release <name>] [--force] [--keep-failed-release]
+   or: ctox update apply --latest [--force] [--keep-failed-release] [--from-source]
+   or: ctox update apply --version <tag> [--force] [--keep-failed-release] [--from-source]
+
+Options:
+  --source <path>          Apply a local source tree
+  --release <name>         Override the release name
+  --latest                 Apply the latest configured release
+  --version <tag>          Apply a specific release tag
+  --force                  Allow replacing the active release
+  --keep-failed-release    Keep failed release directory for inspection
+  --from-source            Build a remote release from source
+  -h, --help               Show this help without starting an update
+";
+
+const UPDATE_USAGE: &str = "\
+usage: ctox update status
+   or: ctox update check
+   or: ctox update channel <show|set-github|clear> ...
+   or: ctox update adopt [--install-root <path>] [--state-root <path>] [--release <name>] [--skip-build] [--force]
+   or: ctox update apply --source <path> [--release <name>] [--force] [--keep-failed-release]
+   or: ctox update apply --latest [--force] [--keep-failed-release] [--from-source]
+   or: ctox update apply --version <tag> [--force] [--keep-failed-release] [--from-source]
+   or: ctox update rollback
+   or: ctox upgrade [--stable|--dev]
+
+Use `ctox upgrade --help` or `ctox update apply --help` for focused help.
+";
+
+fn print_update_help(args: &[String]) {
+    println!("{}", update_help_text(args));
+}
+
+fn update_help_text(args: &[String]) -> &'static str {
+    if args.first().is_none_or(|arg| arg.starts_with('-')) {
+        UPGRADE_USAGE
+    } else if args.first().map(String::as_str) == Some("apply") {
+        UPDATE_APPLY_USAGE
+    } else {
+        UPDATE_USAGE
     }
 }
 
@@ -2604,6 +2663,29 @@ mod tests {
             format_progress_done(80, "downloaded v1.2.3", 75),
             "ctox upgrade | 01:20 | done    | downloaded v1.2.3 | took 1m 15s"
         );
+    }
+
+    #[test]
+    fn upgrade_help_is_a_non_mutating_top_level_path() {
+        let args = vec!["--help".to_string()];
+        let help = update_help_text(&args);
+
+        assert!(help.contains("ctox upgrade [--stable|--dev]"));
+        assert!(help.contains("without starting an upgrade"));
+    }
+
+    #[test]
+    fn update_apply_help_is_a_non_mutating_subcommand_path() {
+        let args = vec![
+            "apply".to_string(),
+            "--latest".to_string(),
+            "--from-source".to_string(),
+            "--help".to_string(),
+        ];
+        let help = update_help_text(&args);
+
+        assert!(help.contains("ctox update apply --latest"));
+        assert!(help.contains("without starting an update"));
     }
 
     #[test]
