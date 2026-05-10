@@ -251,12 +251,106 @@ def normalize_doi(raw: Any) -> str:
     return value
 
 
+def normalize_openalex_work_id(raw: str) -> str:
+    value = str(raw or "").strip()
+    if not value:
+        return ""
+    if value.startswith("https://openalex.org/"):
+        return value.rsplit("/", 1)[-1]
+    return value
+
+
+def openalex_work_to_source(item: dict[str, Any]) -> dict[str, Any]:
+    location = item.get("primary_location") if isinstance(item.get("primary_location"), dict) else {}
+    landing = location.get("landing_page_url") or item.get("doi") or item.get("id")
+    authors = []
+    for author in item.get("authorships", []) if isinstance(item.get("authorships"), list) else []:
+        author_obj = author.get("author") if isinstance(author, dict) else {}
+        if isinstance(author_obj, dict) and author_obj.get("display_name"):
+            authors.append(str(author_obj["display_name"]))
+    return {
+        "title": item.get("title") or item.get("display_name") or "",
+        "url": landing or "",
+        "openalex_id": item.get("id") or "",
+        "doi": normalize_doi(item.get("doi")),
+        "snippet": compact_abstract(item.get("abstract_inverted_index")),
+        "year": item.get("publication_year"),
+        "venue": (location.get("source") or {}).get("display_name")
+        if isinstance(location.get("source"), dict)
+        else "",
+        "authors": authors[:8],
+        "source_kind": "openalex",
+        "type": item.get("type") or "",
+        "cited_by_count": item.get("cited_by_count") or 0,
+    }
+
+
+def openalex_select_fields() -> str:
+    return (
+        "id,doi,title,display_name,publication_year,publication_date,"
+        "primary_location,authorships,abstract_inverted_index,type,cited_by_count"
+    )
+
+
+def run_openalex_snowball_search(query: QuerySpec, max_sources: int, out_path: Path, timeout_sec: int) -> dict[str, Any] | None:
+    if not query.query.startswith(("openalex_refs:", "openalex_cited_by:", "openalex_related:")):
+        return None
+
+    kind, raw_id = query.query.split(":", 1)
+    work_id = normalize_openalex_work_id(raw_id)
+    sources: list[dict[str, Any]] = []
+    errors: list[dict[str, str]] = []
+    try:
+        if kind in {"openalex_refs", "openalex_related"}:
+            work_url = f"https://api.openalex.org/works/{urllib.parse.quote(work_id)}"
+            work = http_json(work_url, timeout_sec)
+            key = "referenced_works" if kind == "openalex_refs" else "related_works"
+            refs = [
+                normalize_openalex_work_id(value)
+                for value in work.get(key, [])
+                if isinstance(value, str) and normalize_openalex_work_id(value)
+            ][:max_sources]
+            for ref in refs:
+                try:
+                    item = http_json(f"https://api.openalex.org/works/{urllib.parse.quote(ref)}", timeout_sec)
+                    sources.append(openalex_work_to_source(item))
+                except Exception as exc:  # noqa: BLE001 - persisted as discovery evidence.
+                    errors.append({"backend": "openalex_snowball_work", "error": str(exc)[:500]})
+        else:
+            cited_url = (
+                "https://api.openalex.org/works"
+                f"?filter=cites:{urllib.parse.quote(work_id)}"
+                f"&per-page={min(max_sources, 200)}"
+                f"&select={openalex_select_fields()}"
+            )
+            data = http_json(cited_url, timeout_sec)
+            for item in data.get("results", []):
+                if isinstance(item, dict):
+                    sources.append(openalex_work_to_source(item))
+    except Exception as exc:  # noqa: BLE001 - persisted as discovery evidence.
+        errors.append({"backend": "openalex_snowball", "error": str(exc)[:500]})
+
+    payload = {
+        "sources": sources[:max_sources],
+        "query": query.query,
+        "focus": query.focus,
+        "resolver": "openalex-snowball",
+        "errors": errors,
+    }
+    out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return payload
+
+
 def run_open_metadata_search(
     query: QuerySpec,
     max_sources: int,
     out_path: Path,
     timeout_sec: int,
 ) -> dict[str, Any]:
+    snowball_payload = run_openalex_snowball_search(query, max_sources, out_path, timeout_sec)
+    if snowball_payload is not None:
+        return snowball_payload
+
     encoded = urllib.parse.quote(query.query)
     per_backend = max(1, max_sources // 2)
     sources: list[dict[str, Any]] = []
@@ -265,37 +359,14 @@ def run_open_metadata_search(
     openalex_url = (
         "https://api.openalex.org/works"
         f"?search={encoded}&per-page={min(per_backend, 200)}"
-        "&select=id,doi,title,display_name,publication_year,publication_date,"
-        "primary_location,authorships,abstract_inverted_index,type,cited_by_count"
+        f"&select={openalex_select_fields()}"
     )
     try:
         data = http_json(openalex_url, timeout_sec)
         for item in data.get("results", []):
             if not isinstance(item, dict):
                 continue
-            location = item.get("primary_location") if isinstance(item.get("primary_location"), dict) else {}
-            landing = location.get("landing_page_url") or item.get("doi") or item.get("id")
-            authors = []
-            for author in item.get("authorships", []) if isinstance(item.get("authorships"), list) else []:
-                author_obj = author.get("author") if isinstance(author, dict) else {}
-                if isinstance(author_obj, dict) and author_obj.get("display_name"):
-                    authors.append(str(author_obj["display_name"]))
-            sources.append(
-                {
-                    "title": item.get("title") or item.get("display_name") or "",
-                    "url": landing or "",
-                    "doi": normalize_doi(item.get("doi")),
-                    "snippet": compact_abstract(item.get("abstract_inverted_index")),
-                    "year": item.get("publication_year"),
-                    "venue": (location.get("source") or {}).get("display_name")
-                    if isinstance(location.get("source"), dict)
-                    else "",
-                    "authors": authors[:8],
-                    "source_kind": "openalex",
-                    "type": item.get("type") or "",
-                    "cited_by_count": item.get("cited_by_count") or 0,
-                }
-            )
+            sources.append(openalex_work_to_source(item))
     except Exception as exc:  # noqa: BLE001 - persisted as discovery evidence.
         errors.append({"backend": "openalex", "error": str(exc)[:500]})
 
@@ -320,6 +391,7 @@ def run_open_metadata_search(
                 {
                     "title": title,
                     "url": url,
+                    "openalex_id": "",
                     "doi": normalize_doi(item.get("DOI")),
                     "snippet": re.sub(r"\s+", " ", abstract).strip()[:1000],
                     "year": year,
@@ -428,6 +500,186 @@ def extract_doi(record: dict[str, Any]) -> str:
     return match.group(0) if match else ""
 
 
+DRONE_DOMAIN_TERMS = (
+    "drone",
+    "drones",
+    "uas",
+    "uav",
+    "suas",
+    "rpas",
+    "remotely piloted aircraft",
+    "unmanned aircraft",
+    "unmanned aerial",
+    "unmanned aerial vehicle",
+    "unmanned aircraft system",
+    "multirotor",
+    "multi-rotor",
+    "quadrotor",
+    "fixed-wing unmanned",
+    "micro air vehicle",
+    "mav",
+)
+
+LOAD_DATA_TERMS = (
+    "load",
+    "loads",
+    "payload",
+    "mtow",
+    "takeoff weight",
+    "take-off weight",
+    "gross weight",
+    "maximum gross",
+    "empty weight",
+    "thrust",
+    "torque",
+    "force",
+    "moment",
+    "force/moment",
+    "force and moment",
+    "load cell",
+    "propeller",
+    "rotor",
+    "rpm",
+    "current",
+    "voltage",
+    "power coefficient",
+    "thrust coefficient",
+    "wind tunnel",
+    "aerodynamic",
+    "structural",
+    "airframe",
+    "flight log",
+    "telemetry",
+    "ardupilot",
+    "px4",
+    "classification",
+    "group 1",
+    "group 2",
+)
+
+REJECT_HINT_TERMS = (
+    "african invertebrates",
+    "taxonomy",
+    "coleoptera",
+    "carabidae",
+    "rfigshare",
+    "cran.package",
+    "moodle",
+    "neuroblastoma",
+    "tumor",
+    "cancer",
+    "fetal",
+    "parasite",
+    "covid",
+    "pneumonia",
+    "diarrhea",
+)
+
+
+def source_text(record: dict[str, Any]) -> str:
+    fields = (
+        record.get("title"),
+        record.get("name"),
+        record.get("snippet"),
+        record.get("summary"),
+        record.get("abstract"),
+        record.get("url"),
+        record.get("canonical_url"),
+        record.get("link"),
+        record.get("source_url"),
+        record.get("doi"),
+        record.get("DOI"),
+    )
+    return re.sub(r"\s+", " ", " ".join(str(value or "") for value in fields)).strip().lower()
+
+
+def source_acceptance(record: dict[str, Any], topic: str) -> tuple[bool, str]:
+    """Gate a screened source before it enters the usable candidate catalog.
+
+    Query text is intentionally excluded. A hit is not accepted just because the
+    search query contained "UAV" or "payload"; the returned source itself must
+    carry both a drone/UAS signal and a load-data signal.
+    """
+
+    text = source_text(record)
+    if not text:
+        return False, "empty_source_metadata"
+    if any(term in text for term in REJECT_HINT_TERMS):
+        return False, "known_off_topic_metadata_hit"
+
+    domain_hits = [term for term in DRONE_DOMAIN_TERMS if term in text]
+    load_hits = [term for term in LOAD_DATA_TERMS if term in text]
+    if not domain_hits:
+        return False, "missing_drone_uas_context_in_source"
+    if not load_hits:
+        return False, "missing_load_payload_thrust_aero_context_in_source"
+
+    return True, f"accepted:domain={domain_hits[0]};load={load_hits[0]}"
+
+
+def source_relevance_score(record: dict[str, Any]) -> int:
+    """Return a deterministic 0-100 score for accepted source triage."""
+
+    text = source_text(record)
+    if not text:
+        return 0
+    direct_measurement_terms = (
+        "thrust stand",
+        "load cell",
+        "force moment",
+        "force/moment",
+        "force and moment",
+        "wind tunnel",
+        "telemetry",
+        "flight log",
+        "rpm",
+        "current",
+        "voltage",
+        "torque",
+        "propeller",
+        "rotor",
+        "aerodynamic",
+        "structural loads",
+        "airframe loads",
+    )
+    mass_scope_terms = (
+        "payload",
+        "mtow",
+        "takeoff weight",
+        "take-off weight",
+        "gross weight",
+        "maximum gross",
+        "group 1",
+        "group 2",
+        "classification",
+    )
+    weak_context_terms = (
+        "review",
+        "survey",
+        "applications",
+        "monitoring",
+        "mapping",
+        "precision agriculture",
+        "hydrology",
+        "medical",
+        "surgical",
+    )
+
+    score = 0
+    score += min(15, 3 * sum(1 for term in DRONE_DOMAIN_TERMS if term in text))
+    score += min(45, 9 * sum(1 for term in direct_measurement_terms if term in text))
+    score += min(25, 5 * sum(1 for term in mass_scope_terms if term in text))
+    if extract_doi(record):
+        score += 5
+    if any(term in text for term in ("dataset", "database", "csv", "download", "repository", "github", "zenodo", "figshare")):
+        score += 10
+    if any(term in text for term in weak_context_terms) and not any(term in text for term in direct_measurement_terms):
+        score -= 25
+    if any(term in text for term in REJECT_HINT_TERMS):
+        score -= 50
+    return max(0, min(100, score))
+
+
 def write_summary(path: Path, spec: QuerySpec, records: list[dict[str, Any]]) -> None:
     lines = [f"Query: {spec.query}", f"Focus: {spec.focus}", f"Sources returned: {len(records)}", ""]
     for idx, record in enumerate(records[:25], start=1):
@@ -471,14 +723,22 @@ def register_research_log(
 
 def build_snowball_queries(topic: str, candidates: list[dict[str, str]], limit: int) -> list[QuerySpec]:
     out: list[QuerySpec] = []
-    for row in candidates:
+    ranked = sorted(candidates, key=lambda row: int(row.get("relevance_score") or 0), reverse=True)
+    for row in ranked:
         title = row.get("title", "")
         doi = row.get("doi", "")
-        if doi:
-            out.append(QuerySpec("snowball", f"{doi} references cited by"))
+        openalex_id = row.get("openalex_id", "")
+        if openalex_id:
+            work_id = normalize_openalex_work_id(openalex_id)
+            out.append(QuerySpec("snowball_openalex_refs", f"openalex_refs:{work_id}"))
+            out.append(QuerySpec("snowball_openalex_cited_by", f"openalex_cited_by:{work_id}"))
+            out.append(QuerySpec("snowball_openalex_related", f"openalex_related:{work_id}"))
+        elif doi:
+            out.append(QuerySpec("snowball_doi_references", f"{doi} references cited by related work {topic}"))
+            out.append(QuerySpec("snowball_doi_cited_by", f"{doi} cited by related work {topic}"))
         elif title:
             compact = " ".join(title.split()[:10])
-            out.append(QuerySpec("snowball", f"{compact} references cited by related work {topic}"))
+            out.append(QuerySpec("snowball_title", f"{compact} references cited by related work {topic}"))
         if len(out) >= limit:
             break
     return out
@@ -488,9 +748,12 @@ def write_outputs(
     out_dir: Path,
     protocol_rows: list[dict[str, Any]],
     candidates: list[dict[str, str]],
+    screened_sources: list[dict[str, str]],
+    rejected_sources: list[dict[str, str]],
     query_plan: list[QuerySpec],
     research_ids: list[str],
 ) -> None:
+    candidates = sorted(candidates, key=lambda row: int(row.get("relevance_score") or 0), reverse=True)
     save_query_plan(out_dir / "query_plan.csv", query_plan)
     with (out_dir / "search_protocol.csv").open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(
@@ -510,10 +773,54 @@ def write_outputs(
     with (out_dir / "candidate_sources.csv").open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(
             handle,
-            fieldnames=["focus", "query", "title", "url", "doi", "snippet"],
+            fieldnames=[
+                "focus",
+                "query",
+                "title",
+                "url",
+                "doi",
+                "openalex_id",
+                "snippet",
+                "relevance_score",
+                "acceptance_reason",
+            ],
         )
         writer.writeheader()
         writer.writerows(candidates)
+    with (out_dir / "screened_sources.csv").open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=[
+                "focus",
+                "query",
+                "title",
+                "url",
+                "doi",
+                "openalex_id",
+                "snippet",
+                "screening_status",
+                "screening_reason",
+            ],
+        )
+        writer.writeheader()
+        writer.writerows(screened_sources)
+    with (out_dir / "rejected_sources.csv").open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=[
+                "focus",
+                "query",
+                "title",
+                "url",
+                "doi",
+                "openalex_id",
+                "snippet",
+                "screening_status",
+                "screening_reason",
+            ],
+        )
+        writer.writeheader()
+        writer.writerows(rejected_sources)
     (out_dir / "research_ids.txt").write_text("\n".join(r for r in research_ids if r) + "\n", encoding="utf-8")
 
 
@@ -546,6 +853,8 @@ def main() -> int:
 
     seen: set[str] = set()
     candidates: list[dict[str, str]] = []
+    screened_sources: list[dict[str, str]] = []
+    rejected_sources: list[dict[str, str]] = []
     protocol_rows: list[dict[str, Any]] = []
     research_ids: list[str] = []
     queue = list(query_plan)
@@ -578,16 +887,26 @@ def main() -> int:
                 continue
             seen.add(key)
             new_count += 1
-            candidates.append(
-                {
-                    "focus": spec.focus,
-                    "query": spec.query,
-                    "title": str(record.get("title") or record.get("name") or "").strip(),
-                    "url": extract_url(record),
-                    "doi": extract_doi(record),
-                    "snippet": str(record.get("snippet") or record.get("summary") or "").strip()[:500],
-                }
-            )
+            row = {
+                "focus": spec.focus,
+                "query": spec.query,
+                "title": str(record.get("title") or record.get("name") or "").strip(),
+                "url": extract_url(record),
+                "doi": extract_doi(record),
+                "openalex_id": str(record.get("openalex_id") or "").strip(),
+                "snippet": str(record.get("snippet") or record.get("summary") or "").strip()[:500],
+            }
+            accepted, reason = source_acceptance(record, args.topic)
+            screened_row = {
+                **row,
+                "screening_status": "accepted" if accepted else "rejected",
+                "screening_reason": reason,
+            }
+            screened_sources.append(screened_row)
+            if accepted:
+                candidates.append({**row, "relevance_score": str(source_relevance_score(record)), "acceptance_reason": reason})
+            else:
+                rejected_sources.append(screened_row)
 
         research_id = ""
         if args.run_id:
@@ -606,20 +925,24 @@ def main() -> int:
             }
         )
 
-        if not queue and rounds_remaining > 0 and reviewed_total < args.target_reviewed:
+        if not queue and rounds_remaining > 0:
             rounds_remaining -= 1
             queue.extend(build_snowball_queries(args.topic, candidates, args.snowball_limit))
 
-    write_outputs(out_dir, protocol_rows, candidates, query_plan, research_ids)
+    write_outputs(out_dir, protocol_rows, candidates, screened_sources, rejected_sources, query_plan, research_ids)
     summary_obj = {
         "out_dir": str(out_dir),
         "queries_run": len(protocol_rows),
         "reviewed_results": reviewed_total,
         "unique_sources": len(candidates),
+        "screened_unique_sources": len(screened_sources),
+        "rejected_sources": len(rejected_sources),
         "research_logs": len([r for r in research_ids if r]),
         "research_ids_file": str(out_dir / "research_ids.txt"),
         "search_protocol_csv": str(out_dir / "search_protocol.csv"),
         "candidate_sources_csv": str(out_dir / "candidate_sources.csv"),
+        "screened_sources_csv": str(out_dir / "screened_sources.csv"),
+        "rejected_sources_csv": str(out_dir / "rejected_sources.csv"),
     }
     (out_dir / "summary.json").write_text(json.dumps(summary_obj, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(summary_obj, indent=2))

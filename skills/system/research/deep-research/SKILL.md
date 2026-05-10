@@ -295,8 +295,12 @@ may only put counts in the Word table that are backed by these persisted logs.
 
 Use the bundled discovery runner. It creates a broad query plan, saves every
 raw JSON payload, deduplicates sources, writes `search_protocol.csv` and
-`candidate_sources.csv`, and calls `ctox report research-log-add` for every
-executed query.
+an accepted-only `candidate_sources.csv`, and calls `ctox report
+research-log-add` for every executed query. `candidate_sources.csv` is not a
+raw metadata dump: every row must pass the topic-specific acceptance gate and
+must carry a numeric relevance score. The full audit trail lives in
+`screened_sources.csv`; rejected/off-topic hits live in `rejected_sources.csv`.
+Never hand the raw screened catalog to the user as the source catalog.
 
 For broad source-discovery tasks where the user expects hundreds or thousands
 of screened sources, start with `--discovery-backend open-metadata`. It queries
@@ -321,6 +325,14 @@ If the generated query plan is too generic for the topic, create a CSV with
 columns `focus,query` and pass it via `--queries-file`. Do not reduce the
 query count just to save time. Increase queries or `--snowball-rounds` when
 the output reports fewer than the requested reviewed-result target.
+
+For scientific source discovery, citation snowballing is mandatory when
+`--snowball-rounds` is greater than zero. Do not skip it just because the first
+metadata pass already exceeded `--target-reviewed`; the target is a minimum
+screening depth, not a reason to avoid references/cited-by discovery. When
+OpenAlex IDs are available, the snowball pass must use OpenAlex
+`referenced_works`, `related_works` and `cites:` paths rather than merely
+turning a DOI into another broad search string.
 
 Do not invent `sources-count`. The `research-log-add` command now requires a
 raw payload file and rejects counts that are not backed by the payload's
