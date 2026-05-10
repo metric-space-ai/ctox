@@ -1631,6 +1631,33 @@ mod tests {
     }
 
     #[test]
+    fn review_harness_contract_is_finite_isolated_and_simple_compaction_only() {
+        assert_eq!(REVIEW_TIMEOUT_SECS, 900);
+        assert_eq!(REVIEW_MAX_LEGS, 3);
+        assert!(REVIEW_SYSTEM_PROMPT.contains("Operate in strict read-only verification mode."));
+        assert!(REVIEW_SYSTEM_PROMPT.contains("normal review compaction is disabled"));
+        assert!(REVIEW_SYSTEM_PROMPT.contains("emit a review handoff instead of compacting"));
+        assert!(
+            !REVIEW_SYSTEM_PROMPT.contains("LCM"),
+            "review prompt must not ask the reviewer to run the mission LCM harness"
+        );
+
+        let request = CompletionReviewRequest {
+            preview: "Review harness proof".to_string(),
+            source_label: "queue".to_string(),
+            workspace_root: "/tmp/review-proof".to_string(),
+            runtime_db_path: "/tmp/ctox.sqlite3".to_string(),
+            review_skill_path: "/tmp/external-review/SKILL.md".to_string(),
+            ..CompletionReviewRequest::default()
+        };
+        let handoff =
+            build_review_handoff_prompt(&request, "Verified files; still need service log.");
+        assert!(handoff.contains("Prior handoff:"));
+        assert!(handoff.contains("Verified files; still need service log."));
+        assert!(handoff.contains("read-only inspection only"));
+    }
+
+    #[test]
     fn parses_review_report_with_explicit_verdict() {
         let outcome = parse_review_report(
             4,

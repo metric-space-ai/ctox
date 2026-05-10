@@ -493,6 +493,23 @@ pub fn enforce_core_spawn(conn: &Connection, request: &CoreSpawnRequest) -> Resu
     anyhow::bail!("{}", proof.message);
 }
 
+pub fn check_core_spawn(conn: &Connection, request: &CoreSpawnRequest) -> Result<CoreSpawnProof> {
+    ensure_core_transition_guard_schema(conn)?;
+
+    let request_json = serde_json::to_string(request)?;
+    let edge_id = deterministic_spawn_edge_id(&request_json);
+    let violation_codes = validate_core_spawn(conn, request, &edge_id)?;
+    let accepted = violation_codes.is_empty();
+    let message = core_spawn_message(&violation_codes);
+
+    Ok(CoreSpawnProof {
+        edge_id,
+        accepted,
+        violation_codes,
+        message,
+    })
+}
+
 pub fn analyze_core_spawn_model() -> CoreSpawnModelReport {
     let contracts = core_spawner_contracts().to_vec();
     let mut violations = Vec::new();
@@ -640,7 +657,6 @@ fn validate_core_spawn(
     if looks_like_review_spawn(&request.spawn_kind) && !has_budget {
         violations.push("review_spawn_requires_finite_budget".to_string());
     }
-
     let self_cycle = request.parent_entity_type == request.child_entity_type
         && request.parent_entity_id == request.child_entity_id;
     let graph_cycle = if self_cycle {
@@ -1356,6 +1372,22 @@ mod tests {
         assert!(proof
             .violation_codes
             .contains(&"unregistered_spawn_kind".to_string()));
+        Ok(())
+    }
+
+    #[test]
+    fn core_spawn_allows_strategy_direction_pass_for_normal_thread() -> Result<()> {
+        let conn = Connection::open_in_memory()?;
+        let mut request = self_work_spawn_request("kunstmen-supervisor", "b");
+        request.parent_entity_type = "Thread".to_string();
+        request.spawn_kind = "self-work:strategic-direction-pass".to_string();
+        request
+            .metadata
+            .insert("thread_key".to_string(), request.parent_entity_id.clone());
+
+        let proof = enforce_core_spawn(&conn, &request)?;
+
+        assert!(proof.accepted);
         Ok(())
     }
 }

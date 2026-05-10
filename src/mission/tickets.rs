@@ -2428,13 +2428,41 @@ pub(crate) fn put_ticket_self_work_item(
     );
     if let Err(err) = enforce_ticket_self_work_spawn(&conn, &item) {
         let now = Utc::now().to_rfc3339();
+        let fallback_state = if item.kind.to_ascii_lowercase().contains("review") {
+            "failed"
+        } else {
+            "blocked"
+        };
+        let fallback_reason = if fallback_state == "failed" {
+            "ticket_self_work_spawn_rejected_terminal"
+        } else {
+            "ticket_self_work_spawn_rejected"
+        };
+        let transition_result = enforce_ticket_self_work_state_transition(
+            &conn,
+            &item.work_id,
+            &item.state,
+            fallback_state,
+            "ctox-core-spawn-gate",
+            fallback_reason,
+        );
+        if let Err(transition_err) = transition_result {
+            anyhow::bail!(
+                "core spawn gate rejected ticket self-work `{}` ({}), and core state guard rejected fallback `{}` transition: {}; original spawn rejection: {}",
+                item.work_id,
+                item.kind,
+                fallback_state,
+                transition_err,
+                err
+            );
+        }
         let _ = conn.execute(
             r#"
             UPDATE ticket_self_work_items
-            SET state = 'blocked', updated_at = ?2
+            SET state = ?2, updated_at = ?3
             WHERE work_id = ?1
             "#,
-            params![&item.work_id, now],
+            params![&item.work_id, fallback_state, now],
         );
         anyhow::bail!(
             "core spawn gate rejected ticket self-work `{}` ({}): {}",
@@ -2479,6 +2507,14 @@ fn enforce_ticket_self_work_spawn(conn: &Connection, item: &TicketSelfWorkItemVi
     edge_metadata.insert("thread_key".to_string(), thread_key);
     edge_metadata.insert("self_work_kind".to_string(), item.kind.clone());
     edge_metadata.insert("source_system".to_string(), item.source_system.clone());
+    if let Some(workspace_root) = metadata_string_value(&item.metadata, "workspace_root") {
+        edge_metadata.insert("workspace_root".to_string(), workspace_root);
+    }
+    if let Some(run_class) = metadata_string_value(&item.metadata, "core_run_class")
+        .or_else(|| metadata_string_value(&item.metadata, "run_class"))
+    {
+        edge_metadata.insert("core_run_class".to_string(), run_class);
+    }
     if let Some(dedupe_key) = metadata_string_value(&item.metadata, "dedupe_key") {
         edge_metadata.insert("dedupe_key".to_string(), dedupe_key);
     }
@@ -2505,7 +2541,7 @@ fn enforce_ticket_self_work_spawn(conn: &Connection, item: &TicketSelfWorkItemVi
 fn ticket_self_work_spawn_budget(kind: &str, thread_key: &str, metadata: &Value) -> (String, i64) {
     let lowered = kind.to_ascii_lowercase();
     if lowered.contains("review") {
-        return (format!("review-spawn:{kind}:{thread_key}"), 2);
+        return (format!("review-spawn:{kind}:{thread_key}"), 5);
     }
     if kind == "founder-communication-rework" {
         let key = metadata_string_value(metadata, "inbound_message_key")
@@ -3035,11 +3071,94 @@ fn self_work_message_key(item: &TicketSelfWorkItemView) -> Option<&str> {
         })
 }
 
+fn enforce_ticket_self_work_state_transition(
+    conn: &Connection,
+    work_id: &str,
+    from_state: &str,
+    to_state: &str,
+    actor: &str,
+    reason: &str,
+) -> Result<()> {
+    let from_core = ticket_self_work_core_state(from_state)?;
+    let to_core = ticket_self_work_core_state(to_state)?;
+    let mut metadata = BTreeMap::new();
+    metadata.insert("from_state".to_string(), from_state.to_string());
+    metadata.insert("to_state".to_string(), to_state.to_string());
+    metadata.insert("reason".to_string(), reason.to_string());
+    enforce_core_transition(
+        conn,
+        &CoreTransitionRequest {
+            entity_type: CoreEntityType::WorkItem,
+            entity_id: work_id.to_string(),
+            lane: RuntimeLane::P2MissionDelivery,
+            from_state: from_core,
+            to_state: to_core,
+            event: ticket_self_work_core_event(to_state),
+            actor: actor.to_string(),
+            evidence: CoreEvidenceRefs {
+                verification_id: if to_core == CoreState::Closed {
+                    Some(format!("ticket-self-work-state-close:{work_id}"))
+                } else {
+                    None
+                },
+                ..CoreEvidenceRefs::default()
+            },
+            metadata,
+        },
+    )?;
+    Ok(())
+}
+
+fn ticket_self_work_core_state(raw: &str) -> Result<CoreState> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "" | "created" => Ok(CoreState::Created),
+        "open" | "queued" | "restored" | "publishing" => Ok(CoreState::Planned),
+        "published" | "running" | "executing" | "in_progress" => Ok(CoreState::Executing),
+        "awaiting_review" | "review" | "reviewing" => Ok(CoreState::AwaitingReview),
+        "rework_required" | "review_rework" | "rework" => Ok(CoreState::ReworkRequired),
+        "awaiting_verification" | "verification" => Ok(CoreState::AwaitingVerification),
+        "verified" => Ok(CoreState::Verified),
+        "blocked" => Ok(CoreState::Blocked),
+        "failed" => Ok(CoreState::Failed),
+        "closed" | "done" | "completed" | "handled" => Ok(CoreState::Closed),
+        "cancelled" | "superseded" => Ok(CoreState::Superseded),
+        other => {
+            anyhow::bail!("ticket self-work state is not mapped to core state machine: {other}")
+        }
+    }
+}
+
+fn ticket_self_work_core_event(state: &str) -> CoreEvent {
+    match state.trim().to_ascii_lowercase().as_str() {
+        "open" | "queued" | "restored" | "publishing" => CoreEvent::Plan,
+        "published" | "running" | "executing" | "in_progress" => CoreEvent::Execute,
+        "awaiting_review" | "review" | "reviewing" => CoreEvent::RequestReview,
+        "rework_required" | "review_rework" | "rework" => CoreEvent::RequireRework,
+        "awaiting_verification" | "verification" => CoreEvent::Verify,
+        "verified" => CoreEvent::Verify,
+        "blocked" => CoreEvent::Block,
+        "failed" => CoreEvent::Fail,
+        "closed" | "done" | "completed" | "handled" => CoreEvent::Close,
+        "cancelled" | "superseded" => CoreEvent::Supersede,
+        _ => CoreEvent::CreateTicket,
+    }
+}
+
 fn set_ticket_self_work_state_internal(
     conn: &mut Connection,
     work_id: &str,
     state: &str,
 ) -> Result<TicketSelfWorkItemView> {
+    let existing = load_ticket_self_work_item_raw(conn, work_id)?
+        .context("ticket self-work item not found")?;
+    enforce_ticket_self_work_state_transition(
+        conn,
+        work_id,
+        &existing.state,
+        state,
+        "ctox-ticket",
+        "set_ticket_self_work_state",
+    )?;
     let now = now_iso_string();
     conn.execute(
         r#"
@@ -3225,6 +3344,16 @@ fn upsert_ticket_self_work_item_internal(
             input.kind, input.title, input.body_text, now
         )),)
     );
+    if let Some(existing) = load_ticket_self_work_item_raw(conn, &work_id)? {
+        enforce_ticket_self_work_state_transition(
+            conn,
+            &existing.work_id,
+            &existing.state,
+            &input.state,
+            "ctox-ticket",
+            "self_work_item_upsert",
+        )?;
+    }
     conn.execute(
         r#"
         INSERT INTO ticket_self_work_items (
@@ -3271,6 +3400,16 @@ fn mark_ticket_self_work_published(
     remote_ticket_id: Option<&str>,
     remote_locator: Option<&str>,
 ) -> Result<TicketSelfWorkItemView> {
+    let existing = load_ticket_self_work_item_raw(conn, work_id)?
+        .context("ticket self-work item not found")?;
+    enforce_ticket_self_work_state_transition(
+        conn,
+        work_id,
+        &existing.state,
+        "published",
+        "ctox-ticket",
+        "mark_ticket_self_work_published",
+    )?;
     let now = now_iso_string();
     conn.execute(
         r#"
@@ -3450,6 +3589,15 @@ pub(crate) fn lease_pending_ticket_events_for_sources(
     let tx = conn.unchecked_transaction()?;
     let leased_at = now_iso_string();
     for event in &events {
+        let previous_route_status = current_ticket_event_route_status(&tx, &event.event_key)?;
+        enforce_ticket_event_route_status_transition(
+            &tx,
+            &event.event_key,
+            &previous_route_status,
+            "leased",
+            lease_owner,
+            "lease_pending_ticket_events",
+        )?;
         tx.execute(
             r#"
             INSERT INTO ticket_event_routing_state (
@@ -3479,6 +3627,15 @@ pub(crate) fn ack_leased_ticket_events(
     let now = now_iso_string();
     let mut updated = 0usize;
     for event_key in event_keys {
+        let previous_route_status = current_ticket_event_route_status(&tx, event_key)?;
+        enforce_ticket_event_route_status_transition(
+            &tx,
+            event_key,
+            &previous_route_status,
+            canonical_status,
+            "ctox-ticket-ack",
+            "ack_leased_ticket_events",
+        )?;
         updated += tx.execute(
             r#"
             INSERT INTO ticket_event_routing_state (
@@ -3529,6 +3686,15 @@ pub(crate) fn release_stale_ticket_event_leases(
         if active_event_keys.contains(&event_key) {
             continue;
         }
+        let previous_route_status = current_ticket_event_route_status(&conn, &event_key)?;
+        enforce_ticket_event_route_status_transition(
+            &conn,
+            &event_key,
+            &previous_route_status,
+            "pending",
+            lease_owner,
+            "release_stale_ticket_event_leases",
+        )?;
         conn.execute(
             r#"
             UPDATE ticket_event_routing_state
@@ -3574,6 +3740,15 @@ pub(crate) fn release_ready_blocked_ticket_events(
         if ticket_event_ready_for_preparation(root, &event).is_err() {
             continue;
         }
+        let previous_route_status = current_ticket_event_route_status(&conn, &event.event_key)?;
+        enforce_ticket_event_route_status_transition(
+            &conn,
+            &event.event_key,
+            &previous_route_status,
+            "pending",
+            "ctox-ticket-router",
+            "release_ready_blocked_ticket_events",
+        )?;
         conn.execute(
             r#"
             UPDATE ticket_event_routing_state
@@ -5019,7 +5194,11 @@ pub(crate) fn suggested_skill_for_live_ticket_source(
     if explicit_self_work.is_some() {
         return Ok(explicit_self_work);
     }
-    preferred_skill_for_ticket_source(root, &event.source_system)
+    let conn = open_ticket_db(root)?;
+    Ok(
+        load_active_ticket_source_skill_binding_from_conn(&conn, &event.source_system)?
+            .map(|binding| binding.skill_name),
+    )
 }
 
 fn default_skill_for_self_work_kind(kind: &str) -> Option<String> {
@@ -5166,11 +5345,36 @@ fn force_ticket_event_routed_state(
     route_status: &str,
 ) -> Result<()> {
     let now = now_iso_string();
+    force_ticket_event_routed_state_at(conn, event_key, route_status, &now)
+}
+
+fn force_ticket_event_routed_state_at(
+    conn: &Connection,
+    event_key: &str,
+    route_status: &str,
+    updated_at: &str,
+) -> Result<()> {
+    let previous_route_status = current_ticket_event_route_status(conn, event_key)?;
+    enforce_ticket_event_route_status_transition(
+        conn,
+        event_key,
+        &previous_route_status,
+        route_status,
+        "ctox-ticket-routing",
+        "force_ticket_event_routed_state",
+    )?;
     conn.execute(
         r#"
         INSERT INTO ticket_event_routing_state (
             event_key, route_status, lease_owner, leased_at, acked_at, updated_at
-        ) VALUES (?1, ?2, NULL, NULL, ?3, ?3)
+        ) VALUES (
+            ?1,
+            ?2,
+            NULL,
+            NULL,
+            CASE WHEN ?2 IN ('handled', 'observed', 'duplicate', 'blocked') THEN ?3 ELSE NULL END,
+            ?3
+        )
         ON CONFLICT(event_key) DO UPDATE SET
             route_status=excluded.route_status,
             lease_owner=NULL,
@@ -5178,9 +5382,79 @@ fn force_ticket_event_routed_state(
             acked_at=excluded.acked_at,
             updated_at=excluded.updated_at
         "#,
-        params![event_key, route_status, now],
+        params![event_key, route_status, updated_at],
     )?;
     Ok(())
+}
+
+fn current_ticket_event_route_status(conn: &Connection, event_key: &str) -> Result<String> {
+    let status = conn
+        .query_row(
+            "SELECT route_status FROM ticket_event_routing_state WHERE event_key = ?1 LIMIT 1",
+            params![event_key],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .unwrap_or_else(|| "pending".to_string());
+    Ok(canonical_ticket_event_route_status(&status)?.to_string())
+}
+
+fn enforce_ticket_event_route_status_transition(
+    conn: &Connection,
+    event_key: &str,
+    from_status: &str,
+    to_status: &str,
+    actor: &str,
+    reason: &str,
+) -> Result<()> {
+    let from_status = canonical_ticket_event_route_status(from_status)?;
+    let to_status = canonical_ticket_event_route_status(to_status)?;
+    if from_status == to_status {
+        return Ok(());
+    }
+    let from_core = ticket_event_route_core_state(from_status);
+    let to_core = ticket_event_route_core_state(to_status);
+    let mut metadata = BTreeMap::new();
+    metadata.insert("from_route_status".to_string(), from_status.to_string());
+    metadata.insert("to_route_status".to_string(), to_status.to_string());
+    metadata.insert("reason".to_string(), reason.to_string());
+    enforce_core_transition(
+        conn,
+        &CoreTransitionRequest {
+            entity_type: CoreEntityType::QueueItem,
+            entity_id: format!("ticket-event:{event_key}"),
+            lane: RuntimeLane::P2MissionDelivery,
+            from_state: from_core,
+            to_state: to_core,
+            event: ticket_event_route_core_event(to_status),
+            actor: actor.to_string(),
+            evidence: CoreEvidenceRefs::default(),
+            metadata,
+        },
+    )?;
+    Ok(())
+}
+
+fn ticket_event_route_core_state(route_status: &str) -> CoreState {
+    match route_status.trim().to_ascii_lowercase().as_str() {
+        "leased" => CoreState::Leased,
+        "blocked" => CoreState::Blocked,
+        "failed" => CoreState::Failed,
+        "handled" | "observed" => CoreState::Completed,
+        "duplicate" => CoreState::Superseded,
+        _ => CoreState::Pending,
+    }
+}
+
+fn ticket_event_route_core_event(route_status: &str) -> CoreEvent {
+    match route_status.trim().to_ascii_lowercase().as_str() {
+        "leased" => CoreEvent::Lease,
+        "blocked" => CoreEvent::Block,
+        "failed" => CoreEvent::Fail,
+        "handled" | "observed" => CoreEvent::Complete,
+        "duplicate" => CoreEvent::Supersede,
+        _ => CoreEvent::Release,
+    }
 }
 
 fn initial_route_status_for_inbound_event(
@@ -5729,6 +6003,16 @@ fn create_dry_run(
         .filter(|value| !value.is_empty())
         .unwrap_or(bundle.default_risk_level.as_str())
         .to_string();
+    enforce_ticket_case_create_transition(
+        &conn,
+        &case_id,
+        ticket_key,
+        state,
+        &label_assignment.label,
+        &bundle.support_mode,
+        "ctox-ticket",
+        "create_dry_run",
+    )?;
     conn.execute(
         r#"
         INSERT INTO ticket_cases (
@@ -6016,6 +6300,13 @@ fn decide_case_approval(
     } else {
         "blocked"
     };
+    enforce_ticket_case_state_transition(
+        &conn,
+        &case,
+        next_state,
+        "approver",
+        "approval_decision",
+    )?;
     conn.execute(
         "UPDATE ticket_cases SET state = ?2, updated_at = ?3 WHERE case_id = ?1",
         params![case_id, next_state, now],
@@ -6059,6 +6350,7 @@ fn record_execution_action(root: &Path, case_id: &str, summary: &str) -> Result<
             now,
         ],
     )?;
+    enforce_ticket_case_state_transition(&conn, &case, "executing", "agent", "execution_case")?;
     conn.execute(
         "UPDATE ticket_cases SET state = 'executing', updated_at = ?2 WHERE case_id = ?1",
         params![case_id, now],
@@ -6108,6 +6400,13 @@ fn record_verification(
     } else {
         "blocked"
     };
+    enforce_ticket_case_state_transition(
+        &conn,
+        &case,
+        next_state,
+        "verification_engine",
+        "verification_record",
+    )?;
     conn.execute(
         "UPDATE ticket_cases SET state = ?2, updated_at = ?3 WHERE case_id = ?1",
         params![case_id, next_state, now],
@@ -6333,6 +6632,7 @@ fn writeback_transition(
             now,
         ],
     )?;
+    enforce_ticket_case_close_transition(&conn, &case, "writeback_engine")?;
     conn.execute(
         "UPDATE ticket_cases SET state = 'closed', updated_at = ?2, closed_at = ?2 WHERE case_id = ?1",
         params![case_id, now],
@@ -6430,6 +6730,74 @@ fn enforce_ticket_case_close_transition(
     Ok(())
 }
 
+fn enforce_ticket_case_create_transition(
+    conn: &Connection,
+    case_id: &str,
+    ticket_key: &str,
+    state: &str,
+    label: &str,
+    support_mode: &str,
+    actor: &str,
+    reason: &str,
+) -> Result<()> {
+    let to_core_state = ticket_case_core_state(state)?;
+    let mut metadata = BTreeMap::new();
+    metadata.insert("ticket_key".to_string(), ticket_key.to_string());
+    metadata.insert("label".to_string(), label.to_string());
+    metadata.insert("support_mode".to_string(), support_mode.to_string());
+    metadata.insert("from_case_state".to_string(), "created".to_string());
+    metadata.insert("to_case_state".to_string(), state.to_string());
+    metadata.insert("reason".to_string(), reason.to_string());
+    enforce_core_transition(
+        conn,
+        &CoreTransitionRequest {
+            entity_type: CoreEntityType::Ticket,
+            entity_id: case_id.to_string(),
+            lane: RuntimeLane::P2MissionDelivery,
+            from_state: CoreState::Created,
+            to_state: to_core_state,
+            event: ticket_case_core_event(state),
+            actor: actor.to_string(),
+            evidence: CoreEvidenceRefs::default(),
+            metadata,
+        },
+    )?;
+    Ok(())
+}
+
+fn enforce_ticket_case_state_transition(
+    conn: &Connection,
+    case: &TicketCaseView,
+    to_state: &str,
+    actor: &str,
+    reason: &str,
+) -> Result<()> {
+    let from_state = ticket_case_core_state(&case.state)?;
+    let to_core_state = ticket_case_core_state(to_state)?;
+    let mut metadata = BTreeMap::new();
+    metadata.insert("ticket_key".to_string(), case.ticket_key.clone());
+    metadata.insert("label".to_string(), case.label.clone());
+    metadata.insert("support_mode".to_string(), case.support_mode.clone());
+    metadata.insert("from_case_state".to_string(), case.state.clone());
+    metadata.insert("to_case_state".to_string(), to_state.to_string());
+    metadata.insert("reason".to_string(), reason.to_string());
+    enforce_core_transition(
+        conn,
+        &CoreTransitionRequest {
+            entity_type: CoreEntityType::Ticket,
+            entity_id: case.case_id.clone(),
+            lane: RuntimeLane::P2MissionDelivery,
+            from_state,
+            to_state: to_core_state,
+            event: ticket_case_core_event(to_state),
+            actor: actor.to_string(),
+            evidence: CoreEvidenceRefs::default(),
+            metadata,
+        },
+    )?;
+    Ok(())
+}
+
 fn latest_passed_ticket_verification_id(
     conn: &Connection,
     case_id: &str,
@@ -6470,15 +6838,32 @@ fn ticket_case_core_state(raw: &str) -> Result<CoreState> {
     match raw.trim().to_ascii_lowercase().as_str() {
         "created" | "open" | "queued" => Ok(CoreState::Created),
         "classified" => Ok(CoreState::Classified),
-        "planned" | "ready" => Ok(CoreState::Planned),
+        "planned" | "ready" | "executable" => Ok(CoreState::Planned),
         "executing" | "in_progress" | "running" => Ok(CoreState::Executing),
-        "awaiting_review" | "review" | "reviewing" => Ok(CoreState::AwaitingReview),
+        "approval_pending" | "awaiting_review" | "review" | "reviewing" => {
+            Ok(CoreState::AwaitingReview)
+        }
         "rework_required" | "rework" => Ok(CoreState::ReworkRequired),
         "awaiting_verification" | "verification" => Ok(CoreState::AwaitingVerification),
         "verified" | "writeback_pending" => Ok(CoreState::Verified),
         "closed" | "done" | "completed" => Ok(CoreState::Closed),
         "blocked" => Ok(CoreState::Blocked),
         other => anyhow::bail!("ticket case state is not mapped to core state machine: {other}"),
+    }
+}
+
+fn ticket_case_core_event(state: &str) -> CoreEvent {
+    match state.trim().to_ascii_lowercase().as_str() {
+        "classified" => CoreEvent::Classify,
+        "planned" | "ready" | "executable" => CoreEvent::Plan,
+        "executing" | "in_progress" | "running" => CoreEvent::Execute,
+        "approval_pending" | "awaiting_review" | "review" | "reviewing" => CoreEvent::RequestReview,
+        "rework_required" | "rework" => CoreEvent::RequireRework,
+        "awaiting_verification" | "verification" => CoreEvent::Verify,
+        "verified" | "writeback_pending" => CoreEvent::Verify,
+        "closed" | "done" | "completed" => CoreEvent::Close,
+        "blocked" => CoreEvent::Block,
+        _ => CoreEvent::CreateTicket,
     }
 }
 
@@ -7210,30 +7595,32 @@ fn ensure_schema(conn: &Connection) -> Result<()> {
 }
 
 fn ensure_ticket_event_routing_rows(conn: &Connection) -> Result<()> {
-    conn.execute(
+    let mut statement = conn.prepare(
         r#"
-        INSERT INTO ticket_event_routing_state (
-            event_key, route_status, lease_owner, leased_at, acked_at, updated_at
-        )
         SELECT
             e.event_key,
             CASE
                 WHEN e.direction = 'outbound' THEN 'handled'
                 ELSE 'pending'
             END,
-            NULL,
-            NULL,
-            CASE
-                WHEN e.direction = 'outbound' THEN e.observed_at
-                ELSE NULL
-            END,
             e.observed_at
         FROM ticket_events e
         LEFT JOIN ticket_event_routing_state r ON r.event_key = e.event_key
         WHERE r.event_key IS NULL
         "#,
-        [],
     )?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    })?;
+    let missing = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(statement);
+    for (event_key, route_status, observed_at) in missing {
+        force_ticket_event_routed_state_at(conn, &event_key, &route_status, &observed_at)?;
+    }
     migrate_ticket_self_work_items_schema(conn)?;
     Ok(())
 }
@@ -7252,6 +7639,7 @@ fn migrate_ticket_self_work_items_schema(conn: &Connection) -> Result<()> {
     if !table_sql.contains("UNIQUE(source_system, kind)") {
         return Ok(());
     }
+    // ctox-allow-direct-state-write: schema migration copies existing states 1:1.
     conn.execute_batch(
         r#"
         ALTER TABLE ticket_self_work_items RENAME TO ticket_self_work_items_legacy_unique;
@@ -8750,6 +9138,52 @@ mod tests {
             .filter(|item| item.kind == "queue-overflow")
             .count();
         assert_eq!(overflow_count, 2);
+
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn terminal_bench_parent_uses_normal_spawn_rules_for_strategy_direction_self_work() -> Result<()>
+    {
+        let root = temp_root("tbq-strategy-self-work-core-normal");
+        std::fs::create_dir_all(&root)?;
+
+        let item = put_ticket_self_work_item(
+            &root,
+            TicketSelfWorkUpsertInput {
+                source_system: "local".to_string(),
+                kind: "strategic-direction-pass".to_string(),
+                title: "Strategic direction setup".to_string(),
+                body_text: "Establish strategy before benchmark work.".to_string(),
+                state: "open".to_string(),
+                metadata: json!({
+                    "thread_key": "tbq-qwen36/tbq-20260509Tcleanfull5/051-public-platform-server",
+                    "workspace_root": "/home/metricspace/ctox/runtime/workspaces/tbq-20260509Tcleanfull5-051-public-platform-server",
+                    "dedupe_key": "strategy-direction:tbq-qwen36/tbq-20260509Tcleanfull5/051-public-platform-server",
+                }),
+            },
+            false,
+        )
+        .expect("Terminal-Bench-shaped metadata must still use normal core spawn rules");
+
+        let conn = open_ticket_db(&root)?;
+        let accepted_edges: i64 = conn.query_row(
+            r#"
+            SELECT COUNT(*)
+            FROM ctox_core_spawn_edges
+            WHERE spawn_kind = 'self-work:strategic-direction-pass'
+              AND accepted = 1
+            "#,
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(accepted_edges, 1);
+
+        let items = list_ticket_self_work_items(&root, Some("local"), None, 10)?;
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].work_id, item.work_id);
+        assert_eq!(items[0].state, "open");
 
         let _ = std::fs::remove_dir_all(&root);
         Ok(())

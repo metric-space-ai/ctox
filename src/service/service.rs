@@ -88,7 +88,9 @@ use crate::service::core_state_machine::{
     ArtifactKind, ArtifactRef, CoreEntityType, CoreEvent, CoreEvidenceRefs, CoreState,
     CoreTransitionRequest, RuntimeLane,
 };
-use crate::service::core_transition_guard::enforce_core_transition;
+use crate::service::core_transition_guard::{
+    check_core_spawn, enforce_core_transition, CoreSpawnRequest,
+};
 use crate::state_invariants;
 use crate::verification;
 
@@ -113,10 +115,10 @@ const STRATEGIC_DIRECTION_KIND: &str = "strategic-direction-pass";
 const FOUNDER_COMMUNICATION_REWORK_KIND: &str = "founder-communication-rework";
 const RUNTIME_API_RETRY_KIND: &str = "runtime-api-retry";
 const FOUNDER_REWORK_REQUEUE_BLOCK_THRESHOLD: usize = 2;
-const REVIEW_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD: usize = 2;
+const REVIEW_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD: usize = 5;
 const REVIEW_REWORK_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD: usize = 5;
-const MAX_REVIEW_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD: usize = 10;
-const MAX_REVIEW_REWORK_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD: usize = 20;
+const MAX_REVIEW_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD: usize = 5;
+const MAX_REVIEW_REWORK_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD: usize = 5;
 const SERVICE_SHUTDOWN_TIMEOUT_SECS: u64 = 15;
 const SERVICE_SHUTDOWN_POLL_MILLIS: u64 = 150;
 const SYSTEMCTL_USER_TIMEOUT_SECS: u64 = 5;
@@ -460,6 +462,7 @@ enum CompletionReviewDisposition {
     FeedbackRetry {
         feedback_prompt: String,
         review_summary: String,
+        persist_on_leased_queue: bool,
     },
 }
 
@@ -1255,6 +1258,31 @@ fn release_stale_service_communication_leases(root: &Path) -> Result<usize> {
     let db_path = crate::paths::core_db(&root);
     let conn = channels::open_channel_db(&db_path)?;
     let now = now_iso_string();
+    let mut statement = conn.prepare(
+        r#"
+        SELECT message_key
+        FROM communication_routing_state
+        WHERE route_status='leased'
+          AND lease_owner=?1
+          AND acked_at IS NULL
+        "#,
+    )?;
+    let message_keys = statement
+        .query_map(params![CHANNEL_ROUTER_LEASE_OWNER], |row| {
+            row.get::<_, String>(0)
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(statement);
+    for message_key in &message_keys {
+        channels::enforce_queue_route_status_transition(
+            &conn,
+            message_key,
+            "leased",
+            "pending",
+            "ctox-service-boot",
+            "release_stale_service_communication_leases",
+        )?;
+    }
     let updated = conn.execute(
         r#"
         UPDATE communication_routing_state
@@ -3130,11 +3158,6 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
                             &review_disposition,
                             CompletionReviewDisposition::NoSend { .. }
                         );
-                        let held_benchmark_controller = matches!(
-                            &review_disposition,
-                            CompletionReviewDisposition::Hold { .. }
-                        )
-                            && is_terminal_bench_controller_artifact_job(&job);
                         let expected_artifact_refs = expected_outcome_artifacts_for_job(&job);
                         let delivered_artifact_refs = match delivered_outcome_artifacts_for_job(
                             &root,
@@ -3312,10 +3335,7 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
                             );
                             let retry_status = if outcome_witness_error.is_some() {
                                 outcome_witness_retry_route_status_for_job(&root, &job)
-                            } else if held_founder_review
-                                || held_benchmark_controller
-                                || held_completion_review
-                            {
+                            } else if held_founder_review || held_completion_review {
                                 "review_rework"
                             } else {
                                 "pending"
@@ -3799,54 +3819,63 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
                 } else if let CompletionReviewDisposition::FeedbackRetry {
                     feedback_prompt,
                     review_summary,
+                    persist_on_leased_queue,
                 } = &review_disposition
                 {
-                    shared.pending_prompts.push_front(QueuedPrompt {
-                        prompt: feedback_prompt.clone(),
-                        goal: format!("Address review feedback for {}", job.goal),
-                        preview: clip_text(review_summary, 180),
-                        source_label: REVIEW_FEEDBACK_SOURCE_LABEL.to_string(),
-                        suggested_skill: job.suggested_skill.clone(),
-                        leased_message_keys: Vec::new(),
-                        leased_ticket_event_keys: Vec::new(),
-                        thread_key: job.thread_key.clone(),
-                        workspace_root: job.workspace_root.clone(),
-                        ticket_self_work_id: None,
-                        outbound_email: job.outbound_email.clone(),
-                        outbound_anchor: job.outbound_anchor.clone(),
-                    });
-                    push_event_locked(
-                        &mut shared,
-                        format!(
-                            "Queued in-process review feedback retry for {}",
-                            job.source_label
-                        ),
-                    );
-                } else if let CompletionReviewDisposition::Hold { summary } = &review_disposition {
-                    if job.ticket_self_work_id.is_none()
-                        && job.outbound_email.is_none()
-                        && is_terminal_bench_controller_artifact_job(&job)
+                    let persisted = if *persist_on_leased_queue
+                        && !job.leased_message_keys.is_empty()
                     {
-                        let feedback_prompt =
-                            terminal_bench_controller_hold_feedback_prompt(&job, summary);
+                        match apply_review_feedback_to_leased_queue(
+                            &root,
+                            &job,
+                            feedback_prompt,
+                            review_summary,
+                        ) {
+                            Ok(updated) if updated > 0 => {
+                                push_event_locked(
+                                        &mut shared,
+                                        format!(
+                                            "Wrote sanitized review feedback back to {updated} leased queue task(s) for {}",
+                                            job.source_label
+                                        ),
+                                    );
+                                true
+                            }
+                            Ok(_) => false,
+                            Err(err) => {
+                                push_event_locked(
+                                        &mut shared,
+                                        format!(
+                                            "Failed to persist review feedback onto leased queue task for {}: {}",
+                                            job.source_label,
+                                            clip_text(&err.to_string(), 180)
+                                        ),
+                                    );
+                                false
+                            }
+                        }
+                    } else {
+                        false
+                    };
+                    if !persisted {
                         shared.pending_prompts.push_front(QueuedPrompt {
                             prompt: feedback_prompt.clone(),
-                            goal: format!("Continue Terminal-Bench controller for {}", job.goal),
-                            preview: clip_text(&feedback_prompt, 180),
+                            goal: format!("Address review feedback for {}", job.goal),
+                            preview: clip_text(review_summary, 180),
                             source_label: REVIEW_FEEDBACK_SOURCE_LABEL.to_string(),
                             suggested_skill: job.suggested_skill.clone(),
-                            leased_message_keys: job.leased_message_keys.clone(),
+                            leased_message_keys: Vec::new(),
                             leased_ticket_event_keys: Vec::new(),
                             thread_key: job.thread_key.clone(),
                             workspace_root: job.workspace_root.clone(),
                             ticket_self_work_id: None,
-                            outbound_email: None,
+                            outbound_email: job.outbound_email.clone(),
                             outbound_anchor: job.outbound_anchor.clone(),
                         });
                         push_event_locked(
                             &mut shared,
                             format!(
-                                "Queued benchmark controller continuation feedback for {} after review hold",
+                                "Queued in-process review feedback retry for {}",
                                 job.source_label
                             ),
                         );
@@ -3969,11 +3998,11 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
 /// The reviewer runs in a fresh `PersistentSession` (its own clean codex-core
 /// thread, no executor turn history) with a skeptical, scope-bound system
 /// prompt. It either ratifies the slice (PASS) or surfaces concrete
-/// objections (FAIL/PARTIAL). On rejection the reviewer's report is enqueued
-/// as a high-priority rework slice on the same thread — the original ack
-/// path is unchanged so the user still sees the executor's reply.
+/// objections (FAIL/PARTIAL). On rejection, the sanitized feedback is fed back
+/// to the same main-agent work item; the raw reviewer report remains audit
+/// evidence and must not become a new review-owned worker task.
 ///
-/// Failures inside the review path (LCM open errors, gateway timeouts) are
+/// Failures inside the review path (session start errors, gateway timeouts) are
 /// swallowed and surfaced as events: the slice falls through unjudged rather
 /// than blocking the worker.
 fn run_completion_review(
@@ -4416,6 +4445,7 @@ fn run_completion_review(
                             job, &outcome, reply_text,
                         ),
                         review_summary: outcome.summary.clone(),
+                        persist_on_leased_queue: false,
                     };
                 }
                 if matches!(routing_class, ReviewRoutingClass::RewriteOnly) {
@@ -4453,6 +4483,7 @@ fn run_completion_review(
                 CompletionReviewDisposition::FeedbackRetry {
                     feedback_prompt: build_review_feedback_retry_prompt(job, &outcome, reply_text),
                     review_summary: outcome.summary.clone(),
+                    persist_on_leased_queue: false,
                 }
             }
             _ => CompletionReviewDisposition::Hold {
@@ -4504,6 +4535,7 @@ fn run_completion_review(
                 CompletionReviewDisposition::FeedbackRetry {
                     feedback_prompt: build_review_feedback_retry_prompt(job, &outcome, reply_text),
                     review_summary: outcome.summary.clone(),
+                    persist_on_leased_queue: false,
                 }
             }
             _ => CompletionReviewDisposition::Hold {
@@ -4541,7 +4573,9 @@ fn run_completion_review(
                 summary: outcome.summary.clone(),
             };
         }
-        return handle_actionable_completion_review_rejection(root, state, job, &outcome);
+        return handle_actionable_completion_review_rejection(
+            root, state, job, &outcome, reply_text,
+        );
     }
     match outcome.verdict {
         review::ReviewVerdict::Pass => CompletionReviewDisposition::Approved,
@@ -4558,15 +4592,10 @@ fn run_completion_review(
 }
 
 fn completion_review_unavailable_disposition(
-    job: &QueuedPrompt,
+    _job: &QueuedPrompt,
     summary: &str,
 ) -> CompletionReviewDisposition {
-    if is_terminal_bench_controller_artifact_job(job) {
-        return CompletionReviewDisposition::Hold {
-            summary: summary.to_string(),
-        };
-    }
-
+    let _ = summary;
     CompletionReviewDisposition::None
 }
 
@@ -4582,7 +4611,6 @@ fn completion_review_is_reviewer_limited_internal_work(
     }
     if is_founder_or_owner_email_job(job)
         || job.outbound_email.is_some()
-        || is_terminal_bench_controller_artifact_job(job)
         || !outcome.categorized_findings.is_empty()
     {
         return false;
@@ -6415,78 +6443,6 @@ Do not create duplicate preparation queue tasks. The harness is only pointing ou
     )
 }
 
-fn terminal_bench_controller_hold_feedback_prompt(
-    job: &QueuedPrompt,
-    review_summary: &str,
-) -> String {
-    let file_refs = declared_workspace_file_artifacts_for_job(job);
-    let run_dir = terminal_bench_run_dir_from_artifact_paths(&file_refs);
-    let basenames = file_refs
-        .iter()
-        .filter_map(|path| {
-            Path::new(path)
-                .file_name()
-                .and_then(|name| name.to_str())
-                .map(str::to_string)
-        })
-        .collect::<Vec<_>>();
-    let artifact_names = if basenames.is_empty() {
-        "the declared durable files".to_string()
-    } else {
-        basenames.join(", ")
-    };
-    let results_name = basenames
-        .iter()
-        .find(|name| name.starts_with("results."))
-        .cloned()
-        .unwrap_or_else(|| "results.jsonl".to_string());
-    let log_name = basenames
-        .iter()
-        .find(|name| *name == "logbook.md" || *name == "run-log.md")
-        .cloned()
-        .unwrap_or_else(|| "logbook.md".to_string());
-    let mut prompt = String::new();
-    prompt.push_str("HARNESS FEEDBACK\n");
-    prompt.push_str(
-        "The previous Terminal-Bench controller turn is not accepted as benchmark completion. ",
-    );
-    prompt.push_str(&format!("The durable files may have been initialized, but the benchmark controller must continue until Terminal-Bench work has real task statuses in {results_name} or a concrete persisted next action after exhausting the current time budget.\n\n"));
-    prompt.push_str("Review status:\n");
-    prompt.push_str("- ");
-    prompt.push_str(&clip_text(review_summary, 500));
-    prompt.push_str("\n\n");
-    if let Some(run_dir) = run_dir.as_deref() {
-        prompt.push_str("Current RUN_DIR:\n");
-        prompt.push_str(run_dir);
-        prompt.push_str("\n\n");
-    }
-    prompt.push_str("Required continuation behavior:\n");
-    prompt.push_str("- The harness is only giving feedback. It will not perform the benchmark work, create tickets, patch artifacts, or mark tasks complete for you. You must do the work yourself with shell tools and CTOX CLI commands.\n");
-    prompt.push_str("- If you are unsure about CTOX CLI syntax or available commands, inspect it yourself with `ctox help`, `ctox queue --help`, `ctox queue add --help`, and the relevant subcommand `--help` before acting.\n");
-    prompt.push_str(&format!("- Read only the current RUN_DIR durable files ({artifact_names}) far enough to preserve existing progress. Do not recreate them from scratch and do not read stale Terminal-Bench run directories.\n"));
-    prompt.push_str("- Your next shell action after this feedback must update the current RUN_DIR durable files, not just inspect them. A valid first action may read the current files and write the checkpoint in the same shell script.\n");
-    prompt.push_str(&format!("- Before any open-ended discovery, runner probing, benchmark execution, or web research, write a checkpoint into the declared durable files, especially controller.json, {log_name}, knowledge.md, and {results_name}. The checkpoint must record the current phase, verified facts, blockers, and exact next action.\n"));
-    prompt.push_str("- If a tool call finds new runtime, task, runner, leaderboard, blocker, or result information, the next tool call must persist that information into the current RUN_DIR durable files before continuing exploration.\n");
-    prompt.push_str(&format!("- Treat controller.phase=preparation and {results_name} with zero real task statuses as an unfinished state, not as completion.\n"));
-    prompt.push_str("- Verify the runtime facts before benchmark execution: CTOX release is current, active harness model/provider match this run, response adapter is correct, and effective context is 131072 tokens. If inference is local, record native runtime/IPC/GPU evidence; if inference is API-backed, record the provider/API evidence instead of inventing local-only facts.\n");
-    prompt.push_str("- Verify Harbor and the Terminal-Bench 2 task source, then write one ticket per discovered benchmark task into ticket-map.jsonl.\n");
-    prompt.push_str("- Research public Terminal-Bench references and leaderboards only for task selection and comparison context; do not read benchmark solutions.\n");
-    prompt.push_str("- Start with tasks known to be solvable by other harnesses/models, update knowledge.md after each attempt, skip blocked tasks temporarily, and return later with accumulated learnings.\n");
-    prompt.push_str(&format!("- After every benchmark action, update {log_name} and {results_name} truthfully. Each task must end as passed, failed, blocked, skipped, or pending with evidence.\n"));
-    prompt.push_str(&format!("- Only finish after all discovered Terminal-Bench tasks have terminal statuses, or after the current time budget is exhausted with a single explicit persisted next_action in controller.json and matching {log_name}.\n\n"));
-    if !file_refs.is_empty() {
-        prompt.push_str("Durable files to preserve and update:\n");
-        for path in &file_refs {
-            prompt.push_str("- ");
-            prompt.push_str(path);
-            prompt.push('\n');
-        }
-        prompt.push('\n');
-    }
-    prompt.push_str("Continue now from the persisted state. Use shell tools and direct file checks for evidence. Do not wait for the harness to do any work for you. Do not answer with prose only.");
-    prompt
-}
-
 fn extract_only_required_durable_file_paths(prompt: &str) -> Vec<String> {
     let mut refs = Vec::new();
     let mut in_section = false;
@@ -7241,179 +7197,12 @@ Now continue the task. Produce the corrected artifact or perform the required CT
     )
 }
 
-/// Enqueue a high-priority rework slice on the same thread as the rejected
-/// slice. Only the structured verdict summary is forwarded; the full review
-/// run remains external and should not leak back into executor prompts.
-fn enqueue_review_rework(
-    root: &Path,
-    job: &QueuedPrompt,
-    outcome: &review::ReviewOutcome,
-) -> Result<String> {
-    if let Some(existing) = find_superseding_corrective_queue_task_ignoring(
-        root,
-        job.thread_key.as_deref(),
-        job.workspace_root.as_deref(),
-        &["review rework"],
-        &job.leased_message_keys,
-    )? {
-        anyhow::bail!(
-            "superseded by runnable corrective work already in queue: {} ({})",
-            existing.title,
-            existing.message_key
-        );
-    }
-    let summary_line = clip_text(&outcome.summary, 220);
-    let preview = clip_text(&job.preview, 80);
-    let title = format!(
-        "Review rework: {} ({})",
-        if preview.is_empty() {
-            "(no preview)"
-        } else {
-            preview.as_str()
-        },
-        outcome.verdict.as_gate_label()
-    );
-    let failed_gates_block = if outcome.failed_gates.is_empty() {
-        "- none".to_string()
-    } else {
-        outcome
-            .failed_gates
-            .iter()
-            .take(6)
-            .map(|item| format!("- {}", item.trim()))
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
-    let findings_block = if outcome.semantic_findings.is_empty() {
-        "- none".to_string()
-    } else {
-        outcome
-            .semantic_findings
-            .iter()
-            .take(8)
-            .map(|item| format!("- {}", item.trim()))
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
-    let open_items_block = if outcome.open_items.is_empty() {
-        "- none".to_string()
-    } else {
-        outcome
-            .open_items
-            .iter()
-            .take(8)
-            .map(|item| format!("- {}", item.trim()))
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
-    let prompt = format!(
-        "An external CTOX review run rejected the previous slice.\n\n\
-Verdict: {}\n\
-Mission state: {}\n\
-Review summary: {}\n\
-\n\
-Failed gates:\n\
-{}\n\
-\n\
-Semantic findings:\n\
-{}\n\
-\n\
-Open items:\n\
-{}\n\
-\n\
-Address the failed gates and open items surfaced by the external review. \
-Start by checking the persisted review verdict and evidence for this conversation or thread. \
-Do not start unrelated work. Either fix the gaps and verify them with direct checks, \
-or prove the review wrong with stronger evidence.",
-        outcome.verdict.as_gate_label(),
-        outcome.mission_state,
-        summary_line,
-        failed_gates_block,
-        findings_block,
-        open_items_block,
-    );
-    // Keep the rework on the original thread when one exists so the executor
-    // sees its own prior conversation context. Synthesize a fallback thread
-    // from the source label when the original came in without one (rare —
-    // mostly non-TUI background sources).
-    let thread_key = job
-        .thread_key
-        .clone()
-        .filter(|t| !t.trim().is_empty())
-        .unwrap_or_else(|| format!("review-rework:{}", job.source_label));
-    let view = create_self_work_backed_queue_task_ignoring(
-        root,
-        DurableSelfWorkQueueRequest {
-            kind: "review-rework".to_string(),
-            title,
-            prompt,
-            thread_key,
-            workspace_root: job.workspace_root.clone(),
-            priority: "high".to_string(),
-            suggested_skill: job
-                .suggested_skill
-                .clone()
-                .or_else(|| Some("follow-up-orchestrator".to_string())),
-            parent_message_key: job.leased_message_keys.first().cloned(),
-            metadata: serde_json::json!({
-                "dedupe_key": format!(
-                    "review-rework:{}:{}:{}",
-                    job.thread_key.as_deref().unwrap_or(job.source_label.as_str()),
-                    outcome.verdict.as_gate_label(),
-                    clip_text(&summary_line, 80),
-                ),
-                "origin_source_label": job.source_label,
-            }),
-        },
-        &job.leased_message_keys,
-    )?;
-    Ok(view.title)
-}
-
-/// Maximum number of distinct `Review rework: ...` queue tasks the harness
-/// will let stack up against the same thread before refusing to enqueue any
-/// more reworks. Without this cap the rejection loop is unbounded — we
-/// observed individual terminal-bench tasks accumulate >100 review-rework
-/// rounds while the model was stuck in a fix-it loop, burning hours of GPU
-/// time with no convergence. Three rounds is the same budget the founder-
-/// communication checkpoint uses (REVIEW_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD)
-/// applied here at the rework-task layer.
-const MAX_REVIEW_REWORK_ATTEMPTS_PER_THREAD: usize = 3;
-
-/// Count how many `Review rework: ...` queue tasks already exist for the
-/// given `thread_key`, regardless of routing status. Used to cap rework
-/// loops in `handle_actionable_completion_review_rejection`.
-fn count_review_rework_attempts_for_thread(root: &Path, thread_key: &str) -> usize {
-    let trimmed = thread_key.trim();
-    if trimmed.is_empty() {
-        return 0;
-    }
-    let statuses = [
-        "pending",
-        "leased",
-        "handled",
-        "cancelled",
-        "failed",
-        "review_rework",
-        "blocked",
-    ]
-    .iter()
-    .map(|value| (*value).to_string())
-    .collect::<Vec<_>>();
-    match channels::list_queue_tasks(root, &statuses, 512) {
-        Ok(tasks) => tasks
-            .into_iter()
-            .filter(|task| task.thread_key == trimmed && task.title.starts_with("Review rework:"))
-            .count(),
-        Err(_) => 0,
-    }
-}
-
 fn handle_actionable_completion_review_rejection(
     root: &Path,
     state: &Arc<Mutex<SharedState>>,
     job: &QueuedPrompt,
     outcome: &review::ReviewOutcome,
+    prior_reply: &str,
 ) -> CompletionReviewDisposition {
     if let Some(work_id) = resolve_review_rejection_target_self_work_id(root, job) {
         push_event(
@@ -7428,42 +7217,17 @@ fn handle_actionable_completion_review_rejection(
             summary: outcome.summary.clone(),
         };
     }
-    // Rework cap: refuse to enqueue another rework when the same thread
-    // already has MAX_REVIEW_REWORK_ATTEMPTS_PER_THREAD pending/handled/...
-    // rework tasks. This prevents unbounded review-loops where the model
-    // can't converge and the harness keeps queueing fix-it rounds forever.
-    if let Some(thread_key) = job.thread_key.as_deref() {
-        let attempts = count_review_rework_attempts_for_thread(root, thread_key);
-        if attempts >= MAX_REVIEW_REWORK_ATTEMPTS_PER_THREAD {
-            push_event(
-                state,
-                format!(
-                    "Review rework cap reached for {} (thread={}, attempts={}/{}) — holding without enqueueing another rework",
-                    job.source_label, thread_key, attempts, MAX_REVIEW_REWORK_ATTEMPTS_PER_THREAD
-                ),
-            );
-            return CompletionReviewDisposition::Hold {
-                summary: format!(
-                    "Review rework loop capped at {} rounds for thread {}. Latest review verdict: {}",
-                    MAX_REVIEW_REWORK_ATTEMPTS_PER_THREAD,
-                    thread_key,
-                    clip_text(&outcome.summary, 220)
-                ),
-            };
-        }
-    }
-    match enqueue_review_rework(root, job, outcome) {
-        Ok(rework_title) => push_event(state, format!("Review rework enqueued: {rework_title}")),
-        Err(err) => push_event(
-            state,
-            format!(
-                "Review rework enqueue failed for {}: {}",
-                job.source_label, err
-            ),
+    push_event(
+        state,
+        format!(
+            "Review rejected {}; feeding sanitized findings back into the same main work item",
+            job.source_label
         ),
-    }
-    CompletionReviewDisposition::Hold {
-        summary: outcome.summary.clone(),
+    );
+    CompletionReviewDisposition::FeedbackRetry {
+        feedback_prompt: build_review_feedback_retry_prompt(job, outcome, prior_reply),
+        review_summary: outcome.summary.clone(),
+        persist_on_leased_queue: !job.leased_message_keys.is_empty(),
     }
 }
 
@@ -9395,6 +9159,44 @@ fn cancel_open_founder_communication_rework_queue_for_inbound(
     let db_path = crate::paths::core_db(&root);
     let conn = channels::open_channel_db(&db_path)?;
     let now = now_iso_string();
+    let mut statement = conn.prepare(
+        r#"
+        SELECT m.message_key, COALESCE(r.route_status, 'pending')
+        FROM communication_messages m
+        LEFT JOIN communication_routing_state r ON r.message_key = m.message_key
+        WHERE m.channel = 'queue'
+          AND m.direction = 'inbound'
+          AND COALESCE(r.route_status, 'pending') IN (
+                'pending', 'leased', 'blocked', 'failed', 'review_rework'
+          )
+          AND (
+                json_extract(m.metadata_json, '$.parent_message_key') = ?1
+             OR json_extract(m.metadata_json, '$.inbound_message_key') = ?1
+          )
+          AND (
+                m.subject LIKE 'Founder communication rework:%'
+             OR m.body_text LIKE '%Founder communication rework%'
+             OR json_extract(m.metadata_json, '$.ticket_self_work_kind') = ?2
+          )
+        "#,
+    )?;
+    let route_updates = statement
+        .query_map(
+            params![inbound_key, FOUNDER_COMMUNICATION_REWORK_KIND],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(statement);
+    for (message_key, previous_status) in &route_updates {
+        channels::enforce_queue_route_status_transition(
+            &conn,
+            message_key,
+            previous_status,
+            "cancelled",
+            "ctox-service-rework-cleanup",
+            "cancel_open_founder_communication_rework_queue_for_inbound",
+        )?;
+    }
     let updated = conn.execute(
         r#"
         UPDATE communication_routing_state
@@ -9783,6 +9585,54 @@ fn release_stalled_founder_communication_rework_queue_for_inbound(
     let db_path = crate::paths::core_db(&root);
     let conn = channels::open_channel_db(&db_path)?;
     let now = now_iso_string();
+    let stalled_message_key = conn
+        .query_row(
+            r#"
+            SELECT m.message_key
+            FROM communication_messages m
+            LEFT JOIN communication_routing_state r ON r.message_key = m.message_key
+            WHERE m.channel = 'queue'
+              AND m.direction = 'inbound'
+              AND COALESCE(r.route_status, 'pending') = 'review_rework'
+              AND (
+                    json_extract(m.metadata_json, '$.parent_message_key') = ?1
+                 OR json_extract(m.metadata_json, '$.inbound_message_key') = ?1
+              )
+              AND (
+                    m.subject LIKE 'Founder communication rework:%'
+                 OR m.body_text LIKE '%Founder communication rework%'
+                 OR json_extract(m.metadata_json, '$.ticket_self_work_kind') = ?2
+              )
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM communication_messages active
+                    LEFT JOIN communication_routing_state active_r
+                      ON active_r.message_key = active.message_key
+                    WHERE active.channel = 'queue'
+                      AND active.direction = 'inbound'
+                      AND COALESCE(active_r.route_status, 'pending') IN ('pending', 'leased')
+                      AND (
+                            json_extract(active.metadata_json, '$.parent_message_key') = ?1
+                         OR json_extract(active.metadata_json, '$.inbound_message_key') = ?1
+                      )
+              )
+            ORDER BY m.observed_at DESC, m.message_key DESC
+            LIMIT 1
+            "#,
+            params![inbound_key, FOUNDER_COMMUNICATION_REWORK_KIND],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    if let Some(message_key) = stalled_message_key.as_deref() {
+        channels::enforce_queue_route_status_transition(
+            &conn,
+            message_key,
+            "review_rework",
+            "pending",
+            "ctox-service-rework-repair",
+            "release_stalled_founder_communication_rework_queue_for_inbound",
+        )?;
+    }
     let updated = conn.execute(
         r#"
         UPDATE communication_routing_state
@@ -10187,9 +10037,6 @@ fn is_owner_visible_strategic_job(job: &QueuedPrompt) -> bool {
     if is_bounded_stateful_product_execution_job(job) {
         return false;
     }
-    if is_bounded_benchmark_or_runtime_execution_job(job) {
-        return false;
-    }
     let haystack = format!(
         "{}\n{}\n{}\n{}\n{}",
         job.prompt,
@@ -10217,79 +10064,6 @@ fn is_bounded_stateful_product_execution_job(job: &QueuedPrompt) -> bool {
         && !job.leased_message_keys.iter().any(|key| {
             key.starts_with("email:") || key.starts_with("jami:") || key.starts_with("meeting:")
         })
-}
-
-fn is_bounded_benchmark_or_runtime_execution_job(job: &QueuedPrompt) -> bool {
-    let thread_key = job
-        .thread_key
-        .as_deref()
-        .unwrap_or_default()
-        .trim()
-        .to_ascii_lowercase();
-    let workspace_root = job
-        .workspace_root
-        .as_deref()
-        .unwrap_or_default()
-        .trim()
-        .to_ascii_lowercase();
-    if thread_key.starts_with("tbq-") || workspace_root.contains("/runtime/workspaces/tbq-") {
-        return true;
-    }
-    let haystack = format!(
-        "{}\n{}\n{}\n{}\n{}",
-        job.prompt,
-        job.goal,
-        job.preview,
-        job.thread_key.clone().unwrap_or_default(),
-        job.workspace_root.clone().unwrap_or_default()
-    )
-    .to_ascii_lowercase();
-    let terminal_bench_scope = haystack.contains("terminal-bench")
-        || haystack.contains("terminal bench")
-        || haystack.contains("terminal_bench")
-        || haystack.contains("terminalbench")
-        || haystack.contains("tbench")
-        || haystack.contains("tb2");
-    let benchmark_scope = terminal_bench_scope
-        || (haystack.contains("benchmark")
-            && (haystack.contains("runner")
-                || haystack.contains("results.jsonl")
-                || haystack.contains("run-log.md")));
-    let terminal_bench_prep_or_control = terminal_bench_scope
-        && (haystack.contains("prep-")
-            || haystack.contains("preparation ticket")
-            || haystack.contains("preparation_tickets")
-            || haystack.contains("task inventory")
-            || haystack.contains("reference research")
-            || haystack.contains("leaderboard")
-            || haystack.contains("priority plan")
-            || haystack.contains("smoke")
-            || haystack.contains("controller")
-            || haystack.contains("ticket-map.jsonl")
-            || haystack.contains("run-queue.jsonl")
-            || haystack.contains("results.jsonl")
-            || haystack.contains("knowledge.md")
-            || haystack.contains("logbook.md")
-            || haystack.contains("harbor")
-            || haystack.contains("no solution"));
-    let concrete_execution = haystack.contains("run_dir=")
-        || haystack.contains("required output artifacts")
-        || haystack.contains("required artifacts")
-        || haystack.contains("required files:")
-        || haystack.contains("required files")
-        || haystack.contains("durable artifact contract")
-        || haystack.contains("required durable files")
-        || haystack.contains("write these exact files")
-        || haystack.contains("use shell/tools")
-        || haystack.contains("use shell tools")
-        || haystack.contains("harbor")
-        || haystack.contains("local ipc")
-        || haystack.contains("local ctox ipc")
-        || haystack.contains("context_window")
-        || haystack.contains("context window")
-        || haystack.contains("backend evidence")
-        || haystack.contains("verify runtime/context");
-    terminal_bench_prep_or_control || (benchmark_scope && concrete_execution)
 }
 
 fn is_internal_harness_or_forensics_job(job: &QueuedPrompt) -> bool {
@@ -10377,10 +10151,108 @@ After direction is canonical, the deferred execution target is:\n{}",
                 "resume_goal": deferred_goal,
                 "resume_preview": deferred_preview,
                 "resume_skill": resume_skill,
+                "core_run_class": core_run_class_for_thread_workspace_skill(
+                    thread_key,
+                    workspace_root,
+                    resume_skill
+                ),
                 "dedupe_key": format!("strategy-direction:{}", thread_key),
             }),
         },
     )
+}
+
+fn core_allows_strategy_direction_pass(
+    root: &Path,
+    thread_key: &str,
+    workspace_root: Option<&str>,
+    suggested_skill: Option<&str>,
+) -> Result<bool> {
+    let db_path = crate::paths::core_db(&root);
+    let conn = channels::open_channel_db(&db_path)?;
+    let mut metadata = BTreeMap::new();
+    metadata.insert("thread_key".to_string(), thread_key.to_string());
+    if let Some(workspace_root) = workspace_root
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        metadata.insert("workspace_root".to_string(), workspace_root.to_string());
+    }
+    if let Some(suggested_skill) = suggested_skill
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        metadata.insert("suggested_skill".to_string(), suggested_skill.to_string());
+    }
+    if let Some(run_class) =
+        core_run_class_for_thread_workspace_skill(thread_key, workspace_root, suggested_skill)
+    {
+        metadata.insert("core_run_class".to_string(), run_class.to_string());
+    }
+    let proof = check_core_spawn(
+        &conn,
+        &CoreSpawnRequest {
+            parent_entity_type: "Thread".to_string(),
+            parent_entity_id: thread_key.to_string(),
+            child_entity_type: "WorkItem".to_string(),
+            child_entity_id: format!("strategy-direction-pass:{thread_key}"),
+            spawn_kind: format!("self-work:{STRATEGIC_DIRECTION_KIND}"),
+            spawn_reason: "strategy_direction_preflight".to_string(),
+            actor: "ctox-service".to_string(),
+            checkpoint_key: Some(format!("strategy-direction:{thread_key}")),
+            budget_key: Some(format!(
+                "service-self-work-spawn:{STRATEGIC_DIRECTION_KIND}:strategy-direction:{thread_key}"
+            )),
+            max_attempts: Some(64),
+            metadata,
+        },
+    )?;
+    if proof.accepted {
+        return Ok(true);
+    }
+    anyhow::bail!("{}", proof.message);
+}
+
+fn core_run_class_for_thread_workspace_skill(
+    thread_key: &str,
+    workspace_root: Option<&str>,
+    suggested_skill: Option<&str>,
+) -> Option<&'static str> {
+    if is_terminal_bench_thread_key(thread_key)
+        || workspace_root
+            .map(is_terminal_bench_workspace_root)
+            .unwrap_or(false)
+        || suggested_skill
+            .map(is_terminal_bench_skill)
+            .unwrap_or(false)
+    {
+        Some("terminal_bench")
+    } else {
+        None
+    }
+}
+
+fn is_terminal_bench_thread_key(value: &str) -> bool {
+    let value = value.trim().to_ascii_lowercase();
+    value.starts_with("tbq-")
+        || value.starts_with("tbq/")
+        || value.starts_with("tb2-")
+        || value.starts_with("terminal-bench/")
+        || value.contains("terminal-bench")
+        || value.contains("/tbq-")
+}
+
+fn is_terminal_bench_workspace_root(value: &str) -> bool {
+    let value = value.trim().to_ascii_lowercase();
+    value.contains("/runtime/workspaces/tbq-")
+        || value.contains("/terminal-bench-controller/")
+        || value.contains("/terminal-bench-queue/")
+        || value.contains("/terminal-bench-2/")
+}
+
+fn is_terminal_bench_skill(value: &str) -> bool {
+    let value = value.trim().to_ascii_lowercase();
+    value == "benchmark-controller" || value == "terminal-bench-controller"
 }
 
 fn cancel_runnable_thread_tasks_for_strategy(
@@ -10493,6 +10365,14 @@ fn maybe_redirect_owner_visible_work_to_strategy_setup(
     let engine = lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default())?;
     let strategy = engine.active_strategy_snapshot(conversation_id, Some(thread_key.as_str()))?;
     if strategy.active_vision.is_some() && strategy.active_mission.is_some() {
+        return Ok(false);
+    }
+    if !core_allows_strategy_direction_pass(
+        root,
+        &thread_key,
+        job.workspace_root.as_deref(),
+        job.suggested_skill.as_deref(),
+    )? {
         return Ok(false);
     }
     let cancelled_thread_tasks =
@@ -11324,14 +11204,6 @@ fn find_runnable_self_work_task_ignoring(
     Ok(None)
 }
 
-fn find_runnable_thread_task_ignoring(
-    root: &Path,
-    thread_key: &str,
-    ignored_message_keys: &[String],
-) -> Result<Option<channels::QueueTaskView>> {
-    find_runnable_scoped_task_ignoring(root, Some(thread_key), None, ignored_message_keys)
-}
-
 fn find_runnable_scoped_task_ignoring(
     root: &Path,
     thread_key: Option<&str>,
@@ -11360,12 +11232,6 @@ fn requeue_review_rejected_self_work(
     }
     if let Some(disposition) = review_checkpoint_loop_disposition(root, work_id, summary)? {
         match disposition {
-            ReviewCheckpointLoopDisposition::Block { note } => {
-                block_self_work_queue_tasks_for_work(root, work_id, &note)?;
-                if !review_checkpoint_loop_block_already_active(root, work_id)? {
-                    block_ticket_self_work_item(root, work_id, &note);
-                }
-            }
             ReviewCheckpointLoopDisposition::Fail { note } => {
                 fail_self_work_queue_tasks_for_work(root, work_id, &note)?;
                 fail_ticket_self_work_item(root, work_id, &note);
@@ -11406,7 +11272,6 @@ fn requeue_review_rejected_self_work(
 }
 
 enum ReviewCheckpointLoopDisposition {
-    Block { note: String },
     Fail { note: String },
 }
 
@@ -11471,46 +11336,14 @@ fn review_checkpoint_loop_disposition(
     if attempts < threshold {
         return Ok(None);
     }
-    if item.kind == "review-rework" {
-        return Ok(Some(ReviewCheckpointLoopDisposition::Fail {
-            note: format!(
-                "Dieses Review-Rework-Item `{}` wurde {attempts} Mal vom Review-Checkpoint zur Nacharbeit zurueckgegeben. Die Rework-Schranke ({threshold}) ist erreicht; der Harness beendet diese Nacharbeit terminal als failed statt sie zu blockieren. Lege bei Bedarf eine neue fachliche Aufgabe mit neuer Evidenz an. Letzter Review-Hinweis: {}",
-                item.work_id,
-                clip_text(summary, 220)
-            ),
-        }));
-    }
-    Ok(Some(ReviewCheckpointLoopDisposition::Block {
+    Ok(Some(ReviewCheckpointLoopDisposition::Fail {
         note: format!(
-            "Dieses Work Item `{}` ({}) wurde {attempts} Mal vom Review-Checkpoint zur Nacharbeit zurueckgegeben. Die Requeue-Schranke ({threshold}) ist erreicht; der Harness blockt weitere automatische Review-Requeues, damit kein unendlicher Self-Rework-Loop entstehen kann. Fuehre erst neue belastbare Arbeit oder Evidenz in einem separaten fachlichen Task zu. Letzter Review-Hinweis: {}",
+            "Dieses Work Item `{}` ({}) wurde {attempts} Mal vom Review-Checkpoint zur Nacharbeit zurueckgegeben. Die Review-Rework-Schranke ({threshold}) ist erreicht; der Harness beendet diese Arbeit terminal als failed statt sie zu blockieren. Lege bei Bedarf eine neue fachliche Aufgabe mit neuer Evidenz an. Letzter Review-Hinweis: {}",
             item.work_id,
             item.kind,
             clip_text(summary, 220)
         ),
     }))
-}
-
-fn review_checkpoint_loop_block_already_active(root: &Path, work_id: &str) -> Result<bool> {
-    let Some(item) = tickets::load_ticket_self_work_item(root, work_id)? else {
-        return Ok(false);
-    };
-    if item.state != "blocked" {
-        return Ok(false);
-    }
-    let db_path = crate::paths::core_db(&root);
-    let conn = channels::open_channel_db(&db_path)?;
-    let exists: i64 = conn.query_row(
-        r#"
-        SELECT COUNT(*)
-        FROM ticket_self_work_notes
-        WHERE work_id = ?1
-          AND body_text LIKE 'Dieses Work Item `% wurde % Mal vom Review-Checkpoint zur Nacharbeit zurueckgegeben.%'
-        LIMIT 1
-        "#,
-        params![work_id],
-        |row| row.get(0),
-    )?;
-    Ok(exists > 0)
 }
 
 fn review_checkpoint_requeue_attempt_count(root: &Path, work_id: &str) -> Result<usize> {
@@ -12736,6 +12569,33 @@ fn apply_runtime_retry_feedback_to_leased_queue(
     Ok(updated)
 }
 
+fn apply_review_feedback_to_leased_queue(
+    root: &Path,
+    job: &QueuedPrompt,
+    feedback_prompt: &str,
+    review_summary: &str,
+) -> Result<usize> {
+    let note = format!(
+        "Review feedback applied to same queue task: {}",
+        clip_text(review_summary.trim(), 180)
+    );
+    let mut updated = 0usize;
+    for message_key in &job.leased_message_keys {
+        channels::update_queue_task(
+            root,
+            channels::QueueTaskUpdateRequest {
+                message_key: message_key.clone(),
+                prompt: Some(feedback_prompt.to_string()),
+                workspace_root: job.workspace_root.clone(),
+                status_note: Some(note.clone()),
+                ..Default::default()
+            },
+        )?;
+        updated += 1;
+    }
+    Ok(updated)
+}
+
 fn runtime_retry_not_before_iso(error_text: &str) -> String {
     let cooldown_secs = turn_loop::hard_runtime_blocker_retry_cooldown_secs(error_text)
         .unwrap_or(300)
@@ -12958,14 +12818,6 @@ fn strip_harness_feedback_wrappers(value: &str) -> &str {
         };
         current = current[after_current_task..after_current_task + runtime_failure_start].trim();
     }
-}
-
-fn runnable_thread_task_exists_ignoring(
-    root: &Path,
-    thread_key: &str,
-    ignored_message_keys: &[String],
-) -> Result<bool> {
-    runnable_scoped_task_exists_ignoring(root, Some(thread_key), None, ignored_message_keys)
 }
 
 fn runnable_scoped_task_exists_ignoring(
@@ -13351,6 +13203,7 @@ fn chrono_like_iso(epoch_seconds: u64) -> String {
 
 #[cfg(test)]
 mod tests {
+    // ctox-allow-direct-state-write: test fixture module
     use super::*;
     use crate::lcm::{ContinuityKind, LcmConfig, LcmEngine};
     use crate::plan;
@@ -15856,71 +15709,6 @@ mod tests {
     }
 
     #[test]
-    fn review_rework_dedupe_does_not_treat_other_workspace_in_same_thread_as_superseder() {
-        let root = temp_root("ctox-review-rework-workspace-scope");
-        channels::create_queue_task(
-            &root,
-            channels::QueueTaskCreateRequest {
-                title: "Workspace task 002: other".to_string(),
-                prompt: "Work only in /tmp/ctox-review-other".to_string(),
-                thread_key: "terminal-bench-run".to_string(),
-                workspace_root: Some("/tmp/ctox-review-other".to_string()),
-                priority: "high".to_string(),
-                suggested_skill: None,
-                parent_message_key: None,
-                extra_metadata: None,
-            },
-        )
-        .expect("failed to seed sibling workspace task");
-        let current = channels::create_queue_task(
-            &root,
-            channels::QueueTaskCreateRequest {
-                title: "Workspace task 001: current".to_string(),
-                prompt: "Work only in /tmp/ctox-review-current".to_string(),
-                thread_key: "terminal-bench-run".to_string(),
-                workspace_root: Some("/tmp/ctox-review-current".to_string()),
-                priority: "high".to_string(),
-                suggested_skill: None,
-                parent_message_key: None,
-                extra_metadata: None,
-            },
-        )
-        .expect("failed to seed current workspace task");
-        let job = QueuedPrompt {
-            prompt: "Work only in /tmp/ctox-review-current".to_string(),
-            goal: "finish current workspace task".to_string(),
-            preview: "Workspace task 001: current".to_string(),
-            source_label: "queue".to_string(),
-            suggested_skill: None,
-            leased_message_keys: vec![current.message_key.clone()],
-            leased_ticket_event_keys: Vec::new(),
-            thread_key: Some("terminal-bench-run".to_string()),
-            workspace_root: Some("/tmp/ctox-review-current".to_string()),
-            ticket_self_work_id: None,
-            outbound_email: None,
-            outbound_anchor: None,
-        };
-        let mut outcome = review::ReviewOutcome::skipped("current workspace still needs proof");
-        outcome.required = true;
-        outcome.verdict = review::ReviewVerdict::Partial;
-        outcome.open_items = vec!["Add direct validation evidence for this workspace.".to_string()];
-
-        let title = enqueue_review_rework(&root, &job, &outcome)
-            .expect("sibling workspace must not suppress current review rework");
-
-        assert!(title.starts_with("Review rework:"));
-        let tasks =
-            channels::list_queue_tasks(&root, &["pending".to_string(), "leased".to_string()], 10)
-                .expect("failed to list pending queue tasks");
-        assert_eq!(tasks.len(), 3);
-        assert!(tasks.iter().any(|task| {
-            task.title.starts_with("Review rework:")
-                && task.workspace_root.as_deref() == Some("/tmp/ctox-review-current")
-        }));
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
     fn timeout_blocker_suppresses_continuation_and_records_governance_event() {
         let root = std::env::temp_dir().join(format!(
             "ctox-timeout-followup-test-{}",
@@ -16016,76 +15804,6 @@ mod tests {
         let self_work = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
             .expect("failed to list self-work items");
         assert!(self_work.is_empty());
-    }
-
-    #[test]
-    fn timeout_blocker_queues_review_feedback_controller_recovery_without_lease() {
-        let root = temp_root("ctox-timeout-review-feedback-controller");
-        let workspace = root.join("terminal-bench-run");
-        std::fs::create_dir_all(&workspace).expect("failed to create workspace");
-        let controller = workspace.join("controller.json");
-        let logbook = workspace.join("logbook.md");
-        let knowledge = workspace.join("knowledge.md");
-        let results = workspace.join("results.jsonl");
-        let parent = QueuedPrompt {
-            prompt: format!(
-                "Run Terminal-Bench 2 controller.\n\nOnly required durable files for this controller turn:\n- {}\n- {}\n- {}\n- {}\n",
-                controller.display(),
-                logbook.display(),
-                knowledge.display(),
-                results.display()
-            ),
-            goal: "Terminal-Bench 2 Qwen3.6 128k clean".to_string(),
-            preview: "Terminal-Bench controller".to_string(),
-            source_label: "queue".to_string(),
-            suggested_skill: Some("benchmark-controller".to_string()),
-            leased_message_keys: vec!["queue:system::parent".to_string()],
-            leased_ticket_event_keys: Vec::new(),
-            thread_key: Some("tb2-controller".to_string()),
-            workspace_root: Some(workspace.to_string_lossy().into_owned()),
-            ticket_self_work_id: None,
-            outbound_email: None,
-            outbound_anchor: None,
-        };
-        let feedback_prompt = terminal_bench_controller_hold_feedback_prompt(
-            &parent,
-            "review timed out before accepting initialized artifacts",
-        );
-        let job = QueuedPrompt {
-            prompt: feedback_prompt,
-            goal: "Continue Terminal-Bench controller for queue".to_string(),
-            preview: "HARNESS FEEDBACK Terminal-Bench controller continuation".to_string(),
-            source_label: "review-feedback".to_string(),
-            suggested_skill: parent.suggested_skill.clone(),
-            leased_message_keys: Vec::new(),
-            leased_ticket_event_keys: Vec::new(),
-            thread_key: parent.thread_key.clone(),
-            workspace_root: parent.workspace_root.clone(),
-            ticket_self_work_id: None,
-            outbound_email: None,
-            outbound_anchor: None,
-        };
-
-        let created =
-            maybe_enqueue_timeout_continuation(&root, &job, "direct session timeout after 900s")
-                .expect("review-feedback timeout recovery should succeed");
-
-        assert!(created
-            .as_deref()
-            .unwrap_or_default()
-            .starts_with("Recover interrupted Continue Terminal-Bench controller"));
-        let pending = channels::list_queue_tasks(&root, &["pending".to_string()], 10)
-            .expect("failed to list pending queue tasks");
-        assert_eq!(pending.len(), 1);
-        assert_eq!(pending[0].thread_key, "tb2-controller");
-        assert!(pending[0]
-            .prompt
-            .contains("TERMINAL-BENCH TIMEOUT RECOVERY ORDER"));
-        assert!(pending[0]
-            .prompt
-            .contains("Immediately write a checkpoint into controller.json"));
-        assert!(pending[0].prompt.contains(controller.to_str().unwrap()));
-        assert!(pending[0].prompt.contains(results.to_str().unwrap()));
     }
 
     #[test]
@@ -16304,65 +16022,7 @@ mod tests {
     }
 
     #[test]
-    fn review_rework_is_suppressed_when_same_scope_corrective_task_exists() {
-        let root = temp_root("ctox-review-rework-suppressed");
-        channels::create_queue_task(
-            &root,
-            channels::QueueTaskCreateRequest {
-                title: "Kunstmen platform homepage reset".to_string(),
-                prompt: "Direct corrective work for the Kunstmen homepage.".to_string(),
-                thread_key: "kunstmen-operator".to_string(),
-                workspace_root: Some("/home/ubuntu/workspace/kunstmen".to_string()),
-                priority: "urgent".to_string(),
-                suggested_skill: Some("service-deployment".to_string()),
-                parent_message_key: None,
-                extra_metadata: None,
-            },
-        )
-        .expect("failed to seed direct corrective task");
-
-        let job = QueuedPrompt {
-            prompt: "Bad homepage".to_string(),
-            goal: "Repair the Kunstmen homepage".to_string(),
-            preview: "Repair the Kunstmen homepage".to_string(),
-            source_label: "queue".to_string(),
-            suggested_skill: Some("follow-up-orchestrator".to_string()),
-            leased_message_keys: vec!["queue-key-1".to_string()],
-            leased_ticket_event_keys: Vec::new(),
-            thread_key: Some("kunstmen-operator".to_string()),
-            workspace_root: Some("/home/ubuntu/workspace/kunstmen".to_string()),
-            ticket_self_work_id: None,
-            outbound_email: None,
-            outbound_anchor: None,
-        };
-        let outcome = review::ReviewOutcome {
-            required: true,
-            verdict: review::ReviewVerdict::Fail,
-            mission_state: "UNHEALTHY".to_string(),
-            score: 0,
-            summary: "The homepage is still not a platform.".to_string(),
-            report: "report".to_string(),
-            reasons: vec!["Reset the IA".to_string()],
-            failed_gates: vec!["Mission fit".to_string()],
-            semantic_findings: vec!["Homepage still reads like a brochure.".to_string()],
-            categorized_findings: Vec::new(),
-            open_items: vec!["Introduce clear roster and hire flow.".to_string()],
-            evidence: vec!["GET / => static shell".to_string()],
-            handoff: None,
-            disposition: review::ReviewDisposition::Send,
-        };
-
-        let err = enqueue_review_rework(&root, &job, &outcome).expect_err("should suppress");
-        assert!(err
-            .to_string()
-            .contains("superseded by runnable corrective work"));
-        let self_work = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
-            .expect("failed to list self-work");
-        assert!(self_work.is_empty());
-    }
-
-    #[test]
-    fn unrelated_active_plan_does_not_swallow_review_rework() {
+    fn unrelated_active_plan_does_not_swallow_review_feedback_retry() {
         let root = temp_root("ctox-review-rework-active-plan");
         plan::ingest_goal(
             &root,
@@ -16417,25 +16077,94 @@ mod tests {
             disposition: review::ReviewDisposition::Send,
         };
 
-        let disposition =
-            handle_actionable_completion_review_rejection(&root, &state, &job, &outcome);
+        let disposition = handle_actionable_completion_review_rejection(
+            &root,
+            &state,
+            &job,
+            &outcome,
+            "I finished the task.",
+        );
 
         assert!(matches!(
             disposition,
-            CompletionReviewDisposition::Hold { .. }
+            CompletionReviewDisposition::FeedbackRetry {
+                persist_on_leased_queue: true,
+                ..
+            }
         ));
-        let tasks = channels::list_queue_tasks(&root, &["pending".to_string()], 10)
-            .expect("failed to list queue tasks");
-        assert_eq!(tasks.len(), 1);
-        assert_eq!(tasks[0].thread_key, "kunstmen-crm-p0-slices");
-        assert_eq!(
-            tasks[0].suggested_skill.as_deref(),
-            Some("stateful-product-from-scratch")
-        );
         let self_work = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
             .expect("failed to list self-work");
-        assert_eq!(self_work.len(), 1);
-        assert_eq!(self_work[0].kind, "review-rework");
+        assert!(self_work.is_empty());
+    }
+
+    #[test]
+    fn review_feedback_retry_updates_original_queue_without_reviewer_raw_report() {
+        let root = temp_root("ctox-review-feedback-same-queue");
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Create durable artifact".to_string(),
+                prompt: "Create /tmp/result.txt and verify it.".to_string(),
+                thread_key: "queue/generic-artifact".to_string(),
+                workspace_root: Some("/tmp/ctox-review-feedback".to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("follow-up-orchestrator".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create queue task");
+        let job = QueuedPrompt {
+            prompt: task.prompt.clone(),
+            goal: task.title.clone(),
+            preview: task.title.clone(),
+            source_label: "queue".to_string(),
+            suggested_skill: task.suggested_skill.clone(),
+            leased_message_keys: vec![task.message_key.clone()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some(task.thread_key.clone()),
+            workspace_root: task.workspace_root.clone(),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+        let mut outcome = review::ReviewOutcome::skipped("artifact missing");
+        outcome.required = true;
+        outcome.verdict = review::ReviewVerdict::Fail;
+        outcome.report = "raw-secret-reviewer-scratch".to_string();
+        outcome.failed_gates = vec!["Required file is missing.".to_string()];
+        outcome.open_items = vec!["Create and verify the required file.".to_string()];
+        outcome.evidence = vec!["test -f /tmp/result.txt => missing".to_string()];
+
+        let disposition = handle_actionable_completion_review_rejection(
+            &root,
+            &Arc::new(Mutex::new(SharedState::default())),
+            &job,
+            &outcome,
+            "Done.",
+        );
+        let CompletionReviewDisposition::FeedbackRetry {
+            feedback_prompt,
+            review_summary,
+            persist_on_leased_queue: true,
+        } = disposition
+        else {
+            panic!("expected same-queue feedback retry");
+        };
+
+        let updated =
+            apply_review_feedback_to_leased_queue(&root, &job, &feedback_prompt, &review_summary)
+                .expect("failed to apply review feedback");
+        assert_eq!(updated, 1);
+        let reloaded = channels::load_queue_task(&root, &task.message_key)
+            .expect("load failed")
+            .expect("missing task");
+        assert!(reloaded.prompt.contains("The external CTOX Review Gate"));
+        assert!(reloaded.prompt.contains("Required file is missing."));
+        assert!(!reloaded.prompt.contains("raw-secret-reviewer-scratch"));
+        let self_work = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
+            .expect("failed to list self-work");
+        assert!(self_work.is_empty());
     }
 
     #[test]
@@ -16501,7 +16230,7 @@ mod tests {
     }
 
     #[test]
-    fn review_spawn_budget_blocks_unbounded_self_work_cascade() {
+    fn review_spawn_budget_fails_unbounded_self_work_cascade() {
         let root = temp_root("ctox-review-spawn-budget");
         for attempt in 0..review_checkpoint_requeue_block_threshold() {
             create_self_work_backed_queue_task(
@@ -16542,10 +16271,18 @@ mod tests {
         .expect_err("review spawn over finite budget must be rejected");
 
         assert!(err.to_string().contains("spawn gate rejected"));
-        let items = tickets::list_ticket_self_work_items(&root, Some("local"), Some("blocked"), 10)
-            .expect("failed to list blocked self-work");
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0].kind, "review-rework");
+        let failed_items =
+            tickets::list_ticket_self_work_items(&root, Some("local"), Some("failed"), 10)
+                .expect("failed to list failed self-work");
+        assert_eq!(failed_items.len(), 1);
+        assert_eq!(failed_items[0].kind, "review-rework");
+        let blocked_items =
+            tickets::list_ticket_self_work_items(&root, Some("local"), Some("blocked"), 10)
+                .expect("failed to list blocked self-work");
+        assert!(
+            blocked_items.is_empty(),
+            "review spawn budget exhaustion must be terminal, not blocked"
+        );
     }
 
     #[test]
@@ -16715,7 +16452,7 @@ mod tests {
     }
 
     #[test]
-    fn generic_review_requeue_blocks_after_finite_checkpoint_threshold() {
+    fn generic_review_requeue_fails_after_five_checkpoint_rounds() {
         let root = temp_root("ctox-generic-review-requeue-threshold");
         let item = tickets::put_ticket_self_work_item(
             &root,
@@ -16736,42 +16473,49 @@ mod tests {
         )
         .expect("failed to create self-work");
 
-        let first = requeue_review_rejected_self_work(&root, &item.work_id, "first rejection")
-            .expect("first requeue should succeed")
-            .expect("first requeue should create queue task");
-        channels::update_queue_task(
+        let threshold = review_checkpoint_requeue_block_threshold();
+        for attempt in 0..threshold {
+            let task = requeue_review_rejected_self_work(
+                &root,
+                &item.work_id,
+                &format!("review rejection {}", attempt + 1),
+            )
+            .expect("requeue should succeed before threshold")
+            .expect("requeue should create or reuse queue task");
+            channels::update_queue_task(
+                &root,
+                channels::QueueTaskUpdateRequest {
+                    message_key: task.message_key,
+                    route_status: Some("handled".to_string()),
+                    ..Default::default()
+                },
+            )
+            .expect("failed to settle review queue task");
+        }
+
+        let terminal = requeue_review_rejected_self_work(
             &root,
-            channels::QueueTaskUpdateRequest {
-                message_key: first.message_key,
-                route_status: Some("handled".to_string()),
-                ..Default::default()
-            },
+            &item.work_id,
+            "review rejection after threshold",
         )
-        .expect("failed to mark first task handled");
-
-        let second = requeue_review_rejected_self_work(&root, &item.work_id, "second rejection")
-            .expect("second requeue should succeed")
-            .expect("second requeue should create queue task");
-
-        let blocked = requeue_review_rejected_self_work(&root, &item.work_id, "third rejection")
-            .expect("threshold block should be handled");
-        assert!(blocked.is_none());
+        .expect("threshold terminal failure should be handled");
+        assert!(terminal.is_none());
 
         let reloaded = tickets::load_ticket_self_work_item(&root, &item.work_id)
             .expect("failed to reload self-work")
             .expect("missing self-work");
-        assert_eq!(reloaded.state, "blocked");
+        assert_eq!(reloaded.state, "failed");
 
         let blocked_tasks = channels::list_queue_tasks(&root, &["blocked".to_string()], 10)
             .expect("failed to list blocked queue tasks");
-        assert!(blocked_tasks
+        assert!(!blocked_tasks
             .iter()
-            .any(|task| task.message_key == second.message_key));
+            .any(|task| task.ticket_self_work_id.as_deref() == Some(item.work_id.as_str())));
     }
 
     #[test]
-    fn review_rework_uses_extended_checkpoint_requeue_threshold() {
-        let root = temp_root("ctox-review-rework-extended-threshold");
+    fn review_rework_fails_after_five_checkpoint_rounds() {
+        let root = temp_root("ctox-review-rework-threshold");
         let item = tickets::put_ticket_self_work_item(
             &root,
             tickets::TicketSelfWorkUpsertInput {
@@ -16791,54 +16535,17 @@ mod tests {
         )
         .expect("failed to create review-rework self-work");
 
-        let generic_threshold = review_checkpoint_requeue_block_threshold();
         let rework_threshold = review_rework_checkpoint_requeue_block_threshold();
-        assert!(rework_threshold > generic_threshold);
+        assert_eq!(rework_threshold, 5);
 
-        for attempt in 0..generic_threshold {
+        for attempt in 0..rework_threshold {
             let task = requeue_review_rejected_self_work(
                 &root,
                 &item.work_id,
                 &format!("review-rework rejection {}", attempt + 1),
             )
-            .expect("review-rework requeue should succeed before extended threshold")
-            .expect("review-rework should stay runnable beyond generic threshold");
-            channels::update_queue_task(
-                &root,
-                channels::QueueTaskUpdateRequest {
-                    message_key: task.message_key,
-                    route_status: Some("handled".to_string()),
-                    ..Default::default()
-                },
-            )
-            .expect("failed to settle intermediate review-rework queue task");
-        }
-
-        let still_runnable = requeue_review_rejected_self_work(
-            &root,
-            &item.work_id,
-            "one more review-rework rejection after generic threshold",
-        )
-        .expect("review-rework should not use generic threshold")
-        .expect("review-rework should still be runnable at generic threshold");
-        channels::update_queue_task(
-            &root,
-            channels::QueueTaskUpdateRequest {
-                message_key: still_runnable.message_key,
-                route_status: Some("handled".to_string()),
-                ..Default::default()
-            },
-        )
-        .expect("failed to settle post-generic-threshold review-rework queue task");
-
-        for attempt in (generic_threshold + 1)..rework_threshold {
-            let task = requeue_review_rejected_self_work(
-                &root,
-                &item.work_id,
-                &format!("review-rework rejection {}", attempt + 1),
-            )
-            .expect("review-rework requeue should succeed before extended threshold")
-            .expect("review-rework should stay runnable before extended threshold");
+            .expect("review-rework requeue should succeed before threshold")
+            .expect("review-rework should stay runnable before threshold");
             channels::update_queue_task(
                 &root,
                 channels::QueueTaskUpdateRequest {
@@ -16853,9 +16560,9 @@ mod tests {
         let terminal = requeue_review_rejected_self_work(
             &root,
             &item.work_id,
-            "review-rework rejection at extended threshold",
+            "review-rework rejection after threshold",
         )
-        .expect("extended threshold terminal failure should be handled");
+        .expect("threshold terminal failure should be handled");
         assert!(terminal.is_none());
 
         let reloaded = tickets::load_ticket_self_work_item(&root, &item.work_id)
@@ -17050,9 +16757,10 @@ mod tests {
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0].title, "Kunstmen platform homepage reset");
 
-        let closed = tickets::list_ticket_self_work_items(&root, Some("local"), Some("closed"), 10)
-            .expect("failed to list closed self-work");
-        assert!(closed.iter().any(|entry| entry.work_id == item.work_id));
+        let superseded =
+            tickets::list_ticket_self_work_items(&root, Some("local"), Some("superseded"), 10)
+                .expect("failed to list superseded self-work");
+        assert!(superseded.iter().any(|entry| entry.work_id == item.work_id));
     }
 
     #[test]
@@ -17122,9 +16830,10 @@ mod tests {
             .expect("skip check should succeed");
         assert!(skipped);
 
-        let closed = tickets::list_ticket_self_work_items(&root, Some("local"), Some("closed"), 10)
-            .expect("failed to list closed self-work");
-        assert!(closed.iter().any(|entry| entry.work_id == item.work_id));
+        let superseded =
+            tickets::list_ticket_self_work_items(&root, Some("local"), Some("superseded"), 10)
+                .expect("failed to list superseded self-work");
+        assert!(superseded.iter().any(|entry| entry.work_id == item.work_id));
 
         let tasks =
             channels::list_queue_tasks(&root, &["pending".to_string(), "leased".to_string()], 10)
@@ -17575,7 +17284,6 @@ Return a local server that connects to the Solana blockchain and provides endpoi
             outbound_anchor: None,
         };
 
-        assert!(is_bounded_benchmark_or_runtime_execution_job(&job));
         assert!(!is_owner_visible_strategic_job(&job));
         let redirected = maybe_redirect_owner_visible_work_to_strategy_setup(&root, &state, &job)
             .expect("strategy evaluation should succeed");
@@ -17586,6 +17294,85 @@ Return a local server that connects to the Solana blockchain and provides endpoi
                 .expect("failed to list queue tasks");
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0].title, "Workspace task 050: solana-data");
+
+        let items = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
+            .expect("failed to list self-work");
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn terminal_bench_strategy_reroute_is_rejected_by_core_without_cancelling_parent_work() {
+        let root = temp_root("ctox-terminal-bench-core-blocks-strategy-reroute");
+        let queue_task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Workspace task 051: public platform server".to_string(),
+                prompt: "Work only inside this workspace: /home/metricspace/ctox/runtime/workspaces/tbq-20260509Tcleanfull5-051-public-platform-server\n\
+Use this workspace as the current directory for the task.\n\
+Build the public platform server required by the benchmark task."
+                    .to_string(),
+                thread_key: "tbq-qwen36/tbq-20260509Tcleanfull5/051-public-platform-server"
+                    .to_string(),
+                workspace_root: Some(
+                    "/home/metricspace/ctox/runtime/workspaces/tbq-20260509Tcleanfull5-051-public-platform-server"
+                        .to_string(),
+                ),
+                priority: "urgent".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to seed Terminal-Bench queue task");
+        let stale_task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Same thread task that must not be cancelled by rejected reroute"
+                    .to_string(),
+                prompt: "Keep pending unless a valid core-approved reroute occurs.".to_string(),
+                thread_key: "tbq-qwen36/tbq-20260509Tcleanfull5/051-public-platform-server"
+                    .to_string(),
+                workspace_root: Some(
+                    "/home/metricspace/ctox/runtime/workspaces/tbq-20260509Tcleanfull5-051-public-platform-server"
+                        .to_string(),
+                ),
+                priority: "high".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to seed same-thread task");
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        let job = QueuedPrompt {
+            prompt: queue_task.prompt.clone(),
+            goal: queue_task.title.clone(),
+            preview: queue_task.title.clone(),
+            source_label: "queue".to_string(),
+            suggested_skill: None,
+            leased_message_keys: vec![queue_task.message_key.clone()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some(
+                "tbq-qwen36/tbq-20260509Tcleanfull5/051-public-platform-server".to_string(),
+            ),
+            workspace_root: Some(
+                "/home/metricspace/ctox/runtime/workspaces/tbq-20260509Tcleanfull5-051-public-platform-server"
+                    .to_string(),
+            ),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        assert!(is_owner_visible_strategic_job(&job));
+        let redirected = maybe_redirect_owner_visible_work_to_strategy_setup(&root, &state, &job)
+            .expect("strategy evaluation should be core-gated");
+        assert!(!redirected);
+
+        let stale = channels::load_queue_task(&root, &stale_task.message_key)
+            .expect("failed to reload same-thread task")
+            .expect("missing same-thread task");
+        assert_eq!(stale.route_status, "pending");
 
         let items = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
             .expect("failed to list self-work");
@@ -17630,8 +17417,7 @@ Use Harbor/Terminal-Bench runner evidence and keep the work bounded to benchmark
             outbound_anchor: None,
         };
 
-        assert!(is_bounded_benchmark_or_runtime_execution_job(&job));
-        assert!(!is_owner_visible_strategic_job(&job));
+        assert!(is_owner_visible_strategic_job(&job));
         let redirected = maybe_redirect_owner_visible_work_to_strategy_setup(&root, &state, &job)
             .expect("strategy evaluation should succeed");
         assert!(!redirected);
@@ -17834,55 +17620,6 @@ Preserve and update controller.json and logbook.md."
     }
 
     #[test]
-    fn terminal_bench_review_hold_generates_actionable_continuation_feedback() {
-        let run_dir = "/home/metricspace/CTOX/runtime/terminal-bench-2/runs/run-hold-feedback";
-        let prompt = format!(
-            "You are CTOX running a Terminal-Bench 2 evaluation controller on this 4xGPU host.\n\n\
-Required artifacts. You must create and maintain exactly these durable files in this run directory:\n\
-- {run_dir}/controller.json\n\
-- {run_dir}/ticket-map.jsonl\n\
-- {run_dir}/run-log.md\n\
-- {run_dir}/knowledge.md\n\
-- {run_dir}/results.json\n\n\
-Use shell tools to create or update these files through Harbor."
-        );
-        let job = QueuedPrompt {
-            prompt,
-            goal: "Terminal-Bench 2 controller Qwen3.6 128k".to_string(),
-            preview: "Terminal-Bench 2 controller Qwen3.6 128k".to_string(),
-            source_label: "queue".to_string(),
-            suggested_skill: None,
-            leased_message_keys: vec!["queue:system::tb2".to_string()],
-            leased_ticket_event_keys: Vec::new(),
-            thread_key: Some("queue/tb2-qwen36-128k".to_string()),
-            workspace_root: Some("/home/metricspace/CTOX/runtime/terminal-bench-2".to_string()),
-            ticket_self_work_id: None,
-            outbound_email: None,
-            outbound_anchor: None,
-        };
-
-        assert!(is_terminal_bench_controller_artifact_job(&job));
-
-        let feedback = terminal_bench_controller_hold_feedback_prompt(
-            &job,
-            "completion review leg did not produce a verdict within 900s",
-        );
-        assert!(feedback.contains("HARNESS FEEDBACK"));
-        assert!(feedback.contains("not accepted as benchmark completion"));
-        assert!(feedback.contains("Do not recreate them from scratch"));
-        assert!(feedback.contains("controller.phase=preparation"));
-        assert!(feedback.contains("results.json with zero real task statuses"));
-        assert!(!feedback.contains("same five durable files"));
-        assert!(!feedback.contains("Read the existing controller.json, ticket-map.jsonl, run-log.md, knowledge.md, and results.json first"));
-        assert!(feedback.contains("active harness model/provider"));
-        assert!(feedback.contains("131072 tokens"));
-        assert!(feedback.contains("API-backed"));
-        assert!(feedback.contains("Verify Harbor"));
-        assert!(feedback.contains(&format!("{run_dir}/controller.json")));
-        assert!(feedback.contains(&format!("{run_dir}/results.json")));
-    }
-
-    #[test]
     fn unavailable_review_does_not_requeue_generic_artifact_job() {
         let job = QueuedPrompt {
             prompt: "RUN_DIR=\"/tmp/ctox-smoke\". Initialisiere die Datei required-smoke.json."
@@ -17907,42 +17644,6 @@ Use shell tools to create or update these files through Harbor."
                 "completion review leg did not produce a verdict within 900s"
             ),
             CompletionReviewDisposition::None
-        ));
-    }
-
-    #[test]
-    fn unavailable_review_still_holds_terminal_bench_controller() {
-        let run_dir = "/home/metricspace/CTOX/runtime/terminal-bench-2/runs/run-hold-feedback";
-        let job = QueuedPrompt {
-            prompt: format!(
-                "Terminal-Bench 2 controller via Harbor.\n\n\
-Required artifacts. You must create and maintain exactly these durable files in this run directory:\n\
-- {run_dir}/controller.json\n\
-- {run_dir}/ticket-map.jsonl\n\
-- {run_dir}/run-log.md\n\
-- {run_dir}/knowledge.md\n\
-- {run_dir}/results.json\n"
-            ),
-            goal: "Terminal-Bench 2 controller Qwen3.6 128k".to_string(),
-            preview: "Terminal-Bench 2 controller Qwen3.6 128k".to_string(),
-            source_label: "queue".to_string(),
-            suggested_skill: None,
-            leased_message_keys: vec!["queue:system::tb2".to_string()],
-            leased_ticket_event_keys: Vec::new(),
-            thread_key: Some("queue/tb2-qwen36-128k".to_string()),
-            workspace_root: Some("/home/metricspace/CTOX/runtime/terminal-bench-2".to_string()),
-            ticket_self_work_id: None,
-            outbound_email: None,
-            outbound_anchor: None,
-        };
-
-        assert!(is_terminal_bench_controller_artifact_job(&job));
-        assert!(matches!(
-            completion_review_unavailable_disposition(
-                &job,
-                "completion review leg did not produce a verdict within 900s"
-            ),
-            CompletionReviewDisposition::Hold { .. }
         ));
     }
 
