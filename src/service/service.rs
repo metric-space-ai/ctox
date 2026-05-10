@@ -11536,14 +11536,7 @@ fn requeue_continue_requested_self_work(
         "Die letzte Ausfuehrung ist noch nicht fertig und hat konkrete naechste Schritte genannt. Setze genau diese Arbeit fort. Wenn danach fertig, liefere eine abgeschlossene Zusammenfassung; schlage nur dann erneut Fortsetzung vor, wenn konkrete Pflichtpunkte offen bleiben. Kontext: {}",
         clip_text(summary, 420)
     );
-    let item = tickets::transition_ticket_self_work_item(
-        root,
-        work_id,
-        "queued",
-        "ctox-continuation",
-        Some(&note),
-        "internal",
-    )?;
+    let item = transition_self_work_after_continuation_request(root, work_id, &note)?;
     if let Some(reason) = suppress_self_work_reason(root, &item)? {
         supersede_ticket_self_work_item(
             root,
@@ -11553,6 +11546,111 @@ fn requeue_continue_requested_self_work(
         return Ok(None);
     }
     queue_ticket_self_work_item(root, &item)
+}
+
+fn transition_self_work_after_continuation_request(
+    root: &Path,
+    work_id: &str,
+    note: &str,
+) -> Result<tickets::TicketSelfWorkItemView> {
+    let item = tickets::load_ticket_self_work_item(root, work_id)?
+        .with_context(|| format!("ticket self-work item {work_id} not found"))?;
+    match normalize_token(&item.state).as_str() {
+        "" | "created" => {
+            let planned = tickets::transition_ticket_self_work_item(
+                root,
+                work_id,
+                "queued",
+                "ctox-continuation",
+                Some("Continuation request arrived before the work item had a planned state; moving it through the normal queue lifecycle."),
+                "internal",
+            )?;
+            transition_planned_self_work_after_continuation_request(root, &planned, note)
+        }
+        "open" | "queued" | "restored" | "publishing" => {
+            transition_planned_self_work_after_continuation_request(root, &item, note)
+        }
+        "blocked" => {
+            let planned = tickets::transition_ticket_self_work_item(
+                root,
+                work_id,
+                "queued",
+                "ctox-continuation",
+                Some("Continuation request reopened blocked self-work for bounded progress."),
+                "internal",
+            )?;
+            transition_planned_self_work_after_continuation_request(root, &planned, note)
+        }
+        "published" | "running" | "executing" | "in_progress" => {
+            transition_executing_self_work_after_continuation_request(root, &item, note)
+        }
+        "awaiting_review" | "review" | "reviewing" => tickets::transition_ticket_self_work_item(
+            root,
+            work_id,
+            "rework_required",
+            "ctox-continuation",
+            Some(note),
+            "internal",
+        ),
+        "rework_required" | "review_rework" | "rework" => {
+            tickets::transition_ticket_self_work_item(
+                root,
+                work_id,
+                "rework_required",
+                "ctox-continuation",
+                Some(note),
+                "internal",
+            )
+        }
+        "failed" | "closed" | "done" | "completed" | "handled" | "cancelled" | "superseded" => {
+            anyhow::bail!(
+                "cannot continue terminal ticket self-work item {work_id} in state {}",
+                item.state
+            )
+        }
+        other => anyhow::bail!(
+            "cannot continue ticket self-work item {work_id} because state `{other}` is not mapped"
+        ),
+    }
+}
+
+fn transition_planned_self_work_after_continuation_request(
+    root: &Path,
+    item: &tickets::TicketSelfWorkItemView,
+    note: &str,
+) -> Result<tickets::TicketSelfWorkItemView> {
+    let executing = tickets::transition_ticket_self_work_item(
+        root,
+        &item.work_id,
+        "published",
+        "ctox-continuation",
+        Some("Continuation request applies to the just-executed queue slice; entering execution before review checkpoint state."),
+        "internal",
+    )?;
+    transition_executing_self_work_after_continuation_request(root, &executing, note)
+}
+
+fn transition_executing_self_work_after_continuation_request(
+    root: &Path,
+    item: &tickets::TicketSelfWorkItemView,
+    note: &str,
+) -> Result<tickets::TicketSelfWorkItemView> {
+    let awaiting_review = tickets::transition_ticket_self_work_item(
+        root,
+        &item.work_id,
+        "awaiting_review",
+        "ctox-continuation",
+        Some("Execution slice reached a continuation checkpoint."),
+        "internal",
+    )?;
+    tickets::transition_ticket_self_work_item(
+        root,
+        &awaiting_review.work_id,
+        "rework_required",
+        "ctox-continuation",
+        Some(note),
+        "internal",
+    )
 }
 
 fn requeue_runtime_failed_self_work(
@@ -16618,6 +16716,84 @@ mod tests {
         let reloaded = tickets::load_ticket_self_work_item(&root, &published.work_id)
             .expect("failed to reload review-rework")
             .expect("missing review-rework");
+        assert_eq!(reloaded.state, "published");
+
+        let conn = channels::open_channel_db(&crate::paths::core_db(&root))
+            .expect("failed to open core db");
+        for (from_state, to_state) in [
+            ("Executing", "AwaitingReview"),
+            ("AwaitingReview", "ReworkRequired"),
+            ("ReworkRequired", "Executing"),
+        ] {
+            let count: i64 = conn
+                .query_row(
+                    r#"
+                    SELECT COUNT(*)
+                    FROM ctox_core_transition_proofs
+                    WHERE entity_type = 'WorkItem'
+                      AND entity_id = ?1
+                      AND from_state = ?2
+                      AND to_state = ?3
+                      AND accepted = 1
+                    "#,
+                    params![published.work_id.as_str(), from_state, to_state],
+                    |row| row.get(0),
+                )
+                .expect("failed to count core transition proofs");
+            assert_eq!(
+                count, 1,
+                "missing accepted core proof for {from_state} -> {to_state}"
+            );
+        }
+    }
+
+    #[test]
+    fn published_self_work_continuation_uses_legal_core_review_path() {
+        let root = temp_root("ctox-published-continuation-core-path");
+        let item = tickets::put_ticket_self_work_item(
+            &root,
+            tickets::TicketSelfWorkUpsertInput {
+                source_system: "local".to_string(),
+                kind: "mission-follow-up".to_string(),
+                title: "Continue mission until the workspace task is complete".to_string(),
+                body_text: "Continue the durable work item after a non-terminal slice.".to_string(),
+                state: "open".to_string(),
+                metadata: serde_json::json!({
+                    "thread_key": "queue/continuation-core-path",
+                    "workspace_root": "/tmp/ctox-continuation-core-path",
+                    "priority": "high",
+                    "skill": "follow-up-orchestrator",
+                    "dedupe_key": "mission-follow-up:continuation-core-path",
+                }),
+            },
+            false,
+        )
+        .expect("failed to create self-work");
+        let published = tickets::transition_ticket_self_work_item(
+            &root,
+            &item.work_id,
+            "published",
+            "ctox-test",
+            Some("Simulate a live self-work slice that asks for continuation."),
+            "internal",
+        )
+        .expect("failed to publish self-work");
+
+        let queued = requeue_continue_requested_self_work(
+            &root,
+            &published.work_id,
+            "The agent identified concrete remaining steps and did not claim completion.",
+        )
+        .expect("published continuation should requeue through core")
+        .expect("expected a new queue task");
+
+        assert_eq!(
+            queued.ticket_self_work_id.as_deref(),
+            Some(published.work_id.as_str())
+        );
+        let reloaded = tickets::load_ticket_self_work_item(&root, &published.work_id)
+            .expect("failed to reload self-work")
+            .expect("missing self-work");
         assert_eq!(reloaded.state, "published");
 
         let conn = channels::open_channel_db(&crate::paths::core_db(&root))
