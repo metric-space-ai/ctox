@@ -11658,14 +11658,7 @@ fn requeue_runtime_failed_self_work(
     work_id: &str,
     note: &str,
 ) -> Result<Option<channels::QueueTaskView>> {
-    let item = tickets::transition_ticket_self_work_item(
-        root,
-        work_id,
-        "queued",
-        "ctox-service",
-        Some(note),
-        "internal",
-    )?;
+    let item = transition_self_work_after_runtime_retry(root, work_id, note)?;
     if let Some(reason) = suppress_self_work_reason(root, &item)? {
         supersede_ticket_self_work_item(
             root,
@@ -11675,6 +11668,111 @@ fn requeue_runtime_failed_self_work(
         return Ok(None);
     }
     queue_ticket_self_work_item(root, &item)
+}
+
+fn transition_self_work_after_runtime_retry(
+    root: &Path,
+    work_id: &str,
+    note: &str,
+) -> Result<tickets::TicketSelfWorkItemView> {
+    let item = tickets::load_ticket_self_work_item(root, work_id)?
+        .with_context(|| format!("ticket self-work item {work_id} not found"))?;
+    match normalize_token(&item.state).as_str() {
+        "" | "created" => {
+            let planned = tickets::transition_ticket_self_work_item(
+                root,
+                work_id,
+                "queued",
+                "ctox-runtime-retry",
+                Some("Runtime retry arrived before the work item had a planned state; moving it through the normal queue lifecycle."),
+                "internal",
+            )?;
+            transition_planned_self_work_after_runtime_retry(root, &planned, note)
+        }
+        "open" | "queued" | "restored" | "publishing" => {
+            transition_planned_self_work_after_runtime_retry(root, &item, note)
+        }
+        "blocked" => {
+            let planned = tickets::transition_ticket_self_work_item(
+                root,
+                work_id,
+                "queued",
+                "ctox-runtime-retry",
+                Some("Runtime retry reopened blocked self-work for bounded retry."),
+                "internal",
+            )?;
+            transition_planned_self_work_after_runtime_retry(root, &planned, note)
+        }
+        "published" | "running" | "executing" | "in_progress" => {
+            transition_executing_self_work_after_runtime_retry(root, &item, note)
+        }
+        "awaiting_review" | "review" | "reviewing" => tickets::transition_ticket_self_work_item(
+            root,
+            work_id,
+            "rework_required",
+            "ctox-runtime-retry",
+            Some(note),
+            "internal",
+        ),
+        "rework_required" | "review_rework" | "rework" => {
+            tickets::transition_ticket_self_work_item(
+                root,
+                work_id,
+                "rework_required",
+                "ctox-runtime-retry",
+                Some(note),
+                "internal",
+            )
+        }
+        "failed" | "closed" | "done" | "completed" | "handled" | "cancelled" | "superseded" => {
+            anyhow::bail!(
+                "cannot runtime-retry terminal ticket self-work item {work_id} in state {}",
+                item.state
+            )
+        }
+        other => anyhow::bail!(
+            "cannot runtime-retry ticket self-work item {work_id} because state `{other}` is not mapped"
+        ),
+    }
+}
+
+fn transition_planned_self_work_after_runtime_retry(
+    root: &Path,
+    item: &tickets::TicketSelfWorkItemView,
+    note: &str,
+) -> Result<tickets::TicketSelfWorkItemView> {
+    let executing = tickets::transition_ticket_self_work_item(
+        root,
+        &item.work_id,
+        "published",
+        "ctox-runtime-retry",
+        Some("Runtime retry applies to the just-executed queue slice; entering execution before retry checkpoint state."),
+        "internal",
+    )?;
+    transition_executing_self_work_after_runtime_retry(root, &executing, note)
+}
+
+fn transition_executing_self_work_after_runtime_retry(
+    root: &Path,
+    item: &tickets::TicketSelfWorkItemView,
+    note: &str,
+) -> Result<tickets::TicketSelfWorkItemView> {
+    let awaiting_review = tickets::transition_ticket_self_work_item(
+        root,
+        &item.work_id,
+        "awaiting_review",
+        "ctox-runtime-retry",
+        Some("Execution slice reached a runtime retry checkpoint."),
+        "internal",
+    )?;
+    tickets::transition_ticket_self_work_item(
+        root,
+        &awaiting_review.work_id,
+        "rework_required",
+        "ctox-runtime-retry",
+        Some(note),
+        "internal",
+    )
 }
 
 fn founder_rework_review_loop_block_note(
@@ -16785,6 +16883,85 @@ mod tests {
             "The agent identified concrete remaining steps and did not claim completion.",
         )
         .expect("published continuation should requeue through core")
+        .expect("expected a new queue task");
+
+        assert_eq!(
+            queued.ticket_self_work_id.as_deref(),
+            Some(published.work_id.as_str())
+        );
+        let reloaded = tickets::load_ticket_self_work_item(&root, &published.work_id)
+            .expect("failed to reload self-work")
+            .expect("missing self-work");
+        assert_eq!(reloaded.state, "published");
+
+        let conn = channels::open_channel_db(&crate::paths::core_db(&root))
+            .expect("failed to open core db");
+        for (from_state, to_state) in [
+            ("Executing", "AwaitingReview"),
+            ("AwaitingReview", "ReworkRequired"),
+            ("ReworkRequired", "Executing"),
+        ] {
+            let count: i64 = conn
+                .query_row(
+                    r#"
+                    SELECT COUNT(*)
+                    FROM ctox_core_transition_proofs
+                    WHERE entity_type = 'WorkItem'
+                      AND entity_id = ?1
+                      AND from_state = ?2
+                      AND to_state = ?3
+                      AND accepted = 1
+                    "#,
+                    params![published.work_id.as_str(), from_state, to_state],
+                    |row| row.get(0),
+                )
+                .expect("failed to count core transition proofs");
+            assert_eq!(
+                count, 1,
+                "missing accepted core proof for {from_state} -> {to_state}"
+            );
+        }
+    }
+
+    #[test]
+    fn published_self_work_runtime_retry_uses_legal_core_review_path() {
+        let root = temp_root("ctox-published-runtime-retry-core-path");
+        let item = tickets::put_ticket_self_work_item(
+            &root,
+            tickets::TicketSelfWorkUpsertInput {
+                source_system: "local".to_string(),
+                kind: "mission-follow-up".to_string(),
+                title: "Continue mission after retryable runtime interruption".to_string(),
+                body_text: "Retry the durable work item after a transient runtime failure."
+                    .to_string(),
+                state: "open".to_string(),
+                metadata: serde_json::json!({
+                    "thread_key": "queue/runtime-retry-core-path",
+                    "workspace_root": "/tmp/ctox-runtime-retry-core-path",
+                    "priority": "high",
+                    "skill": "follow-up-orchestrator",
+                    "dedupe_key": "mission-follow-up:runtime-retry-core-path",
+                }),
+            },
+            false,
+        )
+        .expect("failed to create self-work");
+        let published = tickets::transition_ticket_self_work_item(
+            &root,
+            &item.work_id,
+            "published",
+            "ctox-test",
+            Some("Simulate a live self-work slice interrupted by a retryable runtime failure."),
+            "internal",
+        )
+        .expect("failed to publish self-work");
+
+        let queued = requeue_runtime_failed_self_work(
+            &root,
+            &published.work_id,
+            "Retryable runtime/API failure; resume the same durable work item.",
+        )
+        .expect("published runtime retry should requeue through core")
         .expect("expected a new queue task");
 
         assert_eq!(
