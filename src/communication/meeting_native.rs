@@ -2698,7 +2698,7 @@ if (provider === "microsoft") {
         ctx.moveTo(84, 190);
         ctx.lineTo(w - 84, 190);
         ctx.stroke();
-        const entries = state.entries.slice(-2);
+        const entries = state.entries.slice(-4);
         let y = 250;
         if (entries.length === 0) {
           ctx.font = "600 40px Arial, sans-serif";
@@ -2707,18 +2707,19 @@ if (provider === "microsoft") {
         }
         for (const entry of entries) {
           const speaker = entry.speaker && entry.speaker !== "unknown" ? entry.speaker : "Sprecher unbekannt";
-          ctx.font = "700 24px Arial, sans-serif";
+          ctx.font = "700 22px Arial, sans-serif";
           ctx.fillStyle = entry.speaker && entry.speaker !== "unknown" ? "rgb(147,197,253)" : "rgb(203,213,225)";
-          ctx.fillText(`${speaker} · aktueller Auszug`, 86, y);
+          const sourceLabel = entry.source === "platform_caption" ? "Teams" : "Realtime";
+          ctx.fillText(`${speaker} · ${sourceLabel}`, 86, y);
           y += 32;
-          ctx.font = "500 30px Arial, sans-serif";
+          ctx.font = "500 28px Arial, sans-serif";
           ctx.fillStyle = "rgb(248,250,252)";
-          for (const line of wrapLine(ctx, entry.text, w - 190).slice(0, 3)) {
+          for (const line of wrapLine(ctx, entry.text, w - 190).slice(0, 2)) {
             if (y > h - 145) break;
             ctx.fillText(line, 86, y);
-            y += 36;
+            y += 34;
           }
-          y += 18;
+          y += 14;
           if (y > h - 145) break;
         }
         ctx.fillStyle = "rgba(17,24,39,0.72)";
@@ -2732,19 +2733,52 @@ if (provider === "microsoft") {
       window.__ctoxTranscriptCanvas = canvas;
       return canvas;
     };
+    const mergeText = (previous, next) => {
+      previous = compact(previous);
+      next = compact(next);
+      if (!previous) return next;
+      if (!next) return previous;
+      if (next === previous || previous.endsWith(next)) return previous;
+      if (next.startsWith(previous)) return next;
+      const prevWords = previous.split(" ");
+      const nextWords = next.split(" ");
+      const maxOverlap = Math.min(prevWords.length, nextWords.length, 14);
+      for (let size = maxOverlap; size >= 2; size--) {
+        if (prevWords.slice(-size).join(" ").toLowerCase() === nextWords.slice(0, size).join(" ").toLowerCase()) {
+          return compact(`${previous} ${nextWords.slice(size).join(" ")}`);
+        }
+      }
+      return compact(`${previous} ${next}`);
+    };
     window.__ctoxTranscriptOverlayPush = (text, speaker, source = "realtime_stt") => {
       const clean = compact(text);
       if (!clean || /^(sending|message sent)$/i.test(clean)) return;
-      const normalizedSpeaker = compact(speaker || "unknown");
-      const compacted = clean.length > 520 ? `${clean.slice(0, 520).trim()} ...` : clean;
-      const last = state.entries[state.entries.length - 1];
-      if (!last || last.text !== compacted || last.speaker !== normalizedSpeaker) {
-        state.sequence += 1;
-        state.entries.push({ speaker: normalizedSpeaker, text: compacted, seq: state.sequence, ts: Date.now() });
+      if (source === "chat") return;
+      const now = Date.now();
+      if (source === "realtime_stt") {
+        state.primarySource = "realtime_stt";
+        state.primarySourceAt = now;
       }
-      state.entries = state.entries.slice(-8);
+      if (source === "platform_caption" && state.primarySource === "realtime_stt" && now - (state.primarySourceAt || 0) < 30000) {
+        return;
+      }
+      const normalizedSpeaker = compact(speaker || "unknown");
+      const compacted = clean.length > 700 ? `${clean.slice(0, 700).trim()} ...` : clean;
+      const last = state.entries[state.entries.length - 1];
+      const recentSameLine = last
+        && last.source === source
+        && last.speaker === normalizedSpeaker
+        && now - last.ts < (source === "realtime_stt" ? 12000 : 5000);
+      if (recentSameLine) {
+        last.text = mergeText(last.text, compacted);
+        last.ts = now;
+      } else if (!last || last.text !== compacted || last.speaker !== normalizedSpeaker || last.source !== source) {
+        state.sequence += 1;
+        state.entries.push({ speaker: normalizedSpeaker, text: compacted, source, seq: state.sequence, ts: now });
+      }
+      state.entries = state.entries.slice(-10);
       state.status = source === "platform_caption" ? "Teams-Captions aktiv" : "Realtime-STT aktiv";
-      state.updatedAt = Date.now();
+      state.updatedAt = now;
     };
     const originalGetUserMedia = navigator.mediaDevices?.getUserMedia?.bind(navigator.mediaDevices);
     if (!originalGetUserMedia) return;
@@ -3274,9 +3308,6 @@ const installChatObservers = async () => {
     const key = `${sender}|${msg.text}`;
     if (knownChatKeys.has(key)) return;
     knownChatKeys.add(key);
-    page.evaluate(({ text, sender }) => {
-      window.__ctoxTranscriptOverlayPush?.(text, sender);
-    }, { text: msg.text, sender }).catch(() => {});
     emit({ type: "chat", sender, text: msg.text, ts: msg.ts || new Date().toISOString() });
   }).catch(() => {});
 
@@ -3348,9 +3379,6 @@ const chatPollInterval = setInterval(async () => {
       const key = `${msg.sender}|${msg.text}`;
       if (!knownChatKeys.has(key)) {
         knownChatKeys.add(key);
-        await page.evaluate(({ text, sender }) => {
-          window.__ctoxTranscriptOverlayPush?.(text, sender);
-        }, { text: msg.text, sender: msg.sender }).catch(() => {});
         emit({ type: "chat", sender: msg.sender, text: msg.text, ts: msg.ts || new Date().toISOString() });
       }
     }
@@ -3466,7 +3494,7 @@ const parseCaptionNode = (node) => {
       if (knownTranscriptKeys.has(key)) continue;
       knownTranscriptKeys.add(key);
       await page.evaluate(({ text, speaker }) => {
-        window.__ctoxTranscriptOverlayPush?.(text, speaker);
+        window.__ctoxTranscriptOverlayPush?.(text, speaker, "platform_caption");
       }, { text: entry.text, speaker: entry.speaker }).catch(() => {});
       emit({ type: "transcript_segment", ...entry });
     }
@@ -3859,12 +3887,12 @@ asyncio.run(main())
       return;
     }
     if (msg.type !== "delta" || !msg.text) return;
-    realtimeBuffer = `${realtimeBuffer} ${msg.text}`.trim();
-    if (/[.!?。！？]\s*$/.test(realtimeBuffer) || realtimeBuffer.length >= 220) {
+    realtimeBuffer = `${realtimeBuffer}${msg.text}`;
+    if (/[.!?。！？]\s*$/.test(realtimeBuffer.trim()) || realtimeBuffer.length >= 320) {
       if (realtimeFlushTimer) clearTimeout(realtimeFlushTimer);
       flushRealtimeBuffer();
     } else if (!realtimeFlushTimer) {
-      realtimeFlushTimer = setTimeout(flushRealtimeBuffer, 700);
+      realtimeFlushTimer = setTimeout(flushRealtimeBuffer, 2200);
     }
   });
   const terminateTeamsMediaChildren = () => {
