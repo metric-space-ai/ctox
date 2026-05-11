@@ -412,8 +412,18 @@ impl ReviewOutcome {
     }
 
     pub fn has_acceptable_pass_proof(&self) -> bool {
-        self.pass_proof_kind()
-            .map(|proof| proof.is_acceptable_for_pass())
+        let report = self.canonical_report();
+        let proof = parse_pass_proof(&report);
+        let evidence = if self.evidence.is_empty() {
+            parse_section_items(&report, "EVIDENCE:")
+        } else {
+            self.evidence.clone()
+        };
+        proof
+            .map(|kind| {
+                kind.is_acceptable_for_pass()
+                    && unsupported_pass_proof_reason(proof, &report, &evidence).is_none()
+            })
             .unwrap_or(false)
     }
 
@@ -1229,6 +1239,20 @@ fn parse_review_report(score: u8, reasons: Vec<String>, report: &str) -> ReviewO
             "Re-run review and inspect the required artifact, durable state, live surface, communication record, or trusted external validator before accepting completion.",
         );
     }
+    if verdict == ReviewVerdict::Pass {
+        if let Some(reason) = unsupported_pass_proof_reason(pass_proof, report, &evidence) {
+            verdict = ReviewVerdict::Partial;
+            summary = format!("Review PASS was rejected because {reason}. {summary}");
+            push_unique_item(
+                &mut failed_gates,
+                "Reviewer PASS_PROOF was not supported by non-worker-owned evidence.",
+            );
+            push_unique_item(
+                &mut open_items,
+                "Re-run review with direct artifact/state/communication/live-surface inspection or trusted external acceptance evidence; worker-owned tests, logs, and prose are not sufficient.",
+            );
+        }
+    }
     ReviewOutcome {
         required: true,
         verdict,
@@ -1292,6 +1316,173 @@ fn review_pass_is_unsubstantiated(score: u8, report: &str, evidence: &[String]) 
     // says tools/sandbox blocked inspection, treat the pass as incomplete even
     // if it still emitted a nominal evidence line.
     score >= 3 && (evidence.is_empty() || report_mentions_review_access_blocker(report))
+}
+
+fn unsupported_pass_proof_reason(
+    pass_proof: Option<ReviewPassProofKind>,
+    report: &str,
+    evidence: &[String],
+) -> Option<String> {
+    let proof = pass_proof?;
+    if !proof.is_acceptable_for_pass() {
+        return None;
+    }
+    let evidence_class = classify_pass_evidence(report, evidence);
+    match proof {
+        ReviewPassProofKind::Direct if evidence_class.direct_or_trusted() => None,
+        ReviewPassProofKind::Direct => Some(
+            "PASS_PROOF was declared direct, but the evidence is only worker-owned tests/logs, prose, or otherwise not direct inspection".to_string(),
+        ),
+        ReviewPassProofKind::TrustedExternal if evidence_class.trusted_external => None,
+        ReviewPassProofKind::TrustedExternal => Some(
+            "PASS_PROOF was declared trusted_external, but the evidence does not cite an immutable validator, accepted send proof, or external system of record".to_string(),
+        ),
+        _ => None,
+    }
+}
+
+#[derive(Debug, Default)]
+struct PassEvidenceClass {
+    trusted_external: bool,
+    direct: bool,
+    workspace_local: bool,
+    prose_only: bool,
+}
+
+impl PassEvidenceClass {
+    fn direct_or_trusted(&self) -> bool {
+        self.trusted_external || self.direct
+    }
+}
+
+fn classify_pass_evidence(report: &str, evidence: &[String]) -> PassEvidenceClass {
+    let mut class = PassEvidenceClass::default();
+    let mut saw_evidence = false;
+    for raw in evidence {
+        let line = raw.trim();
+        if line.is_empty() || line.eq_ignore_ascii_case("none") {
+            continue;
+        }
+        saw_evidence = true;
+        let lowered = line.to_ascii_lowercase();
+        if evidence_line_is_trusted_external(&lowered) {
+            class.trusted_external = true;
+            continue;
+        }
+        if evidence_line_is_worker_owned_local(&lowered) {
+            class.workspace_local = true;
+            continue;
+        }
+        if evidence_line_is_prose_only(&lowered) {
+            class.prose_only = true;
+            continue;
+        }
+        if evidence_line_is_direct_inspection(&lowered) {
+            class.direct = true;
+        } else {
+            class.prose_only = true;
+        }
+    }
+    if !saw_evidence && !report.trim().is_empty() {
+        class.prose_only = true;
+    }
+    class
+}
+
+fn evidence_line_is_trusted_external(line: &str) -> bool {
+    contains_any(
+        line,
+        &[
+            "trusted external",
+            "external validator",
+            "immutable validator",
+            "official validator",
+            "external system of record",
+            "system of record",
+            "accepted send proof",
+            "accepted outbound",
+            "delivery receipt",
+            "provider accepted",
+            "remote api accepted",
+            "ci status",
+            "github check",
+            "deployment status",
+        ],
+    )
+}
+
+fn evidence_line_is_worker_owned_local(line: &str) -> bool {
+    contains_any(
+        line,
+        &[
+            "run-tests.sh",
+            "run tests",
+            "run-tests",
+            "pytest",
+            "cargo test",
+            "npm test",
+            "pnpm test",
+            "yarn test",
+            "go test",
+            "make test",
+            "workspace test",
+            "workspace verification",
+            "local verification",
+            "worker-owned",
+            "worker owned",
+            "test suite passes",
+            "tests pass",
+            "tests passing",
+            "all tests pass",
+        ],
+    )
+}
+
+fn evidence_line_is_prose_only(line: &str) -> bool {
+    contains_any(
+        line,
+        &[
+            "worker said",
+            "worker claims",
+            "assistant said",
+            "reported that",
+            "claims look",
+            "seems correct",
+            "looks good",
+            "prose",
+        ],
+    )
+}
+
+fn evidence_line_is_direct_inspection(line: &str) -> bool {
+    contains_any(
+        line,
+        &[
+            "inspected",
+            "read ",
+            "opened ",
+            "file content",
+            "artifact content",
+            "contains",
+            "matches task",
+            "matches request",
+            "matches assignment",
+            "database record",
+            "sqlite record",
+            "runtime record",
+            "communication record",
+            "message record",
+            "ticket record",
+            "durable state",
+            "live surface",
+            "http ",
+            "https://",
+            "status=",
+            "exists as regular file",
+            "required artifact",
+            "required output",
+        ],
+    )
 }
 
 fn report_mentions_review_access_blocker(report: &str) -> bool {
@@ -2013,7 +2204,7 @@ mod tests {
 
     #[test]
     fn required_pass_with_direct_evidence_stays_pass() {
-        let report = "VERDICT: PASS\nMISSION_STATE: HEALTHY\nSUMMARY: verified directly.\nPASS_PROOF: direct\nEVIDENCE:\n- test -f /tmp/workspace/result.json => exit 0\nDISPOSITION: SEND\n";
+        let report = "VERDICT: PASS\nMISSION_STATE: HEALTHY\nSUMMARY: verified directly.\nPASS_PROOF: direct\nEVIDENCE:\n- inspected required artifact content => matches task contract\nDISPOSITION: SEND\n";
         let outcome = parse_review_report(4, vec!["runtime_or_infra_change".to_string()], report);
 
         assert_eq!(outcome.verdict, ReviewVerdict::Pass);
@@ -2042,6 +2233,36 @@ mod tests {
         assert_eq!(outcome.verdict, ReviewVerdict::Partial);
         assert!(outcome.summary.contains("PASS_PROOF was `missing`"));
         assert!(outcome.requires_follow_up());
+    }
+
+    #[test]
+    fn required_pass_with_direct_label_but_only_workspace_local_evidence_is_downgraded() {
+        let report = "VERDICT: PASS\nMISSION_STATE: HEALTHY\nSUMMARY: tests pass.\nPASS_PROOF: direct\nEVIDENCE:\n- bash run-tests.sh => all tests pass\n";
+        let outcome = parse_review_report(4, vec!["runtime_or_infra_change".to_string()], report);
+
+        assert_eq!(outcome.verdict, ReviewVerdict::Partial);
+        assert!(outcome.summary.contains("PASS_PROOF was declared direct"));
+        assert!(outcome.requires_follow_up());
+    }
+
+    #[test]
+    fn trusted_external_requires_external_system_of_record_evidence() {
+        let report = "VERDICT: PASS\nMISSION_STATE: HEALTHY\nSUMMARY: tests pass.\nPASS_PROOF: trusted_external\nEVIDENCE:\n- pytest => all tests pass\n";
+        let outcome = parse_review_report(4, vec!["runtime_or_infra_change".to_string()], report);
+
+        assert_eq!(outcome.verdict, ReviewVerdict::Partial);
+        assert!(outcome
+            .summary
+            .contains("PASS_PROOF was declared trusted_external"));
+    }
+
+    #[test]
+    fn trusted_external_with_accepted_send_proof_stays_pass() {
+        let report = "VERDICT: PASS\nMISSION_STATE: HEALTHY\nSUMMARY: provider accepted the message.\nPASS_PROOF: trusted_external\nEVIDENCE:\n- accepted send proof from provider system of record => message id msg_123\n";
+        let outcome = parse_review_report(4, vec!["communication".to_string()], report);
+
+        assert_eq!(outcome.verdict, ReviewVerdict::Pass);
+        assert!(!outcome.requires_follow_up());
     }
 
     #[test]
