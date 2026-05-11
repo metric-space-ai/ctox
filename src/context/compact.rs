@@ -99,9 +99,6 @@ pub struct CompactPolicy {
     /// Cumulative input tokens loaded from tool results.
     /// Approximated as: total_input - first_call_input (baseline prompt).
     cum_tool_input_tokens: i64,
-    /// Approximate input tokens returned by tools during this turn. This is
-    /// the read side of the adaptive "writes instead of reads" signal.
-    observed_tool_input_tokens: i64,
     /// The input tokens from the very first call (baseline prompt size).
     baseline_input: Option<i64>,
     /// Guard: suppress ALL compact decisions until next TurnComplete.
@@ -120,7 +117,6 @@ impl CompactPolicy {
             last_call_input_tokens: 0,
             cum_output_tokens: 0,
             cum_tool_input_tokens: 0,
-            observed_tool_input_tokens: 0,
             baseline_input: None,
             suppressed_until_turn_end: false,
         }
@@ -249,37 +245,6 @@ impl CompactPolicy {
                 // Layer 2: Adaptive self-output ratio.
                 self.check_self_output_ratio()
             }
-            EventMsg::ExecCommandEnd(ev) => {
-                let text = if ev.formatted_output.is_empty() {
-                    format!("{}{}", ev.stdout, ev.stderr)
-                } else {
-                    ev.formatted_output.clone()
-                };
-                self.observed_tool_input_tokens = self
-                    .observed_tool_input_tokens
-                    .saturating_add(approx_tokens(&text));
-                CompactDecision::Continue
-            }
-            EventMsg::McpToolCallEnd(ev) => {
-                let text = match &ev.result {
-                    Ok(result) => serde_json::to_string(result).unwrap_or_default(),
-                    Err(err) => err.clone(),
-                };
-                self.observed_tool_input_tokens = self
-                    .observed_tool_input_tokens
-                    .saturating_add(approx_tokens(&text));
-                CompactDecision::Continue
-            }
-            EventMsg::DynamicToolCallResponse(ev) => {
-                let mut text = serde_json::to_string(&ev.content_items).unwrap_or_default();
-                if let Some(err) = &ev.error {
-                    text.push_str(err);
-                }
-                self.observed_tool_input_tokens = self
-                    .observed_tool_input_tokens
-                    .saturating_add(approx_tokens(&text));
-                CompactDecision::Continue
-            }
             EventMsg::TurnComplete(_) => {
                 self.turns_since_last_compact = self.turns_since_last_compact.saturating_add(1);
                 self.suppressed_until_turn_end = false; // clear for next turn
@@ -305,10 +270,7 @@ impl CompactPolicy {
         if self.cum_output_tokens < DEFAULT_ADAPTIVE_MIN_OUTPUT_TOKENS {
             return CompactDecision::Continue;
         }
-        let read_input_tokens = self
-            .observed_tool_input_tokens
-            .max(self.cum_tool_input_tokens)
-            .max(1);
+        let read_input_tokens = self.cum_tool_input_tokens.max(1);
         // Integer arithmetic: (output * 100) / read_input >= threshold_pct.
         // No floating point, no ratio conversion, no ambiguity.
         let actual_pct = ((self.cum_output_tokens * 100) / read_input_tokens) as u32;
@@ -344,10 +306,6 @@ impl CompactPolicy {
             CompactDecision::Continue
         }
     }
-}
-
-fn approx_tokens(text: &str) -> i64 {
-    ((text.chars().count() as i64) / 4).max(0)
 }
 
 impl CompactReason {
