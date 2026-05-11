@@ -36,7 +36,8 @@ use crate::service::core_state_machine::{
     CoreEntityType, CoreEvent, CoreEvidenceRefs, CoreState, CoreTransitionRequest, RuntimeLane,
 };
 use crate::service::core_transition_guard::{
-    enforce_core_spawn, enforce_core_transition, CoreSpawnRequest,
+    enforce_core_spawn, enforce_core_transition, ensure_core_transition_guard_schema,
+    CoreSpawnRequest,
 };
 use crate::service::harness_flow::{
     record_harness_flow_event_lossy, RecordHarnessFlowEventRequest,
@@ -586,6 +587,15 @@ pub fn reclassify_historical_auto_submitted_inbounds(root: &Path) -> Result<usiz
             &candidate.message_key,
             "boot-reclassifier",
             &reason,
+        )?;
+        let previous_route_status = current_queue_route_status(&conn, &candidate.message_key)?;
+        enforce_queue_route_status_transition(
+            &conn,
+            &candidate.message_key,
+            &previous_route_status,
+            "handled",
+            "ctox-boot-reclassifier",
+            "mark_historical_auto_submitted_inbound_handled",
         )?;
         conn.execute(
             r#"
@@ -1788,6 +1798,15 @@ fn enforce_queue_task_spawn(
     let mut edge_metadata = BTreeMap::new();
     edge_metadata.insert("thread_key".to_string(), thread_key.to_string());
     edge_metadata.insert("queue_title".to_string(), title.to_string());
+    if let Some(skill) = metadata_string_value(metadata, "skill") {
+        edge_metadata.insert("suggested_skill".to_string(), skill);
+    }
+    if let Some(workspace_root) = metadata_string_value(metadata, "workspace_root") {
+        edge_metadata.insert("workspace_root".to_string(), workspace_root);
+    }
+    if let Some(run_class) = metadata_string_value(metadata, "core_run_class") {
+        edge_metadata.insert("core_run_class".to_string(), run_class);
+    }
     if let Some(kind) = ticket_self_work_kind {
         edge_metadata.insert("self_work_kind".to_string(), kind);
     }
@@ -1971,7 +1990,14 @@ pub fn update_queue_task(root: &Path, request: QueueTaskUpdateRequest) -> Result
         },
     )?;
     if let Some(route_status) = request.route_status.as_deref() {
-        set_routing_status(&mut conn, &current.message_key, route_status, &now)?;
+        set_routing_status(
+            &mut conn,
+            &current.message_key,
+            route_status,
+            &now,
+            "ctox-queue-update",
+            "update_queue_task",
+        )?;
     }
     refresh_thread(&mut conn, &thread_key)?;
     load_queue_task_from_conn(&conn, &current.message_key)?
@@ -1994,6 +2020,15 @@ pub fn lease_queue_task(
     let current =
         load_queue_message_from_conn(&conn, message_key)?.context("queue task not found")?;
     let now = now_iso_string();
+    let previous_route_status = current_queue_route_status(&conn, message_key)?;
+    enforce_queue_route_status_transition(
+        &conn,
+        message_key,
+        &previous_route_status,
+        "leased",
+        "ctox-queue-lease",
+        "lease_queue_task",
+    )?;
     conn.execute(
         r#"
         INSERT INTO communication_routing_state (
@@ -2043,6 +2078,14 @@ pub fn release_stale_queue_task_leases(
         if active_message_keys.contains(&message_key) {
             continue;
         }
+        enforce_queue_route_status_transition(
+            &conn,
+            &message_key,
+            "leased",
+            "pending",
+            "ctox-queue-lease-repair",
+            "release_stale_queue_task_leases",
+        )?;
         conn.execute(
             r#"
             UPDATE communication_routing_state
@@ -2341,6 +2384,7 @@ struct ChannelSendRequest {
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct FounderReplyAction {
+    pub account_key: String,
     pub thread_key: String,
     pub subject: String,
     pub to: Vec<String>,
@@ -2494,14 +2538,30 @@ fn send_message(root: &Path, db_path: &Path, request: ChannelSendRequest) -> Res
                 root,
                 communication_gateway::CommunicationAdapterKind::Email,
             );
-            let protected = protected_recipient_policies(&settings, &request);
-            if request.reviewed_founder_send && !protected.is_empty() {
+            if request.reviewed_founder_send {
+                let action = external_chat_action_from_send_request(&request);
+                if let Ok((approval_key, _anchor_key)) =
+                    require_any_unconsumed_external_chat_review(&conn, &action, &request.body)
+                {
+                    return send_reviewed_email_communication_request(
+                        root,
+                        &conn,
+                        db_path,
+                        &request,
+                        &approval_key,
+                    );
+                }
                 return send_reviewed_founder_outbound_request(root, &conn, db_path, &request);
             }
             validate_founder_outbound_email(&settings, &request)?;
             send_email_message(root, &conn, db_path, &request, None)
         }
         "jami" => {
+            let _core_send_proof = enforce_reviewed_communication_send_core_transition_if_approved(
+                &conn,
+                &request,
+                reviewed_external_chat_approval.as_ref(),
+            )?;
             let adapter = communication_adapters::jami();
             let sender = request
                 .sender_address
@@ -2543,6 +2603,11 @@ fn send_message(root: &Path, db_path: &Path, request: ChannelSendRequest) -> Res
             }))
         }
         "teams" => {
+            let _core_send_proof = enforce_reviewed_communication_send_core_transition_if_approved(
+                &conn,
+                &request,
+                reviewed_external_chat_approval.as_ref(),
+            )?;
             let adapter = communication_adapters::teams();
             let account_config = load_account_config(&conn, &request.account_key)?;
             let tenant_id = teams_tenant_from_account_config(account_config.as_ref());
@@ -2579,6 +2644,11 @@ fn send_message(root: &Path, db_path: &Path, request: ChannelSendRequest) -> Res
             }))
         }
         "whatsapp" => {
+            let _core_send_proof = enforce_reviewed_communication_send_core_transition_if_approved(
+                &conn,
+                &request,
+                reviewed_external_chat_approval.as_ref(),
+            )?;
             let adapter = communication_adapters::whatsapp();
             let adapter_json = adapter.send_cli(
                 root,
@@ -2612,6 +2682,11 @@ fn send_message(root: &Path, db_path: &Path, request: ChannelSendRequest) -> Res
             }))
         }
         "meeting" => {
+            let _core_send_proof = enforce_reviewed_communication_send_core_transition_if_approved(
+                &conn,
+                &request,
+                reviewed_external_chat_approval.as_ref(),
+            )?;
             let adapter = communication_adapters::meeting();
             let session_id = &request.thread_key;
             let adapter_json = adapter.send_cli(
@@ -2645,10 +2720,14 @@ fn enforce_channel_attachment_support(request: &ChannelSendRequest) -> Result<()
     Ok(())
 }
 
+fn is_review_required_outbound_channel(channel: &str) -> bool {
+    matches!(channel, "email" | "teams" | "jami" | "whatsapp" | "meeting")
+}
+
 fn enforce_external_chat_send_is_reviewed(request: &ChannelSendRequest) -> Result<()> {
-    if is_reviewed_external_chat_channel(&request.channel) && !request.reviewed_founder_send {
+    if is_review_required_outbound_channel(&request.channel) && !request.reviewed_founder_send {
         anyhow::bail!(
-            "outbound {} communication must pass external chat review before sending. Draft the chat response for completion review first, then send the exact approved body with --reviewed-communication-send.",
+            "outbound {} communication must pass communication review before sending. Draft the response for completion review first, then send the exact approved body with --reviewed-communication-send.",
             request.channel
         );
     }
@@ -3486,6 +3565,7 @@ pub(crate) fn prepare_reviewed_founder_reply(
         },
     )?;
     Ok(FounderReplyAction {
+        account_key: request.account_key,
         thread_key: request.thread_key,
         subject: request.subject,
         to: request.to,
@@ -3634,8 +3714,13 @@ fn external_chat_review_digest(
     action: &ExternalChatAction,
     body: &str,
 ) -> (String, String, String) {
+    let review_kind = if action.channel.eq_ignore_ascii_case("email") {
+        "reviewed_outbound_email"
+    } else {
+        "external_chat_quick_response"
+    };
     let action_json = json!({
-        "kind": "external_chat_quick_response",
+        "kind": review_kind,
         "channel": &action.channel,
         "account_key": &action.account_key,
         "thread_key": &action.thread_key,
@@ -3811,7 +3896,12 @@ pub(crate) fn record_external_chat_review_approval(
     let db_path = resolve_db_path(root, None);
     let conn = open_channel_db(&db_path)?;
     let (action_digest, action_json, body_sha256) = external_chat_review_digest(action, body);
-    let approval_key = format!("external-chat-review:{anchor_message_key}:{action_digest}");
+    let approval_prefix = if action.channel.eq_ignore_ascii_case("email") {
+        "communication-email-review"
+    } else {
+        "external-chat-review"
+    };
+    let approval_key = format!("{approval_prefix}:{anchor_message_key}:{action_digest}");
     conn.execute(
         r#"
         INSERT INTO communication_founder_reply_reviews (
@@ -3839,12 +3929,17 @@ pub(crate) fn record_external_chat_review_approval(
             now_iso_string()
         ],
     )
-    .context("failed to record external chat review approval")?;
+    .context("failed to record communication review approval")?;
+    let email_review = action.channel.eq_ignore_ascii_case("email");
     record_harness_flow_event_lossy(
         root,
         RecordHarnessFlowEventRequest {
             event_kind: "review.approved",
-            title: "External chat review approved",
+            title: if email_review {
+                "Email communication review approved"
+            } else {
+                "External chat review approved"
+            },
             body_text: review_summary,
             message_key: Some(anchor_message_key),
             work_id: None,
@@ -3855,7 +3950,9 @@ pub(crate) fn record_external_chat_review_approval(
                 "body_sha256": body_sha256,
                 "action_digest": action_digest,
                 "channel": &action.channel,
-                "external_chat": true,
+                "communication_review": true,
+                "email": email_review,
+                "external_chat": !email_review,
             }),
         },
     );
@@ -4060,9 +4157,9 @@ fn require_any_unconsumed_external_chat_review(
             |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
         )
         .optional()
-        .context("failed to load external chat review approval")?;
+        .context("failed to load communication review approval")?;
     approval.with_context(|| {
-        "reviewed external chat acknowledgement has no matching unconsumed review approval for the exact body, channel, thread, recipients, subject, and attachments. Run completion review first, then send exactly the approved body with --reviewed-communication-send."
+        "reviewed outbound communication has no matching unconsumed review approval for the exact body, channel, thread, recipients, subject, and attachments. Run completion review first, then send exactly the approved body with --reviewed-communication-send."
             .to_string()
     })
 }
@@ -4284,15 +4381,6 @@ fn send_reviewed_founder_outbound_request(
     request: &ChannelSendRequest,
 ) -> Result<Value> {
     let _send_guard = acquire_reviewed_founder_send_lock()?;
-    let settings = runtime_settings_with_owner_profiles(
-        root,
-        communication_gateway::CommunicationAdapterKind::Email,
-    );
-    let protected = protected_recipient_policies(&settings, request);
-    anyhow::ensure!(
-        !protected.is_empty(),
-        "reviewed founder outbound requires founder/owner/admin recipient"
-    );
     let action = FounderOutboundAction {
         account_key: request.account_key.clone(),
         thread_key: request.thread_key.clone(),
@@ -4318,6 +4406,51 @@ fn send_reviewed_founder_outbound_request(
     )?;
     mark_founder_reply_review_sent(conn, &approval_key, &send_result)?;
     Ok(send_result)
+}
+
+fn send_reviewed_email_communication_request(
+    root: &Path,
+    conn: &Connection,
+    db_path: &Path,
+    request: &ChannelSendRequest,
+    approval_key: &str,
+) -> Result<Value> {
+    ensure_founder_outbound_body_clean(request)?;
+    let entity_id = format!(
+        "reviewed-email:{}:{}",
+        request.thread_key,
+        stable_digest(approval_key)
+    );
+    enforce_reviewed_founder_send_core_transition(conn, &entity_id, approval_key, request)?;
+    let send_result = send_email_message(
+        root,
+        conn,
+        db_path,
+        request,
+        Some(ReviewedFounderSendContext {
+            entity_id: &entity_id,
+            approval_key,
+        }),
+    )?;
+    mark_founder_reply_review_sent(conn, approval_key, &send_result)?;
+    Ok(send_result)
+}
+
+fn enforce_reviewed_communication_send_core_transition_if_approved(
+    conn: &Connection,
+    request: &ChannelSendRequest,
+    approval: Option<&(String, String)>,
+) -> Result<Option<String>> {
+    let Some((approval_key, anchor_message_key)) = approval else {
+        return Ok(None);
+    };
+    let entity_id = format!(
+        "reviewed-communication:{}:{}",
+        request.channel,
+        stable_digest(&format!("{anchor_message_key}:{approval_key}"))
+    );
+    enforce_reviewed_founder_send_core_transition(conn, &entity_id, approval_key, request)?;
+    Ok(Some(entity_id))
 }
 
 fn enforce_reviewed_founder_send_core_transition(
@@ -4849,7 +4982,9 @@ fn validate_founder_outbound_email(
         .filter(|policy| matches!(policy.role.as_str(), "owner" | "founder" | "admin"))
         .collect::<Vec<_>>();
     if protected_recipients.is_empty() {
-        return Ok(());
+        anyhow::bail!(
+            "direct outbound email is blocked without communication review. Draft the email for completion review first, then send the exact approved body with --reviewed-communication-send."
+        );
     }
     let recipient_summary = protected_recipients
         .iter()
@@ -5132,11 +5267,8 @@ pub(crate) fn ensure_routing_rows_for_inbound(conn: &Connection) -> Result<()> {
     // synthetic `queue` and `tui` channels are programmatic — work items are
     // created after the account exists and must stay `pending` until leased —
     // so they are excluded from the pre-account auto-handle.
-    conn.execute(
+    let mut statement = conn.prepare(
         r#"
-        INSERT INTO communication_routing_state (
-            message_key, route_status, lease_owner, leased_at, acked_at, last_error, updated_at
-        )
         SELECT
             m.message_key,
             CASE
@@ -5152,10 +5284,8 @@ pub(crate) fn ensure_routing_rows_for_inbound(conn: &Connection) -> Result<()> {
                      AND m.channel <> 'teams'
                      AND a.created_at IS NOT NULL
                      AND m.external_created_at <= a.created_at THEN 'handled'
-                ELSE 'pending'
+	                ELSE 'pending'
             END,
-            NULL,
-            NULL,
             CASE
                 WHEN m.direction = 'outbound' OR m.trust_level = 'system_probe' THEN m.observed_at
                 WHEN m.channel IN ('queue', 'tui') THEN NULL
@@ -5168,18 +5298,70 @@ pub(crate) fn ensure_routing_rows_for_inbound(conn: &Connection) -> Result<()> {
                      AND m.channel <> 'teams'
                      AND a.created_at IS NOT NULL
                      AND m.external_created_at <= a.created_at THEN m.observed_at
-                ELSE NULL
+	                ELSE NULL
             END,
-            NULL,
             m.observed_at
         FROM communication_messages m
         LEFT JOIN communication_accounts a ON a.account_key = m.account_key
         LEFT JOIN communication_routing_state r ON r.message_key = m.message_key
         WHERE r.message_key IS NULL
         "#,
-        [],
-    )
-    .context("failed to backfill communication routing state")?;
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, Option<String>>(2)?,
+            row.get::<_, String>(3)?,
+        ))
+    })?;
+    let missing = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(statement);
+    for (message_key, route_status, acked_at, updated_at) in missing {
+        let previous_route_status = current_queue_route_status(conn, &message_key)?;
+        enforce_queue_route_status_transition(
+            conn,
+            &message_key,
+            &previous_route_status,
+            &route_status,
+            "ctox-routing-backfill",
+            "ensure_routing_rows_for_inbound",
+        )?;
+        conn.execute(
+            r#"
+            INSERT INTO communication_routing_state (
+                message_key, route_status, lease_owner, leased_at, acked_at, last_error, updated_at
+            )
+            VALUES (?1, ?2, NULL, NULL, ?3, NULL, ?4)
+            "#,
+            params![message_key, route_status, acked_at, updated_at],
+        )?;
+    }
+    let mut statement = conn.prepare(
+        r#"
+        SELECT r.message_key, r.route_status
+        FROM communication_routing_state r
+        JOIN communication_messages m ON m.message_key = r.message_key
+        WHERE m.direction = 'inbound'
+          AND m.trust_level = 'system_probe'
+          AND r.route_status <> 'handled'
+        "#,
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    let probe_updates = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(statement);
+    for (message_key, previous_route_status) in probe_updates {
+        enforce_queue_route_status_transition(
+            conn,
+            &message_key,
+            &previous_route_status,
+            "handled",
+            "ctox-routing-backfill",
+            "normalize_system_probe_messages",
+        )?;
+    }
     conn.execute(
         r#"
         UPDATE communication_routing_state
@@ -5549,6 +5731,14 @@ fn take_messages(
     let leased_at = now_iso_string();
     let mut taken = Vec::new();
     for mut item in rows {
+        enforce_queue_route_status_transition(
+            &tx,
+            &item.message_key,
+            &item.routing.route_status,
+            "leased",
+            lease_owner,
+            "lease_messages",
+        )?;
         tx.execute(
             r#"
             INSERT INTO communication_routing_state (
@@ -5610,6 +5800,15 @@ fn ack_messages(conn: &mut Connection, message_keys: &[String], status: &str) ->
     let tx = conn.unchecked_transaction()?;
     let mut updated = 0usize;
     for message_key in message_keys {
+        let previous_route_status = current_queue_route_status(&tx, message_key)?;
+        enforce_queue_route_status_transition(
+            &tx,
+            message_key,
+            &previous_route_status,
+            status,
+            "ctox-queue-ack",
+            "ack_messages",
+        )?;
         let routing_updates = tx.execute(
             r#"
             INSERT INTO communication_routing_state (
@@ -6270,8 +6469,19 @@ fn set_routing_status(
     message_key: &str,
     route_status: &str,
     now: &str,
+    actor: &str,
+    reason: &str,
 ) -> Result<()> {
     let route_status = canonical_queue_route_status(route_status)?;
+    let previous_route_status = current_queue_route_status(conn, message_key)?;
+    enforce_queue_route_status_transition(
+        conn,
+        message_key,
+        &previous_route_status,
+        &route_status,
+        actor,
+        reason,
+    )?;
     let acked_at = if matches!(route_status.as_str(), "handled" | "cancelled") {
         Some(now)
     } else {
@@ -6319,6 +6529,14 @@ pub(crate) fn enforce_queue_route_status_transition(
     if from_state == to_state {
         return Ok(());
     }
+    if to_state == CoreState::Completed
+        && queue_completed_has_terminal_success_proof(conn, message_key)?
+    {
+        return Ok(());
+    }
+    if to_state == CoreState::ReworkRequired && queue_rework_has_witness_proof(conn, message_key)? {
+        return Ok(());
+    }
     let mut metadata = BTreeMap::new();
     metadata.insert(
         "from_route_status".to_string(),
@@ -6326,6 +6544,11 @@ pub(crate) fn enforce_queue_route_status_transition(
     );
     metadata.insert("to_route_status".to_string(), to_route_status.to_string());
     metadata.insert("reason".to_string(), reason.to_string());
+    if to_state == CoreState::Completed {
+        if let Some(policy_proof) = queue_terminal_policy_proof(actor, reason) {
+            metadata.insert("terminal_policy_proof".to_string(), policy_proof);
+        }
+    }
     enforce_core_transition(
         conn,
         &CoreTransitionRequest {
@@ -6343,12 +6566,73 @@ pub(crate) fn enforce_queue_route_status_transition(
     Ok(())
 }
 
+fn queue_completed_has_terminal_success_proof(
+    conn: &Connection,
+    message_key: &str,
+) -> Result<bool> {
+    ensure_core_transition_guard_schema(conn)?;
+    let count = conn.query_row(
+        r#"
+        SELECT COUNT(*)
+        FROM ctox_core_transition_proofs
+        WHERE entity_type = 'QueueItem'
+          AND entity_id = ?1
+          AND to_state = 'Completed'
+          AND accepted = 1
+          AND (
+                request_json LIKE '%"reviewed_work_terminal_success":"true"%'
+             OR request_json LIKE '%"terminal_policy_proof"%'
+          )
+        "#,
+        params![message_key],
+        |row| row.get::<_, i64>(0),
+    )?;
+    Ok(count > 0)
+}
+
+fn queue_rework_has_witness_proof(conn: &Connection, message_key: &str) -> Result<bool> {
+    ensure_core_transition_guard_schema(conn)?;
+    let count = conn.query_row(
+        r#"
+        SELECT COUNT(*)
+        FROM ctox_core_transition_proofs
+        WHERE entity_type = 'QueueItem'
+          AND entity_id = ?1
+          AND to_state = 'ReworkRequired'
+          AND accepted = 1
+          AND (
+                request_json LIKE '%"review_checkpoint":"true"%'
+             OR request_json LIKE '%"validator_rework":"true"%'
+          )
+        "#,
+        params![message_key],
+        |row| row.get::<_, i64>(0),
+    )?;
+    Ok(count > 0)
+}
+
+fn queue_terminal_policy_proof(actor: &str, reason: &str) -> Option<String> {
+    match (actor, reason) {
+        ("ctox-boot-reclassifier", "mark_historical_auto_submitted_inbound_handled") => {
+            Some("policy:auto-submitted-inbound-terminal-no-send".to_string())
+        }
+        ("ctox-routing-backfill", "normalize_system_probe_messages") => {
+            Some("policy:system-probe-inbound-terminal-no-send".to_string())
+        }
+        ("ctox-routing-backfill", "ensure_routing_rows_for_inbound") => {
+            Some("policy:routing-backfill-non-work-terminal-no-send".to_string())
+        }
+        _ => None,
+    }
+}
+
 fn queue_route_status_core_state(route_status: &str) -> Result<CoreState> {
     match route_status.trim().to_ascii_lowercase().as_str() {
         "" | "pending" => Ok(CoreState::Pending),
         "leased" => Ok(CoreState::Leased),
         "running" => Ok(CoreState::Running),
-        "blocked" | "review_rework" | "approval-nag-handled" => Ok(CoreState::Blocked),
+        "blocked" | "approval-nag-handled" => Ok(CoreState::Blocked),
+        "review_rework" => Ok(CoreState::ReworkRequired),
         "failed" => Ok(CoreState::Failed),
         "handled" | "completed" => Ok(CoreState::Completed),
         "cancelled" | "superseded" => Ok(CoreState::Superseded),
@@ -6360,7 +6644,8 @@ fn queue_route_status_core_event(route_status: &str) -> CoreEvent {
     match route_status.trim().to_ascii_lowercase().as_str() {
         "leased" => CoreEvent::Lease,
         "pending" => CoreEvent::Release,
-        "blocked" | "review_rework" | "approval-nag-handled" => CoreEvent::Block,
+        "blocked" | "approval-nag-handled" => CoreEvent::Block,
+        "review_rework" => CoreEvent::RequireRework,
         "failed" => CoreEvent::Fail,
         "cancelled" | "superseded" => CoreEvent::Supersede,
         "handled" | "completed" => CoreEvent::Complete,
@@ -6379,9 +6664,11 @@ fn canonical_queue_priority(raw: &str) -> Result<String> {
 fn canonical_queue_route_status(raw: &str) -> Result<String> {
     let normalized = raw.trim().to_lowercase();
     match normalized.as_str() {
-        "pending" | "blocked" | "failed" | "handled" | "cancelled" => Ok(normalized),
+        "pending" | "blocked" | "failed" | "handled" | "cancelled" | "review_rework" => {
+            Ok(normalized)
+        }
         _ => anyhow::bail!(
-            "unsupported queue route status '{raw}' (expected pending|blocked|failed|handled|cancelled)"
+            "unsupported queue route status '{raw}' (expected pending|blocked|failed|handled|cancelled|review_rework)"
         ),
     }
 }
@@ -7036,30 +7323,6 @@ fn refresh_thread_tx(tx: &Transaction<'_>, thread_key: &str) -> Result<()> {
     Ok(())
 }
 
-#[allow(dead_code)]
-fn ensure_routing_rows_for_inbound_tx(tx: &Transaction<'_>) -> Result<()> {
-    tx.execute(
-        r#"
-        INSERT INTO communication_routing_state (
-            message_key, route_status, lease_owner, leased_at, acked_at, last_error, updated_at
-        )
-        SELECT
-            m.message_key,
-            CASE WHEN m.direction = 'outbound' THEN 'handled' ELSE 'pending' END,
-            NULL,
-            NULL,
-            CASE WHEN m.direction = 'outbound' THEN m.observed_at ELSE NULL END,
-            NULL,
-            m.observed_at
-        FROM communication_messages m
-        LEFT JOIN communication_routing_state r ON r.message_key = m.message_key
-        WHERE r.message_key IS NULL
-        "#,
-        [],
-    )?;
-    Ok(())
-}
-
 pub(crate) fn preview_text(body: &str, subject: &str) -> String {
     let source = if body.trim().is_empty() {
         subject
@@ -7261,6 +7524,7 @@ fn civil_from_days(days_since_unix_epoch: i64) -> (i64, i64, i64) {
 
 #[cfg(test)]
 mod tests {
+    // ctox-allow-direct-state-write: test fixture module
     use super::*;
     use std::fs;
 
@@ -7877,6 +8141,36 @@ mod tests {
     }
 
     #[test]
+    fn generic_outbound_email_requires_communication_review() {
+        let settings = BTreeMap::new();
+        let error = validate_founder_outbound_email(
+            &settings,
+            &ChannelSendRequest {
+                channel: "email".to_string(),
+                account_key: "email:cto1@metric-space.ai".to_string(),
+                thread_key: "mail-thread".to_string(),
+                body: "Short external update.".to_string(),
+                subject: "Re: Test".to_string(),
+                to: vec!["customer@example.com".to_string()],
+                cc: Vec::new(),
+                attachments: Vec::new(),
+                sender_display: None,
+                sender_address: None,
+                send_voice: false,
+                reviewed_founder_send: false,
+            },
+        )
+        .expect_err("all outbound email must require communication review");
+
+        assert!(
+            error
+                .to_string()
+                .contains("blocked without communication review"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
     fn parse_send_request_allows_teams_without_to_recipient() {
         let args = vec![
             "send".to_string(),
@@ -8299,7 +8593,7 @@ mod tests {
 
         let err = enforce_external_chat_send_is_reviewed(&request)
             .expect_err("external chat sends must pass review even without work promise");
-        assert!(err.to_string().contains("must pass external chat review"));
+        assert!(err.to_string().contains("must pass communication review"));
 
         let reviewed_request = ChannelSendRequest {
             reviewed_founder_send: true,
@@ -8307,6 +8601,123 @@ mod tests {
         };
         enforce_external_chat_send_is_reviewed(&reviewed_request)
             .expect("reviewed external chat sends should pass this guard");
+    }
+
+    #[test]
+    fn email_communication_review_approval_is_exact_and_typed() {
+        let root = std::env::temp_dir().join(format!(
+            "ctox-email-communication-review-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(root.join("runtime")).expect("failed to create runtime dir");
+        let db_path = crate::paths::core_db(&root);
+        let conn = open_channel_db(&db_path).expect("failed to open db");
+        let action = ExternalChatAction {
+            channel: "email".to_string(),
+            account_key: "email:cto1@metric-space.ai".to_string(),
+            thread_key: "email-thread".to_string(),
+            subject: "Re: Customer".to_string(),
+            to: vec!["customer@example.com".to_string()],
+            cc: vec!["ops@example.com".to_string()],
+            attachments: vec!["/tmp/result.pdf".to_string()],
+        };
+        let body = "Hello,\n\nThe requested work is complete; attached is the result.";
+
+        record_external_chat_review_approval(
+            &root,
+            "email:cto1@metric-space.ai::INBOX::customer-1",
+            &action,
+            body,
+            "PASS",
+        )
+        .expect("failed to record communication review");
+        let action_json: String = conn
+            .query_row(
+                "SELECT action_json FROM communication_founder_reply_reviews LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("failed to load action json");
+        assert!(action_json.contains("reviewed_outbound_email"));
+        assert!(!action_json.contains("external_chat_quick_response"));
+
+        require_any_unconsumed_external_chat_review(&conn, &action, body)
+            .expect("exact approved email body should match");
+        let changed_body =
+            require_any_unconsumed_external_chat_review(&conn, &action, "Changed body")
+                .expect_err("changed email body must not inherit approval");
+        assert!(changed_body
+            .to_string()
+            .contains("no matching unconsumed review approval"));
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn reviewed_external_chat_send_writes_core_transition_proof() {
+        let root = std::env::temp_dir().join(format!(
+            "ctox-reviewed-chat-core-proof-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(root.join("runtime")).expect("failed to create runtime dir");
+        let db_path = crate::paths::core_db(&root);
+        let conn = open_channel_db(&db_path).expect("failed to open db");
+        let request = ChannelSendRequest {
+            channel: "teams".to_string(),
+            account_key: "teams:bot".to_string(),
+            thread_key: "teams:chat-1".to_string(),
+            body: "Ich habe die Aufgabe angelegt und bearbeite sie als naechstes.".to_string(),
+            subject: "(Teams)".to_string(),
+            to: Vec::new(),
+            cc: Vec::new(),
+            attachments: Vec::new(),
+            sender_display: None,
+            sender_address: None,
+            send_voice: false,
+            reviewed_founder_send: true,
+        };
+        let action = external_chat_action_from_send_request(&request);
+        record_external_chat_review_approval(
+            &root,
+            "teams:bot::chat::msg-1",
+            &action,
+            &request.body,
+            "PASS",
+        )
+        .expect("failed to record chat review");
+        let approval = require_any_unconsumed_external_chat_review(&conn, &action, &request.body)
+            .expect("exact approved chat body should match");
+        let entity_id = enforce_reviewed_communication_send_core_transition_if_approved(
+            &conn,
+            &request,
+            Some(&approval),
+        )
+        .expect("reviewed chat send should write a core proof")
+        .expect("reviewed chat approval should produce an entity id");
+
+        let accepted: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM ctox_core_transition_proofs
+                 WHERE entity_type = 'FounderCommunication'
+                   AND entity_id = ?1
+                   AND from_state = 'Approved'
+                   AND to_state = 'Sending'
+                   AND accepted = 1",
+                params![entity_id],
+                |row| row.get(0),
+            )
+            .expect("failed to count proofs");
+        assert_eq!(accepted, 1);
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

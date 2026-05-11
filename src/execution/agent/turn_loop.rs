@@ -479,6 +479,13 @@ where
             "context_selection_empty: refusing model invocation because LCM history exists but no context evidence rendered"
         );
     }
+    if health.status == context_health::ContextHealthStatus::Critical
+        && rendered_prompt.rendered_context_items == 0
+    {
+        anyhow::bail!(
+            "context_selection_empty_critical: refusing model invocation because context health is critical and no context evidence rendered"
+        );
+    }
     emit(&format!(
         "context-selection rendered={} omitted={}",
         rendered_prompt.rendered_context_items, rendered_prompt.omitted_context_items

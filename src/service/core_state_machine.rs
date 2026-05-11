@@ -282,6 +282,75 @@ pub struct CoreLivenessReport {
     pub entities: Vec<CoreLivenessEntityReport>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewHarnessState {
+    Queued,
+    Leased,
+    Running,
+    AwaitingReview,
+    ReviewQueued,
+    Reviewing,
+    ReviewPassed,
+    ReviewRejected,
+    ReviewUnavailable,
+    ReviewRetry,
+    ReworkRequired,
+    AwaitingValidation,
+    Validating,
+    Passed,
+    ModelFailed,
+    InfraFailed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewHarnessProof {
+    NoProof,
+    WorkerFinished,
+    WorkerFailed,
+    InfraError,
+    StartReview,
+    SpawnReviewer,
+    ReviewPass,
+    ReviewReject,
+    ReviewUnavailable,
+    RetryReview,
+    ReviewRetriesExhausted,
+    RequeueSameMainWork,
+    ReviewRoundsExhausted,
+    RunValidator,
+    ValidatorPass,
+    ValidatorFail,
+    ValidatorReworkExhausted,
+    ValidatorInfraError,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewHarnessBudget {
+    NoBudget,
+    ReviewRounds,
+    ReviewerUnavailableRetries,
+    ValidatorRework,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewHarnessEdge {
+    pub from: ReviewHarnessState,
+    pub to: ReviewHarnessState,
+    pub proof: ReviewHarnessProof,
+    pub consumes_budget: ReviewHarnessBudget,
+    pub terminal_success: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewHarnessModelReport {
+    pub ok: bool,
+    pub violations: Vec<String>,
+    pub proof: String,
+}
+
 impl CoreTransitionReport {
     pub fn accepted() -> Self {
         Self {
@@ -313,6 +382,9 @@ pub fn validate_transition(request: &CoreTransitionRequest) -> CoreTransitionRep
 
     validate_founder_communication(request, &mut violations);
     validate_review_gate(request, &mut violations);
+    validate_rework_required_gate(request, &mut violations);
+    validate_review_harness_static_model(&mut violations);
+    validate_work_terminal_success_gate(request, &mut violations);
     validate_ticket_closure(request, &mut violations);
     validate_commitment_backing(request, &mut violations);
     validate_schedule_backing(request, &mut violations);
@@ -325,6 +397,50 @@ pub fn validate_transition(request: &CoreTransitionRequest) -> CoreTransitionRep
     } else {
         CoreTransitionReport::rejected(violations)
     }
+}
+
+fn validate_review_harness_static_model(violations: &mut Vec<CoreTransitionViolation>) {
+    let report = analyze_review_harness_model();
+    if report.ok {
+        return;
+    }
+    for violation_text in report.violations {
+        violations.push(violation(
+            "review_harness_static_model_invalid",
+            format!("review harness static model violation: {violation_text}"),
+        ));
+    }
+}
+
+fn validate_work_terminal_success_gate(
+    request: &CoreTransitionRequest,
+    violations: &mut Vec<CoreTransitionViolation>,
+) {
+    if !matches!(
+        request.entity_type,
+        CoreEntityType::QueueItem | CoreEntityType::WorkItem | CoreEntityType::Ticket
+    ) {
+        return;
+    }
+    if !matches!(request.to_state, CoreState::Completed | CoreState::Closed) {
+        return;
+    }
+    if metadata_bool(request, "completion_review_required") {
+        return;
+    }
+    if request
+        .metadata
+        .get("terminal_policy_proof")
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
+    {
+        return;
+    }
+
+    violations.push(violation(
+        "work_terminal_success_requires_review_or_policy",
+        "work terminal success requires completion review plus validation proof, or an explicit terminal policy proof",
+    ));
 }
 
 fn validate_outcome_witness(
@@ -423,7 +539,69 @@ fn validate_review_gate(
         }
     }
 
+    validate_required_completion_review(request, violations);
     validate_review_checkpoint(request, violations);
+}
+
+fn validate_required_completion_review(
+    request: &CoreTransitionRequest,
+    violations: &mut Vec<CoreTransitionViolation>,
+) {
+    if !metadata_bool(request, "completion_review_required") {
+        return;
+    }
+    if !is_outcome_terminal_transition(request) {
+        return;
+    }
+
+    let review_audit_key = request
+        .evidence
+        .review_audit_key
+        .as_deref()
+        .unwrap_or("")
+        .trim();
+    if review_audit_key.is_empty() {
+        violations.push(violation(
+            "completion_review_required_requires_audit",
+            "review-required terminal success requires a durable review audit key",
+        ));
+    }
+
+    let verdict = request
+        .metadata
+        .get("completion_review_verdict")
+        .map(|value| value.trim().to_ascii_lowercase())
+        .unwrap_or_default();
+    if verdict != "pass" {
+        violations.push(violation(
+            "completion_review_required_requires_pass",
+            "review-required terminal success requires completion_review_verdict=pass",
+        ));
+    }
+    if verdict == "unavailable" {
+        violations.push(violation(
+            "completion_review_unavailable_cannot_complete",
+            "an unavailable reviewer verdict is not a completion proof",
+        ));
+    }
+
+    let validation_not_required = request
+        .metadata
+        .get("validation_not_required_policy_proof")
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false);
+    let has_validation_proof = request
+        .evidence
+        .verification_id
+        .as_deref()
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false);
+    if !has_validation_proof && !validation_not_required {
+        violations.push(violation(
+            "completion_review_required_requires_validation",
+            "review-required terminal success requires validator evidence or an explicit validation-not-required policy proof",
+        ));
+    }
 }
 
 fn validate_review_checkpoint(
@@ -451,15 +629,23 @@ fn validate_review_checkpoint(
         return;
     }
 
-    if !matches!(
-        request.entity_type,
-        CoreEntityType::Ticket | CoreEntityType::WorkItem
-    ) || request.from_state != CoreState::AwaitingReview
-        || request.event != CoreEvent::RequireRework
-    {
+    let valid_feedback_transition = match request.entity_type {
+        CoreEntityType::Ticket | CoreEntityType::WorkItem => {
+            request.from_state == CoreState::AwaitingReview
+                && request.event == CoreEvent::RequireRework
+        }
+        CoreEntityType::QueueItem => {
+            matches!(
+                request.from_state,
+                CoreState::Leased | CoreState::Running | CoreState::Blocked | CoreState::Failed
+            ) && request.event == CoreEvent::RequireRework
+        }
+        _ => false,
+    };
+    if !valid_feedback_transition {
         violations.push(violation(
             "review_checkpoint_invalid_feedback_transition",
-            "review checkpoint feedback must be AwaitingReview -> ReworkRequired on the reviewed ticket/self-work",
+            "review checkpoint feedback must move the reviewed main work item to ReworkRequired through the review gate",
         ));
     }
 
@@ -499,6 +685,48 @@ fn validate_review_checkpoint(
             "review checkpoint feedback must resume the main agent instead of becoming review-owned work",
         ));
     }
+}
+
+fn validate_rework_required_gate(
+    request: &CoreTransitionRequest,
+    violations: &mut Vec<CoreTransitionViolation>,
+) {
+    if request.to_state != CoreState::ReworkRequired {
+        return;
+    }
+    if !matches!(
+        request.entity_type,
+        CoreEntityType::QueueItem | CoreEntityType::WorkItem | CoreEntityType::Ticket
+    ) {
+        return;
+    }
+    if request.lane == RuntimeLane::P3Housekeeping {
+        return;
+    }
+    let review_checkpoint = metadata_bool(request, "review_checkpoint");
+    let validator_rework = metadata_bool(request, "validator_rework");
+    let has_review = request
+        .evidence
+        .review_audit_key
+        .as_deref()
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false);
+    let has_validation = request
+        .evidence
+        .verification_id
+        .as_deref()
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false);
+    if review_checkpoint && has_review {
+        return;
+    }
+    if validator_rework && (has_review || has_validation) {
+        return;
+    }
+    violations.push(violation(
+        "rework_required_requires_review_or_validator_witness",
+        "ReworkRequired requires a durable review rejection/checkpoint or validator rework witness",
+    ));
 }
 
 fn validate_ticket_closure(
@@ -773,20 +1001,35 @@ pub fn allowed_transition_catalog(
             (Stale, Hydrating),
         ],
         QueueItem => &[
+            (Pending, Completed),
+            (Pending, Blocked),
+            (Pending, Failed),
             (Pending, Leased),
+            (Pending, ReworkRequired),
             (Leased, Pending),
             (Leased, Running),
             (Leased, Completed),
             (Leased, Blocked),
             (Leased, Failed),
+            (Leased, ReworkRequired),
             (Running, Completed),
             (Running, Blocked),
             (Running, Failed),
+            (Running, ReworkRequired),
             (Running, Superseded),
             (Blocked, Pending),
+            (Blocked, Completed),
+            (Blocked, Failed),
+            (Blocked, ReworkRequired),
             (Blocked, Superseded),
             (Failed, Pending),
+            (Failed, Blocked),
+            (Failed, Completed),
+            (Failed, ReworkRequired),
             (Failed, Superseded),
+            (ReworkRequired, Pending),
+            (ReworkRequired, Failed),
+            (ReworkRequired, Superseded),
             (Pending, Superseded),
             (Leased, Superseded),
         ],
@@ -798,32 +1041,49 @@ pub fn allowed_transition_catalog(
             (Classified, Superseded),
             (TicketBacked, Planned),
             (TicketBacked, Superseded),
+            (Planned, Closed),
             (Planned, Executing),
+            (Planned, Blocked),
+            (Planned, Failed),
             (Planned, Superseded),
+            (Executing, Closed),
             (Executing, AwaitingReview),
+            (Executing, Failed),
             (AwaitingReview, ReworkRequired),
             (AwaitingReview, AwaitingVerification),
+            (AwaitingReview, Closed),
+            (AwaitingReview, Failed),
             (AwaitingReview, Superseded),
+            (ReworkRequired, Closed),
             (ReworkRequired, Executing),
+            (ReworkRequired, Failed),
             (ReworkRequired, Superseded),
             (AwaitingVerification, Verified),
             (Verified, Closed),
             (Executing, Blocked),
             (Executing, Superseded),
+            (Blocked, Closed),
+            (Blocked, Failed),
             (Blocked, Planned),
             (Blocked, Superseded),
         ],
         Ticket => &[
             (Created, Classified),
+            (Created, AwaitingReview),
+            (Created, Blocked),
             (Created, Planned),
             (Created, Superseded),
             (Classified, Planned),
             (Classified, Superseded),
+            (Planned, Blocked),
             (Planned, Executing),
             (Planned, Superseded),
+            (Executing, Verified),
             (Executing, AwaitingReview),
             (AwaitingReview, ReworkRequired),
             (AwaitingReview, AwaitingVerification),
+            (AwaitingReview, Planned),
+            (AwaitingReview, Blocked),
             (AwaitingReview, Superseded),
             (ReworkRequired, Executing),
             (ReworkRequired, Superseded),
@@ -937,7 +1197,8 @@ pub fn core_terminal_states(entity_type: CoreEntityType) -> &'static [CoreState]
         Mission => &[MissionReady, MissionClosed],
         Context => &[Fresh],
         QueueItem => &[Completed, Superseded],
-        WorkItem | Ticket => &[Closed, Superseded],
+        WorkItem => &[Closed, Failed, Superseded],
+        Ticket => &[Closed, Superseded],
         Review => &[Approved, Rejected],
         FounderCommunication => &[Done, Escalated],
         Commitment => &[Delivered, Escalated, CancelledWithNotice],
@@ -1023,6 +1284,406 @@ pub fn analyze_core_liveness() -> CoreLivenessReport {
             && entity.states_without_terminal_path.is_empty()
     });
     CoreLivenessReport { ok, entities }
+}
+
+pub fn review_harness_transition_catalog() -> &'static [ReviewHarnessEdge] {
+    use ReviewHarnessBudget::*;
+    use ReviewHarnessProof::*;
+    use ReviewHarnessState::*;
+
+    &[
+        ReviewHarnessEdge {
+            from: Queued,
+            to: Leased,
+            proof: NoProof,
+            consumes_budget: NoBudget,
+            terminal_success: false,
+        },
+        ReviewHarnessEdge {
+            from: Leased,
+            to: Running,
+            proof: NoProof,
+            consumes_budget: NoBudget,
+            terminal_success: false,
+        },
+        ReviewHarnessEdge {
+            from: Running,
+            to: AwaitingReview,
+            proof: WorkerFinished,
+            consumes_budget: NoBudget,
+            terminal_success: false,
+        },
+        ReviewHarnessEdge {
+            from: Running,
+            to: ModelFailed,
+            proof: WorkerFailed,
+            consumes_budget: NoBudget,
+            terminal_success: false,
+        },
+        ReviewHarnessEdge {
+            from: Running,
+            to: InfraFailed,
+            proof: InfraError,
+            consumes_budget: NoBudget,
+            terminal_success: false,
+        },
+        ReviewHarnessEdge {
+            from: AwaitingReview,
+            to: ReviewQueued,
+            proof: StartReview,
+            consumes_budget: NoBudget,
+            terminal_success: false,
+        },
+        ReviewHarnessEdge {
+            from: ReviewQueued,
+            to: Reviewing,
+            proof: SpawnReviewer,
+            consumes_budget: NoBudget,
+            terminal_success: false,
+        },
+        ReviewHarnessEdge {
+            from: Reviewing,
+            to: ReviewPassed,
+            proof: ReviewPass,
+            consumes_budget: NoBudget,
+            terminal_success: false,
+        },
+        ReviewHarnessEdge {
+            from: Reviewing,
+            to: ReviewRejected,
+            proof: ReviewReject,
+            consumes_budget: NoBudget,
+            terminal_success: false,
+        },
+        ReviewHarnessEdge {
+            from: Reviewing,
+            to: ReviewHarnessState::ReviewUnavailable,
+            proof: ReviewHarnessProof::ReviewUnavailable,
+            consumes_budget: NoBudget,
+            terminal_success: false,
+        },
+        ReviewHarnessEdge {
+            from: ReviewPassed,
+            to: AwaitingValidation,
+            proof: ReviewPass,
+            consumes_budget: NoBudget,
+            terminal_success: false,
+        },
+        ReviewHarnessEdge {
+            from: ReviewRejected,
+            to: ReworkRequired,
+            proof: ReviewReject,
+            consumes_budget: ReviewRounds,
+            terminal_success: false,
+        },
+        ReviewHarnessEdge {
+            from: ReviewHarnessState::ReviewUnavailable,
+            to: ReviewRetry,
+            proof: ReviewHarnessProof::ReviewUnavailable,
+            consumes_budget: ReviewerUnavailableRetries,
+            terminal_success: false,
+        },
+        ReviewHarnessEdge {
+            from: ReviewHarnessState::ReviewUnavailable,
+            to: InfraFailed,
+            proof: ReviewRetriesExhausted,
+            consumes_budget: NoBudget,
+            terminal_success: false,
+        },
+        ReviewHarnessEdge {
+            from: ReviewRetry,
+            to: AwaitingReview,
+            proof: RetryReview,
+            consumes_budget: NoBudget,
+            terminal_success: false,
+        },
+        ReviewHarnessEdge {
+            from: ReworkRequired,
+            to: Queued,
+            proof: RequeueSameMainWork,
+            consumes_budget: NoBudget,
+            terminal_success: false,
+        },
+        ReviewHarnessEdge {
+            from: ReworkRequired,
+            to: ModelFailed,
+            proof: ReviewRoundsExhausted,
+            consumes_budget: NoBudget,
+            terminal_success: false,
+        },
+        ReviewHarnessEdge {
+            from: AwaitingValidation,
+            to: Validating,
+            proof: RunValidator,
+            consumes_budget: NoBudget,
+            terminal_success: false,
+        },
+        ReviewHarnessEdge {
+            from: Validating,
+            to: Passed,
+            proof: ValidatorPass,
+            consumes_budget: NoBudget,
+            terminal_success: true,
+        },
+        ReviewHarnessEdge {
+            from: Validating,
+            to: ReworkRequired,
+            proof: ValidatorFail,
+            consumes_budget: ValidatorRework,
+            terminal_success: false,
+        },
+        ReviewHarnessEdge {
+            from: Validating,
+            to: ModelFailed,
+            proof: ValidatorReworkExhausted,
+            consumes_budget: NoBudget,
+            terminal_success: false,
+        },
+        ReviewHarnessEdge {
+            from: Validating,
+            to: InfraFailed,
+            proof: ValidatorInfraError,
+            consumes_budget: NoBudget,
+            terminal_success: false,
+        },
+    ]
+}
+
+pub fn analyze_review_harness_model() -> ReviewHarnessModelReport {
+    use ReviewHarnessProof::*;
+    use ReviewHarnessState::*;
+
+    let edges = review_harness_transition_catalog();
+    let terminals = [Passed, ModelFailed, InfraFailed];
+    let mut violations = Vec::new();
+    let mut states = std::collections::BTreeSet::new();
+    let mut outgoing: BTreeMap<ReviewHarnessState, Vec<&ReviewHarnessEdge>> = BTreeMap::new();
+    let mut incoming: BTreeMap<ReviewHarnessState, Vec<&ReviewHarnessEdge>> = BTreeMap::new();
+
+    states.insert(Queued);
+    states.extend(terminals);
+    for edge in edges {
+        states.insert(edge.from);
+        states.insert(edge.to);
+        outgoing.entry(edge.from).or_default().push(edge);
+        incoming.entry(edge.to).or_default().push(edge);
+
+        if edge.terminal_success && edge.to != Passed {
+            violations.push(format!(
+                "terminal_success_edge_must_end_in_passed:{:?}->{:?}",
+                edge.from, edge.to
+            ));
+        }
+        if edge.to == Passed && edge.proof != ValidatorPass {
+            violations.push(format!(
+                "passed_requires_validator_pass:{:?}->{:?}",
+                edge.from, edge.to
+            ));
+        }
+        if edge.terminal_success && edge.proof != ValidatorPass {
+            violations.push(format!(
+                "terminal_success_requires_validator_pass:{:?}->{:?}",
+                edge.from, edge.to
+            ));
+        }
+        if edge.to == Passed && path_exists_without_review_pass(Queued, edge.from, &outgoing) {
+            violations.push(format!(
+                "passed_path_missing_review_pass:{:?}->{:?}",
+                edge.from, edge.to
+            ));
+        }
+        if edge.proof == ReviewHarnessProof::ReviewUnavailable
+            && matches!(edge.to, AwaitingValidation | Validating | Passed)
+        {
+            violations.push(format!(
+                "review_unavailable_cannot_advance_success:{:?}->{:?}",
+                edge.from, edge.to
+            ));
+        }
+        if edge.from == ReviewPassed && edge.to != AwaitingValidation {
+            violations.push(format!(
+                "review_passed_can_only_enter_validation_gate:{:?}->{:?}",
+                edge.from, edge.to
+            ));
+        }
+        if edge.from == ReviewRejected && edge.to != ReworkRequired {
+            violations.push(format!(
+                "review_rejected_can_only_enter_rework_required:{:?}->{:?}",
+                edge.from, edge.to
+            ));
+        }
+        if edge.from == ReviewHarnessState::ReviewUnavailable
+            && !matches!(edge.to, ReviewRetry | InfraFailed)
+        {
+            violations.push(format!(
+                "review_unavailable_can_only_retry_or_fail_infra:{:?}->{:?}",
+                edge.from, edge.to
+            ));
+        }
+        if edge.from == ReworkRequired && !matches!(edge.to, Queued | ModelFailed) {
+            violations.push(format!(
+                "rework_required_can_only_requeue_main_or_model_fail:{:?}->{:?}",
+                edge.from, edge.to
+            ));
+        }
+        if edge.to == Queued && edge.from == ReworkRequired && edge.proof != RequeueSameMainWork {
+            violations.push(format!(
+                "rework_requeue_requires_same_main_work_proof:{:?}->{:?}",
+                edge.from, edge.to
+            ));
+        }
+    }
+
+    let reachable = review_harness_reachable(Queued, &outgoing);
+    for state in &states {
+        if !reachable.contains(state) {
+            violations.push(format!("unreachable_state:{state:?}"));
+        }
+        if !terminals.contains(state) && outgoing.get(state).map(Vec::is_empty).unwrap_or(true) {
+            violations.push(format!("nonterminal_dead_end:{state:?}"));
+        }
+    }
+
+    let terminal_reachable = reverse_review_harness_reachable(&terminals, &incoming);
+    for state in &states {
+        if !terminal_reachable.contains(state) {
+            violations.push(format!("state_without_terminal_path:{state:?}"));
+        }
+    }
+
+    for cycle in review_harness_simple_cycles(&states, &outgoing) {
+        if !cycle
+            .iter()
+            .any(|edge| edge.consumes_budget != ReviewHarnessBudget::NoBudget)
+        {
+            violations.push(format!("cycle_without_budget_decrease:{cycle:?}"));
+        }
+    }
+
+    let ok = violations.is_empty();
+    ReviewHarnessModelReport {
+        ok,
+        violations,
+        proof: "The review harness is a finite graph with terminal states Passed, ModelFailed, and InfraFailed. The only terminal-success state is Passed. Every path to Passed must cross Reviewing->ReviewPassed with ReviewPass, then ReviewPassed->AwaitingValidation, then Validating->Passed with ValidatorPass. ReviewUnavailable has no edge to AwaitingValidation, Validating, or Passed. ReviewRejected can only enter ReworkRequired, and ReworkRequired can only requeue the same main work or end as ModelFailed. Every cycle contains an edge that consumes a finite budget, so the ranking function review_rounds_left + reviewer_unavailable_retries_left + validator_rework_left strictly decreases on cyclic progress and must eventually force Passed, ModelFailed, or InfraFailed.".to_string(),
+    }
+}
+
+fn review_harness_reachable(
+    start: ReviewHarnessState,
+    outgoing: &BTreeMap<ReviewHarnessState, Vec<&ReviewHarnessEdge>>,
+) -> std::collections::BTreeSet<ReviewHarnessState> {
+    let mut reachable = std::collections::BTreeSet::new();
+    let mut stack = vec![start];
+    while let Some(state) = stack.pop() {
+        if !reachable.insert(state) {
+            continue;
+        }
+        if let Some(edges) = outgoing.get(&state) {
+            stack.extend(edges.iter().map(|edge| edge.to));
+        }
+    }
+    reachable
+}
+
+fn reverse_review_harness_reachable(
+    starts: &[ReviewHarnessState],
+    incoming: &BTreeMap<ReviewHarnessState, Vec<&ReviewHarnessEdge>>,
+) -> std::collections::BTreeSet<ReviewHarnessState> {
+    let mut reachable = std::collections::BTreeSet::new();
+    let mut stack = starts.to_vec();
+    while let Some(state) = stack.pop() {
+        if !reachable.insert(state) {
+            continue;
+        }
+        if let Some(edges) = incoming.get(&state) {
+            stack.extend(edges.iter().map(|edge| edge.from));
+        }
+    }
+    reachable
+}
+
+fn review_harness_simple_cycles(
+    states: &std::collections::BTreeSet<ReviewHarnessState>,
+    outgoing: &BTreeMap<ReviewHarnessState, Vec<&ReviewHarnessEdge>>,
+) -> Vec<Vec<ReviewHarnessEdge>> {
+    let mut cycles = Vec::new();
+    for start in states {
+        let mut path = Vec::new();
+        review_harness_cycles_from(*start, *start, outgoing, &mut path, &mut cycles);
+    }
+    cycles
+}
+
+fn review_harness_cycles_from(
+    start: ReviewHarnessState,
+    current: ReviewHarnessState,
+    outgoing: &BTreeMap<ReviewHarnessState, Vec<&ReviewHarnessEdge>>,
+    path: &mut Vec<ReviewHarnessEdge>,
+    cycles: &mut Vec<Vec<ReviewHarnessEdge>>,
+) {
+    if path.len() > review_harness_transition_catalog().len() {
+        return;
+    }
+    let Some(edges) = outgoing.get(&current) else {
+        return;
+    };
+    for edge in edges {
+        if edge.to == start {
+            let mut cycle = path.clone();
+            cycle.push(**edge);
+            cycles.push(cycle);
+            continue;
+        }
+        if path.iter().any(|path_edge| path_edge.from == edge.to) {
+            continue;
+        }
+        path.push(**edge);
+        review_harness_cycles_from(start, edge.to, outgoing, path, cycles);
+        path.pop();
+    }
+}
+
+fn path_exists_without_review_pass(
+    start: ReviewHarnessState,
+    target: ReviewHarnessState,
+    outgoing: &BTreeMap<ReviewHarnessState, Vec<&ReviewHarnessEdge>>,
+) -> bool {
+    path_exists_without_review_pass_from(start, target, outgoing, false, &mut Vec::new())
+}
+
+fn path_exists_without_review_pass_from(
+    start: ReviewHarnessState,
+    target: ReviewHarnessState,
+    outgoing: &BTreeMap<ReviewHarnessState, Vec<&ReviewHarnessEdge>>,
+    has_review_pass: bool,
+    path: &mut Vec<ReviewHarnessState>,
+) -> bool {
+    if start == target {
+        return !has_review_pass;
+    }
+    if path.contains(&start) {
+        return false;
+    }
+    path.push(start);
+    let Some(edges) = outgoing.get(&start) else {
+        path.pop();
+        return false;
+    };
+    for edge in edges {
+        let next_has_review_pass = has_review_pass || edge.proof == ReviewHarnessProof::ReviewPass;
+        if path_exists_without_review_pass_from(
+            edge.to,
+            target,
+            outgoing,
+            next_has_review_pass,
+            path,
+        ) {
+            path.pop();
+            return true;
+        }
+    }
+    path.pop();
+    false
 }
 
 fn graph_reachable(
@@ -1168,7 +1829,7 @@ mod tests {
     }
 
     #[test]
-    fn work_item_without_expected_artifact_can_close_with_verification() {
+    fn work_item_without_expected_artifact_can_close_with_review_and_policy_verification() {
         let request = CoreTransitionRequest {
             entity_type: CoreEntityType::WorkItem,
             entity_id: "self-work:local:research".to_string(),
@@ -1178,10 +1839,22 @@ mod tests {
             event: CoreEvent::Close,
             actor: "ctox-service".to_string(),
             evidence: CoreEvidenceRefs {
-                verification_id: Some("verification-1".to_string()),
+                review_audit_key: Some("review-audit-pass-1".to_string()),
+                verification_id: Some("validation-not-required:research".to_string()),
                 ..CoreEvidenceRefs::default()
             },
-            metadata: BTreeMap::new(),
+            metadata: BTreeMap::from([
+                ("completion_review_required".to_string(), "true".to_string()),
+                ("completion_review_verdict".to_string(), "pass".to_string()),
+                (
+                    "reviewed_work_terminal_success".to_string(),
+                    "true".to_string(),
+                ),
+                (
+                    "validation_not_required_policy_proof".to_string(),
+                    "validation-not-required:research".to_string(),
+                ),
+            ]),
         };
 
         let report = validate_transition(&request);
@@ -1200,6 +1873,8 @@ mod tests {
             event: CoreEvent::Complete,
             actor: "ctox-service".to_string(),
             evidence: CoreEvidenceRefs {
+                review_audit_key: Some("review-audit-pass-1".to_string()),
+                verification_id: Some("outcome-witness:queue-mail".to_string()),
                 expected_artifact_refs: vec![ArtifactRef {
                     kind: ArtifactKind::OutboundEmail,
                     primary_key: "thread:founder-mail".to_string(),
@@ -1212,7 +1887,15 @@ mod tests {
                 }],
                 ..CoreEvidenceRefs::default()
             },
-            metadata: BTreeMap::new(),
+            metadata: BTreeMap::from([
+                ("completion_review_required".to_string(), "true".to_string()),
+                ("completion_review_verdict".to_string(), "pass".to_string()),
+                (
+                    "reviewed_work_terminal_success".to_string(),
+                    "true".to_string(),
+                ),
+                ("outcome_witness".to_string(), "true".to_string()),
+            ]),
         };
 
         let report = validate_transition(&request);
@@ -1303,7 +1986,7 @@ mod tests {
     }
 
     #[test]
-    fn allows_queue_ack_from_lease_to_completed() {
+    fn queue_ack_from_lease_to_completed_requires_review_or_policy() {
         let request = CoreTransitionRequest {
             entity_type: CoreEntityType::QueueItem,
             entity_id: "queue-1".to_string(),
@@ -1318,6 +2001,31 @@ mod tests {
 
         let report = validate_transition(&request);
 
+        assert!(!report.accepted);
+        assert!(report.violations.iter().any(|violation| {
+            violation.code == "work_terminal_success_requires_review_or_policy"
+        }));
+    }
+
+    #[test]
+    fn queue_ack_from_lease_to_completed_accepts_terminal_policy_proof() {
+        let request = CoreTransitionRequest {
+            entity_type: CoreEntityType::QueueItem,
+            entity_id: "queue-1".to_string(),
+            lane: RuntimeLane::P2MissionDelivery,
+            from_state: CoreState::Leased,
+            to_state: CoreState::Completed,
+            event: CoreEvent::Complete,
+            actor: "ctox-runtime".to_string(),
+            evidence: CoreEvidenceRefs::default(),
+            metadata: BTreeMap::from([(
+                "terminal_policy_proof".to_string(),
+                "policy:system-non-work".to_string(),
+            )]),
+        };
+
+        let report = validate_transition(&request);
+
         assert!(report.accepted, "{:?}", report.violations);
     }
 
@@ -1326,6 +2034,238 @@ mod tests {
         let report = analyze_core_liveness();
 
         assert!(report.ok, "{report:#?}");
+    }
+
+    #[test]
+    fn review_harness_model_is_safe_and_live() {
+        let report = analyze_review_harness_model();
+
+        assert!(report.ok, "{report:#?}");
+    }
+
+    #[test]
+    fn review_harness_transition_catalog_matches_required_flow() {
+        use ReviewHarnessBudget::*;
+        use ReviewHarnessProof::*;
+        use ReviewHarnessState::*;
+
+        let actual: std::collections::BTreeSet<_> = review_harness_transition_catalog()
+            .iter()
+            .map(|edge| {
+                (
+                    edge.from,
+                    edge.to,
+                    edge.proof,
+                    edge.consumes_budget,
+                    edge.terminal_success,
+                )
+            })
+            .collect();
+        let expected = std::collections::BTreeSet::from([
+            (Queued, Leased, NoProof, NoBudget, false),
+            (Leased, Running, NoProof, NoBudget, false),
+            (Running, AwaitingReview, WorkerFinished, NoBudget, false),
+            (Running, ModelFailed, WorkerFailed, NoBudget, false),
+            (Running, InfraFailed, InfraError, NoBudget, false),
+            (AwaitingReview, ReviewQueued, StartReview, NoBudget, false),
+            (ReviewQueued, Reviewing, SpawnReviewer, NoBudget, false),
+            (Reviewing, ReviewPassed, ReviewPass, NoBudget, false),
+            (Reviewing, ReviewRejected, ReviewReject, NoBudget, false),
+            (
+                Reviewing,
+                ReviewHarnessState::ReviewUnavailable,
+                ReviewHarnessProof::ReviewUnavailable,
+                NoBudget,
+                false,
+            ),
+            (
+                ReviewPassed,
+                AwaitingValidation,
+                ReviewPass,
+                NoBudget,
+                false,
+            ),
+            (
+                ReviewRejected,
+                ReworkRequired,
+                ReviewReject,
+                ReviewRounds,
+                false,
+            ),
+            (
+                ReviewHarnessState::ReviewUnavailable,
+                ReviewRetry,
+                ReviewHarnessProof::ReviewUnavailable,
+                ReviewerUnavailableRetries,
+                false,
+            ),
+            (
+                ReviewHarnessState::ReviewUnavailable,
+                InfraFailed,
+                ReviewRetriesExhausted,
+                NoBudget,
+                false,
+            ),
+            (ReviewRetry, AwaitingReview, RetryReview, NoBudget, false),
+            (ReworkRequired, Queued, RequeueSameMainWork, NoBudget, false),
+            (
+                ReworkRequired,
+                ModelFailed,
+                ReviewRoundsExhausted,
+                NoBudget,
+                false,
+            ),
+            (
+                AwaitingValidation,
+                Validating,
+                RunValidator,
+                NoBudget,
+                false,
+            ),
+            (Validating, Passed, ValidatorPass, NoBudget, true),
+            (
+                Validating,
+                ReworkRequired,
+                ValidatorFail,
+                ValidatorRework,
+                false,
+            ),
+            (
+                Validating,
+                ModelFailed,
+                ValidatorReworkExhausted,
+                NoBudget,
+                false,
+            ),
+            (
+                Validating,
+                InfraFailed,
+                ValidatorInfraError,
+                NoBudget,
+                false,
+            ),
+        ]);
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn review_required_terminal_completion_rejects_missing_review_proof() {
+        let mut metadata = BTreeMap::new();
+        metadata.insert("completion_review_required".to_string(), "true".to_string());
+        metadata.insert(
+            "completion_review_verdict".to_string(),
+            "unavailable".to_string(),
+        );
+        let request = CoreTransitionRequest {
+            entity_type: CoreEntityType::QueueItem,
+            entity_id: "queue-review-required".to_string(),
+            lane: RuntimeLane::P2MissionDelivery,
+            from_state: CoreState::Leased,
+            to_state: CoreState::Completed,
+            event: CoreEvent::Complete,
+            actor: "ctox-runtime".to_string(),
+            evidence: CoreEvidenceRefs::default(),
+            metadata,
+        };
+
+        let report = validate_transition(&request);
+
+        assert!(!report.accepted);
+        assert!(report
+            .violations
+            .iter()
+            .any(|violation| { violation.code == "completion_review_required_requires_audit" }));
+        assert!(report
+            .violations
+            .iter()
+            .any(|violation| { violation.code == "completion_review_required_requires_pass" }));
+        assert!(report.violations.iter().any(|violation| {
+            violation.code == "completion_review_unavailable_cannot_complete"
+        }));
+    }
+
+    #[test]
+    fn review_required_terminal_completion_accepts_pass_proof() {
+        let mut metadata = BTreeMap::new();
+        metadata.insert("completion_review_required".to_string(), "true".to_string());
+        metadata.insert("completion_review_verdict".to_string(), "pass".to_string());
+        let request = CoreTransitionRequest {
+            entity_type: CoreEntityType::QueueItem,
+            entity_id: "queue-review-required".to_string(),
+            lane: RuntimeLane::P2MissionDelivery,
+            from_state: CoreState::Leased,
+            to_state: CoreState::Completed,
+            event: CoreEvent::Complete,
+            actor: "ctox-runtime".to_string(),
+            evidence: CoreEvidenceRefs {
+                review_audit_key: Some("review-proof-1".to_string()),
+                verification_id: Some("validator-proof-1".to_string()),
+                ..CoreEvidenceRefs::default()
+            },
+            metadata,
+        };
+
+        let report = validate_transition(&request);
+
+        assert!(report.accepted, "{:?}", report.violations);
+    }
+
+    #[test]
+    fn review_required_terminal_completion_rejects_missing_validation_proof() {
+        let mut metadata = BTreeMap::new();
+        metadata.insert("completion_review_required".to_string(), "true".to_string());
+        metadata.insert("completion_review_verdict".to_string(), "pass".to_string());
+        let request = CoreTransitionRequest {
+            entity_type: CoreEntityType::QueueItem,
+            entity_id: "queue-review-required".to_string(),
+            lane: RuntimeLane::P2MissionDelivery,
+            from_state: CoreState::Leased,
+            to_state: CoreState::Completed,
+            event: CoreEvent::Complete,
+            actor: "ctox-runtime".to_string(),
+            evidence: CoreEvidenceRefs {
+                review_audit_key: Some("review-proof-1".to_string()),
+                ..CoreEvidenceRefs::default()
+            },
+            metadata,
+        };
+
+        let report = validate_transition(&request);
+
+        assert!(!report.accepted);
+        assert!(report.violations.iter().any(|violation| {
+            violation.code == "completion_review_required_requires_validation"
+        }));
+    }
+
+    #[test]
+    fn review_required_terminal_completion_accepts_policy_no_validation_proof() {
+        let mut metadata = BTreeMap::new();
+        metadata.insert("completion_review_required".to_string(), "true".to_string());
+        metadata.insert("completion_review_verdict".to_string(), "pass".to_string());
+        metadata.insert(
+            "validation_not_required_policy_proof".to_string(),
+            "policy:unit-test".to_string(),
+        );
+        let request = CoreTransitionRequest {
+            entity_type: CoreEntityType::QueueItem,
+            entity_id: "queue-review-required".to_string(),
+            lane: RuntimeLane::P2MissionDelivery,
+            from_state: CoreState::Leased,
+            to_state: CoreState::Completed,
+            event: CoreEvent::Complete,
+            actor: "ctox-runtime".to_string(),
+            evidence: CoreEvidenceRefs {
+                review_audit_key: Some("review-proof-1".to_string()),
+                ..CoreEvidenceRefs::default()
+            },
+            metadata,
+        };
+
+        let report = validate_transition(&request);
+
+        assert!(report.accepted, "{:?}", report.violations);
     }
 
     #[test]
@@ -1355,7 +2295,14 @@ mod tests {
                         canonical_hot_path: vec!["test".to_string()],
                         ..CoreEvidenceRefs::default()
                     },
-                    metadata: BTreeMap::new(),
+                    metadata: if matches!(to_state, CoreState::Completed | CoreState::Closed) {
+                        BTreeMap::from([(
+                            "terminal_policy_proof".to_string(),
+                            "policy:catalog-edge".to_string(),
+                        )])
+                    } else {
+                        BTreeMap::new()
+                    },
                 };
 
                 let report = validate_transition(&request);

@@ -89,7 +89,8 @@ use crate::service::core_state_machine::{
     CoreTransitionRequest, RuntimeLane,
 };
 use crate::service::core_transition_guard::{
-    check_core_spawn, enforce_core_transition, CoreSpawnRequest,
+    check_core_spawn, enforce_core_transition, ensure_core_transition_guard_schema,
+    CoreSpawnRequest,
 };
 use crate::state_invariants;
 use crate::verification;
@@ -3231,7 +3232,7 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
                             let retry_status = if outcome_witness_error.is_some() {
                                 outcome_witness_retry_route_status_for_job(&root, &job)
                             } else if held_founder_review || held_completion_review {
-                                "review_rework"
+                                "pending"
                             } else {
                                 "pending"
                             };
@@ -7219,20 +7220,12 @@ fn job_outcome_entity_id(job: &QueuedPrompt) -> String {
 
 fn outcome_witness_retry_route_status(root: &Path, job: &QueuedPrompt) -> &'static str {
     match outcome_witness_rejection_count(root, job) {
-        Ok(count) if count >= review_checkpoint_requeue_block_threshold() => "blocked",
-        Ok(_) | Err(_) => "review_rework",
+        Ok(count) if count >= review_checkpoint_requeue_block_threshold() => "failed",
+        Ok(_) | Err(_) => "pending",
     }
 }
 
 fn outcome_witness_retry_route_status_for_job(root: &Path, job: &QueuedPrompt) -> &'static str {
-    if job.source_label == REVIEW_FEEDBACK_SOURCE_LABEL
-        && is_terminal_bench_controller_artifact_job(job)
-    {
-        return "pending";
-    }
-    if is_terminal_bench_controller_artifact_job(job) {
-        return "review_rework";
-    }
     outcome_witness_retry_route_status(root, job)
 }
 
@@ -7351,29 +7344,14 @@ fn failed_worker_route_status(
     timeout_worker_message: bool,
     retry_worker_message: bool,
 ) -> &'static str {
-    // No worker failure ever lands on `blocked` — `blocked` is reserved for
-    // explicit operator action (`ctox queue block …`) and ticket-spill, both
-    // of which are deliberate quarantine. Worker failures must always remain
-    // recoverable, but they need three distinct lanes so the routing layer
-    // does not lose information about WHY the slice failed:
-    //
-    //   * `agent_failure_threshold_hit` (anti-stuck guard, the same slice
-    //     failed N times in a row): the task goes to `review_rework` so the
-    //     reviewer pathway can examine the loop, give the worker corrective
-    //     guidance, and release it back to `pending`. This avoids the
-    //     pathological "one bad turn → permanently dead task" trap while
-    //     still preventing the runtime from burning tokens in a hot loop.
-    //   * `timeout_worker_message`: turn ran out of time. Queue-level report
-    //     jobs are not guaranteed to resume the exact report run; sending them
-    //     straight back to `pending` can create duplicate "created" report
-    //     runs. Route to `review_rework` so an operator or corrective harness
-    //     can decide whether to resume the last run or start a fresh one.
-    //   * `retry_worker_message`: explicit retry signal from the runtime.
-    //   * neither flag: a real non-retryable error → `failed`.
+    // Worker/runtime failures are not review findings. Only the review gate or
+    // validator may produce ReworkRequired/review_rework. Threshold exhaustion
+    // is a terminal model/runtime failure; retryable and timeout slices return
+    // to pending through the normal main-work queue.
     if agent_failure_threshold_hit {
-        "review_rework"
+        "failed"
     } else if timeout_worker_message {
-        "review_rework"
+        "pending"
     } else if retry_worker_message {
         "pending"
     } else {
@@ -8035,7 +8013,7 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
         let _ = channels::ack_leased_messages(root, &meeting_passive, "handled");
     }
     if !deferred_for_founder_rework.is_empty() {
-        let _ = channels::ack_leased_messages(root, &deferred_for_founder_rework, "review_rework");
+        let _ = channels::ack_leased_messages(root, &deferred_for_founder_rework, "pending");
     }
     if ticket_dispatch_allowed && !ticket_sync_allowed_sources.is_empty() {
         route_ticket_events(root, state, &ticket_sync_allowed_sources)?;
@@ -9046,7 +9024,7 @@ fn repair_stalled_founder_communications(
         let _ = channels::ack_leased_messages(
             root,
             std::slice::from_ref(&message.message_key),
-            "review_rework",
+            "pending",
         );
         if rework_changed {
             push_event(
@@ -9156,11 +9134,11 @@ fn repair_stalled_founder_communications(
             &message,
             "Die Founder-/Owner-Mail blieb ohne geprüften Versand in einem blockierten Routing-Zustand stehen.",
         )?;
-        if rework_changed || previous_route_status.as_deref() != Some("review_rework") {
+        if rework_changed || previous_route_status.as_deref() != Some("pending") {
             let _ = channels::ack_leased_messages(
                 root,
                 std::slice::from_ref(&message.message_key),
-                "review_rework",
+                "pending",
             );
             push_event(
                 state,
@@ -11235,32 +11213,11 @@ fn transition_self_work_for_queue_execution(
                 "internal",
             )
         }
-        "published" | "running" | "executing" | "in_progress" => {
-            tickets::transition_ticket_self_work_item(
-                root,
-                &item.work_id,
-                "published",
-                actor,
-                Some(note),
-                "internal",
-            )
-        }
+        "published" | "running" | "executing" | "in_progress" => Ok(item.clone()),
         "awaiting_review" | "review" | "reviewing" => {
-            let rework = tickets::transition_ticket_self_work_item(
-                root,
-                &item.work_id,
-                "rework_required",
-                actor,
-                Some("Review checkpoint returned this work item for rework before queueing."),
-                "internal",
-            )?;
-            tickets::transition_ticket_self_work_item(
-                root,
-                &rework.work_id,
-                "published",
-                actor,
-                Some(note),
-                "internal",
+            anyhow::bail!(
+                "cannot queue ticket self-work item {} while it is awaiting review; wait for a review verdict",
+                item.work_id
             )
         }
         "failed" | "closed" | "done" | "completed" | "handled" | "cancelled" | "superseded" => {
@@ -11363,9 +11320,9 @@ fn requeue_review_rejected_self_work(
         return Ok(None);
     }
     if let Some(note) = founder_rework_review_loop_block_note(root, work_id, summary)? {
-        block_founder_rework_queue_tasks_for_work(root, work_id, &note)?;
-        if !founder_rework_loop_block_already_active(root, work_id)? {
-            block_ticket_self_work_item(root, work_id, &note);
+        fail_founder_rework_queue_tasks_for_work(root, work_id, &note)?;
+        if !founder_rework_loop_terminal_already_active(root, work_id)? {
+            fail_ticket_self_work_item(root, work_id, &note);
         }
         return Ok(None);
     }
@@ -11423,14 +11380,17 @@ fn transition_self_work_after_review_rejection(
         "published" | "running" | "executing" | "in_progress" => {
             transition_executing_self_work_after_review_rejection(root, &item, note)
         }
-        "awaiting_review" | "review" | "reviewing" => tickets::transition_ticket_self_work_item(
-            root,
-            work_id,
-            "rework_required",
-            "ctox-review",
-            Some(note),
-            "internal",
-        ),
+        "awaiting_review" | "review" | "reviewing" => {
+            ensure_review_rejection_checkpoint_proof(root, work_id, note)?;
+            tickets::transition_ticket_self_work_item(
+                root,
+                work_id,
+                "rework_required",
+                "ctox-review",
+                Some(note),
+                "internal",
+            )
+        }
         "rework_required" | "review_rework" | "rework" => tickets::transition_ticket_self_work_item(
             root,
             work_id,
@@ -11480,6 +11440,7 @@ fn transition_executing_self_work_after_review_rejection(
         Some("Execution slice reached the completion-review checkpoint."),
         "internal",
     )?;
+    ensure_review_rejection_checkpoint_proof(root, &awaiting_review.work_id, note)?;
     tickets::transition_ticket_self_work_item(
         root,
         &awaiting_review.work_id,
@@ -11488,6 +11449,79 @@ fn transition_executing_self_work_after_review_rejection(
         Some(note),
         "internal",
     )
+}
+
+fn ensure_review_rejection_checkpoint_proof(
+    root: &Path,
+    work_id: &str,
+    summary: &str,
+) -> Result<String> {
+    if let Some(proof_id) = existing_review_rejection_checkpoint_proof(root, work_id)? {
+        return Ok(proof_id);
+    }
+    let db_path = crate::paths::core_db(&root);
+    let conn = channels::open_channel_db(&db_path)?;
+    let mut metadata = BTreeMap::new();
+    metadata.insert("review_checkpoint".to_string(), "true".to_string());
+    metadata.insert("feedback_owner".to_string(), "main_agent".to_string());
+    metadata.insert("feedback_target_entity_id".to_string(), work_id.to_string());
+    metadata.insert("spawns_review_owned_work".to_string(), "false".to_string());
+    metadata.insert("review_verdict".to_string(), "fail".to_string());
+
+    let proof = enforce_core_transition(
+        &conn,
+        &CoreTransitionRequest {
+            entity_type: CoreEntityType::WorkItem,
+            entity_id: work_id.to_string(),
+            lane: RuntimeLane::P2MissionDelivery,
+            from_state: CoreState::AwaitingReview,
+            to_state: CoreState::ReworkRequired,
+            event: CoreEvent::RequireRework,
+            actor: "ctox-completion-review".to_string(),
+            evidence: CoreEvidenceRefs {
+                review_audit_key: Some(review_rejection_checkpoint_audit_key(work_id, summary)),
+                ..CoreEvidenceRefs::default()
+            },
+            metadata,
+        },
+    )?;
+    Ok(proof.proof_id)
+}
+
+fn existing_review_rejection_checkpoint_proof(
+    root: &Path,
+    work_id: &str,
+) -> Result<Option<String>> {
+    let db_path = crate::paths::core_db(&root);
+    let conn = channels::open_channel_db(&db_path)?;
+    ensure_core_transition_guard_schema(&conn)?;
+    conn.query_row(
+        r#"
+        SELECT proof_id
+        FROM ctox_core_transition_proofs
+        WHERE entity_type = 'WorkItem'
+          AND entity_id = ?1
+          AND to_state = 'ReworkRequired'
+          AND accepted = 1
+          AND request_json LIKE '%"review_checkpoint":"true"%'
+        ORDER BY created_at DESC
+        LIMIT 1
+        "#,
+        params![work_id],
+        |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .map_err(anyhow::Error::from)
+}
+
+fn review_rejection_checkpoint_audit_key(work_id: &str, summary: &str) -> String {
+    use sha2::Digest;
+
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(b"ctox-review-rejection-checkpoint-v1");
+    hasher.update(work_id.as_bytes());
+    hasher.update(summary.as_bytes());
+    format!("review-rejection-checkpoint-{:x}", hasher.finalize())
 }
 
 enum ReviewCheckpointLoopDisposition {
@@ -11634,24 +11668,12 @@ fn transition_self_work_after_runtime_retry(
         "published" | "running" | "executing" | "in_progress" => {
             transition_executing_self_work_after_runtime_retry(root, &item, note)
         }
-        "awaiting_review" | "review" | "reviewing" => tickets::transition_ticket_self_work_item(
-            root,
-            work_id,
-            "rework_required",
-            "ctox-runtime-retry",
-            Some(note),
-            "internal",
-        ),
-        "rework_required" | "review_rework" | "rework" => {
-            tickets::transition_ticket_self_work_item(
-                root,
-                work_id,
-                "rework_required",
-                "ctox-runtime-retry",
-                Some(note),
-                "internal",
+        "awaiting_review" | "review" | "reviewing" => {
+            anyhow::bail!(
+                "cannot runtime-retry ticket self-work item {work_id} while it is awaiting review; wait for the review verdict"
             )
         }
+        "rework_required" | "review_rework" | "rework" => Ok(item),
         "failed" | "closed" | "done" | "completed" | "handled" | "cancelled" | "superseded" => {
             anyhow::bail!(
                 "cannot runtime-retry terminal ticket self-work item {work_id} in state {}",
@@ -11667,40 +11689,25 @@ fn transition_self_work_after_runtime_retry(
 fn transition_planned_self_work_after_runtime_retry(
     root: &Path,
     item: &tickets::TicketSelfWorkItemView,
-    note: &str,
+    _note: &str,
 ) -> Result<tickets::TicketSelfWorkItemView> {
-    let executing = tickets::transition_ticket_self_work_item(
+    tickets::transition_ticket_self_work_item(
         root,
         &item.work_id,
         "published",
         "ctox-runtime-retry",
-        Some("Runtime retry applies to the just-executed queue slice; entering execution before retry checkpoint state."),
+        Some("Runtime retry resumes the same durable work item without creating review rework."),
         "internal",
-    )?;
-    transition_executing_self_work_after_runtime_retry(root, &executing, note)
+    )
 }
 
 fn transition_executing_self_work_after_runtime_retry(
     root: &Path,
     item: &tickets::TicketSelfWorkItemView,
-    note: &str,
+    _note: &str,
 ) -> Result<tickets::TicketSelfWorkItemView> {
-    let awaiting_review = tickets::transition_ticket_self_work_item(
-        root,
-        &item.work_id,
-        "awaiting_review",
-        "ctox-runtime-retry",
-        Some("Execution slice reached a runtime retry checkpoint."),
-        "internal",
-    )?;
-    tickets::transition_ticket_self_work_item(
-        root,
-        &awaiting_review.work_id,
-        "rework_required",
-        "ctox-runtime-retry",
-        Some(note),
-        "internal",
-    )
+    let _ = root;
+    Ok(item.clone())
 }
 
 fn founder_rework_review_loop_block_note(
@@ -11724,11 +11731,11 @@ fn founder_rework_review_loop_block_note(
     )))
 }
 
-fn founder_rework_loop_block_already_active(root: &Path, work_id: &str) -> Result<bool> {
+fn founder_rework_loop_terminal_already_active(root: &Path, work_id: &str) -> Result<bool> {
     let Some(item) = tickets::load_ticket_self_work_item(root, work_id)? else {
         return Ok(false);
     };
-    if item.state != "blocked" {
+    if item.state != "failed" {
         return Ok(false);
     }
     let db_path = crate::paths::core_db(&root);
@@ -11772,7 +11779,7 @@ fn founder_rework_queue_attempt_count(root: &Path, work_id: &str) -> Result<usiz
     Ok(count.max(0) as usize)
 }
 
-fn block_founder_rework_queue_tasks_for_work(
+fn fail_founder_rework_queue_tasks_for_work(
     root: &Path,
     work_id: &str,
     note: &str,
@@ -11809,7 +11816,7 @@ fn block_founder_rework_queue_tasks_for_work(
             root,
             channels::QueueTaskUpdateRequest {
                 message_key,
-                route_status: Some("blocked".to_string()),
+                route_status: Some("failed".to_string()),
                 status_note: Some(note.to_string()),
                 ..Default::default()
             },
@@ -16391,15 +16398,10 @@ mod tests {
 
     #[test]
     fn worker_failures_route_to_recoverable_states_never_blocked() {
-        // Anti-stuck guard fires the reviewer pathway, not a permanent block.
-        assert_eq!(
-            failed_worker_route_status(true, false, false),
-            "review_rework"
-        );
-        assert_eq!(
-            failed_worker_route_status(true, true, true),
-            "review_rework"
-        );
+        // Anti-stuck threshold exhaustion is terminal failure, not review
+        // rework. Review rework requires a review/validator witness.
+        assert_eq!(failed_worker_route_status(true, false, false), "failed");
+        assert_eq!(failed_worker_route_status(true, true, true), "failed");
         // Pure timeout / runtime retry signal stays on the queue.
         assert_eq!(failed_worker_route_status(false, true, false), "pending");
         assert_eq!(failed_worker_route_status(false, true, true), "pending");
@@ -17026,7 +17028,7 @@ mod tests {
     }
 
     #[test]
-    fn published_self_work_runtime_retry_uses_legal_core_review_path() {
+    fn published_self_work_runtime_retry_does_not_synthesize_review_rework() {
         let root = temp_root("ctox-published-runtime-retry-core-path");
         let item = tickets::put_ticket_self_work_item(
             &root,
@@ -17063,7 +17065,7 @@ mod tests {
             &published.work_id,
             "Retryable runtime/API failure; resume the same durable work item.",
         )
-        .expect("published runtime retry should requeue through core")
+        .expect("published runtime retry should requeue without review rework")
         .expect("expected a new queue task");
 
         assert_eq!(
@@ -17077,31 +17079,27 @@ mod tests {
 
         let conn = channels::open_channel_db(&crate::paths::core_db(&root))
             .expect("failed to open core db");
-        for (from_state, to_state) in [
-            ("Executing", "AwaitingReview"),
-            ("AwaitingReview", "ReworkRequired"),
-            ("ReworkRequired", "Executing"),
-        ] {
-            let count: i64 = conn
-                .query_row(
-                    r#"
-                    SELECT COUNT(*)
-                    FROM ctox_core_transition_proofs
-                    WHERE entity_type = 'WorkItem'
-                      AND entity_id = ?1
-                      AND from_state = ?2
-                      AND to_state = ?3
-                      AND accepted = 1
-                    "#,
-                    params![published.work_id.as_str(), from_state, to_state],
-                    |row| row.get(0),
-                )
-                .expect("failed to count core transition proofs");
-            assert_eq!(
-                count, 1,
-                "missing accepted core proof for {from_state} -> {to_state}"
-            );
-        }
+        let synthetic_review_count: i64 = conn
+            .query_row(
+                r#"
+                SELECT COUNT(*)
+                FROM ctox_core_transition_proofs
+                WHERE entity_type = 'WorkItem'
+                  AND entity_id = ?1
+                  AND accepted = 1
+                  AND (
+                        to_state = 'AwaitingReview'
+                     OR to_state = 'ReworkRequired'
+                  )
+                "#,
+                params![published.work_id.as_str()],
+                |row| row.get(0),
+            )
+            .expect("failed to count synthetic review proofs");
+        assert_eq!(
+            synthetic_review_count, 0,
+            "runtime retry must not synthesize review or rework proofs"
+        );
     }
 
     #[test]
@@ -19198,7 +19196,7 @@ Preserve and update controller.json and logbook.md."
                 |row| row.get(0),
             )
             .expect("failed to reload route status");
-        assert_eq!(route_status, "review_rework");
+        assert_eq!(route_status, "pending");
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -19267,15 +19265,15 @@ Preserve and update controller.json and logbook.md."
         let reloaded = tickets::load_ticket_self_work_item(&root, &item.work_id)
             .expect("failed to reload self-work")
             .expect("missing self-work");
-        assert_eq!(reloaded.state, "blocked");
+        assert_eq!(reloaded.state, "failed");
         let open_tasks =
             channels::list_queue_tasks(&root, &["pending".to_string(), "leased".to_string()], 10)
                 .expect("failed to list open queue tasks");
         assert!(open_tasks.is_empty());
-        let blocked_tasks = channels::list_queue_tasks(&root, &["blocked".to_string()], 10)
-            .expect("failed to list blocked queue tasks");
-        assert_eq!(blocked_tasks.len(), FOUNDER_REWORK_REQUEUE_BLOCK_THRESHOLD);
-        assert!(blocked_tasks.iter().all(|task| task
+        let failed_tasks = channels::list_queue_tasks(&root, &["failed".to_string()], 10)
+            .expect("failed to list failed queue tasks");
+        assert_eq!(failed_tasks.len(), FOUNDER_REWORK_REQUEUE_BLOCK_THRESHOLD);
+        assert!(failed_tasks.iter().all(|task| task
             .status_note
             .as_deref()
             .unwrap_or("")
@@ -19792,7 +19790,7 @@ Preserve and update controller.json and logbook.md."
                 |row| row.get(0),
             )
             .expect("failed to reload route status");
-        assert_eq!(route_status, "review_rework");
+        assert_eq!(route_status, "pending");
         let tasks =
             channels::list_queue_tasks(&root, &["pending".to_string(), "leased".to_string()], 10)
                 .expect("failed to list queue tasks");
@@ -19951,7 +19949,7 @@ Preserve and update controller.json and logbook.md."
                 |row| row.get(0),
             )
             .expect("failed to reload route status");
-        assert_eq!(route_status, "review_rework");
+        assert_eq!(route_status, "pending");
         let task_status: String = conn
             .query_row(
                 "SELECT route_status FROM communication_routing_state WHERE message_key = ?1",
@@ -21497,7 +21495,7 @@ The controller must update stale files itself."
 
         assert_eq!(
             outcome_witness_retry_route_status_for_job(&root, &job),
-            "review_rework"
+            "pending"
         );
 
         let _ = std::fs::remove_dir_all(&root);

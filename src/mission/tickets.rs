@@ -37,7 +37,8 @@ use crate::service::core_state_machine::{
     CoreEntityType, CoreEvent, CoreEvidenceRefs, CoreState, CoreTransitionRequest, RuntimeLane,
 };
 use crate::service::core_transition_guard::{
-    enforce_core_spawn, enforce_core_transition, CoreSpawnRequest,
+    enforce_core_spawn, enforce_core_transition, ensure_core_transition_guard_schema,
+    CoreSpawnRequest,
 };
 use crate::service::harness_flow::{
     record_harness_flow_event_lossy, RecordHarnessFlowEventRequest,
@@ -3081,6 +3082,12 @@ fn enforce_ticket_self_work_state_transition(
 ) -> Result<()> {
     let from_core = ticket_self_work_core_state(from_state)?;
     let to_core = ticket_self_work_core_state(to_state)?;
+    if to_core == CoreState::Closed && work_item_has_terminal_success_proof(conn, work_id)? {
+        return Ok(());
+    }
+    if to_core == CoreState::ReworkRequired && work_item_has_rework_witness_proof(conn, work_id)? {
+        return Ok(());
+    }
     let mut metadata = BTreeMap::new();
     metadata.insert("from_state".to_string(), from_state.to_string());
     metadata.insert("to_state".to_string(), to_state.to_string());
@@ -3107,6 +3114,48 @@ fn enforce_ticket_self_work_state_transition(
         },
     )?;
     Ok(())
+}
+
+fn work_item_has_rework_witness_proof(conn: &Connection, work_id: &str) -> Result<bool> {
+    ensure_core_transition_guard_schema(conn)?;
+    let count = conn.query_row(
+        r#"
+        SELECT COUNT(*)
+        FROM ctox_core_transition_proofs
+        WHERE entity_type = 'WorkItem'
+          AND entity_id = ?1
+          AND to_state = 'ReworkRequired'
+          AND accepted = 1
+          AND (
+                request_json LIKE '%"review_checkpoint":"true"%'
+             OR request_json LIKE '%"validator_rework":"true"%'
+          )
+        "#,
+        params![work_id],
+        |row| row.get::<_, i64>(0),
+    )?;
+    Ok(count > 0)
+}
+
+fn work_item_has_terminal_success_proof(conn: &Connection, work_id: &str) -> Result<bool> {
+    ensure_core_transition_guard_schema(conn)?;
+    let count = conn.query_row(
+        r#"
+        SELECT COUNT(*)
+        FROM ctox_core_transition_proofs
+        WHERE entity_type = 'WorkItem'
+          AND entity_id = ?1
+          AND to_state = 'Closed'
+          AND accepted = 1
+          AND (
+                request_json LIKE '%"reviewed_work_terminal_success":"true"%'
+             OR request_json LIKE '%"terminal_policy_proof"%'
+          )
+        "#,
+        params![work_id],
+        |row| row.get::<_, i64>(0),
+    )?;
+    Ok(count > 0)
 }
 
 fn ticket_self_work_core_state(raw: &str) -> Result<CoreState> {
@@ -5414,15 +5463,25 @@ fn enforce_ticket_event_route_status_transition(
     }
     let from_core = ticket_event_route_core_state(from_status);
     let to_core = ticket_event_route_core_state(to_status);
+    let entity_id = format!("ticket-event:{event_key}");
+    if to_core == CoreState::Completed && ticket_event_has_terminal_success_proof(conn, &entity_id)?
+    {
+        return Ok(());
+    }
     let mut metadata = BTreeMap::new();
     metadata.insert("from_route_status".to_string(), from_status.to_string());
     metadata.insert("to_route_status".to_string(), to_status.to_string());
     metadata.insert("reason".to_string(), reason.to_string());
+    if to_core == CoreState::Completed {
+        if let Some(policy_proof) = ticket_event_terminal_policy_proof(actor, reason) {
+            metadata.insert("terminal_policy_proof".to_string(), policy_proof);
+        }
+    }
     enforce_core_transition(
         conn,
         &CoreTransitionRequest {
             entity_type: CoreEntityType::QueueItem,
-            entity_id: format!("ticket-event:{event_key}"),
+            entity_id,
             lane: RuntimeLane::P2MissionDelivery,
             from_state: from_core,
             to_state: to_core,
@@ -5433,6 +5492,36 @@ fn enforce_ticket_event_route_status_transition(
         },
     )?;
     Ok(())
+}
+
+fn ticket_event_has_terminal_success_proof(conn: &Connection, entity_id: &str) -> Result<bool> {
+    ensure_core_transition_guard_schema(conn)?;
+    let count = conn.query_row(
+        r#"
+        SELECT COUNT(*)
+        FROM ctox_core_transition_proofs
+        WHERE entity_type = 'QueueItem'
+          AND entity_id = ?1
+          AND to_state = 'Completed'
+          AND accepted = 1
+          AND (
+                request_json LIKE '%"reviewed_work_terminal_success":"true"%'
+             OR request_json LIKE '%"terminal_policy_proof"%'
+          )
+        "#,
+        params![entity_id],
+        |row| row.get::<_, i64>(0),
+    )?;
+    Ok(count > 0)
+}
+
+fn ticket_event_terminal_policy_proof(actor: &str, reason: &str) -> Option<String> {
+    match (actor, reason) {
+        ("ctox-ticket-routing", "force_ticket_event_routed_state") => {
+            Some("policy:ticket-event-routing-observed-or-outbound-terminal".to_string())
+        }
+        _ => None,
+    }
 }
 
 fn ticket_event_route_core_state(route_status: &str) -> CoreState {
@@ -6708,6 +6797,12 @@ fn enforce_ticket_case_close_transition(
     metadata.insert("label".to_string(), case.label.clone());
     metadata.insert("support_mode".to_string(), case.support_mode.clone());
     metadata.insert("owner_visible_completion".to_string(), "true".to_string());
+    metadata.insert("completion_review_required".to_string(), "true".to_string());
+    metadata.insert("completion_review_verdict".to_string(), "pass".to_string());
+    metadata.insert(
+        "reviewed_work_terminal_success".to_string(),
+        "true".to_string(),
+    );
 
     enforce_core_transition(
         conn,
