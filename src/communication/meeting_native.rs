@@ -15,7 +15,7 @@ use std::fs;
 use std::io::{BufRead, BufReader, Write as IoWrite};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration as StdDuration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::communication::adapters::{AdapterSyncCommandRequest, MeetingSendCommandRequest};
 use crate::communication::runtime as communication_runtime;
@@ -828,9 +828,17 @@ pub fn handle_meeting_command(root: &Path, args: &[String]) -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&result)?);
             Ok(())
         }
+        "preflight-realtime" => {
+            let result = preflight_realtime_meeting(root, &args[1..])?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
+            if !result.get("ok").and_then(Value::as_bool).unwrap_or(false) {
+                bail!("meeting realtime preflight failed; refusing live Teams test");
+            }
+            Ok(())
+        }
         _ => {
             println!(
-                "usage: ctox meeting <join|schedule|cancel|status|transcript|simulate> [args]"
+                "usage: ctox meeting <join|schedule|cancel|status|transcript|simulate|preflight-realtime> [args]"
             );
             println!();
             println!("  join <url> [--name <bot-name>]       Join a meeting now");
@@ -840,6 +848,9 @@ pub fn handle_meeting_command(root: &Path, args: &[String]) -> Result<()> {
             println!("  transcript <session_id>              Print transcript + chatlog as JSON");
             println!(
                 "  simulate [--audio <wav>]... [--transcript <text>]... [--chat <sender:text>]..."
+            );
+            println!(
+                "  preflight-realtime [--audio <wav>]   Verify isolated Teams audio + Mistral realtime before live use"
             );
             Ok(())
         }
@@ -946,6 +957,696 @@ fn simulate_meeting_session(root: &Path, args: &[String]) -> Result<Value> {
     }))
 }
 
+fn preflight_realtime_meeting(root: &Path, args: &[String]) -> Result<Value> {
+    let phrase = find_flag_value(args, "--phrase")
+        .unwrap_or("Die smarte Tuerklingel verdient ihren Namen und reagiert ohne Verzoegerung.");
+    let expected = find_flag_value(args, "--expected").unwrap_or(phrase);
+    let foreign_phrase = find_flag_value(args, "--foreign-phrase")
+        .unwrap_or("Traditional coding is dead. Inspect driven development is the future.");
+    let max_first_delta_ms = find_flag_value(args, "--max-first-delta-ms")
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(2500);
+    let skip_mistral = args.iter().any(|arg| arg == "--skip-mistral");
+    let skip_pulse = args.iter().any(|arg| arg == "--skip-pulse");
+
+    let preflight_id = format!(
+        "meeting-realtime-preflight-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+    );
+    let dir = root.join("runtime/meeting-preflight").join(&preflight_id);
+    fs::create_dir_all(&dir)?;
+
+    let runtime = crate::communication::gateway::runtime_settings_from_root(
+        root,
+        crate::communication::gateway::CommunicationAdapterKind::Meeting,
+    );
+    let config = MeetingSessionConfig::from_runtime(
+        root,
+        "https://teams.microsoft.com/meet/preflight",
+        &runtime,
+    )?;
+
+    let mut gates = Vec::new();
+    let mut artifacts = BTreeMap::new();
+
+    let script_gate = meeting_realtime_script_gate(root);
+    gates.push(script_gate.clone());
+
+    let speaker_gate = meeting_speaker_extraction_gate(root);
+    gates.push(speaker_gate.clone());
+
+    let mut mistral_gate = json!({
+        "name": "mistral_realtime_stream",
+        "ok": false,
+        "skipped": skip_mistral,
+        "reason": if skip_mistral { "skipped_by_flag" } else { "" },
+    });
+    let mut mistral_probe: Option<Value> = None;
+    if !skip_mistral {
+        let input_audio = if let Some(path) = find_flag_value(args, "--audio") {
+            PathBuf::from(path)
+        } else {
+            generate_preflight_speech_audio(&dir, "phrase", phrase)?
+        };
+        artifacts.insert(
+            "phrase_audio".to_string(),
+            input_audio.display().to_string(),
+        );
+        match run_mistral_realtime_probe(&dir, &input_audio, &config, expected, max_first_delta_ms)
+        {
+            Ok(probe) => {
+                mistral_gate = json!({
+                    "name": "mistral_realtime_stream",
+                    "ok": probe.get("ok").and_then(Value::as_bool).unwrap_or(false),
+                    "first_delta_ms": probe.get("first_delta_ms"),
+                    "expected_match_ratio": probe.get("expected_match_ratio"),
+                    "delta_count": probe.get("delta_count"),
+                    "final_text": probe.get("final_text"),
+                });
+                mistral_probe = Some(probe);
+            }
+            Err(err) => {
+                mistral_gate = json!({
+                    "name": "mistral_realtime_stream",
+                    "ok": false,
+                    "reason": err.to_string(),
+                });
+            }
+        }
+    }
+    gates.push(mistral_gate);
+
+    let pulse_gate = if skip_pulse {
+        json!({"name": "pulseaudio_isolation", "ok": true, "skipped": true, "reason": "skipped_by_flag"})
+    } else {
+        match run_pulseaudio_isolation_probe(
+            &dir,
+            phrase,
+            foreign_phrase,
+            expected,
+            &config,
+            max_first_delta_ms,
+            skip_mistral,
+        ) {
+            Ok(gate) => gate,
+            Err(err) => json!({
+                "name": "pulseaudio_isolation",
+                "ok": false,
+                "reason": err.to_string(),
+            }),
+        }
+    };
+    gates.push(pulse_gate);
+
+    let ok = gates
+        .iter()
+        .all(|gate| gate.get("ok").and_then(Value::as_bool).unwrap_or(false));
+
+    let result = json!({
+        "ok": ok,
+        "preflight_id": preflight_id,
+        "artifact_dir": dir,
+        "model": config.realtime_stt_model,
+        "policy": {
+            "teams_captions_allowed": false,
+            "batch_stt_allowed_for_live_ui": false,
+            "live_test_allowed_only_if_ok": true,
+            "max_first_delta_ms": max_first_delta_ms,
+        },
+        "artifacts": artifacts,
+        "mistral_probe": mistral_probe,
+        "gates": gates,
+    });
+    fs::write(
+        dir.join("preflight-result.json"),
+        serde_json::to_string_pretty(&result)?,
+    )?;
+    Ok(result)
+}
+
+fn meeting_realtime_script_gate(root: &Path) -> Value {
+    let config = MeetingSessionConfig {
+        root: root.to_path_buf(),
+        meeting_url: "https://teams.microsoft.com/meet/preflight".to_string(),
+        provider: MeetingProvider::MicrosoftTeams,
+        bot_name: "INF Yoda Notetaker".to_string(),
+        max_duration_minutes: 5,
+        audio_chunk_seconds: 3,
+        stt_model: DEFAULT_MEETING_STT_MODEL.to_string(),
+        realtime_stt_model: "voxtral-mini-transcribe-realtime-2602".to_string(),
+        mistral_api_key: None,
+    };
+    match build_meeting_runner_script_with_timeout(&config) {
+        Ok(script) => {
+            let checks = vec![
+                (
+                    "uses_mistral_realtime",
+                    script.contains("client.audio.realtime.transcribe_stream"),
+                ),
+                (
+                    "uses_pcm_16khz",
+                    script.contains("AudioFormat(encoding=\"pcm_s16le\", sample_rate=16000)"),
+                ),
+                (
+                    "has_live_overlay_delta",
+                    script.contains("__ctoxTranscriptOverlayLive"),
+                ),
+                (
+                    "has_commit_overlay",
+                    script.contains("__ctoxTranscriptOverlayCommit"),
+                ),
+                (
+                    "no_teams_caption_enable",
+                    !script.contains("await enableTeamsLiveCaptions"),
+                ),
+                (
+                    "no_teams_caption_polling",
+                    script.contains("if (provider === \"microsoft\") return;"),
+                ),
+                (
+                    "no_global_default_sink",
+                    !script.contains("set-default-sink virtual_output"),
+                ),
+                (
+                    "no_batch_live_segmenter",
+                    !script.contains("audioSegmenter") && !script.contains("teams-audio-chunks"),
+                ),
+            ];
+            let ok = checks.iter().all(|(_, passed)| *passed);
+            json!({
+                "name": "runner_script_contract",
+                "ok": ok,
+                "checks": checks.into_iter().map(|(name, ok)| json!({"name": name, "ok": ok})).collect::<Vec<_>>(),
+            })
+        }
+        Err(err) => json!({
+            "name": "runner_script_contract",
+            "ok": false,
+            "reason": err.to_string(),
+        }),
+    }
+}
+
+fn meeting_speaker_extraction_gate(root: &Path) -> Value {
+    let config = MeetingSessionConfig {
+        root: root.to_path_buf(),
+        meeting_url: "https://teams.microsoft.com/meet/preflight".to_string(),
+        provider: MeetingProvider::MicrosoftTeams,
+        bot_name: "INF Yoda Notetaker".to_string(),
+        max_duration_minutes: 5,
+        audio_chunk_seconds: 3,
+        stt_model: DEFAULT_MEETING_STT_MODEL.to_string(),
+        realtime_stt_model: "voxtral-mini-transcribe-realtime-2602".to_string(),
+        mistral_api_key: None,
+    };
+    let mut session = MeetingSession::new(&config);
+    let speaker = SpeakerSignal {
+        timestamp: now_iso_string(),
+        speaker_display: "Michael Welsch".to_string(),
+        speaker_id: Some("fixture-speaker".to_string()),
+        source: "platform_active_speaker".to_string(),
+        confidence: 0.75,
+    };
+    session.push_stt_transcript(
+        "Das ist ein deutscher Realtime Preflight Satz.".to_string(),
+        Some(&speaker),
+    );
+    let segment = session.transcript_segments.first();
+    let state_gate = segment
+        .map(|segment| {
+            segment.speaker_display == "Michael Welsch"
+                && segment.source == "stt_with_active_speaker"
+                && segment.confidence >= 0.6
+        })
+        .unwrap_or(false);
+    let script = build_meeting_runner_script_with_timeout(&config).unwrap_or_default();
+    let dom_gate = script.contains("platform_active_speaker")
+        && script.contains("platform_single_participant")
+        && script.contains("data-participant-name")
+        && script.contains("In dieser Besprechung");
+    json!({
+        "name": "speaker_attribution_contract",
+        "ok": state_gate && dom_gate,
+        "checks": [
+            {"name": "stt_segments_accept_active_speaker", "ok": state_gate},
+            {"name": "teams_dom_speaker_selectors_present", "ok": dom_gate},
+        ],
+        "note": "Mistral realtime STT has no diarization here; Teams speaker attribution must come from direct Teams DOM state.",
+    })
+}
+
+fn run_pulseaudio_isolation_probe(
+    dir: &Path,
+    phrase: &str,
+    foreign_phrase: &str,
+    expected: &str,
+    config: &MeetingSessionConfig,
+    max_first_delta_ms: u64,
+    skip_mistral: bool,
+) -> Result<Value> {
+    if !cfg!(target_os = "linux") {
+        return Ok(json!({
+            "name": "pulseaudio_isolation",
+            "ok": true,
+            "skipped": true,
+            "reason": "not_linux",
+        }));
+    }
+    for executable in ["pactl", "ffmpeg"] {
+        if !command_available(executable) {
+            bail!("{executable} is required for PulseAudio isolation preflight");
+        }
+    }
+    let sink = ensure_virtual_output_sink()?;
+    let default_sink = command_stdout("pactl", &["get-default-sink"])
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if default_sink == "virtual_output" {
+        return Ok(json!({
+            "name": "pulseaudio_isolation",
+            "ok": false,
+            "reason": "default_sink_is_virtual_output",
+            "detail": "Teams audio may be routed into virtual_output with PULSE_SINK, but CTOX must not make virtual_output the global default sink because that captures unrelated system audio.",
+        }));
+    }
+
+    let phrase_audio = generate_preflight_speech_audio(dir, "pulse_phrase", phrase)?;
+    let foreign_audio = generate_preflight_speech_audio(dir, "pulse_foreign", foreign_phrase)?;
+    let capture = dir.join("pulse-isolation-capture.wav");
+    let mut recorder = Command::new("ffmpeg")
+        .args([
+            "-y",
+            "-loglevel",
+            "error",
+            "-f",
+            "pulse",
+            "-ac",
+            "1",
+            "-ar",
+            "16000",
+            "-i",
+            "virtual_output.monitor",
+            "-t",
+            "8",
+            "-acodec",
+            "pcm_s16le",
+        ])
+        .arg(&capture)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("failed to start PulseAudio isolation recorder")?;
+    std::thread::sleep(StdDuration::from_millis(600));
+    let mut phrase_player = spawn_audio_player_to_sink(&phrase_audio, "virtual_output")?;
+    let mut foreign_player = if default_sink.is_empty() {
+        None
+    } else {
+        Some(spawn_audio_player_to_sink(&foreign_audio, &default_sink)?)
+    };
+    let _ = phrase_player.wait();
+    if let Some(child) = foreign_player.as_mut() {
+        let _ = child.wait();
+    }
+    let recorder_status = recorder.wait()?;
+    if !recorder_status.success() {
+        bail!("PulseAudio isolation recorder failed with status {recorder_status}");
+    }
+    if skip_mistral {
+        return Ok(json!({
+            "name": "pulseaudio_isolation",
+            "ok": true,
+            "skipped_stt": true,
+            "sink": sink,
+            "default_sink": default_sink,
+            "capture": capture,
+        }));
+    }
+    let probe = run_mistral_realtime_probe(dir, &capture, config, expected, max_first_delta_ms)?;
+    let final_text = probe
+        .get("final_text")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let foreign_leak = token_match_ratio(&final_text, foreign_phrase) >= 0.25;
+    let ok = probe.get("ok").and_then(Value::as_bool).unwrap_or(false) && !foreign_leak;
+    Ok(json!({
+        "name": "pulseaudio_isolation",
+        "ok": ok,
+        "sink": sink,
+        "default_sink": default_sink,
+        "capture": capture,
+        "foreign_leak_detected": foreign_leak,
+        "probe": probe,
+    }))
+}
+
+fn ensure_virtual_output_sink() -> Result<Value> {
+    let sources = command_stdout("pactl", &["list", "sources", "short"]).unwrap_or_default();
+    if sources.contains("virtual_output.monitor") {
+        return Ok(json!({"created": false, "source": "virtual_output.monitor"}));
+    }
+    let _ = Command::new("pulseaudio")
+        .args(["-D", "--exit-idle-time=-1", "--log-level=warning"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    let status = Command::new("pactl")
+        .args([
+            "load-module",
+            "module-null-sink",
+            "sink_name=virtual_output",
+            "sink_properties=device.description=Virtual_Output",
+        ])
+        .status()
+        .context("failed to create PulseAudio virtual_output sink")?;
+    if !status.success() {
+        bail!("pactl could not create virtual_output sink");
+    }
+    let sources = command_stdout("pactl", &["list", "sources", "short"]).unwrap_or_default();
+    if !sources.contains("virtual_output.monitor") {
+        bail!("virtual_output.monitor is still unavailable after sink creation");
+    }
+    Ok(json!({"created": true, "source": "virtual_output.monitor"}))
+}
+
+fn generate_preflight_speech_audio(dir: &Path, stem: &str, phrase: &str) -> Result<PathBuf> {
+    fs::create_dir_all(dir)?;
+    let wav = dir.join(format!("{stem}.wav"));
+    if command_available("say") {
+        let aiff = dir.join(format!("{stem}.aiff"));
+        let status = Command::new("say")
+            .args(["-v", "Anna", "-o"])
+            .arg(&aiff)
+            .arg(phrase)
+            .status();
+        if status.map(|s| s.success()).unwrap_or(false) {
+            convert_audio_to_wav(&aiff, &wav)?;
+            return Ok(wav);
+        }
+    }
+    for candidate in ["espeak-ng", "espeak"] {
+        if !command_available(candidate) {
+            continue;
+        }
+        let status = Command::new(candidate)
+            .args(["-v", "de", "-w"])
+            .arg(&wav)
+            .arg(phrase)
+            .status();
+        if status.map(|s| s.success()).unwrap_or(false) {
+            return Ok(wav);
+        }
+    }
+    bail!("could not generate German speech fixture; install `say`, `espeak-ng`, or pass --audio <wav>")
+}
+
+fn convert_audio_to_wav(input: &Path, output: &Path) -> Result<()> {
+    let status = Command::new("ffmpeg")
+        .args(["-y", "-loglevel", "error", "-i"])
+        .arg(input)
+        .args(["-ac", "1", "-ar", "16000", "-acodec", "pcm_s16le"])
+        .arg(output)
+        .status()
+        .context("failed to run ffmpeg audio conversion")?;
+    if !status.success() {
+        bail!("ffmpeg audio conversion failed for {}", input.display());
+    }
+    Ok(())
+}
+
+fn spawn_audio_player_to_sink(audio: &Path, sink: &str) -> Result<std::process::Child> {
+    if command_available("paplay") {
+        return Command::new("paplay")
+            .arg(format!("--device={sink}"))
+            .arg(audio)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .with_context(|| format!("failed to play {} to sink {sink}", audio.display()));
+    }
+    Command::new("ffmpeg")
+        .args(["-re", "-loglevel", "error", "-i"])
+        .arg(audio)
+        .args(["-f", "pulse"])
+        .arg(sink)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .with_context(|| format!("failed to play {} to sink {sink}", audio.display()))
+}
+
+fn run_mistral_realtime_probe(
+    dir: &Path,
+    audio: &Path,
+    config: &MeetingSessionConfig,
+    expected: &str,
+    max_first_delta_ms: u64,
+) -> Result<Value> {
+    let api_key = config
+        .mistral_api_key
+        .as_deref()
+        .context("missing CTOX_MISTRAL_API_KEY/MISTRAL_API_KEY for realtime preflight")?;
+    if !command_available("ffmpeg") {
+        bail!("ffmpeg is required for realtime preflight");
+    }
+    let pcm = dir.join(format!(
+        "{}.pcm",
+        audio
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or("preflight-audio")
+    ));
+    let status = Command::new("ffmpeg")
+        .args(["-y", "-loglevel", "error", "-i"])
+        .arg(audio)
+        .args([
+            "-ac",
+            "1",
+            "-ar",
+            "16000",
+            "-f",
+            "s16le",
+            "-acodec",
+            "pcm_s16le",
+        ])
+        .arg(&pcm)
+        .status()
+        .context("failed to convert audio to realtime PCM")?;
+    if !status.success() {
+        bail!("ffmpeg could not convert {} to PCM", audio.display());
+    }
+    let script = dir.join("mistral_realtime_preflight.py");
+    fs::write(&script, mistral_realtime_preflight_python())?;
+    let start = Instant::now();
+    let output = Command::new("python3")
+        .arg(&script)
+        .arg(&pcm)
+        .env("CTOX_MISTRAL_API_KEY", api_key)
+        .env("MISTRAL_API_KEY", api_key)
+        .env(
+            "CTOX_MISTRAL_REALTIME_STT_MODEL",
+            &config.realtime_stt_model,
+        )
+        .env("CTOX_MISTRAL_REALTIME_DELAY_MS", "600")
+        .env("CTOX_MISTRAL_REALTIME_PCM_CHUNK_BYTES", "4096")
+        .output()
+        .context("failed to run Mistral realtime probe")?;
+    let elapsed_ms = start.elapsed().as_millis() as u64;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    fs::write(dir.join("mistral-realtime-probe.jsonl"), &stdout)?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("Mistral realtime probe failed: {stderr}");
+    }
+    let mut first_delta_ms = None;
+    let mut deltas = Vec::new();
+    let mut final_text = String::new();
+    for line in stdout.lines() {
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if value.get("type").and_then(Value::as_str) == Some("delta") {
+            if first_delta_ms.is_none() {
+                first_delta_ms = value.get("ms").and_then(Value::as_u64);
+            }
+            if let Some(text) = value.get("text").and_then(Value::as_str) {
+                deltas.push(text.to_string());
+            }
+        }
+        if value.get("type").and_then(Value::as_str) == Some("summary") {
+            final_text = value
+                .get("final_text")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+        }
+    }
+    if final_text.is_empty() {
+        final_text = merge_text_deltas(&deltas);
+    }
+    let match_ratio = token_match_ratio(&final_text, expected);
+    let first_delta_ms = first_delta_ms.unwrap_or(u64::MAX);
+    let ok = !deltas.is_empty() && first_delta_ms <= max_first_delta_ms && match_ratio >= 0.45;
+    Ok(json!({
+        "ok": ok,
+        "audio": audio,
+        "pcm": pcm,
+        "elapsed_ms": elapsed_ms,
+        "first_delta_ms": if first_delta_ms == u64::MAX { Value::Null } else { json!(first_delta_ms) },
+        "max_first_delta_ms": max_first_delta_ms,
+        "delta_count": deltas.len(),
+        "expected_match_ratio": match_ratio,
+        "final_text": final_text,
+    }))
+}
+
+fn mistral_realtime_preflight_python() -> &'static str {
+    r#"import asyncio
+import json
+import os
+import sys
+import time
+
+from mistralai.client import Mistral
+from mistralai.client.models import AudioFormat
+
+pcm_path = sys.argv[1]
+api_key = os.environ.get("CTOX_MISTRAL_API_KEY") or os.environ.get("MISTRAL_API_KEY")
+model = os.environ.get("CTOX_MISTRAL_REALTIME_STT_MODEL", "voxtral-mini-transcribe-realtime-2602")
+delay_ms = int(os.environ.get("CTOX_MISTRAL_REALTIME_DELAY_MS", "600"))
+chunk_bytes = int(os.environ.get("CTOX_MISTRAL_REALTIME_PCM_CHUNK_BYTES", "4096"))
+client = Mistral(api_key=api_key)
+started = time.monotonic()
+deltas = []
+
+def event_text(event):
+    for attr in ("text", "delta", "transcript"):
+        value = getattr(event, attr, None)
+        if isinstance(value, str) and value.strip():
+            return value
+    data = getattr(event, "data", None)
+    if isinstance(data, dict):
+        for key in ("text", "delta", "transcript"):
+            value = data.get(key)
+            if isinstance(value, str) and value.strip():
+                return value
+    return ""
+
+def event_type(event):
+    value = getattr(event, "type", None)
+    return value if isinstance(value, str) else type(event).__name__
+
+async def audio_stream():
+    with open(pcm_path, "rb") as handle:
+        while True:
+            data = handle.read(chunk_bytes)
+            if not data:
+                break
+            yield data
+            await asyncio.sleep(max(len(data) / 32000.0, 0.01))
+
+async def main():
+    async for event in client.audio.realtime.transcribe_stream(
+        audio_stream=audio_stream(),
+        model=model,
+        audio_format=AudioFormat(encoding="pcm_s16le", sample_rate=16000),
+        target_streaming_delay_ms=delay_ms,
+    ):
+        kind = event_type(event)
+        now_ms = int((time.monotonic() - started) * 1000)
+        if kind == "session.created":
+            print(json.dumps({"type": "ready", "ms": now_ms, "model": model, "delay_ms": delay_ms}), flush=True)
+            continue
+        text = event_text(event)
+        if text:
+            deltas.append(text)
+            print(json.dumps({"type": "delta", "ms": now_ms, "text": text}, ensure_ascii=False), flush=True)
+    print(json.dumps({"type": "summary", "final_text": " ".join(deltas)}, ensure_ascii=False), flush=True)
+
+asyncio.run(main())
+"#
+}
+
+fn merge_text_deltas(deltas: &[String]) -> String {
+    let mut merged = String::new();
+    for delta in deltas {
+        let previous = compact_for_match(&merged);
+        let next = compact_for_match(delta);
+        if next.is_empty() {
+            continue;
+        }
+        if previous.is_empty() {
+            merged = next;
+            continue;
+        }
+        if next == previous || previous.ends_with(&next) {
+            continue;
+        }
+        if next.starts_with(&previous) {
+            merged = next;
+            continue;
+        }
+        merged = format!("{previous} {next}");
+    }
+    merged
+}
+
+fn token_match_ratio(actual: &str, expected: &str) -> f64 {
+    let actual = compact_for_match(actual);
+    let expected_tokens = compact_for_match(expected)
+        .split_whitespace()
+        .map(ToOwned::to_owned)
+        .filter(|token| token.len() >= 3)
+        .collect::<Vec<_>>();
+    if expected_tokens.is_empty() {
+        return 0.0;
+    }
+    let matched = expected_tokens
+        .iter()
+        .filter(|token| actual.contains(token.as_str()))
+        .count();
+    matched as f64 / expected_tokens.len() as f64
+}
+
+fn compact_for_match(value: &str) -> String {
+    value
+        .to_lowercase()
+        .chars()
+        .map(|ch| {
+            if ch.is_alphanumeric() || ch.is_whitespace() {
+                ch
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn command_available(name: &str) -> bool {
+    Command::new("which")
+        .arg(name)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+fn command_stdout(command: &str, args: &[&str]) -> Result<String> {
+    let output = Command::new(command).args(args).output()?;
+    if !output.status.success() {
+        bail!("{command} {:?} failed with {}", args, output.status);
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
 // ---------------------------------------------------------------------------
 // Meeting runner — spawns Node.js, reads events, drives STT + chat
 // ---------------------------------------------------------------------------
@@ -1027,6 +1728,16 @@ pub(crate) fn run_meeting_session(root: &Path, config: &MeetingSessionConfig) ->
     // Spawn the Node.js process. On Linux VPS hosts there is usually no
     // interactive X server, but Teams needs a headed browser for media capture.
     let mut runner_cmd = build_meeting_runner_command(&node, &reference_dir, &script_path)?;
+    if config.provider == MeetingProvider::MicrosoftTeams && cfg!(target_os = "linux") {
+        match ensure_virtual_output_sink() {
+            Ok(info) => eprintln!("[meeting] PulseAudio Teams sink ready: {info}"),
+            Err(err) => eprintln!("[meeting] WARNING: PulseAudio Teams sink setup failed: {err}"),
+        }
+        // Route only the Teams browser process tree to the virtual sink. Do not
+        // change PulseAudio's global default sink, otherwise unrelated system
+        // audio can leak into the meeting transcript.
+        runner_cmd.env("PULSE_SINK", "virtual_output");
+    }
     runner_cmd
         .env("CTOX_MEETING_COMMAND_FILE", &command_path)
         .env(
@@ -3835,7 +4546,6 @@ if (provider === "microsoft" && process.platform !== "darwin") {
         execSync("pulseaudio -D --exit-idle-time=-1 --log-level=info");
         execSync("sleep 2");
         execSync('pactl load-module module-null-sink sink_name=virtual_output sink_properties=device.description="Virtual_Output"');
-        execSync("pactl set-default-sink virtual_output");
       } catch (e) { emit({ type: "warning", message: "PulseAudio restart failed: " + e.message }); }
     }
   } catch { /* pactl not available */ }
