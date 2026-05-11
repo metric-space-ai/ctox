@@ -9767,6 +9767,9 @@ fn runtime_error_is_transient_api_failure(error: &str) -> bool {
         || normalized.contains("completed without assistant message")
         || normalized.contains("no assistant message")
         || normalized.contains("empty assistant message")
+        || normalized.contains("context_selection_empty")
+        || normalized.contains("context selection is empty")
+        || normalized.contains("no context evidence rendered")
         || normalized.contains("terminal-bench preflight violation")
         || normalized.contains("mid-task compaction failed")
         || normalized.contains("failed to parse structured compaction response")
@@ -18668,6 +18671,17 @@ Preserve and update controller.json and logbook.md."
             Some(60)
         );
         assert!(runtime_error_is_transient_api_failure(error));
+    }
+
+    #[test]
+    fn empty_context_selection_is_retryable_harness_failure() {
+        let error = "context_selection_empty_critical: refusing model invocation because context health is critical and no context evidence rendered";
+        assert_eq!(
+            turn_loop::hard_runtime_blocker_retry_cooldown_secs(error),
+            Some(60)
+        );
+        assert!(runtime_error_is_transient_api_failure(error));
+        assert_eq!(failed_worker_route_status(false, false, true), "pending");
     }
 
     #[test]

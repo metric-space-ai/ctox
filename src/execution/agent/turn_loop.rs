@@ -480,7 +480,7 @@ where
         );
     }
     if health.status == context_health::ContextHealthStatus::Critical
-        && rendered_prompt.rendered_context_items == 0
+        && critical_context_selection_is_empty(&rendered_prompt)
     {
         anyhow::bail!(
             "context_selection_empty_critical: refusing model invocation because context health is critical and no context evidence rendered"
@@ -1003,6 +1003,9 @@ pub fn hard_runtime_blocker_retry_cooldown_secs(content: &str) -> Option<u64> {
         || lower.contains("completed without assistant message")
         || lower.contains("no assistant message")
         || lower.contains("empty assistant message")
+        || lower.contains("context_selection_empty")
+        || lower.contains("context selection is empty")
+        || lower.contains("no context evidence rendered")
         || lower.contains("terminal-bench preflight violation")
         || lower.contains("mid-task compaction failed")
         || lower.contains("failed to parse structured compaction response")
@@ -1160,6 +1163,13 @@ fn rendered_context_empty_with_existing_history(
     non_empty_messages > 1 || has_summary
 }
 
+fn critical_context_selection_is_empty(
+    rendered_prompt: &live_context::RenderedRuntimePrompt,
+) -> bool {
+    rendered_prompt.rendered_context_items == 0
+        && rendered_prompt.latest_user_prompt.trim().is_empty()
+}
+
 fn read_usize_setting(settings: &BTreeMap<String, String>, key: &str, default: usize) -> usize {
     settings
         .get(key)
@@ -1275,5 +1285,24 @@ mod tests {
             &continued_turn,
             1
         ));
+    }
+
+    #[test]
+    fn critical_context_selection_allows_authoritative_current_prompt() {
+        let rendered = live_context::RenderedRuntimePrompt {
+            prompt: "CURRENT REQUEST (authoritative)\nDo the queued work.".to_string(),
+            latest_user_prompt: "Do the queued work.".to_string(),
+            rendered_context_items: 0,
+            omitted_context_items: 0,
+        };
+        assert!(!critical_context_selection_is_empty(&rendered));
+
+        let empty = live_context::RenderedRuntimePrompt {
+            prompt: "CURRENT REQUEST\n".to_string(),
+            latest_user_prompt: "   ".to_string(),
+            rendered_context_items: 0,
+            omitted_context_items: 0,
+        };
+        assert!(critical_context_selection_is_empty(&empty));
     }
 }
