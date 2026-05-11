@@ -4083,12 +4083,13 @@ fn run_completion_review(
                             &approval_summary,
                         )
                     } else {
+                        let account_key = email_account_key_from_message_key(message_key);
                         channels::record_external_chat_review_approval(
                             root,
                             message_key,
                             &channels::ExternalChatAction {
                                 channel: "email".to_string(),
-                                account_key: action.account_key.clone(),
+                                account_key,
                                 thread_key: action.thread_key.clone(),
                                 subject: action.subject.clone(),
                                 to: action.to.clone(),
@@ -7071,6 +7072,7 @@ fn outcome_witness_recovery_message(
     };
     if let Some(inbound_key) = inbound_email_reply_message_key(job) {
         if let Ok(action) = channels::prepare_reviewed_founder_reply(root, inbound_key) {
+            let account_key = email_account_key_from_message_key(inbound_key);
             let to_flags = action
                 .to
                 .iter()
@@ -7090,7 +7092,7 @@ fn outcome_witness_recovery_message(
             message.push_str(&format!(
                 "\n\nNaechster Schritt fuer den Agent-Run: Die Review-Freigabe fuer exakt diesen Mail-Body, diesen Thread und diese Empfaenger ist bereits persistiert. Sende genau den freigegebenen Text mit genau diesem Befehl:\n\nBODY=$(cat <<'CTOX_REVIEWED_BODY'\n{}\nCTOX_REVIEWED_BODY\n)\nctox channel send --channel email --account-key {} --thread-key {} --subject {}{}{}{} --reviewed-communication-send --body \"$BODY\"\n\nAendere Body, Empfaenger, CC, Betreff oder Attachments nicht. Wenn der Befehl fehlschlaegt, melde exakt die Fehlermeldung und stoppe. Wenn er erfolgreich ist, pruefe, dass `communication_messages` fuer thread_key `{}` eine outbound email mit `status='accepted'` enthaelt.",
                 approved_body_block,
-                shell_quote(&action.account_key),
+                shell_quote(&account_key),
                 shell_quote(&action.thread_key),
                 shell_quote(&action.subject),
                 to_flags,
@@ -9826,6 +9828,15 @@ fn inbound_email_reply_message_key(job: &QueuedPrompt) -> Option<&str> {
         .iter()
         .find(|key| key.starts_with("email:"))
         .map(|key| key.as_str())
+}
+
+fn email_account_key_from_message_key(message_key: &str) -> String {
+    message_key
+        .split_once("::")
+        .map(|(account_key, _)| account_key)
+        .filter(|account_key| !account_key.trim().is_empty())
+        .unwrap_or("email:default")
+        .to_string()
 }
 
 fn founder_outbound_anchor_key(job: &QueuedPrompt) -> Option<&str> {
