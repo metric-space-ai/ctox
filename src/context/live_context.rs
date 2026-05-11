@@ -806,9 +806,76 @@ pub(crate) fn select_rendered_context(
     entries.extend(selected_messages);
 
     let omitted_summaries = summary_start;
+    if entries.is_empty() {
+        let fallback = continuity_floor_context(snapshot, latest_user_message_id);
+        if !fallback.entries.is_empty() {
+            return RenderedContextSelection {
+                entries: fallback.entries,
+                omitted_items: omitted_summaries + omitted_messages + fallback.omitted_items,
+            };
+        }
+    }
     RenderedContextSelection {
         entries,
         omitted_items: omitted_summaries + omitted_messages,
+    }
+}
+
+fn continuity_floor_context(
+    snapshot: &lcm::LcmSnapshot,
+    latest_user_message_id: Option<i64>,
+) -> RenderedContextSelection {
+    let mut entries = Vec::new();
+    let mut total_chars = 0usize;
+    let mut omitted_items = 0usize;
+
+    for summary in snapshot.summaries.iter().rev() {
+        let content = summary.content.trim();
+        if content.is_empty() {
+            continue;
+        }
+        let line = format!("summary: {}", content);
+        let projected = total_chars + line.len();
+        if !entries.is_empty()
+            && (entries.len() >= MAX_RENDERED_SUMMARY_ITEMS
+                || projected > MAX_RENDERED_CONTEXT_CHARS)
+        {
+            omitted_items += 1;
+            continue;
+        }
+        total_chars = projected;
+        entries.push(line);
+    }
+    entries.reverse();
+
+    let mut selected_messages = Vec::new();
+    let mut seen = BTreeSet::new();
+    for message in snapshot.messages.iter().rev() {
+        if Some(message.message_id) == latest_user_message_id || message.content.trim().is_empty() {
+            continue;
+        }
+        let line = render_context_message(&message.role, &message.content);
+        if !seen.insert(line.clone()) {
+            omitted_items += 1;
+            continue;
+        }
+        let projected = total_chars + line.len();
+        if !selected_messages.is_empty()
+            && (selected_messages.len() >= MAX_RENDERED_MESSAGE_ITEMS
+                || projected > MAX_RENDERED_CONTEXT_CHARS)
+        {
+            omitted_items += 1;
+            continue;
+        }
+        total_chars = projected;
+        selected_messages.push(line);
+    }
+    selected_messages.reverse();
+    entries.extend(selected_messages);
+
+    RenderedContextSelection {
+        entries,
+        omitted_items,
     }
 }
 
@@ -1474,6 +1541,68 @@ mod tests {
         ));
         std::fs::create_dir_all(&root).unwrap();
         root
+    }
+
+    fn test_message(message_id: i64, seq: i64, role: &str, content: &str) -> lcm::MessageRecord {
+        lcm::MessageRecord {
+            message_id,
+            conversation_id: 7,
+            seq,
+            role: role.to_string(),
+            content: content.to_string(),
+            token_count: 1,
+            created_at: "2026-05-11T00:00:00Z".to_string(),
+            agent_outcome: None,
+        }
+    }
+
+    fn test_message_item(ordinal: i64, message_id: i64, seq: i64) -> lcm::ContextItemSnapshot {
+        lcm::ContextItemSnapshot {
+            ordinal,
+            item_type: lcm::ContextItemType::Message,
+            message_id: Some(message_id),
+            summary_id: None,
+            seq,
+            depth: 0,
+            token_count: 1,
+        }
+    }
+
+    #[test]
+    fn rendered_context_falls_back_when_mission_filter_would_empty_history() {
+        let snapshot = lcm::LcmSnapshot {
+            conversation_id: 7,
+            messages: vec![
+                test_message(1, 1, "user", "old task"),
+                test_message(
+                    2,
+                    2,
+                    "assistant",
+                    "previous result that must remain visible",
+                ),
+                test_message(3, 3, "user", "new task"),
+            ],
+            summaries: Vec::new(),
+            context_items: vec![
+                test_message_item(1, 1, 1),
+                test_message_item(2, 2, 2),
+                test_message_item(3, 3, 3),
+            ],
+            summary_edges: Vec::new(),
+            summary_messages: Vec::new(),
+        };
+
+        let rendered = select_rendered_context(&snapshot, Some(3), Some(3));
+
+        assert!(!rendered.entries.is_empty());
+        assert!(rendered
+            .entries
+            .iter()
+            .any(|entry| entry.contains("previous result that must remain visible")));
+        assert!(!rendered
+            .entries
+            .iter()
+            .any(|entry| entry.contains("new task")));
     }
 
     #[test]

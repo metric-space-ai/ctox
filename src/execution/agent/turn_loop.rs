@@ -424,6 +424,9 @@ where
     emit("lcm-open");
     let engine = lcm::LcmEngine::open(db_path, lcm::LcmConfig::default())?;
     let _ = engine.continuity_init_documents(conversation_id)?;
+    emit("persist-user-turn");
+    persist_lcm_message_with_retry(db_path, conversation_id, "user", prompt, &mut emit)
+        .context("failed to persist user message into LCM")?;
     emit("turn-plan");
     let plan = turn_engine::build_turn_plan(&engine, conversation_id, config.clone())?;
     emit(&format!(
@@ -460,9 +463,6 @@ where
     let compaction_guard =
         turn_engine::assess_compaction_guard(&decision, compaction_result.as_ref());
     emit(&format!("compaction-guard {}", compaction_guard.summary));
-    emit("persist-user-turn");
-    persist_lcm_message_with_retry(db_path, conversation_id, "user", prompt, &mut emit)
-        .context("failed to persist user message into LCM")?;
     emit("snapshot-context");
     let snapshot = engine.snapshot(conversation_id)?;
     let continuity = engine.continuity_show_all(conversation_id)?;
@@ -505,6 +505,14 @@ where
         ));
         rendered_prompt.prompt = render_current_prompt_fallback(&rendered_prompt.prompt, prompt);
         rendered_prompt.latest_user_prompt = prompt.to_string();
+    }
+    if rendered_context_empty_with_existing_history(
+        &snapshot,
+        rendered_prompt.rendered_context_items,
+    ) {
+        anyhow::bail!(
+            "context_selection_empty: refusing model invocation because LCM history exists but no context evidence rendered"
+        );
     }
     emit(&format!(
         "context-selection rendered={} omitted={}",
@@ -1174,6 +1182,25 @@ fn render_current_prompt_fallback(rendered_prompt: &str, current_prompt: &str) -
     )
 }
 
+fn rendered_context_empty_with_existing_history(
+    snapshot: &lcm::LcmSnapshot,
+    rendered_context_items: usize,
+) -> bool {
+    if rendered_context_items > 0 {
+        return false;
+    }
+    let non_empty_messages = snapshot
+        .messages
+        .iter()
+        .filter(|message| !message.content.trim().is_empty())
+        .count();
+    let has_summary = snapshot
+        .summaries
+        .iter()
+        .any(|summary| !summary.content.trim().is_empty());
+    non_empty_messages > 1 || has_summary
+}
+
 fn read_usize_setting(settings: &BTreeMap<String, String>, key: &str, default: usize) -> usize {
     settings
         .get(key)
@@ -1239,5 +1266,55 @@ mod tests {
         assert!(fallback.starts_with("CURRENT REQUEST (authoritative)\n"));
         assert!(fallback.contains(prompt));
         assert!(fallback.contains(rendered.trim_start()));
+    }
+
+    fn test_message(message_id: i64, seq: i64, role: &str, content: &str) -> lcm::MessageRecord {
+        lcm::MessageRecord {
+            message_id,
+            conversation_id: 9,
+            seq,
+            role: role.to_string(),
+            content: content.to_string(),
+            token_count: 1,
+            created_at: "2026-05-11T00:00:00Z".to_string(),
+            agent_outcome: None,
+        }
+    }
+
+    #[test]
+    fn empty_rendered_context_is_harness_error_when_history_exists() {
+        let first_turn = lcm::LcmSnapshot {
+            conversation_id: 9,
+            messages: vec![test_message(1, 1, "user", "first task")],
+            summaries: Vec::new(),
+            context_items: Vec::new(),
+            summary_edges: Vec::new(),
+            summary_messages: Vec::new(),
+        };
+        assert!(!rendered_context_empty_with_existing_history(
+            &first_turn,
+            0
+        ));
+
+        let continued_turn = lcm::LcmSnapshot {
+            conversation_id: 9,
+            messages: vec![
+                test_message(1, 1, "user", "first task"),
+                test_message(2, 2, "assistant", "completed first task"),
+                test_message(3, 3, "user", "second task"),
+            ],
+            summaries: Vec::new(),
+            context_items: Vec::new(),
+            summary_edges: Vec::new(),
+            summary_messages: Vec::new(),
+        };
+        assert!(rendered_context_empty_with_existing_history(
+            &continued_turn,
+            0
+        ));
+        assert!(!rendered_context_empty_with_existing_history(
+            &continued_turn,
+            1
+        ));
     }
 }
