@@ -29,6 +29,7 @@ use tracing::{debug, error, info, warn};
 const MAX_REQUEST_BYTES: usize = 64 * 1024 * 1024;
 const IDLE_TIMEOUT: Duration = Duration::from_secs(900);
 const DEFAULT_MAX_OUTPUT_TOKENS: usize = 2048;
+const CONTEXT_BUDGET_SAFETY_TOKENS: usize = 64;
 const QWEN_TOOL_PROTOCOL_INSTRUCTIONS: &str = r#"# Tools
 
 You may call one or more functions to assist with the user query.
@@ -143,9 +144,12 @@ async fn main() -> Result<()> {
 }
 
 fn derive_llama_server_path(llama_cli: &Path) -> Result<PathBuf> {
-    let parent = llama_cli
-        .parent()
-        .ok_or_else(|| anyhow!("--llama-cli has no parent directory: {}", llama_cli.display()))?;
+    let parent = llama_cli.parent().ok_or_else(|| {
+        anyhow!(
+            "--llama-cli has no parent directory: {}",
+            llama_cli.display()
+        )
+    })?;
     Ok(parent.join("llama-server"))
 }
 
@@ -425,9 +429,10 @@ fn run_turn(engine: Arc<Engine>, req: ResponsesCreateRequest) -> Result<Vec<u8>>
         .max_output_tokens
         .unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS)
         .min(DEFAULT_MAX_OUTPUT_TOKENS);
-    let text = match run_llama(&engine, &prompt, max_out) {
-        Ok(text) => text,
+    let run = match run_llama(&engine, &prompt, max_out) {
+        Ok(run) => run,
         Err(err) => {
+            let ipc_error = ipc_error_for_inference_error(&err);
             let failed = ResponseEnvelope {
                 id: response_id,
                 object: "response",
@@ -436,10 +441,7 @@ fn run_turn(engine: Arc<Engine>, req: ResponsesCreateRequest) -> Result<Vec<u8>>
                 model: engine.args.model_id.clone(),
                 output: Vec::new(),
                 usage: None,
-                error: Some(IpcError {
-                    code: "inference_error".into(),
-                    message: err.to_string(),
-                }),
+                error: Some(ipc_error),
             };
             sink.send(&ResponsesStreamEvent::Failed {
                 response: failed,
@@ -448,6 +450,7 @@ fn run_turn(engine: Arc<Engine>, req: ResponsesCreateRequest) -> Result<Vec<u8>>
             return Ok(sink.buf);
         }
     };
+    let text = run.text;
 
     let parsed_tool_call = parse_qwen_tool_code(&text);
 
@@ -546,8 +549,6 @@ fn run_turn(engine: Arc<Engine>, req: ResponsesCreateRequest) -> Result<Vec<u8>>
         }
     }
 
-    let output_tokens = estimate_tokens(&text);
-    let input_tokens = estimate_tokens(&prompt);
     envelope.status = ResponseStatus::Completed;
     envelope.output = if let Some(tool_call) = parsed_tool_call {
         vec![ResponseOutputItem::FunctionCall {
@@ -569,9 +570,9 @@ fn run_turn(engine: Arc<Engine>, req: ResponsesCreateRequest) -> Result<Vec<u8>>
         }]
     };
     envelope.usage = Some(ResponseUsage {
-        input_tokens,
-        output_tokens,
-        total_tokens: input_tokens.saturating_add(output_tokens),
+        input_tokens: saturating_u32(run.prompt_tokens),
+        output_tokens: saturating_u32(run.output_tokens),
+        total_tokens: saturating_u32(run.prompt_tokens.saturating_add(run.output_tokens)),
         cached_input_tokens: Some(0),
         reasoning_output_tokens: Some(0),
     });
@@ -701,10 +702,29 @@ fn parse_qwen_json_tool_call(tool_body: &str) -> Option<ParsedToolCall> {
     })
 }
 
-fn run_llama(engine: &Engine, prompt: &str, max_out: usize) -> Result<String> {
+struct LlamaRunOutput {
+    text: String,
+    prompt_tokens: usize,
+    output_tokens: usize,
+}
+
+fn run_llama(engine: &Engine, prompt: &str, max_out: usize) -> Result<LlamaRunOutput> {
     // Single POST to the persistent llama-server. The model stays resident in
     // GPU memory across calls; only the prompt and KV-cache for this turn are
     // processed. No per-call cold-start.
+    let prompt_tokens = count_llama_tokens(engine, prompt, "prompt")?;
+    let required_context = prompt_tokens
+        .saturating_add(max_out)
+        .saturating_add(CONTEXT_BUDGET_SAFETY_TOKENS);
+    if required_context > engine.args.ctx {
+        bail!(
+            "context_length_exceeded: rendered prompt has {prompt_tokens} tokens; \
+             n_predict reserve is {max_out} plus {CONTEXT_BUDGET_SAFETY_TOKENS} safety tokens; \
+             required context {required_context} exceeds configured context size {}",
+            engine.args.ctx
+        );
+    }
+
     let url = format!("http://{}/completion", engine.server_url);
     let body = serde_json::json!({
         "prompt": prompt,
@@ -750,7 +770,48 @@ fn run_llama(engine: &Engine, prompt: &str, max_out: usize) -> Result<String> {
         .get("content")
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| anyhow!("llama-server response missing `content`: {value}"))?;
-    Ok(clean_model_output(content))
+    let text = clean_model_output(content);
+    let output_tokens = count_llama_tokens(engine, &text, "output")?;
+    Ok(LlamaRunOutput {
+        text,
+        prompt_tokens,
+        output_tokens,
+    })
+}
+
+fn count_llama_tokens(engine: &Engine, text: &str, label: &str) -> Result<usize> {
+    let url = format!("http://{}/tokenize", engine.server_url);
+    let body = serde_json::json!({
+        "content": text,
+        "add_special": false,
+        "with_pieces": false,
+    });
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(5))
+        .timeout_read(Duration::from_secs(300))
+        .build();
+    let response = match agent.post(&url).send_json(body) {
+        Ok(resp) => resp,
+        Err(ureq::Error::Status(status, resp)) => {
+            let detail = resp
+                .into_string()
+                .unwrap_or_else(|_| "<no body>".to_string());
+            bail!(
+                "llama-server /tokenize failed for {label} with status {}: {}",
+                status,
+                last_lines(&detail, 20)
+            );
+        }
+        Err(err) => {
+            bail!("llama-server /tokenize transport error for {label}: {err}");
+        }
+    };
+    let value: serde_json::Value = response
+        .into_json()
+        .context("llama-server /tokenize returned non-JSON body")?;
+    parse_tokenize_count(&value).with_context(|| {
+        format!("llama-server /tokenize response missing token list for {label}: {value}")
+    })
 }
 
 fn render_chat_prompt(req: &ResponsesCreateRequest) -> String {
@@ -1002,8 +1063,33 @@ fn strip_think_blocks(text: &str) -> String {
     out
 }
 
-fn estimate_tokens(text: &str) -> u32 {
-    (text.len() / 4).max(text.split_whitespace().count()) as u32
+fn parse_tokenize_count(value: &Value) -> Result<usize> {
+    let Some(tokens) = value.get("tokens").and_then(Value::as_array) else {
+        bail!("missing `tokens` array");
+    };
+    Ok(tokens.len())
+}
+
+fn saturating_u32(value: usize) -> u32 {
+    u32::try_from(value).unwrap_or(u32::MAX)
+}
+
+fn ipc_error_for_inference_error(err: &anyhow::Error) -> IpcError {
+    let message = err.to_string();
+    let normalized = message.to_ascii_lowercase();
+    let code = if normalized.contains("context_length_exceeded")
+        || normalized.contains("exceed_context_size_error")
+        || normalized.contains("exceeds the available context size")
+        || normalized.contains("context size has been exceeded")
+    {
+        "context_length_exceeded"
+    } else {
+        "inference_error"
+    };
+    IpcError {
+        code: code.to_string(),
+        message,
+    }
 }
 
 fn ensure_file(path: &Path, label: &str) -> Result<()> {
@@ -1441,7 +1527,39 @@ printf CTOX_QWEN_TOOL_OK
 
         let prompt = render_chat_prompt(&req);
 
-        assert!(prompt.contains("<|im_start|>user\n<tool_response>\nok\n</tool_response><|im_end|>\n"));
+        assert!(
+            prompt.contains("<|im_start|>user\n<tool_response>\nok\n</tool_response><|im_end|>\n")
+        );
         assert!(prompt.ends_with("<|im_start|>assistant\n<think>\n\n</think>\n\n"));
+    }
+
+    #[test]
+    fn parses_llama_tokenize_count_from_real_tokens_array() {
+        let value = json!({"tokens":[1,2,3,4]});
+
+        assert_eq!(parse_tokenize_count(&value).unwrap(), 4);
+    }
+
+    #[test]
+    fn context_size_errors_are_reported_as_context_length_exceeded() {
+        let err = anyhow!(
+            "{}",
+            "llama-server /completion returned status 400: {\"error\":{\"type\":\"exceed_context_size_error\",\"message\":\"request (131414 tokens) exceeds the available context size (131072 tokens)\"}}"
+        );
+
+        let ipc_error = ipc_error_for_inference_error(&err);
+
+        assert_eq!(ipc_error.code, "context_length_exceeded");
+    }
+
+    #[test]
+    fn local_preflight_overflow_is_reported_as_context_length_exceeded() {
+        let err = anyhow!(
+            "context_length_exceeded: rendered prompt has 130000 tokens; required context 132112 exceeds configured context size 131072"
+        );
+
+        let ipc_error = ipc_error_for_inference_error(&err);
+
+        assert_eq!(ipc_error.code, "context_length_exceeded");
     }
 }
