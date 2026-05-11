@@ -2644,6 +2644,7 @@ if (provider === "microsoft") {
     const state = {
       botName: botName || "INF Yoda Notetaker",
       entries: [],
+      liveEntry: null,
       status: "Realtime-Transcript wird verbunden",
       updatedAt: Date.now(),
       sequence: 0,
@@ -2700,7 +2701,9 @@ if (provider === "microsoft") {
         ctx.moveTo(84, 190);
         ctx.lineTo(w - 84, 190);
         ctx.stroke();
-        const entries = state.entries.slice(-4);
+        const entries = state.liveEntry
+          ? [...state.entries.slice(-3), state.liveEntry]
+          : state.entries.slice(-4);
         let y = 250;
         if (entries.length === 0) {
           ctx.font = "600 40px Arial, sans-serif";
@@ -2711,7 +2714,7 @@ if (provider === "microsoft") {
           const speaker = entry.speaker && entry.speaker !== "unknown" ? entry.speaker : "Sprecher unbekannt";
           ctx.font = "700 22px Arial, sans-serif";
           ctx.fillStyle = entry.speaker && entry.speaker !== "unknown" ? "rgb(147,197,253)" : "rgb(203,213,225)";
-          const sourceLabel = entry.source === "platform_caption" ? "Teams" : "Realtime";
+          const sourceLabel = entry.live ? "Realtime live" : "Realtime";
           ctx.fillText(`${speaker} · ${sourceLabel}`, 86, y);
           y += 32;
           ctx.font = "500 28px Arial, sans-serif";
@@ -2782,6 +2785,31 @@ if (provider === "microsoft") {
       state.entries = state.entries.slice(-10);
       state.status = "Realtime-STT aktiv";
       state.updatedAt = now;
+    };
+    window.__ctoxTranscriptOverlayLive = (text, speaker) => {
+      const clean = compact(text);
+      if (!clean) return;
+      const now = Date.now();
+      state.liveEntry = {
+        speaker: compact(speaker || "unknown"),
+        text: clean.length > 900 ? `${clean.slice(0, 900).trim()} ...` : clean,
+        source: "realtime_stt",
+        live: true,
+        seq: state.sequence + 1,
+        ts: now,
+      };
+      state.status = "Realtime-STT aktiv";
+      state.updatedAt = now;
+    };
+    window.__ctoxTranscriptOverlayCommit = (text, speaker) => {
+      const clean = compact(text);
+      if (!clean) return;
+      state.liveEntry = null;
+      window.__ctoxTranscriptOverlayPush(clean, speaker, "realtime_stt");
+    };
+    window.__ctoxTranscriptOverlayClearLive = () => {
+      state.liveEntry = null;
+      state.updatedAt = Date.now();
     };
     window.__ctoxTranscriptOverlaySetStatus = (status) => {
       const clean = compact(status);
@@ -3139,6 +3167,22 @@ if (provider === "microsoft") {
   // use direct audio -> Mistral realtime STT, and fail visibly if that path is
   // unavailable.
   await muteTeamsMicrophone(page).catch(() => {});
+  await page.evaluate(() => {
+    const compact = (value) => String(value || "").replace(/\s+/g, " ").trim();
+    const hasPeoplePanel = () => {
+      const text = compact(document.body?.innerText || "");
+      return /(?:In dieser Besprechung|Teilnehmer|Participants|People|Namen eingegeben|Search people)/i.test(text)
+        && /(?:Einladung teilen|Share invite|Alle stummschalten|Mute all|In dieser Besprechung)/i.test(text);
+    };
+    if (hasPeoplePanel()) return;
+    const buttons = Array.from(document.querySelectorAll("button,[role='button']"));
+    const peopleButton = buttons.find((button) => {
+      const label = compact(button.getAttribute("aria-label") || button.getAttribute("title") || button.textContent || "");
+      return /^(People|Participants|Teilnehmer|Personen)(?:\b|$)/i.test(label)
+        || /(?:People|Participants|Teilnehmer|Personen)/i.test(label);
+    });
+    peopleButton?.click?.();
+  }).catch((err) => emit({ type: "warning", message: "Teams participant panel open failed: " + err.message }));
 }
 
 // --- Live meeting observers: chat, captions, active speaker, participants ---
@@ -3691,8 +3735,31 @@ const speakerPollInterval = setInterval(async () => {
 
 const participantPollInterval = setInterval(async () => {
   try {
-    const count = await page.evaluate(() => {
+    const result = await page.evaluate(({ providerName, botNameValue }) => {
+      const compact = (value) => String(value || "").replace(/\s+/g, " ").trim();
+      const botLower = compact(botNameValue || "").toLowerCase();
+      const isUiLine = (value) => {
+        const v = compact(value);
+        if (!v) return true;
+        const lower = v.toLowerCase();
+        if (botLower && lower.includes(botLower)) return true;
+        if (v.length > 80) return true;
+        return /^(chat|people|participants|teilnehmer|personen|in dieser besprechung|personen dem chat hinzugefügt|einladung teilen|alle stummschalten|namen eingegeben|search people|antworten an externe teilnehmer)$/i.test(v);
+      };
+      const names = [];
+      const addName = (value) => {
+        let name = compact(value)
+          .replace(/\b(?:muted|unmuted|stummgeschaltet|nicht stummgeschaltet|microphone|mikrofon|camera|kamera|organizer|organisator|external|extern)\b/ig, "")
+          .replace(/^[A-ZÄÖÜ]{1,3}\s+/, "")
+          .replace(/[:|,-]+$/g, "")
+          .trim();
+        if (isUiLine(name)) return;
+        if (!/[A-Za-zÄÖÜäöüß]/.test(name)) return;
+        if (!/\s/.test(name) && name.length < 4) return;
+        if (!names.some((existing) => existing.toLowerCase() === name.toLowerCase())) names.push(name);
+      };
       const buttons = Array.from(document.querySelectorAll("button"));
+      let count = null;
       for (const btn of buttons) {
         const text = btn.textContent || "";
         const match = text.match(/(\d+)/);
@@ -3700,11 +3767,37 @@ const participantPollInterval = setInterval(async () => {
             text.toLowerCase().includes("participant") ||
             btn.getAttribute("aria-label")?.toLowerCase().includes("people") ||
             btn.getAttribute("aria-label")?.toLowerCase().includes("participant"))) {
-          return parseInt(match[1]);
+          count = parseInt(match[1]);
+          break;
         }
       }
-      return null;
-    });
+      if (providerName === "microsoft") {
+        const text = compact(document.body?.innerText || "");
+        const participantPanelMatch = text.match(/(?:In dieser Besprechung[\s\S]*?)(?:Personen dem Chat hinzugefügt|$)/i);
+        const panelText = participantPanelMatch ? participantPanelMatch[0] : text;
+        for (const line of panelText.split(/\n+/).map(compact).filter(Boolean)) addName(line);
+        for (const node of Array.from(document.querySelectorAll('[data-participant-name], [data-self-name], [data-display-name], [aria-label], [title]')).slice(0, 900)) {
+          addName(node.getAttribute("data-participant-name") || node.getAttribute("data-self-name") || node.getAttribute("data-display-name") || node.getAttribute("aria-label") || node.getAttribute("title") || "");
+        }
+      }
+      return { count, names: names.slice(0, 12) };
+    }, { providerName: provider, botNameValue: botName });
+    const count = result?.count ?? null;
+    if (provider === "microsoft" && Array.isArray(result?.names)) {
+      const humans = result.names.filter((name) => name && !name.toLowerCase().includes(botName.toLowerCase()));
+      if (humans.length === 1 && currentDirectSpeaker !== humans[0]) {
+        currentDirectSpeaker = humans[0];
+        emit({
+          type: "active_speaker",
+          speaker: humans[0],
+          speaker_id: "",
+          source: "platform_single_participant",
+          confidence: 0.72,
+          provider,
+          ts: new Date().toISOString(),
+        });
+      }
+    }
     if (count !== null) {
       emit({ type: "participant_count", count });
       if (count <= 1) {
@@ -3805,8 +3898,8 @@ if not api_key:
     sys.exit(3)
 
 model = os.environ.get("CTOX_MISTRAL_REALTIME_STT_MODEL", "voxtral-mini-transcribe-realtime-2602")
-delay_ms = int(os.environ.get("CTOX_MISTRAL_REALTIME_DELAY_MS", "2400"))
-chunk_bytes = int(os.environ.get("CTOX_MISTRAL_REALTIME_PCM_CHUNK_BYTES", "15360"))
+delay_ms = int(os.environ.get("CTOX_MISTRAL_REALTIME_DELAY_MS", "600"))
+chunk_bytes = int(os.environ.get("CTOX_MISTRAL_REALTIME_PCM_CHUNK_BYTES", "8192"))
 client = Mistral(api_key=api_key)
 audio_eof = False
 
@@ -3910,14 +4003,39 @@ asyncio.run(main())
   let realtimeReady = false;
   let realtimeDeltaSeen = false;
   let realtimeNoTextTimer = null;
+  const mergeRealtimeDelta = (previous, next) => {
+    previous = compactText(previous);
+    next = compactText(next);
+    if (!previous) return next;
+    if (!next) return previous;
+    if (next === previous || previous.endsWith(next)) return previous;
+    if (next.startsWith(previous)) return next;
+    const prevWords = previous.split(" ");
+    const nextWords = next.split(" ");
+    const maxOverlap = Math.min(prevWords.length, nextWords.length, 18);
+    for (let size = maxOverlap; size >= 2; size--) {
+      if (prevWords.slice(-size).join(" ").toLowerCase() === nextWords.slice(0, size).join(" ").toLowerCase()) {
+        return compactText(`${previous} ${nextWords.slice(size).join(" ")}`);
+      }
+    }
+    return compactText(`${previous} ${next}`);
+  };
+  const updateRealtimeLive = () => {
+    const text = compactText(realtimeBuffer);
+    if (!text) return;
+    const speaker = currentDirectSpeaker || "unknown";
+    page.evaluate(({ text, speaker }) => {
+      window.__ctoxTranscriptOverlayLive?.(text, speaker);
+    }, { text, speaker }).catch(() => {});
+  };
   const flushRealtimeBuffer = () => {
-    const text = realtimeBuffer.replace(/\s+/g, " ").trim();
+    const text = compactText(realtimeBuffer);
     realtimeBuffer = "";
     realtimeFlushTimer = null;
     if (!text) return;
     const speaker = currentDirectSpeaker || "unknown";
     page.evaluate(({ text, speaker }) => {
-      window.__ctoxTranscriptOverlayPush?.(text, speaker, "realtime_stt");
+      window.__ctoxTranscriptOverlayCommit?.(text, speaker);
     }, { text, speaker }).catch(() => {});
     emit({
       type: "transcript_segment",
@@ -3961,12 +4079,16 @@ asyncio.run(main())
       clearTimeout(realtimeNoTextTimer);
       realtimeNoTextTimer = null;
     }
-    realtimeBuffer = `${realtimeBuffer}${msg.text}`;
-    if (/[.!?。！？]\s*$/.test(realtimeBuffer.trim()) || realtimeBuffer.length >= 320) {
+    realtimeBuffer = mergeRealtimeDelta(realtimeBuffer, msg.text);
+    updateRealtimeLive();
+    if (/[.!?。！？]\s*$/.test(realtimeBuffer.trim()) && realtimeBuffer.length >= 90) {
+      if (realtimeFlushTimer) clearTimeout(realtimeFlushTimer);
+      flushRealtimeBuffer();
+    } else if (realtimeBuffer.length >= 520) {
       if (realtimeFlushTimer) clearTimeout(realtimeFlushTimer);
       flushRealtimeBuffer();
     } else if (!realtimeFlushTimer) {
-      realtimeFlushTimer = setTimeout(flushRealtimeBuffer, 2200);
+      realtimeFlushTimer = setTimeout(flushRealtimeBuffer, 6500);
     }
   });
   const terminateTeamsMediaChildren = () => {
@@ -7052,8 +7174,8 @@ mod tests {
             "Teams should warm up media devices"
         );
         assert!(
-            teams_script.contains("enableTeamsLiveCaptions"),
-            "Teams should enable live captions"
+            !teams_script.contains("await enableTeamsLiveCaptions"),
+            "Teams must not enable Teams captions; Microsoft meetings use Mistral realtime STT only"
         );
         assert!(
             teams_script.contains("stdoutClosed"),
@@ -7078,6 +7200,18 @@ mod tests {
         assert!(
             teams_script.contains("AudioFormat(encoding=\"pcm_s16le\", sample_rate=16000)"),
             "Teams should stream raw 16 kHz PCM into realtime STT"
+        );
+        assert!(
+            teams_script.contains("target_streaming_delay_ms=delay_ms")
+                && teams_script.contains("\"600\"")
+                && teams_script.contains("\"8192\""),
+            "Teams realtime STT should use a low-latency streaming configuration"
+        );
+        assert!(
+            teams_script.contains("__ctoxTranscriptOverlayLive")
+                && teams_script.contains("__ctoxTranscriptOverlayCommit")
+                && teams_script.contains("setTimeout(flushRealtimeBuffer, 6500)"),
+            "Teams realtime STT must render streaming deltas as a live line before committing transcript segments"
         );
         assert!(
             !teams_script.contains("teams-audio-chunks"),
