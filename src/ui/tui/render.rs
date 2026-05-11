@@ -2248,7 +2248,7 @@ fn service_event_visible_in_tui(event: &str) -> bool {
     !(event.starts_with("phase ")
         || event.starts_with("Completion review ")
         || event.starts_with("Context health ")
-        || event.contains("refresh-budget"))
+        || event.contains("refresh-telemetry"))
 }
 
 fn wrap_text_lines(value: &str, max_chars: usize) -> Vec<String> {
@@ -3564,22 +3564,17 @@ fn context_label_line(app: &App, width: usize) -> Line<'static> {
 }
 
 /// Compact suffix for the context status line showing how much of the
-/// output-refresh budget is currently used. Returns an empty string when
-/// there is nothing to show (fresh conversation, budget disabled).
+/// continuity-refresh telemetry is currently active. Returns an empty string
+/// when there is nothing to show for a fresh conversation.
 fn refresh_budget_suffix(app: &App) -> String {
-    let pct = 15;
-    if pct == 0 {
-        return String::new();
-    }
     let snapshot = crate::execution::agent::turn_loop::refresh_budget_snapshot(
         crate::execution::agent::turn_loop::CHAT_CONVERSATION_ID,
-        app.header.max_context as u64,
-        pct,
     );
     if snapshot.output_chars_since_refresh == 0 {
         return String::new();
     }
-    format!("  • refresh {}%/{}%", snapshot.used_pct.min(999), pct)
+    let _ = app;
+    format!("  • refresh {} turns", snapshot.turns_since_refresh)
 }
 
 fn context_health_hint(app: &App) -> String {
