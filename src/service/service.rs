@@ -427,7 +427,9 @@ const PLATFORM_EXPERTISE_PASSES: [ExpertisePassSpec; 3] = [
 #[derive(Debug, Clone)]
 enum CompletionReviewDisposition {
     None,
-    Approved,
+    Approved {
+        review_audit_key: String,
+    },
     Hold {
         summary: String,
     },
@@ -438,27 +440,9 @@ enum CompletionReviewDisposition {
         work_id: String,
         summary: String,
     },
-    ContinueSelfWork {
-        work_id: String,
-        summary: String,
-    },
-    /// Lightweight in-process body fix triggered when every reviewer finding
-    /// is structurally tagged `rewrite`. The post-turn handler synthesises a
-    /// new `QueuedPrompt` with `source_label = "review-rewrite"` that
-    /// re-uses the parent job's outbound metadata and inlines the prior
-    /// body. No durable state mutation, no new plan goal, no queue task —
-    /// just a fast in-process turn that converges the body.
-    RewriteOnly {
-        findings: Vec<RewriteFinding>,
-        prior_body: String,
-        anchor_message_key: Option<String>,
-        review_summary: String,
-    },
-    /// In-process continuation after a substantive review finding. The
+    /// Durable same-queue retry after a substantive review finding. The
     /// reviewer remains a quality gate: it explains what is wrong, but it
-    /// does not spawn durable work or perform the task. The same executor
-    /// receives the feedback as the next prompt with the original outbound
-    /// metadata preserved.
+    /// does not spawn reviewer-owned work or perform the task.
     FeedbackRetry {
         feedback_prompt: String,
         review_summary: String,
@@ -466,21 +450,12 @@ enum CompletionReviewDisposition {
     },
 }
 
-/// Pure-data finding consumed by the lightweight rewrite path. Mirrors the
-/// `category: rewrite` half of `review::CategorizedFinding`; the rework half
-/// stays inside `RequeueSelfWork`'s payload as semantic findings strings.
-#[derive(Debug, Clone)]
-pub(crate) struct RewriteFinding {
-    pub id: String,
-    pub evidence: String,
-    pub corrective_action: String,
-}
-
 /// Result of classifying the reviewer's structured findings list. The
 /// dispatcher consumes the classification verbatim — no fallback heuristics,
-/// no string scraping. Empty findings ⇒ `Approved`; all entries tagged
-/// `rewrite` ⇒ `RewriteOnly`; any other mix (rework-only or mixed) ⇒
-/// `Substantive`. Missing-category items are coerced to `Rework` upstream.
+/// no string scraping. Empty findings ⇒ `Approved`; any finding list with
+/// only wording/style entries is tagged `RewriteOnly` for reporting, but still
+/// routes through the same durable review-rework path as substantive failures.
+/// Missing-category items are coerced to `Rework` upstream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReviewRoutingClass {
     Approved,
@@ -578,15 +553,6 @@ fn contains_any(haystack: &str, needles: &[&str]) -> bool {
     needles.iter().any(|needle| haystack.contains(needle))
 }
 
-/// Source label applied to lightweight rewrite-only post-turn prompts. Kept
-/// distinct from `tui` / `queue` / `plan` / `ticket:local` so the dispatcher
-/// can identify them in logs and the pipeline status surface.
-const REVIEW_REWRITE_SOURCE_LABEL: &str = "review-rewrite";
-
-/// Default convergence threshold for consecutive rewrite-only iterations.
-/// Overridable via the `CTOX_MISSION_REWRITE_FAILURE_THRESHOLD` env var.
-const DEFAULT_REWRITE_FAILURE_THRESHOLD: i64 = 1;
-const MAX_REWRITE_FAILURE_THRESHOLD: i64 = 10;
 const DEFAULT_AGENT_FAILURE_THRESHOLD: i64 = 2;
 const MAX_AGENT_FAILURE_THRESHOLD: i64 = 6;
 const REVIEW_FEEDBACK_SOURCE_LABEL: &str = "review-feedback";
@@ -595,12 +561,10 @@ const OUTCOME_WITNESS_RECOVERY_SOURCE_LABEL: &str = "outcome-witness-recovery";
 fn completion_review_disposition_label(disposition: &CompletionReviewDisposition) -> &'static str {
     match disposition {
         CompletionReviewDisposition::None => "none",
-        CompletionReviewDisposition::Approved => "approved",
+        CompletionReviewDisposition::Approved { .. } => "approved",
         CompletionReviewDisposition::Hold { .. } => "hold",
         CompletionReviewDisposition::NoSend { .. } => "no-send",
         CompletionReviewDisposition::RequeueSelfWork { .. } => "requeue-self-work",
-        CompletionReviewDisposition::ContinueSelfWork { .. } => "continue-self-work",
-        CompletionReviewDisposition::RewriteOnly { .. } => REVIEW_REWRITE_SOURCE_LABEL,
         CompletionReviewDisposition::FeedbackRetry { .. } => "feedback-retry",
     }
 }
@@ -608,43 +572,8 @@ fn completion_review_disposition_label(disposition: &CompletionReviewDisposition
 fn outbound_in_process_review_retry_allowed(job: &QueuedPrompt) -> bool {
     !matches!(
         job.source_label.as_str(),
-        REVIEW_FEEDBACK_SOURCE_LABEL
-            | OUTCOME_WITNESS_RECOVERY_SOURCE_LABEL
-            | REVIEW_REWRITE_SOURCE_LABEL
+        REVIEW_FEEDBACK_SOURCE_LABEL | OUTCOME_WITNESS_RECOVERY_SOURCE_LABEL
     )
-}
-
-fn short_terminal_bench_artifact_reply_disposition(
-    root: &Path,
-    job: &QueuedPrompt,
-    reply_text: &str,
-) -> Option<CompletionReviewDisposition> {
-    if !is_terminal_bench_controller_artifact_job(job) {
-        return None;
-    }
-    if reply_text.trim().chars().count() > 8 {
-        return None;
-    }
-
-    let expected = expected_outcome_artifacts_for_job(job);
-    if expected.is_empty() {
-        return None;
-    }
-    let delivered = delivered_outcome_artifacts_for_job(root, job, &expected).unwrap_or_default();
-    let runtime_refs_ok =
-        validate_terminal_bench_controller_runtime_refs(root, job, &expected).is_ok();
-    if delivered.len() == expected.len() && runtime_refs_ok {
-        return None;
-    }
-
-    let missing_count = expected.len().saturating_sub(delivered.len());
-    Some(CompletionReviewDisposition::Hold {
-        summary: format!(
-            "Terminal-Bench controller stayed open because the worker returned only {} character(s) and did not satisfy the durable artifact contract. Missing or stale artifacts: {missing_count}/{}. The harness/review must not create files or queue work; retry the same worker with feedback so it performs the shell work itself.",
-            reply_text.chars().count(),
-            expected.len()
-        ),
-    })
 }
 
 struct ServiceExitGuard {
@@ -2911,48 +2840,6 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
                 }
                 _ => None,
             };
-            #[test]
-            fn outbound_recovery_prompt_gives_agent_exact_reviewed_send_step() {
-                let approved_body =
-                    "Hallo Julia,\n\ndas ist der freigegebene Text.\n\nViele Gruesse\nINF Yoda";
-                let job = QueuedPrompt {
-                    prompt: "Schreibe eine Mail an Julia.".to_string(),
-                    goal: "send mail".to_string(),
-                    preview: "send mail".to_string(),
-                    source_label: "tui".to_string(),
-                    suggested_skill: None,
-                    leased_message_keys: Vec::new(),
-                    leased_ticket_event_keys: Vec::new(),
-                    thread_key: Some("julia-meeting-notetaker-report-20260505".to_string()),
-                    workspace_root: None,
-                    ticket_self_work_id: None,
-                    outbound_email: Some(channels::FounderOutboundAction {
-                        account_key: "email:INF.Yoda@remcapital.de".to_string(),
-                        thread_key: "julia-meeting-notetaker-report-20260505".to_string(),
-                        subject: "Erste Meeting-Teilnahme als INF Yoda Notetaker".to_string(),
-                        to: vec!["j.kienzler@remcapital.de".to_string()],
-                        cc: Vec::new(),
-                        attachments: Vec::new(),
-                    }),
-                    outbound_anchor: Some("tui-outbound:test".to_string()),
-                };
-
-                let prompt = outcome_witness_recovery_message(
-                    Path::new(""),
-                    &job,
-                    approved_body,
-                    "missing artifact",
-                );
-
-                assert!(prompt.contains("Die Review-Freigabe"));
-                assert!(prompt.contains("Fuehre keine DB- oder Code-Forensik aus"));
-                assert!(prompt.contains("BODY=$(cat <<'CTOX_REVIEWED_BODY'"));
-                assert!(prompt.contains(approved_body));
-                assert!(prompt.contains("ctox channel send --channel email"));
-                assert!(prompt.contains("--reviewed-founder-send --body \"$BODY\""));
-                assert!(!prompt.contains("<freigegebener Mailtext>"));
-            }
-
             // F3: classify the turn outcome explicitly. The structured value
             // is persisted on the assistant row in `messages.agent_outcome`
             // so downstream consumers (founder-send pipeline, status
@@ -3069,12 +2956,13 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
             // PersistentSession with its own clean context — no executor turn
             // history). The reviewer either ratifies the result (PASS) or
             // CTOX enqueues a rework slice with the reviewer's report as
-            // input. Errors / timeouts skip the review (no slice to judge).
+            // input. Reviewer errors/timeouts hold terminal completion; they
+            // must not silently complete the worker slice.
             let review_disposition = if completion_review_should_skip_feedback_turn(&job) {
                 push_event(
                     &state,
                     format!(
-                        "Completion review skipped for {} because feedback turns must not review themselves",
+                        "Completion review skipped for {} because queue-guard maintenance is not terminal user work",
                         job.source_label
                     ),
                 );
@@ -3088,29 +2976,14 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
                         reply_text.chars().count()
                     ),
                 );
-                let disposition = if let Some(disposition) =
-                    short_terminal_bench_artifact_reply_disposition(&root, &job, reply_text)
-                {
-                    disposition
-                } else if let Some(work_id) = continuation_self_work_requested(&job, reply_text) {
-                    let summary = format!(
-                            "Agentic work is not finished; the last turn explicitly requested continuation with concrete next steps. Last reply: {}",
-                            clip_text(reply_text, 260)
-                        );
-                    CompletionReviewDisposition::ContinueSelfWork {
-                        work_id: work_id.to_string(),
-                        summary,
-                    }
-                } else {
-                    run_completion_review(
-                        &root,
-                        &state,
-                        &job,
-                        reply_text,
-                        conversation_id,
-                        mission_sync_outcome.as_ref(),
-                    )
-                };
+                let disposition = run_completion_review(
+                    &root,
+                    &state,
+                    &job,
+                    reply_text,
+                    conversation_id,
+                    mission_sync_outcome.as_ref(),
+                );
                 push_event(
                     &state,
                     format!(
@@ -3141,9 +3014,11 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
                 );
                 match result {
                     Ok(reply) => {
+                        let email_reply_key =
+                            inbound_email_reply_message_key(&job).map(ToOwned::to_owned);
                         let founder_reply_key =
                             founder_email_reply_message_key(&job).map(ToOwned::to_owned);
-                        let proactive_founder_action = if founder_reply_key.is_none() {
+                        let proactive_founder_action = if email_reply_key.is_none() {
                             job.outbound_email.clone()
                         } else {
                             None
@@ -3151,8 +3026,7 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
                         let mut founder_send_error: Option<String> = None;
                         let mut should_handle_messages = matches!(
                             &review_disposition,
-                            CompletionReviewDisposition::Approved
-                                | CompletionReviewDisposition::None
+                            CompletionReviewDisposition::Approved { .. }
                         );
                         let terminal_no_send = matches!(
                             &review_disposition,
@@ -3184,41 +3058,62 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
                                 ),
                             );
                         }
-                        let outcome_witness_allowed = matches!(
-                            &review_disposition,
-                            CompletionReviewDisposition::Approved
-                                | CompletionReviewDisposition::None
-                        );
-                        let mut outcome_witness_proof_id: Option<String> = None;
+                        let mut reviewed_terminal_proof_ids: Vec<String> = Vec::new();
                         let mut outcome_witness_error: Option<String> = None;
-                        if !terminal_no_send && outcome_witness_allowed {
-                            match enforce_job_outcome_witness(
+                        if let CompletionReviewDisposition::Approved { review_audit_key } =
+                            &review_disposition
+                        {
+                            match enforce_reviewed_work_terminal_success(
                                 &root,
                                 &job,
+                                review_audit_key,
                                 expected_artifact_refs.clone(),
                                 delivered_artifact_refs.clone(),
                             ) {
-                                Ok(proof_id) => {
-                                    outcome_witness_proof_id = proof_id;
+                                Ok(proof_ids) => {
+                                    if !proof_ids.is_empty() {
+                                        push_event_locked(
+                                            &mut shared,
+                                            format!(
+                                                "Reviewed terminal proof accepted for {} via {}",
+                                                job.source_label,
+                                                proof_ids.join(", ")
+                                            ),
+                                        );
+                                    }
+                                    reviewed_terminal_proof_ids = proof_ids;
                                 }
                                 Err(err) => {
-                                    outcome_witness_error = Some(err.to_string());
+                                    outcome_witness_error = Some(format!(
+                                        "Reviewed terminal proof rejected by core state machine: {err}"
+                                    ));
+                                    should_handle_messages = false;
                                 }
                             }
                         }
+                        let review_can_complete = matches!(
+                            &review_disposition,
+                            CompletionReviewDisposition::Approved { .. }
+                        );
                         if !expected_artifact_refs.is_empty() && outcome_witness_error.is_none() {
-                            if let Some(proof_id) = outcome_witness_proof_id.as_deref() {
+                            if let Some(proof_id) = reviewed_terminal_proof_ids.first() {
                                 push_event_locked(
                                     &mut shared,
                                     format!(
-                                        "Outcome witness accepted proof {} for {}",
+                                        "Reviewed outcome witness accepted proof {} for {}",
                                         proof_id,
                                         job_outcome_entity_id(&job)
                                     ),
                                 );
-                            } else if !terminal_no_send && outcome_witness_allowed {
+                            } else if !terminal_no_send && review_can_complete {
                                 outcome_witness_error = Some(format!(
                                     "Harness invariant violation: {} expected durable outcome artifact(s), but no core transition proof was recorded for {}.",
+                                    expected_artifact_refs.len(),
+                                    job_outcome_entity_id(&job)
+                                ));
+                            } else if !terminal_no_send {
+                                outcome_witness_error = Some(format!(
+                                    "Harness invariant violation: {} expected durable outcome artifact(s), but the slice has no accepted completion review proof for {}.",
                                     expected_artifact_refs.len(),
                                     job_outcome_entity_id(&job)
                                 ));
@@ -3326,7 +3221,7 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
                                 "cancelled",
                             );
                         } else if !job.leased_message_keys.is_empty() {
-                            let held_founder_review = founder_reply_key.is_some()
+                            let held_founder_review = email_reply_key.is_some()
                                 || proactive_founder_action.is_some()
                                 || is_founder_or_owner_email_job(&job);
                             let held_completion_review = matches!(
@@ -3346,11 +3241,25 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
                                 retry_status,
                             );
                         }
-                        if !job.leased_ticket_event_keys.is_empty() {
+                        if !job.leased_ticket_event_keys.is_empty() && should_handle_messages {
                             let _ = tickets::ack_leased_ticket_events(
                                 &root,
                                 &job.leased_ticket_event_keys,
                                 "handled",
+                            );
+                        } else if !job.leased_ticket_event_keys.is_empty() {
+                            let retry_status = if matches!(
+                                &review_disposition,
+                                CompletionReviewDisposition::Hold { .. }
+                            ) {
+                                "blocked"
+                            } else {
+                                "pending"
+                            };
+                            let _ = tickets::ack_leased_ticket_events(
+                                &root,
+                                &job.leased_ticket_event_keys,
+                                retry_status,
                             );
                         }
                         shared.last_error = founder_send_error.clone();
@@ -3371,39 +3280,10 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
                                         ),
                                     );
                                 }
-                                CompletionReviewDisposition::ContinueSelfWork {
-                                    work_id: target_work_id,
-                                    summary,
-                                } => match requeue_continue_requested_self_work(
-                                    &root,
-                                    target_work_id,
-                                    summary,
-                                ) {
-                                    Ok(Some(queued)) => push_event_locked(
-                                        &mut shared,
-                                        format!(
-                                            "Agent requested continuation; requeued durable self-work {} via {}",
-                                            target_work_id, queued.title
-                                        ),
-                                    ),
-                                    Ok(None) => push_event_locked(
-                                        &mut shared,
-                                        format!(
-                                            "Agent requested continuation for {}, but no queue item was created",
-                                            target_work_id
-                                        ),
-                                    ),
-                                    Err(err) => push_event_locked(
-                                        &mut shared,
-                                        format!(
-                                            "Agent continuation requeue failed for {}: {}",
-                                            target_work_id, err
-                                        ),
-                                    ),
-                                },
-                                CompletionReviewDisposition::Approved
-                                | CompletionReviewDisposition::None => {
-                                    if outcome_witness_error.is_none() && founder_send_error.is_none() {
+                                CompletionReviewDisposition::Approved { .. } => {
+                                    if outcome_witness_error.is_none()
+                                        && founder_send_error.is_none()
+                                    {
                                         let note = format!(
                                             "Execution slice completed successfully. Reply summary: {}",
                                             clip_text(&reply, 220)
@@ -3420,7 +3300,9 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
                                             .as_ref()
                                             .cloned()
                                             .unwrap_or_else(|| {
-                                                outcome_witness_recovery_message(&root, &job, &reply, err)
+                                                outcome_witness_recovery_message(
+                                                    &root, &job, &reply, err,
+                                                )
                                             });
                                         review_requeue = Some((work_id.to_string(), recovery));
                                         push_event_locked(
@@ -3431,6 +3313,15 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
                                             ),
                                         );
                                     }
+                                }
+                                CompletionReviewDisposition::None => {
+                                    push_event_locked(
+                                        &mut shared,
+                                        format!(
+                                            "Completion review produced no terminal verdict for {}; preserving durable self-work {}",
+                                            job.source_label, work_id
+                                        ),
+                                    );
                                 }
                                 CompletionReviewDisposition::NoSend { summary } => {
                                     if founder_send_error.is_none() {
@@ -3453,20 +3344,6 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
                                         ),
                                     );
                                 }
-                                CompletionReviewDisposition::RewriteOnly {
-                                    findings,
-                                    review_summary,
-                                    ..
-                                } => {
-                                    push_event_locked(
-                                        &mut shared,
-                                        format!(
-                                            "Review found {} rewrite-class issue(s); body fix scheduled in-process: {}",
-                                            findings.len(),
-                                            clip_text(review_summary, 180)
-                                        ),
-                                    );
-                                }
                                 CompletionReviewDisposition::FeedbackRetry {
                                     review_summary,
                                     ..
@@ -3474,7 +3351,7 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
                                     push_event_locked(
                                         &mut shared,
                                         format!(
-                                            "Review fed back substantive guidance without spawning rework: {}",
+                                            "Review fed back substantive guidance through the same durable work item: {}",
                                             clip_text(review_summary, 180)
                                         ),
                                     );
@@ -3733,90 +3610,7 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
                 if let Some(event) = &platform_pipeline_event {
                     push_event_locked(&mut shared, event.clone());
                 }
-                // Lightweight rewrite path: when every reviewer finding is
-                // structurally `rewrite`-class, synthesise an in-process
-                // body-fix prompt instead of spawning the heavy rework
-                // queue task. The prompt inherits outbound recipient/anchor
-                // metadata from the parent job, sandwiches the prior body
-                // and the categorized findings, and is pushed to the front
-                // of the pending queue so the next pick picks it up.
-                if let CompletionReviewDisposition::RewriteOnly {
-                    findings,
-                    prior_body,
-                    anchor_message_key,
-                    review_summary,
-                } = &review_disposition
-                {
-                    let synthesised = synthesise_review_rewrite_prompt(
-                        &job,
-                        findings,
-                        prior_body,
-                        anchor_message_key.as_deref(),
-                        review_summary,
-                    );
-                    shared.pending_prompts.push_front(synthesised);
-                    push_event_locked(
-                        &mut shared,
-                        format!(
-                            "Queued lightweight rewrite-only retry ({} finding(s)) for {}",
-                            findings.len(),
-                            job.source_label
-                        ),
-                    );
-                    if let Ok(engine) = lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default()) {
-                        match engine.increment_mission_rewrite_failure_count(conversation_id) {
-                            Ok(record) => {
-                                let threshold = mission_rewrite_failure_threshold();
-                                if record.rewrite_failure_count >= threshold {
-                                    let _ = engine.defer_mission_for_reason(
-                                        conversation_id,
-                                        "rewrite_failure_threshold",
-                                    );
-                                    push_event_locked(
-                                        &mut shared,
-                                        format!(
-                                            "Rewrite-only loop hit threshold ({}) for conversation {}; mission deferred",
-                                            threshold, conversation_id
-                                        ),
-                                    );
-                                    // Drop the synthesised retry — the
-                                    // mission is now deferred and we do
-                                    // not want to keep re-spawning. Pop
-                                    // the prompt we just pushed to the
-                                    // front.
-                                    let _ = shared.pending_prompts.pop_front();
-                                    let _ = governance::record_event(
-                                        &root,
-                                        governance::GovernanceEventRequest {
-                                            mechanism_id: "review_rewrite_threshold",
-                                            conversation_id: Some(conversation_id),
-                                            severity: "warning",
-                                            reason: "rewrite-only review iterations failed to converge",
-                                            action_taken: "deferred mission and stopped respawning rewrite retries",
-                                            details: serde_json::json!({
-                                                "thread_key": job.thread_key,
-                                                "source_label": job.source_label,
-                                                "rewrite_failure_count": record.rewrite_failure_count,
-                                                "threshold": threshold,
-                                            }),
-                                            idempotence_key: Some(&format!(
-                                                "rewrite-threshold:{}:{}",
-                                                conversation_id, record.rewrite_failure_count
-                                            )),
-                                        },
-                                    );
-                                }
-                            }
-                            Err(err) => push_event_locked(
-                                &mut shared,
-                                format!(
-                                    "rewrite_failure_count bump failed for conversation {}: {}",
-                                    conversation_id, err
-                                ),
-                            ),
-                        }
-                    }
-                } else if let CompletionReviewDisposition::FeedbackRetry {
+                if let CompletionReviewDisposition::FeedbackRetry {
                     feedback_prompt,
                     review_summary,
                     persist_on_leased_queue,
@@ -3858,33 +3652,13 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
                         false
                     };
                     if !persisted {
-                        shared.pending_prompts.push_front(QueuedPrompt {
-                            prompt: feedback_prompt.clone(),
-                            goal: format!("Address review feedback for {}", job.goal),
-                            preview: clip_text(review_summary, 180),
-                            source_label: REVIEW_FEEDBACK_SOURCE_LABEL.to_string(),
-                            suggested_skill: job.suggested_skill.clone(),
-                            leased_message_keys: Vec::new(),
-                            leased_ticket_event_keys: Vec::new(),
-                            thread_key: job.thread_key.clone(),
-                            workspace_root: job.workspace_root.clone(),
-                            ticket_self_work_id: None,
-                            outbound_email: job.outbound_email.clone(),
-                            outbound_anchor: job.outbound_anchor.clone(),
-                        });
                         push_event_locked(
                             &mut shared,
                             format!(
-                                "Queued in-process review feedback retry for {}",
+                                "Review feedback for {} was not persisted to a durable queue item; suppressing in-memory retry outside the core review flow",
                                 job.source_label
                             ),
                         );
-                    }
-                } else if matches!(&review_disposition, CompletionReviewDisposition::Approved) {
-                    // Successful approval clears the rewrite-only failure
-                    // counter so a future regression starts from zero.
-                    if let Ok(engine) = lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default()) {
-                        let _ = engine.reset_mission_rewrite_failure_count(conversation_id);
                     }
                 }
                 next_prompt = maybe_start_next_queued_prompt_after_recovery_locked(
@@ -4019,21 +3793,20 @@ fn run_completion_review(
         .join("skills/system/review/external-review/SKILL.md")
         .to_string_lossy()
         .to_string();
+    let email_reply_key = inbound_email_reply_message_key(job);
     let founder_reply_key = founder_email_reply_message_key(job);
-    let founder_reply_action = founder_reply_key
+    let email_reply_action = email_reply_key
         .and_then(|message_key| channels::prepare_reviewed_founder_reply(root, message_key).ok());
-    let proactive_founder_action = if founder_reply_key.is_none() {
+    let proactive_founder_action = if email_reply_key.is_none() {
         job.outbound_email.clone()
     } else {
         None
     };
-    let external_chat_action = if founder_reply_key.is_none()
+    let external_chat_action = if email_reply_key.is_none()
         && proactive_founder_action.is_none()
         && !matches!(
             job.source_label.as_str(),
-            OUTCOME_WITNESS_RECOVERY_SOURCE_LABEL
-                | REVIEW_FEEDBACK_SOURCE_LABEL
-                | REVIEW_REWRITE_SOURCE_LABEL
+            OUTCOME_WITNESS_RECOVERY_SOURCE_LABEL | REVIEW_FEEDBACK_SOURCE_LABEL
         ) {
         reviewed_external_chat_action_for_job(root, job)
             .ok()
@@ -4046,7 +3819,7 @@ fn run_completion_review(
             channels::required_founder_reply_deliverables(root, message_key).ok()
         })
         .unwrap_or_default();
-    let artifact_attachments = founder_reply_action
+    let artifact_attachments = email_reply_action
         .as_ref()
         .map(|action| action.attachments.clone())
         .or_else(|| {
@@ -4063,12 +3836,12 @@ fn run_completion_review(
     let required_deliverables = founder_required_deliverables;
     let deterministic_evidence =
         collect_review_evidence_summaries(root, job, conversation_id, &artifact_attachments);
-    let founder_commitments =
-        if is_founder_or_owner_email_job(job) || proactive_founder_action.is_some() {
-            detect_founder_mail_commitments(reply_text)
-        } else {
-            Vec::new()
-        };
+    let founder_commitments = if email_reply_action.is_some() || proactive_founder_action.is_some()
+    {
+        detect_founder_mail_commitments(reply_text)
+    } else {
+        Vec::new()
+    };
     let founder_commitment_backing = if founder_commitments.is_empty() {
         Vec::new()
     } else {
@@ -4086,7 +3859,7 @@ fn run_completion_review(
         runtime_db_path: db_path.to_string_lossy().to_string(),
         review_skill_path,
         artifact_text: reply_text.to_string(),
-        artifact_action: founder_reply_action
+        artifact_action: email_reply_action
             .as_ref()
             .map(|_| "reply".to_string())
             .or_else(|| {
@@ -4099,7 +3872,7 @@ fn run_completion_review(
                     .as_ref()
                     .map(|_| "external_chat_quick_response".to_string())
             }),
-        artifact_channel: founder_reply_action
+        artifact_channel: email_reply_action
             .as_ref()
             .map(|_| "email".to_string())
             .or_else(|| {
@@ -4113,7 +3886,7 @@ fn run_completion_review(
                     .map(|action| action.channel.clone())
             })
             .unwrap_or_default(),
-        artifact_to: founder_reply_action
+        artifact_to: email_reply_action
             .as_ref()
             .map(|action| action.to.clone())
             .or_else(|| {
@@ -4127,7 +3900,7 @@ fn run_completion_review(
                     .map(|action| action.to.clone())
             })
             .unwrap_or_default(),
-        artifact_cc: founder_reply_action
+        artifact_cc: email_reply_action
             .as_ref()
             .map(|action| action.cc.clone())
             .or_else(|| {
@@ -4141,7 +3914,7 @@ fn run_completion_review(
                     .map(|action| action.cc.clone())
             })
             .unwrap_or_default(),
-        artifact_subject: founder_reply_action
+        artifact_subject: email_reply_action
             .as_ref()
             .map(|action| action.subject.clone())
             .or_else(|| {
@@ -4172,7 +3945,7 @@ fn run_completion_review(
         );
         outcome = guard_outcome;
     }
-    if is_founder_or_owner_email_job(job) || proactive_founder_action.is_some() {
+    if email_reply_action.is_some() || proactive_founder_action.is_some() {
         if let Some(guard_outcome) = founder_commitment_guard_outcome(
             &review_request.artifact_commitments,
             &review_request.commitment_backing,
@@ -4197,6 +3970,19 @@ fn run_completion_review(
             outcome = guard_outcome;
         }
     }
+    if let Some(guard_outcome) =
+        communication_pipeline_resolution_guard_outcome(&review_request, &outcome)
+    {
+        push_event(
+            state,
+            format!(
+                "Communication review pipeline-resolution guard rejected PASS for {}: {}",
+                job.source_label,
+                clip_text(&guard_outcome.summary, 180)
+            ),
+        );
+        outcome = guard_outcome;
+    }
     if let Some(guard_outcome) = workspace_review_pass_gate_outcome(job, &outcome) {
         push_event(
             state,
@@ -4212,7 +3998,7 @@ fn run_completion_review(
         // Founder-visible mail is never allowed to fall through unreviewed.
         // If the gate declines to run, hold the outbound path and force
         // explicit rework instead of sending or immediately retrying.
-        if is_founder_or_owner_email_job(job)
+        if email_reply_action.is_some()
             || proactive_founder_action.is_some()
             || external_chat_action.is_some()
         {
@@ -4223,8 +4009,9 @@ fn run_completion_review(
                 summary: summary.to_string(),
             };
         }
-        // Heuristic decided this slice does not need review — stay quiet.
-        return CompletionReviewDisposition::None;
+        return CompletionReviewDisposition::Hold {
+            summary: "Completion review did not run; terminal completion is held until review passes or explicit policy resolves it.".to_string(),
+        };
     }
     let verification_request = verification::SliceVerificationRequest {
         conversation_id,
@@ -4234,21 +4021,29 @@ fn run_completion_review(
         source_label: review_request.source_label.clone(),
         owner_visible,
     };
-    if let Err(err) = verification::record_slice_assurance(
+    let review_audit_key = match verification::record_slice_assurance(
         root,
         &verification_request,
         reply_text,
         None,
         Some(&outcome),
     ) {
-        push_event(
-            state,
-            format!(
-                "Completion review persist failed for {}: {}",
-                job.source_label, err
-            ),
-        );
-    }
+        Ok(recorded) => recorded.run.run_id.clone(),
+        Err(err) => {
+            push_event(
+                state,
+                format!(
+                    "Completion review persist failed for {}: {}",
+                    job.source_label, err
+                ),
+            );
+            return CompletionReviewDisposition::Hold {
+                summary: format!(
+                    "Completion review produced a verdict, but its durable audit record could not be persisted: {err}"
+                ),
+            };
+        }
+    };
     push_event(
         state,
         format!(
@@ -4272,24 +4067,43 @@ fn run_completion_review(
     // `categorized_findings` will be empty *and* the reviewer's verdict
     // dictates the path — `Approved` for Pass, the heavy path for Fail.
     let routing_class = classify_findings(&outcome.categorized_findings);
-    let founder_mail_source = matches!(
-        job.source_label.to_ascii_lowercase().as_str(),
-        "email:owner" | "email:founder" | "email:admin"
-    );
-    if founder_mail_source {
+    let email_reply_source = email_reply_key.is_some();
+    if email_reply_source {
         return match outcome.verdict {
             review::ReviewVerdict::Pass => {
-                if let Some(message_key) = founder_reply_key {
-                    if let Err(err) = channels::record_founder_reply_review_approval(
-                        root,
-                        message_key,
-                        reply_text,
-                        &outcome.summary,
-                    ) {
+                if let (Some(message_key), Some(action)) =
+                    (email_reply_key, email_reply_action.as_ref())
+                {
+                    let approval_summary = communication_review_approval_summary(&outcome);
+                    let record_result = if founder_reply_key.is_some() {
+                        channels::record_founder_reply_review_approval(
+                            root,
+                            message_key,
+                            reply_text,
+                            &approval_summary,
+                        )
+                    } else {
+                        channels::record_external_chat_review_approval(
+                            root,
+                            message_key,
+                            &channels::ExternalChatAction {
+                                channel: "email".to_string(),
+                                account_key: action.account_key.clone(),
+                                thread_key: action.thread_key.clone(),
+                                subject: action.subject.clone(),
+                                to: action.to.clone(),
+                                cc: action.cc.clone(),
+                                attachments: action.attachments.clone(),
+                            },
+                            reply_text,
+                            &approval_summary,
+                        )
+                    };
+                    if let Err(err) = record_result {
                         push_event(
                             state,
                             format!(
-                                "Founder review passed for {} but approval persistence failed: {}",
+                                "Communication review passed for {} but approval persistence failed: {}",
                                 job.source_label, err
                             ),
                         );
@@ -4298,14 +4112,16 @@ fn run_completion_review(
                         };
                     }
                 }
-                CompletionReviewDisposition::Approved
+                CompletionReviewDisposition::Approved {
+                    review_audit_key: review_audit_key.clone(),
+                }
             }
             review::ReviewVerdict::Fail if actionable_rejection => {
                 if review_outcome_is_terminal_no_send(&outcome) {
                     push_event(
                         state,
                         format!(
-                            "Founder review closed {} without sending because the correct action is to wait: {}",
+                            "Communication review closed {} without sending because the correct action is to wait: {}",
                             job.source_label,
                             clip_text(&outcome.summary, 180)
                         ),
@@ -4318,45 +4134,24 @@ fn run_completion_review(
                     return disposition;
                 }
                 if matches!(routing_class, ReviewRoutingClass::Stale) {
-                    match enqueue_review_stale_refresh(root, job, &outcome) {
-                        Ok(title) => push_event(
-                            state,
-                            format!("Founder review stale refresh enqueued: {title}"),
-                        ),
-                        Err(err) => push_event(
-                            state,
-                            format!(
-                                "Founder review stale refresh enqueue failed for {}: {}",
-                                job.source_label, err
-                            ),
-                        ),
-                    }
-                    return CompletionReviewDisposition::Hold {
-                        summary: outcome.summary.clone(),
-                    };
+                    return handle_actionable_completion_review_rejection(
+                        root, state, job, &outcome, reply_text,
+                    );
                 }
                 if matches!(routing_class, ReviewRoutingClass::RewriteOnly) {
-                    let findings = rewrite_findings_from(&outcome.categorized_findings);
                     push_event(
                         state,
                         format!(
-                            "Founder review fail for {} routed to lightweight rewrite-only path ({} finding(s))",
-                            job.source_label,
-                            findings.len()
+                            "Communication review fail for {} contains rewrite-class findings; routing through durable review rework",
+                            job.source_label
                         ),
                     );
-                    return CompletionReviewDisposition::RewriteOnly {
-                        findings,
-                        prior_body: reply_text.to_string(),
-                        anchor_message_key: founder_reply_key.map(ToOwned::to_owned),
-                        review_summary: outcome.summary.clone(),
-                    };
                 }
                 if let Some(work_id) = resolve_review_rejection_target_self_work_id(root, job) {
                     push_event(
                         state,
                         format!(
-                            "Founder review fail for {} will resume durable self-work {} instead of sending",
+                            "Communication review fail for {} will resume durable self-work {} instead of sending",
                             job.source_label, work_id
                         ),
                     );
@@ -4364,33 +4159,10 @@ fn run_completion_review(
                         work_id,
                         summary: outcome.summary.clone(),
                     }
-                } else if let Some(message_key) = founder_reply_key {
-                    match enqueue_founder_communication_rework(root, job, message_key, &outcome) {
-                        Ok(title) => {
-                            push_event(
-                                state,
-                                format!(
-                                    "Founder review fail for {} enqueued real communication rework via {}",
-                                    job.source_label, title
-                                ),
-                            );
-                            CompletionReviewDisposition::Hold {
-                                summary: outcome.summary.clone(),
-                            }
-                        }
-                        Err(err) => {
-                            push_event(
-                                state,
-                                format!(
-                                    "Founder review fail for {} could not enqueue communication rework: {}",
-                                    job.source_label, err
-                                ),
-                            );
-                            CompletionReviewDisposition::Hold {
-                                summary: outcome.summary.clone(),
-                            }
-                        }
-                    }
+                } else if founder_reply_key.is_some() {
+                    handle_actionable_completion_review_rejection(
+                        root, state, job, &outcome, reply_text,
+                    )
                 } else {
                     CompletionReviewDisposition::Hold {
                         summary: outcome.summary.clone(),
@@ -4408,12 +4180,13 @@ fn run_completion_review(
     ) {
         return match outcome.verdict {
             review::ReviewVerdict::Pass => {
+                let approval_summary = communication_review_approval_summary(&outcome);
                 if let Err(err) = channels::record_founder_outbound_review_approval(
                     root,
                     anchor_key,
                     action,
                     reply_text,
-                    &outcome.summary,
+                    &approval_summary,
                 ) {
                     push_event(
                         state,
@@ -4426,7 +4199,9 @@ fn run_completion_review(
                         summary: err.to_string(),
                     }
                 } else {
-                    CompletionReviewDisposition::Approved
+                    CompletionReviewDisposition::Approved {
+                        review_audit_key: review_audit_key.clone(),
+                    }
                 }
             }
             review::ReviewVerdict::Fail | review::ReviewVerdict::Partial
@@ -4440,62 +4215,51 @@ fn run_completion_review(
                         push_event(
                             state,
                             format!(
-                                "Founder outbound review for {} stayed held because an in-process review retry already failed; automatic retry loop stopped",
+                                "Founder outbound review for {} stayed held because a prior review-feedback retry already failed; automatic retry loop stopped",
                                 job.source_label
                             ),
                         );
                         return CompletionReviewDisposition::Hold {
                             summary: format!(
-                                "{}\n\nAutomatic in-process outbound review retry stopped after the prior retry still failed. Create durable follow-up work or provide explicit operator review approval before sending.",
+                                "{}\n\nAutomatic same-work outbound review retry stopped after the prior retry still failed. Create durable follow-up work or provide explicit operator review approval before sending.",
                                 outcome.summary
                             ),
                         };
                     }
-                    return CompletionReviewDisposition::FeedbackRetry {
-                        feedback_prompt: build_review_feedback_retry_prompt(
-                            job, &outcome, reply_text,
-                        ),
-                        review_summary: outcome.summary.clone(),
-                        persist_on_leased_queue: false,
-                    };
+                    return handle_actionable_completion_review_rejection(
+                        root, state, job, &outcome, reply_text,
+                    );
                 }
                 if matches!(routing_class, ReviewRoutingClass::RewriteOnly) {
-                    let findings = rewrite_findings_from(&outcome.categorized_findings);
                     push_event(
                         state,
                         format!(
-                            "Founder outbound review for {} routed to lightweight rewrite-only path ({} finding(s))",
-                            job.source_label,
-                            findings.len()
+                            "Founder outbound review for {} contains rewrite-class findings; routing through durable review rework",
+                            job.source_label
                         ),
                     );
-                    return CompletionReviewDisposition::RewriteOnly {
-                        findings,
-                        prior_body: reply_text.to_string(),
-                        anchor_message_key: Some(anchor_key.to_string()),
-                        review_summary: outcome.summary.clone(),
-                    };
+                    return handle_actionable_completion_review_rejection(
+                        root, state, job, &outcome, reply_text,
+                    );
                 }
                 if !outbound_in_process_review_retry_allowed(job) {
                     push_event(
                         state,
                         format!(
-                            "Founder outbound review for {} stayed held because an in-process review retry already failed; automatic retry loop stopped",
+                            "Founder outbound review for {} stayed held because a prior review-feedback retry already failed; automatic retry loop stopped",
                             job.source_label
                         ),
                     );
                     return CompletionReviewDisposition::Hold {
                         summary: format!(
-                            "{}\n\nAutomatic in-process outbound review retry stopped after the prior retry still failed. Create durable follow-up work or provide explicit operator review approval before sending.",
+                            "{}\n\nAutomatic same-work outbound review retry stopped after the prior retry still failed. Create durable follow-up work or provide explicit operator review approval before sending.",
                             outcome.summary
                         ),
                     };
                 }
-                CompletionReviewDisposition::FeedbackRetry {
-                    feedback_prompt: build_review_feedback_retry_prompt(job, &outcome, reply_text),
-                    review_summary: outcome.summary.clone(),
-                    persist_on_leased_queue: false,
-                }
+                handle_actionable_completion_review_rejection(
+                    root, state, job, &outcome, reply_text,
+                )
             }
             _ => CompletionReviewDisposition::Hold {
                 summary: outcome.summary.clone(),
@@ -4507,12 +4271,13 @@ fn run_completion_review(
     {
         return match outcome.verdict {
             review::ReviewVerdict::Pass => {
+                let approval_summary = communication_review_approval_summary(&outcome);
                 if let Err(err) = channels::record_external_chat_review_approval(
                     root,
                     anchor_key,
                     action,
                     reply_text,
-                    &outcome.summary,
+                    &approval_summary,
                 ) {
                     push_event(
                         state,
@@ -4525,7 +4290,9 @@ fn run_completion_review(
                         summary: err.to_string(),
                     }
                 } else {
-                    CompletionReviewDisposition::Approved
+                    CompletionReviewDisposition::Approved {
+                        review_audit_key: review_audit_key.clone(),
+                    }
                 }
             }
             review::ReviewVerdict::Fail | review::ReviewVerdict::Partial
@@ -4535,19 +4302,13 @@ fn run_completion_review(
                     return disposition;
                 }
                 if matches!(routing_class, ReviewRoutingClass::RewriteOnly) {
-                    let findings = rewrite_findings_from(&outcome.categorized_findings);
-                    return CompletionReviewDisposition::RewriteOnly {
-                        findings,
-                        prior_body: reply_text.to_string(),
-                        anchor_message_key: Some(anchor_key.to_string()),
-                        review_summary: outcome.summary.clone(),
-                    };
+                    return handle_actionable_completion_review_rejection(
+                        root, state, job, &outcome, reply_text,
+                    );
                 }
-                CompletionReviewDisposition::FeedbackRetry {
-                    feedback_prompt: build_review_feedback_retry_prompt(job, &outcome, reply_text),
-                    review_summary: outcome.summary.clone(),
-                    persist_on_leased_queue: false,
-                }
+                handle_actionable_completion_review_rejection(
+                    root, state, job, &outcome, reply_text,
+                )
             }
             _ => CompletionReviewDisposition::Hold {
                 summary: outcome.summary.clone(),
@@ -4559,38 +4320,34 @@ fn run_completion_review(
             push_event(
                 state,
                 format!(
-                    "Completion review could not inspect internal work for {}; leaving worker result unblocked: {}",
+                    "Completion review could not inspect internal work for {}; holding terminal completion: {}",
                     job.source_label,
                     clip_text(&outcome.summary, 180)
                 ),
             );
-            return CompletionReviewDisposition::None;
+            return CompletionReviewDisposition::Hold {
+                summary: outcome.summary.clone(),
+            };
         }
         if let Some(disposition) = no_cascade_review_block(root, job, &outcome) {
             return disposition;
         }
         if matches!(routing_class, ReviewRoutingClass::Stale) {
-            match enqueue_review_stale_refresh(root, job, &outcome) {
-                Ok(title) => push_event(state, format!("Review stale refresh enqueued: {title}")),
-                Err(err) => push_event(
-                    state,
-                    format!(
-                        "Review stale refresh enqueue failed for {}: {}",
-                        job.source_label, err
-                    ),
-                ),
-            }
-            return CompletionReviewDisposition::Hold {
-                summary: outcome.summary.clone(),
-            };
+            return handle_actionable_completion_review_rejection(
+                root, state, job, &outcome, reply_text,
+            );
         }
         return handle_actionable_completion_review_rejection(
             root, state, job, &outcome, reply_text,
         );
     }
     match outcome.verdict {
-        review::ReviewVerdict::Pass => CompletionReviewDisposition::Approved,
-        review::ReviewVerdict::Skipped => CompletionReviewDisposition::None,
+        review::ReviewVerdict::Pass => CompletionReviewDisposition::Approved { review_audit_key },
+        review::ReviewVerdict::Skipped => CompletionReviewDisposition::Hold {
+            summary:
+                "Completion review was skipped after being required; terminal completion is held."
+                    .to_string(),
+        },
         review::ReviewVerdict::Unavailable => {
             completion_review_unavailable_disposition(job, &outcome.summary)
         }
@@ -4666,76 +4423,12 @@ fn completion_review_is_reviewer_limited_internal_work(
 }
 
 fn completion_review_should_skip_feedback_turn(job: &QueuedPrompt) -> bool {
-    job.source_label == "review-feedback" || job.source_label == QUEUE_GUARD_SOURCE_LABEL
-}
-
-fn continuation_self_work_requested<'a>(
-    job: &'a QueuedPrompt,
-    reply_text: &str,
-) -> Option<&'a str> {
-    let work_id = job.ticket_self_work_id.as_deref()?;
-    if is_founder_or_owner_email_job(job)
-        || job.outbound_email.is_some()
-        || job.source_label == REVIEW_REWRITE_SOURCE_LABEL
-    {
-        return None;
-    }
-    let lowered = reply_text.to_ascii_lowercase();
-    let explicit_continue = contains_any(
-        &lowered,
-        &[
-            "mach weiter",
-            "weiter machen",
-            "weiterarbeiten",
-            "continue",
-            "i can continue",
-            "ich kann weiter",
-            "next step",
-            "next steps",
-            "next slice",
-            "nächster schritt",
-            "naechster schritt",
-        ],
-    );
-    if !explicit_continue {
-        return None;
-    }
-    let has_open_work = contains_any(
-        &lowered,
-        &[
-            "noch offen",
-            "offene nächste",
-            "offene naechste",
-            "remaining",
-            "pending",
-            "not finished",
-            "nicht fertig",
-            "next smallest",
-            "nächste konkrete",
-            "naechste konkrete",
-        ],
-    );
-    let claims_done = contains_any(
-        &lowered,
-        &[
-            "fertig",
-            "completed",
-            "done",
-            "abgeschlossen",
-            "keine offenen",
-            "no open",
-        ],
-    );
-    if has_open_work || !claims_done {
-        Some(work_id)
-    } else {
-        None
-    }
+    job.source_label == QUEUE_GUARD_SOURCE_LABEL
 }
 
 /// Background-driven slices (timeout continuation, queue-pressure guard, cron,
 /// and legacy watchdog items) are not directly owner-visible. The
-/// owner_visible flag feeds the review-trigger heuristic, so we err on the
+/// owner_visible flag feeds the review-trigger classifier, so we err on the
 /// side of conservative review: foreground sources (TUI, queue, ticket
 /// channels, email) are owner-visible.
 fn derive_owner_visible_for_review(source_label: &str) -> bool {
@@ -4744,51 +4437,6 @@ fn derive_owner_visible_for_review(source_label: &str) -> bool {
         return false;
     }
     !(lowered.contains("watchdog") || lowered.contains("timeout") || lowered.starts_with("cron"))
-}
-
-/// Synthesise the in-process `QueuedPrompt` that drives the lightweight
-/// rewrite-only retry. The new prompt inherits outbound recipient/anchor
-/// metadata from the parent job verbatim — no re-derivation, no leak of
-/// internal vocab into the agent-facing instruction beyond what the
-/// reviewer already surfaced.
-fn synthesise_review_rewrite_prompt(
-    parent: &QueuedPrompt,
-    findings: &[RewriteFinding],
-    prior_body: &str,
-    anchor_message_key: Option<&str>,
-    review_summary: &str,
-) -> QueuedPrompt {
-    let prompt = build_review_rewrite_prompt(prior_body, findings, anchor_message_key);
-    QueuedPrompt {
-        prompt,
-        goal: format!("Body rewrite for {}", parent.source_label),
-        preview: clip_text(review_summary, 160),
-        source_label: REVIEW_REWRITE_SOURCE_LABEL.to_string(),
-        suggested_skill: parent.suggested_skill.clone(),
-        leased_message_keys: Vec::new(),
-        leased_ticket_event_keys: Vec::new(),
-        thread_key: parent.thread_key.clone(),
-        workspace_root: parent.workspace_root.clone(),
-        ticket_self_work_id: None,
-        outbound_email: parent.outbound_email.clone(),
-        outbound_anchor: parent.outbound_anchor.clone(),
-    }
-}
-
-/// Project the `Rewrite`-class half of a reviewer's `categorized_findings`
-/// list onto the dispatcher's `RewriteFinding` shape. Items tagged `Rework`
-/// stay in the heavy-path payload elsewhere; this helper does not coerce
-/// categories.
-fn rewrite_findings_from(findings: &[review::CategorizedFinding]) -> Vec<RewriteFinding> {
-    findings
-        .iter()
-        .filter(|f| matches!(f.category, review::FindingCategory::Rewrite))
-        .map(|f| RewriteFinding {
-            id: f.id.clone(),
-            evidence: f.evidence.clone(),
-            corrective_action: f.corrective_action.clone(),
-        })
-        .collect()
 }
 
 fn no_cascade_review_block(
@@ -5076,9 +4724,163 @@ fn review_external_work_backing_evidence_summaries(root: &Path, job: &QueuedProm
     } else {
         0
     };
-    vec![format!(
+    let mut evidence = vec![format!(
         "External chat work backing for thread `{thread_key}`: queue_open={queue_count}, plan_open={plan_count}, self_work_open={self_work_count}."
-    )]
+    )];
+    evidence.push(format!(
+        "External chat pipeline delta contract for thread `{thread_key}`: reviewer must classify the latest communication as new_task, update_existing, merge_duplicate, extend_scope, no_action_needed, or blocked_needs_clarification; every actionable request must be represented by a referenced queue, plan, ticket, or self-work item, merged into one explicitly named existing item, or explicitly blocked for clarification."
+    ));
+    evidence.extend(review_external_queue_backing_rows(&conn, thread_key));
+    evidence.extend(review_external_plan_backing_rows(&conn, thread_key));
+    evidence.extend(review_external_self_work_backing_rows(&conn, thread_key));
+    evidence
+}
+
+fn review_external_queue_backing_rows(conn: &Connection, thread_key: &str) -> Vec<String> {
+    let mut stmt = match conn.prepare(
+        r#"
+        SELECT
+            m.message_key,
+            COALESCE(r.route_status, 'pending') AS route_status,
+            m.subject,
+            m.preview,
+            m.observed_at
+        FROM communication_messages m
+        LEFT JOIN communication_routing_state r ON r.message_key = m.message_key
+        WHERE m.channel = 'queue'
+          AND m.direction = 'inbound'
+          AND m.thread_key = ?1
+          AND COALESCE(r.route_status, 'pending') NOT IN ('handled', 'cancelled', 'failed', 'superseded')
+        ORDER BY m.observed_at DESC
+        LIMIT 5
+        "#,
+    ) {
+        Ok(stmt) => stmt,
+        Err(err) => {
+            return vec![format!(
+                "External chat queue backing rows unavailable for `{thread_key}`: {err}"
+            )]
+        }
+    };
+    let rows = match stmt.query_map(params![thread_key], |row| {
+        Ok(format!(
+            "External chat queue backing row: message_key={} route_status={} observed_at={} subject=`{}` preview=`{}`",
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(4)?,
+            clip_text(&row.get::<_, String>(2)?, 120),
+            clip_text(&row.get::<_, String>(3)?, 180),
+        ))
+    }) {
+        Ok(rows) => rows,
+        Err(err) => {
+            return vec![format!(
+                "External chat queue backing rows unavailable for `{thread_key}`: {err}"
+            )]
+        }
+    };
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap_or_else(|err| {
+            vec![format!(
+                "External chat queue backing rows unavailable for `{thread_key}`: {err}"
+            )]
+        })
+}
+
+fn review_external_plan_backing_rows(conn: &Connection, thread_key: &str) -> Vec<String> {
+    if !sqlite_table_exists(conn, "planned_goals").unwrap_or(false) {
+        return Vec::new();
+    }
+    let mut stmt = match conn.prepare(
+        r#"
+        SELECT goal_id, status, title, updated_at
+        FROM planned_goals
+        WHERE thread_key = ?1
+          AND status NOT IN ('completed', 'closed', 'cancelled', 'failed', 'superseded')
+        ORDER BY updated_at DESC
+        LIMIT 5
+        "#,
+    ) {
+        Ok(stmt) => stmt,
+        Err(err) => {
+            return vec![format!(
+                "External chat plan backing rows unavailable for `{thread_key}`: {err}"
+            )]
+        }
+    };
+    let rows = match stmt.query_map(params![thread_key], |row| {
+        Ok(format!(
+            "External chat plan backing row: goal_id={} status={} updated_at={} title=`{}`",
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(3)?,
+            clip_text(&row.get::<_, String>(2)?, 160),
+        ))
+    }) {
+        Ok(rows) => rows,
+        Err(err) => {
+            return vec![format!(
+                "External chat plan backing rows unavailable for `{thread_key}`: {err}"
+            )]
+        }
+    };
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap_or_else(|err| {
+            vec![format!(
+                "External chat plan backing rows unavailable for `{thread_key}`: {err}"
+            )]
+        })
+}
+
+fn review_external_self_work_backing_rows(conn: &Connection, thread_key: &str) -> Vec<String> {
+    if !sqlite_table_exists(conn, "ticket_self_work_items").unwrap_or(false) {
+        return Vec::new();
+    }
+    let mut stmt = match conn.prepare(
+        r#"
+        SELECT work_id, state, kind, title, updated_at, COALESCE(remote_locator, '')
+        FROM ticket_self_work_items
+        WHERE state NOT IN ('closed', 'cancelled', 'failed', 'superseded', 'blocked')
+          AND (
+            json_extract(metadata_json, '$.thread_key') = ?1
+            OR json_extract(metadata_json, '$.parent_thread_key') = ?1
+            OR body_text LIKE '%' || ?1 || '%'
+          )
+        ORDER BY updated_at DESC
+        LIMIT 5
+        "#,
+    ) {
+        Ok(stmt) => stmt,
+        Err(err) => {
+            return vec![format!(
+                "External chat self-work backing rows unavailable for `{thread_key}`: {err}"
+            )]
+        }
+    };
+    let rows = match stmt.query_map(params![thread_key], |row| {
+        Ok(format!(
+            "External chat self-work backing row: work_id={} state={} kind={} updated_at={} locator=`{}` title=`{}`",
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(4)?,
+            clip_text(&row.get::<_, String>(5)?, 100),
+            clip_text(&row.get::<_, String>(3)?, 160),
+        ))
+    }) {
+        Ok(rows) => rows,
+        Err(err) => {
+            return vec![format!(
+                "External chat self-work backing rows unavailable for `{thread_key}`: {err}"
+            )]
+        }
+    };
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap_or_else(|err| {
+            vec![format!(
+                "External chat self-work backing rows unavailable for `{thread_key}`: {err}"
+            )]
+        })
 }
 
 fn sqlite_table_exists(conn: &Connection, table_name: &str) -> Result<bool> {
@@ -5344,10 +5146,95 @@ fn spreadsheet_guard_failure_outcome(
         evidence,
         handoff: None,
         disposition: review::ReviewDisposition::Send,
+        pipeline_resolution: None,
     }
 }
 
 const WORKSPACE_REVIEW_PASS_GATE_TIMEOUT_SECS: u64 = 900;
+
+fn communication_pipeline_resolution_guard_outcome(
+    request: &review::CompletionReviewRequest,
+    outcome: &review::ReviewOutcome,
+) -> Option<review::ReviewOutcome> {
+    if outcome.verdict != review::ReviewVerdict::Pass {
+        return None;
+    }
+    if !matches!(
+        request.artifact_action.as_deref(),
+        Some("reply")
+            | Some("proactive_founder_outbound_email")
+            | Some("external_chat_quick_response")
+    ) {
+        return None;
+    }
+    let Some(resolution) = outcome.pipeline_resolution.as_ref() else {
+        return Some(communication_pipeline_resolution_failure_outcome(
+            outcome,
+            "Communication review PASS did not include a structured pipeline resolution.",
+            "Re-run communication review and emit PIPELINE_RESOLUTION before approving send.",
+        ));
+    };
+    if resolution.rationale.trim().is_empty() {
+        return Some(communication_pipeline_resolution_failure_outcome(
+            outcome,
+            "Communication review PASS included an empty pipeline-resolution rationale.",
+            "Re-run communication review with a rationale grounded in the latest communication and pipeline state.",
+        ));
+    }
+    let target = resolution.target.trim();
+    let target_missing = target.is_empty() || target.eq_ignore_ascii_case("none") || target == "-";
+    if resolution.action.requires_target() && target_missing {
+        return Some(communication_pipeline_resolution_failure_outcome(
+            outcome,
+            "Communication review PASS claims a pipeline mutation but names no durable target item.",
+            "Create, update, merge, or extend a concrete queue/plan/ticket/self-work item, then re-run communication review with that target id.",
+        ));
+    }
+    None
+}
+
+fn communication_pipeline_resolution_failure_outcome(
+    prior: &review::ReviewOutcome,
+    summary: &str,
+    open_item: &str,
+) -> review::ReviewOutcome {
+    review::ReviewOutcome {
+        required: true,
+        verdict: review::ReviewVerdict::Partial,
+        mission_state: prior.mission_state.clone(),
+        summary: summary.to_string(),
+        report: prior.report.clone(),
+        score: prior.score,
+        reasons: prior.reasons.clone(),
+        failed_gates: vec![summary.to_string()],
+        semantic_findings: prior.semantic_findings.clone(),
+        categorized_findings: prior.categorized_findings.clone(),
+        open_items: vec![open_item.to_string()],
+        evidence: prior.evidence.clone(),
+        handoff: prior.handoff.clone(),
+        disposition: review::ReviewDisposition::Send,
+        pipeline_resolution: prior.pipeline_resolution.clone(),
+    }
+}
+
+fn communication_review_approval_summary(outcome: &review::ReviewOutcome) -> String {
+    let mut summary = outcome.summary.trim().to_string();
+    if let Some(resolution) = outcome.pipeline_resolution.as_ref() {
+        let witness = format!(
+            "PIPELINE_RESOLUTION: action={} | target={} | rationale=\"{}\"",
+            resolution.action.as_str(),
+            resolution.target.trim(),
+            resolution.rationale.trim()
+        );
+        if !summary.contains("PIPELINE_RESOLUTION:") {
+            if !summary.is_empty() {
+                summary.push('\n');
+            }
+            summary.push_str(&witness);
+        }
+    }
+    summary
+}
 
 #[derive(Debug, Clone)]
 struct WorkspaceReviewPassGate {
@@ -5370,7 +5257,6 @@ fn workspace_review_pass_gate_outcome(
     if matches!(
         job.source_label.as_str(),
         REVIEW_FEEDBACK_SOURCE_LABEL
-            | REVIEW_REWRITE_SOURCE_LABEL
             | OUTCOME_WITNESS_RECOVERY_SOURCE_LABEL
             | QUEUE_GUARD_SOURCE_LABEL
     ) {
@@ -5397,7 +5283,17 @@ fn workspace_review_pass_gate_outcome(
         Duration::from_secs(WORKSPACE_REVIEW_PASS_GATE_TIMEOUT_SECS),
         &description,
     ) {
-        Ok(output) if output.status.success() => None,
+        Ok(output) if output.status.success() => {
+            if outcome.has_acceptable_pass_proof() {
+                None
+            } else {
+                Some(workspace_review_pass_gate_untrusted_success_outcome(
+                    outcome,
+                    &gate,
+                    output_excerpt(&output),
+                ))
+            }
+        }
         Ok(output) => Some(workspace_review_pass_gate_failure_outcome(
             outcome,
             &gate,
@@ -5497,6 +5393,70 @@ fn workspace_review_pass_gate_failure_outcome(
         "Make `{}` pass in the workspace.",
         gate.display_command
     ));
+    outcome.evidence.push(evidence);
+    outcome.disposition = review::ReviewDisposition::Send;
+    outcome
+}
+
+fn workspace_review_pass_gate_untrusted_success_outcome(
+    original: &review::ReviewOutcome,
+    gate: &WorkspaceReviewPassGate,
+    output: String,
+) -> review::ReviewOutcome {
+    let mut outcome = original.clone();
+    let proof = original
+        .pass_proof_kind()
+        .map(|proof| proof.as_str().to_string())
+        .unwrap_or_else(|| "missing".to_string());
+    let evidence = if output.trim().is_empty() {
+        format!(
+            "{} exited successfully, but PASS_PROOF was `{}`.",
+            gate.display_command, proof
+        )
+    } else {
+        format!(
+            "{} exited successfully, but PASS_PROOF was `{}`.\n{}",
+            gate.display_command, proof, output
+        )
+    };
+    outcome.required = true;
+    outcome.verdict = review::ReviewVerdict::Partial;
+    outcome.mission_state = "UNCLEAR".to_string();
+    outcome.score = outcome.score.min(3);
+    outcome.summary = format!(
+        "Review PASS held because workspace-local verification `{}` succeeded but no direct or trusted external proof was recorded.",
+        gate.display_command
+    );
+    outcome.report = format!(
+        "{}\n\nWorkspace-local verification passed, but worker-owned checks cannot prove completion by themselves.\n{}",
+        original.canonical_report(),
+        evidence
+    );
+    outcome
+        .reasons
+        .push("workspace_local_pass_proof_not_sufficient".to_string());
+    outcome.failed_gates.push(format!(
+        "Workspace-local verification `{}` is not sufficient positive proof for reviewer PASS.",
+        gate.display_command
+    ));
+    outcome.semantic_findings.push(format!(
+        "The review approved completion using `{}` without direct artifact inspection or trusted external acceptance evidence.",
+        gate.display_command
+    ));
+    outcome
+        .categorized_findings
+        .push(review::CategorizedFinding {
+            id: format!("workspace-local-proof-{}", gate.label),
+            category: review::FindingCategory::Rework,
+            evidence: evidence.clone(),
+            corrective_action:
+                "Run review again with direct inspection of the required artifact, durable state, live surface, communication record, or trusted external validator before accepting completion."
+                    .to_string(),
+        });
+    outcome.open_items.push(
+        "Produce direct or trusted external completion evidence; do not rely only on worker-owned workspace tests."
+            .to_string(),
+    );
     outcome.evidence.push(evidence);
     outcome.disposition = review::ReviewDisposition::Send;
     outcome
@@ -5668,6 +5628,18 @@ fn expected_outcome_artifacts_for_job(job: &QueuedPrompt) -> Vec<ArtifactRef> {
         refs.push(ArtifactRef {
             kind: ArtifactKind::OutboundEmail,
             primary_key: outcome_thread_artifact_key(&action.thread_key),
+            expected_terminal_state: "accepted".to_string(),
+        });
+    } else if inbound_email_reply_message_key(job).is_some() {
+        refs.push(ArtifactRef {
+            kind: ArtifactKind::OutboundEmail,
+            primary_key: job
+                .thread_key
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(outcome_thread_artifact_key)
+                .unwrap_or_else(|| "*".to_string()),
             expected_terminal_state: "accepted".to_string(),
         });
     } else if is_founder_or_owner_email_job(job) {
@@ -6876,6 +6848,7 @@ fn prompt_declares_reviewed_founder_send(prompt: &str) -> bool {
         || lowered.contains("owner/founder/admin-targeted outbound email")
 }
 
+#[cfg(test)]
 fn enforce_job_outcome_witness(
     root: &Path,
     job: &QueuedPrompt,
@@ -6885,15 +6858,16 @@ fn enforce_job_outcome_witness(
     if expected_artifact_refs.is_empty() {
         return Ok(None);
     }
+
     validate_terminal_bench_controller_runtime_refs(root, job, &expected_artifact_refs)?;
 
-    let db_path = crate::paths::core_db(&root);
+    let db_path = crate::paths::core_db(root);
     let conn = channels::open_channel_db(&db_path)?;
     let entity_id = job_outcome_entity_id(job);
     let (entity_type, from_state, to_state, event) = if job.ticket_self_work_id.is_some() {
         (
             CoreEntityType::WorkItem,
-            CoreState::Verified,
+            CoreState::AwaitingReview,
             CoreState::Closed,
             CoreEvent::Close,
         )
@@ -6905,33 +6879,165 @@ fn enforce_job_outcome_witness(
             CoreEvent::Complete,
         )
     };
-
+    let verification_id = format!(
+        "outcome-witness:{}",
+        channels::stable_digest(&format!("{}:{entity_id}", job.source_label))
+    );
     let proof = enforce_core_transition(
         &conn,
         &CoreTransitionRequest {
             entity_type,
             entity_id,
-            lane: RuntimeLane::P0FounderCommunication,
+            lane: RuntimeLane::P2MissionDelivery,
             from_state,
             to_state,
             event,
-            actor: "ctox-outcome-witness".to_string(),
+            actor: "ctox-test-reviewed-terminal-gate".to_string(),
             evidence: CoreEvidenceRefs {
-                verification_id: Some(format!(
-                    "outcome-witness:{}",
-                    channels::stable_digest(&job.source_label)
-                )),
+                review_audit_key: Some("test-review-audit-pass".to_string()),
+                verification_id: Some(verification_id),
                 expected_artifact_refs,
                 delivered_artifact_refs,
                 ..CoreEvidenceRefs::default()
             },
             metadata: BTreeMap::from([
+                ("completion_review_required".to_string(), "true".to_string()),
+                ("completion_review_verdict".to_string(), "pass".to_string()),
+                (
+                    "reviewed_work_terminal_success".to_string(),
+                    "true".to_string(),
+                ),
                 ("outcome_witness".to_string(), "true".to_string()),
                 ("source_label".to_string(), job.source_label.clone()),
             ]),
         },
     )?;
     Ok(Some(proof.proof_id))
+}
+
+fn enforce_reviewed_work_terminal_success(
+    root: &Path,
+    job: &QueuedPrompt,
+    review_audit_key: &str,
+    expected_artifact_refs: Vec<ArtifactRef>,
+    delivered_artifact_refs: Vec<ArtifactRef>,
+) -> Result<Vec<String>> {
+    if !expected_artifact_refs.is_empty() {
+        validate_terminal_bench_controller_runtime_refs(root, job, &expected_artifact_refs)?;
+    }
+
+    let db_path = crate::paths::core_db(&root);
+    let conn = channels::open_channel_db(&db_path)?;
+    let mut proof_ids = Vec::new();
+    let validation_id = format!(
+        "outcome-witness:{}",
+        channels::stable_digest(&format!(
+            "{}:{}",
+            job.source_label,
+            job_outcome_entity_id(job)
+        ))
+    );
+    let policy_no_validation_id = format!(
+        "validation-not-required:{}",
+        channels::stable_digest(&format!(
+            "{}:{}",
+            job.source_label,
+            job_outcome_entity_id(job)
+        ))
+    );
+    let mut metadata = BTreeMap::from([
+        ("completion_review_required".to_string(), "true".to_string()),
+        ("completion_review_verdict".to_string(), "pass".to_string()),
+        (
+            "reviewed_work_terminal_success".to_string(),
+            "true".to_string(),
+        ),
+        ("source_label".to_string(), job.source_label.clone()),
+    ]);
+    let verification_id = if expected_artifact_refs.is_empty() {
+        metadata.insert(
+            "validation_not_required_policy_proof".to_string(),
+            policy_no_validation_id.clone(),
+        );
+        policy_no_validation_id
+    } else {
+        metadata.insert("outcome_witness".to_string(), "true".to_string());
+        validation_id
+    };
+
+    for message_key in &job.leased_message_keys {
+        let proof = enforce_core_transition(
+            &conn,
+            &CoreTransitionRequest {
+                entity_type: CoreEntityType::QueueItem,
+                entity_id: message_key.clone(),
+                lane: RuntimeLane::P2MissionDelivery,
+                from_state: CoreState::Leased,
+                to_state: CoreState::Completed,
+                event: CoreEvent::Complete,
+                actor: "ctox-completion-review-terminal-gate".to_string(),
+                evidence: CoreEvidenceRefs {
+                    review_audit_key: Some(review_audit_key.to_string()),
+                    verification_id: Some(verification_id.clone()),
+                    expected_artifact_refs: expected_artifact_refs.clone(),
+                    delivered_artifact_refs: delivered_artifact_refs.clone(),
+                    ..CoreEvidenceRefs::default()
+                },
+                metadata: metadata.clone(),
+            },
+        )?;
+        proof_ids.push(proof.proof_id);
+    }
+
+    for event_key in &job.leased_ticket_event_keys {
+        let proof = enforce_core_transition(
+            &conn,
+            &CoreTransitionRequest {
+                entity_type: CoreEntityType::QueueItem,
+                entity_id: format!("ticket-event:{event_key}"),
+                lane: RuntimeLane::P2MissionDelivery,
+                from_state: CoreState::Leased,
+                to_state: CoreState::Completed,
+                event: CoreEvent::Complete,
+                actor: "ctox-completion-review-terminal-gate".to_string(),
+                evidence: CoreEvidenceRefs {
+                    review_audit_key: Some(review_audit_key.to_string()),
+                    verification_id: Some(verification_id.clone()),
+                    expected_artifact_refs: expected_artifact_refs.clone(),
+                    delivered_artifact_refs: delivered_artifact_refs.clone(),
+                    ..CoreEvidenceRefs::default()
+                },
+                metadata: metadata.clone(),
+            },
+        )?;
+        proof_ids.push(proof.proof_id);
+    }
+
+    if let Some(work_id) = job.ticket_self_work_id.as_deref() {
+        let proof = enforce_core_transition(
+            &conn,
+            &CoreTransitionRequest {
+                entity_type: CoreEntityType::WorkItem,
+                entity_id: work_id.to_string(),
+                lane: RuntimeLane::P2MissionDelivery,
+                from_state: CoreState::AwaitingReview,
+                to_state: CoreState::Closed,
+                event: CoreEvent::Close,
+                actor: "ctox-completion-review-terminal-gate".to_string(),
+                evidence: CoreEvidenceRefs {
+                    review_audit_key: Some(review_audit_key.to_string()),
+                    verification_id: Some(verification_id),
+                    expected_artifact_refs,
+                    delivered_artifact_refs,
+                    ..CoreEvidenceRefs::default()
+                },
+                metadata,
+            },
+        )?;
+        proof_ids.push(proof.proof_id);
+    }
+
+    Ok(proof_ids)
 }
 
 fn outcome_witness_recovery_message(
@@ -6950,7 +7056,7 @@ fn outcome_witness_recovery_message(
         .collect::<Vec<_>>();
     let mut message = if !file_refs.is_empty()
         && job.outbound_email.is_none()
-        && founder_email_reply_message_key(job).is_none()
+        && inbound_email_reply_message_key(job).is_none()
         && !is_founder_or_owner_email_job(job)
     {
         format!(
@@ -6963,11 +7069,36 @@ fn outcome_witness_recovery_message(
             clip_text(err, 240)
         )
     };
-    if let Some(inbound_key) = founder_email_reply_message_key(job) {
-        message.push_str(&format!(
-            "\n\nNaechster Schritt fuer den Agent-Run: Sende die freigegebene Antwort selbst mit `ctox channel founder-reply --message-key {}` und exakt dem bereits freigegebenen Mailtext als `--body`. Aendere To, CC, Betreff und Body nicht, sonst passt die Review-Freigabe nicht mehr. Danach pruefe, dass `communication_messages` fuer diesen Mail-Thread eine outbound email mit `status='accepted'` enthaelt.",
-            inbound_key
-        ));
+    if let Some(inbound_key) = inbound_email_reply_message_key(job) {
+        if let Ok(action) = channels::prepare_reviewed_founder_reply(root, inbound_key) {
+            let to_flags = action
+                .to
+                .iter()
+                .map(|value| format!(" --to {}", shell_quote(value)))
+                .collect::<String>();
+            let cc_flags = action
+                .cc
+                .iter()
+                .map(|value| format!(" --cc {}", shell_quote(value)))
+                .collect::<String>();
+            let attachment_flags = action
+                .attachments
+                .iter()
+                .map(|value| format!(" --attach-file {}", shell_quote(value)))
+                .collect::<String>();
+            let approved_body_block = approved_body.trim();
+            message.push_str(&format!(
+                "\n\nNaechster Schritt fuer den Agent-Run: Die Review-Freigabe fuer exakt diesen Mail-Body, diesen Thread und diese Empfaenger ist bereits persistiert. Sende genau den freigegebenen Text mit genau diesem Befehl:\n\nBODY=$(cat <<'CTOX_REVIEWED_BODY'\n{}\nCTOX_REVIEWED_BODY\n)\nctox channel send --channel email --account-key {} --thread-key {} --subject {}{}{}{} --reviewed-communication-send --body \"$BODY\"\n\nAendere Body, Empfaenger, CC, Betreff oder Attachments nicht. Wenn der Befehl fehlschlaegt, melde exakt die Fehlermeldung und stoppe. Wenn er erfolgreich ist, pruefe, dass `communication_messages` fuer thread_key `{}` eine outbound email mit `status='accepted'` enthaelt.",
+                approved_body_block,
+                shell_quote(&action.account_key),
+                shell_quote(&action.thread_key),
+                shell_quote(&action.subject),
+                to_flags,
+                cc_flags,
+                attachment_flags,
+                action.thread_key
+            ));
+        }
     } else if let Some(action) = job.outbound_email.as_ref() {
         let to_flags = action
             .to
@@ -7196,21 +7327,6 @@ fn review_checkpoint_audit_key(work_id: &str, outcome: &review::ReviewOutcome) -
     format!("review-checkpoint-{:x}", hasher.finalize())
 }
 
-/// Convergence threshold for the lightweight rewrite-only loop. Defaults to
-/// `DEFAULT_REWRITE_FAILURE_THRESHOLD` and is overridable via the
-/// `CTOX_MISSION_REWRITE_FAILURE_THRESHOLD` env var. Non-numeric or
-/// non-positive overrides fall back to the default; oversized values are
-/// capped so the safety proof stays operationally meaningful.
-fn mission_rewrite_failure_threshold() -> i64 {
-    match std::env::var("CTOX_MISSION_REWRITE_FAILURE_THRESHOLD") {
-        Ok(value) => match value.trim().parse::<i64>() {
-            Ok(parsed) if parsed > 0 => parsed.min(MAX_REWRITE_FAILURE_THRESHOLD),
-            _ => DEFAULT_REWRITE_FAILURE_THRESHOLD,
-        },
-        Err(_) => DEFAULT_REWRITE_FAILURE_THRESHOLD,
-    }
-}
-
 fn mission_agent_failure_threshold() -> i64 {
     match std::env::var("CTOX_MISSION_AGENT_FAILURE_THRESHOLD") {
         Ok(value) => match value.trim().parse::<i64>() {
@@ -7269,59 +7385,6 @@ fn parse_boolish(value: &str) -> Option<bool> {
         "0" | "false" | "no" | "off" => Some(false),
         _ => None,
     }
-}
-
-/// Build the lightweight rewrite-only prompt body. The agent receives the
-/// prior outbound body verbatim (between fenced markers), the structured
-/// list of rewrite findings with corrective actions, and a strict
-/// "reply-with-body-only" instruction so the review checkpoint can approve
-/// the corrected body against the same outbound action without re-deriving
-/// recipients/subjects from scratch.
-fn build_review_rewrite_prompt(
-    prior_body: &str,
-    findings: &[RewriteFinding],
-    anchor_message_key: Option<&str>,
-) -> String {
-    let mut numbered = String::new();
-    for (idx, finding) in findings.iter().enumerate() {
-        let id = if finding.id.trim().is_empty() {
-            format!("f{}", idx + 1)
-        } else {
-            finding.id.trim().to_string()
-        };
-        numbered.push_str(&format!(
-            "{}. [{}] evidence: {} | corrective_action: {}\n",
-            idx + 1,
-            id,
-            finding.evidence.trim(),
-            finding.corrective_action.trim()
-        ));
-    }
-    if numbered.is_empty() {
-        numbered.push_str("(none)\n");
-    }
-    let anchor_note = match anchor_message_key {
-        Some(key) if !key.trim().is_empty() => {
-            format!("\nKontext-Anchor: {}\n", key.trim())
-        }
-        _ => String::new(),
-    };
-    format!(
-        "Du erhältst den vorigen Body einer reviewed founder send Mail und eine Liste von Wording-/Style-Findings.\n\
-Erstelle den korrigierten Body — alles andere bleibt unverändert.\n\
-{anchor_note}\n\
-Vorheriger Body (zwischen ====):\n\
-====\n\
-{prior_body}\n\
-====\n\
-\n\
-Findings (jeweils mit corrective_action):\n\
-{numbered}\n\
-Reply: nur der korrigierte Body. Keine eigenen \"An:\", \"Betreff:\" oder \"From:\"-Zeilen. Keine Erläuterung.\n",
-        anchor_note = anchor_note,
-        prior_body = prior_body.trim(),
-        numbered = numbered.trim_end(),
-    )
 }
 
 fn build_review_feedback_retry_prompt(
@@ -7400,10 +7463,25 @@ fn handle_actionable_completion_review_rejection(
             summary: outcome.summary.clone(),
         };
     }
+    if job.leased_message_keys.is_empty() {
+        push_event(
+            state,
+            format!(
+                "Review rejected {} but no durable queue/self-work target exists; holding instead of creating in-memory review retry",
+                job.source_label
+            ),
+        );
+        return CompletionReviewDisposition::Hold {
+            summary: format!(
+                "{}\n\nReview rejected the worker result, but there is no durable queue item or self-work item to requeue. The harness held the result fail-closed instead of creating an in-memory retry outside the core flow.",
+                outcome.summary
+            ),
+        };
+    }
     push_event(
         state,
         format!(
-            "Review rejected {}; feeding sanitized findings back into the same main work item",
+            "Review rejected {}; writing sanitized findings back into the same durable queue item",
             job.source_label
         ),
     );
@@ -7512,181 +7590,6 @@ fn looks_like_internal_label(text: &str) -> bool {
     ];
     let lowered = trimmed.to_ascii_lowercase();
     codeish.iter().any(|needle| lowered.contains(needle))
-}
-
-fn enqueue_review_stale_refresh(
-    root: &Path,
-    job: &QueuedPrompt,
-    outcome: &review::ReviewOutcome,
-) -> Result<String> {
-    if let Some(existing) = find_superseding_corrective_queue_task(
-        root,
-        job.thread_key.as_deref(),
-        job.workspace_root.as_deref(),
-        &["stale refresh", "stale consolidate", "review stale"],
-    )? {
-        anyhow::bail!(
-            "superseded by runnable stale-refresh work already in queue: {} ({})",
-            existing.title,
-            existing.message_key
-        );
-    }
-    let summary_line = clip_text(&outcome.summary, 220);
-    let preview = clip_text(&job.preview, 80);
-    let stale_categories = outcome
-        .categorized_findings
-        .iter()
-        .filter(|finding| finding.category.is_stale())
-        .map(|finding| {
-            format!(
-                "- {}: {} -> {}",
-                finding.category.as_str(),
-                clip_text(&finding.evidence, 160),
-                clip_text(&finding.corrective_action, 160)
-            )
-        })
-        .collect::<Vec<_>>();
-    let stale_block = if stale_categories.is_empty() {
-        "- stale context changed; reload the current thread and queue state before continuing"
-            .to_string()
-    } else {
-        stale_categories.join("\n")
-    };
-    let thread_key = job
-        .thread_key
-        .clone()
-        .filter(|t| !t.trim().is_empty())
-        .unwrap_or_else(|| format!("review-stale:{}", job.source_label));
-    let title = format!(
-        "Review stale refresh: {}",
-        if preview.is_empty() {
-            "(no preview)"
-        } else {
-            preview.as_str()
-        }
-    );
-    let prompt = format!(
-        "An external CTOX review found that the previous slice is stale rather than merely wrong.\n\n\
-Review summary: {summary_line}\n\n\
-Stale findings:\n\
-{stale_block}\n\n\
-Reload the current thread, inbound messages, queue rows, and active mission/strategy before drafting or closing anything. \
-If the prior draft is obsolete, cancel or supersede it. If multiple queue items now describe the same changed world state, consolidate them. \
-Only produce a new draft after the current state is reflected in durable runtime records."
-    );
-    let view = create_self_work_backed_queue_task(
-        root,
-        DurableSelfWorkQueueRequest {
-            kind: "review-stale-refresh".to_string(),
-            title,
-            prompt,
-            thread_key,
-            workspace_root: job.workspace_root.clone(),
-            priority: "high".to_string(),
-            suggested_skill: job
-                .suggested_skill
-                .clone()
-                .or_else(|| Some("follow-up-orchestrator".to_string())),
-            parent_message_key: job.leased_message_keys.first().cloned(),
-            metadata: serde_json::json!({
-                "dedupe_key": format!(
-                    "review-stale-refresh:{}:{}",
-                    job.thread_key.as_deref().unwrap_or(job.source_label.as_str()),
-                    clip_text(&summary_line, 80),
-                ),
-                "origin_source_label": job.source_label,
-            }),
-        },
-    )?;
-    Ok(view.title)
-}
-
-fn enqueue_founder_communication_rework(
-    root: &Path,
-    job: &QueuedPrompt,
-    inbound_message_key: &str,
-    outcome: &review::ReviewOutcome,
-) -> Result<String> {
-    let summary_line = clip_text(&outcome.summary, 220);
-    let preview = clip_text(&job.preview, 80);
-    let title = format!(
-        "Founder communication rework: {} ({})",
-        if preview.is_empty() {
-            "(no preview)"
-        } else {
-            preview.as_str()
-        },
-        outcome.verdict.as_gate_label()
-    );
-    let failed_gates_block = render_review_feedback_block(
-        &outcome.failed_gates,
-        "Die Antwort ist noch nicht sendereif; nutze Befunde und Evidenz fuer die konkrete Nacharbeit.",
-        6,
-    );
-    let findings_block = render_review_feedback_block(
-        &outcome.semantic_findings,
-        "Der Review hat keinen klaren Befundtext geliefert; pruefe den aktuellen Thread und die verlangten Ergebnisse erneut.",
-        8,
-    );
-    let open_items_block = render_review_feedback_block(
-        &outcome.open_items,
-        "Pruefe die aktuelle Founder-Mail, erledige fehlende Arbeit, und schreibe erst danach eine sendefertige Antwort.",
-        8,
-    );
-    let evidence_block = render_review_feedback_block(
-        &outcome.evidence,
-        "Keine belastbare Evidenz im Reviewtext; rekonstruiere sie aus dem aktuellen Mailthread und der Runtime-Historie, bevor du antwortest.",
-        8,
-    );
-    let thread_key = job
-        .thread_key
-        .clone()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| format!("founder-rework:{}", job.source_label));
-    let prompt = format!(
-        "Der Review hat die letzte Founder-/Owner-Antwort blockiert.\n\n\
-Wichtig: Behebe zuerst den inhaltlichen Grund. Wenn ein Ergebnis fehlt, erstelle oder beschaffe es. Wenn Empfaenger, Kopie, Threadbezug oder Kontext falsch waren, korrigiere die Antwortlogik. Reines Umformulieren reicht nur dann, wenn der Review ausdruecklich nur die Form beanstandet.\n\n\
-Review-Kurzfassung: {}\n\n\
-Was nicht passt:\n\
-{}\n\n\
-Evidenz aus dem Review:\n\
-{}\n\n\
-Was jetzt zu tun ist:\n\
-{}\n\n\
-Weitere Befunde:\n\
-{}\n\n\
-Erwartete Ausgabe:\n\
-- Beende diesen Arbeitsschritt mit genau der E-Mail, die im bestehenden Thread an Founder oder Owner gehen soll.\n\
-- Keine internen Statusberichte, keine Arbeitsnotizen, keine Tool- oder Tabellenbegriffe in der Antwort.\n\
-- Umgehe den geprueften E-Mail-Pfad nicht; der Versand erfolgt erst nach der anschliessenden Pruefung.\n",
-        summary_line,
-        failed_gates_block,
-        evidence_block,
-        open_items_block,
-        findings_block,
-    );
-    let view = create_self_work_backed_queue_task(
-        root,
-        DurableSelfWorkQueueRequest {
-            kind: FOUNDER_COMMUNICATION_REWORK_KIND.to_string(),
-            title,
-            prompt,
-            thread_key: thread_key.clone(),
-            workspace_root: job.workspace_root.clone(),
-            priority: "urgent".to_string(),
-            suggested_skill: Some("follow-up-orchestrator".to_string()),
-            parent_message_key: Some(inbound_message_key.to_string()),
-            metadata: serde_json::json!({
-                "thread_key": thread_key,
-                "workspace_root": job.workspace_root.clone(),
-                "priority": "urgent",
-                "inbound_message_key": inbound_message_key,
-                "dedupe_key": format!("founder-communication-rework:{inbound_message_key}"),
-                "origin_source_label": job.source_label,
-            }),
-        },
-    )?;
-    Ok(view.title)
 }
 
 fn start_channel_router(root: std::path::PathBuf, state: Arc<Mutex<SharedState>>) {
@@ -9541,11 +9444,11 @@ fn ensure_founder_communication_rework_runnable(
     // founder mails that arrive on the same thread while a prior rework
     // is `Blocked` by the review-loop circuit-breaker. Each new mail has
     // a fresh `message_key` and would otherwise spawn a new rework on a
-    // new `work_id`, bypassing the counter-based circuit-breaker that
+    // new `work_id`, evading the counter-based circuit-breaker that
     // is keyed on the prior `work_id`.
     //
     // Trigger is purely structural: same isolated thread-key AND prior
-    // rework state == "blocked". No string-heuristics on prose content.
+    // rework state == "blocked". No prose matching.
     let isolated_thread_key = isolated_founder_email_thread_key(&message.thread_key, "founder");
     if let Some(blocked) =
         find_blocked_founder_communication_rework_self_work_by_thread(root, &isolated_thread_key)?
@@ -9915,6 +9818,10 @@ fn founder_email_reply_message_key(job: &QueuedPrompt) -> Option<&str> {
     if !is_founder_or_owner_email_job(job) {
         return None;
     }
+    inbound_email_reply_message_key(job)
+}
+
+fn inbound_email_reply_message_key(job: &QueuedPrompt) -> Option<&str> {
     job.leased_message_keys
         .iter()
         .find(|key| key.starts_with("email:"))
@@ -10094,6 +10001,7 @@ fn founder_commitment_guard_outcome(
         },
         handoff: None,
         disposition: review::ReviewDisposition::Send,
+        pipeline_resolution: None,
     })
 }
 
@@ -10200,10 +10108,14 @@ fn founder_outbound_body_failure_outcome(
         ],
         handoff: None,
         disposition: review::ReviewDisposition::Send,
+        pipeline_resolution: None,
     }
 }
 
 fn is_owner_visible_strategic_job(job: &QueuedPrompt) -> bool {
+    if job.source_label.eq_ignore_ascii_case("meeting:mention") {
+        return false;
+    }
     if !derive_owner_visible_for_review(&job.source_label) {
         return false;
     }
@@ -10334,11 +10246,6 @@ After direction is canonical, the deferred execution target is:\n{}",
                 "resume_goal": deferred_goal,
                 "resume_preview": deferred_preview,
                 "resume_skill": resume_skill,
-                "core_run_class": core_run_class_for_thread_workspace_skill(
-                    thread_key,
-                    workspace_root,
-                    resume_skill
-                ),
                 "dedupe_key": format!("strategy-direction:{}", thread_key),
             }),
         },
@@ -10367,11 +10274,6 @@ fn core_allows_strategy_direction_pass(
     {
         metadata.insert("suggested_skill".to_string(), suggested_skill.to_string());
     }
-    if let Some(run_class) =
-        core_run_class_for_thread_workspace_skill(thread_key, workspace_root, suggested_skill)
-    {
-        metadata.insert("core_run_class".to_string(), run_class.to_string());
-    }
     let proof = check_core_spawn(
         &conn,
         &CoreSpawnRequest {
@@ -10394,48 +10296,6 @@ fn core_allows_strategy_direction_pass(
         return Ok(true);
     }
     anyhow::bail!("{}", proof.message);
-}
-
-fn core_run_class_for_thread_workspace_skill(
-    thread_key: &str,
-    workspace_root: Option<&str>,
-    suggested_skill: Option<&str>,
-) -> Option<&'static str> {
-    if is_terminal_bench_thread_key(thread_key)
-        || workspace_root
-            .map(is_terminal_bench_workspace_root)
-            .unwrap_or(false)
-        || suggested_skill
-            .map(is_terminal_bench_skill)
-            .unwrap_or(false)
-    {
-        Some("terminal_bench")
-    } else {
-        None
-    }
-}
-
-fn is_terminal_bench_thread_key(value: &str) -> bool {
-    let value = value.trim().to_ascii_lowercase();
-    value.starts_with("tbq-")
-        || value.starts_with("tbq/")
-        || value.starts_with("tb2-")
-        || value.starts_with("terminal-bench/")
-        || value.contains("terminal-bench")
-        || value.contains("/tbq-")
-}
-
-fn is_terminal_bench_workspace_root(value: &str) -> bool {
-    let value = value.trim().to_ascii_lowercase();
-    value.contains("/runtime/workspaces/tbq-")
-        || value.contains("/terminal-bench-controller/")
-        || value.contains("/terminal-bench-queue/")
-        || value.contains("/terminal-bench-2/")
-}
-
-fn is_terminal_bench_skill(value: &str) -> bool {
-    let value = value.trim().to_ascii_lowercase();
-    value == "benchmark-controller" || value == "terminal-bench-controller"
 }
 
 fn cancel_runnable_thread_tasks_for_strategy(
@@ -11708,132 +11568,6 @@ fn review_checkpoint_requeue_attempt_count(root: &Path, work_id: &str) -> Result
         |row| row.get(0),
     )?;
     Ok(count.max(0) as usize)
-}
-
-fn requeue_continue_requested_self_work(
-    root: &Path,
-    work_id: &str,
-    summary: &str,
-) -> Result<Option<channels::QueueTaskView>> {
-    let note = format!(
-        "Die letzte Ausfuehrung ist noch nicht fertig und hat konkrete naechste Schritte genannt. Setze genau diese Arbeit fort. Wenn danach fertig, liefere eine abgeschlossene Zusammenfassung; schlage nur dann erneut Fortsetzung vor, wenn konkrete Pflichtpunkte offen bleiben. Kontext: {}",
-        clip_text(summary, 420)
-    );
-    let item = transition_self_work_after_continuation_request(root, work_id, &note)?;
-    if let Some(reason) = suppress_self_work_reason(root, &item)? {
-        supersede_ticket_self_work_item(
-            root,
-            work_id,
-            &format!("Closed instead of auto-continuing because the work was superseded: {reason}"),
-        );
-        return Ok(None);
-    }
-    queue_ticket_self_work_item(root, &item)
-}
-
-fn transition_self_work_after_continuation_request(
-    root: &Path,
-    work_id: &str,
-    note: &str,
-) -> Result<tickets::TicketSelfWorkItemView> {
-    let item = tickets::load_ticket_self_work_item(root, work_id)?
-        .with_context(|| format!("ticket self-work item {work_id} not found"))?;
-    match normalize_token(&item.state).as_str() {
-        "" | "created" => {
-            let planned = tickets::transition_ticket_self_work_item(
-                root,
-                work_id,
-                "queued",
-                "ctox-continuation",
-                Some("Continuation request arrived before the work item had a planned state; moving it through the normal queue lifecycle."),
-                "internal",
-            )?;
-            transition_planned_self_work_after_continuation_request(root, &planned, note)
-        }
-        "open" | "queued" | "restored" | "publishing" => {
-            transition_planned_self_work_after_continuation_request(root, &item, note)
-        }
-        "blocked" => {
-            let planned = tickets::transition_ticket_self_work_item(
-                root,
-                work_id,
-                "queued",
-                "ctox-continuation",
-                Some("Continuation request reopened blocked self-work for bounded progress."),
-                "internal",
-            )?;
-            transition_planned_self_work_after_continuation_request(root, &planned, note)
-        }
-        "published" | "running" | "executing" | "in_progress" => {
-            transition_executing_self_work_after_continuation_request(root, &item, note)
-        }
-        "awaiting_review" | "review" | "reviewing" => tickets::transition_ticket_self_work_item(
-            root,
-            work_id,
-            "rework_required",
-            "ctox-continuation",
-            Some(note),
-            "internal",
-        ),
-        "rework_required" | "review_rework" | "rework" => {
-            tickets::transition_ticket_self_work_item(
-                root,
-                work_id,
-                "rework_required",
-                "ctox-continuation",
-                Some(note),
-                "internal",
-            )
-        }
-        "failed" | "closed" | "done" | "completed" | "handled" | "cancelled" | "superseded" => {
-            anyhow::bail!(
-                "cannot continue terminal ticket self-work item {work_id} in state {}",
-                item.state
-            )
-        }
-        other => anyhow::bail!(
-            "cannot continue ticket self-work item {work_id} because state `{other}` is not mapped"
-        ),
-    }
-}
-
-fn transition_planned_self_work_after_continuation_request(
-    root: &Path,
-    item: &tickets::TicketSelfWorkItemView,
-    note: &str,
-) -> Result<tickets::TicketSelfWorkItemView> {
-    let executing = tickets::transition_ticket_self_work_item(
-        root,
-        &item.work_id,
-        "published",
-        "ctox-continuation",
-        Some("Continuation request applies to the just-executed queue slice; entering execution before review checkpoint state."),
-        "internal",
-    )?;
-    transition_executing_self_work_after_continuation_request(root, &executing, note)
-}
-
-fn transition_executing_self_work_after_continuation_request(
-    root: &Path,
-    item: &tickets::TicketSelfWorkItemView,
-    note: &str,
-) -> Result<tickets::TicketSelfWorkItemView> {
-    let awaiting_review = tickets::transition_ticket_self_work_item(
-        root,
-        &item.work_id,
-        "awaiting_review",
-        "ctox-continuation",
-        Some("Execution slice reached a continuation checkpoint."),
-        "internal",
-    )?;
-    tickets::transition_ticket_self_work_item(
-        root,
-        &awaiting_review.work_id,
-        "rework_required",
-        "ctox-continuation",
-        Some(note),
-        "internal",
-    )
 }
 
 fn requeue_runtime_failed_self_work(
@@ -13772,6 +13506,118 @@ mod tests {
         outcome.verdict = review::ReviewVerdict::Fail;
         outcome.score = 25;
         outcome
+    }
+
+    #[test]
+    fn external_chat_review_evidence_names_pipeline_delta_and_backing_rows() {
+        let root = temp_root("external-chat-pipeline-delta-evidence");
+        let thread_key = "teams:inf.yoda@example.test::chat::jill";
+        let queue_task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Merge duplicate scraper request into existing Intersolar task".to_string(),
+                prompt: "Update the existing scraper task with Jill's changed export scope."
+                    .to_string(),
+                thread_key: thread_key.to_string(),
+                workspace_root: None,
+                priority: "high".to_string(),
+                suggested_skill: Some("universal-scraping".to_string()),
+                parent_message_key: None,
+                extra_metadata: Some(json!({
+                    "pipeline_delta": "merge_duplicate",
+                    "merged_into": "queue:system::existing-intersolar",
+                })),
+            },
+        )
+        .expect("failed to seed queue task");
+        let job = QueuedPrompt {
+            prompt: "Acknowledge Jill's Teams update after reconciling pipeline state.".to_string(),
+            goal: "Acknowledge external chat task update".to_string(),
+            preview: "Teams reply".to_string(),
+            source_label: "teams".to_string(),
+            suggested_skill: None,
+            leased_message_keys: vec!["teams:inf.yoda@example.test::msg::1".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some(thread_key.to_string()),
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let evidence = review_external_work_backing_evidence_summaries(&root, &job);
+        assert!(evidence.iter().any(|line| line.contains("queue_open=1")));
+        assert!(evidence
+            .iter()
+            .any(|line| line.contains("new_task, update_existing, merge_duplicate, extend_scope")));
+        assert!(evidence
+            .iter()
+            .any(|line| line.contains(&format!("message_key={}", queue_task.message_key))));
+        assert!(evidence
+            .iter()
+            .any(|line| line
+                .contains("Merge duplicate scraper request into existing Intersolar task")));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn communication_pass_requires_structured_pipeline_resolution() {
+        let request = review::CompletionReviewRequest {
+            artifact_action: Some("external_chat_quick_response".to_string()),
+            artifact_channel: "teams".to_string(),
+            ..review::CompletionReviewRequest::default()
+        };
+        let mut outcome = review::ReviewOutcome {
+            required: true,
+            verdict: review::ReviewVerdict::Pass,
+            mission_state: "HEALTHY".to_string(),
+            summary: "looks good".to_string(),
+            report: String::new(),
+            score: 5,
+            reasons: vec!["external_chat_quick_response".to_string()],
+            failed_gates: Vec::new(),
+            semantic_findings: Vec::new(),
+            categorized_findings: Vec::new(),
+            open_items: Vec::new(),
+            evidence: vec!["queue row exists".to_string()],
+            handoff: None,
+            disposition: review::ReviewDisposition::Send,
+            pipeline_resolution: None,
+        };
+
+        let missing = communication_pipeline_resolution_guard_outcome(&request, &outcome)
+            .expect("communication PASS without pipeline resolution must be rejected");
+        assert_eq!(missing.verdict, review::ReviewVerdict::Partial);
+        assert!(missing.summary.contains("structured pipeline resolution"));
+
+        outcome.pipeline_resolution = Some(review::PipelineResolution {
+            action: review::PipelineResolutionAction::MergeDuplicate,
+            target: "queue:system::existing-intersolar".to_string(),
+            rationale: "The latest Teams request duplicates the existing Intersolar task."
+                .to_string(),
+        });
+        assert!(communication_pipeline_resolution_guard_outcome(&request, &outcome).is_none());
+
+        outcome.pipeline_resolution = Some(review::PipelineResolution {
+            action: review::PipelineResolutionAction::UpdateExisting,
+            target: "none".to_string(),
+            rationale: "Update was intended but no target was named.".to_string(),
+        });
+        let missing_target = communication_pipeline_resolution_guard_outcome(&request, &outcome)
+            .expect("pipeline mutation without target must be rejected");
+        assert!(missing_target
+            .summary
+            .contains("names no durable target item"));
+
+        outcome.pipeline_resolution = Some(review::PipelineResolution {
+            action: review::PipelineResolutionAction::BlockedNeedsClarification,
+            target: "none".to_string(),
+            rationale: "Asked for the missing account id before changing queued work.".to_string(),
+        });
+        let approval_summary = communication_review_approval_summary(&outcome);
+        assert!(approval_summary
+            .contains("PIPELINE_RESOLUTION: action=blocked_needs_clarification | target=none"));
     }
 
     #[test]
@@ -15731,23 +15577,9 @@ mod tests {
             }),
         );
         let state = Arc::new(Mutex::new(SharedState::default()));
-        {
-            let mut shared = state.lock().expect("state poisoned");
-            shared.busy = true;
-        }
 
         route_external_messages(&root, &state).expect("route meeting mention");
 
-        let shared = state.lock().expect("state poisoned");
-        assert_eq!(shared.pending_prompts.len(), 1);
-        let prompt = shared.pending_prompts.front().expect("queued mention");
-        assert_eq!(prompt.source_label, "meeting:mention");
-        assert_eq!(
-            prompt.suggested_skill.as_deref(),
-            Some("meeting-participant")
-        );
-        assert_eq!(prompt.leased_message_keys, vec!["meeting-mention-1"]);
-        drop(shared);
         assert_eq!(route_status_for(&root, "meeting-mention-1"), "leased");
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -16619,6 +16451,7 @@ mod tests {
             evidence: vec!["review artifact".to_string()],
             handoff: None,
             disposition: review::ReviewDisposition::Send,
+            pipeline_resolution: None,
         };
 
         let disposition = handle_actionable_completion_review_rejection(
@@ -16639,6 +16472,43 @@ mod tests {
         let self_work = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
             .expect("failed to list self-work");
         assert!(self_work.is_empty());
+    }
+
+    #[test]
+    fn review_feedback_without_durable_target_holds_fail_closed() {
+        let root = temp_root("ctox-review-feedback-no-durable-target");
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        let job = QueuedPrompt {
+            prompt: "Do an ad-hoc task.".to_string(),
+            goal: "Ad-hoc task".to_string(),
+            preview: "ad-hoc".to_string(),
+            source_label: "tui".to_string(),
+            suggested_skill: None,
+            leased_message_keys: Vec::new(),
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("adhoc".to_string()),
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+        let mut outcome = review::ReviewOutcome::skipped("missing result");
+        outcome.required = true;
+        outcome.verdict = review::ReviewVerdict::Fail;
+        outcome.failed_gates = vec!["No durable result exists.".to_string()];
+
+        let disposition =
+            handle_actionable_completion_review_rejection(&root, &state, &job, &outcome, "Done.");
+
+        assert!(matches!(
+            disposition,
+            CompletionReviewDisposition::Hold { .. }
+        ));
+        assert!(state
+            .lock()
+            .expect("service state poisoned")
+            .pending_prompts
+            .is_empty());
     }
 
     #[test]
@@ -16756,7 +16626,7 @@ mod tests {
     }
 
     #[test]
-    fn workspace_review_pass_gate_accepts_passing_run_tests() {
+    fn workspace_review_pass_gate_holds_passing_run_tests_without_direct_proof() {
         let root = temp_root("ctox-review-pass-gate-pass");
         let workspace = root.join("workspace");
         std::fs::create_dir_all(&workspace).expect("failed to create workspace");
@@ -16783,6 +16653,46 @@ mod tests {
         outcome.required = true;
         outcome.verdict = review::ReviewVerdict::Pass;
         outcome.score = 8;
+
+        let guarded = workspace_review_pass_gate_outcome(&job, &outcome)
+            .expect("worker-owned passing gate is not sufficient proof");
+        assert_eq!(guarded.verdict, review::ReviewVerdict::Partial);
+        assert!(guarded.requires_follow_up());
+        assert!(guarded
+            .failed_gates
+            .iter()
+            .any(|gate| gate.contains("not sufficient positive proof")));
+    }
+
+    #[test]
+    fn workspace_review_pass_gate_accepts_passing_run_tests_with_direct_proof() {
+        let root = temp_root("ctox-review-pass-gate-pass-direct");
+        let workspace = root.join("workspace");
+        std::fs::create_dir_all(&workspace).expect("failed to create workspace");
+        std::fs::write(
+            workspace.join("run-tests.sh"),
+            "#!/usr/bin/env bash\necho passing verification\nexit 0\n",
+        )
+        .expect("failed to write run-tests.sh");
+        let job = QueuedPrompt {
+            prompt: "Implement the workspace task.".to_string(),
+            goal: "Implement the workspace task.".to_string(),
+            preview: "workspace task".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: Some("follow-up-orchestrator".to_string()),
+            leased_message_keys: Vec::new(),
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("queue/workspace-pass-gate".to_string()),
+            workspace_root: Some(workspace.to_string_lossy().into_owned()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+        let mut outcome = review::ReviewOutcome::skipped("reviewer approved completion");
+        outcome.required = true;
+        outcome.verdict = review::ReviewVerdict::Pass;
+        outcome.score = 8;
+        outcome.report = "VERDICT: PASS\nMISSION_STATE: HEALTHY\nSUMMARY: artifact inspected directly.\nPASS_PROOF: direct\nEVIDENCE:\n- required output file content => matches task contract\n".to_string();
 
         assert!(workspace_review_pass_gate_outcome(&job, &outcome).is_none());
     }
@@ -17105,84 +17015,6 @@ mod tests {
     }
 
     #[test]
-    fn published_self_work_continuation_uses_legal_core_review_path() {
-        let root = temp_root("ctox-published-continuation-core-path");
-        let item = tickets::put_ticket_self_work_item(
-            &root,
-            tickets::TicketSelfWorkUpsertInput {
-                source_system: "local".to_string(),
-                kind: "mission-follow-up".to_string(),
-                title: "Continue mission until the workspace task is complete".to_string(),
-                body_text: "Continue the durable work item after a non-terminal slice.".to_string(),
-                state: "open".to_string(),
-                metadata: serde_json::json!({
-                    "thread_key": "queue/continuation-core-path",
-                    "workspace_root": "/tmp/ctox-continuation-core-path",
-                    "priority": "high",
-                    "skill": "follow-up-orchestrator",
-                    "dedupe_key": "mission-follow-up:continuation-core-path",
-                }),
-            },
-            false,
-        )
-        .expect("failed to create self-work");
-        let published = tickets::transition_ticket_self_work_item(
-            &root,
-            &item.work_id,
-            "published",
-            "ctox-test",
-            Some("Simulate a live self-work slice that asks for continuation."),
-            "internal",
-        )
-        .expect("failed to publish self-work");
-
-        let queued = requeue_continue_requested_self_work(
-            &root,
-            &published.work_id,
-            "The agent identified concrete remaining steps and did not claim completion.",
-        )
-        .expect("published continuation should requeue through core")
-        .expect("expected a new queue task");
-
-        assert_eq!(
-            queued.ticket_self_work_id.as_deref(),
-            Some(published.work_id.as_str())
-        );
-        let reloaded = tickets::load_ticket_self_work_item(&root, &published.work_id)
-            .expect("failed to reload self-work")
-            .expect("missing self-work");
-        assert_eq!(reloaded.state, "published");
-
-        let conn = channels::open_channel_db(&crate::paths::core_db(&root))
-            .expect("failed to open core db");
-        for (from_state, to_state) in [
-            ("Executing", "AwaitingReview"),
-            ("AwaitingReview", "ReworkRequired"),
-            ("ReworkRequired", "Executing"),
-        ] {
-            let count: i64 = conn
-                .query_row(
-                    r#"
-                    SELECT COUNT(*)
-                    FROM ctox_core_transition_proofs
-                    WHERE entity_type = 'WorkItem'
-                      AND entity_id = ?1
-                      AND from_state = ?2
-                      AND to_state = ?3
-                      AND accepted = 1
-                    "#,
-                    params![published.work_id.as_str(), from_state, to_state],
-                    |row| row.get(0),
-                )
-                .expect("failed to count core transition proofs");
-            assert_eq!(
-                count, 1,
-                "missing accepted core proof for {from_state} -> {to_state}"
-            );
-        }
-    }
-
-    #[test]
     fn published_self_work_runtime_retry_uses_legal_core_review_path() {
         let root = temp_root("ctox-published-runtime-retry-core-path");
         let item = tickets::put_ticket_self_work_item(
@@ -17341,7 +17173,7 @@ mod tests {
                 &root,
                 channels::QueueTaskUpdateRequest {
                     message_key: task.message_key,
-                    route_status: Some("handled".to_string()),
+                    route_status: Some("failed".to_string()),
                     ..Default::default()
                 },
             )
@@ -17405,7 +17237,7 @@ mod tests {
                 &root,
                 channels::QueueTaskUpdateRequest {
                     message_key: task.message_key,
-                    route_status: Some("handled".to_string()),
+                    route_status: Some("failed".to_string()),
                     ..Default::default()
                 },
             )
@@ -17492,20 +17324,13 @@ mod tests {
     fn review_gate_worst_case_model_has_strictly_finite_variant() {
         #[derive(Debug, Clone, Copy, PartialEq, Eq)]
         enum AbstractRoute {
-            RewriteOnly,
             SpawnedRework,
             SameWorkCheckpoint,
             Terminal,
         }
 
-        fn next(
-            route: AbstractRoute,
-            rewrite_budget: usize,
-            requeue_budget: usize,
-        ) -> AbstractRoute {
+        fn next(route: AbstractRoute, requeue_budget: usize) -> AbstractRoute {
             match route {
-                AbstractRoute::RewriteOnly if rewrite_budget > 0 => AbstractRoute::RewriteOnly,
-                AbstractRoute::RewriteOnly => AbstractRoute::Terminal,
                 AbstractRoute::SpawnedRework => AbstractRoute::SameWorkCheckpoint,
                 AbstractRoute::SameWorkCheckpoint if requeue_budget > 0 => {
                     AbstractRoute::SameWorkCheckpoint
@@ -17518,35 +17343,30 @@ mod tests {
         fn route_weight(route: AbstractRoute) -> usize {
             match route {
                 AbstractRoute::SpawnedRework => 2,
-                AbstractRoute::RewriteOnly | AbstractRoute::SameWorkCheckpoint => 1,
+                AbstractRoute::SameWorkCheckpoint => 1,
                 AbstractRoute::Terminal => 0,
             }
         }
 
         for start in [
-            AbstractRoute::RewriteOnly,
             AbstractRoute::SpawnedRework,
             AbstractRoute::SameWorkCheckpoint,
             AbstractRoute::Terminal,
         ] {
             let mut route = start;
-            let mut rewrite_budget = mission_rewrite_failure_threshold().max(0) as usize;
             let mut requeue_budget = review_checkpoint_requeue_block_threshold();
-            let mut variant = rewrite_budget + requeue_budget + route_weight(route);
+            let mut variant = requeue_budget + route_weight(route);
 
             for _ in 0..16 {
                 let previous_variant = variant;
-                route = next(route, rewrite_budget, requeue_budget);
+                route = next(route, requeue_budget);
                 match route {
-                    AbstractRoute::RewriteOnly => {
-                        rewrite_budget = rewrite_budget.saturating_sub(1);
-                    }
                     AbstractRoute::SameWorkCheckpoint => {
                         requeue_budget = requeue_budget.saturating_sub(1);
                     }
                     AbstractRoute::SpawnedRework | AbstractRoute::Terminal => {}
                 }
-                variant = rewrite_budget + requeue_budget + route_weight(route);
+                variant = requeue_budget + route_weight(route);
                 assert!(
                     route == AbstractRoute::Terminal || variant < previous_variant,
                     "route={route:?} variant={variant} previous={previous_variant}"
@@ -18156,8 +17976,8 @@ Return a local server that connects to the Solana blockchain and provides endpoi
     }
 
     #[test]
-    fn terminal_bench_strategy_reroute_is_rejected_by_core_without_cancelling_parent_work() {
-        let root = temp_root("ctox-terminal-bench-core-blocks-strategy-reroute");
+    fn benchmark_shaped_owner_visible_work_uses_normal_strategy_reroute() {
+        let root = temp_root("ctox-benchmark-shaped-normal-strategy-reroute");
         let queue_task = channels::create_queue_task(
             &root,
             channels::QueueTaskCreateRequest {
@@ -18222,21 +18042,22 @@ Build the public platform server required by the benchmark task."
         assert!(is_owner_visible_strategic_job(&job));
         let redirected = maybe_redirect_owner_visible_work_to_strategy_setup(&root, &state, &job)
             .expect("strategy evaluation should be core-gated");
-        assert!(!redirected);
+        assert!(redirected);
 
         let stale = channels::load_queue_task(&root, &stale_task.message_key)
             .expect("failed to reload same-thread task")
             .expect("missing same-thread task");
-        assert_eq!(stale.route_status, "pending");
+        assert_eq!(stale.route_status, "cancelled");
 
         let items = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
             .expect("failed to list self-work");
-        assert!(items.is_empty());
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].kind, STRATEGIC_DIRECTION_KIND);
     }
 
     #[test]
-    fn terminal_bench_prep_ticket_without_workspace_root_does_not_reroute_to_strategy_setup() {
-        let root = temp_root("ctox-terminal-bench-prep-no-workspace-no-strategy-reroute");
+    fn benchmark_prep_owner_visible_work_uses_normal_strategy_reroute() {
+        let root = temp_root("ctox-benchmark-prep-normal-strategy-reroute");
         let queue_task = channels::create_queue_task(
             &root,
             channels::QueueTaskCreateRequest {
@@ -18275,20 +18096,22 @@ Use Harbor/Terminal-Bench runner evidence and keep the work bounded to benchmark
         assert!(is_owner_visible_strategic_job(&job));
         let redirected = maybe_redirect_owner_visible_work_to_strategy_setup(&root, &state, &job)
             .expect("strategy evaluation should succeed");
-        assert!(!redirected);
+        assert!(redirected);
 
         let tasks =
             channels::list_queue_tasks(&root, &["pending".to_string(), "leased".to_string()], 10)
                 .expect("failed to list queue tasks");
-        assert_eq!(tasks.len(), 1);
-        assert_eq!(
-            tasks[0].title,
-            "prep-priority-plan: choose first easy Terminal-Bench tasks"
+        assert!(
+            tasks
+                .iter()
+                .all(|task| task.title
+                    != "prep-priority-plan: choose first easy Terminal-Bench tasks")
         );
 
         let items = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
             .expect("failed to list self-work");
-        assert!(items.is_empty());
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].kind, STRATEGIC_DIRECTION_KIND);
     }
 
     #[test]
@@ -18354,8 +18177,8 @@ Create these five files immediately, before open-ended discovery or research.\n\
     }
 
     #[test]
-    fn terminal_bench_controller_with_required_artifacts_does_not_reroute_or_infer_extra_files() {
-        let root = temp_root("ctox-terminal-bench-required-artifacts-no-strategy-reroute");
+    fn benchmark_controller_required_artifacts_use_normal_strategy_without_extra_file_inference() {
+        let root = temp_root("ctox-benchmark-required-artifacts-normal-strategy");
         let run_dir = "/home/metricspace/CTOX/runtime/terminal-bench-2/runs/run-required-artifacts";
         let prompt = format!(
             "You are CTOX running a Terminal-Bench 2 evaluation controller on this 4xGPU host.\n\n\
@@ -18416,7 +18239,7 @@ Use shell tools to create or update these files."
 
         let redirected = maybe_redirect_owner_visible_work_to_strategy_setup(&root, &state, &job)
             .expect("strategy evaluation should succeed");
-        assert!(!redirected);
+        assert!(redirected);
 
         let paths = expected_outcome_artifacts_for_job(&job)
             .iter()
@@ -18506,7 +18329,7 @@ Preserve and update controller.json and logbook.md."
     }
 
     #[test]
-    fn reviewer_limited_internal_queue_review_does_not_block_worker_result() {
+    fn reviewer_limited_internal_queue_review_is_detected_for_hold_path() {
         let job = QueuedPrompt {
             prompt: "Work in /tmp/workspace and implement the requested CLI.".to_string(),
             goal: "internal queue work".to_string(),
@@ -18536,6 +18359,7 @@ Preserve and update controller.json and logbook.md."
             evidence: Vec::new(),
             handoff: None,
             disposition: review::ReviewDisposition::Send,
+            pipeline_resolution: None,
         };
 
         assert!(completion_review_is_reviewer_limited_internal_work(
@@ -18581,6 +18405,7 @@ Preserve and update controller.json and logbook.md."
             evidence: Vec::new(),
             handoff: None,
             disposition: review::ReviewDisposition::Send,
+            pipeline_resolution: None,
         };
 
         assert!(!completion_review_is_reviewer_limited_internal_work(
@@ -18598,7 +18423,7 @@ Preserve and update controller.json and logbook.md."
             preview: "Founder outbound mail about Kunstmen CRM".to_string(),
             source_label: "tui".to_string(),
             suggested_skill: None,
-            leased_message_keys: Vec::new(),
+            leased_message_keys: vec!["queue:send-mail".to_string()],
             leased_ticket_event_keys: Vec::new(),
             thread_key: Some("chat-outbound".to_string()),
             workspace_root: None,
@@ -19265,65 +19090,6 @@ Preserve and update controller.json and logbook.md."
     }
 
     #[test]
-    fn founder_review_rejection_enqueues_real_communication_rework() {
-        let root = temp_root("ctox-founder-communication-rework");
-        let job = QueuedPrompt {
-            prompt: "[E-Mail eingegangen]\nSender: michael.welsch@metric-space.ai\nBetreff: Jami zugang schicken.\nSchick mir bitte den Jami QR code Zugang fuer den Chat mit dir."
-                .to_string(),
-            goal: "Reply to founder".to_string(),
-            preview: "Founder asks for Jami QR code".to_string(),
-            source_label: "email:owner".to_string(),
-            suggested_skill: Some("follow-up-orchestrator".to_string()),
-            leased_message_keys: vec!["email:cto1@metric-space.ai::INBOX::82".to_string()],
-            leased_ticket_event_keys: Vec::new(),
-            thread_key: Some("<founder-thread@example.com>".to_string()),
-            workspace_root: Some("/home/ubuntu/workspace/kunstmen".to_string()),
-            ticket_self_work_id: None,
-            outbound_email: None,
-            outbound_anchor: None,
-        };
-        let outcome = review::ReviewOutcome {
-            required: true,
-            verdict: review::ReviewVerdict::Fail,
-            mission_state: "HEALTHY".to_string(),
-            summary: "Owner requested a QR code and the draft does not include it.".to_string(),
-            report: String::new(),
-            score: 21,
-            reasons: vec!["missing_deliverable".to_string()],
-            failed_gates: vec!["missing_deliverable".to_string()],
-            semantic_findings: vec!["QR code is required before any reply can be sent.".to_string()],
-            categorized_findings: Vec::new(),
-            open_items: vec!["Generate or retrieve the Jami QR code.".to_string()],
-            evidence: vec!["owner mail explicitly asks for QR code".to_string()],
-            handoff: None,
-            disposition: review::ReviewDisposition::Send,
-        };
-
-        let title = enqueue_founder_communication_rework(
-            &root,
-            &job,
-            "email:cto1@metric-space.ai::INBOX::82",
-            &outcome,
-        )
-        .expect("founder communication rework should enqueue");
-        assert!(title.starts_with("Founder communication rework:"));
-
-        let tasks =
-            channels::list_queue_tasks(&root, &["pending".to_string(), "leased".to_string()], 10)
-                .expect("failed to list queue tasks");
-        assert_eq!(tasks.len(), 1);
-        assert_eq!(tasks[0].title, title);
-        assert!(tasks[0]
-            .prompt
-            .contains("Beende diesen Arbeitsschritt mit genau der E-Mail"));
-        assert!(tasks[0]
-            .prompt
-            .contains("Generate or retrieve the Jami QR code."));
-        assert!(tasks[0].ticket_self_work_id.is_some());
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
     fn stalled_founder_email_requeues_blocked_rework() {
         let root = temp_root("ctox-stalled-founder-repair");
         let mut settings = BTreeMap::new();
@@ -19632,7 +19398,7 @@ Preserve and update controller.json and logbook.md."
     /// while a prior rework is `blocked` by the review-loop
     /// circuit-breaker MUST NOT spawn a fresh rework on a new
     /// `work_id`. Trigger is purely structural (state == blocked AND
-    /// thread_key match), no string-heuristics.
+    /// thread_key match), no prose matching.
     #[test]
     fn founder_rework_new_inbound_on_same_thread_blocked_by_circuit() {
         let root = temp_root("ctox-founder-rework-bug4-thread-block");
@@ -20896,7 +20662,7 @@ Was jetzt zu tun ist:\n\
             preview: "outreach".to_string(),
             source_label: "tui".to_string(),
             suggested_skill: None,
-            leased_message_keys: Vec::new(),
+            leased_message_keys: vec!["queue:hy3-smoke".to_string()],
             leased_ticket_event_keys: Vec::new(),
             thread_key: Some("kunstmen".to_string()),
             workspace_root: None,
@@ -20907,8 +20673,8 @@ Was jetzt zu tun ist:\n\
 
         // No structured intent on the job: post-turn proactive action must be
         // None even though the prompt body name-drops a founder address and
-        // mentions "Kunstmen update". This is the deliberate, post-heuristic
-        // contract — keyword-scanning is gone.
+        // mentions "Kunstmen update". The contract is structured intent only;
+        // keyword-scanning is gone.
         assert!(job.outbound_email.is_none());
     }
 
@@ -21587,48 +21353,6 @@ Create durable CTOX queue/ticket work and record message keys."
     }
 
     #[test]
-    fn short_terminal_bench_reply_holds_artifact_job_open() {
-        let root = temp_root("terminal-bench-short-reply-hold");
-        let run_dir = root.join("terminal-bench-2/runs/short-reply");
-        let run_dir = run_dir.to_string_lossy().into_owned();
-        let job = QueuedPrompt {
-            prompt: format!(
-                "Only required durable files for this controller turn:\n\
-- {run_dir}/controller.json\n\
-- {run_dir}/ticket-map.jsonl\n\
-- {run_dir}/preparation-tickets.jsonl\n\
-- {run_dir}/run-queue.jsonl\n\
-- {run_dir}/results.jsonl\n\
-- {run_dir}/knowledge.md\n\
-- {run_dir}/logbook.md\n\
-- {run_dir}/blogpost-notes.md\n\n\
-The controller must create preparation queue/tickets and record queue:system::* keys."
-            ),
-            goal: "Terminal-Bench 2 controller".to_string(),
-            preview: "Terminal-Bench 2 controller".to_string(),
-            source_label: "queue".to_string(),
-            suggested_skill: Some("benchmark-controller".to_string()),
-            leased_message_keys: vec!["queue:system::parent".to_string()],
-            leased_ticket_event_keys: Vec::new(),
-            thread_key: Some("terminal-bench-2/deepseek/short-reply/controller".to_string()),
-            workspace_root: Some(run_dir.clone()),
-            ticket_self_work_id: None,
-            outbound_email: None,
-            outbound_anchor: None,
-        };
-
-        let disposition = short_terminal_bench_artifact_reply_disposition(&root, &job, "::")
-            .expect("short artifact reply must hold the slice open");
-
-        assert!(matches!(
-            disposition,
-            CompletionReviewDisposition::Hold { .. }
-        ));
-
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
     fn terminal_bench_review_feedback_retries_parent_queue_before_threshold() {
         let root = temp_root("terminal-bench-feedback-parent-retry");
         let run_dir = root.join("terminal-bench-2/runs/feedback-retry");
@@ -21979,7 +21703,7 @@ The previous controller turn is incomplete. Update these files now:\n\
 
         assert!(is_terminal_bench_controller_artifact_job(&job));
         assert!(terminal_bench_preflight_spec_for_job(&job).is_none());
-        assert!(completion_review_should_skip_feedback_turn(&job));
+        assert!(!completion_review_should_skip_feedback_turn(&job));
         let prompt = artifact_first_execution_prompt(&job);
         assert!(!prompt.starts_with("HARNESS TERMINAL-BENCH PREFLIGHT"));
         assert!(prompt.contains("ORIGINAL TASK"));
@@ -22182,6 +21906,74 @@ Im Workspace muss synthesis/helper-run.json existieren."
             .expect("proof id should be returned");
 
         assert!(proof_id.starts_with("ctp-"));
+    }
+
+    #[test]
+    fn reviewed_terminal_success_requires_review_and_artifact_witness_together() {
+        let root = temp_root("reviewed-terminal-success-combined-proof");
+        let run_dir = root.join("artifacts");
+        std::fs::create_dir_all(&run_dir).expect("failed to create artifact dir");
+        let artifact_path = run_dir.join("required-smoke.json");
+        let job = QueuedPrompt {
+            prompt: format!(
+                "Only required durable files for this controller turn:\n- {}\n",
+                artifact_path.display()
+            ),
+            goal: "reviewed terminal proof".to_string(),
+            preview: "reviewed terminal proof".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: None,
+            leased_message_keys: vec!["queue:reviewed-terminal-proof".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("queue/reviewed-terminal-proof".to_string()),
+            workspace_root: Some(run_dir.to_string_lossy().into_owned()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let expected = expected_outcome_artifacts_for_job(&job);
+        let missing_delivered = delivered_outcome_artifacts_for_job(&root, &job, &expected)
+            .expect("failed to inspect missing artifacts");
+        let err = enforce_reviewed_work_terminal_success(
+            &root,
+            &job,
+            "review-audit-pass-1",
+            expected.clone(),
+            missing_delivered,
+        )
+        .expect_err("review pass without required artifact must not complete");
+        assert!(err.to_string().contains("dauerhafte Ergebnis-Artefakt"));
+
+        std::fs::write(&artifact_path, "{}\n").expect("failed to write artifact");
+        let delivered = delivered_outcome_artifacts_for_job(&root, &job, &expected)
+            .expect("failed to inspect delivered artifacts");
+        let proof_ids = enforce_reviewed_work_terminal_success(
+            &root,
+            &job,
+            "review-audit-pass-1",
+            expected,
+            delivered,
+        )
+        .expect("review pass plus artifact witness must complete");
+
+        assert_eq!(proof_ids.len(), 1);
+        assert!(proof_ids[0].starts_with("ctp-"));
+
+        let conn = channels::open_channel_db(&crate::paths::core_db(&root))
+            .expect("failed to open channel db");
+        let request_json: String = conn
+            .query_row(
+                "SELECT request_json FROM ctox_core_transition_proofs WHERE proof_id = ?1",
+                params![proof_ids[0]],
+                |row| row.get(0),
+            )
+            .expect("failed to load terminal proof");
+        assert!(request_json.contains("completion_review_required"));
+        assert!(request_json.contains("review-audit-pass-1"));
+        assert!(request_json.contains("required-smoke.json"));
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -23005,23 +22797,6 @@ Those are not durable artifact requirements."
         }
     }
 
-    fn parent_outbound_job() -> QueuedPrompt {
-        QueuedPrompt {
-            prompt: "draft founder reply".to_string(),
-            goal: "founder mail".to_string(),
-            preview: "founder thread".to_string(),
-            source_label: "email:owner".to_string(),
-            suggested_skill: Some("communication-orchestrator".to_string()),
-            leased_message_keys: vec!["email:cto1@example.com:msg-1".to_string()],
-            leased_ticket_event_keys: Vec::new(),
-            thread_key: Some("email-review:owner:thread-1".to_string()),
-            workspace_root: Some("/srv/kunstmen".to_string()),
-            ticket_self_work_id: None,
-            outbound_email: None,
-            outbound_anchor: Some("email:cto1@example.com:msg-1".to_string()),
-        }
-    }
-
     fn self_work_job() -> QueuedPrompt {
         QueuedPrompt {
             prompt: "work on CRM".to_string(),
@@ -23037,27 +22812,6 @@ Those are not durable artifact requirements."
             outbound_email: None,
             outbound_anchor: None,
         }
-    }
-
-    #[test]
-    fn self_work_can_continue_before_completion_review_when_agent_requests_it() {
-        let job = self_work_job();
-        let work_id = continuation_self_work_requested(
-            &job,
-            "Ich habe den ersten Teil umgesetzt. Noch offen: Browser-QA und DB-Smoke-Test. Mach weiter mit dem naechsten konkreten Schritt.",
-        );
-        assert_eq!(work_id, Some("self-work:local:crm"));
-    }
-
-    #[test]
-    fn founder_mail_never_uses_continue_shortcut_before_review() {
-        let mut job = parent_outbound_job();
-        job.ticket_self_work_id = Some("self-work:local:mail".to_string());
-        let work_id = continuation_self_work_requested(
-            &job,
-            "Noch offen: die Antwort sauber formulieren. Mach weiter.",
-        );
-        assert_eq!(work_id, None);
     }
 
     #[test]
@@ -23145,114 +22899,6 @@ Those are not durable artifact requirements."
     fn dispatcher_routes_empty_findings_to_approved() {
         let empty: Vec<review::CategorizedFinding> = Vec::new();
         assert_eq!(classify_findings(&empty), ReviewRoutingClass::Approved);
-    }
-
-    #[test]
-    fn rewrite_only_post_turn_spawns_lightweight_pending_prompt() {
-        let _ = temp_root("rewrite-only-post-turn");
-        let parent = parent_outbound_job();
-        let findings = vec![
-            RewriteFinding {
-                id: "f1".to_string(),
-                evidence: "salutation uses internal vocab".to_string(),
-                corrective_action: "use neutral salutation".to_string(),
-            },
-            RewriteFinding {
-                id: "f2".to_string(),
-                evidence: "body too long".to_string(),
-                corrective_action: "trim to two paragraphs".to_string(),
-            },
-        ];
-        let prior_body = "Hallo TUI-Founder, hier kommt der Stand…".to_string();
-        let synthesised = synthesise_review_rewrite_prompt(
-            &parent,
-            &findings,
-            &prior_body,
-            parent.outbound_anchor.as_deref(),
-            "two wording issues to address",
-        );
-
-        assert_eq!(synthesised.source_label, REVIEW_REWRITE_SOURCE_LABEL);
-        assert!(synthesised.leased_message_keys.is_empty());
-        assert_eq!(
-            synthesised.outbound_email.is_some(),
-            parent.outbound_email.is_some()
-        );
-        assert_eq!(synthesised.outbound_anchor, parent.outbound_anchor);
-        assert_eq!(synthesised.thread_key, parent.thread_key);
-        assert!(synthesised.ticket_self_work_id.is_none());
-        assert!(synthesised.prompt.contains(&prior_body));
-        assert!(synthesised
-            .prompt
-            .contains("salutation uses internal vocab"));
-        assert!(synthesised.prompt.contains("trim to two paragraphs"));
-        assert!(synthesised.prompt.contains("nur der korrigierte Body"));
-
-        let mut shared = SharedState::default();
-        shared.pending_prompts.push_front(synthesised);
-        assert_eq!(shared.pending_prompts.len(), 1);
-        let front = shared.pending_prompts.front().unwrap();
-        assert_eq!(front.source_label, REVIEW_REWRITE_SOURCE_LABEL);
-        assert_eq!(front.outbound_anchor, parent.outbound_anchor);
-        // No durable side effects: no ticket id and no plan goal/step row
-        // could exist because we never called plan::ingest. Confirming the
-        // synthesis path itself never inherited a ticket id is enough.
-        assert!(front.ticket_self_work_id.is_none());
-    }
-
-    #[test]
-    fn rewrite_failure_count_threshold_defers_mission() {
-        let root = temp_root("rewrite-threshold-defer");
-        std::fs::create_dir_all(root.join("runtime")).unwrap();
-        let db_path = crate::paths::core_db(&root);
-        let engine = LcmEngine::open(&db_path, LcmConfig::default()).unwrap();
-        // Seed an initial mission so the counter has somewhere to land.
-        let _ = engine
-            .continuity_init_documents(turn_loop::CHAT_CONVERSATION_ID)
-            .unwrap();
-        let _ = engine
-            .sync_mission_state_from_continuity(turn_loop::CHAT_CONVERSATION_ID)
-            .unwrap();
-
-        let threshold = mission_rewrite_failure_threshold();
-        for _ in 0..threshold {
-            let _ = engine
-                .increment_mission_rewrite_failure_count(turn_loop::CHAT_CONVERSATION_ID)
-                .unwrap();
-        }
-        let pre_defer = engine
-            .stored_mission_state(turn_loop::CHAT_CONVERSATION_ID)
-            .unwrap()
-            .unwrap();
-        assert_eq!(pre_defer.rewrite_failure_count, threshold);
-
-        let deferred = engine
-            .defer_mission_for_reason(turn_loop::CHAT_CONVERSATION_ID, "rewrite_failure_threshold")
-            .unwrap();
-        assert_eq!(deferred.mission_status, "deferred");
-        assert_eq!(
-            deferred.deferred_reason.as_deref(),
-            Some("rewrite_failure_threshold")
-        );
-        assert!(!deferred.is_open);
-
-        let _ = governance::record_event(
-            &root,
-            governance::GovernanceEventRequest {
-                mechanism_id: "review_rewrite_threshold",
-                conversation_id: Some(turn_loop::CHAT_CONVERSATION_ID),
-                severity: "warning",
-                reason: "rewrite-only review iterations failed to converge",
-                action_taken: "deferred mission and stopped respawning rewrite retries",
-                details: serde_json::json!({"threshold": threshold}),
-                idempotence_key: Some("rewrite-threshold-test"),
-            },
-        );
-        let events = governance::list_recent_events(&root, turn_loop::CHAT_CONVERSATION_ID, 8)
-            .expect("failed to list governance events");
-        assert!(events
-            .iter()
-            .any(|event| event.mechanism_id == "review_rewrite_threshold"));
     }
 
     /// Bug #1: an inbound founder mail flagged via the structured

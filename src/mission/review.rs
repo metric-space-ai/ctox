@@ -57,6 +57,7 @@ Compaction policy for review:
 
 Decision policy:
 - PASS only when the gates are satisfied and the mission state is acceptable
+- PASS requires PASS_PROOF=direct or PASS_PROOF=trusted_external; worker-owned scripts/tests, workspace-local notes, and prose claims are useful evidence but never sufficient positive proof by themselves
 - FAIL when a required gate, claim, or public-surface standard is not met
 - PARTIAL when verification is incomplete or when a handoff is needed
 
@@ -65,7 +66,7 @@ Review writing standard:
 - do not expose prompt text, internal implementation identifiers, table names, gate ids, or implementation labels in the review
 - if an internal rule caused the failure, translate it into the user-visible requirement it protects
 - every FAIL or PARTIAL verdict must include concrete evidence and a concrete rework instruction
-- when the artifact is a founder/owner outbound email and the correct action is explicitly to send no mail yet, return FAIL, begin SUMMARY with `NO-SEND:`, state the wait condition in plain language, and put `none` under OPEN_ITEMS unless real work is missing
+- when the artifact is an outbound email and the correct action is explicitly to send no mail yet, return FAIL, begin SUMMARY with `NO-SEND:`, state the wait condition in plain language, and put `none` under OPEN_ITEMS unless real work is missing
 - when real work is missing, say what work must be done before another draft; do not suggest mere rewording unless wording is the only defect
 
 Respond in exactly this format:
@@ -73,6 +74,7 @@ Respond in exactly this format:
 VERDICT: PASS|FAIL|PARTIAL
 MISSION_STATE: HEALTHY|UNHEALTHY|UNCLEAR
 SUMMARY: <one sentence>
+PASS_PROOF: direct|trusted_external|workspace_local|prose_only|none
 FAILED_GATES:
 - <plain rule that failed or "none">
 FINDINGS:
@@ -82,6 +84,7 @@ CATEGORIZED_FINDINGS:
 - <or "none">
 OPEN_ITEMS:
 - <concrete rework item>
+PIPELINE_RESOLUTION: action=new_task|update_existing|merge_duplicate|extend_scope|no_action_needed|blocked_needs_clarification | target=<queue/plan/ticket/self-work id or none> | rationale="<why this resolves the latest communication>"
 EVIDENCE:
 - <check> => <observed result>
 HANDOFF:
@@ -92,6 +95,14 @@ CATEGORIZED_FINDINGS contract:
 - each line is pipe-delimited key:value pairs in the order id | category | evidence | corrective_action
 - category is the structural enum the dispatcher routes on; the skill teaches the rules
 - if there is no concrete finding, write a single "- none" line under the section
+
+PASS_PROOF contract:
+- direct means you directly inspected the required artifact, durable state, live surface, or communication record against the assignment
+- trusted_external means an immutable validator, accepted send proof, or external system of record proves the result
+- workspace_local means the positive proof is only a worker-owned workspace script/test/log such as run-tests.sh, pytest, or notes written in the task workspace
+- prose_only means the positive proof is only the worker's written claim
+- none means no positive proof was available
+- VERDICT PASS is invalid unless PASS_PROOF is direct or trusted_external
 "#;
 
 #[derive(Debug, Clone, Default)]
@@ -165,6 +176,93 @@ impl ReviewDisposition {
             _ => None,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ReviewPassProofKind {
+    Direct,
+    TrustedExternal,
+    WorkspaceLocal,
+    ProseOnly,
+    None,
+}
+
+impl ReviewPassProofKind {
+    pub fn parse(token: &str) -> Option<Self> {
+        match token.trim().to_ascii_lowercase().as_str() {
+            "direct" | "direct_inspection" | "direct-inspection" => Some(Self::Direct),
+            "trusted_external" | "trusted-external" | "external" => Some(Self::TrustedExternal),
+            "workspace_local" | "workspace-local" | "local" => Some(Self::WorkspaceLocal),
+            "prose_only" | "prose-only" | "prose" => Some(Self::ProseOnly),
+            "none" | "no_proof" | "no-proof" => Some(Self::None),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Direct => "direct",
+            Self::TrustedExternal => "trusted_external",
+            Self::WorkspaceLocal => "workspace_local",
+            Self::ProseOnly => "prose_only",
+            Self::None => "none",
+        }
+    }
+
+    pub fn is_acceptable_for_pass(&self) -> bool {
+        matches!(self, Self::Direct | Self::TrustedExternal)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum PipelineResolutionAction {
+    NewTask,
+    UpdateExisting,
+    MergeDuplicate,
+    ExtendScope,
+    NoActionNeeded,
+    BlockedNeedsClarification,
+}
+
+impl PipelineResolutionAction {
+    pub fn parse(token: &str) -> Option<Self> {
+        match token.trim().to_ascii_lowercase().as_str() {
+            "new_task" | "new-task" => Some(Self::NewTask),
+            "update_existing" | "update-existing" => Some(Self::UpdateExisting),
+            "merge_duplicate" | "merge-duplicate" => Some(Self::MergeDuplicate),
+            "extend_scope" | "extend-scope" => Some(Self::ExtendScope),
+            "no_action_needed" | "no-action-needed" => Some(Self::NoActionNeeded),
+            "blocked_needs_clarification" | "blocked-needs-clarification" => {
+                Some(Self::BlockedNeedsClarification)
+            }
+            _ => None,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::NewTask => "new_task",
+            Self::UpdateExisting => "update_existing",
+            Self::MergeDuplicate => "merge_duplicate",
+            Self::ExtendScope => "extend_scope",
+            Self::NoActionNeeded => "no_action_needed",
+            Self::BlockedNeedsClarification => "blocked_needs_clarification",
+        }
+    }
+
+    pub fn requires_target(&self) -> bool {
+        matches!(
+            self,
+            Self::NewTask | Self::UpdateExisting | Self::MergeDuplicate | Self::ExtendScope
+        )
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PipelineResolution {
+    pub action: PipelineResolutionAction,
+    pub target: String,
+    pub rationale: String,
 }
 
 /// Structural category emitted by the reviewer for every concrete finding.
@@ -280,6 +378,8 @@ pub struct ReviewOutcome {
     /// or finding text to derive it.
     #[serde(default)]
     pub disposition: ReviewDisposition,
+    #[serde(default)]
+    pub pipeline_resolution: Option<PipelineResolution>,
 }
 
 impl ReviewOutcome {
@@ -299,11 +399,22 @@ impl ReviewOutcome {
             evidence: Vec::new(),
             handoff: None,
             disposition: ReviewDisposition::Send,
+            pipeline_resolution: None,
         }
     }
 
     pub fn requires_follow_up(&self) -> bool {
         self.required && matches!(self.verdict, ReviewVerdict::Fail | ReviewVerdict::Partial)
+    }
+
+    pub fn pass_proof_kind(&self) -> Option<ReviewPassProofKind> {
+        parse_pass_proof(&self.canonical_report())
+    }
+
+    pub fn has_acceptable_pass_proof(&self) -> bool {
+        self.pass_proof_kind()
+            .map(|proof| proof.is_acceptable_for_pass())
+            .unwrap_or(false)
     }
 
     pub fn canonical_report(&self) -> String {
@@ -315,6 +426,9 @@ impl ReviewOutcome {
         rendered.push(format!("VERDICT: {}", self.verdict.as_report_label()));
         rendered.push(format!("MISSION_STATE: {}", self.mission_state.trim()));
         rendered.push(format!("SUMMARY: {}", self.summary.trim()));
+        if matches!(self.verdict, ReviewVerdict::Pass) {
+            rendered.push("PASS_PROOF: none".to_string());
+        }
         append_report_section(&mut rendered, "FAILED_GATES", &self.failed_gates);
         append_report_section(&mut rendered, "FINDINGS", &self.semantic_findings);
         rendered.push("CATEGORIZED_FINDINGS:".to_string());
@@ -332,6 +446,14 @@ impl ReviewOutcome {
             }
         }
         append_report_section(&mut rendered, "OPEN_ITEMS", &self.open_items);
+        if let Some(resolution) = &self.pipeline_resolution {
+            rendered.push(format!(
+                "PIPELINE_RESOLUTION: action={} | target={} | rationale=\"{}\"",
+                resolution.action.as_str(),
+                resolution.target.trim(),
+                resolution.rationale.trim()
+            ));
+        }
         append_report_section(&mut rendered, "EVIDENCE", &self.evidence);
         rendered.push("HANDOFF:".to_string());
         match self.handoff.as_deref() {
@@ -396,6 +518,7 @@ pub fn review_completion_if_needed(
             evidence: Vec::new(),
             handoff: None,
             disposition: ReviewDisposition::Send,
+            pipeline_resolution: None,
         },
     }
 }
@@ -692,6 +815,7 @@ fn build_review_prompt(request: &CompletionReviewRequest, reasons: &[String]) ->
     } else {
         request.review_skill_path.trim()
     };
+    let email_artifact = request.artifact_channel.eq_ignore_ascii_case("email");
     let founder_artifact = matches!(
         request.source_label.to_ascii_lowercase().as_str(),
         "email:owner" | "email:founder" | "email:admin"
@@ -699,7 +823,8 @@ fn build_review_prompt(request: &CompletionReviewRequest, reasons: &[String]) ->
         .artifact_action
         .as_deref()
         .map(|value| value.to_ascii_lowercase().contains("founder"))
-        .unwrap_or(false);
+        .unwrap_or(false)
+        || email_artifact;
     let external_chat_artifact = request
         .artifact_action
         .as_deref()
@@ -714,7 +839,7 @@ fn build_review_prompt(request: &CompletionReviewRequest, reasons: &[String]) ->
         && request.artifact_action.is_none()
         && !founder_artifact;
     let artifact_kind = if founder_artifact {
-        "founder_or_owner_outbound_email_draft"
+        "reviewed_outbound_email_draft"
     } else if external_chat_artifact {
         "external_chat_quick_response"
     } else {
@@ -778,14 +903,16 @@ fn build_review_prompt(request: &CompletionReviewRequest, reasons: &[String]) ->
     };
     let founder_specific_work = if founder_artifact {
         "\
-Founder/owner communication gate:\n\
+Email communication gate:\n\
 - judge the outbound draft itself as the artifact under review\n\
 - judge the full mail action, not just the prose: recipients, cc list, subject, attachments, and reply/forward behavior are part of the artifact\n\
-- verify that the mail is still relevant against the latest communication, meeting outcomes, ticket/work state, and durable knowledge/runbook context\n\
-- verify that the mail truthfully reflects completed work; fail when it only promises work that has not actually been done, reviewed, queued, or attached\n\
+- verify that the mail is still relevant against the latest communication across all channels, meeting outcomes, ticket/work state, and durable knowledge/runbook context\n\
+- verify that email sends the result of completed work; fail when it only promises work that has not actually been done, reviewed, queued, or attached\n\
 - verify that the wording is recipient-appropriate, concise, and does not hide material limitations or missing proof\n\
 - decide whether the draft should be sent now, blocked, or reworked first\n\
-- if the correct outcome is no outbound mail yet because the thread is waiting on specific founder input, return FAIL, begin SUMMARY with `NO-SEND:`, and state the wait condition; do not invent rework\n\
+- if newer communication makes this draft stale, fail the review and state which newer message/context must be answered instead\n\
+- if the correct outcome is no outbound mail yet because the thread is waiting on specific input, return FAIL, begin SUMMARY with `NO-SEND:`, and state the wait condition; do not invent rework\n\
+- emit PIPELINE_RESOLUTION for the mail: use no_action_needed only when the latest communication requires no queue/ticket change; otherwise name the exact queue/plan/ticket/self-work item created, updated, merged, extended, or blocked\n\
 - treat every listed required deliverable as mandatory; if a required deliverable is missing, the mail must fail review and be reworked first\n\
 - treat every listed future promise, dated commitment, or deadline promise as mandatory review context; if a promise is not backed by a concrete CTOX schedule or open follow-up, the mail must fail review and be reworked first\n\
 - inspect recent relevant meeting outcomes before judging the draft; if the latest meeting changed decisions, blockers, commitments, names, recipients, or proof expectations, the draft must reflect that newer context\n\
@@ -806,6 +933,11 @@ External chat quick-response gate:\n\
 - judge the full chat action: channel, thread, subject when present, recipients when present, attachments, and body\n\
 - approve only short, timely, recipient-appropriate responses that either acknowledge the task accurately or ask a necessary clarifying question\n\
 - if the body promises follow-up work, verify durable pipeline backing exists first: queue item, plan, ticket case, or self-work linked to this thread\n\
+- classify the communication-to-pipeline delta before approving: new task, update existing task, merge duplicate, extend scope, no action needed, or blocked awaiting clarification\n\
+- verify that the chosen delta is durably represented by the evidence: every actionable request must be backed by a referenced queue item, plan, ticket, or self-work item; merged/extended work must name the existing item it changes\n\
+- fail if newer communication, meeting notes, ticket state, or durable knowledge changes scope, priority, recipient expectations, due date, or result validity and the response leaves stale or superseded work unresolved\n\
+- fail if any actionable request is hidden, dropped, vaguely promised, or left without an explicit pipeline resolution; nothing may remain unresolved under the conversation thread\n\
+- emit PIPELINE_RESOLUTION with the exact action and target before PASS; use blocked_needs_clarification when the chat response asks for missing input instead of creating/updating work\n\
 - do not require the final work result before approving a chat acknowledgement; require a real pipeline item instead\n\
 - fail if the response claims the work is done before evidence exists, promises work without backing, omits an obvious clarification, or ignores current communication/meeting/knowledge context\n\
 - fail if a requested attachment is mentioned but not attached, or if an attachment is attached without being relevant\n\
@@ -897,6 +1029,7 @@ Respond in exactly this shape:\n\
 VERDICT: PASS|FAIL|PARTIAL\n\
 MISSION_STATE: HEALTHY|UNHEALTHY|UNCLEAR\n\
 SUMMARY: <one sentence>\n\
+PASS_PROOF: direct|trusted_external|workspace_local|prose_only|none\n\
 FAILED_GATES:\n\
 - <plain rule that failed or \"none\">\n\
 FINDINGS:\n\
@@ -906,6 +1039,7 @@ CATEGORIZED_FINDINGS:\n\
 - <or \"none\">\n\
 OPEN_ITEMS:\n\
 - <concrete rework item>\n\
+PIPELINE_RESOLUTION: action=new_task|update_existing|merge_duplicate|extend_scope|no_action_needed|blocked_needs_clarification | target=<queue/plan/ticket/self-work id or none> | rationale=\"<why this resolves the latest communication>\"\n\
 EVIDENCE:\n\
 - <check> => <observed result>\n\
 HANDOFF:\n\
@@ -913,6 +1047,8 @@ HANDOFF:\n\
 DISPOSITION: SEND|NO_SEND\n\
 \n\
 The CATEGORIZED_FINDINGS block is the structural input the dispatcher uses to choose between the lightweight rewrite path (body wording / subject / tonality fixes), the heavy rework loop (durable state changes, missing artefacts, evidence gaps), and stale refresh handling (new inbound/world state made the prior draft obsolete or in need of consolidation). Read the review skill section on Finding categories before assigning.\n\
+\n\
+PASS_PROOF is a structural trust boundary. Emit `direct` only when you inspected the required artifact, durable state, live surface, or communication record yourself against the assignment. Emit `trusted_external` only when an immutable validator, accepted send proof, or external system of record proves the result. Emit `workspace_local` when the only positive proof is a worker-owned workspace script/test/log such as run-tests.sh or pytest. Emit `prose_only` for worker claims. Emit `none` when no positive proof exists. A PASS without `direct` or `trusted_external` is invalid.\n\
 \n\
 DISPOSITION is the structural terminal flag: emit `NO_SEND` only when the current task is closed without sending anything (the correct action is to wait for external inputs, the user already received the answer elsewhere, the task was a duplicate, etc.). Default is `SEND` — used for every PASS verdict and for FAIL verdicts that should drive a rewrite or rework loop. The dispatcher reads this enum directly; do not encode the no-send signal as free-text in the summary or findings.\n",
         conversation_id = request.conversation_id,
@@ -1011,6 +1147,7 @@ Do not do worker actions. Inspect only as needed to produce a real verdict. Retu
 VERDICT: PASS|FAIL|PARTIAL\n\
 MISSION_STATE: HEALTHY|UNHEALTHY|UNCLEAR\n\
 SUMMARY: <one sentence>\n\
+PASS_PROOF: direct|trusted_external|workspace_local|prose_only|none\n\
 FAILED_GATES:\n\
 - <plain rule that failed or \"none\">\n\
 FINDINGS:\n\
@@ -1020,6 +1157,7 @@ CATEGORIZED_FINDINGS:\n\
 - <or \"none\">\n\
 OPEN_ITEMS:\n\
 - <concrete rework item or \"none\">\n\
+PIPELINE_RESOLUTION: action=new_task|update_existing|merge_duplicate|extend_scope|no_action_needed|blocked_needs_clarification | target=<queue/plan/ticket/self-work id or none> | rationale=\"<why this resolves the latest communication>\"\n\
 EVIDENCE:\n\
 - <check> => <observed result>\n\
 HANDOFF:\n\
@@ -1032,6 +1170,7 @@ DISPOSITION: SEND|NO_SEND\n",
 fn parse_review_report(score: u8, reasons: Vec<String>, report: &str) -> ReviewOutcome {
     let parsed_verdict = parse_verdict(report);
     let mut verdict = parsed_verdict.clone().unwrap_or(ReviewVerdict::Partial);
+    let pass_proof = parse_pass_proof(report);
     let mission_state = parse_prefixed_line(report, "MISSION_STATE:")
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "UNCLEAR".to_string());
@@ -1069,6 +1208,27 @@ fn parse_review_report(score: u8, reasons: Vec<String>, report: &str) -> ReviewO
             "Re-run review with direct filesystem, database, log, process, or live-surface evidence before accepting completion.",
         );
     }
+    if verdict == ReviewVerdict::Pass
+        && !pass_proof
+            .map(|proof| proof.is_acceptable_for_pass())
+            .unwrap_or(false)
+    {
+        verdict = ReviewVerdict::Partial;
+        let observed = pass_proof
+            .map(|proof| proof.as_str().to_string())
+            .unwrap_or_else(|| "missing".to_string());
+        summary = format!(
+            "Review PASS was rejected because PASS_PROOF was `{observed}` instead of direct or trusted_external. {summary}"
+        );
+        push_unique_item(
+            &mut failed_gates,
+            "Reviewer pass did not declare direct or trusted external proof.",
+        );
+        push_unique_item(
+            &mut open_items,
+            "Re-run review and inspect the required artifact, durable state, live surface, communication record, or trusted external validator before accepting completion.",
+        );
+    }
     ReviewOutcome {
         required: true,
         verdict,
@@ -1084,7 +1244,46 @@ fn parse_review_report(score: u8, reasons: Vec<String>, report: &str) -> ReviewO
         evidence,
         handoff: parse_handoff_block(report),
         disposition: parse_disposition(report).unwrap_or_default(),
+        pipeline_resolution: parse_pipeline_resolution(report),
     }
+}
+
+pub fn parse_pass_proof(report: &str) -> Option<ReviewPassProofKind> {
+    parse_prefixed_line(report, "PASS_PROOF:")
+        .and_then(|value| ReviewPassProofKind::parse(value.split_whitespace().next().unwrap_or("")))
+}
+
+fn parse_pipeline_resolution(report: &str) -> Option<PipelineResolution> {
+    for line in report.lines() {
+        let trimmed = line.trim();
+        let Some(rest) = trimmed.strip_prefix("PIPELINE_RESOLUTION:") else {
+            continue;
+        };
+        let mut action = None;
+        let mut target = None;
+        let mut rationale = None;
+        for raw_segment in rest.split('|') {
+            let segment = raw_segment.trim();
+            let Some((key, value)) = segment.split_once('=') else {
+                continue;
+            };
+            let key = key.trim().to_ascii_lowercase();
+            let value = unquote_field_value(value.trim());
+            match key.as_str() {
+                "action" => action = PipelineResolutionAction::parse(&value),
+                "target" => target = Some(value),
+                "rationale" => rationale = Some(value),
+                _ => {}
+            }
+        }
+        let action = action?;
+        return Some(PipelineResolution {
+            action,
+            target: target.unwrap_or_default(),
+            rationale: rationale.unwrap_or_default(),
+        });
+    }
+    None
 }
 
 fn review_pass_is_unsubstantiated(score: u8, report: &str, evidence: &[String]) -> bool {
@@ -1178,8 +1377,10 @@ fn parse_handoff_block(report: &str) -> Option<String> {
             if trimmed.starts_with("VERDICT:")
                 || trimmed.starts_with("MISSION_STATE:")
                 || trimmed.starts_with("SUMMARY:")
+                || trimmed.starts_with("PASS_PROOF:")
                 || trimmed.starts_with("FAILED_GATES:")
                 || trimmed.starts_with("OPEN_ITEMS:")
+                || trimmed.starts_with("PIPELINE_RESOLUTION:")
                 || trimmed.starts_with("EVIDENCE:")
                 || trimmed.starts_with("CATEGORIZED_FINDINGS:")
                 || trimmed.starts_with("DISPOSITION:")
@@ -1222,6 +1423,8 @@ fn parse_section_items(report: &str, header: &str) -> Vec<String> {
                     | "FINDINGS:"
                     | "CATEGORIZED_FINDINGS:"
                     | "OPEN_ITEMS:"
+                    | "PASS_PROOF:"
+                    | "PIPELINE_RESOLUTION:"
                     | "EVIDENCE:"
                     | "HANDOFF:"
                     | "DISPOSITION:"
@@ -1269,6 +1472,8 @@ fn parse_categorized_findings(report: &str) -> Vec<CategorizedFinding> {
                     | "FAILED_GATES:"
                     | "FINDINGS:"
                     | "OPEN_ITEMS:"
+                    | "PASS_PROOF:"
+                    | "PIPELINE_RESOLUTION:"
                     | "EVIDENCE:"
                     | "HANDOFF:"
             ) {
@@ -1561,7 +1766,7 @@ mod tests {
             ],
         };
         let rendered = build_review_prompt(&request, &["founder_communication".to_string()]);
-        assert!(rendered.contains("Artifact kind: founder_or_owner_outbound_email_draft"));
+        assert!(rendered.contains("Artifact kind: reviewed_outbound_email_draft"));
         assert!(rendered.contains("judge the outbound draft itself as the artifact under review"));
         assert!(rendered.contains("Artifact action: reply"));
         assert!(rendered.contains("Artifact to: o.schaefers@gmx.net"));
@@ -1580,7 +1785,8 @@ mod tests {
         assert!(rendered.contains("judge the full mail action, not just the prose"));
         assert!(rendered.contains("recipients, cc list, subject, attachments"));
         assert!(rendered.contains("still relevant against the latest communication"));
-        assert!(rendered.contains("truthfully reflects completed work"));
+        assert!(rendered.contains("sends the result of completed work"));
+        assert!(rendered.contains("latest communication across all channels"));
         assert!(rendered.contains("recipient-appropriate, concise"));
         assert!(rendered.contains("treat every listed required deliverable as mandatory"));
         assert!(rendered.contains("future promise, dated commitment, or deadline promise"));
@@ -1626,6 +1832,9 @@ mod tests {
         assert!(rendered.contains("Artifact channel: teams"));
         assert!(rendered.contains("External chat quick-response gate"));
         assert!(rendered.contains("durable pipeline backing exists first"));
+        assert!(rendered.contains("communication-to-pipeline delta"));
+        assert!(rendered.contains("new task, update existing task, merge duplicate, extend scope"));
+        assert!(rendered.contains("nothing may remain unresolved"));
         assert!(rendered.contains("do not require the final work result"));
         assert!(rendered.contains("queue_open=1"));
     }
@@ -1667,6 +1876,21 @@ mod tests {
         assert_eq!(outcome.verdict, ReviewVerdict::Fail);
         assert!(outcome.summary.contains("502"));
         assert!(outcome.requires_follow_up());
+    }
+
+    #[test]
+    fn parses_structured_pipeline_resolution() {
+        let outcome = parse_review_report(
+            4,
+            vec!["external_chat_quick_response".to_string()],
+            "VERDICT: PASS\nSUMMARY: ack is backed.\nPIPELINE_RESOLUTION: action=merge_duplicate | target=queue:system::intersolar | rationale=\"Merged Jill's duplicate into the open scraper task.\"\nEVIDENCE:\n- queue row exists\n",
+        );
+        let resolution = outcome
+            .pipeline_resolution
+            .expect("pipeline resolution should parse");
+        assert_eq!(resolution.action, PipelineResolutionAction::MergeDuplicate);
+        assert_eq!(resolution.target, "queue:system::intersolar");
+        assert!(resolution.rationale.contains("duplicate"));
     }
 
     #[test]
@@ -1755,7 +1979,7 @@ mod tests {
 
     #[test]
     fn parses_send_disposition_block_explicitly() {
-        let report = "VERDICT: PASS\nSUMMARY: looks good.\nDISPOSITION: SEND\n";
+        let report = "VERDICT: PASS\nSUMMARY: looks good.\nPASS_PROOF: direct\nEVIDENCE:\n- inspected artifact => matches request\nDISPOSITION: SEND\n";
         let outcome = parse_review_report(0, vec![], report);
         assert_eq!(outcome.disposition, ReviewDisposition::Send);
     }
@@ -1789,12 +2013,35 @@ mod tests {
 
     #[test]
     fn required_pass_with_direct_evidence_stays_pass() {
-        let report = "VERDICT: PASS\nMISSION_STATE: HEALTHY\nSUMMARY: verified directly.\nEVIDENCE:\n- test -f /tmp/workspace/result.json => exit 0\nDISPOSITION: SEND\n";
+        let report = "VERDICT: PASS\nMISSION_STATE: HEALTHY\nSUMMARY: verified directly.\nPASS_PROOF: direct\nEVIDENCE:\n- test -f /tmp/workspace/result.json => exit 0\nDISPOSITION: SEND\n";
         let outcome = parse_review_report(4, vec!["runtime_or_infra_change".to_string()], report);
 
         assert_eq!(outcome.verdict, ReviewVerdict::Pass);
         assert_eq!(outcome.evidence.len(), 1);
         assert!(!outcome.requires_follow_up());
+    }
+
+    #[test]
+    fn required_pass_with_workspace_local_proof_is_downgraded_to_partial() {
+        let report = "VERDICT: PASS\nMISSION_STATE: HEALTHY\nSUMMARY: tests pass.\nPASS_PROOF: workspace_local\nEVIDENCE:\n- bash run-tests.sh => exit 0\n";
+        let outcome = parse_review_report(4, vec!["runtime_or_infra_change".to_string()], report);
+
+        assert_eq!(outcome.verdict, ReviewVerdict::Partial);
+        assert!(outcome
+            .failed_gates
+            .iter()
+            .any(|gate| gate.contains("direct or trusted external proof")));
+        assert!(outcome.requires_follow_up());
+    }
+
+    #[test]
+    fn required_pass_without_pass_proof_is_downgraded_to_partial() {
+        let report = "VERDICT: PASS\nMISSION_STATE: HEALTHY\nSUMMARY: checked.\nEVIDENCE:\n- inspected artifact => looked correct\n";
+        let outcome = parse_review_report(4, vec!["runtime_or_infra_change".to_string()], report);
+
+        assert_eq!(outcome.verdict, ReviewVerdict::Partial);
+        assert!(outcome.summary.contains("PASS_PROOF was `missing`"));
+        assert!(outcome.requires_follow_up());
     }
 
     #[test]
