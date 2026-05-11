@@ -365,8 +365,15 @@ tui_select_model() {
   local -a model_descs=()
 
   if [[ "$has_gpu" != "yes" ]]; then
-    err "Qwen/Qwen3.5-27B local inference requires a supported GPU."
-    exit 1
+    if [[ -n "$MODEL_FLAG" ]]; then
+      SELECTED_MODEL="$MODEL_FLAG"
+      return
+    fi
+    if [[ -n "$API_PROVIDER_FLAG" || "${CTOX_CHAT_SOURCE:-}" == "api" ]]; then
+      SELECTED_MODEL="${CTOX_CHAT_MODEL:-$DEFAULT_MODEL}"
+      return
+    fi
+    tui_fatal "Qwen/Qwen3.5-27B local inference requires a supported GPU. Use --api-provider for API-backed setup or --model with a CPU-supported profile."
   fi
 
   models+=("$DEFAULT_MODEL")
@@ -2038,7 +2045,7 @@ main() {
 
   # All local inference now runs through the integrated Candle engine.
   local model_serving="Candle"
-  if [[ "$has_gpu" != "yes" && "$SELECTED_MODEL" != *gemma-4-E4B* && "$SELECTED_MODEL" != *gemma-4-E2B* ]]; then
+  if [[ "$has_gpu" != "yes" && -z "$API_PROVIDER_FLAG" && "${CTOX_CHAT_SOURCE:-}" != "api" && "$SELECTED_MODEL" != *gemma-4-E4B* && "$SELECTED_MODEL" != *gemma-4-E2B* ]]; then
     SELECTED_MODEL="$DEFAULT_MODEL"
   fi
 
