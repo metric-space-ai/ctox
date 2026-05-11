@@ -323,6 +323,19 @@ fn write_chat_command_to_session(session: &Value, text: &str) -> Result<()> {
     Ok(())
 }
 
+fn append_line(path: &Path, line: &str) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .with_context(|| format!("failed to open {}", path.display()))?;
+    writeln!(file, "{line}")?;
+    Ok(())
+}
+
 fn recent_direct_speaker(signal: Option<&SpeakerSignal>) -> Option<&SpeakerSignal> {
     let signal = signal?;
     let speaker = signal.speaker_display.trim();
@@ -1712,8 +1725,10 @@ pub(crate) fn run_meeting_session(root: &Path, config: &MeetingSessionConfig) ->
         .get("local_enabled_for_live_meetings")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    let api_live_ready = config.mistral_api_key.is_some();
+    let live_meeting_ready = local_live_ready || api_live_ready;
     session.engine_was_reachable_at_start = engine_reachable;
-    session.live_transcription_ready_at_start = local_live_ready;
+    session.live_transcription_ready_at_start = live_meeting_ready;
     session.live_transcription_status_at_start = Some(live_transcription_status.clone());
     if engine_reachable {
         eprintln!("[meeting] STT runtime reachable via managed transport");
@@ -1727,15 +1742,19 @@ pub(crate) fn run_meeting_session(root: &Path, config: &MeetingSessionConfig) ->
             "[meeting] Unsent chunks will be retried at meeting end if the engine becomes available."
         );
     }
-    if local_live_ready {
-        eprintln!("[meeting] local live STT enabled; realtime streaming proof is present");
+    if live_meeting_ready {
+        if api_live_ready {
+            eprintln!("[meeting] Mistral realtime STT enabled for live meeting");
+        } else {
+            eprintln!("[meeting] local live STT enabled; realtime streaming proof is present");
+        }
     } else {
         let reason = live_transcription_status
             .get("local_live_disabled_reason")
             .and_then(Value::as_str)
             .unwrap_or("not_live_ready");
         eprintln!(
-            "[meeting] local live STT disabled ({reason}); microsoft meeting overlay requires realtime STT and will not fall back to Teams captions"
+            "[meeting] live STT disabled ({reason}); microsoft meeting overlay requires realtime STT and will not fall back to Teams captions"
         );
     }
 
@@ -1795,6 +1814,8 @@ pub(crate) fn run_meeting_session(root: &Path, config: &MeetingSessionConfig) ->
     let reader = BufReader::new(stdout);
     let mut join_failure_reason: Option<String> = None;
     let mut last_speaker_signal: Option<SpeakerSignal> = None;
+    let speaker_probe_path =
+        meeting_sessions_dir(root).join(format!("{}-speaker-probes.jsonl", session.session_id));
     for line in reader.lines() {
         let line = match line {
             Ok(l) => l,
@@ -1894,6 +1915,11 @@ pub(crate) fn run_meeting_session(root: &Path, config: &MeetingSessionConfig) ->
             "speaker_probe" => {
                 let text = event.get("text").and_then(Value::as_str).unwrap_or("");
                 eprintln!("[meeting] speaker probe: {}", &text[..text.len().min(500)]);
+                if !text.trim().is_empty() {
+                    if let Ok(encoded) = serde_json::to_string(&event) {
+                        let _ = append_line(&speaker_probe_path, &encoded);
+                    }
+                }
             }
             "transcript_segment" => {
                 if let Some(segment) = TranscriptSegment::from_platform_event(&event) {
@@ -3375,6 +3401,7 @@ if (provider === "microsoft") {
       sequence: 0,
     };
     const compact = (value) => String(value || "").replace(/\s+/g, " ").trim();
+    const displaySourceLabel = (entry) => entry.live ? "aktueller Satz" : "bestätigt";
     const wrapLine = (ctx, text, maxWidth) => {
       const words = compact(text).split(" ").filter(Boolean);
       const lines = [];
@@ -3439,7 +3466,7 @@ if (provider === "microsoft") {
           const speaker = entry.speaker && entry.speaker !== "unknown" ? entry.speaker : "Sprecher unbekannt";
           ctx.font = "700 22px Arial, sans-serif";
           ctx.fillStyle = entry.speaker && entry.speaker !== "unknown" ? "rgb(147,197,253)" : "rgb(203,213,225)";
-          const sourceLabel = entry.live ? "Realtime live" : "Realtime";
+          const sourceLabel = displaySourceLabel(entry);
           ctx.fillText(`${speaker} · ${sourceLabel}`, 86, y);
           y += 32;
           ctx.font = "500 28px Arial, sans-serif";
@@ -3499,7 +3526,7 @@ if (provider === "microsoft") {
       const recentSameLine = last
         && last.source === source
         && last.speaker === normalizedSpeaker
-        && now - last.ts < (source === "realtime_stt" ? 12000 : 5000);
+        && now - last.ts < (source === "realtime_stt" ? 2500 : 5000);
       if (recentSameLine) {
         last.text = mergeText(last.text, compacted);
         last.ts = now;
@@ -4363,8 +4390,14 @@ const speakerPollInterval = setInterval(async () => {
           '[data-tid*="speaking" i]',
           '[data-is-speaking="true"]',
           '[data-speaking="true"]',
+          '[aria-label*="Rauschen unterdrückt" i]',
+          '[aria-label*="noise suppressed" i]',
+          '[title*="Rauschen unterdrückt" i]',
+          '[title*="noise suppressed" i]',
           '[aria-label*="speaking" i]',
           '[aria-label*="spricht" i]',
+          '[aria-label*="Mikrofon" i]',
+          '[aria-label*="microphone" i]',
           '[class*="speaking" i]',
           '[class*="activeSpeaker" i]',
           '[class*="active-speaker" i]',
@@ -4420,16 +4453,17 @@ const speakerPollInterval = setInterval(async () => {
             const aria = compactText(node.getAttribute?.("aria-label") || "");
             const title = compactText(node.getAttribute?.("title") || "");
             const klass = compactText(String(node.className || ""));
+            const dataset = compactText(JSON.stringify(node.dataset || {}));
             const text = compactText((node.innerText || node.textContent || "").split(/\n+/).slice(0, 5).join(" / "));
             const nameish = [aria, title, text].join(" ");
-            const blob = `${tid} ${aria} ${title} ${klass} ${text}`;
+            const blob = `${tid} ${aria} ${title} ${klass} ${dataset} ${text}`;
             const interesting = /(speaker|speaking|spricht|active|participant|tile|people|person|teilnehmer|microphone|mute|noise|rauschen|camera|kamera|video|name|author)/i.test(blob)
               || /\b[A-ZÄÖÜ][a-zäöüß]+ [A-ZÄÖÜ][a-zäöüß]+\b/.test(nameish);
             if (!interesting) continue;
-            probeRows.push(`${tid || "no-tid"} | ${aria || title || "no-label"} | ${text || "no-text"}`.slice(0, 240));
-            if (probeRows.length >= 16) break;
+            probeRows.push(`${tid || "no-tid"} | ${aria || title || "no-label"} | ${dataset || "no-data"} | ${text || "no-text"}`.slice(0, 320));
+            if (probeRows.length >= 24) break;
           }
-          if (probeRows.length >= 16) break;
+          if (probeRows.length >= 24) break;
         }
         if (probeRows.length) {
           return {
@@ -4805,14 +4839,15 @@ asyncio.run(main())
     }
     realtimeBuffer = mergeRealtimeDelta(realtimeBuffer, msg.text);
     updateRealtimeLive();
-    if (/[.!?。！？]\s*$/.test(realtimeBuffer.trim()) && realtimeBuffer.length >= 90) {
+    const wordCount = realtimeBuffer.trim().split(/\s+/).filter(Boolean).length;
+    if (/[.!?。！？]\s*$/.test(realtimeBuffer.trim()) && wordCount >= 10) {
       if (realtimeFlushTimer) clearTimeout(realtimeFlushTimer);
       flushRealtimeBuffer();
-    } else if (realtimeBuffer.length >= 520) {
+    } else if (realtimeBuffer.length >= 360 || wordCount >= 42) {
       if (realtimeFlushTimer) clearTimeout(realtimeFlushTimer);
       flushRealtimeBuffer();
     } else if (!realtimeFlushTimer) {
-      realtimeFlushTimer = setTimeout(flushRealtimeBuffer, 6500);
+      realtimeFlushTimer = setTimeout(flushRealtimeBuffer, 2800);
     }
   });
   const terminateTeamsMediaChildren = () => {
@@ -7934,7 +7969,7 @@ mod tests {
         assert!(
             teams_script.contains("__ctoxTranscriptOverlayLive")
                 && teams_script.contains("__ctoxTranscriptOverlayCommit")
-                && teams_script.contains("setTimeout(flushRealtimeBuffer, 6500)"),
+                && teams_script.contains("setTimeout(flushRealtimeBuffer, 2800)"),
             "Teams realtime STT must render streaming deltas as a live line before committing transcript segments"
         );
         assert!(
