@@ -850,7 +850,7 @@ pub fn handle_meeting_command(root: &Path, args: &[String]) -> Result<()> {
                 "  simulate [--audio <wav>]... [--transcript <text>]... [--chat <sender:text>]..."
             );
             println!(
-                "  preflight-realtime [--audio <wav>]   Verify isolated Teams audio + Mistral realtime before live use"
+                "  preflight-realtime [--audio <wav>] [--foreign-audio <wav>]   Verify isolated Teams audio + Mistral realtime before live use"
             );
             Ok(())
         }
@@ -1039,6 +1039,8 @@ fn preflight_realtime_meeting(root: &Path, args: &[String]) -> Result<Value> {
     }
     gates.push(mistral_gate);
 
+    let pulse_phrase_audio = find_flag_value(args, "--audio").map(PathBuf::from);
+    let pulse_foreign_audio = find_flag_value(args, "--foreign-audio").map(PathBuf::from);
     let pulse_gate = if skip_pulse {
         json!({"name": "pulseaudio_isolation", "ok": true, "skipped": true, "reason": "skipped_by_flag"})
     } else {
@@ -1046,6 +1048,8 @@ fn preflight_realtime_meeting(root: &Path, args: &[String]) -> Result<Value> {
             &dir,
             phrase,
             foreign_phrase,
+            pulse_phrase_audio.as_deref(),
+            pulse_foreign_audio.as_deref(),
             expected,
             &config,
             max_first_delta_ms,
@@ -1202,6 +1206,8 @@ fn run_pulseaudio_isolation_probe(
     dir: &Path,
     phrase: &str,
     foreign_phrase: &str,
+    phrase_audio_override: Option<&Path>,
+    foreign_audio_override: Option<&Path>,
     expected: &str,
     config: &MeetingSessionConfig,
     max_first_delta_ms: u64,
@@ -1234,8 +1240,16 @@ fn run_pulseaudio_isolation_probe(
         }));
     }
 
-    let phrase_audio = generate_preflight_speech_audio(dir, "pulse_phrase", phrase)?;
-    let foreign_audio = generate_preflight_speech_audio(dir, "pulse_foreign", foreign_phrase)?;
+    let phrase_audio = if let Some(path) = phrase_audio_override {
+        path.to_path_buf()
+    } else {
+        generate_preflight_speech_audio(dir, "pulse_phrase", phrase)?
+    };
+    let foreign_audio = if let Some(path) = foreign_audio_override {
+        path.to_path_buf()
+    } else {
+        generate_preflight_speech_audio(dir, "pulse_foreign", foreign_phrase)?
+    };
     let capture = dir.join("pulse-isolation-capture.wav");
     let mut recorder = Command::new("ffmpeg")
         .args([
