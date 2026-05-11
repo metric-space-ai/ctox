@@ -1,0 +1,4 @@
+interface:
+  display_name: "Technical Drawing Review"
+  short_description: "Review PDFs, images, and email drawing attachments"
+  default_prompt: "Review this technical drawing PDF, image, or email attachment with a vision model, then produce a standalone interactive HTML review with embedded drawing pages, normalized pins, severity, evidence, risk, and recommendations."

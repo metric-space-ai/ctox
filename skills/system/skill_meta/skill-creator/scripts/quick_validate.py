@@ -81,7 +81,16 @@ def validate_skill(skill_path):
     if error is not None:
         return False, error
 
-    allowed_properties = {"name", "description", "license", "allowed-tools", "metadata"}
+    allowed_properties = {
+        "name",
+        "description",
+        "license",
+        "allowed-tools",
+        "metadata",
+        "cluster",
+        "class",
+        "state",
+    }
 
     unexpected_keys = set(frontmatter.keys()) - allowed_properties
     if unexpected_keys:
