@@ -9,6 +9,7 @@ use serde_json::json;
 use sha2::Digest;
 use sha2::Sha256;
 use std::path::Path;
+use std::process::Command;
 use std::time::Duration;
 
 use crate::channels;
@@ -21,6 +22,7 @@ use crate::service::harness_flow::{
 use crate::tickets;
 
 const DEFAULT_LIST_LIMIT: usize = 20;
+const DEFAULT_CLEANUP_SCAN_LIMIT: usize = 10_000;
 const DEFAULT_TICKET_SYSTEM: &str = "internal";
 const SPILL_RESTORE_LEASE_OWNER: &str = "spill-restore-hold";
 const SPILL_RESTORE_TITLE_PREFIX: &str = "spill restore: ";
@@ -43,6 +45,8 @@ const QUEUE_USAGE: &str = "usage:
   ctox queue spill-candidates [--limit <n>]
   ctox queue spills [--state <spilled|restored>] [--limit <n>]
   ctox queue restore --message-key <key> [--priority <urgent|high|normal|low>] [--note <text>]
+  ctox queue cleanup-scope [--all-open] [--match-run-id <id>] [--match-thread-prefix <prefix>] [--match-workspace-prefix <path>] [--match-title-prefix <prefix>] [--source-label <label>] [--message-key <key>] [--status <pending|leased|blocked|failed|handled|cancelled|review_rework>]... [--limit <n>] [--dry-run] [--cancel-open|--release-open|--block-open] [--stop-watchers] [--watcher-pattern <text>] [--reason <text>]
+  ctox queue assert-clean-scope [--all-open] [--match-run-id <id>] [--match-thread-prefix <prefix>] [--match-workspace-prefix <path>] [--match-title-prefix <prefix>] [--source-label <label>] [--message-key <key>] [--status <pending|leased|blocked|failed|handled|cancelled|review_rework>]... [--limit <n>] [--empty]
   ctox queue repair [--dry-run] [--mechanical]";
 
 const QUEUE_REPAIR_SYSTEM_PROMPT: &str = r#"You are CTOX Queue Repair.
@@ -188,6 +192,118 @@ struct QueueRepairVerificationView {
     follow_up_actions: Vec<String>,
     evidence: Vec<String>,
     handoff: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+struct QueueCleanupScopeSelector {
+    all_open: bool,
+    message_keys: Vec<String>,
+    run_ids: Vec<String>,
+    thread_prefixes: Vec<String>,
+    workspace_prefixes: Vec<String>,
+    title_prefixes: Vec<String>,
+    source_labels: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum QueueCleanupScopeAction {
+    None,
+    CancelOpen,
+    ReleaseOpen,
+    BlockOpen,
+}
+
+impl QueueCleanupScopeAction {
+    fn as_str(self) -> &'static str {
+        match self {
+            QueueCleanupScopeAction::None => "none",
+            QueueCleanupScopeAction::CancelOpen => "cancel-open",
+            QueueCleanupScopeAction::ReleaseOpen => "release-open",
+            QueueCleanupScopeAction::BlockOpen => "block-open",
+        }
+    }
+
+    fn route_status(self) -> Option<&'static str> {
+        match self {
+            QueueCleanupScopeAction::None => None,
+            QueueCleanupScopeAction::CancelOpen => Some("cancelled"),
+            QueueCleanupScopeAction::ReleaseOpen => Some("pending"),
+            QueueCleanupScopeAction::BlockOpen => Some("blocked"),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct QueueCleanupScopeOptions {
+    selector: QueueCleanupScopeSelector,
+    statuses: Vec<String>,
+    limit: usize,
+    dry_run: bool,
+    action: QueueCleanupScopeAction,
+    stop_watchers: bool,
+    watcher_patterns: Vec<String>,
+    reason: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct QueueCleanupScopeReport {
+    selector: QueueCleanupScopeSelector,
+    statuses: Vec<String>,
+    limit: usize,
+    dry_run: bool,
+    action: String,
+    reason: String,
+    scanned_count: usize,
+    matched_count: usize,
+    mutated_count: usize,
+    status_counts: std::collections::BTreeMap<String, usize>,
+    tasks: Vec<QueueCleanupTaskPlanView>,
+    watchers: QueueCleanupWatcherReport,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct QueueCleanupTaskPlanView {
+    message_key: String,
+    route_status: String,
+    title: String,
+    thread_key: String,
+    workspace_root: Option<String>,
+    priority: String,
+    planned_action: String,
+    mutated: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+struct QueueCleanupWatcherReport {
+    requested: bool,
+    supported: bool,
+    patterns: Vec<String>,
+    matched_count: usize,
+    stopped_count: usize,
+    processes: Vec<QueueCleanupWatcherView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct QueueCleanupWatcherView {
+    pid: u32,
+    command: String,
+    matched_patterns: Vec<String>,
+    stopped: bool,
+    stop_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct QueueAssertCleanScopeReport {
+    ok: bool,
+    mode: String,
+    selector: QueueCleanupScopeSelector,
+    statuses: Vec<String>,
+    limit: usize,
+    open_total: usize,
+    matched_count: usize,
+    non_matching_count: usize,
+    matching_preview: Vec<QueueCleanupTaskPlanView>,
+    non_matching_preview: Vec<QueueCleanupTaskPlanView>,
 }
 
 pub fn handle_queue_command(root: &Path, args: &[String]) -> Result<()> {
@@ -414,6 +530,17 @@ pub fn handle_queue_command(root: &Path, args: &[String]) -> Result<()> {
             )?;
             print_json(&json!({"ok": true, "bridge": bridge}))
         }
+        "cleanup-scope" => {
+            let cleanup = cleanup_queue_scope(root, args)?;
+            print_json(&json!({"ok": true, "cleanup": cleanup}))
+        }
+        "assert-clean-scope" => {
+            let assertion = assert_clean_queue_scope(root, args)?;
+            let ok = assertion.ok;
+            print_json(&json!({"ok": ok, "assertion": assertion}))?;
+            anyhow::ensure!(ok, "queue scope assertion failed");
+            Ok(())
+        }
         "repair" => {
             let repaired = repair_queue_state(
                 root,
@@ -450,6 +577,466 @@ fn repair_queue_state(
         open_queue_preview,
         agentic,
     })
+}
+
+fn cleanup_queue_scope(root: &Path, args: &[String]) -> Result<QueueCleanupScopeReport> {
+    let options = parse_queue_cleanup_scope_options(args, false)?;
+    anyhow::ensure!(
+        !queue_cleanup_selector_is_empty(&options.selector),
+        "cleanup-scope requires at least one selector or --all-open"
+    );
+    let tasks = channels::list_queue_tasks(root, &options.statuses, options.limit)?;
+    let mut status_counts = std::collections::BTreeMap::new();
+    let mut plans = Vec::new();
+    let mut mutated_count = 0usize;
+
+    for task in tasks.iter() {
+        *status_counts.entry(task.route_status.clone()).or_insert(0) += 1;
+        let metadata = load_queue_task_metadata(root, &task.message_key)?;
+        if !queue_task_matches_cleanup_selector(task, &metadata, &options.selector) {
+            continue;
+        }
+        let mut mutated = false;
+        if !options.dry_run {
+            if let Some(route_status) = options.action.route_status() {
+                let updated = channels::update_queue_task(
+                    root,
+                    channels::QueueTaskUpdateRequest {
+                        message_key: task.message_key.clone(),
+                        route_status: Some(route_status.to_string()),
+                        status_note: Some(options.reason.clone()),
+                        ..Default::default()
+                    },
+                )?;
+                mutated = updated.route_status == route_status;
+                if mutated {
+                    mutated_count += 1;
+                }
+            }
+        }
+        plans.push(queue_cleanup_task_plan(
+            task,
+            options.action.as_str(),
+            mutated,
+        ));
+    }
+
+    let watchers = cleanup_scope_watchers(&options)?;
+    if !options.dry_run && (mutated_count > 0 || watchers.stopped_count > 0) {
+        record_harness_flow_event_lossy(
+            root,
+            RecordHarnessFlowEventRequest {
+                event_kind: "queue.cleanup_scope",
+                title: "Queue scope cleanup applied",
+                body_text: &options.reason,
+                message_key: None,
+                work_id: None,
+                ticket_key: None,
+                attempt_index: None,
+                metadata: json!({
+                    "action": options.action.as_str(),
+                    "selector": options.selector.clone(),
+                    "statuses": options.statuses.clone(),
+                    "matched_count": plans.len(),
+                    "mutated_count": mutated_count,
+                    "watchers_stopped": watchers.stopped_count,
+                }),
+            },
+        );
+    }
+
+    Ok(QueueCleanupScopeReport {
+        selector: options.selector,
+        statuses: options.statuses,
+        limit: options.limit,
+        dry_run: options.dry_run,
+        action: options.action.as_str().to_string(),
+        reason: options.reason,
+        scanned_count: tasks.len(),
+        matched_count: plans.len(),
+        mutated_count,
+        status_counts,
+        tasks: plans,
+        watchers,
+    })
+}
+
+fn assert_clean_queue_scope(root: &Path, args: &[String]) -> Result<QueueAssertCleanScopeReport> {
+    let options = parse_queue_cleanup_scope_options(args, true)?;
+    let expect_empty = args.iter().any(|arg| arg == "--empty");
+    anyhow::ensure!(
+        expect_empty || !queue_cleanup_selector_is_empty(&options.selector),
+        "assert-clean-scope requires selectors, --all-open, or --empty"
+    );
+    let tasks = channels::list_queue_tasks(root, &options.statuses, options.limit)?;
+    let mut matching = Vec::new();
+    let mut non_matching = Vec::new();
+
+    for task in tasks.iter() {
+        let metadata = load_queue_task_metadata(root, &task.message_key)?;
+        let is_match = queue_task_matches_cleanup_selector(task, &metadata, &options.selector);
+        let plan = queue_cleanup_task_plan(task, "assert", false);
+        if is_match {
+            matching.push(plan);
+        } else {
+            non_matching.push(plan);
+        }
+    }
+
+    let ok = if expect_empty {
+        tasks.is_empty()
+    } else {
+        non_matching.is_empty()
+    };
+    Ok(QueueAssertCleanScopeReport {
+        ok,
+        mode: if expect_empty {
+            "empty".to_string()
+        } else {
+            "only-matching-scope".to_string()
+        },
+        selector: options.selector,
+        statuses: options.statuses,
+        limit: options.limit,
+        open_total: tasks.len(),
+        matched_count: matching.len(),
+        non_matching_count: non_matching.len(),
+        matching_preview: matching.into_iter().take(DEFAULT_LIST_LIMIT).collect(),
+        non_matching_preview: non_matching.into_iter().take(DEFAULT_LIST_LIMIT).collect(),
+    })
+}
+
+fn parse_queue_cleanup_scope_options(
+    args: &[String],
+    assertion: bool,
+) -> Result<QueueCleanupScopeOptions> {
+    let action = parse_queue_cleanup_action(args)?;
+    let stop_watchers = args.iter().any(|arg| arg == "--stop-watchers");
+    let mutation_requested = action != QueueCleanupScopeAction::None || stop_watchers;
+    let selector = QueueCleanupScopeSelector {
+        all_open: args.iter().any(|arg| arg == "--all-open"),
+        message_keys: collect_flag_values(args, "--message-key"),
+        run_ids: collect_flag_values(args, "--match-run-id"),
+        thread_prefixes: collect_flag_values(args, "--match-thread-prefix"),
+        workspace_prefixes: collect_flag_values(args, "--match-workspace-prefix"),
+        title_prefixes: collect_flag_values(args, "--match-title-prefix"),
+        source_labels: collect_flag_values(args, "--source-label"),
+    };
+    let statuses = {
+        let explicit = collect_flag_values(args, "--status");
+        if explicit.is_empty() {
+            vec![
+                "pending".to_string(),
+                "leased".to_string(),
+                "blocked".to_string(),
+                "review_rework".to_string(),
+            ]
+        } else {
+            explicit
+        }
+    };
+    let reason = find_flag_value(args, "--reason")
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| "queue cleanup scope operation".to_string());
+    Ok(QueueCleanupScopeOptions {
+        watcher_patterns: cleanup_watcher_patterns(args, &selector),
+        selector,
+        statuses,
+        limit: find_flag_value(args, "--limit")
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(DEFAULT_CLEANUP_SCAN_LIMIT),
+        dry_run: assertion || args.iter().any(|arg| arg == "--dry-run") || !mutation_requested,
+        action,
+        stop_watchers: stop_watchers && !assertion,
+        reason,
+    })
+}
+
+fn parse_queue_cleanup_action(args: &[String]) -> Result<QueueCleanupScopeAction> {
+    let requested = [
+        ("--cancel-open", QueueCleanupScopeAction::CancelOpen),
+        ("--release-open", QueueCleanupScopeAction::ReleaseOpen),
+        ("--block-open", QueueCleanupScopeAction::BlockOpen),
+    ]
+    .into_iter()
+    .filter(|(flag, _)| args.iter().any(|arg| arg == flag))
+    .map(|(_, action)| action)
+    .collect::<Vec<_>>();
+    anyhow::ensure!(
+        requested.len() <= 1,
+        "cleanup-scope accepts only one of --cancel-open, --release-open, or --block-open"
+    );
+    Ok(requested
+        .first()
+        .copied()
+        .unwrap_or(QueueCleanupScopeAction::None))
+}
+
+fn queue_cleanup_selector_is_empty(selector: &QueueCleanupScopeSelector) -> bool {
+    !selector.all_open
+        && selector.message_keys.is_empty()
+        && selector.run_ids.is_empty()
+        && selector.thread_prefixes.is_empty()
+        && selector.workspace_prefixes.is_empty()
+        && selector.title_prefixes.is_empty()
+        && selector.source_labels.is_empty()
+}
+
+fn queue_task_matches_cleanup_selector(
+    task: &channels::QueueTaskView,
+    metadata: &serde_json::Value,
+    selector: &QueueCleanupScopeSelector,
+) -> bool {
+    if selector.all_open {
+        return true;
+    }
+    if !selector.message_keys.is_empty()
+        && !selector
+            .message_keys
+            .iter()
+            .any(|value| task.message_key == value.trim())
+    {
+        return false;
+    }
+    if !selector.run_ids.is_empty()
+        && !selector
+            .run_ids
+            .iter()
+            .any(|value| queue_task_contains_scope_text(task, metadata, value))
+    {
+        return false;
+    }
+    if !selector.thread_prefixes.is_empty()
+        && !selector
+            .thread_prefixes
+            .iter()
+            .any(|value| task.thread_key.starts_with(value.trim()))
+    {
+        return false;
+    }
+    if !selector.workspace_prefixes.is_empty()
+        && !selector.workspace_prefixes.iter().any(|value| {
+            task.workspace_root
+                .as_deref()
+                .map(|workspace| workspace.starts_with(value.trim()))
+                .unwrap_or(false)
+        })
+    {
+        return false;
+    }
+    if !selector.title_prefixes.is_empty()
+        && !selector
+            .title_prefixes
+            .iter()
+            .any(|value| task.title.starts_with(value.trim()))
+    {
+        return false;
+    }
+    if !selector.source_labels.is_empty()
+        && !selector
+            .source_labels
+            .iter()
+            .any(|value| queue_task_has_source_label(metadata, value))
+    {
+        return false;
+    }
+    true
+}
+
+fn queue_task_contains_scope_text(
+    task: &channels::QueueTaskView,
+    metadata: &serde_json::Value,
+    needle: &str,
+) -> bool {
+    let needle = needle.trim();
+    if needle.is_empty() {
+        return false;
+    }
+    task.message_key.contains(needle)
+        || task.thread_key.contains(needle)
+        || task.title.contains(needle)
+        || task.prompt.contains(needle)
+        || task
+            .workspace_root
+            .as_deref()
+            .map(|value| value.contains(needle))
+            .unwrap_or(false)
+        || json_contains_text(metadata, needle)
+}
+
+fn queue_task_has_source_label(metadata: &serde_json::Value, label: &str) -> bool {
+    let label = label.trim();
+    if label.is_empty() {
+        return false;
+    }
+    ["source_label", "source", "sourceLabel", "core_run_class"]
+        .iter()
+        .any(|key| {
+            metadata
+                .get(key)
+                .and_then(serde_json::Value::as_str)
+                .map(|value| value == label)
+                .unwrap_or(false)
+        })
+}
+
+fn json_contains_text(value: &serde_json::Value, needle: &str) -> bool {
+    match value {
+        serde_json::Value::String(value) => value.contains(needle),
+        serde_json::Value::Array(values) => {
+            values.iter().any(|value| json_contains_text(value, needle))
+        }
+        serde_json::Value::Object(values) => values
+            .values()
+            .any(|value| json_contains_text(value, needle)),
+        _ => false,
+    }
+}
+
+fn load_queue_task_metadata(root: &Path, message_key: &str) -> Result<serde_json::Value> {
+    let db_path = crate::paths::core_db(&root);
+    let conn = Connection::open_with_flags(&db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .with_context(|| format!("failed to open queue metadata db {}", db_path.display()))?;
+    let raw = conn
+        .query_row(
+            "SELECT metadata_json FROM communication_messages WHERE message_key = ?1 LIMIT 1",
+            params![message_key],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .unwrap_or_else(|| "{}".to_string());
+    Ok(serde_json::from_str(&raw).unwrap_or_else(|_| json!({"raw_metadata": raw})))
+}
+
+fn queue_cleanup_task_plan(
+    task: &channels::QueueTaskView,
+    planned_action: &str,
+    mutated: bool,
+) -> QueueCleanupTaskPlanView {
+    QueueCleanupTaskPlanView {
+        message_key: task.message_key.clone(),
+        route_status: task.route_status.clone(),
+        title: task.title.clone(),
+        thread_key: task.thread_key.clone(),
+        workspace_root: task.workspace_root.clone(),
+        priority: task.priority.clone(),
+        planned_action: planned_action.to_string(),
+        mutated,
+    }
+}
+
+fn cleanup_watcher_patterns(args: &[String], selector: &QueueCleanupScopeSelector) -> Vec<String> {
+    let explicit = collect_flag_values(args, "--watcher-pattern");
+    if !explicit.is_empty() {
+        return explicit
+            .into_iter()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .collect();
+    }
+    selector
+        .run_ids
+        .iter()
+        .chain(selector.thread_prefixes.iter())
+        .chain(selector.workspace_prefixes.iter())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect()
+}
+
+fn cleanup_scope_watchers(options: &QueueCleanupScopeOptions) -> Result<QueueCleanupWatcherReport> {
+    let mut report = QueueCleanupWatcherReport {
+        requested: options.stop_watchers,
+        supported: std::path::Path::new("/proc").exists(),
+        patterns: options.watcher_patterns.clone(),
+        ..Default::default()
+    };
+    if !options.stop_watchers || !report.supported || report.patterns.is_empty() {
+        return Ok(report);
+    }
+    let own_pid = std::process::id();
+    for entry in std::fs::read_dir("/proc")? {
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|value| value.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        if pid == own_pid {
+            continue;
+        }
+        let cmdline_path = entry.path().join("cmdline");
+        let Ok(raw) = std::fs::read(&cmdline_path) else {
+            continue;
+        };
+        if raw.is_empty() {
+            continue;
+        }
+        let command = String::from_utf8_lossy(&raw)
+            .replace('\0', " ")
+            .trim()
+            .to_string();
+        if command.is_empty()
+            || command.contains("ctox queue cleanup-scope")
+            || !cleanup_command_is_watcher_like(&command)
+        {
+            continue;
+        }
+        let matched_patterns = report
+            .patterns
+            .iter()
+            .filter(|pattern| command.contains(pattern.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+        if matched_patterns.is_empty() {
+            continue;
+        }
+        let (stopped, stop_error) = if options.dry_run {
+            (false, None)
+        } else {
+            match Command::new("kill")
+                .arg("-TERM")
+                .arg(pid.to_string())
+                .status()
+            {
+                Ok(status) if status.success() => (true, None),
+                Ok(status) => (false, Some(format!("kill exited with status {status}"))),
+                Err(error) => (false, Some(error.to_string())),
+            }
+        };
+        if stopped {
+            report.stopped_count += 1;
+        }
+        report.processes.push(QueueCleanupWatcherView {
+            pid,
+            command,
+            matched_patterns,
+            stopped,
+            stop_error,
+        });
+    }
+    report.matched_count = report.processes.len();
+    Ok(report)
+}
+
+fn cleanup_command_is_watcher_like(command: &str) -> bool {
+    let lowered = command.to_ascii_lowercase();
+    [
+        "watch",
+        "monitor",
+        "controller",
+        "loop",
+        "scheduler",
+        "worker",
+    ]
+    .iter()
+    .any(|marker| lowered.contains(marker))
 }
 
 fn run_agentic_queue_repair(root: &Path, dry_run: bool) -> Result<AgenticQueueRepairView> {
@@ -1054,6 +1641,7 @@ fn restore_spilled_queue_task(
             message_key: message_key.to_string(),
             title: Some(restored_title),
             priority: priority.map(ToOwned::to_owned),
+            route_status: Some("pending".to_string()),
             status_note: Some(restored_note.clone()),
             ..Default::default()
         },
@@ -1198,14 +1786,17 @@ fn complete_spill_restore_follow_ups(root: &Path, parent_message_key: &str) -> R
                     .title
                     .to_ascii_lowercase()
                     .starts_with(SPILL_RESTORE_TITLE_PREFIX)
-                && task.route_status != "handled"
+                && !matches!(
+                    task.route_status.as_str(),
+                    "handled" | "cancelled" | "failed"
+                )
         })
     {
         let _ = channels::update_queue_task(
             root,
             channels::QueueTaskUpdateRequest {
                 message_key: follow_up.message_key,
-                route_status: Some("handled".to_string()),
+                route_status: Some("cancelled".to_string()),
                 status_note: Some("superseded by the restored original queue task".to_string()),
                 ..Default::default()
             },
@@ -1601,6 +2192,7 @@ fn print_json(value: &serde_json::Value) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    // ctox-allow-direct-state-write: test fixture module
     use super::*;
 
     fn temp_root(label: &str) -> std::path::PathBuf {
@@ -1894,6 +2486,157 @@ mod tests {
             updated.status_note.as_deref(),
             Some("superseded by canonical supervisor task")
         );
+
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn cleanup_scope_dry_run_matches_run_id_without_mutating() -> Result<()> {
+        let root = temp_root("cleanup-dry-run");
+        std::fs::create_dir_all(&root)?;
+
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Scoped benchmark task".to_string(),
+                prompt: "Run normal CTOX work for run cleanup-run-1.".to_string(),
+                thread_key: "queue/cleanup-run-1".to_string(),
+                workspace_root: Some("/tmp/cleanup-run-1".to_string()),
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: Some(json!({
+                    "run_id": "cleanup-run-1",
+                    "source_label": "queue-test"
+                })),
+            },
+        )?;
+
+        let report = cleanup_queue_scope(
+            &root,
+            &[
+                "cleanup-scope".to_string(),
+                "--match-run-id".to_string(),
+                "cleanup-run-1".to_string(),
+                "--cancel-open".to_string(),
+                "--dry-run".to_string(),
+            ],
+        )?;
+        assert_eq!(report.matched_count, 1);
+        assert_eq!(report.mutated_count, 0);
+        let current = channels::load_queue_task(&root, &task.message_key)?.unwrap();
+        assert_eq!(current.route_status, "pending");
+
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn cleanup_scope_cancel_open_only_mutates_matching_scope() -> Result<()> {
+        let root = temp_root("cleanup-cancel");
+        std::fs::create_dir_all(&root)?;
+
+        let matched = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Old scoped run".to_string(),
+                prompt: "Cancel stale scoped work.".to_string(),
+                thread_key: "queue/scoped-run".to_string(),
+                workspace_root: Some("/tmp/scoped-run".to_string()),
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: Some(json!({"run_id": "scoped-run"})),
+            },
+        )?;
+        let survivor = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Different run".to_string(),
+                prompt: "Keep this task.".to_string(),
+                thread_key: "queue/different-run".to_string(),
+                workspace_root: Some("/tmp/different-run".to_string()),
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: Some(json!({"run_id": "different-run"})),
+            },
+        )?;
+
+        let report = cleanup_queue_scope(
+            &root,
+            &[
+                "cleanup-scope".to_string(),
+                "--match-run-id".to_string(),
+                "scoped-run".to_string(),
+                "--cancel-open".to_string(),
+                "--reason".to_string(),
+                "superseded by clean scope".to_string(),
+            ],
+        )?;
+        assert_eq!(report.matched_count, 1);
+        assert_eq!(report.mutated_count, 1);
+        assert_eq!(
+            channels::load_queue_task(&root, &matched.message_key)?
+                .unwrap()
+                .route_status,
+            "cancelled"
+        );
+        assert_eq!(
+            channels::load_queue_task(&root, &survivor.message_key)?
+                .unwrap()
+                .route_status,
+            "pending"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn assert_clean_scope_detects_open_work_outside_scope() -> Result<()> {
+        let root = temp_root("assert-clean-scope");
+        std::fs::create_dir_all(&root)?;
+
+        let _ = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Expected scoped work".to_string(),
+                prompt: "Allowed work.".to_string(),
+                thread_key: "queue/allowed-run".to_string(),
+                workspace_root: None,
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: Some(json!({"run_id": "allowed-run"})),
+            },
+        )?;
+        let _ = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Unexpected stale work".to_string(),
+                prompt: "This should fail the clean-scope gate.".to_string(),
+                thread_key: "queue/stale-run".to_string(),
+                workspace_root: None,
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: Some(json!({"run_id": "stale-run"})),
+            },
+        )?;
+
+        let report = assert_clean_queue_scope(
+            &root,
+            &[
+                "assert-clean-scope".to_string(),
+                "--match-run-id".to_string(),
+                "allowed-run".to_string(),
+            ],
+        )?;
+        assert!(!report.ok);
+        assert_eq!(report.matched_count, 1);
+        assert_eq!(report.non_matching_count, 1);
 
         let _ = std::fs::remove_dir_all(&root);
         Ok(())
