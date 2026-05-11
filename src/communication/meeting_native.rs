@@ -323,6 +323,21 @@ fn write_chat_command_to_session(session: &Value, text: &str) -> Result<()> {
     Ok(())
 }
 
+fn recent_direct_speaker(signal: Option<&SpeakerSignal>) -> Option<&SpeakerSignal> {
+    let signal = signal?;
+    let speaker = signal.speaker_display.trim();
+    if speaker.is_empty() || speaker.eq_ignore_ascii_case("unknown") {
+        return None;
+    }
+    let ts = DateTime::parse_from_rfc3339(&signal.timestamp).ok()?;
+    let age = Utc::now().signed_duration_since(ts.with_timezone(&Utc));
+    if age <= Duration::seconds(45) {
+        Some(signal)
+    } else {
+        None
+    }
+}
+
 fn session_value_is_own_message(session: &Value, sender: &str, text: &str) -> bool {
     let bot_name = session
         .get("bot_name")
@@ -877,8 +892,10 @@ fn simulate_meeting_session(root: &Path, args: &[String]) -> Result<Value> {
         provider,
         bot_name: bot_name.to_string(),
         max_duration_minutes: 60,
-        audio_chunk_seconds: 30,
+        audio_chunk_seconds: 3,
         stt_model: String::new(),
+        realtime_stt_model: "voxtral-mini-transcribe-realtime-2602".to_string(),
+        mistral_api_key: None,
     };
     let mut session = MeetingSession::new(&config);
     session.status = "ended".to_string();
@@ -1003,7 +1020,7 @@ pub(crate) fn run_meeting_session(root: &Path, config: &MeetingSessionConfig) ->
             .and_then(Value::as_str)
             .unwrap_or("not_live_ready");
         eprintln!(
-            "[meeting] local live STT disabled ({reason}); chat replies will use platform captions and completed STT chunks only"
+            "[meeting] local live STT disabled ({reason}); meeting overlay will use realtime STT or platform captions only"
         );
     }
 
@@ -1012,9 +1029,18 @@ pub(crate) fn run_meeting_session(root: &Path, config: &MeetingSessionConfig) ->
     let mut runner_cmd = build_meeting_runner_command(&node, &reference_dir, &script_path)?;
     runner_cmd
         .env("CTOX_MEETING_COMMAND_FILE", &command_path)
+        .env(
+            "CTOX_MISTRAL_REALTIME_STT_MODEL",
+            &config.realtime_stt_model,
+        )
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if let Some(api_key) = config.mistral_api_key.as_deref() {
+        runner_cmd
+            .env("CTOX_MISTRAL_API_KEY", api_key)
+            .env("MISTRAL_API_KEY", api_key);
+    }
     let mut child = runner_cmd.spawn().with_context(|| {
         format!(
             "failed to spawn meeting browser runner via {:?}",
@@ -1106,7 +1132,8 @@ pub(crate) fn run_meeting_session(root: &Path, config: &MeetingSessionConfig) ->
                 ) {
                     Ok(text) if !text.is_empty() => {
                         eprintln!("[meeting] transcript: {}...", &text[..text.len().min(80)]);
-                        session.push_stt_transcript(text, last_speaker_signal.as_ref());
+                        let direct_speaker = recent_direct_speaker(last_speaker_signal.as_ref());
+                        session.push_stt_transcript(text, direct_speaker);
                         session.save(root)?;
                         if let Some(p) = persisted_path.as_ref() {
                             let _ = fs::remove_file(p);
@@ -1138,6 +1165,10 @@ pub(crate) fn run_meeting_session(root: &Path, config: &MeetingSessionConfig) ->
                     session.speaker_signals.push(signal);
                     session.save(root)?;
                 }
+            }
+            "speaker_probe" => {
+                let text = event.get("text").and_then(Value::as_str).unwrap_or("");
+                eprintln!("[meeting] speaker probe: {}", &text[..text.len().min(500)]);
             }
             "transcript_segment" => {
                 if let Some(segment) = TranscriptSegment::from_platform_event(&event) {
@@ -1177,6 +1208,30 @@ pub(crate) fn run_meeting_session(root: &Path, config: &MeetingSessionConfig) ->
                     text: text.to_string(),
                     timestamp: ts.to_string(),
                 });
+                if MeetingSession::is_mention(text) {
+                    let ack_text = first_mention_ack_text();
+                    if !session
+                        .outbound_chat_texts
+                        .iter()
+                        .any(|sent| normalize_chat_text(sent) == normalize_chat_text(ack_text))
+                    {
+                        if let Some(stdin_path) = session.stdin_pipe.as_deref() {
+                            let command = json!({"action": "send_chat", "text": ack_text});
+                            match fs::OpenOptions::new().append(true).open(stdin_path) {
+                                Ok(mut file) => {
+                                    let _ = writeln!(file, "{}", command);
+                                    eprintln!("[meeting] queued immediate mention ack");
+                                }
+                                Err(err) => {
+                                    eprintln!(
+                                        "[meeting] warning: could not queue immediate mention ack: {err}"
+                                    );
+                                }
+                            }
+                        }
+                        session.outbound_chat_texts.push(ack_text.to_string());
+                    }
+                }
                 // Persist session so sync() can pick up new chat messages
                 session.save(root)?;
 
@@ -1737,6 +1792,10 @@ fn persist_audio_chunk(root: &Path, session_id: &str, source_path: &str) -> Opti
     if !src.exists() {
         return None;
     }
+    let metadata = fs::metadata(src).ok()?;
+    if metadata.len() < 4096 {
+        return None;
+    }
     let dest_dir = meeting_sessions_dir(root).join(format!("{session_id}-audio"));
     if fs::create_dir_all(&dest_dir).is_err() {
         return None;
@@ -1891,6 +1950,8 @@ pub(crate) struct MeetingSessionConfig {
     pub max_duration_minutes: u64,
     pub audio_chunk_seconds: u64,
     pub stt_model: String,
+    pub realtime_stt_model: String,
+    pub mistral_api_key: Option<String>,
 }
 
 impl MeetingSessionConfig {
@@ -1910,10 +1971,15 @@ impl MeetingSessionConfig {
         let audio_chunk_seconds =
             runtime_setting_or_env(runtime, "CTO_MEETING_AUDIO_CHUNK_SECONDS")
                 .and_then(|v| v.parse().ok())
-                .unwrap_or(30u64);
+                .unwrap_or(3u64);
         let stt_model = normalize_meeting_stt_model(
             runtime_setting_or_env(runtime, "CTOX_STT_MODEL").as_deref(),
         );
+        let realtime_stt_model = runtime_setting_or_env(runtime, "CTOX_MISTRAL_REALTIME_STT_MODEL")
+            .or_else(|| runtime_setting_or_env(runtime, "CTOX_STT_REALTIME_MODEL"))
+            .unwrap_or_else(|| "voxtral-mini-transcribe-realtime-2602".to_string());
+        let mistral_api_key = runtime_setting_or_env(runtime, "CTOX_MISTRAL_API_KEY")
+            .or_else(|| runtime_setting_or_env(runtime, "MISTRAL_API_KEY"));
         Ok(Self {
             root: root.to_path_buf(),
             meeting_url: meeting_url.to_string(),
@@ -1922,6 +1988,8 @@ impl MeetingSessionConfig {
             max_duration_minutes,
             audio_chunk_seconds,
             stt_model,
+            realtime_stt_model,
+            mistral_api_key,
         })
     }
 }
@@ -2237,7 +2305,15 @@ impl MeetingSession {
     /// Returns true if a known bot mention appears with a word boundary on both sides
     /// (so "@ctoxbar" doesn't match, but "@INF Yoda Notetaker" or "@ctox!" do).
     pub(crate) fn is_mention(text: &str) -> bool {
-        let lower = text.to_lowercase();
+        let lower = normalize_chat_text(text).to_lowercase();
+        for prefix in ["inf yoda notetaker", "inf yoda", "ctox"] {
+            if let Some(rest) = lower.strip_prefix(prefix) {
+                let rest = rest.trim_start();
+                if rest.starts_with(':') || rest.starts_with('-') || rest.starts_with(',') {
+                    return true;
+                }
+            }
+        }
         for needle in ["@ctox", "@inf yoda", "@inf yoda notetaker"] {
             let mut search_from = 0;
             while let Some(pos) = lower[search_from..].find(needle) {
@@ -2271,12 +2347,12 @@ fn is_own_message_text(
     sender: &str,
     text: &str,
 ) -> bool {
-    let bot_name_lower = bot_name.to_lowercase();
+    let bot_name_lower = normalize_chat_text(bot_name).to_lowercase();
     let bot_name_lower = bot_name_lower.trim();
     if bot_name_lower.is_empty() {
         return false;
     }
-    let sender_lower = sender.to_lowercase();
+    let sender_lower = normalize_chat_text(sender).to_lowercase();
     // Match if sender contains the bot name (sender field may include
     // role suffixes like "(Host)" or be wrapped in other text)
     if sender_lower.contains(bot_name_lower) {
@@ -2290,24 +2366,22 @@ fn is_own_message_text(
     }
     // Some chat scrapers misattribute and put the sender in the text;
     // match if text starts with the bot name + colon/dash separator
-    let text_lower = text.to_lowercase();
+    let text_lower = normalize_chat_text(text).to_lowercase();
     if outbound_chat_texts.iter().any(|sent| {
-        let sent = sent.trim().to_lowercase();
+        let sent = normalize_chat_text(sent).trim().to_lowercase();
         !sent.is_empty() && text_lower.contains(&sent)
     }) {
         return true;
     }
-    let text_trimmed = text_lower.trim_start();
-    if text_trimmed.starts_with(bot_name_lower) {
-        let after_name = &text_trimmed[bot_name_lower.len()..];
-        if after_name.starts_with(':')
-            || after_name.starts_with(" -")
-            || after_name.starts_with(" to ")
-        {
-            return true;
-        }
-    }
     false
+}
+
+fn normalize_chat_text(value: &str) -> String {
+    value
+        .replace('\u{00a0}', " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 // ---------------------------------------------------------------------------
@@ -2561,6 +2635,148 @@ const context = await browser.newContext({
   ignoreHTTPSErrors: true,
   userAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
 });
+if (provider === "microsoft") {
+  await context.addInitScript(({ botName }) => {
+    if (window.__ctoxTranscriptCameraInstalled) return;
+    window.__ctoxTranscriptCameraInstalled = true;
+    const state = {
+      botName: botName || "INF Yoda Notetaker",
+      entries: [],
+      status: "Realtime-Transcript wird verbunden",
+      updatedAt: Date.now(),
+      sequence: 0,
+    };
+    const compact = (value) => String(value || "").replace(/\s+/g, " ").trim();
+    const wrapLine = (ctx, text, maxWidth) => {
+      const words = compact(text).split(" ").filter(Boolean);
+      const lines = [];
+      let current = "";
+      for (const word of words) {
+        const next = current ? `${current} ${word}` : word;
+        if (ctx.measureText(next).width > maxWidth && current) {
+          lines.push(current);
+          current = word;
+        } else {
+          current = next;
+        }
+      }
+      if (current) lines.push(current);
+      return lines;
+    };
+    const ensureCanvas = () => {
+      if (window.__ctoxTranscriptCanvas) return window.__ctoxTranscriptCanvas;
+      const canvas = document.createElement("canvas");
+      canvas.width = 1280;
+      canvas.height = 720;
+      canvas.style.position = "fixed";
+      canvas.style.left = "-10000px";
+      canvas.style.top = "0";
+      document.documentElement.appendChild(canvas);
+      const ctx = canvas.getContext("2d");
+      const draw = () => {
+        const w = canvas.width;
+        const h = canvas.height;
+        ctx.fillStyle = "rgb(17,24,39)";
+        ctx.fillRect(0, 0, w, h);
+        const grd = ctx.createLinearGradient(0, 0, w, h);
+        grd.addColorStop(0, "rgba(37, 99, 235, 0.28)");
+        grd.addColorStop(1, "rgba(20, 184, 166, 0.18)");
+        ctx.fillStyle = grd;
+        ctx.fillRect(0, 0, w, h);
+        ctx.fillStyle = "rgba(255,255,255,0.08)";
+        ctx.fillRect(48, 46, w - 96, h - 92);
+        ctx.fillStyle = "rgb(248,250,252)";
+        ctx.font = "700 48px Arial, sans-serif";
+        ctx.fillText(state.botName, 84, 118);
+        ctx.font = "500 26px Arial, sans-serif";
+        ctx.fillStyle = "rgb(203,213,225)";
+        const age = Math.max(0, Math.round((Date.now() - state.updatedAt) / 1000));
+        ctx.fillText(`${state.status} - aktualisiert vor ${age}s`, 86, 160);
+        ctx.strokeStyle = "rgba(148,163,184,0.55)";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(84, 190);
+        ctx.lineTo(w - 84, 190);
+        ctx.stroke();
+        const entries = state.entries.slice(-2);
+        let y = 250;
+        if (entries.length === 0) {
+          ctx.font = "600 40px Arial, sans-serif";
+          ctx.fillStyle = "rgb(248,250,252)";
+          ctx.fillText("Warte auf Realtime-Transcript...", 86, y);
+        }
+        for (const entry of entries) {
+          const speaker = entry.speaker && entry.speaker !== "unknown" ? entry.speaker : "Sprecher unbekannt";
+          ctx.font = "700 24px Arial, sans-serif";
+          ctx.fillStyle = entry.speaker && entry.speaker !== "unknown" ? "rgb(147,197,253)" : "rgb(203,213,225)";
+          ctx.fillText(`${speaker} · aktueller Auszug`, 86, y);
+          y += 32;
+          ctx.font = "500 30px Arial, sans-serif";
+          ctx.fillStyle = "rgb(248,250,252)";
+          for (const line of wrapLine(ctx, entry.text, w - 190).slice(0, 3)) {
+            if (y > h - 145) break;
+            ctx.fillText(line, 86, y);
+            y += 36;
+          }
+          y += 18;
+          if (y > h - 145) break;
+        }
+        ctx.fillStyle = "rgba(17,24,39,0.72)";
+        ctx.fillRect(48, h - 116, w - 96, 70);
+        ctx.font = "400 22px Arial, sans-serif";
+        ctx.fillStyle = "rgb(148,163,184)";
+        ctx.fillText("CTOX Meeting Bot - Chat-Mentions und Audio werden protokolliert", 84, h - 70);
+      };
+      draw();
+      window.__ctoxTranscriptDrawTimer = window.setInterval(draw, 1000);
+      window.__ctoxTranscriptCanvas = canvas;
+      return canvas;
+    };
+    window.__ctoxTranscriptOverlayPush = (text, speaker, source = "realtime_stt") => {
+      const clean = compact(text);
+      if (!clean || /^(sending|message sent)$/i.test(clean)) return;
+      const normalizedSpeaker = compact(speaker || "unknown");
+      const compacted = clean.length > 520 ? `${clean.slice(0, 520).trim()} ...` : clean;
+      const last = state.entries[state.entries.length - 1];
+      if (!last || last.text !== compacted || last.speaker !== normalizedSpeaker) {
+        state.sequence += 1;
+        state.entries.push({ speaker: normalizedSpeaker, text: compacted, seq: state.sequence, ts: Date.now() });
+      }
+      state.entries = state.entries.slice(-8);
+      state.status = source === "platform_caption" ? "Teams-Captions aktiv" : "Realtime-STT aktiv";
+      state.updatedAt = Date.now();
+    };
+    const originalGetUserMedia = navigator.mediaDevices?.getUserMedia?.bind(navigator.mediaDevices);
+    if (!originalGetUserMedia) return;
+    const silentAudioTracks = () => {
+      try {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (!AudioCtx) return [];
+        if (!window.__ctoxSilentAudioContext) window.__ctoxSilentAudioContext = new AudioCtx();
+        const dest = window.__ctoxSilentAudioContext.createMediaStreamDestination();
+        const track = dest.stream.getAudioTracks()[0];
+        if (track) track.enabled = false;
+        return track ? [track] : [];
+      } catch {
+        return [];
+      }
+    };
+    navigator.mediaDevices.getUserMedia = async (constraints = {}) => {
+      const wantsVideo = !!constraints.video;
+      const wantsAudio = !!constraints.audio;
+      if (!wantsVideo && !wantsAudio) return originalGetUserMedia(constraints);
+      if (!wantsVideo && wantsAudio) return new MediaStream(silentAudioTracks());
+      let audioTracks = wantsAudio ? silentAudioTracks() : [];
+      if (wantsAudio) {
+        console.log("[CTOX_AUDIO] outgoing microphone replaced with silent local track");
+      }
+      const canvas = ensureCanvas();
+      const videoStream = canvas.captureStream(12);
+      const tracks = [...audioTracks, ...videoStream.getVideoTracks()];
+      return new MediaStream(tracks);
+    };
+  }, { botName: "INF Yoda Notetaker" }).catch(() => {});
+}
 for (const origin of new Set([meetingUrl, provider === "zoom" ? buildZoomWebClientUrl(meetingUrl) : meetingUrl].map((url) => {
   try { return new URL(url).origin; } catch { return null; }
 }).filter(Boolean))) {
@@ -2730,9 +2946,36 @@ const enableTeamsLiveCaptions = async (targetPage) => {
     for (const scope of scopes()) {
       for (const matcher of matchers) {
         try {
-          const button = scope.getByRole("button", { name: matcher }).first();
-          if (await button.isVisible({ timeout: 1000 }).catch(() => false)) {
-            await button.click({ force: true });
+          const roleTargets = [
+            scope.getByRole("button", { name: matcher }).first(),
+            scope.getByRole("menuitem", { name: matcher }).first(),
+          ];
+          for (const target of roleTargets) {
+            if (await target.isVisible({ timeout: 600 }).catch(() => false)) {
+              await target.click({ force: true });
+              await targetPage.waitForTimeout(700);
+              return true;
+            }
+          }
+          const clicked = await scope.evaluate((matcherSource) => {
+            const re = new RegExp(matcherSource.source, matcherSource.flags);
+            const visible = (el) => {
+              const rect = el.getBoundingClientRect();
+              const style = window.getComputedStyle(el);
+              return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+            };
+            const nodes = Array.from(document.querySelectorAll('button, [role="button"], [role="menuitem"], [role="option"], [data-tid], span, div'));
+            for (const node of nodes) {
+              if (!visible(node)) continue;
+              const text = `${node.getAttribute("aria-label") || ""} ${node.getAttribute("title") || ""} ${node.innerText || node.textContent || ""}`;
+              if (!re.test(text)) continue;
+              const clickable = node.closest('button, [role="button"], [role="menuitem"], [role="option"]') || node;
+              clickable.click();
+              return true;
+            }
+            return false;
+          }, { source: matcher.source, flags: matcher.flags }).catch(() => false);
+          if (clicked) {
             await targetPage.waitForTimeout(700);
             return true;
           }
@@ -2743,10 +2986,40 @@ const enableTeamsLiveCaptions = async (targetPage) => {
   };
 
   if (await tryClick([/More/i, /Weitere/i, /Mehr/i])) {
-    await tryClick([/Language and speech/i, /Sprache und Spracherkennung/i, /Speech/i]);
-    await tryClick([/Turn on live captions/i, /Live captions/i, /Untertitel aktivieren/i, /Liveuntertitel/i]);
+    if (!(await tryClick([/^Captions$/i, /^Live captions$/i, /^Untertitel$/i, /^Liveuntertitel$/i, /Turn on live captions/i, /Untertitel aktivieren/i]))) {
+      await tryClick([/Language and speech/i, /Sprache und Spracherkennung/i, /Speech/i]);
+      await tryClick([/Turn on live captions/i, /^Live captions$/i, /^Captions$/i, /Untertitel aktivieren/i, /^Liveuntertitel$/i, /^Untertitel$/i]);
+    }
   }
   await targetPage.keyboard.press(process.platform === "darwin" ? "Meta+Shift+C" : "Control+Shift+C").catch(() => {});
+};
+
+const muteTeamsMicrophone = async (targetPage) => {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const clicked = await targetPage.evaluate(() => {
+      const visible = (el) => {
+        const rect = el.getBoundingClientRect();
+        const style = window.getComputedStyle(el);
+        return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+      };
+      const buttons = Array.from(document.querySelectorAll("button, [role='button']"));
+      for (const button of buttons) {
+        if (!visible(button)) continue;
+        const label = `${button.getAttribute("aria-label") || ""} ${button.getAttribute("title") || ""} ${button.innerText || button.textContent || ""}`;
+        if (!/(mute mic|mute microphone|mikrofon stummschalten|stumm schalten)/i.test(label)) continue;
+        if (/(unmute|nicht mehr stumm|stummschaltung aufheben)/i.test(label)) continue;
+        button.click();
+        return true;
+      }
+      return false;
+    }).catch(() => false);
+    if (clicked) {
+      await targetPage.waitForTimeout(700);
+      return true;
+    }
+    await targetPage.waitForTimeout(700);
+  }
+  return false;
 };
 
 // --- Join the meeting ---
@@ -2816,7 +3089,9 @@ if (provider === "zoom") {
   stopZoomRemovalMonitor = startZoomRemovalMonitor(page);
 }
 if (provider === "microsoft") {
+  await muteTeamsMicrophone(page).catch((err) => emit({ type: "warning", message: "Teams microphone mute failed: " + err.message }));
   await enableTeamsLiveCaptions(page).catch((err) => emit({ type: "warning", message: "Teams live captions activation failed: " + err.message }));
+  await muteTeamsMicrophone(page).catch(() => {});
 }
 
 // --- Live meeting observers: chat, captions, active speaker, participants ---
@@ -2844,8 +3119,16 @@ const parseCaptionNode = (node, providerName) => {
   const raw = compactText(node.innerText || node.textContent || "");
   if (!raw || raw.length < 2 || raw.length > 1200) return null;
   if (/^(chat|people|participants|teilnehmer|leave|verlassen)$/i.test(raw)) return null;
-  if (/messages? addressed to|direct messages? are private/i.test(raw)) return null;
   const aria = node.getAttribute?.("aria-label") || "";
+  const className = String(node.getAttribute?.("class") || "");
+  const dataTid = String(node.getAttribute?.("data-tid") || "");
+  const role = String(node.getAttribute?.("role") || "");
+  const captionish = /(caption|closed-caption|transcript|subtitle|untertitel)/i.test(`${aria} ${className} ${dataTid}`);
+  if (/messages? addressed to|direct messages? are private/i.test(raw)) return null;
+  if (/^(new notification|notification)[:：]/i.test(raw)) return null;
+  if (/your video stopped working|camera and plugging it back|use another device/i.test(raw)) return null;
+  if (providerName === "microsoft" && /(status|alert|log)/i.test(role) && !captionish) return null;
+  if (providerName === "microsoft" && !captionish) return null;
   let speaker = "";
   let text = raw;
   const labelled = aria.match(/(?:caption|transcript|live caption).*?(?:from|by)\s+(.+?)[,:-]\s*(.+)$/i);
@@ -2893,8 +3176,6 @@ const scrapeTranscriptEntries = (providerName) => {
     microsoft: [
       '[data-tid*="closed-caption" i]',
       '[data-tid*="caption" i]',
-      '[aria-live="polite"]',
-      '[aria-live="assertive"]',
       '[class*="caption" i]',
       '[class*="transcript" i]',
     ],
@@ -2983,6 +3264,8 @@ const scrapeActiveSpeaker = (providerName) => {
 const knownChatKeys = new Set();
 const knownTranscriptKeys = new Set();
 let lastSpeakerKey = "";
+let lastSpeakerProbeAt = 0;
+let currentDirectSpeaker = "";
 
 const installChatObservers = async () => {
   await page.exposeFunction("ctoxObservedChatMessage", (msg) => {
@@ -2991,6 +3274,9 @@ const installChatObservers = async () => {
     const key = `${sender}|${msg.text}`;
     if (knownChatKeys.has(key)) return;
     knownChatKeys.add(key);
+    page.evaluate(({ text, sender }) => {
+      window.__ctoxTranscriptOverlayPush?.(text, sender);
+    }, { text: msg.text, sender }).catch(() => {});
     emit({ type: "chat", sender, text: msg.text, ts: msg.ts || new Date().toISOString() });
   }).catch(() => {});
 
@@ -3062,6 +3348,9 @@ const chatPollInterval = setInterval(async () => {
       const key = `${msg.sender}|${msg.text}`;
       if (!knownChatKeys.has(key)) {
         knownChatKeys.add(key);
+        await page.evaluate(({ text, sender }) => {
+          window.__ctoxTranscriptOverlayPush?.(text, sender);
+        }, { text: msg.text, sender: msg.sender }).catch(() => {});
         emit({ type: "chat", sender: msg.sender, text: msg.text, ts: msg.ts || new Date().toISOString() });
       }
     }
@@ -3078,6 +3367,24 @@ const transcriptPollInterval = setInterval(async () => {
           return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
         } catch { return false; }
       };
+      const queryAllDeep = (root, selector, limit = 700) => {
+        const out = [];
+        const visit = (scope) => {
+          if (!scope || out.length >= limit) return;
+          try {
+            for (const node of Array.from(scope.querySelectorAll(selector))) {
+              out.push(node);
+              if (out.length >= limit) return;
+            }
+            for (const node of Array.from(scope.querySelectorAll("*"))) {
+              if (out.length >= limit) return;
+              if (node.shadowRoot) visit(node.shadowRoot);
+            }
+          } catch {}
+        };
+        visit(root);
+        return out;
+      };
       const compactText = (value) => String(value || "").replace(/\s+/g, " ").trim();
       const cleanSpeakerName = (value) => {
         let name = compactText(value)
@@ -3087,12 +3394,20 @@ const transcriptPollInterval = setInterval(async () => {
         if (!name || name.length > 96) return "";
         return name;
       };
-      const parseCaptionNode = (node) => {
+const parseCaptionNode = (node) => {
         const raw = compactText(node.innerText || node.textContent || "");
         if (!raw || raw.length < 2 || raw.length > 1200) return null;
         if (/^(chat|people|participants|teilnehmer|leave|verlassen)$/i.test(raw)) return null;
-        if (/messages? addressed to|direct messages? are private/i.test(raw)) return null;
         const aria = node.getAttribute?.("aria-label") || "";
+        const className = String(node.getAttribute?.("class") || "");
+        const dataTid = String(node.getAttribute?.("data-tid") || "");
+        const role = String(node.getAttribute?.("role") || "");
+        const captionish = /(caption|closed-caption|transcript|subtitle|untertitel)/i.test(`${aria} ${className} ${dataTid}`);
+        if (/messages? addressed to|direct messages? are private/i.test(raw)) return null;
+        if (/^(new notification|notification)[:：]/i.test(raw)) return null;
+        if (/your video stopped working|camera and plugging it back|use another device/i.test(raw)) return null;
+        if (providerName === "microsoft" && /(status|alert|log)/i.test(role) && !captionish) return null;
+        if (providerName === "microsoft" && !captionish) return null;
         let speaker = "";
         let text = raw;
         const labelled = aria.match(/(?:caption|transcript|live caption).*?(?:from|by)\s+(.+?)[,:-]\s*(.+)$/i);
@@ -3129,7 +3444,7 @@ const transcriptPollInterval = setInterval(async () => {
       } catch {}
       const selectorsByProvider = {
         google: ['[aria-live="polite"]', '[aria-live="assertive"]', '[role="status"]', '[jsname][data-ved]', '[class*="caption" i]'],
-        microsoft: ['[data-tid*="closed-caption" i]', '[data-tid*="caption" i]', '[aria-live="polite"]', '[aria-live="assertive"]', '[class*="caption" i]', '[class*="transcript" i]'],
+        microsoft: ['[data-tid*="closed-caption" i]', '[data-tid*="caption" i]', '[class*="caption" i]', '[class*="transcript" i]'],
         zoom: ['.live-transcription-subtitle', '.closed-caption', '[class*="caption" i]', '[class*="transcription" i]', '[aria-live="polite"]', '[aria-live="assertive"]'],
       };
       const selectors = selectorsByProvider[providerName] || selectorsByProvider.google;
@@ -3150,6 +3465,9 @@ const transcriptPollInterval = setInterval(async () => {
       const key = `${entry.speaker}|${entry.text}`;
       if (knownTranscriptKeys.has(key)) continue;
       knownTranscriptKeys.add(key);
+      await page.evaluate(({ text, speaker }) => {
+        window.__ctoxTranscriptOverlayPush?.(text, speaker);
+      }, { text: entry.text, speaker: entry.speaker }).catch(() => {});
       emit({ type: "transcript_segment", ...entry });
     }
   } catch {}
@@ -3157,7 +3475,7 @@ const transcriptPollInterval = setInterval(async () => {
 
 const speakerPollInterval = setInterval(async () => {
   try {
-    const signal = await page.evaluate((providerName) => {
+    const signal = await page.evaluate(({ providerName, botNameValue }) => {
       const visibleNode = (el) => {
         try {
           const rect = el.getBoundingClientRect();
@@ -3166,13 +3484,61 @@ const speakerPollInterval = setInterval(async () => {
         } catch { return false; }
       };
       const compactText = (value) => String(value || "").replace(/\s+/g, " ").trim();
+      const botLower = compactText(botNameValue || "").toLowerCase();
+      const isBotOrUiName = (value) => {
+        const v = compactText(value).toLowerCase();
+        if (!v) return true;
+        if (botLower && v.includes(botLower)) return true;
+        return /^(you|me|ich|du|chat|people|participants|teilnehmer|personen|camera|microphone|leave|verlassen|more|caption|captions|notes)$/i.test(v);
+      };
       const cleanSpeakerName = (value) => {
         let name = compactText(value)
-          .replace(/\b(is speaking|speaking|active speaker|current speaker|spricht|aktueller sprecher)\b/ig, "")
+          .replace(/\b(is speaking|speaking|active speaker|current speaker|spricht|aktueller sprecher|ist am sprechen|spricht gerade)\b/ig, "")
+          .replace(/\b(muted|unmuted|stummgeschaltet|nicht stummgeschaltet|microphone|mikrofon|camera|kamera|pinned|angeheftet)\b/ig, "")
           .replace(/[:|,-]+$/g, "")
           .trim();
-        if (!name || name.length > 96) return "";
+        if (!name || name.length > 96 || isBotOrUiName(name)) return "";
         return name;
+      };
+      const parseAriaSpeaker = (value) => {
+        const raw = compactText(value);
+        if (!raw) return "";
+        const patterns = [
+          /^(.+?)(?:,|\s)+(?:is speaking|speaking)$/i,
+          /^(.+?)(?:,|\s)+(?:spricht|spricht gerade|ist am sprechen)$/i,
+          /(?:active speaker|current speaker)[:,-]?\s*(.+)$/i,
+          /(?:aktueller sprecher)[:,-]?\s*(.+)$/i,
+        ];
+        for (const pattern of patterns) {
+          const match = raw.match(pattern);
+          if (match) {
+            const speaker = cleanSpeakerName(match[1]);
+            if (speaker) return speaker;
+          }
+        }
+        return cleanSpeakerName(raw);
+      };
+      const extractSpeakerFromNode = (node) => {
+        const attrs = [
+          node.getAttribute?.("aria-label"),
+          node.getAttribute?.("title"),
+          node.getAttribute?.("data-participant-name"),
+          node.getAttribute?.("data-self-name"),
+          node.getAttribute?.("data-display-name"),
+        ].filter(Boolean);
+        for (const attr of attrs) {
+          const speaker = parseAriaSpeaker(attr);
+          if (speaker) return speaker;
+        }
+        const nameNode = node.querySelector?.('[data-self-name], [data-participant-name], [data-display-name], [class*="name" i], [class*="display" i], [data-tid*="name" i]');
+        const speakerFromName = cleanSpeakerName(nameNode?.textContent || nameNode?.getAttribute?.("aria-label") || "");
+        if (speakerFromName) return speakerFromName;
+        const lines = (node.innerText || node.textContent || "").split(/\n+/).map(compactText).filter(Boolean);
+        for (const line of lines) {
+          const speaker = cleanSpeakerName(line);
+          if (speaker) return speaker;
+        }
+        return "";
       };
       const doms = [document];
       try {
@@ -3181,42 +3547,102 @@ const speakerPollInterval = setInterval(async () => {
       } catch {}
       const selectorsByProvider = {
         google: ['[data-speaking="true"]', '[aria-label*="speaking" i]', '[aria-label*="spricht" i]', '[class*="speaking" i]', '[class*="active-speaker" i]'],
-        microsoft: ['[data-tid*="active-speaker" i]', '[data-tid*="speaking" i]', '[aria-label*="speaking" i]', '[aria-label*="spricht" i]', '[class*="speaking" i]'],
+        microsoft: [
+          '[data-tid*="active-speaker" i]',
+          '[data-tid*="speaking" i]',
+          '[data-is-speaking="true"]',
+          '[data-speaking="true"]',
+          '[aria-label*="speaking" i]',
+          '[aria-label*="spricht" i]',
+          '[class*="speaking" i]',
+          '[class*="activeSpeaker" i]',
+          '[class*="active-speaker" i]',
+        ],
         zoom: ['[aria-label*="active speaker" i]', '[aria-label*="speaking" i]', '[class*="active-speaker" i]', '[class*="activeSpeaker" i]', '[class*="is-speaking" i]'],
       };
       const selectors = selectorsByProvider[providerName] || selectorsByProvider.google;
       for (const dom of doms) {
         for (const selector of selectors) {
-          for (const node of Array.from(dom.querySelectorAll(selector))) {
+          for (const node of queryAllDeep(dom, selector, 500)) {
             if (!visibleNode(node)) continue;
-            const aria = node.getAttribute("aria-label") || node.getAttribute("title") || "";
-            let speaker = cleanSpeakerName(aria);
-            if (!speaker) {
-              const nameNode = node.querySelector?.('[data-self-name], [data-participant-name], [class*="name" i], [class*="display" i]');
-              speaker = cleanSpeakerName(nameNode?.textContent || "");
-            }
-            if (!speaker) {
-              const lines = (node.innerText || node.textContent || "").split(/\n+/).map(compactText).filter(Boolean);
-              speaker = cleanSpeakerName(lines.find(line => line.length <= 80) || "");
-            }
+            const tile = node.closest?.('[data-tid*="participant" i], [data-tid*="tile" i], [role="group"], [role="listitem"]') || node;
+            const speaker = extractSpeakerFromNode(tile) || extractSpeakerFromNode(node);
             if (!speaker) continue;
             return {
               speaker,
-              speaker_id: node.getAttribute("data-participant-id") || node.getAttribute("data-user-id") || "",
+              speaker_id: node.getAttribute("data-participant-id") || tile.getAttribute?.("data-participant-id") || node.getAttribute("data-user-id") || "",
               source: "platform_active_speaker",
-              confidence: 0.6,
+              confidence: 0.75,
               provider: providerName,
               ts: new Date().toISOString(),
             };
           }
         }
       }
+      if (providerName === "microsoft") {
+        for (const dom of doms) {
+          const candidates = queryAllDeep(dom, '[data-tid*="participant" i], [data-tid*="tile" i], [role="group"], [role="listitem"]', 700);
+          for (const node of candidates) {
+            if (!visibleNode(node)) continue;
+            const text = `${node.getAttribute("data-tid") || ""} ${node.className || ""} ${node.getAttribute("aria-label") || ""}`;
+            if (!/(speaking|active-speaker|activeSpeaker|spricht)/i.test(text)) continue;
+            const speaker = extractSpeakerFromNode(node);
+            if (!speaker) continue;
+            return {
+              speaker,
+              speaker_id: node.getAttribute("data-participant-id") || node.getAttribute("data-user-id") || "",
+              source: "platform_active_speaker",
+              confidence: 0.65,
+              provider: providerName,
+              ts: new Date().toISOString(),
+            };
+          }
+        }
+        const probeRows = [];
+        for (const dom of doms) {
+          const bodyText = compactText((dom.body || dom.documentElement || dom).innerText || "");
+          if (bodyText) probeRows.push(`body | visible-text | ${bodyText.slice(0, 420)}`);
+          const candidates = queryAllDeep(dom, '[data-tid], [aria-label], [role="group"], [role="listitem"], [role="button"], [role="img"], button, video', 1200);
+          for (const node of candidates) {
+            if (!visibleNode(node)) continue;
+            const tid = compactText(node.getAttribute?.("data-tid") || "");
+            const aria = compactText(node.getAttribute?.("aria-label") || "");
+            const title = compactText(node.getAttribute?.("title") || "");
+            const klass = compactText(String(node.className || ""));
+            const text = compactText((node.innerText || node.textContent || "").split(/\n+/).slice(0, 5).join(" / "));
+            const nameish = [aria, title, text].join(" ");
+            const blob = `${tid} ${aria} ${title} ${klass} ${text}`;
+            const interesting = /(speaker|speaking|spricht|active|participant|tile|people|person|teilnehmer|microphone|mute|noise|rauschen|camera|kamera|video|name|author)/i.test(blob)
+              || /\b[A-ZÄÖÜ][a-zäöüß]+ [A-ZÄÖÜ][a-zäöüß]+\b/.test(nameish);
+            if (!interesting) continue;
+            probeRows.push(`${tid || "no-tid"} | ${aria || title || "no-label"} | ${text || "no-text"}`.slice(0, 240));
+            if (probeRows.length >= 16) break;
+          }
+          if (probeRows.length >= 16) break;
+        }
+        if (probeRows.length) {
+          return {
+            probe: probeRows.join(" || "),
+            provider: providerName,
+            ts: new Date().toISOString(),
+          };
+        }
+      }
       return null;
-    }, provider);
+    }, { providerName: provider, botNameValue: botName });
+    if (signal?.probe) {
+      const now = Date.now();
+      if (now - lastSpeakerProbeAt > 10000) {
+        lastSpeakerProbeAt = now;
+        emit({ type: "speaker_probe", text: signal.probe, provider: signal.provider, ts: signal.ts });
+      }
+      return;
+    }
     if (!signal?.speaker) return;
     const key = `${signal.speaker}|${signal.source}`;
     if (key === lastSpeakerKey) return;
     lastSpeakerKey = key;
+    if (provider === "microsoft") currentDirectSpeaker = signal.speaker;
     emit({ type: "active_speaker", ...signal });
   } catch {}
 }, 1000);
@@ -3285,13 +3711,13 @@ if (provider === "microsoft" && process.platform !== "darwin") {
   const display = process.env.DISPLAY || ":99";
   const runtimeDir = process.env.XDG_RUNTIME_DIR || (typeof process.getuid === "function" ? `/run/user/${process.getuid()}` : undefined);
   const ffmpegArgs = [
-    "-y", "-loglevel", "info",
-    "-f", "x11grab", "-video_size", "1280x720", "-framerate", "25",
+    "-y", "-loglevel", "warning",
+    "-f", "x11grab", "-video_size", "1280x720", "-framerate", "8",
     "-draw_mouse", "0", "-i", `${display}+0,80`,
     "-f", "pulse", "-ac", "2", "-ar", "44100", "-i", "virtual_output.monitor",
-    "-c:v", "libx264", "-preset", "faster", "-pix_fmt", "yuv420p", "-crf", "23",
-    "-g", "50", "-threads", "0",
-    "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2", "-strict", "experimental",
+    "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-pix_fmt", "yuv420p", "-crf", "32",
+    "-g", "16", "-threads", "1",
+    "-c:a", "aac", "-b:a", "96k", "-ar", "44100", "-ac", "1", "-strict", "experimental",
     "-vsync", "cfr", "-async", "1",
     "-movflags", "+faststart",
     outputPath,
@@ -3302,7 +3728,7 @@ if (provider === "microsoft" && process.platform !== "darwin") {
   });
   ffmpeg.on("error", (err) => {
     emit({ type: "ffmpeg_error", text: err.message || String(err) });
-    window.ctoxMeetingEnd?.("ffmpeg_error");
+    meetingEnded = true;
   });
   ffmpeg.stderr.on("data", (d) => {
     const s = d.toString();
@@ -3311,9 +3737,249 @@ if (provider === "microsoft" && process.platform !== "darwin") {
   ffmpeg.on("exit", (code) => {
     if (code !== 0 && code !== null) {
       emit({ type: "ffmpeg_exit", code });
-      window.ctoxMeetingEnd?.("ffmpeg_exit");
+      meetingEnded = true;
     }
   });
+
+  // Teams realtime STT: stream raw 16 kHz PCM into Mistral's realtime
+  // transcription API. This deliberately replaces the old file-segment path:
+  // completed WAV chunks are batch STT and must not drive a live transcript UI.
+  const realtimeScriptPath = path.join(tempDir, "mistral_realtime_stt.py");
+  fs.writeFileSync(realtimeScriptPath, String.raw`import asyncio
+import json
+import os
+import sys
+
+try:
+    from mistralai.client import Mistral
+    from mistralai.client.models import AudioFormat
+except Exception as exc:
+    print(json.dumps({"type": "error", "message": "missing mistralai realtime SDK: " + str(exc)}), flush=True)
+    sys.exit(4)
+
+api_key = os.environ.get("CTOX_MISTRAL_API_KEY") or os.environ.get("MISTRAL_API_KEY")
+if not api_key:
+    print(json.dumps({"type": "error", "message": "missing CTOX_MISTRAL_API_KEY/MISTRAL_API_KEY"}), flush=True)
+    sys.exit(3)
+
+model = os.environ.get("CTOX_MISTRAL_REALTIME_STT_MODEL", "voxtral-mini-transcribe-realtime-2602")
+delay_ms = int(os.environ.get("CTOX_MISTRAL_REALTIME_DELAY_MS", "1000"))
+chunk_bytes = int(os.environ.get("CTOX_MISTRAL_REALTIME_PCM_CHUNK_BYTES", "6400"))
+client = Mistral(api_key=api_key)
+
+async def audio_stream():
+    loop = asyncio.get_running_loop()
+    while True:
+        data = await loop.run_in_executor(None, sys.stdin.buffer.read, chunk_bytes)
+        if not data:
+            break
+        yield data
+
+def event_text(event):
+    for attr in ("text", "delta", "transcript"):
+        value = getattr(event, attr, None)
+        if isinstance(value, str) and value.strip():
+            return value
+    data = getattr(event, "data", None)
+    if isinstance(data, dict):
+        for key in ("text", "delta", "transcript"):
+            value = data.get(key)
+            if isinstance(value, str) and value.strip():
+                return value
+    return ""
+
+async def main():
+    print(json.dumps({"type": "ready", "model": model, "delay_ms": delay_ms}), flush=True)
+    async for event in client.audio.realtime.transcribe_stream(
+        audio_stream=audio_stream(),
+        model=model,
+        audio_format=AudioFormat(encoding="pcm_s16le", sample_rate=16000),
+        target_streaming_delay_ms=delay_ms,
+    ):
+        text = event_text(event)
+        if text:
+            print(json.dumps({"type": "delta", "text": text}, ensure_ascii=False), flush=True)
+
+asyncio.run(main())
+`);
+  const realtimePcm = spawn("ffmpeg", [
+    "-y", "-loglevel", "warning",
+    "-f", "pulse", "-ac", "1", "-ar", "16000", "-i", "virtual_output.monitor",
+    "-vn", "-f", "s16le", "-acodec", "pcm_s16le", "-ac", "1", "-ar", "16000", "-"
+  ], {
+    stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, ...(runtimeDir ? { XDG_RUNTIME_DIR: runtimeDir } : {}), DISPLAY: display },
+  });
+  const realtimeStt = spawn("python3", [realtimeScriptPath], {
+    stdio: ["pipe", "pipe", "pipe"],
+    env: { ...process.env, PYTHONUNBUFFERED: "1" },
+  });
+  realtimePcm.stdout.pipe(realtimeStt.stdin);
+  realtimePcm.stderr.on("data", (d) => {
+    const s = d.toString();
+    if (s.includes("error") || s.includes("Error")) emit({ type: "warning", message: "Teams realtime PCM ffmpeg: " + s.substring(0, 180) });
+  });
+  realtimePcm.on("error", (err) => emit({ type: "warning", message: "Teams realtime PCM ffmpeg failed: " + (err.message || String(err)) }));
+  realtimeStt.on("error", (err) => emit({ type: "warning", message: "Mistral realtime STT failed: " + (err.message || String(err)) }));
+  realtimeStt.stderr.on("data", (d) => {
+    const s = d.toString();
+    if (s.trim()) emit({ type: "browser_log", level: "warning", text: "[MISTRAL_REALTIME_STT] " + s.substring(0, 500) });
+  });
+  const realtimeRl = readline.createInterface({ input: realtimeStt.stdout });
+  let realtimeBuffer = "";
+  let realtimeFlushTimer = null;
+  const flushRealtimeBuffer = () => {
+    const text = realtimeBuffer.replace(/\s+/g, " ").trim();
+    realtimeBuffer = "";
+    realtimeFlushTimer = null;
+    if (!text) return;
+    const speaker = currentDirectSpeaker || "unknown";
+    page.evaluate(({ text, speaker }) => {
+      window.__ctoxTranscriptOverlayPush?.(text, speaker, "realtime_stt");
+    }, { text, speaker }).catch(() => {});
+    emit({
+      type: "transcript_segment",
+      speaker,
+      source: "realtime_stt",
+      confidence: currentDirectSpeaker ? 0.68 : 0.5,
+      provider,
+      text,
+      ts: new Date().toISOString(),
+    });
+  };
+  realtimeRl.on("line", (line) => {
+    let msg = null;
+    try { msg = JSON.parse(line); } catch { return; }
+    if (msg.type === "ready") {
+      emit({ type: "status", status: "mistral_realtime_stt_ready", model: msg.model, delay_ms: msg.delay_ms });
+      return;
+    }
+    if (msg.type === "error") {
+      emit({ type: "warning", message: "Mistral realtime STT: " + msg.message });
+      return;
+    }
+    if (msg.type !== "delta" || !msg.text) return;
+    realtimeBuffer = `${realtimeBuffer} ${msg.text}`.trim();
+    if (/[.!?。！？]\s*$/.test(realtimeBuffer) || realtimeBuffer.length >= 220) {
+      if (realtimeFlushTimer) clearTimeout(realtimeFlushTimer);
+      flushRealtimeBuffer();
+    } else if (!realtimeFlushTimer) {
+      realtimeFlushTimer = setTimeout(flushRealtimeBuffer, 700);
+    }
+  });
+  const terminateTeamsMediaChildren = () => {
+    for (const child of [realtimeStt, realtimePcm, ffmpeg]) {
+      try {
+        if (child && !child.killed) child.kill("SIGTERM");
+      } catch {}
+    }
+  };
+  process.once("SIGTERM", () => {
+    terminateTeamsMediaChildren();
+    process.exit(143);
+  });
+  process.once("SIGINT", () => {
+    terminateTeamsMediaChildren();
+    process.exit(130);
+  });
+  const sendTeamsChatFromBranch = async (text) => {
+    try { await page.keyboard.press("Escape"); } catch {}
+    const scopes = () => [page, ...page.frames().filter((frame) => frame !== page.mainFrame())];
+    const chatButtonMatchers = [/chat/i, /unterhaltung/i, /conversation/i, /messages/i, /nachrichten/i];
+    for (const scope of scopes()) {
+      for (const matcher of chatButtonMatchers) {
+        try {
+          const button = scope.getByRole("button", { name: matcher }).first();
+          if (await button.isVisible({ timeout: 1000 }).catch(() => false)) {
+            await button.click({ force: true });
+            await page.waitForTimeout(1000);
+            break;
+          }
+        } catch {}
+      }
+    }
+    const inputSelectors = [
+      '.chat-rtf-box__editor-outer [contenteditable="true"]',
+      '.chat-rtf-box__display',
+      '.tiptap.ProseMirror',
+      '[contenteditable="true"][aria-label*="message" i]',
+      '[contenteditable="true"][data-tid*="message" i]',
+      '[data-tid="meeting-chat-input"] [contenteditable="true"]',
+      'textarea[placeholder*="message" i]',
+      'textarea[placeholder*="Type" i]',
+      'textarea[aria-label*="message" i]',
+      'textarea[aria-label*="Send" i]',
+      'input[placeholder*="message" i]',
+      'input[placeholder*="Type" i]',
+      'input[aria-label*="message" i]',
+      '[contenteditable="true"]',
+      '[role="textbox"]',
+    ];
+    for (const scope of scopes()) {
+      for (const selector of inputSelectors) {
+        try {
+          const input = scope.locator(selector).last();
+          if (!(await input.isVisible({ timeout: 1000 }).catch(() => false))) continue;
+          await input.click({ force: true });
+          const editable = await input.evaluate((el) => el.isContentEditable || el.getAttribute("role") === "textbox").catch(() => false);
+          if (editable) {
+            await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A").catch(() => {});
+            await page.keyboard.type(text, { delay: 10 });
+          } else {
+            try { await input.fill(text); }
+            catch {
+              await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A").catch(() => {});
+              await page.keyboard.type(text, { delay: 10 });
+            }
+          }
+          await page.keyboard.press("Enter");
+          return true;
+        } catch {}
+      }
+    }
+    return false;
+  };
+
+  const handleTeamsCommandLine = async (line) => {
+    try {
+      const cmd = JSON.parse(line);
+      if (cmd.action === "send_chat") {
+        emit({ type: "command_received", action: "send_chat" });
+        const sent = await sendTeamsChatFromBranch(cmd.text);
+        emit(sent ? { type: "chat_sent", text: cmd.text } : { type: "chat_send_failed", text: cmd.text });
+      } else if (cmd.action === "overlay_text") {
+        emit({ type: "command_received", action: "overlay_text" });
+        await page.evaluate(({ text, speaker }) => {
+          window.__ctoxTranscriptOverlayPush?.(text, speaker);
+        }, { text: cmd.text || "", speaker: cmd.speaker || "unknown" }).catch(() => {});
+      }
+    } catch (err) {
+      emit({ type: "error", message: err.message });
+    }
+  };
+
+  let teamsCommandFileOffset = 0;
+  const teamsCommandFilePollInterval = setInterval(async () => {
+    if (!commandFile) return;
+    try {
+      if (!fs.existsSync(commandFile)) return;
+      const stat = fs.statSync(commandFile);
+      if (stat.size < teamsCommandFileOffset) teamsCommandFileOffset = 0;
+      if (stat.size === teamsCommandFileOffset) return;
+      const fd = fs.openSync(commandFile, "r");
+      try {
+        const buffer = Buffer.alloc(stat.size - teamsCommandFileOffset);
+        fs.readSync(fd, buffer, 0, buffer.length, teamsCommandFileOffset);
+        teamsCommandFileOffset = stat.size;
+        const lines = buffer.toString("utf8").split(/\r?\n/).filter(Boolean);
+        for (const commandLine of lines) await handleTeamsCommandLine(commandLine);
+      } finally {
+        fs.closeSync(fd);
+      }
+    } catch (err) {
+      emit({ type: "warning", message: "teams command file poll failed: " + err.message });
+    }
+  }, 500);
 
   // Teams participant detection (from reference) + audio silence via parec
   await page.evaluate(({ maxMs, inactivityMinutes }) => {
@@ -3337,7 +4003,9 @@ if (provider === "microsoft" && process.platform !== "darwin") {
     }, inactivityMinutes * 60 * 1000);
   }, { maxMs: maxDurationMs, inactivityMinutes: 1 });
 
-  // Teams also monitors audio silence via parec (Node-side)
+  // Teams also monitors audio silence via parec (Node-side). Silence is useful
+  // telemetry, but it must not end the meeting while participants are present:
+  // real meetings often have quiet stretches.
   const monitorTeamsSilence = () => {
     let consecutiveSilent = 0;
     const checksNeeded = Math.ceil((2 * 60 * 1000) / 1000 / 5); // 2min inactivity
@@ -3348,7 +4016,13 @@ if (provider === "microsoft" && process.platform !== "darwin") {
           "od -An -td2 -v | awk 'BEGIN{max=0} {for(i=1;i<=NF;i++) {val=($i<0)?-$i:$i; if(val>max) max=val}} END{print max}'"
         ).toString();
         const peak = parseInt(out.trim()) || 0;
-        if (peak < 200) { consecutiveSilent++; if (consecutiveSilent >= checksNeeded) { clearInterval(iv); meetingEnded = true; } }
+        if (peak < 200) {
+          consecutiveSilent++;
+          if (consecutiveSilent >= checksNeeded) {
+            emit({ type: "status", status: "audio_silence_detected" });
+            consecutiveSilent = 0;
+          }
+        }
         else consecutiveSilent = 0;
       } catch {}
     }, 5000);
@@ -3361,18 +4035,27 @@ if (provider === "microsoft" && process.platform !== "darwin") {
     await new Promise(r => setTimeout(r, 1000));
   }
 
-  // Graceful ffmpeg stop
+  // Graceful realtime STT + ffmpeg stop.
+  clearInterval(teamsCommandFilePollInterval);
+  if (realtimeFlushTimer) {
+    clearTimeout(realtimeFlushTimer);
+    flushRealtimeBuffer();
+  }
+  try { realtimeRl.close(); } catch {}
+  try { realtimePcm.kill("SIGTERM"); } catch {}
+  try { realtimeStt.stdin.end(); } catch {}
+  try { realtimeStt.kill("SIGTERM"); } catch {}
+  await Promise.all([
+    new Promise(r => { realtimePcm.on("exit", r); setTimeout(() => { try { realtimePcm.kill("SIGKILL"); } catch {} r(); }, 5000); }),
+    new Promise(r => { realtimeStt.on("exit", r); setTimeout(() => { try { realtimeStt.kill("SIGKILL"); } catch {} r(); }, 5000); }),
+  ]);
   try { ffmpeg.stdin.write("q\n"); ffmpeg.stdin.end(); } catch { ffmpeg.kill("SIGTERM"); }
   await new Promise(r => { ffmpeg.on("exit", r); setTimeout(() => { try { ffmpeg.kill("SIGKILL"); } catch {} r(); }, 20000); });
 
-  // Read the recording and emit as chunks
+  // Persist the screen recording artifact. Audio chunks are emitted by the
+  // segmenter above; do not call browser-exposed functions from Node here.
   if (fs.existsSync(outputPath)) {
     emit({ type: "recording_artifact", path: outputPath, name: "screen-recording", extension: "mp4" });
-    const buffer = fs.readFileSync(outputPath);
-    let binary = "";
-    const bytes = new Uint8Array(buffer);
-    for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
-    await window.ctoxAudioChunk({ base64: btoa(binary), extension: "mp4" });
     fs.unlinkSync(outputPath);
   }
 
@@ -3617,6 +4300,11 @@ const handleCommandLine = async (line) => {
       } else {
         emit({ type: "chat_send_failed", text: cmd.text });
       }
+    } else if (cmd.action === "overlay_text") {
+      emit({ type: "command_received", action: "overlay_text" });
+      await page.evaluate(({ text, speaker }) => {
+        window.__ctoxTranscriptOverlayPush?.(text, speaker);
+      }, { text: cmd.text || "", speaker: cmd.speaker || "unknown" }).catch(() => {});
     }
   } catch (err) {
     emit({ type: "error", message: err.message });
@@ -4229,23 +4917,9 @@ try {
     emit({ type: "warning", message: "Teams audio option not selected: " + err.message });
   }
 
-  // 3. Toggle off camera and mute microphone
+  // 3. Keep the injected transcript camera on, mute microphone
   try {
     await page.waitForTimeout(2000);
-    // Camera off
-    const cameraSelectors = [
-      'input[data-tid="toggle-video"][checked]',
-      'input[type="checkbox"][title*="Turn camera off" i]',
-      'input[role="switch"][data-tid="toggle-video"]',
-      'button[aria-label*="Turn camera off" i]',
-      'button[aria-label*="Camera off" i]',
-    ];
-    for (const sel of cameraSelectors) {
-      const el = page.locator(sel).first();
-      if (await el.isVisible({ timeout: 2000 }).catch(() => false)) {
-        await el.click(); await page.waitForTimeout(500); break;
-      }
-    }
     // Microphone mute
     const micSelectors = [
       'input[data-tid="toggle-mute"]:not([checked])',
@@ -5428,6 +6102,8 @@ mod tests {
             max_duration_minutes: 60,
             audio_chunk_seconds: 30,
             stt_model: String::new(),
+            realtime_stt_model: "voxtral-mini-transcribe-realtime-2602".to_string(),
+            mistral_api_key: None,
         };
         let mut session = MeetingSession::new(&config);
 
@@ -5440,9 +6116,14 @@ mod tests {
         assert!(!session.is_own_message("Michael Welsch", "@CTOX hello"));
         assert!(!session.is_own_message("Participant", "regular message"));
 
-        // Sender misattributed to "Participant" but text starts with bot name + colon
-        assert!(session.is_own_message("Participant", "INF Yoda Notetaker: I heard you"));
-        assert!(session.is_own_message("Participant", "INF Yoda Notetaker To everyone: hi"));
+        // Addressing the bot by name is an inbound mention, not self-loop.
+        assert!(!session.is_own_message("Participant", "INF Yoda Notetaker: I heard you"));
+        assert!(MeetingSession::is_mention(
+            "INF Yoda Notetaker: I heard you"
+        ));
+        assert!(MeetingSession::is_mention(
+            "INF\u{00a0}Yoda\u{00a0}Notetaker: bitte pruefen"
+        ));
         session
             .outbound_chat_texts
             .push("CTOX Test: Chat-Bridge aktiv.".to_string());
@@ -5463,6 +6144,8 @@ mod tests {
             max_duration_minutes: 180,
             audio_chunk_seconds: 30,
             stt_model: String::new(),
+            realtime_stt_model: "voxtral-mini-transcribe-realtime-2602".to_string(),
+            mistral_api_key: None,
         };
         let session = MeetingSession::new(&config);
         let json = session.to_json();
@@ -5507,6 +6190,8 @@ mod tests {
             max_duration_minutes: 180,
             audio_chunk_seconds: 30,
             stt_model: DEFAULT_MEETING_STT_MODEL.to_string(),
+            realtime_stt_model: "voxtral-mini-transcribe-realtime-2602".to_string(),
+            mistral_api_key: None,
         };
         let mut session = MeetingSession::new(&config);
         session.push_platform_transcript(TranscriptSegment {
@@ -5537,6 +6222,8 @@ mod tests {
             max_duration_minutes: 180,
             audio_chunk_seconds: 30,
             stt_model: DEFAULT_MEETING_STT_MODEL.to_string(),
+            realtime_stt_model: "voxtral-mini-transcribe-realtime-2602".to_string(),
+            mistral_api_key: None,
         };
         let mut session = MeetingSession::new(&config);
         let signal = SpeakerSignal {
@@ -5568,6 +6255,8 @@ mod tests {
             max_duration_minutes: 180,
             audio_chunk_seconds: 30,
             stt_model: DEFAULT_MEETING_STT_MODEL.to_string(),
+            realtime_stt_model: "voxtral-mini-transcribe-realtime-2602".to_string(),
+            mistral_api_key: None,
         };
         let mut session = MeetingSession::new(&config);
         session.push_platform_transcript(TranscriptSegment {
@@ -5599,6 +6288,8 @@ mod tests {
             max_duration_minutes: 180,
             audio_chunk_seconds: 30,
             stt_model: DEFAULT_MEETING_STT_MODEL.to_string(),
+            realtime_stt_model: "voxtral-mini-transcribe-realtime-2602".to_string(),
+            mistral_api_key: None,
         };
         let mut session = MeetingSession::new(&config);
         session.push_platform_transcript(TranscriptSegment {
@@ -5666,6 +6357,8 @@ mod tests {
                 max_duration_minutes: 60,
                 audio_chunk_seconds: 30,
                 stt_model: String::new(),
+                realtime_stt_model: "voxtral-mini-transcribe-realtime-2602".to_string(),
+                mistral_api_key: None,
             };
             let script = build_meeting_runner_script(&config).unwrap();
             assert!(script.contains("chromium"));
@@ -6040,7 +6733,7 @@ mod tests {
     fn simulate_meeting_runs_offline_post_meeting_pipeline() {
         let root = temp_root("simulate");
         let fixture = root.join("fixture.wav");
-        std::fs::write(&fixture, b"RIFFdemo").expect("fixture audio");
+        std::fs::write(&fixture, vec![0_u8; 4096]).expect("fixture audio");
         let args = vec![
             "--provider".to_string(),
             "zoom".to_string(),
@@ -6086,6 +6779,8 @@ mod tests {
             max_duration_minutes: 60,
             audio_chunk_seconds: 30,
             stt_model: String::new(),
+            realtime_stt_model: "voxtral-mini-transcribe-realtime-2602".to_string(),
+            mistral_api_key: None,
         };
         let mut session = MeetingSession::new(&config);
         session.session_id = "meeting-google-finalize-test".to_string();
@@ -6169,6 +6864,8 @@ mod tests {
             max_duration_minutes: 60,
             audio_chunk_seconds: 30,
             stt_model: String::new(),
+            realtime_stt_model: "voxtral-mini-transcribe-realtime-2602".to_string(),
+            mistral_api_key: None,
         };
         let script = build_meeting_runner_script_with_timeout(&config).unwrap();
         // Verify transplanted reference detection logic is present
@@ -6264,6 +6961,34 @@ mod tests {
             teams_script.contains(r#"type: "recording_artifact""#),
             "Teams should preserve the full ffmpeg recording as an artifact"
         );
+        assert!(
+            teams_script.contains("mistral_realtime_stt.py"),
+            "Teams should write the realtime STT helper"
+        );
+        assert!(
+            teams_script.contains("client.audio.realtime.transcribe_stream"),
+            "Teams live transcript must use Mistral realtime streaming"
+        );
+        assert!(
+            teams_script.contains("voxtral-mini-transcribe-realtime-2602"),
+            "Teams should default to the Voxtral realtime model"
+        );
+        assert!(
+            teams_script.contains("AudioFormat(encoding=\"pcm_s16le\", sample_rate=16000)"),
+            "Teams should stream raw 16 kHz PCM into realtime STT"
+        );
+        assert!(
+            !teams_script.contains("teams-audio-chunks"),
+            "Teams live transcript must not use file chunk directories"
+        );
+        assert!(
+            !teams_script.contains("audioSegmenter"),
+            "Teams live transcript must not use the old batch segmenter"
+        );
+        assert!(
+            !teams_script.contains("Live-ish Teams STT"),
+            "Teams should not present delayed batch STT as live transcript"
+        );
     }
 
     #[test]
@@ -6276,6 +7001,8 @@ mod tests {
             max_duration_minutes: 60,
             audio_chunk_seconds: 30,
             stt_model: String::new(),
+            realtime_stt_model: "voxtral-mini-transcribe-realtime-2602".to_string(),
+            mistral_api_key: None,
         };
         let google_script = build_meeting_runner_script(&google_config).unwrap();
         assert!(google_script.contains("getDisplayMedia"));
