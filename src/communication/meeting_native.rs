@@ -1020,7 +1020,7 @@ pub(crate) fn run_meeting_session(root: &Path, config: &MeetingSessionConfig) ->
             .and_then(Value::as_str)
             .unwrap_or("not_live_ready");
         eprintln!(
-            "[meeting] local live STT disabled ({reason}); meeting overlay will use realtime STT or platform captions only"
+            "[meeting] local live STT disabled ({reason}); microsoft meeting overlay requires realtime STT and will not fall back to Teams captions"
         );
     }
 
@@ -1979,7 +1979,9 @@ impl MeetingSessionConfig {
             .or_else(|| runtime_setting_or_env(runtime, "CTOX_STT_REALTIME_MODEL"))
             .unwrap_or_else(|| "voxtral-mini-transcribe-realtime-2602".to_string());
         let mistral_api_key = runtime_setting_or_env(runtime, "CTOX_MISTRAL_API_KEY")
-            .or_else(|| runtime_setting_or_env(runtime, "MISTRAL_API_KEY"));
+            .or_else(|| runtime_setting_or_env(runtime, "MISTRAL_API_KEY"))
+            .or_else(|| crate::secrets::get_credential(root, "CTOX_MISTRAL_API_KEY"))
+            .or_else(|| crate::secrets::get_credential(root, "MISTRAL_API_KEY"));
         Ok(Self {
             root: root.to_path_buf(),
             meeting_url: meeting_url.to_string(),
@@ -2754,6 +2756,7 @@ if (provider === "microsoft") {
       const clean = compact(text);
       if (!clean || /^(sending|message sent)$/i.test(clean)) return;
       if (source === "chat") return;
+      if (source === "platform_caption") return;
       const now = Date.now();
       if (source === "realtime_stt") {
         state.primarySource = "realtime_stt";
@@ -2777,8 +2780,14 @@ if (provider === "microsoft") {
         state.entries.push({ speaker: normalizedSpeaker, text: compacted, source, seq: state.sequence, ts: now });
       }
       state.entries = state.entries.slice(-10);
-      state.status = source === "platform_caption" ? "Teams-Captions aktiv" : "Realtime-STT aktiv";
+      state.status = "Realtime-STT aktiv";
       state.updatedAt = now;
+    };
+    window.__ctoxTranscriptOverlaySetStatus = (status) => {
+      const clean = compact(status);
+      if (!clean) return;
+      state.status = clean;
+      state.updatedAt = Date.now();
     };
     const originalGetUserMedia = navigator.mediaDevices?.getUserMedia?.bind(navigator.mediaDevices);
     if (!originalGetUserMedia) return;
@@ -3124,7 +3133,11 @@ if (provider === "zoom") {
 }
 if (provider === "microsoft") {
   await muteTeamsMicrophone(page).catch((err) => emit({ type: "warning", message: "Teams microphone mute failed: " + err.message }));
-  await enableTeamsLiveCaptions(page).catch((err) => emit({ type: "warning", message: "Teams live captions activation failed: " + err.message }));
+  // Do not enable or consume Teams captions for Microsoft meetings. They are
+  // client-side captions with Teams-controlled language settings and produced
+  // unusable English hallucinations in German meetings. The Microsoft path must
+  // use direct audio -> Mistral realtime STT, and fail visibly if that path is
+  // unavailable.
   await muteTeamsMicrophone(page).catch(() => {});
 }
 
@@ -3387,6 +3400,7 @@ const chatPollInterval = setInterval(async () => {
 
 const transcriptPollInterval = setInterval(async () => {
   try {
+    if (provider === "microsoft") return;
     const entries = await page.evaluate((providerName) => {
       const visibleNode = (el) => {
         try {
@@ -3791,15 +3805,18 @@ if not api_key:
     sys.exit(3)
 
 model = os.environ.get("CTOX_MISTRAL_REALTIME_STT_MODEL", "voxtral-mini-transcribe-realtime-2602")
-delay_ms = int(os.environ.get("CTOX_MISTRAL_REALTIME_DELAY_MS", "1000"))
-chunk_bytes = int(os.environ.get("CTOX_MISTRAL_REALTIME_PCM_CHUNK_BYTES", "6400"))
+delay_ms = int(os.environ.get("CTOX_MISTRAL_REALTIME_DELAY_MS", "2400"))
+chunk_bytes = int(os.environ.get("CTOX_MISTRAL_REALTIME_PCM_CHUNK_BYTES", "15360"))
 client = Mistral(api_key=api_key)
+audio_eof = False
 
 async def audio_stream():
+    global audio_eof
     loop = asyncio.get_running_loop()
     while True:
         data = await loop.run_in_executor(None, sys.stdin.buffer.read, chunk_bytes)
         if not data:
+            audio_eof = True
             break
         yield data
 
@@ -3816,17 +3833,51 @@ def event_text(event):
                 return value
     return ""
 
+def event_type(event):
+    value = getattr(event, "type", None)
+    return value if isinstance(value, str) else type(event).__name__
+
+def event_error_message(event):
+    error = getattr(event, "error", None)
+    if error is None:
+        return ""
+    message = getattr(error, "message", None)
+    code = getattr(error, "code", None)
+    if isinstance(message, str) and message.strip():
+        return f"{message} (code={code})" if code is not None else message
+    return str(error)
+
 async def main():
-    print(json.dumps({"type": "ready", "model": model, "delay_ms": delay_ms}), flush=True)
-    async for event in client.audio.realtime.transcribe_stream(
-        audio_stream=audio_stream(),
-        model=model,
-        audio_format=AudioFormat(encoding="pcm_s16le", sample_rate=16000),
-        target_streaming_delay_ms=delay_ms,
-    ):
-        text = event_text(event)
-        if text:
-            print(json.dumps({"type": "delta", "text": text}, ensure_ascii=False), flush=True)
+    attempt = 0
+    while True:
+        attempt += 1
+        ready = False
+        try:
+            async for event in client.audio.realtime.transcribe_stream(
+                audio_stream=audio_stream(),
+                model=model,
+                audio_format=AudioFormat(encoding="pcm_s16le", sample_rate=16000),
+                target_streaming_delay_ms=delay_ms,
+            ):
+                kind = event_type(event)
+                if kind == "session.created" and not ready:
+                    ready = True
+                    print(json.dumps({"type": "ready", "model": model, "delay_ms": delay_ms, "attempt": attempt}), flush=True)
+                    continue
+                if kind == "error" or type(event).__name__ == "RealtimeTranscriptionError":
+                    print(json.dumps({"type": "error", "message": event_error_message(event) or repr(event), "attempt": attempt}), flush=True)
+                    break
+                text = event_text(event)
+                if text:
+                    print(json.dumps({"type": "delta", "text": text}, ensure_ascii=False), flush=True)
+            if audio_eof:
+                break
+            await asyncio.sleep(min(2 * attempt, 10))
+        except Exception as exc:
+            print(json.dumps({"type": "error", "message": str(exc), "attempt": attempt}), flush=True)
+            if audio_eof:
+                break
+            await asyncio.sleep(min(2 * attempt, 10))
 
 asyncio.run(main())
 `);
@@ -3856,6 +3907,9 @@ asyncio.run(main())
   const realtimeRl = readline.createInterface({ input: realtimeStt.stdout });
   let realtimeBuffer = "";
   let realtimeFlushTimer = null;
+  let realtimeReady = false;
+  let realtimeDeltaSeen = false;
+  let realtimeNoTextTimer = null;
   const flushRealtimeBuffer = () => {
     const text = realtimeBuffer.replace(/\s+/g, " ").trim();
     realtimeBuffer = "";
@@ -3879,14 +3933,34 @@ asyncio.run(main())
     let msg = null;
     try { msg = JSON.parse(line); } catch { return; }
     if (msg.type === "ready") {
+      realtimeReady = true;
       emit({ type: "status", status: "mistral_realtime_stt_ready", model: msg.model, delay_ms: msg.delay_ms });
+      page.evaluate(() => {
+        window.__ctoxTranscriptOverlaySetStatus?.("Realtime-STT verbunden - warte auf Sprache");
+      }).catch(() => {});
+      realtimeNoTextTimer = setTimeout(() => {
+        if (realtimeReady && !realtimeDeltaSeen) {
+          page.evaluate(() => {
+            window.__ctoxTranscriptOverlaySetStatus?.("Realtime-STT verbunden, aber noch kein Transkript");
+          }).catch(() => {});
+          emit({ type: "warning", message: "Mistral realtime STT connected but produced no text yet; Teams captions are disabled" });
+        }
+      }, 12000);
       return;
     }
     if (msg.type === "error") {
       emit({ type: "warning", message: "Mistral realtime STT: " + msg.message });
+      page.evaluate(({ message }) => {
+        window.__ctoxTranscriptOverlaySetStatus?.(`Realtime-STT reconnect - ${message}`);
+      }, { message: String(msg.message || "unknown").slice(0, 240) }).catch(() => {});
       return;
     }
     if (msg.type !== "delta" || !msg.text) return;
+    realtimeDeltaSeen = true;
+    if (realtimeNoTextTimer) {
+      clearTimeout(realtimeNoTextTimer);
+      realtimeNoTextTimer = null;
+    }
     realtimeBuffer = `${realtimeBuffer}${msg.text}`;
     if (/[.!?。！？]\s*$/.test(realtimeBuffer.trim()) || realtimeBuffer.length >= 320) {
       if (realtimeFlushTimer) clearTimeout(realtimeFlushTimer);
