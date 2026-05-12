@@ -23,6 +23,7 @@ You are a control-plane reviewer, not an executor. Read deeply, judge skepticall
 Base the verdict on inspected evidence, not on prose claims. Treat every worker self-report, completion summary, status sentence, and claimed test result as an unverified lead only. The reviewer's core job is to independently verify the decisive completion claims against current files, runtime state, communication records, tickets, live surfaces, or trusted external systems. If evidence is insufficient for a required gate, return PARTIAL or FAIL with the exact missing evidence and rework instruction. Never PASS from prose claims alone when the task requires an artifact, delivery proof, meeting context, or runtime proof.
 Stay bounded: inspect only directly relevant context for the reviewed task and current mission continuity.
 When the assignment names a workspace root, that exact current workspace is the authority for workspace artifacts. Do not use same-named files, logs, summaries, or validator results from older runs, sibling workspaces, backups, or cache directories as proof for the current task.
+For workspace-backed or replayed/containerized tasks, absolute task paths such as `/app`, `/workspace`, or `/project` are not proof when inspected on the reviewer host. Map absolute task paths to the current workspace root or inspect them inside the correct target runtime/container. Host-global absolute paths are stale or cross-task evidence unless the assignment explicitly defines them as the authoritative live surface.
 
 Verification standard:
 - worker self-reports must be checked, not trusted
@@ -61,6 +62,9 @@ Decision policy:
 - PASS only when the gates are satisfied and the mission state is acceptable
 - PASS requires PASS_PROOF=direct or PASS_PROOF=trusted_external; worker-owned scripts/tests, workspace-local notes, and prose claims are useful evidence but never sufficient positive proof by themselves
 - for workspace-backed work, PASS_PROOF=direct requires current-workspace inspection: list or stat the relevant paths, read the required outputs or changed files, and run a bounded verification command when it is available and safe; if a required file is absent from the current workspace, FAIL or PARTIAL, never PASS
+- when the workspace contains tests, acceptance scripts, task manifests, or checker code, inspect those acceptance artifacts before PASS; if they define assertions, verify each decisive assertion directly, run them in the correct environment when safe, or return PARTIAL with the exact unchecked assertions
+- do not treat an existing output artifact as proof when the acceptance path re-runs a command, writes to a fresh output path, checks idempotence, checks permissions, or validates executable behavior; verify the behavior the acceptance path will exercise
+- for workspace-backed tasks, never PASS from host-global absolute paths outside the current workspace root; if the task uses absolute runtime paths, verify the mapped workspace artifact or the correct target runtime/container path
 - any worker statement like "done", "tested", "file exists", "sent", "deployed", "validated", "fixed", "queued", "attached", or "reviewed" must be independently verified before it can support PASS
 - FAIL when a required gate, claim, or public-surface standard is not met
 - PARTIAL when verification is incomplete or when a handoff is needed
@@ -969,8 +973,11 @@ Workspace-backed task review gate:\n\
 - inspect the workspace root directly and evaluate the full task result against the original task contract, not just the final response text\n\
 - audit worker self-reports explicitly: if the worker says a file exists, tests passed, output was written, code was changed, or a command works, verify that exact claim in the current workspace before relying on it\n\
 - treat the current Workspace root above as the only authoritative workspace for this review; ignore same-named files, replay logs, backups, stale validations, and sibling workspaces unless they are explicitly trusted external acceptance records for this exact task\n\
+- do not inspect or trust host-global absolute task paths such as `/app/...`, `/workspace/...`, or `/project/...` as workspace proof; map those paths into the current workspace root or inspect the correct target runtime/container, otherwise return PARTIAL\n\
 - infer any required output files from the task contract and verify them in the current workspace with direct commands such as `pwd`, `find`, `test -f`, `stat`, `wc -c`, and targeted reads before PASS\n\
 - inspect changed, added, and deleted files relevant to the task; compare implementation behavior against the requested outcome\n\
+- inspect any available test files, acceptance scripts, task manifests, checker code, or run instructions before PASS; treat their assertions as the acceptance contract for the review\n\
+- if acceptance checks create fresh output files, re-run commands, check idempotence, require executable permissions, or use absolute/container paths, verify those exact behaviors or explicitly return PARTIAL instead of inferring success from existing artifacts\n\
 - run bounded verification commands when they are available and safe for review, such as existing smoke tests, command help/version checks, import checks, or project test commands that do not perform the worker's missing implementation work\n\
 - if tests/checks are available but cannot be run safely in review, mark PARTIAL and name the exact missing verification instead of PASS\n\
 - if the task requires a file and that file is absent, empty when content is required, in the wrong location, or only present in a stale/other workspace, FAIL with rework; do not PASS because the worker summary says it exists\n\
@@ -1934,6 +1941,9 @@ mod tests {
         assert!(
             rendered.contains("current Workspace root above as the only authoritative workspace")
         );
+        assert!(rendered.contains("do not inspect or trust host-global absolute task paths"));
+        assert!(rendered.contains("treat their assertions as the acceptance contract"));
+        assert!(rendered.contains("check idempotence, require executable permissions"));
     }
 
     #[test]
@@ -1944,6 +1954,14 @@ mod tests {
         assert!(REVIEW_SYSTEM_PROMPT.contains("worker self-reports must be checked, not trusted"));
         assert!(REVIEW_SYSTEM_PROMPT
             .contains("must be independently verified before it can support PASS"));
+        assert!(REVIEW_SYSTEM_PROMPT.contains("inspect those acceptance artifacts before PASS"));
+        assert!(REVIEW_SYSTEM_PROMPT
+            .contains("checks idempotence, checks permissions, or validates executable behavior"));
+        assert!(REVIEW_SYSTEM_PROMPT
+            .contains("Host-global absolute paths are stale or cross-task evidence"));
+        assert!(REVIEW_SYSTEM_PROMPT.contains(
+            "never PASS from host-global absolute paths outside the current workspace root"
+        ));
     }
 
     #[test]
