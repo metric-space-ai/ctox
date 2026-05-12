@@ -44,44 +44,48 @@ Anna's Archive support is intentionally metadata-only. The tool may use it to
 discover bibliographic records when `--include-annas-archive` is explicit, but
 it must not download or reproduce unauthorized copyrighted full text.
 
-## Default search provider
+## Search providers
 
-`ctox_web_search` defaults to DuckDuckGo (`duckduckgo`) so normal search does
-not open Chrome, clone a browser profile, or depend on Google session cookies.
-Google search remains available by setting the local CTOX runtime config key
-`CTOX_WEB_SEARCH_PROVIDER` to `google`, `google_browser`, or
-`google_bootstrap_native`.
+`ctox_web_search` defaults to provider `auto`, which cascades
+`Google → Brave → DuckDuckGo → Bing` with rate-limit cooldown and a quality
+gate. Set `CTOX_WEB_SEARCH_PROVIDER` in the CTOX SQLite runtime config to pin
+a specific backend.
 
-## Google bootstrap profile
+| Provider | Notes |
+| --- | --- |
+| `auto` (default) | Google → Brave → DuckDuckGo → Bing cascade |
+| `brave` | Brave HTML scrape |
+| `bing` | Bing HTML scrape |
+| `duckduckgo` / `ddg` | DuckDuckGo HTML scrape (header-augmented to avoid the anomaly modal) |
+| `google` | Playwright-driven Google with stealth init script + EU consent dismissal. Needs `ctox web browser-prepare --install-reference --install-browser` once; state persists in `runtime/google_browser_state/`. |
+| `searxng` | Forwards to a user-hosted SearXNG instance set via `CTOX_WEB_SEARCH_SEARXNG_BASE_URL` |
+| `annas_archive` | Anna's Archive metadata only |
+| `mock` | Deterministic fixture provider for tests |
 
-`ctox_web_search` with the explicit `google_bootstrap_native` provider fronts
-Google search with a cookie profile sampled from a headed Chrome session. The
-profile is persisted at `runtime/google_bootstrap_native_profile.json` with
-mode `0600` — **it holds live Google session cookies (SID, __Secure-1PSID,
-SAPISID, …) that are equivalent to a logged-in auth token for the signed-in
-Google account**. Treat the file with the same care as an OAuth refresh
-token:
+### Google notes
 
-- Do not commit it, back it up unencrypted, or copy it to shared hosts.
-- On headless servers, sample the profile on a GUI host and transfer it via
-  `ctox web google-bootstrap-import --file <path>` — the import re-applies
-  `0600` permissions.
-- Run `ctox web google-doctor` to check pipeline readiness (Chrome binary,
-  Playwright workspace, helper binary, profile freshness, DISPLAY availability).
+The `google` provider drives a Playwright-launched persistent-context Chromium
+with stealth measures (`--disable-blink-features=AutomationControlled`,
+`navigator.webdriver` masked, fake `chrome.runtime` / plugins / languages,
+WebGL vendor patched) and automatically dismisses the EU cookie consent
+banner. Latency is typically 1–3 s per query once the state directory is warm.
+
+On a fully headless server without a display Google's `/sorry/index` CAPTCHA
+can still trigger; the provider surfaces this as an error so the auto-cascade
+can fall through to Brave/Bing/DuckDuckGo. There is no longer a separate
+cookie-bootstrap profile flow — Playwright owns the entire Google path.
 
 ### Runtime config keys
 
 | Key | Purpose |
 | --- | --- |
-| `CTOX_WEB_SEARCH_OPENAI_MODE` | `ctox_primary` (default) routes OpenAI `web_search` tool calls through CTOX; `passthrough` forwards them upstream unchanged. |
-| `CTOX_WEB_SEARCH_PROVIDER` | `duckduckgo` (default through `auto`), `google`, `google_browser`, `google_bootstrap_native`, `bing`, `searxng`, or `mock`. |
-| `CTOX_WEB_GOOGLE_BOOTSTRAP_TTL_SECS` | Proactive profile refresh window. Default `21600` (6h). |
-| `CTOX_WEB_GOOGLE_BOOTSTRAP_PROFILE_PATH` | Override persisted profile location. |
-| `CTOX_WEB_GOOGLE_BOOTSTRAP_PROBE` | Override probe script (used by tests). |
+| `CTOX_WEB_SEARCH_OPENAI_MODE` | `local_stack` / `ctox_primary` routes OpenAI `web_search` tool calls through CTOX; `openai` / `passthrough` forwards them upstream unchanged. |
+| `CTOX_WEB_SEARCH_PROVIDER` | `auto` (default), `brave`, `bing`, `duckduckgo`, `google`, `searxng`, `annas_archive`, or `mock`. |
+| `CTOX_WEB_SEARCH_SEARXNG_BASE_URL` | Required when `CTOX_WEB_SEARCH_PROVIDER=searxng`. |
+| `CTOX_WEB_SEARCH_LANGUAGE` / `CTOX_WEB_SEARCH_REGION` | Forwarded to providers as locale/`gl` hints. |
+| `CTOX_WEB_SEARCH_TIMEOUT_MS` | Per-request timeout for HTTP and Playwright paths (default 7000). |
+| `CTOX_WEB_AUTO_PROVIDER_BUDGET` | Max providers tried per query in `auto` mode (default 4). |
 | `CTOX_WEB_BROWSER_REFERENCE_DIR` | Directory containing `node_modules/playwright`. Defaults to `runtime/browser/interactive-reference`. |
-| `CTOX_WEB_GOOGLE_BOOTSTRAP_QUIT_RUNNING_CHROME` | `1` to explicitly allow the Google bootstrap probe to ask Chrome to quit before cloning. Default is leave running. |
-| `CTOX_WEB_CHROME_BIN` | Explicit path to the Chrome/Chromium executable for `google_bootstrap_native`; not auto-discovered. |
-| `CTOX_WEB_CHROME_USER_DATA_DIR` | Explicit path to the Chrome profile to clone for `google_bootstrap_native`; not auto-discovered. |
 
 These keys are read from CTOX's local SQLite runtime config store, not from
 global process environment variables.

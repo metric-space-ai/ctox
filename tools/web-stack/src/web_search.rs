@@ -20,15 +20,13 @@ use std::sync::OnceLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use url::Url;
 
-use crate::google_engine;
 use crate::runtime_config;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum ProviderKind {
     Auto,
     Google,
-    GoogleBootstrapNative,
-    GoogleBrowser,
+    Brave,
     DuckDuckGo,
     Bing,
     Searxng,
@@ -46,10 +44,15 @@ impl ProviderKind {
             .as_str()
         {
             "auto" | "" => Self::Auto,
-            "google_bootstrap_native" | "google_bootstrapped" | "google_hybrid" => {
-                Self::GoogleBootstrapNative
-            }
-            "google_browser" => Self::GoogleBrowser,
+            "google"
+            | "playwright_google"
+            | "google_playwright"
+            | "google_pw"
+            | "google_browser"
+            | "google_bootstrap_native"
+            | "google_bootstrapped"
+            | "google_hybrid" => Self::Google,
+            "brave" | "brave_search" => Self::Brave,
             "duckduckgo" | "ddg" => Self::DuckDuckGo,
             "bing" => Self::Bing,
             "mock" => Self::Mock,
@@ -57,7 +60,7 @@ impl ProviderKind {
             "annas_archive" | "annas-archive" | "anna_archive" | "anna-archive" | "annas" => {
                 Self::AnnasArchive
             }
-            _ => Self::Google,
+            _ => Self::Auto,
         }
     }
 
@@ -65,28 +68,12 @@ impl ProviderKind {
         match self {
             Self::Auto => "auto",
             Self::Google => "google",
-            Self::GoogleBootstrapNative => "google_bootstrap_native",
-            Self::GoogleBrowser => "google_browser",
+            Self::Brave => "brave",
             Self::DuckDuckGo => "duckduckgo",
             Self::Bing => "bing",
             Self::Searxng => "searxng",
             Self::AnnasArchive => "annas_archive",
             Self::Mock => "mock",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum GoogleFetchTransport {
-    Native,
-    BrowserClone,
-}
-
-impl GoogleFetchTransport {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Native => "native",
-            Self::BrowserClone => "browser_clone",
         }
     }
 }
@@ -189,12 +176,13 @@ impl OpenAiWebSearchCompatMode {
     fn from_root(root: &Path) -> Self {
         match runtime_config::get(root, "CTOX_WEB_SEARCH_OPENAI_MODE")
             .as_deref()
-            .unwrap_or("ctox_primary")
+            .unwrap_or("local_stack")
             .trim()
             .to_ascii_lowercase()
             .as_str()
         {
             "openai" | "openai_passthrough" | "passthrough" | "compat" => Self::Passthrough,
+            "local_stack" | "ctox" | "ctox_primary" => Self::CtoxPrimary,
             _ => Self::CtoxPrimary,
         }
     }
@@ -214,7 +202,6 @@ struct SearchConfig {
     default_safe_search: bool,
     cache_ttl_secs: u64,
     page_cache_ttl_secs: u64,
-    google_bootstrap_ttl_secs: u64,
     max_page_bytes: usize,
     max_page_chars: usize,
     max_pdf_pages: usize,
@@ -241,16 +228,6 @@ impl SearchConfig {
             default_safe_search: read_bool(root, "CTOX_WEB_SEARCH_SAFE", true),
             cache_ttl_secs: read_u64(root, "CTOX_WEB_SEARCH_CACHE_TTL_SECS", 86_400),
             page_cache_ttl_secs: read_u64(root, "CTOX_WEB_SEARCH_PAGE_CACHE_TTL_SECS", 259_200),
-            // Google session cookies stay valid for weeks, and the google_bootstrap_native
-            // path already forces a reactive refresh whenever a fetch sees a challenge
-            // (see fetch_google_response_via_helper error handler). A 6-hour proactive
-            // TTL avoids constant Chrome-quit cycles while still catching silent cookie
-            // rotations within the same working day.
-            google_bootstrap_ttl_secs: read_u64(
-                root,
-                "CTOX_WEB_GOOGLE_BOOTSTRAP_TTL_SECS",
-                21_600,
-            ),
             max_page_bytes: read_usize(root, "CTOX_WEB_SEARCH_MAX_PAGE_BYTES", 2_000_000),
             max_page_chars: read_usize(root, "CTOX_WEB_SEARCH_MAX_PAGE_CHARS", 16_000),
             max_pdf_pages: read_usize(root, "CTOX_WEB_SEARCH_MAX_PDF_PAGES", 12),
@@ -657,250 +634,6 @@ pub fn run_ctox_web_search_tool(root: &Path, request: &CanonicalWebSearchRequest
     ))
 }
 
-pub fn run_ctox_google_bootstrap_refresh_tool(
-    root: &Path,
-    query: &str,
-    allowed_domains: &[String],
-    timeout_ms: Option<u64>,
-) -> Result<Value> {
-    let config = SearchConfig::from_root(root);
-    let query_text = normalize_text(query)
-        .context("ctox web google-bootstrap-refresh requires --query <text>")?;
-    let tool_request = SearchToolRequest {
-        allowed_domains: allowed_domains.to_vec(),
-        ..Default::default()
-    };
-    let search_query = SearchQuery {
-        text: build_search_text(&query_text, &tool_request.allowed_domains),
-        count: config.default_top_k.min(config.max_top_k.max(1)),
-        offset: 0,
-        language: config.default_language.clone(),
-        region: derive_region(&config, &tool_request.user_location),
-        safe_search: if config.default_safe_search { 1 } else { 0 },
-    };
-    let google_query = google_engine::GoogleQuery {
-        text: search_query.text.clone(),
-        language: search_query.language,
-        region: search_query.region,
-        safe_search: search_query.safe_search,
-    };
-    let plan = google_engine::build_request_plan(&google_query, 1)?;
-    let wait_timeout_secs = timeout_ms.unwrap_or(300_000).clamp(30_000, 900_000) / 1000;
-    let profile_path = google_bootstrap_profile_path(root);
-    let (profile, summary) = refresh_google_bootstrap_profile_interactive(
-        root,
-        &profile_path,
-        &plan,
-        wait_timeout_secs,
-    )?;
-    Ok(json!({
-        "ok": true,
-        "tool": "ctox_google_bootstrap_refresh",
-        "provider": "google_bootstrap_native",
-        "query": query_text,
-        "allowed_domains": tool_request.allowed_domains,
-        "profile_path": profile_path.display().to_string(),
-        "bootstrap_ttl_secs": config.google_bootstrap_ttl_secs,
-        "final_url": summary.final_url,
-        "title": summary.title,
-        "cookie_name_count": profile.cookie_header.split(';').filter(|part| !part.trim().is_empty()).count(),
-        "extra_header_names": profile.extra_headers.keys().cloned().collect::<Vec<_>>(),
-        "message": "Google bootstrap profile refreshed from a user-cleared browser session. Subsequent google_bootstrap_native searches will use the refreshed native session state."
-    }))
-}
-
-pub fn run_ctox_google_bootstrap_status_tool(root: &Path) -> Result<Value> {
-    let config = SearchConfig::from_root(root);
-    let profile_path = google_bootstrap_profile_path(root);
-    let profile = read_google_bootstrap_profile_file(&profile_path)?;
-    let age_secs = profile
-        .as_ref()
-        .map(|profile| unix_ts().saturating_sub(profile.created_at_epoch));
-    let fresh = age_secs
-        .map(|age| age <= config.google_bootstrap_ttl_secs)
-        .unwrap_or(false);
-
-    Ok(json!({
-        "ok": true,
-        "tool": "ctox_google_bootstrap_status",
-        "provider": "google_bootstrap_native",
-        "profile_path": profile_path.display().to_string(),
-        "exists": profile.is_some(),
-        "fresh": fresh,
-        "ttl_secs": config.google_bootstrap_ttl_secs,
-        "age_secs": age_secs,
-        "cookie_name_count": profile.as_ref().map(|value| value.cookie_header.split(';').filter(|part| !part.trim().is_empty()).count()),
-        "extra_header_names": profile.as_ref().map(|value| value.extra_headers.keys().cloned().collect::<Vec<_>>()).unwrap_or_default(),
-    }))
-}
-
-pub fn run_ctox_google_bootstrap_doctor_tool(root: &Path) -> Result<Value> {
-    use std::process::Command as StdCommand;
-
-    let python3 = which_first(&["python3"]);
-    let node = which_first(&["node"]);
-    let node_version = node.as_ref().and_then(|path| {
-        StdCommand::new(path)
-            .arg("--version")
-            .output()
-            .ok()
-            .and_then(|out| {
-                if out.status.success() {
-                    Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
-                } else {
-                    None
-                }
-            })
-    });
-
-    let helper_bin = google_fetch_binary_path(root);
-    let probe_script = google_bootstrap_probe_script_path(root);
-    let probe_driver = probe_script.with_file_name("browser_profile_probe.mjs");
-    let reference_dir = runtime_config::get(root, "CTOX_WEB_BROWSER_REFERENCE_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| root.join("runtime/browser/interactive-reference"));
-    let playwright_ok = reference_dir.join("node_modules/playwright").exists();
-
-    let chrome_bin = runtime_config::get(root, "CTOX_WEB_CHROME_BIN").map(PathBuf::from);
-    let chrome_user_data_dir =
-        runtime_config::get(root, "CTOX_WEB_CHROME_USER_DATA_DIR").map(PathBuf::from);
-
-    let profile_path = google_bootstrap_profile_path(root);
-    let profile = read_google_bootstrap_profile_file(&profile_path)
-        .ok()
-        .flatten();
-    let config = SearchConfig::from_root(root);
-    let age_secs = profile
-        .as_ref()
-        .map(|profile| unix_ts().saturating_sub(profile.created_at_epoch));
-    let profile_fresh = age_secs
-        .map(|age| age <= config.google_bootstrap_ttl_secs)
-        .unwrap_or(false);
-    let profile_permissions = profile_file_permissions(&profile_path);
-
-    let headless_no_gui = looks_headless_without_browser_session();
-
-    let mut ready = true;
-    let mut issues = Vec::new();
-    if python3.is_none() {
-        ready = false;
-        issues.push("python3 is not on PATH");
-    }
-    if node.is_none() {
-        ready = false;
-        issues.push("node is not on PATH");
-    }
-    if !playwright_ok {
-        ready = false;
-        issues.push("playwright is not installed (run `ctox web browser-prepare --install-reference --install-browser`)");
-    }
-    if !helper_bin.exists() {
-        ready = false;
-        issues.push("ctox-google-fetch helper is not built (run `cargo build --release --bin ctox-google-fetch` in tools/google-fetch)");
-    }
-    if !probe_script.exists() || !probe_driver.exists() {
-        ready = false;
-        issues.push("probe script pair is missing (expected browser_profile_probe.py + .mjs in tools/google-fetch)");
-    }
-    if headless_no_gui {
-        issues.push("no DISPLAY/WAYLAND_DISPLAY; live refresh is disabled — import a profile with `ctox web google-bootstrap-import`");
-    }
-    if profile.is_none() {
-        ready = false;
-        issues.push("no cached profile; explicit google_bootstrap_native requires `ctox web google-bootstrap-import --file <path>` or configured refresh inputs");
-        if chrome_bin.is_none() {
-            issues.push("CTOX_WEB_CHROME_BIN is not configured in local CTOX runtime config");
-        }
-        if chrome_user_data_dir.is_none() {
-            issues.push(
-                "CTOX_WEB_CHROME_USER_DATA_DIR is not configured in local CTOX runtime config",
-            );
-        }
-    }
-
-    Ok(json!({
-        "ok": ready,
-        "tool": "ctox_google_bootstrap_doctor",
-        "provider": "google_bootstrap_native",
-        "python3_path": python3.map(|p| p.display().to_string()),
-        "node_path": node.map(|p| p.display().to_string()),
-        "node_version": node_version,
-        "chrome_bin": chrome_bin.as_ref().map(|p| p.display().to_string()),
-        "chrome_bin_configured": chrome_bin.is_some(),
-        "chrome_user_data_dir": chrome_user_data_dir.as_ref().map(|p| p.display().to_string()),
-        "chrome_user_data_dir_configured": chrome_user_data_dir.is_some(),
-        "reference_dir": reference_dir.display().to_string(),
-        "playwright_installed": playwright_ok,
-        "helper_binary_path": helper_bin.display().to_string(),
-        "helper_binary_built": helper_bin.exists(),
-        "probe_script_path": probe_script.display().to_string(),
-        "probe_script_present": probe_script.exists(),
-        "probe_driver_path": probe_driver.display().to_string(),
-        "probe_driver_present": probe_driver.exists(),
-        "profile_path": profile_path.display().to_string(),
-        "profile_exists": profile.is_some(),
-        "profile_fresh": profile_fresh,
-        "profile_age_secs": age_secs,
-        "profile_ttl_secs": config.google_bootstrap_ttl_secs,
-        "profile_permissions_octal": profile_permissions,
-        "headless_without_gui": headless_no_gui,
-        "issues": issues,
-    }))
-}
-
-fn which_first(names: &[&str]) -> Option<PathBuf> {
-    use std::env;
-    let path = env::var_os("PATH")?;
-    for name in names {
-        for dir in env::split_paths(&path) {
-            let candidate = dir.join(name);
-            if candidate.is_file() {
-                return Some(candidate);
-            }
-        }
-    }
-    None
-}
-
-#[cfg(unix)]
-fn profile_file_permissions(path: &Path) -> Option<String> {
-    use std::os::unix::fs::PermissionsExt;
-    let meta = fs::metadata(path).ok()?;
-    Some(format!("{:o}", meta.permissions().mode() & 0o777))
-}
-
-#[cfg(not(unix))]
-fn profile_file_permissions(_path: &Path) -> Option<String> {
-    None
-}
-
-pub fn run_ctox_google_bootstrap_import_tool(root: &Path, source: &Path) -> Result<Value> {
-    let raw = fs::read_to_string(source).with_context(|| {
-        format!(
-            "failed to read Google bootstrap profile source {}",
-            source.display()
-        )
-    })?;
-    let mut profile: GoogleBootstrapProfile =
-        serde_json::from_str(&raw).context("failed to decode Google bootstrap profile source")?;
-    validate_google_bootstrap_profile_fields(&profile)?;
-    profile.created_at_epoch = unix_ts();
-
-    let profile_path = google_bootstrap_profile_path(root);
-    persist_google_bootstrap_profile(&profile_path, &profile)?;
-
-    Ok(json!({
-        "ok": true,
-        "tool": "ctox_google_bootstrap_import",
-        "provider": "google_bootstrap_native",
-        "source_path": source.display().to_string(),
-        "profile_path": profile_path.display().to_string(),
-        "cookie_name_count": profile.cookie_header.split(';').filter(|part| !part.trim().is_empty()).count(),
-        "extra_header_names": profile.extra_headers.keys().cloned().collect::<Vec<_>>(),
-        "message": "Google bootstrap profile imported. This headless host can now use google_bootstrap_native until the imported session expires or is challenged again."
-    }))
-}
-
 pub fn run_ctox_web_read_tool(root: &Path, request: &DirectWebReadRequest) -> Result<Value> {
     let config = SearchConfig::from_root(root);
     if !config.enabled {
@@ -1132,43 +865,59 @@ fn search_with_query_plan(
     let mut merged_hits = Vec::new();
     let mut executed_queries = Vec::new();
     let mut providers = Vec::new();
+    let auto_provider = config.provider == ProviderKind::Auto;
+    let provider_candidates = search_provider_candidates(root, config.provider);
+    let provider_budget = auto_provider_budget(root, config.provider);
+    let mut provider_cooldown_until: BTreeMap<ProviderKind, SystemTime> = BTreeMap::new();
+    let mut failures = Vec::new();
 
     for query_text in planned_queries {
         let mut query = base_query.clone();
         query.text = query_text.clone();
-        let provider = resolve_effective_provider(root, config.provider);
-        let response = match provider {
-            ProviderKind::Auto => unreachable!("auto provider must be resolved before execution"),
-            ProviderKind::Google => google_search(
-                root,
-                config,
-                &query,
-                ProviderKind::Google,
-                GoogleFetchTransport::Native,
-                false,
-            ),
-            ProviderKind::GoogleBootstrapNative => google_search(
-                root,
-                config,
-                &query,
-                ProviderKind::GoogleBootstrapNative,
-                GoogleFetchTransport::Native,
-                true,
-            ),
-            ProviderKind::GoogleBrowser => google_search(
-                root,
-                config,
-                &query,
-                ProviderKind::GoogleBrowser,
-                GoogleFetchTransport::BrowserClone,
-                false,
-            ),
-            ProviderKind::DuckDuckGo => duckduckgo_search(config, &query),
-            ProviderKind::Bing => bing_search(config, &query),
-            ProviderKind::Searxng => searxng_search(config, &query),
-            ProviderKind::AnnasArchive => annas_archive_search_as_web(root, &query),
-            ProviderKind::Mock => Ok(mock_search(&query)),
-        }?;
+        let mut accepted_response = None;
+        let mut attempted_providers = 0usize;
+        for provider in &provider_candidates {
+            if auto_provider {
+                if let Some(until) = provider_cooldown_until.get(provider) {
+                    if SystemTime::now() < *until {
+                        failures.push(format!("{}: skipped after rate limit", provider.as_str()));
+                        continue;
+                    }
+                }
+                if attempted_providers >= provider_budget {
+                    failures.push(format!("provider budget exhausted for {}", query.text));
+                    break;
+                }
+                attempted_providers += 1;
+            }
+            let response = match run_search_provider(root, config, &query, *provider) {
+                Ok(response) => response,
+                Err(err) if auto_provider => {
+                    if is_rate_limit_error(&err) {
+                        provider_cooldown_until
+                            .insert(*provider, SystemTime::now() + Duration::from_secs(60));
+                    }
+                    failures.push(format!("{}: {err:#}", provider.as_str()));
+                    continue;
+                }
+                Err(err) => return Err(err),
+            };
+            if auto_provider && !search_response_quality_ok(&query.text, &response.hits) {
+                failures.push(format!(
+                    "{}: low relevance for {}",
+                    provider.as_str(),
+                    query.text
+                ));
+                continue;
+            }
+            accepted_response = Some(response);
+            break;
+        }
+
+        let Some(response) = accepted_response else {
+            executed_queries.push(query.text.clone());
+            continue;
+        };
         if !providers.contains(&response.provider) {
             providers.push(response.provider.clone());
         }
@@ -1190,6 +939,13 @@ fn search_with_query_plan(
         }
     }
 
+    if merged_hits.is_empty() && !failures.is_empty() {
+        bail!(
+            "web search failed to produce relevant results; provider attempts: {}",
+            failures.join("; ")
+        );
+    }
+
     for (index, hit) in merged_hits.iter_mut().enumerate() {
         hit.rank = index + 1;
     }
@@ -1206,6 +962,52 @@ fn search_with_query_plan(
         evidence: Vec::new(),
         executed_queries,
     })
+}
+
+fn search_provider_candidates(root: &Path, provider: ProviderKind) -> Vec<ProviderKind> {
+    if provider != ProviderKind::Auto {
+        return vec![provider];
+    }
+    let _ = root;
+    vec![
+        ProviderKind::Google,
+        ProviderKind::Brave,
+        ProviderKind::DuckDuckGo,
+        ProviderKind::Bing,
+    ]
+}
+
+fn auto_provider_budget(root: &Path, provider: ProviderKind) -> usize {
+    if provider != ProviderKind::Auto {
+        return usize::MAX;
+    }
+    runtime_config::get(root, "CTOX_WEB_AUTO_PROVIDER_BUDGET")
+        .and_then(|raw| raw.trim().parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(4)
+}
+
+fn is_rate_limit_error(err: &anyhow::Error) -> bool {
+    let text = format!("{err:#}").to_ascii_lowercase();
+    text.contains("429") || text.contains("too many requests") || text.contains("rate limit")
+}
+
+fn run_search_provider(
+    root: &Path,
+    config: &SearchConfig,
+    query: &SearchQuery,
+    provider: ProviderKind,
+) -> Result<SearchResponse> {
+    match provider {
+        ProviderKind::Auto => unreachable!("auto provider must be expanded before execution"),
+        ProviderKind::Google => google_search(root, config, query),
+        ProviderKind::Brave => brave_search(config, query),
+        ProviderKind::DuckDuckGo => duckduckgo_search(config, query),
+        ProviderKind::Bing => bing_search(config, query),
+        ProviderKind::Searxng => searxng_search(config, query),
+        ProviderKind::AnnasArchive => annas_archive_search_as_web(root, query),
+        ProviderKind::Mock => Ok(mock_search(query)),
+    }
 }
 
 impl<'a> WebSearchSession<'a> {
@@ -1306,150 +1108,6 @@ impl<'a> WebSearchSession<'a> {
         write_page_cache(self.root, &self.page_cache)
     }
 }
-
-fn google_search(
-    root: &Path,
-    config: &SearchConfig,
-    query: &SearchQuery,
-    provider: ProviderKind,
-    transport: GoogleFetchTransport,
-    bootstrap_native: bool,
-) -> Result<SearchResponse> {
-    if query.offset / 10 >= 50 {
-        return Ok(SearchResponse {
-            provider: provider.as_str().to_string(),
-            hits: Vec::new(),
-            evidence: Vec::new(),
-            executed_queries: vec![query.text.clone()],
-        });
-    }
-
-    let google_query = google_engine::GoogleQuery {
-        text: query.text.clone(),
-        language: query.language.clone(),
-        region: query.region.clone(),
-        safe_search: query.safe_search,
-    };
-    let first_page = (query.offset / 10) + 1;
-    let last_needed_index = query.offset + query.count.saturating_sub(1);
-    let last_page = ((last_needed_index / 10) + 1).min(50);
-    let mut combined = google_engine::ParsedGoogleResponse {
-        hits: Vec::new(),
-        suggestions: Vec::new(),
-    };
-    let mut bootstrap_profile = if bootstrap_native {
-        let bootstrap_plan = google_engine::build_request_plan(&google_query, first_page)?;
-        Some(load_or_refresh_google_bootstrap_profile(
-            root,
-            config,
-            &bootstrap_plan,
-            &google_accept_language(query),
-        )?)
-    } else {
-        None
-    };
-
-    for page_no in first_page..=last_page {
-        let plan = google_engine::build_request_plan(&google_query, page_no)?;
-        let accept_language = google_accept_language(query);
-        let manual_refresh_hint = format!(
-            "If Google now requires a browser challenge, run `ctox web google-bootstrap-refresh --query {}` and complete the challenge in Chrome before retrying.",
-            serde_json::to_string(&query.text).unwrap_or_else(|_| "\"<query>\"".to_string())
-        );
-        let response = match fetch_google_response_via_helper(
-            root,
-            &plan,
-            &accept_language,
-            config.timeout_ms,
-            transport,
-            bootstrap_profile.as_ref(),
-        ) {
-            Ok(response) => response,
-            Err(err) if bootstrap_native => {
-                let refreshed = refresh_google_bootstrap_profile(
-                    root,
-                    &google_bootstrap_profile_path(root),
-                    &plan,
-                )
-                .map_err(|refresh_err| anyhow!("{refresh_err:#}. {manual_refresh_hint}"))?;
-                bootstrap_profile = Some(refreshed);
-                fetch_google_response_via_helper(
-                    root,
-                    &plan,
-                    &accept_language,
-                    config.timeout_ms,
-                    transport,
-                    bootstrap_profile.as_ref(),
-                )
-                .map_err(|retry_err| {
-                    anyhow!(
-                        "{retry_err:#}; initial bootstrap-native failure: {err:#}. {manual_refresh_hint}"
-                    )
-                })?
-            }
-            Err(err) => return Err(err),
-        };
-        let _final_url = &response.final_url;
-
-        let parsed = google_engine::parse_response(&response.body);
-        for suggestion in parsed.suggestions {
-            if !combined
-                .suggestions
-                .iter()
-                .any(|existing| existing == &suggestion)
-            {
-                combined.suggestions.push(suggestion);
-            }
-        }
-        combined.hits.extend(parsed.hits);
-    }
-
-    let hits = google_engine::apply_window(combined, query.offset, query.count)
-        .hits
-        .into_iter()
-        .enumerate()
-        .map(|(idx, hit)| SearchHit {
-            title: hit.title,
-            url: hit.url,
-            snippet: hit.snippet,
-            source: provider.as_str().to_string(),
-            rank: query.offset + idx + 1,
-        })
-        .collect();
-
-    Ok(SearchResponse {
-        provider: provider.as_str().to_string(),
-        hits,
-        evidence: Vec::new(),
-        executed_queries: vec![query.text.clone()],
-    })
-}
-
-fn google_accept_language(query: &SearchQuery) -> String {
-    match (query.language.as_deref(), query.region.as_deref()) {
-        (Some(language), Some(region)) => {
-            let language = language.trim().replace('_', "-");
-            format!(
-                "{language},{language}-{};q=0.7,en;q=0.3",
-                region.trim().to_ascii_uppercase()
-            )
-        }
-        (Some(language), None) => {
-            let language = language.trim().replace('_', "-");
-            format!("{language},{language};q=0.7,en;q=0.3")
-        }
-        _ => "en,en-US;q=0.7,en;q=0.3".to_string(),
-    }
-}
-
-#[cfg(test)]
-fn google_requires_consent_or_challenge(final_url: &str, body: &str) -> bool {
-    Url::parse(final_url)
-        .ok()
-        .and_then(|url| google_engine::detect_google_interstitial(&url, body).err())
-        .is_some()
-}
-
 fn bing_search(config: &SearchConfig, query: &SearchQuery) -> Result<SearchResponse> {
     let mut url = Url::parse("https://www.bing.com/search").expect("static bing URL");
     {
@@ -1501,7 +1159,139 @@ fn resolve_effective_provider(root: &Path, provider: ProviderKind) -> ProviderKi
         return provider;
     }
     let _ = root;
-    ProviderKind::DuckDuckGo
+    ProviderKind::Brave
+}
+
+fn brave_search(config: &SearchConfig, query: &SearchQuery) -> Result<SearchResponse> {
+    let mut url = Url::parse("https://search.brave.com/search").expect("static Brave URL");
+    {
+        let mut qp = url.query_pairs_mut();
+        qp.append_pair("q", &query.text);
+        if let Some(language) = query.language.as_deref() {
+            qp.append_pair("lang", language);
+        }
+        if let Some(region) = query.region.as_deref() {
+            qp.append_pair("country", region);
+        }
+        qp.append_pair(
+            "safesearch",
+            if query.safe_search > 0 {
+                "moderate"
+            } else {
+                "off"
+            },
+        );
+    }
+
+    let response = build_agent(config)?
+        .get(url.as_str())
+        .set(
+            "accept",
+            "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        )
+        .set("accept-language", "en-US,en;q=0.9")
+        .call()
+        .context("failed to query Brave search endpoint")?;
+    let body = response
+        .into_string()
+        .context("failed to read Brave search response")?;
+    let hits = parse_brave_html_results(&body, query.offset, query.count)?;
+    Ok(SearchResponse {
+        provider: ProviderKind::Brave.as_str().to_string(),
+        hits,
+        evidence: Vec::new(),
+        executed_queries: vec![query.text.clone()],
+    })
+}
+
+fn parse_brave_html_results(
+    body: &str,
+    absolute_offset: usize,
+    max_count: usize,
+) -> Result<Vec<SearchHit>> {
+    let re = Regex::new(
+        r#"(?s)title:"((?:\\.|[^"\\])*)".{0,1500}?url:"((?:\\.|[^"\\])*)".{0,1500}?description:(?:"((?:\\.|[^"\\])*)"|void 0|null)"#,
+    )
+    .context("invalid Brave result parser")?;
+    let mut hits = Vec::new();
+    for captures in re.captures_iter(body) {
+        if hits.len() >= max_count.max(1) {
+            break;
+        }
+        let title = decode_js_search_string(captures.get(1).map(|m| m.as_str()).unwrap_or(""));
+        let url = decode_js_search_string(captures.get(2).map(|m| m.as_str()).unwrap_or(""));
+        let snippet = decode_js_search_string(captures.get(3).map(|m| m.as_str()).unwrap_or(""));
+        if title.trim().is_empty()
+            || !url.starts_with("http")
+            || is_search_noise_url(&url)
+            || hits.iter().any(|hit: &SearchHit| hit.url == url)
+        {
+            continue;
+        }
+        hits.push(SearchHit {
+            title: normalize_ws(&title),
+            url,
+            snippet: normalize_ws(&strip_html_tags(&snippet)),
+            source: "brave".to_string(),
+            rank: absolute_offset + hits.len() + 1,
+        });
+    }
+    Ok(hits)
+}
+
+fn decode_js_search_string(raw: &str) -> String {
+    if raw.is_empty() {
+        return String::new();
+    }
+    let json_string = format!("\"{}\"", raw.replace('\n', "\\n"));
+    let decoded = serde_json::from_str::<String>(&json_string).unwrap_or_else(|_| {
+        raw.replace("\\/", "/")
+            .replace("\\u002F", "/")
+            .replace("\\\"", "\"")
+            .replace("\\n", " ")
+    });
+    decode_xml_entities(&decoded)
+}
+
+fn strip_html_tags(input: &str) -> String {
+    static TAG_RE: OnceLock<Regex> = OnceLock::new();
+    let re = TAG_RE.get_or_init(|| Regex::new(r"<[^>]+>").expect("static tag regex"));
+    re.replace_all(input, " ").to_string()
+}
+
+fn is_search_noise_url(raw_url: &str) -> bool {
+    let Ok(url) = Url::parse(raw_url) else {
+        return true;
+    };
+    let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
+    host.ends_with("brave.com")
+        || host.ends_with("duckduckgo.com")
+        || host.ends_with("bing.com")
+        || host.ends_with("google.com")
+}
+
+fn search_response_quality_ok(query: &str, hits: &[SearchHit]) -> bool {
+    if hits.is_empty() {
+        return false;
+    }
+    let terms = significant_terms_with_numbers(query)
+        .into_iter()
+        .filter(|term| term.len() >= 3)
+        .collect::<Vec<_>>();
+    if terms.len() < 2 {
+        return true;
+    }
+    hits.iter()
+        .take(5)
+        .any(|hit| score_search_hit_for_query(&terms, hit) >= 2)
+}
+
+fn score_search_hit_for_query(terms: &[String], hit: &SearchHit) -> usize {
+    let haystack = format!("{} {} {}", hit.title, hit.url, hit.snippet).to_ascii_lowercase();
+    terms
+        .iter()
+        .filter(|term| haystack.contains(term.as_str()))
+        .count()
 }
 
 fn duckduckgo_search(config: &SearchConfig, query: &SearchQuery) -> Result<SearchResponse> {
@@ -1520,18 +1310,44 @@ fn duckduckgo_search(config: &SearchConfig, query: &SearchQuery) -> Result<Searc
         }
     }
 
+    let chrome_major = parse_chrome_major_from_ua(&config.user_agent).unwrap_or(136);
+    let sec_ch_ua = format!(
+        "\"Chromium\";v=\"{0}\", \"Google Chrome\";v=\"{0}\", \"Not_A Brand\";v=\"99\"",
+        chrome_major
+    );
+    let sec_ch_ua_platform = if cfg!(target_os = "macos") {
+        "\"macOS\""
+    } else if cfg!(target_os = "windows") {
+        "\"Windows\""
+    } else {
+        "\"Linux\""
+    };
+    let accept_language = duckduckgo_accept_language(query.language.as_deref());
+
     let response = build_agent(config)?
         .get(url.as_str())
         .set(
             "accept",
             "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         )
-        .set("accept-language", "en-US,en;q=0.9")
+        .set("accept-language", &accept_language)
+        .set("sec-ch-ua", &sec_ch_ua)
+        .set("sec-ch-ua-mobile", "?0")
+        .set("sec-ch-ua-platform", sec_ch_ua_platform)
+        .set("sec-fetch-dest", "document")
+        .set("sec-fetch-mode", "navigate")
+        .set("sec-fetch-site", "same-site")
+        .set("sec-fetch-user", "?1")
+        .set("upgrade-insecure-requests", "1")
+        .set("referer", "https://duckduckgo.com/")
         .call()
         .context("failed to query DuckDuckGo HTML endpoint")?;
     let body = response
         .into_string()
         .context("failed to read DuckDuckGo search response")?;
+    if detect_duckduckgo_anomaly(&body) {
+        bail!("DuckDuckGo returned an anti-bot interstitial");
+    }
     let hits = parse_duckduckgo_html_results(&body, query.offset, query.count)?;
     Ok(SearchResponse {
         provider: ProviderKind::DuckDuckGo.as_str().to_string(),
@@ -1539,6 +1355,34 @@ fn duckduckgo_search(config: &SearchConfig, query: &SearchQuery) -> Result<Searc
         evidence: Vec::new(),
         executed_queries: vec![query.text.clone()],
     })
+}
+
+fn parse_chrome_major_from_ua(user_agent: &str) -> Option<u16> {
+    let marker = "Chrome/";
+    let start = user_agent.find(marker)? + marker.len();
+    let version = &user_agent[start..];
+    version.split('.').next()?.trim().parse::<u16>().ok()
+}
+
+fn duckduckgo_accept_language(language: Option<&str>) -> String {
+    let primary = match language {
+        Some(value) if !value.trim().is_empty() => value.trim().to_string(),
+        _ => return "en-US,en;q=0.9".to_string(),
+    };
+    let base = primary
+        .split('-')
+        .next()
+        .unwrap_or(&primary)
+        .to_ascii_lowercase();
+    if base.eq_ignore_ascii_case(&primary) {
+        format!("{primary},en;q=0.8")
+    } else {
+        format!("{primary},{base};q=0.9,en;q=0.8")
+    }
+}
+
+fn detect_duckduckgo_anomaly(body: &str) -> bool {
+    body.contains("anomaly-modal") || body.contains("Unfortunately, bots use DuckDuckGo")
 }
 
 fn parse_duckduckgo_html_results(
@@ -1729,6 +1573,152 @@ fn searxng_search(config: &SearchConfig, query: &SearchQuery) -> Result<SearchRe
 
     Ok(SearchResponse {
         provider: ProviderKind::Searxng.as_str().to_string(),
+        hits,
+        evidence: Vec::new(),
+        executed_queries: vec![query.text.clone()],
+    })
+}
+
+fn google_search(
+    root: &Path,
+    config: &SearchConfig,
+    query: &SearchQuery,
+) -> Result<SearchResponse> {
+    let reference_dir = root.join(crate::browser::DEFAULT_REFERENCE_RELATIVE_DIR);
+    if !reference_dir.join("node_modules/playwright").is_dir() {
+        bail!(
+            "playwright_google requires Playwright in {}. Run `ctox web browser-prepare --install-reference --install-browser` first.",
+            reference_dir.display()
+        );
+    }
+    let node_path = crate::browser::find_command_on_path("node")
+        .context("playwright_google requires node on PATH")?;
+    let runner_source = include_str!("../assets/google_browser_runner.mjs");
+    // ESM resolves 'playwright' relative to the script file, so the runner must
+    // live inside the reference dir where node_modules sits.
+    let runner_path = reference_dir.join(format!(
+        ".ctox-google-runner-{}-{}.mjs",
+        std::process::id(),
+        unix_ts()
+    ));
+    fs::write(&runner_path, runner_source)
+        .with_context(|| format!("failed to write {}", runner_path.display()))?;
+
+    let state_dir = root.join("runtime").join("google_browser_state");
+    let payload = json!({
+        "query": query.text,
+        "language": query.language.clone().unwrap_or_else(|| "de-DE".to_string()),
+        "region": query.region.clone().unwrap_or_else(|| "DE".to_string()),
+        "stateDir": state_dir.to_string_lossy(),
+        "maxResults": query.count.max(1).min(20),
+        "timeoutMs": config.timeout_ms.max(5_000).min(120_000),
+        "headless": true,
+        "userAgent": config.user_agent,
+    });
+    let payload_bytes = serde_json::to_vec(&payload)
+        .context("failed to encode playwright_google runner payload")?;
+
+    let mut command = Command::new(&node_path);
+    command
+        .current_dir(&reference_dir)
+        .env(
+            "PLAYWRIGHT_BROWSERS_PATH",
+            crate::browser::playwright_browser_cache_dir(&reference_dir),
+        )
+        .arg(&runner_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = command
+        .spawn()
+        .context("failed to spawn playwright_google runner")?;
+    child
+        .stdin
+        .as_mut()
+        .context("playwright_google runner stdin was not piped")?
+        .write_all(&payload_bytes)
+        .context("failed to write playwright_google runner payload")?;
+    drop(child.stdin.take());
+
+    let deadline =
+        SystemTime::now() + Duration::from_millis(config.timeout_ms.saturating_add(15_000));
+    let output = loop {
+        if child
+            .try_wait()
+            .context("failed to poll playwright_google runner")?
+            .is_some()
+        {
+            break child
+                .wait_with_output()
+                .context("failed to collect playwright_google runner output")?;
+        }
+        if SystemTime::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = fs::remove_file(&runner_path);
+            bail!(
+                "playwright_google runner timed out after {}ms",
+                config.timeout_ms.saturating_add(15_000)
+            );
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    let _ = fs::remove_file(&runner_path);
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let detail = if !stderr.is_empty() { stderr } else { stdout };
+        bail!("playwright_google runner failed: {detail}");
+    }
+
+    #[derive(Deserialize)]
+    struct RunnerHit {
+        title: String,
+        url: String,
+        #[serde(default)]
+        snippet: String,
+    }
+    #[derive(Deserialize)]
+    struct RunnerOutcome {
+        #[serde(default)]
+        ok: bool,
+        #[serde(default)]
+        results: Vec<RunnerHit>,
+        #[serde(default)]
+        error: Option<String>,
+    }
+
+    let outcome: RunnerOutcome = serde_json::from_slice(&output.stdout).with_context(|| {
+        format!(
+            "playwright_google runner produced invalid JSON: {}",
+            String::from_utf8_lossy(&output.stdout)
+                .chars()
+                .take(400)
+                .collect::<String>()
+        )
+    })?;
+    if !outcome.ok {
+        bail!(
+            "playwright_google runner did not return results: {}",
+            outcome.error.unwrap_or_else(|| "unknown error".to_string())
+        );
+    }
+    let hits: Vec<SearchHit> = outcome
+        .results
+        .into_iter()
+        .enumerate()
+        .map(|(index, hit)| SearchHit {
+            title: hit.title,
+            url: hit.url,
+            snippet: hit.snippet,
+            source: ProviderKind::Google.as_str().to_string(),
+            rank: query.offset + index + 1,
+        })
+        .collect();
+    Ok(SearchResponse {
+        provider: ProviderKind::Google.as_str().to_string(),
         hits,
         evidence: Vec::new(),
         executed_queries: vec![query.text.clone()],
@@ -5367,485 +5357,6 @@ fn page_cache_path(root: &Path) -> PathBuf {
     root.join("runtime/web_search_page_cache.json")
 }
 
-#[derive(Debug, Serialize)]
-struct GoogleFetchHelperRequest<'a> {
-    url: &'a str,
-    user_agent: &'a str,
-    cookie_header: &'a str,
-    accept_language: &'a str,
-    timeout_ms: u64,
-    emulation_major: u16,
-    transport: &'a str,
-    repo_root: &'a str,
-    extra_headers: &'a BTreeMap<String, String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct GoogleFetchHelperResponse {
-    final_url: String,
-    body: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct GoogleBootstrapProfile {
-    created_at_epoch: u64,
-    user_agent: String,
-    cookie_header: String,
-    extra_headers: BTreeMap<String, String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct GoogleBrowserProbeEnvelope {
-    probe_stdout: String,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum GoogleBootstrapProbeMode {
-    Automatic,
-    Interactive { wait_timeout_secs: u64 },
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct GoogleBrowserProbeSummary {
-    title: String,
-    #[serde(rename = "finalUrl")]
-    final_url: String,
-    #[serde(default, rename = "dataVed")]
-    data_ved: bool,
-    #[serde(default)]
-    sorry: bool,
-    #[serde(default)]
-    captcha: bool,
-    #[serde(default)]
-    enablejs: bool,
-    #[serde(default, rename = "mainRequestHeaders")]
-    main_request_headers: BTreeMap<String, String>,
-    #[serde(default, rename = "mainCdpRequestHeaders")]
-    main_cdp_request_headers: BTreeMap<String, String>,
-    #[serde(default, rename = "mainCdpRequestExtraHeaders")]
-    main_cdp_request_extra_headers: BTreeMap<String, String>,
-}
-
-fn validate_google_bootstrap_probe(summary: &GoogleBrowserProbeSummary) -> Result<()> {
-    if summary.sorry || summary.captcha || !summary.data_ved {
-        bail!(
-            "Google bootstrap probe did not reach a usable search result page: final_url={}, data_ved={}, sorry={}, captcha={}, enablejs={}, title={}",
-            summary.final_url,
-            summary.data_ved,
-            summary.sorry,
-            summary.captcha,
-            summary.enablejs,
-            summary.title,
-        );
-    }
-    Ok(())
-}
-
-fn validate_google_bootstrap_profile_fields(profile: &GoogleBootstrapProfile) -> Result<()> {
-    if profile.user_agent.trim().is_empty() {
-        bail!("Google bootstrap profile is missing a browser user-agent");
-    }
-    if profile.cookie_header.trim().is_empty() {
-        bail!("Google bootstrap profile is missing a Google cookie header");
-    }
-    Ok(())
-}
-
-fn google_fetch_binary_path(root: &Path) -> PathBuf {
-    if let Some(path) = runtime_config::get(root, "CTOX_WEB_GOOGLE_FETCH_BIN") {
-        return PathBuf::from(path);
-    }
-
-    let release = root.join("tools/google-fetch/target/release/ctox-google-fetch");
-    if release.exists() {
-        return release;
-    }
-    root.join("tools/google-fetch/target/debug/ctox-google-fetch")
-}
-
-fn google_bootstrap_profile_path(root: &Path) -> PathBuf {
-    runtime_config::get(root, "CTOX_WEB_GOOGLE_BOOTSTRAP_PROFILE_PATH")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| root.join("runtime/google_bootstrap_native_profile.json"))
-}
-
-fn google_bootstrap_probe_script_path(root: &Path) -> PathBuf {
-    runtime_config::get(root, "CTOX_WEB_GOOGLE_BOOTSTRAP_PROBE")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| root.join("tools/google-fetch/browser_profile_probe.py"))
-}
-
-fn load_or_refresh_google_bootstrap_profile(
-    root: &Path,
-    config: &SearchConfig,
-    plan: &google_engine::GoogleRequestPlan,
-    _accept_language: &str,
-) -> Result<GoogleBootstrapProfile> {
-    let path = google_bootstrap_profile_path(root);
-    if let Some(profile) =
-        read_cached_google_bootstrap_profile(&path, config.google_bootstrap_ttl_secs)
-    {
-        return Ok(profile);
-    }
-    refresh_google_bootstrap_profile(root, &path, plan)
-}
-
-fn read_cached_google_bootstrap_profile(
-    path: &Path,
-    ttl_secs: u64,
-) -> Option<GoogleBootstrapProfile> {
-    let profile = read_google_bootstrap_profile_file(path).ok().flatten()?;
-    validate_google_bootstrap_profile_fields(&profile).ok()?;
-    if unix_ts().saturating_sub(profile.created_at_epoch) <= ttl_secs {
-        Some(profile)
-    } else {
-        None
-    }
-}
-
-fn read_google_bootstrap_profile_file(path: &Path) -> Result<Option<GoogleBootstrapProfile>> {
-    if !path.exists() {
-        return Ok(None);
-    }
-    let raw = fs::read_to_string(path)
-        .with_context(|| format!("failed to read Google bootstrap profile {}", path.display()))?;
-    let profile = serde_json::from_str::<GoogleBootstrapProfile>(&raw).with_context(|| {
-        format!(
-            "failed to decode Google bootstrap profile {}",
-            path.display()
-        )
-    })?;
-    Ok(Some(profile))
-}
-
-fn refresh_google_bootstrap_profile(
-    root: &Path,
-    path: &Path,
-    plan: &google_engine::GoogleRequestPlan,
-) -> Result<GoogleBootstrapProfile> {
-    refresh_google_bootstrap_profile_with_summary(
-        root,
-        path,
-        plan,
-        GoogleBootstrapProbeMode::Automatic,
-    )
-    .map(|(profile, _)| profile)
-}
-
-fn refresh_google_bootstrap_profile_interactive(
-    root: &Path,
-    path: &Path,
-    plan: &google_engine::GoogleRequestPlan,
-    wait_timeout_secs: u64,
-) -> Result<(GoogleBootstrapProfile, GoogleBrowserProbeSummary)> {
-    refresh_google_bootstrap_profile_with_summary(
-        root,
-        path,
-        plan,
-        GoogleBootstrapProbeMode::Interactive { wait_timeout_secs },
-    )
-}
-
-fn refresh_google_bootstrap_profile_with_summary(
-    root: &Path,
-    path: &Path,
-    plan: &google_engine::GoogleRequestPlan,
-    mode: GoogleBootstrapProbeMode,
-) -> Result<(GoogleBootstrapProfile, GoogleBrowserProbeSummary)> {
-    let summary = run_google_bootstrap_probe(root, plan, mode)?;
-    validate_google_bootstrap_probe(&summary)?;
-    let profile = build_google_bootstrap_profile(&summary)?;
-    persist_google_bootstrap_profile(path, &profile)?;
-    Ok((profile, summary))
-}
-
-fn looks_headless_without_browser_session() -> bool {
-    if cfg!(target_os = "macos") {
-        return false;
-    }
-    std::env::var_os("DISPLAY").is_none() && std::env::var_os("WAYLAND_DISPLAY").is_none()
-}
-
-fn run_google_bootstrap_probe(
-    root: &Path,
-    plan: &google_engine::GoogleRequestPlan,
-    mode: GoogleBootstrapProbeMode,
-) -> Result<GoogleBrowserProbeSummary> {
-    if looks_headless_without_browser_session() {
-        return Err(anyhow!(
-            "cannot launch a headed Chrome without DISPLAY/WAYLAND_DISPLAY. \
-             Refresh the Google bootstrap profile on a GUI host and install it here with \
-             `ctox web google-bootstrap-import --file <path>`, or set \
-             CTOX_WEB_GOOGLE_BOOTSTRAP_PROFILE_PATH to a pre-sampled profile."
-        ));
-    }
-
-    let script = google_bootstrap_probe_script_path(root);
-    if !script.exists() {
-        return Err(anyhow!(
-            "Google bootstrap probe is missing: {}",
-            script.display()
-        ));
-    }
-
-    let reference_dir = runtime_config::get(root, "CTOX_WEB_BROWSER_REFERENCE_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| root.join("runtime/browser/interactive-reference"));
-    // We intentionally do NOT verify `node_modules/playwright` exists here.
-    // The probe process (browser_profile_probe.py) does its own presence check
-    // and emits a clear remediation message; doing it twice is redundant and
-    // makes it impossible to stub the probe out for tests via
-    // CTOX_WEB_GOOGLE_BOOTSTRAP_PROBE. The doctor command is the surface where
-    // missing Playwright is surfaced proactively.
-
-    let mut command = Command::new("python3");
-    command
-        .arg(&script)
-        .arg("--full-clone")
-        .arg("--url")
-        .arg(&plan.url)
-        .arg("--reference-dir")
-        .arg(&reference_dir);
-    if let Some(chrome_bin) = runtime_config::get(root, "CTOX_WEB_CHROME_BIN") {
-        command.arg("--chrome-bin").arg(chrome_bin);
-    }
-    if let Some(user_data_dir) = runtime_config::get(root, "CTOX_WEB_CHROME_USER_DATA_DIR") {
-        command.arg("--chrome-user-data-dir").arg(user_data_dir);
-    }
-    let quit_running_chrome = matches!(
-        runtime_config::get(root, "CTOX_WEB_GOOGLE_BOOTSTRAP_QUIT_RUNNING_CHROME").as_deref(),
-        Some("1" | "true" | "TRUE" | "yes"),
-    );
-    if quit_running_chrome {
-        command.arg("--quit-running-chrome");
-    } else {
-        command.arg("--leave-chrome-running");
-    }
-    if let GoogleBootstrapProbeMode::Interactive { wait_timeout_secs } = mode {
-        command
-            .arg("--interactive-unlock")
-            .arg("--wait-timeout-secs")
-            .arg(wait_timeout_secs.to_string());
-    }
-    let output = command
-        .current_dir(root)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .context("failed to run Google bootstrap probe")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let detail = if !stderr.trim().is_empty() {
-            stderr.trim()
-        } else {
-            stdout.trim()
-        };
-        return Err(anyhow!("Google bootstrap probe failed: {detail}"));
-    }
-
-    let envelope: GoogleBrowserProbeEnvelope = serde_json::from_slice(&output.stdout)
-        .context("failed to decode Google bootstrap probe envelope")?;
-    let summary: GoogleBrowserProbeSummary = serde_json::from_str(&envelope.probe_stdout)
-        .context("failed to decode Google bootstrap probe summary")?;
-    Ok(summary)
-}
-
-fn build_google_bootstrap_profile(
-    summary: &GoogleBrowserProbeSummary,
-) -> Result<GoogleBootstrapProfile> {
-    let user_agent = summary
-        .main_request_headers
-        .get("user-agent")
-        .cloned()
-        .or_else(|| summary.main_cdp_request_headers.get("User-Agent").cloned())
-        .context("Google bootstrap probe did not expose a browser user-agent")?;
-    let cookie_header = summary
-        .main_cdp_request_extra_headers
-        .get("cookie")
-        .cloned()
-        .context("Google bootstrap probe did not expose a Google cookie header")?;
-
-    let mut extra_headers = BTreeMap::new();
-    for key in [
-        "downlink",
-        "rtt",
-        "sec-ch-prefers-color-scheme",
-        "sec-ch-ua",
-        "sec-ch-ua-arch",
-        "sec-ch-ua-bitness",
-        "sec-ch-ua-form-factors",
-        "sec-ch-ua-full-version",
-        "sec-ch-ua-full-version-list",
-        "sec-ch-ua-mobile",
-        "sec-ch-ua-model",
-        "sec-ch-ua-platform",
-        "sec-ch-ua-platform-version",
-        "sec-ch-ua-wow64",
-    ] {
-        if let Some(value) = summary
-            .main_request_headers
-            .get(key)
-            .filter(|value| !value.is_empty())
-        {
-            extra_headers.insert(key.to_string(), value.clone());
-        }
-    }
-    for key in [
-        "sec-fetch-site",
-        "sec-fetch-mode",
-        "sec-fetch-user",
-        "sec-fetch-dest",
-        "x-client-data",
-        "x-browser-validation",
-        "x-browser-channel",
-        "available-dictionary",
-        "priority",
-    ] {
-        if let Some(value) = summary
-            .main_cdp_request_extra_headers
-            .get(key)
-            .filter(|value| !value.is_empty())
-        {
-            extra_headers.insert(key.to_string(), value.clone());
-        }
-    }
-
-    let profile = GoogleBootstrapProfile {
-        created_at_epoch: unix_ts(),
-        user_agent,
-        cookie_header,
-        extra_headers,
-    };
-    validate_google_bootstrap_profile_fields(&profile)?;
-    Ok(profile)
-}
-
-fn persist_google_bootstrap_profile(path: &Path, profile: &GoogleBootstrapProfile) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).with_context(|| {
-            format!(
-                "failed to create Google bootstrap profile dir {}",
-                parent.display()
-            )
-        })?;
-    }
-    fs::write(
-        path,
-        serde_json::to_string_pretty(profile)
-            .context("failed to encode Google bootstrap profile")?,
-    )
-    .with_context(|| {
-        format!(
-            "failed to write Google bootstrap profile {}",
-            path.display()
-        )
-    })?;
-    restrict_profile_permissions(path)?;
-    Ok(())
-}
-
-#[cfg(unix)]
-fn restrict_profile_permissions(path: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    // The profile holds live Google session cookies (SID, __Secure-1PSID, etc.)
-    // that are equivalent to a logged-in auth token. Make sure other local
-    // users cannot read it.
-    let perms = std::fs::Permissions::from_mode(0o600);
-    fs::set_permissions(path, perms).with_context(|| {
-        format!(
-            "failed to lock down Google bootstrap profile permissions {}",
-            path.display()
-        )
-    })
-}
-
-#[cfg(not(unix))]
-fn restrict_profile_permissions(_path: &Path) -> Result<()> {
-    Ok(())
-}
-
-fn fetch_google_response_via_helper(
-    root: &Path,
-    plan: &google_engine::GoogleRequestPlan,
-    accept_language: &str,
-    timeout_ms: u64,
-    transport: GoogleFetchTransport,
-    bootstrap_profile: Option<&GoogleBootstrapProfile>,
-) -> Result<GoogleFetchHelperResponse> {
-    let binary = google_fetch_binary_path(root);
-    if !binary.exists() {
-        return Err(anyhow!(
-            "Google transport helper is not built: {}",
-            binary.display()
-        ));
-    }
-    let root_string = root.to_string_lossy();
-    let empty_headers = BTreeMap::new();
-    let (user_agent, cookie_header, effective_accept_language, extra_headers) =
-        if let Some(profile) = bootstrap_profile {
-            (
-                profile.user_agent.as_str(),
-                profile.cookie_header.as_str(),
-                accept_language,
-                &profile.extra_headers,
-            )
-        } else {
-            (
-                plan.user_agent.as_str(),
-                plan.cookie_header.as_str(),
-                accept_language,
-                &empty_headers,
-            )
-        };
-
-    let payload = serde_json::to_vec(&GoogleFetchHelperRequest {
-        url: &plan.url,
-        user_agent,
-        cookie_header,
-        accept_language: effective_accept_language,
-        timeout_ms,
-        emulation_major: plan.emulation_major,
-        transport: transport.as_str(),
-        repo_root: &root_string,
-        extra_headers,
-    })
-    .context("failed to encode Google transport helper request")?;
-
-    let mut child = Command::new(&binary)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .with_context(|| {
-            format!(
-                "failed to launch Google transport helper: {}",
-                binary.display()
-            )
-        })?;
-
-    child
-        .stdin
-        .as_mut()
-        .context("Google transport helper stdin was not piped")?
-        .write_all(&payload)
-        .context("failed to write Google transport helper request")?;
-
-    let output = child
-        .wait_with_output()
-        .context("failed to wait for Google transport helper")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow!("Google transport helper failed: {}", stderr.trim()));
-    }
-
-    serde_json::from_slice(&output.stdout)
-        .context("failed to decode Google transport helper response")
-}
-
 fn build_agent(config: &SearchConfig) -> Result<ureq::Agent> {
     Ok(ureq::AgentBuilder::new()
         .user_agent(&config.user_agent)
@@ -6857,6 +6368,21 @@ mod tests {
     }
 
     #[test]
+    fn openai_web_search_mode_accepts_tui_labels() {
+        let root = unique_test_root("web_search_mode_tui_labels");
+        set_runtime_config(&root, "CTOX_WEB_SEARCH_OPENAI_MODE", "openai");
+        assert_eq!(
+            OpenAiWebSearchCompatMode::from_root(&root),
+            OpenAiWebSearchCompatMode::Passthrough
+        );
+        set_runtime_config(&root, "CTOX_WEB_SEARCH_OPENAI_MODE", "local_stack");
+        assert_eq!(
+            OpenAiWebSearchCompatMode::from_root(&root),
+            OpenAiWebSearchCompatMode::CtoxPrimary
+        );
+    }
+
+    #[test]
     fn augment_request_strips_native_tool_and_injects_context() {
         let root = unique_test_root("augment_request_ctox_primary");
         set_runtime_config(&root, "CTOX_WEB_SEARCH_PROVIDER", "mock");
@@ -7200,22 +6726,6 @@ mod tests {
     }
 
     #[test]
-    fn google_consent_detection_handles_redirects_and_interstitials() {
-        assert!(google_requires_consent_or_challenge(
-            "https://consent.google.com/ml?continue=https://www.google.com/search",
-            "<html><body>Before you continue to Google Search</body></html>",
-        ));
-        assert!(google_requires_consent_or_challenge(
-            "https://www.google.com/search?q=test",
-            "<form id=\"captcha-form\"></form>",
-        ));
-        assert!(!google_requires_consent_or_challenge(
-            "https://www.google.com/search?q=test",
-            "<html><body><a data-ved=\"123\">result</a></body></html>",
-        ));
-    }
-
-    #[test]
     fn bing_rss_parser_extracts_search_hits() {
         let payload = r#"<?xml version="1.0" encoding="utf-8" ?>
 <rss version="2.0">
@@ -7260,6 +6770,35 @@ mod tests {
         assert!(hits[0].snippet.contains("AI employees"));
         assert_eq!(hits[1].url, "https://relevanceai.com/");
         assert_eq!(hits[1].rank, 2);
+    }
+
+    #[test]
+    fn duckduckgo_accept_language_derives_from_query_language() {
+        assert_eq!(
+            super::duckduckgo_accept_language(Some("de-DE")),
+            "de-DE,de;q=0.9,en;q=0.8"
+        );
+        assert_eq!(super::duckduckgo_accept_language(Some("fr")), "fr,en;q=0.8");
+        assert_eq!(super::duckduckgo_accept_language(None), "en-US,en;q=0.9");
+        assert_eq!(
+            super::duckduckgo_accept_language(Some("  ")),
+            "en-US,en;q=0.9"
+        );
+    }
+
+    #[test]
+    fn duckduckgo_anomaly_modal_is_detected() {
+        let body = r#"<html><body><div class="anomaly-modal__title">Unfortunately, bots use DuckDuckGo too.</div></body></html>"#;
+        assert!(super::detect_duckduckgo_anomaly(body));
+        let clean = r#"<html><body><div class="result"><a class="result__a" href="/x">x</a></div></body></html>"#;
+        assert!(!super::detect_duckduckgo_anomaly(clean));
+    }
+
+    #[test]
+    fn parse_chrome_major_extracts_version_from_default_ua() {
+        let ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36";
+        assert_eq!(super::parse_chrome_major_from_ua(ua), Some(136));
+        assert_eq!(super::parse_chrome_major_from_ua("ctox-test"), None);
     }
 
     // The stdout-capture path uses process-wide dup2, which races with any
@@ -8005,7 +7544,7 @@ mod tests {
             source: "google".to_string(),
             ..hit.clone()
         };
-        let cold_config = test_config(ProviderKind::Google);
+        let cold_config = test_config(ProviderKind::Brave);
         let mut cold_session = WebSearchSession::new(&root, &cold_config).expect("cold session");
         let cached = cold_session
             .fetch_evidence_doc("find CTOX_REMOTE_WEB_OK", &cold_hit)
@@ -8102,7 +7641,7 @@ mod tests {
         let root = unique_test_root("real_world_rfc_editor_search");
         fs::create_dir_all(root.join("runtime")).expect("runtime dir");
 
-        let mut config = test_config(ProviderKind::Google);
+        let mut config = test_config(ProviderKind::Brave);
         config.timeout_ms = 20_000;
         config.max_page_bytes = 2_000_000;
 
@@ -8146,7 +7685,7 @@ mod tests {
     #[test]
     #[ignore = "live network validation for real-world PDFs"]
     fn real_world_pdf_samples_extract_meaningful_text() {
-        let config = test_config(ProviderKind::Google);
+        let config = test_config(ProviderKind::Brave);
         let cases = [
             (
                 "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
@@ -8190,7 +7729,7 @@ mod tests {
     #[test]
     #[ignore = "live network validation for GitHub repo and blob extraction"]
     fn real_world_github_pages_extract_meaningful_text() {
-        let mut config = test_config(ProviderKind::Google);
+        let mut config = test_config(ProviderKind::Brave);
         config.max_page_bytes = 2_000_000;
         config.timeout_ms = 20_000;
         let cases = [
@@ -8248,7 +7787,7 @@ mod tests {
     #[test]
     #[ignore = "live network validation for GitHub repo-root command extraction"]
     fn real_world_github_repo_root_surfaces_start_command() {
-        let mut config = test_config(ProviderKind::Google);
+        let mut config = test_config(ProviderKind::Brave);
         config.max_page_bytes = 2_000_000;
         config.timeout_ms = 20_000;
 
@@ -8283,7 +7822,7 @@ mod tests {
     #[test]
     #[ignore = "live network validation for GitHub repo-root path discovery"]
     fn real_world_github_repo_root_surfaces_intro_exercise_location() {
-        let mut config = test_config(ProviderKind::Google);
+        let mut config = test_config(ProviderKind::Brave);
         config.max_page_bytes = 2_000_000;
         config.timeout_ms = 20_000;
 
@@ -8328,7 +7867,7 @@ mod tests {
     #[test]
     #[ignore = "live OpenAI-vs-CTOX compatibility benchmark"]
     fn openai_web_search_compatibility_benchmark() {
-        let mut config = test_config(ProviderKind::Google);
+        let mut config = test_config(ProviderKind::Brave);
         config.max_page_bytes = 2_000_000;
         config.timeout_ms = 30_000;
 
@@ -8504,7 +8043,7 @@ mod tests {
     #[test]
     #[ignore = "live network validation for docs-site extraction"]
     fn real_world_docs_sites_extract_meaningful_text() {
-        let mut config = test_config(ProviderKind::Google);
+        let mut config = test_config(ProviderKind::Brave);
         config.max_page_bytes = 2_000_000;
         config.timeout_ms = 20_000;
 
@@ -8553,7 +8092,7 @@ mod tests {
     #[test]
     #[ignore = "live network validation for news-site extraction"]
     fn real_world_news_sites_extract_meaningful_text() {
-        let mut config = test_config(ProviderKind::Google);
+        let mut config = test_config(ProviderKind::Brave);
         config.max_page_bytes = 2_000_000;
         config.timeout_ms = 20_000;
 
@@ -8599,7 +8138,7 @@ mod tests {
     #[test]
     #[ignore = "live network validation for knowledge-site extraction"]
     fn real_world_knowledge_sites_extract_meaningful_text() {
-        let mut config = test_config(ProviderKind::Google);
+        let mut config = test_config(ProviderKind::Brave);
         config.max_page_bytes = 2_000_000;
         config.timeout_ms = 20_000;
 
@@ -8655,7 +8194,7 @@ mod tests {
     #[test]
     #[ignore = "live network validation for semi-complex PDFs"]
     fn real_world_semicomplex_pdfs_extract_meaningful_text_quickly() {
-        let mut config = test_config(ProviderKind::Google);
+        let mut config = test_config(ProviderKind::Brave);
         config.timeout_ms = 20_000;
         config.max_page_bytes = 6_000_000;
         config.max_page_chars = 20_000;
@@ -8713,7 +8252,7 @@ mod tests {
     #[test]
     #[ignore = "live network validation for page-hinted PDF loading"]
     fn real_world_pdf_page_hint_loads_requested_page() {
-        let mut config = test_config(ProviderKind::Google);
+        let mut config = test_config(ProviderKind::Brave);
         config.timeout_ms = 20_000;
         config.max_page_bytes = 6_000_000;
         config.max_page_chars = 20_000;
@@ -8763,276 +8302,10 @@ mod tests {
             default_safe_search: true,
             cache_ttl_secs: 60,
             page_cache_ttl_secs: 60,
-            google_bootstrap_ttl_secs: 60,
             max_page_bytes: 128_000,
             max_page_chars: 8_000,
             max_pdf_pages: 12,
         }
-    }
-
-    fn test_google_plan(url: &str) -> google_engine::GoogleRequestPlan {
-        google_engine::GoogleRequestPlan {
-            url: url.to_string(),
-            user_agent: "Mozilla/5.0 TestBrowser".to_string(),
-            cookie_header: "CONSENT=YES+".to_string(),
-            emulation_major: 146,
-        }
-    }
-
-    fn bootstrap_env_guard() -> std::sync::MutexGuard<'static, ()> {
-        static ENV_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
-        ENV_MUTEX
-            .get_or_init(|| Mutex::new(()))
-            .lock()
-            .expect("bootstrap env mutex poisoned")
-    }
-
-    #[test]
-    fn parses_google_browser_provider_from_config_value() {
-        assert_eq!(ProviderKind::from_config_value(None), ProviderKind::Auto);
-        assert_eq!(
-            ProviderKind::from_config_value(Some("auto".to_string())),
-            ProviderKind::Auto
-        );
-        assert_eq!(
-            ProviderKind::from_config_value(Some("google_browser".to_string())),
-            ProviderKind::GoogleBrowser
-        );
-        assert_eq!(
-            ProviderKind::from_config_value(Some("google_bootstrap_native".to_string())),
-            ProviderKind::GoogleBootstrapNative
-        );
-        assert_eq!(
-            ProviderKind::from_config_value(Some("duckduckgo".to_string())),
-            ProviderKind::DuckDuckGo
-        );
-        assert_eq!(
-            ProviderKind::from_config_value(Some("ddg".to_string())),
-            ProviderKind::DuckDuckGo
-        );
-        assert_eq!(
-            ProviderKind::from_config_value(Some("annas_archive".to_string())),
-            ProviderKind::AnnasArchive
-        );
-        assert_eq!(
-            ProviderKind::from_config_value(Some("annas-archive".to_string())),
-            ProviderKind::AnnasArchive
-        );
-        assert_eq!(ProviderKind::AnnasArchive.as_str(), "annas_archive");
-    }
-
-    #[test]
-    fn auto_provider_defaults_to_duckduckgo() {
-        let root = unique_test_root("web_search_auto_provider_ddg");
-        assert_eq!(
-            resolve_effective_provider(&root, ProviderKind::Auto),
-            ProviderKind::DuckDuckGo
-        );
-    }
-
-    #[test]
-    fn loads_fresh_google_bootstrap_profile_from_cache() {
-        let root = unique_test_root("google_bootstrap_cache");
-        fs::create_dir_all(root.join("runtime")).expect("create runtime dir");
-        let expected = GoogleBootstrapProfile {
-            created_at_epoch: unix_ts(),
-            user_agent: "Mozilla/5.0 CachedBrowser".to_string(),
-            cookie_header: "SID=abc; HSID=def".to_string(),
-            extra_headers: BTreeMap::from([
-                ("sec-fetch-site".to_string(), "none".to_string()),
-                ("x-client-data".to_string(), "cached".to_string()),
-            ]),
-        };
-        fs::write(
-            google_bootstrap_profile_path(&root),
-            serde_json::to_string_pretty(&expected).expect("encode bootstrap profile"),
-        )
-        .expect("write bootstrap profile");
-
-        let config = test_config(ProviderKind::GoogleBootstrapNative);
-        let plan = test_google_plan("https://www.google.com/search?q=rust");
-        let loaded = load_or_refresh_google_bootstrap_profile(&root, &config, &plan, "en-US")
-            .expect("load cached bootstrap profile");
-
-        assert_eq!(loaded.user_agent, expected.user_agent);
-        assert_eq!(loaded.cookie_header, expected.cookie_header);
-        assert_eq!(loaded.extra_headers, expected.extra_headers);
-    }
-
-    #[test]
-    fn refreshes_google_bootstrap_profile_via_probe_script_override() {
-        let _guard = bootstrap_env_guard();
-        let root = unique_test_root("google_bootstrap_probe");
-        fs::create_dir_all(root.join("runtime")).expect("create runtime dir");
-        let script_path = root.join("fake_google_bootstrap_probe.py");
-        fs::write(
-            &script_path,
-            concat!(
-                "#!/usr/bin/env python3\n",
-                "import json\n",
-                "summary = {\n",
-                "  \"title\": \"RFC 9110 HTTP Semantics - Google Search\",\n",
-                "  \"finalUrl\": \"https://www.google.com/search?q=rust\",\n",
-                "  \"dataVed\": True,\n",
-                "  \"sorry\": False,\n",
-                "  \"captcha\": False,\n",
-                "  \"enablejs\": False,\n",
-                "  \"mainRequestHeaders\": {\n",
-                "    \"user-agent\": \"Mozilla/5.0 ProbeBrowser\",\n",
-                "    \"sec-ch-ua\": '\"Chromium\";v=\"146\"'\n",
-                "  },\n",
-                "  \"mainCdpRequestHeaders\": {},\n",
-                "  \"mainCdpRequestExtraHeaders\": {\n",
-                "    \"cookie\": \"SID=probe; HSID=probe2\",\n",
-                "    \"sec-fetch-site\": \"none\",\n",
-                "    \"x-client-data\": \"probe-client\"\n",
-                "  }\n",
-                "}\n",
-                "print(json.dumps({\"probe_stdout\": json.dumps(summary)}))\n"
-            ),
-        )
-        .expect("write fake probe script");
-        set_runtime_config(
-            &root,
-            "CTOX_WEB_GOOGLE_BOOTSTRAP_PROBE",
-            &script_path.to_string_lossy(),
-        );
-
-        let mut config = test_config(ProviderKind::GoogleBootstrapNative);
-        config.google_bootstrap_ttl_secs = 0;
-        let plan = test_google_plan("https://www.google.com/search?q=rust");
-        let loaded = load_or_refresh_google_bootstrap_profile(&root, &config, &plan, "en-US")
-            .expect("refresh bootstrap profile");
-
-        assert_eq!(loaded.user_agent, "Mozilla/5.0 ProbeBrowser");
-        assert_eq!(loaded.cookie_header, "SID=probe; HSID=probe2");
-        assert_eq!(
-            loaded
-                .extra_headers
-                .get("sec-fetch-site")
-                .map(String::as_str),
-            Some("none")
-        );
-        assert_eq!(
-            loaded
-                .extra_headers
-                .get("x-client-data")
-                .map(String::as_str),
-            Some("probe-client")
-        );
-
-        let persisted: GoogleBootstrapProfile = serde_json::from_str(
-            &fs::read_to_string(google_bootstrap_profile_path(&root))
-                .expect("read persisted bootstrap profile"),
-        )
-        .expect("decode persisted bootstrap profile");
-        assert_eq!(persisted.user_agent, loaded.user_agent);
-        assert_eq!(persisted.cookie_header, loaded.cookie_header);
-    }
-
-    #[test]
-    fn rejects_google_bootstrap_profile_when_probe_hits_challenge() {
-        let _guard = bootstrap_env_guard();
-        let root = unique_test_root("google_bootstrap_probe_challenge");
-        fs::create_dir_all(root.join("runtime")).expect("create runtime dir");
-        let script_path = root.join("fake_google_bootstrap_probe_fail.py");
-        fs::write(
-            &script_path,
-            concat!(
-                "#!/usr/bin/env python3\n",
-                "import json\n",
-                "summary = {\n",
-                "  \"title\": \"https://www.google.com/sorry/index\",\n",
-                "  \"finalUrl\": \"https://www.google.com/sorry/index?continue=...\",\n",
-                "  \"dataVed\": False,\n",
-                "  \"sorry\": True,\n",
-                "  \"captcha\": True,\n",
-                "  \"enablejs\": False,\n",
-                "  \"mainRequestHeaders\": {\n",
-                "    \"user-agent\": \"Mozilla/5.0 ProbeBrowser\"\n",
-                "  },\n",
-                "  \"mainCdpRequestHeaders\": {},\n",
-                "  \"mainCdpRequestExtraHeaders\": {\n",
-                "    \"cookie\": \"SID=probe; HSID=probe2\"\n",
-                "  }\n",
-                "}\n",
-                "print(json.dumps({\"probe_stdout\": json.dumps(summary)}))\n"
-            ),
-        )
-        .expect("write fake failing probe script");
-        set_runtime_config(
-            &root,
-            "CTOX_WEB_GOOGLE_BOOTSTRAP_PROBE",
-            &script_path.to_string_lossy(),
-        );
-
-        let mut config = test_config(ProviderKind::GoogleBootstrapNative);
-        config.google_bootstrap_ttl_secs = 0;
-        let plan = test_google_plan("https://www.google.com/search?q=rust");
-        let err = load_or_refresh_google_bootstrap_profile(&root, &config, &plan, "en-US")
-            .expect_err("challenge probe should not produce a bootstrap profile");
-
-        let err_text = format!("{err:#}");
-        assert!(
-            err_text.contains("did not reach a usable search result page"),
-            "unexpected error: {err_text}"
-        );
-        assert!(
-            !google_bootstrap_profile_path(&root).exists(),
-            "failed probe must not persist a bootstrap profile"
-        );
-    }
-
-    #[test]
-    #[ignore = "live Google bootstrap-native validation using local Chrome profile clone"]
-    fn real_world_google_bootstrap_native_fetches_results() {
-        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(Path::parent)
-            .expect("web-stack crate has repo grandparent")
-            .to_path_buf();
-        let mut config = test_config(ProviderKind::GoogleBootstrapNative);
-        config.timeout_ms = 30_000;
-        config.google_bootstrap_ttl_secs = 1_800;
-        let query = SearchQuery {
-            text: "RFC 9110 HTTP Semantics".to_string(),
-            count: 5,
-            offset: 0,
-            language: Some("en".to_string()),
-            region: Some("US".to_string()),
-            safe_search: 0,
-        };
-
-        let response = google_search(
-            &repo_root,
-            &config,
-            &query,
-            ProviderKind::GoogleBootstrapNative,
-            GoogleFetchTransport::Native,
-            true,
-        )
-        .expect("bootstrap-native google search");
-
-        assert_eq!(response.provider, "google_bootstrap_native");
-        assert!(
-            !response.hits.is_empty(),
-            "expected bootstrap-native Google search to return hits"
-        );
-        assert!(
-            response.hits.iter().any(|hit| {
-                let lowered_title = hit.title.to_ascii_lowercase();
-                let lowered_url = hit.url.to_ascii_lowercase();
-                lowered_title.contains("rfc 9110")
-                    || lowered_url.contains("rfc9110")
-                    || lowered_url.contains("rfc-editor.org")
-            }),
-            "expected RFC-related result, got {:?}",
-            response
-                .hits
-                .iter()
-                .map(|hit| format!("{} -> {}", hit.title, hit.url))
-                .collect::<Vec<_>>()
-        );
     }
 
     fn unique_test_root(prefix: &str) -> PathBuf {

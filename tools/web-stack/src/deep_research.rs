@@ -308,13 +308,46 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
 fn select_balanced_sources(sources: Vec<Value>, max_sources: usize) -> Vec<Value> {
     let mut selected = Vec::new();
     let mut buckets = BTreeMap::<String, Vec<Value>>::new();
+    let relevant_count = sources
+        .iter()
+        .filter(|source| {
+            source
+                .get("evidence_relevance")
+                .and_then(Value::as_i64)
+                .unwrap_or_default()
+                >= 0
+        })
+        .count();
+    let filter_low_relevance = relevant_count >= max_sources.min(8);
     for source in sources {
+        if filter_low_relevance
+            && source
+                .get("evidence_relevance")
+                .and_then(Value::as_i64)
+                .unwrap_or_default()
+                < 0
+        {
+            continue;
+        }
         let kind = source
             .get("source_type")
             .and_then(Value::as_str)
             .unwrap_or("unknown")
             .to_string();
         buckets.entry(kind).or_default().push(source);
+    }
+    for bucket in buckets.values_mut() {
+        bucket.sort_by(|a, b| {
+            let a_score = a
+                .get("evidence_relevance")
+                .and_then(Value::as_i64)
+                .unwrap_or_default();
+            let b_score = b
+                .get("evidence_relevance")
+                .and_then(Value::as_i64)
+                .unwrap_or_default();
+            b_score.cmp(&a_score)
+        });
     }
 
     let preferred = [
@@ -356,6 +389,9 @@ fn normalize_required_query(raw: &str) -> Result<String> {
 
 fn derive_research_search_query(raw: &str, focus: Option<&str>) -> String {
     let compact = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    if is_measurement_or_source_review_query(&compact) {
+        return append_focus(derive_measurement_data_query(&compact), focus);
+    }
     if compact.chars().count() <= 220 {
         return append_focus(compact, focus);
     }
@@ -431,6 +467,37 @@ fn append_focus(mut query: String, focus: Option<&str>) -> String {
     query.chars().take(260).collect()
 }
 
+fn derive_measurement_data_query(raw: &str) -> String {
+    let lowered = raw.to_ascii_lowercase();
+    let mut terms = important_query_terms(raw);
+    if lowered.contains("load") || lowered.contains("last") {
+        terms.extend([
+            "load".to_string(),
+            "force".to_string(),
+            "moment".to_string(),
+            "thrust".to_string(),
+            "torque".to_string(),
+        ]);
+    }
+    if lowered.contains("data") || lowered.contains("dataset") || lowered.contains("source") {
+        terms.extend([
+            "dataset".to_string(),
+            "measured".to_string(),
+            "benchmark".to_string(),
+            "data".to_string(),
+        ]);
+    }
+    let mut seen = BTreeSet::new();
+    let mut unique = Vec::new();
+    for term in terms {
+        let key = term.to_ascii_lowercase();
+        if seen.insert(key) {
+            unique.push(term);
+        }
+    }
+    unique.join(" ").chars().take(220).collect()
+}
+
 fn build_research_search_plan(
     query: &str,
     request: &DeepResearchRequest,
@@ -478,6 +545,52 @@ fn build_research_search_plan(
             metadata_only: true,
         },
     ];
+
+    if is_measurement_or_source_review_query(query) {
+        plans.extend([
+            ResearchSearchPlan {
+                label: "measured_data_sources",
+                query: format!("{query} measured experimental dataset benchmark data tables"),
+                domains: Vec::new(),
+                scholarly: true,
+                metadata_only: false,
+            },
+            ResearchSearchPlan {
+                label: "load_and_operating_fields",
+                query: format!(
+                    "{query} force moment load thrust torque RPM current voltage power vibration IMU"
+                ),
+                domains: Vec::new(),
+                scholarly: true,
+                metadata_only: false,
+            },
+            ResearchSearchPlan {
+                label: "data_repositories",
+                query: format!("{query} dataset csv xlsx github zenodo figshare mendeley dataverse"),
+                domains: vec![
+                    "github.com".to_string(),
+                    "zenodo.org".to_string(),
+                    "figshare.com".to_string(),
+                    "data.mendeley.com".to_string(),
+                    "dataverse.harvard.edu".to_string(),
+                ],
+                scholarly: false,
+                metadata_only: false,
+            },
+            ResearchSearchPlan {
+                label: "technical_reports_data",
+                query: format!("{query} technical report data report test bed raw data"),
+                domains: vec![
+                    "nasa.gov".to_string(),
+                    "osti.gov".to_string(),
+                    "dtic.mil".to_string(),
+                    "faa.gov".to_string(),
+                ],
+                scholarly: false,
+                metadata_only: false,
+            },
+        ]);
+    }
 
     if let Some(focus) = request
         .focus
@@ -618,10 +731,7 @@ fn build_research_search_plan(
             ResearchSearchPlan {
                 label: "topic_patents_industry",
                 query: format!("{query} patent manufacturer datasheet manual specification"),
-                domains: vec![
-                    "patents.google.com".to_string(),
-                    "github.com".to_string(),
-                ],
+                domains: vec!["patents.google.com".to_string(), "github.com".to_string()],
                 scholarly: false,
                 metadata_only: false,
             },
@@ -653,10 +763,42 @@ fn is_lsp_composite_topic(query: &str) -> bool {
     let has_lsp = ["lightning strike protection", "blitzschutz", " lsp "]
         .iter()
         .any(|needle| lowered.contains(needle));
-    let has_composite = ["cfrp", "cfk", "carbon fiber", "composite", "kupfergitter", "copper mesh"]
-        .iter()
-        .any(|needle| lowered.contains(needle));
+    let has_composite = [
+        "cfrp",
+        "cfk",
+        "carbon fiber",
+        "composite",
+        "kupfergitter",
+        "copper mesh",
+    ]
+    .iter()
+    .any(|needle| lowered.contains(needle));
     has_lsp && has_composite
+}
+
+fn is_measurement_or_source_review_query(query: &str) -> bool {
+    let lowered = query.to_ascii_lowercase();
+    [
+        "source",
+        "sources",
+        "quelle",
+        "quellen",
+        "dataset",
+        "data set",
+        "database",
+        "daten",
+        "messdaten",
+        "measurement",
+        "measured",
+        "experimental",
+        "benchmark",
+        "load data",
+        "performance data",
+        "flight log",
+        "test data",
+    ]
+    .iter()
+    .any(|needle| lowered.contains(needle))
 }
 
 fn collect_search_sources(
@@ -677,7 +819,7 @@ fn collect_search_sources(
             continue;
         }
         let source_type = classify_source(url, plan.scholarly, plan.metadata_only);
-        sources.push(json!({
+        let mut entry = json!({
             "title": result.get("title").cloned().unwrap_or(Value::Null),
             "url": url,
             "domain": domain_for_url(url),
@@ -692,8 +834,272 @@ fn collect_search_sources(
             "excerpts": result.get("excerpts").cloned().unwrap_or_else(|| json!([])),
             "is_pdf": result.get("is_pdf").cloned().unwrap_or(Value::Bool(false)),
             "pdf_total_pages": result.get("pdf_total_pages").cloned().unwrap_or(Value::Null),
-        }));
+        });
+        entry["evidence_relevance"] =
+            Value::Number(score_source_relevance(&entry, &plan.query).into());
+        sources.push(entry);
     }
+}
+
+fn score_source_relevance(source: &Value, query: &str) -> i64 {
+    let title = source
+        .get("title")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let snippet = source
+        .get("snippet")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let summary = source
+        .get("summary")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let url = source
+        .get("url")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let bounded_title = bounded_text(title, 700);
+    let bounded_snippet = bounded_text(snippet, 900);
+    let bounded_summary = bounded_text(summary, 700);
+    let haystack = [
+        bounded_title.as_str(),
+        bounded_snippet.as_str(),
+        bounded_summary.as_str(),
+        url,
+    ]
+    .join(" ")
+    .to_ascii_lowercase();
+    let compact_query = query.to_ascii_lowercase();
+    let is_measurement_review = is_measurement_or_source_review_query(&compact_query);
+    let topic_terms = topical_query_terms(query);
+    let mut topic_score = 0_i64;
+    for term in &topic_terms {
+        if haystack.contains(term) {
+            topic_score += 1;
+        }
+    }
+
+    let mut score = topic_score * 8;
+    for term in important_query_terms(query) {
+        if haystack.contains(&term) {
+            score += if topical_query_stopwords().contains(term.as_str()) {
+                1
+            } else {
+                3
+            };
+        }
+    }
+    let evidence_terms = [
+        "dataset",
+        "data set",
+        "database",
+        "benchmark",
+        "measured",
+        "measurement",
+        "experimental",
+        "test bed",
+        "technical report",
+        "data report",
+        "raw data",
+        "csv",
+        "xlsx",
+        "github",
+        "zenodo",
+        "figshare",
+        "mendeley",
+        "dataverse",
+        "force",
+        "moment",
+        "load",
+        "thrust",
+        "torque",
+        "rpm",
+        "current",
+        "voltage",
+        "power",
+        "vibration",
+        "imu",
+        "flight log",
+        "wind tunnel",
+    ];
+    let mut evidence_score = 0_i64;
+    for term in evidence_terms {
+        if haystack.contains(term) {
+            evidence_score += 1;
+            score += 2;
+        }
+    }
+    let needs_load_evidence = compact_query.contains("load")
+        || compact_query.contains("thrust")
+        || compact_query.contains("torque");
+    let has_load_evidence = [
+        "load",
+        "force",
+        "moment",
+        "thrust",
+        "torque",
+        "rpm",
+        "power",
+        "current",
+        "voltage",
+        "vibration",
+        "imu",
+        "wind tunnel",
+        "actuator fault",
+    ]
+    .iter()
+    .any(|term| haystack.contains(term));
+    if is_measurement_review && needs_load_evidence && !has_load_evidence {
+        score -= 20;
+    }
+    if is_measurement_review && !topic_terms.is_empty() && topic_score == 0 {
+        score -= 40;
+    }
+    if is_measurement_review && is_low_value_generic_source(url, title, snippet) {
+        score -= 25;
+    }
+    if is_measurement_review && looks_like_issue_table_of_contents(title, snippet) {
+        score -= 60;
+    }
+    if is_measurement_review
+        && evidence_score < 2
+        && [
+            "image",
+            "images",
+            "vision",
+            "remote sensing",
+            "classification",
+            "detection",
+            "surveillance",
+            "archaeological",
+            "crop",
+            "wireless communication",
+        ]
+        .iter()
+        .any(|term| haystack.contains(term))
+    {
+        score -= 20;
+    }
+    for bad in [
+        "cran.package",
+        "package.r",
+        "invertebrate",
+        "taxonomy",
+        "species",
+        "ecology",
+        "dictionary",
+        "translation",
+        "thesaurus",
+    ] {
+        if haystack.contains(bad) {
+            score -= 10;
+        }
+    }
+    score
+}
+
+fn bounded_text(value: &str, max_chars: usize) -> String {
+    value.chars().take(max_chars).collect()
+}
+
+fn looks_like_issue_table_of_contents(title: &str, snippet: &str) -> bool {
+    let text = format!("{title} {snippet}").to_ascii_lowercase();
+    title.chars().count() > 900
+        && (text.contains("volume")
+            || text.contains("issue")
+            || text.contains("abstract")
+            || text.contains("doi link")
+            || text.contains("download pdf")
+            || text.contains("pages:"))
+}
+
+fn topical_query_terms(query: &str) -> Vec<String> {
+    let terms = important_query_terms(query)
+        .into_iter()
+        .filter(|term| !topical_query_stopwords().contains(term.as_str()))
+        .collect::<Vec<_>>();
+    let mut seen = BTreeSet::new();
+    terms
+        .into_iter()
+        .filter(|term| seen.insert(term.to_ascii_lowercase()))
+        .collect()
+}
+
+fn topical_query_stopwords() -> BTreeSet<&'static str> {
+    BTreeSet::from([
+        "benchmark",
+        "classification",
+        "current",
+        "data",
+        "dataset",
+        "force",
+        "load",
+        "loads",
+        "measured",
+        "measurement",
+        "moment",
+        "performance",
+        "power",
+        "rpm",
+        "source",
+        "sources",
+        "stand",
+        "takeoff",
+        "test",
+        "thrust",
+        "torque",
+        "voltage",
+        "weight",
+    ])
+}
+
+fn is_low_value_generic_source(url: &str, _title: &str, _snippet: &str) -> bool {
+    let domain = domain_for_url(url).to_ascii_lowercase();
+    let low_value_domain = [
+        "dictionary.cambridge.org",
+        "dict.leo.org",
+        "dict.cc",
+        "merriam-webster.com",
+        "wikipedia.org",
+        "wiktionary.org",
+        "researchgate.net",
+        "scholar.google.com",
+    ]
+    .iter()
+    .any(|needle| domain.contains(needle));
+    low_value_domain
+}
+
+fn important_query_terms(query: &str) -> Vec<String> {
+    let stopwords = BTreeSet::from([
+        "about",
+        "according",
+        "also",
+        "and",
+        "are",
+        "class",
+        "especially",
+        "for",
+        "from",
+        "into",
+        "nach",
+        "of",
+        "range",
+        "research",
+        "source",
+        "sources",
+        "the",
+        "those",
+        "to",
+        "up",
+        "with",
+    ]);
+    query
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .map(|part| part.trim().to_ascii_lowercase())
+        .filter(|part| part.len() >= 4 && !stopwords.contains(part.as_str()))
+        .take(24)
+        .collect()
 }
 
 fn run_annas_archive_plan(
@@ -930,7 +1336,7 @@ fn collect_scholarly_database_sources(
     for query in queries {
         runs.push(match query_crossref(&query, 20) {
             Ok(items) => {
-                let count = push_database_sources("crossref", items, seen_urls, sources);
+                let count = push_database_sources("crossref", &query, items, seen_urls, sources);
                 json!({
                     "database": "crossref",
                     "query": query,
@@ -947,7 +1353,7 @@ fn collect_scholarly_database_sources(
         });
         runs.push(match query_openalex(&query, 20) {
             Ok(items) => {
-                let count = push_database_sources("openalex", items, seen_urls, sources);
+                let count = push_database_sources("openalex", &query, items, seen_urls, sources);
                 json!({
                     "database": "openalex",
                     "query": query,
@@ -964,7 +1370,8 @@ fn collect_scholarly_database_sources(
         });
         runs.push(match query_semantic_scholar(&query, 12) {
             Ok(items) => {
-                let count = push_database_sources("semantic_scholar", items, seen_urls, sources);
+                let count =
+                    push_database_sources("semantic_scholar", &query, items, seen_urls, sources);
                 json!({
                     "database": "semantic_scholar",
                     "query": query,
@@ -985,6 +1392,7 @@ fn collect_scholarly_database_sources(
 
 fn push_database_sources(
     database: &'static str,
+    query: &str,
     items: Vec<Value>,
     seen_urls: &mut BTreeSet<String>,
     sources: &mut Vec<Value>,
@@ -1008,6 +1416,7 @@ fn push_database_sources(
         item["scholarly"] = Value::Bool(true);
         item["metadata_only"] = Value::Bool(true);
         item["domain"] = Value::String(domain_for_url(&url));
+        item["evidence_relevance"] = Value::Number(score_source_relevance(&item, query).into());
         sources.push(item);
         pushed += 1;
     }
@@ -1814,8 +2223,7 @@ mod tests {
     #[test]
     fn generic_topics_do_not_receive_lsp_specific_search_plans() {
         let request = DeepResearchRequest {
-            query: "drone UAS UAV sUAS up to 25 kg payload capacity MTOW load data sources"
-                .to_string(),
+            query: "bearing load data sources for small electromechanical systems".to_string(),
             focus: Some("scope_terms".to_string()),
             depth: DeepResearchDepth::Standard,
             max_sources: 20,
@@ -1825,13 +2233,113 @@ mod tests {
             persist_workspace: false,
         };
         let plans = build_research_search_plan(&request.query, &request);
-        let labels = plans
-            .iter()
-            .map(|plan| plan.label)
-            .collect::<Vec<_>>();
+        let labels = plans.iter().map(|plan| plan.label).collect::<Vec<_>>();
         assert!(labels.contains(&"topic_literature"));
         assert!(!labels.contains(&"eddy_current_lsp"));
         assert!(!labels.contains(&"aircraft_composites_ndt"));
+    }
+
+    #[test]
+    fn data_source_reviews_receive_measurement_search_plans() {
+        let request = DeepResearchRequest {
+            query: "bearing load data sources for small electromechanical systems".to_string(),
+            focus: None,
+            depth: DeepResearchDepth::Standard,
+            max_sources: 20,
+            include_annas_archive: false,
+            include_papers: true,
+            workspace: None,
+            persist_workspace: false,
+        };
+        let plans = build_research_search_plan(&request.query, &request);
+        let labels = plans.iter().map(|plan| plan.label).collect::<Vec<_>>();
+        assert!(labels.contains(&"measured_data_sources"));
+        assert!(labels.contains(&"load_and_operating_fields"));
+        assert!(labels.contains(&"data_repositories"));
+        assert!(labels.contains(&"technical_reports_data"));
+    }
+
+    #[test]
+    fn source_relevance_prefers_measurement_data_over_random_package_pages() {
+        let query = "bearing load data sources force moment dataset";
+        let good = json!({
+            "title": "Bearing load force moment measured dataset",
+            "snippet": "Benchmark data with force and moment tables for operating points",
+            "url": "https://data.example.org/bearing-load-dataset.csv",
+        });
+        let bad = json!({
+            "title": "CRAN package metadata",
+            "snippet": "cran.package rfigshare ecology species invertebrate taxonomy",
+            "url": "https://doi.org/10.32614/cran.package.rfigshare",
+        });
+        assert!(score_source_relevance(&good, query) > score_source_relevance(&bad, query));
+    }
+
+    #[test]
+    fn measurement_source_relevance_requires_topic_match() {
+        let query = "bearing load data sources force moment dataset";
+        let good = json!({
+            "title": "Bearing load and moment dataset",
+            "snippet": "Measured force and moment data for bearing operating conditions",
+            "url": "https://data.example.org/bearing-load-data",
+        });
+        let bad = json!({
+            "title": "Large measurement dataset for surgical outcomes",
+            "snippet": "Raw data benchmark with measurements, current tables, power statistics, and load fields",
+            "url": "https://doi.org/10.0000/generic-measurement-dataset",
+        });
+        assert!(score_source_relevance(&good, query) > score_source_relevance(&bad, query) + 30);
+    }
+
+    #[test]
+    fn dictionary_pages_are_penalized_for_measurement_queries() {
+        let query = "bearing load data sources force moment dataset";
+        let good = json!({
+            "title": "Public bearing load dataset",
+            "snippet": "Force, moment, vibration and operating-point data",
+            "url": "https://example.org/bearing-load-dataset",
+        });
+        let bad = json!({
+            "title": "LOAD English meaning",
+            "snippet": "Definition of load in the Cambridge English Dictionary",
+            "url": "https://dictionary.cambridge.org/dictionary/english/load",
+        });
+        assert!(score_source_relevance(&good, query) > score_source_relevance(&bad, query));
+    }
+
+    #[test]
+    fn issue_tables_of_contents_do_not_outrank_specific_load_sources() {
+        let query = "bearing load data sources force moment dataset";
+        let good = json!({
+            "title": "Bearing force and moment benchmark dataset",
+            "snippet": "Measured bearing load data with force, moment and operating conditions",
+            "url": "https://doi.org/10.0000/bearing-load-data",
+        });
+        let bad = json!({
+            "title": format!(
+                "{} Generic Sensor Images and Deep Learning Techniques",
+                "Full Issue Download Vol. 13 No. 1 Abstract DOI Link Download Pdf Pages ".repeat(25)
+            ),
+            "snippet": "A complete issue table of contents with many unrelated papers and a single image dataset entry.",
+            "url": "https://doi.org/10.0000/full-issue",
+        });
+        assert!(score_source_relevance(&good, query) > score_source_relevance(&bad, query));
+    }
+
+    #[test]
+    fn generic_force_stands_are_not_topic_matches_for_bearing_queries() {
+        let query = "\"bearing\" \"test stand\" force moment dataset";
+        let good = json!({
+            "title": "Bearing test stand dataset",
+            "snippet": "Bearing force and moment measurements",
+            "url": "https://example.org/bearing-test-stand",
+        });
+        let bad = json!({
+            "title": "Multiaxial Force/Torque Measurement: Thrust Stands for Jet Engines and Rocket Engines",
+            "snippet": "General thrust stand force and moment calibration data",
+            "url": "https://doi.org/10.1201/9781439819487-12",
+        });
+        assert!(score_source_relevance(&good, query) > score_source_relevance(&bad, query) + 20);
     }
 
     #[test]
@@ -1859,6 +2367,17 @@ mod tests {
         assert!(query.contains("CFRP"));
         assert!(query.contains("eddy current"));
         assert!(query.chars().count() <= 260);
+    }
+
+    #[test]
+    fn derives_measurement_data_query_from_operator_research_prompt() {
+        let prompt = "Research into sources of load data for bearing design in small electromechanical systems";
+        let query = derive_research_search_query(prompt, None);
+        assert!(!query.to_ascii_lowercase().contains("research into"));
+        assert!(query.contains("bearing"));
+        assert!(query.contains("force"));
+        assert!(query.contains("torque"));
+        assert!(query.contains("dataset"));
     }
 
     #[test]

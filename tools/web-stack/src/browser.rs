@@ -18,7 +18,7 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use url::Url;
 
-const DEFAULT_REFERENCE_RELATIVE_DIR: &str = "runtime/browser/interactive-reference";
+pub(crate) const DEFAULT_REFERENCE_RELATIVE_DIR: &str = "runtime/browser/interactive-reference";
 const LOCAL_PLAYWRIGHT_BROWSERS_RELATIVE_DIR: &str = "ms-playwright";
 const MINIMUM_NODE_MAJOR: u64 = 18;
 
@@ -686,7 +686,10 @@ fn run_command(cwd: &Path, program: &str, args: &[&str], error_message: &str) ->
     run_command_with_env(cwd, program, args, &[], error_message)
 }
 
-fn command_output_with_timeout(mut command: Command, timeout: Duration) -> Result<Output> {
+pub(crate) fn command_output_with_timeout(
+    mut command: Command,
+    timeout: Duration,
+) -> Result<Output> {
     let mut child = command
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -798,7 +801,7 @@ fn ensure_node_runtime_compatible() -> Result<()> {
     Ok(())
 }
 
-fn find_command_on_path(program: &str) -> Option<PathBuf> {
+pub(crate) fn find_command_on_path(program: &str) -> Option<PathBuf> {
     if program.contains('/') {
         let path = PathBuf::from(program);
         return path.is_file().then_some(path);
@@ -869,7 +872,7 @@ fn resolve_root_relative_path(root: &Path, path: PathBuf) -> PathBuf {
     }
 }
 
-fn playwright_browser_cache_dir(reference_dir: &Path) -> PathBuf {
+pub(crate) fn playwright_browser_cache_dir(reference_dir: &Path) -> PathBuf {
     reference_dir.join(LOCAL_PLAYWRIGHT_BROWSERS_RELATIVE_DIR)
 }
 

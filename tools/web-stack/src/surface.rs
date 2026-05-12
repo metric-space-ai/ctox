@@ -17,10 +17,6 @@ use crate::deep_research::DeepResearchRequest;
 use crate::scholarly_search::run_ctox_scholarly_search_tool;
 use crate::scholarly_search::ScholarlySearchProvider;
 use crate::scholarly_search::ScholarlySearchRequest;
-use crate::web_search::run_ctox_google_bootstrap_doctor_tool;
-use crate::web_search::run_ctox_google_bootstrap_import_tool;
-use crate::web_search::run_ctox_google_bootstrap_refresh_tool;
-use crate::web_search::run_ctox_google_bootstrap_status_tool;
 use crate::web_search::run_ctox_web_read_tool;
 use crate::web_search::run_ctox_web_search_tool;
 use crate::web_search::CanonicalWebSearchRequest;
@@ -188,50 +184,6 @@ pub fn handle_web_command(
             )?;
             print_json(&payload)
         }
-        "google-bootstrap-refresh" => {
-            let query = required_flag_value(args, "--query")
-                .or_else(|| args.get(1).map(String::as_str))
-                .context(
-                    "usage: ctox web google-bootstrap-refresh --query <text> [--domain <host>]... [--timeout-ms <n>]",
-                )?;
-            if looks_headless_without_browser_session() {
-                anyhow::bail!(
-                    "interactive Google bootstrap refresh needs a local browser session, but this host looks headless. Refresh the profile on a GUI host and install it here with `ctox web google-bootstrap-import --file <path>`."
-                );
-            }
-            let timeout_ms = find_flag_value(args, "--timeout-ms")
-                .map(|value| value.parse::<u64>())
-                .transpose()
-                .context("failed to parse --timeout-ms")?;
-            eprintln!(
-                "CTOX is opening Chrome for a manual Google bootstrap refresh. If Google shows a challenge, clear it in the browser window and wait for the search results page."
-            );
-            let payload = run_ctox_google_bootstrap_refresh_tool(
-                root,
-                query,
-                &find_flag_values(args, "--domain")
-                    .into_iter()
-                    .map(ToOwned::to_owned)
-                    .collect::<Vec<_>>(),
-                timeout_ms,
-            )?;
-            print_json(&payload)
-        }
-        "google-bootstrap-status" => {
-            let payload = run_ctox_google_bootstrap_status_tool(root)?;
-            print_json(&payload)
-        }
-        "google-doctor" | "google-bootstrap-doctor" => {
-            let payload = run_ctox_google_bootstrap_doctor_tool(root)?;
-            print_json(&payload)
-        }
-        "google-bootstrap-import" => {
-            let source = required_flag_value(args, "--file")
-                .or_else(|| args.get(1).map(String::as_str))
-                .context("usage: ctox web google-bootstrap-import --file <path>")?;
-            let payload = run_ctox_google_bootstrap_import_tool(root, &PathBuf::from(source))?;
-            print_json(&payload)
-        }
         "scrape" => {
             let target_key = required_flag_value(args, "--target-key")
                 .or_else(|| args.get(1).map(String::as_str))
@@ -374,18 +326,11 @@ fn handle_scholarly_command(root: &Path, args: &[String]) -> Result<()> {
 }
 
 fn web_usage() -> &'static str {
-    "usage:\n  ctox web search --query <text> [--domain <host>]... [--context-size <low|medium|high>] [--cached] [--include-sources]\n  ctox web read --url <url> [--query <text>] [--find <text>]...\n  ctox web scholarly search --query <text> [--provider <annas_archive>] [--content-type <type>]... [--language <code>]... [--ext <pdf|epub|...>]... [--sort <newest|oldest|largest|smallest|newest_added|oldest_added|random>] [--max-results <n>] [--page <n>] [--with-oa-pdf] [--only-doi]\n  ctox web deep-research --query <text> [--focus <text>] [--depth <quick|standard|exhaustive>] [--max-sources <n>] [--workspace <path>] [--include-annas-archive] [--no-papers] [--no-workspace]\n  ctox web google-bootstrap-refresh --query <text> [--domain <host>]... [--timeout-ms <n>]\n  ctox web google-bootstrap-status\n  ctox web google-bootstrap-import --file <path>\n  ctox web google-doctor\n  ctox web scrape --target-key <key> --mode <latest|semantic> [--query <text>] [--limit <n>]\n  ctox web browser-prepare [--dir <path>] [--install-reference] [--install-browser] [--skip-npm-install]\n  ctox web browser-automation [--dir <path>] [--timeout-ms <n>] [--script-file <path>] < script.js\n  ctox web browser-capture --url <url> [--dir <path>] [--out-dir <path>] [--timeout-ms <n>]"
+    "usage:\n  ctox web search --query <text> [--domain <host>]... [--context-size <low|medium|high>] [--cached] [--include-sources]\n  ctox web read --url <url> [--query <text>] [--find <text>]...\n  ctox web scholarly search --query <text> [--provider <annas_archive>] [--content-type <type>]... [--language <code>]... [--ext <pdf|epub|...>]... [--sort <newest|oldest|largest|smallest|newest_added|oldest_added|random>] [--max-results <n>] [--page <n>] [--with-oa-pdf] [--only-doi]\n  ctox web deep-research --query <text> [--focus <text>] [--depth <quick|standard|exhaustive>] [--max-sources <n>] [--workspace <path>] [--include-annas-archive] [--no-papers] [--no-workspace]\n  ctox web scrape --target-key <key> --mode <latest|semantic> [--query <text>] [--limit <n>]\n  ctox web browser-prepare [--dir <path>] [--install-reference] [--install-browser] [--skip-npm-install]\n  ctox web browser-automation [--dir <path>] [--timeout-ms <n>] [--script-file <path>] < script.js\n  ctox web browser-capture --url <url> [--dir <path>] [--out-dir <path>] [--timeout-ms <n>]"
 }
 
 fn scholarly_usage() -> &'static str {
     "usage: ctox web scholarly search --query <text> [--provider <annas_archive>] [--content-type <type>]... [--language <code>]... [--ext <pdf|epub|...>]... [--sort <newest|oldest|largest|smallest|newest_added|oldest_added|random>] [--max-results <n>] [--page <n>] [--with-oa-pdf] [--only-doi]"
-}
-
-fn looks_headless_without_browser_session() -> bool {
-    if cfg!(target_os = "macos") {
-        return false;
-    }
-    std::env::var_os("DISPLAY").is_none() && std::env::var_os("WAYLAND_DISPLAY").is_none()
 }
 
 fn parse_context_size(raw: &str) -> Result<ContextSize> {
