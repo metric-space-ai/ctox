@@ -55,7 +55,7 @@ export async function runMarketingResearch(runId: string, amount: number) {
   });
   const accepted = mapDeepResearchSources(payload, topic);
   const counts = deepResearchCounts(payload, accepted.length);
-  const nextRun = mergeResearchResults(run, accepted, counts.identified);
+  const nextRun = mergeResearchResults({ ...run, sources: [], graph: { nodes: [], edges: [] } }, accepted, counts.identified);
   nextRun.status = nextRun.sources.length > 0 ? "collecting" : "draft";
   nextRun.researchProgress = {
     status: nextRun.sources.length > run.sources.length ? "done" : "error",
