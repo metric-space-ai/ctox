@@ -22,6 +22,14 @@ export type CtoxCoreEventRequest = {
   payload: Record<string, unknown>;
 };
 
+export type CtoxDeepResearchRequest = {
+  query: string;
+  focus?: string;
+  depth?: "quick" | "standard" | "exhaustive";
+  maxSources?: number;
+  workspace?: string;
+};
+
 type CtoxQueueTask = {
   message_key?: string;
   title?: string;
@@ -217,6 +225,42 @@ export async function emitCtoxCoreEvent(request: CtoxCoreEventRequest) {
   }
 
   return { ok: true, mode: "local_event", event };
+}
+
+export async function runCtoxDeepResearch(request: CtoxDeepResearchRequest) {
+  const bridgeUrl = process.env.CTOX_BRIDGE_URL?.replace(/\/$/, "");
+  const token = process.env.CTOX_BRIDGE_TOKEN;
+
+  if (bridgeUrl) {
+    const response = await fetch(`${bridgeUrl}/deep-research`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(token ? { authorization: `Bearer ${token}` } : {})
+      },
+      body: JSON.stringify(request)
+    });
+
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null) as { error?: string } | null;
+      throw new Error(payload?.error ?? `deep_research_bridge_failed_${response.status}`);
+    }
+
+    return await response.json() as Record<string, unknown>;
+  }
+
+  if (!shouldExecuteCoreQueue()) throw new Error("deep_research_bridge_not_configured");
+
+  const args = ["web", "deep-research", "--query", request.query];
+  if (request.focus) args.push("--focus", request.focus);
+  if (request.depth) args.push("--depth", request.depth);
+  if (request.maxSources) args.push("--max-sources", String(request.maxSources));
+  if (request.workspace) args.push("--workspace", request.workspace);
+  const { stdout } = await execFileAsync(resolveCtoxBinary(), args, {
+    cwd: process.env.CTOX_ROOT,
+    maxBuffer: 64 * 1024 * 1024
+  });
+  return JSON.parse(stdout) as Record<string, unknown>;
 }
 
 export async function getCtoxHarnessFlow(): Promise<CtoxHarnessFlowResult> {

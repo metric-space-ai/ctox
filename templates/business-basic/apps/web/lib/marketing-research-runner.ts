@@ -1,5 +1,6 @@
 import { getMarketingResearchRuns, upsertMarketingResearchRun } from "./marketing-research-store";
 import { marketingSeed, type ResearchRun, type ResearchSource, type ResearchSourceScore } from "./marketing-seed";
+import { runCtoxDeepResearch } from "./ctox-core-bridge";
 
 const MINIMAX_MODEL = "MiniMax-M2.7";
 
@@ -8,6 +9,20 @@ type SearchHit = {
   url: string;
   snippet: string;
   query: string;
+};
+
+type ReviewedHit = {
+  accept: boolean;
+  title?: string;
+  group?: string;
+  type?: string;
+  score?: number;
+  access?: string;
+  contribution?: string;
+  fields?: string;
+  use?: string;
+  missing?: string;
+  tags?: string[];
 };
 
 export async function runMarketingResearch(runId: string, amount: number) {
@@ -31,47 +46,24 @@ export async function runMarketingResearch(runId: string, amount: number) {
     updatedAt: new Date().toISOString()
   });
 
-  const existingUrls = new Set(run.sources.map((source) => normalizeUrl(source.url)));
-  const queries = await generateSearchQueries(topic, run);
-  const accepted: ResearchSource[] = [];
-  const screened: SearchHit[] = [];
-
-  for (let index = 0; index < queries.length && accepted.length < target; index += 1) {
-    const query = queries[index];
-    await persistRunProgress(run, {
-      status: "running",
-      currentStep: `Suchrichtung ${index + 1} von ${queries.length}`,
-      currentQuery: query,
-      targetAdditionalSources: target,
-      identifiedDelta: screened.length,
-      readDelta: accepted.length,
-      usedDelta: run.sources.length + accepted.length,
-      updatedAt: new Date().toISOString()
-    });
-
-    const hits = await searchWeb(query);
-    for (const hit of hits) {
-      const key = normalizeUrl(hit.url);
-      if (!key || existingUrls.has(key)) continue;
-      existingUrls.add(key);
-      screened.push(hit);
-      const source = buildResearchSource(hit, topic);
-      accepted.push(source);
-      if (accepted.length >= target) break;
-    }
-
-    await persistPartialResults(run, accepted, screened.length, query, target);
-  }
-
-  const nextRun = mergeResearchResults(run, accepted, screened.length);
+  const payload = await runCtoxDeepResearch({
+    query: topic,
+    focus: run.criteria || undefined,
+    depth: target <= 25 ? "quick" : "standard",
+    maxSources: Math.min(target, 80),
+    workspace: `/home/ubuntu/.local/state/ctox/business-os/research/${run.id}`
+  });
+  const accepted = mapDeepResearchSources(payload, topic);
+  const counts = deepResearchCounts(payload, accepted.length);
+  const nextRun = mergeResearchResults(run, accepted, counts.identified);
   nextRun.status = nextRun.sources.length > 0 ? "collecting" : "draft";
   nextRun.researchProgress = {
     status: nextRun.sources.length > run.sources.length ? "done" : "error",
     currentStep: nextRun.sources.length > run.sources.length ? "Recherche aktualisiert" : "Keine neuen Quellen gefunden",
-    currentQuery: queries[queries.length - 1] ?? topic,
+    currentQuery: String(payload.search_query ?? topic),
     targetAdditionalSources: target,
-    identifiedDelta: screened.length,
-    readDelta: accepted.length,
+    identifiedDelta: counts.identified,
+    readDelta: counts.read,
     usedDelta: nextRun.sources.length,
     updatedAt: new Date().toISOString()
   };
@@ -82,7 +74,14 @@ export async function runMarketingResearch(runId: string, amount: number) {
   return nextRun;
 }
 
-async function persistPartialResults(run: ResearchRun, accepted: ResearchSource[], screenedDelta: number, currentQuery: string, target: number) {
+async function persistPartialResults(
+  run: ResearchRun,
+  accepted: ResearchSource[],
+  screenedDelta: number,
+  readDelta: number,
+  currentQuery: string,
+  target: number
+) {
   const nextRun = mergeResearchResults(run, accepted, screenedDelta);
   nextRun.status = "collecting";
   nextRun.researchProgress = {
@@ -91,7 +90,7 @@ async function persistPartialResults(run: ResearchRun, accepted: ResearchSource[
     currentQuery,
     targetAdditionalSources: target,
     identifiedDelta: screenedDelta,
-    readDelta: accepted.length,
+    readDelta,
     usedDelta: nextRun.sources.length,
     updatedAt: new Date().toISOString()
   };
@@ -105,6 +104,80 @@ async function persistRunProgress(run: ResearchRun, progress: NonNullable<Resear
     researchProgress: progress,
     updated: new Date().toISOString().slice(0, 10)
   }, marketingSeed.researchRuns);
+}
+
+function mapDeepResearchSources(payload: Record<string, unknown>, topic: string): ResearchSource[] {
+  const rawSources = Array.isArray(payload.sources) ? payload.sources as Array<Record<string, unknown>> : [];
+  return rawSources.map((source, index) => {
+    const title = stringField(source.title) || stringField(source.url) || `Research source ${index + 1}`;
+    const url = stringField(source.url);
+    const host = safeHostname(url);
+    const sourceType = stringField(source.source_type) || stringField(source.source) || "source";
+    const read = objectField(source.read);
+    const readOk = read?.ok === true;
+    const scoreValue = scoreDeepResearchSource(source, topic, readOk);
+    const score: ResearchSourceScore = scoreValue >= 78 ? "A" : scoreValue >= 60 ? "B" : scoreValue >= 42 ? "C" : "D";
+    const group = groupDeepResearchSource(source);
+    const snippet = stringField(source.summary) || stringField(source.snippet);
+    return {
+      id: `src-${slugify(host || sourceType)}-${slugify(title).slice(0, 42)}`,
+      title: title.slice(0, 120),
+      group,
+      type: labelSourceType(sourceType),
+      publisher: host || stringField(source.source) || "ctox deep research",
+      year: String(source.year ?? inferYear(`${title} ${snippet}`)),
+      score,
+      scoreValue,
+      contribution: snippet || "Verified by CTOX deep research source discovery.",
+      access: readOk ? "readable public source" : source.metadata_only ? "metadata only" : "public source",
+      url,
+      tags: [group, labelSourceType(sourceType), stringField(source.search_label)].filter(Boolean).slice(0, 5),
+      fields: snippet || "Source metadata and available extracted content.",
+      use: readOk ? "Use as a checked source from the deep-research reading pass." : "Use as a discovered source; read status is limited.",
+      missing: readOk ? "Validate exact tables/measurements before final engineering use." : "Full source extraction was not completed or failed.",
+      fit: {
+        primary: readOk ? 4 : 2,
+        structured: source.metadata_only ? 2 : 3,
+        coverage: Math.max(1, Math.min(5, Math.round(scoreValue / 20))),
+        specificity: Math.max(1, Math.min(5, Math.round(scoreValue / 20))),
+        reuse: readOk ? 4 : 2
+      },
+      links: url ? [{ label: host || "Source", url }] : []
+    };
+  }).filter((source) => source.url);
+}
+
+function deepResearchCounts(payload: Record<string, unknown>, usedCount: number) {
+  const callCounts = objectField(payload.research_call_counts);
+  const searchRuns = Array.isArray(payload.search_runs) ? payload.search_runs as Array<Record<string, unknown>> : [];
+  const identifiedFromRuns = searchRuns.reduce((sum, run) => sum + numberField(run.result_count), 0);
+  return {
+    identified: numberField(callCounts?.deduplicated_sources) || identifiedFromRuns || usedCount,
+    read: numberField(callCounts?.sources_with_page_read_attempts) || usedCount,
+    used: usedCount
+  };
+}
+
+function scoreDeepResearchSource(source: Record<string, unknown>, topic: string, readOk: boolean) {
+  const text = `${stringField(source.title)} ${stringField(source.snippet)} ${stringField(source.summary)} ${stringField(source.url)}`.toLowerCase();
+  let score = scoreHit(text, topic);
+  if (readOk) score += 12;
+  if (source.metadata_only) score -= 12;
+  if (source.scholarly) score += 6;
+  return clampScore(score);
+}
+
+function groupDeepResearchSource(source: Record<string, unknown>) {
+  const text = `${stringField(source.title)} ${stringField(source.snippet)} ${stringField(source.url)}`.toLowerCase();
+  const type = stringField(source.source_type) || stringField(source.source);
+  return inferGroup(text, labelSourceType(type));
+}
+
+function labelSourceType(type: string) {
+  const normalized = type.replace(/_/g, " ").trim();
+  if (!normalized) return "source";
+  if (normalized === "paper metadata") return "technical report";
+  return normalized;
 }
 
 function mergeResearchResults(run: ResearchRun, accepted: ResearchSource[], screenedDelta: number): ResearchRun {
@@ -196,6 +269,51 @@ async function minimaxJsonQueries(prompt: string) {
   if (!match) return [];
   const parsed = JSON.parse(match[0]) as { queries?: unknown };
   return Array.isArray(parsed.queries) ? parsed.queries.map(String) : [];
+}
+
+async function reviewSearchHits(topic: string, hits: SearchHit[]) {
+  const apiKey = process.env.MINIMAX_API_KEY?.trim();
+  if (!apiKey || hits.length === 0) return fallbackReviewedHits(topic, hits);
+
+  const prompt = [
+    "Return only JSON with a property results.",
+    "results must be an array with one item per candidate URL.",
+    "Evaluate search results for a research task. This is source screening, not search-query generation.",
+    "Accept only sources that are plausibly useful research inputs for the task: datasets, databases, technical documentation, official reports, papers, repositories, standards, or primary/credible domain sources.",
+    "Reject shopping pages, generic SEO articles, news without data, product category pages, irrelevant broad pages, and weak results that do not help the research question.",
+    "Do not accept every result. Be selective. If the title/snippet is not enough to justify use, reject it.",
+    "For accepted sources, provide score 0-100, group, type, access, contribution, fields, use, missing, and tags.",
+    `Research task:\n${topic}`,
+    `Candidates:\n${JSON.stringify(hits, null, 2)}`
+  ].join("\n\n");
+
+  const response = await fetch("https://api.minimax.io/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "authorization": `Bearer ${apiKey}`,
+      "content-type": "application/json"
+    },
+    body: JSON.stringify({
+      model: MINIMAX_MODEL,
+      messages: [
+        { role: "system", content: "You are a strict research source screener. You reject weak search results and only keep useful sources." },
+        { role: "user", content: prompt }
+      ],
+      temperature: 0.1
+    })
+  });
+  if (!response.ok) return fallbackReviewedHits(topic, hits);
+  const payload = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
+  const content = payload.choices?.[0]?.message?.content ?? "";
+  const match = content.match(/\{[\s\S]*\}/);
+  if (!match) return fallbackReviewedHits(topic, hits);
+  const parsed = JSON.parse(match[0]) as { results?: Array<ReviewedHit & { url?: string }> };
+  const reviews = new Map<string, ReviewedHit>();
+  for (const result of parsed.results ?? []) {
+    if (!result.url) continue;
+    reviews.set(normalizeUrl(result.url), result);
+  }
+  return reviews;
 }
 
 async function searchWeb(query: string): Promise<SearchHit[]> {
@@ -380,30 +498,56 @@ async function searchWithDuckDuckGoHtml(query: string): Promise<SearchHit[]> {
   return results;
 }
 
-function buildResearchSource(hit: SearchHit, topic: string): ResearchSource {
+function buildResearchSource(hit: SearchHit, topic: string, review?: ReviewedHit): ResearchSource {
   const host = safeHostname(hit.url);
   const text = `${hit.title} ${hit.snippet} ${hit.url}`.toLowerCase();
-  const scoreValue = scoreHit(text, topic);
+  const scoreValue = clampScore(review?.score ?? scoreHit(text, topic));
   const score: ResearchSourceScore = scoreValue >= 78 ? "A" : scoreValue >= 60 ? "B" : scoreValue >= 42 ? "C" : "D";
-  const type = inferType(text, host);
-  const group = inferGroup(text, type);
+  const type = cleanLabel(review?.type) ?? inferType(text, host);
+  const group = cleanLabel(review?.group) ?? inferGroup(text, type);
   return {
     id: `src-${slugify(host)}-${slugify(hit.title).slice(0, 42)}`,
-    title: hit.title.slice(0, 120),
+    title: (review?.title || hit.title).slice(0, 120),
     group,
     type,
     publisher: host || "public web",
     year: inferYear(text),
     score,
     scoreValue,
-    contribution: hit.snippet || `Search result found for: ${hit.query}`,
-    access: "public web",
+    contribution: review?.contribution || hit.snippet || `Search result found for: ${hit.query}`,
+    access: review?.access || "public web",
     url: hit.url,
-    tags: [hit.query, group, type].filter(Boolean).slice(0, 4),
-    fields: hit.snippet || "Public source metadata and linked content.",
-    use: "Candidate source for the research question; inspect source content before final use.",
-    missing: "Needs source-level reading and validation before relying on it."
+    tags: [...(review?.tags ?? []), hit.query, group, type].filter(Boolean).slice(0, 5),
+    fields: review?.fields || hit.snippet || "Public source metadata and linked content.",
+    use: review?.use || "Candidate source for the research question; inspect source content before final use.",
+    missing: review?.missing || "Needs source-level reading and validation before relying on it."
   };
+}
+
+function fallbackReviewedHits(topic: string, hits: SearchHit[]) {
+  const topicTerms = uniqueStrings(topic.toLowerCase().split(/[^a-z0-9äöüß]+/).filter((term) => term.length > 3));
+  const reviews = new Map<string, ReviewedHit>();
+  for (const hit of hits) {
+    const text = `${hit.title} ${hit.snippet} ${hit.url}`.toLowerCase();
+    const host = safeHostname(hit.url);
+    const topicMatches = topicTerms.filter((term) => text.includes(term)).length;
+    const hasResearchSignal = /\b(dataset|database|data|download|csv|repository|github|zenodo|figshare|mendeley|technical report|report|paper|publication|documentation|docs|manual|pdf|standard|specification)\b/.test(text);
+    const weakSource = /\b(shop|shopping|buy|price|amazon|forum|reddit|hacker news|steam|scribd|pinterest|youtube|school district|news|blog)\b/.test(text);
+    const accept = hasResearchSignal && topicMatches >= 2 && !weakSource;
+    reviews.set(normalizeUrl(hit.url), {
+      accept,
+      score: accept ? scoreHit(text, topic) : 0,
+      group: inferGroup(text, inferType(text, host)),
+      type: inferType(text, host),
+      access: "public web",
+      contribution: hit.snippet,
+      fields: hit.snippet,
+      use: accept ? "Potentially useful source for the research task." : "",
+      missing: "Needs source-level validation.",
+      tags: [hit.query]
+    });
+  }
+  return reviews;
 }
 
 function scoreHit(text: string, topic: string) {
@@ -474,6 +618,27 @@ function abstractFromInvertedIndex(index?: Record<string, number[]>) {
 
 function validHit(hit: SearchHit) {
   return Boolean(hit.title && hit.url.startsWith("http"));
+}
+
+function stringField(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function numberField(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function objectField(value: unknown) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function clampScore(value: number) {
+  return Math.max(20, Math.min(92, Math.round(value)));
+}
+
+function cleanLabel(value?: string) {
+  const label = value?.replace(/\s+/g, " ").trim();
+  return label || undefined;
 }
 
 function safeHostname(url: string) {
