@@ -1,3 +1,5 @@
+import { getMarketingResearchRuns } from "./marketing-research-store";
+
 export type SupportedLocale = "en" | "de";
 export type Localized = Record<SupportedLocale, string>;
 
@@ -51,6 +53,103 @@ export type ResearchItem = {
   linkedCampaignIds: string[];
 };
 
+export type ResearchSourceScore = "A" | "B" | "C" | "D";
+
+export type ResearchSource = {
+  id: string;
+  title: string;
+  group: string;
+  type: string;
+  publisher: string;
+  year: string;
+  score: ResearchSourceScore;
+  scoreValue: number;
+  contribution: string;
+  access: string;
+  url: string;
+  tags?: string[];
+  fields?: string;
+  use?: string;
+  missing?: string;
+  fit?: Record<string, number>;
+  links?: Array<{ label: string; url: string }>;
+};
+
+export type ResearchGraphNode = {
+  id: string;
+  label: string;
+  kind: "query" | "source" | "group";
+  score?: ResearchSourceScore;
+};
+
+export type ResearchGraphEdge = {
+  source: string;
+  target: string;
+  relation: string;
+};
+
+export type ResearchExpansionRequest = {
+  id: string;
+  createdAt: string;
+  query: string;
+  criteria: string;
+  targetAdditionalSources?: number;
+  status: "queued" | "running" | "done";
+};
+
+export type ResearchCriterion = {
+  id: string;
+  label: string;
+  description: string;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ResearchSourceGroup = {
+  id: string;
+  label: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ResearchProgress = {
+  status: "queued" | "running" | "done" | "error";
+  currentStep: string;
+  currentQuery?: string;
+  targetAdditionalSources?: number;
+  identifiedDelta: number;
+  readDelta: number;
+  usedDelta: number;
+  updatedAt: string;
+  taskId?: string;
+};
+
+export type ResearchRun = {
+  id: string;
+  title: string;
+  status: "draft" | "collecting" | "synthesized";
+  updated: string;
+  prompt?: string;
+  criteria?: string;
+  archivedAt?: string;
+  queryCount: number;
+  screenedCount: number;
+  acceptedCount: number;
+  summary: Localized;
+  sources: ResearchSource[];
+  graph: {
+    nodes: ResearchGraphNode[];
+    edges: ResearchGraphEdge[];
+  };
+  expansionRequests?: ResearchExpansionRequest[];
+  criteriaItems?: ResearchCriterion[];
+  sourceGroupLabels?: Record<string, string>;
+  hiddenSourceGroups?: string[];
+  customSourceGroups?: ResearchSourceGroup[];
+  researchProgress?: ResearchProgress;
+};
+
 export type CommerceItem = {
   id: string;
   name: string;
@@ -67,6 +166,7 @@ export type MarketingBundle = {
   assets: MarketingAsset[];
   campaigns: Campaign[];
   researchItems: ResearchItem[];
+  researchRuns: ResearchRun[];
   commerceItems: CommerceItem[];
 };
 
@@ -205,6 +305,7 @@ export const marketingSeed: MarketingBundle = {
       linkedCampaignIds: ["founder-demo"]
     }
   ],
+  researchRuns: [],
   commerceItems: [
     {
       id: "starter-stack",
@@ -261,6 +362,7 @@ export async function getMarketingBundle(): Promise<MarketingBundle> {
       assets: rowsToPayload(assetRows, marketingSeed.assets),
       campaigns: rowsToPayload(campaignRows, marketingSeed.campaigns),
       researchItems: rowsToPayload(researchRows, marketingSeed.researchItems),
+      researchRuns: await getMarketingResearchRuns(marketingSeed.researchRuns),
       commerceItems: rowsToPayload(commerceRows, marketingSeed.commerceItems)
     };
   } catch (error) {
@@ -275,6 +377,7 @@ export async function getMarketingResource(resource: string) {
   if (resource === "assets") return data.assets;
   if (resource === "campaigns") return data.campaigns;
   if (resource === "research") return data.researchItems;
+  if (resource === "research-runs") return data.researchRuns;
   if (resource === "commerce") return data.commerceItems;
   if (resource === "people") return data.people;
   return null;

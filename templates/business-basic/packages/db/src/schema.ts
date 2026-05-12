@@ -40,6 +40,13 @@ export const ctoxBugReports = pgTable("ctox_bug_reports", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
 });
 
+export const businessRuntimeStores = pgTable("business_runtime_stores", {
+  storeKey: text("store_key").primaryKey(),
+  payloadJson: text("payload_json").notNull().default("{}"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
+});
+
 export const marketingCompetitorWatchlist = pgTable("marketing_competitor_watchlist", {
   id: uuid("id").primaryKey().defaultRandom(),
   name: text("name").notNull(),

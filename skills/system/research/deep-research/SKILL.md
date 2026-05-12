@@ -42,7 +42,7 @@ Every run is bound to exactly one `report_type_id`. Pick from these nine:
 | `report_type_id`         | When                                                                    | Typical chars | Min sections |
 | ------------------------ | ----------------------------------------------------------------------- | ------------- | ------------ |
 | `feasibility_study`      | "Geht das Verfahren X für Anwendung Y?" — option matrix + verdict       | ~30 000       | 9            |
-| `project_description`    | "Beschreibe Förder-/Innovationsvorhaben X" — company, problem, innovation, implementation, budget, benefit | ~22 000 | 8 |
+| `project_description`    | "Beschreibe Förder-/Innovationsvorhaben X" — company, problem, innovation, implementation, budget, benefit | ~22 000 | 11 |
 | `source_review`          | "Finde möglichst alle Quellen/Daten zu X" — search log + source catalog + coverage/gaps | ~26 000 | 8 |
 | `market_research`        | "Wie groß ist Markt X, wer kauft, was zahlen sie?"                      | ~25 000       | 7            |
 | `competitive_analysis`   | "Wer sind die Anbieter, wie schneiden sie ab?"                          | ~20 000       | 8            |
@@ -130,6 +130,18 @@ Returns the run's `report_type`, `domain_profile`, `depth_profile`,
 register size and the depth profile's `min_evidence_count` floor, plus any
 operator-supplied seed DOIs / reference documents.
 
+Create the active flavor contract immediately after reading the skeleton:
+
+```bash
+ctox report flavor-brief --run-id RUN_ID
+```
+
+This is mandatory for every flavor. It keeps the shared CTOX tool surface
+uniform while allowing each `report_type_id` to install its own adapter
+contract. For `project_description`, this dispatches to the app-derived
+Fördervorhaben-Agent bridge and produces the writing contract from
+`references/foerdervorhaben_agent_asset_pack.json`.
+
 You also have the static knowledge in this skill's `references/` folder —
 read those for block scaffolding and writing rubrics:
 
@@ -148,6 +160,15 @@ read those for block scaffolding and writing rubrics:
 - `references/project_description_style.md` — mandatory for
   `project_description`; describes the Fördervorhaben writing process,
   structure, client-facing style and anti-patterns.
+- `references/project_description_reference_archetype.md` — mandatory for
+  `project_description`; captures the real funding-project reference corpus
+  and its company -> project -> problem -> goal -> measures -> cost/period
+  sequence.
+- `references/foerdervorhaben_agent_asset_pack.json` — imported asset pack
+  from `/Users/michaelwelsch/Documents/Hypoport/Fördervorhaben-Agent/Foerdervorhaben-Agent.html`.
+  For `project_description`, the bridge tool
+  `ctox report project-description-agent-brief --run-id RUN_ID` turns this
+  into the active block contract, app-style dossier arc and release checklist.
 
 Do not use historical pseudo-tool documentation such as `check_contracts.md`
 as an operating manual. The only executable interface in this skill is the
@@ -181,15 +202,103 @@ English source review.
 
 For `project_description`, research is input, not the visible product. Do not
 write a literature review, scientific paper, source review or citation-heavy
-market study. Read `references/project_description_style.md` before drafting
-and treat it as a release contract:
+market study. Read both `references/project_description_style.md` and
+`references/project_description_reference_archetype.md` before drafting and
+treat them as release contracts:
 
+- `project_description` is now driven through the ported Fördervorhaben-App
+  CLI, not through the generic deep-research writer. Before any
+  `block-stage`, initialize the app CLI and use its stage prompts:
+
+  ```bash
+  python3 skills/system/research/deep-research/scripts/foerdervorhaben_app_cli.py \
+    init --run-id RUN_ID
+  python3 skills/system/research/deep-research/scripts/foerdervorhaben_app_cli.py \
+    workspace-snapshot --run-id RUN_ID --out /tmp/RUN_ID_fvh_snapshot.json
+  python3 skills/system/research/deep-research/scripts/foerdervorhaben_app_cli.py \
+    asset-lookup --run-id RUN_ID --out /tmp/RUN_ID_fvh_assets.json
+  ```
+
+  For every write or revision step, generate the exact app-stage prompt first
+  and write only the requested block(s):
+
+  ```bash
+  python3 skills/system/research/deep-research/scripts/foerdervorhaben_app_cli.py \
+    writer-prompt --run-id RUN_ID --instance-id INSTANCE_ID --out /tmp/RUN_ID_writer_prompt.md
+  python3 skills/system/research/deep-research/scripts/foerdervorhaben_app_cli.py \
+    revision-prompt --run-id RUN_ID --instance-id INSTANCE_ID --out /tmp/RUN_ID_revision_prompt.md
+  python3 skills/system/research/deep-research/scripts/foerdervorhaben_app_cli.py \
+    flow-review-prompt --run-id RUN_ID --instance-id INSTANCE_ID --out /tmp/RUN_ID_flow_prompt.md
+  ```
+
+  After staging/applying blocks and before final DOCX render, run the app
+  baseline lint. A non-zero exit means the project-description text is not
+  releasable:
+
+  ```bash
+  python3 skills/system/research/deep-research/scripts/foerdervorhaben_app_cli.py \
+    lint-run --run-id RUN_ID
+  ```
+
+  If a DOCX already exists, additionally lint the rendered file:
+
+  ```bash
+  python3 skills/system/research/deep-research/scripts/foerdervorhaben_app_cli.py \
+    lint-docx --run-id RUN_ID --docx /path/to/report.docx --reference-dir /path/to/reference_docs
+  ```
+
+  This CLI is the port of the existing Fördervorhaben-Agent app workflow:
+  manager snapshot, asset lookup, block writer, revision skill, flow review and
+  app-baseline release lint. Skipping it for `project_description` is a hard
+  workflow failure.
+  Its `lint-docx` stage also runs the project-description reference-fit gate:
+  at standard depth the final DOCX must have at least five client-facing
+  figures, at least two native Word tables, a native cost-breakdown table,
+  visible project-cost / implementation-period structure, and no
+  Antragstellerinnen-/Gutachter-/Research voice.
+
+- before writing any project-description prose, run the deterministic
+  Fördervorhaben-Agent bridge tool:
+  `ctox report project-description-agent-brief --run-id RUN_ID`. This imports
+  the app-derived asset pack
+  `references/foerdervorhaben_agent_asset_pack.json` as the primary
+  project-description writing contract. Use the generated
+  `runtime/report_project_description_agent/RUN_ID/foerdervorhaben-agent-brief.md`
+  as the block plan, style guide and release contract. The active CTOX
+  blueprint is app-shaped and uses these client-facing block instances:
+  `doc_company__company_legal`, `doc_company__company_profile`,
+  `doc_company__company_history`, `doc_company__company_portfolio`,
+  `doc_project__project_intro`, `doc_project__project_1_title_scope`,
+  `doc_project__project_1_current_state`,
+  `doc_project__project_1_development_goal`,
+  `doc_project__project_1_state_of_art`,
+  `doc_project__project_1_challenges_measures`,
+  `doc_project__project_1_workpackages`,
+  `doc_project__project_1_costs_timeline` and
+  `doc_project__project_economic_benefit`. Do not stage the old eight
+  generic report blocks for new runs;
+- follow the app pipeline shape: workspace snapshot -> app asset lookup ->
+  reference-fit contract -> missing-fact public research only when needed ->
+  fact-transfer ledger -> block writer -> targeted revision ->
+  narrative-flow review -> `project-description-sync` -> release checks ->
+  final DOCX render -> App-CLI `lint-docx`. Skipping the app-derived brief,
+  skipping the app CLI stages, or writing all chapters in one free-form pass is
+  a failure mode;
 - final Word text has no bracket citations such as `[1][2]`, no DOI/reference
   list and no "Quellen und Recherchebasis" appendix unless the operator
   explicitly requests an annotated source appendix;
 - write from the applicant/project perspective with a clear funding narrative:
   company development -> status quo / bottleneck -> innovation jump -> target
   operating model -> implementation -> costs/timeline -> economic benefit;
+- the final document must resemble a Fördervorhabenbeschreibung, not merely an
+  eight-heading research dossier. Build the reference-corpus sequence:
+  Gesellschaftsrechtliche Verhältnisse / Unternehmensprofil / Historie /
+  Produkte und Kundensegmente / Vorstellung des Innovations- oder
+  Digitalisierungsprojektes / Derzeitiger Stand und Problembereich /
+  Entwicklungsziel / Herausforderungen und Maßnahmen / Projektkosten /
+  Umsetzungszeitraum / wirtschaftlicher Nutzen. If the operator supplies a
+  shorter chapter list, use it as packaging only; the reference-corpus
+  substance still has to appear inside those chapters;
 - create an internal `fact-transfer-ledger.md` before drafting. Extract
   concrete facts from the evidence register and map them to target chapters:
   company/legal/location/history, products/services, customers/segments,
@@ -199,19 +308,42 @@ and treat it as a release contract:
 - every major chapter must contain concrete researched facts, not only generic
   funding prose. Use research to make statements specific, then translate it
   into smooth Fördervorhaben prose without exposing the research mechanics;
+- keep the final title client-facing and short. Do not let the raw task prompt
+  become the report title. For project descriptions, title the document after
+  the project, e.g. `Fördervorhabenbeschreibung: <Vorhabenname>`;
 - when Laufzeit, Status, Budget or Kostenblöcke are known, add a compact
   project-scope table. Prefer the deterministic helper
   `ctox report project-description-sync --run-id RUN_ID`; it extracts
   Laufzeit, Status, Budget and Kostenblöcke from the run topic / committed
   project-scope prose and binds the resulting native table to
-  `project_scope_budget_timeline`. Use manual `table-add` only when the helper
-  cannot parse the supplied framing;
+  `doc_project__project_1_costs_timeline`. The same helper also creates a native
+  Gesellschafts-/Unternehmensprofil table when it can extract register,
+  address, management, ownership, capital or founding facts from the committed
+  company prose or evidence register. Visible project-description tables must
+  not contain `Quelle`, `Herkunft`, URL, DOI or evidence columns. Use manual
+  `table-add` only when the helper cannot parse the supplied framing;
 - if a reference DOCX contains Word comments, treat comments as revision
   criteria for storyline, readability and structure. Pass commented reference
   files as `--review-doc` at `ctox report new` time, or immediately import
   them with `ctox report review-import --run-id RUN_ID --review-doc PATH`.
   Do not rely on a path mentioned only in prose; the comments must be present
   in `review_feedback`. Do not copy the comments into the final document.
+- every standard-depth project-description DOCX must contain at least five
+  embedded, client-facing figures if usable visual material can be created or
+  lawfully sourced. The minimum visual set is: company/site or brand/product
+  visual, product/series overview, target architecture or platform schematic,
+  service/process flow, and implementation or benefit logic. Prefer real
+  product/site/company visuals if usable sources exist; otherwise create clean
+  own schematics with `ctox report figure-add --kind schematic --code-python ...`.
+  Bind figures to relevant app blocks and mention the resulting `{{fig:...}}`
+  token in the prose. Write `Wie in {{fig:...}} gezeigt...`, not `Wie in
+  Abbildung {{fig:...}} gezeigt...`, because the renderer inserts the localized
+  figure label itself.
+- the cost/period section must follow the reference archetype. If the topic or
+  material names cost blocks, the final DOCX must include a native table row or
+  table with those cost blocks/positions; a total budget alone is not enough.
+  When available, include project costs, financing/refinancing if relevant,
+  and implementation period as separate readable elements.
 
 ### 3. Build the evidence register
 
@@ -297,43 +429,123 @@ Use the bundled discovery runner. It creates a broad query plan, saves every
 raw JSON payload, deduplicates sources, writes `search_protocol.csv` and
 an accepted-only `candidate_sources.csv`, and calls `ctox report
 research-log-add` for every executed query. `candidate_sources.csv` is not a
-raw metadata dump: every row must pass the topic-specific acceptance gate and
+raw metadata dump: every row must pass the topic-derived acceptance gate and
 must carry a numeric relevance score. The full audit trail lives in
 `screened_sources.csv`; rejected/off-topic hits live in `rejected_sources.csv`.
-The paper/citation traversal lives in `discovery_graph.json`. Never hand the
-raw screened catalog to the user as the source catalog.
+The query-to-source and citation traversal lives in `discovery_graph.json`.
+Never hand the raw screened catalog to the user as the source catalog.
+
+Before running discovery, write the search plan yourself as a CSV file with
+columns `focus,query`. The LLM is responsible for the actual raw search
+queries. Do not rely on the script to infer the right domain language from a
+long prompt. The discovery runner rejects real runs without `--queries-file`;
+its built-in query plan can only be enabled explicitly with
+`--allow-auto-query-plan` for smoke tests.
+
+The query plan must be natural search language, not a compressed prompt and not
+a keyword salad. Each query should look like something a careful human
+researcher would type into a search engine or metadata database. Use:
+
+- obvious short seed queries first;
+- the core object and the core data need in the same query;
+- separate queries for scope constraints, classifications, jurisdictions,
+  dates, materials, product classes or populations;
+- separate queries for source containers such as `dataset`, `database`,
+  `technical report`, `standard`, `manual`, `datasheet`, `GitHub`, `Zenodo`,
+  `Figshare`, `Dataverse`, `government report`, `regulatory guidance`;
+- `site:` queries only after a relevant host or institution is obvious from
+  the prompt or has been found in earlier results;
+- no hidden benchmark answer list, no topic-specific hard-coded shortcuts in
+  the generic skill.
+
+For general source reviews, do not invent the scoring matrix, groups or
+criteria before seeing sources. The first pass is intentionally simple:
+run short obvious queries, read the first strong pages/results, and then infer
+the source families from what actually appears. Build follow-up query groups
+from recurring evidence patterns such as source type, host/institution,
+dataset format, measured variables, access path, standard/report identifiers,
+and repeated terminology. The LLM must name these groups in ordinary
+operator-facing language. Do not derive them with topic-specific shortcuts,
+regex tricks, or a fixed taxonomy from a previous domain.
+
+Bad query style:
+
+```text
+load data particularly relevant bearing design drones takeoff weight defense
+```
+
+Good query style:
+
+```text
+drone load data bearing design
+drone propeller force moment dataset
+small UAV takeoff weight payload datasheet
+DoD UAS Group 1 Group 2 classification
+```
 
 For broad source-discovery tasks where the user expects hundreds or thousands
-of screened sources, start with `--discovery-backend open-metadata`. It queries
-OpenAlex and Crossref directly and is the correct first pass for corpus-scale
-screening. Use `ctox web deep-research` afterwards only for targeted follow-up
-reading and evidence extraction, not as the only mechanism for a 1000+ source
-ledger.
+of screened sources, start with `--discovery-backend hybrid`. Source reviews
+are not bibliographies. The first pass must use short, obvious seed queries
+from the operator's own words before it expands into datasets, public
+databases, official pages, repositories, standards, agency pages,
+documentation, manuals and DOI/OpenAlex papers. The hybrid backend sends
+scholarly/snowball queries to OpenAlex/Crossref and sends web/source-family
+queries to direct web search with query simplification. Use
+`--discovery-backend open-metadata` only for a deliberately literature-only
+corpus.
 
 ```bash
 python3 skills/system/research/deep-research/scripts/source_review_discovery.py \
   --topic "<source-review topic and scope>" \
   --run-id RUN_ID \
   --out-dir "/tmp/RUN_ID_source_discovery" \
+  --queries-file "/tmp/RUN_ID_source_queries.csv" \
   --max-sources-per-query 80 \
   --target-reviewed 1000 \
-  --discovery-backend open-metadata \
+  --discovery-backend hybrid \
   --query-timeout-sec 25 \
+  --web-query-delay-sec 3 \
   --snowball-rounds 1
 ```
 
-If the generated query plan is too generic for the topic, create a CSV with
-columns `focus,query` and pass it via `--queries-file`. Do not reduce the
-query count just to save time. Increase queries or `--snowball-rounds` when
-the output reports fewer than the requested reviewed-result target.
+If the first query plan misses obvious source families, revise the CSV and run
+another pass. Do not ask the script to repair a bad plan by clever parsing.
+Do not reduce the query count just to save time. Increase queries or
+`--snowball-rounds` when the output reports fewer than the requested
+reviewed-result target.
 
-For scientific source discovery, citation snowballing is mandatory when
-`--snowball-rounds` is greater than zero. Do not skip it just because the first
-metadata pass already exceeded `--target-reviewed`; the target is a minimum
-screening depth, not a reason to avoid references/cited-by discovery. When
-OpenAlex IDs are available, the snowball pass must use OpenAlex
-`referenced_works`, `related_works` and `cites:` paths rather than merely
-turning a DOI into another broad search string.
+For a continuation search, never restart from an empty corpus. Load the
+previous discovery directory or candidate CSV, preserve existing sources, and
+ask the runner for additional candidates only:
+
+```bash
+python3 skills/system/research/deep-research/scripts/source_review_discovery.py \
+  --topic "<same source-review topic and scope>" \
+  --run-id RUN_ID \
+  --out-dir "/tmp/RUN_ID_source_discovery_next" \
+  --queries-file "/tmp/RUN_ID_source_queries_next.csv" \
+  --existing-discovery-dir "/tmp/RUN_ID_source_discovery" \
+  --target-additional-candidates 50 \
+  --max-sources-per-query 80 \
+  --target-reviewed 1000 \
+  --discovery-backend hybrid \
+  --query-timeout-sec 25 \
+  --web-query-delay-sec 3 \
+  --snowball-rounds 1
+```
+
+The continuation run must report `initial_unique_sources` and
+`additional_unique_sources`. Only `additional_unique_sources` counts as newly
+found material. Preserve and deduplicate existing sources by DOI, URL or title;
+append new candidates, source groups and graph edges to the existing research
+run instead of replacing it.
+
+For source discovery, graph expansion is mandatory when `--snowball-rounds` is
+greater than zero, but it must not replace seed web discovery. The runner first
+expands from high-scoring source titles and hosts, then performs OpenAlex
+reference/related/cited-by traversal where paper IDs exist. Do not skip this
+just because the first metadata pass already exceeded `--target-reviewed`; the
+target is a minimum screening depth, not a reason to avoid graph expansion.
 
 Discovery is not the same as reading. After the graph exists, select the
 highest-scoring source families and perform a targeted reading/extraction pass
@@ -410,19 +622,22 @@ persisted evidence, not hand-written count inflation.
 
 Mandatory source-review discovery passes:
 
-1. Broad web and domain synonyms.
-2. Scholarly metadata / OpenAlex / DOI-oriented queries.
-3. Agencies and regulators.
-4. Standards and public standards metadata.
-5. Technical reports, government repositories and institutional libraries.
-6. Datasets, repositories and telemetry/data portals.
-7. OEM / industry manuals and datasheets.
-8. Patents and adjacent technical reports.
-9. Citation snowballing: take the strongest papers/reports found so far,
-   inspect references/cited-by metadata where available, then run follow-up
-   queries for recurring authors, datasets, report numbers, standards and
-   terminology. Stop only when the next pass yields no material new source
-   families or the depth target is met.
+1. LLM-authored raw query plan: short, natural seed queries plus explicit
+   follow-up families. This pass must find the plain, expected sources before
+   any over-specific academic query dominates the run.
+2. Broad web and domain synonyms.
+3. Scholarly metadata / OpenAlex / DOI-oriented queries.
+4. Agencies, regulators and other official bodies where relevant.
+5. Standards and public standards metadata.
+6. Technical reports, government repositories and institutional libraries.
+7. Datasets, repositories, documentation portals and APIs.
+8. OEM / industry manuals, datasheets and product documentation where relevant.
+9. Patents and adjacent technical reports where relevant.
+10. Graph expansion: take the strongest sources found so far, inspect source
+    titles, hosts, references/cited-by metadata and recurring entities, then
+    run follow-up queries for datasets, report numbers, standards, repositories,
+    authors/institutions and terminology. Stop only when the next pass yields
+    no material new source families or the depth target is met.
 
 For `technical_data_sources` source reviews, treat the deliverable as a
 source-map, not a bibliography. Before running discovery, write a short data
@@ -434,17 +649,12 @@ need map with:
 - synonyms and classification terms that change the search result set;
 - "direct data", "proxy data" and "context-only" criteria.
 
-For drone/UAS load-data research, do not assume one meaning of "load". Cover
-and label at least these meanings where relevant: payload/cargo mass, takeoff
-weight/MTOW/AUW, thrust/force/load-cell measurements, rotor/propeller loads,
-airframe/aerodynamic loads, flight-log load proxies such as current draw or
-motor output, and regulatory or military class definitions. For Class 1/2 or
-up-to-25 kg scope, explicitly include terms such as `sUAS`, `UAS`, `UAV`,
-`drone`, `multirotor`, `fixed-wing`, `eVTOL`, `Group 1`, `Group 2`, `DoD UAS
-classification`, `MTOW`, `maximum takeoff weight`, `payload capacity`, `load
-cell`, `thrust stand`, `force moment`, `flight log`, `PX4`, `ArduPilot`,
-`NASA`, `FAA`, `EASA`, `DTIC`, `DoD`, `NATO`, `ASTM`, `manufacturer
-datasheet`, `technical report`, `dataset`, and `GitHub`.
+When an operator term is ambiguous, split the meaning before searching. Do not
+let one overloaded word drive all queries. Create separate query groups for
+each plausible meaning, then score sources against the operator's actual data
+need. If early results drift into an unrelated meaning, simplify the query,
+add discriminating topic terms from the data need map, and log the rejected
+hits instead of accepting them.
 
 The source catalog for technical data-source reviews must expose usefulness, not
 just existence. Add columns where the final table format allows it:
@@ -484,9 +694,10 @@ must then be cited, summarized and interpreted in the prose:
    `Publisher/author`, `Year`, `Type`, `Data contribution`,
    `Direct URL/DOI`, and `Score`.
 4. Group-specific source tables for the main groups. For technical source
-   reviews this normally means regulation/agencies, military/DoD/NATO,
-   standards, NASA/DTIC/technical reports, academic literature,
-   datasets/repositories, OEM/industry/manuals, patents/other.
+   reviews this normally means official/regulatory sources, standards,
+   technical reports, academic literature, datasets/repositories,
+   industry/manuals/datasheets, and patents/other. Adapt the group names to
+   the operator's topic; do not use a fixed domain taxonomy.
 
 Every source table row must be traceable with a direct URL, DOI, arXiv link,
 repository URL, standards identifier with access page, or a clear "not public /
