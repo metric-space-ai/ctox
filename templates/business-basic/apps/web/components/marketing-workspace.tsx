@@ -8,10 +8,12 @@ import {
   type MarketingAsset,
   type Campaign,
   type ResearchItem,
+  type ResearchRun,
   type SupportedLocale,
   type WebsitePage
 } from "../lib/marketing-seed";
 import { MarketingCreateForm, MarketingQueueButton } from "./marketing-actions";
+import { ResearchNavigator } from "./research-navigator";
 
 type QueryState = {
   locale?: string;
@@ -119,7 +121,7 @@ export async function MarketingPanel({
 
   const record = findRecord(data, resource, recordId);
   if (!record) return null;
-  const owner = data.people.find((person) => person.id === record.ownerId);
+  const owner = "ownerId" in record ? data.people.find((person) => person.id === record.ownerId) : null;
 
   return (
     <div className="drawer-content ops-drawer">
@@ -241,42 +243,7 @@ function CampaignsView({ data, locale, query, submoduleId }: ViewProps) {
 }
 
 function ResearchView({ data, locale, query, submoduleId }: ViewProps) {
-  return (
-    <div className="ops-workspace ops-planning-workspace">
-      <Pane title="Research queue" description="Market notes, personas, interviews, pricing, and search signals.">
-        <div className="ops-note-feed">
-          {data.researchItems.map((item) => (
-            <a
-              data-context-item
-              data-context-label={item.title}
-              data-context-module="marketing"
-              data-context-record-id={item.id}
-              data-context-record-type="research_item"
-              data-context-submodule={submoduleId}
-              href={panelHref(query, submoduleId, "research", item.id, "right")}
-              key={item.id}
-            >
-              <strong>{item.title}</strong>
-              <span>{text(item.insight, locale)}</span>
-              <small>{item.kind} · {item.status} · {item.updated}</small>
-            </a>
-          ))}
-        </div>
-      </Pane>
-      <Pane title="Campaign links" description="Research is actionable only when linked to work.">
-        <SignalList
-          items={[
-            ["Queued research", String(data.researchItems.filter((item) => item.status === "queued").length), panelHref(query, submoduleId, "marketing-set", "research-queued", "right"), "research-queued"],
-            ["Collecting research", String(data.researchItems.filter((item) => item.status === "collecting").length), panelHref(query, submoduleId, "marketing-set", "research-collecting", "right"), "research-collecting"],
-            ["Synthesized research", String(data.researchItems.filter((item) => item.status === "synthesized").length), panelHref(query, submoduleId, "marketing-set", "research-synthesized", "right"), "research-synthesized"]
-          ]}
-          submoduleId={submoduleId}
-        />
-        <SignalList items={data.researchItems.map((item) => [item.title, item.linkedCampaignIds.join(", "), panelHref(query, submoduleId, "research", item.id, "right"), item.id])} submoduleId={submoduleId} />
-        <ActionDock query={query} resource="research" submoduleId={submoduleId} />
-      </Pane>
-    </div>
-  );
+  return <ResearchNavigator locale={locale} runs={data.researchRuns} />;
 }
 
 function CommerceView({ data, locale, query, submoduleId }: ViewProps) {
@@ -497,20 +464,21 @@ function findRecord(data: MarketingBundle, resource: RecordType, recordId?: stri
   if (!recordId) return null;
   if (resource === "assets") return data.assets.find((item) => item.id === recordId) ?? null;
   if (resource === "campaigns") return data.campaigns.find((item) => item.id === recordId) ?? null;
-  if (resource === "research") return data.researchItems.find((item) => item.id === recordId) ?? null;
+  if (resource === "research") return data.researchRuns.find((item) => item.id === recordId) ?? data.researchItems.find((item) => item.id === recordId) ?? null;
   if (resource === "commerce") return data.commerceItems.find((item) => item.id === recordId) ?? null;
   return data.websitePages.find((item) => item.id === recordId) ?? null;
 }
 
-function recordTitle(record: WebsitePage | MarketingAsset | Campaign | ResearchItem | CommerceItem) {
+function recordTitle(record: WebsitePage | MarketingAsset | Campaign | ResearchItem | ResearchRun | CommerceItem) {
   if ("title" in record) return record.title;
   return record.name;
 }
 
-function recordContext(record: WebsitePage | MarketingAsset | Campaign | ResearchItem | CommerceItem, locale: SupportedLocale) {
+function recordContext(record: WebsitePage | MarketingAsset | Campaign | ResearchItem | ResearchRun | CommerceItem, locale: SupportedLocale) {
   if ("intent" in record) return [record.path, text(record.intent, locale), text(record.nextAction, locale)];
   if ("audience" in record) return [record.kind, text(record.audience, locale), text(record.usage, locale)];
   if ("target" in record) return [record.channel, text(record.target, locale), text(record.nextAction, locale)];
+  if ("sources" in record) return [`${record.acceptedCount} accepted sources`, `${record.screenedCount} screened results`, text(record.summary, locale)];
   if ("insight" in record) return [record.kind, text(record.insight, locale), `Campaigns: ${record.linkedCampaignIds.join(", ")}`];
   return [record.kind, record.price, text(record.nextAction, locale)];
 }
