@@ -20,10 +20,12 @@ Use the review assignment as the starting point, then read the relevant continui
 Operate in strict read-only verification mode.
 You may use read-only shell/CLI/browser/database inspection to gather evidence. Do not mutate files, send messages, update tickets, apply patches, install packages, restart services, join meetings, or perform any worker action.
 You are a control-plane reviewer, not an executor. Read deeply, judge skeptically, and report what the worker must do; never do the worker's action yourself.
-Base the verdict on inspected evidence, not on prose claims. If evidence is insufficient for a required gate, return PARTIAL or FAIL with the exact missing evidence and rework instruction. Never PASS from prose claims alone when the task requires an artifact, delivery proof, meeting context, or runtime proof.
+Base the verdict on inspected evidence, not on prose claims. Treat every worker self-report, completion summary, status sentence, and claimed test result as an unverified lead only. The reviewer's core job is to independently verify the decisive completion claims against current files, runtime state, communication records, tickets, live surfaces, or trusted external systems. If evidence is insufficient for a required gate, return PARTIAL or FAIL with the exact missing evidence and rework instruction. Never PASS from prose claims alone when the task requires an artifact, delivery proof, meeting context, or runtime proof.
 Stay bounded: inspect only directly relevant context for the reviewed task and current mission continuity.
+When the assignment names a workspace root, that exact current workspace is the authority for workspace artifacts. Do not use same-named files, logs, summaries, or validator results from older runs, sibling workspaces, backups, or cache directories as proof for the current task.
 
 Verification standard:
+- worker self-reports must be checked, not trusted
 - active vision and active mission are the primary strategic context
 - recent meeting outcomes are time-sensitive runtime evidence; for communication reviews and artifact reviews, inspect the latest relevant meeting summaries, meeting chat, and transcript-derived outputs before deciding
 - explicit done gates
@@ -58,6 +60,8 @@ Compaction policy for review:
 Decision policy:
 - PASS only when the gates are satisfied and the mission state is acceptable
 - PASS requires PASS_PROOF=direct or PASS_PROOF=trusted_external; worker-owned scripts/tests, workspace-local notes, and prose claims are useful evidence but never sufficient positive proof by themselves
+- for workspace-backed work, PASS_PROOF=direct requires current-workspace inspection: list or stat the relevant paths, read the required outputs or changed files, and run a bounded verification command when it is available and safe; if a required file is absent from the current workspace, FAIL or PARTIAL, never PASS
+- any worker statement like "done", "tested", "file exists", "sent", "deployed", "validated", "fixed", "queued", "attached", or "reviewed" must be independently verified before it can support PASS
 - FAIL when a required gate, claim, or public-surface standard is not met
 - PARTIAL when verification is incomplete or when a handoff is needed
 
@@ -98,6 +102,7 @@ CATEGORIZED_FINDINGS contract:
 
 PASS_PROOF contract:
 - direct means you directly inspected the required artifact, durable state, live surface, or communication record against the assignment
+- for workspace artifacts, direct means the inspection was performed in the current Workspace root from this assignment; artifacts from other runs or workspaces are stale evidence
 - trusted_external means an immutable validator, accepted send proof, or external system of record proves the result
 - workspace_local means the positive proof is only a worker-owned workspace script/test/log such as run-tests.sh, pytest, or notes written in the task workspace
 - prose_only means the positive proof is only the worker's written claim
@@ -962,9 +967,13 @@ External chat quick-response gate:\n\
         "\
 Workspace-backed task review gate:\n\
 - inspect the workspace root directly and evaluate the full task result against the original task contract, not just the final response text\n\
+- audit worker self-reports explicitly: if the worker says a file exists, tests passed, output was written, code was changed, or a command works, verify that exact claim in the current workspace before relying on it\n\
+- treat the current Workspace root above as the only authoritative workspace for this review; ignore same-named files, replay logs, backups, stale validations, and sibling workspaces unless they are explicitly trusted external acceptance records for this exact task\n\
+- infer any required output files from the task contract and verify them in the current workspace with direct commands such as `pwd`, `find`, `test -f`, `stat`, `wc -c`, and targeted reads before PASS\n\
 - inspect changed, added, and deleted files relevant to the task; compare implementation behavior against the requested outcome\n\
-- run safe read-only checks where possible, such as `test -f`, `find`, `git diff --stat`, targeted file reads, import checks, command help/version checks, or existing non-mutating smoke/test commands\n\
-- if tests/checks are available but cannot be run safely in read-only review, mark PARTIAL and name the exact missing verification instead of PASS\n\
+- run bounded verification commands when they are available and safe for review, such as existing smoke tests, command help/version checks, import checks, or project test commands that do not perform the worker's missing implementation work\n\
+- if tests/checks are available but cannot be run safely in review, mark PARTIAL and name the exact missing verification instead of PASS\n\
+- if the task requires a file and that file is absent, empty when content is required, in the wrong location, or only present in a stale/other workspace, FAIL with rework; do not PASS because the worker summary says it exists\n\
 - PASS only when the workspace state and direct evidence support the completion claim; FAIL when required files, implementation changes, or task-specific behavior are missing or contradicted by evidence\n\
 - do not approve merely because the worker claimed success, produced a plausible summary, or created some unrelated artifact\n\
 "
@@ -1015,6 +1024,7 @@ Deterministic review evidence:\n\
 Open the review skill first and follow it.\n\
 \n\
 Start from the deterministic review evidence above, then inspect the underlying runtime/continuity/artifact context yourself with read-only tools. Do not assume a claim is true unless the deterministic evidence or your own read-only inspection supports it.\n\
+Treat the worker's artifact text and completion summary as claims to audit, not as proof. For every decisive claim needed for PASS, write the check you performed in EVIDENCE; if you did not verify it yourself or from a trusted external system of record, do not PASS.\n\
 \n\
 Required review work:\n\
 1. load active strategic directives, mission state, and continuity for this conversation/thread\n\
@@ -1919,6 +1929,21 @@ mod tests {
         assert!(rendered.contains("Deterministic review evidence:"));
         assert!(rendered.contains("read-only tools"));
         assert!(rendered.contains("inspect explicit artifact paths and attachments directly"));
+        assert!(rendered.contains("claims to audit, not as proof"));
+        assert!(rendered.contains("audit worker self-reports explicitly"));
+        assert!(
+            rendered.contains("current Workspace root above as the only authoritative workspace")
+        );
+    }
+
+    #[test]
+    fn review_system_prompt_requires_self_report_verification() {
+        assert!(REVIEW_SYSTEM_PROMPT.contains(
+            "Treat every worker self-report, completion summary, status sentence, and claimed test result as an unverified lead only."
+        ));
+        assert!(REVIEW_SYSTEM_PROMPT.contains("worker self-reports must be checked, not trusted"));
+        assert!(REVIEW_SYSTEM_PROMPT
+            .contains("must be independently verified before it can support PASS"));
     }
 
     #[test]
