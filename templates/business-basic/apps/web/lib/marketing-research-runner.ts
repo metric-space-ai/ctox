@@ -199,29 +199,152 @@ async function minimaxJsonQueries(prompt: string) {
 }
 
 async function searchWeb(query: string): Promise<SearchHit[]> {
-  const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-  const response = await fetch(url, {
+  const providers = [
+    searchWithBrave,
+    searchWithSerper,
+    searchWithOpenAlex,
+    searchWithCrossref,
+    searchWithBingHtml
+  ];
+  const hits: SearchHit[] = [];
+  const seen = new Set<string>();
+
+  for (const provider of providers) {
+    const providerHits = await provider(query).catch(() => []);
+    for (const hit of providerHits) {
+      const key = normalizeUrl(hit.url);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      hits.push(hit);
+    }
+    if (hits.length >= 10) break;
+  }
+
+  return hits.slice(0, 12);
+}
+
+async function searchWithBrave(query: string): Promise<SearchHit[]> {
+  const apiKey = process.env.BRAVE_SEARCH_API_KEY?.trim();
+  if (!apiKey) return [];
+  const response = await fetch(`https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=10`, {
+    headers: {
+      "accept": "application/json",
+      "x-subscription-token": apiKey
+    }
+  });
+  if (!response.ok) return [];
+  const payload = await response.json() as { web?: { results?: Array<{ title?: string; url?: string; description?: string }> } };
+  return (payload.web?.results ?? []).map((item) => ({
+    title: stripHtml(item.title ?? ""),
+    url: item.url ?? "",
+    snippet: stripHtml(item.description ?? ""),
+    query
+  })).filter(validHit);
+}
+
+async function searchWithSerper(query: string): Promise<SearchHit[]> {
+  const apiKey = process.env.SERPER_API_KEY?.trim();
+  if (!apiKey) return [];
+  const response = await fetch("https://google.serper.dev/search", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-api-key": apiKey
+    },
+    body: JSON.stringify({ q: query, num: 10 })
+  });
+  if (!response.ok) return [];
+  const payload = await response.json() as { organic?: Array<{ title?: string; link?: string; snippet?: string }> };
+  return (payload.organic ?? []).map((item) => ({
+    title: stripHtml(item.title ?? ""),
+    url: item.link ?? "",
+    snippet: stripHtml(item.snippet ?? ""),
+    query
+  })).filter(validHit);
+}
+
+async function searchWithOpenAlex(query: string): Promise<SearchHit[]> {
+  const response = await fetch(`https://api.openalex.org/works?search=${encodeURIComponent(query)}&per-page=10`, {
+    headers: { "accept": "application/json" }
+  });
+  if (!response.ok) return [];
+  const payload = await response.json() as {
+    results?: Array<{
+      title?: string;
+      display_name?: string;
+      publication_year?: number;
+      doi?: string;
+      primary_location?: { landing_page_url?: string; pdf_url?: string; source?: { display_name?: string } };
+      abstract_inverted_index?: Record<string, number[]>;
+    }>;
+  };
+  return (payload.results ?? []).map((item) => {
+    const title = item.title ?? item.display_name ?? "";
+    const landingUrl = item.primary_location?.landing_page_url ?? item.primary_location?.pdf_url ?? item.doi ?? "";
+    const source = item.primary_location?.source?.display_name;
+    const year = item.publication_year ? String(item.publication_year) : "";
+    return {
+      title: stripHtml(title),
+      url: landingUrl,
+      snippet: [source, year, abstractFromInvertedIndex(item.abstract_inverted_index)].filter(Boolean).join(" · "),
+      query
+    };
+  }).filter(validHit);
+}
+
+async function searchWithCrossref(query: string): Promise<SearchHit[]> {
+  const response = await fetch(`https://api.crossref.org/works?query=${encodeURIComponent(query)}&rows=10`, {
+    headers: { "accept": "application/json" }
+  });
+  if (!response.ok) return [];
+  const payload = await response.json() as {
+    message?: {
+      items?: Array<{
+        title?: string[];
+        URL?: string;
+        DOI?: string;
+        publisher?: string;
+        type?: string;
+        published?: { "date-parts"?: number[][] };
+        "container-title"?: string[];
+      }>;
+    };
+  };
+  return (payload.message?.items ?? []).map((item) => {
+    const title = item.title?.[0] ?? "";
+    const year = item.published?.["date-parts"]?.[0]?.[0];
+    return {
+      title: stripHtml(title),
+      url: item.URL ?? (item.DOI ? `https://doi.org/${item.DOI}` : ""),
+      snippet: [item.publisher, item.type, item["container-title"]?.[0], year].filter(Boolean).join(" · "),
+      query
+    };
+  }).filter(validHit);
+}
+
+async function searchWithBingHtml(query: string): Promise<SearchHit[]> {
+  const response = await fetch(`https://www.bing.com/search?q=${encodeURIComponent(query)}`, {
     headers: {
       "accept": "text/html,application/xhtml+xml",
-      "user-agent": "Mozilla/5.0 research-source-discovery"
+      "accept-language": "en-US,en;q=0.9",
+      "user-agent": "Mozilla/5.0 (compatible; research-source-discovery/1.0)"
     }
   });
   if (!response.ok) return [];
   const html = await response.text();
   const results: SearchHit[] = [];
-  const blocks = html.split(/<div class="result/i).slice(1, 12);
+  const blocks = html.split("<li class=\"b_algo").slice(1, 12);
   for (const block of blocks) {
-    const link = block.match(/class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/);
+    const link = block.match(/<h2[^>]*>\s*<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/);
     if (!link) continue;
-    const snippet = block.match(/class="result__snippet"[^>]*>([\s\S]*?)<\/a>|class="result__snippet"[^>]*>([\s\S]*?)<\/div>/);
-    const rawUrl = decodeHtml(link[1]);
-    const title = stripHtml(decodeHtml(link[2]));
-    const cleanUrl = unwrapDuckDuckGoUrl(rawUrl);
-    if (!title || !cleanUrl.startsWith("http")) continue;
+    const snippet = block.match(/<div class="b_caption"[^>]*>\s*<p[^>]*>([\s\S]*?)<\/p>/);
+    const title = stripHtml(decodeHtml(link[2] ?? ""));
+    const url = unwrapBingUrl(decodeHtml(link[1] ?? ""));
+    if (!title || !url.startsWith("http")) continue;
     results.push({
       title,
-      url: cleanUrl,
-      snippet: stripHtml(decodeHtml(snippet?.[1] ?? snippet?.[2] ?? "")),
+      url,
+      snippet: stripHtml(decodeHtml(snippet?.[1] ?? "")),
       query
     });
   }
@@ -296,6 +419,32 @@ function unwrapDuckDuckGoUrl(url: string) {
   } catch {
     return url;
   }
+}
+
+function unwrapBingUrl(url: string) {
+  try {
+    const parsed = new URL(url, "https://www.bing.com");
+    const encoded = parsed.searchParams.get("u");
+    if (encoded?.startsWith("a1")) {
+      return Buffer.from(encoded.slice(2), "base64url").toString("utf8");
+    }
+    return parsed.href;
+  } catch {
+    return url;
+  }
+}
+
+function abstractFromInvertedIndex(index?: Record<string, number[]>) {
+  if (!index) return "";
+  return Object.entries(index)
+    .sort((left, right) => Math.min(...left[1]) - Math.min(...right[1]))
+    .slice(0, 42)
+    .map(([word]) => word)
+    .join(" ");
+}
+
+function validHit(hit: SearchHit) {
+  return Boolean(hit.title && hit.url.startsWith("http"));
 }
 
 function safeHostname(url: string) {
