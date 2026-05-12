@@ -203,9 +203,7 @@ async function searchWeb(query: string): Promise<SearchHit[]> {
     searchWithSerper,
     searchWithBrave,
     searchWithDuckDuckGoHtml,
-    searchWithBingHtml,
-    searchWithOpenAlex,
-    searchWithCrossref
+    searchWithBingHtml
   ];
   const hits: SearchHit[] = [];
   const seen = new Set<string>();
