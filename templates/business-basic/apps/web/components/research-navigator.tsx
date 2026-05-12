@@ -182,30 +182,6 @@ export function ResearchNavigator({
     if (!run) return;
     const query = `Suche um ${amount} Kandidaten erweitern`;
     setQuickExpansionFeedback("Recherche wird gestartet ...");
-    const queueResponse = await fetch("/api/ctox/queue-tasks", {
-      body: JSON.stringify({
-        instruction: buildResearchQueueInstruction(run, amount),
-        context: {
-          source: "marketing-research",
-          currentUrl: "/app/marketing/research",
-          items: [{
-            moduleId: "marketing",
-            submoduleId: "research",
-            recordType: "research_run",
-            recordId: run.id,
-            label: run.title,
-            action: "extend-research"
-          }]
-        }
-      }),
-      headers: { "content-type": "application/json" },
-      method: "POST"
-    }).catch(() => null);
-    const queuePayload = await queueResponse?.json().catch(() => null) as { ok?: boolean; core?: { taskId?: string } } | null;
-    if (!queueResponse?.ok || !queuePayload?.ok) {
-      setQuickExpansionFeedback("Recherche konnte nicht gestartet werden");
-      return;
-    }
     const request: ResearchExpansionRequest = {
       id: `exp-${Date.now()}`,
       createdAt: new Date().toISOString(),
@@ -225,14 +201,18 @@ export function ResearchNavigator({
         identifiedDelta: 0,
         readDelta: 0,
         usedDelta: 0,
-        updatedAt: new Date().toISOString(),
-        taskId: queuePayload.core?.taskId
+        updatedAt: new Date().toISOString()
       },
       updated: new Date().toISOString().slice(0, 10)
     };
     setRuns((currentRuns) => [nextRun, ...currentRuns.filter((item) => item.id !== nextRun.id)]);
     const saved = await saveRun(nextRun);
-    setQuickExpansionFeedback(saved ? "Recherche läuft in der Queue" : "Recherche-Status konnte nicht gespeichert werden");
+    if (!saved) {
+      setQuickExpansionFeedback("Recherche-Status konnte nicht gespeichert werden");
+      return;
+    }
+    setQuickExpansionFeedback("Recherche läuft");
+    void startResearchExecution(nextRun.id, amount);
   }
 
   async function saveCriterion(event: FormEvent<HTMLFormElement>) {
@@ -353,6 +333,22 @@ export function ResearchNavigator({
     setNewRunCriteria("");
     setNewRunOpen(false);
     setDetailSheetOpen(false);
+    void startResearchExecution(nextRun.id, 50);
+  }
+
+  async function startResearchExecution(runId: string, amount: number) {
+    const response = await fetch("/api/marketing/research-runs/run", {
+      body: JSON.stringify({ runId, amount }),
+      headers: { "content-type": "application/json" },
+      method: "POST"
+    }).catch(() => null);
+    const payload = await response?.json().catch(() => null) as { ok?: boolean; run?: ResearchRun; error?: string } | null;
+    if (!response?.ok || !payload?.ok || !payload.run) {
+      setQuickExpansionFeedback(`Recherche fehlgeschlagen${payload?.error ? `: ${payload.error}` : ""}`);
+      return;
+    }
+    setRuns((currentRuns) => [payload.run!, ...currentRuns.filter((item) => item.id !== payload.run!.id)]);
+    setQuickExpansionFeedback("Recherche aktualisiert");
   }
 
   async function archiveResearchRun(runId: string) {
