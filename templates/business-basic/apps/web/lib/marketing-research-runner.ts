@@ -200,11 +200,12 @@ async function minimaxJsonQueries(prompt: string) {
 
 async function searchWeb(query: string): Promise<SearchHit[]> {
   const providers = [
-    searchWithBrave,
     searchWithSerper,
+    searchWithBrave,
+    searchWithDuckDuckGoHtml,
+    searchWithBingHtml,
     searchWithOpenAlex,
-    searchWithCrossref,
-    searchWithBingHtml
+    searchWithCrossref
   ];
   const hits: SearchHit[] = [];
   const seen = new Set<string>();
@@ -345,6 +346,36 @@ async function searchWithBingHtml(query: string): Promise<SearchHit[]> {
       title,
       url,
       snippet: stripHtml(decodeHtml(snippet?.[1] ?? "")),
+      query
+    });
+  }
+  return results;
+}
+
+async function searchWithDuckDuckGoHtml(query: string): Promise<SearchHit[]> {
+  const response = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, {
+    headers: {
+      "accept": "text/html,application/xhtml+xml",
+      "accept-language": "en-US,en;q=0.9",
+      "user-agent": "Mozilla/5.0 (compatible; research-source-discovery/1.0)"
+    }
+  });
+  if (!response.ok) return [];
+  const html = await response.text();
+  if (html.includes("anomaly-modal") || html.includes("Unfortunately, bots use DuckDuckGo too")) return [];
+  const results: SearchHit[] = [];
+  const blocks = html.split(/<div class="result/i).slice(1, 12);
+  for (const block of blocks) {
+    const link = block.match(/class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/);
+    if (!link) continue;
+    const snippet = block.match(/class="result__snippet"[^>]*>([\s\S]*?)<\/a>|class="result__snippet"[^>]*>([\s\S]*?)<\/div>/);
+    const title = stripHtml(decodeHtml(link[2] ?? ""));
+    const url = unwrapDuckDuckGoUrl(decodeHtml(link[1] ?? ""));
+    if (!title || !url.startsWith("http")) continue;
+    results.push({
+      title,
+      url,
+      snippet: stripHtml(decodeHtml(snippet?.[1] ?? snippet?.[2] ?? "")),
       query
     });
   }
