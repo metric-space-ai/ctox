@@ -1,7 +1,7 @@
 export const companyNameCookieName = "ctox_company_name";
 export const sessionCookieName = "ctox_business_session";
 
-const defaultCompanyName = "CTOX";
+const defaultCompanyName = process.env.CTOX_BUSINESS_COMPANY_NAME ?? "CTOX";
 
 export function normalizeCompanyName(value?: string | null) {
   const normalized = String(value ?? "")

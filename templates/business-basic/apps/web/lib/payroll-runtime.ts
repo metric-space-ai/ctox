@@ -1,5 +1,3 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
 import { businessDeepLink } from "@ctox-business/ui";
 import {
   buildJournalDraft,
@@ -18,7 +16,16 @@ import {
   type PayrollStructure,
   type PayrollStructureAssignment
 } from "@ctox-business/payroll";
+export type {
+  PayrollAdditional,
+  PayrollComponent,
+  PayrollPayslip,
+  PayrollPayslipStatus,
+  PayrollStructure,
+  PayrollStructureAssignment
+} from "@ctox-business/payroll";
 import { getWorkforceSnapshot } from "./workforce-runtime";
+import { loadRuntimeJsonStore, saveRuntimeJsonStore } from "./runtime-json-store";
 
 export type PayrollPostedJournal = {
   id: string;
@@ -52,7 +59,7 @@ export type PayrollEvent = {
 };
 
 export type PayrollSnapshot = {
-  source: "file" | "seed";
+  source: "database" | "file" | "seed";
   companyId: string;
   employees: PayrollEmployee[];
   components: PayrollComponent[];
@@ -112,19 +119,16 @@ export type PayrollMutationResult = {
   snapshot: PayrollSnapshot;
 };
 
-const STORE_DIR = ".ctox-business";
-const STORE_FILE = "payroll.json";
-
 export async function getPayrollSnapshot(): Promise<PayrollSnapshot> {
   const seed = buildPayrollSeed();
-  try {
-    const stored = await readFile(storePath(), "utf8");
-    const parsed = JSON.parse(stored) as Partial<PayrollSnapshot>;
-    return normalizeSnapshot({ ...seed, ...parsed, source: "file" });
-  } catch {
-    await persistPayrollSnapshot(seed);
-    return seed;
+
+  const database = await loadRuntimeJsonStore<Partial<PayrollSnapshot>>("payroll");
+  if (database) {
+    return normalizeSnapshot({ ...seed, ...database, source: "database" });
   }
+
+  await persistPayrollSnapshot(seed);
+  return seed;
 }
 
 export async function executePayrollCommand(request: PayrollMutationRequest): Promise<PayrollMutationResult> {
@@ -858,13 +862,9 @@ function ensureWorkforcePayrollComponent(components: PayrollComponent[]): Payrol
 }
 
 async function persistPayrollSnapshot(snapshot: PayrollSnapshot) {
-  const path = storePath();
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, JSON.stringify({ ...snapshot, source: "file" }, null, 2), "utf8");
-}
-
-function storePath() {
-  return join(process.cwd(), STORE_DIR, STORE_FILE);
+  const persisted = { ...snapshot, source: "database" as const };
+  if (await saveRuntimeJsonStore("payroll", persisted)) return;
+  throw new Error("Payroll runtime requires configured Postgres persistence.");
 }
 
 function buildPayrollSeed(): PayrollSnapshot {

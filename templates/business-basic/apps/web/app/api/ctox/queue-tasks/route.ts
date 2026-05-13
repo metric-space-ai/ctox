@@ -53,6 +53,7 @@ export async function POST(request: Request) {
   };
 
   const firstItem = body.context?.items?.[0];
+  const syncContext = businessOsCodeSyncContext();
   const core = await createCtoxCoreTask({
     title: `Business prompt: ${firstItem?.label ?? firstItem?.recordId ?? "selected context"}`,
     prompt: instruction,
@@ -62,7 +63,8 @@ export async function POST(request: Request) {
       currentUrl: body.context?.currentUrl,
       moduleId: firstItem?.moduleId,
       submoduleId: firstItem?.submoduleId,
-      items: body.context?.items ?? []
+      items: body.context?.items ?? [],
+      businessOsCodeSync: syncContext
     },
     priority: "normal",
     skill: "product_engineering/business-stack",
@@ -78,4 +80,18 @@ export async function POST(request: Request) {
   });
 
   return NextResponse.json({ ok: true, queued: true, task: { ...task, coreTaskId: core.taskId }, core });
+}
+
+function businessOsCodeSyncContext() {
+  return {
+    app: "Kunstmen Business OS",
+    mountedPath: "/business-os",
+    canonicalTemplate: "templates/business-basic",
+    codeSyncPolicy: [
+      "If the requested change fixes or improves reusable Business OS code, implement it in the running Kunstmen Business OS and backport the generic code change to the CTOX Business OS template.",
+      "Do not copy tenant data, customer records, screenshots, credentials, database rows, or .ctox-business runtime JSON into the template.",
+      "Persistent Business OS data belongs in Postgres. If a module still persists durable state in files, treat that as a bug and migrate it to Postgres-backed storage.",
+      "If immediate backport is unsafe, create a tracked follow-up with the changed file paths and exact migration notes."
+    ]
+  };
 }

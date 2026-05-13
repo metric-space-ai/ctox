@@ -1,4 +1,8 @@
 {
+  "framework": "nextjs",
+  "installCommand": "pnpm install --frozen-lockfile",
+  "buildCommand": "pnpm --filter @ctox-business/web exec next build --webpack",
+  "outputDirectory": "apps/web/.next",
   "crons": [
     {
       "path": "/api/marketing/competitive-analysis/scheduled",

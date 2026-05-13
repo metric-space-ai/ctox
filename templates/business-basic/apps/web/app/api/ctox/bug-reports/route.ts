@@ -56,8 +56,8 @@ export async function POST(request: Request) {
     source: "business-bug-report",
     context: {
       latestReport: summarizeBugReportForQueue(queuedReport),
-      bugReportsEndpoint: "/api/ctox/bug-reports",
-      bugReportsStore: ".ctox-business/bug-reports.json"
+      bugReportsEndpoint: "/business-os/api/ctox/bug-reports",
+      businessOsCodeSync: businessOsCodeSyncContext()
     },
     priority: "high",
     skill: "product_engineering/business-stack",
@@ -98,6 +98,20 @@ function buildBugQueuePrompt(report: CtoxBugRecord) {
     "",
     "Use the structured bug report payload, including annotation metadata and screenshot/markup data when present, to reproduce, triage, and create the necessary implementation task."
   ].join("\n");
+}
+
+function businessOsCodeSyncContext() {
+  return {
+    app: "Kunstmen Business OS",
+    mountedPath: "/business-os",
+    canonicalTemplate: "templates/business-basic",
+    codeSyncPolicy: [
+      "If the fix changes reusable Business OS code, apply it to the running Kunstmen Business OS and backport the generic code change to the CTOX Business OS template.",
+      "Do not copy tenant data, customer records, screenshots, credentials, database rows, or .ctox-business runtime JSON into the template.",
+      "Persistent Business OS data belongs in Postgres. A durable file-backed store is a defect.",
+      "If immediate backport is unsafe, create a tracked follow-up with changed file paths and migration notes."
+    ]
+  };
 }
 
 function summarizeBugReportForQueue(report: CtoxBugRecord) {

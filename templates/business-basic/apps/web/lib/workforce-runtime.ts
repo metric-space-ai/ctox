@@ -1,7 +1,6 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { dirname, join } from "node:path";
 import { businessDeepLink } from "@ctox-business/ui";
+import { loadRuntimeJsonStore, saveRuntimeJsonStore } from "./runtime-json-store";
 
 export type WorkforcePerson = {
   id: string;
@@ -187,7 +186,7 @@ export type WorkforceInvoiceDraft = {
 };
 
 export type WorkforceSnapshot = {
-  source: "file" | "seed";
+  source: "database" | "file" | "seed";
   companyId: string;
   weekStart: string;
   people: WorkforcePerson[];
@@ -247,19 +246,16 @@ export type WorkforceMutationResult = {
   snapshot: WorkforceSnapshot;
 };
 
-const STORE_DIR = ".ctox-business";
-const STORE_FILE = "workforce.json";
-
 export async function getWorkforceSnapshot(): Promise<WorkforceSnapshot> {
   const seed = buildWorkforceSeed();
-  try {
-    const stored = await readFile(storePath(), "utf8");
-    const parsed = JSON.parse(stored) as Partial<WorkforceSnapshot>;
-    return normalizeSnapshot({ ...seed, ...parsed, source: "file" });
-  } catch {
-    await persistWorkforceSnapshot(seed);
-    return seed;
+
+  const database = await loadRuntimeJsonStore<Partial<WorkforceSnapshot>>("workforce");
+  if (database) {
+    return normalizeSnapshot({ ...seed, ...database, source: "database" });
   }
+
+  await persistWorkforceSnapshot(seed);
+  return seed;
 }
 
 export async function executeWorkforceCommand(request: WorkforceMutationRequest): Promise<WorkforceMutationResult> {
@@ -714,7 +710,7 @@ export async function executeWorkforceCommand(request: WorkforceMutationRequest)
       payload.recordType !== ctoxPayload!.recordType || payload.recordId !== ctoxPayload!.recordId
     )].slice(0, 40);
   }
-  const next = normalizeSnapshot({ ...snapshot, source: "file" });
+  const next = normalizeSnapshot({ ...snapshot, source: "database" });
   await persistWorkforceSnapshot(next);
   return { ok: true, command: request.command, event, ctoxPayload, snapshot: next };
 }
@@ -894,12 +890,9 @@ function buildWorkforceSeed(): WorkforceSnapshot {
 }
 
 async function persistWorkforceSnapshot(snapshot: WorkforceSnapshot) {
-  await mkdir(dirname(storePath()), { recursive: true });
-  await writeFile(storePath(), `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");
-}
-
-function storePath() {
-  return join(process.cwd(), STORE_DIR, STORE_FILE);
+  const persisted = { ...snapshot, source: "database" as const };
+  if (await saveRuntimeJsonStore("workforce", persisted)) return;
+  throw new Error("Workforce runtime requires configured Postgres persistence.");
 }
 
 function payloadFor(recordType: WorkforceCtoxPayload["recordType"], recordId: string, selectedFields: Record<string, unknown>, allowedActions: string[]): WorkforceCtoxPayload {

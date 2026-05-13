@@ -236,7 +236,7 @@ export function PayrollWorkbench({ query, snapshot, submoduleId = "payroll" }: P
                 ? `${selectedPeriod.startDate} – ${selectedPeriod.endDate}`
                 : "Kein Run ausgewählt"}
               {selectedRun && (
-                <span className={`wf2-state ${selectedRun.status === "Posted" || selectedRun.status === "Submitted" ? "ok" : selectedRun.status === "Failed" || selectedRun.status === "Cancelled" ? "err" : ""}`}>
+                <span className={`wf2-state ${selectedRun.status === "Submitted" ? "ok" : selectedRun.status === "Failed" || selectedRun.status === "Cancelled" ? "err" : ""}`}>
                   {selectedRun.status}
                 </span>
               )}

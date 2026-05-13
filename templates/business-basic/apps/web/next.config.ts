@@ -1,6 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  basePath: process.env.NEXT_PUBLIC_BASE_PATH || undefined,
   distDir: process.env.NEXT_DIST_DIR ?? ".next",
   typescript: {
     ignoreBuildErrors: true

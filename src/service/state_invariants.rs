@@ -90,10 +90,7 @@ pub fn evaluate_runtime_state_invariants(
 
     let plan_goals = plan::list_goals(root)?
         .into_iter()
-        .filter(|goal| {
-            turn_loop::conversation_id_for_thread_key(Some(goal.thread_key.as_str()))
-                == conversation_id
-        })
+        .filter(|goal| plan_goal_belongs_to_conversation(goal.thread_key.as_str(), conversation_id))
         .filter(|goal| goal.status != "completed")
         .collect::<Vec<_>>();
     let open_plan_titles = plan_goals
@@ -197,6 +194,13 @@ pub fn evaluate_runtime_state_invariants(
 fn find_flag_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
     let index = args.iter().position(|arg| arg == flag)?;
     args.get(index + 1).map(String::as_str)
+}
+
+fn plan_goal_belongs_to_conversation(thread_key: &str, conversation_id: i64) -> bool {
+    if turn_loop::conversation_id_for_thread_key(Some(thread_key)) == conversation_id {
+        return true;
+    }
+    conversation_id == turn_loop::CHAT_CONVERSATION_ID && thread_key.trim().starts_with("plan/")
 }
 
 fn normalize_token(value: &str) -> String {

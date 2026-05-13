@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { businessApiPath } from "@/lib/business-api-path";
 
 type CtoxQueueResponse = {
   ok?: boolean;
@@ -66,7 +67,7 @@ export function CtoxQueueButton({
 }
 
 async function postQueue(body: Record<string, unknown>): Promise<CtoxQueueResponse> {
-  const response = await fetch("/api/ctox/queue-tasks", {
+  const response = await fetch(businessApiPath("/api/ctox/queue-tasks"), {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body)

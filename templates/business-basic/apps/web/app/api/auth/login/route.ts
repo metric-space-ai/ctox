@@ -1,7 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { sessionCookieName } from "../../../../lib/company-settings";
-const defaultUser = "admin";
-const defaultPassword = "ctox-business";
+import { encodeBusinessSession, resolveUnifiedIdentity } from "../../../../lib/auth-users";
 
 export async function GET(request: NextRequest) {
   const search = request.nextUrl.searchParams;
@@ -32,7 +31,8 @@ export async function POST(request: NextRequest) {
 }
 
 function loginResponse(request: NextRequest, user: string, password: string, next: string) {
-  if (!isValidLogin(user, password)) {
+  const identity = resolveUnifiedIdentity(user, password);
+  if (!identity) {
     return NextResponse.json({ ok: false, error: "invalid_login" }, { status: 401 });
   }
 
@@ -45,20 +45,18 @@ function loginResponse(request: NextRequest, user: string, password: string, nex
     path: "/",
     sameSite: "lax",
     secure: request.nextUrl.protocol === "https:",
-    value: encodeURIComponent(user)
+    value: encodeBusinessSession(identity)
   });
   return response;
 }
 
-function isValidLogin(user: string, password: string) {
-  const expectedUser = process.env.CTOX_BUSINESS_USER ?? defaultUser;
-  const expectedPassword = process.env.CTOX_BUSINESS_PASSWORD ?? defaultPassword;
-  return user === expectedUser && password === expectedPassword;
-}
-
 function safeRedirect(request: NextRequest, next: string) {
   if (!next || next.startsWith("http://") || next.startsWith("https://") || next.startsWith("//")) {
-    return new URL("/app", request.url);
+    return new URL("/app", publicRedirectBase(request));
   }
-  return new URL(next.startsWith("/") ? next : `/${next}`, request.url);
+  return new URL(next.startsWith("/") ? next : `/${next}`, publicRedirectBase(request));
+}
+
+function publicRedirectBase(request: NextRequest) {
+  return process.env.CTOX_BUSINESS_PUBLIC_BASE_URL || request.url;
 }

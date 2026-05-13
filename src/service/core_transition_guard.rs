@@ -1055,6 +1055,28 @@ mod tests {
         Ok(())
     }
 
+    fn reviewed_outcome_evidence(
+        mut evidence: CoreEvidenceRefs,
+        verification_id: &str,
+    ) -> CoreEvidenceRefs {
+        evidence.review_audit_key = Some("review-audit-pass-1".to_string());
+        evidence.verification_id = Some(verification_id.to_string());
+        evidence
+    }
+
+    fn reviewed_outcome_metadata(source_label: &str) -> BTreeMap<String, String> {
+        BTreeMap::from([
+            ("completion_review_required".to_string(), "true".to_string()),
+            ("completion_review_verdict".to_string(), "pass".to_string()),
+            (
+                "reviewed_work_terminal_success".to_string(),
+                "true".to_string(),
+            ),
+            ("outcome_witness".to_string(), "true".to_string()),
+            ("source_label".to_string(), source_label.to_string()),
+        ])
+    }
+
     #[test]
     fn outcome_witness_rejects_delivered_email_in_wrong_state() -> Result<()> {
         let conn = Connection::open_in_memory()?;
@@ -1088,20 +1110,23 @@ mod tests {
             to_state: CoreState::Completed,
             event: CoreEvent::Complete,
             actor: "ctox-service".to_string(),
-            evidence: CoreEvidenceRefs {
-                expected_artifact_refs: vec![csm::ArtifactRef {
-                    kind: csm::ArtifactKind::OutboundEmail,
-                    primary_key: "thread:founder-thread".to_string(),
-                    expected_terminal_state: "accepted".to_string(),
-                }],
-                delivered_artifact_refs: vec![csm::ArtifactRef {
-                    kind: csm::ArtifactKind::OutboundEmail,
-                    primary_key: "email:cto@example.test::pending_send::abc".to_string(),
-                    expected_terminal_state: "accepted".to_string(),
-                }],
-                ..CoreEvidenceRefs::default()
-            },
-            metadata: BTreeMap::new(),
+            evidence: reviewed_outcome_evidence(
+                CoreEvidenceRefs {
+                    expected_artifact_refs: vec![csm::ArtifactRef {
+                        kind: csm::ArtifactKind::OutboundEmail,
+                        primary_key: "thread:founder-thread".to_string(),
+                        expected_terminal_state: "accepted".to_string(),
+                    }],
+                    delivered_artifact_refs: vec![csm::ArtifactRef {
+                        kind: csm::ArtifactKind::OutboundEmail,
+                        primary_key: "email:cto@example.test::pending_send::abc".to_string(),
+                        expected_terminal_state: "accepted".to_string(),
+                    }],
+                    ..CoreEvidenceRefs::default()
+                },
+                "outcome-witness:wrong-state",
+            ),
+            metadata: reviewed_outcome_metadata("queue"),
         };
 
         let proof = evaluate_core_transition(&conn, &request)?;
@@ -1148,20 +1173,23 @@ mod tests {
             to_state: CoreState::Completed,
             event: CoreEvent::Complete,
             actor: "ctox-service".to_string(),
-            evidence: CoreEvidenceRefs {
-                expected_artifact_refs: vec![csm::ArtifactRef {
-                    kind: csm::ArtifactKind::OutboundEmail,
-                    primary_key: "thread:founder-thread".to_string(),
-                    expected_terminal_state: "accepted".to_string(),
-                }],
-                delivered_artifact_refs: vec![csm::ArtifactRef {
-                    kind: csm::ArtifactKind::OutboundEmail,
-                    primary_key: "email:cto@example.test::pending_send::abc".to_string(),
-                    expected_terminal_state: "accepted".to_string(),
-                }],
-                ..CoreEvidenceRefs::default()
-            },
-            metadata: BTreeMap::new(),
+            evidence: reviewed_outcome_evidence(
+                CoreEvidenceRefs {
+                    expected_artifact_refs: vec![csm::ArtifactRef {
+                        kind: csm::ArtifactKind::OutboundEmail,
+                        primary_key: "thread:founder-thread".to_string(),
+                        expected_terminal_state: "accepted".to_string(),
+                    }],
+                    delivered_artifact_refs: vec![csm::ArtifactRef {
+                        kind: csm::ArtifactKind::OutboundEmail,
+                        primary_key: "email:cto@example.test::pending_send::abc".to_string(),
+                        expected_terminal_state: "accepted".to_string(),
+                    }],
+                    ..CoreEvidenceRefs::default()
+                },
+                "outcome-witness:accepted-email",
+            ),
+            metadata: reviewed_outcome_metadata("queue"),
         };
 
         let proof = evaluate_core_transition(&conn, &request)?;
@@ -1184,16 +1212,19 @@ mod tests {
             to_state: CoreState::Completed,
             event: CoreEvent::Complete,
             actor: "ctox-service".to_string(),
-            evidence: CoreEvidenceRefs {
-                expected_artifact_refs: vec![csm::ArtifactRef {
-                    kind: csm::ArtifactKind::WorkspaceFile,
-                    primary_key: path.display().to_string(),
-                    expected_terminal_state: "present".to_string(),
-                }],
-                delivered_artifact_refs: Vec::new(),
-                ..CoreEvidenceRefs::default()
-            },
-            metadata: BTreeMap::new(),
+            evidence: reviewed_outcome_evidence(
+                CoreEvidenceRefs {
+                    expected_artifact_refs: vec![csm::ArtifactRef {
+                        kind: csm::ArtifactKind::WorkspaceFile,
+                        primary_key: path.display().to_string(),
+                        expected_terminal_state: "present".to_string(),
+                    }],
+                    delivered_artifact_refs: Vec::new(),
+                    ..CoreEvidenceRefs::default()
+                },
+                "outcome-witness:missing-file",
+            ),
+            metadata: reviewed_outcome_metadata("queue"),
         };
 
         let proof = evaluate_core_transition(&conn, &request)?;
@@ -1233,12 +1264,15 @@ mod tests {
             to_state: CoreState::Completed,
             event: CoreEvent::Complete,
             actor: "ctox-service".to_string(),
-            evidence: CoreEvidenceRefs {
-                expected_artifact_refs: vec![artifact.clone()],
-                delivered_artifact_refs: vec![artifact],
-                ..CoreEvidenceRefs::default()
-            },
-            metadata: BTreeMap::new(),
+            evidence: reviewed_outcome_evidence(
+                CoreEvidenceRefs {
+                    expected_artifact_refs: vec![artifact.clone()],
+                    delivered_artifact_refs: vec![artifact],
+                    ..CoreEvidenceRefs::default()
+                },
+                "outcome-witness:present-file",
+            ),
+            metadata: reviewed_outcome_metadata("queue"),
         };
 
         let proof = evaluate_core_transition(&conn, &request)?;

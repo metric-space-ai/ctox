@@ -30,6 +30,7 @@ import {
 } from "@lexical/rich-text";
 import { $patchStyleText } from "@lexical/selection";
 import { mergeRegister } from "@lexical/utils";
+import { businessApiPath } from "@/lib/business-api-path";
 import type { EditorState, EditorThemeClasses, ElementFormatType, LexicalEditor } from "lexical";
 import {
   $createParagraphNode,
@@ -608,7 +609,7 @@ async function queueRunbookEdit({
   setMessage: (message: string) => void;
 }) {
   const recordId = runbook?.id ?? selectedSkill.id;
-  const response = await fetch("/api/ctox/queue-tasks", {
+  const response = await fetch(businessApiPath("/api/ctox/queue-tasks"), {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({

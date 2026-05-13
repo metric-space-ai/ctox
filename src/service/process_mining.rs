@@ -3773,6 +3773,58 @@ fn upsert_default_core_transition_rules(conn: &Connection) -> Result<()> {
             json!({"core_transition": false, "records_state_machine_proofs": true}),
         ),
         (
+            "core-spawn-edge-ledger",
+            821,
+            Some("=ctox_core_spawn_edges"),
+            None,
+            None,
+            None,
+            "telemetry",
+            "CoreSpawnEdgeLedger",
+            "P1RuntimeSafety",
+            "telemetry.core.spawn.edge",
+            json!({"core_transition": false, "records_core_spawn_proofs": true}),
+        ),
+        (
+            "harness-mining-audit-run-telemetry",
+            822,
+            Some("=ctox_hm_audit_runs"),
+            None,
+            None,
+            None,
+            "telemetry",
+            "HarnessMiningAuditRun",
+            "P1RuntimeSafety",
+            "telemetry.harness_mining.audit_run",
+            json!({"core_transition": false, "records_harness_mining": true}),
+        ),
+        (
+            "harness-mining-finding-telemetry",
+            823,
+            Some("=ctox_hm_findings"),
+            None,
+            None,
+            None,
+            "telemetry",
+            "HarnessMiningFinding",
+            "P1RuntimeSafety",
+            "telemetry.harness_mining.finding",
+            json!({"core_transition": false, "records_harness_mining": true}),
+        ),
+        (
+            "runtime-env-telemetry",
+            824,
+            Some("=runtime_env_kv"),
+            None,
+            None,
+            None,
+            "telemetry",
+            "RuntimeEnvKv",
+            "P1RuntimeSafety",
+            "telemetry.runtime.env",
+            json!({"core_transition": false, "requires_redaction": true}),
+        ),
+        (
             "payload-store-telemetry",
             830,
             Some("ctox_payload_store"),
@@ -5332,6 +5384,7 @@ fn core_violation_severity(request: &csm::CoreTransitionRequest, code: &str) -> 
 
 #[cfg(test)]
 mod tests {
+    // ctox-allow-direct-state-write: test fixture module
     use super::*;
     use tempfile::tempdir;
 
@@ -6255,6 +6308,37 @@ mod tests {
                 event_id TEXT PRIMARY KEY,
                 event_type TEXT NOT NULL
             );
+            CREATE TABLE ctox_core_spawn_edges (
+                edge_id TEXT PRIMARY KEY,
+                parent_entity_type TEXT NOT NULL,
+                parent_entity_id TEXT NOT NULL,
+                child_entity_type TEXT NOT NULL,
+                child_entity_id TEXT NOT NULL,
+                spawn_kind TEXT NOT NULL,
+                spawn_reason TEXT NOT NULL,
+                actor TEXT NOT NULL,
+                checkpoint_key TEXT,
+                budget_key TEXT,
+                max_attempts INTEGER,
+                accepted INTEGER NOT NULL,
+                violation_codes_json TEXT NOT NULL DEFAULT '[]',
+                request_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                terminal_reaped_at TEXT
+            );
+            CREATE TABLE ctox_hm_audit_runs (
+                audit_id TEXT PRIMARY KEY,
+                status TEXT NOT NULL
+            );
+            CREATE TABLE ctox_hm_findings (
+                finding_id TEXT PRIMARY KEY,
+                status TEXT NOT NULL
+            );
+            CREATE TABLE runtime_env_kv (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            );
             "#,
         )?;
         ensure_process_mining_schema(&conn, &db_path)?;
@@ -6314,6 +6398,34 @@ mod tests {
             "INSERT INTO local_ticket_events (event_id, event_type) VALUES ('le1', 'created')",
             [],
         )?;
+        conn.execute(
+            r#"
+            INSERT INTO ctox_core_spawn_edges (
+                edge_id, parent_entity_type, parent_entity_id,
+                child_entity_type, child_entity_id, spawn_kind, spawn_reason,
+                actor, accepted, violation_codes_json, request_json,
+                created_at, updated_at
+            )
+            VALUES (
+                'e1', 'Thread', 'tbq-test', 'WorkItem', 'w1',
+                'self-work:test', 'test', 'ctox-test', 1, '[]', '{}',
+                'now', 'now'
+            )
+            "#,
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO ctox_hm_audit_runs (audit_id, status) VALUES ('hm1', 'ok')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO ctox_hm_findings (finding_id, status) VALUES ('hfind1', 'verified')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO runtime_env_kv (key, value) VALUES ('CTOX_CHAT_MODEL_MAX_CONTEXT', '131072')",
+            [],
+        )?;
 
         let summary = scan_core_state_machine_violations(&conn, 100)?;
         let unmapped = summary
@@ -6336,7 +6448,11 @@ mod tests {
                   'mission-claim-telemetry',
                   'ticket-audit-telemetry',
                   'ticket-note-telemetry',
-                  'local-ticket-event-telemetry'
+                  'local-ticket-event-telemetry',
+                  'core-spawn-edge-ledger',
+                  'harness-mining-audit-run-telemetry',
+                  'harness-mining-finding-telemetry',
+                  'runtime-env-telemetry'
               )
             "#,
             [],
@@ -6354,7 +6470,7 @@ mod tests {
         )?;
 
         assert_eq!(unmapped, 0, "{summary}");
-        assert_eq!(telemetry_count, 14);
+        assert_eq!(telemetry_count, 18);
         assert_eq!(communication_message_misclassified, 0);
         Ok(())
     }

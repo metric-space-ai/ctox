@@ -12,3 +12,4 @@ apps/web/next-env.d.ts
 public-website-repo/next-env.d.ts
 apps/web/.ctox-business/
 output/
+.vercel

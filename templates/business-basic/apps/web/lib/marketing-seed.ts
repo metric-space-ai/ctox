@@ -94,7 +94,7 @@ export type ResearchExpansionRequest = {
   query: string;
   criteria: string;
   targetAdditionalSources?: number;
-  status: "queued" | "running" | "done";
+  status: "queued" | "running" | "done" | "failed";
 };
 
 export type ResearchCriterion = {

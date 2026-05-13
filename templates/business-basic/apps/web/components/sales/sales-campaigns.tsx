@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { businessApiPath } from "@/lib/business-api-path";
 import { SalesQueueButton } from "./actions";
 
 type QueryState = {
@@ -405,41 +406,38 @@ export function SalesCampaignsView({
     const ready = automationRows.length
       ? automationRows.filter((row) => row.researchStatus === "complete").length
       : rows.filter((row) => "status" in row && (row.status === "Bereit" || row.status === "Entwurf")).length;
-    return { campaign, rows, replies, ready };
+    const source = automationRows.length || automationStore.campaigns.some((item) => item.id === campaign.id) ? "postgres" : "demo";
+    return { campaign, rows, replies, ready, source };
+  }).sort((left, right) => {
+    if (left.source !== right.source) return left.source === "postgres" ? -1 : 1;
+    return right.campaign.importedRecords - left.campaign.importedRecords;
   });
   const campaignOptions = useMemo(
     () => campaigns.map((campaign) => ({ id: campaign.id, name: campaign.name })),
     [campaigns]
   );
   const refreshAutomationStore = async () => {
-    const response = await fetch("/api/sales/campaign-imports", { cache: "no-store" });
+    const response = await fetch(businessApiPath("/api/sales/campaign-imports"), { cache: "no-store" });
     const store = await response.json().catch(() => ({ campaigns: [], rows: [] })) as SalesAutomationStore;
+    const automationCampaigns = Array.isArray(store.campaigns) ? store.campaigns : [];
     setAutomationStore({
-      campaigns: Array.isArray(store.campaigns) ? store.campaigns : [],
+      campaigns: automationCampaigns,
       rows: Array.isArray(store.rows) ? store.rows : []
     });
-    if (Array.isArray(store.campaigns) && store.campaigns.length) {
-      setCampaigns((current) => current.map((campaign) => {
-        const automationCampaign = store.campaigns.find((item) => item.id === campaign.id);
-        if (!automationCampaign) return campaign;
-        return {
-          ...campaign,
-          importedRecords: automationCampaign.rowCount,
-          enrichedRecords: automationCampaign.completedRows,
-          assignedRecords: automationCampaign.completedRows,
-          status: automationCampaign.status === "ready" ? "Ready" : "Research",
-          nextStep: {
-            en: `${automationCampaign.completedRows}/${automationCampaign.rowCount} independent MiniMax research jobs complete.`,
-            de: `${automationCampaign.completedRows}/${automationCampaign.rowCount} unabhaengige MiniMax-Research-Jobs abgeschlossen.`
-          }
-        };
-      }));
+    if (automationCampaigns.length) {
+      setCampaigns((current) => mergeAutomationCampaigns(current, automationCampaigns));
+      setSelectedCampaignId((current) => {
+        if (current && automationCampaigns.some((campaign) => campaign.id === current)) return current;
+        if (current && campaigns.some((campaign) => campaign.id === current)) return current;
+        return automationCampaigns[0]?.id ?? current;
+      });
+      setImportTargetId((current) => current || automationCampaigns[0]?.id || NEW_IMPORT_CAMPAIGN_ID);
     }
   };
   const transferReadyRowsToPipeline = async () => {
     if (!selectedOutboundCampaign) return;
     setResearchStatus(locale === "de" ? "Pipeline-Uebergabe laeuft ..." : "Pipeline handoff running ...");
-    const response = await fetch("/api/sales/campaign-imports/pipeline", {
+    const response = await fetch(businessApiPath("/api/sales/campaign-imports/pipeline"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ campaignId: selectedOutboundCampaign.id })
@@ -456,7 +454,7 @@ export function SalesCampaignsView({
   const runCampaignResearch = async (limit = 2, retryFailed = false, rowId?: string, rerunComplete = false) => {
     if (!selectedOutboundCampaign) return;
     setResearchStatus(locale === "de" ? `Research-Batch mit ${limit} Datensaetzen laeuft.` : `Research batch with ${limit} records is running.`);
-    const response = await fetch("/api/sales/campaign-imports/run", {
+    const response = await fetch(businessApiPath("/api/sales/campaign-imports/run"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -662,9 +660,9 @@ export function SalesCampaignsView({
               {campaignStatus ? <small className="campaign-inline-status">{campaignStatus}</small> : null}
             </form>
           ) : null}
-          {outboundCampaignRows.map(({ campaign, rows, replies, ready }) => (
+          {outboundCampaignRows.map(({ campaign, rows, replies, ready, source }) => (
             <article
-              className={`campaign-hub-row ${activeDialog === "details" && selectedCampaignId === campaign.id ? "is-selected" : ""}`}
+              className={`campaign-hub-row ${source === "demo" ? "is-demo" : "is-postgres"} ${activeDialog === "details" && selectedCampaignId === campaign.id ? "is-selected" : ""}`}
               data-campaign-name={campaign.name}
               data-context-item
               data-context-label={campaign.name}
@@ -685,7 +683,7 @@ export function SalesCampaignsView({
             >
               <span>
                 <strong>{campaign.name}</strong>
-                <small>{campaign.importedRecords} importiert · {campaign.enrichedRecords} recherchiert · {campaign.assignedRecords} zugeordnet</small>
+                <small><mark className={`campaign-source-badge ${source}`}>{source === "demo" ? "Demo-Daten" : "Postgres"}</mark>{campaign.importedRecords} importiert · {campaign.enrichedRecords} recherchiert · {campaign.assignedRecords} zugeordnet</small>
               </span>
               <span><em>{campaign.status}</em><small>{locale === "de" ? "Outbound aktiv" : "outbound active"}</small></span>
               <span>Outbound</span>
@@ -696,7 +694,7 @@ export function SalesCampaignsView({
           ))}
           {inboundCampaignState.map((campaign) => (
             <article
-              className={`campaign-hub-row inbound ${activeDialog === "details" && selectedCampaignId === campaign.id ? "is-selected" : ""}`}
+              className={`campaign-hub-row inbound is-demo ${activeDialog === "details" && selectedCampaignId === campaign.id ? "is-selected" : ""}`}
               data-campaign-name={campaign.name}
               data-context-item
               data-context-label={campaign.name}
@@ -717,7 +715,7 @@ export function SalesCampaignsView({
             >
               <span>
                 <strong>{campaign.name}</strong>
-                <small>{campaign.tag} · {campaign.landingPath}</small>
+                <small><mark className="campaign-source-badge demo">Demo-Daten</mark>{campaign.tag} · {campaign.landingPath}</small>
               </span>
               <span><em>{campaign.status}</em><small>{locale === "de" ? "Landingpage geplant" : "landing page planned"}</small></span>
               <span>Inbound</span>
@@ -1302,7 +1300,7 @@ async function postCampaignMutation(query: QueryState, body: Record<string, unkn
   core?: { taskId?: string | null; mode?: string };
   error?: string;
 }> {
-  const response = await fetch("/api/sales/campaigns", {
+  const response = await fetch(businessApiPath("/api/sales/campaigns"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ locale: query.locale, theme: query.theme, ...body })
@@ -1341,7 +1339,7 @@ async function postCampaignImport(query: QueryState, body: {
   form.set("theme", query.theme ?? "");
   if (body.sourceFile) form.set("sourceFile", body.sourceFile);
 
-  const response = await fetch("/api/sales/campaign-imports", {
+  const response = await fetch(businessApiPath("/api/sales/campaign-imports"), {
     method: "POST",
     body: form
   });
@@ -1354,6 +1352,36 @@ async function postCampaignImport(query: QueryState, body: {
 
 function slugify(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+
+function mergeAutomationCampaigns(current: SalesCampaign[], automationCampaigns: SalesAutomationCampaign[]) {
+  const byId = new Map(current.map((campaign) => [campaign.id, campaign]));
+  for (const automationCampaign of automationCampaigns) {
+    const existing = byId.get(automationCampaign.id);
+    byId.set(automationCampaign.id, automationCampaignToSalesCampaign(automationCampaign, existing));
+  }
+  return Array.from(byId.values());
+}
+
+function automationCampaignToSalesCampaign(automationCampaign: SalesAutomationCampaign, existing?: SalesCampaign): SalesCampaign {
+  return {
+    id: automationCampaign.id,
+    name: automationCampaign.name,
+    sourceTypes: existing?.sourceTypes?.length ? existing.sourceTypes : [automationCampaign.sourceType],
+    importedRecords: automationCampaign.rowCount,
+    enrichedRecords: automationCampaign.completedRows,
+    assignedRecords: automationCampaign.completedRows,
+    ownerId: existing?.ownerId ?? "sales-lead",
+    assignmentPrompt: existing?.assignmentPrompt ?? {
+      en: "Qualify imported companies, verify source evidence, find buyer context and prepare pipeline handoff.",
+      de: "Importierte Unternehmen qualifizieren, Quellennachweise pruefen, Buyer-Kontext finden und Pipeline-Uebergabe vorbereiten."
+    },
+    status: automationCampaign.status === "ready" ? "Ready" : "Research",
+    nextStep: {
+      en: `${automationCampaign.completedRows}/${automationCampaign.rowCount} independent MiniMax research jobs complete.`,
+      de: `${automationCampaign.completedRows}/${automationCampaign.rowCount} unabhaengige MiniMax-Research-Jobs abgeschlossen.`
+    }
+  };
 }
 
 function estimateImportedRecords(file: File, sourceType: SalesCampaign["sourceTypes"][number]) {
@@ -1659,9 +1687,11 @@ function inboundCampaignScript(locale: SupportedLocale, query: QueryState) {
   return `(() => {
   const messages = ${JSON.stringify(messages)};
   const basePayload = ${JSON.stringify({ locale: query.locale, theme: query.theme })};
+  const apiPrefix = ${JSON.stringify(process.env.NEXT_PUBLIC_BASE_PATH ?? "")};
+  const apiUrl = (path) => path.startsWith("/api/") && apiPrefix ? apiPrefix + path : path;
   const inboundCampaigns = ${JSON.stringify(inboundCampaigns)};
   const postJson = async (url, body) => {
-    const response = await fetch(url, {
+    const response = await fetch(apiUrl(url), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ...basePayload, ...body })
@@ -1783,8 +1813,10 @@ function campaignImporterScript(locale: SupportedLocale, query: QueryState) {
   return `(() => {
   const messages = ${JSON.stringify(messages)};
   const basePayload = ${JSON.stringify({ locale: query.locale, theme: query.theme })};
+  const apiPrefix = ${JSON.stringify(process.env.NEXT_PUBLIC_BASE_PATH ?? "")};
+  const apiUrl = (path) => path.startsWith("/api/") && apiPrefix ? apiPrefix + path : path;
   const postCampaign = async (body) => {
-    const response = await fetch("/api/sales/campaigns", {
+    const response = await fetch(apiUrl("/api/sales/campaigns"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ...basePayload, ...body })
@@ -1865,8 +1897,10 @@ function campaignOutreachScript(locale: SupportedLocale, query: QueryState) {
   return `(() => {
   const messages = ${JSON.stringify(messages)};
   const basePayload = ${JSON.stringify({ locale: query.locale, theme: query.theme })};
+  const apiPrefix = ${JSON.stringify(process.env.NEXT_PUBLIC_BASE_PATH ?? "")};
+  const apiUrl = (path) => path.startsWith("/api/") && apiPrefix ? apiPrefix + path : path;
   const postJson = async (url, body) => {
-    const response = await fetch(url, {
+    const response = await fetch(apiUrl(url), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ...basePayload, ...body })

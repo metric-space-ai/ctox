@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { businessApiPath } from "@/lib/business-api-path";
 
 type MutationAction = "create" | "update" | "delete" | "sync" | "extract" | "reschedule";
 
@@ -394,7 +395,7 @@ async function postMutation(resource: string, body: Record<string, unknown>): Pr
 }
 
 async function postCtoxPrompt(body: Record<string, unknown>): Promise<{ ok?: boolean; taskId?: string; error?: string }> {
-  const response = await fetch("/api/ctox/queue-tasks", {
+  const response = await fetch(businessApiPath("/api/ctox/queue-tasks"), {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body)

@@ -1,7 +1,6 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { sql } from "drizzle-orm";
 
 const execFileAsync = promisify(execFile);
 
@@ -202,7 +201,7 @@ export type AnswerPipelineRunOptions = {
   text?: string;
 };
 
-const DEFAULT_STORE_PATH = join(/* webpackIgnore: true */ /* turbopackIgnore: true */ process.cwd(), ".ctox-business", "sales-automation.json");
+const SALES_AUTOMATION_STORE_KEY = "sales_automation";
 const MINIMAX_MODEL = "MiniMax-M2.7";
 const DEFAULT_RESEARCH_TIMEOUT_MS = 360_000;
 const IRRELEVANT_SEARCH_HOSTS = [
@@ -490,17 +489,9 @@ export function salesCampaignPipelineGate(row: SalesCampaignImportRow): {
 }
 
 export async function loadSalesAutomationStore(): Promise<SalesAutomationStore> {
-  try {
-    const raw = await readFile(storePath(), "utf8");
-    const parsed = JSON.parse(raw) as SalesAutomationStore;
-    return {
-      campaigns: Array.isArray(parsed.campaigns) ? parsed.campaigns : [],
-      rows: Array.isArray(parsed.rows) ? parsed.rows : [],
-      pipelineRuns: Array.isArray(parsed.pipelineRuns) ? parsed.pipelineRuns : []
-    };
-  } catch {
-    return { campaigns: [], rows: [], pipelineRuns: [] };
-  }
+  const databaseStore = await loadSalesAutomationStoreFromDatabase();
+  if (databaseStore) return databaseStore;
+  return { campaigns: [], rows: [], pipelineRuns: [] };
 }
 
 export function inferSalesPipelineStage(row: SalesCampaignImportRow): SalesPipelineStageId {
@@ -1830,7 +1821,7 @@ function buildSalesResearchSystemPrompt({
 }
 
 async function repairSalesResearchJsonOutput(
-  client: unknown,
+  client: any,
   input: {
     campaign: SalesAutomationCampaign | undefined;
     row: SalesCampaignImportRow;
@@ -2475,13 +2466,75 @@ async function refreshCampaignProgress(store: SalesAutomationStore) {
 }
 
 async function saveSalesAutomationStore(store: SalesAutomationStore) {
-  const path = storePath();
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, JSON.stringify(store, null, 2), "utf8");
+  if (await saveSalesAutomationStoreToDatabase(store)) return;
+  throw new Error("Sales automation runtime requires configured Postgres persistence.");
 }
 
-function storePath() {
-  return process.env.CTOX_BUSINESS_AUTOMATION_DATA || DEFAULT_STORE_PATH;
+async function loadSalesAutomationStoreFromDatabase(): Promise<SalesAutomationStore | null> {
+  if (!process.env.DATABASE_URL) return null;
+
+  try {
+    const { createBusinessDb } = await import("@ctox-business/db");
+    const db = createBusinessDb();
+    await ensureBusinessRuntimeStoresTable(db);
+    const result = await db.execute(sql`
+      SELECT payload_json
+      FROM business_runtime_stores
+      WHERE store_key = ${SALES_AUTOMATION_STORE_KEY}
+      LIMIT 1
+    `);
+    const rows = sqlRows<{ payload_json: string }>(result);
+    const payload = rows[0]?.payload_json;
+    if (!payload) return { campaigns: [], rows: [], pipelineRuns: [] };
+    return normalizeSalesAutomationStore(JSON.parse(payload));
+  } catch {
+    return null;
+  }
+}
+
+async function saveSalesAutomationStoreToDatabase(store: SalesAutomationStore) {
+  if (!process.env.DATABASE_URL) return false;
+
+  try {
+    const { createBusinessDb } = await import("@ctox-business/db");
+    const db = createBusinessDb();
+    await ensureBusinessRuntimeStoresTable(db);
+    await db.execute(sql`
+      INSERT INTO business_runtime_stores (store_key, payload_json, updated_at)
+      VALUES (${SALES_AUTOMATION_STORE_KEY}, ${JSON.stringify(normalizeSalesAutomationStore(store))}, now())
+      ON CONFLICT (store_key)
+      DO UPDATE SET payload_json = EXCLUDED.payload_json, updated_at = now()
+    `);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function ensureBusinessRuntimeStoresTable(db: { execute: (query: any) => Promise<unknown> | unknown }) {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS business_runtime_stores (
+      store_key text PRIMARY KEY NOT NULL,
+      payload_json text NOT NULL DEFAULT '{}',
+      created_at timestamp with time zone NOT NULL DEFAULT now(),
+      updated_at timestamp with time zone NOT NULL DEFAULT now()
+    )
+  `);
+}
+
+function normalizeSalesAutomationStore(value: Partial<SalesAutomationStore> | unknown): SalesAutomationStore {
+  const parsed = value as Partial<SalesAutomationStore>;
+  return {
+    campaigns: Array.isArray(parsed?.campaigns) ? parsed.campaigns : [],
+    rows: Array.isArray(parsed?.rows) ? parsed.rows : [],
+    pipelineRuns: Array.isArray(parsed?.pipelineRuns) ? parsed.pipelineRuns : []
+  };
+}
+
+function sqlRows<T>(result: unknown): T[] {
+  if (Array.isArray(result)) return result as T[];
+  const maybeRows = (result as { rows?: unknown }).rows;
+  return Array.isArray(maybeRows) ? maybeRows as T[] : [];
 }
 
 function findValue(row: Record<string, string>, names: string[]) {

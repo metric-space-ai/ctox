@@ -354,7 +354,22 @@ export function ResearchNavigator({
     }).catch(() => null);
     const payload = await response?.json().catch(() => null) as { ok?: boolean; run?: ResearchRun; error?: string } | null;
     if (!response?.ok || !payload?.ok || !payload.run) {
-      setQuickExpansionFeedback(`Recherche fehlgeschlagen${payload?.error ? `: ${payload.error}` : ""}`);
+      const error = payload?.error ?? `HTTP ${response?.status ?? "offline"}`;
+      setRuns((currentRuns) => currentRuns.map((item) => item.id === runId ? {
+        ...item,
+        researchProgress: {
+          status: "error",
+          currentStep: "CTOX-Agent-Auftrag konnte nicht gestartet werden",
+          currentQuery: item.researchProgress?.currentQuery ?? item.prompt,
+          targetAdditionalSources: amount,
+          identifiedDelta: item.researchProgress?.identifiedDelta ?? 0,
+          readDelta: item.researchProgress?.readDelta ?? 0,
+          usedDelta: item.researchProgress?.usedDelta ?? 0,
+          updatedAt: new Date().toISOString()
+        },
+        expansionRequests: (item.expansionRequests ?? []).map((request, index) => index === 0 ? { ...request, status: "failed" } : request)
+      } : item));
+      setQuickExpansionFeedback(`Recherche fehlgeschlagen: ${error}`);
       return;
     }
     setRuns((currentRuns) => [payload.run!, ...currentRuns.filter((item) => item.id !== payload.run!.id)]);
@@ -1080,7 +1095,7 @@ function statusLabel(status: ResearchRun["status"]) {
 function activityStatusLabel(status: ResearchExpansionRequest["status"] | NonNullable<ResearchRun["researchProgress"]>["status"]) {
   if (status === "running") return "Läuft";
   if (status === "done") return "Fertig";
-  if (status === "error") return "Fehler";
+  if (status === "error" || status === "failed") return "Fehler";
   return "Geplant";
 }
 
@@ -1090,6 +1105,9 @@ function activityRequestLabel(request: ResearchExpansionRequest) {
   }
   if (request.status === "running") {
     return request.targetAdditionalSources ? `Läuft · +${request.targetAdditionalSources} Kandidaten` : `Läuft · ${request.query}`;
+  }
+  if (request.status === "failed") {
+    return request.targetAdditionalSources ? `Fehler · +${request.targetAdditionalSources} Kandidaten` : `Fehler · ${request.query}`;
   }
   return request.targetAdditionalSources ? `Angefragt · +${request.targetAdditionalSources} Kandidaten` : `Angefragt · ${request.query}`;
 }
@@ -1141,8 +1159,8 @@ function buildResearchQueueInstruction(run: ResearchRun, amount: number) {
     "Nutze den allgemeinen deep-research/source-review Prozess: natürliche Suchanfragen, erste Quellen lesen, Quellenfamilien/Kriterien aus den Quellen ableiten, dann Discovery-Graph erweitern.",
     "Fortsetzungssuche: Starte nicht neu. Baue Follow-up-Queries aus bestehenden Quellen, Hosts, Titeln, Quellenfamilien und offenen Lücken. Ergänze nur neue Quellen.",
     "Schreibe Fortschritt in den Research-Run zurück: researchProgress.status, currentStep, currentQuery, identifiedDelta, readDelta, usedDelta.",
-    "Füge neue Quellen in sources hinzu, aktualisiere screenedCount/acceptedCount, source groups und graph.nodes/graph.edges. Keine simulierten Counts.",
-    "Persistiere die aktualisierten Daten über /api/marketing/research-runs."
+    "Der Discovery-Runner darf nur Fortschritt und Audit-Artefakte schreiben. Sichtbare Quellen, Counts, Scores und Graph dürfen erst nach Agent-Review geschrieben werden.",
+    "Persistiere finale Ergebnisse ausschließlich über das Business-Research-Writeback-Tool des deep-research Skills; keine simulierten Counts und keine Rohquellen in sources."
   ].filter(Boolean).join("\n");
 }
 

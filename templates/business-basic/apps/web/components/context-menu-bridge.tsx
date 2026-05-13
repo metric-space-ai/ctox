@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
+import { businessApiPath } from "@/lib/business-api-path";
 
 type ContextItem = {
   action?: string;
@@ -442,7 +443,7 @@ function fitMenuPosition(clientX: number, clientY: number, actionCount = 0) {
 }
 
 async function postQueue(body: Record<string, unknown>): Promise<QueueResponse> {
-  const response = await fetch("/api/ctox/queue-tasks", {
+  const response = await fetch(businessApiPath("/api/ctox/queue-tasks"), {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body)

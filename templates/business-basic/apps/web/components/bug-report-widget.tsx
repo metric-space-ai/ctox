@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, type PointerEvent } from "react";
+import { businessApiPath } from "@/lib/business-api-path";
 
 type BugReportWidgetProps = {
   locale?: string;
@@ -100,7 +101,7 @@ export function BugReportWidget({ locale, moduleId, submoduleId }: BugReportWidg
   async function submit() {
     if (!summary.trim()) return;
     setStatus("submitting");
-    const response = await fetch("/api/ctox/bug-reports", {
+    const response = await fetch(businessApiPath("/api/ctox/bug-reports"), {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({

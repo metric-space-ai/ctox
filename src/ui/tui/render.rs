@@ -2350,6 +2350,7 @@ fn settings_snapshot_text(app: &App, width: usize, height: usize) -> String {
     match item.key {
         "CTOX_API_PROVIDER"
         | "CTOX_OPENAI_AUTH_MODE"
+        | "CTOX_WEB_SEARCH_OPENAI_MODE"
         | "OPENAI_API_KEY"
         | "OPENROUTER_API_KEY"
         | "AZURE_FOUNDRY_API_KEY"
@@ -3898,6 +3899,7 @@ fn setting_row_style(key: &str, _value: &str) -> Style {
         "CTOX_CHAT_SOURCE"
         | "CTOX_API_PROVIDER"
         | "CTOX_OPENAI_AUTH_MODE"
+        | "CTOX_WEB_SEARCH_OPENAI_MODE"
         | "CTOX_CHAT_MODEL"
         | "CTOX_CHAT_LOCAL_PRESET"
         | "CTOX_CHAT_SKILL_PRESET" => role_color("chat"),

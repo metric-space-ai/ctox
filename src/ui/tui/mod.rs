@@ -64,6 +64,9 @@ const DEFAULT_API_PROVIDER: &str = "local";
 const OPENAI_AUTH_MODE_KEY: &str = "CTOX_OPENAI_AUTH_MODE";
 const DEFAULT_OPENAI_AUTH_MODE: &str = "api_key";
 const OPENAI_AUTH_MODE_CHOICES: &[&str] = &["api_key", "chatgpt_subscription"];
+const WEB_SEARCH_OPENAI_MODE_KEY: &str = "CTOX_WEB_SEARCH_OPENAI_MODE";
+const DEFAULT_WEB_SEARCH_OPENAI_MODE: &str = "local_stack";
+const WEB_SEARCH_OPENAI_MODE_CHOICES: &[&str] = &["local_stack", "openai"];
 const WORK_HOURS_CHOICES: &[&str] = &["off", "on"];
 const DEFAULT_LOCAL_RUNTIME: &str = "candle";
 const DEFAULT_CHAT_PRESET: &str = "Quality";
@@ -1918,6 +1921,7 @@ impl App {
                     | "CTOX_WORK_HOURS_END"
                     | "CTOX_API_PROVIDER"
                     | "CTOX_OPENAI_AUTH_MODE"
+                    | "CTOX_WEB_SEARCH_OPENAI_MODE"
                     | "CTOX_AZURE_FOUNDRY_ENDPOINT"
                     | "CTOX_AZURE_FOUNDRY_DEPLOYMENT_ID"
                     | "AZURE_FOUNDRY_API_KEY"
@@ -2038,6 +2042,7 @@ impl App {
                 .eq_ignore_ascii_case("remote-webrtc"),
             "CTOX_API_PROVIDER" => true,
             "CTOX_OPENAI_AUTH_MODE" => api_provider.eq_ignore_ascii_case("openai"),
+            "CTOX_WEB_SEARCH_OPENAI_MODE" => api_provider.eq_ignore_ascii_case("openai"),
             "OPENAI_API_KEY" => {
                 api_provider.eq_ignore_ascii_case("openai")
                     && !self
@@ -2380,6 +2385,12 @@ impl App {
                 }
                 "CTOX_OPENAI_AUTH_MODE" => {
                     item.choices = OPENAI_AUTH_MODE_CHOICES.to_vec();
+                    if !item.choices.is_empty() && !choice_contains(&item.choices, &item.value) {
+                        item.value = item.choices[0].to_string();
+                    }
+                }
+                "CTOX_WEB_SEARCH_OPENAI_MODE" => {
+                    item.choices = WEB_SEARCH_OPENAI_MODE_CHOICES.to_vec();
                     if !item.choices.is_empty() && !choice_contains(&item.choices, &item.value) {
                         item.value = item.choices[0].to_string();
                     }
@@ -3985,6 +3996,22 @@ fn load_settings_items(root: &Path) -> Vec<SettingItem> {
             kind: SettingKind::Env,
         },
         SettingItem {
+            key: WEB_SEARCH_OPENAI_MODE_KEY,
+            label: "Web Search",
+            value: env_map
+                .get(WEB_SEARCH_OPENAI_MODE_KEY)
+                .cloned()
+                .unwrap_or_else(|| DEFAULT_WEB_SEARCH_OPENAI_MODE.to_string()),
+            saved_value: env_map
+                .get(WEB_SEARCH_OPENAI_MODE_KEY)
+                .cloned()
+                .unwrap_or_else(|| DEFAULT_WEB_SEARCH_OPENAI_MODE.to_string()),
+            secret: false,
+            choices: WEB_SEARCH_OPENAI_MODE_CHOICES.to_vec(),
+            help: "Choose local_stack for CTOX's own web stack or openai to pass native web_search calls through to OpenAI.",
+            kind: SettingKind::Env,
+        },
+        SettingItem {
             key: AZURE_FOUNDRY_ENDPOINT_KEY,
             label: "Foundry Endpoint",
             value: azure_foundry_endpoint.clone(),
@@ -5119,6 +5146,7 @@ fn relevant_header_estimate_setting(key: &str) -> bool {
             | "CTOX_LOCAL_RUNTIME"
             | "CTOX_API_PROVIDER"
             | "CTOX_OPENAI_AUTH_MODE"
+            | "CTOX_WEB_SEARCH_OPENAI_MODE"
             | "CTOX_AZURE_FOUNDRY_ENDPOINT"
             | "CTOX_AZURE_FOUNDRY_DEPLOYMENT_ID"
             | "AZURE_FOUNDRY_API_KEY"
@@ -5183,6 +5211,7 @@ fn is_model_runtime_setting(key: &str) -> bool {
             | "CTOX_LOCAL_RUNTIME"
             | "CTOX_API_PROVIDER"
             | "CTOX_OPENAI_AUTH_MODE"
+            | "CTOX_WEB_SEARCH_OPENAI_MODE"
             | "CTOX_AZURE_FOUNDRY_ENDPOINT"
             | "CTOX_AZURE_FOUNDRY_DEPLOYMENT_ID"
             | "AZURE_FOUNDRY_API_KEY"
@@ -6903,6 +6932,7 @@ mod tests {
         assert!(keys.contains(&"CTOX_BOOST_DEFAULT_MINUTES"));
         assert!(keys.contains(&"CTOX_API_PROVIDER"));
         assert!(keys.contains(&"CTOX_OPENAI_AUTH_MODE"));
+        assert!(keys.contains(&"CTOX_WEB_SEARCH_OPENAI_MODE"));
         assert!(keys.contains(&"CTOX_LOCAL_RUNTIME"));
         assert!(keys.contains(&"OPENAI_API_KEY"));
         assert!(keys.contains(&"ANTHROPIC_API_KEY"));
@@ -6952,6 +6982,13 @@ mod tests {
             .unwrap()
             .clone();
         assert!(!app.setting_visible(&openai_auth_row));
+        let openai_web_search_row = app
+            .settings_items
+            .iter()
+            .find(|item| item.key == "CTOX_WEB_SEARCH_OPENAI_MODE")
+            .unwrap()
+            .clone();
+        assert!(!app.setting_visible(&openai_web_search_row));
 
         let mut app = App::new(root.clone(), root.join("runtime/test-subscription.sqlite3"));
         let provider_idx = app
@@ -6974,6 +7011,13 @@ mod tests {
             .unwrap()
             .clone();
         assert!(!app.setting_visible(&openai_key_row));
+        let openai_web_search_row = app
+            .settings_items
+            .iter()
+            .find(|item| item.key == "CTOX_WEB_SEARCH_OPENAI_MODE")
+            .unwrap()
+            .clone();
+        assert!(app.setting_visible(&openai_web_search_row));
     }
 
     #[test]
@@ -7104,10 +7148,13 @@ mod tests {
             local_keys,
             vec![
                 "CTOX_SERVICE_TOGGLE",
+                "CTOX_WORK_HOURS_ENABLED",
+                "CTOX_WORK_HOURS_START",
+                "CTOX_WORK_HOURS_END",
                 "CTOX_API_PROVIDER",
-                "CTOX_LOCAL_RUNTIME",
                 "CTOX_CHAT_MODEL",
                 "CTOX_CHAT_LOCAL_PRESET",
+                "CTOX_CHAT_MODEL_MAX_CONTEXT",
                 "CTOX_CHAT_SKILL_PRESET",
                 "CTOX_REFRESH_OUTPUT_BUDGET_PCT",
                 "CTOX_AUTONOMY_LEVEL",
@@ -7117,6 +7164,11 @@ mod tests {
                 "CTOX_EMBEDDING_MODEL",
                 "CTOX_STT_MODEL",
                 "CTOX_TTS_MODEL",
+                "CTOX_USE_DIRECT_SESSION",
+                "CTOX_COMPACT_TRIGGER",
+                "CTOX_COMPACT_MODE",
+                "CTOX_COMPACT_FIXED_INTERVAL",
+                "CTOX_COMPACT_ADAPTIVE_THRESHOLD",
             ]
         );
 
@@ -7142,9 +7194,12 @@ mod tests {
             api_keys,
             vec![
                 "CTOX_SERVICE_TOGGLE",
+                "CTOX_WORK_HOURS_ENABLED",
+                "CTOX_WORK_HOURS_START",
+                "CTOX_WORK_HOURS_END",
                 "CTOX_API_PROVIDER",
                 "CTOX_OPENAI_AUTH_MODE",
-                "CTOX_LOCAL_RUNTIME",
+                "CTOX_WEB_SEARCH_OPENAI_MODE",
                 "OPENAI_API_KEY",
                 "CTOX_CHAT_MODEL",
                 "CTOX_CHAT_LOCAL_PRESET",
@@ -7157,6 +7212,11 @@ mod tests {
                 "CTOX_EMBEDDING_MODEL",
                 "CTOX_STT_MODEL",
                 "CTOX_TTS_MODEL",
+                "CTOX_USE_DIRECT_SESSION",
+                "CTOX_COMPACT_TRIGGER",
+                "CTOX_COMPACT_MODE",
+                "CTOX_COMPACT_FIXED_INTERVAL",
+                "CTOX_COMPACT_ADAPTIVE_THRESHOLD",
             ]
         );
 
@@ -7176,10 +7236,15 @@ mod tests {
             api_base_keys,
             vec![
                 "CTOX_SERVICE_TOGGLE",
+                "CTOX_WORK_HOURS_ENABLED",
+                "CTOX_WORK_HOURS_START",
+                "CTOX_WORK_HOURS_END",
                 "CTOX_API_PROVIDER",
                 "CTOX_OPENAI_AUTH_MODE",
+                "CTOX_WEB_SEARCH_OPENAI_MODE",
                 "OPENAI_API_KEY",
                 "CTOX_CHAT_MODEL",
+                "CTOX_CHAT_LOCAL_PRESET",
                 "CTOX_CHAT_SKILL_PRESET",
                 "CTOX_REFRESH_OUTPUT_BUDGET_PCT",
                 "CTOX_AUTONOMY_LEVEL",
@@ -7189,6 +7254,11 @@ mod tests {
                 "CTOX_EMBEDDING_MODEL",
                 "CTOX_STT_MODEL",
                 "CTOX_TTS_MODEL",
+                "CTOX_USE_DIRECT_SESSION",
+                "CTOX_COMPACT_TRIGGER",
+                "CTOX_COMPACT_MODE",
+                "CTOX_COMPACT_FIXED_INTERVAL",
+                "CTOX_COMPACT_ADAPTIVE_THRESHOLD",
             ]
         );
     }

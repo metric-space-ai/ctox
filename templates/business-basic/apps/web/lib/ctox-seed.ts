@@ -1,5 +1,4 @@
 import { execFile } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
@@ -272,27 +271,13 @@ export function normalizeCtoxResource(resource: string): keyof CtoxBundle | null
 async function readPersistedBugReports(): Promise<CtoxBugRecord[]> {
   const databaseReports = await readPostgresBugReports();
   if (databaseReports) return databaseReports;
-
-  try {
-    const raw = await readFile(bugStorePath(), "utf-8");
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return parsed.map((item) => normalizeBugReport(item)).filter(Boolean) as CtoxBugRecord[];
-  } catch {
-    return [];
-  }
+  return [];
 }
 
 async function writePersistedBugReports(reports: CtoxBugRecord[]) {
   const latestReport = reports[0];
   if (latestReport && await writePostgresBugReport(latestReport)) return;
-
-  await mkdir(".ctox-business", { recursive: true });
-  await writeFile(bugStorePath(), JSON.stringify(reports, null, 2), "utf-8");
-}
-
-function bugStorePath() {
-  return ".ctox-business/bug-reports.json";
+  throw new Error("Business OS bug reports require configured Postgres persistence.");
 }
 
 function normalizeBugReport(value: unknown): CtoxBugRecord {
