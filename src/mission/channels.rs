@@ -2727,7 +2727,7 @@ fn is_review_required_outbound_channel(channel: &str) -> bool {
 fn enforce_external_chat_send_is_reviewed(request: &ChannelSendRequest) -> Result<()> {
     if is_review_required_outbound_channel(&request.channel) && !request.reviewed_founder_send {
         anyhow::bail!(
-            "outbound {} communication must pass communication review before sending. Draft the response for completion review first, then send the exact approved body with --reviewed-communication-send.",
+            "outbound {} communication must pass communication review before sending. Draft the response for completion review first; after approval the Harness sends the exact approved body through the reviewed send path.",
             request.channel
         );
     }
@@ -2752,7 +2752,7 @@ fn enforce_external_work_ack_has_pipeline_backing(
             return Ok(());
         }
         anyhow::bail!(
-            "outbound {} acknowledgement promises follow-up work and has pipeline backing, but it has not passed external chat review. Draft the quick response for review first, then send the exact approved body with --reviewed-communication-send.",
+            "outbound {} acknowledgement promises follow-up work and has pipeline backing, but it has not passed communication review. Draft the quick response for review first; after approval the Harness sends the exact approved body.",
             request.channel
         );
     }
@@ -4159,7 +4159,7 @@ fn require_any_unconsumed_external_chat_review(
         .optional()
         .context("failed to load communication review approval")?;
     approval.with_context(|| {
-        "reviewed outbound communication has no matching unconsumed review approval for the exact body, channel, thread, recipients, subject, and attachments. Run completion review first, then send exactly the approved body with --reviewed-communication-send."
+        "reviewed outbound communication has no matching unconsumed review approval for the exact body, channel, thread, recipients, subject, and attachments. Run completion review first; after approval the Harness sends exactly the approved body."
             .to_string()
     })
 }
@@ -4406,6 +4406,59 @@ fn send_reviewed_founder_outbound_request(
     )?;
     mark_founder_reply_review_sent(conn, &approval_key, &send_result)?;
     Ok(send_result)
+}
+
+pub(crate) fn send_reviewed_founder_outbound_action(
+    root: &Path,
+    action: &FounderOutboundAction,
+    body: &str,
+) -> Result<Value> {
+    let db_path = resolve_db_path(root, None);
+    let conn = open_channel_db(&db_path)?;
+    let request = resolve_outbound_subject(
+        &conn,
+        ChannelSendRequest {
+            channel: "email".to_string(),
+            account_key: action.account_key.clone(),
+            thread_key: action.thread_key.clone(),
+            body: body.trim().to_string(),
+            subject: action.subject.clone(),
+            to: action.to.clone(),
+            cc: action.cc.clone(),
+            attachments: action.attachments.clone(),
+            sender_display: None,
+            sender_address: None,
+            send_voice: false,
+            reviewed_founder_send: true,
+        },
+    )?;
+    send_reviewed_founder_outbound_request(root, &conn, &db_path, &request)
+}
+
+pub(crate) fn send_reviewed_external_chat_action(
+    root: &Path,
+    action: &ExternalChatAction,
+    body: &str,
+) -> Result<Value> {
+    let db_path = resolve_db_path(root, None);
+    send_message(
+        root,
+        &db_path,
+        ChannelSendRequest {
+            channel: action.channel.clone(),
+            account_key: action.account_key.clone(),
+            thread_key: action.thread_key.clone(),
+            body: body.trim().to_string(),
+            subject: action.subject.clone(),
+            to: action.to.clone(),
+            cc: action.cc.clone(),
+            attachments: action.attachments.clone(),
+            sender_display: None,
+            sender_address: None,
+            send_voice: false,
+            reviewed_founder_send: true,
+        },
+    )
 }
 
 fn send_reviewed_email_communication_request(
@@ -4983,7 +5036,7 @@ fn validate_founder_outbound_email(
         .collect::<Vec<_>>();
     if protected_recipients.is_empty() {
         anyhow::bail!(
-            "direct outbound email is blocked without communication review. Draft the email for completion review first, then send the exact approved body with --reviewed-communication-send."
+            "direct outbound email is blocked without communication review. Draft the email for completion review first; after approval the Harness sends the exact approved body."
         );
     }
     let recipient_summary = protected_recipients

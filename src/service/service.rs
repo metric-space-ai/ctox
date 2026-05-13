@@ -558,6 +558,10 @@ const DEFAULT_AGENT_FAILURE_THRESHOLD: i64 = 2;
 const MAX_AGENT_FAILURE_THRESHOLD: i64 = 6;
 const REVIEW_FEEDBACK_SOURCE_LABEL: &str = "review-feedback";
 const OUTCOME_WITNESS_RECOVERY_SOURCE_LABEL: &str = "outcome-witness-recovery";
+const CHANNEL_ROUTER_SERIAL_LEASE_LIMIT: usize = 1;
+const REVIEW_FEEDBACK_PRIOR_REPLY_MAX_CHARS: usize = 6_000;
+const STANDALONE_OUTBOUND_DB_LOCK_RETRY_MARKER: &str =
+    "transient database lock interrupted the reviewed outbound send";
 
 fn completion_review_disposition_label(disposition: &CompletionReviewDisposition) -> &'static str {
     match disposition {
@@ -3112,12 +3116,6 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
                                     expected_artifact_refs.len(),
                                     job_outcome_entity_id(&job)
                                 ));
-                            } else if !terminal_no_send {
-                                outcome_witness_error = Some(format!(
-                                    "Harness invariant violation: {} expected durable outcome artifact(s), but the slice has no accepted completion review proof for {}.",
-                                    expected_artifact_refs.len(),
-                                    job_outcome_entity_id(&job)
-                                ));
                             }
                         }
                         if let Some(err) = outcome_witness_error.as_ref() {
@@ -3130,66 +3128,155 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
                                 ),
                             );
                             should_handle_messages = false;
-                            if founder_send_error.is_none() {
-                                founder_send_error = Some(outcome_witness_recovery_message(
-                                    &root, &job, &reply, err,
-                                ));
-                            }
-                            if job.ticket_self_work_id.is_none()
-                                && job.leased_message_keys.is_empty()
-                                && job.outbound_email.is_some()
-                                && outcome_witness_outbound_recovery_requeue_allowed(&root, &job)
-                            {
-                                let recovery =
-                                    founder_send_error.as_ref().cloned().unwrap_or_else(|| {
-                                        outcome_witness_recovery_message(&root, &job, &reply, err)
+                            let communication_feedback =
+                                communication_outcome_witness_feedback_target(&job);
+                            if communication_feedback {
+                                let feedback_prompt =
+                                    build_outcome_witness_feedback_prompt(&job, &reply, err);
+                                let feedback_summary = format!(
+                                    "Outcome witness could not verify a durable accepted communication artifact: {}",
+                                    clip_text(err, 180)
+                                );
+                                let mut feedback_persisted = false;
+                                if !job.leased_message_keys.is_empty() {
+                                    match apply_review_feedback_to_leased_queue(
+                                        &root,
+                                        &job,
+                                        &feedback_prompt,
+                                        &feedback_summary,
+                                    ) {
+                                        Ok(updated) if updated > 0 => {
+                                            feedback_persisted = true;
+                                            push_event_locked(
+                                                &mut shared,
+                                                format!(
+                                                    "Outcome witness fed communication recovery back into {updated} durable queue item(s) for {}",
+                                                    job.source_label
+                                                ),
+                                            );
+                                        }
+                                        Ok(_) => {}
+                                        Err(update_err) => {
+                                            push_event_locked(
+                                                &mut shared,
+                                                format!(
+                                                    "Failed to persist outcome-witness communication feedback for {}: {}",
+                                                    job.source_label,
+                                                    clip_text(&update_err.to_string(), 180)
+                                                ),
+                                            );
+                                        }
+                                    }
+                                }
+                                if !feedback_persisted
+                                    && job.ticket_self_work_id.is_none()
+                                    && job.leased_message_keys.is_empty()
+                                    && job.outbound_email.is_some()
+                                    && outbound_in_process_review_retry_allowed(&job)
+                                {
+                                    outcome_recovery_prompt = Some(QueuedPrompt {
+                                        prompt: feedback_prompt.clone(),
+                                        goal: format!(
+                                            "Outcome-witness feedback retry for {}",
+                                            job.goal
+                                        ),
+                                        preview: clip_text(&feedback_prompt, 180),
+                                        source_label: REVIEW_FEEDBACK_SOURCE_LABEL.to_string(),
+                                        suggested_skill: job.suggested_skill.clone(),
+                                        leased_message_keys: Vec::new(),
+                                        leased_ticket_event_keys: Vec::new(),
+                                        thread_key: job.thread_key.clone(),
+                                        workspace_root: job.workspace_root.clone(),
+                                        ticket_self_work_id: None,
+                                        outbound_email: job.outbound_email.clone(),
+                                        outbound_anchor: job.outbound_anchor.clone(),
                                     });
-                                outcome_recovery_prompt = Some(QueuedPrompt {
-                                    prompt: recovery.clone(),
-                                    goal: format!(
-                                        "Complete reviewed send for {}",
-                                        job.source_label
-                                    ),
-                                    preview: clip_text(&recovery, 180),
-                                    source_label: OUTCOME_WITNESS_RECOVERY_SOURCE_LABEL.to_string(),
-                                    suggested_skill: job.suggested_skill.clone(),
-                                    leased_message_keys: Vec::new(),
-                                    leased_ticket_event_keys: Vec::new(),
-                                    thread_key: job.thread_key.clone(),
-                                    workspace_root: job.workspace_root.clone(),
-                                    ticket_self_work_id: None,
-                                    outbound_email: job.outbound_email.clone(),
-                                    outbound_anchor: job.outbound_anchor.clone(),
-                                });
-                            }
-                            if job.ticket_self_work_id.is_none()
-                                && !job.leased_message_keys.is_empty()
-                                && job.outbound_email.is_none()
-                                && should_queue_artifact_outcome_recovery(&job)
-                                && outcome_witness_rejection_count(&root, &job)
-                                    .map(|count| {
-                                        count < review_checkpoint_requeue_block_threshold()
-                                    })
-                                    .unwrap_or(true)
-                            {
-                                let recovery =
-                                    founder_send_error.as_ref().cloned().unwrap_or_else(|| {
-                                        outcome_witness_recovery_message(&root, &job, &reply, err)
+                                    push_event_locked(
+                                        &mut shared,
+                                        format!(
+                                            "Outcome witness queued bounded worker feedback retry for {} instead of a recovery-sender path",
+                                            job.source_label
+                                        ),
+                                    );
+                                }
+                                if founder_send_error.is_none() {
+                                    founder_send_error = Some(feedback_summary);
+                                }
+                            } else {
+                                if founder_send_error.is_none() {
+                                    founder_send_error = Some(outcome_witness_recovery_message(
+                                        &root, &job, &reply, err,
+                                    ));
+                                }
+                                if job.ticket_self_work_id.is_none()
+                                    && job.leased_message_keys.is_empty()
+                                    && job.outbound_email.is_some()
+                                    && outcome_witness_outbound_recovery_requeue_allowed(
+                                        &root, &job,
+                                    )
+                                {
+                                    let recovery =
+                                        founder_send_error.as_ref().cloned().unwrap_or_else(|| {
+                                            outcome_witness_recovery_message(
+                                                &root, &job, &reply, err,
+                                            )
+                                        });
+                                    outcome_recovery_prompt = Some(QueuedPrompt {
+                                        prompt: recovery.clone(),
+                                        goal: format!(
+                                            "Complete reviewed send for {}",
+                                            job.source_label
+                                        ),
+                                        preview: clip_text(&recovery, 180),
+                                        source_label: OUTCOME_WITNESS_RECOVERY_SOURCE_LABEL
+                                            .to_string(),
+                                        suggested_skill: job.suggested_skill.clone(),
+                                        leased_message_keys: Vec::new(),
+                                        leased_ticket_event_keys: Vec::new(),
+                                        thread_key: job.thread_key.clone(),
+                                        workspace_root: job.workspace_root.clone(),
+                                        ticket_self_work_id: None,
+                                        outbound_email: job.outbound_email.clone(),
+                                        outbound_anchor: job.outbound_anchor.clone(),
                                     });
-                                outcome_recovery_prompt = Some(QueuedPrompt {
-                                    prompt: recovery.clone(),
-                                    goal: format!("Complete required artifacts for {}", job.goal),
-                                    preview: clip_text(&recovery, 180),
-                                    source_label: OUTCOME_WITNESS_RECOVERY_SOURCE_LABEL.to_string(),
-                                    suggested_skill: job.suggested_skill.clone(),
-                                    leased_message_keys: job.leased_message_keys.clone(),
-                                    leased_ticket_event_keys: job.leased_ticket_event_keys.clone(),
-                                    thread_key: job.thread_key.clone(),
-                                    workspace_root: job.workspace_root.clone(),
-                                    ticket_self_work_id: None,
-                                    outbound_email: None,
-                                    outbound_anchor: job.outbound_anchor.clone(),
-                                });
+                                }
+                                if job.ticket_self_work_id.is_none()
+                                    && !job.leased_message_keys.is_empty()
+                                    && job.outbound_email.is_none()
+                                    && should_queue_artifact_outcome_recovery(&job)
+                                    && outcome_witness_rejection_count(&root, &job)
+                                        .map(|count| {
+                                            count < review_checkpoint_requeue_block_threshold()
+                                        })
+                                        .unwrap_or(true)
+                                {
+                                    let recovery =
+                                        founder_send_error.as_ref().cloned().unwrap_or_else(|| {
+                                            outcome_witness_recovery_message(
+                                                &root, &job, &reply, err,
+                                            )
+                                        });
+                                    outcome_recovery_prompt = Some(QueuedPrompt {
+                                        prompt: recovery.clone(),
+                                        goal: format!(
+                                            "Complete required artifacts for {}",
+                                            job.goal
+                                        ),
+                                        preview: clip_text(&recovery, 180),
+                                        source_label: OUTCOME_WITNESS_RECOVERY_SOURCE_LABEL
+                                            .to_string(),
+                                        suggested_skill: job.suggested_skill.clone(),
+                                        leased_message_keys: job.leased_message_keys.clone(),
+                                        leased_ticket_event_keys: job
+                                            .leased_ticket_event_keys
+                                            .clone(),
+                                        thread_key: job.thread_key.clone(),
+                                        workspace_root: job.workspace_root.clone(),
+                                        ticket_self_work_id: None,
+                                        outbound_email: None,
+                                        outbound_anchor: job.outbound_anchor.clone(),
+                                    });
+                                }
                             }
                         }
                         if founder_send_error.is_none() && !terminal_no_send {
@@ -3552,6 +3639,32 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
                                     job.source_label
                                 ),
                             );
+                        } else if retry_worker_message
+                            && standalone_outbound_runtime_retry_allowed(&job, &err_text)
+                        {
+                            let retry_prompt =
+                                standalone_outbound_runtime_retry_prompt(&job, &err_text);
+                            outcome_recovery_prompt = Some(QueuedPrompt {
+                                prompt: retry_prompt.clone(),
+                                goal: format!("Retry reviewed outbound send for {}", job.goal),
+                                preview: clip_text(&retry_prompt, 180),
+                                source_label: job.source_label.clone(),
+                                suggested_skill: job.suggested_skill.clone(),
+                                leased_message_keys: Vec::new(),
+                                leased_ticket_event_keys: Vec::new(),
+                                thread_key: job.thread_key.clone(),
+                                workspace_root: job.workspace_root.clone(),
+                                ticket_self_work_id: None,
+                                outbound_email: job.outbound_email.clone(),
+                                outbound_anchor: job.outbound_anchor.clone(),
+                            });
+                            push_event_locked(
+                                &mut shared,
+                                format!(
+                                    "{} prompt hit a retryable database lock; queued one bounded standalone outbound retry: {compact_error}",
+                                    job.source_label
+                                ),
+                            );
                         } else if retry_worker_message {
                             push_event_locked(
                                 &mut shared,
@@ -3653,13 +3766,39 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
                         false
                     };
                     if !persisted {
-                        push_event_locked(
-                            &mut shared,
-                            format!(
-                                "Review feedback for {} was not persisted to a durable queue item; suppressing in-memory retry outside the core review flow",
-                                job.source_label
-                            ),
-                        );
+                        if job.outbound_email.is_some()
+                            && outbound_in_process_review_retry_allowed(&job)
+                        {
+                            push_event_locked(
+                                &mut shared,
+                                format!(
+                                    "Queued bounded review-feedback retry for proactive outbound {}",
+                                    job.source_label
+                                ),
+                            );
+                            outcome_recovery_prompt = Some(QueuedPrompt {
+                                prompt: feedback_prompt.clone(),
+                                goal: format!("Review-feedback retry for {}", job.goal),
+                                preview: clip_text(feedback_prompt, 180),
+                                source_label: REVIEW_FEEDBACK_SOURCE_LABEL.to_string(),
+                                suggested_skill: job.suggested_skill.clone(),
+                                leased_message_keys: Vec::new(),
+                                leased_ticket_event_keys: Vec::new(),
+                                thread_key: job.thread_key.clone(),
+                                workspace_root: job.workspace_root.clone(),
+                                ticket_self_work_id: None,
+                                outbound_email: job.outbound_email.clone(),
+                                outbound_anchor: job.outbound_anchor.clone(),
+                            });
+                        } else {
+                            push_event_locked(
+                                &mut shared,
+                                format!(
+                                    "Review feedback for {} was not persisted to a durable queue item; suppressing in-memory retry outside the core review flow",
+                                    job.source_label
+                                ),
+                            );
+                        }
                     }
                 }
                 next_prompt = maybe_start_next_queued_prompt_after_recovery_locked(
@@ -4076,41 +4215,83 @@ fn run_completion_review(
                     (email_reply_key, email_reply_action.as_ref())
                 {
                     let approval_summary = communication_review_approval_summary(&outcome);
-                    let record_result = if founder_reply_key.is_some() {
+                    let send_result = if founder_reply_key.is_some() {
                         channels::record_founder_reply_review_approval(
                             root,
                             message_key,
                             reply_text,
                             &approval_summary,
                         )
+                        .and_then(|_| {
+                            channels::send_reviewed_founder_reply(root, message_key, reply_text)
+                        })
                     } else {
                         let account_key = email_account_key_from_message_key(message_key);
+                        let reviewed_action = channels::ExternalChatAction {
+                            channel: "email".to_string(),
+                            account_key,
+                            thread_key: action.thread_key.clone(),
+                            subject: action.subject.clone(),
+                            to: action.to.clone(),
+                            cc: action.cc.clone(),
+                            attachments: action.attachments.clone(),
+                        };
                         channels::record_external_chat_review_approval(
                             root,
                             message_key,
-                            &channels::ExternalChatAction {
-                                channel: "email".to_string(),
-                                account_key,
+                            &reviewed_action,
+                            reply_text,
+                            &approval_summary,
+                        )
+                        .and_then(|_| {
+                            channels::send_reviewed_external_chat_action(
+                                root,
+                                &reviewed_action,
+                                reply_text,
+                            )
+                        })
+                    };
+                    match send_result {
+                        Ok(send_result) => {
+                            push_event(
+                                state,
+                                format!(
+                                    "Communication review approved and harness auto-sent {}: {}",
+                                    job.source_label,
+                                    clip_text(&send_result.to_string(), 180)
+                                ),
+                            );
+                        }
+                        Err(err) => {
+                            push_event(
+                                state,
+                                format!(
+                                    "Communication review passed for {} but harness auto-send failed: {}",
+                                    job.source_label, err
+                                ),
+                            );
+                            return CompletionReviewDisposition::Hold {
+                                summary: err.to_string(),
+                            };
+                        }
+                    }
+                    if founder_reply_key.is_some()
+                        && channels::terminal_founder_outbound_artifact_count(
+                            root,
+                            &channels::FounderOutboundAction {
+                                account_key: email_account_key_from_message_key(message_key),
                                 thread_key: action.thread_key.clone(),
                                 subject: action.subject.clone(),
                                 to: action.to.clone(),
                                 cc: action.cc.clone(),
                                 attachments: action.attachments.clone(),
                             },
-                            reply_text,
-                            &approval_summary,
                         )
-                    };
-                    if let Err(err) = record_result {
-                        push_event(
-                            state,
-                            format!(
-                                "Communication review passed for {} but approval persistence failed: {}",
-                                job.source_label, err
-                            ),
-                        );
+                        .unwrap_or(0)
+                            == 0
+                    {
                         return CompletionReviewDisposition::Hold {
-                            summary: err.to_string(),
+                            summary: "Communication review passed, but harness auto-send did not produce a durable outbound artifact.".to_string(),
                         };
                     }
                 }
@@ -4183,17 +4364,21 @@ fn run_completion_review(
         return match outcome.verdict {
             review::ReviewVerdict::Pass => {
                 let approval_summary = communication_review_approval_summary(&outcome);
-                if let Err(err) = channels::record_founder_outbound_review_approval(
+                let send_result = channels::record_founder_outbound_review_approval(
                     root,
                     anchor_key,
                     action,
                     reply_text,
                     &approval_summary,
-                ) {
+                )
+                .and_then(|_| {
+                    channels::send_reviewed_founder_outbound_action(root, action, reply_text)
+                });
+                if let Err(err) = send_result {
                     push_event(
                         state,
                         format!(
-                            "Founder outbound review passed for {} but approval persistence failed: {}",
+                            "Founder outbound review passed for {} but harness auto-send failed: {}",
                             job.source_label, err
                         ),
                     );
@@ -4274,17 +4459,21 @@ fn run_completion_review(
         return match outcome.verdict {
             review::ReviewVerdict::Pass => {
                 let approval_summary = communication_review_approval_summary(&outcome);
-                if let Err(err) = channels::record_external_chat_review_approval(
+                let send_result = channels::record_external_chat_review_approval(
                     root,
                     anchor_key,
                     action,
                     reply_text,
                     &approval_summary,
-                ) {
+                )
+                .and_then(|_| {
+                    channels::send_reviewed_external_chat_action(root, action, reply_text)
+                });
+                if let Err(err) = send_result {
                     push_event(
                         state,
                         format!(
-                            "External chat review passed for {} but approval persistence failed: {}",
+                            "External chat review passed for {} but harness auto-send failed: {}",
                             job.source_label, err
                         ),
                     );
@@ -6015,6 +6204,9 @@ fn outbound_email_first_execution_prompt(job: &QueuedPrompt, base_prompt: String
     let Some(action) = job.outbound_email.as_ref() else {
         return base_prompt;
     };
+    if job.source_label == OUTCOME_WITNESS_RECOVERY_SOURCE_LABEL {
+        return base_prompt;
+    }
     let to = if action.to.is_empty() {
         "(none recorded)".to_string()
     } else {
@@ -7045,7 +7237,7 @@ fn enforce_reviewed_work_terminal_success(
 fn outcome_witness_recovery_message(
     root: &Path,
     job: &QueuedPrompt,
-    approved_body: &str,
+    _approved_body: &str,
     err: &str,
 ) -> String {
     let expected_file_artifacts = expected_outcome_artifacts_for_job(job)
@@ -7067,104 +7259,14 @@ fn outcome_witness_recovery_message(
         )
     } else {
         format!(
-            "Der Review hat den Entwurf nicht selbst versendet. Die Aufgabe bleibt offen, weil noch kein akzeptiertes Outbound-E-Mail-Artefakt existiert: {}",
+            "Die Kommunikationsaufgabe bleibt offen, weil der Harness noch kein akzeptiertes Outbound-E-Mail-Artefakt nachweisen konnte: {}",
             clip_text(err, 240)
         )
     };
-    if let Some(inbound_key) = inbound_email_reply_message_key(job) {
-        if let Ok(action) = channels::prepare_reviewed_founder_reply(root, inbound_key) {
-            let account_key = email_account_key_from_message_key(inbound_key);
-            let to_flags = action
-                .to
-                .iter()
-                .map(|value| format!(" --to {}", shell_quote(value)))
-                .collect::<String>();
-            let cc_flags = action
-                .cc
-                .iter()
-                .map(|value| format!(" --cc {}", shell_quote(value)))
-                .collect::<String>();
-            let attachment_flags = action
-                .attachments
-                .iter()
-                .map(|value| format!(" --attach-file {}", shell_quote(value)))
-                .collect::<String>();
-            let approved_body_block = approved_body.trim();
-            message.push_str(&format!(
-                "\n\nNaechster Schritt fuer den Agent-Run: Die Review-Freigabe fuer exakt diesen Mail-Body, diesen Thread und diese Empfaenger ist bereits persistiert. Sende genau den freigegebenen Text mit genau diesem Befehl:\n\nBODY=$(cat <<'CTOX_REVIEWED_BODY'\n{}\nCTOX_REVIEWED_BODY\n)\nctox channel send --channel email --account-key {} --thread-key {} --subject {}{}{}{} --reviewed-communication-send --body \"$BODY\"\n\nAendere Body, Empfaenger, CC, Betreff oder Attachments nicht. Wenn der Befehl fehlschlaegt, melde exakt die Fehlermeldung und stoppe. Wenn er erfolgreich ist, pruefe, dass `communication_messages` fuer thread_key `{}` eine outbound email mit `status='accepted'` enthaelt.",
-                approved_body_block,
-                shell_quote(&account_key),
-                shell_quote(&action.thread_key),
-                shell_quote(&action.subject),
-                to_flags,
-                cc_flags,
-                attachment_flags,
-                action.thread_key
-            ));
-        }
-    } else if let Some(action) = job.outbound_email.as_ref() {
-        let to_flags = action
-            .to
-            .iter()
-            .map(|value| format!(" --to {}", shell_quote(value)))
-            .collect::<String>();
-        let cc_flags = action
-            .cc
-            .iter()
-            .map(|value| format!(" --cc {}", shell_quote(value)))
-            .collect::<String>();
-        let attachment_flags = action
-            .attachments
-            .iter()
-            .map(|value| format!(" --attach-file {}", shell_quote(value)))
-            .collect::<String>();
-        let approved_body_block = approved_body.trim();
-        message.push_str(&format!(
-            "\n\nNaechster Schritt fuer den Worker: Die Review-Freigabe fuer exakt diesen Body, diese Empfaenger und diese Attachments ist bereits persistiert. Fuehre keine DB- oder Code-Forensik aus und erstelle keine Review-Zeilen manuell. Sende genau den freigegebenen Text mit genau diesem Befehl:\n\nBODY=$(cat <<'CTOX_REVIEWED_BODY'\n{}\nCTOX_REVIEWED_BODY\n)\nctox channel send --channel email --account-key {} --thread-key {} --subject {}{}{}{} --reviewed-founder-send --body \"$BODY\"\n\nAendere Body, Empfaenger, CC, Betreff oder Attachments nicht. Wenn der Befehl fehlschlaegt, melde exakt die Fehlermeldung und stoppe. Wenn er erfolgreich ist, pruefe, dass `communication_messages` fuer thread_key `{}` eine outbound email mit `status='accepted'` enthaelt.",
-            approved_body_block,
-            shell_quote(&action.account_key),
-            shell_quote(&action.thread_key),
-            shell_quote(&action.subject),
-            to_flags,
-            cc_flags,
-            attachment_flags,
-            action.thread_key
-        ));
-    } else if let Ok(Some(action)) = reviewed_external_chat_action_for_job(root, job) {
-        let to_flags = action
-            .to
-            .iter()
-            .map(|value| format!(" --to {}", shell_quote(value)))
-            .collect::<String>();
-        let cc_flags = action
-            .cc
-            .iter()
-            .map(|value| format!(" --cc {}", shell_quote(value)))
-            .collect::<String>();
-        let attachment_flags = action
-            .attachments
-            .iter()
-            .map(|value| format!(" --attach-file {}", shell_quote(value)))
-            .collect::<String>();
-        let subject_flag = if action.subject.trim().is_empty() {
-            String::new()
-        } else {
-            format!(" --subject {}", shell_quote(&action.subject))
-        };
-        let approved_body_block = approved_body.trim();
-        message.push_str(&format!(
-            "\n\nNaechster Schritt fuer den Worker: Die Review-Freigabe fuer exakt diesen Chat-Body, Kanal, Thread und diese Attachments ist bereits persistiert. Fuehre keine DB- oder Code-Forensik aus und erstelle keine Review-Zeilen manuell. Sende genau den freigegebenen Text mit genau diesem Befehl:\n\nBODY=$(cat <<'CTOX_REVIEWED_BODY'\n{}\nCTOX_REVIEWED_BODY\n)\nctox channel send --channel {} --account-key {} --thread-key {}{}{}{}{} --reviewed-communication-send --body \"$BODY\"\n\nAendere Body, Kanal, Thread, Empfaenger oder Attachments nicht. Wenn der Befehl fehlschlaegt, melde exakt die Fehlermeldung und stoppe. Wenn er erfolgreich ist, pruefe, dass `communication_messages` fuer thread_key `{}` eine outbound {} Nachricht mit terminalem Status enthaelt.",
-            approved_body_block,
-            shell_quote(&action.channel),
-            shell_quote(&action.account_key),
-            shell_quote(&action.thread_key),
-            subject_flag,
-            to_flags,
-            cc_flags,
-            attachment_flags,
-            action.thread_key,
-            action.channel
-        ));
+    if communication_outcome_witness_feedback_target(job) {
+        message.push_str(
+            "\n\nNaechster Schritt fuer den Harness: Gib nur Rueckmeldung an denselben Worker. Der Reviewer und der Recovery-Pfad duerfen niemals selbst senden. Der Worker darf nicht manuell senden; er muss nur fehlende Nacharbeit, Kontextabgleich oder einen korrigierten Entwurf liefern. Wenn der Review danach freigibt, versendet der Harness exakt den freigegebenen Text automatisch und erzeugt den Versandnachweis.",
+        );
     } else {
         if file_refs.is_empty() {
             message.push_str(
@@ -7207,8 +7309,35 @@ fn outcome_witness_recovery_message(
     message
 }
 
-fn shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
+fn communication_outcome_witness_feedback_target(job: &QueuedPrompt) -> bool {
+    job.outbound_email.is_some()
+        || inbound_email_reply_message_key(job).is_some()
+        || is_founder_or_owner_email_job(job)
+        || external_chat_channel_for_job(job).is_some()
+}
+
+fn build_outcome_witness_feedback_prompt(
+    job: &QueuedPrompt,
+    approved_body: &str,
+    err: &str,
+) -> String {
+    let mut message = format!(
+        "The CTOX review approved your communication draft, but the Harness could not verify that the approved message was actually sent. The reviewer never sends messages; after approval the Harness must send the exact approved draft automatically.\n\nTask source: {}\n\nWhat failed:\n- {}\n\nContinue the same task context now. Do not run a manual send command. Re-check the live thread context and produce a corrected draft only if the context changed or the required backing work is still missing. The Harness will send automatically after the next clean approval.",
+        job.source_label,
+        clip_text(err.trim(), 280)
+    );
+    message.push_str(
+        "\n\nRules:\n- The worker drafts and performs any required backing work.\n- The reviewer only checks the draft and either approves it or requests rework.\n- The Harness sends the exact approved message automatically after approval.\n- If a promise is made in the draft, the underlying work must already be done or durably queued before approval.\n",
+    );
+    let approved = approved_body.trim();
+    if !approved.is_empty() {
+        message.push_str(
+            "\nPreviously approved draft/body (reuse unchanged unless the live thread context changed):\n==== approved draft ====\n",
+        );
+        message.push_str(approved);
+        message.push_str("\n==== end approved draft ====");
+    }
+    message
 }
 
 fn job_outcome_entity_id(job: &QueuedPrompt) -> String {
@@ -7230,6 +7359,9 @@ fn outcome_witness_retry_route_status_for_job(root: &Path, job: &QueuedPrompt) -
 }
 
 fn should_queue_artifact_outcome_recovery(job: &QueuedPrompt) -> bool {
+    if job.source_label == OUTCOME_WITNESS_RECOVERY_SOURCE_LABEL {
+        return false;
+    }
     if external_chat_channel_for_job(job).is_some() {
         return true;
     }
@@ -7241,6 +7373,9 @@ fn should_queue_artifact_outcome_recovery(job: &QueuedPrompt) -> bool {
 }
 
 fn outcome_witness_outbound_recovery_requeue_allowed(root: &Path, job: &QueuedPrompt) -> bool {
+    if communication_outcome_witness_feedback_target(job) {
+        return false;
+    }
     if job.source_label == OUTCOME_WITNESS_RECOVERY_SOURCE_LABEL {
         return false;
     }
@@ -7393,10 +7528,11 @@ fn build_review_feedback_retry_prompt(
         8,
     );
     let send_instruction = if job.outbound_email.is_some() {
-        "\nFor this owner/founder email task, the Review Gate only checks and records approval. It does not send the email. After your corrected draft is approved, you must run the reviewed send command yourself and verify that CTOX has an outbound email artifact with status `accepted`. Do not mark the task complete until that durable accepted artifact exists.\n"
+        "\nFor this owner/founder email task, do not send manually. Produce a corrected draft and complete any required backing work first. If the Review Gate approves the corrected draft, the Harness sends that exact approved message automatically and records the durable outbound artifact.\n"
     } else {
         ""
     };
+    let clipped_prior_reply = clip_text(prior_reply.trim(), REVIEW_FEEDBACK_PRIOR_REPLY_MAX_CHARS);
     format!(
         "The external CTOX Review Gate checked your last result and found that it is not complete yet. Continue the same task now; do not create a subtask, queue task, or self-rework item.\n\n\
 Review summary: {}\n\n\
@@ -7419,7 +7555,7 @@ Now continue the task. Produce the corrected artifact or perform the required CT
         evidence_block,
         open_items_block,
         findings_block,
-        prior_reply.trim(),
+        clipped_prior_reply,
     )
 }
 
@@ -7444,6 +7580,20 @@ fn handle_actionable_completion_review_rejection(
         };
     }
     if job.leased_message_keys.is_empty() {
+        if job.outbound_email.is_some() && outbound_in_process_review_retry_allowed(job) {
+            push_event(
+                state,
+                format!(
+                    "Review rejected proactive outbound {}; routing one bounded same-job feedback retry",
+                    job.source_label
+                ),
+            );
+            return CompletionReviewDisposition::FeedbackRetry {
+                feedback_prompt: build_review_feedback_retry_prompt(job, outcome, prior_reply),
+                review_summary: outcome.summary.clone(),
+                persist_on_leased_queue: false,
+            };
+        }
         push_event(
             state,
             format!(
@@ -7743,6 +7893,9 @@ fn active_agent_loop_in_progress(state: &Arc<Mutex<SharedState>>) -> bool {
 }
 
 fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Result<()> {
+    if let Err(err) = reconcile_ticket_runtime_state(root, state) {
+        push_event(state, format!("Ticket reconciliation failed: {err}"));
+    }
     if queue_pressure_active(state) {
         return Ok(());
     }
@@ -7758,9 +7911,6 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
     let ticket_dispatch_allowed = ticket_preflight_issues
         .iter()
         .all(|issue| issue.severity != "error");
-    if let Err(err) = reconcile_ticket_runtime_state(root, state) {
-        push_event(state, format!("Ticket reconciliation failed: {err}"));
-    }
     let repaired_founder_messages = repair_stalled_founder_communications(root, state, &settings)?;
     if repaired_founder_messages > 0 {
         push_event(
@@ -7787,8 +7937,11 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
         .get("CTO_MEETING_BOT_NAME")
         .cloned()
         .unwrap_or_else(|| "INF Yoda Notetaker".to_string());
-    let mut leased =
-        channels::lease_pending_inbound_messages(root, 16, CHANNEL_ROUTER_LEASE_OWNER)?;
+    let mut leased = channels::lease_pending_inbound_messages(
+        root,
+        CHANNEL_ROUTER_SERIAL_LEASE_LIMIT,
+        CHANNEL_ROUTER_LEASE_OWNER,
+    )?;
     leased.sort_by_key(|message| {
         std::cmp::Reverse(source_label_dispatch_rank(&inbound_source_label(
             &settings, message,
@@ -8404,6 +8557,13 @@ fn enqueue_prompt(
 }
 
 fn queued_prompt_dispatch_rank(prompt: &QueuedPrompt) -> u8 {
+    let lowered = prompt.source_label.trim().to_ascii_lowercase();
+    if prompt.outbound_email.is_some()
+        || lowered == OUTCOME_WITNESS_RECOVERY_SOURCE_LABEL
+        || lowered == REVIEW_FEEDBACK_SOURCE_LABEL
+    {
+        return 6;
+    }
     source_label_dispatch_rank(&prompt.source_label)
 }
 
@@ -9747,7 +9907,10 @@ fn release_stalled_founder_communication_rework_queue_for_inbound(
 }
 
 fn founder_email_worker_error_is_retryable(job: &QueuedPrompt, error: &str) -> bool {
-    if !is_founder_or_owner_email_job(job) {
+    if !(is_founder_or_owner_email_job(job)
+        || job.outbound_email.is_some()
+        || job.source_label == REVIEW_FEEDBACK_SOURCE_LABEL)
+    {
         return false;
     }
     let normalized = error.to_ascii_lowercase();
@@ -9756,6 +9919,35 @@ fn founder_email_worker_error_is_retryable(job: &QueuedPrompt, error: &str) -> b
         || normalized.contains("database is busy")
         || normalized.contains("sqlite_busy")
         || normalized.contains("sqlite locked")
+}
+
+fn standalone_outbound_runtime_retry_allowed(job: &QueuedPrompt, error: &str) -> bool {
+    if job.outbound_email.is_none()
+        || !job.leased_message_keys.is_empty()
+        || !job.leased_ticket_event_keys.is_empty()
+        || job.ticket_self_work_id.is_some()
+    {
+        return false;
+    }
+    let normalized = error.to_ascii_lowercase();
+    let retryable_db_lock = normalized.contains("database is locked")
+        || normalized.contains("database is busy")
+        || normalized.contains("sqlite_busy")
+        || normalized.contains("sqlite locked");
+    if !retryable_db_lock {
+        return false;
+    }
+    !job.prompt
+        .to_ascii_lowercase()
+        .contains(STANDALONE_OUTBOUND_DB_LOCK_RETRY_MARKER)
+}
+
+fn standalone_outbound_runtime_retry_prompt(job: &QueuedPrompt, error: &str) -> String {
+    format!(
+        "A transient database lock interrupted the reviewed outbound send before it could complete. Continue the same outbound communication now. Keep the same recipient, CC, subject, and body intent. Re-check current thread context, run the required review/send path, and finish only after the reviewed send proof exists.\n\nTransient error evidence: {}\n\nOriginal task:\n{}",
+        clip_text(error, 220),
+        job.prompt.trim()
+    )
 }
 
 fn runtime_error_is_transient_api_failure(error: &str) -> bool {
@@ -12031,10 +12223,9 @@ fn enrich_inbound_prompt(
             "Wenn eine Antwort sinnvoll ist, sende keine direkte E-Mail aus diesem Run. Erstelle stattdessen nur den empfaengerorientierten Antwortentwurf auf Basis des gesamten Founder-/Owner-Kontexts; Founder-/Owner-Outbound darf nur ueber den dedizierten reviewed communication path rausgehen. Dein gesamter Assistenten-Output in diesem Run ist exakt der zu versendende Mailtext und sonst nichts: keine Analyse, keine Revalidierungsnotizen, keine Queue-/Review-/Runtime-Sprache, keine Host-Pfade, keine Tool-Evidenz. Beantworte die neueste Founder-/Owner-Nachricht direkt; wenn konkrete Deliverables oder Links bereits vorhanden sind, liefere sie unmittelbar in der Mail. Wenn ein konkreter Anhang verlangt ist (zum Beispiel QR-Code-PDF, Installationsdatei oder Mockup-Datei), darfst du ihn nicht durch einen oeffentlichen Link ersetzen. Wenn etwas objektiv noch fehlt, benenne nur den fehlenden Punkt kurz und klar statt internen Status zu berichten.".to_string()
         } else {
             format!(
-                "Wenn eine Antwort per E-Mail sinnvoll ist, nutze `ctox channel send --channel email --account-key {} --thread-key '{}' --to {} --subject \"Re: {}\"`. Nutze bei Antworten auf bestehende Mail-Threads keinen leeren oder neuen Betreff.",
-                message.account_key,
-                message.thread_key,
+                "Wenn eine Antwort per E-Mail sinnvoll ist, sende keine direkte E-Mail aus diesem Run. Erstelle nur den empfaengerorientierten Antwortentwurf fuer den Review. Der Harness versendet die freigegebene Antwort danach automatisch an {} im bestehenden Thread '{}' mit Betreff \"Re: {}\".",
                 reply_target,
+                message.thread_key,
                 subject
             )
         };
@@ -12059,7 +12250,7 @@ fn enrich_inbound_prompt(
         };
         let sender = display_inbound_sender(message);
         return format!(
-            "[Jami-Nachricht eingegangen]\nSender: {sender}\nThread: {}\nWenn du antwortest, sende nicht direkt. Gib nur den kurzen Chat-Antworttext fuer den Review aus; der Harness versendet ihn nach Review mit `--reviewed-communication-send`. Wenn die Nachricht eine Aufgabe oder Nacharbeit ausloest, lege vorher durable Queue-/Plan-/Self-Work-Backing fuer genau diesen Thread an. Wenn ein QR-Code, PDF, Bild oder anderer konkreter Anhang verlangt ist, sende ihn als echte Datei ueber `--attach-file` und niemals als oeffentlichen Link.{voice_note}\n\n{}",
+            "[Jami-Nachricht eingegangen]\nSender: {sender}\nThread: {}\nWenn du antwortest, sende nicht direkt. Gib nur den kurzen Chat-Antworttext fuer den Review aus; der Harness versendet die freigegebene Nachricht danach automatisch. Wenn die Nachricht eine Aufgabe oder Nacharbeit ausloest, lege vorher durable Queue-/Plan-/Self-Work-Backing fuer genau diesen Thread an. Wenn ein QR-Code, PDF, Bild oder anderer konkreter Anhang verlangt ist, fuege ihn als echte Datei an und niemals als oeffentlichen Link.{voice_note}\n\n{}",
             message.thread_key,
             prepend_workspace_contract(prompt_body, message.workspace_root.as_deref())
         );
@@ -12072,7 +12263,7 @@ fn enrich_inbound_prompt(
             format!("\nBetreff: {}", message.subject.trim())
         };
         return format!(
-            "[Teams-Nachricht eingegangen]\nSender: {sender}{subject_line}\nThread: {}\nWenn du antwortest, sende nicht direkt. Gib nur den kurzen Chat-Antworttext fuer den Review aus; der Harness versendet ihn nach Review mit `--reviewed-communication-send`. Wenn die Nachricht eine Aufgabe oder Nacharbeit ausloest, lege vorher durable Queue-/Plan-/Self-Work-Backing fuer genau diesen Thread an. Der Teams-Adapter sendet ueber Microsoft Graph in den konfigurierten Chat oder Channel-Thread; erfinde keine Empfaengeradresse und wechsle fuer Live-Meeting-Chat nur auf den `meeting`-Kanal, wenn die Nachricht aus einer aktiven Meeting-Session stammt.\n\n{}",
+            "[Teams-Nachricht eingegangen]\nSender: {sender}{subject_line}\nThread: {}\nWenn du antwortest, sende nicht direkt. Gib nur den kurzen Chat-Antworttext fuer den Review aus; der Harness versendet die freigegebene Nachricht danach automatisch. Wenn die Nachricht eine Aufgabe oder Nacharbeit ausloest, lege vorher durable Queue-/Plan-/Self-Work-Backing fuer genau diesen Thread an. Der Teams-Adapter sendet ueber Microsoft Graph in den konfigurierten Chat oder Channel-Thread; erfinde keine Empfaengeradresse und wechsle fuer Live-Meeting-Chat nur auf den Meeting-Kanal, wenn die Nachricht aus einer aktiven Meeting-Session stammt.\n\n{}",
             message.thread_key,
             prepend_workspace_contract(prompt_body, message.workspace_root.as_deref())
         );
@@ -12080,7 +12271,7 @@ fn enrich_inbound_prompt(
     if message.channel == "whatsapp" {
         let sender = display_inbound_sender(message);
         return format!(
-            "[WhatsApp-Nachricht eingegangen]\nSender: {sender}\nThread: {}\nWenn du antwortest, sende nicht direkt. Gib nur den kurzen Chat-Antworttext fuer den Review aus; der Harness versendet ihn nach Review mit `--reviewed-communication-send`. Wenn die Nachricht eine Aufgabe oder Nacharbeit ausloest, lege vorher durable Queue-/Plan-/Self-Work-Backing fuer genau diesen Thread an. Antworte auf diesem Kanal kurz und direkt; wenn ein konkreter Anhang verlangt ist, sende ihn als echte Datei ueber `--attach-file`.\n\n{}",
+            "[WhatsApp-Nachricht eingegangen]\nSender: {sender}\nThread: {}\nWenn du antwortest, sende nicht direkt. Gib nur den kurzen Chat-Antworttext fuer den Review aus; der Harness versendet die freigegebene Nachricht danach automatisch. Wenn die Nachricht eine Aufgabe oder Nacharbeit ausloest, lege vorher durable Queue-/Plan-/Self-Work-Backing fuer genau diesen Thread an. Antworte auf diesem Kanal kurz und direkt; wenn ein konkreter Anhang verlangt ist, muss er als echte Datei angehaengt werden.\n\n{}",
             message.thread_key,
             prepend_workspace_contract(prompt_body, message.workspace_root.as_deref())
         );
@@ -12110,7 +12301,7 @@ fn enrich_inbound_prompt(
              Provider: {provider}\n\
              Sender: {sender}\n\
              Session: {session_id}\n\
-             Wenn du antwortest, sende nicht direkt. Gib nur den kurzen Chat-Antworttext fuer den Review aus; der Harness versendet ihn nach Review mit `--reviewed-communication-send`. Wenn die Nachricht eine Aufgabe oder Nacharbeit ausloest, lege vorher durable Queue-/Plan-/Self-Work-Backing fuer diese Session an.{mention_hint}\n\n{}",
+             Wenn du antwortest, sende nicht direkt. Gib nur den kurzen Chat-Antworttext fuer den Review aus; der Harness versendet die freigegebene Nachricht danach automatisch. Wenn die Nachricht eine Aufgabe oder Nacharbeit ausloest, lege vorher durable Queue-/Plan-/Self-Work-Backing fuer diese Session an.{mention_hint}\n\n{}",
             prepend_workspace_contract(prompt_body, message.workspace_root.as_deref())
         );
     }
@@ -15927,6 +16118,113 @@ mod tests {
     }
 
     #[test]
+    fn ordered_pending_prompts_put_explicit_outbound_ahead_of_founder_email() {
+        let mut pending = VecDeque::new();
+        insert_pending_prompt_ordered(
+            &mut pending,
+            QueuedPrompt {
+                prompt: "founder".to_string(),
+                goal: "founder".to_string(),
+                preview: "founder".to_string(),
+                source_label: "email:founder".to_string(),
+                suggested_skill: None,
+                leased_message_keys: Vec::new(),
+                leased_ticket_event_keys: Vec::new(),
+                thread_key: None,
+                workspace_root: None,
+                ticket_self_work_id: None,
+                outbound_email: None,
+                outbound_anchor: None,
+            },
+        );
+        insert_pending_prompt_ordered(
+            &mut pending,
+            QueuedPrompt {
+                prompt: "send".to_string(),
+                goal: "send".to_string(),
+                preview: "send".to_string(),
+                source_label: "tui".to_string(),
+                suggested_skill: None,
+                leased_message_keys: Vec::new(),
+                leased_ticket_event_keys: Vec::new(),
+                thread_key: Some("chat-outbound".to_string()),
+                workspace_root: None,
+                ticket_self_work_id: None,
+                outbound_email: Some(channels::FounderOutboundAction {
+                    account_key: "email:cto1@example.test".to_string(),
+                    thread_key: "chat-outbound".to_string(),
+                    subject: "Kunstmen Business OS".to_string(),
+                    to: vec!["founder@example.test".to_string()],
+                    cc: Vec::new(),
+                    attachments: Vec::new(),
+                }),
+                outbound_anchor: Some("chat-outbound".to_string()),
+            },
+        );
+
+        assert_eq!(
+            pending.front().map(|item| item.source_label.as_str()),
+            Some("tui")
+        );
+        assert!(pending
+            .front()
+            .and_then(|item| item.outbound_email.as_ref())
+            .is_some());
+        assert_eq!(
+            pending.back().map(|item| item.source_label.as_str()),
+            Some("email:founder")
+        );
+    }
+
+    #[test]
+    fn ordered_pending_prompts_put_review_recovery_ahead_of_founder_email() {
+        let mut pending = VecDeque::new();
+        insert_pending_prompt_ordered(
+            &mut pending,
+            QueuedPrompt {
+                prompt: "founder".to_string(),
+                goal: "founder".to_string(),
+                preview: "founder".to_string(),
+                source_label: "email:founder".to_string(),
+                suggested_skill: None,
+                leased_message_keys: Vec::new(),
+                leased_ticket_event_keys: Vec::new(),
+                thread_key: None,
+                workspace_root: None,
+                ticket_self_work_id: None,
+                outbound_email: None,
+                outbound_anchor: None,
+            },
+        );
+        insert_pending_prompt_ordered(
+            &mut pending,
+            QueuedPrompt {
+                prompt: "retry reviewed send".to_string(),
+                goal: "retry reviewed send".to_string(),
+                preview: "retry reviewed send".to_string(),
+                source_label: OUTCOME_WITNESS_RECOVERY_SOURCE_LABEL.to_string(),
+                suggested_skill: None,
+                leased_message_keys: Vec::new(),
+                leased_ticket_event_keys: Vec::new(),
+                thread_key: Some("chat-outbound".to_string()),
+                workspace_root: None,
+                ticket_self_work_id: None,
+                outbound_email: None,
+                outbound_anchor: Some("chat-outbound".to_string()),
+            },
+        );
+
+        assert_eq!(
+            pending.front().map(|item| item.source_label.as_str()),
+            Some(OUTCOME_WITNESS_RECOVERY_SOURCE_LABEL)
+        );
+        assert_eq!(
+            pending.back().map(|item| item.source_label.as_str()),
+            Some("email:founder")
+        );
+    }
+
+    #[test]
     fn blocks_secret_bearing_email_even_from_allowed_domain() {
         let mut settings = BTreeMap::new();
         settings.insert(
@@ -16528,6 +16826,56 @@ mod tests {
     }
 
     #[test]
+    fn proactive_outbound_review_fail_gets_one_bounded_feedback_retry() {
+        let root = temp_root("ctox-proactive-outbound-review-feedback");
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        let job = QueuedPrompt {
+            prompt: "Schreibe eine kurze Mail an Olaf.".to_string(),
+            goal: "Founder mail".to_string(),
+            preview: "Founder mail".to_string(),
+            source_label: "tui".to_string(),
+            suggested_skill: None,
+            leased_message_keys: Vec::new(),
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("chat-outbound".to_string()),
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: Some(channels::FounderOutboundAction {
+                account_key: "email:cto1@example.test".to_string(),
+                thread_key: "chat-outbound".to_string(),
+                subject: "Kunstmen Business OS".to_string(),
+                to: vec!["olaf@example.test".to_string()],
+                cc: vec!["michael@example.test".to_string()],
+                attachments: Vec::new(),
+            }),
+            outbound_anchor: Some("tui-outbound:test".to_string()),
+        };
+        let mut outcome = review::ReviewOutcome::skipped("mail misses requested login context");
+        outcome.required = true;
+        outcome.verdict = review::ReviewVerdict::Fail;
+        outcome.failed_gates = vec!["Missing login context.".to_string()];
+        outcome.open_items = vec!["Add the verified Business OS login path.".to_string()];
+
+        let disposition = handle_actionable_completion_review_rejection(
+            &root,
+            &state,
+            &job,
+            &outcome,
+            "Hallo Olaf, hier ist der Stand.",
+        );
+
+        let CompletionReviewDisposition::FeedbackRetry {
+            feedback_prompt,
+            persist_on_leased_queue: false,
+            ..
+        } = disposition
+        else {
+            panic!("expected bounded feedback retry for proactive outbound");
+        };
+        assert!(feedback_prompt.contains("Business OS login path"));
+    }
+
+    #[test]
     fn review_feedback_retry_updates_original_queue_without_reviewer_raw_report() {
         let root = temp_root("ctox-review-feedback-same-queue");
         let task = channels::create_queue_task(
@@ -16595,6 +16943,41 @@ mod tests {
         let self_work = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
             .expect("failed to list self-work");
         assert!(self_work.is_empty());
+    }
+
+    #[test]
+    fn review_feedback_retry_clips_prior_reply_before_requeue_prompt() {
+        let job = QueuedPrompt {
+            prompt: "Create /tmp/result.txt and verify it.".to_string(),
+            goal: "Create durable artifact".to_string(),
+            preview: "Create durable artifact".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: None,
+            leased_message_keys: vec!["queue:system::clip-prior".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("queue/clip-prior".to_string()),
+            workspace_root: Some("/tmp/ctox-review-feedback-clip".to_string()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+        let mut outcome = review::ReviewOutcome::skipped("artifact missing");
+        outcome.required = true;
+        outcome.verdict = review::ReviewVerdict::Fail;
+        outcome.failed_gates = vec!["Required file is missing.".to_string()];
+        outcome.open_items = vec!["Create and verify the required file.".to_string()];
+        let prior_reply = format!(
+            "start {} TAIL_MARKER_SHOULD_NOT_SURVIVE",
+            "x".repeat(REVIEW_FEEDBACK_PRIOR_REPLY_MAX_CHARS * 2)
+        );
+
+        let feedback_prompt = build_review_feedback_retry_prompt(&job, &outcome, &prior_reply);
+
+        assert!(feedback_prompt.contains("==== previous result ===="));
+        assert!(feedback_prompt.contains("start "));
+        assert!(feedback_prompt.contains('…'));
+        assert!(!feedback_prompt.contains("TAIL_MARKER_SHOULD_NOT_SURVIVE"));
+        assert!(feedback_prompt.len() < REVIEW_FEEDBACK_PRIOR_REPLY_MAX_CHARS + 3_000);
     }
 
     #[test]
@@ -18548,6 +18931,77 @@ Preserve and update controller.json and logbook.md."
         };
 
         assert!(founder_email_worker_error_is_retryable(
+            &job,
+            "database is locked"
+        ));
+    }
+
+    #[test]
+    fn proactive_outbound_sqlite_lock_is_retryable_once() {
+        let job = QueuedPrompt {
+            prompt: "Send reviewed founder update.".to_string(),
+            goal: "Send reviewed founder update".to_string(),
+            preview: "Founder outbound".to_string(),
+            source_label: REVIEW_FEEDBACK_SOURCE_LABEL.to_string(),
+            suggested_skill: None,
+            leased_message_keys: Vec::new(),
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("chat-outbound".to_string()),
+            workspace_root: Some("/home/ubuntu/workspace/kunstmen".to_string()),
+            ticket_self_work_id: None,
+            outbound_email: Some(channels::FounderOutboundAction {
+                account_key: "email:cto1@metric-space.ai".to_string(),
+                thread_key: "chat-outbound".to_string(),
+                subject: "Kunstmen Business OS".to_string(),
+                to: vec!["o.schaefers@gmx.net".to_string()],
+                cc: vec!["michael.welsch@metric-space.ai".to_string()],
+                attachments: Vec::new(),
+            }),
+            outbound_anchor: Some("tui-outbound:test".to_string()),
+        };
+
+        assert!(founder_email_worker_error_is_retryable(
+            &job,
+            "database is locked"
+        ));
+        assert!(standalone_outbound_runtime_retry_allowed(
+            &job,
+            "database is locked"
+        ));
+
+        let retry_prompt = standalone_outbound_runtime_retry_prompt(&job, "database is locked");
+        assert!(retry_prompt.contains("transient database lock"));
+        assert!(retry_prompt.contains("Send reviewed founder update."));
+    }
+
+    #[test]
+    fn proactive_outbound_sqlite_lock_retry_is_bounded() {
+        let job = QueuedPrompt {
+            prompt: format!(
+                "A {} before completion. Original task follows.",
+                STANDALONE_OUTBOUND_DB_LOCK_RETRY_MARKER
+            ),
+            goal: "Retry reviewed founder update".to_string(),
+            preview: "Founder outbound retry".to_string(),
+            source_label: REVIEW_FEEDBACK_SOURCE_LABEL.to_string(),
+            suggested_skill: None,
+            leased_message_keys: Vec::new(),
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("chat-outbound".to_string()),
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: Some(channels::FounderOutboundAction {
+                account_key: "email:cto1@metric-space.ai".to_string(),
+                thread_key: "chat-outbound".to_string(),
+                subject: "Kunstmen Business OS".to_string(),
+                to: vec!["o.schaefers@gmx.net".to_string()],
+                cc: Vec::new(),
+                attachments: Vec::new(),
+            }),
+            outbound_anchor: Some("tui-outbound:test".to_string()),
+        };
+
+        assert!(!standalone_outbound_runtime_retry_allowed(
             &job,
             "database is locked"
         ));
@@ -21632,6 +22086,26 @@ The controller must create preparation queue/tickets and record queue:system::* 
     }
 
     #[test]
+    fn outcome_witness_recovery_artifact_job_does_not_chain_recovery_prompt() {
+        let job = QueuedPrompt {
+            prompt: "Create /tmp/ctox-outcome-recovery/result.txt and verify it.".to_string(),
+            goal: "Complete required artifact".to_string(),
+            preview: "Complete required artifact".to_string(),
+            source_label: OUTCOME_WITNESS_RECOVERY_SOURCE_LABEL.to_string(),
+            suggested_skill: None,
+            leased_message_keys: vec!["queue:system::artifact-recovery".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("queue/artifact-recovery".to_string()),
+            workspace_root: Some("/tmp/ctox-outcome-recovery".to_string()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        assert!(!should_queue_artifact_outcome_recovery(&job));
+    }
+
+    #[test]
     fn terminal_bench_preflight_spec_stops_after_real_bootstrap_refs_exist() {
         let root = temp_root("terminal-bench-bootstrap-refs-skip-first-guard");
         let run_dir = root.join("terminal-bench-2/runs/run-with-real-refs");
@@ -22558,7 +23032,7 @@ Those are not durable artifact requirements."
     }
 
     #[test]
-    fn outbound_recovery_prompt_gives_agent_exact_reviewed_send_step() {
+    fn outcome_witness_feedback_prompt_keeps_worker_out_of_manual_send() {
         let approved_body =
             "Hallo Julia,\n\ndas ist der freigegebene Text.\n\nViele Gruesse\nINF Yoda";
         let job = QueuedPrompt {
@@ -22586,22 +23060,15 @@ Those are not durable artifact requirements."
             outbound_anchor: Some("tui-outbound:test".to_string()),
         };
 
-        let prompt = outcome_witness_recovery_message(
-            Path::new(""),
-            &job,
-            approved_body,
-            "missing artifact",
-        );
+        let prompt = build_outcome_witness_feedback_prompt(&job, approved_body, "missing artifact");
 
-        assert!(prompt.contains("Die Review-Freigabe"));
-        assert!(prompt.contains("Fuehre keine DB- oder Code-Forensik aus"));
-        assert!(prompt.contains("BODY=$(cat <<'CTOX_REVIEWED_BODY'"));
+        assert!(prompt.contains("Harness could not verify"));
+        assert!(prompt.contains("The reviewer never sends messages"));
+        assert!(prompt.contains("The Harness sends the exact approved message automatically"));
         assert!(prompt.contains(approved_body));
-        assert!(prompt.contains("ctox channel send --channel email"));
-        assert!(prompt.contains("--attach-file '/tmp/Vertriebsmanagement.html'"));
-        assert!(prompt.contains("--attach-file '/tmp/Jill App'\\''s Notes.xlsx'"));
-        assert!(prompt.contains("--reviewed-founder-send --body \"$BODY\""));
-        assert!(prompt.contains("Attachments nicht"));
+        assert!(!prompt.contains("ctox channel send"));
+        assert!(!prompt.contains("--reviewed-founder-send"));
+        assert!(prompt.contains("Do not run a manual send command"));
         assert!(!prompt.contains("<freigegebener Mailtext>"));
     }
 
@@ -22686,6 +23153,40 @@ Those are not durable artifact requirements."
     }
 
     #[test]
+    fn outcome_witness_recovery_keeps_worker_out_of_manual_send_path() {
+        let job = QueuedPrompt {
+            prompt:
+                "Communication recovery: re-check context and produce a corrected draft if needed."
+                    .to_string(),
+            goal: "recover reviewed communication".to_string(),
+            preview: "recover reviewed communication".to_string(),
+            source_label: OUTCOME_WITNESS_RECOVERY_SOURCE_LABEL.to_string(),
+            suggested_skill: None,
+            leased_message_keys: Vec::new(),
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("thread:jill".to_string()),
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: Some(channels::FounderOutboundAction {
+                account_key: "email:yoda@example.test".to_string(),
+                thread_key: "thread:jill".to_string(),
+                subject: "Subject".to_string(),
+                to: vec!["jill@example.test".to_string()],
+                cc: Vec::new(),
+                attachments: Vec::new(),
+            }),
+            outbound_anchor: Some("tui-outbound:test".to_string()),
+        };
+
+        let prompt = outbound_email_first_execution_prompt(&job, job.prompt.clone());
+
+        assert!(!prompt.contains("REVIEWED FOUNDER OUTBOUND EMAIL CONTRACT"));
+        assert!(!prompt.contains("ctox channel send"));
+        assert!(!prompt.contains("--reviewed-founder-send"));
+        assert!(prompt.contains("corrected draft"));
+    }
+
+    #[test]
     fn outbound_in_process_review_retry_does_not_chain_retry_sources() {
         let mut job = QueuedPrompt {
             prompt: "Schreibe eine Mail an Jill.".to_string(),
@@ -22710,6 +23211,10 @@ Those are not durable artifact requirements."
         };
 
         assert!(outbound_in_process_review_retry_allowed(&job));
+        assert!(!outcome_witness_outbound_recovery_requeue_allowed(
+            Path::new(""),
+            &job
+        ));
 
         job.source_label = REVIEW_FEEDBACK_SOURCE_LABEL.to_string();
         assert!(!outbound_in_process_review_retry_allowed(&job));

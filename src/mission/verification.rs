@@ -639,6 +639,7 @@ mod tests {
             evidence: vec!["curl /health => 502".to_string()],
             handoff: None,
             disposition: review::ReviewDisposition::Send,
+            pipeline_resolution: None,
         };
 
         let recorded = record_slice_assurance(
@@ -722,6 +723,7 @@ mod tests {
             evidence: vec!["GET / => static shell".to_string()],
             handoff: None,
             disposition: review::ReviewDisposition::Send,
+            pipeline_resolution: None,
         };
 
         let recorded = record_slice_assurance(
