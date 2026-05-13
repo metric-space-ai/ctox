@@ -5,7 +5,9 @@ const RESEARCH_RUNS_STORE_KEY = "marketing/research/runs";
 
 export async function getMarketingResearchRuns(fallback: ResearchRun[], options: { includeArchived?: boolean } = {}): Promise<ResearchRun[]> {
   const stored = await loadRuntimeJsonStore<ResearchRun[]>(RESEARCH_RUNS_STORE_KEY);
-  const runs = !Array.isArray(stored) || stored.length === 0 ? fallback : mergeStoredResearchRuns(stored, fallback);
+  const runs = !Array.isArray(stored) || stored.length === 0
+    ? fallback.map(sanitizeStoredResearchRun)
+    : mergeStoredResearchRuns(stored, fallback);
   return options.includeArchived ? runs : runs.filter((run) => !run.archivedAt);
 }
 
@@ -36,24 +38,47 @@ function mergeStoredResearchRuns(stored: ResearchRun[], fallback: ResearchRun[])
 }
 
 function mergeResearchRun(stored: ResearchRun, fallback?: ResearchRun): ResearchRun {
-  if (!fallback) return stored;
+  const safeStored = sanitizeStoredResearchRun(stored);
+  if (!fallback) return safeStored;
   return {
     ...fallback,
-    ...stored,
-    queryCount: stored.queryCount,
-    screenedCount: stored.screenedCount,
-    acceptedCount: stored.acceptedCount,
-    sources: stored.sources,
+    ...safeStored,
+    queryCount: safeStored.queryCount,
+    screenedCount: safeStored.screenedCount,
+    acceptedCount: safeStored.acceptedCount,
+    sources: safeStored.sources,
     graph: {
-      nodes: stored.graph.nodes,
-      edges: stored.graph.edges
+      nodes: safeStored.graph.nodes,
+      edges: safeStored.graph.edges
     },
-    expansionRequests: stored.expansionRequests ?? fallback.expansionRequests,
-    criteriaItems: stored.criteriaItems ?? fallback.criteriaItems,
-    sourceGroupLabels: stored.sourceGroupLabels ?? fallback.sourceGroupLabels,
-    hiddenSourceGroups: stored.hiddenSourceGroups ?? fallback.hiddenSourceGroups,
-    customSourceGroups: stored.customSourceGroups ?? fallback.customSourceGroups,
-    researchProgress: stored.researchProgress ?? fallback.researchProgress
+    expansionRequests: safeStored.expansionRequests ?? fallback.expansionRequests,
+    criteriaItems: safeStored.criteriaItems ?? fallback.criteriaItems,
+    sourceGroupLabels: safeStored.sourceGroupLabels ?? fallback.sourceGroupLabels,
+    hiddenSourceGroups: safeStored.hiddenSourceGroups ?? fallback.hiddenSourceGroups,
+    customSourceGroups: safeStored.customSourceGroups ?? fallback.customSourceGroups,
+    researchProgress: safeStored.researchProgress ?? fallback.researchProgress
+  };
+}
+
+function sanitizeStoredResearchRun(run: ResearchRun): ResearchRun {
+  if (run.sources.length === 0 || run.agentReviewedAt || run.agentReviewMode === "ctox-agent") return run;
+  return {
+    ...run,
+    status: run.status === "synthesized" ? "collecting" : run.status,
+    acceptedCount: 0,
+    sources: [],
+    graph: { nodes: [], edges: [] },
+    researchProgress: {
+      status: "error",
+      currentStep: "Quellen verworfen: kein CTOX-Agent-Review nachgewiesen",
+      currentQuery: run.researchProgress?.currentQuery ?? run.prompt,
+      targetAdditionalSources: run.researchProgress?.targetAdditionalSources,
+      identifiedDelta: run.screenedCount,
+      readDelta: 0,
+      usedDelta: 0,
+      updatedAt: new Date().toISOString(),
+      taskId: run.researchProgress?.taskId
+    }
   };
 }
 

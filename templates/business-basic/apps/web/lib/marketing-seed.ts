@@ -148,6 +148,8 @@ export type ResearchRun = {
   hiddenSourceGroups?: string[];
   customSourceGroups?: ResearchSourceGroup[];
   researchProgress?: ResearchProgress;
+  agentReviewedAt?: string;
+  agentReviewMode?: string;
 };
 
 export type CommerceItem = {

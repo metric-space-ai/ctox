@@ -313,7 +313,7 @@ export function ResearchNavigator({
       title,
       prompt,
       criteria: newRunCriteria.trim(),
-      status: "draft",
+      status: "collecting",
       updated: new Date().toISOString().slice(0, 10),
       queryCount: 0,
       screenedCount: 0,
@@ -324,7 +324,17 @@ export function ResearchNavigator({
       },
       sources: [],
       graph: { nodes: [], edges: [] },
-      expansionRequests: []
+      expansionRequests: [],
+      researchProgress: {
+        status: "queued",
+        currentStep: "Recherche wird gestartet",
+        currentQuery: prompt,
+        targetAdditionalSources: 50,
+        identifiedDelta: 0,
+        readDelta: 0,
+        usedDelta: 0,
+        updatedAt: new Date().toISOString()
+      }
     };
     const saved = await saveRun(nextRun);
     if (!saved) return;

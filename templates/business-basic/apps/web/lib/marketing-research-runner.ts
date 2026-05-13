@@ -24,8 +24,13 @@ export async function runMarketingResearch(runId: string, amount: number) {
     priority: "high",
     skill: "deep-research",
     threadKey: `marketing-research:${run.id}`,
-    workspaceRoot: "/home/ubuntu/.local/lib/ctox/current"
+    workspaceRoot: "/home/ubuntu/.local/lib/ctox/current",
+    requireRealQueue: true
   });
+
+  if (!task.taskId) {
+    throw new Error("ctox_queue_task_missing");
+  }
 
   const nextRun: ResearchRun = {
     ...run,
@@ -74,7 +79,9 @@ function buildAgentResearchPrompt(run: ResearchRun, topic: string, target: numbe
     `- Discovery-Artefakte: ${discoveryDir}`,
     databaseUrl ? `- DATABASE_URL: ${databaseUrl}` : "- DATABASE_URL ist im Webprozess nicht gesetzt; falls im Agent-Kontext ebenfalls keine DATABASE_URL existiert, den Run mit Fehlerstatus markieren statt Fake-Daten zu schreiben.",
     "- Schreibe Fortschritt laufend in `researchProgress`: status, currentStep, currentQuery, identifiedDelta, readDelta, usedDelta.",
-    "- Schreibe finale Quellen, Counts und Discovery-Graph in denselben Research Run.",
+    "- Der Discovery-Runner darf nur Fortschritt/Audit schreiben. Er darf keine sichtbaren Quellen oder Scores in Business OS schreiben.",
+    "- Schreibe finale Quellen, Counts und Discovery-Graph erst nach Agent-Review/Agent-Scoring in denselben Research Run.",
+    "- Verwende fuer den finalen Business-OS-Writeback `python3 skills/system/research/deep-research/scripts/business_research_writeback.py --database-url \"$DATABASE_URL\" --store-key marketing/research/runs --run-id <RUN_ID> --payload-json <agent_curated_payload.json>`.",
     run.sources.length > 0
       ? `- Fortsetzungssuche: vorhandene Quellen und Artefakte erhalten, ${target} zusaetzliche Kandidaten suchen, nicht von leer neu starten.`
       : `- Neue Suche: initiale Source-Review-Discovery fuer bis zu ${target} zusaetzliche Kandidaten starten.`,

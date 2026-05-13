@@ -12,6 +12,7 @@ export type CtoxCoreTaskRequest = {
   skill?: string;
   threadKey?: string;
   workspaceRoot?: string;
+  requireRealQueue?: boolean;
 };
 
 export type CtoxCoreEventRequest = {
@@ -135,6 +136,11 @@ export async function createCtoxCoreTask(request: CtoxCoreTaskRequest) {
         taskId: payload?.task?.id ?? payload?.task?.message_key ?? null
       };
     }
+
+    if (request.requireRealQueue) {
+      const payload = await response.json().catch(() => null) as { error?: string } | null;
+      throw new Error(payload?.error ?? `ctox_bridge_queue_failed_${response.status}`);
+    }
   }
 
   const command = buildQueueAddCommand(request);
@@ -150,10 +156,14 @@ export async function createCtoxCoreTask(request: CtoxCoreTaskRequest) {
         taskId: payload.task?.message_key ?? null
       };
     } catch (error) {
+      if (request.requireRealQueue) throw error;
       return plannedTask(request, command, error instanceof Error ? error.message : String(error));
     }
   }
 
+  if (request.requireRealQueue) {
+    throw new Error("ctox_real_queue_not_configured");
+  }
   return plannedTask(request, command);
 }
 

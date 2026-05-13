@@ -1835,7 +1835,15 @@ def main() -> int:
     parser.add_argument("--business-store-key", default="marketing/research/runs")
     parser.add_argument("--business-research-run-id")
     parser.add_argument("--business-research-title")
-    parser.add_argument("--business-writeback", action="store_true")
+    parser.add_argument(
+        "--business-writeback",
+        action="store_true",
+        help=(
+            "Write live progress only. This runner must not publish visible "
+            "Business OS sources or scores; final catalog writeback is an "
+            "agent-curated step."
+        ),
+    )
     parser.add_argument("--plan-only", action="store_true")
     args = parser.parse_args()
 
@@ -2006,15 +2014,22 @@ def main() -> int:
     write_discovery_graph(out_dir, protocol_rows, candidates)
     if business_writeback:
         try:
-            sync_business_research_run(
+            upsert_business_progress(
                 args.business_database_url,
                 args.business_store_key,
                 args.business_research_run_id,
                 args.business_research_title or args.topic[:80],
                 args.topic,
-                protocol_rows,
-                candidates,
-                screened_sources,
+                {
+                    "status": "running",
+                    "currentStep": "Discovery abgeschlossen, Agent prueft und scoret Quellen",
+                    "currentQuery": "",
+                    "targetAdditionalSources": args.target_additional_candidates or 0,
+                    "identifiedDelta": len(screened_sources),
+                    "readDelta": 0,
+                    "usedDelta": len(existing_candidates),
+                    "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                },
             )
         except Exception as exc:  # noqa: BLE001
             print(f"business_writeback_final_failed: {exc}", file=sys.stderr)

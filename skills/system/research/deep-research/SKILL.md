@@ -451,6 +451,10 @@ search next, which early pages to read, which source families are emerging,
 which candidates are useful, and when to move from web discovery into citation
 and reference-graph expansion. Do not move these decisions into deterministic
 word parsing, regex rules, or a sidecar LLM call outside the agent loop.
+When the discovery runner is called with `--business-writeback`, it may update
+live Business OS progress only. It must not publish visible Business OS
+sources, counts or scores. The final visible catalog is written only after
+you, the harness agent, have read, selected and scored the sources.
 
 The query plan must be natural search language, not a compressed prompt and not
 a keyword salad. Each query should look like something a careful human
@@ -651,6 +655,21 @@ This command rebuilds the search protocol, scoring model and grouped source
 tables from `report_research_log` and `report_evidence_register`. If the
 generated tables are too small, the answer is more discovery and more
 persisted evidence, not hand-written count inflation.
+
+For Business OS research runs, persist the final app-facing result only after
+agent review and agent scoring. Prepare a JSON object with the complete
+ResearchRun fields the app renders: `sources`, counts, `graph`, `summary` and
+criteria. Every source must have a direct URL/DOI, `score`, `scoreValue`,
+`contribution`, `use`, and `missing` based on what you actually read. Do not
+write `metadata_only` records, raw search hits, or mechanically scored rows.
+
+```bash
+python3 skills/system/research/deep-research/scripts/business_research_writeback.py \
+  --database-url "$DATABASE_URL" \
+  --store-key marketing/research/runs \
+  --run-id BUSINESS_RESEARCH_RUN_ID \
+  --payload-json /tmp/BUSINESS_RESEARCH_RUN_ID_agent_curated_payload.json
+```
 
 Mandatory source-review discovery passes:
 
