@@ -657,6 +657,19 @@ fn validate_core_spawn(
     if looks_like_review_spawn(&request.spawn_kind) && !has_budget {
         violations.push("review_spawn_requires_finite_budget".to_string());
     }
+    if request.spawn_kind == "self-work:strategic-direction-pass" {
+        let source_label = request
+            .metadata
+            .get("source_label")
+            .map(|value| value.trim())
+            .unwrap_or_default();
+        if source_label.is_empty() {
+            violations.push("strategy_direction_spawn_requires_source_label".to_string());
+        }
+        if source_label == "queue" || request.metadata.contains_key("queue_message_key") {
+            violations.push("strategy_direction_spawn_for_queue_execution".to_string());
+        }
+    }
     let self_cycle = request.parent_entity_type == request.child_entity_type
         && request.parent_entity_id == request.child_entity_id;
     let graph_cycle = if self_cycle {
@@ -1418,10 +1431,35 @@ mod tests {
         request
             .metadata
             .insert("thread_key".to_string(), request.parent_entity_id.clone());
+        request
+            .metadata
+            .insert("source_label".to_string(), "foreground".to_string());
 
         let proof = enforce_core_spawn(&conn, &request)?;
 
         assert!(proof.accepted);
+        Ok(())
+    }
+
+    #[test]
+    fn core_spawn_rejects_strategy_direction_pass_for_queue_execution() -> Result<()> {
+        let conn = Connection::open_in_memory()?;
+        let mut request = self_work_spawn_request("queue/run/task", "b");
+        request.parent_entity_type = "Thread".to_string();
+        request.spawn_kind = "self-work:strategic-direction-pass".to_string();
+        request
+            .metadata
+            .insert("thread_key".to_string(), request.parent_entity_id.clone());
+        request
+            .metadata
+            .insert("source_label".to_string(), "queue".to_string());
+
+        let proof = evaluate_core_spawn(&conn, &request)?;
+
+        assert!(!proof.accepted);
+        assert!(proof
+            .violation_codes
+            .contains(&"strategy_direction_spawn_for_queue_execution".to_string()));
         Ok(())
     }
 }

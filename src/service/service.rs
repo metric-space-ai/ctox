@@ -89,7 +89,7 @@ use crate::service::core_state_machine::{
     CoreTransitionRequest, RuntimeLane,
 };
 use crate::service::core_transition_guard::{
-    check_core_spawn, enforce_core_transition, ensure_core_transition_guard_schema,
+    enforce_core_transition, ensure_core_transition_guard_schema, evaluate_core_spawn,
     CoreSpawnRequest,
 };
 use crate::state_invariants;
@@ -10372,6 +10372,7 @@ fn is_internal_harness_or_forensics_job(job: &QueuedPrompt) -> bool {
 fn queue_strategy_direction_pass(
     root: &Path,
     thread_key: &str,
+    source_label: &str,
     workspace_root: Option<&str>,
     resume_prompt: &str,
     resume_goal: &str,
@@ -10427,6 +10428,7 @@ After direction is canonical, the deferred execution target is:\n{}",
             parent_message_key: None,
             metadata: serde_json::json!({
                 "thread_key": thread_key,
+                "source_label": source_label,
                 "workspace_root": workspace_root,
                 "priority": "urgent",
                 "skill": resume_skill,
@@ -10443,6 +10445,7 @@ After direction is canonical, the deferred execution target is:\n{}",
 fn core_allows_strategy_direction_pass(
     root: &Path,
     thread_key: &str,
+    source_label: &str,
     workspace_root: Option<&str>,
     suggested_skill: Option<&str>,
 ) -> Result<bool> {
@@ -10450,6 +10453,7 @@ fn core_allows_strategy_direction_pass(
     let conn = channels::open_channel_db(&db_path)?;
     let mut metadata = BTreeMap::new();
     metadata.insert("thread_key".to_string(), thread_key.to_string());
+    metadata.insert("source_label".to_string(), source_label.to_string());
     if let Some(workspace_root) = workspace_root
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -10462,7 +10466,7 @@ fn core_allows_strategy_direction_pass(
     {
         metadata.insert("suggested_skill".to_string(), suggested_skill.to_string());
     }
-    let proof = check_core_spawn(
+    let proof = evaluate_core_spawn(
         &conn,
         &CoreSpawnRequest {
             parent_entity_type: "Thread".to_string(),
@@ -10483,7 +10487,7 @@ fn core_allows_strategy_direction_pass(
     if proof.accepted {
         return Ok(true);
     }
-    anyhow::bail!("{}", proof.message);
+    Ok(false)
 }
 
 fn cancel_runnable_thread_tasks_for_strategy(
@@ -10601,6 +10605,7 @@ fn maybe_redirect_owner_visible_work_to_strategy_setup(
     if !core_allows_strategy_direction_pass(
         root,
         &thread_key,
+        &job.source_label,
         job.workspace_root.as_deref(),
         job.suggested_skill.as_deref(),
     )? {
@@ -10624,6 +10629,7 @@ fn maybe_redirect_owner_visible_work_to_strategy_setup(
     let created = queue_strategy_direction_pass(
         root,
         &thread_key,
+        &job.source_label,
         job.workspace_root.as_deref(),
         &job.prompt,
         &job.goal,
@@ -18156,7 +18162,7 @@ mod tests {
             let mut shared = lock_shared_state(&state);
             shared.busy = true;
             shared.current_goal_preview = Some("Kunstmen platform homepage reset".to_string());
-            shared.active_source_label = Some("queue".to_string());
+            shared.active_source_label = Some("foreground".to_string());
             track_leased_keys_locked(
                 &mut shared,
                 std::slice::from_ref(&queue_task.message_key),
@@ -18168,7 +18174,7 @@ mod tests {
                 .to_string(),
             goal: "Kunstmen platform homepage reset".to_string(),
             preview: "Kunstmen platform homepage reset".to_string(),
-            source_label: "queue".to_string(),
+            source_label: "foreground".to_string(),
             suggested_skill: Some("follow-up-orchestrator".to_string()),
             leased_message_keys: vec![queue_task.message_key.clone()],
             leased_ticket_event_keys: Vec::new(),
@@ -18378,7 +18384,7 @@ Return a local server that connects to the Solana blockchain and provides endpoi
     }
 
     #[test]
-    fn benchmark_shaped_owner_visible_work_uses_normal_strategy_reroute() {
+    fn queue_execution_strategy_candidate_is_rejected_by_core_spawn_gate() {
         let root = temp_root("ctox-benchmark-shaped-normal-strategy-reroute");
         let queue_task = channels::create_queue_task(
             &root,
@@ -18444,21 +18450,20 @@ Build the public platform server required by the benchmark task."
         assert!(is_owner_visible_strategic_job(&job));
         let redirected = maybe_redirect_owner_visible_work_to_strategy_setup(&root, &state, &job)
             .expect("strategy evaluation should be core-gated");
-        assert!(redirected);
+        assert!(!redirected);
 
         let stale = channels::load_queue_task(&root, &stale_task.message_key)
             .expect("failed to reload same-thread task")
             .expect("missing same-thread task");
-        assert_eq!(stale.route_status, "cancelled");
+        assert_eq!(stale.route_status, "pending");
 
         let items = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
             .expect("failed to list self-work");
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0].kind, STRATEGIC_DIRECTION_KIND);
+        assert!(items.is_empty());
     }
 
     #[test]
-    fn benchmark_prep_owner_visible_work_uses_normal_strategy_reroute() {
+    fn queue_prep_strategy_candidate_is_rejected_by_core_spawn_gate() {
         let root = temp_root("ctox-benchmark-prep-normal-strategy-reroute");
         let queue_task = channels::create_queue_task(
             &root,
@@ -18498,7 +18503,7 @@ Use Harbor/Terminal-Bench runner evidence and keep the work bounded to benchmark
         assert!(is_owner_visible_strategic_job(&job));
         let redirected = maybe_redirect_owner_visible_work_to_strategy_setup(&root, &state, &job)
             .expect("strategy evaluation should succeed");
-        assert!(redirected);
+        assert!(!redirected);
 
         let tasks =
             channels::list_queue_tasks(&root, &["pending".to_string(), "leased".to_string()], 10)
@@ -18506,14 +18511,13 @@ Use Harbor/Terminal-Bench runner evidence and keep the work bounded to benchmark
         assert!(
             tasks
                 .iter()
-                .all(|task| task.title
-                    != "prep-priority-plan: choose first easy Terminal-Bench tasks")
+                .any(|task| task.title
+                    == "prep-priority-plan: choose first easy Terminal-Bench tasks")
         );
 
         let items = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
             .expect("failed to list self-work");
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0].kind, STRATEGIC_DIRECTION_KIND);
+        assert!(items.is_empty());
     }
 
     #[test]
@@ -18641,7 +18645,7 @@ Use shell tools to create or update these files."
 
         let redirected = maybe_redirect_owner_visible_work_to_strategy_setup(&root, &state, &job)
             .expect("strategy evaluation should succeed");
-        assert!(redirected);
+        assert!(!redirected);
 
         let paths = expected_outcome_artifacts_for_job(&job)
             .iter()

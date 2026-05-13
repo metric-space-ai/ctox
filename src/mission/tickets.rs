@@ -2508,6 +2508,12 @@ fn enforce_ticket_self_work_spawn(conn: &Connection, item: &TicketSelfWorkItemVi
     edge_metadata.insert("thread_key".to_string(), thread_key);
     edge_metadata.insert("self_work_kind".to_string(), item.kind.clone());
     edge_metadata.insert("source_system".to_string(), item.source_system.clone());
+    if let Some(source_label) = metadata_string_value(&item.metadata, "source_label") {
+        edge_metadata.insert("source_label".to_string(), source_label);
+    }
+    if let Some(queue_message_key) = metadata_string_value(&item.metadata, "queue_message_key") {
+        edge_metadata.insert("queue_message_key".to_string(), queue_message_key);
+    }
     if let Some(workspace_root) = metadata_string_value(&item.metadata, "workspace_root") {
         edge_metadata.insert("workspace_root".to_string(), workspace_root);
     }
@@ -9239,12 +9245,11 @@ mod tests {
     }
 
     #[test]
-    fn terminal_bench_parent_uses_normal_spawn_rules_for_strategy_direction_self_work() -> Result<()>
-    {
-        let root = temp_root("tbq-strategy-self-work-core-normal");
+    fn queue_parent_cannot_spawn_strategy_direction_self_work() -> Result<()> {
+        let root = temp_root("queue-strategy-self-work-core-rejected");
         std::fs::create_dir_all(&root)?;
 
-        let item = put_ticket_self_work_item(
+        let err = put_ticket_self_work_item(
             &root,
             TicketSelfWorkUpsertInput {
                 source_system: "local".to_string(),
@@ -9253,32 +9258,45 @@ mod tests {
                 body_text: "Establish strategy before benchmark work.".to_string(),
                 state: "open".to_string(),
                 metadata: json!({
-                    "thread_key": "tbq-qwen36/tbq-20260509Tcleanfull5/051-public-platform-server",
-                    "workspace_root": "/home/metricspace/ctox/runtime/workspaces/tbq-20260509Tcleanfull5-051-public-platform-server",
-                    "dedupe_key": "strategy-direction:tbq-qwen36/tbq-20260509Tcleanfull5/051-public-platform-server",
+                    "thread_key": "queue/normal-work",
+                    "source_label": "queue",
+                    "workspace_root": "/tmp/ctox-workspace",
+                    "dedupe_key": "strategy-direction:queue/normal-work",
                 }),
             },
             false,
         )
-        .expect("Terminal-Bench-shaped metadata must still use normal core spawn rules");
+        .expect_err("queue execution must not spawn strategic-direction self-work");
+        assert!(err.to_string().contains("core spawn gate rejected"));
 
         let conn = open_ticket_db(&root)?;
-        let accepted_edges: i64 = conn.query_row(
+        let rejected_edges: i64 = conn.query_row(
             r#"
             SELECT COUNT(*)
             FROM ctox_core_spawn_edges
             WHERE spawn_kind = 'self-work:strategic-direction-pass'
-              AND accepted = 1
+              AND accepted = 0
             "#,
             [],
             |row| row.get(0),
         )?;
-        assert_eq!(accepted_edges, 1);
+        assert_eq!(rejected_edges, 1);
+        let violation_codes_json: String = conn.query_row(
+            r#"
+            SELECT violation_codes_json
+            FROM ctox_core_spawn_edges
+            WHERE spawn_kind = 'self-work:strategic-direction-pass'
+              AND accepted = 0
+            LIMIT 1
+            "#,
+            [],
+            |row| row.get(0),
+        )?;
+        assert!(violation_codes_json.contains("strategy_direction_spawn_for_queue_execution"));
 
         let items = list_ticket_self_work_items(&root, Some("local"), None, 10)?;
         assert_eq!(items.len(), 1);
-        assert_eq!(items[0].work_id, item.work_id);
-        assert_eq!(items[0].state, "open");
+        assert_eq!(items[0].state, "blocked");
 
         let _ = std::fs::remove_dir_all(&root);
         Ok(())

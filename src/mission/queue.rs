@@ -684,7 +684,7 @@ fn assert_clean_queue_scope(root: &Path, args: &[String]) -> Result<QueueAssertC
     }
 
     let ok = if expect_empty {
-        tasks.is_empty()
+        matching.is_empty()
     } else {
         non_matching.is_empty()
     };
@@ -2636,6 +2636,42 @@ mod tests {
         )?;
         assert!(!report.ok);
         assert_eq!(report.matched_count, 1);
+        assert_eq!(report.non_matching_count, 1);
+
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn assert_clean_scope_empty_only_requires_selected_scope_empty() -> Result<()> {
+        let root = temp_root("assert-clean-scope-empty-selected");
+        std::fs::create_dir_all(&root)?;
+
+        let _ = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Other run work".to_string(),
+                prompt: "This task is intentionally outside the asserted scope.".to_string(),
+                thread_key: "queue/other-run".to_string(),
+                workspace_root: None,
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: Some(json!({"run_id": "other-run"})),
+            },
+        )?;
+
+        let report = assert_clean_queue_scope(
+            &root,
+            &[
+                "assert-clean-scope".to_string(),
+                "--match-run-id".to_string(),
+                "target-run".to_string(),
+                "--empty".to_string(),
+            ],
+        )?;
+        assert!(report.ok);
+        assert_eq!(report.matched_count, 0);
         assert_eq!(report.non_matching_count, 1);
 
         let _ = std::fs::remove_dir_all(&root);
