@@ -24,8 +24,7 @@ impl CliCommandLedger {
     pub fn start(root: &Path, args: &[String]) -> Result<Self> {
         let db_path = crate::paths::core_db(root);
         ensure_db_parent(&db_path)?;
-        let mut conn = Connection::open(&db_path)
-            .with_context(|| format!("failed to open turn ledger db {}", db_path.display()))?;
+        let mut conn = open_turn_ledger_connection(&db_path)?;
         crate::service::process_mining::attach_sqlite_access_recorder(&conn, &db_path);
         ensure_turn_ledger_schema(&conn)?;
         crate::service::process_mining::ensure_process_mining_schema(&conn, &db_path)?;
@@ -89,8 +88,7 @@ impl CliCommandLedger {
     }
 
     pub fn finish(&mut self, result: &Result<()>) -> Result<()> {
-        let conn = Connection::open(&self.db_path)
-            .with_context(|| format!("failed to open turn ledger db {}", self.db_path.display()))?;
+        let conn = open_turn_ledger_connection(&self.db_path)?;
         crate::service::process_mining::attach_sqlite_access_recorder(&conn, &self.db_path);
         ensure_turn_ledger_schema(&conn)?;
         crate::service::process_mining::ensure_process_mining_schema(&conn, &self.db_path)?;
@@ -158,6 +156,29 @@ impl CliCommandLedger {
     pub fn turn_id(&self) -> &str {
         &self.turn_id
     }
+}
+
+fn open_turn_ledger_connection(db_path: &Path) -> Result<Connection> {
+    let conn = Connection::open(db_path)
+        .with_context(|| format!("failed to open turn ledger db {}", db_path.display()))?;
+    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())
+        .with_context(|| {
+            format!(
+                "failed to configure SQLite busy_timeout for turn ledger {}",
+                db_path.display()
+            )
+        })?;
+    let busy_timeout_ms = crate::persistence::sqlite_busy_timeout_millis();
+    conn.execute_batch(&format!(
+        "PRAGMA busy_timeout={busy_timeout_ms};\nPRAGMA journal_mode=WAL;"
+    ))
+    .with_context(|| {
+        format!(
+            "failed to configure SQLite pragmas for turn ledger {}",
+            db_path.display()
+        )
+    })?;
+    Ok(conn)
 }
 
 pub fn ensure_turn_ledger_schema(conn: &Connection) -> Result<()> {
@@ -308,8 +329,7 @@ pub fn end_turn(root: &Path, turn_id: &str, terminal_status: &str, reason: &str)
     validate_terminal_status(terminal_status)?;
     let db_path = crate::paths::core_db(root);
     ensure_db_parent(&db_path)?;
-    let mut conn = Connection::open(&db_path)
-        .with_context(|| format!("failed to open turn ledger db {}", db_path.display()))?;
+    let mut conn = open_turn_ledger_connection(&db_path)?;
     ensure_turn_ledger_schema(&conn)?;
     ensure_turn_row(&mut conn, turn_id, "terminal_command")?;
     let ended_at = now_iso();
@@ -331,8 +351,7 @@ pub fn end_turn(root: &Path, turn_id: &str, terminal_status: &str, reason: &str)
 pub fn turn_status(root: &Path, turn_id: Option<&str>) -> Result<serde_json::Value> {
     let db_path = crate::paths::core_db(root);
     ensure_db_parent(&db_path)?;
-    let conn = Connection::open(&db_path)
-        .with_context(|| format!("failed to open turn ledger db {}", db_path.display()))?;
+    let conn = open_turn_ledger_connection(&db_path)?;
     ensure_turn_ledger_schema(&conn)?;
 
     if let Some(turn_id) = turn_id {
