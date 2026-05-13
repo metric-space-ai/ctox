@@ -5386,6 +5386,7 @@ pub(crate) fn ensure_routing_rows_for_inbound(conn: &Connection) -> Result<()> {
                 message_key, route_status, lease_owner, leased_at, acked_at, last_error, updated_at
             )
             VALUES (?1, ?2, NULL, NULL, ?3, NULL, ?4)
+            ON CONFLICT(message_key) DO NOTHING
             "#,
             params![message_key, route_status, acked_at, updated_at],
         )?;
@@ -7580,6 +7581,8 @@ mod tests {
     // ctox-allow-direct-state-write: test fixture module
     use super::*;
     use std::fs;
+    use std::sync::{Arc, Barrier};
+    use std::thread;
 
     fn unique_test_db_path(prefix: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
@@ -7668,6 +7671,88 @@ mod tests {
         assert_eq!(listed[0].message_key, created.message_key);
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn routing_backfill_is_idempotent_under_parallel_schema_open() {
+        let db_path = unique_test_db_path("ctox-routing-backfill-parallel");
+        {
+            let mut conn = open_channel_db(&db_path).expect("failed to open db");
+            ensure_account(
+                &mut conn,
+                QUEUE_ACCOUNT_KEY,
+                QUEUE_CHANNEL_NAME,
+                QUEUE_ACCOUNT_ADDRESS,
+                QUEUE_PROVIDER,
+                json!({"source": "ctox-queue"}),
+            )
+            .expect("failed to create queue account");
+            for index in 0..32 {
+                let message_key = format!("queue:parallel::{index}");
+                let remote_id = format!("remote-parallel-{index}");
+                upsert_communication_message(
+                    &mut conn,
+                    UpsertMessage {
+                        message_key: &message_key,
+                        channel: QUEUE_CHANNEL_NAME,
+                        account_key: QUEUE_ACCOUNT_KEY,
+                        thread_key: "parallel-routing",
+                        remote_id: &remote_id,
+                        direction: "inbound",
+                        folder_hint: "queue",
+                        sender_display: QUEUE_SENDER_DISPLAY,
+                        sender_address: QUEUE_SENDER_ADDRESS,
+                        recipient_addresses_json: "[]",
+                        cc_addresses_json: "[]",
+                        bcc_addresses_json: "[]",
+                        subject: "parallel queue",
+                        preview: "parallel queue",
+                        body_text: "parallel queue",
+                        body_html: "",
+                        raw_payload_ref: "",
+                        trust_level: "high",
+                        status: "received",
+                        seen: false,
+                        has_attachments: false,
+                        external_created_at: "2026-05-13T10:00:00Z",
+                        observed_at: "2026-05-13T10:00:00Z",
+                        metadata_json: "{}",
+                    },
+                )
+                .expect("failed to insert queue message");
+            }
+        }
+
+        let workers = 12;
+        let barrier = Arc::new(Barrier::new(workers));
+        let handles = (0..workers)
+            .map(|_| {
+                let db_path = db_path.clone();
+                let barrier = Arc::clone(&barrier);
+                thread::spawn(move || {
+                    barrier.wait();
+                    open_channel_db(&db_path).map(|_| ())
+                })
+            })
+            .collect::<Vec<_>>();
+        for handle in handles {
+            handle
+                .join()
+                .expect("routing backfill thread panicked")
+                .expect("parallel schema open should not race on routing state");
+        }
+
+        let conn = open_channel_db(&db_path).expect("failed to reopen db");
+        let routing_rows: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM communication_routing_state WHERE message_key LIKE 'queue:parallel::%'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("failed to count routing rows");
+        assert_eq!(routing_rows, 32);
+
+        let _ = fs::remove_file(&db_path);
     }
 
     #[test]
