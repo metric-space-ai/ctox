@@ -40,7 +40,7 @@ const USAGE: &str = "Usage:
   ctox harness-mining stuck-cases    [--min-attempts <n>] [--idle-seconds <s>] [--limit <n>]
   ctox harness-mining variants       [--entity-type <t>] [--limit <n>] [--cluster]
   ctox harness-mining sojourn        [--entity-type <t>] [--limit <n>]
-  ctox harness-mining conformance    [--lane <lane>] [--window <n>] [--fitness-threshold <0.0..1.0>]
+  ctox harness-mining conformance    [--lane <lane>] [--since <iso8601>] [--window <n>] [--fitness-threshold <0.0..1.0>]
   ctox harness-mining alignment      [--entity-type <t>] [--limit <n>]
   ctox harness-mining causal         [--violation-code <code>] [--lookback <n>] [--limit <n>]
   ctox harness-mining drift          [--window <n>] [--threshold <f>]

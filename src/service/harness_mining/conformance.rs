@@ -26,6 +26,12 @@ use std::collections::{HashMap, HashSet};
 pub struct Options {
     /// Restrict to this lane (canonical csm string, e.g. "P0FounderCommunication").
     pub lane: Option<String>,
+    /// Restrict the replay to observations at or after this timestamp.
+    ///
+    /// This is intentionally explicit. It lets operators prove the currently
+    /// deployed harness after a known fix point without deleting historical
+    /// violations from the forensic ledger.
+    pub since: Option<String>,
     /// Sliding window size; only the last N proofs / transitions per metric.
     pub window: i64,
     /// Failure threshold; below this either fitness is reported as not OK.
@@ -36,6 +42,7 @@ impl Default for Options {
     fn default() -> Self {
         Self {
             lane: None,
+            since: None,
             window: 1000,
             fitness_threshold: 0.95,
         }
@@ -47,6 +54,7 @@ impl Options {
         let d = Self::default();
         Self {
             lane: super::parse_string_flag(args, "--lane").map(str::to_string),
+            since: super::parse_string_flag(args, "--since").map(str::to_string),
             window: super::parse_i64_flag(args, "--window", d.window).clamp(10, 1_000_000),
             fitness_threshold: super::parse_f64_flag(
                 args,
@@ -73,6 +81,7 @@ pub fn replay(conn: &Connection, opts: &Options) -> Result<Value> {
         "spec_source": "core_state_machine.rs",
         "options": {
             "lane": opts.lane,
+            "since": opts.since,
             "window": opts.window,
             "fitness_threshold": opts.fitness_threshold,
         },
@@ -116,8 +125,19 @@ fn round4(v: f64) -> f64 {
 
 fn preventive_fitness(conn: &Connection, opts: &Options) -> Result<FitnessReport> {
     // pull the most recent N proofs (filtered by lane if requested)
-    let (sql, has_lane) = match &opts.lane {
-        Some(_) => (
+    let (sql, has_lane, has_since) = match (&opts.lane, &opts.since) {
+        (Some(_), Some(_)) => (
+            r#"
+            SELECT entity_type, lane, accepted FROM ctox_core_transition_proofs
+            WHERE lane = ?1
+              AND updated_at >= ?2
+            ORDER BY updated_at DESC
+            LIMIT ?3
+            "#,
+            true,
+            true,
+        ),
+        (Some(_), None) => (
             r#"
             SELECT entity_type, lane, accepted FROM ctox_core_transition_proofs
             WHERE lane = ?1
@@ -125,13 +145,25 @@ fn preventive_fitness(conn: &Connection, opts: &Options) -> Result<FitnessReport
             LIMIT ?2
             "#,
             true,
+            false,
         ),
-        None => (
+        (None, Some(_)) => (
+            r#"
+            SELECT entity_type, lane, accepted FROM ctox_core_transition_proofs
+            WHERE updated_at >= ?1
+            ORDER BY updated_at DESC
+            LIMIT ?2
+            "#,
+            false,
+            true,
+        ),
+        (None, None) => (
             r#"
             SELECT entity_type, lane, accepted FROM ctox_core_transition_proofs
             ORDER BY updated_at DESC
             LIMIT ?1
             "#,
+            false,
             false,
         ),
     };
@@ -139,13 +171,29 @@ fn preventive_fitness(conn: &Connection, opts: &Options) -> Result<FitnessReport
     let map_row = |row: &rusqlite::Row<'_>| -> rusqlite::Result<(String, String, i64)> {
         Ok((row.get(0)?, row.get(1)?, row.get(2)?))
     };
-    let rows: Vec<(String, String, i64)> = if has_lane {
-        let lane = opts.lane.as_deref().unwrap();
-        stmt.query_map(params![lane, opts.window], map_row)?
-            .collect::<rusqlite::Result<_>>()?
-    } else {
-        stmt.query_map(params![opts.window], map_row)?
-            .collect::<rusqlite::Result<_>>()?
+    let rows: Vec<(String, String, i64)> = match (has_lane, has_since) {
+        (true, true) => stmt
+            .query_map(
+                params![
+                    opts.lane.as_deref().unwrap(),
+                    opts.since.as_deref().unwrap(),
+                    opts.window
+                ],
+                map_row,
+            )?
+            .collect::<rusqlite::Result<_>>()?,
+        (true, false) => stmt
+            .query_map(params![opts.lane.as_deref().unwrap(), opts.window], map_row)?
+            .collect::<rusqlite::Result<_>>()?,
+        (false, true) => stmt
+            .query_map(
+                params![opts.since.as_deref().unwrap(), opts.window],
+                map_row,
+            )?
+            .collect::<rusqlite::Result<_>>()?,
+        (false, false) => stmt
+            .query_map(params![opts.window], map_row)?
+            .collect::<rusqlite::Result<_>>()?,
     };
 
     if rows.is_empty() {
@@ -203,8 +251,32 @@ fn preventive_fitness(conn: &Connection, opts: &Options) -> Result<FitnessReport
 }
 
 fn trigger_fitness(conn: &Connection, opts: &Options) -> Result<FitnessReport> {
-    let mut stmt = conn.prepare(
-        r#"
+    let (sql, has_since) = if opts.since.is_some() {
+        (
+            r#"
+        WITH ordered AS (
+            SELECT case_id, entity_type,
+                   to_state AS to_state,
+                   LAG(to_state) OVER (
+                       PARTITION BY case_id ORDER BY observed_at, event_seq
+                   ) AS prev_to_state,
+                   observed_at, event_seq
+            FROM ctox_process_events
+            WHERE to_state IS NOT NULL
+              AND observed_at >= ?1
+        )
+        SELECT entity_type, prev_to_state, to_state
+        FROM ordered
+        WHERE prev_to_state IS NOT NULL
+          AND prev_to_state != to_state
+        ORDER BY observed_at DESC, event_seq DESC
+        LIMIT ?2
+        "#,
+            true,
+        )
+    } else {
+        (
+            r#"
         WITH ordered AS (
             SELECT case_id, entity_type,
                    to_state AS to_state,
@@ -222,12 +294,23 @@ fn trigger_fitness(conn: &Connection, opts: &Options) -> Result<FitnessReport> {
         ORDER BY observed_at DESC, event_seq DESC
         LIMIT ?1
         "#,
-    )?;
-    let rows: Vec<(String, String, String)> = stmt
-        .query_map(params![opts.window], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-        })?
-        .collect::<rusqlite::Result<_>>()?;
+            false,
+        )
+    };
+    let mut stmt = conn.prepare(sql)?;
+    let map_row = |row: &rusqlite::Row<'_>| -> rusqlite::Result<(String, String, String)> {
+        Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+    };
+    let rows: Vec<(String, String, String)> = if has_since {
+        stmt.query_map(
+            params![opts.since.as_deref().unwrap(), opts.window],
+            map_row,
+        )?
+        .collect::<rusqlite::Result<_>>()?
+    } else {
+        stmt.query_map(params![opts.window], map_row)?
+            .collect::<rusqlite::Result<_>>()?
+    };
 
     if rows.is_empty() {
         return Ok(FitnessReport::empty());
@@ -477,6 +560,42 @@ mod tests {
     }
 
     #[test]
+    fn preventive_fitness_since_filters_legacy_rejections() {
+        let conn = setup_proofs();
+        proof(
+            &conn,
+            "legacy-reject",
+            "FounderCommunication",
+            "P0FounderCommunication",
+            0,
+            "2026-04-26T10:00:00Z",
+        );
+        proof(
+            &conn,
+            "current-pass",
+            "FounderCommunication",
+            "P0FounderCommunication",
+            1,
+            "2026-04-26T11:00:00Z",
+        );
+
+        let report = preventive_fitness(
+            &conn,
+            &Options {
+                since: Some("2026-04-26T10:30:00Z".to_string()),
+                window: 100,
+                fitness_threshold: 1.0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(report.denominator, 1);
+        assert_eq!(report.numerator, 1);
+        assert!((report.fitness - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
     fn replay_top_level_combines_metrics() {
         let conn = setup_proofs();
         proof(
@@ -493,6 +612,7 @@ mod tests {
                 fitness_threshold: 0.5,
                 window: 100,
                 lane: None,
+                since: None,
             },
         )
         .unwrap();

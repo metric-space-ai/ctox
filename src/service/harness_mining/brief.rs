@@ -58,6 +58,7 @@ pub fn synthesize(conn: &Connection, opts: &Options) -> Result<Value> {
             conn,
             &conformance::Options {
                 lane: None,
+                since: None,
                 window: 1000,
                 fitness_threshold: opts.conformance_threshold,
             },
