@@ -13048,6 +13048,9 @@ fn apply_runtime_retry_feedback_to_leased_queue(
     );
     let mut updated = 0usize;
     for message_key in &job.leased_message_keys {
+        if channels::load_queue_task(root, message_key)?.is_none() {
+            continue;
+        }
         channels::update_queue_task(
             root,
             channels::QueueTaskUpdateRequest {
@@ -19260,6 +19263,67 @@ Preserve and update controller.json and logbook.md."
             .contains("Create and verify the smoke artifact."));
         assert_eq!(reloaded.workspace_root.as_deref(), Some("/tmp/qwen-smoke"));
         assert_eq!(route_status_for(&root, &task.message_key), "leased");
+    }
+
+    #[test]
+    fn direct_email_runtime_retry_skips_queue_feedback_injection() {
+        let root = temp_root("direct-email-runtime-retry-feedback");
+        let db_path = crate::paths::core_db(&root);
+        let mut conn = channels::open_channel_db(&db_path).expect("open channel db");
+        channels::upsert_communication_message(
+            &mut conn,
+            channels::UpsertMessage {
+                message_key: "email:cto1@example.test::INBOX::1",
+                channel: "email",
+                account_key: "email:cto1@example.test",
+                thread_key: "email-thread-1",
+                remote_id: "email-remote-1",
+                direction: "inbound",
+                folder_hint: "INBOX",
+                sender_display: "Owner",
+                sender_address: "owner@example.test",
+                recipient_addresses_json: "[]",
+                cc_addresses_json: "[]",
+                bcc_addresses_json: "[]",
+                subject: "Research request",
+                preview: "Please research drone load data",
+                body_text: "Please research drone load data",
+                body_html: "",
+                raw_payload_ref: "",
+                trust_level: "high",
+                status: "received",
+                seen: false,
+                has_attachments: false,
+                external_created_at: "2026-05-13T10:00:00Z",
+                observed_at: "2026-05-13T10:00:00Z",
+                metadata_json: "{}",
+            },
+        )
+        .expect("seed email message");
+        channels::ensure_routing_rows_for_inbound(&conn).expect("routing rows");
+
+        let job = QueuedPrompt {
+            prompt: "Please research drone load data".to_string(),
+            goal: "Research request".to_string(),
+            preview: "Research request".to_string(),
+            source_label: "email:owner".to_string(),
+            suggested_skill: None,
+            leased_message_keys: vec!["email:cto1@example.test::INBOX::1".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("email-thread-1".to_string()),
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let updated = apply_runtime_retry_feedback_to_leased_queue(
+            &root,
+            &job,
+            "direct session error: Your access token could not be refreshed because your refresh token was already used.",
+        )
+        .expect("direct email retry feedback should not fail");
+        assert_eq!(updated, 0);
     }
 
     #[test]
