@@ -1,6 +1,6 @@
 import { getMarketingResearchRuns, upsertMarketingResearchRun } from "./marketing-research-store";
 import { marketingSeed, type ResearchRun, type ResearchSource, type ResearchSourceScore } from "./marketing-seed";
-import { runCtoxDeepResearch } from "./ctox-core-bridge";
+import { runCtoxSourceReviewDiscovery } from "./ctox-core-bridge";
 
 const MINIMAX_MODEL = "MiniMax-M2.7";
 
@@ -46,32 +46,87 @@ export async function runMarketingResearch(runId: string, amount: number) {
     updatedAt: new Date().toISOString()
   });
 
-  const payload = await runCtoxDeepResearch({
-    query: topic,
-    focus: run.criteria || undefined,
-    depth: target <= 25 ? "quick" : "standard",
-    maxSources: Math.min(target, 80),
-    workspace: `/home/ubuntu/.local/state/ctox/business-os/research/${run.id}`
-  });
-  const accepted = mapDeepResearchSources(payload, topic);
-  const counts = deepResearchCounts(payload, accepted.length);
-  const nextRun = mergeResearchResults({ ...run, sources: [], graph: { nodes: [], edges: [] } }, accepted, counts.identified);
-  nextRun.status = nextRun.sources.length > 0 ? "collecting" : "draft";
-  nextRun.researchProgress = {
-    status: nextRun.sources.length > run.sources.length ? "done" : "error",
-    currentStep: nextRun.sources.length > run.sources.length ? "Recherche aktualisiert" : "Keine neuen Quellen gefunden",
-    currentQuery: String(payload.search_query ?? topic),
+  const discoveryDir = `/home/ubuntu/.local/state/ctox/business-os/source-review/${run.id}`;
+  const queries = await generateSourceReviewQueries(topic, target, run.sources.length > 0);
+  const payload = await runCtoxSourceReviewDiscovery({
+    topic,
+    runId: run.id,
+    title: run.title,
+    queries,
     targetAdditionalSources: target,
-    identifiedDelta: counts.identified,
-    readDelta: counts.read,
-    usedDelta: nextRun.sources.length,
-    updatedAt: new Date().toISOString()
+    workspace: discoveryDir,
+    existingDiscoveryDir: run.sources.length > 0 ? discoveryDir : undefined,
+    databaseUrl: process.env.DATABASE_URL,
+    openaiApiKey: process.env.OPENAI_API_KEY,
+    storeKey: "marketing/research/runs"
+  });
+  const refreshed = await getMarketingResearchRuns(marketingSeed.researchRuns, { includeArchived: true });
+  const nextRun = refreshed.find((item) => item.id === run.id);
+  if (nextRun) return nextRun;
+
+  const fallbackRun = {
+    ...run,
+    researchProgress: {
+      status: "error" as const,
+      currentStep: "Source-Review lieferte keinen gespeicherten Run",
+      currentQuery: String(payload.summary ?? topic),
+      targetAdditionalSources: target,
+      identifiedDelta: numberField(payload.screened_unique_sources),
+      readDelta: numberField(payload.unique_sources),
+      usedDelta: 0,
+      updatedAt: new Date().toISOString()
+    }
   };
-  nextRun.expansionRequests = (nextRun.expansionRequests ?? []).map((request, index) => (
-    index === 0 && request.status !== "done" ? { ...request, status: nextRun.researchProgress?.status === "done" ? "done" : "running" } : request
-  ));
-  await upsertMarketingResearchRun(nextRun, marketingSeed.researchRuns);
-  return nextRun;
+  await upsertMarketingResearchRun(fallbackRun, marketingSeed.researchRuns);
+  return fallbackRun;
+}
+
+async function generateSourceReviewQueries(topic: string, target: number, continuation: boolean) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) throw new Error("source_review_llm_query_planner_not_configured");
+  const { default: OpenAI } = await import("openai");
+  const client = new OpenAI({ apiKey });
+  const response = await client.chat.completions.create({
+    model: process.env.CTOX_SOURCE_REVIEW_LLM_MODEL ?? "gpt-5.4-mini",
+    response_format: { type: "json_object" },
+    messages: [
+      {
+        role: "system",
+        content: "You write strict source-review web search query plans. Return only valid JSON."
+      },
+      {
+        role: "user",
+        content: JSON.stringify({
+          topic,
+          targetAdditionalSources: target,
+          continuation,
+          instructions: [
+            "Return natural raw search queries a careful human researcher would actually type.",
+            "Use obvious short seed queries first.",
+            "Keep the core object and core data need together.",
+            "Add source-container queries for datasets, databases, technical reports, standards, manuals, documentation, repositories and official/public data portals.",
+            "Do not use hidden benchmark answers, topic-specific shortcuts, regex-like keyword salad, or overly compressed prompt fragments.",
+            "For continuation, add queries that broaden source families without restarting the same exact search."
+          ],
+          outputSchema: {
+            queries: [
+              { focus: "seed", query: "plain search query" }
+            ]
+          }
+        })
+      }
+    ]
+  });
+  const parsed = JSON.parse(response.choices[0]?.message?.content ?? "{}") as { queries?: Array<{ focus?: unknown; query?: unknown }> };
+  const queries = (parsed.queries ?? [])
+    .map((item) => ({
+      focus: typeof item.focus === "string" && item.focus.trim() ? item.focus.trim().slice(0, 80) : "llm",
+      query: typeof item.query === "string" ? item.query.trim() : ""
+    }))
+    .filter((item) => item.query.length >= 3)
+    .slice(0, Math.max(8, Math.min(24, Math.ceil(target / 10) + 8)));
+  if (queries.length === 0) throw new Error("source_review_llm_query_planner_returned_no_queries");
+  return queries;
 }
 
 async function persistPartialResults(

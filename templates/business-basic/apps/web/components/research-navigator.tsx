@@ -839,42 +839,74 @@ function D3DiscoveryGraph({
   selectedNodeId?: string;
 }) {
   const ref = useRef<SVGSVGElement | null>(null);
+  const zoomRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null);
+  const graphNodesRef = useRef<GraphNodeDatum[]>([]);
 
   useEffect(() => {
     if (!ref.current) return;
-    const width = 980;
-    const height = 560;
+    const width = 1200;
+    const height = 760;
     const nodes: GraphNodeDatum[] = run.graph.nodes.map((node) => ({ ...node }));
     const edges: GraphEdgeDatum[] = run.graph.edges.map((edge) => ({ ...edge }));
+    graphNodesRef.current = nodes;
     const svg = d3.select(ref.current);
     svg.selectAll("*").remove();
     svg.attr("viewBox", `0 0 ${width} ${height}`);
+    svg.attr("tabIndex", 0);
+
+    const viewport = svg.append("g").attr("class", "research-d3-viewport");
+    const zoom = d3.zoom<SVGSVGElement, unknown>()
+      .scaleExtent([0.18, 4])
+      .on("zoom", (event) => {
+        viewport.attr("transform", event.transform.toString());
+      });
+    zoomRef.current = zoom;
+    svg.call(zoom);
 
     const simulation = d3.forceSimulation<GraphNodeDatum>(nodes)
-      .force("link", d3.forceLink<GraphNodeDatum, GraphEdgeDatum>(edges).id((node) => node.id).distance(130).strength(0.55))
-      .force("charge", d3.forceManyBody().strength(-420))
+      .force("link", d3.forceLink<GraphNodeDatum, GraphEdgeDatum>(edges).id((node) => node.id).distance(170).strength(0.42))
+      .force("charge", d3.forceManyBody().strength(-720))
       .force("center", d3.forceCenter(width / 2, height / 2))
-      .force("x", d3.forceX<GraphNodeDatum>((node) => node.kind === "query" ? 160 : node.kind === "group" ? 500 : 780).strength(0.18))
-      .force("y", d3.forceY(height / 2).strength(0.05));
+      .force("x", d3.forceX<GraphNodeDatum>((node) => node.kind === "query" ? 210 : node.kind === "group" ? 600 : 980).strength(0.16))
+      .force("y", d3.forceY(height / 2).strength(0.045))
+      .force("collision", d3.forceCollide<GraphNodeDatum>().radius((node) => node.kind === "group" ? 78 : 62).strength(0.78));
 
-    const link = svg.append("g")
+    const link = viewport.append("g")
       .attr("class", "research-d3-links")
       .selectAll("line")
       .data(edges)
       .join("line");
 
-    const node = svg.append("g")
+    const drag = d3.drag<SVGGElement, GraphNodeDatum>()
+      .on("start", (event, item) => {
+        if (!event.active) simulation.alphaTarget(0.25).restart();
+        item.fx = item.x;
+        item.fy = item.y;
+      })
+      .on("drag", (event, item) => {
+        item.fx = event.x;
+        item.fy = event.y;
+      })
+      .on("end", (event, item) => {
+        if (!event.active) simulation.alphaTarget(0);
+        item.fx = null;
+        item.fy = null;
+      });
+
+    const node = viewport.append("g")
       .attr("class", "research-d3-nodes")
-      .selectAll("g")
+      .selectAll<SVGGElement, GraphNodeDatum>("g")
       .data(nodes)
       .join("g")
       .attr("class", (item: GraphNodeDatum) => `research-d3-node node-${item.kind} ${item.id === selectedNodeId ? "active" : ""}`)
+      .call(drag)
       .on("click", (_, item) => {
         onSelectNode(item);
       });
 
     node.append("circle").attr("r", (item: GraphNodeDatum) => item.kind === "group" ? 19 : 14);
-    node.append("text").text((item: GraphNodeDatum) => item.label).attr("dy", 34);
+    node.append("text").text((item: GraphNodeDatum) => graphLabel(item.label)).attr("dy", 34);
+    node.append("title").text((item: GraphNodeDatum) => item.label);
 
     simulation.on("tick", () => {
       link
@@ -885,16 +917,62 @@ function D3DiscoveryGraph({
       node.attr("transform", (item: GraphNodeDatum) => `translate(${item.x ?? 0},${item.y ?? 0})`);
     });
 
+    window.setTimeout(() => fitGraphToViewport(ref.current, zoom, nodes, width, height), 350);
+
     return () => {
       simulation.stop();
+      zoomRef.current = null;
     };
   }, [onSelectNode, run.graph.edges, run.graph.nodes, selectedNodeId]);
 
+  const zoomBy = (factor: number) => {
+    if (!ref.current || !zoomRef.current) return;
+    d3.select(ref.current).transition().duration(160).call(zoomRef.current.scaleBy, factor);
+  };
+  const fit = () => {
+    if (!ref.current || !zoomRef.current) return;
+    const width = 1200;
+    const height = 760;
+    fitGraphToViewport(ref.current, zoomRef.current, graphNodesRef.current, width, height);
+  };
+
   return (
     <div className="research-d3-frame">
+      <div className="research-d3-controls" aria-label="Graph Navigation">
+        <button onClick={fit} type="button">Fit</button>
+        <button onClick={() => zoomBy(1.25)} type="button">+</button>
+        <button onClick={() => zoomBy(0.8)} type="button">-</button>
+      </div>
       <svg ref={ref} role="img" aria-label="Discovery Graph" />
     </div>
   );
+}
+
+function graphLabel(label: string) {
+  return label.length > 72 ? `${label.slice(0, 69)}...` : label;
+}
+
+function fitGraphToViewport(
+  element: SVGSVGElement | null,
+  zoom: d3.ZoomBehavior<SVGSVGElement, unknown>,
+  nodes: GraphNodeDatum[],
+  width: number,
+  height: number
+) {
+  if (!element || nodes.length === 0) return;
+  const xs = nodes.map((node) => node.x ?? width / 2);
+  const ys = nodes.map((node) => node.y ?? height / 2);
+  const minX = Math.min(...xs) - 120;
+  const maxX = Math.max(...xs) + 120;
+  const minY = Math.min(...ys) - 90;
+  const maxY = Math.max(...ys) + 90;
+  const graphWidth = Math.max(1, maxX - minX);
+  const graphHeight = Math.max(1, maxY - minY);
+  const scale = Math.max(0.18, Math.min(2.2, 0.88 / Math.max(graphWidth / width, graphHeight / height)));
+  const transform = d3.zoomIdentity
+    .translate((width - graphWidth * scale) / 2 - minX * scale, (height - graphHeight * scale) / 2 - minY * scale)
+    .scale(scale);
+  d3.select(element).transition().duration(220).call(zoom.transform, transform);
 }
 
 function resolveGraphNodeSources(node: GraphNode, run: ResearchRun, sources: ResearchSource[]) {

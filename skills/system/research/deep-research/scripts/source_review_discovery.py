@@ -532,7 +532,7 @@ SEARCH_PROVIDER_COOLDOWN_UNTIL: dict[str, float] = {}
 
 
 def search_provider_sequence() -> list[str]:
-    raw = os.environ.get("CTOX_SOURCE_REVIEW_WEB_PROVIDERS", "brave-html,bing-rss,duckduckgo-html")
+    raw = os.environ.get("CTOX_SOURCE_REVIEW_WEB_PROVIDERS", "ctox-web-search,brave-html,duckduckgo-html,bing-rss")
     providers: list[str] = []
     for item in raw.split(","):
         provider = item.strip()
@@ -544,6 +544,8 @@ def search_provider_sequence() -> list[str]:
 
 
 def search_provider_url(provider: str, encoded_query: str) -> str:
+    if provider == "ctox-web-search":
+        return f"ctox web search:{encoded_query}"
     if provider == "brave-html":
         return f"https://search.brave.com/search?q={encoded_query}"
     if provider == "bing-rss":
@@ -554,6 +556,8 @@ def search_provider_url(provider: str, encoded_query: str) -> str:
 
 
 def parse_provider_sources(provider: str, page: str, max_sources: int) -> list[dict[str, Any]]:
+    if provider == "ctox-web-search":
+        return parse_ctox_web_search_results(page, max_sources)
     if provider == "brave-html":
         return parse_brave_results(page, max_sources)
     if provider == "bing-rss":
@@ -561,6 +565,41 @@ def parse_provider_sources(provider: str, page: str, max_sources: int) -> list[d
     if provider == "duckduckgo-html":
         return parse_duckduckgo_results(page, max_sources)
     raise ValueError(f"unsupported search provider: {provider}")
+
+
+def parse_ctox_web_search_results(payload_text: str, max_sources: int) -> list[dict[str, Any]]:
+    payload = json.loads(payload_text)
+    out: list[dict[str, Any]] = []
+    for item in payload.get("results") or []:
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("url") or "").strip()
+        title = str(item.get("title") or "").strip()
+        if not url or is_search_noise_url(url):
+            continue
+        out.append(
+            {
+                "title": title or urllib.parse.urlparse(url).netloc,
+                "url": url,
+                "snippet": str(item.get("snippet") or item.get("summary") or "").strip(),
+                "source_kind": "web",
+                "resolver": str(payload.get("provider") or "ctox-web-search"),
+            }
+        )
+        if len(out) >= max_sources:
+            break
+    return out
+
+
+def run_ctox_web_search_provider(query: str, timeout_sec: int) -> str:
+    proc = subprocess.run(
+        ["ctox", "web", "search", "--query", query, "--include-sources"],
+        check=True,
+        text=True,
+        capture_output=True,
+        timeout=timeout_sec,
+    )
+    return proc.stdout
 
 
 def run_web_search(query: QuerySpec, max_sources: int, out_path: Path, timeout_sec: int, delay_sec: float = 3.0) -> dict[str, Any]:
@@ -592,7 +631,10 @@ def run_web_search(query: QuerySpec, max_sources: int, out_path: Path, timeout_s
                 )
                 continue
             try:
-                page = fetch_search_page_with_retry(url, variant, web_timeout_sec, errors)
+                if resolver == "ctox-web-search":
+                    page = run_ctox_web_search_provider(variant, max(web_timeout_sec, 12))
+                else:
+                    page = fetch_search_page_with_retry(url, variant, web_timeout_sec, errors)
                 sources = parse_provider_sources(resolver, page, max_sources)
                 if sources:
                     if not web_sources_quality_ok(variant, sources):
@@ -893,6 +935,84 @@ def source_records(payload: dict[str, Any]) -> list[dict[str, Any]]:
         if isinstance(value, list):
             return [item for item in value if isinstance(item, dict)]
     return []
+
+
+def llm_screen_records(records: list[dict[str, Any]], topic: str, query: str) -> dict[int, dict[str, Any]]:
+    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY is required for --llm-screening")
+    if not records:
+        return {}
+    compact_records = []
+    for idx, record in enumerate(records):
+        compact_records.append(
+            {
+                "index": idx,
+                "title": str(record.get("title") or record.get("name") or "")[:220],
+                "url": extract_url(record)[:260],
+                "snippet": str(record.get("snippet") or record.get("summary") or "")[:650],
+            }
+        )
+    prompt = {
+        "topic": topic,
+        "query": query,
+        "task": (
+            "Screen source candidates for a source-review catalog. Accept only sources that are likely to contain "
+            "usable primary data, datasets, databases, technical reports, standards, documentation, manuals, or "
+            "source containers that directly help answer the topic. Reject broad surveys, SEO articles, unrelated "
+            "uses of shared words, news, forums, and sources without evidence that they contain useful data. "
+            "Return strict JSON only."
+        ),
+        "records": compact_records,
+        "output_schema": {
+            "decisions": [
+                {
+                    "index": 0,
+                    "accepted": True,
+                    "score": 0,
+                    "reason": "short operator-facing reason",
+                }
+            ]
+        },
+    }
+    body = json.dumps(
+        {
+            "model": os.environ.get("CTOX_SOURCE_REVIEW_LLM_MODEL", "gpt-5.4-mini"),
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "You are a strict research source reviewer. Output only valid JSON.",
+                },
+                {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
+            ],
+            "response_format": {"type": "json_object"},
+        }
+    ).encode("utf-8")
+    request = urllib.request.Request(
+        "https://api.openai.com/v1/chat/completions",
+        data=body,
+        headers={
+            "authorization": f"Bearer {api_key}",
+            "content-type": "application/json",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=90) as response:  # noqa: S310 - trusted OpenAI API endpoint.
+        payload = json.loads(response.read().decode("utf-8"))
+    content = payload["choices"][0]["message"]["content"]
+    parsed = json.loads(content)
+    decisions: dict[int, dict[str, Any]] = {}
+    for item in parsed.get("decisions", []):
+        try:
+            index = int(item.get("index"))
+        except Exception:
+            continue
+        decisions[index] = {
+            "accepted": bool(item.get("accepted")),
+            "score": max(0, min(100, int(item.get("score") or 0))),
+            "reason": str(item.get("reason") or "llm_screened").strip()[:240],
+        }
+    return decisions
 
 
 def source_key(record: dict[str, Any]) -> str:
@@ -1794,6 +1914,7 @@ def main() -> int:
     parser.add_argument("--business-research-run-id")
     parser.add_argument("--business-research-title")
     parser.add_argument("--business-writeback", action="store_true")
+    parser.add_argument("--llm-screening", action="store_true")
     parser.add_argument("--plan-only", action="store_true")
     args = parser.parse_args()
 
@@ -1872,11 +1993,12 @@ def main() -> int:
             args.web_query_delay_sec,
         )
         records = source_records(payload)
+        llm_decisions = llm_screen_records(records, args.topic, spec.query) if args.llm_screening else None
         reviewed_total += len(records)
         write_summary(summary_path, spec, records)
 
         new_count = 0
-        for record in records:
+        for record_index, record in enumerate(records):
             key = source_key(record)
             if not key or key in seen:
                 continue
@@ -1891,7 +2013,14 @@ def main() -> int:
                 "openalex_id": str(record.get("openalex_id") or "").strip(),
                 "snippet": str(record.get("snippet") or record.get("summary") or "").strip()[:500],
             }
-            accepted, reason = source_acceptance(record, args.topic, spec.query)
+            if llm_decisions is not None:
+                decision = llm_decisions.get(record_index, {"accepted": False, "score": 0, "reason": "llm_no_decision"})
+                accepted = bool(decision.get("accepted"))
+                reason = f"llm:{decision.get('reason') or 'screened'}"
+                relevance_score = int(decision.get("score") or 0)
+            else:
+                accepted, reason = source_acceptance(record, args.topic, spec.query)
+                relevance_score = source_relevance_score(record, args.topic)
             screened_row = {
                 **row,
                 "screening_status": "accepted" if accepted else "rejected",
@@ -1899,7 +2028,7 @@ def main() -> int:
             }
             screened_sources.append(screened_row)
             if accepted:
-                candidates.append({**row, "relevance_score": str(source_relevance_score(record, args.topic)), "acceptance_reason": reason})
+                candidates.append({**row, "relevance_score": str(relevance_score), "acceptance_reason": reason})
             else:
                 rejected_sources.append(screened_row)
 

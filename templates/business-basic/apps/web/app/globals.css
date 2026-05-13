@@ -5132,14 +5132,49 @@ a {
 }
 
 .research-d3-frame {
+  position: relative;
   min-height: 560px;
   padding: 10px;
+  overflow: hidden;
+  touch-action: none;
 }
 
 .research-d3-frame svg {
   display: block;
   width: 100%;
   height: 560px;
+  cursor: grab;
+  outline: none;
+}
+
+.research-d3-frame svg:active {
+  cursor: grabbing;
+}
+
+.research-d3-controls {
+  position: absolute;
+  z-index: 2;
+  top: 12px;
+  right: 12px;
+  display: flex;
+  gap: 6px;
+}
+
+.research-d3-controls button {
+  min-width: 38px;
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.research-d3-controls button:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-muted);
 }
 
 .research-d3-links line {
@@ -5174,6 +5209,10 @@ a {
   font-size: 12px;
   font-weight: 850;
   text-anchor: middle;
+  paint-order: stroke;
+  stroke: var(--surface);
+  stroke-width: 3px;
+  stroke-linejoin: round;
 }
 
 .research-bottom-panel {
@@ -20295,6 +20334,10 @@ button.warehouse-flow-item:hover,
 
 .research-d3-node text {
   fill: var(--text);
+  paint-order: stroke;
+  stroke: var(--surface);
+  stroke-width: 3px;
+  stroke-linejoin: round;
 }
 
 .research-d3-node {
