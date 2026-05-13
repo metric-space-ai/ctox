@@ -937,84 +937,6 @@ def source_records(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return []
 
 
-def llm_screen_records(records: list[dict[str, Any]], topic: str, query: str) -> dict[int, dict[str, Any]]:
-    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
-    if not api_key:
-        raise RuntimeError("OPENAI_API_KEY is required for --llm-screening")
-    if not records:
-        return {}
-    compact_records = []
-    for idx, record in enumerate(records):
-        compact_records.append(
-            {
-                "index": idx,
-                "title": str(record.get("title") or record.get("name") or "")[:220],
-                "url": extract_url(record)[:260],
-                "snippet": str(record.get("snippet") or record.get("summary") or "")[:650],
-            }
-        )
-    prompt = {
-        "topic": topic,
-        "query": query,
-        "task": (
-            "Screen source candidates for a source-review catalog. Accept only sources that are likely to contain "
-            "usable primary data, datasets, databases, technical reports, standards, documentation, manuals, or "
-            "source containers that directly help answer the topic. Reject broad surveys, SEO articles, unrelated "
-            "uses of shared words, news, forums, and sources without evidence that they contain useful data. "
-            "Return strict JSON only."
-        ),
-        "records": compact_records,
-        "output_schema": {
-            "decisions": [
-                {
-                    "index": 0,
-                    "accepted": True,
-                    "score": 0,
-                    "reason": "short operator-facing reason",
-                }
-            ]
-        },
-    }
-    body = json.dumps(
-        {
-            "model": os.environ.get("CTOX_SOURCE_REVIEW_LLM_MODEL", "gpt-5.4-mini"),
-            "messages": [
-                {
-                    "role": "system",
-                    "content": "You are a strict research source reviewer. Output only valid JSON.",
-                },
-                {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
-            ],
-            "response_format": {"type": "json_object"},
-        }
-    ).encode("utf-8")
-    request = urllib.request.Request(
-        "https://api.openai.com/v1/chat/completions",
-        data=body,
-        headers={
-            "authorization": f"Bearer {api_key}",
-            "content-type": "application/json",
-        },
-        method="POST",
-    )
-    with urllib.request.urlopen(request, timeout=90) as response:  # noqa: S310 - trusted OpenAI API endpoint.
-        payload = json.loads(response.read().decode("utf-8"))
-    content = payload["choices"][0]["message"]["content"]
-    parsed = json.loads(content)
-    decisions: dict[int, dict[str, Any]] = {}
-    for item in parsed.get("decisions", []):
-        try:
-            index = int(item.get("index"))
-        except Exception:
-            continue
-        decisions[index] = {
-            "accepted": bool(item.get("accepted")),
-            "score": max(0, min(100, int(item.get("score") or 0))),
-            "reason": str(item.get("reason") or "llm_screened").strip()[:240],
-        }
-    return decisions
-
-
 def source_key(record: dict[str, Any]) -> str:
     for key in ("doi", "DOI", "url", "canonical_url", "link", "id"):
         value = record.get(key)
@@ -1914,7 +1836,6 @@ def main() -> int:
     parser.add_argument("--business-research-run-id")
     parser.add_argument("--business-research-title")
     parser.add_argument("--business-writeback", action="store_true")
-    parser.add_argument("--llm-screening", action="store_true")
     parser.add_argument("--plan-only", action="store_true")
     args = parser.parse_args()
 
@@ -1993,12 +1914,11 @@ def main() -> int:
             args.web_query_delay_sec,
         )
         records = source_records(payload)
-        llm_decisions = llm_screen_records(records, args.topic, spec.query) if args.llm_screening else None
         reviewed_total += len(records)
         write_summary(summary_path, spec, records)
 
         new_count = 0
-        for record_index, record in enumerate(records):
+        for record in records:
             key = source_key(record)
             if not key or key in seen:
                 continue
@@ -2013,14 +1933,8 @@ def main() -> int:
                 "openalex_id": str(record.get("openalex_id") or "").strip(),
                 "snippet": str(record.get("snippet") or record.get("summary") or "").strip()[:500],
             }
-            if llm_decisions is not None:
-                decision = llm_decisions.get(record_index, {"accepted": False, "score": 0, "reason": "llm_no_decision"})
-                accepted = bool(decision.get("accepted"))
-                reason = f"llm:{decision.get('reason') or 'screened'}"
-                relevance_score = int(decision.get("score") or 0)
-            else:
-                accepted, reason = source_acceptance(record, args.topic, spec.query)
-                relevance_score = source_relevance_score(record, args.topic)
+            accepted, reason = source_acceptance(record, args.topic, spec.query)
+            relevance_score = source_relevance_score(record, args.topic)
             screened_row = {
                 **row,
                 "screening_status": "accepted" if accepted else "rejected",

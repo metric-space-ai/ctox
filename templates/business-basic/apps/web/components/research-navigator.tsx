@@ -1046,22 +1046,12 @@ function facetLabel(value: string) {
 function fitValue(source: ResearchSource, key: string) {
   if (source.fit?.[key] !== undefined) return source.fit[key];
   const legacy = source.fit ?? {};
-  if (key === "primary") return legacy.direct ?? inferredFit(source, key);
-  if (key === "structured") return Math.max(legacy.rpm ?? 0, legacy.simulation ?? 0, inferredFit(source, key));
-  if (key === "coverage") return legacy.duty ?? inferredFit(source, key);
-  if (key === "specificity") return Math.max(legacy.direct ?? 0, legacy.vibration ?? 0, inferredFit(source, key));
-  if (key === "reuse") return legacy.simulation ?? inferredFit(source, key);
-  return inferredFit(source, key);
-}
-
-function inferredFit(source: ResearchSource, key: string) {
-  const text = [source.title, source.group, source.type, source.contribution, ...(source.tags ?? [])].join(" ").toLowerCase();
-  if (key === "primary") return text.includes("data") || text.includes("dataset") || text.includes("database") ? 4 : 2;
-  if (key === "structured") return text.includes("csv") || text.includes("table") || text.includes("database") || text.includes("dataset") ? 4 : 2;
-  if (key === "coverage") return text.includes("public") || text.includes("current") || text.includes("repository") ? 4 : 2;
-  if (key === "specificity") return text.includes("force") || text.includes("moment") || text.includes("load") || text.includes("telemetry") ? 4 : 2;
-  if (key === "reuse") return text.includes("model") || text.includes("coefficient") || text.includes("documentation") || text.includes("repository") ? 4 : 2;
-  return 1;
+  if (key === "primary") return legacy.direct ?? 0;
+  if (key === "structured") return Math.max(legacy.rpm ?? 0, legacy.simulation ?? 0);
+  if (key === "coverage") return legacy.duty ?? 0;
+  if (key === "specificity") return Math.max(legacy.direct ?? 0, legacy.vibration ?? 0);
+  if (key === "reuse") return legacy.simulation ?? 0;
+  return 0;
 }
 
 function gradeLabel(score: ResearchSource["score"]) {

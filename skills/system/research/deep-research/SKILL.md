@@ -427,13 +427,16 @@ may only put counts in the Word table that are backed by these persisted logs.
 
 Use the bundled discovery runner. It creates a broad query plan, saves every
 raw JSON payload, deduplicates sources, writes `search_protocol.csv` and
-an accepted-only `candidate_sources.csv`, and calls `ctox report
-research-log-add` for every executed query. `candidate_sources.csv` is not a
-raw metadata dump: every row must pass the topic-derived acceptance gate and
-must carry a numeric relevance score. The full audit trail lives in
-`screened_sources.csv`; rejected/off-topic hits live in `rejected_sources.csv`.
-The query-to-source and citation traversal lives in `discovery_graph.json`.
-Never hand the raw screened catalog to the user as the source catalog.
+`screened_sources.csv`, `candidate_sources.csv`, and `rejected_sources.csv`,
+and calls `ctox report research-log-add` for every executed query. Treat
+`candidate_sources.csv` as a retrieval aid, not as the final intellectual
+source catalog. The agent must read and decide: promote only LLM-reviewed,
+topic-relevant, useful sources into the visible catalog and move weak or
+off-topic material to the rejected/off-topic audit. The full audit trail lives
+in `screened_sources.csv`; rejected/off-topic hits live in
+`rejected_sources.csv`. The query-to-source and citation traversal lives in
+`discovery_graph.json`. Never hand raw screened or mechanically accepted rows
+to the user as the source catalog.
 
 Before running discovery, write the search plan yourself as a CSV file with
 columns `focus,query`. The LLM is responsible for the actual raw search
@@ -441,6 +444,13 @@ queries. Do not rely on the script to infer the right domain language from a
 long prompt. The discovery runner rejects real runs without `--queries-file`;
 its built-in query plan can only be enabled explicitly with
 `--allow-auto-query-plan` for smoke tests.
+
+The discovery runner is a persistence and retrieval tool, not the research
+brain. The agent loop owns the research decisions. It must decide what to
+search next, which early pages to read, which source families are emerging,
+which candidates are useful, and when to move from web discovery into citation
+and reference-graph expansion. Do not move these decisions into deterministic
+word parsing, regex rules, or a sidecar LLM call outside the agent loop.
 
 The query plan must be natural search language, not a compressed prompt and not
 a keyword salad. Each query should look like something a careful human
@@ -467,6 +477,28 @@ dataset format, measured variables, access path, standard/report identifiers,
 and repeated terminology. The LLM must name these groups in ordinary
 operator-facing language. Do not derive them with topic-specific shortcuts,
 regex tricks, or a fixed taxonomy from a previous domain.
+
+Use this sequence for source discovery:
+
+1. **Primary-source web pass**: start with web searches for obvious source
+   containers: public databases, datasets, official/agency pages, technical
+   reports, manufacturer or operator documentation, manuals, standards, data
+   portals, repositories, and downloadable tables. The first pass should favor
+   primary or near-primary sources over papers and broad reviews.
+2. **Read and classify**: open/read the best early sources. From their actual
+   content, infer the source families, scoring criteria, exclusion criteria,
+   host/institution names, data formats, variable names, and repeated terms.
+3. **Targeted follow-up**: write a revised query CSV from those observations.
+   Add host-specific or institution-specific queries only after the host or
+   institution has surfaced naturally from the first pass.
+4. **Scientific/deep pass**: only then expand into papers, DOI/OpenAlex,
+   citation snowballing, reference/cited-by traversal, and related-work
+   discovery. Scientific sources are used to find data trails, validation
+   reports, appendices, repositories and cited datasets, not as a replacement
+   for source-container discovery.
+5. **Discovery graph**: keep query -> source, source -> source-family, and
+   citation/reference relationships in `discovery_graph.json`. Use the graph to
+   decide the next search step independently of search-engine ranking.
 
 Bad query style:
 

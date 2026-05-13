@@ -1,7 +1,4 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
@@ -31,19 +28,6 @@ export type CtoxDeepResearchRequest = {
   depth?: "quick" | "standard" | "exhaustive";
   maxSources?: number;
   workspace?: string;
-};
-
-export type CtoxSourceReviewDiscoveryRequest = {
-  topic: string;
-  runId: string;
-  title?: string;
-  queries?: Array<{ focus: string; query: string }>;
-  targetAdditionalSources?: number;
-  workspace?: string;
-  existingDiscoveryDir?: string;
-  databaseUrl?: string;
-  openaiApiKey?: string;
-  storeKey?: string;
 };
 
 type CtoxQueueTask = {
@@ -277,86 +261,6 @@ export async function runCtoxDeepResearch(request: CtoxDeepResearchRequest) {
     maxBuffer: 64 * 1024 * 1024
   });
   return JSON.parse(stdout) as Record<string, unknown>;
-}
-
-export async function runCtoxSourceReviewDiscovery(request: CtoxSourceReviewDiscoveryRequest) {
-  const bridgeUrl = process.env.CTOX_BRIDGE_URL?.replace(/\/$/, "");
-  const token = process.env.CTOX_BRIDGE_TOKEN;
-
-  if (bridgeUrl) {
-    const response = await fetch(`${bridgeUrl}/source-review-discovery`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        ...(token ? { authorization: `Bearer ${token}` } : {})
-      },
-      body: JSON.stringify(request)
-    });
-
-    if (!response.ok) {
-      const payload = await response.json().catch(() => null) as { error?: string } | null;
-      throw new Error(payload?.error ?? `source_review_discovery_bridge_failed_${response.status}`);
-    }
-
-    return await response.json() as Record<string, unknown>;
-  }
-
-  if (!shouldExecuteCoreQueue()) throw new Error("source_review_discovery_bridge_not_configured");
-
-  const outDir = request.workspace ?? `/tmp/ctox-business-source-review-${request.runId}`;
-  let queriesFile = "";
-  if (request.queries?.length) {
-    const dir = await mkdtemp(join(tmpdir(), "ctox-source-review-"));
-    queriesFile = join(dir, "queries.csv");
-    const rows = ["focus,query", ...request.queries.map((item) => `${csvCell(item.focus)},${csvCell(item.query)}`)];
-    await writeFile(queriesFile, `${rows.join("\n")}\n`, "utf8");
-  }
-  const args = [
-    "skills/system/research/deep-research/scripts/source_review_discovery.py",
-    "--topic",
-    request.topic,
-    "--out-dir",
-    outDir,
-    "--max-sources-per-query",
-    "50",
-    "--target-reviewed",
-    String(Math.max(50, request.targetAdditionalSources ?? 50)),
-    "--discovery-backend",
-    "hybrid",
-    "--query-timeout-sec",
-    "45",
-    "--web-query-delay-sec",
-    "1",
-    "--snowball-rounds",
-    "1"
-  ];
-  if (queriesFile) args.push("--queries-file", queriesFile);
-  else args.push("--allow-auto-query-plan");
-  args.push("--llm-screening");
-  if (request.existingDiscoveryDir) args.push("--existing-discovery-dir", request.existingDiscoveryDir);
-  if (request.targetAdditionalSources) args.push("--target-additional-candidates", String(request.targetAdditionalSources));
-  if (request.databaseUrl) {
-    args.push(
-      "--business-writeback",
-      "--business-database-url",
-      request.databaseUrl,
-      "--business-research-run-id",
-      request.runId,
-      "--business-research-title",
-      request.title ?? request.topic.slice(0, 80),
-      "--business-store-key",
-      request.storeKey ?? "marketing/research/runs"
-    );
-  }
-  const { stdout } = await execFileAsync("python3", args, {
-    cwd: process.env.CTOX_ROOT,
-    maxBuffer: 64 * 1024 * 1024
-  });
-  return JSON.parse(stdout) as Record<string, unknown>;
-}
-
-function csvCell(value: string) {
-  return `"${value.replace(/"/g, '""')}"`;
 }
 
 export async function getCtoxHarnessFlow(): Promise<CtoxHarnessFlowResult> {

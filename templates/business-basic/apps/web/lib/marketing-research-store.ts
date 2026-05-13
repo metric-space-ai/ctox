@@ -37,23 +37,16 @@ function mergeStoredResearchRuns(stored: ResearchRun[], fallback: ResearchRun[])
 
 function mergeResearchRun(stored: ResearchRun, fallback?: ResearchRun): ResearchRun {
   if (!fallback) return stored;
-  const fallbackSourcesById = new Map(fallback.sources.map((source) => [source.id, source]));
-  const sourceIds = new Set(stored.sources.map((source) => source.id));
-  const sources = [
-    ...stored.sources.map((source) => ({ ...fallbackSourcesById.get(source.id), ...source })),
-    ...fallback.sources.filter((source) => !sourceIds.has(source.id))
-  ];
-
   return {
     ...fallback,
     ...stored,
-    queryCount: Math.max(stored.queryCount, fallback.queryCount),
-    screenedCount: Math.max(stored.screenedCount, fallback.screenedCount),
-    acceptedCount: Math.max(stored.acceptedCount, fallback.acceptedCount),
-    sources,
+    queryCount: stored.queryCount,
+    screenedCount: stored.screenedCount,
+    acceptedCount: stored.acceptedCount,
+    sources: stored.sources,
     graph: {
-      nodes: mergeById(fallback.graph.nodes, stored.graph.nodes),
-      edges: mergeGraphEdges(fallback.graph.edges, stored.graph.edges)
+      nodes: stored.graph.nodes,
+      edges: stored.graph.edges
     },
     expansionRequests: stored.expansionRequests ?? fallback.expansionRequests,
     criteriaItems: stored.criteriaItems ?? fallback.criteriaItems,
