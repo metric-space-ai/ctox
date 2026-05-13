@@ -1196,7 +1196,7 @@ DISPOSITION: SEND|NO_SEND\n",
 
 fn parse_review_report(score: u8, reasons: Vec<String>, report: &str) -> ReviewOutcome {
     let parsed_verdict = parse_verdict(report);
-    let mut verdict = parsed_verdict.clone().unwrap_or(ReviewVerdict::Partial);
+    let mut verdict = parsed_verdict.clone().unwrap_or(ReviewVerdict::Unavailable);
     let pass_proof = parse_pass_proof(report);
     let mission_state = parse_prefixed_line(report, "MISSION_STATE:")
         .filter(|value| !value.is_empty())
@@ -1204,10 +1204,10 @@ fn parse_review_report(score: u8, reasons: Vec<String>, report: &str) -> ReviewO
     let mut summary = if parsed_verdict.is_none() {
         match parse_prefixed_line(report, "SUMMARY:") {
             Some(summary) if !summary.is_empty() => format!(
-                "Review report did not contain an explicit verdict, so the task stays open. {}",
+                "Review report did not contain an explicit verdict, so the review is unavailable. {}",
                 summary
             ),
-            _ => "Review report did not contain an explicit verdict, so the task stays open."
+            _ => "Review report did not contain an explicit verdict, so the review is unavailable."
                 .to_string(),
         }
     } else {
@@ -2128,11 +2128,11 @@ mod tests {
     }
 
     #[test]
-    fn missing_verdict_keeps_slice_open() {
+    fn missing_verdict_is_review_unavailable_not_worker_rework() {
         let outcome = parse_review_report(3, vec![], "SUMMARY: Looked okay overall.");
-        assert_eq!(outcome.verdict, ReviewVerdict::Partial);
-        assert!(outcome.summary.contains("stays open"));
-        assert!(outcome.requires_follow_up());
+        assert_eq!(outcome.verdict, ReviewVerdict::Unavailable);
+        assert!(outcome.summary.contains("review is unavailable"));
+        assert!(!outcome.requires_follow_up());
     }
 
     #[test]
