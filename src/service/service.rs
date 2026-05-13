@@ -9987,6 +9987,10 @@ fn runtime_error_is_transient_api_failure(error: &str) -> bool {
         || normalized.contains("status code 502")
         || normalized.contains("status code 503")
         || normalized.contains("status code 504")
+        || normalized.contains("access token could not be refreshed")
+        || normalized.contains("refresh token was already used")
+        || normalized.contains("refresh token has expired")
+        || normalized.contains("refresh token was revoked")
 }
 
 fn founder_email_reply_message_key(job: &QueuedPrompt) -> Option<&str> {
@@ -19038,6 +19042,18 @@ Preserve and update controller.json and logbook.md."
             Some(300)
         );
         assert!(runtime_error_is_transient_api_failure(error));
+    }
+
+    #[test]
+    fn chatgpt_subscription_refresh_error_keeps_work_retryable() {
+        let error = "direct session error: ErrorEvent { message: \"Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.\", codex_error_info: Some(Unauthorized) }";
+        assert_eq!(
+            turn_loop::hard_runtime_blocker_retry_cooldown_secs(error),
+            Some(900)
+        );
+        assert!(runtime_error_is_transient_api_failure(error));
+        assert_eq!(failed_worker_route_status(false, false, true), "pending");
+        assert!(turn_loop::summarize_runtime_error(error).contains("re-authentication"));
     }
 
     #[test]

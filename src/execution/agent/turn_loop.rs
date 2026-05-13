@@ -1105,6 +1105,15 @@ fn summarize_known_infra_error(content: &str) -> Option<String> {
             "CTOX chat could not continue because the configured OpenAI API quota is exhausted or billing is unavailable for the selected model.".to_string(),
         );
     }
+    if lower.contains("access token could not be refreshed")
+        || lower.contains("refresh token was already used")
+        || lower.contains("refresh token has expired")
+        || lower.contains("refresh token was revoked")
+    {
+        return Some(
+            "CTOX chat could not continue because the ChatGPT subscription session on this host needs re-authentication. The task must stay open until login is refreshed.".to_string(),
+        );
+    }
     if lower.contains("feature `edition2024` is required")
         || (lower.contains("edition2024") && lower.contains("cargo"))
     {
