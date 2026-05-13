@@ -70,7 +70,6 @@ use tiny_http::StatusCode;
 use crate::channels;
 use crate::communication::adapters as communication_adapters;
 use crate::context_health;
-use crate::execution::agent::direct_session::TerminalBenchPreflightSpec;
 use crate::governance;
 use crate::inference::runtime_control;
 use crate::inference::runtime_env;
@@ -2786,36 +2785,8 @@ fn start_prompt_worker(
                 .leased_message_keys
                 .iter()
                 .any(|key| key.starts_with("plan:system::"));
-            let mut execution_prompt =
+            let execution_prompt =
                 outbound_email_first_execution_prompt(&job, artifact_first_execution_prompt(&job));
-            let terminal_bench_preflight = terminal_bench_preflight_spec_for_job(&job);
-            match maybe_terminal_bench_controller_runtime_ref_feedback(&root, &job) {
-                Ok(Some(note)) => {
-                    push_event(
-                        &event_state,
-                        format!("phase {} terminal-bench-runtime-ref-feedback", event_source),
-                    );
-                    execution_prompt = format!("{note}\n\n{execution_prompt}");
-                }
-                Ok(None) => {}
-                Err(err) => {
-                    let note = format!(
-                        "HARNESS FEEDBACK\n\
-The harness could not inspect the Terminal-Bench runtime-ticket refs before model execution: {}\n\
-Before doing any other work, persist this blocker in controller.json, logbook.md, and run-queue.jsonl with the exact next command needed to repair it. Do not claim completion.",
-                        clip_text(&err.to_string(), 600)
-                    );
-                    push_event(
-                        &event_state,
-                        format!(
-                            "phase {} terminal-bench-runtime-ref-feedback-failed {}",
-                            event_source,
-                            clip_text(&err.to_string(), 160)
-                        ),
-                    );
-                    execution_prompt = format!("{note}\n\n{execution_prompt}");
-                }
-            }
             let result = turn_loop::run_chat_turn_with_events_extended_guarded(
                 &root,
                 &db_path,
@@ -2824,8 +2795,6 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
                 conversation_id,
                 job.suggested_skill.as_deref(),
                 force_continuity_refresh,
-                terminal_bench_preflight,
-                false,
                 None, // TUI service: per-turn clients (persistent session TODO)
                 |event| {
                     push_event(&event_state, format!("phase {} {}", event_source, event));
@@ -2860,7 +2829,6 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
                 .map(|err| {
                     let err_text = err.to_string();
                     runtime_error_is_transient_api_failure(&err_text)
-                        && !terminal_bench_preflight_retry_loop_should_stop(&job, &err_text)
                 })
                 .unwrap_or(false);
             // F3: when the turn failed, persist a structured outcome with a
@@ -3467,13 +3435,10 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
                     Err(err) => {
                         let err_text = err.to_string();
                         let compact_error = turn_loop::summarize_runtime_error(&err_text);
-                        let terminal_bench_preflight_loop_stop =
-                            terminal_bench_preflight_retry_loop_should_stop(&job, &err_text);
                         let retry_founder_message =
                             founder_email_worker_error_is_retryable(&job, &err_text);
                         let retry_runtime_message =
-                            runtime_error_is_transient_api_failure(&err_text)
-                                && !terminal_bench_preflight_loop_stop;
+                            runtime_error_is_transient_api_failure(&err_text);
                         let timeout_worker_message =
                             matches!(agent_outcome, lcm::AgentOutcome::TurnTimeout);
                         let timeout_retry_message =
@@ -3512,28 +3477,11 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
                                     ),
                                 }
                             }
-                            if terminal_bench_preflight_loop_stop {
-                                let note = terminal_bench_preflight_loop_stop_note(&err_text);
-                                for message_key in &job.leased_message_keys {
-                                    let _ = channels::update_queue_task(
-                                        &root,
-                                        channels::QueueTaskUpdateRequest {
-                                            message_key: message_key.clone(),
-                                            status_note: Some(note.clone()),
-                                            ..Default::default()
-                                        },
-                                    );
-                                }
-                            }
-                            let route_status = if terminal_bench_preflight_loop_stop {
-                                "blocked"
-                            } else {
-                                failed_worker_route_status(
-                                    agent_failure_threshold_hit,
-                                    timeout_worker_message,
-                                    retry_worker_message,
-                                )
-                            };
+                            let route_status = failed_worker_route_status(
+                                agent_failure_threshold_hit,
+                                timeout_worker_message,
+                                retry_worker_message,
+                            );
                             if let Some(not_before) = retry_not_before.as_deref() {
                                 let _ = channels::defer_messages_until(
                                     &root,
@@ -3623,15 +3571,7 @@ Before doing any other work, persist this blocker in controller.json, logbook.md
                                 block_ticket_self_work_item(&root, work_id, &note);
                             }
                         }
-                        if terminal_bench_preflight_loop_stop {
-                            push_event_locked(
-                                &mut shared,
-                                format!(
-                                    "{} prompt hit repeated Terminal-Bench preflight violations; automatic retry stopped: {compact_error}",
-                                    job.source_label
-                                ),
-                            );
-                        } else if retry_worker_message && retry_has_durable_resume {
+                        if retry_worker_message && retry_has_durable_resume {
                             push_event_locked(
                                 &mut shared,
                                 format!(
@@ -6003,9 +5943,6 @@ fn workspace_file_artifacts_require_fresh_write(job: &QueuedPrompt) -> bool {
     if declared_workspace_file_artifacts_for_job(job).is_empty() {
         return false;
     }
-    if is_terminal_bench_controller_artifact_job(job) {
-        return true;
-    }
     let haystack = format!(
         "{}\n{}\n{}\n{}\n{}",
         job.prompt,
@@ -6028,9 +5965,7 @@ fn workspace_file_artifacts_require_fresh_write(job: &QueuedPrompt) -> bool {
 }
 
 fn workspace_artifact_fresh_cutoff_for_job(root: &Path, job: &QueuedPrompt) -> Option<SystemTime> {
-    let mut cutoff = if job.source_label == "review-feedback"
-        && is_terminal_bench_controller_artifact_job(job)
-    {
+    let mut cutoff = if job.source_label == "review-feedback" {
         latest_outcome_witness_rejection_cutoff_for_job(root, job)
     } else {
         None
@@ -6150,12 +6085,6 @@ fn artifact_first_execution_prompt(job: &QueuedPrompt) -> String {
         return job.prompt.clone();
     }
 
-    if is_terminal_bench_controller_artifact_job(job)
-        && terminal_bench_first_turn_preflight_applies(job, &file_refs)
-    {
-        return terminal_bench_controller_artifact_preflight_prompt(job, &file_refs);
-    }
-
     let mut prompt = String::new();
     prompt.push_str("HARNESS ARTIFACT CONTRACT\n");
     prompt.push_str("This task declares durable file artifacts. The harness will not accept a final answer, plan, or interim text as completion unless these files exist on disk.\n\n");
@@ -6242,553 +6171,6 @@ ORIGINAL TASK\n\
         subject = &action.subject,
         attachments = attachments,
         base_prompt = base_prompt
-    )
-}
-
-fn terminal_bench_controller_artifact_preflight_prompt(
-    job: &QueuedPrompt,
-    file_refs: &[String],
-) -> String {
-    let run_dir = terminal_bench_run_dir_from_artifact_paths(file_refs);
-    let mut prompt = String::new();
-    prompt.push_str("HARNESS TERMINAL-BENCH PREFLIGHT\n");
-    prompt.push_str("The current Terminal-Bench controller task is paused at an artifact gate. The worker must perform this preflight itself. The harness and review system will not create files, create tickets, run commands, patch artifacts, or mark anything complete for the worker.\n\n");
-    if let Some(run_dir) = run_dir.as_deref() {
-        prompt.push_str("CURRENT TERMINAL-BENCH RUN SCOPE\n");
-        prompt.push_str("Use exactly this RUN_DIR for this queue item:\n");
-        prompt.push_str(run_dir);
-        prompt.push_str("\n\n");
-        prompt.push_str("Do not read, copy, or continue controller-prompt.md, controller.json, ticket-map.jsonl, preparation-tickets.jsonl, run-queue.jsonl, results.jsonl, knowledge.md, logbook.md, or blogpost-notes.md from any other Terminal-Bench run directory. Other directories under /home/metricspace/CTOX/runtime/terminal-bench-2/runs are stale context for this item. If a shell command or file path points at a different run id, that is a wrong-run error; stop that command sequence and write the blocker into the required files in the current RUN_DIR.\n\n");
-    }
-    prompt.push_str("FIRST TOOL CALL CONTRACT\n");
-    prompt.push_str("Your next assistant turn must use exactly one shell/terminal tool call before any prose conclusion. That shell script must, in this order:\n");
-    if let Some(run_dir) = run_dir.as_deref() {
-        prompt.push_str("1. Run `mkdir -p ");
-        prompt.push_str(run_dir);
-        prompt.push_str("/tasks`.\n");
-    } else {
-        prompt.push_str("1. Create the directory that contains the required files and its tasks subdirectory.\n");
-    }
-    prompt.push_str("2. Create or update every required file listed below as a regular file with truthful current status.\n");
-    prompt.push_str("3. If CTOX queue syntax is needed, run `ctox queue --help` or `ctox queue add --help` only after those files exist, and append the useful output or blocker to logbook.md.\n");
-    if terminal_bench_controller_requires_runtime_refs(job) {
-        prompt.push_str("4. Create durable CTOX queue/ticket work for the preparation phase and record the real message keys in ticket-map.jsonl and preparation-tickets.jsonl. Use the worker's CLI; do not invent synthetic keys.\n");
-        prompt.push_str("5. Verify each queued item with `ctox queue show` when the CLI supports it, or record the exact CLI blocker in logbook.md and controller.json.\n");
-        prompt.push_str("6. Run `test -f` checks for every required file and append the result to logbook.md.\n\n");
-        prompt.push_str("Required preparation queue items:\n");
-        prompt.push_str("- Inventory Terminal-Bench 2 tasks and create one durable benchmark ticket per task without opening solutions.\n");
-        prompt.push_str("- Research public Terminal-Bench 2 reference results and safe task ordering without solution leakage.\n");
-        prompt.push_str("- Verify the active harness runtime/model/provider, response adapter, and 131072 token context setting. If the runtime is local, record IPC/native/GPU facts; if it is remote/API-backed, record the provider/API path.\n");
-        prompt.push_str("- Run an initial small set of likely-solvable Terminal-Bench 2 tasks under Harbor/Terminal-Bench tooling.\n");
-        prompt.push_str(
-            "- Update knowledge.md, results.jsonl, and logbook.md after each benchmark attempt.\n",
-        );
-        prompt.push_str("- Return later to failed or skipped tasks with accumulated learnings, without treating intermediate state as final success.\n\n");
-    } else {
-        prompt.push_str("4. Run `test -f` checks for every required file and append the result to logbook.md or the closest required log file.\n\n");
-    }
-    prompt.push_str("Forbidden before the above succeeds:\n");
-    prompt.push_str("- `find`, `grep`, `rg`, `ls`, `cat`, `which`, `pip`, `python`, `docker`, `harbor`, or install-tree inspection unless the same shell script has already created every required file in the current RUN_DIR.\n");
-    prompt.push_str("- Web research, benchmark execution, model evaluation, broad codebase discovery, or reading old Terminal-Bench run directories.\n");
-    prompt.push_str("- A final answer that says work will be done later without the files and real queue refs existing on disk.\n\n");
-    prompt.push_str("Required files:\n");
-    for path in file_refs {
-        prompt.push_str("- ");
-        prompt.push_str(path);
-        prompt.push('\n');
-    }
-    prompt.push_str("\nCompletion condition for this preflight turn:\n");
-    prompt.push_str("End only after the shell has created the required files, recorded real queue refs or a precise CLI blocker, and verified every required path with `test -f`. If anything fails, write the failure into the required files and continue only with the next concrete repair step.\n\n");
-    prompt.push_str("Original controller task is intentionally withheld until this artifact preflight exists. Use the preparation queue items above to carry the benchmark forward.");
-    prompt
-}
-
-fn terminal_bench_run_dir_from_artifact_paths(paths: &[String]) -> Option<String> {
-    for path in paths {
-        let marker = "/terminal-bench-2/runs/";
-        let Some(marker_start) = path.find(marker) else {
-            continue;
-        };
-        let run_id_start = marker_start + marker.len();
-        let rest = &path[run_id_start..];
-        let Some(run_id_len) = rest.find('/') else {
-            continue;
-        };
-        if run_id_len == 0 {
-            continue;
-        }
-        return Some(path[..run_id_start + run_id_len].to_string());
-    }
-    None
-}
-
-fn is_terminal_bench_controller_artifact_job(job: &QueuedPrompt) -> bool {
-    if declared_workspace_file_artifacts_for_job(job).is_empty() {
-        return false;
-    }
-    let haystack = format!(
-        "{}\n{}\n{}\n{}\n{}",
-        job.prompt,
-        job.goal,
-        job.preview,
-        job.thread_key.clone().unwrap_or_default(),
-        job.workspace_root.clone().unwrap_or_default()
-    )
-    .to_ascii_lowercase();
-    let terminal_bench_scope = haystack.contains("terminal-bench")
-        || haystack.contains("terminal bench")
-        || haystack.contains("tbench");
-    let controller_shape = haystack.contains("controller")
-        || haystack.contains("harbor")
-        || haystack.contains("ticket-map.jsonl")
-        || haystack.contains("results.json")
-        || haystack.contains("run-log.md");
-    terminal_bench_scope && controller_shape
-}
-
-fn terminal_bench_controller_requires_runtime_refs(job: &QueuedPrompt) -> bool {
-    if !is_terminal_bench_controller_artifact_job(job) {
-        return false;
-    }
-    let haystack = format!(
-        "{}\n{}\n{}\n{}\n{}",
-        job.prompt,
-        job.goal,
-        job.preview,
-        job.thread_key.clone().unwrap_or_default(),
-        job.workspace_root.clone().unwrap_or_default()
-    )
-    .to_ascii_lowercase();
-    haystack.contains("create durable ctox queue/ticket work")
-        || haystack.contains("preparation queue/tickets")
-        || haystack.contains("preparation-tickets.jsonl")
-        || haystack.contains("one benchmark ticket")
-        || haystack.contains("message keys")
-}
-
-fn terminal_bench_preflight_spec_for_job(job: &QueuedPrompt) -> Option<TerminalBenchPreflightSpec> {
-    if !is_terminal_bench_controller_artifact_job(job) {
-        return None;
-    }
-    let file_refs = declared_workspace_file_artifacts_for_job(job);
-    if !terminal_bench_first_turn_preflight_applies(job, &file_refs) {
-        return None;
-    }
-    let run_dir = terminal_bench_run_dir_from_artifact_paths(&file_refs)?;
-    Some(TerminalBenchPreflightSpec {
-        run_dir,
-        required_files: file_refs,
-        requires_runtime_refs: terminal_bench_controller_requires_runtime_refs(job),
-    })
-}
-
-fn terminal_bench_first_turn_preflight_applies(job: &QueuedPrompt, file_refs: &[String]) -> bool {
-    if file_refs.is_empty() || !is_terminal_bench_controller_artifact_job(job) {
-        return false;
-    }
-    if job.source_label == "review-feedback" || job.ticket_self_work_id.is_some() {
-        return false;
-    }
-    let lower_prompt = job.prompt.to_ascii_lowercase();
-    let explicit_first_turn_contract = [
-        "only required durable files for this controller turn",
-        "first action must be one shell",
-        "critical first-turn contract",
-        "harness terminal-bench preflight",
-        "harness terminal-bench preflight retry",
-    ]
-    .iter()
-    .any(|needle| lower_prompt.contains(needle));
-    if !explicit_first_turn_contract {
-        return false;
-    }
-    let requires_runtime_refs = terminal_bench_controller_requires_runtime_refs(job);
-    !terminal_bench_preflight_already_bootstrapped(file_refs, requires_runtime_refs)
-}
-
-fn terminal_bench_preflight_already_bootstrapped(
-    file_refs: &[String],
-    requires_runtime_refs: bool,
-) -> bool {
-    let Some(run_dir) = terminal_bench_run_dir_from_artifact_paths(file_refs) else {
-        return false;
-    };
-    let all_required_files_exist = file_refs.iter().all(|path| Path::new(path).is_file());
-    if !all_required_files_exist || !Path::new(&run_dir).join("tasks").is_dir() {
-        return false;
-    }
-    if !requires_runtime_refs {
-        return true;
-    }
-    terminal_bench_file_refs_contain_real_queue_refs(file_refs)
-}
-
-fn terminal_bench_file_refs_contain_real_queue_refs(file_refs: &[String]) -> bool {
-    file_refs.iter().any(|path| {
-        let Ok(content) = std::fs::read_to_string(path) else {
-            return false;
-        };
-        content.contains("queue:system::")
-    })
-}
-
-fn validate_terminal_bench_controller_runtime_refs(
-    root: &Path,
-    job: &QueuedPrompt,
-    expected_artifact_refs: &[ArtifactRef],
-) -> Result<()> {
-    if !terminal_bench_controller_requires_runtime_refs(job) {
-        return Ok(());
-    }
-    let paths = terminal_bench_controller_runtime_ref_paths(expected_artifact_refs);
-    if paths.is_empty() {
-        return Ok(());
-    }
-
-    let mut valid_refs = Vec::new();
-    let mut synthetic_refs = Vec::new();
-    for path in &paths {
-        if !path.is_file() {
-            continue;
-        }
-        let text = std::fs::read_to_string(path)
-            .with_context(|| format!("failed to read {}", path.display()))?;
-        collect_valid_terminal_bench_runtime_refs(
-            root,
-            job,
-            &text,
-            &mut valid_refs,
-            &mut synthetic_refs,
-        )?;
-    }
-
-    if !valid_refs.is_empty() {
-        return Ok(());
-    }
-    if terminal_bench_controller_has_explicit_blocker(expected_artifact_refs) {
-        return Ok(());
-    }
-
-    anyhow::bail!(
-        "Terminal-Bench controller outcome is missing real CTOX runtime ticket/queue refs. \
-ticket-map.jsonl, preparation-tickets.jsonl, and run-queue.jsonl must reference existing \
-CTOX queue message keys such as queue:system::<id> or existing ticket self-work IDs. \
-Synthetic refs like {} do not count. Create real CTOX queue tasks via `ctox queue add` \
-or persist an explicit blocker with the exact next command.",
-        if synthetic_refs.is_empty() {
-            "msg-prep-runtime-001".to_string()
-        } else {
-            synthetic_refs
-                .iter()
-                .take(3)
-                .cloned()
-                .collect::<Vec<_>>()
-                .join(", ")
-        }
-    );
-}
-
-fn terminal_bench_controller_runtime_ref_paths(
-    expected_artifact_refs: &[ArtifactRef],
-) -> Vec<PathBuf> {
-    let mut paths = Vec::new();
-    for artifact in expected_artifact_refs {
-        if artifact.kind != ArtifactKind::WorkspaceFile {
-            continue;
-        }
-        let path = Path::new(&artifact.primary_key);
-        let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
-            continue;
-        };
-        if matches!(
-            name,
-            "ticket-map.jsonl" | "preparation-tickets.jsonl" | "run-queue.jsonl"
-        ) {
-            paths.push(path.to_path_buf());
-        }
-    }
-    paths
-}
-
-fn collect_valid_terminal_bench_runtime_refs(
-    root: &Path,
-    job: &QueuedPrompt,
-    text: &str,
-    valid_refs: &mut Vec<String>,
-    synthetic_refs: &mut Vec<String>,
-) -> Result<()> {
-    for raw_line in text.lines() {
-        let line = raw_line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        if let Ok(value) = serde_json::from_str::<Value>(line) {
-            collect_valid_terminal_bench_runtime_refs_from_value(
-                root,
-                job,
-                &value,
-                valid_refs,
-                synthetic_refs,
-            )?;
-        } else {
-            collect_valid_terminal_bench_runtime_refs_from_text(
-                root,
-                job,
-                line,
-                valid_refs,
-                synthetic_refs,
-            )?;
-        }
-    }
-    Ok(())
-}
-
-fn collect_valid_terminal_bench_runtime_refs_from_value(
-    root: &Path,
-    job: &QueuedPrompt,
-    value: &Value,
-    valid_refs: &mut Vec<String>,
-    synthetic_refs: &mut Vec<String>,
-) -> Result<()> {
-    match value {
-        Value::Object(map) => {
-            for (key, value) in map {
-                if let Some(value) = value.as_str() {
-                    validate_terminal_bench_runtime_ref_value(
-                        root,
-                        job,
-                        key,
-                        value,
-                        valid_refs,
-                        synthetic_refs,
-                    )?;
-                } else {
-                    collect_valid_terminal_bench_runtime_refs_from_value(
-                        root,
-                        job,
-                        value,
-                        valid_refs,
-                        synthetic_refs,
-                    )?;
-                }
-            }
-        }
-        Value::Array(items) => {
-            for item in items {
-                collect_valid_terminal_bench_runtime_refs_from_value(
-                    root,
-                    job,
-                    item,
-                    valid_refs,
-                    synthetic_refs,
-                )?;
-            }
-        }
-        _ => {}
-    }
-    Ok(())
-}
-
-fn collect_valid_terminal_bench_runtime_refs_from_text(
-    root: &Path,
-    job: &QueuedPrompt,
-    text: &str,
-    valid_refs: &mut Vec<String>,
-    synthetic_refs: &mut Vec<String>,
-) -> Result<()> {
-    for token in text
-        .split(|ch: char| ch.is_whitespace() || matches!(ch, '"' | '\'' | ',' | ';' | '[' | ']'))
-        .map(str::trim)
-        .filter(|token| !token.is_empty())
-    {
-        validate_terminal_bench_runtime_ref_value(
-            root,
-            job,
-            "runtime_ref",
-            token,
-            valid_refs,
-            synthetic_refs,
-        )?;
-    }
-    Ok(())
-}
-
-fn validate_terminal_bench_runtime_ref_value(
-    root: &Path,
-    job: &QueuedPrompt,
-    key: &str,
-    value: &str,
-    valid_refs: &mut Vec<String>,
-    synthetic_refs: &mut Vec<String>,
-) -> Result<()> {
-    let key = key.to_ascii_lowercase();
-    let value = value.trim();
-    if value.is_empty() {
-        return Ok(());
-    }
-    if value.starts_with("msg-") || value.starts_with("queue-id-") {
-        push_unique_string(synthetic_refs, value.to_string());
-        return Ok(());
-    }
-    let queue_key_field =
-        key.contains("message_key") || key.contains("queue_key") || key == "runtime_ref";
-    if queue_key_field && value.starts_with("queue:") {
-        if job
-            .leased_message_keys
-            .iter()
-            .any(|leased| leased.as_str() == value)
-        {
-            return Ok(());
-        }
-        if channels::load_queue_task(root, value)?.is_some() {
-            push_unique_string(valid_refs, value.to_string());
-        }
-        return Ok(());
-    }
-    let work_id_field =
-        key.contains("work_id") || key.contains("self_work_id") || key.contains("ticket_work");
-    if work_id_field && tickets::load_ticket_self_work_item(root, value)?.is_some() {
-        push_unique_string(valid_refs, value.to_string());
-    }
-    Ok(())
-}
-
-fn terminal_bench_controller_has_explicit_blocker(expected_artifact_refs: &[ArtifactRef]) -> bool {
-    let mut controller_has_blocker = false;
-    let mut next_action_recorded = false;
-    for artifact in expected_artifact_refs {
-        if artifact.kind != ArtifactKind::WorkspaceFile {
-            continue;
-        }
-        let path = Path::new(&artifact.primary_key);
-        if !path.is_file() {
-            continue;
-        }
-        let Ok(text) = std::fs::read_to_string(path) else {
-            continue;
-        };
-        let lowered = text.to_ascii_lowercase();
-        if path
-            .file_name()
-            .and_then(|value| value.to_str())
-            .is_some_and(|name| name == "controller.json")
-            && (lowered.contains("\"blocker\"")
-                || lowered.contains("\"status\":\"blocked\"")
-                || lowered.contains("\"phase\":\"blocked\""))
-        {
-            controller_has_blocker = true;
-        }
-        if lowered.contains("next_action")
-            || lowered.contains("next command")
-            || lowered.contains("next_command")
-        {
-            next_action_recorded = true;
-        }
-    }
-    controller_has_blocker && next_action_recorded
-}
-
-fn maybe_terminal_bench_controller_runtime_ref_feedback(
-    root: &Path,
-    job: &QueuedPrompt,
-) -> Result<Option<String>> {
-    if !terminal_bench_controller_requires_runtime_refs(job) {
-        return Ok(None);
-    }
-    let expected = expected_outcome_artifacts_for_job(job);
-    let runtime_ref_paths = terminal_bench_controller_runtime_ref_paths(&expected);
-    if runtime_ref_paths.is_empty() {
-        return Ok(None);
-    }
-    let current_run_dir = terminal_bench_run_dir_from_artifact_paths(
-        &expected
-            .iter()
-            .filter(|artifact| artifact.kind == ArtifactKind::WorkspaceFile)
-            .map(|artifact| artifact.primary_key.clone())
-            .collect::<Vec<_>>(),
-    );
-    let mut valid_refs = Vec::new();
-    let mut synthetic_refs = Vec::new();
-    for path in &runtime_ref_paths {
-        if path.is_file() {
-            let text = std::fs::read_to_string(path)
-                .with_context(|| format!("failed to read {}", path.display()))?;
-            collect_valid_terminal_bench_runtime_refs(
-                root,
-                job,
-                &text,
-                &mut valid_refs,
-                &mut synthetic_refs,
-            )?;
-        }
-    }
-    if !valid_refs.is_empty() {
-        return Ok(Some(terminal_bench_runtime_ref_feedback_note(
-            &valid_refs,
-            current_run_dir.as_deref(),
-            "The harness found existing real preparation queue refs.",
-        )));
-    }
-
-    let parent_key = parent_queue_key_for_feedback(job);
-    let example = parent_key
-        .as_deref()
-        .map(|key| {
-            format!(
-                "Concrete valid command shape for each preparation item:\n\
-ctox queue add --title \"<short preparation title>\" --prompt \"<full worker instruction>\" --thread-key \"terminal-bench-2/prep/<slug>\" --workspace-root \"{}\" --skill benchmark-controller --priority high --parent-message-key {key}\n\
-Do not use `--description`; this CLI requires `--prompt <text>`.",
-                current_run_dir.as_deref().unwrap_or("<current RUN_DIR>")
-            )
-        })
-        .unwrap_or_else(|| {
-            format!(
-                "Concrete valid command shape for each preparation item:\n\
-ctox queue add --title \"<short preparation title>\" --prompt \"<full worker instruction>\" --thread-key \"terminal-bench-2/prep/<slug>\" --workspace-root \"{}\" --skill benchmark-controller --priority high\n\
-Do not use `--description`; this CLI requires `--prompt <text>`.",
-                current_run_dir.as_deref().unwrap_or("<current RUN_DIR>")
-            )
-        });
-    Ok(Some(format!(
-        "HARNESS FEEDBACK\n\
-The Terminal-Bench controller requires real CTOX runtime queue/ticket refs, but none are currently recorded in ticket-map.jsonl, preparation-tickets.jsonl, or run-queue.jsonl.\n\
-Current RUN_DIR for this queue item: {}\n\
-Write only to files in this RUN_DIR. Do not inspect or reuse controller-prompt.md or durable files from older Terminal-Bench run directories.\n\
-Do not invent identifiers. Values like msg-prep-runtime-001, q1, ticket-1, or TODO are invalid.\n\
-If you are unsure about CTOX CLI syntax, inspect it yourself with `ctox help`, `ctox queue --help`, and `ctox queue add --help` before creating any tickets. Do not guess.\n\
-Your next shell action must create the preparation work yourself with `ctox queue add --title ... --prompt ...`; `--description` is not a valid `ctox queue add` flag. Capture the real `queue:system::*` message_key values from stdout, verify each with `ctox queue show --message-key <key>`, and persist those exact keys in ticket-map.jsonl, preparation-tickets.jsonl, and run-queue.jsonl before any benchmark work.\n\
-{example}\n\
-If any `ctox queue add` command fails, persist a blocker in controller.json, logbook.md, and run-queue.jsonl with the exact failing command and stderr. Do not claim completion."
-        ,
-        current_run_dir.as_deref().unwrap_or("<declared artifact paths>")
-    )))
-}
-
-fn parent_queue_key_for_feedback(job: &QueuedPrompt) -> Option<String> {
-    job.leased_message_keys
-        .iter()
-        .find(|key| key.starts_with("queue:"))
-        .cloned()
-}
-
-fn terminal_bench_runtime_ref_feedback_note(
-    refs: &[String],
-    current_run_dir: Option<&str>,
-    action: &str,
-) -> String {
-    format!(
-        "HARNESS FEEDBACK\n\
-{action}\n\
-These refs are real CTOX runtime objects already persisted in the run artifacts:\n\
-{}\n\n\
-Current RUN_DIR for this queue item: {}\n\
-Do not create duplicate preparation queue tasks. The harness is only pointing out the state; it will not perform the work for you. Read controller.json, ticket-map.jsonl, preparation-tickets.jsonl, run-queue.jsonl, knowledge.md, and logbook.md from this RUN_DIR first. If you need CLI syntax, inspect `ctox help` and the relevant subcommand `--help` yourself. Do not read or continue stale Terminal-Bench run directories. Continue by verifying the queued preparation work and updating the durable files with any new facts.",
-        refs.iter()
-            .map(|value| format!("- {value}"))
-            .collect::<Vec<_>>()
-            .join("\n")
-            ,
-        current_run_dir.unwrap_or("<declared artifact paths>")
     )
 }
 
@@ -7053,8 +6435,6 @@ fn enforce_job_outcome_witness(
         return Ok(None);
     }
 
-    validate_terminal_bench_controller_runtime_refs(root, job, &expected_artifact_refs)?;
-
     let db_path = crate::paths::core_db(root);
     let conn = channels::open_channel_db(&db_path)?;
     let entity_id = job_outcome_entity_id(job);
@@ -7116,10 +6496,6 @@ fn enforce_reviewed_work_terminal_success(
     expected_artifact_refs: Vec<ArtifactRef>,
     delivered_artifact_refs: Vec<ArtifactRef>,
 ) -> Result<Vec<String>> {
-    if !expected_artifact_refs.is_empty() {
-        validate_terminal_bench_controller_runtime_refs(root, job, &expected_artifact_refs)?;
-    }
-
     let db_path = crate::paths::core_db(&root);
     let conn = channels::open_channel_db(&db_path)?;
     let mut proof_ids = Vec::new();
@@ -7276,14 +6652,6 @@ fn outcome_witness_recovery_message(
             message.push_str(
                 "\n\nHARNESS FEEDBACK\nProblem: Du hast die Aufgabe als fertig behandelt, aber der Harness konnte die erwarteten Datei-Artefakte nicht als Ergebnis dieses Turns nachweisen. Eine Textantwort, ein Plan oder ein Codeblock reicht hier nicht.\n\nREQUIRED ARTIFACTS\nDiese Pfade muessen als regulaere Dateien existieren und, wenn unten als stale markiert, in diesem Turn aktualisiert werden, bevor du Abschluss behauptest:",
             );
-            if is_terminal_bench_controller_artifact_job(job) {
-                if let Some(run_dir) = terminal_bench_run_dir_from_artifact_paths(&file_refs) {
-                    message.push_str(&format!(
-                        "\n\nCURRENT TERMINAL-BENCH RUN SCOPE\nDer einzige gueltige RUN_DIR fuer diesen Queue-Run ist:\n{}\n\nWenn du Dateien in einem anderen Terminal-Bench-Run-Ordner erzeugt oder gelesen hast, war das ein Wrong-Run-Fehler. Verwende keine controller-prompt.md oder durable Dateien aus alten Runs. Arbeite jetzt nur in diesem RUN_DIR weiter.",
-                        run_dir
-                    ));
-                }
-            }
             for artifact in expected_file_artifacts {
                 let path = artifact.primary_key;
                 let diagnostic = workspace_file_artifact_diagnostic_for_expected(
@@ -7368,8 +6736,7 @@ fn should_queue_artifact_outcome_recovery(job: &QueuedPrompt) -> bool {
     if declared_workspace_file_artifacts_for_job(job).is_empty() {
         return false;
     }
-    !(job.source_label == REVIEW_FEEDBACK_SOURCE_LABEL
-        && is_terminal_bench_controller_artifact_job(job))
+    true
 }
 
 fn outcome_witness_outbound_recovery_requeue_allowed(root: &Path, job: &QueuedPrompt) -> bool {
@@ -9962,7 +9329,6 @@ fn runtime_error_is_transient_api_failure(error: &str) -> bool {
         || normalized.contains("context_selection_empty")
         || normalized.contains("context selection is empty")
         || normalized.contains("no context evidence rendered")
-        || normalized.contains("terminal-bench preflight violation")
         || normalized.contains("mid-task compaction failed")
         || normalized.contains("failed to parse structured compaction response")
         || normalized.contains("exceed_context_size_error")
@@ -12750,25 +12116,11 @@ fn should_queue_durable_artifact_timeout_recovery(job: &QueuedPrompt) -> bool {
     {
         return false;
     }
-    if job.leased_message_keys.is_empty()
-        && !(job.source_label == "review-feedback"
-            && is_terminal_bench_controller_artifact_job(job))
-    {
+    if job.leased_message_keys.is_empty() {
         return false;
     }
     let file_refs = declared_workspace_file_artifacts_for_job(job);
-    if file_refs.is_empty() {
-        return false;
-    }
-    let normalized = normalize_token(&format!("{} {} {}", job.goal, job.preview, job.prompt));
-    normalized.contains("terminal-bench")
-        || normalized.contains("terminal bench")
-        || normalized.contains("benchmark")
-        || normalized.contains("bench ")
-        || normalized.contains("harbor")
-        || normalized.contains("controller")
-        || normalized.contains("durable artifact")
-        || normalized.contains("required durable")
+    !file_refs.is_empty()
 }
 
 fn queue_durable_artifact_timeout_recovery(
@@ -12959,30 +12311,6 @@ fn maybe_enqueue_runtime_retry_continuation(
     if !runtime_error_is_transient_api_failure(error_text) {
         return Ok(None);
     }
-    if job.source_label == "review-feedback" && is_terminal_bench_preflight_violation(error_text) {
-        let _ = governance::record_event(
-            root,
-            governance::GovernanceEventRequest {
-                mechanism_id: "terminal_bench_review_feedback_guard",
-                conversation_id: Some(turn_loop::CHAT_CONVERSATION_ID),
-                severity: "warning",
-                reason: "review-feedback hit the first-turn Terminal-Bench preflight guard",
-                action_taken:
-                    "suppressed durable runtime retry self-work; the original controller/queue state must carry the feedback",
-                details: serde_json::json!({
-                    "source_label": job.source_label,
-                    "thread_key": job.thread_key.clone(),
-                    "workspace_root": job.workspace_root.clone(),
-                    "error": clip_text(error_text, 220),
-                }),
-                idempotence_key: Some(&format!(
-                    "tb2-review-feedback-preflight:{}",
-                    job.thread_key.as_deref().unwrap_or(job.goal.as_str())
-                )),
-            },
-        );
-        return Ok(None);
-    }
     let thread_key = job
         .thread_key
         .clone()
@@ -13136,28 +12464,6 @@ fn is_no_assistant_message_blocker(value: &str) -> bool {
         || lowered.contains("empty assistant message")
 }
 
-fn is_terminal_bench_preflight_violation(value: &str) -> bool {
-    value
-        .to_ascii_lowercase()
-        .contains("terminal-bench preflight violation")
-}
-
-fn terminal_bench_preflight_retry_loop_should_stop(job: &QueuedPrompt, error_text: &str) -> bool {
-    if !is_terminal_bench_preflight_violation(error_text) {
-        return false;
-    }
-    job.prompt
-        .to_ascii_lowercase()
-        .contains("harness terminal-bench preflight retry")
-}
-
-fn terminal_bench_preflight_loop_stop_note(error_text: &str) -> String {
-    format!(
-        "Stopped automatic Terminal-Bench preflight retry loop. The worker repeated the preflight violation after explicit harness feedback; the model must be restarted with a clearer controller prompt or a stronger model. Last error: {}",
-        clip_text(error_text.trim(), 220)
-    )
-}
-
 /// F3: classify a harness-error string into a structured `AgentOutcome`.
 /// The error text comes from the harness/turn-loop itself (we own its
 /// format), not from free-form prompt content. Keep the matchers narrow
@@ -13208,35 +12514,10 @@ fn render_durable_artifact_timeout_recovery_prompt(job: &QueuedPrompt, blocker: 
     prompt.push_str(
         "\nREQUIRED ACTIONS\n- Inspect the workspace and the listed files first; preserve valid progress.\n- Continue the same controller run from the durable files instead of restarting from scratch.\n- Each listed path must be a regular file. A directory at a required file path is invalid and must be corrected before any completion claim.\n- Keep the logbook and summary truthful about attempted work, discovered tasks, blockers, and next actions.\n- If benchmark execution still needs another slice, persist exactly one concrete queue item or plan item before ending.\n\nEXIT GATE\nFinish only after the durable outcome exists in the listed files and the benchmark controller is either terminal or has exactly one persisted next action.",
     );
-    if is_terminal_bench_controller_artifact_job(job) {
-        let basenames = file_refs
-            .iter()
-            .filter_map(|path| {
-                Path::new(path)
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .map(str::to_string)
-            })
-            .collect::<Vec<_>>();
-        let results_name = basenames
-            .iter()
-            .find(|name| name.starts_with("results."))
-            .cloned()
-            .unwrap_or_else(|| "results.jsonl".to_string());
-        let log_name = basenames
-            .iter()
-            .find(|name| *name == "logbook.md" || *name == "run-log.md")
-            .cloned()
-            .unwrap_or_else(|| "logbook.md".to_string());
-        prompt.push_str(&format!(
-            "\n\nTERMINAL-BENCH TIMEOUT RECOVERY ORDER\n1. Read the listed files and recent context only far enough to recover the current phase.\n2. Immediately write a checkpoint into controller.json, {log_name}, knowledge.md, and {results_name} before any further discovery.\n3. The checkpoint must include verified runtime facts, discovered task source, runner/container blocker status, no-solutions policy status, and the exact next action.\n4. After every further tool call that discovers facts or changes benchmark state, the next tool call must persist those facts into the durable files.\n5. Do not finish with a prose summary only. The durable files are the state."
-        ));
-    }
     prepend_workspace_contract(&prompt, job.workspace_root.as_deref())
 }
 
 fn render_runtime_retry_prompt(job: &QueuedPrompt, error_text: &str) -> String {
-    let terminal_bench_preflight_retry = is_terminal_bench_preflight_violation(error_text);
     let mut required_actions = vec![
         "inspect durable state and workspace artifacts before retrying; do not trust the previous reply text as proof",
         "preserve work that already exists and avoid duplicate queue tasks",
@@ -13244,17 +12525,7 @@ fn render_runtime_retry_prompt(job: &QueuedPrompt, error_text: &str) -> String {
         "finish only after the real durable outcome exists in the state machine",
         "if the runtime is still unavailable, leave this work pending for another retry instead of claiming completion",
     ];
-    let problem = if terminal_bench_preflight_retry {
-        required_actions.insert(
-            0,
-            "the previous first shell command violated the Terminal-Bench preflight gate; the next worker action must be a shell script that creates the current RUN_DIR, creates all required files as regular files, records real queue refs or an exact CLI blocker, and verifies every file with test -f before any discovery",
-        );
-        required_actions.insert(
-            1,
-            "do not inspect install trees, old run directories, Harbor, datasets, web pages, GPUs, or runtime state until the current RUN_DIR artifacts exist and the blocker or queue refs are persisted",
-        );
-        "The previous worker turn started with the wrong shell action for a Terminal-Bench controller preflight. The task is not complete; this is actionable harness feedback, not work performed by the harness."
-    } else if is_no_assistant_message_blocker(error_text) {
+    let problem = if is_no_assistant_message_blocker(error_text) {
         required_actions.insert(
             0,
             "the previous model turn executed at least one tool phase but ended without a final assistant message; continue after the tool phase instead of restarting blindly",
@@ -13277,22 +12548,6 @@ fn render_runtime_retry_prompt(job: &QueuedPrompt, error_text: &str) -> String {
         clip_text(error_text.trim(), 220),
         required_actions.join("\n- ")
     );
-    if terminal_bench_preflight_retry {
-        let file_refs = declared_workspace_file_artifacts_for_job(job);
-        if !file_refs.is_empty() {
-            prompt.push_str(
-                "\n\nHARNESS TERMINAL-BENCH PREFLIGHT RETRY\nOnly required durable files for this controller turn:\n",
-            );
-            for path in &file_refs {
-                prompt.push_str("- ");
-                prompt.push_str(path);
-                prompt.push('\n');
-            }
-            prompt.push_str(
-                "The controller must create preparation queue/tickets and record real queue:system::* keys, or persist an exact blocker with the failed CLI command and stderr. Do not satisfy this retry with substitute files outside this list.\n",
-            );
-        }
-    }
     prepend_workspace_contract(&prompt, job.workspace_root.as_deref())
 }
 
@@ -14586,7 +13841,7 @@ mod tests {
             suggested_skill: Some("benchmark-controller".to_string()),
             leased_message_keys: vec!["queue:system::next".to_string()],
             leased_ticket_event_keys: Vec::new(),
-            thread_key: Some("terminal-bench".to_string()),
+            thread_key: Some("durable-artifact-controller".to_string()),
             workspace_root: Some(root.to_string_lossy().to_string()),
             ticket_self_work_id: None,
             outbound_email: None,
@@ -16462,20 +15717,20 @@ mod tests {
     }
 
     #[test]
-    fn timeout_blocker_queues_durable_artifact_controller_recovery() {
+    fn timeout_blocker_queues_durable_artifact_recovery() {
         let root = temp_root("ctox-timeout-durable-artifact-controller");
-        let workspace = root.join("terminal-bench-run");
+        let workspace = root.join("artifact-controller-run");
         std::fs::create_dir_all(&workspace).expect("failed to create workspace");
         let controller = workspace.join("controller.json");
         let logbook = workspace.join("run-log.md");
         let job = QueuedPrompt {
             prompt: format!(
-                "Terminal-Bench 2 controller via Harbor.\n\nOnly required durable files for this controller turn:\n- {}\n- {}\n\nKeep these artifacts updated while running benchmark tickets.",
+                "Generic artifact controller.\n\nOnly required durable files for this controller turn:\n- {}\n- {}\n\nKeep these artifacts updated while running the queued work.",
                 controller.display(),
                 logbook.display()
             ),
-            goal: "Run Terminal-Bench 2 controller and write durable results".to_string(),
-            preview: "Terminal-Bench 2 controller".to_string(),
+            goal: "Run artifact controller and write durable results".to_string(),
+            preview: "Artifact controller".to_string(),
             source_label: "queue".to_string(),
             suggested_skill: Some("benchmark-controller".to_string()),
             leased_message_keys: vec!["queue:system::current".to_string()],
@@ -16494,7 +15749,7 @@ mod tests {
         assert!(created
             .as_deref()
             .unwrap_or_default()
-            .starts_with("Recover interrupted Run Terminal-Bench 2"));
+            .starts_with("Recover interrupted Run artifact controller"));
         let pending = channels::list_queue_tasks(&root, &["pending".to_string()], 10)
             .expect("failed to list pending queue tasks");
         assert_eq!(pending.len(), 1);
@@ -18269,156 +17524,34 @@ mod tests {
     }
 
     #[test]
-    fn terminal_bench_controller_does_not_reroute_to_strategy_setup() {
-        let root = temp_root("ctox-terminal-bench-no-strategy-reroute");
-        let queue_task = channels::create_queue_task(
-            &root,
-            channels::QueueTaskCreateRequest {
-                title: "Terminal-Bench 2 controller Qwen3.6 128k".to_string(),
-                prompt: "You are CTOX running the Terminal-Bench 2 evaluation project.\n\
-Use the configured local harness model through CTOX local IPC only.\n\
-REQUIRED OUTPUT ARTIFACTS\n\
-Write these exact files under RUN_DIR=/home/metricspace/CTOX/runtime/terminal-bench-2/runs/run-1:\n\
-- controller.json\n- ticket-map.jsonl\n- run-log.md\n- results.jsonl\n- summary.md\n\
-Start now by using shell/tools to create RUN_DIR artifacts and verify runtime/context."
-                    .to_string(),
-                thread_key: "tb2-qwen36-128k-controller".to_string(),
-                workspace_root: Some("/home/metricspace".to_string()),
-                priority: "urgent".to_string(),
-                suggested_skill: None,
-                parent_message_key: None,
-                extra_metadata: None,
-            },
-        )
-        .expect("failed to seed Terminal-Bench queue task");
-        let state = Arc::new(Mutex::new(SharedState::default()));
-        let job = QueuedPrompt {
-            prompt: queue_task.prompt.clone(),
-            goal: queue_task.title.clone(),
-            preview: queue_task.title.clone(),
-            source_label: "queue".to_string(),
-            suggested_skill: None,
-            leased_message_keys: vec![queue_task.message_key.clone()],
-            leased_ticket_event_keys: Vec::new(),
-            thread_key: Some("tb2-qwen36-128k-controller".to_string()),
-            workspace_root: Some("/home/metricspace".to_string()),
-            ticket_self_work_id: None,
-            outbound_email: None,
-            outbound_anchor: None,
-        };
-
-        let redirected = maybe_redirect_owner_visible_work_to_strategy_setup(&root, &state, &job)
-            .expect("strategy evaluation should succeed");
-        assert!(!redirected);
-
-        let tasks =
-            channels::list_queue_tasks(&root, &["pending".to_string(), "leased".to_string()], 10)
-                .expect("failed to list queue tasks");
-        assert_eq!(tasks.len(), 1);
-        assert_eq!(tasks[0].title, "Terminal-Bench 2 controller Qwen3.6 128k");
-
-        let items = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
-            .expect("failed to list self-work");
-        assert!(items.is_empty());
-    }
-
-    #[test]
-    fn terminal_bench_queue_workspace_task_does_not_reroute_to_strategy_setup() {
-        let root = temp_root("ctox-terminal-bench-tbq-workspace-no-strategy-reroute");
-        let queue_task = channels::create_queue_task(
-            &root,
-            channels::QueueTaskCreateRequest {
-                title: "Workspace task 050: solana-data".to_string(),
-                prompt: "Work only inside this workspace: /home/metricspace/ctox/runtime/workspaces/tbq-20260508T2217Z-qwen36-fresh-050-solana-data\n\
-Use this workspace as the current directory for the task.\n\
-Return a local server that connects to the Solana blockchain and provides endpoints to retrieve account data."
-                    .to_string(),
-                thread_key: "tbq-qwen36/tbq-20260508T2217Z-qwen36-fresh/050-solana-data"
-                    .to_string(),
-                workspace_root: Some(
-                    "/home/metricspace/ctox/runtime/workspaces/tbq-20260508T2217Z-qwen36-fresh-050-solana-data"
-                        .to_string(),
-                ),
-                priority: "high".to_string(),
-                suggested_skill: None,
-                parent_message_key: None,
-                extra_metadata: None,
-            },
-        )
-        .expect("failed to seed Terminal-Bench workspace queue task");
-        let state = Arc::new(Mutex::new(SharedState::default()));
-        let job = QueuedPrompt {
-            prompt: queue_task.prompt.clone(),
-            goal: queue_task.title.clone(),
-            preview: queue_task.title.clone(),
-            source_label: "queue".to_string(),
-            suggested_skill: None,
-            leased_message_keys: vec![queue_task.message_key.clone()],
-            leased_ticket_event_keys: Vec::new(),
-            thread_key: Some(
-                "tbq-qwen36/tbq-20260508T2217Z-qwen36-fresh/050-solana-data".to_string(),
-            ),
-            workspace_root: Some(
-                "/home/metricspace/ctox/runtime/workspaces/tbq-20260508T2217Z-qwen36-fresh-050-solana-data"
-                    .to_string(),
-            ),
-            ticket_self_work_id: None,
-            outbound_email: None,
-            outbound_anchor: None,
-        };
-
-        assert!(!is_owner_visible_strategic_job(&job));
-        let redirected = maybe_redirect_owner_visible_work_to_strategy_setup(&root, &state, &job)
-            .expect("strategy evaluation should succeed");
-        assert!(!redirected);
-
-        let tasks =
-            channels::list_queue_tasks(&root, &["pending".to_string(), "leased".to_string()], 10)
-                .expect("failed to list queue tasks");
-        assert_eq!(tasks.len(), 1);
-        assert_eq!(tasks[0].title, "Workspace task 050: solana-data");
-
-        let items = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
-            .expect("failed to list self-work");
-        assert!(items.is_empty());
-    }
-
-    #[test]
     fn queue_execution_strategy_candidate_is_rejected_by_core_spawn_gate() {
-        let root = temp_root("ctox-benchmark-shaped-normal-strategy-reroute");
+        let root = temp_root("ctox-generic-queue-strategy-reroute");
         let queue_task = channels::create_queue_task(
             &root,
             channels::QueueTaskCreateRequest {
-                title: "Workspace task 051: public platform server".to_string(),
-                prompt: "Work only inside this workspace: /home/metricspace/ctox/runtime/workspaces/tbq-20260509Tcleanfull5-051-public-platform-server\n\
+                title: "Workspace task: public platform server".to_string(),
+                prompt:
+                    "Work only inside this workspace: /tmp/ctox/workspaces/public-platform-server\n\
 Use this workspace as the current directory for the task.\n\
-Build the public platform server required by the benchmark task."
-                    .to_string(),
-                thread_key: "tbq-qwen36/tbq-20260509Tcleanfull5/051-public-platform-server"
-                    .to_string(),
-                workspace_root: Some(
-                    "/home/metricspace/ctox/runtime/workspaces/tbq-20260509Tcleanfull5-051-public-platform-server"
+Build the public platform server required by the queued task."
                         .to_string(),
-                ),
+                thread_key: "queue/public-platform-server".to_string(),
+                workspace_root: Some("/tmp/ctox/workspaces/public-platform-server".to_string()),
                 priority: "urgent".to_string(),
                 suggested_skill: None,
                 parent_message_key: None,
                 extra_metadata: None,
             },
         )
-        .expect("failed to seed Terminal-Bench queue task");
+        .expect("failed to seed queue task");
         let stale_task = channels::create_queue_task(
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Same thread task that must not be cancelled by rejected reroute"
                     .to_string(),
                 prompt: "Keep pending unless a valid core-approved reroute occurs.".to_string(),
-                thread_key: "tbq-qwen36/tbq-20260509Tcleanfull5/051-public-platform-server"
-                    .to_string(),
-                workspace_root: Some(
-                    "/home/metricspace/ctox/runtime/workspaces/tbq-20260509Tcleanfull5-051-public-platform-server"
-                        .to_string(),
-                ),
+                thread_key: "queue/public-platform-server".to_string(),
+                workspace_root: Some("/tmp/ctox/workspaces/public-platform-server".to_string()),
                 priority: "high".to_string(),
                 suggested_skill: None,
                 parent_message_key: None,
@@ -18435,13 +17568,8 @@ Build the public platform server required by the benchmark task."
             suggested_skill: None,
             leased_message_keys: vec![queue_task.message_key.clone()],
             leased_ticket_event_keys: Vec::new(),
-            thread_key: Some(
-                "tbq-qwen36/tbq-20260509Tcleanfull5/051-public-platform-server".to_string(),
-            ),
-            workspace_root: Some(
-                "/home/metricspace/ctox/runtime/workspaces/tbq-20260509Tcleanfull5-051-public-platform-server"
-                    .to_string(),
-            ),
+            thread_key: Some("queue/public-platform-server".to_string()),
+            workspace_root: Some("/tmp/ctox/workspaces/public-platform-server".to_string()),
             ticket_self_work_id: None,
             outbound_email: None,
             outbound_anchor: None,
@@ -18464,36 +17592,35 @@ Build the public platform server required by the benchmark task."
 
     #[test]
     fn queue_prep_strategy_candidate_is_rejected_by_core_spawn_gate() {
-        let root = temp_root("ctox-benchmark-prep-normal-strategy-reroute");
+        let root = temp_root("ctox-generic-prep-normal-strategy-reroute");
         let queue_task = channels::create_queue_task(
             &root,
             channels::QueueTaskCreateRequest {
-                title: "prep-priority-plan: choose first easy Terminal-Bench tasks".to_string(),
-                prompt: "Preparation ticket for the Terminal-Bench 2 controller.\n\
-Research public Terminal-Bench references and leaderboard/model result lists for task selection only; do not read solutions.\n\
-Pick initial benchmark tasks that other harnesses/models are known to solve, then update ticket-map.jsonl, run-queue.jsonl, knowledge.md, and logbook.md in the current RUN_DIR.\n\
-Use Harbor/Terminal-Bench runner evidence and keep the work bounded to benchmark preparation."
+                title: "prep-priority-plan: choose first work items".to_string(),
+                prompt: "Preparation ticket for a generic queued project.\n\
+Research public references and safe task ordering.\n\
+Pick initial work items, then update ticket-map.jsonl, run-queue.jsonl, knowledge.md, and logbook.md in the current workspace.\n\
+Keep the work bounded to project preparation."
                     .to_string(),
-                thread_key: "queue/prep-priority-plan-choose-first-easy-1be52fca49b0"
-                    .to_string(),
+                thread_key: "queue/prep-priority-plan-choose-first-work".to_string(),
                 workspace_root: None,
                 priority: "urgent".to_string(),
-                suggested_skill: Some("benchmark-controller".to_string()),
+                suggested_skill: Some("project-controller".to_string()),
                 parent_message_key: None,
                 extra_metadata: None,
             },
         )
-        .expect("failed to seed Terminal-Bench prep queue task");
+        .expect("failed to seed prep queue task");
         let state = Arc::new(Mutex::new(SharedState::default()));
         let job = QueuedPrompt {
             prompt: queue_task.prompt.clone(),
             goal: queue_task.title.clone(),
             preview: queue_task.title.clone(),
             source_label: "queue".to_string(),
-            suggested_skill: Some("benchmark-controller".to_string()),
+            suggested_skill: Some("project-controller".to_string()),
             leased_message_keys: vec![queue_task.message_key.clone()],
             leased_ticket_event_keys: Vec::new(),
-            thread_key: Some("queue/prep-priority-plan-choose-first-easy-1be52fca49b0".to_string()),
+            thread_key: Some("queue/prep-priority-plan-choose-first-work".to_string()),
             workspace_root: None,
             ticket_self_work_id: None,
             outbound_email: None,
@@ -18508,12 +17635,9 @@ Use Harbor/Terminal-Bench runner evidence and keep the work bounded to benchmark
         let tasks =
             channels::list_queue_tasks(&root, &["pending".to_string(), "leased".to_string()], 10)
                 .expect("failed to list queue tasks");
-        assert!(
-            tasks
-                .iter()
-                .any(|task| task.title
-                    == "prep-priority-plan: choose first easy Terminal-Bench tasks")
-        );
+        assert!(tasks
+            .iter()
+            .any(|task| task.title == "prep-priority-plan: choose first work items"));
 
         let items = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
             .expect("failed to list self-work");
@@ -18521,87 +17645,11 @@ Use Harbor/Terminal-Bench runner evidence and keep the work bounded to benchmark
     }
 
     #[test]
-    fn terminal_bench_controller_with_artifact_contract_does_not_reroute_to_strategy_setup() {
-        let root = temp_root("ctox-terminal-bench-artifact-contract-no-strategy-reroute");
-        let queue_task = channels::create_queue_task(
-            &root,
-            channels::QueueTaskCreateRequest {
-                title: "Terminal-Bench 2 controller Qwen3.6 128k clean".to_string(),
-                prompt: "You are CTOX running as the Terminal-Bench 2 benchmark controller.\n\
-RUNTIME CONTRACT\n\
-- The required context window is 128k tokens / 131072 tokens. Verify this from CTOX status/runtime evidence.\n\
-- Inference must stay on local CTOX IPC/native backend.\n\
-DURABLE ARTIFACT CONTRACT\n\
-Create these five files immediately, before open-ended discovery or research.\n\
-1. /home/metricspace/CTOX/runtime/terminal-bench-2/runs/run-1/controller.json\n\
-2. /home/metricspace/CTOX/runtime/terminal-bench-2/runs/run-1/ticket-map.jsonl\n\
-3. /home/metricspace/CTOX/runtime/terminal-bench-2/runs/run-1/run-log.md\n\
-4. /home/metricspace/CTOX/runtime/terminal-bench-2/runs/run-1/results.jsonl\n\
-5. /home/metricspace/CTOX/runtime/terminal-bench-2/runs/run-1/summary.md"
-                    .to_string(),
-                thread_key: "tb2-qwen36-128k-controller-artifact-contract".to_string(),
-                workspace_root: Some("/home/metricspace".to_string()),
-                priority: "urgent".to_string(),
-                suggested_skill: None,
-                parent_message_key: None,
-                extra_metadata: None,
-            },
-        )
-        .expect("failed to seed Terminal-Bench queue task");
-        let state = Arc::new(Mutex::new(SharedState::default()));
-        let job = QueuedPrompt {
-            prompt: queue_task.prompt.clone(),
-            goal: queue_task.title.clone(),
-            preview: queue_task.title.clone(),
-            source_label: "queue".to_string(),
-            suggested_skill: None,
-            leased_message_keys: vec![queue_task.message_key.clone()],
-            leased_ticket_event_keys: Vec::new(),
-            thread_key: Some("tb2-qwen36-128k-controller-artifact-contract".to_string()),
-            workspace_root: Some("/home/metricspace".to_string()),
-            ticket_self_work_id: None,
-            outbound_email: None,
-            outbound_anchor: None,
-        };
-
-        let redirected = maybe_redirect_owner_visible_work_to_strategy_setup(&root, &state, &job)
-            .expect("strategy evaluation should succeed");
-        assert!(!redirected);
-
-        let tasks =
-            channels::list_queue_tasks(&root, &["pending".to_string(), "leased".to_string()], 10)
-                .expect("failed to list queue tasks");
-        assert_eq!(tasks.len(), 1);
-        assert_eq!(
-            tasks[0].title,
-            "Terminal-Bench 2 controller Qwen3.6 128k clean"
-        );
-
-        let items = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
-            .expect("failed to list self-work");
-        assert!(items.is_empty());
-    }
-
-    #[test]
-    fn benchmark_controller_required_artifacts_use_normal_strategy_without_extra_file_inference() {
-        let root = temp_root("ctox-benchmark-required-artifacts-normal-strategy");
-        let run_dir = "/home/metricspace/CTOX/runtime/terminal-bench-2/runs/run-required-artifacts";
+    fn declared_required_artifacts_use_normal_strategy_without_extra_file_inference() {
+        let root = temp_root("ctox-artifact-required-normal-strategy");
+        let run_dir = "/tmp/ctox/project-runs/run-required-artifacts";
         let prompt = format!(
-            "You are CTOX running a Terminal-Bench 2 evaluation controller on this 4xGPU host.\n\n\
-Hard runtime facts you must verify before doing benchmark work:\n\
-- CTOX release must be branch-main-20260506T031528Z or newer.\n\
-- Harness model must be Qwen/Qwen3.6-35B-A3B.\n\
-- Inference source must be local.\n\
-- Local runtime must be ggml.\n\
-- Effective context must be 131072 tokens (128k). Any smaller context is invalid and must be fixed before continuing.\n\
-- The Qwen process must use --ctx 131072 and CUDA GPUs 0,1,2,3.\n\
-- Do not use an HTTP inference path.\n\n\
-Your mission is to run Terminal-Bench 2 through Harbor as an honest benchmark controller.\n\
-Public references to use:\n\
-- https://registry.hub.databricks.com/environments/terminal-bench:2.0\n\
-- https://evalscope.readthedocs.io/en/latest/third_party/terminal_bench.html\n\
-- https://www.tbench.ai/leaderboard\n\
-- https://github.com/laude-institute/terminal-bench\n\n\
+            "You are CTOX running a generic project controller.\n\n\
 Required artifacts. You must create and maintain exactly these durable files in this run directory:\n\
 - {run_dir}/controller.json\n\
 - {run_dir}/ticket-map.jsonl\n\
@@ -18616,17 +17664,17 @@ Use shell tools to create or update these files."
         let queue_task = channels::create_queue_task(
             &root,
             channels::QueueTaskCreateRequest {
-                title: "Terminal-Bench 2 controller Qwen3.6 128k c1ad584".to_string(),
+                title: "Generic project controller".to_string(),
                 prompt: prompt.clone(),
-                thread_key: "queue/terminal-bench-2-controller-qwen3-6".to_string(),
-                workspace_root: Some("/home/metricspace/CTOX/runtime/terminal-bench-2".to_string()),
+                thread_key: "queue/generic-project-controller".to_string(),
+                workspace_root: Some("/tmp/ctox/project-runs".to_string()),
                 priority: "urgent".to_string(),
                 suggested_skill: None,
                 parent_message_key: None,
                 extra_metadata: None,
             },
         )
-        .expect("failed to seed Terminal-Bench queue task");
+        .expect("failed to seed queue task");
         let state = Arc::new(Mutex::new(SharedState::default()));
         let job = QueuedPrompt {
             prompt: queue_task.prompt.clone(),
@@ -18636,8 +17684,8 @@ Use shell tools to create or update these files."
             suggested_skill: None,
             leased_message_keys: vec![queue_task.message_key.clone()],
             leased_ticket_event_keys: Vec::new(),
-            thread_key: Some("queue/terminal-bench-2-controller-qwen3-6".to_string()),
-            workspace_root: Some("/home/metricspace/CTOX/runtime/terminal-bench-2".to_string()),
+            thread_key: Some("queue/generic-project-controller".to_string()),
+            workspace_root: Some("/tmp/ctox/project-runs".to_string()),
             ticket_self_work_id: None,
             outbound_email: None,
             outbound_anchor: None,
@@ -18665,45 +17713,6 @@ Use shell tools to create or update these files."
     }
 
     #[test]
-    fn terminal_bench_artifact_parser_ignores_openrouter_model_ids() {
-        let run_dir = "/home/metricspace/ctox/runtime/terminal-bench-2/runs/run-deepseek-v4-flash";
-        let prompt = format!(
-            "Terminal-Bench controller artifact contract:\n\
-- {run_dir}/controller.json\n\
-- {run_dir}/logbook.md\n\n\
-Current RUN_DIR and workspace scope: {run_dir}; active model deepseek/deepseek-v4-flash via OpenRouter.\n\
-Preserve and update controller.json and logbook.md."
-        );
-        let job = QueuedPrompt {
-            prompt,
-            goal: "Terminal-Bench 2 controller DeepSeek flash".to_string(),
-            preview: "Terminal-Bench 2 controller DeepSeek flash".to_string(),
-            source_label: "queue".to_string(),
-            suggested_skill: Some("benchmark-controller".to_string()),
-            leased_message_keys: vec!["queue:system::parent".to_string()],
-            leased_ticket_event_keys: Vec::new(),
-            thread_key: Some("terminal-bench-2/deepseek-v4-flash/controller".to_string()),
-            workspace_root: Some(run_dir.to_string()),
-            ticket_self_work_id: None,
-            outbound_email: None,
-            outbound_anchor: None,
-        };
-
-        let paths = declared_workspace_file_artifacts_for_job(&job);
-
-        assert_eq!(
-            paths,
-            vec![
-                format!("{run_dir}/controller.json"),
-                format!("{run_dir}/logbook.md"),
-            ]
-        );
-        assert!(!paths
-            .iter()
-            .any(|path| path.starts_with("/deepseek-v4-flash/")));
-    }
-
-    #[test]
     fn unavailable_review_holds_generic_artifact_job_fail_closed() {
         let job = QueuedPrompt {
             prompt: "RUN_DIR=\"/tmp/ctox-smoke\". Initialisiere die Datei required-smoke.json."
@@ -18721,7 +17730,6 @@ Preserve and update controller.json and logbook.md."
             outbound_anchor: None,
         };
 
-        assert!(!is_terminal_bench_controller_artifact_job(&job));
         match completion_review_unavailable_disposition(
             &job,
             "completion review leg did not produce a verdict within 900s",
@@ -18744,7 +17752,7 @@ Preserve and update controller.json and logbook.md."
             suggested_skill: None,
             leased_message_keys: vec!["queue:system::internal".to_string()],
             leased_ticket_event_keys: Vec::new(),
-            thread_key: Some("tbq-qwen36/example".to_string()),
+            thread_key: Some("queue/example".to_string()),
             workspace_root: Some("/tmp/workspace".to_string()),
             ticket_self_work_id: None,
             outbound_email: None,
@@ -18783,7 +17791,7 @@ Preserve and update controller.json and logbook.md."
             suggested_skill: None,
             leased_message_keys: vec!["queue:system::internal".to_string()],
             leased_ticket_event_keys: Vec::new(),
-            thread_key: Some("tbq-qwen36/example".to_string()),
+            thread_key: Some("queue/example".to_string()),
             workspace_root: Some("/tmp/workspace".to_string()),
             ticket_self_work_id: None,
             outbound_email: None,
@@ -19103,44 +18111,6 @@ Preserve and update controller.json and logbook.md."
     }
 
     #[test]
-    fn terminal_bench_preflight_violation_is_retryable_with_specific_feedback() {
-        let error = "terminal-bench preflight violation: the first shell command did not create and verify the required current-run artifacts.";
-        assert_eq!(
-            turn_loop::hard_runtime_blocker_retry_cooldown_secs(error),
-            Some(60)
-        );
-        assert!(runtime_error_is_transient_api_failure(error));
-        let job = QueuedPrompt {
-            prompt: "Only required durable files for this controller turn:\n- /tmp/tb/controller.json\n- /tmp/tb/ticket-map.jsonl\n- /tmp/tb/preparation-tickets.jsonl".to_string(),
-            goal: "Terminal-Bench controller preflight".to_string(),
-            preview: "Terminal-Bench controller preflight".to_string(),
-            source_label: "queue".to_string(),
-            suggested_skill: Some("benchmark-controller".to_string()),
-            leased_message_keys: Vec::new(),
-            leased_ticket_event_keys: Vec::new(),
-            thread_key: Some("tb2/preflight".to_string()),
-            workspace_root: Some("/tmp".to_string()),
-            ticket_self_work_id: None,
-            outbound_email: None,
-            outbound_anchor: None,
-        };
-
-        let prompt = render_runtime_retry_prompt(&job, error);
-
-        assert!(prompt.contains("HARNESS FEEDBACK"));
-        assert!(prompt.contains("wrong shell action"));
-        assert!(prompt.contains("creates the current RUN_DIR"));
-        assert!(prompt.contains("do not inspect install trees"));
-        assert!(prompt.contains("not work performed by the harness"));
-        assert!(prompt.contains("HARNESS TERMINAL-BENCH PREFLIGHT RETRY"));
-        assert!(prompt.contains("Only required durable files for this controller turn"));
-        assert!(prompt.contains("/tmp/tb/controller.json"));
-        assert!(prompt.contains("/tmp/tb/ticket-map.jsonl"));
-        assert!(prompt.contains("/tmp/tb/preparation-tickets.jsonl"));
-        assert!(prompt.contains("Do not satisfy this retry with substitute files"));
-    }
-
-    #[test]
     fn local_context_overflow_is_retryable_runtime_failure() {
         let error = "stream disconnected before completion: llama-server /completion returned status 400: {\"error\":{\"type\":\"exceed_context_size_error\",\"message\":\"request (132458 tokens) exceeds the available context size (131072 tokens)\"}}";
         assert_eq!(
@@ -19173,44 +18143,6 @@ Preserve and update controller.json and logbook.md."
             classify_agent_failure(error),
             crate::lcm::AgentOutcome::Aborted
         );
-    }
-
-    #[test]
-    fn terminal_bench_preflight_retry_loop_stops_after_feedback_retry() {
-        let error = "terminal-bench preflight violation: the first shell command did not create and verify the required current-run artifacts.";
-        let first_attempt = QueuedPrompt {
-            prompt:
-                "Only required durable files for this controller turn:\n- /tmp/tb/controller.json"
-                    .to_string(),
-            goal: "Terminal-Bench controller preflight".to_string(),
-            preview: "Terminal-Bench controller preflight".to_string(),
-            source_label: "queue".to_string(),
-            suggested_skill: Some("benchmark-controller".to_string()),
-            leased_message_keys: Vec::new(),
-            leased_ticket_event_keys: Vec::new(),
-            thread_key: Some("tb2/preflight".to_string()),
-            workspace_root: Some("/tmp".to_string()),
-            ticket_self_work_id: None,
-            outbound_email: None,
-            outbound_anchor: None,
-        };
-        assert!(!terminal_bench_preflight_retry_loop_should_stop(
-            &first_attempt,
-            error
-        ));
-
-        let retry_attempt = QueuedPrompt {
-            prompt: format!(
-                "{}\n\nHARNESS TERMINAL-BENCH PREFLIGHT RETRY\nOnly required durable files for this controller turn:\n- /tmp/tb/controller.json",
-                first_attempt.prompt
-            ),
-            ..first_attempt
-        };
-        assert!(terminal_bench_preflight_retry_loop_should_stop(
-            &retry_attempt,
-            error
-        ));
-        assert!(terminal_bench_preflight_loop_stop_note(error).contains("Stopped automatic"));
     }
 
     #[test]
@@ -19333,32 +18265,31 @@ Preserve and update controller.json and logbook.md."
     #[test]
     fn runtime_retry_prompt_strips_nested_harness_feedback() {
         let original =
-            "Work only inside this workspace:\n/home/metricspace\n\nRun Terminal-Bench 2 cleanly.";
+            "Work only inside this workspace:\n/tmp/workspace\n\nRun the project cleanly.";
         let nested = format!(
             "HARNESS FEEDBACK\nProblem: x\n\nCURRENT TASK\n{original}\n\nRUNTIME FAILURE\ny\n\nREQUIRED ACTIONS\n- z"
         );
         let job = QueuedPrompt {
             prompt: nested.clone(),
             goal: nested,
-            preview: "Terminal-Bench 2".to_string(),
+            preview: "Project work".to_string(),
             source_label: "queue".to_string(),
             suggested_skill: None,
             leased_message_keys: Vec::new(),
             leased_ticket_event_keys: Vec::new(),
-            thread_key: Some("tb2".to_string()),
-            workspace_root: Some("/home/metricspace".to_string()),
+            thread_key: Some("project/work".to_string()),
+            workspace_root: Some("/tmp/workspace".to_string()),
             ticket_self_work_id: None,
             outbound_email: None,
             outbound_anchor: None,
         };
 
-        let prompt =
-            render_runtime_retry_prompt(&job, "terminal-bench preflight violation: bad first call");
+        let prompt = render_runtime_retry_prompt(&job, "turn completed without assistant message");
 
-        assert!(prompt.contains("Run Terminal-Bench 2 cleanly."));
+        assert!(prompt.contains("Run the project cleanly."));
         assert_eq!(prompt.matches("RUNTIME FAILURE").count(), 1);
         assert!(!prompt.contains("CURRENT TASK\nHARNESS FEEDBACK"));
-        assert!(prompt.starts_with("Work only inside this workspace:\n/home/metricspace"));
+        assert!(prompt.starts_with("Work only inside this workspace:\n/tmp/workspace"));
     }
 
     #[test]
@@ -21727,7 +20658,7 @@ Create a file named smoke.txt inside that workspace containing exactly HY3_CTOX_
 
     #[test]
     fn only_required_durable_files_section_limits_workspace_artifacts() {
-        let run_dir = "/tmp/ctox-tb2-run";
+        let run_dir = "/tmp/ctox-artifact-run";
         let job = QueuedPrompt {
             prompt: format!(
                 "Runtime requirements:\n- record context_window in summary.md.\n\n\
@@ -21745,11 +20676,11 @@ Initial completion criteria:\n\
 - summary.md states next action.\n\
 - helper files like controller-prompt.md and runtime-switch.json may exist but are not required durable files."
             ),
-            goal: "Terminal-Bench 2 controller".to_string(),
-            preview: "Terminal-Bench 2 controller".to_string(),
+            goal: "Generic artifact controller".to_string(),
+            preview: "Generic artifact controller".to_string(),
             source_label: "queue".to_string(),
             suggested_skill: None,
-            leased_message_keys: vec!["queue:tb2-controller".to_string()],
+            leased_message_keys: vec!["queue:artifact-controller".to_string()],
             leased_ticket_event_keys: Vec::new(),
             thread_key: None,
             workspace_root: Some("/tmp".to_string()),
@@ -21768,18 +20699,18 @@ Initial completion criteria:\n\
         assert_eq!(
             paths,
             vec![
-                "/tmp/ctox-tb2-run/controller.json",
-                "/tmp/ctox-tb2-run/ticket-map.jsonl",
-                "/tmp/ctox-tb2-run/run-log.md",
-                "/tmp/ctox-tb2-run/results.jsonl",
-                "/tmp/ctox-tb2-run/summary.md",
+                "/tmp/ctox-artifact-run/controller.json",
+                "/tmp/ctox-artifact-run/ticket-map.jsonl",
+                "/tmp/ctox-artifact-run/run-log.md",
+                "/tmp/ctox-artifact-run/results.jsonl",
+                "/tmp/ctox-artifact-run/summary.md",
             ]
         );
     }
 
     #[test]
     fn durable_artifact_contract_section_limits_workspace_artifacts() {
-        let run_dir = "/tmp/ctox-tb2-run";
+        let run_dir = "/tmp/ctox-artifact-run";
         let job = QueuedPrompt {
             prompt: format!(
                 "DURABLE ARTIFACT CONTRACT\n\
@@ -21791,11 +20722,11 @@ Create these five files immediately:\n\
 5. {run_dir}/summary.md\n\n\
 Write {run_dir}/controller.json as valid JSON after planning. Helper files like {run_dir}/controller-prompt.md may exist but are not required."
             ),
-            goal: "Terminal-Bench 2 controller".to_string(),
-            preview: "Terminal-Bench 2 controller".to_string(),
+            goal: "Generic artifact controller".to_string(),
+            preview: "Generic artifact controller".to_string(),
             source_label: "queue".to_string(),
             suggested_skill: None,
-            leased_message_keys: vec!["queue:tb2-controller".to_string()],
+            leased_message_keys: vec!["queue:artifact-controller".to_string()],
             leased_ticket_event_keys: Vec::new(),
             thread_key: None,
             workspace_root: Some("/tmp".to_string()),
@@ -21814,30 +20745,30 @@ Write {run_dir}/controller.json as valid JSON after planning. Helper files like 
         assert_eq!(
             paths,
             vec![
-                "/tmp/ctox-tb2-run/controller.json",
-                "/tmp/ctox-tb2-run/ticket-map.jsonl",
-                "/tmp/ctox-tb2-run/run-log.md",
-                "/tmp/ctox-tb2-run/results.jsonl",
-                "/tmp/ctox-tb2-run/summary.md",
+                "/tmp/ctox-artifact-run/controller.json",
+                "/tmp/ctox-artifact-run/ticket-map.jsonl",
+                "/tmp/ctox-artifact-run/run-log.md",
+                "/tmp/ctox-artifact-run/results.jsonl",
+                "/tmp/ctox-artifact-run/summary.md",
             ]
         );
     }
 
     #[test]
     fn artifact_first_prompt_front_loads_declared_workspace_files() {
-        let run_dir = "/tmp/terminal-bench-2/runs/20260506T104258Z-qwen36-128k-worker-owned-queue";
+        let run_dir = "/tmp/ctox-artifact-run";
         let job = QueuedPrompt {
             prompt: format!(
                 "Only required durable files for this controller turn:\n\
 - {run_dir}/controller.json\n\
 - {run_dir}/summary.md\n\n\
-Start by discovering benchmark tasks."
+Start by discovering project tasks."
             ),
-            goal: "Terminal-Bench 2 controller".to_string(),
-            preview: "Terminal-Bench 2 controller".to_string(),
+            goal: "Generic artifact controller".to_string(),
+            preview: "Generic artifact controller".to_string(),
             source_label: "queue".to_string(),
             suggested_skill: None,
-            leased_message_keys: vec!["queue:tb2-controller".to_string()],
+            leased_message_keys: vec!["queue:artifact-controller".to_string()],
             leased_ticket_event_keys: Vec::new(),
             thread_key: None,
             workspace_root: Some("/tmp".to_string()),
@@ -21848,75 +20779,22 @@ Start by discovering benchmark tasks."
 
         let prompt = artifact_first_execution_prompt(&job);
 
-        assert!(prompt.starts_with("HARNESS TERMINAL-BENCH PREFLIGHT"));
-        assert!(prompt.contains("The worker must perform this preflight itself"));
-        assert!(prompt.contains("The harness and review system will not create files"));
-        assert!(prompt.contains("CURRENT TERMINAL-BENCH RUN SCOPE"));
-        assert!(prompt.contains("Use exactly this RUN_DIR"));
+        assert!(prompt.starts_with("HARNESS ARTIFACT CONTRACT"));
+        assert!(prompt.contains("This task declares durable file artifacts"));
+        assert!(prompt.contains("The harness will not accept a final answer"));
         assert!(prompt.contains(run_dir));
-        assert!(prompt.contains("controller-prompt.md"));
-        assert!(prompt.contains("wrong-run error"));
-        assert!(prompt.contains("FIRST TOOL CALL CONTRACT"));
         assert!(prompt.contains(&format!("{run_dir}/controller.json")));
         assert!(prompt.contains(&format!("{run_dir}/summary.md")));
         assert!(prompt.contains("regular file"));
         assert!(prompt.contains("test -f"));
-        assert!(prompt.contains("Forbidden before the above succeeds"));
-        assert!(prompt.contains("Original controller task is intentionally withheld"));
-        assert!(!prompt.contains("Start by discovering benchmark tasks"));
-        assert!(!prompt.contains("ORIGINAL TASK"));
+        assert!(prompt.contains("ORIGINAL TASK"));
+        assert!(prompt.contains("Start by discovering project tasks"));
     }
 
     #[test]
-    fn terminal_bench_preflight_spec_uses_current_job_artifacts() {
-        let run_dir = "/tmp/terminal-bench-2/runs/20260506T122406Z-qwen36-128k-40965ff-clean2";
-        let stale_run_dir = "/tmp/terminal-bench-2/runs/20260506T120350Z-stale";
-        let job = QueuedPrompt {
-            prompt: format!(
-                "Only required durable files for this controller turn:\n\
-- {run_dir}/controller.json\n\
-- {run_dir}/ticket-map.jsonl\n\
-- {run_dir}/preparation-tickets.jsonl\n\
-- {run_dir}/run-queue.jsonl\n\
-- {run_dir}/results.jsonl\n\
-- {run_dir}/knowledge.md\n\
-- {run_dir}/logbook.md\n\
-- {run_dir}/blogpost-notes.md\n\n\
-Stale context may mention {stale_run_dir}/controller.json, but do not use it.\n\
-Create durable CTOX queue/ticket work and record message keys."
-            ),
-            goal: "Terminal-Bench 2 controller".to_string(),
-            preview: "Terminal-Bench 2 controller".to_string(),
-            source_label: "queue".to_string(),
-            suggested_skill: None,
-            leased_message_keys: vec!["queue:tb2-controller".to_string()],
-            leased_ticket_event_keys: Vec::new(),
-            thread_key: None,
-            workspace_root: Some("/tmp".to_string()),
-            ticket_self_work_id: None,
-            outbound_email: None,
-            outbound_anchor: None,
-        };
-
-        let spec = terminal_bench_preflight_spec_for_job(&job).unwrap();
-
-        assert_eq!(spec.run_dir, run_dir);
-        assert!(spec.requires_runtime_refs);
-        assert_eq!(spec.required_files.len(), 8);
-        assert!(spec
-            .required_files
-            .iter()
-            .all(|path| path.starts_with(run_dir)));
-        assert!(!spec
-            .required_files
-            .iter()
-            .any(|path| path.contains(stale_run_dir)));
-    }
-
-    #[test]
-    fn terminal_bench_review_feedback_retries_parent_queue_before_threshold() {
-        let root = temp_root("terminal-bench-feedback-parent-retry");
-        let run_dir = root.join("terminal-bench-2/runs/feedback-retry");
+    fn review_feedback_retries_parent_queue_before_threshold() {
+        let root = temp_root("artifact-feedback-parent-retry");
+        let run_dir = root.join("artifact-runs/feedback-retry");
         let run_dir = run_dir.to_string_lossy().into_owned();
         let job = QueuedPrompt {
             prompt: format!(
@@ -21932,13 +20810,13 @@ Only required durable files for this controller turn:\n\
 - {run_dir}/blogpost-notes.md\n\n\
 The controller must create preparation queue/tickets and record queue:system::* keys."
             ),
-            goal: "Continue Terminal-Bench controller".to_string(),
-            preview: "Terminal-Bench review feedback".to_string(),
+            goal: "Continue artifact controller".to_string(),
+            preview: "Artifact review feedback".to_string(),
             source_label: "review-feedback".to_string(),
-            suggested_skill: Some("benchmark-controller".to_string()),
+            suggested_skill: None,
             leased_message_keys: vec!["queue:system::parent".to_string()],
             leased_ticket_event_keys: Vec::new(),
-            thread_key: Some("terminal-bench-2/deepseek/feedback-retry/controller".to_string()),
+            thread_key: Some("queue/artifact-feedback-retry/controller".to_string()),
             workspace_root: Some(run_dir),
             ticket_self_work_id: None,
             outbound_email: None,
@@ -21954,9 +20832,9 @@ The controller must create preparation queue/tickets and record queue:system::* 
     }
 
     #[test]
-    fn terminal_bench_review_feedback_keeps_retrying_after_outcome_rejections() {
-        let root = temp_root("terminal-bench-feedback-no-circuit-block");
-        let run_dir = root.join("terminal-bench-2/runs/feedback-no-circuit-block");
+    fn review_feedback_keeps_retrying_after_outcome_rejections() {
+        let root = temp_root("artifact-feedback-no-circuit-block");
+        let run_dir = root.join("artifact-runs/feedback-no-circuit-block");
         let run_dir = run_dir.to_string_lossy().into_owned();
         let job = QueuedPrompt {
             prompt: format!(
@@ -21968,15 +20846,13 @@ Only required durable files for this controller turn:\n\
 - {run_dir}/logbook.md\n\n\
 The controller must update stale files itself."
             ),
-            goal: "Continue Terminal-Bench controller".to_string(),
-            preview: "Terminal-Bench review feedback".to_string(),
+            goal: "Continue artifact controller".to_string(),
+            preview: "Artifact review feedback".to_string(),
             source_label: "review-feedback".to_string(),
-            suggested_skill: Some("benchmark-controller".to_string()),
+            suggested_skill: None,
             leased_message_keys: vec!["queue:system::parent-no-circuit".to_string()],
             leased_ticket_event_keys: Vec::new(),
-            thread_key: Some(
-                "terminal-bench-2/deepseek/feedback-no-circuit/controller".to_string(),
-            ),
+            thread_key: Some("queue/artifact-feedback-no-circuit/controller".to_string()),
             workspace_root: Some(run_dir),
             ticket_self_work_id: None,
             outbound_email: None,
@@ -22005,27 +20881,25 @@ The controller must update stale files itself."
     }
 
     #[test]
-    fn terminal_bench_controller_artifact_job_does_not_circuit_block() {
-        let root = temp_root("terminal-bench-controller-no-circuit-block");
-        let run_dir = root.join("terminal-bench-2/runs/controller-no-circuit-block");
+    fn queue_artifact_job_does_not_circuit_block() {
+        let root = temp_root("artifact-controller-no-circuit-block");
+        let run_dir = root.join("artifact-runs/controller-no-circuit-block");
         let run_dir = run_dir.to_string_lossy().into_owned();
         let job = QueuedPrompt {
             prompt: format!(
-                "Terminal-Bench controller artifact contract:\n\
+                "Controller artifact contract:\n\
 - {run_dir}/controller.json\n\
 - {run_dir}/results.jsonl\n\
 - {run_dir}/knowledge.md\n\
 - {run_dir}/logbook.md"
             ),
-            goal: "Terminal-Bench 2 controller".to_string(),
-            preview: "Terminal-Bench 2 controller".to_string(),
+            goal: "Generic artifact controller".to_string(),
+            preview: "Generic artifact controller".to_string(),
             source_label: "queue".to_string(),
-            suggested_skill: Some("benchmark-controller".to_string()),
+            suggested_skill: None,
             leased_message_keys: vec!["queue:system::controller-no-circuit".to_string()],
             leased_ticket_event_keys: Vec::new(),
-            thread_key: Some(
-                "terminal-bench-2/deepseek/controller-no-circuit/controller".to_string(),
-            ),
+            thread_key: Some("queue/artifact-controller-no-circuit/controller".to_string()),
             workspace_root: Some(run_dir),
             ticket_self_work_id: None,
             outbound_email: None,
@@ -22054,9 +20928,9 @@ The controller must update stale files itself."
     }
 
     #[test]
-    fn terminal_bench_review_feedback_requires_files_newer_than_last_rejection() {
-        let root = temp_root("terminal-bench-feedback-fresh-after-rejection");
-        let run_dir = root.join("terminal-bench-2/runs/fresh-after-rejection");
+    fn review_feedback_requires_files_newer_than_last_rejection() {
+        let root = temp_root("artifact-feedback-fresh-after-rejection");
+        let run_dir = root.join("artifact-runs/fresh-after-rejection");
         std::fs::create_dir_all(&run_dir).expect("failed to create run dir");
         let controller = run_dir.join("controller.json");
         std::fs::write(&controller, "{\"status\":\"preflight-in-progress\"}\n")
@@ -22070,14 +20944,14 @@ Only required durable files for this controller turn:\n\
 - {controller_text}\n\n\
 The controller must update stale files itself."
             ),
-            goal: "Continue Terminal-Bench controller".to_string(),
-            preview: "Terminal-Bench review feedback".to_string(),
+            goal: "Continue artifact controller".to_string(),
+            preview: "Artifact review feedback".to_string(),
             source_label: "review-feedback".to_string(),
-            suggested_skill: Some("benchmark-controller".to_string()),
+            suggested_skill: None,
             leased_message_keys: vec!["queue:system::parent-fresh-cutoff".to_string()],
             leased_ticket_event_keys: Vec::new(),
             thread_key: Some(
-                "terminal-bench-2/deepseek/fresh-after-rejection/controller".to_string(),
+                "queue/artifact-feedback-fresh-after-rejection/controller".to_string(),
             ),
             workspace_root: Some(run_dir_text),
             ticket_self_work_id: None,
@@ -22126,9 +21000,9 @@ The controller must update stale files itself."
     }
 
     #[test]
-    fn terminal_bench_review_feedback_does_not_need_outcome_recovery_prompt() {
-        let root = temp_root("terminal-bench-feedback-no-recovery-prompt");
-        let run_dir = root.join("terminal-bench-2/runs/feedback-no-recovery");
+    fn review_feedback_can_use_generic_outcome_recovery_prompt() {
+        let root = temp_root("artifact-feedback-no-recovery-prompt");
+        let run_dir = root.join("artifact-runs/feedback-no-recovery");
         let run_dir = run_dir.to_string_lossy().into_owned();
         let job = QueuedPrompt {
             prompt: format!(
@@ -22144,27 +21018,24 @@ Only required durable files for this controller turn:\n\
 - {run_dir}/blogpost-notes.md\n\n\
 The controller must create preparation queue/tickets and record queue:system::* keys."
             ),
-            goal: "Continue Terminal-Bench controller".to_string(),
-            preview: "Terminal-Bench review feedback".to_string(),
+            goal: "Continue artifact controller".to_string(),
+            preview: "Artifact review feedback".to_string(),
             source_label: "review-feedback".to_string(),
-            suggested_skill: Some("benchmark-controller".to_string()),
+            suggested_skill: None,
             leased_message_keys: vec!["queue:system::parent".to_string()],
             leased_ticket_event_keys: Vec::new(),
-            thread_key: Some(
-                "terminal-bench-2/deepseek/feedback-no-recovery/controller".to_string(),
-            ),
+            thread_key: Some("queue/artifact-feedback-no-recovery/controller".to_string()),
             workspace_root: Some(run_dir),
             ticket_self_work_id: None,
             outbound_email: None,
             outbound_anchor: None,
         };
 
-        assert!(is_terminal_bench_controller_artifact_job(&job));
         assert_eq!(
             outcome_witness_retry_route_status_for_job(&root, &job),
             "pending"
         );
-        assert!(!should_queue_artifact_outcome_recovery(&job));
+        assert!(should_queue_artifact_outcome_recovery(&job));
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -22190,72 +21061,8 @@ The controller must create preparation queue/tickets and record queue:system::* 
     }
 
     #[test]
-    fn terminal_bench_preflight_spec_stops_after_real_bootstrap_refs_exist() {
-        let root = temp_root("terminal-bench-bootstrap-refs-skip-first-guard");
-        let run_dir = root.join("terminal-bench-2/runs/run-with-real-refs");
-        std::fs::create_dir_all(run_dir.join("tasks")).expect("failed to create tasks dir");
-        let files = [
-            "controller.json",
-            "ticket-map.jsonl",
-            "preparation-tickets.jsonl",
-            "run-queue.jsonl",
-            "results.jsonl",
-            "knowledge.md",
-            "logbook.md",
-            "blogpost-notes.md",
-        ];
-        for file in files {
-            let content = match file {
-                "ticket-map.jsonl" | "preparation-tickets.jsonl" | "run-queue.jsonl" => {
-                    "{\"message_key\":\"queue:system::abc123\"}\n"
-                }
-                "results.jsonl" => "",
-                "controller.json" => "{\"status\":\"preflight\"}\n",
-                _ => "# status\n",
-            };
-            std::fs::write(run_dir.join(file), content).expect("failed to write artifact");
-        }
-        let run_dir = run_dir.to_string_lossy().into_owned();
-        let job = QueuedPrompt {
-            prompt: format!(
-                "Only required durable files for this controller turn:\n\
-- {run_dir}/controller.json\n\
-- {run_dir}/ticket-map.jsonl\n\
-- {run_dir}/preparation-tickets.jsonl\n\
-- {run_dir}/run-queue.jsonl\n\
-- {run_dir}/results.jsonl\n\
-- {run_dir}/knowledge.md\n\
-- {run_dir}/logbook.md\n\
-- {run_dir}/blogpost-notes.md\n\n\
-The controller must create preparation queue/tickets and record queue:system::* keys.\n\
-Continue by fixing results.jsonl."
-            ),
-            goal: "Terminal-Bench 2 controller".to_string(),
-            preview: "Terminal-Bench 2 controller".to_string(),
-            source_label: "queue".to_string(),
-            suggested_skill: Some("benchmark-controller".to_string()),
-            leased_message_keys: vec!["queue:system::parent".to_string()],
-            leased_ticket_event_keys: Vec::new(),
-            thread_key: Some("terminal-bench-2/deepseek/run-with-real-refs/controller".to_string()),
-            workspace_root: Some(run_dir.clone()),
-            ticket_self_work_id: None,
-            outbound_email: None,
-            outbound_anchor: None,
-        };
-
-        assert!(is_terminal_bench_controller_artifact_job(&job));
-        assert!(terminal_bench_preflight_spec_for_job(&job).is_none());
-        let prompt = artifact_first_execution_prompt(&job);
-        assert!(prompt.starts_with("HARNESS ARTIFACT CONTRACT"));
-        assert!(prompt.contains("ORIGINAL TASK"));
-        assert!(prompt.contains("Continue by fixing results.jsonl"));
-
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn terminal_bench_review_feedback_does_not_reenter_first_turn_preflight() {
-        let run_dir = "/tmp/terminal-bench-2/runs/review-feedback-run";
+    fn review_feedback_uses_generic_artifact_prompt() {
+        let run_dir = "/tmp/ctox-artifact-review-feedback-run";
         let job = QueuedPrompt {
             prompt: format!(
                 "HARNESS FEEDBACK\n\
@@ -22269,24 +21076,22 @@ The previous controller turn is incomplete. Update these files now:\n\
 - {run_dir}/logbook.md\n\
 - {run_dir}/blogpost-notes.md\n"
             ),
-            goal: "Address Terminal-Bench review feedback".to_string(),
-            preview: "Terminal-Bench review feedback".to_string(),
+            goal: "Address review feedback".to_string(),
+            preview: "Review feedback".to_string(),
             source_label: "review-feedback".to_string(),
-            suggested_skill: Some("benchmark-controller".to_string()),
+            suggested_skill: None,
             leased_message_keys: Vec::new(),
             leased_ticket_event_keys: Vec::new(),
-            thread_key: Some("terminal-bench-2/review-feedback".to_string()),
+            thread_key: Some("queue/review-feedback".to_string()),
             workspace_root: Some(run_dir.to_string()),
             ticket_self_work_id: None,
             outbound_email: None,
             outbound_anchor: None,
         };
 
-        assert!(is_terminal_bench_controller_artifact_job(&job));
-        assert!(terminal_bench_preflight_spec_for_job(&job).is_none());
         assert!(!completion_review_should_skip_feedback_turn(&job));
         let prompt = artifact_first_execution_prompt(&job);
-        assert!(!prompt.starts_with("HARNESS TERMINAL-BENCH PREFLIGHT"));
+        assert!(prompt.starts_with("HARNESS ARTIFACT CONTRACT"));
         assert!(prompt.contains("ORIGINAL TASK"));
         assert!(prompt.contains("The previous controller turn is incomplete"));
     }
@@ -22682,209 +21487,14 @@ Exit after the write command.",
     }
 
     #[test]
-    fn terminal_bench_controller_rejects_synthetic_runtime_ticket_refs() {
-        let root = temp_root("terminal-bench-synthetic-runtime-refs");
-        let run_dir = root.join("tb2-run");
-        let controller = run_dir.join("controller.json");
-        let ticket_map = run_dir.join("ticket-map.jsonl");
-        let preparation = run_dir.join("preparation-tickets.jsonl");
-        let run_queue = run_dir.join("run-queue.jsonl");
-        let prompt = format!(
-            "You are CTOX running the Terminal-Bench 2 evaluation controller.\n\
-REQUIRED OUTPUT FILES TO UPDATE NOW\n\
-- {}\n\
-- {}\n\
-- {}\n\
-- {}\n\n\
-Before any benchmark task attempt, create durable CTOX queue/ticket work for \
-preparation queue/tickets and record message keys.",
-            controller.display(),
-            ticket_map.display(),
-            preparation.display(),
-            run_queue.display()
-        );
-        let task = channels::create_queue_task(
-            &root,
-            channels::QueueTaskCreateRequest {
-                title: "Terminal-Bench 2 controller synthetic refs".to_string(),
-                prompt: prompt.clone(),
-                thread_key: "queue/tb2-synthetic-refs".to_string(),
-                workspace_root: Some(run_dir.to_string_lossy().into_owned()),
-                priority: "urgent".to_string(),
-                suggested_skill: Some("benchmark-controller".to_string()),
-                parent_message_key: None,
-                extra_metadata: None,
-            },
-        )
-        .expect("failed to create parent queue task");
-        let leased = channels::lease_queue_task(&root, &task.message_key, "test")
-            .expect("failed to lease parent queue task");
-        std::fs::create_dir_all(&run_dir).expect("failed to create run dir");
-        std::fs::write(
-            &controller,
-            "{\"phase\":\"1-preparation\",\"next_action\":\"prep\"}\n",
-        )
-        .expect("failed to write controller");
-        std::fs::write(
-            &ticket_map,
-            "{\"ticket_id\":\"prep-runtime\",\"message_key\":\"msg-prep-runtime-001\"}\n",
-        )
-        .expect("failed to write ticket map");
-        std::fs::write(
-            &preparation,
-            "{\"ticket_id\":\"prep-runtime\",\"message_key\":\"msg-prep-runtime-001\"}\n",
-        )
-        .expect("failed to write prep tickets");
-        std::fs::write(
-            &run_queue,
-            "{\"queue_id\":\"q1\",\"ticket_id\":\"prep-runtime\",\"status\":\"pending\"}\n",
-        )
-        .expect("failed to write run queue");
-        let job = QueuedPrompt {
-            prompt,
-            goal: "Terminal-Bench 2 controller".to_string(),
-            preview: "Terminal-Bench 2 controller".to_string(),
-            source_label: "queue".to_string(),
-            suggested_skill: Some("benchmark-controller".to_string()),
-            leased_message_keys: vec![leased.message_key],
-            leased_ticket_event_keys: Vec::new(),
-            thread_key: Some("queue/tb2-synthetic-refs".to_string()),
-            workspace_root: Some(run_dir.to_string_lossy().into_owned()),
-            ticket_self_work_id: None,
-            outbound_email: None,
-            outbound_anchor: None,
-        };
-
-        let expected = expected_outcome_artifacts_for_job(&job);
-        let delivered = delivered_outcome_artifacts_for_job(&root, &job, &expected)
-            .expect("failed to read delivered artifacts");
-
-        assert_eq!(delivered.len(), 4);
-        let err = enforce_job_outcome_witness(&root, &job, expected, delivered)
-            .expect_err("synthetic runtime refs must not satisfy Terminal-Bench witness");
-        assert!(err
-            .to_string()
-            .contains("missing real CTOX runtime ticket/queue refs"));
-        assert!(err.to_string().contains("msg-prep-runtime-001"));
-    }
-
-    #[test]
-    fn terminal_bench_controller_accepts_real_queue_runtime_refs() {
-        let root = temp_root("terminal-bench-real-runtime-refs");
-        let run_dir = root.join("tb2-run");
-        let controller = run_dir.join("controller.json");
-        let ticket_map = run_dir.join("ticket-map.jsonl");
-        let preparation = run_dir.join("preparation-tickets.jsonl");
-        let run_queue = run_dir.join("run-queue.jsonl");
-        let prompt = format!(
-            "You are CTOX running the Terminal-Bench 2 evaluation controller.\n\
-REQUIRED OUTPUT FILES TO UPDATE NOW\n\
-- {}\n\
-- {}\n\
-- {}\n\
-- {}\n\n\
-Before any benchmark task attempt, create durable CTOX queue/ticket work for \
-preparation queue/tickets and record message keys.",
-            controller.display(),
-            ticket_map.display(),
-            preparation.display(),
-            run_queue.display()
-        );
-        let task = channels::create_queue_task(
-            &root,
-            channels::QueueTaskCreateRequest {
-                title: "Terminal-Bench 2 controller real refs".to_string(),
-                prompt: prompt.clone(),
-                thread_key: "queue/tb2-real-refs".to_string(),
-                workspace_root: Some(run_dir.to_string_lossy().into_owned()),
-                priority: "urgent".to_string(),
-                suggested_skill: Some("benchmark-controller".to_string()),
-                parent_message_key: None,
-                extra_metadata: None,
-            },
-        )
-        .expect("failed to create parent queue task");
-        let leased = channels::lease_queue_task(&root, &task.message_key, "test")
-            .expect("failed to lease parent queue task");
-        let child = channels::create_queue_task(
-            &root,
-            channels::QueueTaskCreateRequest {
-                title: "prep-runtime".to_string(),
-                prompt: "verify runtime".to_string(),
-                thread_key: "queue/tb2-real-refs/prep-runtime".to_string(),
-                workspace_root: Some(run_dir.to_string_lossy().into_owned()),
-                priority: "urgent".to_string(),
-                suggested_skill: Some("benchmark-controller".to_string()),
-                parent_message_key: Some(leased.message_key.clone()),
-                extra_metadata: None,
-            },
-        )
-        .expect("failed to create child queue task");
-        std::fs::create_dir_all(&run_dir).expect("failed to create run dir");
-        std::fs::write(
-            &controller,
-            "{\"phase\":\"1-preparation\",\"next_action\":\"prep\"}\n",
-        )
-        .expect("failed to write controller");
-        std::fs::write(
-            &ticket_map,
-            format!(
-                "{{\"ticket_id\":\"prep-runtime\",\"message_key\":\"{}\"}}\n",
-                child.message_key
-            ),
-        )
-        .expect("failed to write ticket map");
-        std::fs::write(
-            &preparation,
-            format!(
-                "{{\"ticket_id\":\"prep-runtime\",\"message_key\":\"{}\"}}\n",
-                child.message_key
-            ),
-        )
-        .expect("failed to write prep tickets");
-        std::fs::write(
-            &run_queue,
-            format!(
-                "{{\"queue_key\":\"{}\",\"ticket_id\":\"prep-runtime\",\"status\":\"pending\"}}\n",
-                child.message_key
-            ),
-        )
-        .expect("failed to write run queue");
-        let job = QueuedPrompt {
-            prompt,
-            goal: "Terminal-Bench 2 controller".to_string(),
-            preview: "Terminal-Bench 2 controller".to_string(),
-            source_label: "queue".to_string(),
-            suggested_skill: Some("benchmark-controller".to_string()),
-            leased_message_keys: vec![leased.message_key],
-            leased_ticket_event_keys: Vec::new(),
-            thread_key: Some("queue/tb2-real-refs".to_string()),
-            workspace_root: Some(run_dir.to_string_lossy().into_owned()),
-            ticket_self_work_id: None,
-            outbound_email: None,
-            outbound_anchor: None,
-        };
-
-        let expected = expected_outcome_artifacts_for_job(&job);
-        let delivered = delivered_outcome_artifacts_for_job(&root, &job, &expected)
-            .expect("failed to read delivered artifacts");
-
-        assert_eq!(delivered.len(), 4);
-        let proof_id = enforce_job_outcome_witness(&root, &job, expected, delivered)
-            .expect("real queue runtime refs should satisfy Terminal-Bench witness")
-            .expect("proof id should be returned");
-        assert!(proof_id.starts_with("ctp-"));
-    }
-
-    #[test]
     fn workspace_file_recovery_prompt_names_missing_paths() {
         let job = QueuedPrompt {
-            prompt: "RUN_DIR=\"/tmp/ctox-tb2-run\"\nInitialisiere die Dateien logbook.md und controller.json.".to_string(),
+            prompt: "RUN_DIR=\"/tmp/ctox-artifact-run\"\nInitialisiere die Dateien logbook.md und controller.json.".to_string(),
             goal: "bootstrap artifacts".to_string(),
             preview: "bootstrap artifacts".to_string(),
             source_label: "queue".to_string(),
             suggested_skill: None,
-            leased_message_keys: vec!["queue:tb2-bootstrap".to_string()],
+            leased_message_keys: vec!["queue:artifact-bootstrap".to_string()],
             leased_ticket_event_keys: Vec::new(),
             thread_key: None,
             workspace_root: None,
@@ -22898,8 +21508,8 @@ preparation queue/tickets and record message keys.",
 
         assert!(prompt.contains("Datei-Artefakte fehlen"));
         assert!(prompt.contains("test -f"));
-        assert!(prompt.contains("/tmp/ctox-tb2-run/logbook.md"));
-        assert!(prompt.contains("/tmp/ctox-tb2-run/controller.json"));
+        assert!(prompt.contains("/tmp/ctox-artifact-run/logbook.md"));
+        assert!(prompt.contains("/tmp/ctox-artifact-run/controller.json"));
         assert!(!prompt.contains("reviewed-founder-send"));
     }
 

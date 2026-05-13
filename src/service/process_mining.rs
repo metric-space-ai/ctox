@@ -6407,7 +6407,7 @@ mod tests {
                 created_at, updated_at
             )
             VALUES (
-                'e1', 'Thread', 'tbq-test', 'WorkItem', 'w1',
+                'e1', 'Thread', 'queue-test', 'WorkItem', 'w1',
                 'self-work:test', 'test', 'ctox-test', 1, '[]', '{}',
                 'now', 'now'
             )

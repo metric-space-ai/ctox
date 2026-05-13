@@ -9,7 +9,6 @@ use std::sync::Mutex;
 
 // Re-export PersistentSession so callers (main.rs, service.rs) can hold one.
 pub(crate) use super::direct_session::PersistentSession;
-use super::direct_session::TerminalBenchPreflightSpec;
 use std::sync::OnceLock;
 use std::time::Duration;
 use toml::Value as TomlValue;
@@ -194,7 +193,7 @@ const DEFAULT_REMOTE_CHAT_TURN_TIMEOUT_SECS: u64 = 180;
 // longer turn budget than remote APIs. A single agent turn often involves
 // dozens of tool round-trips, each carrying ~5-15 s GPU model-load overhead
 // plus the actual generation time. With a 900 s ceiling, complex
-// terminal-bench tasks (SWE-Bench, large workspaces) hit
+// large workspace tasks hit
 // "direct session timeout after 900s" mid-turn, the persistent session is
 // dropped and the ggml backend is killed — leaving leases held and 0 passes.
 // 3600 s gives long-running tasks room while still bounding genuinely stuck
@@ -334,8 +333,6 @@ where
         conversation_id,
         suggested_skill,
         force_continuity_refresh,
-        None,
-        true,
         session,
         emit,
     )
@@ -349,8 +346,6 @@ pub(crate) fn run_chat_turn_with_events_extended_guarded<F>(
     conversation_id: i64,
     suggested_skill: Option<&str>,
     force_continuity_refresh: bool,
-    terminal_bench_preflight: Option<TerminalBenchPreflightSpec>,
-    infer_terminal_bench_preflight_from_prompt: bool,
     mut session: Option<&mut PersistentSession>,
     mut emit: F,
 ) -> Result<String>
@@ -493,20 +488,16 @@ where
     let turn_start_ts = current_rfc3339_timestamp();
     emit("invoke-model");
     let reply = match session.as_deref_mut() {
-        Some(sess) => sess.run_turn_with_terminal_bench_preflight(
+        Some(sess) => sess.run_turn_inner(
             &rendered_prompt.prompt,
             Some(Duration::from_secs(config.turn_timeout_secs)),
-            terminal_bench_preflight.clone(),
-            infer_terminal_bench_preflight_from_prompt,
         )?,
         None => owned_session
             .as_mut()
             .expect("owned persistent session should exist when no session was supplied")
-            .run_turn_with_terminal_bench_preflight(
+            .run_turn_inner(
                 &rendered_prompt.prompt,
                 Some(Duration::from_secs(config.turn_timeout_secs)),
-                terminal_bench_preflight,
-                infer_terminal_bench_preflight_from_prompt,
             )?,
     };
     emit("persist-assistant-turn");
@@ -1006,7 +997,6 @@ pub fn hard_runtime_blocker_retry_cooldown_secs(content: &str) -> Option<u64> {
         || lower.contains("context_selection_empty")
         || lower.contains("context selection is empty")
         || lower.contains("no context evidence rendered")
-        || lower.contains("terminal-bench preflight violation")
         || lower.contains("mid-task compaction failed")
         || lower.contains("failed to parse structured compaction response")
         || lower.contains("exceed_context_size_error")
