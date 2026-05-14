@@ -216,6 +216,22 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn skips_cli_turn_ledger(args: &[String]) -> bool {
+    // Diagnostic and administrative commands MUST NOT block on the CLI
+    // turn ledger. Opening the ledger requires an fcntl write lock on
+    // runtime/ctox.sqlite3, and on macOS a previous CTOX CLI process
+    // stuck in uninterruptible-exit (UE) state holds that lock until the
+    // kernel reaps it — which never happens. Without this skip, a single
+    // stuck `ctox` invocation poisons every subsequent `ctox upgrade`,
+    // `ctox status`, etc. with an indefinite SQLite hang. The legacy
+    // runtime-* smokes below were the original entries.
+    if let Some(first) = args.first().map(String::as_str) {
+        match first {
+            // Recovery / inspection commands — must work even when the
+            // runtime DB is wedged.
+            "upgrade" | "update" | "version" | "status" | "doctor" => return true,
+            _ => {}
+        }
+    }
     matches!(
         args,
         [command, subcommand, ..]

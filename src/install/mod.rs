@@ -1283,8 +1283,32 @@ fn update_lock_is_stale(path: &Path) -> bool {
     if pid == std::process::id() {
         return false;
     }
-    !process_is_alive(pid)
+    if !process_is_alive(pid) {
+        return true;
+    }
+    // Holder appears alive — but on macOS a previous upgrade can become
+    // wedged in uninterruptible-exit (UE) state, never releasing the lock.
+    // Treat any lock older than UPDATE_LOCK_MAX_AGE_SECS as abandoned so
+    // the next upgrade can recover without manual cleanup.
+    if let Some(started_at) = lock_field(path, "started_at") {
+        if let Ok(started) = chrono::DateTime::parse_from_rfc3339(&started_at) {
+            let now = chrono::Utc::now();
+            let age = now.signed_duration_since(started.with_timezone(&chrono::Utc));
+            if age.num_seconds() > UPDATE_LOCK_MAX_AGE_SECS as i64 {
+                return true;
+            }
+        } else {
+            // Unparseable started_at — treat as stale rather than wait forever.
+            return true;
+        }
+    } else {
+        // Missing started_at — old lock format or corruption. Treat as stale.
+        return true;
+    }
+    false
 }
+
+const UPDATE_LOCK_MAX_AGE_SECS: u64 = 30 * 60;
 
 fn lock_field(path: &Path, key: &str) -> Option<String> {
     let raw = fs::read_to_string(path).ok()?;
