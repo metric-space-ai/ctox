@@ -35,6 +35,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::inference::runtime_env;
 use crate::mission::tickets;
+use crate::service::core_state_machine::{
+    CoreEntityType, CoreEvent, CoreEvidenceRefs, CoreState, CoreTransitionRequest, RuntimeLane,
+};
+use crate::service::core_transition_guard::enforce_core_transition;
 
 const DB_RELATIVE_PATH: &str = "runtime/ctox.sqlite3";
 
@@ -581,7 +585,17 @@ fn parse_inbound_approval_replies(root: &Path) -> Result<usize> {
             ReplyAction::Approve => "closed",
             ReplyAction::Reject => "failed",
         };
-        match tickets::set_ticket_self_work_state(root, &work_id, new_state) {
+        let transition_result = if matches!(action, ReplyAction::Reject) {
+            tickets::set_ticket_self_work_state_with_failure_reason(
+                root,
+                &work_id,
+                new_state,
+                Some("approval reply rejected the self-work item"),
+            )
+        } else {
+            tickets::set_ticket_self_work_state(root, &work_id, new_state)
+        };
+        match transition_result {
             Ok(_) => {
                 processed += 1;
                 let _ = mark_reply_handled(&conn, &message_key);
@@ -640,6 +654,38 @@ fn extract_work_id(subject: &str) -> Option<String> {
 }
 
 fn mark_reply_handled(conn: &Connection, message_key: &str) -> Result<()> {
+    let previous = conn
+        .query_row(
+            "SELECT route_status FROM communication_routing_state WHERE message_key = ?1 LIMIT 1",
+            params![message_key],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .unwrap_or_else(|| "pending".to_string());
+    let mut metadata = std::collections::BTreeMap::new();
+    metadata.insert("from_route_status".to_string(), previous.clone());
+    metadata.insert(
+        "to_route_status".to_string(),
+        "approval-nag-handled".to_string(),
+    );
+    metadata.insert(
+        "reason".to_string(),
+        "approval_nag_reply_handled".to_string(),
+    );
+    enforce_core_transition(
+        conn,
+        &CoreTransitionRequest {
+            entity_type: CoreEntityType::QueueItem,
+            entity_id: message_key.to_string(),
+            lane: RuntimeLane::P2MissionDelivery,
+            from_state: approval_nag_route_core_state(&previous),
+            to_state: CoreState::Blocked,
+            event: CoreEvent::Block,
+            actor: "ctox-approval-nag".to_string(),
+            evidence: CoreEvidenceRefs::default(),
+            metadata,
+        },
+    )?;
     conn.execute(
         r#"
         UPDATE communication_routing_state
@@ -650,6 +696,17 @@ fn mark_reply_handled(conn: &Connection, message_key: &str) -> Result<()> {
         params![message_key],
     )?;
     Ok(())
+}
+
+fn approval_nag_route_core_state(route_status: &str) -> CoreState {
+    match route_status.trim().to_ascii_lowercase().as_str() {
+        "leased" => CoreState::Leased,
+        "blocked" | "review_rework" | "approval-nag-handled" => CoreState::Blocked,
+        "failed" => CoreState::Failed,
+        "handled" | "completed" => CoreState::Completed,
+        "cancelled" | "superseded" => CoreState::Superseded,
+        _ => CoreState::Pending,
+    }
 }
 
 // Backwards-compat shim so unused `Serialize` / `Deserialize` imports do

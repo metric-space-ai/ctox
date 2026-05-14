@@ -1243,14 +1243,15 @@ pub fn handle_channel_command(root: &Path, args: &[String]) -> Result<()> {
         "ack" => {
             let db_path = resolve_db_path(root, find_flag_value(args, "--db"));
             let status = find_flag_value(args, "--status").unwrap_or("handled");
+            let failure_reason = find_flag_value(args, "--reason");
             let message_keys = positional_after_flags(&args[1..]);
             if message_keys.is_empty() {
                 anyhow::bail!(
-                    "usage: ctox channel ack [--db <path>] [--status <status>] <message-key>..."
+                    "usage: ctox channel ack [--db <path>] [--status <status>] [--reason <text>] <message-key>..."
                 );
             }
             let mut conn = open_channel_db(&db_path)?;
-            let updated = ack_messages(&mut conn, &message_keys, status)?;
+            let updated = ack_messages(&mut conn, &message_keys, status, failure_reason)?;
             print_json(&json!({
                 "ok": true,
                 "db_path": db_path,
@@ -1642,7 +1643,23 @@ pub fn ack_leased_messages(root: &Path, message_keys: &[String], status: &str) -
     let db_path = resolve_db_path(root, None);
     let mut conn = open_channel_db(&db_path)?;
     guard_founder_handled_ack(root, &conn, message_keys, status)?;
-    ack_messages(&mut conn, message_keys, status)
+    ack_messages(&mut conn, message_keys, status, None)
+}
+
+pub fn ack_leased_messages_with_failure_reason(
+    root: &Path,
+    message_keys: &[String],
+    status: &str,
+    failure_reason: &str,
+) -> Result<usize> {
+    anyhow::ensure!(
+        status == "failed",
+        "ack_leased_messages_with_failure_reason only accepts status='failed'"
+    );
+    let db_path = resolve_db_path(root, None);
+    let mut conn = open_channel_db(&db_path)?;
+    guard_founder_handled_ack(root, &conn, message_keys, status)?;
+    ack_messages(&mut conn, message_keys, status, Some(failure_reason))
 }
 
 pub fn set_queue_task_route_status(
@@ -1990,6 +2007,11 @@ pub fn update_queue_task(root: &Path, request: QueueTaskUpdateRequest) -> Result
         },
     )?;
     if let Some(route_status) = request.route_status.as_deref() {
+        let status_note = request
+            .status_note
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
         set_routing_status(
             &mut conn,
             &current.message_key,
@@ -1997,6 +2019,7 @@ pub fn update_queue_task(root: &Path, request: QueueTaskUpdateRequest) -> Result
             &now,
             "ctox-queue-update",
             "update_queue_task",
+            status_note,
         )?;
     }
     refresh_thread(&mut conn, &thread_key)?;
@@ -5844,10 +5867,25 @@ pub fn defer_messages_until(
     Ok(updated)
 }
 
-fn ack_messages(conn: &mut Connection, message_keys: &[String], status: &str) -> Result<usize> {
+fn ack_messages(
+    conn: &mut Connection,
+    message_keys: &[String],
+    status: &str,
+    failure_note: Option<&str>,
+) -> Result<usize> {
     let now = now_iso_string();
     let acked_at = if matches!(status, "handled" | "cancelled") {
         Some(now.as_str())
+    } else {
+        None
+    };
+    let failure_note = if status == "failed" {
+        Some(
+            failure_note
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .context("failed queue ack requires a non-empty failure reason")?,
+        )
     } else {
         None
     };
@@ -5861,14 +5899,14 @@ fn ack_messages(conn: &mut Connection, message_keys: &[String], status: &str) ->
             &previous_route_status,
             status,
             "ctox-queue-ack",
-            "ack_messages",
+            failure_note.unwrap_or("ack_messages"),
         )?;
         let routing_updates = tx.execute(
             r#"
             INSERT INTO communication_routing_state (
                 message_key, route_status, lease_owner, leased_at, acked_at, last_error, updated_at
             )
-            SELECT ?1, ?2, NULL, NULL, ?3, NULL, ?4
+            SELECT ?1, ?2, NULL, NULL, ?3, ?4, ?5
             FROM communication_messages
             WHERE message_key = ?1
             ON CONFLICT(message_key) DO UPDATE SET
@@ -5876,9 +5914,10 @@ fn ack_messages(conn: &mut Connection, message_keys: &[String], status: &str) ->
                 lease_owner=NULL,
                 leased_at=NULL,
                 acked_at=excluded.acked_at,
+                last_error=excluded.last_error,
                 updated_at=excluded.updated_at
             "#,
-            params![message_key, status, acked_at, now],
+            params![message_key, status, acked_at, failure_note, now],
         )?;
         if routing_updates == 0 {
             continue;
@@ -6525,8 +6564,18 @@ fn set_routing_status(
     now: &str,
     actor: &str,
     reason: &str,
+    status_note: Option<&str>,
 ) -> Result<()> {
     let route_status = canonical_queue_route_status(route_status)?;
+    let failure_note = if route_status == "failed" {
+        let note = status_note
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .context("failed queue route status requires a non-empty status_note/failure reason")?;
+        Some(note)
+    } else {
+        None
+    };
     let previous_route_status = current_queue_route_status(conn, message_key)?;
     enforce_queue_route_status_transition(
         conn,
@@ -6534,7 +6583,7 @@ fn set_routing_status(
         &previous_route_status,
         &route_status,
         actor,
-        reason,
+        failure_note.unwrap_or(reason),
     )?;
     let acked_at = if matches!(route_status.as_str(), "handled" | "cancelled") {
         Some(now)
@@ -6546,15 +6595,16 @@ fn set_routing_status(
         INSERT INTO communication_routing_state (
             message_key, route_status, lease_owner, leased_at, acked_at, last_error, updated_at
         )
-        VALUES (?1, ?2, NULL, NULL, ?3, NULL, ?4)
+        VALUES (?1, ?2, NULL, NULL, ?3, ?4, ?5)
         ON CONFLICT(message_key) DO UPDATE SET
             route_status=excluded.route_status,
             lease_owner=NULL,
             leased_at=NULL,
             acked_at=excluded.acked_at,
+            last_error=excluded.last_error,
             updated_at=excluded.updated_at
         "#,
-        params![message_key, route_status, acked_at, now],
+        params![message_key, route_status, acked_at, failure_note, now],
     )?;
     Ok(())
 }
@@ -6598,6 +6648,13 @@ pub(crate) fn enforce_queue_route_status_transition(
     );
     metadata.insert("to_route_status".to_string(), to_route_status.to_string());
     metadata.insert("reason".to_string(), reason.to_string());
+    if to_state == CoreState::Failed {
+        metadata.insert("failure_reason".to_string(), reason.to_string());
+        metadata.insert(
+            "failure_class".to_string(),
+            "queue_route_failure".to_string(),
+        );
+    }
     if to_state == CoreState::Completed {
         if let Some(policy_proof) = queue_terminal_policy_proof(actor, reason) {
             metadata.insert("terminal_policy_proof".to_string(), policy_proof);
@@ -8056,6 +8113,66 @@ mod tests {
         assert_eq!(
             legacy.workspace_root.as_deref(),
             Some("/tmp/ctox-legacy-workspace")
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn failed_queue_ack_requires_and_persists_failure_reason() {
+        let root = std::env::temp_dir().join(format!(
+            "ctox-queue-failed-ack-reason-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("failed to create temp test root");
+
+        let task = create_queue_task(
+            &root,
+            QueueTaskCreateRequest {
+                title: "queue failure reason".to_string(),
+                prompt: "Exercise failed ack reason handling.".to_string(),
+                thread_key: "queue/failure-reason".to_string(),
+                workspace_root: None,
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create queue task");
+        lease_queue_task(&root, &task.message_key, "ctox-test")
+            .expect("failed to lease queue task");
+
+        let err = ack_leased_messages(&root, std::slice::from_ref(&task.message_key), "failed")
+            .expect_err("failed ack without reason must be rejected");
+        assert!(err
+            .to_string()
+            .contains("failed queue ack requires a non-empty failure reason"));
+
+        ack_leased_messages_with_failure_reason(
+            &root,
+            std::slice::from_ref(&task.message_key),
+            "failed",
+            "worker execution failed before completion review",
+        )
+        .expect("failed ack with reason should succeed");
+
+        let conn =
+            open_channel_db(&crate::paths::core_db(&root)).expect("failed to open channel db");
+        let (route_status, last_error): (String, Option<String>) = conn
+            .query_row(
+                "SELECT route_status, last_error FROM communication_routing_state WHERE message_key = ?1",
+                params![task.message_key],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("failed to read routing state");
+        assert_eq!(route_status, "failed");
+        assert_eq!(
+            last_error.as_deref(),
+            Some("worker execution failed before completion review")
         );
 
         let _ = fs::remove_dir_all(&root);

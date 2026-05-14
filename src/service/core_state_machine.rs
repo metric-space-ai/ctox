@@ -384,6 +384,7 @@ pub fn validate_transition(request: &CoreTransitionRequest) -> CoreTransitionRep
     validate_review_gate(request, &mut violations);
     validate_rework_required_gate(request, &mut violations);
     validate_review_harness_static_model(&mut violations);
+    validate_terminal_failure_gate(request, &mut violations);
     validate_work_terminal_success_gate(request, &mut violations);
     validate_ticket_closure(request, &mut violations);
     validate_commitment_backing(request, &mut violations);
@@ -396,6 +397,48 @@ pub fn validate_transition(request: &CoreTransitionRequest) -> CoreTransitionRep
         CoreTransitionReport::accepted()
     } else {
         CoreTransitionReport::rejected(violations)
+    }
+}
+
+fn validate_terminal_failure_gate(
+    request: &CoreTransitionRequest,
+    violations: &mut Vec<CoreTransitionViolation>,
+) {
+    if request.to_state != CoreState::Failed {
+        return;
+    }
+    if !matches!(
+        request.entity_type,
+        CoreEntityType::QueueItem | CoreEntityType::WorkItem | CoreEntityType::Ticket
+    ) {
+        return;
+    }
+    if request.lane == RuntimeLane::P3Housekeeping {
+        return;
+    }
+
+    let failure_reason = request
+        .metadata
+        .get("failure_reason")
+        .map(|value| value.trim())
+        .unwrap_or("");
+    if failure_reason.is_empty() {
+        violations.push(violation(
+            "terminal_failure_requires_reason",
+            "work terminal failure requires a durable non-empty failure_reason",
+        ));
+    }
+
+    let failure_class = request
+        .metadata
+        .get("failure_class")
+        .map(|value| value.trim())
+        .unwrap_or("");
+    if failure_class.is_empty() {
+        violations.push(violation(
+            "terminal_failure_requires_class",
+            "work terminal failure requires a durable failure_class",
+        ));
     }
 }
 
@@ -2260,6 +2303,58 @@ mod tests {
                 review_audit_key: Some("review-proof-1".to_string()),
                 ..CoreEvidenceRefs::default()
             },
+            metadata,
+        };
+
+        let report = validate_transition(&request);
+
+        assert!(report.accepted, "{:?}", report.violations);
+    }
+
+    #[test]
+    fn work_terminal_failure_rejects_missing_failure_reason_and_class() {
+        let request = CoreTransitionRequest {
+            entity_type: CoreEntityType::QueueItem,
+            entity_id: "queue-fail-without-reason".to_string(),
+            lane: RuntimeLane::P2MissionDelivery,
+            from_state: CoreState::Leased,
+            to_state: CoreState::Failed,
+            event: CoreEvent::Fail,
+            actor: "ctox-runtime".to_string(),
+            evidence: CoreEvidenceRefs::default(),
+            metadata: BTreeMap::new(),
+        };
+
+        let report = validate_transition(&request);
+
+        assert!(!report.accepted);
+        assert!(report
+            .violations
+            .iter()
+            .any(|violation| { violation.code == "terminal_failure_requires_reason" }));
+        assert!(report
+            .violations
+            .iter()
+            .any(|violation| { violation.code == "terminal_failure_requires_class" }));
+    }
+
+    #[test]
+    fn work_terminal_failure_accepts_durable_reason_and_class() {
+        let mut metadata = BTreeMap::new();
+        metadata.insert(
+            "failure_reason".to_string(),
+            "worker crashed before producing a reviewed artifact".to_string(),
+        );
+        metadata.insert("failure_class".to_string(), "worker_crash".to_string());
+        let request = CoreTransitionRequest {
+            entity_type: CoreEntityType::QueueItem,
+            entity_id: "queue-fail-with-reason".to_string(),
+            lane: RuntimeLane::P2MissionDelivery,
+            from_state: CoreState::Leased,
+            to_state: CoreState::Failed,
+            event: CoreEvent::Fail,
+            actor: "ctox-runtime".to_string(),
+            evidence: CoreEvidenceRefs::default(),
             metadata,
         };
 

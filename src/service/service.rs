@@ -3310,11 +3310,35 @@ fn start_prompt_worker(
                             } else {
                                 "pending"
                             };
-                            let _ = channels::ack_leased_messages(
-                                &root,
-                                &job.leased_message_keys,
-                                retry_status,
-                            );
+                            let ack_result = if retry_status == "failed" {
+                                let failure_reason = match &review_disposition {
+                                    CompletionReviewDisposition::TerminalQueueFailure {
+                                        summary,
+                                    } => summary.as_str(),
+                                    _ => "terminal queue failure",
+                                };
+                                channels::ack_leased_messages_with_failure_reason(
+                                    &root,
+                                    &job.leased_message_keys,
+                                    retry_status,
+                                    failure_reason,
+                                )
+                            } else {
+                                channels::ack_leased_messages(
+                                    &root,
+                                    &job.leased_message_keys,
+                                    retry_status,
+                                )
+                            };
+                            if let Err(ack_err) = ack_result {
+                                push_event_locked(
+                                    &mut shared,
+                                    format!(
+                                        "Failed to update leased queue task(s) after completion review: {}",
+                                        clip_text(&ack_err.to_string(), 180)
+                                    ),
+                                );
+                            }
                         }
                         if !job.leased_ticket_event_keys.is_empty() && should_handle_messages {
                             let _ = tickets::ack_leased_ticket_events(
@@ -3528,11 +3552,29 @@ fn start_prompt_worker(
                                     },
                                 );
                             }
-                            let _ = channels::ack_leased_messages(
-                                &root,
-                                &job.leased_message_keys,
-                                route_status,
-                            );
+                            let ack_result = if route_status == "failed" {
+                                channels::ack_leased_messages_with_failure_reason(
+                                    &root,
+                                    &job.leased_message_keys,
+                                    route_status,
+                                    &compact_error,
+                                )
+                            } else {
+                                channels::ack_leased_messages(
+                                    &root,
+                                    &job.leased_message_keys,
+                                    route_status,
+                                )
+                            };
+                            if let Err(ack_err) = ack_result {
+                                push_event_locked(
+                                    &mut shared,
+                                    format!(
+                                        "Failed to update leased queue task(s) after worker error: {}",
+                                        clip_text(&ack_err.to_string(), 180)
+                                    ),
+                                );
+                            }
                         }
                         if !job.leased_ticket_event_keys.is_empty() {
                             let _ = tickets::ack_leased_ticket_events(
@@ -7104,6 +7146,14 @@ fn enforce_queue_review_budget_exhausted_terminal_transition(
         "pre_worker_dispatch".to_string(),
     );
     metadata.insert("spawns_review_owned_work".to_string(), "false".to_string());
+    metadata.insert(
+        "failure_class".to_string(),
+        "review_budget_exhausted".to_string(),
+    );
+    metadata.insert(
+        "failure_reason".to_string(),
+        format!("finite completion-review budget exhausted after {attempts}/{threshold} attempts"),
+    );
 
     let proof = enforce_core_transition(
         &conn,
@@ -7163,7 +7213,6 @@ fn terminalize_exhausted_queue_review_budget_before_run(
         .iter()
         .map(|(message_key, _, _)| message_key.clone())
         .collect::<Vec<_>>();
-    channels::ack_leased_messages(root, &keys, "failed")?;
     let summary = exhausted
         .iter()
         .map(|(message_key, attempts, proof_id)| {
@@ -7171,6 +7220,12 @@ fn terminalize_exhausted_queue_review_budget_before_run(
         })
         .collect::<Vec<_>>()
         .join(", ");
+    channels::ack_leased_messages_with_failure_reason(
+        root,
+        &keys,
+        "failed",
+        &format!("finite completion-review budget exhausted: {summary}"),
+    )?;
     Ok(Some(summary))
 }
 
@@ -17899,6 +17954,10 @@ mod tests {
                 channels::QueueTaskUpdateRequest {
                     message_key: task.message_key,
                     route_status: Some("failed".to_string()),
+                    status_note: Some(format!(
+                        "test settled failed review queue attempt {}",
+                        attempt + 1
+                    )),
                     ..Default::default()
                 },
             )
@@ -17963,6 +18022,10 @@ mod tests {
                 channels::QueueTaskUpdateRequest {
                     message_key: task.message_key,
                     route_status: Some("failed".to_string()),
+                    status_note: Some(format!(
+                        "test settled failed review-rework queue attempt {}",
+                        attempt + 1
+                    )),
                     ..Default::default()
                 },
             )

@@ -2439,6 +2439,7 @@ pub(crate) fn put_ticket_self_work_item(
         } else {
             "ticket_self_work_spawn_rejected"
         };
+        let failure_reason = err.to_string();
         let transition_result = enforce_ticket_self_work_state_transition(
             &conn,
             &item.work_id,
@@ -2446,6 +2447,11 @@ pub(crate) fn put_ticket_self_work_item(
             fallback_state,
             "ctox-core-spawn-gate",
             fallback_reason,
+            if fallback_state == "failed" {
+                Some(failure_reason.as_str())
+            } else {
+                None
+            },
         );
         if let Err(transition_err) = transition_result {
             anyhow::bail!(
@@ -2835,7 +2841,7 @@ pub(crate) fn transition_ticket_self_work_item(
             remote_event_ids.first().map(String::as_str),
         )?;
     }
-    let item = set_ticket_self_work_state_internal(&mut conn, work_id, state)?;
+    let item = set_ticket_self_work_state_internal(&mut conn, work_id, state, note)?;
     record_audit(
         &mut conn,
         AuditRequest {
@@ -2932,8 +2938,17 @@ pub(crate) fn set_ticket_self_work_state(
     work_id: &str,
     state: &str,
 ) -> Result<TicketSelfWorkItemView> {
+    set_ticket_self_work_state_with_failure_reason(root, work_id, state, None)
+}
+
+pub(crate) fn set_ticket_self_work_state_with_failure_reason(
+    root: &Path,
+    work_id: &str,
+    state: &str,
+    failure_reason: Option<&str>,
+) -> Result<TicketSelfWorkItemView> {
     let mut conn = open_ticket_db(root)?;
-    let item = set_ticket_self_work_state_internal(&mut conn, work_id, state)?;
+    let item = set_ticket_self_work_state_internal(&mut conn, work_id, state, failure_reason)?;
     record_audit(
         &mut conn,
         AuditRequest {
@@ -3085,6 +3100,7 @@ fn enforce_ticket_self_work_state_transition(
     to_state: &str,
     actor: &str,
     reason: &str,
+    failure_reason: Option<&str>,
 ) -> Result<()> {
     let from_core = ticket_self_work_core_state(from_state)?;
     let to_core = ticket_self_work_core_state(to_state)?;
@@ -3098,6 +3114,17 @@ fn enforce_ticket_self_work_state_transition(
     metadata.insert("from_state".to_string(), from_state.to_string());
     metadata.insert("to_state".to_string(), to_state.to_string());
     metadata.insert("reason".to_string(), reason.to_string());
+    if to_core == CoreState::Failed {
+        let failure_reason = failure_reason
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .context("ticket self-work failed transition requires a non-empty failure reason")?;
+        metadata.insert("failure_reason".to_string(), failure_reason.to_string());
+        metadata.insert(
+            "failure_class".to_string(),
+            "ticket_self_work_failure".to_string(),
+        );
+    }
     enforce_core_transition(
         conn,
         &CoreTransitionRequest {
@@ -3203,6 +3230,7 @@ fn set_ticket_self_work_state_internal(
     conn: &mut Connection,
     work_id: &str,
     state: &str,
+    failure_reason: Option<&str>,
 ) -> Result<TicketSelfWorkItemView> {
     let existing = load_ticket_self_work_item_raw(conn, work_id)?
         .context("ticket self-work item not found")?;
@@ -3213,6 +3241,7 @@ fn set_ticket_self_work_state_internal(
         state,
         "ctox-ticket",
         "set_ticket_self_work_state",
+        failure_reason,
     )?;
     let now = now_iso_string();
     conn.execute(
@@ -3407,6 +3436,7 @@ fn upsert_ticket_self_work_item_internal(
             &input.state,
             "ctox-ticket",
             "self_work_item_upsert",
+            None,
         )?;
     }
     conn.execute(
@@ -3464,6 +3494,7 @@ fn mark_ticket_self_work_published(
         "published",
         "ctox-ticket",
         "mark_ticket_self_work_published",
+        None,
     )?;
     let now = now_iso_string();
     conn.execute(
