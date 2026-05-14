@@ -1000,6 +1000,11 @@ pub fn hard_runtime_blocker_retry_cooldown_secs(content: &str) -> Option<u64> {
         || lower.contains("mid-task compaction failed")
         || lower.contains("failed to parse structured compaction response")
         || lower.contains("exceed_context_size_error")
+        || lower.contains("contextwindowexceeded")
+        || lower.contains("context window exceeded")
+        || lower.contains("ran out of room in the model's context window")
+        || lower.contains("context_length_exceeded")
+        || lower.contains("input exceeds the context window")
         || lower.contains("exceeds the available context size")
     {
         return Some(60);

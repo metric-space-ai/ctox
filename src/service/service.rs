@@ -10087,6 +10087,11 @@ fn runtime_error_is_transient_api_failure(error: &str) -> bool {
         || normalized.contains("mid-task compaction failed")
         || normalized.contains("failed to parse structured compaction response")
         || normalized.contains("exceed_context_size_error")
+        || normalized.contains("contextwindowexceeded")
+        || normalized.contains("context window exceeded")
+        || normalized.contains("ran out of room in the model's context window")
+        || normalized.contains("context_length_exceeded")
+        || normalized.contains("input exceeds the context window")
         || normalized.contains("exceeds the available context size")
         || normalized.contains("too many requests")
         || normalized.contains("rate limit")
@@ -19262,6 +19267,53 @@ Use shell tools to create or update these files."
             Some(60)
         );
         assert!(runtime_error_is_transient_api_failure(error));
+    }
+
+    #[test]
+    fn direct_context_window_exceeded_is_retryable_harness_failure() {
+        let error = "direct session error: ErrorEvent { message: \"Codex ran out of room in the model's context window. Start a new thread or clear earlier history before retrying.\", codex_error_info: Some(ContextWindowExceeded) }";
+        assert_eq!(
+            turn_loop::hard_runtime_blocker_retry_cooldown_secs(error),
+            Some(60)
+        );
+        assert!(runtime_error_is_transient_api_failure(error));
+        assert_eq!(failed_worker_route_status(false, false, true), "pending");
+    }
+
+    #[test]
+    fn context_length_exceeded_api_error_is_retryable_harness_failure() {
+        let error = "response failed: context_length_exceeded: Your input exceeds the context window of this model. Please adjust your input and try again.";
+        assert_eq!(
+            turn_loop::hard_runtime_blocker_retry_cooldown_secs(error),
+            Some(60)
+        );
+        assert!(runtime_error_is_transient_api_failure(error));
+        assert_eq!(failed_worker_route_status(false, false, true), "pending");
+    }
+
+    #[test]
+    fn recoverable_runtime_failure_matrix_stays_pending() {
+        let cases = [
+            "turn completed without assistant message",
+            "context_selection_empty_critical: refusing model invocation because context health is critical and no context evidence rendered",
+            "mid-task compaction failed: failed to parse structured compaction response",
+            "direct session error: ErrorEvent { message: \"Codex ran out of room in the model's context window. Start a new thread or clear earlier history before retrying.\", codex_error_info: Some(ContextWindowExceeded) }",
+            "stream disconnected before completion: llama-server /completion returned status 400: {\"error\":{\"type\":\"exceed_context_size_error\",\"message\":\"request (132458 tokens) exceeds the available context size (131072 tokens)\"}}",
+            "HTTP status 429 Too Many Requests",
+            "HTTP status 503 Service Unavailable",
+        ];
+
+        for error in cases {
+            assert!(
+                runtime_error_is_transient_api_failure(error),
+                "expected retryable runtime failure: {error}"
+            );
+            assert_eq!(
+                failed_worker_route_status(false, false, true),
+                "pending",
+                "retryable runtime failures must return to the main queue"
+            );
+        }
     }
 
     #[test]
