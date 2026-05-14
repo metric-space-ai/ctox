@@ -1306,7 +1306,21 @@ impl ModelClientSession {
                 summary,
                 service_tier,
             )?;
-            let wire_request = self.prepare_http_request(&request);
+            // ChatGPT subscription endpoint rejects `previous_response_id`
+            // (returns "Unsupported parameter: previous_response_id" with the
+            // current responses.example.com surface). Skip the incremental
+            // optimization in that mode and resend the full input every turn.
+            let is_chatgpt_subscription = client_setup
+                .auth
+                .as_ref()
+                .map(CodexAuth::auth_mode)
+                .map(|m| matches!(m, AuthMode::Chatgpt))
+                .unwrap_or(false);
+            let wire_request = if is_chatgpt_subscription {
+                request.clone()
+            } else {
+                self.prepare_http_request(&request)
+            };
             let client = ApiResponsesClient::new(
                 transport,
                 client_setup.api_provider,
@@ -1490,7 +1504,21 @@ impl ModelClientSession {
                 Err(err) => return Err(map_api_error(err)),
             }
 
-            let ws_request = self.prepare_websocket_request(ws_payload, &request);
+            // Same chatgpt-subscription compatibility note as the HTTP path:
+            // the websocket equivalent of `previous_response_id` is also
+            // rejected on the subscription endpoint, so skip the prepare
+            // pass and resend the full payload.
+            let is_chatgpt_subscription = client_setup
+                .auth
+                .as_ref()
+                .map(CodexAuth::auth_mode)
+                .map(|m| matches!(m, AuthMode::Chatgpt))
+                .unwrap_or(false);
+            let ws_request = if is_chatgpt_subscription {
+                ResponsesWsRequest::ResponseCreate(ws_payload)
+            } else {
+                self.prepare_websocket_request(ws_payload, &request)
+            };
             self.websocket_session.last_request = Some(request);
             let stream_result = self.websocket_session.connection.as_ref().ok_or_else(|| {
                 map_api_error(ApiError::Stream(
