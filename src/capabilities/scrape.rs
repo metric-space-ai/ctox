@@ -2657,6 +2657,13 @@ fn execute_registered_script(
                 .to_string_lossy()
                 .to_string(),
         );
+    // Hand the script the exact ctox binary that's running this scrape
+    // execute, so nested shell-outs (`ctox web search`, `ctox web read`,
+    // `ctox secret get`) hit the same code-base instead of a different
+    // PATH-resolved binary.
+    if let Ok(self_exe) = std::env::current_exe() {
+        child.env("CTOX_BIN", self_exe.to_string_lossy().to_string());
+    }
     if let Some(text) = input_json {
         child.env("CTOX_SCRAPE_INPUT_JSON", text);
     }

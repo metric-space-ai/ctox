@@ -54,6 +54,19 @@ impl SourceModule for Northdata {
         &["northdata", "nd"]
     }
 
+    /// Northdata is HTML-pathed and DOM-prone-to-drift, so we delegate
+    /// extraction to the registered scrape target. Phase B: the script
+    /// at `runtime/scraping/targets/northdata.de/scripts/current.js`
+    /// mirrors the Rust `extract_from_html` below; when the DOM drifts,
+    /// `universal-scraping` revises that JS file instead of the Rust
+    /// code here. The Rust fallback stays as a baseline for unit-tests
+    /// and for environments where no scrape target is registered.
+    fn scrape_target_key(&self) -> Option<&'static str> {
+        // The CTOX scrape registry normalises target keys to a dashed slug
+        // (`.` → `-`); upsert-target rewrites `northdata.de` to `northdata-de`.
+        Some("northdata-de")
+    }
+
     fn tier(&self) -> Tier {
         Tier::S
     }

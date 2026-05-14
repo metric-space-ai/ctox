@@ -171,6 +171,7 @@ fn parse_scrape_envelope(target_key: &'static str, envelope: &Value) -> ScrapeBr
         .get("classification")
         .and_then(|v| v.get("reason"))
         .and_then(Value::as_str)
+        .or_else(|| envelope.get("reason").and_then(Value::as_str))
         .map(|s| s.to_string());
     let repair_queued = envelope
         .get("repair_queue_task")
@@ -181,15 +182,23 @@ fn parse_scrape_envelope(target_key: &'static str, envelope: &Value) -> ScrapeBr
         .and_then(Value::as_str)
         .map(|s| s.to_string());
 
-    // Records are emitted by the script under one of the accepted shapes
-    // (see references/task-contracts.md). The runner normalises them onto
-    // payload.records.
-    let records = envelope
-        .get("records")
-        .or_else(|| envelope.get("result").and_then(|v| v.get("records")))
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
+    // Records: ctox scrape execute persists them to
+    // `<run_dir>/outputs/records.json` and reports the run_manifest_path
+    // in the envelope. The script's raw stdout is also tail-truncated
+    // into `result.stdout_excerpt`; for short runs the records may be
+    // recoverable from there, but we prefer the on-disk records.json
+    // because it is the durable contract documented in
+    // skills/.../universal-scraping/references/storage-layout.md.
+    let records: Vec<Value> = if let Some(records_path) = locate_records_file(envelope) {
+        load_records_file(&records_path).unwrap_or_default()
+    } else {
+        envelope
+            .get("records")
+            .or_else(|| envelope.get("result").and_then(|v| v.get("records")))
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+    };
 
     let fields = records
         .into_iter()
@@ -203,6 +212,31 @@ fn parse_scrape_envelope(target_key: &'static str, envelope: &Value) -> ScrapeBr
         reason,
         repair_queued,
         run_id,
+    }
+}
+
+/// Try to find the on-disk records.json that the scrape executor wrote
+/// for this run. Derived from `run_manifest_path` when present.
+fn locate_records_file(envelope: &Value) -> Option<PathBuf> {
+    let manifest = envelope
+        .get("run_manifest_path")
+        .and_then(Value::as_str)?;
+    let manifest_path = PathBuf::from(manifest);
+    let run_dir = manifest_path.parent()?;
+    let candidate = run_dir.join("outputs").join("records.json");
+    Some(candidate)
+}
+
+fn load_records_file(path: &Path) -> Option<Vec<Value>> {
+    let raw = std::fs::read_to_string(path).ok()?;
+    let value: Value = serde_json::from_str(&raw).ok()?;
+    match value {
+        Value::Array(items) => Some(items),
+        Value::Object(map) => {
+            let recs = map.get("records")?;
+            recs.as_array().cloned()
+        }
+        _ => None,
     }
 }
 

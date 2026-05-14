@@ -743,6 +743,10 @@ pub fn run_ctox_web_read_tool(root: &Path, request: &DirectWebReadRequest) -> Re
         "page_text_excerpt": trim_text(&doc.page_text, 4000),
         "context": render_direct_read_context(&read_query, &doc),
         "extracted_fields": extracted,
+        // Raw HTML body for downstream parsers that need DOM access
+        // (e.g. scrape-target scripts revising selectors). PDFs and
+        // cache-loaded pages from older CTOX versions return null.
+        "raw_html": doc.raw_html,
     }))
 }
 
