@@ -6972,6 +6972,41 @@ fn table_exists(conn: &rusqlite::Connection, table_name: &str) -> Result<bool> {
     Ok(count > 0)
 }
 
+fn parse_rfc3339_millis(value: &str) -> Option<i64> {
+    let parsed = chrono::DateTime::parse_from_rfc3339(value).ok()?;
+    Some(parsed.timestamp_millis())
+}
+
+fn queue_message_review_floor_millis(
+    conn: &rusqlite::Connection,
+    message_key: &str,
+) -> Result<Option<i64>> {
+    let row = conn
+        .query_row(
+            r#"
+            SELECT observed_at, metadata_json
+            FROM communication_messages
+            WHERE message_key = ?1
+            "#,
+            params![message_key],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()?;
+    let Some((observed_at, metadata_json)) = row else {
+        return Ok(None);
+    };
+    let metadata_created_at =
+        serde_json::from_str::<Value>(&metadata_json)
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("created_at")
+                    .and_then(Value::as_str)
+                    .and_then(parse_rfc3339_millis)
+            });
+    Ok(metadata_created_at.or_else(|| parse_rfc3339_millis(&observed_at)))
+}
+
 fn queue_legacy_verification_review_attempt_count(
     root: &Path,
     job: &QueuedPrompt,
@@ -6986,20 +7021,35 @@ fn queue_legacy_verification_review_attempt_count(
     {
         return Ok(0);
     }
-    let observed_ms = conn
-        .query_row(
-            r#"
-            SELECT CAST(strftime('%s', observed_at) * 1000 AS INTEGER)
-            FROM communication_messages
-            WHERE message_key = ?1
-            "#,
-            params![message_key],
-            |row| row.get::<_, i64>(0),
-        )
-        .optional()?;
-    let Some(observed_ms) = observed_ms else {
+    let Some(floor_ms) = queue_message_review_floor_millis(&conn, message_key)? else {
         return Ok(0);
     };
+    if let Some(workspace_root) = job
+        .workspace_root
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    {
+        let workspace_pattern = format!("%{workspace_root}%");
+        let count: i64 = conn.query_row(
+            r#"
+            SELECT COUNT(*)
+            FROM verification_runs
+            WHERE review_required = 1
+              AND review_verdict IN ('fail', 'partial', 'unavailable')
+              AND source_label = ?1
+              AND CAST(created_at AS INTEGER) >= ?2
+              AND (
+                    goal LIKE ?3
+                 OR preview LIKE ?3
+                 OR result_excerpt LIKE ?3
+                 OR raw_report LIKE ?3
+              )
+            "#,
+            params![job.source_label, floor_ms, workspace_pattern],
+            |row| row.get(0),
+        )?;
+        return Ok(count.max(0) as usize);
+    }
     let count: i64 = conn.query_row(
         r#"
         SELECT COUNT(*)
@@ -7011,7 +7061,7 @@ fn queue_legacy_verification_review_attempt_count(
           AND preview = ?3
           AND CAST(created_at AS INTEGER) >= ?4
         "#,
-        params![job.source_label, job.goal, job.preview, observed_ms],
+        params![job.source_label, job.goal, job.preview, floor_ms],
         |row| row.get(0),
     )?;
     Ok(count.max(0) as usize)
@@ -16807,15 +16857,19 @@ mod tests {
         outcome.verdict = review::ReviewVerdict::Fail;
         outcome.failed_gates = vec!["Missing required output.".to_string()];
 
-        let verification_request = verification::SliceVerificationRequest {
-            conversation_id: turn_loop::CHAT_CONVERSATION_ID,
-            goal: job.goal.clone(),
-            prompt: job.prompt.clone(),
-            preview: job.preview.clone(),
-            source_label: job.source_label.clone(),
-            owner_visible: false,
-        };
-        for _ in 1..review_checkpoint_requeue_block_threshold() {
+        let workspace_root = job
+            .workspace_root
+            .as_deref()
+            .expect("test queue task should be workspace-backed");
+        for attempt in 1..review_checkpoint_requeue_block_threshold() {
+            let verification_request = verification::SliceVerificationRequest {
+                conversation_id: turn_loop::CHAT_CONVERSATION_ID,
+                goal: format!("Review rework attempt {attempt} changed the worker prompt"),
+                prompt: job.prompt.clone(),
+                preview: format!("Work only inside this workspace: {workspace_root}"),
+                source_label: job.source_label.clone(),
+                owner_visible: false,
+            };
             verification::record_slice_assurance(
                 &root,
                 &verification_request,
