@@ -448,6 +448,9 @@ enum CompletionReviewDisposition {
         review_summary: String,
         persist_on_leased_queue: bool,
     },
+    TerminalQueueFailure {
+        summary: String,
+    },
 }
 
 /// Result of classifying the reviewer's structured findings list. The
@@ -570,6 +573,7 @@ fn completion_review_disposition_label(disposition: &CompletionReviewDisposition
         CompletionReviewDisposition::NoSend { .. } => "no-send",
         CompletionReviewDisposition::RequeueSelfWork { .. } => "requeue-self-work",
         CompletionReviewDisposition::FeedbackRetry { .. } => "feedback-retry",
+        CompletionReviewDisposition::TerminalQueueFailure { .. } => "terminal-queue-failure",
     }
 }
 
@@ -3277,6 +3281,17 @@ fn start_prompt_worker(
                                 "cancelled",
                             );
                         } else if !job.leased_message_keys.is_empty() {
+                            let terminal_queue_failure = matches!(
+                                &review_disposition,
+                                CompletionReviewDisposition::TerminalQueueFailure { .. }
+                            );
+                            let queue_feedback_retry = matches!(
+                                &review_disposition,
+                                CompletionReviewDisposition::FeedbackRetry {
+                                    persist_on_leased_queue: true,
+                                    ..
+                                }
+                            );
                             let held_founder_review = email_reply_key.is_some()
                                 || proactive_founder_action.is_some()
                                 || is_founder_or_owner_email_job(&job);
@@ -3284,7 +3299,11 @@ fn start_prompt_worker(
                                 &review_disposition,
                                 CompletionReviewDisposition::Hold { .. }
                             );
-                            let retry_status = if outcome_witness_error.is_some() {
+                            let retry_status = if terminal_queue_failure {
+                                "failed"
+                            } else if queue_feedback_retry {
+                                "review_rework"
+                            } else if outcome_witness_error.is_some() {
                                 outcome_witness_retry_route_status_for_job(&root, &job)
                             } else if held_founder_review || held_completion_review {
                                 "pending"
@@ -3305,6 +3324,11 @@ fn start_prompt_worker(
                             );
                         } else if !job.leased_ticket_event_keys.is_empty() {
                             let retry_status = if matches!(
+                                &review_disposition,
+                                CompletionReviewDisposition::TerminalQueueFailure { .. }
+                            ) {
+                                "failed"
+                            } else if matches!(
                                 &review_disposition,
                                 CompletionReviewDisposition::Hold { .. }
                             ) {
@@ -3409,6 +3433,16 @@ fn start_prompt_worker(
                                         format!(
                                             "Review fed back substantive guidance through the same durable work item: {}",
                                             clip_text(review_summary, 180)
+                                        ),
+                                    );
+                                }
+                                CompletionReviewDisposition::TerminalQueueFailure { summary } => {
+                                    push_event_locked(
+                                        &mut shared,
+                                        format!(
+                                            "Review exhausted the finite queue retry budget for {}; queue item is terminal failed: {}",
+                                            job.source_label,
+                                            clip_text(summary, 180)
                                         ),
                                     );
                                 }
@@ -3681,24 +3715,127 @@ fn start_prompt_worker(
                         ) {
                             Ok(updated) if updated > 0 => {
                                 push_event_locked(
+                                    &mut shared,
+                                    format!(
+                                        "Wrote sanitized review feedback back to {updated} leased queue task(s) for {}",
+                                        job.source_label
+                                    ),
+                                );
+                                let mut released = 0usize;
+                                for message_key in &job.leased_message_keys {
+                                    let route_status =
+                                        channels::open_channel_db(&crate::paths::core_db(&root))
+                                            .and_then(|conn| {
+                                                channels::current_queue_route_status(
+                                                    &conn,
+                                                    message_key,
+                                                )
+                                            });
+                                    match route_status.as_deref() {
+                                        Ok("review_rework") => {}
+                                        Ok(other) => {
+                                            push_event_locked(
+                                                &mut shared,
+                                                format!(
+                                                    "Not releasing reviewed queue task {} to pending because its route status is {} instead of review_rework",
+                                                    message_key, other
+                                                ),
+                                            );
+                                            continue;
+                                        }
+                                        Err(err) => {
+                                            push_event_locked(
+                                                &mut shared,
+                                                format!(
+                                                    "Not releasing reviewed queue task {} to pending because route status could not be verified: {}",
+                                                    message_key,
+                                                    clip_text(&err.to_string(), 180)
+                                                ),
+                                            );
+                                            continue;
+                                        }
+                                    }
+                                    let attempt = match queue_review_checkpoint_attempt_count(
+                                        &root,
+                                        message_key,
+                                    ) {
+                                        Ok(value) if value > 0 => value,
+                                        Ok(_) => {
+                                            push_event_locked(
+                                                    &mut shared,
+                                                    format!(
+                                                        "Not releasing reviewed queue task {} to pending because no accepted review checkpoint proof exists",
+                                                        message_key
+                                                    ),
+                                                );
+                                            continue;
+                                        }
+                                        Err(err) => {
+                                            push_event_locked(
+                                                    &mut shared,
+                                                    format!(
+                                                        "Not releasing reviewed queue task {} to pending because review checkpoint proofs could not be counted: {}",
+                                                        message_key,
+                                                        clip_text(&err.to_string(), 180)
+                                                    ),
+                                                );
+                                            continue;
+                                        }
+                                    };
+                                    if let Err(err) =
+                                        enforce_queue_review_requeue_same_main_work_transition(
+                                            &root,
+                                            message_key,
+                                            attempt,
+                                        )
+                                    {
+                                        push_event_locked(
+                                            &mut shared,
+                                            format!(
+                                                "Failed to prove reviewed queue task {} can requeue same main work: {}",
+                                                message_key,
+                                                clip_text(&err.to_string(), 180)
+                                            ),
+                                        );
+                                        continue;
+                                    }
+                                    match channels::set_queue_task_route_status(
+                                        &root,
+                                        message_key,
+                                        "pending",
+                                    ) {
+                                        Ok(true) => released += 1,
+                                        Ok(false) => {}
+                                        Err(err) => push_event_locked(
+                                            &mut shared,
+                                            format!(
+                                                "Failed to release reviewed queue task {} back to pending after feedback persisted: {}",
+                                                message_key,
+                                                clip_text(&err.to_string(), 180)
+                                            ),
+                                        ),
+                                    }
+                                }
+                                if released > 0 {
+                                    push_event_locked(
                                         &mut shared,
                                         format!(
-                                            "Wrote sanitized review feedback back to {updated} leased queue task(s) for {}",
-                                            job.source_label
+                                            "Released {released} reviewed queue task(s) from review_rework back to pending through the core requeue path"
                                         ),
                                     );
+                                }
                                 true
                             }
                             Ok(_) => false,
                             Err(err) => {
                                 push_event_locked(
-                                        &mut shared,
-                                        format!(
-                                            "Failed to persist review feedback onto leased queue task for {}: {}",
-                                            job.source_label,
-                                            clip_text(&err.to_string(), 180)
-                                        ),
-                                    );
+                                    &mut shared,
+                                    format!(
+                                        "Failed to persist review feedback onto leased queue task for {}: {}; keeping the item in review_rework instead of requeueing stale work",
+                                        job.source_label,
+                                        clip_text(&err.to_string(), 180)
+                                    ),
+                                );
                                 false
                             }
                         }
@@ -4480,7 +4617,7 @@ fn run_completion_review(
                     .to_string(),
         },
         review::ReviewVerdict::Unavailable => {
-            completion_review_unavailable_disposition(job, &outcome.summary)
+            completion_review_unavailable_disposition(root, job, &outcome.summary)
         }
         review::ReviewVerdict::Fail | review::ReviewVerdict::Partial => {
             CompletionReviewDisposition::Hold {
@@ -4491,12 +4628,26 @@ fn run_completion_review(
 }
 
 fn completion_review_unavailable_disposition(
-    _job: &QueuedPrompt,
+    root: &Path,
+    job: &QueuedPrompt,
     summary: &str,
 ) -> CompletionReviewDisposition {
+    if !job.leased_message_keys.is_empty() {
+        match queue_review_unavailable_retry_disposition(root, job, summary) {
+            Ok(disposition) => return disposition,
+            Err(err) => {
+                return CompletionReviewDisposition::Hold {
+                    summary: format!(
+                        "{}\n\nCompletion review is required, but the reviewer did not produce a verdict and the retry checkpoint could not be persisted through the core state machine: {err}",
+                        summary.trim()
+                    ),
+                };
+            }
+        }
+    }
     CompletionReviewDisposition::Hold {
         summary: format!(
-            "{}\n\nCompletion review is required for this slice, but the reviewer did not produce a verdict. The worker result must remain open until review succeeds or explicit operator policy resolves it.",
+            "{}\n\nCompletion review is required for this slice, but the reviewer did not produce a verdict. The worker result remains open; no terminal completion is allowed without a review verdict.",
             summary.trim()
         ),
     }
@@ -6771,6 +6922,280 @@ fn outcome_witness_rejection_count(root: &Path, job: &QueuedPrompt) -> Result<us
     Ok(count.max(0) as usize)
 }
 
+fn queue_review_checkpoint_attempt_count(root: &Path, message_key: &str) -> Result<usize> {
+    let db_path = crate::paths::core_db(root);
+    let conn = channels::open_channel_db(&db_path)?;
+    ensure_core_transition_guard_schema(&conn)?;
+    let count: i64 = conn.query_row(
+        r#"
+        SELECT COUNT(*)
+        FROM ctox_core_transition_proofs
+        WHERE entity_type = 'QueueItem'
+          AND entity_id = ?1
+          AND to_state = 'ReworkRequired'
+          AND accepted = 1
+          AND request_json LIKE '%"review_checkpoint":"true"%'
+          AND request_json LIKE '%"feedback_owner":"main_agent"%'
+        "#,
+        params![message_key],
+        |row| row.get(0),
+    )?;
+    Ok(count.max(0) as usize)
+}
+
+fn queue_review_unavailable_attempt_count(root: &Path, message_key: &str) -> Result<usize> {
+    let db_path = crate::paths::core_db(root);
+    let conn = channels::open_channel_db(&db_path)?;
+    ensure_core_transition_guard_schema(&conn)?;
+    let count: i64 = conn.query_row(
+        r#"
+        SELECT COUNT(*)
+        FROM ctox_core_transition_proofs
+        WHERE entity_type = 'QueueItem'
+          AND entity_id = ?1
+          AND accepted = 1
+          AND request_json LIKE '%"review_unavailable_retry":"true"%'
+        "#,
+        params![message_key],
+        |row| row.get(0),
+    )?;
+    Ok(count.max(0) as usize)
+}
+
+fn queue_core_state_for_service(route_status: &str) -> CoreState {
+    match route_status.trim().to_ascii_lowercase().as_str() {
+        "leased" => CoreState::Leased,
+        "running" => CoreState::Running,
+        "blocked" | "approval-nag-handled" => CoreState::Blocked,
+        "review_rework" => CoreState::ReworkRequired,
+        "failed" => CoreState::Failed,
+        "handled" | "completed" => CoreState::Completed,
+        "cancelled" | "superseded" => CoreState::Superseded,
+        _ => CoreState::Pending,
+    }
+}
+
+fn queue_review_checkpoint_audit_key(
+    message_key: &str,
+    outcome: &review::ReviewOutcome,
+    attempt: usize,
+) -> String {
+    use sha2::Digest;
+
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(b"ctox-queue-review-checkpoint-v1");
+    hasher.update(message_key.as_bytes());
+    hasher.update(outcome.verdict.as_gate_label().as_bytes());
+    hasher.update(outcome.summary.as_bytes());
+    hasher.update(attempt.to_string().as_bytes());
+    format!("queue-review-checkpoint-{:x}", hasher.finalize())
+}
+
+fn queue_review_unavailable_audit_key(message_key: &str, summary: &str, attempt: usize) -> String {
+    use sha2::Digest;
+
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(b"ctox-queue-review-unavailable-v1");
+    hasher.update(message_key.as_bytes());
+    hasher.update(summary.as_bytes());
+    hasher.update(attempt.to_string().as_bytes());
+    format!("queue-review-unavailable-{:x}", hasher.finalize())
+}
+
+fn queue_review_requeue_audit_key(message_key: &str, attempt: usize) -> String {
+    use sha2::Digest;
+
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(b"ctox-queue-review-requeue-same-main-work-v1");
+    hasher.update(message_key.as_bytes());
+    hasher.update(attempt.to_string().as_bytes());
+    format!("queue-review-requeue-{:x}", hasher.finalize())
+}
+
+fn enforce_queue_review_checkpoint_feedback_transition(
+    root: &Path,
+    message_key: &str,
+    outcome: &review::ReviewOutcome,
+    attempt: usize,
+) -> Result<String> {
+    let db_path = crate::paths::core_db(root);
+    let conn = channels::open_channel_db(&db_path)?;
+    let route_status = channels::current_queue_route_status(&conn, message_key)
+        .unwrap_or_else(|_| "leased".to_string());
+    let from_state = queue_core_state_for_service(&route_status);
+    let mut metadata = BTreeMap::new();
+    metadata.insert("review_checkpoint".to_string(), "true".to_string());
+    metadata.insert("feedback_owner".to_string(), "main_agent".to_string());
+    metadata.insert(
+        "feedback_target_entity_id".to_string(),
+        message_key.to_string(),
+    );
+    metadata.insert("spawns_review_owned_work".to_string(), "false".to_string());
+    metadata.insert(
+        "review_verdict".to_string(),
+        outcome.verdict.as_gate_label().to_string(),
+    );
+    metadata.insert("review_checkpoint_attempt".to_string(), attempt.to_string());
+
+    let proof = enforce_core_transition(
+        &conn,
+        &CoreTransitionRequest {
+            entity_type: CoreEntityType::QueueItem,
+            entity_id: message_key.to_string(),
+            lane: RuntimeLane::P2MissionDelivery,
+            from_state,
+            to_state: CoreState::ReworkRequired,
+            event: CoreEvent::RequireRework,
+            actor: "ctox-completion-review".to_string(),
+            evidence: CoreEvidenceRefs {
+                review_audit_key: Some(queue_review_checkpoint_audit_key(
+                    message_key,
+                    outcome,
+                    attempt,
+                )),
+                ..CoreEvidenceRefs::default()
+            },
+            metadata,
+        },
+    )?;
+    Ok(proof.proof_id)
+}
+
+fn enforce_queue_review_requeue_same_main_work_transition(
+    root: &Path,
+    message_key: &str,
+    attempt: usize,
+) -> Result<String> {
+    let db_path = crate::paths::core_db(root);
+    let conn = channels::open_channel_db(&db_path)?;
+    let route_status = channels::current_queue_route_status(&conn, message_key)
+        .unwrap_or_else(|_| "review_rework".to_string());
+    let from_state = queue_core_state_for_service(&route_status);
+    if !matches!(from_state, CoreState::ReworkRequired) {
+        anyhow::bail!(
+            "queue item {message_key} is in route status {route_status}, not review_rework"
+        );
+    }
+
+    let mut metadata = BTreeMap::new();
+    metadata.insert(
+        "review_requeue_same_main_work".to_string(),
+        "true".to_string(),
+    );
+    metadata.insert("feedback_owner".to_string(), "main_agent".to_string());
+    metadata.insert(
+        "feedback_target_entity_id".to_string(),
+        message_key.to_string(),
+    );
+    metadata.insert("spawns_review_owned_work".to_string(), "false".to_string());
+    metadata.insert("review_checkpoint_attempt".to_string(), attempt.to_string());
+
+    let proof = enforce_core_transition(
+        &conn,
+        &CoreTransitionRequest {
+            entity_type: CoreEntityType::QueueItem,
+            entity_id: message_key.to_string(),
+            lane: RuntimeLane::P2MissionDelivery,
+            from_state,
+            to_state: CoreState::Pending,
+            event: CoreEvent::Retry,
+            actor: "ctox-completion-review".to_string(),
+            evidence: CoreEvidenceRefs {
+                review_audit_key: Some(queue_review_requeue_audit_key(message_key, attempt)),
+                ..CoreEvidenceRefs::default()
+            },
+            metadata,
+        },
+    )?;
+    Ok(proof.proof_id)
+}
+
+fn enforce_queue_review_unavailable_retry_transition(
+    root: &Path,
+    message_key: &str,
+    summary: &str,
+    attempt: usize,
+) -> Result<String> {
+    let db_path = crate::paths::core_db(root);
+    let conn = channels::open_channel_db(&db_path)?;
+    let route_status = channels::current_queue_route_status(&conn, message_key)
+        .unwrap_or_else(|_| "leased".to_string());
+    let from_state = queue_core_state_for_service(&route_status);
+    let mut metadata = BTreeMap::new();
+    metadata.insert("review_unavailable_retry".to_string(), "true".to_string());
+    metadata.insert(
+        "review_unavailable_attempt".to_string(),
+        attempt.to_string(),
+    );
+    metadata.insert(
+        "review_unavailable_summary".to_string(),
+        clip_text(summary.trim(), 240),
+    );
+
+    let proof = enforce_core_transition(
+        &conn,
+        &CoreTransitionRequest {
+            entity_type: CoreEntityType::QueueItem,
+            entity_id: message_key.to_string(),
+            lane: RuntimeLane::P2MissionDelivery,
+            from_state,
+            to_state: CoreState::Pending,
+            event: CoreEvent::Retry,
+            actor: "ctox-completion-review".to_string(),
+            evidence: CoreEvidenceRefs {
+                review_audit_key: Some(queue_review_unavailable_audit_key(
+                    message_key,
+                    summary,
+                    attempt,
+                )),
+                ..CoreEvidenceRefs::default()
+            },
+            metadata,
+        },
+    )?;
+    Ok(proof.proof_id)
+}
+
+fn queue_review_unavailable_retry_disposition(
+    root: &Path,
+    job: &QueuedPrompt,
+    summary: &str,
+) -> Result<CompletionReviewDisposition> {
+    let threshold = review_checkpoint_requeue_block_threshold();
+    let mut exhausted = Vec::new();
+    let mut proof_ids = Vec::new();
+    for message_key in &job.leased_message_keys {
+        let attempt = queue_review_unavailable_attempt_count(root, message_key)?.saturating_add(1);
+        let proof_id =
+            enforce_queue_review_unavailable_retry_transition(root, message_key, summary, attempt)?;
+        proof_ids.push(proof_id);
+        if attempt >= threshold {
+            exhausted.push((message_key.clone(), attempt));
+        }
+    }
+    if !exhausted.is_empty() {
+        let attempts = exhausted
+            .iter()
+            .map(|(message_key, attempt)| format!("{message_key}:{attempt}/{threshold}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Ok(CompletionReviewDisposition::TerminalQueueFailure {
+            summary: format!(
+                "{}\n\nCompletion review stayed unavailable until the finite retry budget was exhausted for queue item(s) {attempts}. Core retry proof(s): {}. CTOX stops the loop terminally instead of retrying forever.",
+                summary.trim(),
+                proof_ids.join(", ")
+            ),
+        });
+    }
+    Ok(CompletionReviewDisposition::Hold {
+        summary: format!(
+            "{}\n\nCompletion review is required, but the reviewer did not produce a verdict. CTOX persisted a finite retry checkpoint ({}/{threshold}) and will retry; terminal completion remains blocked until review passes or the retry budget is exhausted.",
+            summary.trim(),
+            queue_review_unavailable_attempt_count(root, job.leased_message_keys.first().map(String::as_str).unwrap_or(""))?
+        ),
+    })
+}
+
 fn enforce_review_checkpoint_feedback_transition(
     root: &Path,
     work_id: &str,
@@ -6975,18 +7400,68 @@ fn handle_actionable_completion_review_rejection(
             ),
         };
     }
-    push_event(
-        state,
-        format!(
-            "Review rejected {}; writing sanitized findings back into the same durable queue item",
-            job.source_label
-        ),
-    );
-    CompletionReviewDisposition::FeedbackRetry {
+    match queue_review_rejection_feedback_disposition(root, job, outcome, prior_reply) {
+        Ok(disposition) => return disposition,
+        Err(err) => {
+            push_event(
+                state,
+                format!(
+                    "Review rejected {} but the core queue review checkpoint failed: {}",
+                    job.source_label,
+                    clip_text(&err.to_string(), 180)
+                ),
+            );
+            return CompletionReviewDisposition::Hold {
+                summary: format!(
+                    "{}\n\nReview rejected the worker result, but CTOX could not persist the required queue review checkpoint through the core state machine: {err}",
+                    outcome.summary
+                ),
+            };
+        }
+    }
+}
+
+fn queue_review_rejection_feedback_disposition(
+    root: &Path,
+    job: &QueuedPrompt,
+    outcome: &review::ReviewOutcome,
+    prior_reply: &str,
+) -> Result<CompletionReviewDisposition> {
+    let threshold = review_checkpoint_requeue_block_threshold();
+    let mut exhausted = Vec::new();
+    let mut proof_ids = Vec::new();
+    for message_key in &job.leased_message_keys {
+        let attempt = queue_review_checkpoint_attempt_count(root, message_key)?.saturating_add(1);
+        let proof_id = enforce_queue_review_checkpoint_feedback_transition(
+            root,
+            message_key,
+            outcome,
+            attempt,
+        )?;
+        proof_ids.push(proof_id);
+        if attempt >= threshold {
+            exhausted.push((message_key.clone(), attempt));
+        }
+    }
+    if !exhausted.is_empty() {
+        let attempts = exhausted
+            .iter()
+            .map(|(message_key, attempt)| format!("{message_key}:{attempt}/{threshold}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Ok(CompletionReviewDisposition::TerminalQueueFailure {
+            summary: format!(
+                "{}\n\nFinite review budget exhausted for queue item(s) {attempts}. Core review checkpoint proof(s): {}. CTOX stops this same-work loop terminally instead of re-queueing it again.",
+                outcome.summary,
+                proof_ids.join(", ")
+            ),
+        });
+    }
+    Ok(CompletionReviewDisposition::FeedbackRetry {
         feedback_prompt: build_review_feedback_retry_prompt(job, outcome, prior_reply),
         review_summary: outcome.summary.clone(),
         persist_on_leased_queue: !job.leased_message_keys.is_empty(),
-    }
+    })
 }
 
 fn render_review_feedback_block(items: &[String], fallback: &str, limit: usize) -> String {
@@ -15998,6 +16473,22 @@ mod tests {
             plan::has_active_goal_with_pending_step(&root).expect("failed to inspect plan state"),
             "fixture should contain unrelated runnable plan work"
         );
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Repair CRM task workflow".to_string(),
+                prompt: "Repair the Kunstmen CRM tasks workflow.".to_string(),
+                thread_key: "kunstmen-crm-p0-slices".to_string(),
+                workspace_root: Some("/home/ubuntu/workspace/kunstmen".to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("stateful-product-from-scratch".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create queue task");
+        channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
+            .expect("failed to lease queue task");
 
         let state = Arc::new(Mutex::new(SharedState::default()));
         let job = QueuedPrompt {
@@ -16006,7 +16497,7 @@ mod tests {
             preview: "CRM task workflow".to_string(),
             source_label: "queue".to_string(),
             suggested_skill: Some("stateful-product-from-scratch".to_string()),
-            leased_message_keys: vec!["queue-key-1".to_string()],
+            leased_message_keys: vec![task.message_key.clone()],
             leased_ticket_event_keys: Vec::new(),
             thread_key: Some("kunstmen-crm-p0-slices".to_string()),
             workspace_root: Some("/home/ubuntu/workspace/kunstmen".to_string()),
@@ -16054,6 +16545,161 @@ mod tests {
         let self_work = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
             .expect("failed to list self-work");
         assert!(self_work.is_empty());
+
+        let conn = channels::open_channel_db(&crate::paths::core_db(&root))
+            .expect("failed to open core db");
+        let proof_count: i64 = conn
+            .query_row(
+                r#"
+                SELECT COUNT(*)
+                FROM ctox_core_transition_proofs
+                WHERE entity_type = 'QueueItem'
+                  AND entity_id = ?1
+                  AND to_state = 'ReworkRequired'
+                  AND accepted = 1
+                  AND request_json LIKE '%"review_checkpoint":"true"%'
+                  AND request_json LIKE '%"feedback_owner":"main_agent"%'
+                "#,
+                params![task.message_key],
+                |row| row.get(0),
+            )
+            .expect("failed to count queue review checkpoint proofs");
+        assert_eq!(proof_count, 1);
+    }
+
+    #[test]
+    fn queue_review_feedback_fails_terminally_after_five_rounds() {
+        let root = temp_root("ctox-queue-review-feedback-threshold");
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Bounded queue task".to_string(),
+                prompt: "Create the requested durable output.".to_string(),
+                thread_key: "queue/bounded-review-feedback".to_string(),
+                workspace_root: Some("/tmp/ctox-bounded-review-feedback".to_string()),
+                priority: "high".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create queue task");
+        let mut job = QueuedPrompt {
+            prompt: task.prompt.clone(),
+            goal: task.title.clone(),
+            preview: task.title.clone(),
+            source_label: "queue".to_string(),
+            suggested_skill: None,
+            leased_message_keys: vec![task.message_key.clone()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some(task.thread_key.clone()),
+            workspace_root: task.workspace_root.clone(),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+        let mut outcome = review::ReviewOutcome::skipped("still incomplete");
+        outcome.required = true;
+        outcome.verdict = review::ReviewVerdict::Fail;
+        outcome.failed_gates = vec!["Missing required output.".to_string()];
+
+        for attempt in 1..review_checkpoint_requeue_block_threshold() {
+            channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
+                .expect("failed to lease queue task");
+            let disposition = handle_actionable_completion_review_rejection(
+                &root,
+                &Arc::new(Mutex::new(SharedState::default())),
+                &job,
+                &outcome,
+                "Done.",
+            );
+            assert!(
+                matches!(
+                    disposition,
+                    CompletionReviewDisposition::FeedbackRetry {
+                        persist_on_leased_queue: true,
+                        ..
+                    }
+                ),
+                "attempt {attempt} should still requeue same main work, got {disposition:?}"
+            );
+            channels::ack_leased_messages(
+                &root,
+                std::slice::from_ref(&task.message_key),
+                "review_rework",
+            )
+            .expect("failed to mark queue task as review_rework");
+            enforce_queue_review_requeue_same_main_work_transition(
+                &root,
+                &task.message_key,
+                attempt,
+            )
+            .expect("failed to prove reviewed queue task requeue");
+            channels::set_queue_task_route_status(&root, &task.message_key, "pending")
+                .expect("failed to release reviewed queue task")
+                .then_some(())
+                .expect("reviewed queue task was not released");
+            job.prompt = format!("retry attempt {attempt}");
+        }
+
+        channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
+            .expect("failed to lease terminal queue task");
+        let terminal = handle_actionable_completion_review_rejection(
+            &root,
+            &Arc::new(Mutex::new(SharedState::default())),
+            &job,
+            &outcome,
+            "Still done.",
+        );
+        assert!(
+            matches!(
+                terminal,
+                CompletionReviewDisposition::TerminalQueueFailure { .. }
+            ),
+            "fifth review rejection must terminalize instead of requeueing, got {terminal:?}"
+        );
+
+        let conn = channels::open_channel_db(&crate::paths::core_db(&root))
+            .expect("failed to open core db");
+        let proof_count: i64 = conn
+            .query_row(
+                r#"
+                SELECT COUNT(*)
+                FROM ctox_core_transition_proofs
+                WHERE entity_type = 'QueueItem'
+                  AND entity_id = ?1
+                  AND to_state = 'ReworkRequired'
+                  AND accepted = 1
+                  AND request_json LIKE '%"review_checkpoint":"true"%'
+                "#,
+                params![task.message_key],
+                |row| row.get(0),
+            )
+            .expect("failed to count queue review checkpoint proofs");
+        assert_eq!(
+            proof_count as usize,
+            review_checkpoint_requeue_block_threshold()
+        );
+        let requeue_count: i64 = conn
+            .query_row(
+                r#"
+                SELECT COUNT(*)
+                FROM ctox_core_transition_proofs
+                WHERE entity_type = 'QueueItem'
+                  AND entity_id = ?1
+                  AND from_state = 'ReworkRequired'
+                  AND to_state = 'Pending'
+                  AND accepted = 1
+                  AND request_json LIKE '%"review_requeue_same_main_work":"true"%'
+                "#,
+                params![task.message_key],
+                |row| row.get(0),
+            )
+            .expect("failed to count queue review requeue proofs");
+        assert_eq!(
+            requeue_count as usize,
+            review_checkpoint_requeue_block_threshold() - 1
+        );
     }
 
     #[test]
@@ -16160,6 +16806,8 @@ mod tests {
             },
         )
         .expect("failed to create queue task");
+        channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
+            .expect("failed to lease queue task");
         let job = QueuedPrompt {
             prompt: task.prompt.clone(),
             goal: task.title.clone(),
@@ -17714,6 +18362,24 @@ Use shell tools to create or update these files."
 
     #[test]
     fn unavailable_review_holds_generic_artifact_job_fail_closed() {
+        let root = temp_root("ctox-unavailable-review-finite-retry");
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "smoke artifact".to_string(),
+                prompt: "RUN_DIR=\"/tmp/ctox-smoke\". Initialisiere die Datei required-smoke.json."
+                    .to_string(),
+                thread_key: "queue/unavailable-review".to_string(),
+                workspace_root: None,
+                priority: "high".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create queue task");
+        channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
+            .expect("failed to lease queue task");
         let job = QueuedPrompt {
             prompt: "RUN_DIR=\"/tmp/ctox-smoke\". Initialisiere die Datei required-smoke.json."
                 .to_string(),
@@ -17721,7 +18387,7 @@ Use shell tools to create or update these files."
             preview: "smoke artifact".to_string(),
             source_label: "queue".to_string(),
             suggested_skill: None,
-            leased_message_keys: vec!["queue:smoke-artifact".to_string()],
+            leased_message_keys: vec![task.message_key.clone()],
             leased_ticket_event_keys: Vec::new(),
             thread_key: None,
             workspace_root: None,
@@ -17731,12 +18397,13 @@ Use shell tools to create or update these files."
         };
 
         match completion_review_unavailable_disposition(
+            &root,
             &job,
             "completion review leg did not produce a verdict within 900s",
         ) {
             CompletionReviewDisposition::Hold { summary } => {
                 assert!(summary.contains("did not produce a verdict"));
-                assert!(summary.contains("must remain open"));
+                assert!(summary.contains("finite retry checkpoint"));
             }
             other => panic!("unavailable review must fail closed, got {other:?}"),
         }
