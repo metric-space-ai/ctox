@@ -68,6 +68,7 @@ pub struct PersonResearchRequest {
 struct PersonResearchPlan {
     source_id: &'static str,
     aliases: &'static [&'static str],
+    host_suffixes: &'static [&'static str],
     tier: Tier,
     target_fields: Vec<FieldKey>,
     /// `true` if the source has an API path (`fetch_direct`); informational
@@ -175,7 +176,7 @@ pub fn run_ctox_person_research_tool(
             // pinned-source `fetch_direct` already returned typed data, but
             // the generic cascade may have added unrelated URLs to the
             // result list.
-            if !url_belongs_to_source(url, plan.source_id, plan.aliases) {
+            if !url_belongs_to_source(url, plan.source_id, plan.aliases, plan.host_suffixes) {
                 continue;
             }
             let read_payload = run_ctox_web_read_tool(
@@ -330,6 +331,7 @@ fn build_person_research_plan(request: &PersonResearchRequest) -> Vec<PersonRese
                 .or_insert_with(|| PersonResearchPlan {
                     source_id: module.id(),
                     aliases: module.aliases(),
+                    host_suffixes: module.host_suffixes(),
                     tier: module.tier(),
                     target_fields: Vec::new(),
                     api_path: probe_api_path(module),
@@ -479,7 +481,12 @@ fn tier_label(tier: Tier) -> &'static str {
     }
 }
 
-fn url_belongs_to_source(url: &str, id: &str, aliases: &[&str]) -> bool {
+fn url_belongs_to_source(
+    url: &str,
+    id: &str,
+    aliases: &[&str],
+    host_suffixes: &[&str],
+) -> bool {
     let Some(host) = url::Url::parse(url).ok().and_then(|u| u.host_str().map(str::to_owned))
     else {
         return false;
@@ -487,6 +494,7 @@ fn url_belongs_to_source(url: &str, id: &str, aliases: &[&str]) -> bool {
     let host = host
         .trim_start_matches("www.")
         .trim_start_matches("app.")
+        .trim_start_matches("api.")
         .to_ascii_lowercase();
     if host == id.to_ascii_lowercase() {
         return true;
@@ -496,6 +504,12 @@ fn url_belongs_to_source(url: &str, id: &str, aliases: &[&str]) -> bool {
     }
     for alias in aliases {
         let needle = alias.to_ascii_lowercase();
+        if host == needle || host.ends_with(&format!(".{needle}")) {
+            return true;
+        }
+    }
+    for suffix in host_suffixes {
+        let needle = suffix.to_ascii_lowercase();
         if host == needle || host.ends_with(&format!(".{needle}")) {
             return true;
         }
@@ -779,16 +793,44 @@ mod tests {
             "https://www.northdata.de/Foo+SE,Berlin",
             "northdata.de",
             &["northdata"],
+            &[],
         ));
         assert!(url_belongs_to_source(
             "https://app.dnbhoovers.com/data/duns/123",
             "dnbhoovers.com",
             &["dnb"],
+            &[],
         ));
         assert!(!url_belongs_to_source(
             "https://example.com/page",
             "northdata.de",
             &["northdata"],
+            &[],
+        ));
+    }
+
+    #[test]
+    fn url_belongs_to_source_resolves_via_host_suffixes() {
+        // Zefix: id=zefix.ch, but hit URLs come back from zefix.admin.ch.
+        assert!(url_belongs_to_source(
+            "https://www.zefix.admin.ch/de/search/entity/list/firm/154673",
+            "zefix.ch",
+            &["zefix"],
+            &["zefix.admin.ch"],
+        ));
+        // D&B Direct+: id=dnbhoovers.com, API host is plus.dnb.com.
+        assert!(url_belongs_to_source(
+            "https://plus.dnb.com/data/duns/316840271",
+            "dnbhoovers.com",
+            &["dnb"],
+            &["plus.dnb.com"],
+        ));
+        // LinkedIn API host.
+        assert!(url_belongs_to_source(
+            "https://api.linkedin.com/v2/people/(id:urn:li:person:123)",
+            "linkedin.com",
+            &["linkedin"],
+            &["api.linkedin.com"],
         ));
     }
 

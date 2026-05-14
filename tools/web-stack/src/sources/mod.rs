@@ -269,6 +269,13 @@ pub struct SourceHit {
 ///
 /// Phase 3 converts the web-stack's internal `EvidenceDoc` into this shape so
 /// source modules stay decoupled from the search-engine internals.
+///
+/// `text` carries the article-extracted plaintext suitable for LLM
+/// summarisation. `raw_html` carries the original HTML body of the page
+/// when one was fetched — crawl-pathed adapters that parse with
+/// `scraper` should always prefer `raw_html` over `text`, falling back
+/// to `text` only when `raw_html` is `None` (PDF responses, cache-loaded
+/// pages from older CTOX versions).
 #[derive(Debug, Clone)]
 pub struct SourceReadResult {
     pub url: String,
@@ -278,6 +285,20 @@ pub struct SourceReadResult {
     pub is_pdf: bool,
     pub excerpts: Vec<String>,
     pub find_results: Vec<SourceFindMatch>,
+    /// Raw HTML body of the page, when available. `None` for PDFs and
+    /// when the read was served from a cache that pre-dates this field.
+    pub raw_html: Option<String>,
+}
+
+impl SourceReadResult {
+    /// Best string to feed to an HTML parser: `raw_html` if present and
+    /// non-empty, otherwise `text` as a degraded fallback.
+    pub fn html_source(&self) -> &str {
+        self.raw_html
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or(&self.text)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -356,6 +377,26 @@ pub trait SourceModule: Sync {
     /// Short aliases the user may type instead of [`id`].
     /// Example: `["northdata", "nd"]` for `northdata.de`.
     fn aliases(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// Additional URL hosts that should resolve to this source module
+    /// beyond the canonical [`id`].
+    ///
+    /// Most modules need an empty list because the canonical id is also the
+    /// public host (e.g. `bundesanzeiger.de`). Override when the production
+    /// host differs from the id — typical cases:
+    ///
+    /// * `zefix.ch` id, but hits come back from `www.zefix.admin.ch`.
+    /// * `dnbhoovers.com` id, but the D&B Direct+ API lives under
+    ///   `plus.dnb.com` and detail pages on `app.dnbhoovers.com`.
+    /// * `linkedin.com` / `xing.com` API responses originate from
+    ///   `api.linkedin.com` / `api.xing.com`.
+    ///
+    /// Suffixes are matched after the URL host has its `www.` / `app.` /
+    /// `api.` prefixes stripped, so list bare domain forms here
+    /// (`zefix.admin.ch`, `plus.dnb.com`, `api.linkedin.com`).
+    fn host_suffixes(&self) -> &'static [&'static str] {
         &[]
     }
 

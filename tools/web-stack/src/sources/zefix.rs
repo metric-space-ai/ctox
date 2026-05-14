@@ -57,6 +57,12 @@ impl SourceModule for Zefix {
         &["zefix"]
     }
 
+    fn host_suffixes(&self) -> &'static [&'static str] {
+        // SPA und API leben unter www.zefix.admin.ch; Treffer-URLs aus
+        // fetch_direct zeigen dorthin, nicht auf zefix.ch.
+        &["zefix.admin.ch"]
+    }
+
     fn tier(&self) -> Tier {
         Tier::P
     }
@@ -121,12 +127,21 @@ impl SourceModule for Zefix {
     }
 
     fn extract_fields(&self, page: &SourceReadResult) -> Vec<(FieldKey, FieldEvidence)> {
-        // JSON-Detail-Antwort? Dann strukturiert extrahieren (High).
-        if let Some(json) = parse_detail_json(&page.text) {
-            return extract_from_json(&json, &page.url);
+        // JSON-Detail-Antwort: zuerst raw_html (originale API-Antwort), dann
+        // text (article-extrahierter Plaintext, der für reines JSON in
+        // vielen Pipelines unverändert durchläuft). Beide Quellen werden
+        // probiert, weil der Webstack-Fetch das JSON je nach Content-Type-
+        // Erkennung mal in der einen, mal in der anderen Spalte landet.
+        for source in [
+            page.raw_html.as_deref().unwrap_or(""),
+            page.text.as_str(),
+        ] {
+            if let Some(json) = parse_detail_json(source) {
+                return extract_from_json(&json, &page.url);
+            }
         }
         // Sonst HTML-Profil-Fallback (Medium).
-        extract_from_html(&page.text, &page.url)
+        extract_from_html(page.html_source(), &page.url)
     }
 }
 
@@ -220,15 +235,26 @@ fn company_short_to_hit(entry: &Value) -> Option<SourceHit> {
     if name.is_empty() {
         return None;
     }
-    // The profile-page URL the SPA uses (klickbar; HTML wird später vom
-    // generischen Read-Pfad geladen). `ehraid` ist robust; fällt back auf
-    // `chid` für legacy IDs.
-    let url = if let Some(ehraid) = entry.get("ehraid").and_then(Value::as_i64) {
+    // Hit-URL zeigt auf den JSON-Detail-Endpunkt, nicht auf die SPA-Profilseite.
+    // Hintergrund: die SPA unter `…/de/search/entity/list/firm/<id>` ist ein
+    // Angular-Shell ohne strukturierte Daten im HTML — `extract_fields` würde
+    // dort nichts finden. Der JSON-Endpunkt `…/firm/<ehraid>.json` ist offen,
+    // liefert strukturiert (Adresse, Personen via shabPub) und ist von
+    // `extract_fields::parse_detail_json` direkt verwertbar. Der menschen-
+    // lesbare SPA-Link liegt zusätzlich im Snippet.
+    let api_url = if let Some(ehraid) = entry.get("ehraid").and_then(Value::as_i64) {
+        format!("{API_BASE}/firm/{ehraid}.json")
+    } else if let Some(chid) = entry.get("chid").and_then(Value::as_str) {
+        format!("{API_BASE}/firm/{}.json", chid.trim())
+    } else {
+        return None;
+    };
+    let profile_url = if let Some(ehraid) = entry.get("ehraid").and_then(Value::as_i64) {
         format!("{PROFILE_BASE}/{ehraid}")
     } else if let Some(chid) = entry.get("chid").and_then(Value::as_str) {
         format!("{PROFILE_BASE}/{}", chid.trim())
     } else {
-        return None;
+        String::new()
     };
 
     let uid = entry
@@ -238,13 +264,20 @@ fn company_short_to_hit(entry: &Value) -> Option<SourceHit> {
         .unwrap_or("");
     let seat = entry.get("legalSeat").and_then(Value::as_str).unwrap_or("");
     let status = entry.get("status").and_then(Value::as_str).unwrap_or("");
-    let snippet = format!("{uid} · {seat} · {status}")
+    let summary = format!("{uid} · {seat} · {status}")
         .trim_matches(|c: char| c == ' ' || c == '·')
         .to_string();
+    let snippet = if profile_url.is_empty() {
+        summary
+    } else {
+        format!("{summary} · profile: {profile_url}")
+            .trim_matches(|c: char| c == ' ' || c == '·')
+            .to_string()
+    };
 
     Some(SourceHit {
         title: name.to_string(),
-        url,
+        url: api_url,
         snippet,
     })
 }
@@ -731,6 +764,7 @@ mod tests {
             is_pdf: false,
             excerpts: Vec::new(),
             find_results: Vec::new(),
+            raw_html: None,
         }
     }
 
@@ -799,10 +833,14 @@ mod tests {
             .expect("Roche Holding AG hit");
         assert_eq!(
             roche.url,
-            "https://www.zefix.admin.ch/de/search/entity/list/firm/154673"
+            "https://www.zefix.admin.ch/ZefixREST/api/v1/firm/154673.json"
         );
         assert!(roche.snippet.contains("CHE-101.602.521"));
         assert!(roche.snippet.contains("Basel"));
+        // The human-readable SPA URL is in the snippet for navigation.
+        assert!(roche
+            .snippet
+            .contains("https://www.zefix.admin.ch/de/search/entity/list/firm/154673"));
     }
 
     #[test]
@@ -980,7 +1018,9 @@ mod tests {
             .iter()
             .find(|h| h.title == "Roche Holding AG")
             .expect("Roche Holding AG present");
-        assert!(roche.url.starts_with(PROFILE_BASE));
+        assert!(roche.url.starts_with(API_BASE));
+        assert!(roche.url.ends_with(".json"));
+        assert!(roche.snippet.contains(PROFILE_BASE));
         assert!(roche.snippet.contains("CHE-"));
     }
 }

@@ -294,6 +294,14 @@ struct EvidenceDoc {
     page_text: String,
     #[serde(default)]
     find_results: Vec<FindInPageResult>,
+    /// The raw HTML response body when the page is HTML, untransformed by
+    /// the article extractor. Populated only by `build_evidence_doc` for
+    /// non-PDF responses; cache-loaded docs deserialize this as `None` for
+    /// backward compatibility (serde `default`). Source modules consume
+    /// this via `SourceReadResult.raw_html` so their `scraper`-based
+    /// extractors see the real DOM, not the LLM-summary plaintext.
+    #[serde(default)]
+    raw_html: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -749,10 +757,17 @@ fn match_source_for_url(url: &str) -> Option<&'static dyn crate::sources::Source
         .host_str()?
         .trim_start_matches("www.")
         .trim_start_matches("app.")
+        .trim_start_matches("api.")
         .to_ascii_lowercase();
     crate::sources::list().find(|module| {
         let id = module.id().to_ascii_lowercase();
-        host == id || host.ends_with(&format!(".{id}"))
+        if host == id || host.ends_with(&format!(".{id}")) {
+            return true;
+        }
+        module.host_suffixes().iter().any(|suffix| {
+            let s = suffix.to_ascii_lowercase();
+            host == s || host.ends_with(&format!(".{s}"))
+        })
     })
 }
 
@@ -772,6 +787,7 @@ fn evidence_doc_to_source_read(doc: &EvidenceDoc) -> crate::sources::SourceReadR
                 matches: f.matches.clone(),
             })
             .collect(),
+        raw_html: doc.raw_html.clone(),
     }
 }
 
@@ -1994,15 +2010,20 @@ fn build_evidence_doc(
 ) -> Result<(EvidenceDoc, Option<String>)> {
     let fetched = fetch_page_content(config, query, hit)?;
     let canonical_url = canonical_page_url(hit, &fetched);
-    let opened_page = if is_pdf_content(hit, &fetched) {
+    let is_pdf = is_pdf_content(hit, &fetched);
+    let opened_page = if is_pdf {
         extract_pdf_opened_page(config, query, hit, &fetched)?
     } else {
         extract_opened_page(query, hit, &String::from_utf8_lossy(&fetched.body))
     };
-    Ok((
-        build_query_evidence_doc(config, query, hit, canonical_url, opened_page),
-        fetched.content_type,
-    ))
+    let raw_html = if is_pdf {
+        None
+    } else {
+        Some(String::from_utf8_lossy(&fetched.body).into_owned())
+    };
+    let mut doc = build_query_evidence_doc(config, query, hit, canonical_url, opened_page);
+    doc.raw_html = raw_html;
+    Ok((doc, fetched.content_type))
 }
 
 fn build_query_evidence_doc(
@@ -2026,6 +2047,7 @@ fn build_query_evidence_doc(
             excerpts: opened_page.excerpts,
             page_text: opened_page.page_text,
             find_results: Vec::new(),
+            raw_html: None,
         },
     )
 }
@@ -2070,6 +2092,7 @@ fn rebuild_cached_evidence_doc(
         excerpts,
         page_text,
         find_results,
+        raw_html: cached.raw_html.clone(),
     }
 }
 
@@ -6798,6 +6821,7 @@ mod tests {
                     pattern: "ctox_remote_web_ok".to_string(),
                     matches: vec!["CTOX_REMOTE_WEB_OK".to_string()],
                 }],
+                raw_html: None,
             }],
             executed_queries: vec!["find CTOX_REMOTE_WEB_OK".to_string()],
         };

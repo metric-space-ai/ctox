@@ -62,6 +62,12 @@ impl SourceModule for LinkedIn {
         &["linkedin", "li", "sales-nav"]
     }
 
+    fn host_suffixes(&self) -> &'static [&'static str] {
+        // Antworten kommen von `api.linkedin.com`, profile-URLs zeigen auf
+        // `www.linkedin.com`; beide gehören zu diesem Modul.
+        &["api.linkedin.com"]
+    }
+
     fn tier(&self) -> Tier {
         Tier::C
     }
@@ -542,6 +548,7 @@ mod tests {
             is_pdf: false,
             excerpts: Vec::new(),
             find_results: Vec::new(),
+            raw_html: None,
         }
     }
 

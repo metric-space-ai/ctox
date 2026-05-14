@@ -91,7 +91,7 @@ impl SourceModule for Firmenabc {
         if page.is_pdf {
             return Vec::new();
         }
-        extract_from_html(&page.text, &page.url)
+        extract_from_html(page.html_source(), &page.url)
     }
 }
 
@@ -651,6 +651,7 @@ mod tests {
             is_pdf: false,
             excerpts: Vec::new(),
             find_results: Vec::new(),
+            raw_html: None,
         };
         let fields = module().extract_fields(&page);
 
@@ -754,6 +755,7 @@ mod tests {
             is_pdf: false,
             excerpts: Vec::new(),
             find_results: Vec::new(),
+            raw_html: None,
         };
         let fields = module().extract_fields(&page);
         // No JSON-LD, no anchors → keine Felder. Reine HTML-Heuristiken
@@ -802,6 +804,7 @@ mod tests {
             is_pdf: false,
             excerpts: Vec::new(),
             find_results: Vec::new(),
+            raw_html: None,
         };
         let fields = module().extract_fields(&page);
         let name = fields

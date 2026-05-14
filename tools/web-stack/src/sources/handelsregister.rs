@@ -114,7 +114,7 @@ impl SourceModule for Handelsregister {
         if page.is_pdf {
             return Vec::new();
         }
-        extract_from_html(&page.text, &page.url)
+        extract_from_html(page.html_source(), &page.url)
     }
 }
 
@@ -875,6 +875,7 @@ mod tests {
             is_pdf: false,
             excerpts: Vec::new(),
             find_results: Vec::new(),
+            raw_html: None,
         };
         let fields = module().extract_fields(&page);
         let by_key: std::collections::HashMap<FieldKey, &FieldEvidence> =
@@ -919,6 +920,7 @@ mod tests {
             is_pdf: false,
             excerpts: Vec::new(),
             find_results: Vec::new(),
+            raw_html: None,
         };
         let fields = module().extract_fields(&page);
         let by_key: std::collections::HashMap<FieldKey, &FieldEvidence> =
@@ -965,6 +967,7 @@ mod tests {
             is_pdf: false,
             excerpts: Vec::new(),
             find_results: Vec::new(),
+            raw_html: None,
         };
         let fields = module().extract_fields(&page);
         assert!(fields.is_empty(), "unexpected fields: {fields:?}");
@@ -980,6 +983,7 @@ mod tests {
             is_pdf: true,
             excerpts: Vec::new(),
             find_results: Vec::new(),
+            raw_html: None,
         };
         assert!(module().extract_fields(&page).is_empty());
     }

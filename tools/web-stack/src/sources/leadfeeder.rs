@@ -71,6 +71,10 @@ impl SourceModule for Leadfeeder {
         &["leadfeeder", "lf"]
     }
 
+    fn host_suffixes(&self) -> &'static [&'static str] {
+        &["api.leadfeeder.com"]
+    }
+
     fn tier(&self) -> Tier {
         Tier::C
     }
@@ -510,6 +514,7 @@ mod tests {
             is_pdf: false,
             excerpts: Vec::new(),
             find_results: Vec::new(),
+            raw_html: None,
         }
     }
 

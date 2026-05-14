@@ -57,6 +57,11 @@ impl SourceModule for DnbHoovers {
         &["dnb", "dnbhoovers", "hoovers"]
     }
 
+    fn host_suffixes(&self) -> &'static [&'static str] {
+        // Token-Endpoint und Direct+ API leben unter `plus.dnb.com`.
+        &["plus.dnb.com"]
+    }
+
     fn tier(&self) -> Tier {
         Tier::C
     }
@@ -762,6 +767,7 @@ mod tests {
             is_pdf: false,
             excerpts: Vec::new(),
             find_results: Vec::new(),
+            raw_html: None,
         }
     }
 

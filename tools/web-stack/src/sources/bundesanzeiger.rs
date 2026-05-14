@@ -95,7 +95,7 @@ impl SourceModule for Bundesanzeiger {
         if page.is_pdf {
             extract_from_pdf_text(&page.text, &page.url)
         } else {
-            extract_from_html(&page.text, &page.url)
+            extract_from_html(page.html_source(), &page.url)
         }
     }
 }
@@ -454,6 +454,7 @@ mod tests {
             is_pdf: false,
             excerpts: Vec::new(),
             find_results: Vec::new(),
+            raw_html: None,
         };
         let fields = module().extract_fields(&page);
         let by_key: std::collections::HashMap<FieldKey, &FieldEvidence> =
@@ -493,6 +494,7 @@ mod tests {
             is_pdf: true,
             excerpts: Vec::new(),
             find_results: Vec::new(),
+            raw_html: None,
         };
         let fields = module().extract_fields(&page);
         let by_key: std::collections::HashMap<FieldKey, &FieldEvidence> =
@@ -530,6 +532,7 @@ mod tests {
             is_pdf: true,
             excerpts: Vec::new(),
             find_results: Vec::new(),
+            raw_html: None,
         };
         let fields = module().extract_fields(&page);
         let mitarbeiter = fields
@@ -551,6 +554,7 @@ mod tests {
             is_pdf: true,
             excerpts: Vec::new(),
             find_results: Vec::new(),
+            raw_html: None,
         };
         let fields = module().extract_fields(&page);
         let mitarbeiter = fields
@@ -571,6 +575,7 @@ mod tests {
             is_pdf: false,
             excerpts: Vec::new(),
             find_results: Vec::new(),
+            raw_html: None,
         };
         let fields = module().extract_fields(&page);
         // No data-id rows → keine Felder.
@@ -628,6 +633,7 @@ mod tests {
             is_pdf: false,
             excerpts: Vec::new(),
             find_results: Vec::new(),
+            raw_html: None,
         };
         let _fields = module().extract_fields(&page);
         assert!(
