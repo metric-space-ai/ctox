@@ -7486,6 +7486,30 @@ fn ensure_schema(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_knowledge_runbook_items_lookup
             ON knowledge_runbook_items(runbook_id, label, updated_at DESC);
 
+        CREATE TABLE IF NOT EXISTS knowledge_data_tables (
+            table_id      TEXT PRIMARY KEY,
+            domain        TEXT NOT NULL,
+            table_key     TEXT NOT NULL,
+            source_system TEXT NOT NULL,
+            title         TEXT NOT NULL,
+            description   TEXT NOT NULL,
+            parquet_path  TEXT NOT NULL,
+            schema_hash   TEXT NOT NULL DEFAULT '',
+            row_count     INTEGER NOT NULL DEFAULT 0,
+            bytes         INTEGER NOT NULL DEFAULT 0,
+            tags_json     TEXT NOT NULL DEFAULT '{{}}',
+            archived_at   TEXT,
+            created_at    TEXT NOT NULL,
+            updated_at    TEXT NOT NULL,
+            UNIQUE(source_system, domain, table_key)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_knowledge_data_tables_domain
+            ON knowledge_data_tables(domain, updated_at DESC);
+
+        CREATE INDEX IF NOT EXISTS idx_knowledge_data_tables_source
+            ON knowledge_data_tables(source_system, updated_at DESC);
+
         CREATE TABLE IF NOT EXISTS knowledge_embeddings (
             item_id TEXT NOT NULL,
             embedding_model TEXT NOT NULL,

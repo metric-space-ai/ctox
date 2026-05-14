@@ -22,6 +22,12 @@ include_dir = "0.7"
 libc = "0.2"
 mailparse = "0.16"
 native-tls = "0.2"
+polars = { version = "0.52", default-features = false, features = [
+    "lazy", "parquet", "csv", "json",
+    "dtype-full", "strings", "regex", "timezones",
+    "is_in", "diagonal_concat", "concat_str",
+    "fmt", "describe", "polars-io",
+] }
 ratatui = "0.29"
 regex = "1"
 qrcode = "0.14"

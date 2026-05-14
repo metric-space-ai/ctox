@@ -10,6 +10,7 @@ mod doc_stack;
 mod execution;
 mod export;
 mod install;
+mod knowledge;
 mod mission;
 mod paths;
 mod persistence;
@@ -473,6 +474,7 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
         Some("jami-daemon") => {
             communication::jami_native::handle_daemon_command(&root, &args[1..])
         }
+        Some("knowledge") => knowledge::handle_knowledge_command(&root, &args[1..]),
         Some("meeting") => {
             communication::meeting_native::handle_meeting_command(&root, &args[1..])
         }
