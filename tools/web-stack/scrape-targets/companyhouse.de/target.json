@@ -1,0 +1,25 @@
+{
+  "target_key": "companyhouse-de",
+  "display_name": "CompanyHouse DE Handelsregister Aggregator",
+  "start_url": "https://www.companyhouse.de/",
+  "target_kind": "prospect-research",
+  "status": "active",
+  "config": {
+    "expected_provider": "companyhouse",
+    "country_hints": ["DE"],
+    "tier": "S",
+    "skip_probe": false,
+    "expected_min_records": 1,
+    "record_key_fields": ["field", "source_url"],
+    "api": {
+      "semantic": {
+        "source_fields": ["value", "note"]
+      }
+    }
+  },
+  "output_schema": {
+    "schema_key": "prospect.v1",
+    "primary_artifact_kind": "field_records_json",
+    "record_key_fields": ["field", "source_url"]
+  }
+}

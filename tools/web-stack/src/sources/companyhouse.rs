@@ -46,6 +46,21 @@ impl SourceModule for Companyhouse {
         &["companyhouse", "ch_de"]
     }
 
+    /// Companyhouse is HTML-pathed and Cloudflare-fronted, so we delegate
+    /// extraction to the registered scrape target. Phase B: the script
+    /// at `runtime/scraping/targets/companyhouse.de/scripts/current.js`
+    /// mirrors the Rust `extract_from_html` below; when the DOM drifts
+    /// (or Cloudflare changes the interstitial pattern), `universal-scraping`
+    /// revises that JS file instead of the Rust code here. The Rust
+    /// fallback stays as a baseline for unit-tests and for environments
+    /// where no scrape target is registered.
+    fn scrape_target_key(&self) -> Option<&'static str> {
+        // The CTOX scrape registry normalises target keys to a dashed slug
+        // (`.` → `-`); upsert-target rewrites `companyhouse.de` to
+        // `companyhouse-de`.
+        Some("companyhouse-de")
+    }
+
     fn tier(&self) -> Tier {
         Tier::S
     }
