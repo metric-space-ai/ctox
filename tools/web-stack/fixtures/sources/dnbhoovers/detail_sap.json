@@ -1,0 +1,104 @@
+{
+  "transactionDetail": {
+    "transactionID": "rrt-test-fixture-detail-sap-0001",
+    "transactionTimestamp": "2026-04-12T08:15:42.117Z",
+    "inLanguage": "en-US",
+    "serviceVersionNumber": "1"
+  },
+  "inquiryDetail": {
+    "duns": "316840271",
+    "productID": "cmpelk",
+    "productVersion": "v1"
+  },
+  "organization": {
+    "duns": "316840271",
+    "primaryName": "SAP SE",
+    "registeredName": "SAP SE",
+    "tradeStyleNames": [
+      { "name": "SAP", "priority": 1 }
+    ],
+    "telephone": [
+      { "telephoneNumber": "+49 6227 7-47474", "isdCode": "49" }
+    ],
+    "email": [
+      { "address": "info@sap.com" }
+    ],
+    "websiteAddress": [
+      { "url": "www.sap.com", "domainName": "sap.com" }
+    ],
+    "primaryAddress": {
+      "addressCountry": { "name": "Germany", "isoAlpha2Code": "DE" },
+      "addressLocality": { "name": "Walldorf" },
+      "addressRegion": { "name": "Baden-Wuerttemberg", "abbreviatedName": "BW" },
+      "postalCode": "69190",
+      "streetAddress": { "line1": "Dietmar-Hopp-Allee 16", "line2": null }
+    },
+    "primaryIndustryCode": {
+      "usSicV4": "7372",
+      "usSicV4Description": "Prepackaged Software"
+    },
+    "industryCodes": [
+      {
+        "code": "7372",
+        "description": "Prepackaged Software",
+        "typeDescription": "D&B Standard Industry Code",
+        "typeDnBCode": 399,
+        "priority": 1
+      },
+      {
+        "code": "5820",
+        "description": "Software publishing",
+        "typeDescription": "NACE Revision 2",
+        "typeDnBCode": 29550,
+        "priority": 2
+      }
+    ],
+    "numberOfEmployees": [
+      {
+        "value": 107602,
+        "informationScopeDescription": "Consolidated",
+        "informationScopeDnBCode": 9067,
+        "reliabilityDescription": "Actual",
+        "reliabilityDnBCode": 9092
+      },
+      {
+        "value": 25437,
+        "informationScopeDescription": "Individual",
+        "informationScopeDnBCode": 9066,
+        "reliabilityDescription": "Actual",
+        "reliabilityDnBCode": 9092
+      }
+    ],
+    "employeeFigures": {
+      "numberOfEmployees": 107602,
+      "reliabilityDescription": "Actual",
+      "informationScopeDescription": "Consolidated"
+    },
+    "financials": [
+      {
+        "yearlyRevenue": [
+          {
+            "value": 33809000000,
+            "currency": "USD"
+          },
+          {
+            "value": 30287000000,
+            "currency": "EUR"
+          }
+        ],
+        "salesRevenue": 33809000000,
+        "currency": "USD",
+        "financialStatementToDate": "2024-12-31",
+        "financialStatementDuration": "P1Y",
+        "informationScopeDescription": "Consolidated"
+      }
+    ],
+    "registrationNumbers": [
+      {
+        "registrationNumber": "HRB 719915",
+        "typeDescription": "Commercial Registry Number (Germany)",
+        "typeDnBCode": 2156
+      }
+    ]
+  }
+}
