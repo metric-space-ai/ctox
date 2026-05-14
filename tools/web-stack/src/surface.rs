@@ -14,6 +14,11 @@ use crate::browser::BrowserPrepareOptions;
 use crate::deep_research::run_ctox_deep_research_tool;
 use crate::deep_research::DeepResearchDepth;
 use crate::deep_research::DeepResearchRequest;
+use crate::person_research::run_ctox_person_research_tool;
+use crate::person_research::PersonResearchRequest;
+use crate::sources::Country as SourceCountry;
+use crate::sources::FieldKey as SourceFieldKey;
+use crate::sources::ResearchMode as SourceResearchMode;
 use crate::scholarly_search::run_ctox_scholarly_search_tool;
 use crate::scholarly_search::ScholarlySearchProvider;
 use crate::scholarly_search::ScholarlySearchRequest;
@@ -164,6 +169,45 @@ pub fn handle_web_command(
         }
         "scholarly" => handle_scholarly_command(root, &args[1..]),
         "sources" => handle_sources_command(&args[1..]),
+        "person-research" => {
+            let company = required_flag_value(args, "--company")
+                .or_else(|| args.get(1).map(String::as_str))
+                .context(
+                    "usage: ctox web person-research --company <name> --country <DE|AT|CH> --mode <new_record|update_firm|update_person|update_inventory_general|have_data> [--field <field-key>]... [--include-private <source-id>]... [--workspace <path>] [--no-workspace]",
+                )?;
+            let country_raw = required_flag_value(args, "--country")
+                .context("ctox web person-research requires --country <DE|AT|CH>")?;
+            let country = SourceCountry::from_iso(country_raw)
+                .with_context(|| format!("unsupported --country `{country_raw}`"))?;
+            let mode_raw = required_flag_value(args, "--mode")
+                .context("ctox web person-research requires --mode <new_record|update_firm|update_person|update_inventory_general|have_data>")?;
+            let mode = SourceResearchMode::from_str(mode_raw)
+                .with_context(|| format!("unsupported --mode `{mode_raw}`"))?;
+            let fields: Vec<SourceFieldKey> = find_flag_values(args, "--field")
+                .into_iter()
+                .filter_map(SourceFieldKey::from_str)
+                .collect();
+            let include_private: Vec<String> = find_flag_values(args, "--include-private")
+                .into_iter()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            let workspace = find_flag_value(args, "--workspace").map(PathBuf::from);
+            let persist_workspace = !args.iter().any(|arg| arg == "--no-workspace");
+            let payload = run_ctox_person_research_tool(
+                root,
+                &PersonResearchRequest {
+                    company: company.to_string(),
+                    country,
+                    mode,
+                    fields,
+                    include_private,
+                    workspace,
+                    persist_workspace,
+                },
+            )?;
+            print_json(&payload)
+        }
         "deep-research" => {
             let query = required_flag_value(args, "--query")
                 .or_else(|| args.get(1).map(String::as_str))
@@ -422,7 +466,7 @@ fn handle_scholarly_command(root: &Path, args: &[String]) -> Result<()> {
 }
 
 fn web_usage() -> &'static str {
-    "usage:\n  ctox web search --query <text> [--domain <host>]... [--source <id>]... [--country <DE|AT|CH>] [--context-size <low|medium|high>] [--cached] [--include-sources]\n  ctox web read --url <url> [--query <text>] [--find <text>]... [--country <DE|AT|CH>]\n  ctox web sources list [--country <DE|AT|CH>] [--tier <P|S|C>]... [--field <field-key>]\n  ctox web sources info --id <source-id>\n  ctox web scholarly search --query <text> [--provider <annas_archive>] [--content-type <type>]... [--language <code>]... [--ext <pdf|epub|...>]... [--sort <newest|oldest|largest|smallest|newest_added|oldest_added|random>] [--max-results <n>] [--page <n>] [--with-oa-pdf] [--only-doi]\n  ctox web deep-research --query <text> [--focus <text>] [--depth <quick|standard|exhaustive>] [--max-sources <n>] [--workspace <path>] [--include-annas-archive] [--no-papers] [--no-workspace]\n  ctox web scrape --target-key <key> --mode <latest|semantic> [--query <text>] [--limit <n>]\n  ctox web browser-prepare [--dir <path>] [--install-reference] [--install-browser] [--skip-npm-install]\n  ctox web browser-automation [--dir <path>] [--timeout-ms <n>] [--script-file <path>] < script.js\n  ctox web browser-capture --url <url> [--dir <path>] [--out-dir <path>] [--timeout-ms <n>]"
+    "usage:\n  ctox web search --query <text> [--domain <host>]... [--source <id>]... [--country <DE|AT|CH>] [--context-size <low|medium|high>] [--cached] [--include-sources]\n  ctox web read --url <url> [--query <text>] [--find <text>]... [--country <DE|AT|CH>]\n  ctox web sources list [--country <DE|AT|CH>] [--tier <P|S|C>]... [--field <field-key>]\n  ctox web sources info --id <source-id>\n  ctox web person-research --company <name> --country <DE|AT|CH> --mode <new_record|update_firm|update_person|update_inventory_general|have_data> [--field <field-key>]... [--include-private <source-id>]... [--workspace <path>] [--no-workspace]\n  ctox web scholarly search --query <text> [--provider <annas_archive>] [--content-type <type>]... [--language <code>]... [--ext <pdf|epub|...>]... [--sort <newest|oldest|largest|smallest|newest_added|oldest_added|random>] [--max-results <n>] [--page <n>] [--with-oa-pdf] [--only-doi]\n  ctox web deep-research --query <text> [--focus <text>] [--depth <quick|standard|exhaustive>] [--max-sources <n>] [--workspace <path>] [--include-annas-archive] [--no-papers] [--no-workspace]\n  ctox web scrape --target-key <key> --mode <latest|semantic> [--query <text>] [--limit <n>]\n  ctox web browser-prepare [--dir <path>] [--install-reference] [--install-browser] [--skip-npm-install]\n  ctox web browser-automation [--dir <path>] [--timeout-ms <n>] [--script-file <path>] < script.js\n  ctox web browser-capture --url <url> [--dir <path>] [--out-dir <path>] [--timeout-ms <n>]"
 }
 
 fn scholarly_usage() -> &'static str {

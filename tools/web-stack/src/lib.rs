@@ -6,6 +6,7 @@
 
 pub mod browser;
 pub mod deep_research;
+pub mod person_research;
 pub(crate) mod runtime_config;
 pub mod scholarly_search;
 pub mod sources;
@@ -20,6 +21,8 @@ pub use browser::BrowserPrepareOptions;
 pub use deep_research::run_ctox_deep_research_tool;
 pub use deep_research::DeepResearchDepth;
 pub use deep_research::DeepResearchRequest;
+pub use person_research::run_ctox_person_research_tool;
+pub use person_research::PersonResearchRequest;
 pub use scholarly_search::execute_scholarly_search;
 pub use scholarly_search::run_ctox_scholarly_search_tool;
 pub use scholarly_search::ScholarlyResult;
