@@ -7078,6 +7078,102 @@ fn queue_review_budget_attempt_count(
     Ok(checkpoint_count.max(unavailable_count).max(legacy_count))
 }
 
+fn enforce_queue_review_budget_exhausted_terminal_transition(
+    root: &Path,
+    message_key: &str,
+    attempts: usize,
+    threshold: usize,
+) -> Result<String> {
+    let db_path = crate::paths::core_db(root);
+    let conn = channels::open_channel_db(&db_path)?;
+    ensure_core_transition_guard_schema(&conn)?;
+    let route_status = channels::current_queue_route_status(&conn, message_key)
+        .unwrap_or_else(|_| "leased".to_string());
+    let from_state = queue_core_state_for_service(&route_status);
+    if from_state == CoreState::Failed {
+        return Ok(format!(
+            "queue-review-budget-exhausted:{message_key}:already-failed"
+        ));
+    }
+    let mut metadata = BTreeMap::new();
+    metadata.insert("review_budget_exhausted".to_string(), "true".to_string());
+    metadata.insert("review_budget_attempts".to_string(), attempts.to_string());
+    metadata.insert("review_budget_threshold".to_string(), threshold.to_string());
+    metadata.insert(
+        "review_budget_gate".to_string(),
+        "pre_worker_dispatch".to_string(),
+    );
+    metadata.insert("spawns_review_owned_work".to_string(), "false".to_string());
+
+    let proof = enforce_core_transition(
+        &conn,
+        &CoreTransitionRequest {
+            entity_type: CoreEntityType::QueueItem,
+            entity_id: message_key.to_string(),
+            lane: RuntimeLane::P2MissionDelivery,
+            from_state,
+            to_state: CoreState::Failed,
+            event: CoreEvent::Fail,
+            actor: "ctox-completion-review-budget".to_string(),
+            evidence: CoreEvidenceRefs {
+                review_audit_key: Some(format!(
+                    "queue-review-budget-exhausted:{message_key}:{attempts}/{threshold}"
+                )),
+                ..CoreEvidenceRefs::default()
+            },
+            metadata,
+        },
+    )?;
+    Ok(proof.proof_id)
+}
+
+fn terminalize_exhausted_queue_review_budget_before_run(
+    root: &Path,
+    job: &QueuedPrompt,
+) -> Result<Option<String>> {
+    if job.leased_message_keys.is_empty()
+        || job.source_label != "queue"
+        || job
+            .workspace_root
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .is_empty()
+    {
+        return Ok(None);
+    }
+    let threshold = review_checkpoint_requeue_block_threshold();
+    let mut exhausted = Vec::new();
+    for message_key in &job.leased_message_keys {
+        let attempts = queue_review_budget_attempt_count(root, job, message_key)?;
+        if attempts >= threshold {
+            let proof_id = enforce_queue_review_budget_exhausted_terminal_transition(
+                root,
+                message_key,
+                attempts,
+                threshold,
+            )?;
+            exhausted.push((message_key.clone(), attempts, proof_id));
+        }
+    }
+    if exhausted.is_empty() {
+        return Ok(None);
+    }
+    let keys = exhausted
+        .iter()
+        .map(|(message_key, _, _)| message_key.clone())
+        .collect::<Vec<_>>();
+    channels::ack_leased_messages(root, &keys, "failed")?;
+    let summary = exhausted
+        .iter()
+        .map(|(message_key, attempts, proof_id)| {
+            format!("{message_key}:{attempts}/{threshold} proof={proof_id}")
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    Ok(Some(summary))
+}
+
 fn queue_core_state_for_service(route_status: &str) -> CoreState {
     match route_status.trim().to_ascii_lowercase().as_str() {
         "leased" => CoreState::Leased,
@@ -8082,27 +8178,37 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
         } else {
             prompt_body.clone()
         };
+        let job = QueuedPrompt {
+            preview: preview_text(&prompt),
+            source_label,
+            goal,
+            prompt,
+            suggested_skill: suggested_skill_from_message(&message),
+            leased_message_keys,
+            leased_ticket_event_keys: ticket_event_key_from_metadata(&message.metadata)
+                .into_iter()
+                .collect(),
+            thread_key: Some(execution_thread_key_for_inbound_message(
+                &settings, &message,
+            )),
+            workspace_root: message.workspace_root.clone(),
+            ticket_self_work_id: ticket_self_work_id_from_metadata(&message.metadata),
+            outbound_email: founder_outbound_action_from_metadata(&message.metadata),
+            outbound_anchor: metadata_string(&message.metadata, "outbound_anchor"),
+        };
+        if let Some(summary) = terminalize_exhausted_queue_review_budget_before_run(root, &job)? {
+            push_event(
+                state,
+                format!(
+                    "Terminalized queue task before worker dispatch because finite review budget was exhausted: {summary}"
+                ),
+            );
+            continue;
+        }
         enqueue_prompt(
             root,
             state,
-            QueuedPrompt {
-                preview: preview_text(&prompt),
-                source_label,
-                goal,
-                prompt,
-                suggested_skill: suggested_skill_from_message(&message),
-                leased_message_keys,
-                leased_ticket_event_keys: ticket_event_key_from_metadata(&message.metadata)
-                    .into_iter()
-                    .collect(),
-                thread_key: Some(execution_thread_key_for_inbound_message(
-                    &settings, &message,
-                )),
-                workspace_root: message.workspace_root.clone(),
-                ticket_self_work_id: ticket_self_work_id_from_metadata(&message.metadata),
-                outbound_email: founder_outbound_action_from_metadata(&message.metadata),
-                outbound_anchor: metadata_string(&message.metadata, "outbound_anchor"),
-            },
+            job,
             format!(
                 "Queued {} inbound from {}",
                 message.channel,
@@ -16919,6 +17025,95 @@ mod tests {
             "\"review_checkpoint_attempt\":\"{}\"",
             review_checkpoint_requeue_block_threshold()
         )));
+    }
+
+    #[test]
+    fn exhausted_queue_review_budget_terminalizes_before_worker_dispatch() {
+        let root = temp_root("ctox-queue-review-pre-dispatch-budget");
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Pre-dispatch exhausted queue task".to_string(),
+                prompt: "Create the requested durable output.".to_string(),
+                thread_key: "queue/pre-dispatch-review-budget".to_string(),
+                workspace_root: Some("/tmp/ctox-pre-dispatch-review-budget".to_string()),
+                priority: "high".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create queue task");
+        let job = QueuedPrompt {
+            prompt: task.prompt.clone(),
+            goal: task.title.clone(),
+            preview: task.title.clone(),
+            source_label: "queue".to_string(),
+            suggested_skill: None,
+            leased_message_keys: vec![task.message_key.clone()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some(task.thread_key.clone()),
+            workspace_root: task.workspace_root.clone(),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+        let mut outcome = review::ReviewOutcome::skipped("still incomplete");
+        outcome.required = true;
+        outcome.verdict = review::ReviewVerdict::Fail;
+        outcome.failed_gates = vec!["Missing required output.".to_string()];
+        let workspace_root = job
+            .workspace_root
+            .as_deref()
+            .expect("test queue task should be workspace-backed");
+        for attempt in 0..review_checkpoint_requeue_block_threshold() {
+            let verification_request = verification::SliceVerificationRequest {
+                conversation_id: turn_loop::CHAT_CONVERSATION_ID,
+                goal: format!("Changed review feedback prompt {attempt}"),
+                prompt: job.prompt.clone(),
+                preview: format!("Work only inside this workspace: {workspace_root}"),
+                source_label: job.source_label.clone(),
+                owner_visible: false,
+            };
+            verification::record_slice_assurance(
+                &root,
+                &verification_request,
+                "The worker claimed completion, but the output is still missing.",
+                None,
+                Some(&outcome),
+            )
+            .expect("failed to persist legacy review audit");
+        }
+
+        channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
+            .expect("failed to lease queue task");
+        let terminalized = terminalize_exhausted_queue_review_budget_before_run(&root, &job)
+            .expect("pre-dispatch terminalization should not fail")
+            .expect("exhausted review budget should terminalize before worker dispatch");
+        assert!(terminalized.contains(&task.message_key));
+
+        let conn = channels::open_channel_db(&crate::paths::core_db(&root))
+            .expect("failed to open core db");
+        let route_status =
+            channels::current_queue_route_status(&conn, &task.message_key).expect("route status");
+        assert_eq!(route_status, "failed");
+        let proof_count: i64 = conn
+            .query_row(
+                r#"
+                SELECT COUNT(*)
+                FROM ctox_core_transition_proofs
+                WHERE entity_type = 'QueueItem'
+                  AND entity_id = ?1
+                  AND from_state = 'Leased'
+                  AND to_state = 'Failed'
+                  AND accepted = 1
+                  AND request_json LIKE '%"review_budget_gate":"pre_worker_dispatch"%'
+                "#,
+                params![task.message_key],
+                |row| row.get(0),
+            )
+            .expect("failed to count pre-dispatch terminal proof");
+        assert_eq!(proof_count, 1);
     }
 
     #[test]
