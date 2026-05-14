@@ -1,0 +1,25 @@
+{
+  "target_key": "bundesanzeiger-de",
+  "display_name": "Bundesanzeiger DE Pflichtveroeffentlichungen",
+  "start_url": "https://www.bundesanzeiger.de/pub/de/suche?13",
+  "target_kind": "prospect-research",
+  "status": "active",
+  "config": {
+    "expected_provider": "bundesanzeiger",
+    "country_hints": ["DE"],
+    "tier": "P",
+    "skip_probe": false,
+    "expected_min_records": 0,
+    "record_key_fields": ["field", "source_url"],
+    "api": {
+      "semantic": {
+        "source_fields": ["value", "note"]
+      }
+    }
+  },
+  "output_schema": {
+    "schema_key": "prospect.v1",
+    "primary_artifact_kind": "field_records_json",
+    "record_key_fields": ["field", "source_url"]
+  }
+}

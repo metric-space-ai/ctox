@@ -52,6 +52,35 @@ impl SourceModule for Bundesanzeiger {
         &["bundesanzeiger", "ba"]
     }
 
+    /// Hybrid migration: the HTML search-results path of bundesanzeiger.de
+    /// is owned by the registered scrape target
+    /// (`runtime/scraping/targets/bundesanzeiger.de/scripts/current.js`,
+    /// initially imported from
+    /// `tools/web-stack/scrape-targets/bundesanzeiger.de/scripts/v1.js`).
+    /// The JS extractor parses the search-hit DOM and emits
+    /// `firma_name` records with `Confidence::Medium` (summary view).
+    ///
+    /// The **PDF Jahresabschluss path stays in Rust** — see
+    /// [`extract_from_pdf_text`] in this very file. The PDF layout has
+    /// not drifted historically, `ctox_pdf_parse` lands the plaintext
+    /// pre-extraction, and the regex-based pull of `Umsatzerlöse` /
+    /// `Arbeitnehmer im Jahresdurchschnitt` produces `Confidence::High`
+    /// values that the universal-scraping JS path cannot match. The
+    /// `extract_fields` dispatch below keeps the PDF branch local; the
+    /// scrape bridge only fires for HTML hits, and the JS script itself
+    /// short-circuits any PDF URL it encounters (`page.is_pdf === true`
+    /// → skip) so the two paths cannot double-emit on the same hit.
+    ///
+    /// The Rust HTML extractor (`extract_from_html`) is retained as a
+    /// baseline for unit tests and for environments where no scrape
+    /// target is registered.
+    fn scrape_target_key(&self) -> Option<&'static str> {
+        // The CTOX scrape registry normalises target keys to a dashed slug
+        // (`.` → `-`); upsert-target rewrites `bundesanzeiger.de` to
+        // `bundesanzeiger-de`.
+        Some("bundesanzeiger-de")
+    }
+
     fn tier(&self) -> Tier {
         Tier::P
     }
