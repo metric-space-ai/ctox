@@ -1,0 +1,25 @@
+{
+  "target_key": "handelsregister-de",
+  "display_name": "Handelsregister DE (Registerportal der Länder)",
+  "start_url": "https://www.handelsregister.de/rp_web/erweiterte-suche.xhtml",
+  "target_kind": "prospect-research",
+  "status": "active",
+  "config": {
+    "expected_provider": "handelsregister",
+    "country_hints": ["DE"],
+    "tier": "P",
+    "skip_probe": true,
+    "expected_min_records": 1,
+    "record_key_fields": ["field", "source_url"],
+    "api": {
+      "semantic": {
+        "source_fields": ["value", "note"]
+      }
+    }
+  },
+  "output_schema": {
+    "schema_key": "prospect.v1",
+    "primary_artifact_kind": "field_records_json",
+    "record_key_fields": ["field", "source_url"]
+  }
+}

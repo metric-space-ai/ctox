@@ -61,6 +61,21 @@ impl SourceModule for Handelsregister {
         &["handelsregister", "hr"]
     }
 
+    /// Handelsregister.de is JSF/PrimeFaces-rendered with a captcha wall,
+    /// so the extraction pathway is delegated to the registered scrape
+    /// target. Phase B: the script at
+    /// `runtime/scraping/targets/handelsregister.de/scripts/current.js`
+    /// mirrors the Rust `extract_from_html` below; when the DOM drifts,
+    /// `universal-scraping` revises that JS file instead of the Rust
+    /// code here. The Rust fallback stays as a baseline for unit-tests
+    /// and for environments where no scrape target is registered.
+    fn scrape_target_key(&self) -> Option<&'static str> {
+        // The CTOX scrape registry normalises target keys to a dashed slug
+        // (`.` → `-`); upsert-target rewrites `handelsregister.de` to
+        // `handelsregister-de`.
+        Some("handelsregister-de")
+    }
+
     fn tier(&self) -> Tier {
         Tier::P
     }
