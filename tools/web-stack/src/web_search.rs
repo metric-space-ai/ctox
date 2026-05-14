@@ -132,6 +132,10 @@ struct SearchToolRequest {
     search_context_size: Option<ContextSize>,
     search_content_types: Vec<String>,
     include_sources: bool,
+    /// Source-module IDs/aliases pinned for this query. Resolved against
+    /// `crate::sources::find` at `execute_search` entry; unresolved ids are
+    /// reported back via the response envelope as `unknown_sources`.
+    pinned_sources: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -151,6 +155,12 @@ pub struct CanonicalWebSearchRequest {
     pub search_context_size: Option<ContextSize>,
     pub search_content_types: Vec<String>,
     pub include_sources: bool,
+    /// Pinned source-module IDs or aliases (e.g. `["bundesanzeiger", "zefix"]`).
+    /// Each pin is run before the generic provider cascade: API-pathed modules
+    /// (`fetch_direct`) hit their native API directly; crawl-pathed modules
+    /// rewrite the query via `shape_query` and add their domain to the
+    /// allow-list. See `crate::sources` for the source-module trait.
+    pub pinned_sources: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -164,6 +174,11 @@ pub struct DirectWebReadRequest {
     pub url: String,
     pub query: Option<String>,
     pub find: Vec<String>,
+    /// Optional country hint (e.g. `"DE"`) used when invoking a matched
+    /// source-module's `extract_fields`. Some source modules gate behaviour
+    /// on country (LinkedIn, Zefix); without this hint they fall back to
+    /// best-effort universal extraction.
+    pub country: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -680,6 +695,31 @@ pub fn run_ctox_web_read_tool(root: &Path, request: &DirectWebReadRequest) -> Re
         find_results = doc.find_results.clone();
     }
 
+    // Phase 3: if the URL belongs to a registered source module, run its
+    // `extract_fields` post-processor and surface the typed evidence under
+    // `extracted_fields`. Country hint is forwarded if the caller set it.
+    let extracted = match_source_for_url(&url).map(|module| {
+        let read = evidence_doc_to_source_read(&doc);
+        let evidence = module.extract_fields(&read);
+        let payload: Vec<Value> = evidence
+            .into_iter()
+            .map(|(field, ev)| {
+                json!({
+                    "field": field.as_str(),
+                    "value": ev.value,
+                    "confidence": ev.confidence.as_str(),
+                    "note": ev.note,
+                    "source_url": ev.source_url,
+                })
+            })
+            .collect();
+        json!({
+            "source_id": module.id(),
+            "tier": tier_label(module.tier()),
+            "fields": payload,
+        })
+    });
+
     Ok(json!({
         "ok": true,
         "tool": "ctox_web_read",
@@ -694,7 +734,53 @@ pub fn run_ctox_web_read_tool(root: &Path, request: &DirectWebReadRequest) -> Re
         "page_sections": doc.page_sections,
         "page_text_excerpt": trim_text(&doc.page_text, 4000),
         "context": render_direct_read_context(&read_query, &doc),
+        "extracted_fields": extracted,
     }))
+}
+
+/// Resolve the source module that owns the given URL's host.
+///
+/// Matching is loose: we strip `www.` and `app.` prefixes from the host and
+/// check both exact id match and suffix match (so `app.dnbhoovers.com`
+/// resolves to `dnbhoovers.com`).
+fn match_source_for_url(url: &str) -> Option<&'static dyn crate::sources::SourceModule> {
+    let parsed = Url::parse(url).ok()?;
+    let host = parsed
+        .host_str()?
+        .trim_start_matches("www.")
+        .trim_start_matches("app.")
+        .to_ascii_lowercase();
+    crate::sources::list().find(|module| {
+        let id = module.id().to_ascii_lowercase();
+        host == id || host.ends_with(&format!(".{id}"))
+    })
+}
+
+fn evidence_doc_to_source_read(doc: &EvidenceDoc) -> crate::sources::SourceReadResult {
+    crate::sources::SourceReadResult {
+        url: doc.url.clone(),
+        title: doc.title.clone(),
+        summary: doc.summary.clone(),
+        text: doc.page_text.clone(),
+        is_pdf: doc.is_pdf,
+        excerpts: doc.excerpts.clone(),
+        find_results: doc
+            .find_results
+            .iter()
+            .map(|f| crate::sources::SourceFindMatch {
+                pattern: f.pattern.clone(),
+                matches: f.matches.clone(),
+            })
+            .collect(),
+    }
+}
+
+fn tier_label(tier: crate::sources::Tier) -> &'static str {
+    match tier {
+        crate::sources::Tier::P => "P",
+        crate::sources::Tier::S => "S",
+        crate::sources::Tier::C => "C",
+    }
 }
 
 pub fn should_passthrough_openai_web_search(root: &Path, payload: &Value) -> bool {
@@ -826,6 +912,20 @@ fn execute_search(
     original_query: &str,
     query: &SearchQuery,
 ) -> Result<SearchResponse> {
+    // Phase 3: resolve `--source <id>` pins before the provider cascade.
+    // API-pathed source modules (`fetch_direct`) contribute hits directly;
+    // crawl-pathed modules contribute additional allow-list domains via
+    // their `shape_query`. The cascade then runs over the merged domain set.
+    let (pinned_hits, pinned_domains) =
+        run_pinned_sources_for_search(root, tool_request, original_query);
+    let mut effective = tool_request.clone();
+    if !pinned_domains.is_empty() {
+        effective.allowed_domains.extend(pinned_domains);
+        effective.allowed_domains.sort();
+        effective.allowed_domains.dedup();
+    }
+    let tool_request = &effective;
+
     let planned_queries = plan_search_queries(original_query, &tool_request.allowed_domains);
     let cache_key = build_cache_key(query, tool_request);
     if tool_request.external_web_access == Some(false) {
@@ -836,13 +936,14 @@ fn execute_search(
         return Ok(SearchResponse {
             provider: format!("{}-cached", cached.provider),
             evidence,
-            hits,
+            hits: merge_pinned_hits(pinned_hits, hits),
             executed_queries: planned_queries,
         });
     }
 
     let mut response = search_with_query_plan(root, config, query, &planned_queries)?;
     response.hits = filter_hits_by_domain(response.hits, &tool_request.allowed_domains);
+    response.hits = merge_pinned_hits(pinned_hits, response.hits);
     let mut session = WebSearchSession::new(root, config)?;
     response.evidence = session.fetch_evidence(
         &query.text,
@@ -854,6 +955,84 @@ fn execute_search(
     session.persist_page_cache()?;
     write_cached_search(root, &cache_key, &response)?;
     Ok(response)
+}
+
+/// Resolve `tool_request.pinned_sources`, invoke each module's
+/// `fetch_direct`/`shape_query`, and return additional hits + additional
+/// domains for the cascade. Failures from individual modules are absorbed —
+/// the generic cascade is the fallback path.
+fn run_pinned_sources_for_search(
+    root: &Path,
+    tool_request: &SearchToolRequest,
+    original_query: &str,
+) -> (Vec<SearchHit>, Vec<String>) {
+    use crate::sources::{self, ResearchMode, SourceCtx};
+
+    if tool_request.pinned_sources.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
+
+    let country = tool_request
+        .user_location
+        .country
+        .as_deref()
+        .and_then(sources::Country::from_iso);
+    let ctx = SourceCtx {
+        root,
+        country,
+        mode: ResearchMode::NewRecord,
+    };
+
+    let mut hits = Vec::new();
+    let mut domains = Vec::new();
+    for raw in &tool_request.pinned_sources {
+        let Some(module) = sources::find(raw) else {
+            continue;
+        };
+        // API path: native fetch_direct → hits, skip search-engine cascade.
+        if let Some(direct_result) = module.fetch_direct(&ctx, original_query) {
+            if let Ok(direct_hits) = direct_result {
+                let id = module.id();
+                for (rank_idx, hit) in direct_hits.into_iter().enumerate() {
+                    hits.push(SearchHit {
+                        title: hit.title,
+                        url: hit.url,
+                        snippet: hit.snippet,
+                        source: id.to_string(),
+                        rank: rank_idx + 1,
+                    });
+                }
+            }
+            // On Err (credential_missing, no_match, network, …) we silently
+            // fall through to the cascade — the agent will see partial
+            // results via the generic pipeline.
+            continue;
+        }
+        // Crawl path: shape_query contributes domain pins.
+        if let Some(shape) = module.shape_query(original_query, &ctx) {
+            domains.extend(shape.domains);
+        }
+    }
+    (hits, domains)
+}
+
+fn merge_pinned_hits(pinned: Vec<SearchHit>, generic: Vec<SearchHit>) -> Vec<SearchHit> {
+    if pinned.is_empty() {
+        return generic;
+    }
+    use std::collections::BTreeSet;
+    let mut seen: BTreeSet<String> = pinned.iter().map(|h| h.url.clone()).collect();
+    let mut merged = pinned;
+    for hit in generic {
+        if seen.insert(hit.url.clone()) {
+            merged.push(hit);
+        }
+    }
+    // Re-rank in merged order so the agent sees pinned-source hits first.
+    for (i, h) in merged.iter_mut().enumerate() {
+        h.rank = i + 1;
+    }
+    merged
 }
 
 fn search_with_query_plan(
@@ -4466,6 +4645,8 @@ fn canonical_web_search_request_from_responses(
             search_context_size: tool_request.search_context_size,
             search_content_types: tool_request.search_content_types,
             include_sources: request_includes_sources(payload),
+            // Responses-API does not carry CTOX-specific source pins.
+            pinned_sources: Vec::new(),
         })?;
     request.query = extract_latest_user_query(payload)?;
     Some(request)
@@ -4484,6 +4665,12 @@ fn canonical_request_to_tool_request(request: &CanonicalWebSearchRequest) -> Sea
         search_context_size: request.search_context_size,
         search_content_types: request.search_content_types.clone(),
         include_sources: request.include_sources,
+        pinned_sources: request
+            .pinned_sources
+            .iter()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect(),
     }
 }
 
@@ -4533,6 +4720,7 @@ fn parse_web_search_tool(tool: &Value) -> SearchToolRequest {
         search_context_size: ContextSize::from_value(tool.get("search_context_size")),
         search_content_types,
         include_sources: false,
+        pinned_sources: Vec::new(),
     }
 }
 
@@ -6427,6 +6615,7 @@ mod tests {
                 search_context_size: Some(ContextSize::Medium),
                 search_content_types: Vec::new(),
                 include_sources: true,
+                pinned_sources: Vec::new(),
             },
         )
         .unwrap();
@@ -6450,6 +6639,7 @@ mod tests {
                 url: "https://example.com/mock-result".to_string(),
                 query: Some("ctox web search evidence".to_string()),
                 find: vec!["CTOX_REMOTE_WEB_OK".to_string()],
+                country: None,
             },
         )
         .unwrap();
@@ -6819,6 +7009,7 @@ mod tests {
                     url: "https://example.com/mock-result.pdf".to_string(),
                     query: Some("Attention Is All You Need".to_string()),
                     find: vec!["Attention Is All You Need".to_string()],
+                    country: None,
                 },
             )
             .expect("pdf read payload")

@@ -153,6 +153,7 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
                 search_context_size: Some(request.depth.context_size()),
                 search_content_types: Vec::new(),
                 include_sources: true,
+                pinned_sources: Vec::new(),
             },
         ) {
             Ok(payload) => payload,
@@ -199,6 +200,7 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
                         url: url.clone(),
                         query: Some(search_query.clone()),
                         find: build_find_terms(&search_query),
+                        country: None,
                     },
                 ) {
                     Ok(read_payload) => {

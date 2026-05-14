@@ -1,6 +1,6 @@
 use anyhow::Context;
 use anyhow::Result;
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -107,11 +107,15 @@ pub fn handle_web_command(
             let query = required_flag_value(args, "--query")
                 .or_else(|| args.get(1).map(String::as_str))
                 .context(
-                    "usage: ctox web search --query <text> [--domain <host>]... [--context-size <low|medium|high>] [--cached] [--include-sources]",
+                    "usage: ctox web search --query <text> [--domain <host>]... [--source <id>]... [--country <DE|AT|CH>] [--context-size <low|medium|high>] [--cached] [--include-sources]",
                 )?;
             let search_context_size = find_flag_value(args, "--context-size")
                 .map(parse_context_size)
                 .transpose()?;
+            let user_location = SearchUserLocation {
+                country: find_flag_value(args, "--country").map(|raw| raw.trim().to_string()),
+                ..SearchUserLocation::default()
+            };
             let payload = run_ctox_web_search_tool(
                 root,
                 &CanonicalWebSearchRequest {
@@ -121,10 +125,14 @@ pub fn handle_web_command(
                         .into_iter()
                         .map(ToOwned::to_owned)
                         .collect(),
-                    user_location: SearchUserLocation::default(),
+                    user_location,
                     search_context_size,
                     search_content_types: Vec::new(),
                     include_sources: args.iter().any(|arg| arg == "--include-sources"),
+                    pinned_sources: find_flag_values(args, "--source")
+                        .into_iter()
+                        .map(ToOwned::to_owned)
+                        .collect(),
                 },
             )?;
             print_json(&payload)
@@ -139,7 +147,7 @@ pub fn handle_web_command(
             }
             let url = required_flag_value(args, "--url")
                 .or_else(|| args.get(1).map(String::as_str))
-                .context("usage: ctox web read --url <url> [--query <text>] [--find <text>]...")?;
+                .context("usage: ctox web read --url <url> [--query <text>] [--find <text>]... [--country <DE|AT|CH>]")?;
             let payload = run_ctox_web_read_tool(
                 root,
                 &DirectWebReadRequest {
@@ -149,11 +157,13 @@ pub fn handle_web_command(
                         .into_iter()
                         .map(ToOwned::to_owned)
                         .collect(),
+                    country: find_flag_value(args, "--country").map(|s| s.trim().to_string()),
                 },
             )?;
             print_json(&payload)
         }
         "scholarly" => handle_scholarly_command(root, &args[1..]),
+        "sources" => handle_sources_command(&args[1..]),
         "deep-research" => {
             let query = required_flag_value(args, "--query")
                 .or_else(|| args.get(1).map(String::as_str))
@@ -261,6 +271,92 @@ pub fn handle_web_command(
     }
 }
 
+fn handle_sources_command(args: &[String]) -> Result<()> {
+    use crate::sources;
+    let action = args.first().map(String::as_str).unwrap_or("");
+    if matches!(action, "" | "help" | "-h" | "--help" | "list") {
+        let country_filter = find_flag_value(args, "--country")
+            .and_then(|raw| sources::Country::from_iso(raw));
+        let tier_filter: Vec<String> = find_flag_values(args, "--tier")
+            .into_iter()
+            .map(|s| s.trim().to_ascii_uppercase())
+            .collect();
+        let field_filter = find_flag_value(args, "--field")
+            .and_then(|raw| sources::FieldKey::from_str(raw));
+        let mut entries: Vec<Value> = Vec::new();
+        for module in sources::list() {
+            if let Some(c) = country_filter {
+                if !module.countries().contains(&c) {
+                    continue;
+                }
+            }
+            if !tier_filter.is_empty() {
+                let tier = match module.tier() {
+                    sources::Tier::P => "P",
+                    sources::Tier::S => "S",
+                    sources::Tier::C => "C",
+                };
+                if !tier_filter.iter().any(|t| t == tier) {
+                    continue;
+                }
+            }
+            if let Some(f) = field_filter {
+                if !module.authoritative_for().contains(&f) {
+                    continue;
+                }
+            }
+            entries.push(source_manifest_json(module));
+        }
+        print_json(&json!({
+            "ok": true,
+            "tool": "ctox_web_sources_list",
+            "sources": entries,
+        }))?;
+        return Ok(());
+    }
+    if action == "info" {
+        let id = required_flag_value(args, "--id")
+            .or_else(|| args.get(1).map(String::as_str))
+            .context("usage: ctox web sources info --id <source-id>")?;
+        let module = sources::find(id).with_context(|| format!("unknown source: {id}"))?;
+        print_json(&json!({
+            "ok": true,
+            "tool": "ctox_web_sources_info",
+            "source": source_manifest_json(module),
+        }))?;
+        return Ok(());
+    }
+    anyhow::bail!("{}", sources_usage())
+}
+
+fn source_manifest_json(module: &'static dyn crate::sources::SourceModule) -> Value {
+    use crate::sources::Tier;
+    let tier = match module.tier() {
+        Tier::P => "P",
+        Tier::S => "S",
+        Tier::C => "C",
+    };
+    let countries: Vec<&'static str> =
+        module.countries().iter().map(|c| c.as_iso()).collect();
+    let fields: Vec<&'static str> = module
+        .authoritative_for()
+        .iter()
+        .map(|f| f.as_str())
+        .collect();
+    json!({
+        "id": module.id(),
+        "aliases": module.aliases(),
+        "tier": tier,
+        "countries": countries,
+        "authoritative_for": fields,
+        "requires_credential": module.requires_credential(),
+    })
+}
+
+fn sources_usage() -> &'static str {
+    "usage:\n  ctox web sources list [--country <DE|AT|CH>] [--tier <P|S|C>]... [--field <field-key>]\n  ctox web sources info --id <source-id>"
+}
+
 fn handle_scholarly_command(root: &Path, args: &[String]) -> Result<()> {
     let action = args.first().map(String::as_str).unwrap_or("");
     if matches!(action, "" | "help" | "-h" | "--help") {
@@ -326,7 +422,7 @@ fn handle_scholarly_command(root: &Path, args: &[String]) -> Result<()> {
 }
 
 fn web_usage() -> &'static str {
-    "usage:\n  ctox web search --query <text> [--domain <host>]... [--context-size <low|medium|high>] [--cached] [--include-sources]\n  ctox web read --url <url> [--query <text>] [--find <text>]...\n  ctox web scholarly search --query <text> [--provider <annas_archive>] [--content-type <type>]... [--language <code>]... [--ext <pdf|epub|...>]... [--sort <newest|oldest|largest|smallest|newest_added|oldest_added|random>] [--max-results <n>] [--page <n>] [--with-oa-pdf] [--only-doi]\n  ctox web deep-research --query <text> [--focus <text>] [--depth <quick|standard|exhaustive>] [--max-sources <n>] [--workspace <path>] [--include-annas-archive] [--no-papers] [--no-workspace]\n  ctox web scrape --target-key <key> --mode <latest|semantic> [--query <text>] [--limit <n>]\n  ctox web browser-prepare [--dir <path>] [--install-reference] [--install-browser] [--skip-npm-install]\n  ctox web browser-automation [--dir <path>] [--timeout-ms <n>] [--script-file <path>] < script.js\n  ctox web browser-capture --url <url> [--dir <path>] [--out-dir <path>] [--timeout-ms <n>]"
+    "usage:\n  ctox web search --query <text> [--domain <host>]... [--source <id>]... [--country <DE|AT|CH>] [--context-size <low|medium|high>] [--cached] [--include-sources]\n  ctox web read --url <url> [--query <text>] [--find <text>]... [--country <DE|AT|CH>]\n  ctox web sources list [--country <DE|AT|CH>] [--tier <P|S|C>]... [--field <field-key>]\n  ctox web sources info --id <source-id>\n  ctox web scholarly search --query <text> [--provider <annas_archive>] [--content-type <type>]... [--language <code>]... [--ext <pdf|epub|...>]... [--sort <newest|oldest|largest|smallest|newest_added|oldest_added|random>] [--max-results <n>] [--page <n>] [--with-oa-pdf] [--only-doi]\n  ctox web deep-research --query <text> [--focus <text>] [--depth <quick|standard|exhaustive>] [--max-sources <n>] [--workspace <path>] [--include-annas-archive] [--no-papers] [--no-workspace]\n  ctox web scrape --target-key <key> --mode <latest|semantic> [--query <text>] [--limit <n>]\n  ctox web browser-prepare [--dir <path>] [--install-reference] [--install-browser] [--skip-npm-install]\n  ctox web browser-automation [--dir <path>] [--timeout-ms <n>] [--script-file <path>] < script.js\n  ctox web browser-capture --url <url> [--dir <path>] [--out-dir <path>] [--timeout-ms <n>]"
 }
 
 fn scholarly_usage() -> &'static str {
