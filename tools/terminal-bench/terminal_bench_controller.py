@@ -465,12 +465,18 @@ def validation_for_not_ready(route_status: str) -> dict[str, Any]:
         "leased": "in_progress",
         "review_rework": "needs_rework",
         "blocked": "blocked",
+        "failed": "model_failed",
+        "cancelled": "infra_blocked",
         "not_found": "not_found",
+    }
+    failure_mode_map = {
+        "failed": "ctox_route_failed",
+        "cancelled": "ctox_route_cancelled",
     }
     return {
         "validation_status": status_map.get(route_status, "not_ready"),
         "is_resolved": None,
-        "failure_mode": "",
+        "failure_mode": failure_mode_map.get(route_status, ""),
         "parser_results": None,
         "tb_results_path": "",
         "validated_at": "",
