@@ -27,6 +27,7 @@ pub mod handelsregister;
 pub mod leadfeeder;
 pub mod linkedin;
 pub mod northdata;
+pub mod scrape_bridge;
 pub mod xing;
 pub mod zefix;
 
@@ -378,6 +379,26 @@ pub trait SourceModule: Sync {
     /// Example: `["northdata", "nd"]` for `northdata.de`.
     fn aliases(&self) -> &'static [&'static str] {
         &[]
+    }
+
+    /// Optional `target_key` for the CTOX scrape registry
+    /// (`ctox scrape execute --target-key <key>`). When set, the orchestrator
+    /// may delegate extraction to the registered, hot-revisable script under
+    /// `runtime/scraping/targets/<key>/scripts/current.*` instead of running
+    /// the in-tree Rust `extract_fields`. This is how the
+    /// `universal-scraping` skill ([skills/system/communication/universal-scraping](../../../../skills/system/communication/universal-scraping/SKILL.md))
+    /// repairs HTML extractors on portal drift without a Cargo rebuild.
+    ///
+    /// Returning `None` (default) keeps the source purely Rust-resident
+    /// — appropriate for stable API endpoints (Zefix, LinkedIn, XING,
+    /// D&B, Leadfeeder) where the JSON shape is versioned upstream.
+    /// Crawl-pathed HTML sources (Northdata, Firmenabc, Companyhouse,
+    /// Handelsregister, Bundesanzeiger HTML) should override this with
+    /// their canonical id, register the target via
+    /// `ctox scrape upsert-target`, and emit `prospect.v1` records from
+    /// the registered script.
+    fn scrape_target_key(&self) -> Option<&'static str> {
+        None
     }
 
     /// Additional URL hosts that should resolve to this source module

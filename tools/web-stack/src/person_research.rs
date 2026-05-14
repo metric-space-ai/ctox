@@ -30,7 +30,9 @@ use anyhow::Result;
 use serde_json::json;
 use serde_json::Value;
 
-use crate::sources::{self, Country, FieldKey, ResearchMode, SourceCtx, SourceModule, Tier};
+use crate::sources::{
+    self, scrape_bridge, Country, FieldKey, ResearchMode, SourceCtx, SourceModule, Tier,
+};
 use crate::web_search::{
     run_ctox_web_read_tool, run_ctox_web_search_tool, CanonicalWebSearchRequest, ContextSize,
     DirectWebReadRequest, SearchUserLocation,
@@ -106,9 +108,54 @@ pub fn run_ctox_person_research_tool(
     let mut field_evidence: BTreeMap<FieldKey, Vec<Value>> = BTreeMap::new();
     let mut search_runs: Vec<Value> = Vec::with_capacity(plans.len());
     let mut read_runs: Vec<Value> = Vec::new();
+    let mut scrape_runs: Vec<Value> = Vec::new();
     let mut visited_urls: BTreeSet<String> = BTreeSet::new();
+    let ctox_bin = scrape_bridge::default_ctox_bin();
 
     for plan in &plans {
+        // If the module is registered as a CTOX scrape target, delegate
+        // extraction to the universal-scraping pipeline. Drift then flows
+        // through `ctox scrape execute --allow-heal` into the repair queue
+        // instead of silently failing here.
+        if let Some(module) = sources::find(plan.source_id) {
+            if module.scrape_target_key().is_some() {
+                let result = scrape_bridge::run_via_scrape_target(
+                    module,
+                    &company,
+                    request.country,
+                    root,
+                    &ctox_bin,
+                );
+                scrape_runs.push(json!({
+                    "source_id": plan.source_id,
+                    "target_key": result.target_key,
+                    "classification": result.classification,
+                    "reason": result.reason,
+                    "repair_queued": result.repair_queued,
+                    "run_id": result.run_id,
+                    "record_count": result.fields.len(),
+                }));
+                for (field, ev) in result.fields {
+                    if !request.fields.is_empty() && !request.fields.contains(&field) {
+                        continue;
+                    }
+                    field_evidence.entry(field).or_default().push(json!({
+                        "value": ev.value,
+                        "confidence": ev.confidence.as_str(),
+                        "source_id": plan.source_id,
+                        "source_url": ev.source_url,
+                        "tier": tier_label(plan.tier),
+                        "via": "scrape_target",
+                        "note": ev.note,
+                    }));
+                }
+                // For drift / unreachable / blocked, fall through to the
+                // search+read path as a safety net; for `succeeded` we
+                // still run the cascade in case the script returned a
+                // partial result and the cascade can supplement.
+            }
+        }
+
         let search_payload = run_ctox_web_search_tool(
             root,
             &CanonicalWebSearchRequest {
@@ -264,6 +311,7 @@ pub fn run_ctox_person_research_tool(
         "fields": aggregated,
         "search_runs": search_runs,
         "read_runs": read_runs,
+        "scrape_runs": scrape_runs,
     });
 
     if request.persist_workspace {
@@ -469,6 +517,7 @@ fn empty_plan_response(company: &str, request: &PersonResearchRequest, reason: &
         "plan": [],
         "search_runs": [],
         "read_runs": [],
+        "scrape_runs": [],
         "skipped_reason": reason,
     })
 }
@@ -583,6 +632,7 @@ fn persist_person_workspace(
     write_json_pretty(&workspace.join("search_runs.jsonl"), &Value::Null)?; // placeholder
     write_jsonl(&workspace.join("search_runs.jsonl"), payload.get("search_runs"))?;
     write_jsonl(&workspace.join("read_runs.jsonl"), payload.get("read_runs"))?;
+    write_jsonl(&workspace.join("scrape_runs.jsonl"), payload.get("scrape_runs"))?;
     write_json_pretty(&workspace.join("envelope.json"), payload)?;
 
     fs::write(

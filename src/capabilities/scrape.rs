@@ -600,7 +600,7 @@ pub fn handle_scrape_command(root: &Path, args: &[String]) -> Result<()> {
 
 fn execute_scrape(root: &Path, args: &[String]) -> Result<()> {
     let target_key = required_flag_value(args, "--target-key")
-        .context("usage: ctox scrape execute --target-key <key> [--trigger-kind <manual|scheduled|repair>] [--scheduled-for <iso>] [--timeout-seconds <n>] [--runtime-root <path>] [--allow-heal] [--thread-key <key>] [--queue-priority <urgent|high|normal|low>]")?;
+        .context("usage: ctox scrape execute --target-key <key> [--trigger-kind <manual|scheduled|repair>] [--scheduled-for <iso>] [--timeout-seconds <n>] [--runtime-root <path>] [--allow-heal] [--input-json <text>] [--input-file <path>] [--thread-key <key>] [--queue-priority <urgent|high|normal|low>]")?;
     let trigger_kind = find_flag_value(args, "--trigger-kind").unwrap_or("manual");
     let timeout_seconds = find_flag_value(args, "--timeout-seconds")
         .map(|value| value.parse::<u64>())
@@ -609,6 +609,24 @@ fn execute_scrape(root: &Path, args: &[String]) -> Result<()> {
         .unwrap_or(120);
     let allow_heal = args.iter().any(|arg| arg == "--allow-heal");
     let scheduled_for = find_flag_value(args, "--scheduled-for").map(ToOwned::to_owned);
+    // Caller-supplied dynamic input forwarded to the script as
+    // CTOX_SCRAPE_INPUT_JSON. Lets one registered target serve per-call
+    // queries (e.g. person-research handing the company name to a Northdata
+    // extractor) without registering a new target per query.
+    let input_json: Option<String> = if let Some(text) = find_flag_value(args, "--input-json") {
+        Some(text.to_string())
+    } else if let Some(path) = find_flag_value(args, "--input-file") {
+        Some(
+            fs::read_to_string(path)
+                .with_context(|| format!("failed to read --input-file {path}"))?,
+        )
+    } else {
+        None
+    };
+    if let Some(text) = &input_json {
+        serde_json::from_str::<Value>(text)
+            .context("--input-json / --input-file must be valid JSON")?;
+    }
     let conn = open_db(root)?;
     let target =
         load_registered_target(root, &conn, target_key)?.context("target_key not found")?;
@@ -649,7 +667,13 @@ fn execute_scrape(root: &Path, args: &[String]) -> Result<()> {
             .unwrap_or(false),
     );
 
-    let execution = execute_registered_script(&target, &run_dir, &output_dir, timeout_seconds)?;
+    let execution = execute_registered_script(
+        &target,
+        &run_dir,
+        &output_dir,
+        timeout_seconds,
+        input_json.as_deref(),
+    )?;
     let payload = match parse_execution_payload(&execution.stdout_text) {
         Ok(value) => value,
         Err(error) => json!({
@@ -2572,6 +2596,7 @@ fn execute_registered_script(
     run_dir: &Path,
     output_dir: &Path,
     timeout_seconds: u64,
+    input_json: Option<&str>,
 ) -> Result<CommandExecution> {
     let sources = target_sources(&target.view);
     let mut command_parts = target.script.entry_command.clone();
@@ -2631,7 +2656,11 @@ fn execute_registered_script(
                 .join("sources")
                 .to_string_lossy()
                 .to_string(),
-        )
+        );
+    if let Some(text) = input_json {
+        child.env("CTOX_SCRAPE_INPUT_JSON", text);
+    }
+    child
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
