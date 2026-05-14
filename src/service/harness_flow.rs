@@ -2,11 +2,13 @@
 // License: Apache-2.0
 
 use anyhow::{Context, Result};
-use chrono::Utc;
+use chrono::{TimeZone, Utc};
 use rusqlite::{params, Connection, OpenFlags};
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use std::fs::File;
+use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 use crate::persistence::{sqlite_busy_timeout_duration, sqlite_busy_timeout_millis};
@@ -368,7 +370,7 @@ fn build_flow(
     let review_approval = load_founder_review_approval(&conn, &message.message_key)?;
     let proofs = load_core_proofs_for_key(&conn, &message.message_key)?;
     let violations = load_state_violations_for_key(&conn, &message.message_key)?;
-    let ledger_events = load_flow_events(
+    let mut ledger_events = load_flow_events(
         root,
         Some(&message.message_key),
         work_for_attempt_2
@@ -378,6 +380,15 @@ fn build_flow(
         12,
     )
     .unwrap_or_default();
+    if let Some(usage_event) = latest_context_token_usage_event(
+        root,
+        Some(&message.message_key),
+        work_for_attempt_2
+            .as_ref()
+            .map(|work| work.work_id.as_str()),
+    ) {
+        ledger_events.push(usage_event);
+    }
 
     let mut blocks = Vec::new();
     blocks.push(MainBlock {
@@ -1393,6 +1404,72 @@ fn load_flow_events(
         })
     })?;
     Ok(rows.filter_map(|row| row.ok()).collect())
+}
+
+fn latest_context_token_usage_event(
+    root: &Path,
+    message_key: Option<&str>,
+    work_id: Option<&str>,
+) -> Option<HarnessFlowEvent> {
+    let path = root.join("runtime").join("context-log.jsonl");
+    let file = File::open(path).ok()?;
+    let reader = BufReader::new(file);
+    let mut latest: Option<Value> = None;
+    for line in reader.lines().map_while(Result::ok) {
+        let Ok(value) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        if value
+            .get("event")
+            .and_then(Value::as_str)
+            .is_some_and(|event| event == "token_count")
+        {
+            latest = Some(value);
+        }
+    }
+    let latest = latest?;
+    let input_tokens = latest.get("call_input").and_then(Value::as_i64)?;
+    let output_tokens = latest.get("call_output").and_then(Value::as_i64)?;
+    let total_input_tokens = latest.get("cum_input").and_then(Value::as_i64);
+    let total_output_tokens = latest.get("cum_output").and_then(Value::as_i64);
+    let elapsed_seconds = latest.get("elapsed_s").and_then(Value::as_i64);
+    let created_at = latest
+        .get("ts")
+        .and_then(Value::as_i64)
+        .and_then(|ts| Utc.timestamp_millis_opt(ts).single())
+        .map(|timestamp| timestamp.to_rfc3339())
+        .unwrap_or_else(|| Utc::now().to_rfc3339());
+    let metadata = json!({
+        "source": "runtime/context-log.jsonl",
+        "usage": {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_input_tokens": total_input_tokens,
+            "total_output_tokens": total_output_tokens
+        },
+        "runtime": {
+            "seconds": elapsed_seconds
+        }
+    });
+    let metadata_json = metadata.to_string();
+    let chain_key = chain_key(message_key, work_id, None);
+    let event_kind = "worker.token_usage";
+    let title = "Worker token usage";
+    let body_text = "Exact token usage from the model runtime event stream.";
+    let event_id = event_id(&chain_key, event_kind, title, body_text, &created_at);
+    Some(HarnessFlowEvent {
+        event_id,
+        chain_key,
+        event_kind: event_kind.to_string(),
+        title: title.to_string(),
+        body_text: body_text.to_string(),
+        message_key: message_key.map(ToOwned::to_owned),
+        work_id: work_id.map(ToOwned::to_owned),
+        ticket_key: None,
+        attempt_index: None,
+        metadata_json,
+        created_at,
+    })
 }
 
 #[allow(dead_code)]
