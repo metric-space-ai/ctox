@@ -3755,8 +3755,9 @@ fn start_prompt_worker(
                                             continue;
                                         }
                                     }
-                                    let attempt = match queue_review_checkpoint_attempt_count(
+                                    let attempt = match queue_review_budget_attempt_count(
                                         &root,
+                                        &job,
                                         message_key,
                                     ) {
                                         Ok(value) if value > 0 => value,
@@ -6962,6 +6963,71 @@ fn queue_review_unavailable_attempt_count(root: &Path, message_key: &str) -> Res
     Ok(count.max(0) as usize)
 }
 
+fn table_exists(conn: &rusqlite::Connection, table_name: &str) -> Result<bool> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+        params![table_name],
+        |row| row.get(0),
+    )?;
+    Ok(count > 0)
+}
+
+fn queue_legacy_verification_review_attempt_count(
+    root: &Path,
+    job: &QueuedPrompt,
+    message_key: &str,
+) -> Result<usize> {
+    let db_path = root.join("runtime/ctox.sqlite3");
+    if !db_path.exists() {
+        return Ok(0);
+    }
+    let conn = rusqlite::Connection::open(db_path)?;
+    if !table_exists(&conn, "verification_runs")? || !table_exists(&conn, "communication_messages")?
+    {
+        return Ok(0);
+    }
+    let observed_ms = conn
+        .query_row(
+            r#"
+            SELECT CAST(strftime('%s', observed_at) * 1000 AS INTEGER)
+            FROM communication_messages
+            WHERE message_key = ?1
+            "#,
+            params![message_key],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()?;
+    let Some(observed_ms) = observed_ms else {
+        return Ok(0);
+    };
+    let count: i64 = conn.query_row(
+        r#"
+        SELECT COUNT(*)
+        FROM verification_runs
+        WHERE review_required = 1
+          AND review_verdict IN ('fail', 'partial', 'unavailable')
+          AND source_label = ?1
+          AND goal = ?2
+          AND preview = ?3
+          AND CAST(created_at AS INTEGER) >= ?4
+        "#,
+        params![job.source_label, job.goal, job.preview, observed_ms],
+        |row| row.get(0),
+    )?;
+    Ok(count.max(0) as usize)
+}
+
+fn queue_review_budget_attempt_count(
+    root: &Path,
+    job: &QueuedPrompt,
+    message_key: &str,
+) -> Result<usize> {
+    let checkpoint_count = queue_review_checkpoint_attempt_count(root, message_key)?;
+    let unavailable_count = queue_review_unavailable_attempt_count(root, message_key)?;
+    let legacy_count = queue_legacy_verification_review_attempt_count(root, job, message_key)?;
+    Ok(checkpoint_count.max(unavailable_count).max(legacy_count))
+}
+
 fn queue_core_state_for_service(route_status: &str) -> CoreState {
     match route_status.trim().to_ascii_lowercase().as_str() {
         "leased" => CoreState::Leased,
@@ -7165,7 +7231,7 @@ fn queue_review_unavailable_retry_disposition(
     let mut exhausted = Vec::new();
     let mut proof_ids = Vec::new();
     for message_key in &job.leased_message_keys {
-        let attempt = queue_review_unavailable_attempt_count(root, message_key)?.saturating_add(1);
+        let attempt = queue_review_budget_attempt_count(root, job, message_key)?.saturating_add(1);
         let proof_id =
             enforce_queue_review_unavailable_retry_transition(root, message_key, summary, attempt)?;
         proof_ids.push(proof_id);
@@ -7191,7 +7257,10 @@ fn queue_review_unavailable_retry_disposition(
         summary: format!(
             "{}\n\nCompletion review is required, but the reviewer did not produce a verdict. CTOX persisted a finite retry checkpoint ({}/{threshold}) and will retry; terminal completion remains blocked until review passes or the retry budget is exhausted.",
             summary.trim(),
-            queue_review_unavailable_attempt_count(root, job.leased_message_keys.first().map(String::as_str).unwrap_or(""))?
+            match job.leased_message_keys.first() {
+                Some(message_key) => queue_review_budget_attempt_count(root, job, message_key)?,
+                None => 0,
+            }
         ),
     })
 }
@@ -7431,7 +7500,7 @@ fn queue_review_rejection_feedback_disposition(
     let mut exhausted = Vec::new();
     let mut proof_ids = Vec::new();
     for message_key in &job.leased_message_keys {
-        let attempt = queue_review_checkpoint_attempt_count(root, message_key)?.saturating_add(1);
+        let attempt = queue_review_budget_attempt_count(root, job, message_key)?.saturating_add(1);
         let proof_id = enforce_queue_review_checkpoint_feedback_transition(
             root,
             message_key,
@@ -16700,6 +16769,102 @@ mod tests {
             requeue_count as usize,
             review_checkpoint_requeue_block_threshold() - 1
         );
+    }
+
+    #[test]
+    fn queue_review_budget_counts_legacy_verification_audits() {
+        let root = temp_root("ctox-queue-review-feedback-legacy-budget");
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Legacy audited queue task".to_string(),
+                prompt: "Create the requested durable output.".to_string(),
+                thread_key: "queue/legacy-review-budget".to_string(),
+                workspace_root: Some("/tmp/ctox-legacy-review-budget".to_string()),
+                priority: "high".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create queue task");
+        let job = QueuedPrompt {
+            prompt: task.prompt.clone(),
+            goal: task.title.clone(),
+            preview: task.title.clone(),
+            source_label: "queue".to_string(),
+            suggested_skill: None,
+            leased_message_keys: vec![task.message_key.clone()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some(task.thread_key.clone()),
+            workspace_root: task.workspace_root.clone(),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+        let mut outcome = review::ReviewOutcome::skipped("still incomplete");
+        outcome.required = true;
+        outcome.verdict = review::ReviewVerdict::Fail;
+        outcome.failed_gates = vec!["Missing required output.".to_string()];
+
+        let verification_request = verification::SliceVerificationRequest {
+            conversation_id: turn_loop::CHAT_CONVERSATION_ID,
+            goal: job.goal.clone(),
+            prompt: job.prompt.clone(),
+            preview: job.preview.clone(),
+            source_label: job.source_label.clone(),
+            owner_visible: false,
+        };
+        for _ in 1..review_checkpoint_requeue_block_threshold() {
+            verification::record_slice_assurance(
+                &root,
+                &verification_request,
+                "The worker claimed completion, but the output is still missing.",
+                None,
+                Some(&outcome),
+            )
+            .expect("failed to persist legacy review audit");
+        }
+
+        channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
+            .expect("failed to lease queue task");
+        let terminal = handle_actionable_completion_review_rejection(
+            &root,
+            &Arc::new(Mutex::new(SharedState::default())),
+            &job,
+            &outcome,
+            "Still done.",
+        );
+        assert!(
+            matches!(
+                terminal,
+                CompletionReviewDisposition::TerminalQueueFailure { .. }
+            ),
+            "legacy durable review audits must consume the finite queue review budget, got {terminal:?}"
+        );
+
+        let conn = channels::open_channel_db(&crate::paths::core_db(&root))
+            .expect("failed to open core db");
+        let checkpoint_attempt: String = conn
+            .query_row(
+                r#"
+                SELECT request_json
+                FROM ctox_core_transition_proofs
+                WHERE entity_type = 'QueueItem'
+                  AND entity_id = ?1
+                  AND to_state = 'ReworkRequired'
+                  AND accepted = 1
+                  AND request_json LIKE '%"review_checkpoint":"true"%'
+                LIMIT 1
+                "#,
+                params![task.message_key],
+                |row| row.get(0),
+            )
+            .expect("failed to load queue review checkpoint proof");
+        assert!(checkpoint_attempt.contains(&format!(
+            "\"review_checkpoint_attempt\":\"{}\"",
+            review_checkpoint_requeue_block_threshold()
+        )));
     }
 
     #[test]
