@@ -1,0 +1,57 @@
+{
+  "id": "urn:li:person:abc123",
+  "publicIdentifier": "anna-mueller-wittenstein",
+  "firstName": {
+    "localized": {
+      "de_DE": "Anna"
+    },
+    "preferredLocale": {
+      "country": "DE",
+      "language": "de"
+    }
+  },
+  "lastName": {
+    "localized": {
+      "de_DE": "Müller"
+    },
+    "preferredLocale": {
+      "country": "DE",
+      "language": "de"
+    }
+  },
+  "headline": {
+    "localized": {
+      "de_DE": "Geschäftsführerin Vertrieb bei WITTENSTEIN SE"
+    },
+    "preferredLocale": {
+      "country": "DE",
+      "language": "de"
+    }
+  },
+  "currentPositions": [
+    {
+      "title": "Geschäftsführerin Vertrieb",
+      "companyName": "WITTENSTEIN SE",
+      "companyUrn": "urn:li:company:12345",
+      "startMonthYear": {
+        "month": 4,
+        "year": 2022
+      }
+    },
+    {
+      "title": "Head of Sales DACH",
+      "companyName": "Some Previous GmbH",
+      "companyUrn": "urn:li:company:99999",
+      "startMonthYear": {
+        "month": 1,
+        "year": 2018
+      },
+      "endMonthYear": {
+        "month": 3,
+        "year": 2022
+      }
+    }
+  ],
+  "locationName": "Igersheim, Baden-Württemberg, Deutschland",
+  "industryName": "Maschinenbau"
+}

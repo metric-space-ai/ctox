@@ -1,0 +1,123 @@
+{
+  "paging": {
+    "count": 10,
+    "start": 0,
+    "total": 3
+  },
+  "elements": [
+    {
+      "id": "urn:li:person:abc123",
+      "publicIdentifier": "anna-mueller-wittenstein",
+      "firstName": {
+        "localized": {
+          "de_DE": "Anna"
+        },
+        "preferredLocale": {
+          "country": "DE",
+          "language": "de"
+        }
+      },
+      "lastName": {
+        "localized": {
+          "de_DE": "Müller"
+        },
+        "preferredLocale": {
+          "country": "DE",
+          "language": "de"
+        }
+      },
+      "headline": {
+        "localized": {
+          "de_DE": "Geschäftsführerin Vertrieb bei WITTENSTEIN SE"
+        },
+        "preferredLocale": {
+          "country": "DE",
+          "language": "de"
+        }
+      },
+      "currentPositions": [
+        {
+          "title": "Geschäftsführerin Vertrieb",
+          "companyName": "WITTENSTEIN SE",
+          "companyUrn": "urn:li:company:12345"
+        }
+      ]
+    },
+    {
+      "id": "urn:li:person:def456",
+      "publicIdentifier": "bernd-schulz",
+      "firstName": {
+        "localized": {
+          "de_DE": "Bernd"
+        },
+        "preferredLocale": {
+          "country": "DE",
+          "language": "de"
+        }
+      },
+      "lastName": {
+        "localized": {
+          "de_DE": "Schulz"
+        },
+        "preferredLocale": {
+          "country": "DE",
+          "language": "de"
+        }
+      },
+      "headline": {
+        "localized": {
+          "de_DE": "Leiter Produktion bei WITTENSTEIN SE"
+        },
+        "preferredLocale": {
+          "country": "DE",
+          "language": "de"
+        }
+      },
+      "currentPositions": [
+        {
+          "title": "Leiter Produktion",
+          "companyName": "WITTENSTEIN SE",
+          "companyUrn": "urn:li:company:12345"
+        }
+      ]
+    },
+    {
+      "id": "urn:li:person:ghi789",
+      "publicIdentifier": "claudia-becker-3a4b5c",
+      "firstName": {
+        "localized": {
+          "de_DE": "Claudia"
+        },
+        "preferredLocale": {
+          "country": "DE",
+          "language": "de"
+        }
+      },
+      "lastName": {
+        "localized": {
+          "de_DE": "Becker"
+        },
+        "preferredLocale": {
+          "country": "DE",
+          "language": "de"
+        }
+      },
+      "headline": {
+        "localized": {
+          "de_DE": "Head of Marketing | WITTENSTEIN SE"
+        },
+        "preferredLocale": {
+          "country": "DE",
+          "language": "de"
+        }
+      },
+      "currentPositions": [
+        {
+          "title": "Head of Marketing",
+          "companyName": "WITTENSTEIN SE",
+          "companyUrn": "urn:li:company:12345"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,62 @@
+{
+  "data": [
+    {
+      "id": "c-993481",
+      "type": "contacts",
+      "attributes": {
+        "name": "Manfred Weber",
+        "first_name": "Manfred",
+        "last_name": "Weber",
+        "title": "Chief Executive Officer",
+        "email": "manfred.weber@wittenstein.de",
+        "email_status": "verified",
+        "phone": "+49 7931 493-0",
+        "linkedin_url": "https://www.linkedin.com/in/manfred-weber-wittenstein",
+        "company_name": "WITTENSTEIN SE",
+        "company_domain": "wittenstein.de",
+        "source": "leadfeeder_contacts_db"
+      },
+      "relationships": {
+        "lead": {
+          "data": { "id": "8472341", "type": "leads" }
+        }
+      },
+      "links": {
+        "self": "https://api.leadfeeder.com/accounts/me/contacts/c-993481"
+      }
+    },
+    {
+      "id": "c-993512",
+      "type": "contacts",
+      "attributes": {
+        "name": "Dr. Anna Hofmann",
+        "first_name": "Anna",
+        "last_name": "Hofmann",
+        "title": "Head of Sales DACH",
+        "email": "a.hofmann@wittenstein.de",
+        "email_status": "guessed",
+        "phone": "+49 7931 493-2010",
+        "linkedin_url": "https://www.linkedin.com/in/anna-hofmann-wittenstein",
+        "company_name": "WITTENSTEIN SE",
+        "company_domain": "wittenstein.de",
+        "source": "leadfeeder_contacts_db"
+      },
+      "relationships": {
+        "lead": {
+          "data": { "id": "8472341", "type": "leads" }
+        }
+      },
+      "links": {
+        "self": "https://api.leadfeeder.com/accounts/me/contacts/c-993512"
+      }
+    }
+  ],
+  "meta": {
+    "total": 2,
+    "page": 1,
+    "per_page": 25
+  },
+  "links": {
+    "self": "https://api.leadfeeder.com/accounts/me/contacts?search=Wittenstein"
+  }
+}

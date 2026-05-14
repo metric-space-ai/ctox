@@ -8,6 +8,7 @@ pub mod browser;
 pub mod deep_research;
 pub(crate) mod runtime_config;
 pub mod scholarly_search;
+pub mod sources;
 pub mod surface;
 pub mod web_search;
 

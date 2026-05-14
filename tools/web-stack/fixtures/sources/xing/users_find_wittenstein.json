@@ -1,0 +1,55 @@
+{
+  "users": {
+    "items": [
+      {
+        "id": "10368_abcdef",
+        "display_name": "Anna Schmidt",
+        "permalink": "https://www.xing.com/profile/Anna_Schmidt10",
+        "first_name": "Anna",
+        "last_name": "Schmidt",
+        "gender": "f",
+        "professional_experience": {
+          "primary_company": {
+            "name": "WITTENSTEIN SE",
+            "title": "Leiterin Forschung & Entwicklung",
+            "company_size": "1001-5000",
+            "industry": "ELECTRICAL_ENGINEERING_PRECISION_MECHANICS_AND_OPTICS.MECHANICAL_AND_PLANT_ENGINEERING"
+          }
+        }
+      },
+      {
+        "id": "20581_ghijkl",
+        "display_name": "Bernd Müller",
+        "permalink": "https://www.xing.com/profile/Bernd_Mueller7",
+        "first_name": "Bernd",
+        "last_name": "Müller",
+        "gender": "m",
+        "professional_experience": {
+          "primary_company": {
+            "name": "WITTENSTEIN SE",
+            "title": "Vertriebsleiter DACH",
+            "company_size": "1001-5000",
+            "industry": "ELECTRICAL_ENGINEERING_PRECISION_MECHANICS_AND_OPTICS.MECHANICAL_AND_PLANT_ENGINEERING"
+          }
+        }
+      },
+      {
+        "id": "30192_mnopqr",
+        "display_name": "Claudia Hofer",
+        "permalink": "https://www.xing.com/profile/Claudia_Hofer3",
+        "first_name": "Claudia",
+        "last_name": "Hofer",
+        "gender": "f",
+        "professional_experience": {
+          "primary_company": {
+            "name": "Andere Firma AG",
+            "title": "Beraterin",
+            "company_size": "201-500",
+            "industry": "CONSULTING_ACCOUNTING_AND_LAW.MANAGEMENT_CONSULTING"
+          }
+        }
+      }
+    ],
+    "total": 3
+  }
+}

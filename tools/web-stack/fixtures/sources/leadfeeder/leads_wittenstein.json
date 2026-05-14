@@ -1,0 +1,70 @@
+{
+  "data": [
+    {
+      "id": "8472341",
+      "type": "leads",
+      "attributes": {
+        "name": "WITTENSTEIN SE",
+        "website_url": "https://www.wittenstein.de/de-de/",
+        "email": "info@wittenstein.de",
+        "industry": "Mechanical or Industrial Engineering",
+        "employee_count": "1001-5000",
+        "annual_revenue": "$100M-$500M",
+        "country": "DE",
+        "city": "Igersheim",
+        "first_visit_date": "2026-03-04",
+        "last_visit_date": "2026-05-12",
+        "page_views": 47,
+        "visits": 12,
+        "quality": 8,
+        "crm_last_contact_date": null,
+        "tags": ["dach-priority", "engineering"]
+      },
+      "relationships": {
+        "account": {
+          "data": { "id": "me", "type": "accounts" }
+        }
+      },
+      "links": {
+        "self": "https://api.leadfeeder.com/accounts/me/leads/8472341"
+      }
+    },
+    {
+      "id": "8472399",
+      "type": "leads",
+      "attributes": {
+        "name": "Wittenstein alpha GmbH",
+        "website_url": "http://alpha.wittenstein.de",
+        "email": "kontakt@alpha.wittenstein.de",
+        "industry": "Mechanical or Industrial Engineering",
+        "employee_count": "201-500",
+        "annual_revenue": "$50M-$100M",
+        "country": "DE",
+        "city": "Igersheim",
+        "first_visit_date": "2026-04-19",
+        "last_visit_date": "2026-05-11",
+        "page_views": 19,
+        "visits": 5,
+        "quality": 6,
+        "crm_last_contact_date": null,
+        "tags": []
+      },
+      "relationships": {
+        "account": {
+          "data": { "id": "me", "type": "accounts" }
+        }
+      },
+      "links": {
+        "self": "https://api.leadfeeder.com/accounts/me/leads/8472399"
+      }
+    }
+  ],
+  "meta": {
+    "total": 2,
+    "page": 1,
+    "per_page": 25
+  },
+  "links": {
+    "self": "https://api.leadfeeder.com/accounts/me/leads?company_name=Wittenstein"
+  }
+}

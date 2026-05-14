@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<title>Erweiterte Suche - Handelsregister</title>
+</head>
+<body>
+<!--
+  Fixture-Quelle: gerendertes Markup einer Trefferliste auf
+  https://www.handelsregister.de/rp_web/erweiterte-suche.xhtml (PrimeFaces 6.x).
+  Die Tabelle .RegPortErg ist das stabile Identifikationsmerkmal der Treffer-
+  liste; jede Treffer-Zeile beginnt mit `.RegPortErg_AZ` (Aktenzeichen) gefolgt
+  von einer separaten `<tr>` mit der Firmierung und einer dritten `<tr>` mit
+  Sitz/Anschrift. Aufgenommen wurde das Markup einer „WITTENSTEIN SE"-Suche,
+  reduziert auf die wirklich darstellungsrelevanten Knoten.
+-->
+<div id="ergebnissForm">
+  <table id="ergebnissForm:selectedSuchErgebnisFormTable" class="RegPortErg" role="grid">
+    <colgroup>
+      <col><col><col><col><col>
+    </colgroup>
+    <thead>
+      <tr>
+        <th>Gericht</th>
+        <th>Firma</th>
+        <th>Sitz</th>
+        <th>Status</th>
+        <th>Auszug</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr class="RegPortErg_AZ">
+        <td class="RegPortErg_AZ" colspan="5">
+          Amtsgericht Stuttgart HRB 730760
+        </td>
+      </tr>
+      <tr class="RegPortErg_HoverDecoration">
+        <td class="RegPortErg_FirmaSp">
+          <span class="marked">WITTENSTEIN SE</span>
+        </td>
+        <td class="RegPortErg_SitzSp">
+          <span>Igersheim</span>
+        </td>
+        <td class="RegPortErg_StatusSp">
+          <span>currently registered</span>
+        </td>
+        <td class="RegPortErg_AuszugSp">
+          <a href="/rp_web/charge-info.xhtml" title="AD - Aktueller Abdruck">AD</a>
+          <a href="/rp_web/charge-info.xhtml" title="CD - Chronologischer Abdruck">CD</a>
+        </td>
+        <td>&nbsp;</td>
+      </tr>
+      <tr>
+        <td colspan="5" class="RegPortErg_AdresseSp">
+          Walter-Wittenstein-Straße 1, 97999 Igersheim
+        </td>
+      </tr>
+
+      <tr class="RegPortErg_AZ">
+        <td class="RegPortErg_AZ" colspan="5">
+          Amtsgericht Stuttgart HRB 580457
+        </td>
+      </tr>
+      <tr class="RegPortErg_HoverDecoration">
+        <td class="RegPortErg_FirmaSp">
+          <span class="marked">WITTENSTEIN alpha GmbH</span>
+        </td>
+        <td class="RegPortErg_SitzSp">
+          <span>Igersheim</span>
+        </td>
+        <td class="RegPortErg_StatusSp">
+          <span>currently registered</span>
+        </td>
+        <td class="RegPortErg_AuszugSp">
+          <a href="/rp_web/charge-info.xhtml" title="AD - Aktueller Abdruck">AD</a>
+        </td>
+        <td>&nbsp;</td>
+      </tr>
+      <tr>
+        <td colspan="5" class="RegPortErg_AdresseSp">
+          Walter-Wittenstein-Straße 1, 97999 Igersheim
+        </td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+</body>
+</html>

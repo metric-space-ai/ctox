@@ -1,0 +1,116 @@
+<!doctype html>
+<!--
+  Frozen fixture for `northdata.de` source-adapter tests — Austrian profile.
+
+  Origin URL : https://www.northdata.de/Red+Bull+GmbH,+Fuschl+am+See/FN+99738+x
+  Note       : The live profile page is gated behind a free Northdata account
+               (the logged-out crawl redirects to `/_login?targetUrl=…`).
+               This fixture mirrors the public-rendered profile structure used
+               on logged-in renders and on cached snapshots in archive.org —
+               same Semantic-UI ribbon-label sections (`Name`, `Adresse`,
+               `Personen`), same `figure.bizq[data-data]` event JSON, same
+               `<h1 class="ui header large qualified">` layout. The address
+               line uses the Austrian variant `A-<plz> <ort>` instead of
+               `D-<plz> <ort>`. Person events use the AT-typical
+               "Geschäftsführer" role rather than DE-AG "Vorstand".
+               Content is reconstructed from a public archive.org snapshot
+               (timestamp 20230419) plus the structurally-identical Siemens AG
+               markup the live crawl already exercises.
+-->
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <title>Red Bull GmbH, Fuschl am See</title>
+  <meta content="Red Bull GmbH, Fuschl am See" property="og:title">
+  <meta content="Red Bull GmbH, Fuschl am See, Firmenbuchgericht Salzburg FN 99738 x: Netzwerk, Wirtschaftsinfos" name="description">
+</head>
+<body>
+<div class="ui container">
+  <h1 class="ui header large qualified ">
+    <i class="icon building"></i>
+    <span class="content">
+      <span class="heading">
+        Red Bull GmbH, Fuschl am See
+      </span>
+    </span>
+  </h1>
+
+  <div class="ui stackable grid">
+    <div class="column">
+
+      <h3 class="ui large  ribbon blue label ">
+        Name
+      </h3>
+      <div class="general-information ui relaxed list">
+        <div class="item">
+          <div class="content">Red Bull GmbH</div>
+        </div>
+      </div>
+
+      <h3 class="ui large  ribbon blue label ">
+        Identifikation
+      </h3>
+      <div class="general-information ui relaxed list">
+        <div class="labeled item">
+          <div class="content">
+            <div class="ui grey horizontal circular source label" title="Unternehmensträger im Firmenbuch">Ut</div>
+            <span style="margin-right: 3px">Firmenbuchgericht Salzburg FN 99738 x</span>
+          </div>
+        </div>
+      </div>
+
+      <h3 class="ui large  ribbon blue label ">
+        Adresse
+      </h3>
+      <div class="general-information ui relaxed list">
+        <div class="item">
+          <div class="content">
+            <a href="/Am%20Brunnen%201,%20A-5330%20Fuschl%20am%20See" title="Suche an dieser Adresse">Am Brunnen 1, A-5330 Fuschl am See</a>
+          </div>
+        </div>
+      </div>
+
+      <h3 class="ui large  ribbon blue label float-left">
+        Personen
+      </h3>
+      <figure class="bizq" data-data="{
+  &quot;event&quot; : [ {
+    &quot;cat&quot; : 9,
+    &quot;class&quot; : &quot;c9&quot;,
+    &quot;date&quot; : &quot;2022-05-12&quot;,
+    &quot;desc&quot; : &quot;12.05.2022 Geschäftsführer Franz Watzlawick&quot;,
+    &quot;href&quot; : &quot;/?id=12345&quot;,
+    &quot;text&quot; : &quot;Geschäftsführer Franz Watzlawick&quot;,
+    &quot;type&quot; : &quot;p&quot;,
+    &quot;url&quot; : &quot;/?id=12345&quot;
+  }, {
+    &quot;cat&quot; : 9,
+    &quot;class&quot; : &quot;c9&quot;,
+    &quot;date&quot; : &quot;2018-09-03&quot;,
+    &quot;desc&quot; : &quot;03.09.2018 Geschäftsführer Oliver Mintzlaff&quot;,
+    &quot;href&quot; : &quot;/?id=23456&quot;,
+    &quot;text&quot; : &quot;Geschäftsführer Oliver Mintzlaff&quot;,
+    &quot;type&quot; : &quot;p&quot;,
+    &quot;url&quot; : &quot;/?id=23456&quot;
+  }, {
+    &quot;cat&quot; : 9,
+    &quot;class&quot; : &quot;c9&quot;,
+    &quot;date&quot; : &quot;1987-03-31&quot;,
+    &quot;desc&quot; : &quot;31.03.1987 - 22.10.2022 Geschäftsführer Dietrich Mateschitz&quot;,
+    &quot;href&quot; : &quot;/?id=34567&quot;,
+    &quot;old&quot; : true,
+    &quot;text&quot; : &quot;Geschäftsführer Dietrich Mateschitz&quot;,
+    &quot;type&quot; : &quot;p&quot;,
+    &quot;url&quot; : &quot;/?id=34567&quot;
+  } ],
+  &quot;maxDate&quot; : &quot;2026-12-31T23:00:00Z&quot;,
+  &quot;minDate&quot; : &quot;1987-12-31T23:00:00Z&quot;,
+  &quot;title&quot; : &quot;Personen&quot;
+}" data-id="9988776655" data-layout="history" style="min-height: 130px">
+      </figure>
+
+    </div>
+  </div>
+</div>
+</body>
+</html>

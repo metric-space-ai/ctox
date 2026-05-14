@@ -1,0 +1,60 @@
+{
+  "users": [
+    {
+      "id": "10368_abcdef",
+      "academic_title": "Dr.",
+      "first_name": "Anna",
+      "last_name": "Schmidt",
+      "display_name": "Dr. Anna Schmidt",
+      "gender": "f",
+      "page_name": "Anna_Schmidt10",
+      "permalink": "https://www.xing.com/profile/Anna_Schmidt10",
+      "employment_status": "EMPLOYEE",
+      "active_email": "anna.schmidt@wittenstein.example",
+      "business_address": {
+        "city": "Igersheim",
+        "country": "DE",
+        "zip_code": "97999",
+        "street": "Walter-Wittenstein-Str. 1",
+        "phone": "49|7931|493|0",
+        "fax": "49|7931|493|10000",
+        "province": "Baden-Württemberg",
+        "email": "anna.schmidt@wittenstein.example",
+        "mobile_phone": "49|172|1234567"
+      },
+      "professional_experience": {
+        "primary_company": {
+          "id": "wittenstein_se",
+          "name": "WITTENSTEIN SE",
+          "title": "Leiterin Forschung & Entwicklung",
+          "company_size": "1001-5000",
+          "tag": null,
+          "url": "https://www.wittenstein.de",
+          "career_level": "MANAGER",
+          "begin_date": "2018-04",
+          "description": "Verantwortlich für die F&E-Aktivitäten der Antriebstechnik-Sparte.",
+          "industry": "ELECTRICAL_ENGINEERING_PRECISION_MECHANICS_AND_OPTICS.MECHANICAL_AND_PLANT_ENGINEERING",
+          "form_of_employment": "FULL_EMPLOYEE",
+          "until_date": null
+        },
+        "non_primary_companies": [
+          {
+            "id": "fraunhofer_iao",
+            "name": "Fraunhofer IAO",
+            "title": "Wissenschaftliche Mitarbeiterin",
+            "begin_date": "2012-09",
+            "until_date": "2018-03"
+          }
+        ],
+        "awards": []
+      },
+      "languages": {
+        "de": "NATIVE",
+        "en": "FLUENT"
+      },
+      "wants": "Innovative Antriebssysteme, F&E-Kooperationen, Industrie 4.0",
+      "haves": "Maschinenbau, Mechatronik, F&E-Leitung",
+      "interests": "Robotik, Industrie 4.0, Bergsteigen"
+    }
+  ]
+}

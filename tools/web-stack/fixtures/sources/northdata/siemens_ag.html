@@ -1,0 +1,168 @@
+<!doctype html>
+<!--
+  Frozen fixture for `northdata.de` source-adapter tests.
+
+  Origin URL : https://www.northdata.de/Siemens+Aktiengesellschaft,+M%C3%BCnchen/HRB+6684
+  Fetched on : 2026-05-14 with the same User-Agent and Accept-Language headers
+               that the production crawl path uses, while logged out.
+  Reduction  : Tracking scripts, consent-manager bootstrap, navigation chrome,
+               historic-event blocks, and balance-sheet filter controls have
+               been stripped. The structural elements the adapter targets
+               (`<h1 class="ui header large qualified">`, the
+               `<h3 class="ui ... ribbon ... label">Name|Adresse|Personen</h3>`
+               sections, the `<figure class="bizq" data-data="...">` events JSON,
+               and the address `<a>` are preserved byte-for-byte.
+  Note       : Northdata exposes Umsatz only behind a login; the
+               public profile of Siemens AG contains no concrete revenue
+               figure, so the fixture has none either. The adapter must
+               degrade gracefully in that case (no `firma_umsatz` field).
+-->
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <title>Siemens AG, München</title>
+  <meta content="Siemens AG, München" property="og:title">
+  <meta content="Siemens AG, München, Amtsgericht München HRB 6684: Netzwerk, Wirtschaftsinfos" property="og:description">
+  <meta content="Siemens AG, München, Amtsgericht München HRB 6684: Netzwerk, Wirtschaftsinfos" name="description">
+</head>
+<body>
+<div class="ui container">
+  <h1 class="ui header large qualified ">
+    <i class="icon building"></i>
+    <span class="content">
+      <span class="heading">
+        Siemens AG, München
+      </span>
+    </span>
+  </h1>
+
+  <div class="ui stackable grid">
+    <div class="column">
+
+      <h3 class="ui large  ribbon blue label ">
+        Name
+      </h3>
+      <div class="general-information ui relaxed list">
+        <div class="item">
+          <div class="content">Siemens AG</div>
+        </div>
+        <div class="former item">
+          <i class="middle aligned exchange icon" title="auch / vormals"></i>
+          <div class="content">
+            Siemens Setr
+          </div>
+        </div>
+      </div>
+
+      <h3 class="ui large  ribbon blue label ">
+        Identifikation
+      </h3>
+      <div class="general-information ui relaxed list">
+        <div class="labeled item">
+          <div class="content">
+            <div class="ui grey horizontal circular source label" title="Unternehmensträger im Handelsregister">Ut</div>
+            <span style="margin-right: 3px">Amtsgericht München HRB 6684</span>
+          </div>
+        </div>
+        <div class="labeled item">
+          <div class="content">
+            <div class="ui grey horizontal circular source label" title="Global Legal Entity Identifier Foundation (LEI numbers)">Lei</div>
+            <span style="margin-right: 3px"><a href="/?id=5720917758">W38RGI023J3WT1HWRP32</a></span>
+          </div>
+        </div>
+        <div class="labeled item">
+          <div class="content">
+            <div class="ui grey horizontal circular source label">EUID</div>
+            <span style="margin-right: 3px">DED2601V.HRB6684</span>
+          </div>
+        </div>
+      </div>
+
+      <h3 class="ui large  ribbon blue label ">
+        Adresse
+      </h3>
+      <div class="general-information ui relaxed list">
+        <div class="item">
+          <div class="content">
+            <a href="/Werner-von-Siemens-Str%C2%B7%201,%20D-80333%20M%C3%BCnchen" title="Suche an dieser Adresse">Werner-von-Siemens-Str. 1, D-80333 München</a>
+          </div>
+        </div>
+        <div class="former item">
+          <i class="middle aligned exchange icon" title="auch / vormals"></i>
+          <div class="content">
+            Berlin, Deutschland
+          </div>
+        </div>
+      </div>
+
+      <h3 class="ui large  ribbon blue label ">
+        Gegenstand
+      </h3>
+      <p class="ui small">
+        Die Tätigkeit der Gesellschaft umfasst die Bereiche Industrie,
+        Infrastruktur, Mobilität und Gesundheitstechnik.
+      </p>
+
+      <h3 class="ui large  ribbon blue label float-left">
+        Personen
+      </h3>
+      <figure class="bizq" data-data="{
+  &quot;event&quot; : [ {
+    &quot;cat&quot; : 9,
+    &quot;class&quot; : &quot;c9&quot;,
+    &quot;date&quot; : &quot;2024-10-15&quot;,
+    &quot;desc&quot; : &quot;15.10.2024 Vorstand Veronika Bienert&quot;,
+    &quot;href&quot; : &quot;/?id=5574592786857984&quot;,
+    &quot;text&quot; : &quot;Vorstand Veronika Bienert&quot;,
+    &quot;type&quot; : &quot;p&quot;,
+    &quot;url&quot; : &quot;/?id=5574592786857984&quot;
+  }, {
+    &quot;cat&quot; : 9,
+    &quot;class&quot; : &quot;c9&quot;,
+    &quot;date&quot; : &quot;2024-10-15&quot;,
+    &quot;desc&quot; : &quot;15.10.2024 Vorstand Peter Körte&quot;,
+    &quot;href&quot; : &quot;/?id=5574592786857984&quot;,
+    &quot;text&quot; : &quot;Vorstand Peter Körte&quot;,
+    &quot;type&quot; : &quot;p&quot;,
+    &quot;url&quot; : &quot;/?id=5574592786857984&quot;
+  }, {
+    &quot;cat&quot; : 9,
+    &quot;class&quot; : &quot;c9&quot;,
+    &quot;date&quot; : &quot;2021-03-15&quot;,
+    &quot;desc&quot; : &quot;15.03.2021 Vorstandsvorsitzender Roland Busch&quot;,
+    &quot;href&quot; : &quot;/?id=6491175889&quot;,
+    &quot;text&quot; : &quot;VV Roland Busch&quot;,
+    &quot;type&quot; : &quot;p&quot;,
+    &quot;url&quot; : &quot;/?id=6491175889&quot;
+  }, {
+    &quot;cat&quot; : 9,
+    &quot;class&quot; : &quot;c9&quot;,
+    &quot;date&quot; : &quot;2011-05-20&quot;,
+    &quot;desc&quot; : &quot;20.05.2011 - 15.03.2021 Vorstand Roland Busch&quot;,
+    &quot;href&quot; : &quot;/?id=10402209&quot;,
+    &quot;old&quot; : true,
+    &quot;text&quot; : &quot;Vorstand Roland Busch&quot;,
+    &quot;type&quot; : &quot;p&quot;,
+    &quot;url&quot; : &quot;/?id=10402209&quot;
+  }, {
+    &quot;cat&quot; : 9,
+    &quot;class&quot; : &quot;c9&quot;,
+    &quot;date&quot; : &quot;2008-04-01&quot;,
+    &quot;desc&quot; : &quot;01.04.2008 - 10.05.2017 Vorstand Siegfried Konrad Rußwurm&quot;,
+    &quot;href&quot; : &quot;/?id=8069822&quot;,
+    &quot;old&quot; : true,
+    &quot;text&quot; : &quot;Vst. Siegfried K. Rußwurm&quot;,
+    &quot;type&quot; : &quot;p&quot;,
+    &quot;url&quot; : &quot;/?id=8069822&quot;
+  } ],
+  &quot;maxDate&quot; : &quot;2026-12-31T23:00:00Z&quot;,
+  &quot;minDate&quot; : &quot;2007-12-31T23:00:00Z&quot;,
+  &quot;title&quot; : &quot;Personen&quot;
+}" data-id="5735524187" data-layout="history" style="min-height: 130px">
+      </figure>
+
+    </div>
+  </div>
+</div>
+</body>
+</html>
