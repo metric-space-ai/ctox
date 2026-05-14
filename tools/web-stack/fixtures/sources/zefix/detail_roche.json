@@ -1,0 +1,71 @@
+{
+  "name": "Roche Holding AG",
+  "ehraid": 154673,
+  "uid": "CHE101602521",
+  "uidFormatted": "CHE-101.602.521",
+  "chid": "CH27030051590",
+  "chidFormatted": "CH-270-3005159-0",
+  "legalSeatId": 2701,
+  "legalSeat": "Basel",
+  "registerOfficeId": 270,
+  "legalFormId": 3,
+  "status": "EXISTIEREND",
+  "rabId": null,
+  "shabDate": "2026-05-11",
+  "deleteDate": null,
+  "cantonalExcerptWeb": "https://bs.chregister.ch/cr-portal/auszug/auszug.xhtml?uid=CHE-101.602.521",
+  "translation": [
+    "Roche Holding Ltd",
+    "Roche Holding SA"
+  ],
+  "purpose": "Unter der Firma «Roche Holding AG» «Roche Holding SA» «Roche Holding Ltd» besteht eine Aktiengesellschaft, welche den Zweck hat, sich an Unternehmungen zu beteiligen, die in den Bereichen Life Sciences, Gesundheit oder verwandt en Gebieten tätig sind. Die Beteiligung jeglicher Art an sonstigen Unternehmungen und Holdinggesellschaften im In - und Ausland ist gestattet. Die Gesellschaft kann Zweigniederlassungen und Tochtergesellschaften im In- und Ausland errichten sowie alle Geschäfte tätigen, die direkt oder indirekt mit ihrem Zweck in Zusammenhang stehen. Die Gesellschaft kann im In- und Ausland Grundeigentum und Immaterialgüterrechte erwerben, belasten, veräussern und verwalten sowie andere Gesellschaften finanzieren. Bei der Verfolgung ihres Gesellschaftszwecks strebt die Gesellschaft die Schaffung von langfristigem, nachhaltigem Wert an.",
+  "shabPub": [
+    {
+      "shabDate": "2026-05-11",
+      "shabNr": 0,
+      "shabPage": 0,
+      "shabId": 1006647830,
+      "shabMutationStatus": 0,
+      "registryOfficeId": 270,
+      "registryOfficeCanton": "BS",
+      "registryOfficeJournalId": 3230,
+      "registryOfficeJournalDate": "2026-05-06",
+      "message": "<FT TYPE=\"F\">Roche Holding AG</FT>, in <FT TYPE=\"S\">Basel</FT>, <FT TYPE=\"A\">CHE-101.602.521</FT>, Aktiengesellschaft (SHAB Nr. 50 vom 13.03.2026, Publ. 1006595719). Ausgeschiedene Personen und erloschene Unterschriften: Süssmuth-Dyckerhoff, Dr. Claudia, deutsche Staatsangehörige, in Ennetbürgen, Mitglied des Verwaltungsrates, ohne Zeichnungsberechtigung; Eisenring, Peter, von Aarau und Bichelsee-Balterswil, in Aarau, mit Kollektivunterschrift zu zweien. Eingetragene Personen neu oder mutierend: Rochet, Lubomira, französische Staatsangehörige, in Paris (FR), Mitglied des Verwaltungsrates, ohne Zeichnungsberechtigung.",
+      "mutationTypes": [
+        {
+          "id": 17,
+          "key": "aenderungorgane"
+        }
+      ]
+    },
+    {
+      "shabDate": "2025-09-04",
+      "shabNr": 0,
+      "shabPage": 0,
+      "shabId": 1006424990,
+      "shabMutationStatus": 0,
+      "registryOfficeId": 270,
+      "registryOfficeCanton": "BS",
+      "registryOfficeJournalId": 6155,
+      "registryOfficeJournalDate": "2025-09-01",
+      "message": "<FT TYPE=\"F\">Roche Holding AG</FT>, in <FT TYPE=\"S\">Basel</FT>, <FT TYPE=\"A\">CHE-101.602.521</FT>, Aktiengesellschaft (SHAB Nr. 160 vom 21.08.2025, Publ. 1006413523). Eingetragene Personen neu oder mutierend: Eschli, Dr. Bruno, von Küsnacht (ZH) und deutscher Staatsangehöriger, in Küsnacht (ZH), mit Kollektivunterschrift zu zweien; Regli, Dr. Florian, von Wassen, in Wettingen, mit Kollektivunterschrift zu zweien.",
+      "mutationTypes": [
+        {
+          "id": 17,
+          "key": "aenderungorgane"
+        }
+      ]
+    }
+  ],
+  "address": {
+    "organisation": "Roche Holding AG",
+    "careOf": "",
+    "street": "Grenzacherstr.",
+    "houseNumber": "124",
+    "addon": "",
+    "poBox": "",
+    "town": "Basel",
+    "swissZipCode": "4058",
+    "country": "CH"
+  }
+}
