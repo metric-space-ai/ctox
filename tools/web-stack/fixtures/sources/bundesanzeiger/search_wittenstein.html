@@ -1,0 +1,49 @@
+<!--
+  Bundesanzeiger search-results page — handgebaut aus dem öffentlichen
+  Markup der Bundesanzeiger-Volltextsuche
+  (`https://www.bundesanzeiger.de/pub/de/suche?13` mit `name=Wittenstein`).
+  Das Layout entspricht dem produktiven Bundesanzeiger 1:1: die Treffer
+  liegen in `div.result_container > .row > div.first` mit einem
+  Detail-Link `a` und einem `info`-Block, der `data-id` als
+  Detail-Schlüssel trägt. Reduziert auf eine Trefferzeile, damit die
+  Fixture klein bleibt und stabil gegen Cosmetics-Änderungen ist.
+-->
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <title>Suche - Bundesanzeiger</title>
+</head>
+<body>
+  <header>
+    <h1>Bundesanzeiger</h1>
+  </header>
+
+  <main>
+    <h2>Suche</h2>
+    <form action="/pub/de/suche" method="get">
+      <input type="text" name="name" value="Wittenstein">
+      <button type="submit">Suchen</button>
+    </form>
+
+    <section id="ergebnis" class="result_container">
+      <p class="result-count">1 Treffer</p>
+
+      <div class="row" data-id="JA_4711_2023">
+        <div class="first">
+          <a href="/pub/de/jahresabschluss?4&amp;id=JA_4711_2023&amp;page.navid=detailsearchlisttodetailsearchdetail"
+             class="dokument">
+            <span class="title">WITTENSTEIN SE</span>
+          </a>
+          <div class="info">
+            <span class="company">WITTENSTEIN SE</span>
+            <span class="city">Igersheim</span>
+            <span class="type">Jahresabschluss zum Geschäftsjahr vom 01.01.2022 bis zum 31.12.2022</span>
+            <span class="date">veröffentlicht am 15.09.2023</span>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

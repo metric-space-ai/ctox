@@ -1,0 +1,43 @@
+WITTENSTEIN SE
+Igersheim
+Jahresabschluss zum Geschäftsjahr vom 01.01.2022 bis zum 31.12.2022
+
+Bilanz zum 31. Dezember 2022
+
+AKTIVA
+A. Anlagevermögen
+B. Umlaufvermögen
+C. Rechnungsabgrenzungsposten
+
+PASSIVA
+A. Eigenkapital
+B. Rückstellungen
+C. Verbindlichkeiten
+
+Gewinn- und Verlustrechnung für die Zeit vom 01.01.2022 bis zum 31.12.2022
+
+1. Umsatzerlöse                                   485.732.145,00
+2. Sonstige betriebliche Erträge                    8.420.119,00
+3. Materialaufwand                               -198.554.317,00
+4. Personalaufwand                               -142.310.886,00
+   davon Löhne und Gehälter                      -115.402.330,00
+   davon soziale Abgaben und Aufwendungen
+   für Altersversorgung und für Unterstützung     -26.908.556,00
+5. Abschreibungen                                  -22.117.004,00
+6. Sonstige betriebliche Aufwendungen              -75.221.987,00
+7. Erträge aus Beteiligungen                        2.110.000,00
+
+Anhang
+
+Sonstige Angaben
+
+Arbeitnehmer im Jahresdurchschnitt              1842
+
+Der Vorstand
+Igersheim, den 14. September 2023
+
+Hinweis: Dieser Text-Dump ist ein repräsentativer Auszug auf Basis der
+offiziellen Veröffentlichungsstruktur eines Bundesanzeiger-Jahresabschlusses
+nach HGB §325 (Pflichtveröffentlichung). Die Zahlen sind synthetisch und
+nicht das tatsächliche Ergebnis der WITTENSTEIN SE. Verwendet als
+deterministische Test-Fixture für ctox-web-stack/sources/bundesanzeiger.
