@@ -27,6 +27,7 @@ pub mod handelsregister;
 pub mod leadfeeder;
 pub mod linkedin;
 pub mod northdata;
+pub mod person_discovery;
 pub mod scrape_bridge;
 pub mod xing;
 pub mod zefix;
@@ -467,6 +468,28 @@ pub trait SourceModule: Sync {
     fn extract_fields(&self, _page: &SourceReadResult) -> Vec<(FieldKey, FieldEvidence)> {
         Vec::new()
     }
+
+    /// Pull typed fields directly out of search-result hits, without
+    /// performing a `web read` on each URL.
+    ///
+    /// Useful for "snippet-mining" sources that work against gated profile
+    /// pages (LinkedIn, XING) where the underlying HTML behind the URL is
+    /// not retrievable, but Google's title+snippet preview already carries
+    /// the person name, role, and company.
+    ///
+    /// Returning a non-empty list signals the orchestrator that this
+    /// source has produced all the evidence it can from the hits alone
+    /// and the per-hit `web read` + [`extract_fields`] step should be
+    /// SKIPPED. Returning an empty list keeps the default crawl-and-extract
+    /// behavior.
+    fn extract_from_hits(
+        &self,
+        _ctx: &SourceCtx<'_>,
+        _company: &str,
+        _hits: &[SourceHit],
+    ) -> Vec<(FieldKey, FieldEvidence)> {
+        Vec::new()
+    }
 }
 
 /// Static list of every registered source module.
@@ -483,6 +506,7 @@ pub static REGISTRY: &[fn() -> &'static dyn SourceModule] = &[
     leadfeeder::module,
     linkedin::module,
     northdata::module,
+    person_discovery::module,
     xing::module,
     zefix::module,
 ];
@@ -539,7 +563,7 @@ mod tests {
     #[test]
     fn registry_has_all_expected_sources() {
         let ids: Vec<_> = list().map(|m| m.id()).collect();
-        assert_eq!(ids.len(), 10, "expected exactly 10 registered sources");
+        assert_eq!(ids.len(), 11, "expected exactly 11 registered sources");
         for expected in [
             "bundesanzeiger.de",
             "companyhouse.de",
@@ -549,6 +573,7 @@ mod tests {
             "leadfeeder.com",
             "linkedin.com",
             "northdata.de",
+            "person-discovery",
             "xing.com",
             "zefix.ch",
         ] {

@@ -31,7 +31,7 @@ use serde_json::json;
 use serde_json::Value;
 
 use crate::sources::{
-    self, scrape_bridge, Country, FieldKey, ResearchMode, SourceCtx, SourceModule, Tier,
+    self, scrape_bridge, Country, FieldKey, ResearchMode, SourceCtx, SourceHit, SourceModule, Tier,
 };
 use crate::web_search::{
     run_ctox_web_read_tool, run_ctox_web_search_tool, CanonicalWebSearchRequest, ContextSize,
@@ -156,10 +156,25 @@ pub fn run_ctox_person_research_tool(
             }
         }
 
+        // Honor the source's `shape_query` for the search-engine query
+        // text. Crawl/snippet sources frequently need a tightened query
+        // (e.g. `site:` operators, role-keyword bias) that the bare
+        // company name doesn't carry.
+        let effective_query = sources::find(plan.source_id)
+            .and_then(|m| {
+                let ctx = SourceCtx {
+                    root,
+                    country: Some(request.country),
+                    mode: request.mode,
+                };
+                m.shape_query(&company, &ctx).map(|s| s.query)
+            })
+            .unwrap_or_else(|| company.clone());
+
         let search_payload = run_ctox_web_search_tool(
             root,
             &CanonicalWebSearchRequest {
-                query: company.clone(),
+                query: effective_query,
                 external_web_access: None,
                 allowed_domains: Vec::new(),
                 user_location: SearchUserLocation {
@@ -206,6 +221,41 @@ pub fn run_ctox_person_research_tool(
         }));
         if !ok {
             continue;
+        }
+
+        // Snippet-mining sources (e.g. `person-discovery`) extract typed
+        // evidence directly from the search-result hits without needing to
+        // fetch the gated profile pages behind them. If `extract_from_hits`
+        // returns evidence, we use it and skip the per-hit read loop.
+        if let Some(module) = sources::find(plan.source_id) {
+            let hit_objs = parse_hits(&hits);
+            if !hit_objs.is_empty() {
+                let ctx = SourceCtx {
+                    root,
+                    country: Some(request.country),
+                    mode: request.mode,
+                };
+                let snippet_evidence = module.extract_from_hits(&ctx, &company, &hit_objs);
+                if !snippet_evidence.is_empty() {
+                    for (field, ev) in snippet_evidence {
+                        if !request.fields.is_empty() && !request.fields.contains(&field) {
+                            continue;
+                        }
+                        field_evidence.entry(field).or_default().push(json!({
+                            "value": ev.value,
+                            "confidence": ev.confidence.as_str(),
+                            "source_id": plan.source_id,
+                            "source_url": ev.source_url,
+                            "tier": tier_label(plan.tier),
+                            "via": "search_snippet",
+                            "note": ev.note,
+                        }));
+                    }
+                    // Snippet path produced evidence — do not also read each
+                    // URL (typically gated by login walls).
+                    continue;
+                }
+            }
         }
 
         let mut reads_for_plan = 0_usize;
@@ -564,6 +614,31 @@ fn url_belongs_to_source(
         }
     }
     false
+}
+
+/// Convert the raw `results` JSON returned by `run_ctox_web_search_tool`
+/// into typed [`SourceHit`]s for snippet-mining sources.
+fn parse_hits(raw: &[Value]) -> Vec<SourceHit> {
+    raw.iter()
+        .filter_map(|entry| {
+            let url = entry.get("url").and_then(Value::as_str)?.to_string();
+            let title = entry
+                .get("title")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let snippet = entry
+                .get("snippet")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            if url.trim().is_empty() {
+                None
+            } else {
+                Some(SourceHit { title, url, snippet })
+            }
+        })
+        .collect()
 }
 
 fn find_terms_for_fields(fields: &[FieldKey]) -> Vec<String> {

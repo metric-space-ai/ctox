@@ -44,9 +44,51 @@ Per `(mode, country, field)` the agent should consult sources in tier order
 
 | Country | Tier P | Tier S | Tier C (opt-in via tenant credential) |
 | --- | --- | --- | --- |
-| AT | (Firmenbuch direkt — TODO adapter), zefix-only-for-CH | `firmenabc.at`, `northdata.de` | `linkedin.com`, `xing.com`, `dnbhoovers.com`, `leadfeeder.com` |
-| DE | `bundesanzeiger.de`, `handelsregister.de` | `northdata.de`, `companyhouse.de` | dito |
-| CH | `zefix.ch` | `northdata.de` | dito |
+| AT | (Firmenbuch direkt — TODO adapter), zefix-only-for-CH | `firmenabc.at`, `northdata.de`, `person-discovery` | `linkedin.com`, `xing.com`, `dnbhoovers.com`, `leadfeeder.com` |
+| DE | `bundesanzeiger.de`, `handelsregister.de` | `northdata.de`, `companyhouse.de`, `person-discovery` | dito |
+| CH | `zefix.ch` | `northdata.de`, `person-discovery` | dito |
+
+### `person-discovery` (public LinkedIn/XING snippet mining)
+
+Tier S, DACH-wide, no credential required. Fans out a Google query of the
+form `<company> ("linkedin.com/in/" OR "xing.com/profile/")` and mines the
+search-result titles for:
+
+* `person_linkedin` / `person_xing` — canonical profile URL (Confidence::High)
+* `person_vorname` / `person_nachname` — split from the title (Confidence::Medium)
+* `person_funktion` — role segment between name and company (Confidence::Medium)
+
+Each emitted evidence row carries a `note` like
+`network=linkedin;seniority=c_level;google_snippet_title` so the agent can
+rank discovered profiles without a separate evaluation pass. Seniority
+buckets are derived from the role string:
+
+* `c_level` — CEO/CFO/COO/CTO/Vorstand/Geschäftsführer/Founder/Managing Director
+* `senior`  — VP/Direktor/Head of/Bereichsleiter/Leiter/Prokurist/Partner
+* `mid`     — Manager/Lead/Principal/Specialist
+* `unknown` — anything else
+
+Pinned-source flow (`ctox web search --source person-discovery`) skips the
+per-hit `web read` step because LinkedIn and XING profile pages are gated
+behind login walls. All evidence comes from the search-engine snippet
+titles via [`SourceModule::extract_from_hits`](../../../../tools/web-stack/src/sources/mod.rs).
+
+### Social-media evaluation step
+
+After running person-discovery (or any Tier-C `--include-private` pass),
+the agent SHOULD evaluate each discovered profile for sales relevance:
+
+1. **Filter by seniority bucket** from the `note` annotation — c_level
+   and senior are typical first-pass targets for sales pipeline work.
+2. **De-duplicate** across LinkedIn / XING when the same person appears
+   on both networks (match by full name + company).
+3. **Cross-validate the role** against [`person-research`](../../../../tools/web-stack/src/person_research.rs)'s
+   aggregated `person_funktion` from authoritative sources (Northdata,
+   Bundesanzeiger, Zefix) — if a discovered "CEO" title contradicts the
+   register, surface BOTH as candidates and flag.
+4. **Optionally re-read** the public profile URL via `ctox web read` —
+   most LinkedIn/XING pages return Open-Graph `og:title` + `og:description`
+   even on a login wall, which can confirm the snippet.
 
 ## Tool surface
 
@@ -119,7 +161,7 @@ ctox scrape execute --target-key <key> \
    - If field is financial and country=DE: search Bundesanzeiger PDF directly
      (`ctox web search --query "<company> Jahresabschluss filetype:pdf" --domain bundesanzeiger.de` + `ctox web read --url <pdf>`).
    - If field is `register_id`/`hr_amtsgericht` and country=DE: query Handelsregister via `ctox scrape execute --target-key handelsregister-de`.
-   - If field is `person_funktion`/`person_email` and tenant has LinkedIn creds: `ctox web person-research … --include-private linkedin`.
+   - If field is `person_funktion`/`person_linkedin`/`person_xing` and no creds: rely on the always-on `person-discovery` source (already in the default plan for DACH); for credentialled API enrichment add `--include-private linkedin` / `--include-private xing`.
    - If country=AT and `register_id`/`firma_rechtsform` missing: probe Firmenbuch (manual `ctox web search --query "<company> firmenbuch.justiz.gv.at" + read`).
 
 4. **Compute derived fields.** When the raw inputs are present:
