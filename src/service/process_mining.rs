@@ -8,6 +8,7 @@ use anyhow::Result;
 use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
 use rusqlite::params;
 use rusqlite::Connection;
+use rusqlite::OptionalExtension;
 use serde_json::{json, Value};
 use sha2::Digest;
 use sha2::Sha256;
@@ -3825,6 +3826,19 @@ fn upsert_default_core_transition_rules(conn: &Connection) -> Result<()> {
             json!({"core_transition": false, "requires_redaction": true}),
         ),
         (
+            "runtime-state-store-telemetry",
+            825,
+            Some("=runtime_state_store"),
+            None,
+            None,
+            None,
+            "telemetry",
+            "RuntimeStateStore",
+            "P1RuntimeSafety",
+            "telemetry.runtime.state_store",
+            json!({"core_transition": false, "records_runtime_state_snapshot": true}),
+        ),
+        (
             "payload-store-telemetry",
             830,
             Some("ctox_payload_store"),
@@ -4058,6 +4072,7 @@ fn is_telemetry_rule(rule: &CoreTransitionRule) -> bool {
 }
 
 fn infer_core_transition_from_rule(
+    conn: &Connection,
     rule: &CoreTransitionRule,
     event: &ProcessEventForStateMachine,
 ) -> Option<csm::CoreTransitionRequest> {
@@ -4066,7 +4081,7 @@ fn infer_core_transition_from_rule(
     let haystack = event_haystack(event, &before, &after);
     let mut request = match rule.inference_kind.as_str() {
         "communication" => infer_communication_transition(event, &after, &haystack),
-        "queue" => infer_queue_transition(event, &before, &after, &haystack),
+        "queue" => infer_queue_transition(conn, event, &before, &after, &haystack),
         "ticket" => infer_ticket_transition(event, &after, &haystack),
         "commitment" => infer_commitment_transition(event, &after),
         "schedule" => infer_schedule_transition(event, &after),
@@ -4297,7 +4312,7 @@ fn scan_core_state_machine_violations(conn: &Connection, limit: i64) -> Result<V
             continue;
         }
 
-        let Some(request) = infer_core_transition_from_rule(&rule, &event) else {
+        let Some(request) = infer_core_transition_from_rule(conn, &rule, &event) else {
             rule_matched_without_core_transition += 1;
             record_event_coverage(
                 conn,
@@ -4653,6 +4668,7 @@ fn infer_communication_transition(
 }
 
 fn infer_queue_transition(
+    conn: &Connection,
     event: &ProcessEventForStateMachine,
     before: &Value,
     after: &Value,
@@ -4681,17 +4697,45 @@ fn infer_queue_transition(
         csm::CoreState::Running => csm::CoreEvent::Execute,
         csm::CoreState::Completed => csm::CoreEvent::Complete,
         csm::CoreState::Blocked => csm::CoreEvent::Block,
+        csm::CoreState::ReworkRequired => csm::CoreEvent::RequireRework,
         csm::CoreState::Failed => csm::CoreEvent::Fail,
         csm::CoreState::Superseded => csm::CoreEvent::Supersede,
         _ => csm::CoreEvent::Execute,
     };
     let mut metadata = common_metadata(event);
+    let entity_id = queue_entity_id(event, after);
     if founder_text(haystack) {
         metadata.insert("protected_party".to_string(), "founder".to_string());
     }
+    let mut evidence = evidence_from_row(after);
+    if to_state == csm::CoreState::ReworkRequired {
+        if let Some((review_audit_key, proof_metadata)) =
+            queue_rework_witness_from_core_proof(conn, &entity_id)
+        {
+            evidence.review_audit_key = Some(review_audit_key);
+            for (key, value) in proof_metadata {
+                metadata.entry(key).or_insert(value);
+            }
+        }
+    }
+    if to_state == csm::CoreState::Failed {
+        if let Some(reason) = json_string(
+            after,
+            &["last_error", "failure_reason", "status_note", "error"],
+        )
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        {
+            metadata.insert("failure_reason".to_string(), reason);
+        }
+        metadata.insert(
+            "failure_class".to_string(),
+            "queue_route_failure".to_string(),
+        );
+    }
     Some(csm::CoreTransitionRequest {
         entity_type: csm::CoreEntityType::QueueItem,
-        entity_id: stable_entity_id(event),
+        entity_id,
         lane: if founder_text(haystack) {
             csm::RuntimeLane::P0FounderCommunication
         } else {
@@ -4701,9 +4745,62 @@ fn infer_queue_transition(
         to_state,
         event: core_event,
         actor: actor_from_event(event),
-        evidence: evidence_from_row(after),
+        evidence,
         metadata,
     })
+}
+
+fn queue_entity_id(event: &ProcessEventForStateMachine, row: &Value) -> String {
+    json_string(row, &["message_key", "queue_message_key", "route_id", "id"])
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| stable_entity_id(event))
+}
+
+fn queue_rework_witness_from_core_proof(
+    conn: &Connection,
+    entity_id: &str,
+) -> Option<(String, BTreeMap<String, String>)> {
+    let request_json: Option<String> = conn
+        .query_row(
+            r#"
+            SELECT request_json
+            FROM ctox_core_transition_proofs
+            WHERE entity_type = 'QueueItem'
+              AND entity_id = ?1
+              AND to_state = 'ReworkRequired'
+              AND accepted = 1
+            ORDER BY updated_at DESC
+            LIMIT 1
+            "#,
+            params![entity_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .ok()
+        .flatten();
+    let value = serde_json::from_str::<Value>(&request_json?).ok()?;
+    let review_audit_key = value
+        .get("evidence")
+        .and_then(|evidence| evidence.get("review_audit_key"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?
+        .to_string();
+    let mut metadata = BTreeMap::new();
+    if let Some(object) = value.get("metadata").and_then(Value::as_object) {
+        for key in [
+            "review_checkpoint",
+            "feedback_owner",
+            "feedback_target_entity_id",
+            "spawns_review_owned_work",
+            "validator_rework",
+        ] {
+            if let Some(raw) = object.get(key).and_then(Value::as_str) {
+                metadata.insert(key.to_string(), raw.to_string());
+            }
+        }
+    }
+    Some((review_audit_key, metadata))
 }
 
 fn infer_ticket_transition(
@@ -5014,6 +5111,7 @@ fn map_queue_state(raw: Option<&str>) -> Option<csm::CoreState> {
         "leased" | "claimed" => Some(csm::CoreState::Leased),
         "running" | "processing" | "active" => Some(csm::CoreState::Running),
         "blocked" | "stuck" => Some(csm::CoreState::Blocked),
+        "review_rework" | "rework_required" | "rework" => Some(csm::CoreState::ReworkRequired),
         "failed" | "error" => Some(csm::CoreState::Failed),
         "completed" | "done" | "handled" => Some(csm::CoreState::Completed),
         "superseded" | "cancelled" | "canceled" => Some(csm::CoreState::Superseded),
@@ -6339,6 +6437,11 @@ mod tests {
                 key TEXT PRIMARY KEY,
                 value TEXT
             );
+            CREATE TABLE runtime_state_store (
+                state_id INTEGER PRIMARY KEY,
+                active_model TEXT,
+                updated_at TEXT
+            );
             "#,
         )?;
         ensure_process_mining_schema(&conn, &db_path)?;
@@ -6426,6 +6529,10 @@ mod tests {
             "INSERT INTO runtime_env_kv (key, value) VALUES ('CTOX_CHAT_MODEL_MAX_CONTEXT', '131072')",
             [],
         )?;
+        conn.execute(
+            "INSERT INTO runtime_state_store (state_id, active_model, updated_at) VALUES (1, 'Qwen/Qwen3.6-35B-A3B', 'now')",
+            [],
+        )?;
 
         let summary = scan_core_state_machine_violations(&conn, 100)?;
         let unmapped = summary
@@ -6452,7 +6559,8 @@ mod tests {
                   'core-spawn-edge-ledger',
                   'harness-mining-audit-run-telemetry',
                   'harness-mining-finding-telemetry',
-                  'runtime-env-telemetry'
+                  'runtime-env-telemetry',
+                  'runtime-state-store-telemetry'
               )
             "#,
             [],
@@ -6470,8 +6578,141 @@ mod tests {
         )?;
 
         assert_eq!(unmapped, 0, "{summary}");
-        assert_eq!(telemetry_count, 18);
+        assert_eq!(telemetry_count, 19);
         assert_eq!(communication_message_misclassified, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn queue_review_rework_and_failed_with_reason_map_to_core_transitions() -> Result<()> {
+        let dir = tempdir()?;
+        let db_path = dir.path().join("ctox.sqlite3");
+        let conn = Connection::open(&db_path)?;
+        conn.execute_batch(
+            r#"
+            CREATE TABLE communication_routing_state (
+                message_key TEXT PRIMARY KEY,
+                route_status TEXT NOT NULL,
+                lease_owner TEXT,
+                leased_at TEXT,
+                acked_at TEXT,
+                last_error TEXT,
+                updated_at TEXT NOT NULL
+            );
+            "#,
+        )?;
+        ensure_process_mining_schema(&conn, &db_path)?;
+        conn.execute(
+            r#"
+            INSERT INTO communication_routing_state (
+                message_key, route_status, lease_owner, leased_at, updated_at
+            )
+            VALUES (
+                'queue:system::review', 'leased', 'ctox-service',
+                '2026-05-14T17:00:00Z', '2026-05-14T17:00:00Z'
+            )
+            "#,
+            [],
+        )?;
+        core_transition_guard::enforce_core_transition(
+            &conn,
+            &csm::CoreTransitionRequest {
+                entity_type: csm::CoreEntityType::QueueItem,
+                entity_id: "queue:system::review".to_string(),
+                lane: csm::RuntimeLane::P2MissionDelivery,
+                from_state: csm::CoreState::Leased,
+                to_state: csm::CoreState::ReworkRequired,
+                event: csm::CoreEvent::RequireRework,
+                actor: "ctox-completion-review".to_string(),
+                evidence: csm::CoreEvidenceRefs {
+                    review_audit_key: Some("review-checkpoint-1".to_string()),
+                    ..csm::CoreEvidenceRefs::default()
+                },
+                metadata: BTreeMap::from([
+                    ("review_checkpoint".to_string(), "true".to_string()),
+                    ("feedback_owner".to_string(), "main_agent".to_string()),
+                    (
+                        "feedback_target_entity_id".to_string(),
+                        "queue:system::review".to_string(),
+                    ),
+                    ("spawns_review_owned_work".to_string(), "false".to_string()),
+                ]),
+            },
+        )?;
+        conn.execute(
+            r#"
+            UPDATE communication_routing_state
+            SET route_status = 'review_rework',
+                lease_owner = NULL,
+                leased_at = NULL,
+                updated_at = '2026-05-14T17:01:00Z'
+            WHERE message_key = 'queue:system::review'
+            "#,
+            [],
+        )?;
+        conn.execute(
+            r#"
+            INSERT INTO communication_routing_state (
+                message_key, route_status, lease_owner, leased_at, updated_at
+            )
+            VALUES (
+                'queue:system::failed', 'leased', 'ctox-service',
+                '2026-05-14T17:02:00Z', '2026-05-14T17:02:00Z'
+            )
+            "#,
+            [],
+        )?;
+        conn.execute(
+            r#"
+            UPDATE communication_routing_state
+            SET route_status = 'failed',
+                lease_owner = NULL,
+                leased_at = NULL,
+                last_error = 'worker crashed after durable failure classification',
+                updated_at = '2026-05-14T17:03:00Z'
+            WHERE message_key = 'queue:system::failed'
+            "#,
+            [],
+        )?;
+
+        let summary = scan_core_state_machine_violations(&conn, 100)?;
+        let without_transition = summary
+            .get("rule_matched_without_core_transition")
+            .and_then(Value::as_u64)
+            .unwrap_or_default();
+        let rejected = summary
+            .get("rejected")
+            .and_then(Value::as_u64)
+            .unwrap_or_default();
+        let rework_core: i64 = conn.query_row(
+            r#"
+            SELECT COUNT(*)
+            FROM ctox_pm_core_transition_audit
+            WHERE rule_id = 'communication-routing-state'
+              AND from_state = 'Leased'
+              AND to_state = 'ReworkRequired'
+              AND accepted = 1
+            "#,
+            [],
+            |row| row.get(0),
+        )?;
+        let failed_core: i64 = conn.query_row(
+            r#"
+            SELECT COUNT(*)
+            FROM ctox_pm_core_transition_audit
+            WHERE rule_id = 'communication-routing-state'
+              AND from_state = 'Leased'
+              AND to_state = 'Failed'
+              AND accepted = 1
+            "#,
+            [],
+            |row| row.get(0),
+        )?;
+
+        assert_eq!(without_transition, 0, "{summary}");
+        assert_eq!(rejected, 0, "{summary}");
+        assert_eq!(rework_core, 1);
+        assert_eq!(failed_core, 1);
         Ok(())
     }
 
