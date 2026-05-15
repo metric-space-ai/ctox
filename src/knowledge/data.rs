@@ -713,7 +713,11 @@ pub(super) fn validate_identifier(label: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn required_flag<'a>(args: &'a [String], flag: &str, usage: &'static str) -> Result<&'a str> {
+pub(super) fn required_flag<'a>(
+    args: &'a [String],
+    flag: &str,
+    usage: &'static str,
+) -> Result<&'a str> {
     find_flag(args, flag).with_context(|| format!("missing {flag}. usage: {usage}"))
 }
 
@@ -727,8 +731,11 @@ pub(super) fn now_rfc3339() -> String {
 }
 
 pub(super) fn print_json(value: &Value) -> Result<()> {
-    println!("{}", serde_json::to_string_pretty(value)?);
-    Ok(())
+    // Delegate to the namespace-level sink so capture-mode (used by the
+    // daemon IPC handler) intercepts the write instead of stdout. Keeping
+    // this thin wrapper preserves the existing `pub(super)` import path
+    // from `ops.rs` without a sweeping refactor of every callsite.
+    crate::knowledge::print_json(value)
 }
 
 const USAGE_CREATE: &str =

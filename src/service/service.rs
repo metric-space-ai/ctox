@@ -307,6 +307,14 @@ enum ServiceIpcRequest {
     ScrapeApi {
         path: String,
     },
+    /// Execute a `ctox knowledge data …` subcommand inside the daemon
+    /// process. The CLI routes through here when the daemon is running so
+    /// SQLite writes happen in the daemon (which holds a stable connection)
+    /// rather than in a sandboxed agent-subshell CLI process (which has
+    /// macOS Seatbelt restrictions that quietly drop the writes).
+    KnowledgeData {
+        argv: Vec<String>,
+    },
 }
 
 #[cfg(unix)]
@@ -1558,6 +1566,60 @@ pub fn submit_chat_prompt(root: &Path, prompt: &str) -> Result<()> {
     submit_chat_prompt_with_thread_key(root, prompt, None)
 }
 
+/// Entry point for `ctox knowledge data …` from the CLI.
+///
+/// If the daemon is reachable on its Unix socket, route the request to it
+/// so the SQLite write is committed by the daemon process. This matters
+/// because the CLI may be invoked from a sandboxed agent subshell (macOS
+/// Seatbelt), where direct SQLite writes can be silently dropped during
+/// sandbox teardown even though the call returns exit 0.
+///
+/// If the daemon is not running (offline CLI use), fall back to direct
+/// in-process dispatch so `ctox knowledge data` remains usable for manual
+/// debugging.
+pub fn run_knowledge_data(root: &Path, argv: &[String]) -> Result<()> {
+    #[cfg(unix)]
+    {
+        let socket_path = service_socket_path(root);
+        if socket_path.exists() {
+            match send_service_ipc_request(
+                root,
+                ServiceIpcRequest::KnowledgeData {
+                    argv: argv.to_vec(),
+                },
+            ) {
+                Ok(ServiceIpcResponse::Json { payload, .. }) => {
+                    println!("{}", serde_json::to_string_pretty(&payload)?);
+                    let ok = payload
+                        .get("ok")
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(true);
+                    if ok {
+                        return Ok(());
+                    }
+                    let message = payload
+                        .get("error")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("knowledge command reported ok=false")
+                        .to_string();
+                    anyhow::bail!(message);
+                }
+                Ok(ServiceIpcResponse::Error { message }) => {
+                    anyhow::bail!("daemon rejected knowledge request: {message}");
+                }
+                Ok(_) => {
+                    // Unexpected response shape; fall through to direct dispatch.
+                }
+                Err(_) => {
+                    // Socket exists but daemon is unreachable (likely a
+                    // stale socket); fall through to direct dispatch.
+                }
+            }
+        }
+    }
+    crate::knowledge::handle_knowledge_command(root, argv)
+}
+
 /// Operator-supplied outbound-email intent attached to a chat submission.
 ///
 /// When present, the agent's reply will be routed through the reviewed
@@ -1917,6 +1979,21 @@ fn handle_service_ipc_request(
         ServiceIpcRequest::ScrapeApi { path } => {
             let (status, payload) = resolve_scrape_api_payload(root, &path)?;
             Ok(ServiceIpcResponse::Json { status, payload })
+        }
+        ServiceIpcRequest::KnowledgeData { argv } => {
+            // Dispatch the knowledge subcommand inside the daemon process so
+            // the SQLite write is committed by the long-lived daemon's
+            // connection — not by a sandboxed CLI subprocess that may have
+            // its writes silently discarded on sandbox teardown.
+            match crate::knowledge::dispatch_capturing(root, &argv) {
+                Ok(payload) => Ok(ServiceIpcResponse::Json {
+                    status: 200,
+                    payload,
+                }),
+                Err(err) => Ok(ServiceIpcResponse::Error {
+                    message: err.to_string(),
+                }),
+            }
         }
     }
 }
@@ -2426,6 +2503,9 @@ fn service_ipc_timeout(request: &ServiceIpcRequest) -> Duration {
         ServiceIpcRequest::ScrapeApi { .. } => Duration::from_millis(750),
         ServiceIpcRequest::ChatSubmit { .. } => Duration::from_secs(10),
         ServiceIpcRequest::Stop => Duration::from_secs(2),
+        // Knowledge writes hit Polars + Parquet; bulk imports can run for
+        // seconds even on modest tables. 30s is conservative.
+        ServiceIpcRequest::KnowledgeData { .. } => Duration::from_secs(30),
     }
 }
 

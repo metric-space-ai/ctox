@@ -490,7 +490,7 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
         Some("jami-daemon") => {
             communication::jami_native::handle_daemon_command(&root, &args[1..])
         }
-        Some("knowledge") => knowledge::handle_knowledge_command(&root, &args[1..]),
+        Some("knowledge") => service::run_knowledge_data(&root, &args[1..]),
         Some("meeting") => {
             communication::meeting_native::handle_meeting_command(&root, &args[1..])
         }
