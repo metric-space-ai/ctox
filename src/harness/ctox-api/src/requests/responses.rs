@@ -46,13 +46,17 @@ fn response_item_history_id(item: &ResponseItem, index: usize) -> Option<String>
     match item {
         ResponseItem::FunctionCallOutput { call_id, .. }
         | ResponseItem::CustomToolCallOutput { call_id, .. } => {
-            Some(format!("fc_output_{}", response_id_component(call_id)))
+            // OpenAI Responses API requires function-call-output IDs to begin
+            // with `ctco`. The legacy `fc_output_*` prefix was rejected with
+            // `invalid_value` once a conversation accumulated enough turns
+            // for the synthesized history IDs to be sent back.
+            Some(format!("ctco_{}", response_id_component(call_id)))
         }
         ResponseItem::ToolSearchOutput {
             call_id: Some(call_id),
             ..
-        } => Some(format!("fc_output_{}", response_id_component(call_id))),
-        ResponseItem::ToolSearchOutput { call_id: None, .. } => Some(format!("fc_output_{index}")),
+        } => Some(format!("ctco_{}", response_id_component(call_id))),
+        ResponseItem::ToolSearchOutput { call_id: None, .. } => Some(format!("ctco_{index}")),
         _ => None,
     }
 }
@@ -117,7 +121,7 @@ mod tests {
         attach_item_ids(&mut body, &items);
 
         assert_eq!(body["input"][0]["id"], "fc_123");
-        assert_eq!(body["input"][1]["id"], "fc_output_call_123");
+        assert_eq!(body["input"][1]["id"], "ctco_call_123");
         assert_eq!(body["input"][2]["id"], "msg_123");
     }
 }
