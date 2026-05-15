@@ -94,7 +94,7 @@ OPEN_ITEMS:
 - <concrete rework item>
 PIPELINE_RESOLUTION: action=new_task|update_existing|merge_duplicate|extend_scope|no_action_needed|blocked_needs_clarification | target=<queue/plan/ticket/self-work id or none> | rationale="<why this resolves the latest communication>"
 EVIDENCE:
-- <check> => <observed result>
+- source=reviewer|worker|external | method=read_file|stat_file|run_command|db_query|live_check|communication_check|claim|log|validator | target=<path, command, record, surface, or system> | result=<observed result>
 HANDOFF:
 - <only when another review run should continue; otherwise write "none">
 
@@ -107,7 +107,9 @@ CATEGORIZED_FINDINGS contract:
 PASS_PROOF contract:
 - direct means you directly inspected the required artifact, durable state, live surface, or communication record against the assignment
 - for workspace artifacts, direct means the inspection was performed in the current Workspace root from this assignment; artifacts from other runs or workspaces are stale evidence
+- direct evidence must identify the reviewer as source and the method used; prefer `source=reviewer | method=read_file|stat_file|run_command|db_query|live_check|communication_check | target=... | result=...`
 - trusted_external means an immutable validator, accepted send proof, or external system of record proves the result
+- trusted external evidence must identify the external validator or system of record; prefer `source=external | method=validator | target=... | result=...`
 - workspace_local means the positive proof is only a worker-owned workspace script/test/log such as run-tests.sh, pytest, or notes written in the task workspace
 - prose_only means the positive proof is only the worker's written claim
 - none means no positive proof was available
@@ -1068,7 +1070,7 @@ OPEN_ITEMS:\n\
 - <concrete rework item>\n\
 PIPELINE_RESOLUTION: action=new_task|update_existing|merge_duplicate|extend_scope|no_action_needed|blocked_needs_clarification | target=<queue/plan/ticket/self-work id or none> | rationale=\"<why this resolves the latest communication>\"\n\
 EVIDENCE:\n\
-- <check> => <observed result>\n\
+- source=reviewer|worker|external | method=read_file|stat_file|run_command|db_query|live_check|communication_check|claim|log|validator | target=<path, command, record, surface, or system> | result=<observed result>\n\
 HANDOFF:\n\
 - <only when another review run should continue; otherwise write \"none\">\n\
 DISPOSITION: SEND|NO_SEND\n\
@@ -1076,6 +1078,7 @@ DISPOSITION: SEND|NO_SEND\n\
 The CATEGORIZED_FINDINGS block is the structural input the dispatcher uses to choose between the lightweight rewrite path (body wording / subject / tonality fixes), the heavy rework loop (durable state changes, missing artefacts, evidence gaps), and stale refresh handling (new inbound/world state made the prior draft obsolete or in need of consolidation). Read the review skill section on Finding categories before assigning.\n\
 \n\
 PASS_PROOF is a structural trust boundary. Emit `direct` only when you inspected the required artifact, durable state, live surface, or communication record yourself against the assignment. Emit `trusted_external` only when an immutable validator, accepted send proof, or external system of record proves the result. Emit `workspace_local` when the only positive proof is a worker-owned workspace script/test/log such as run-tests.sh or pytest. Emit `prose_only` for worker claims. Emit `none` when no positive proof exists. A PASS without `direct` or `trusted_external` is invalid.\n\
+EVIDENCE is also structural. Prefer pipe-delimited fields: `source=reviewer|worker|external | method=read_file|stat_file|run_command|db_query|live_check|communication_check|claim|log|validator | target=... | result=...`. Reviewer-owned `run_command` evidence is direct only when the reviewer executed the command in the reviewed workspace or target runtime and reports the command target plus observed result. Worker-owned command logs remain workspace_local, not direct.\n\
 \n\
 DISPOSITION is the structural terminal flag: emit `NO_SEND` only when the current task is closed without sending anything (the correct action is to wait for external inputs, the user already received the answer elsewhere, the task was a duplicate, etc.). Default is `SEND` — used for every PASS verdict and for FAIL verdicts that should drive a rewrite or rework loop. The dispatcher reads this enum directly; do not encode the no-send signal as free-text in the summary or findings.\n",
         conversation_id = request.conversation_id,
@@ -1186,7 +1189,7 @@ OPEN_ITEMS:\n\
 - <concrete rework item or \"none\">\n\
 PIPELINE_RESOLUTION: action=new_task|update_existing|merge_duplicate|extend_scope|no_action_needed|blocked_needs_clarification | target=<queue/plan/ticket/self-work id or none> | rationale=\"<why this resolves the latest communication>\"\n\
 EVIDENCE:\n\
-- <check> => <observed result>\n\
+- source=reviewer|worker|external | method=read_file|stat_file|run_command|db_query|live_check|communication_check|claim|log|validator | target=<path, command, record, surface, or system> | result=<observed result>\n\
 HANDOFF:\n\
 - none\n\
 DISPOSITION: SEND|NO_SEND\n",
@@ -1382,20 +1385,32 @@ fn classify_pass_evidence(report: &str, evidence: &[String]) -> PassEvidenceClas
         }
         saw_evidence = true;
         let lowered = line.to_ascii_lowercase();
+        if evidence_line_is_structured_trusted_external(&lowered) {
+            class.trusted_external = true;
+            continue;
+        }
+        if evidence_line_is_structured_reviewer_direct(&lowered) {
+            class.direct = true;
+            continue;
+        }
+        if evidence_line_is_structured_worker_owned(&lowered) {
+            class.workspace_local = true;
+            continue;
+        }
         if evidence_line_is_trusted_external(&lowered) {
             class.trusted_external = true;
             continue;
         }
-        if evidence_line_is_worker_owned_local(&lowered) {
-            class.workspace_local = true;
+        if evidence_line_is_direct_inspection(&lowered) {
+            class.direct = true;
             continue;
         }
         if evidence_line_is_prose_only(&lowered) {
             class.prose_only = true;
             continue;
         }
-        if evidence_line_is_direct_inspection(&lowered) {
-            class.direct = true;
+        if evidence_line_is_worker_owned_local(&lowered) {
+            class.workspace_local = true;
         } else {
             class.prose_only = true;
         }
@@ -1404,6 +1419,59 @@ fn classify_pass_evidence(report: &str, evidence: &[String]) -> PassEvidenceClas
         class.prose_only = true;
     }
     class
+}
+
+fn evidence_line_is_structured_trusted_external(line: &str) -> bool {
+    structured_field_equals(line, "source", "external")
+        && contains_any(
+            line,
+            &[
+                "method=validator",
+                "method=external_validator",
+                "method=system_of_record",
+                "method=send_proof",
+                "method=ci_check",
+            ],
+        )
+}
+
+fn evidence_line_is_structured_reviewer_direct(line: &str) -> bool {
+    structured_field_equals(line, "source", "reviewer")
+        && contains_any(
+            line,
+            &[
+                "method=read_file",
+                "method=stat_file",
+                "method=run_command",
+                "method=db_query",
+                "method=live_check",
+                "method=communication_check",
+                "method=inspect_artifact",
+                "method=inspect_record",
+            ],
+        )
+}
+
+fn evidence_line_is_structured_worker_owned(line: &str) -> bool {
+    structured_field_equals(line, "source", "worker")
+        || contains_any(line, &["method=claim", "method=log", "method=worker_log"])
+}
+
+fn structured_field_equals(line: &str, key: &str, value: &str) -> bool {
+    line.split('|').any(|segment| {
+        let segment = segment.trim();
+        let Some((observed_key, observed_value)) = segment.split_once('=') else {
+            return false;
+        };
+        observed_key.trim().eq_ignore_ascii_case(key)
+            && observed_value
+                .trim()
+                .trim_matches('"')
+                .split_whitespace()
+                .next()
+                .map(|token| token.eq_ignore_ascii_case(value))
+                .unwrap_or(false)
+    })
 }
 
 fn evidence_line_is_trusted_external(line: &str) -> bool {
@@ -1472,6 +1540,27 @@ fn evidence_line_is_prose_only(line: &str) -> bool {
 }
 
 fn evidence_line_is_direct_inspection(line: &str) -> bool {
+    if contains_any(
+        line,
+        &[
+            "reviewer ran ",
+            "reviewer executed ",
+            "reviewer inspected ",
+            "reviewer read ",
+            "i ran ",
+            "i executed ",
+            "i inspected ",
+            "i read ",
+            "verified by direct inspection",
+            "directly inspected",
+            "direct inspection",
+            "direct runtime inspection",
+            "direct workspace inspection",
+            "current workspace inspection",
+        ],
+    ) {
+        return true;
+    }
     contains_any(
         line,
         &[
@@ -2252,6 +2341,24 @@ mod tests {
 
         assert_eq!(outcome.verdict, ReviewVerdict::Pass);
         assert_eq!(outcome.evidence.len(), 1);
+        assert!(!outcome.requires_follow_up());
+    }
+
+    #[test]
+    fn required_pass_with_structured_reviewer_command_evidence_stays_pass() {
+        let report = "VERDICT: PASS\nMISSION_STATE: HEALTHY\nSUMMARY: reviewer verified the workspace.\nPASS_PROOF: direct\nEVIDENCE:\n- source=reviewer | method=run_command | target=bash run-tests.sh | result=exit 0 and required artifacts match the assignment\nDISPOSITION: SEND\n";
+        let outcome = parse_review_report(4, vec!["runtime_or_infra_change".to_string()], report);
+
+        assert_eq!(outcome.verdict, ReviewVerdict::Pass);
+        assert!(!outcome.requires_follow_up());
+    }
+
+    #[test]
+    fn required_pass_with_reviewer_direct_command_phrase_stays_pass() {
+        let report = "VERDICT: PASS\nMISSION_STATE: HEALTHY\nSUMMARY: reviewer verified the workspace.\nPASS_PROOF: direct\nEVIDENCE:\n- I ran bash run-tests.sh in the current workspace and inspected the required output file; all acceptance checks passed\nDISPOSITION: SEND\n";
+        let outcome = parse_review_report(4, vec!["runtime_or_infra_change".to_string()], report);
+
+        assert_eq!(outcome.verdict, ReviewVerdict::Pass);
         assert!(!outcome.requires_follow_up());
     }
 

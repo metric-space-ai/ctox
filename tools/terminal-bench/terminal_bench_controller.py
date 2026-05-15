@@ -459,7 +459,37 @@ def run_replay_validation(
     return result
 
 
-def validation_for_not_ready(route_status: str) -> dict[str, Any]:
+def classify_ctox_route_failure(route: dict[str, Any]) -> tuple[str, str]:
+    error = (route.get("last_error") or "").lower()
+    if not error:
+        return "model_failed", "ctox_route_failed"
+
+    review_protocol_markers = [
+        "pass_proof was rejected",
+        "reviewer pass_proof was not supported",
+        "review pass was rejected because",
+        "review report did not contain an explicit verdict",
+        "completion review could not finish",
+        "review stayed unavailable",
+        "finite retry budget was exhausted",
+        "direct session error",
+        "contextwindowexceeded",
+        "context window",
+        "terminal failure requires a durable",
+        "missing failure_reason",
+        "missing failure_class",
+    ]
+    if any(marker in error for marker in review_protocol_markers):
+        return "infra_failed", "ctox_review_protocol_failed"
+
+    if "failed to re-queue" in error or "core-transition" in error:
+        return "infra_failed", "ctox_core_transition_failed"
+
+    return "model_failed", "ctox_route_failed"
+
+
+def validation_for_not_ready(route: dict[str, Any]) -> dict[str, Any]:
+    route_status = route["route_status"]
     status_map = {
         "pending": "not_started",
         "leased": "in_progress",
@@ -473,10 +503,15 @@ def validation_for_not_ready(route_status: str) -> dict[str, Any]:
         "failed": "ctox_route_failed",
         "cancelled": "ctox_route_cancelled",
     }
+    if route_status == "failed":
+        validation_status, failure_mode = classify_ctox_route_failure(route)
+    else:
+        validation_status = status_map.get(route_status, "not_ready")
+        failure_mode = failure_mode_map.get(route_status, "")
     return {
-        "validation_status": status_map.get(route_status, "not_ready"),
+        "validation_status": validation_status,
         "is_resolved": None,
-        "failure_mode": failure_mode_map.get(route_status, ""),
+        "failure_mode": failure_mode,
         "parser_results": None,
         "tb_results_path": "",
         "validated_at": "",
@@ -502,7 +537,7 @@ def build_ledger(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[s
                 prune_before=args.prune_before_validate,
             )
         else:
-            validation = validation_for_not_ready(route["route_status"])
+            validation = validation_for_not_ready(route)
         ledger.append(
             {
                 "run_id": args.run_id,
