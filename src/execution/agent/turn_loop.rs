@@ -424,19 +424,19 @@ where
         turn_engine::assess_compaction_guard(&decision, compaction_result.as_ref());
     emit(&format!("compaction-guard {}", compaction_guard.summary));
     emit("snapshot-context");
-    let snapshot = engine.snapshot(conversation_id)?;
-    let continuity = engine.continuity_show_all(conversation_id)?;
-    let mission_state = engine.mission_state(conversation_id)?;
-    let mission_assurance = engine.mission_assurance_snapshot(conversation_id)?;
-    let forgotten_entries = engine.continuity_forgotten(conversation_id, None, None)?;
-    let health = context_health::assess_with_forgotten(
+    let mut snapshot = engine.snapshot(conversation_id)?;
+    let mut continuity = engine.continuity_show_all(conversation_id)?;
+    let mut mission_state = engine.mission_state(conversation_id)?;
+    let mut mission_assurance = engine.mission_assurance_snapshot(conversation_id)?;
+    let mut forgotten_entries = engine.continuity_forgotten(conversation_id, None, None)?;
+    let mut health = context_health::assess_with_forgotten(
         &snapshot,
         &continuity,
         &forgotten_entries,
         prompt,
         config.max_context_tokens,
     );
-    let governance_snapshot =
+    let mut governance_snapshot =
         governance::prompt_snapshot(root, conversation_id).unwrap_or_default();
     emit(&format!(
         "context-health {} {}",
@@ -454,37 +454,93 @@ where
         &health,
         suggested_skill,
     )?;
-    let current_prompt = prompt.trim();
-    let latest_empty = rendered_prompt.latest_user_prompt.trim().is_empty();
-    let missing_current_prompt =
-        !current_prompt.is_empty() && !rendered_prompt.prompt.contains(current_prompt);
-    if latest_empty || missing_current_prompt {
-        emit(&format!(
-            "context-selection fallback-current-prompt latest_empty={} missing_current={}",
-            latest_empty, missing_current_prompt
-        ));
-        rendered_prompt.prompt = render_current_prompt_fallback(&rendered_prompt.prompt, prompt);
-        rendered_prompt.latest_user_prompt = prompt.to_string();
-    }
-    if rendered_context_empty_with_existing_history(
+    ensure_rendered_prompt_is_invocable(
         &snapshot,
-        rendered_prompt.rendered_context_items,
-    ) {
-        anyhow::bail!(
-            "context_selection_empty: refusing model invocation because LCM history exists but no context evidence rendered"
-        );
-    }
-    if health.status == context_health::ContextHealthStatus::Critical
-        && critical_context_selection_is_empty(&rendered_prompt)
-    {
-        anyhow::bail!(
-            "context_selection_empty_critical: refusing model invocation because context health is critical and no context evidence rendered"
-        );
-    }
+        &mut rendered_prompt,
+        prompt,
+        &health,
+        &mut emit,
+    )?;
     emit(&format!(
         "context-selection rendered={} omitted={}",
         rendered_prompt.rendered_context_items, rendered_prompt.omitted_context_items
     ));
+    for exact_preflight_round in 0..=2 {
+        let Some(count) =
+            super::direct_session::exact_prompt_token_count(root, &rendered_prompt.prompt)?
+        else {
+            break;
+        };
+        let safe_budget =
+            super::direct_session::exact_prompt_safe_input_budget(count.context_limit);
+        emit(&format!(
+            "exact-token-preflight round={} tokens={} safe_budget={} context={} source={}",
+            exact_preflight_round, count.tokens, safe_budget, count.context_limit, count.source
+        ));
+        if count.tokens <= safe_budget {
+            break;
+        }
+        if exact_preflight_round >= 2 {
+            anyhow::bail!(
+                "context_preflight_exact_overflow: exact rendered prompt tokens {} exceed safe input budget {} for context window {} after {} LCM compaction rounds via {}",
+                count.tokens,
+                safe_budget,
+                count.context_limit,
+                exact_preflight_round,
+                count.source
+            );
+        }
+        emit("exact-token-preflight-compaction-run");
+        let result = engine.compact(
+            conversation_id,
+            config.max_context_tokens,
+            &lcm::HeuristicSummarizer,
+            true,
+        )?;
+        emit(&format!(
+            "exact-token-preflight-compaction-result before={} after={} rounds={} created={}",
+            result.tokens_before,
+            result.tokens_after,
+            result.rounds,
+            result.created_summary_ids.len()
+        ));
+        compaction_result = Some(result);
+        snapshot = engine.snapshot(conversation_id)?;
+        continuity = engine.continuity_show_all(conversation_id)?;
+        mission_state = engine.mission_state(conversation_id)?;
+        mission_assurance = engine.mission_assurance_snapshot(conversation_id)?;
+        forgotten_entries = engine.continuity_forgotten(conversation_id, None, None)?;
+        health = context_health::assess_with_forgotten(
+            &snapshot,
+            &continuity,
+            &forgotten_entries,
+            prompt,
+            config.max_context_tokens,
+        );
+        governance_snapshot =
+            governance::prompt_snapshot(root, conversation_id).unwrap_or_default();
+        rendered_prompt = live_context::render_runtime_prompt(
+            root,
+            &snapshot,
+            &continuity,
+            &mission_state,
+            &mission_assurance,
+            &governance_snapshot,
+            &health,
+            suggested_skill,
+        )?;
+        ensure_rendered_prompt_is_invocable(
+            &snapshot,
+            &mut rendered_prompt,
+            prompt,
+            &health,
+            &mut emit,
+        )?;
+        emit(&format!(
+            "context-selection rendered={} omitted={}",
+            rendered_prompt.rendered_context_items, rendered_prompt.omitted_context_items
+        ));
+    }
     let turn_start_ts = current_rfc3339_timestamp();
     emit("invoke-model");
     let reply = match session.as_deref_mut() {
@@ -632,6 +688,43 @@ fn clip_for_log(value: &str, max_chars: usize) -> String {
         .collect::<String>();
     clipped.push('…');
     clipped
+}
+
+fn ensure_rendered_prompt_is_invocable(
+    snapshot: &lcm::LcmSnapshot,
+    rendered_prompt: &mut live_context::RenderedRuntimePrompt,
+    prompt: &str,
+    health: &context_health::ContextHealthSnapshot,
+    emit: &mut dyn FnMut(&str),
+) -> Result<()> {
+    let current_prompt = prompt.trim();
+    let latest_empty = rendered_prompt.latest_user_prompt.trim().is_empty();
+    let missing_current_prompt =
+        !current_prompt.is_empty() && !rendered_prompt.prompt.contains(current_prompt);
+    if latest_empty || missing_current_prompt {
+        emit(&format!(
+            "context-selection fallback-current-prompt latest_empty={} missing_current={}",
+            latest_empty, missing_current_prompt
+        ));
+        rendered_prompt.prompt = render_current_prompt_fallback(&rendered_prompt.prompt, prompt);
+        rendered_prompt.latest_user_prompt = prompt.to_string();
+    }
+    if rendered_context_empty_with_existing_history(
+        snapshot,
+        rendered_prompt.rendered_context_items,
+    ) {
+        anyhow::bail!(
+            "context_selection_empty: refusing model invocation because LCM history exists but no context evidence rendered"
+        );
+    }
+    if health.status == context_health::ContextHealthStatus::Critical
+        && critical_context_selection_is_empty(rendered_prompt)
+    {
+        anyhow::bail!(
+            "context_selection_empty_critical: refusing model invocation because context health is critical and no context evidence rendered"
+        );
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -999,13 +1092,6 @@ pub fn hard_runtime_blocker_retry_cooldown_secs(content: &str) -> Option<u64> {
         || lower.contains("no context evidence rendered")
         || lower.contains("mid-task compaction failed")
         || lower.contains("failed to parse structured compaction response")
-        || lower.contains("exceed_context_size_error")
-        || lower.contains("contextwindowexceeded")
-        || lower.contains("context window exceeded")
-        || lower.contains("ran out of room in the model's context window")
-        || lower.contains("context_length_exceeded")
-        || lower.contains("input exceeds the context window")
-        || lower.contains("exceeds the available context size")
     {
         return Some(60);
     }

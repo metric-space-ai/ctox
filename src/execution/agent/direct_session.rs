@@ -6,6 +6,7 @@
 // (main turn + continuity refreshes) reuse the same client and thread.
 
 use anyhow::{Context, Result};
+use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -51,6 +52,8 @@ const OPENAI_AUTH_MODE_CHATGPT_SUBSCRIPTION: &str = "chatgpt_subscription";
 const DIRECT_SESSION_CONTROL_REQUEST_TIMEOUT_SECS: u64 = 5;
 const DIRECT_SESSION_MIDTASK_COMPACT_TIMEOUT_SECS: u64 = 90;
 const DIRECT_SESSION_INTERRUPT_TIMEOUT_SECS: u64 = 2;
+const EXACT_PROMPT_SAFE_INPUT_BUDGET_NUMERATOR: i64 = 3;
+const EXACT_PROMPT_SAFE_INPUT_BUDGET_DENOMINATOR: i64 = 4;
 const CTOX_DIRECT_SESSION_BASE_INSTRUCTIONS: &str = r#"You are an agent working inside CTOX.
 
 Complete a work step only when the required durable outcome exists in CTOX runtime state. A final answer, summary, note file, or statement such as "sent", "done", or "closed" is not evidence by itself.
@@ -64,6 +67,96 @@ If an API, provider, tool, or runtime call fails or is rate-limited, do not clai
 When review feedback is returned, continue the same main work step whenever possible. Do not create review-driven self-work or subtask cascades. Spawn a new task only for a distinct bounded work step, and include a clear parent or thread anchor.
 
 Use plain English in your own reasoning and replies. Do not expose internal source-code labels when a normal phrase is clearer; for example, say "work step" or "agent run" instead of "slice"."#;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ExactPromptTokenCount {
+    pub tokens: i64,
+    pub context_limit: i64,
+    pub source: String,
+}
+
+pub(crate) fn exact_prompt_safe_input_budget(context_limit: i64) -> i64 {
+    if context_limit <= 0 {
+        return 1;
+    }
+    context_limit
+        .saturating_mul(EXACT_PROMPT_SAFE_INPUT_BUDGET_NUMERATOR)
+        .checked_div(EXACT_PROMPT_SAFE_INPUT_BUDGET_DENOMINATOR)
+        .unwrap_or(1)
+        .max(1)
+}
+
+pub(crate) fn exact_prompt_token_count(
+    root: &Path,
+    text: &str,
+) -> Result<Option<ExactPromptTokenCount>> {
+    let kernel = runtime_kernel::InferenceRuntimeKernel::resolve(root)
+        .context("failed to resolve runtime kernel for exact token preflight")?;
+    if !kernel.state.source.is_local() {
+        return Ok(None);
+    }
+    let binding = kernel.primary_generation.as_ref().context(
+        "exact token preflight unavailable: local runtime has no primary generation binding",
+    )?;
+    let base_url = if binding.base_url.trim().is_empty() {
+        format!("http://127.0.0.1:{}", binding.port)
+    } else {
+        binding.base_url.trim().trim_end_matches('/').to_string()
+    };
+    let tokens = count_llama_tokenize_endpoint(&base_url, text).with_context(|| {
+        format!(
+            "exact token preflight failed via {} for {}",
+            base_url, binding.request_model
+        )
+    })?;
+    Ok(Some(ExactPromptTokenCount {
+        tokens,
+        context_limit: kernel.turn_context_tokens(),
+        source: format!("{} /tokenize", binding.request_model),
+    }))
+}
+
+fn count_llama_tokenize_endpoint(base_url: &str, text: &str) -> Result<i64> {
+    let endpoint = format!("{}/tokenize", base_url.trim_end_matches('/'));
+    let body = serde_json::json!({
+        "content": text,
+        "add_special": false,
+        "with_pieces": false,
+    })
+    .to_string();
+    let response = ureq::post(&endpoint)
+        .set("Content-Type", "application/json")
+        .timeout(Duration::from_secs(30))
+        .send_string(&body);
+    let response = response.map_err(|err| anyhow::anyhow!("POST {endpoint}: {err}"))?;
+    let response_body = response
+        .into_string()
+        .map_err(|err| anyhow::anyhow!("read {endpoint} response: {err}"))?;
+    parse_tokenize_count(&response_body)
+}
+
+fn parse_tokenize_count(body: &str) -> Result<i64> {
+    let value: JsonValue =
+        serde_json::from_str(body).context("failed to parse tokenizer response JSON")?;
+    if let Some(tokens) = value.get("tokens").and_then(JsonValue::as_array) {
+        return Ok(tokens.len() as i64);
+    }
+    for key in ["n_tokens", "token_count", "count"] {
+        if let Some(count) = value.get(key).and_then(JsonValue::as_i64) {
+            if count >= 0 {
+                return Ok(count);
+            }
+        }
+    }
+    anyhow::bail!("tokenizer response did not contain tokens/n_tokens/token_count/count")
+}
+
+fn escape_json_fragment(value: &str) -> String {
+    serde_json::to_string(value)
+        .unwrap_or_else(|_| "\"\"".to_string())
+        .trim_matches('"')
+        .to_string()
+}
 
 fn compose_base_instructions(extra: Option<&str>) -> String {
     match extra.map(str::trim).filter(|value| !value.is_empty()) {
@@ -751,6 +844,30 @@ impl PersistentSession {
         let thread_id = thread_resp.thread.id;
         eprintln!("[ctox direct-session] new thread for turn: {}", thread_id);
 
+        let preflight_text = format!("{base_instructions}\n\n{prompt}");
+        if let Some(count) = exact_prompt_token_count(root, &preflight_text)? {
+            let safe_budget = exact_prompt_safe_input_budget(count.context_limit);
+            ctx_log.log(
+                "exact_prompt_preflight",
+                &format!(
+                    "\"tokens\":{},\"safe_budget\":{},\"context_limit\":{},\"source\":\"{}\"",
+                    count.tokens,
+                    safe_budget,
+                    count.context_limit,
+                    escape_json_fragment(&count.source)
+                ),
+            );
+            if count.tokens > safe_budget {
+                anyhow::bail!(
+                    "context_preflight_exact_overflow: exact prompt tokens {} exceed safe input budget {} for context window {} via {}",
+                    count.tokens,
+                    safe_budget,
+                    count.context_limit,
+                    count.source
+                );
+            }
+        }
+
         // TurnStart
         let turn_resp: TurnStartResponse = client
             .request_typed(ClientRequest::TurnStart {
@@ -1140,6 +1257,28 @@ mod tests {
         let instructions = compose_base_instructions(Some("Act as the external reviewer."));
         assert!(instructions.contains("required durable outcome exists"));
         assert!(instructions.contains("Act as the external reviewer."));
+    }
+
+    #[test]
+    fn exact_prompt_budget_keeps_generation_headroom() {
+        assert_eq!(exact_prompt_safe_input_budget(131_072), 98_304);
+        assert_eq!(exact_prompt_safe_input_budget(1), 1);
+        assert_eq!(exact_prompt_safe_input_budget(0), 1);
+    }
+
+    #[test]
+    fn tokenizer_response_parser_accepts_llama_tokens_array() {
+        assert_eq!(
+            parse_tokenize_count(r#"{"tokens":[1,2,3],"pieces":[]}"#).unwrap(),
+            3
+        );
+    }
+
+    #[test]
+    fn tokenizer_response_parser_accepts_count_fields() {
+        assert_eq!(parse_tokenize_count(r#"{"n_tokens":42}"#).unwrap(), 42);
+        assert_eq!(parse_tokenize_count(r#"{"token_count":17}"#).unwrap(), 17);
+        assert_eq!(parse_tokenize_count(r#"{"count":9}"#).unwrap(), 9);
     }
 
     #[test]
