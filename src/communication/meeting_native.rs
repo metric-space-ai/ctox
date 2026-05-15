@@ -1478,7 +1478,7 @@ fn run_mistral_realtime_probe(
             "CTOX_MISTRAL_REALTIME_STT_MODEL",
             &config.realtime_stt_model,
         )
-        .env("CTOX_MISTRAL_REALTIME_DELAY_MS", "600")
+        .env("CTOX_MISTRAL_REALTIME_DELAY_MS", "1800")
         .env("CTOX_MISTRAL_REALTIME_PCM_CHUNK_BYTES", "4096")
         .output()
         .context("failed to run Mistral realtime probe")?;
@@ -1544,7 +1544,7 @@ from mistralai.client.models import AudioFormat
 pcm_path = sys.argv[1]
 api_key = os.environ.get("CTOX_MISTRAL_API_KEY") or os.environ.get("MISTRAL_API_KEY")
 model = os.environ.get("CTOX_MISTRAL_REALTIME_STT_MODEL", "voxtral-mini-transcribe-realtime-2602")
-delay_ms = int(os.environ.get("CTOX_MISTRAL_REALTIME_DELAY_MS", "600"))
+delay_ms = int(os.environ.get("CTOX_MISTRAL_REALTIME_DELAY_MS", "1800"))
 chunk_bytes = int(os.environ.get("CTOX_MISTRAL_REALTIME_PCM_CHUNK_BYTES", "4096"))
 client = Mistral(api_key=api_key)
 started = time.monotonic()
@@ -3401,6 +3401,31 @@ if (provider === "microsoft") {
       sequence: 0,
     };
     const compact = (value) => String(value || "").replace(/\s+/g, " ").trim();
+    const normalizeRealtimeText = (value) => {
+      let text = compact(value)
+        .replace(/\s+([,.;:!?])/g, "$1")
+        .replace(/([(\[{])\s+/g, "$1")
+        .replace(/\s+([)\]}])/g, "$1")
+        .replace(/\b(K)\s+(I)\b/g, "KI")
+        .replace(/\b(B)\s+(W)\s+(L)\b/g, "BWL")
+        .replace(/\b(gu)\s+(cken)\b/gi, "$1$2")
+        .replace(/\b(ma)\s+(chen)\b/gi, "$1$2")
+        .replace(/\b(nach)\s+(machen|bauen|weisen)\b/gi, "$1$2")
+        .replace(/\b(um)\s+(satz)\b/gi, "$1$2")
+        .replace(/\b(invest)\s+(or|oren)\b/gi, "$1$2")
+        .replace(/\b(techn)\s+(ologie)\b/gi, "$1$2")
+        .replace(/\b(strateg)\s+(ie)\b/gi, "$1$2")
+        .replace(/\b(sach)\s+(en)\b/gi, "$1$2")
+        .replace(/\b(mahn)\s+(ung)\b/gi, "$1$2")
+        .replace(/\b(bezahl)\s+(t)\b/gi, "$1$2")
+        .replace(/\b(funktion)\s+(iert|ieren)\b/gi, "$1$2")
+        .replace(/\b(tät)\s+(igkeiten?)\b/gi, "$1$2")
+        .replace(/\b(personal)\s+(kosten|vermittler)\b/gi, "$1$2")
+        .replace(/\b([A-Za-zÄÖÜäöüß]{3,})\s+(ung|keit|heit|lich|tion|sion|ologie|ieren|iert|igkeiten?|oren|erin|er|en)\b/g, "$1$2")
+        .replace(/\b(\d)\s+(\d)\s*\.\s+(\d)\b/g, "$1$2.$3")
+        .replace(/\b(\d)\s+(\d)\s+(\d)\b/g, "$1$2$3");
+      return compact(text);
+    };
     const displaySourceLabel = (entry) => entry.live ? "aktueller Satz" : "bestätigt";
     const wrapLine = (ctx, text, maxWidth) => {
       const words = compact(text).split(" ").filter(Boolean);
@@ -3508,7 +3533,7 @@ if (provider === "microsoft") {
       return compact(`${previous} ${next}`);
     };
     window.__ctoxTranscriptOverlayPush = (text, speaker, source = "realtime_stt") => {
-      const clean = compact(text);
+      const clean = source === "realtime_stt" ? normalizeRealtimeText(text) : compact(text);
       if (!clean || /^(sending|message sent)$/i.test(clean)) return;
       if (source === "chat") return;
       if (source === "platform_caption") return;
@@ -3539,7 +3564,7 @@ if (provider === "microsoft") {
       state.updatedAt = now;
     };
     window.__ctoxTranscriptOverlayLive = (text, speaker) => {
-      const clean = compact(text);
+      const clean = normalizeRealtimeText(text);
       if (!clean) return;
       const now = Date.now();
       state.liveEntry = {
@@ -3554,7 +3579,7 @@ if (provider === "microsoft") {
       state.updatedAt = now;
     };
     window.__ctoxTranscriptOverlayCommit = (text, speaker) => {
-      const clean = compact(text);
+      const clean = normalizeRealtimeText(text);
       if (!clean) return;
       state.liveEntry = null;
       window.__ctoxTranscriptOverlayPush(clean, speaker, "realtime_stt");
@@ -3949,6 +3974,37 @@ const visibleNode = (el) => {
 };
 
 const compactText = (value) => String(value || "").replace(/\s+/g, " ").trim();
+const normalizeRealtimeSttText = (value) => {
+  let text = compactText(value)
+    .replace(/\s+([,.;:!?])/g, "$1")
+    .replace(/([(\[{])\s+/g, "$1")
+    .replace(/\s+([)\]}])/g, "$1")
+    .replace(/\b(K)\s+(I)\b/g, "KI")
+    .replace(/\b(B)\s+(W)\s+(L)\b/g, "BWL")
+    .replace(/\b(gu)\s+(cken)\b/gi, "$1$2")
+    .replace(/\b(ma)\s+(chen)\b/gi, "$1$2")
+    .replace(/\b(nach)\s+(machen|bauen|weisen)\b/gi, "$1$2")
+    .replace(/\b(um)\s+(satz)\b/gi, "$1$2")
+    .replace(/\b(invest)\s+(or|oren)\b/gi, "$1$2")
+    .replace(/\b(techn)\s+(ologie)\b/gi, "$1$2")
+    .replace(/\b(strateg)\s+(ie)\b/gi, "$1$2")
+    .replace(/\b(sach)\s+(en)\b/gi, "$1$2")
+    .replace(/\b(mahn)\s+(ung)\b/gi, "$1$2")
+    .replace(/\b(bezahl)\s+(t)\b/gi, "$1$2")
+    .replace(/\b(funktion)\s+(iert|ieren)\b/gi, "$1$2")
+    .replace(/\b(tät)\s+(igkeiten?)\b/gi, "$1$2")
+    .replace(/\b(personal)\s+(kosten|vermittler)\b/gi, "$1$2")
+    .replace(/\b([A-Za-zÄÖÜäöüß]{3,})\s+(ung|keit|heit|lich|tion|sion|ologie|ieren|iert|igkeiten?|oren|erin|er|en)\b/g, "$1$2")
+    .replace(/\b(\d)\s+(\d)\s*\.\s+(\d)\b/g, "$1$2.$3")
+    .replace(/\b(\d)\s+(\d)\s+(\d)\b/g, "$1$2$3");
+  return compactText(text);
+};
+const fragmentedRealtimeScore = (value) => {
+  const text = compactText(value);
+  if (!text) return 0;
+  const hits = text.match(/\b[A-Za-zÄÖÜäöüß]{1,3}\s+[A-Za-zÄÖÜäöüß]{1,4}\b/g) || [];
+  return hits.length;
+};
 const cleanSpeakerName = (value) => {
   let name = compactText(value)
     .replace(/\b(is speaking|speaking|active speaker|current speaker|spricht|aktueller sprecher)\b/ig, "")
@@ -4656,7 +4712,7 @@ if not api_key:
     sys.exit(3)
 
 model = os.environ.get("CTOX_MISTRAL_REALTIME_STT_MODEL", "voxtral-mini-transcribe-realtime-2602")
-delay_ms = int(os.environ.get("CTOX_MISTRAL_REALTIME_DELAY_MS", "600"))
+delay_ms = int(os.environ.get("CTOX_MISTRAL_REALTIME_DELAY_MS", "1800"))
 chunk_bytes = int(os.environ.get("CTOX_MISTRAL_REALTIME_PCM_CHUNK_BYTES", "8192"))
 client = Mistral(api_key=api_key)
 audio_eof = False
@@ -4762,8 +4818,8 @@ asyncio.run(main())
   let realtimeDeltaSeen = false;
   let realtimeNoTextTimer = null;
   const mergeRealtimeDelta = (previous, next) => {
-    previous = compactText(previous);
-    next = compactText(next);
+    previous = normalizeRealtimeSttText(previous);
+    next = normalizeRealtimeSttText(next);
     if (!previous) return next;
     if (!next) return previous;
     if (next === previous || previous.endsWith(next)) return previous;
@@ -4776,10 +4832,10 @@ asyncio.run(main())
         return compactText(`${previous} ${nextWords.slice(size).join(" ")}`);
       }
     }
-    return compactText(`${previous} ${next}`);
+    return normalizeRealtimeSttText(`${previous} ${next}`);
   };
   const updateRealtimeLive = () => {
-    const text = compactText(realtimeBuffer);
+    const text = normalizeRealtimeSttText(realtimeBuffer);
     if (!text) return;
     const speaker = currentDirectSpeaker || "unknown";
     page.evaluate(({ text, speaker }) => {
@@ -4787,10 +4843,18 @@ asyncio.run(main())
     }, { text, speaker }).catch(() => {});
   };
   const flushRealtimeBuffer = () => {
-    const text = compactText(realtimeBuffer);
+    const raw = compactText(realtimeBuffer);
+    const text = normalizeRealtimeSttText(raw);
     realtimeBuffer = "";
     realtimeFlushTimer = null;
     if (!text) return;
+    if (fragmentedRealtimeScore(text) >= 4 && text.split(/\s+/).length < 18) {
+      page.evaluate(() => {
+        window.__ctoxTranscriptOverlaySetStatus?.("Realtime-STT stabilisiert Sprache");
+      }).catch(() => {});
+      emit({ type: "warning", message: "Dropped unstable realtime STT fragment instead of persisting broken transcript text" });
+      return;
+    }
     const speaker = currentDirectSpeaker || "unknown";
     page.evaluate(({ text, speaker }) => {
       window.__ctoxTranscriptOverlayCommit?.(text, speaker);
@@ -7962,7 +8026,7 @@ mod tests {
         );
         assert!(
             teams_script.contains("target_streaming_delay_ms=delay_ms")
-                && teams_script.contains("\"600\"")
+                && teams_script.contains("\"1800\"")
                 && teams_script.contains("\"8192\""),
             "Teams realtime STT should use a low-latency streaming configuration"
         );
