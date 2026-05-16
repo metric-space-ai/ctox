@@ -1091,13 +1091,6 @@ const emit = async (payload) => {{
 }};
 
 const {{ chromium, firefox, webkit }} = await import("patchright");
-const launchOptions = {{
-  headless: true,
-  ignoreDefaultArgs: ["--enable-automation", "--enable-unsafe-swiftshader"],
-}};
-if (fallbackExecutable) {{
-  launchOptions.executablePath = fallbackExecutable;
-}}
 const defaultUserAgent = (() => {{
   switch (process.platform) {{
     case "darwin":
@@ -1108,10 +1101,29 @@ const defaultUserAgent = (() => {{
       return "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36";
   }}
 }})();
+const launchOptions = {{
+  headless: true,
+  ignoreDefaultArgs: ["--enable-automation", "--enable-unsafe-swiftshader"],
+  args: [`--user-agent=${{defaultUserAgent}}`],
+}};
+if (fallbackExecutable) {{
+  launchOptions.executablePath = fallbackExecutable;
+}}
+const defaultClientHints = (() => {{
+  let platform = '"Linux"';
+  if (process.platform === "darwin") platform = '"macOS"';
+  else if (process.platform === "win32") platform = '"Windows"';
+  return {{
+    "Sec-CH-UA": '"Chromium";v="146", "Google Chrome";v="146", "Not.A/Brand";v="24"',
+    "Sec-CH-UA-Mobile": "?0",
+    "Sec-CH-UA-Platform": platform,
+  }};
+}})();
 const contextOptions = {{
   viewport: {{ width: 1920, height: 947 }},
   userAgent: defaultUserAgent,
   locale: "en-US",
+  extraHTTPHeaders: defaultClientHints,
 }};
 
 const profileDir = path.join(process.cwd(), ".ctox-browser-profile");

@@ -42,6 +42,7 @@ const STEALTH_LAUNCH_ARGS = [
   '--mute-audio',
 ];
 
+
 // JS-property evasions live in a sibling stealth_init.js, loaded below via
 // addInitScript({ path }). Patchright handles the structural CDP leaks;
 // stealth_init.js handles the userland navigator/window/WebGL surface.
@@ -143,6 +144,17 @@ function defaultUserAgent() {
   }
 }
 
+function defaultClientHints() {
+  let platform = '"Linux"';
+  if (process.platform === 'darwin') platform = '"macOS"';
+  else if (process.platform === 'win32') platform = '"Windows"';
+  return {
+    'Sec-CH-UA': '"Chromium";v="146", "Google Chrome";v="146", "Not.A/Brand";v="24"',
+    'Sec-CH-UA-Mobile': '?0',
+    'Sec-CH-UA-Platform': platform,
+  };
+}
+
 (async () => {
   const cfg = await readStdinJson();
   const log = [];
@@ -156,15 +168,17 @@ function defaultUserAgent() {
   const acceptLanguageLang = language.split('-')[0].toLowerCase();
   const langs = [language, acceptLanguageLang, 'en-US', 'en'];
 
+  const launchUserAgent = cfg.userAgent || defaultUserAgent();
   const ctx = await chromium.launchPersistentContext(cfg.stateDir, {
     headless: cfg.headless !== false,
-    args: STEALTH_LAUNCH_ARGS,
+    args: [...STEALTH_LAUNCH_ARGS, `--user-agent=${launchUserAgent}`],
     ignoreDefaultArgs: ['--enable-automation', '--enable-unsafe-swiftshader'],
     locale: language,
     timezoneId: cfg.timezoneId || 'Europe/Berlin',
     colorScheme: 'dark',
     viewport: { width: 1920, height: 947 },
     userAgent: cfg.userAgent || defaultUserAgent(),
+    extraHTTPHeaders: defaultClientHints(),
     permissions: ['geolocation', 'notifications'],
     isMobile: false,
     hasTouch: false,

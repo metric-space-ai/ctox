@@ -282,4 +282,64 @@
       });
     }
   } catch {}
+
+  // ──────────────────────────────────────────────────────────────────────
+  // navigator.userAgentData — JS-side counterpart to Sec-CH-UA headers.
+  // Headless Chromium reports brands like "HeadlessChrome" here; replace
+  // with a vanilla Chrome 146 brand triple, mobile=false, platform derived
+  // from navigator.platform. The accompanying HTTP headers are set on the
+  // context via extraHTTPHeaders in the runner so JS and HTTP align.
+  // ──────────────────────────────────────────────────────────────────────
+  try {
+    const platRaw = (navigator.platform || '').toLowerCase();
+    let uaPlatform = 'Linux';
+    if (platRaw.includes('mac')) uaPlatform = 'macOS';
+    else if (platRaw.includes('win')) uaPlatform = 'Windows';
+    const brands = [
+      { brand: 'Chromium', version: '146' },
+      { brand: 'Google Chrome', version: '146' },
+      { brand: 'Not.A/Brand', version: '24' },
+    ];
+    const fullVersionList = [
+      { brand: 'Chromium', version: '146.0.7680.177' },
+      { brand: 'Google Chrome', version: '146.0.7680.177' },
+      { brand: 'Not.A/Brand', version: '24.0.0.0' },
+    ];
+    const uad = {
+      brands,
+      mobile: false,
+      platform: uaPlatform,
+      getHighEntropyValues: asNative('getHighEntropyValues', function (hints) {
+        const data = {
+          architecture: uaPlatform === 'macOS' ? 'arm' : 'x86',
+          bitness: '64',
+          brands,
+          fullVersionList,
+          mobile: false,
+          model: '',
+          platform: uaPlatform,
+          platformVersion: uaPlatform === 'macOS' ? '14.7.0' : (uaPlatform === 'Windows' ? '15.0.0' : '6.5.0'),
+          uaFullVersion: '146.0.7680.177',
+          wow64: false,
+          formFactors: ['Desktop'],
+        };
+        const out = {};
+        if (Array.isArray(hints)) {
+          for (const h of hints) if (h in data) out[h] = data[h];
+        }
+        // brands/mobile/platform are always present per spec.
+        out.brands = brands;
+        out.mobile = false;
+        out.platform = uaPlatform;
+        return Promise.resolve(out);
+      }),
+      toJSON: asNative('toJSON', function () {
+        return { brands, mobile: false, platform: uaPlatform };
+      }),
+    };
+    Object.defineProperty(Navigator.prototype, 'userAgentData', {
+      get: asNative('get userAgentData', () => uad),
+      configurable: true,
+    });
+  } catch {}
 })();
