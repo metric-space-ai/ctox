@@ -146,7 +146,9 @@
 
     const pluginArray = Object.create(PluginArray.prototype);
     Object.defineProperty(pluginArray, 'length', { get: () => fakePlugins.length });
-    pluginArray.item = asNative('item', (i) => fakePlugins[i] || null);
+    // Real Chrome truncates index to uint32 (i >>> 0). incolumitas overflowTest
+    // probes item(2**32) and expects it to equal plugins[0].
+    pluginArray.item = asNative('item', (i) => fakePlugins[i >>> 0] || null);
     pluginArray.namedItem = asNative('namedItem', (n) => fakePlugins.find((p) => p.name === n) || null);
     pluginArray.refresh = asNative('refresh', () => {});
     for (let i = 0; i < fakePlugins.length; i += 1) pluginArray[i] = fakePlugins[i];
@@ -154,7 +156,7 @@
 
     const mimeTypeArray = Object.create(MimeTypeArray.prototype);
     Object.defineProperty(mimeTypeArray, 'length', { get: () => fakeMimeTypes.length });
-    mimeTypeArray.item = asNative('item', (i) => fakeMimeTypes[i] || null);
+    mimeTypeArray.item = asNative('item', (i) => fakeMimeTypes[i >>> 0] || null);
     mimeTypeArray.namedItem = asNative('namedItem', (n) => fakeMimeTypes.find((m) => m.type === n) || null);
     for (let i = 0; i < fakeMimeTypes.length; i += 1) mimeTypeArray[i] = fakeMimeTypes[i];
     mimeTypeArray[Symbol.iterator] = function* () { for (const m of fakeMimeTypes) yield m; };
@@ -167,6 +169,19 @@
       get: asNative('get mimeTypes', () => mimeTypeArray),
       configurable: true,
     });
+  } catch {}
+
+  // ──────────────────────────────────────────────────────────────────────
+  // Notification.permission — headless reports 'denied' by default; real
+  // Chrome on a fresh profile reports 'default' (= prompt user on demand)
+  // ──────────────────────────────────────────────────────────────────────
+  try {
+    if (typeof Notification !== 'undefined' && Notification.permission === 'denied') {
+      Object.defineProperty(Notification, 'permission', {
+        get: asNative('get permission', () => 'default'),
+        configurable: true,
+      });
+    }
   } catch {}
 
   // ──────────────────────────────────────────────────────────────────────
@@ -185,6 +200,32 @@
         return originalQuery.apply(navigator.permissions, [params]);
       });
       navigator.permissions.query = patched;
+    }
+  } catch {}
+
+  // ──────────────────────────────────────────────────────────────────────
+  // document.hasFocus / window blur — headless reports false; real focus
+  // is the default state. Patches are mild and only affect read tells.
+  // ──────────────────────────────────────────────────────────────────────
+  try {
+    const origHasFocus = document.hasFocus;
+    document.hasFocus = asNative('hasFocus', function () {
+      try {
+        return origHasFocus.call(document) || true;
+      } catch { return true; }
+    });
+  } catch {}
+
+  // ──────────────────────────────────────────────────────────────────────
+  // navigator.vibrate — must exist on Chrome (function, returns true/false)
+  // ──────────────────────────────────────────────────────────────────────
+  try {
+    if (typeof navigator.vibrate !== 'function') {
+      Object.defineProperty(Navigator.prototype, 'vibrate', {
+        value: asNative('vibrate', function () { return true; }),
+        configurable: true,
+        writable: true,
+      });
     }
   } catch {}
 
@@ -284,28 +325,27 @@
   } catch {}
 
   // ──────────────────────────────────────────────────────────────────────
-  // navigator.connection — headless often reports rtt=0 or empty object.
-  // A realistic desktop network: 4g, ~50ms rtt, ~10mbps downlink.
+  // navigator.connection — headless commonly reports rtt=0 (a strong tell
+  // since headed Chrome rounds to nearest 25ms with privacy budget, and
+  // 0 means "unmeasured"). We override unconditionally because the value
+  // may flip to 0 after init-time depending on background measurements.
   // ──────────────────────────────────────────────────────────────────────
   try {
-    const conn = navigator.connection;
-    if (!conn || conn.rtt === 0 || conn.rtt === undefined) {
-      const fake = {
-        rtt: 50,
-        downlink: 10,
-        effectiveType: '4g',
-        saveData: false,
-        type: 'wifi',
-        onchange: null,
-        addEventListener: asNative('addEventListener', () => {}),
-        removeEventListener: asNative('removeEventListener', () => {}),
-        dispatchEvent: asNative('dispatchEvent', () => true),
-      };
-      Object.defineProperty(Navigator.prototype, 'connection', {
-        get: asNative('get connection', () => fake),
-        configurable: true,
-      });
-    }
+    const fakeConn = {
+      rtt: 50,
+      downlink: 10,
+      effectiveType: '4g',
+      saveData: false,
+      type: 'wifi',
+      onchange: null,
+      addEventListener: asNative('addEventListener', () => {}),
+      removeEventListener: asNative('removeEventListener', () => {}),
+      dispatchEvent: asNative('dispatchEvent', () => true),
+    };
+    Object.defineProperty(Navigator.prototype, 'connection', {
+      get: asNative('get connection', () => fakeConn),
+      configurable: true,
+    });
   } catch {}
 
   // ──────────────────────────────────────────────────────────────────────
