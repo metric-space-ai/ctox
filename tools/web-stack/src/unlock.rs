@@ -134,9 +134,23 @@ fn ensure_schema(conn: &Connection) -> Result<()> {
             created_at TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS web_unlock_signals (
+            signal_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            detected_at TEXT NOT NULL,
+            source TEXT NOT NULL,
+            probe_url TEXT,
+            evidence_json TEXT,
+            resolved INTEGER NOT NULL DEFAULT 0,
+            resolved_at TEXT,
+            resolved_by_repair_id INTEGER,
+            notes TEXT
+        );
+
         CREATE INDEX IF NOT EXISTS idx_web_unlock_vectors_probe ON web_unlock_vectors(probe_id);
         CREATE INDEX IF NOT EXISTS idx_web_unlock_vectors_status ON web_unlock_vectors(status);
         CREATE INDEX IF NOT EXISTS idx_web_unlock_test_runs_probe_time ON web_unlock_test_runs(probe_id, executed_at);
+        CREATE INDEX IF NOT EXISTS idx_web_unlock_signals_resolved ON web_unlock_signals(resolved, detected_at);
+        CREATE INDEX IF NOT EXISTS idx_web_unlock_signals_source ON web_unlock_signals(source);
         "#,
     )
     .context("failed to create web_unlock_* schema")
@@ -468,6 +482,23 @@ pub fn handle_unlock_command(root: &Path, args: &[String]) -> Result<()> {
                 }
             }
         }
+        "signals" => {
+            let action = args.get(1).map(String::as_str).unwrap_or("list");
+            match action {
+                "list" => cmd_signals_list(root, &args[1..]),
+                "resolve" => cmd_signals_resolve(root, &args[1..]),
+                "record" => cmd_signals_record(root, &args[1..]),
+                "help" | "-h" | "--help" => {
+                    print_signals_usage();
+                    Ok(())
+                }
+                _ => {
+                    eprintln!("unknown signals action: {action}\n");
+                    print_signals_usage();
+                    std::process::exit(2);
+                }
+            }
+        }
         _ => {
             eprintln!("unknown subcommand: {sub}\n");
             print_usage();
@@ -495,6 +526,25 @@ fn print_usage() {
     println!("                                 Mark a vector's current status");
     println!("  repair <start|complete|list>");
     println!("                                 Manage repair attempts (see `repair help`)");
+    println!("  signals <list|resolve|record>");
+    println!("                                 Detection signals logged by the runners");
+    println!("                                 (see `signals help`)");
+}
+
+fn print_signals_usage() {
+    println!("ctox web unlock signals <action>");
+    println!();
+    println!("Actions:");
+    println!("  list [--unresolved] [--source <name>] [--limit N]");
+    println!("                                 Show recent detection signals (CAPTCHAs,");
+    println!("                                 Cloudflare challenges, etc.) logged by the");
+    println!("                                 web-search and browser-automation runners.");
+    println!("  resolve --id <signal_id> [--repair <repair_id>] [--notes <text>]");
+    println!("                                 Mark a signal resolved, optionally linking the");
+    println!("                                 repair that fixed it.");
+    println!("  record --source <name> [--url <url>] [--evidence <json>]");
+    println!("                                 Manual signal entry — for skills emitting");
+    println!("                                 their own detection observations.");
 }
 
 fn print_repair_usage() {
@@ -773,6 +823,187 @@ fn cmd_set_vector_status(root: &Path, args: &[String]) -> Result<()> {
         anyhow::bail!("no vector with id {vector_id}");
     }
     println!("{}", serde_json::to_string_pretty(&json!({"ok": true, "vector_id": vector_id, "status": status}))?);
+    Ok(())
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Signals — call sites in web_search/browser-automation log a detection
+// signal whenever they see a CAPTCHA, Cloudflare challenge, /sorry/index,
+// or empty-result regression. The skill (or the operator) reviews unresolved
+// signals and triggers a repair flow that resolves them.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Lossy signal recorder — never fails the caller. If the DB is unreachable
+/// or the schema is missing, the signal is silently dropped. This matches
+/// the lossy semantics of other CTOX evidence recorders (harness flow etc.).
+///
+/// The `source` identifier should be short and stable (e.g. "google_search",
+/// "browser_automation", "web_scrape"). `probe_url` is the URL that triggered
+/// the signal, `evidence` is arbitrary JSON.
+pub fn record_signal_lossy(root: &Path, source: &str, probe_url: Option<&str>, evidence: Value) {
+    let _ = (|| -> Result<()> {
+        let conn = open_db(root)?;
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO web_unlock_signals
+             (detected_at, source, probe_url, evidence_json, resolved)
+             VALUES (?1, ?2, ?3, ?4, 0)",
+            params![now, source, probe_url, evidence.to_string()],
+        )?;
+        Ok(())
+    })();
+}
+
+/// Strict signal recorder — returns Err if the write fails. Use when the
+/// caller specifically wants to know whether the persist succeeded.
+pub fn record_signal(
+    conn: &Connection,
+    source: &str,
+    probe_url: Option<&str>,
+    evidence: Value,
+) -> Result<i64> {
+    let now = Utc::now().to_rfc3339();
+    conn.execute(
+        "INSERT INTO web_unlock_signals
+         (detected_at, source, probe_url, evidence_json, resolved)
+         VALUES (?1, ?2, ?3, ?4, 0)",
+        params![now, source, probe_url, evidence.to_string()],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub fn resolve_signal(
+    conn: &Connection,
+    signal_id: i64,
+    repair_id: Option<i64>,
+    notes: Option<&str>,
+) -> Result<()> {
+    let now = Utc::now().to_rfc3339();
+    let updated = conn.execute(
+        "UPDATE web_unlock_signals
+         SET resolved = 1, resolved_at = ?1, resolved_by_repair_id = ?2,
+             notes = COALESCE(?3, notes)
+         WHERE signal_id = ?4",
+        params![now, repair_id, notes, signal_id],
+    )?;
+    if updated == 0 {
+        anyhow::bail!("no signal with id {signal_id}");
+    }
+    Ok(())
+}
+
+fn cmd_signals_list(root: &Path, args: &[String]) -> Result<()> {
+    let unresolved_only = args.iter().any(|a| a == "--unresolved");
+    let source_filter = find_flag(args, "--source");
+    let limit = find_flag_u64(args, "--limit").unwrap_or(50);
+    let conn = open_db(root)?;
+    let map = |r: &rusqlite::Row| -> rusqlite::Result<Value> {
+        let resolved: i64 = r.get(5)?;
+        let evidence_raw: Option<String> = r.get(4)?;
+        let evidence = evidence_raw
+            .as_deref()
+            .and_then(|s| serde_json::from_str::<Value>(s).ok())
+            .unwrap_or(Value::Null);
+        Ok(json!({
+            "signal_id": r.get::<_, i64>(0)?,
+            "detected_at": r.get::<_, String>(1)?,
+            "source": r.get::<_, String>(2)?,
+            "probe_url": r.get::<_, Option<String>>(3)?,
+            "evidence": evidence,
+            "resolved": resolved != 0,
+            "resolved_at": r.get::<_, Option<String>>(6)?,
+            "resolved_by_repair_id": r.get::<_, Option<i64>>(7)?,
+            "notes": r.get::<_, Option<String>>(8)?,
+        }))
+    };
+    let select = "SELECT signal_id, detected_at, source, probe_url, evidence_json,
+                         resolved, resolved_at, resolved_by_repair_id, notes
+                  FROM web_unlock_signals";
+    let rows: Vec<Value> = match (unresolved_only, source_filter) {
+        (true, Some(src)) => {
+            let mut stmt = conn.prepare(&format!(
+                "{} WHERE resolved = 0 AND source = ?1 ORDER BY signal_id DESC LIMIT ?2",
+                select
+            ))?;
+            let collected = stmt
+                .query_map(params![src, limit as i64], map)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            collected
+        }
+        (true, None) => {
+            let mut stmt = conn.prepare(&format!(
+                "{} WHERE resolved = 0 ORDER BY signal_id DESC LIMIT ?1",
+                select
+            ))?;
+            let collected = stmt
+                .query_map(params![limit as i64], map)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            collected
+        }
+        (false, Some(src)) => {
+            let mut stmt = conn.prepare(&format!(
+                "{} WHERE source = ?1 ORDER BY signal_id DESC LIMIT ?2",
+                select
+            ))?;
+            let collected = stmt
+                .query_map(params![src, limit as i64], map)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            collected
+        }
+        (false, None) => {
+            let mut stmt = conn.prepare(&format!(
+                "{} ORDER BY signal_id DESC LIMIT ?1",
+                select
+            ))?;
+            let collected = stmt
+                .query_map(params![limit as i64], map)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            collected
+        }
+    };
+    println!("{}", serde_json::to_string_pretty(&rows)?);
+    Ok(())
+}
+
+fn cmd_signals_resolve(root: &Path, args: &[String]) -> Result<()> {
+    let signal_id_raw = find_flag(args, "--id").context("--id required")?;
+    let signal_id: i64 = signal_id_raw
+        .parse()
+        .with_context(|| format!("--id must be integer, got `{signal_id_raw}`"))?;
+    let repair_id = find_flag(args, "--repair").and_then(|v| v.parse::<i64>().ok());
+    let notes = find_flag(args, "--notes");
+    let conn = open_db(root)?;
+    resolve_signal(&conn, signal_id, repair_id, notes)?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "ok": true,
+            "signal_id": signal_id,
+            "resolved_by_repair_id": repair_id,
+        }))?
+    );
+    Ok(())
+}
+
+fn cmd_signals_record(root: &Path, args: &[String]) -> Result<()> {
+    let source = find_flag(args, "--source").context("--source required")?;
+    let probe_url = find_flag(args, "--url");
+    let evidence_raw = find_flag(args, "--evidence");
+    let evidence: Value = match evidence_raw {
+        Some(s) => serde_json::from_str(s)
+            .with_context(|| format!("--evidence must be JSON, got `{s}`"))?,
+        None => Value::Object(Default::default()),
+    };
+    let conn = open_db(root)?;
+    let signal_id = record_signal(&conn, source, probe_url, evidence)?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "ok": true,
+            "signal_id": signal_id,
+            "source": source,
+        }))?
+    );
     Ok(())
 }
 
@@ -1142,7 +1373,7 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(count, 4);
+        assert_eq!(count, 5);
     }
 
     fn seeded_in_memory_db() -> Connection {
@@ -1228,6 +1459,72 @@ mod tests {
         let err = close_repair(&conn, 9_999_999, true, None, None).unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("no repair with id"));
+    }
+
+    #[test]
+    fn record_signal_persists_row() {
+        let conn = seeded_in_memory_db();
+        let id = record_signal(
+            &conn,
+            "google_search",
+            Some("https://www.google.com/sorry/index"),
+            json!({"reason": "captcha", "query": "test"}),
+        )
+        .unwrap();
+        assert!(id > 0);
+        let count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM web_unlock_signals WHERE signal_id = ?1 AND resolved = 0",
+                params![id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn resolve_signal_marks_resolved_and_links_repair() {
+        let conn = seeded_in_memory_db();
+        let signal_id = record_signal(
+            &conn,
+            "google_search",
+            Some("https://www.google.com/sorry/index"),
+            json!({"reason": "captcha"}),
+        )
+        .unwrap();
+        let repair_id =
+            open_repair(&conn, "navigator-webdriver-exists", None, "fix captcha", None).unwrap();
+        resolve_signal(&conn, signal_id, Some(repair_id), Some("captcha addressed")).unwrap();
+        let row: (i64, Option<i64>, Option<String>) = conn
+            .query_row(
+                "SELECT resolved, resolved_by_repair_id, notes
+                 FROM web_unlock_signals WHERE signal_id = ?1",
+                params![signal_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(row.0, 1);
+        assert_eq!(row.1, Some(repair_id));
+        assert_eq!(row.2.as_deref(), Some("captcha addressed"));
+    }
+
+    #[test]
+    fn resolve_signal_missing_id_errors() {
+        let conn = seeded_in_memory_db();
+        let err = resolve_signal(&conn, 9_999_999, None, None).unwrap_err();
+        assert!(format!("{err}").contains("no signal with id"));
+    }
+
+    #[test]
+    fn record_signal_lossy_does_not_panic_on_bad_root() {
+        // Path under /dev/null shouldn't exist; lossy should swallow the error.
+        let bad_root = std::path::Path::new("/dev/null/never");
+        record_signal_lossy(
+            bad_root,
+            "test_source",
+            None,
+            json!({}),
+        );
     }
 
     #[test]

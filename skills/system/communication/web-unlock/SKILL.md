@@ -45,14 +45,15 @@ See `references/patch-locations.md` for line-level pointers.
 
 ## Central registry — SQLite-backed `ctox web unlock` CLI
 
-All probe configuration, vector knowledge, and test-run history is persisted in the consolidated runtime database (`runtime/ctox.sqlite3`) under four tables:
+All probe configuration, vector knowledge, test-run history, repair attempts, and live detection signals are persisted in the consolidated runtime database (`runtime/ctox.sqlite3`) under five tables:
 
 | Table | Purpose |
 |---|---|
 | `web_unlock_probes` | Registered detection-site probes (id, url, script path, parser, timeout, enabled) |
 | `web_unlock_vectors` | Known detection vectors with their fix-strategy, status (working/broken/untested), and last-verified timestamp |
 | `web_unlock_test_runs` | Append-only history of every recorded run (probe_id, executed_at, duration, pass/fail, failed tests) |
-| `web_unlock_repairs` | Recorded repair attempts (reserved for future auto-repair workflow) |
+| `web_unlock_repairs` | Repair attempts — start/complete lifecycle, with linked vector_id and resulting commit |
+| `web_unlock_signals` | Live detection-signal log emitted by the production runners (web search, browser automation) when they hit a CAPTCHA, Cloudflare challenge, `/sorry/index`, or unexpectedly empty result |
 
 Schema and seed are written on first use. The seed lives at `tools/web-stack/assets/web_unlock_seed.json` and is embedded into the `ctox` binary via `include_str!`. To extend or override the seed, edit that JSON file and rebuild.
 
@@ -72,6 +73,11 @@ ctox web unlock repair start --vector <vid> [--run-id <n>] [--notes <text>]
 ctox web unlock repair complete --id <repair_id> (--succeeded | --failed) \
     [--commit <sha>] [--notes <text>]
 ctox web unlock repair list [--status <pending|succeeded|failed>] [--limit N]
+
+# Signal log
+ctox web unlock signals list [--unresolved] [--source <name>] [--limit N]
+ctox web unlock signals resolve --id <signal_id> [--repair <repair_id>] [--notes <text>]
+ctox web unlock signals record --source <name> [--url <url>] [--evidence <json>]
 ```
 
 `baseline` returns structured JSON with one entry per probe (`passed_baseline`, `failed_tests`, `duration_ms`, `notes`, `run_id`, `opened_repairs`). Exit code is non-zero if any probe regressed — directly usable in maintenance loops and pre-commit checks. `--record` persists each run to `web_unlock_test_runs` for trend analysis. `--auto-repair` additionally opens pending `web_unlock_repairs` rows for any known vector whose `test_name` matches a failed test under the same probe.
@@ -98,6 +104,38 @@ On success, the vector flips back to `working`, `last_verified_at` is updated, t
 `repair list [--status pending|succeeded|failed]` is the trend query — useful for "what's still broken right now" and for retrospectives.
 
 The `baseline --auto-repair` flag combines the two: if a probe regresses, matching vectors are converted to pending repairs in the same call, ready for the agent to pick up.
+
+### Live detection signals (the unsolicited path)
+
+Production runners log a `web_unlock_signals` row whenever they observe a real-world bot-detection symptom — independent of the periodic baseline probes. Today's hooks:
+
+- **`google_search`** (in `tools/web-stack/src/web_search.rs`) writes a signal when:
+  - the runner returns `error` matching `/captcha|sorry|consent/i`
+  - the final URL is `/sorry/` or `/recaptcha`
+  - `ok=true` but the result set is empty
+  
+  Source name: `google_search`. Evidence carries the query, final URL, title, error string, and result count.
+
+- Other runners (`browser_automation`, `web_scrape`, …) can write their own observations using the `record_signal_lossy(root, source, probe_url, evidence)` helper. Lossy means a DB-open failure is silently swallowed; the runner never crashes the user's call because of signal-logging trouble.
+
+- Manually from a skill or agent: `ctox web unlock signals record --source <name> --url <url> --evidence '<json>'`.
+
+To respond:
+
+```sh
+# Triage what's pending
+ctox web unlock signals list --unresolved --limit 20
+
+# Open a repair for the matching vector
+ctox web unlock repair start --vector <vid>
+
+# After verifying the fix and committing, close both:
+ctox web unlock repair complete --id <repair_id> --succeeded --commit <sha>
+ctox web unlock signals resolve --id <signal_id> --repair <repair_id> \
+    --notes "fixed in commit <sha>"
+```
+
+The `resolved_by_repair_id` link lets retrospectives answer "which commit fixed the May 16 google-CAPTCHA wave?" without manual cross-referencing.
 
 ## Diagnostic workflow
 

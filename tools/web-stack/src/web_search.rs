@@ -1887,6 +1887,10 @@ fn google_search(
         results: Vec<RunnerHit>,
         #[serde(default)]
         error: Option<String>,
+        #[serde(default, rename = "finalUrl")]
+        final_url: Option<String>,
+        #[serde(default)]
+        title: Option<String>,
     }
 
     let outcome: RunnerOutcome = serde_json::from_slice(&output.stdout).with_context(|| {
@@ -1898,6 +1902,51 @@ fn google_search(
                 .collect::<String>()
         )
     })?;
+
+    // Detection-signal hook: if the runner reports a CAPTCHA, /sorry/index
+    // redirect, consent wall, or simply zero results despite ok=true, log a
+    // web_unlock_signals row so the unlock skill can pick it up.
+    let signal_evidence = |reason: &str| -> serde_json::Value {
+        serde_json::json!({
+            "reason": reason,
+            "query": query.text,
+            "final_url": outcome.final_url,
+            "title": outcome.title,
+            "error": outcome.error,
+            "result_count": outcome.results.len(),
+        })
+    };
+    let probe_url = outcome.final_url.as_deref();
+    if let Some(err) = outcome.error.as_deref() {
+        let lower = err.to_lowercase();
+        if lower.contains("captcha") || lower.contains("/sorry/") || lower.contains("consent") {
+            crate::unlock::record_signal_lossy(
+                root,
+                "google_search",
+                probe_url,
+                signal_evidence(err),
+            );
+        }
+    }
+    if outcome.ok && outcome.results.is_empty() {
+        crate::unlock::record_signal_lossy(
+            root,
+            "google_search",
+            probe_url,
+            signal_evidence("empty_result_set"),
+        );
+    }
+    if let Some(url) = outcome.final_url.as_deref() {
+        if url.contains("/sorry/") || url.contains("/recaptcha") {
+            crate::unlock::record_signal_lossy(
+                root,
+                "google_search",
+                probe_url,
+                signal_evidence("sorry_or_recaptcha_url"),
+            );
+        }
+    }
+
     if !outcome.ok {
         bail!(
             "google browser runner did not return results: {}",
