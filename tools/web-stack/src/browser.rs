@@ -1101,10 +1101,25 @@ const defaultUserAgent = (() => {{
       return "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36";
   }}
 }})();
+// Derive locale from OS so Page (CDP-overridden) and Service/Web Worker
+// (which read OS locale) stay consistent. Anti-bots flag the mismatch.
+// process.env.LANG / LC_ALL on Unix carries the OS locale. Empty env
+// (eg. shells without it) — leave locale unset so Chromium and Worker
+// both pick the OS default and stay aligned.
+const hostLocale = (() => {{
+  const raw = process.env.LC_ALL || process.env.LC_MESSAGES || process.env.LANG || "";
+  const stripped = raw.split(".")[0];
+  if (stripped && stripped.length >= 2) {{
+    return stripped.replace("_", "-");
+  }}
+  return null;
+}})();
+const launchArgs = [`--user-agent=${{defaultUserAgent}}`];
+if (hostLocale) launchArgs.push(`--lang=${{hostLocale}}`);
 const launchOptions = {{
   headless: true,
   ignoreDefaultArgs: ["--enable-automation", "--enable-unsafe-swiftshader"],
-  args: [`--user-agent=${{defaultUserAgent}}`],
+  args: launchArgs,
 }};
 if (fallbackExecutable) {{
   launchOptions.executablePath = fallbackExecutable;
@@ -1122,9 +1137,9 @@ const defaultClientHints = (() => {{
 const contextOptions = {{
   viewport: {{ width: 1920, height: 947 }},
   userAgent: defaultUserAgent,
-  locale: "en-US",
   extraHTTPHeaders: defaultClientHints,
 }};
+if (hostLocale) contextOptions.locale = hostLocale;
 
 const profileDir = path.join(process.cwd(), ".ctox-browser-profile");
 const browser = await chromium.launch(launchOptions);

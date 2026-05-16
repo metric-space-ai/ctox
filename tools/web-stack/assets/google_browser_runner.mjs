@@ -169,9 +169,10 @@ function defaultClientHints() {
   const langs = [language, acceptLanguageLang, 'en-US', 'en'];
 
   const launchUserAgent = cfg.userAgent || defaultUserAgent();
+  const launchLang = (cfg.language || 'de-DE');
   const ctx = await chromium.launchPersistentContext(cfg.stateDir, {
     headless: cfg.headless !== false,
-    args: [...STEALTH_LAUNCH_ARGS, `--user-agent=${launchUserAgent}`],
+    args: [...STEALTH_LAUNCH_ARGS, `--user-agent=${launchUserAgent}`, `--lang=${launchLang}`],
     ignoreDefaultArgs: ['--enable-automation', '--enable-unsafe-swiftshader'],
     locale: language,
     timezoneId: cfg.timezoneId || 'Europe/Berlin',

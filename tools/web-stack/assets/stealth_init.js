@@ -284,6 +284,53 @@
   } catch {}
 
   // ──────────────────────────────────────────────────────────────────────
+  // navigator.connection — headless often reports rtt=0 or empty object.
+  // A realistic desktop network: 4g, ~50ms rtt, ~10mbps downlink.
+  // ──────────────────────────────────────────────────────────────────────
+  try {
+    const conn = navigator.connection;
+    if (!conn || conn.rtt === 0 || conn.rtt === undefined) {
+      const fake = {
+        rtt: 50,
+        downlink: 10,
+        effectiveType: '4g',
+        saveData: false,
+        type: 'wifi',
+        onchange: null,
+        addEventListener: asNative('addEventListener', () => {}),
+        removeEventListener: asNative('removeEventListener', () => {}),
+        dispatchEvent: asNative('dispatchEvent', () => true),
+      };
+      Object.defineProperty(Navigator.prototype, 'connection', {
+        get: asNative('get connection', () => fake),
+        configurable: true,
+      });
+    }
+  } catch {}
+
+  // ──────────────────────────────────────────────────────────────────────
+  // overflow / scrollLeft tells — headless reports inconsistent values on
+  // elements with overflow:hidden. Force consistent zero-clamping so the
+  // incolumitas overflowTest does not flag it.
+  // ──────────────────────────────────────────────────────────────────────
+  try {
+    const originalScrollLeftDesc = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollLeft');
+    if (originalScrollLeftDesc && originalScrollLeftDesc.get && originalScrollLeftDesc.set) {
+      const origGet = originalScrollLeftDesc.get;
+      const origSet = originalScrollLeftDesc.set;
+      Object.defineProperty(Element.prototype, 'scrollLeft', {
+        get: asNative('get scrollLeft', function () { return origGet.call(this); }),
+        set: asNative('set scrollLeft', function (value) {
+          // Clamp to int >= 0 like real Chrome
+          const v = Math.max(0, Math.floor(Number(value) || 0));
+          return origSet.call(this, v);
+        }),
+        configurable: true,
+      });
+    }
+  } catch {}
+
+  // ──────────────────────────────────────────────────────────────────────
   // navigator.userAgentData — JS-side counterpart to Sec-CH-UA headers.
   // Headless Chromium reports brands like "HeadlessChrome" here; replace
   // with a vanilla Chrome 146 brand triple, mobile=false, platform derived
