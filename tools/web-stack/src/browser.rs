@@ -1098,8 +1098,20 @@ const launchOptions = {{
 if (fallbackExecutable) {{
   launchOptions.executablePath = fallbackExecutable;
 }}
+const defaultUserAgent = (() => {{
+  switch (process.platform) {{
+    case "darwin":
+      return "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36";
+    case "win32":
+      return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36";
+    default:
+      return "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36";
+  }}
+}})();
 const contextOptions = {{
   viewport: {{ width: 1920, height: 947 }},
+  userAgent: defaultUserAgent,
+  locale: "en-US",
 }};
 
 const profileDir = path.join(process.cwd(), ".ctox-browser-profile");
