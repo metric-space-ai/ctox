@@ -3610,6 +3610,7 @@ fn context_debug_line(app: &App, width: usize) -> Line<'static> {
             compact_debug_size(breakdown.system_prompt_chars)
         ),
         format!("state {}", compact_debug_size(breakdown.continuity_chars())),
+        format!("strat {}", compact_debug_size(breakdown.strategy_chars)),
         format!(
             "evid {}",
             compact_debug_size(breakdown.verified_evidence_chars + breakdown.workflow_state_chars)
