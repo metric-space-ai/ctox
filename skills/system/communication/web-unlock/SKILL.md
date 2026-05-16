@@ -61,16 +61,43 @@ Schema and seed are written on first use. The seed lives at `tools/web-stack/ass
 ```sh
 ctox web unlock list-probes
 ctox web unlock list-vectors [<probe_id>]
-ctox web unlock baseline [<probe_id>] [--record]
+ctox web unlock baseline [<probe_id>] [--record] [--auto-repair]
 ctox web unlock history [<probe_id>] [--limit N]
 ctox web unlock add-vector --id <vid> --probe <pid> --test <name> \
     --desc <text> --fix <text> [--predicate <js>] [--patch-files <a,b>]
 ctox web unlock set-vector-status --id <vid> --status <working|broken|untested>
+
+# Repair flow
+ctox web unlock repair start --vector <vid> [--run-id <n>] [--notes <text>]
+ctox web unlock repair complete --id <repair_id> (--succeeded | --failed) \
+    [--commit <sha>] [--notes <text>]
+ctox web unlock repair list [--status <pending|succeeded|failed>] [--limit N]
 ```
 
-`baseline` returns structured JSON with one entry per probe (`passed_baseline`, `failed_tests`, `duration_ms`, `notes`). Exit code is non-zero if any probe regressed — directly usable in maintenance loops and pre-commit checks. `--record` persists each run to `web_unlock_test_runs` for trend analysis.
+`baseline` returns structured JSON with one entry per probe (`passed_baseline`, `failed_tests`, `duration_ms`, `notes`, `run_id`, `opened_repairs`). Exit code is non-zero if any probe regressed — directly usable in maintenance loops and pre-commit checks. `--record` persists each run to `web_unlock_test_runs` for trend analysis. `--auto-repair` additionally opens pending `web_unlock_repairs` rows for any known vector whose `test_name` matches a failed test under the same probe.
 
 `add-vector` and `set-vector-status` let the agent grow the knowledge base from inside its own loop: when a new probe-failure is diagnosed, the fix path includes registering the vector so future regressions can be looked up.
+
+### Repair flow
+
+`repair start --vector <vid>` is the operator-facing entry into the structured repair workflow:
+
+1. Loads the vector from `web_unlock_vectors`
+2. Inserts a `web_unlock_repairs` row with `succeeded=NULL` (pending)
+3. Flips the vector's `status` to `broken` until the repair completes
+4. Emits a JSON plan with `repair_id`, the vector's `patch_files`, `fix_strategy`, and the precise next-step commands the agent should run
+
+The agent (or operator) then edits the files, runs `ctox web unlock baseline <probe_id> --record` to verify, and creates a commit. The session closes with:
+
+```sh
+ctox web unlock repair complete --id <repair_id> --succeeded --commit <sha>
+```
+
+On success, the vector flips back to `working`, `last_verified_at` is updated, the commit hash is persisted on the repair row, and the loop is closed. On `--failed`, the vector stays `broken`, the repair row is closed with `succeeded=0`, and `notes` records why — leaving the next iteration a clean slate.
+
+`repair list [--status pending|succeeded|failed]` is the trend query — useful for "what's still broken right now" and for retrospectives.
+
+The `baseline --auto-repair` flag combines the two: if a probe regresses, matching vectors are converted to pending repairs in the same call, ready for the agent to pick up.
 
 ## Diagnostic workflow
 
@@ -141,7 +168,7 @@ If you only touched stealth_init.js / humanlike.mjs / google_browser_runner.mjs,
 
 Re-run the same four probes. All must hold their baseline. If any new FAIL appears as a side effect, the patch is wrong — revert and rethink.
 
-### Step 7 — Commit
+### Step 7 — Commit and close the repair
 
 One commit per patch family. Use the HEREDOC style from this skill:
 
@@ -158,13 +185,14 @@ Verified against the four probes — all hold baseline.
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
 EOF
 )"
-```
-
-Then push to main:
-
-```sh
 git push origin main
+
+# Then close the repair so the vector flips back to "working":
+COMMIT_SHA=$(git rev-parse HEAD)
+ctox web unlock repair complete --id <repair_id> --succeeded --commit "$COMMIT_SHA"
 ```
+
+If the repair was opened by `baseline --auto-repair`, the `repair_id` is already in the prior `baseline` JSON output under `probes[*].opened_repairs`. Otherwise look it up with `ctox web unlock repair list --status pending`.
 
 ### Step 8 — Update knowledge artifacts (CLI-first, markdown as commentary)
 
