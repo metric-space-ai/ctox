@@ -1,12 +1,21 @@
----
-name: deep-research
-description: Produces decision-grade reports across nine types — Machbarkeitsstudien (feasibility), Projekt-/Fördervorhabenbeschreibungen, Quellenreviews/Quellenkompendien, Marktanalyse (market research), Wettbewerbsanalyse, Technologie-Screening, Whitepaper, Stand-der-Technik (literature review), Entscheidungsvorlage (decision brief). The harness LLM drives the run by calling deterministic `ctox report …` CLI subcommands.
-class: system
-state: active
-cluster: research
----
+# Decision-Report Mode (full playbook)
 
-# Deep Research
+This file is loaded as a reference of the `systematic-research` skill
+when the run is in decision-report mode (one of the nine `report_type_id`
+values, output is a Word document via `ctox report`). It is not a
+stand-alone skill — `systematic-research/SKILL.md` is the entry point.
+
+Modes overview:
+- **Library mode**: durable record-shape table via `ctox knowledge data`
+- **Decision-report mode** (THIS FILE): single Word document via `ctox report`
+- **Combined mode**: both — library first, then report cites library rows
+
+The remainder of this file is the original decision-grade-report
+playbook covering feasibility studies (Machbarkeitsstudien), project
+descriptions (Fördervorhabenbeschreibungen), source reviews
+(Quellenreviews), market research (Marktanalyse), competitive analysis
+(Wettbewerbsanalyse), technology screening, whitepapers, literature
+reviews (Stand der Technik), and decision briefs (Entscheidungsvorlagen).
 
 You are the harness LLM. This skill instructs you to produce a decision-grade
 written report on the topic the operator named. You drive the run yourself by
@@ -211,11 +220,11 @@ treat them as release contracts:
   `block-stage`, initialize the app CLI and use its stage prompts:
 
   ```bash
-  python3 skills/system/research/deep-research/scripts/foerdervorhaben_app_cli.py \
+  python3 skills/system/research/systematic-research/scripts/foerdervorhaben_app_cli.py \
     init --run-id RUN_ID
-  python3 skills/system/research/deep-research/scripts/foerdervorhaben_app_cli.py \
+  python3 skills/system/research/systematic-research/scripts/foerdervorhaben_app_cli.py \
     workspace-snapshot --run-id RUN_ID --out /tmp/RUN_ID_fvh_snapshot.json
-  python3 skills/system/research/deep-research/scripts/foerdervorhaben_app_cli.py \
+  python3 skills/system/research/systematic-research/scripts/foerdervorhaben_app_cli.py \
     asset-lookup --run-id RUN_ID --out /tmp/RUN_ID_fvh_assets.json
   ```
 
@@ -223,11 +232,11 @@ treat them as release contracts:
   and write only the requested block(s):
 
   ```bash
-  python3 skills/system/research/deep-research/scripts/foerdervorhaben_app_cli.py \
+  python3 skills/system/research/systematic-research/scripts/foerdervorhaben_app_cli.py \
     writer-prompt --run-id RUN_ID --instance-id INSTANCE_ID --out /tmp/RUN_ID_writer_prompt.md
-  python3 skills/system/research/deep-research/scripts/foerdervorhaben_app_cli.py \
+  python3 skills/system/research/systematic-research/scripts/foerdervorhaben_app_cli.py \
     revision-prompt --run-id RUN_ID --instance-id INSTANCE_ID --out /tmp/RUN_ID_revision_prompt.md
-  python3 skills/system/research/deep-research/scripts/foerdervorhaben_app_cli.py \
+  python3 skills/system/research/systematic-research/scripts/foerdervorhaben_app_cli.py \
     flow-review-prompt --run-id RUN_ID --instance-id INSTANCE_ID --out /tmp/RUN_ID_flow_prompt.md
   ```
 
@@ -236,14 +245,14 @@ treat them as release contracts:
   releasable:
 
   ```bash
-  python3 skills/system/research/deep-research/scripts/foerdervorhaben_app_cli.py \
+  python3 skills/system/research/systematic-research/scripts/foerdervorhaben_app_cli.py \
     lint-run --run-id RUN_ID
   ```
 
   If a DOCX already exists, additionally lint the rendered file:
 
   ```bash
-  python3 skills/system/research/deep-research/scripts/foerdervorhaben_app_cli.py \
+  python3 skills/system/research/systematic-research/scripts/foerdervorhaben_app_cli.py \
     lint-docx --run-id RUN_ID --docx /path/to/report.docx --reference-dir /path/to/reference_docs
   ```
 
@@ -429,14 +438,13 @@ Use the bundled discovery runner. It creates a broad query plan, saves every
 raw JSON payload, deduplicates sources, writes `search_protocol.csv` and
 `screened_sources.csv`, `candidate_sources.csv`, and `rejected_sources.csv`,
 and calls `ctox report research-log-add` for every executed query. Treat
-`candidate_sources.csv` as a retrieval aid, not as the final intellectual
-source catalog. The agent must read and decide: promote only LLM-reviewed,
+`candidate_sources.csv` as an unreviewed retrieval queue, not as the final
+intellectual source catalog. The agent must read and decide: promote only LLM-reviewed,
 topic-relevant, useful sources into the visible catalog and move weak or
 off-topic material to the rejected/off-topic audit. The full audit trail lives
-in `screened_sources.csv`; rejected/off-topic hits live in
-`rejected_sources.csv`. The query-to-source and citation traversal lives in
-`discovery_graph.json`. Never hand raw screened or mechanically accepted rows
-to the user as the source catalog.
+in `screened_sources.csv`; invalid raw records live in `rejected_sources.csv`.
+The query-to-source and citation traversal lives in `discovery_graph.json`.
+Never hand raw screened rows to the user as the source catalog.
 
 Before running discovery, write the search plan yourself as a CSV file with
 columns `focus,query`. The LLM is responsible for the actual raw search
@@ -531,7 +539,7 @@ queries to direct web search with query simplification. Use
 corpus.
 
 ```bash
-python3 skills/system/research/deep-research/scripts/source_review_discovery.py \
+python3 skills/system/research/systematic-research/scripts/source_review_discovery.py \
   --topic "<source-review topic and scope>" \
   --run-id RUN_ID \
   --out-dir "/tmp/RUN_ID_source_discovery" \
@@ -555,7 +563,7 @@ previous discovery directory or candidate CSV, preserve existing sources, and
 ask the runner for additional candidates only:
 
 ```bash
-python3 skills/system/research/deep-research/scripts/source_review_discovery.py \
+python3 skills/system/research/systematic-research/scripts/source_review_discovery.py \
   --topic "<same source-review topic and scope>" \
   --run-id RUN_ID \
   --out-dir "/tmp/RUN_ID_source_discovery_next" \
@@ -595,7 +603,7 @@ table. A client-facing report must not claim full-text review for sources that
 are only `metadata_only` or `blocked`.
 
 ```bash
-python3 skills/system/research/deep-research/scripts/source_review_reading.py \
+python3 skills/system/research/systematic-research/scripts/source_review_reading.py \
   --discovery-dir "/tmp/RUN_ID_source_discovery" \
   --out-dir "/tmp/RUN_ID_source_reading" \
   --limit 80 \
@@ -624,7 +632,7 @@ XLSX workbook. Do not deliver only CSV/JSON for a `source_review` unless the
 operator explicitly asks for raw artifacts only.
 
 ```bash
-python3 skills/system/research/deep-research/scripts/source_review_report.py \
+python3 skills/system/research/systematic-research/scripts/source_review_report.py \
   --topic "<source-review topic and scope>" \
   --title "<client-facing report title>" \
   --discovery-dir "/tmp/RUN_ID_source_discovery" \
@@ -664,7 +672,7 @@ criteria. Every source must have a direct URL/DOI, `score`, `scoreValue`,
 write `metadata_only` records, raw search hits, or mechanically scored rows.
 
 ```bash
-python3 skills/system/research/deep-research/scripts/business_research_writeback.py \
+python3 skills/system/research/systematic-research/scripts/business_research_writeback.py \
   --database-url "$DATABASE_URL" \
   --store-key marketing/research/runs \
   --run-id BUSINESS_RESEARCH_RUN_ID \
@@ -1124,7 +1132,7 @@ Once all five checks are ready:
 ```bash
 ctox report render RUN_ID --format md --out /tmp/feasibility_study.md
 ctox report render RUN_ID --format docx --out /tmp/feasibility_study.docx
-python3 skills/system/research/deep-research/scripts/render_check.py \
+python3 skills/system/research/systematic-research/scripts/render_check.py \
     --docx /tmp/feasibility_study.docx \
     --out-dir /tmp/feasibility_study_render_check
 ctox report finalise RUN_ID

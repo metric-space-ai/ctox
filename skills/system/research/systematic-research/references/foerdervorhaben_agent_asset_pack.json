@@ -1,0 +1,1529 @@
+{
+  "manifest": {
+    "asset_pack_id": "foerder-begleitdokumente-assets",
+    "version": "0.9.4",
+    "title": "Asset-Pack für Fördervorhabenbeschreibung & Unterlagen",
+    "purpose": "Blockkatalog, Paketprofile, Referenzmuster und Stilregeln für die autonome Erstellung von Unterlagenn im ERP-Förderkredit-Kontext.",
+    "derived_from": [
+      "FoerdervorhabenBeschreibung_V0.8.2.html",
+      "FuZu_Check_V0.10.4.html",
+      "Referenzdokumente aus OneDrive_1_9.zip"
+    ]
+  },
+  "program_profiles": [
+    {
+      "id": "innovation",
+      "label": "Innovation",
+      "project_heading": "Vorstellung des Innovationsprojektes",
+      "project_doc_title": "Projektbeschreibung Innovation",
+      "default_modules": [
+        "organigramm"
+      ],
+      "cost_block_variant": "cost_standard",
+      "notes": [
+        "Aktuelle Innovationsfälle im ZIP arbeiten mit Gesellschafts-/Unternehmensprofil, optionalem Organigramm bzw. Historie und einer allgemeinen Einleitung vor dem Projektteil.",
+        "Der Projektteil folgt meist auf einen langen Projekttitel und arbeitet mit Problemstand, Entwicklungsziel, Herausforderungen/Maßnahmen und Kosten-/Zeitraumangaben."
+      ]
+    },
+    {
+      "id": "digitalization",
+      "label": "Digitalisierung",
+      "project_heading": "Vorstellung des Digitalisierungsprojektes",
+      "project_doc_title": "Projektbeschreibung Digitalisierung",
+      "default_modules": [
+        "organigramm"
+      ],
+      "cost_block_variant": "cost_standard",
+      "notes": [
+        "Digitale Fälle im ZIP nutzen dieselbe aktuelle Grundstruktur, muessen aber ueber konkrete Prozessbrueche, Datenfluesse, Freigabelogik oder Nachweisfuehrung geerdet werden statt nur ueber Tool- oder Architektursprache.",
+        "Bei Arena-/Parkhaus- und Plattformfällen sind service- bzw. eventbezogene Kontextblöcke sinnvoll; bei Mittelstandsfällen stehen operative Hebel vor Buzzwords."
+      ]
+    }
+  ],
+  "funding_profiles": [
+    {
+      "id": "standard",
+      "label": "Standard",
+      "description": "Reguläre aktuelle Struktur ohne Zusatzakzent.",
+      "generation_notes": [
+        "Nutze die aktuelle Grundstruktur und schreibe kompakt-prüffähig.",
+        "Ergänze optionale Module nur, wenn sie durch Kontext oder gewählte Module gestützt sind."
+      ]
+    },
+    {
+      "id": "stufe2",
+      "label": "Stufe 2",
+      "description": "Aktuelle Struktur mit stärkerem Fokus auf durchgehenden Umsetzungs- und Transformationsbezug.",
+      "generation_notes": [
+        "Verknüpfe Unternehmenskontext, Projektlogik und Umsetzungsdruck sauber.",
+        "Schreibe stärker auf Ganzheitlichkeit, aber ohne Werbesprache."
+      ]
+    },
+    {
+      "id": "levelup",
+      "label": "LevelUp",
+      "description": "Ganzheitliche Vorhaben mit deutlicher Kopplung von Standort, Prozess, Technologie oder Systemverbund.",
+      "generation_notes": [
+        "Zeige deutlich, wie mehrere Veränderungsebenen zusammenhängen, z. B. Gebäude plus Prozess, Plattform plus KI plus Datenfluss oder Servicekonzept plus bauliche Erweiterung.",
+        "Die allgemeine Einleitung und das Entwicklungsziel dürfen breiter angelegt sein, müssen aber in konkrete Projektmechanik übersetzt werden."
+      ]
+    },
+    {
+      "id": "personalkosten",
+      "label": "Personalkostenfokus",
+      "description": "Variante mit explizitem Fokus auf Projektkosten und vorhabenbezogene Personalkosten.",
+      "generation_notes": [
+        "Fordere im Kostenblock neben Zeitraum und Gesamtkosten nach Rollenbündeln, internen Fachbereichen oder vorhabenbezogenen Personalkostenbezügen.",
+        "Keine Kostenarten erfinden; nur sauber gliedern, wenn sie belegt sind."
+      ]
+    }
+  ],
+  "reference_profiles": [
+    {
+      "id": "auto",
+      "label": "Automatisch",
+      "style_profile_id": "balanced_dossier",
+      "recommended_reference_ids": [],
+      "suggested_modules": []
+    },
+    {
+      "id": "produktion_gebaeude",
+      "label": "Produktion / Standort / Gebäude",
+      "style_profile_id": "tradition_production_dossier",
+      "recommended_reference_ids": [
+        "ref_new_innovation_site_building",
+        "ref_old_multi_project_compact"
+      ],
+      "suggested_modules": [
+        "historie",
+        "portfolio",
+        "quality"
+      ]
+    },
+    {
+      "id": "plattform_ai",
+      "label": "Digitalisierung / Prozesse / Daten",
+      "style_profile_id": "operative_digitalisierung_dossier",
+      "recommended_reference_ids": [
+        "ref_new_platform_ai",
+        "ref_old_multi_project_compact"
+      ],
+      "suggested_modules": [
+        "historie",
+        "portfolio",
+        "workpackages"
+      ]
+    },
+    {
+      "id": "event_immobilie",
+      "label": "Event / Immobilie / Arena",
+      "style_profile_id": "venue_service_dossier",
+      "recommended_reference_ids": [
+        "ref_new_event_service_building"
+      ],
+      "suggested_modules": [
+        "organigramm",
+        "event_context"
+      ]
+    },
+    {
+      "id": "mehrprojekt_industrie",
+      "label": "Mehrprojekt / Industrie / Altideen",
+      "style_profile_id": "multi_project_dossier",
+      "recommended_reference_ids": [
+        "ref_old_multi_project_compact",
+        "ref_old_digitalization_bridge"
+      ],
+      "suggested_modules": [
+        "project_overview",
+        "cost_summary"
+      ]
+    }
+  ],
+  "optional_modules": [
+    {
+      "id": "organigramm",
+      "label": "Organigramm / Gruppenstruktur",
+      "block_ids": [
+        "company_organigramm"
+      ],
+      "description": "Textlicher Begleitblock zur Gruppenstruktur bzw. zum Organigramm."
+    },
+    {
+      "id": "historie",
+      "label": "Historie",
+      "block_ids": [
+        "company_history"
+      ],
+      "description": "Historienblock bei etablierten Unternehmensgeschichten oder Standortentwicklungen."
+    },
+    {
+      "id": "portfolio",
+      "label": "Produkte / Leistungen / Kundensegmente",
+      "block_ids": [
+        "company_portfolio"
+      ],
+      "description": "Produkt-, Leistungs- oder Kundensegmentblock."
+    },
+    {
+      "id": "quality",
+      "label": "Qualitätsversprechen / Nachweise",
+      "block_ids": [
+        "company_quality"
+      ],
+      "description": "Block für Qualitätslogik, Zertifikate, Prüf- und Nachweisbezug."
+    },
+    {
+      "id": "event_context",
+      "label": "Veranstaltungs- / Nutzungskonzept",
+      "block_ids": [
+        "company_event_context"
+      ],
+      "description": "Kontextblock für Arena-, Veranstaltungs- oder Standortnutzungsprofile."
+    },
+    {
+      "id": "workpackages",
+      "label": "Arbeitspakete / Umsetzungsschritte",
+      "block_ids": [
+        "project_{i}_workpackages"
+      ],
+      "description": "Detaillierter Maßnahmen-/Arbeitspaketeblock für komplexe Vorhaben."
+    },
+    {
+      "id": "project_overview",
+      "label": "Projektübersicht",
+      "block_ids": [
+        "project_overview"
+      ],
+      "description": "Kurzübersicht aller Teilprojekte bei Mehrvorhaben."
+    },
+    {
+      "id": "cost_summary",
+      "label": "Zusammenfassung der Projektkosten",
+      "block_ids": [
+        "cost_summary"
+      ],
+      "description": "Übergreifende Kostenübersicht für Mehrvorhaben."
+    }
+  ],
+  "document_blueprints": {
+    "base_docs_single": [
+      {
+        "id": "doc_company",
+        "title": "Dokument 01 – Gesellschaft & Unternehmensprofil"
+      },
+      {
+        "id": "doc_project",
+        "title": "Dokument 02 – Projektbeschreibung"
+      }
+    ],
+    "base_docs_multi": [
+      {
+        "id": "doc_company",
+        "title": "Dokument 01 – Gesellschaft & Unternehmensprofil"
+      },
+      {
+        "id": "doc_project",
+        "title": "Dokument 02 – Projektteil"
+      },
+      {
+        "id": "doc_costs",
+        "title": "Dokument 03 – Projektübersicht & Kosten"
+      }
+    ],
+    "sequence_single": [
+      {
+        "block_id": "company_legal",
+        "doc_id": "doc_company",
+        "required": true,
+        "order": 10
+      },
+      {
+        "block_id": "company_profile",
+        "doc_id": "doc_company",
+        "required": true,
+        "order": 20
+      },
+      {
+        "block_id": "company_organigramm",
+        "doc_id": "doc_company",
+        "required": false,
+        "order": 30,
+        "module": "organigramm"
+      },
+      {
+        "block_id": "company_history",
+        "doc_id": "doc_company",
+        "required": false,
+        "order": 40,
+        "module": "historie"
+      },
+      {
+        "block_id": "company_portfolio",
+        "doc_id": "doc_company",
+        "required": false,
+        "order": 50,
+        "module": "portfolio"
+      },
+      {
+        "block_id": "company_quality",
+        "doc_id": "doc_company",
+        "required": false,
+        "order": 60,
+        "module": "quality"
+      },
+      {
+        "block_id": "company_event_context",
+        "doc_id": "doc_company",
+        "required": false,
+        "order": 70,
+        "module": "event_context"
+      },
+      {
+        "block_id": "project_intro",
+        "doc_id": "doc_project",
+        "required": true,
+        "order": 100
+      },
+      {
+        "block_id": "project_{i}_title_scope",
+        "doc_id": "doc_project",
+        "required": true,
+        "order": 200
+      },
+      {
+        "block_id": "project_{i}_current_state",
+        "doc_id": "doc_project",
+        "required": true,
+        "order": 210
+      },
+      {
+        "block_id": "project_{i}_development_goal",
+        "doc_id": "doc_project",
+        "required": true,
+        "order": 220
+      },
+      {
+        "block_id": "project_{i}_state_of_art",
+        "doc_id": "doc_project",
+        "required": false,
+        "order": 230
+      },
+      {
+        "block_id": "project_{i}_challenges_measures",
+        "doc_id": "doc_project",
+        "required": true,
+        "order": 240
+      },
+      {
+        "block_id": "project_{i}_workpackages",
+        "doc_id": "doc_project",
+        "required": false,
+        "order": 245,
+        "module": "workpackages"
+      },
+      {
+        "block_id": "project_{i}_costs_timeline",
+        "doc_id": "doc_project",
+        "required": true,
+        "order": 250
+      }
+    ],
+    "sequence_multi_prefix": [
+      {
+        "block_id": "project_overview",
+        "doc_id": "doc_costs",
+        "required": true,
+        "order": 90
+      },
+      {
+        "block_id": "cost_summary",
+        "doc_id": "doc_costs",
+        "required": true,
+        "order": 900
+      }
+    ]
+  },
+  "block_library": {
+    "company_legal": {
+      "title": "Gesellschaftsrechtliche Verhältnisse",
+      "goal": "Prüffähiger Stammdatenblock zum Antragsteller bzw. zur relevanten Gesellschaft.",
+      "must_have": [
+        "Firma / Gesellschaft",
+        "Anschrift / Sitz",
+        "Registergericht und HRB/HRA oder vergleichbare Registerdaten",
+        "Stammkapital bzw. Beteiligungsverhältnisse, wenn sie vorliegen",
+        "Geschäftsführung / Gesellschafterkern, sofern im Kontext vorhanden"
+      ],
+      "style_rules": [
+        "Sehr kompakt und prüffähig schreiben; dieser Block ist Stammdatenbasis, nicht Unternehmensgeschichte.",
+        "Nur wirklich relevante gesellschaftsrechtliche Hardfacts nennen und keine langen Umsatz-, Gesellschafter- oder Registerauflistungen ausweiten.",
+        "Keine Lücken mit Platzhaltern füllen; fehlende Felder eher sauber auslassen und per Rückfrage anstoßen.",
+        "Bei Gruppenkonstellationen klar markieren, welche Gesellschaft Antragstellerin ist."
+      ],
+      "min_chars": 220,
+      "reference_ids": [
+        "ref_new_innovation_site_building",
+        "ref_new_event_service_building",
+        "ref_old_multi_project_compact"
+      ]
+    },
+    "company_profile": {
+      "title": "Unternehmensprofil",
+      "goal": "Kompakter Unternehmensblock mit belastbaren Ankern zu Entwicklung, Geschäft, Markt, Produkten, Leistungen und bisheriger Innovationsfähigkeit.",
+      "must_have": [
+        "Unternehmenszweck / Geschäftsmodell",
+        "Sitz / Standorte / regionale Einordnung",
+        "Gründungs- oder Entwicklungshintergrund",
+        "bisherige Projekte, Entwicklungsschritte oder Innovationsleistungen, soweit belegt",
+        "konkrete Leistungs- bzw. Produktfelder",
+        "qualitative oder quantitative Anker aus dem bereitgestellten Kontext"
+      ],
+      "style_rules": [
+        "Maximal so lang schreiben, dass Gesellschafts- und Unternehmensprofil zusammen auf etwa eine Seite passen; lieber verdichten als Hardfacts ausbreiten.",
+        "Aus Wir-Perspektive oder enger interner Feststellungsperspektive formulieren, wenn das Dokument diese Perspektive trägt.",
+        "Weniger Gewicht auf Umsatz- und Stammdaten legen; stärker die Entwicklung des Unternehmens, bisher umgesetzte Projekte und bereits erreichte Innovationen herausarbeiten.",
+        "Unternehmen als kompetenten, gewachsenen und handlungsfähigen Antragsteller zeichnen; positive Wirkung aus belastbaren Fakten statt aus Claims.",
+        "Nicht wie eine Imagebroschüre schreiben; konkrete Anker, keine Leerformeln.",
+        "Behalte branchenspezifische Details, z. B. Produktionsverfahren, Plattformlogik oder Nutzungsprofil.",
+        "Schreibe aus interner Feststellungsperspektive oder in ruhiger Wir-Perspektive; nie aus externer Gutachter- oder Beobachterperspektive.",
+        "Keine Distanzformeln wie 'nach dem vorliegenden Kontext', 'öffentlich belastbare Hinweise' oder 'soweit beigefügt'.",
+        "Wenn Gruppenkontext relevant ist, die Rolle des Antragstellers innerhalb der Gruppe klar einordnen."
+      ],
+      "min_chars": 560,
+      "reference_ids": [
+        "ref_new_innovation_site_building",
+        "ref_new_platform_ai",
+        "ref_new_event_service_building",
+        "ref_old_multi_project_compact"
+      ]
+    },
+    "company_organigramm": {
+      "title": "Organigramm / Gruppenstruktur",
+      "goal": "Textlicher Begleitblock zur Unternehmensgruppe bzw. zum Organigramm.",
+      "must_have": [
+        "Mutter- / Tochter- oder Beteiligungsbezug",
+        "relevante Gruppengesellschaften mit ihrer Rolle",
+        "Hinweis auf beigefügtes Organigramm, falls vorhanden"
+      ],
+      "style_rules": [
+        "Nur konkrete Gesellschaften und Rollen nennen, keine allgemeine Managementsprache.",
+        "Wenn kein echtes Organigramm vorliegt, beschreibe nur die belegte Gruppenlogik oder lasse den Hinweis weg; die fehlende Anlage nie im Dossier kommentieren."
+      ],
+      "min_chars": 260,
+      "reference_ids": [
+        "ref_new_event_service_building",
+        "ref_new_innovation_site_building"
+      ]
+    },
+    "company_history": {
+      "title": "Historie",
+      "goal": "Historienblock für Traditionsunternehmen, Standortentwicklungen oder Entwicklungslinien, die für das Vorhaben relevant sind.",
+      "must_have": [
+        "Gründungs- oder Meilensteinhintergrund",
+        "wichtige Entwicklungsschritte",
+        "mindestens ein prägender Meilenstein oder markanter betrieblicher Unterschied",
+        "Bezug zur heutigen Problemstellung oder Standortlogik"
+      ],
+      "style_rules": [
+        "Keine reine Chronik schreiben; auf die heutige Ausgangslage zuspitzen.",
+        "Historie als Entwicklungserzählung nutzen, die Erfahrung, Kontinuität oder unternehmerische Leistung sichtbar macht.",
+        "Wenn ein Gründungsjahr genannt wird, mindestens einen echten Meilenstein oder eine prägende Eigenheit anschließen.",
+        "Nur Historie aufnehmen, wenn sie für Glaubwürdigkeit oder Problemlogik einen Mehrwert hat."
+      ],
+      "min_chars": 380,
+      "reference_ids": [
+        "ref_new_innovation_site_building",
+        "ref_old_multi_project_compact"
+      ]
+    },
+    "company_portfolio": {
+      "title": "Produkte / Leistungen / Kundensegmente",
+      "goal": "Block mit konkreten Produkt-, Leistungs- oder Kundensegmentbezügen.",
+      "must_have": [
+        "konkrete Produkt- oder Leistungsgruppen",
+        "typische Kunden- oder Einsatzsegmente",
+        "branchenspezifische Besonderheiten oder Prozessbezug"
+      ],
+      "style_rules": [
+        "Fachbegriffe und konkrete Gegenstände erhalten, nicht zu abstrakten Sammelbegriffen verdichten.",
+        "Portfolio so beschreiben, dass Fachlichkeit, Marktnähe und operative Tiefe spürbar werden.",
+        "Nur aufnehmen, wenn das Portfolio die spätere Projektlogik trägt."
+      ],
+      "min_chars": 420,
+      "reference_ids": [
+        "ref_new_innovation_site_building",
+        "ref_new_platform_ai",
+        "ref_old_multi_project_compact"
+      ]
+    },
+    "company_quality": {
+      "title": "Qualitätsversprechen / Nachweise",
+      "goal": "Block zu Qualitätslogik, Prüfmechanik, Zertifikaten oder Nachweisen, soweit sie im Kontext belegt sind.",
+      "must_have": [
+        "Qualitäts- oder Sicherheitslogik",
+        "Prüf-, Zertifikats- oder Nachweisbezug",
+        "Bezug zur operativen Realität des Antragstellers"
+      ],
+      "style_rules": [
+        "Nur belegte Nachweise nennen.",
+        "Qualitätsbezug als gelebte Unternehmenshaltung und operative Realität schreiben, nicht als Marketingclaim."
+      ],
+      "min_chars": 260,
+      "reference_ids": [
+        "ref_new_innovation_site_building"
+      ]
+    },
+    "company_event_context": {
+      "title": "Veranstaltungs- / Nutzungskonzept",
+      "goal": "Kontextblock für Arena-, Event-, Immobilien- oder Flächenkonzepte, wenn diese für das Projekt essentiell sind.",
+      "must_have": [
+        "Nutzungsprofile / Veranstaltungsarten",
+        "Flächen-, Besucher- oder Betriebslogik",
+        "Bezug zum späteren Projektengpass"
+      ],
+      "style_rules": [
+        "Kontext so schreiben, dass Profil, Attraktivität und Betriebslogik der Nutzung sichtbar werden und der spätere Projektdruck nachvollziehbar wird.",
+        "Keine touristische oder werbliche Darstellung."
+      ],
+      "min_chars": 420,
+      "reference_ids": [
+        "ref_new_event_service_building"
+      ]
+    },
+    "project_intro": {
+      "title": "Allgemeine Einleitung",
+      "goal": "Brücke zwischen Unternehmenskontext und dem konkreten Vorhaben bzw. den Teilprojekten.",
+      "must_have": [
+        "strategischer Anlass oder Entwicklungspfad",
+        "warum das Vorhaben jetzt relevant ist",
+        "klare Überleitung in die konkrete Projektbeschreibung"
+      ],
+      "style_rules": [
+        "Die Einleitung darf breiter sein, muss aber auf das konkrete Vorhaben zulaufen.",
+        "Die ersten Absätze der Projektbeschreibung müssen Status quo, zentrale Herausforderung und Zielrichtung bereits zusammenführen; wichtige integrierte Projektlogik nicht erst spät im Dokument einführen.",
+        "Keine reine Förderlogik; immer vom realen Vorhaben aus argumentieren.",
+        "Der unternehmerische Anlass soll spürbar werden: Wachstum, Qualitätsanspruch, Marktveränderung, Kapazitätsdruck oder strategische Weiterentwicklung.",
+        "Keine distanzierende Außenperspektive und keine Hinweise auf fehlende Unterlagen oder fehlende Beleglage.",
+        "LevelUp-Fälle dürfen die Mehr-Ebenen-Logik betonen, müssen aber in konkrete Projektblöcke überführbar bleiben."
+      ],
+      "min_chars": 420,
+      "reference_ids": [
+        "ref_new_innovation_site_building",
+        "ref_new_platform_ai",
+        "ref_new_event_service_building"
+      ]
+    },
+    "project_{i}_title_scope": {
+      "title": "Projekt {i} – Vorhabenbezeichnung & Scope",
+      "goal": "Klarer Titel und kurze Scope-Einordnung des Teilprojekts.",
+      "must_have": [
+        "konkrete Vorhabenbezeichnung",
+        "knappe Scope-/Abgrenzungsaussage",
+        "Bezug zu Standort, System, Prozess oder Dienstleistung"
+      ],
+      "style_rules": [
+        "Titellinie und kurze Einordnung so formulieren, dass das Vorhaben eindeutig wird.",
+        "Keine generischen Überschriften wie 'Digitalisierungsvorhaben'."
+      ],
+      "min_chars": 180,
+      "reference_ids": [
+        "ref_new_innovation_site_building",
+        "ref_new_platform_ai",
+        "ref_new_event_service_building",
+        "ref_old_multi_project_compact"
+      ]
+    },
+    "project_{i}_current_state": {
+      "title": "Projekt {i} – Derzeitiger Stand / Problembereich",
+      "goal": "Konkrete Ausgangslage, Engpässe und Problemmechanik.",
+      "must_have": [
+        "heutiger Ist-Zustand",
+        "konkrete Engpässe / Probleme",
+        "Auswirkungen oder Grenzen",
+        "branchen- und vorhabenspezifische Anker"
+      ],
+      "style_rules": [
+        "Status quo, Herausforderung und Projektanlass so verbinden, dass der spätere Zielblock logisch vorbereitet ist.",
+        "Probleme mechanisch erklären: was blockiert, wo und mit welcher Wirkung.",
+        "Abgrenzungen zum Bestand oder zum Stand der Technik hier verankern, wenn sie vor allem die Problemstellung erklären; nicht als isolierte Nebenargumentation behandeln.",
+        "Keine austauschbaren Branchenfloskeln.",
+        "Keine unvermittelten Themen einführen, die im bisherigen Kontext nicht angelegt sind, z. B. Marketingbezüge ohne klaren Projektbezug.",
+        "Dopplungen für denselben Sachverhalt vermeiden, z. B. Homeoffice und Zuhause nicht als zwei getrennte Probleme darstellen.",
+        "Problemdruck klar zeigen, ohne das Unternehmen klein oder defizitär wirken zu lassen; die Ausgangslage als Folge realer Grenzen, Wachstums- oder Marktanforderungen einordnen, wenn belegt.",
+        "Bei Digitalisierungsfällen mindestens zwei konkrete Prozess-, Daten-, Freigabe- oder Nachweisbrüche benennen statt nur Tool- oder Dashboardsprache zu verwenden.",
+        "Bei Standort- oder Gebäudevorhaben den Bezug zwischen Bestand, Flächen- oder Prozessgrenze deutlich machen."
+      ],
+      "min_chars": 720,
+      "reference_ids": [
+        "ref_new_innovation_site_building",
+        "ref_new_platform_ai",
+        "ref_new_event_service_building",
+        "ref_old_multi_project_compact"
+      ]
+    },
+    "project_{i}_development_goal": {
+      "title": "Projekt {i} – Entwicklungsziel",
+      "goal": "Zielbild und geplante Entwicklungslogik des Vorhabens.",
+      "must_have": [
+        "konkretes Zielbild / Soll-Zustand",
+        "wesentliche Bausteine oder Entwicklungsachsen",
+        "Bezug zur Problemlage",
+        "bei Bedarf geplante Maßnahmen oder Module"
+      ],
+      "style_rules": [
+        "Nicht in Marketingziele kippen; konkrete Vorhabenlogik und Zielmechanik zeigen.",
+        "Die im Problembereich genannten Herausforderungen sichtbar wieder aufnehmen und als Zielzustand beantworten, damit ein roter Faden entsteht.",
+        "Zielbild als ambitionierte, aber belastbare Weiterentwicklung formulieren, sodass Gestaltungswille und Kompetenz des Unternehmens sichtbar werden.",
+        "Bei Digitalisierungsfällen das Zielbild ueber 2-3 konkrete betriebliche Hebel oder Anwendungsfaelle schreiben, nicht nur ueber Systemnamen, Power BI, SharePoint, KI oder Automatisierung als Selbstzweck.",
+        "Bei LevelUp-Fällen darf die Zielbeschreibung mehr Systemverbund enthalten, aber mit überprüfbaren Bestandteilen."
+      ],
+      "min_chars": 620,
+      "reference_ids": [
+        "ref_new_innovation_site_building",
+        "ref_new_platform_ai",
+        "ref_new_event_service_building",
+        "ref_old_multi_project_compact"
+      ]
+    },
+    "project_{i}_state_of_art": {
+      "title": "Projekt {i} – Abgrenzung zum Stand der Technik",
+      "goal": "Knappe, konkrete Abgrenzung zu heutigen Lösungen, Standards oder etablierten Vorgehensweisen.",
+      "must_have": [
+        "Vergleich zu etablierten Lösungen / Bestand",
+        "konkrete Grenze / Unzulänglichkeit",
+        "Bezug zum eigenen Vorhaben"
+      ],
+      "style_rules": [
+        "Kurz und eng an die Problemstellung schreiben; die Abgrenzung soll den Ist-Zustand erklären und nicht wie ein abgetrennter Exkurs wirken.",
+        "Nur dann einsetzen, wenn belastbare Vergleichspunkte vorliegen oder per öffentlicher Recherche sauber gestützt werden können.",
+        "Wenn Vergleichspunkte fehlen, den Block weglassen oder Rückfrage auslösen; nie die fehlende Beleglage ausformulieren.",
+        "Keine 'einzigartig'-Behauptungen ohne Vergleich."
+      ],
+      "min_chars": 320,
+      "reference_ids": [
+        "ref_new_platform_ai",
+        "ref_new_event_service_building",
+        "ref_old_multi_project_compact"
+      ]
+    },
+    "project_{i}_challenges_measures": {
+      "title": "Projekt {i} – Herausforderungen und Maßnahmen",
+      "goal": "Darstellung der zentralen Hürden, Umsetzungslogik und Gegenmaßnahmen / Lösungsschritte.",
+      "must_have": [
+        "wesentliche Herausforderungen",
+        "technische / organisatorische Maßnahmen oder Reaktionslogik",
+        "Verknüpfung zum Zielbild"
+      ],
+      "style_rules": [
+        "Keine Risikobullet-Wolke; lieber wenige klare Hürden mit konkreten Maßnahmen.",
+        "Die Herausforderungen müssen an Problembereich und Entwicklungsziel anschließen; keine neue Liste eröffnen, die im Zielbild nicht vorbereitet wurde.",
+        "Herausforderungen als anspruchsvolle, beherrschbare Entwicklungsaufgabe darstellen, nicht als Krisenprosa.",
+        "Wenn bauliche, prozessuale und digitale Ebenen zusammenspielen, diese sauber verzahnen."
+      ],
+      "min_chars": 520,
+      "reference_ids": [
+        "ref_new_innovation_site_building",
+        "ref_new_platform_ai",
+        "ref_new_event_service_building",
+        "ref_old_multi_project_compact"
+      ]
+    },
+    "project_{i}_workpackages": {
+      "title": "Projekt {i} – Arbeitspakete / Umsetzungsschritte",
+      "goal": "Optionaler Block für dichte, nachvollziehbare Arbeitsschritte oder Transformationsphasen.",
+      "must_have": [
+        "klare Arbeitsschritte oder Phasen",
+        "sichtbarer Output / Ergebnis je Schritt"
+      ],
+      "style_rules": [
+        "Nur einsetzen, wenn der Kontext genug Material für konkrete Schritte liefert.",
+        "Bevorzugt als zusammenhängenden Fließtext mit Phasenlogik schreiben; keine harte Schritt-für-Schritt-Liste, wenn sie den Lesefluss schwächt.",
+        "Keine leeren AP-Labels; jeder Schritt braucht Handlung plus Ergebnis."
+      ],
+      "min_chars": 380,
+      "reference_ids": [
+        "ref_old_multi_project_compact",
+        "ref_new_platform_ai"
+      ]
+    },
+    "project_{i}_costs_timeline": {
+      "title": "Projekt {i} – Projektkosten & Zeitraum",
+      "goal": "Kompakter Kosten-/Zeitraumblock pro Projekt.",
+      "must_have": [
+        "Gesamtkosten",
+        "Zeitraum / Dauer",
+        "bei Personalkostenfokus: Rollen- oder Personalkostenbezug, sofern belegt"
+      ],
+      "style_rules": [
+        "Nur belegte Zahlen nennen.",
+        "Bei Kennzahlen und Kostenwerten Jahresbezug oder Zeitraum klar nennen, wenn die Zahlen nicht offenkundig aktuell sind.",
+        "Wenn Kosten grob siebenstellig sind und der Kontext es traegt, 2-3 grobe Kostentreiber oder Nutzenkriterien benennen.",
+        "Wenn Projektlaufzeiten vor dem Dokumentstichtag beginnen, die zeitliche Einordnung nicht stillschweigend stehenlassen, sondern intern absichern oder im Text plausibel machen.",
+        "Falls mehrere Kostenlogiken vorliegen, knapp gliedern statt zu schätzen."
+      ],
+      "min_chars": 150,
+      "reference_ids": [
+        "ref_new_innovation_site_building",
+        "ref_new_platform_ai",
+        "ref_new_event_service_building",
+        "ref_old_multi_project_compact"
+      ]
+    },
+    "project_overview": {
+      "title": "Projektübersicht",
+      "goal": "Kurze Mehrprojekt-Übersicht mit Titeln und Kurzlogik.",
+      "must_have": [
+        "alle Teilprojekte",
+        "knappe Titel / Scope-Hinweise"
+      ],
+      "style_rules": [
+        "Nur bei Mehrvorhaben einsetzen.",
+        "Nicht zu lang; dient als Navigationsblock."
+      ],
+      "min_chars": 180,
+      "reference_ids": [
+        "ref_old_multi_project_compact",
+        "ref_old_digitalization_bridge"
+      ]
+    },
+    "cost_summary": {
+      "title": "Zusammenfassung der Projektkosten",
+      "goal": "Übergreifende Kostenübersicht je Teilprojekt.",
+      "must_have": [
+        "je Teilprojekt Kosten und Zeitraum",
+        "optional Gesamtsumme, wenn alle Werte vorliegen"
+      ],
+      "style_rules": [
+        "Nur vollständige und belegte Kostenwerte zusammenziehen.",
+        "Bei Einzelvorhaben meist nicht nötig."
+      ],
+      "min_chars": 160,
+      "reference_ids": [
+        "ref_old_multi_project_compact",
+        "ref_old_digitalization_bridge"
+      ]
+    }
+  },
+  "reference_resources": [
+    {
+      "id": "res_lubeca_profile_substanz",
+      "source_file": "Lubeca Projektbeschreibung 20251117_Entwurf.docx",
+      "story_role": "profile",
+      "block_template_ids": [
+        "company_profile",
+        "company_history"
+      ],
+      "excerpt": "Wir, die Lübecker Marzipan-Fabrik v. Minden & Bruhns GmbH & Co. KG (Lubeca), sind ein mittelständisches Traditionsunternehmen. Stammsitz unserer Unternehmensgruppe ist Stockelsdorf im Kreis Ostholstein, Schleswig-Holstein, wo das Unternehmen 1904 gegründet wurde. Seit über 120 Jahren produzieren wir ausschließlich am Standort Stockelsdorf Halbfabrikate für Bäcker, Konditoreien, Confiseure und Chocolatiers in Deutschland. Trotz internationaler Ausrichtung sind wir lokal fest verwurzelt.",
+      "why_it_works": [
+        "Der Absatz baut Profil über Gründung, Standort und Marktrolle auf statt über Selbstlob.",
+        "Die Wirkung ist positiv, weil Geschichte und Gegenwart unmittelbar zusammengeführt werden."
+      ],
+      "reuse_moves": [
+        "Identität zuerst konkret machen, danach operative Rolle und Marktbezug verdichten.",
+        "Jahreszahlen und Standortbindung nur dort nutzen, wo sie heutige Substanz erklären."
+      ]
+    },
+    {
+      "id": "res_lubeca_fuehrung_nachfolge",
+      "source_file": "Lubeca Projektbeschreibung 20251117_Entwurf.docx",
+      "story_role": "credibility",
+      "block_template_ids": [
+        "company_profile",
+        "company_organigramm"
+      ],
+      "excerpt": "Über zwei Beteiligungsgesellschaften gehört das Unternehmen seit 1963 der Friedrich Bluhme und Else Jebsen-Stiftung. Somit ist die Nachfolgeregelung im Gesellschafterkreis langfristig und solide geregelt. Die Unternehmensleitung der Gruppe liegt in den Händen der langjährig im Unternehmen tätigen Geschäftsführer Balthas Klein, Andreas Bäder und Sandra Mumme.",
+      "why_it_works": [
+        "Governance und Führung werden ruhig und belastbar dargestellt, ohne steif zu wirken.",
+        "Der Leser versteht, warum das Unternehmen strukturell tragfähig und gut geführt wirkt."
+      ],
+      "reuse_moves": [
+        "Gesellschafter- oder Führungsinformationen nur dann hervorheben, wenn sie Vertrauen in Kontinuität und Handlungsfähigkeit stützen.",
+        "Organisation nicht abstrakt beschreiben, sondern an Personen, Rollen und Stabilität festmachen."
+      ]
+    },
+    {
+      "id": "res_lubeca_verfahren_qualitaet",
+      "source_file": "Lubeca Projektbeschreibung 20251117_Entwurf.docx",
+      "story_role": "capability",
+      "block_template_ids": [
+        "company_portfolio",
+        "company_quality"
+      ],
+      "excerpt": "Es ist eines der Herstellungsverfahren, die Tradition und Qualität in Einklang bringen: das Röstkesselverfahren. In offenen, rotierenden Kupfer-Röstkesseln wird die Marzipanmasse abgeröstet. Die Produktqualität während der Herstellung überwacht ein bestens ausgestattetes Qualitätslabor. Die Bezeichnung „Lübecker Marzipan“ ist eine geschützte geografische Angabe und unterliegt besonderen Anforderungen an Qualität und Herstellung.",
+      "why_it_works": [
+        "Qualität wird über Verfahren, Prüfmechanik und regulatorische Einordnung sichtbar gemacht.",
+        "Fachliche Tiefe erzeugt Seriosität, ohne in Werbeton zu kippen."
+      ],
+      "reuse_moves": [
+        "Portfolio immer mit Prozess- oder Qualitätslogik verbinden.",
+        "Spezifische Verfahren oder Nachweise nur nennen, wenn sie die operative Realität wirklich tragen."
+      ]
+    },
+    {
+      "id": "res_lubeca_bridge_wachstum_vorhaben",
+      "source_file": "Lubeca Projektbeschreibung 20251117_Entwurf.docx",
+      "story_role": "bridge",
+      "block_template_ids": [
+        "project_intro"
+      ],
+      "excerpt": "Lubeca hat sich im Laufe der Jahrzehnte eine führende Marktstellung gesichert. Das kontinuierliche Wachstum wurde maßgeblich durch die erfolgreiche Realisierung zahlreicher Innovationsprojekte getragen. Im Zuge der strategischen Weiterentwicklung steht nun ein zentrales Projekt bevor, das an diese Entwicklung anknüpft und den nächsten Ausbauschritt vorbereitet.",
+      "why_it_works": [
+        "Die Einleitung startet nicht bei null, sondern leitet das Vorhaben aus der bisherigen Unternehmensentwicklung her.",
+        "Das Vorhaben wirkt wie ein folgerichtiger Schritt statt wie ein isolierter Förderanlass."
+      ],
+      "reuse_moves": [
+        "Einleitungen an die zuvor aufgebaute Unternehmenssubstanz anschließen.",
+        "Die Brücke über Wachstum, Qualitätsanspruch oder strategische Entwicklung schlagen, nicht über Förderlogik."
+      ]
+    },
+    {
+      "id": "res_lubeca_problem_standortgrenze",
+      "source_file": "Lubeca Projektbeschreibung 20251117_Entwurf.docx",
+      "story_role": "pressure",
+      "block_template_ids": [
+        "project_{i}_current_state"
+      ],
+      "excerpt": "Der bestehende Standort des Unternehmens ist durch seine historisch gewachsene Struktur geprägt. Aufgrund der fortschreitenden Geschäftsentwicklung sowie des kontinuierlichen Wachstums sind sämtliche verfügbaren Flächen vollständig ausgelastet. Eine zusätzliche Erweiterung von Produktionseinheiten ist innerhalb der bestehenden Gebäude nicht möglich; auch ein Anbau würde in bestehende, optimierte Produktionsprozesse eingreifen.",
+      "why_it_works": [
+        "Der Druck wird aus gewachsener Realität und nicht aus pauschaler Mängelrhetorik erklärt.",
+        "Bestand, Wachstum und Prozesslogik greifen direkt ineinander."
+      ],
+      "reuse_moves": [
+        "Probleme so schildern, dass ihre betriebliche Mechanik sichtbar wird.",
+        "Kapazitäts- oder Flächengrenzen immer mit den betroffenen Prozessen verknüpfen."
+      ]
+    },
+    {
+      "id": "res_lubeca_ziel_integrales_gebaeude",
+      "source_file": "Lubeca Projektbeschreibung 20251117_Entwurf.docx",
+      "story_role": "target",
+      "block_template_ids": [
+        "project_{i}_development_goal",
+        "project_{i}_challenges_measures"
+      ],
+      "excerpt": "Ein grundlegender Baustein bildet die ganzheitliche Fabrikplanung hin zu einem innovativen, modularen und energieeffizienten Produktionsgebäude in Verbindung mit einer grundlegenden Änderung des gesamten Produktionsprozesses. Hierbei sollen sämtliche Abläufe, Ressourcenflüsse und Infrastrukturkomponenten in einem integrativen Konzept betrachtet und aufeinander abgestimmt werden. Das vollständige Hallenlayout orientiert sich an den technischen Erfordernissen des Verarbeitungsprozesses.",
+      "why_it_works": [
+        "Das Zielbild beschreibt nicht nur ein Gebäude, sondern eine Zielarchitektur aus Prozess, Fläche und Infrastruktur.",
+        "Die Maßnahme wirkt dadurch technisch durchdrungen und unternehmerisch plausibel."
+      ],
+      "reuse_moves": [
+        "Entwicklungsziele als integrierten Soll-Zustand schreiben, nicht als lose Maßnahmenliste.",
+        "Bauliche Komponenten immer als Konsequenz der Prozesslogik erklären."
+      ]
+    },
+    {
+      "id": "res_nha_profil_multifunktionsarena",
+      "source_file": "NHA Projektbeschreibung 20260221.docx",
+      "story_role": "profile",
+      "block_template_ids": [
+        "company_profile",
+        "company_event_context"
+      ],
+      "excerpt": "Seit dem Einstieg von Paul Sinizin als Investor wird die Halle klar auf das Konzept einer Multifunktionsarena ausgerichtet. Die Nutzungsprofile reichen von Eishockey und Publikumslauf über Konzerte, Shows und Corporate-Events bis zu Gastronomie- und VIP-Formaten. Gerade diese breite Nutzung erklärt die betriebliche Komplexität des Standorts.",
+      "why_it_works": [
+        "Das Profil wird über reale Nutzung und Betriebslogik aufgebaut, nicht über Eventpathos.",
+        "Die spätere Projektlogik ist bereits im Unternehmenskontext angelegt."
+      ],
+      "reuse_moves": [
+        "Bei Arena- oder Servicefällen immer die Nutzungsrealität vor die Wirkung stellen.",
+        "Attraktivität nur dort andeuten, wo sie sich aus konkreter Nutzung und Auslastung ergibt."
+      ]
+    },
+    {
+      "id": "res_nha_bridge_attraktivitaet_zu_entwicklungsdruck",
+      "source_file": "NHA Projektbeschreibung 20260221.docx",
+      "story_role": "bridge",
+      "block_template_ids": [
+        "project_intro"
+      ],
+      "excerpt": "Die Probonio Arena hat sich als attraktive Veranstaltungsarena etabliert; im relevanten Einzugsgebiet gibt es keine vergleichbare Multifunktionshalle mit ähnlicher Infrastruktur und Kapazität. Mit zusätzlichen Nutzungsperspektiven steigt zugleich der Druck, Dienstleistungsangebot, Hospitality und Flächenkonzept konsequent weiterzuentwickeln.",
+      "why_it_works": [
+        "Die Brücke leitet den Projektdruck aus Marktposition und Nutzung ab.",
+        "Das Vorhaben erscheint als Antwort auf gewachsene Nachfrage, nicht als frei erfundene Ausbauidee."
+      ],
+      "reuse_moves": [
+        "Zwischen Standortattraktivität und Entwicklungsdruck eine klare Kausalität herstellen.",
+        "Einleitungen sollen zeigen, warum Erfolg und Wachstum neue Anforderungen auslösen."
+      ]
+    },
+    {
+      "id": "res_nha_problem_service_und_flaechen",
+      "source_file": "NHA Projektbeschreibung 20260221.docx",
+      "story_role": "pressure",
+      "block_template_ids": [
+        "project_{i}_current_state"
+      ],
+      "excerpt": "Die historisch gewachsene Flächenaufteilung bietet keine realistische Möglichkeit, VIP-/Hospitality-Angebote, zusätzliche Eventflächen sowie notwendige Back-of-House-Strukturen in ausreichender Dimension zu integrieren. Catering- und VIP-Prozesse sind durch Platzmangel und ungeeignete Layouts engpassgetrieben. Ein durchgängiges digitales Servicekonzept zur Reduktion von Wartezeiten und zur Effizienzsteigerung fehlt bislang.",
+      "why_it_works": [
+        "Der Problemdruck ist konkret, betrieblich und ohne Eventsprache formuliert.",
+        "Raum, Service und Digitalisierung werden als zusammenhängendes Engpasssystem lesbar."
+      ],
+      "reuse_moves": [
+        "Serviceprobleme über Flächen-, Durchsatz- und Ablaufgrenzen erklären.",
+        "Nicht nur fehlende Angebote benennen, sondern die operative Ursache offenlegen."
+      ]
+    },
+    {
+      "id": "res_nha_ziel_integriertes_betriebsmodell",
+      "source_file": "NHA Projektbeschreibung 20260221.docx",
+      "story_role": "target",
+      "block_template_ids": [
+        "project_{i}_development_goal",
+        "project_{i}_challenges_measures"
+      ],
+      "excerpt": "Die Entwicklung und Ausarbeitung des neuen Hallen- und Dienstleistungskonzepts wird als integriertes Innovationsprojekt aufgesetzt, das bauliche Erweiterung, Hospitality, Digitalisierung der Serviceprozesse und klimaschonenden Betrieb zusammenführt. Als Ergebnis liegt ein Zielkonzept vor, das räumlich-funktionale Planung, Dienstleistungs- und Logistikdesign, digitales Prozesskonzept und belastbare Umsetzungslogik zusammenbindet.",
+      "why_it_works": [
+        "Das Zielbild erzählt ein Betriebsmodell und nicht bloß eine Baumaßnahme.",
+        "Mehrere Ebenen werden in einer klaren, lesbaren Systemlogik zusammengeführt."
+      ],
+      "reuse_moves": [
+        "Bei komplexen Vorhaben das Zusammenspiel der Ebenen in einem Zielbild bündeln.",
+        "Die spätere Umsetzbarkeit über Betrieb, Logistik und Wirtschaftlichkeit mitdenken."
+      ]
+    },
+    {
+      "id": "res_speck_profil_industrie",
+      "source_file": "Speck Projektbeschreibung 20250422_Entwurf.docx",
+      "story_role": "profile",
+      "block_template_ids": [
+        "company_profile",
+        "company_history"
+      ],
+      "excerpt": "Wir, die SPECK Gruppe, sind ein mittelständisches Familienunternehmen in nunmehr dritter Generation. Stammsitz der Unternehmensgruppe ist Neunkirchen am Sand, wo das Unternehmen 1909 gegründet wurde. Mit weltweit rund 1.000 Mitarbeitern an über 50 Standorten gilt zugleich das Prinzip „Made in Germany“: Die Produktion der weltweit vertriebenen Produkte erfolgt ausschließlich in Deutschland.",
+      "why_it_works": [
+        "Die Kombination aus Familienprägung, industrieller Größe und Produktionsprinzip schafft sofort Profil.",
+        "Der Absatz klingt selbstbewusst, aber verdient und nicht werblich."
+      ],
+      "reuse_moves": [
+        "Industrieprofile über Eigentümerprägung, Produktionsrealität und Marktpräsenz aufbauen.",
+        "Wenige belastbare Kennzahlen genügen, wenn sie die richtige Substanz zeigen."
+      ]
+    },
+    {
+      "id": "res_speck_problem_materialfluss",
+      "source_file": "Speck Projektbeschreibung 20250422_Entwurf.docx",
+      "story_role": "pressure",
+      "block_template_ids": [
+        "project_{i}_current_state"
+      ],
+      "excerpt": "Die unzureichende Integration zwischen Lagerverwaltungssystem und Produktionsplanung führt zu einem Informationsdefizit, das sich negativ auf die Produktionsabläufe auswirkt. Die Lagerverwaltungsprozesse sind ineffizient, Buchungsprozesse weiterhin manuell geprägt und die Materialversorgung an den Fertigungslinien oft nicht bedarfsgerecht. Hinzu kommen veraltete Prüfstände ohne belastbare digitale Dokumentation der Leistungsdaten.",
+      "why_it_works": [
+        "Digitalisierung wird über reale Prozessbrüche und Qualitätsrisiken erklärt.",
+        "Der Absatz bleibt technisch konkret und vermeidet abstrakte Transformationsrhetorik."
+      ],
+      "reuse_moves": [
+        "Digitale Defizite immer an Materialfluss, Datenlücke, Taktung oder Qualitätsnachweis festmachen.",
+        "Mehrere Engpässe nur dann bündeln, wenn sie sich erkennbar gegenseitig verstärken."
+      ]
+    },
+    {
+      "id": "res_speck_ziel_digitale_prozesskette",
+      "source_file": "Speck Projektbeschreibung 20250422_Entwurf.docx",
+      "story_role": "target",
+      "block_template_ids": [
+        "project_{i}_development_goal",
+        "project_{i}_challenges_measures"
+      ],
+      "excerpt": "Zukünftig erfolgt die Materialbereitstellung durch ein computergestütztes System, das den Fertigungsmitarbeiter direkt an seinem Arbeitsplatz mit den benötigten Informationen versorgt. Scanner- und Barcodesysteme ersetzen manuelle Buchungen und erhöhen Bestandssicherheit, Transparenz und Reaktionsgeschwindigkeit. Ergänzend werden automatisierte, digital vernetzte Prüfstände eingeführt, deren Ergebnisse für Qualitätssteuerung und Prozessverbesserung ausgewertet werden können.",
+      "why_it_works": [
+        "Das Zielbild ist unmittelbar aus dem beschriebenen Ist-Zustand hergeleitet.",
+        "Technologie wird als Prozesskette und nicht als isoliertes IT-Projekt erzählt."
+      ],
+      "reuse_moves": [
+        "Digitale Zielbilder immer über künftige Arbeitsweise, nicht nur über Systeme, schildern.",
+        "Wenn möglich die Rückkopplung zu Qualität, Transparenz und Steuerung sichtbar machen."
+      ]
+    },
+    {
+      "id": "res_heil_multi_project_overview",
+      "source_file": "Projektbeschreibung P1+P2 Final.docx",
+      "story_role": "overview",
+      "block_template_ids": [
+        "project_overview",
+        "cost_summary"
+      ],
+      "excerpt": "Vorstellung der Innovationsvorhaben: Innovationsvorhaben 1 behandelt die Weiterentwicklung und prozesstechnische Integration des bestehenden CRM-Systems; Innovationsvorhaben 2 die Entwicklung und Implementierung eines neuen Verfahrens unter Anwendung eines weiterentwickelten PIM-Systems. Die Trennung der Vorhaben bleibt klar, gleichzeitig sind beide Teile als gemeinsamer Entwicklungsschritt des Unternehmens lesbar.",
+      "why_it_works": [
+        "Mehrvorhaben werden navigierbar, ohne auseinanderzufallen.",
+        "Die Übersicht schafft Orientierung, bevor technische Tiefe folgt."
+      ],
+      "reuse_moves": [
+        "Mehrprojektblöcke zuerst sauber gliedern, danach jedes Teilprojekt mit eigenem Profil laden.",
+        "Projektübersichten knapp halten und trotzdem die gemeinsame Klammer sichtbar machen."
+      ]
+    },
+    {
+      "id": "res_heil_profil_skala",
+      "source_file": "Projektbeschreibung P1+P2 Final.docx",
+      "story_role": "profile",
+      "block_template_ids": [
+        "company_profile",
+        "company_portfolio"
+      ],
+      "excerpt": "Die A.-W. HEIL & SOHN GmbH & Co. KG ist ein etabliertes, traditionsreiches Familienunternehmen im Handel mit Kfz-Ersatzteilen und Fahrzeugzubehör. Mittlerweile werden für den Kundenbedarf mehr als 130.000 Referenzen zur schnellen Verfügung gehalten. Mit 800 Mitarbeitern, Logistikzentrum in Sarstedt und 22 regionalen Verkaufshäusern verbindet das Unternehmen fachliche Tiefe mit belastbarer operativer Reichweite.",
+      "why_it_works": [
+        "Größe und Komplexität werden konkret, ohne in Kennzahlenprosa zu kippen.",
+        "Die operative Leistungsfähigkeit des Unternehmens wird schnell sichtbar."
+      ],
+      "reuse_moves": [
+        "Bei Handels- oder Plattformfällen Netzwerk, Logistik und Sortimentsbreite greifbar machen.",
+        "Größe nur nennen, wenn sie spätere Projektlogik oder Systemkomplexität erklärt."
+      ]
+    },
+    {
+      "id": "res_heil_crm_problem_digitaler_reifegrad",
+      "source_file": "Projektbeschreibung P1+P2 Final.docx",
+      "story_role": "pressure",
+      "block_template_ids": [
+        "project_intro",
+        "project_{i}_current_state"
+      ],
+      "excerpt": "Zahlreiche Prozesse sind bislang nur unzureichend digitalisiert; Daten werden vielfach manuell erfasst und sind nicht für alle Mitarbeiter zugänglich. Fachliches Know-how über Kunden liegt größtenteils in den Köpfen der Mitarbeitenden, während der ERP-Kundenstamm nur eine lückenhafte Grundlage liefert. Die Einführung des CRM-Systems ist damit kein Selbstzweck, sondern Teil einer größeren Digitalisierungsstrategie und der Vertriebsstrategie „Vision Q“.",
+      "why_it_works": [
+        "Der Text verbindet strategischen Anspruch mit einem sehr konkreten digitalen Reifegradproblem.",
+        "Der Leser versteht, warum das Vorhaben operativ dringend und strategisch anschlussfähig ist."
+      ],
+      "reuse_moves": [
+        "Strategie nur dann nennen, wenn sie direkt in reale Prozessprobleme und Systementscheidungen eingebettet ist.",
+        "Wissens- und Datenprobleme über den Arbeitsalltag erklären, nicht über Abstrakta."
+      ]
+    },
+    {
+      "id": "res_heil_pim_ziel_architektur",
+      "source_file": "Projektbeschreibung P1+P2 Final.docx",
+      "story_role": "target",
+      "block_template_ids": [
+        "project_{i}_development_goal",
+        "project_{i}_state_of_art",
+        "project_{i}_workpackages"
+      ],
+      "excerpt": "Das geplante PIM-System soll zukünftig als zentrale Plattform für das unternehmensweite Produktdatenmanagement fungieren und den gesamten Prozessfluss digital, effizient und automatisiert abbilden. Die Systemarchitektur wird bewusst modular und API-basiert gewählt; zugleich soll sie rund 800.000 Produktdatensätze performant verwalten, Klassifikationsmodelle integrieren und regelbasierte sowie KI-gestützte Datenpflege ermöglichen.",
+      "why_it_works": [
+        "Das Zielbild wirkt technologisch anspruchsvoll, weil Architektur, Datenmenge und Fachlogik zusammenkommen.",
+        "Der Absatz zeigt Systemverständnis statt bloßer Digitalisierungssemantik."
+      ],
+      "reuse_moves": [
+        "Tech-Zielbilder über Architektur, Datenlogik und operative Wirkung beschreiben.",
+        "Skalierbarkeit nur dort behaupten, wo konkrete Lasten oder Strukturen sichtbar sind."
+      ]
+    },
+    {
+      "id": "res_speyer_grund_mehrprojekt_navigation",
+      "source_file": "250131 Projektbeschreibung_Innovationsprogramm_E5.docx",
+      "story_role": "overview",
+      "block_template_ids": [
+        "project_overview",
+        "cost_summary"
+      ],
+      "excerpt": "Übersicht Innovationsprojekte: Projekt 1 adressiert KI-Anwendungen zur Prozesseffizienz, Projekt 2 einen datengesteuerten Instandhaltungsprozess mit Predictive-Maintenance-Ansatz, Projekt 3 eine integrierte Produktionsplanung auf Grundlage abgestimmter Produktions-, Absatz- und Bestellmengen. Die Navigation schafft zuerst Überblick, bevor jedes Vorhaben in die Tiefe geht.",
+      "why_it_works": [
+        "Mehrprojektfälle werden sofort lesbar strukturiert.",
+        "Die Übersicht bleibt knapp und funktional, ohne die Projekte zu verwässern."
+      ],
+      "reuse_moves": [
+        "Projektübersichten mit kurzer Scope-Logik aufbauen, nicht mit generischen Überschriften.",
+        "Bei mehreren Projekten früh Orientierung schaffen und technische Tiefe nachgelagert entfalten."
+      ]
+    }
+  ],
+  "reference_length_stats": {
+    "source_zip": "OneDrive_1_9.zip",
+    "document_count": 13,
+    "average_chars": 30945,
+    "min_chars": 19926,
+    "max_chars": 52549,
+    "total_chars": 402285,
+    "calculation_note": "Ermittelt aus 9 DOCX via textutil und 4 PDF via PDFKit-Textauslesung."
+  },
+  "reference_patterns": [
+    {
+      "id": "ref_new_innovation_site_building",
+      "label": "Aktuelle Innovationsfälle mit Standort-, Gebäude- und Prozesskopplung",
+      "source_files": [
+        "Lubeca Projektbeschreibung 20251117_Entwurf.docx",
+        "Gott Projektbeschreibung_Entwurf_20.11.2025.docx",
+        "Neu_Welt_Innovationsprogramm Peters Stahlbau GmbH_13112025.pdf"
+      ],
+      "best_for": [
+        "Produktions- und Standortentwicklungen",
+        "Gebäude plus Prozess- oder Produktionskonzept",
+        "LevelUp-Innovationsfälle"
+      ],
+      "structure_signals": [
+        "Gesellschaftsrechtliche Verhältnisse",
+        "Unternehmensprofil",
+        "optional Organigramm/Historie/Produkte/Qualitätsversprechen",
+        "Allgemeine Einleitung",
+        "langer Projekttitel",
+        "Derzeitiger Stand / Problembereich",
+        "Entwicklungsziel bzw. geplante Maßnahmen",
+        "Herausforderungen",
+        "Projektkosten & Zeitraum"
+      ],
+      "content_cues": [
+        "bestehender Standort oder Bestand stößt an Grenzen",
+        "neues Gebäude oder neue Infrastruktur ist mit Prozesslogik verknüpft",
+        "Qualität, Energie, Materialfluss oder Kapazität wirken als konkrete Treiber"
+      ],
+      "resource_ids": [
+        "res_lubeca_profile_substanz",
+        "res_lubeca_fuehrung_nachfolge",
+        "res_lubeca_verfahren_qualitaet",
+        "res_lubeca_bridge_wachstum_vorhaben",
+        "res_lubeca_problem_standortgrenze",
+        "res_lubeca_ziel_integrales_gebaeude"
+      ],
+      "cautions": [
+        "Nicht nur 'Neubau' schreiben; immer den Prozess- oder Produktionskern mitziehen.",
+        "Ganzheitlichkeit nur behaupten, wenn mehrere Ebenen konkret beschrieben sind."
+      ],
+      "style_samples": [
+        {
+          "source_file": "Lubeca Projektbeschreibung 20251117_Entwurf.docx",
+          "excerpt": "Wir sind ein mittelständisches Traditionsunternehmen mit langer Standortbindung und einem klaren Qualitätsanspruch in Herstellung und Produktentwicklung.",
+          "takeaway": "Ruhiger, selbstbewusster Einstieg, der Substanz über Geschichte, Standort und Qualität statt über Claims aufbaut."
+        },
+        {
+          "source_file": "Lubeca Projektbeschreibung 20251117_Entwurf.docx",
+          "excerpt": "Der Standort wird nicht nur beschrieben, sondern als operative Grundlage für Produktion, Materialfluss, Hygiene, Energie und Kapazität verständlich gemacht.",
+          "takeaway": "Gebäude- und Standortthemen immer mit realer Prozessmechanik verzahnen."
+        }
+      ]
+    },
+    {
+      "id": "ref_new_platform_ai",
+      "label": "Aktuelle Digitalisierungs-/Plattformfälle mit Daten- und KI-Bezug",
+      "source_files": [
+        "m2m Projektbeschreibung 20251111_final.docx",
+        "Projektbeschreibung P1+P2 Final.docx"
+      ],
+      "best_for": [
+        "Plattform-, PIM-, CRM- oder Handelssysteme",
+        "AI-/Automatisierungsbezug",
+        "digitale Transformationsfälle mit vielen Schnittstellen"
+      ],
+      "structure_signals": [
+        "Unternehmensprofil mit Plattform- oder Prozesslogik",
+        "Historie / Gruppenprofil",
+        "Allgemeine Einleitung",
+        "Projektteil mit Problemstand, Entwicklungsziel, optionaler Stand-der-Technik-Abgrenzung und Herausforderungen/Maßnahmen",
+        "bei Mehrvorhaben: Projektweise Wiederholung und Kostenübersicht"
+      ],
+      "content_cues": [
+        "bestehende digitale Vorstufen oder Systeme werden weiterentwickelt, nicht nur neu eingeführt",
+        "Schnittstellen, Datenmengen, Automatisierung, KI-Funktion und Mehrkanal-/Plattformlogik sind konkrete Anker"
+      ],
+      "resource_ids": [
+        "res_speck_profil_industrie",
+        "res_speck_problem_materialfluss",
+        "res_speck_ziel_digitale_prozesskette",
+        "res_heil_profil_skala",
+        "res_heil_crm_problem_digitaler_reifegrad",
+        "res_heil_pim_ziel_architektur"
+      ],
+      "cautions": [
+        "Nicht nur KI-Schlagworte auflisten; die Plattform- oder Prozessmechanik muss sichtbar bleiben.",
+        "Vermeide reine Marketing- oder Vertriebsargumentation."
+      ],
+      "style_samples": [
+        {
+          "source_file": "Projektbeschreibung P1+P2 Final.docx",
+          "excerpt": "Das Unternehmen beschreibt digitale Systeme nicht als Vision aus dem Off, sondern als konkrete Weiterentwicklung bestehender Prozess- und Datenlogiken.",
+          "takeaway": "Digitale Vorhaben wirken glaubwürdig, wenn Entwicklungstiefe, Systemstand und Anschlussfaehigkeit sichtbar werden."
+        },
+        {
+          "source_file": "m2m Projektbeschreibung 20251111_final.docx",
+          "excerpt": "Technologische Kompetenz entsteht im Text ueber Datenfluesse, Automatisierung, API-Logik und operative Skalierung statt ueber Buzzwords.",
+          "takeaway": "Tech-Faelle muessen nach echter Plattform- und Prozessbeherrschung klingen, nicht nach Sales-Folie."
+        }
+      ]
+    },
+    {
+      "id": "ref_new_event_service_building",
+      "label": "Aktuelle Event-, Arena- und Immobilienfälle",
+      "source_files": [
+        "NHA Projektbeschreibung 20260221.docx",
+        "NHA Parkhaus Projektbeschreibung 20260227.docx"
+      ],
+      "best_for": [
+        "Event-, Arena-, Hospitality- oder Flächenkonzepte",
+        "digitale oder innovative Erweiterungen rund um Besucher-, Park- oder Serviceprozesse",
+        "Immobilienbezogene Unterlagen mit klarem Nutzungsprofil"
+      ],
+      "structure_signals": [
+        "Gesellschaftsrechtliche Verhältnisse",
+        "Unternehmensprofil",
+        "Veranstaltungskonzept",
+        "Allgemeine Einleitung",
+        "Projektteil mit Problemstand, Entwicklungsziel, optionaler Stand-der-Technik-Abgrenzung und Herausforderungen"
+      ],
+      "content_cues": [
+        "Nutzungsprofile und Flächenlogik erklären den Projektengpass",
+        "Service-, Besucher- oder Parkprozesse werden mit baulicher oder digitaler Erweiterung gekoppelt"
+      ],
+      "resource_ids": [
+        "res_nha_profil_multifunktionsarena",
+        "res_nha_bridge_attraktivitaet_zu_entwicklungsdruck",
+        "res_nha_problem_service_und_flaechen",
+        "res_nha_ziel_integriertes_betriebsmodell"
+      ],
+      "cautions": [
+        "Nicht zu touristisch oder eventwerblich schreiben.",
+        "Immer die operative Flächen- bzw. Prozesslogik hervorheben."
+      ],
+      "style_samples": [
+        {
+          "source_file": "NHA Projektbeschreibung 20260221.docx",
+          "excerpt": "Die Attraktivitaet des Standorts wird gezeigt, ohne Eventsprache zu bemuehen, und sofort mit Kapazitaet, Besucherfuehrung und Serviceprozessen verbunden.",
+          "takeaway": "Erlebnisqualitaet immer in betriebliche Logik uebersetzen."
+        },
+        {
+          "source_file": "NHA Projektbeschreibung 20260221.docx",
+          "excerpt": "Nutzungsprofile wie Sport, Hospitality und Events erklaeren, warum bauliche und digitale Erweiterungen unternehmerisch notwendig werden.",
+          "takeaway": "Nicht die Arena feiern, sondern ihre Nutzung so praezise schildern, dass der Projektdruck plausibel wird."
+        }
+      ]
+    },
+    {
+      "id": "ref_old_multi_project_compact",
+      "label": "Alte Mehrprojekt-Struktur als Ideenquelle",
+      "source_files": [
+        "Kurzbeschreibung Innovationsprojekte 2018 final.docx",
+        "GKD Innovationsprojekte 2.0.pdf",
+        "250131 Projektbeschreibung_Innovationsprogramm_E5.docx"
+      ],
+      "best_for": [
+        "Mehrvorhaben",
+        "klare Projektübersicht und Kostenzusammenfassung",
+        "detailliertere technische Argumentation pro Projekt"
+      ],
+      "structure_signals": [
+        "Projektübersicht",
+        "Zusammenfassung der Projektkosten",
+        "wiederholte Projektstruktur mit Stand der Technik / Problemen / Ziel / Abgrenzung / Herausforderungen / Kosten"
+      ],
+      "content_cues": [
+        "starke technische Problem-Ziel-Herausforderungs-Logik",
+        "gute Ideen für Mehrprojekt-Navigation und Kostenbündelung"
+      ],
+      "resource_ids": [
+        "res_heil_multi_project_overview",
+        "res_speyer_grund_mehrprojekt_navigation"
+      ],
+      "cautions": [
+        "Nicht die Altstruktur 1:1 als aktuelle Standardstruktur ausgeben.",
+        "Die alten Kapitel sind Ideengeber für inhaltliche Tiefe, nicht für die moderne Endstruktur."
+      ],
+      "style_samples": [
+        {
+          "source_file": "250131 Projektbeschreibung_Innovationsprogramm_E5.docx",
+          "excerpt": "Mehrere Teilvorhaben werden klar getrennt, aber jeweils mit eigener Problem-Ziel-Herausforderungs-Logik aufgeladen.",
+          "takeaway": "Mehrprojektfaelle brauchen Navigation und Profil, nicht nur Wiederholung."
+        }
+      ]
+    },
+    {
+      "id": "ref_old_digitalization_bridge",
+      "label": "Alte Digitalisierungsfälle als Brücke für Prozess- und Systemtiefe",
+      "source_files": [
+        "Speck Projektbeschreibung 20250422_Entwurf.docx",
+        "Alt_Welt_ERP Innovation Gustav Seeland GmbH 15042025.pdf"
+      ],
+      "best_for": [
+        "Digitalisierungsfälle mit mehreren Prozesslinien",
+        "Brücke zwischen Altidee und neuer Struktur"
+      ],
+      "structure_signals": [
+        "mehrere Digitalisierungsprojekte",
+        "detaillierte Prozess-, Lager-, Produktions- oder Buchungslogik"
+      ],
+      "content_cues": [
+        "alte Dokumente liefern gute Prozessbeispiele und Konkretisierungsideen"
+      ],
+      "resource_ids": [
+        "res_speck_problem_materialfluss",
+        "res_speck_ziel_digitale_prozesskette"
+      ],
+      "cautions": [
+        "Nicht das alte Kapitelraster kopieren, sondern die inhaltliche Konkretheit übernehmen."
+      ],
+      "style_samples": [
+        {
+          "source_file": "Speck Projektbeschreibung 20250422_Entwurf.docx",
+          "excerpt": "Prozessprobleme werden anhand von Materialfluss, Buchung, Pruefstaenden und Montageablauf erklaert statt ueber abstrakte Digitalisierungsrhetorik.",
+          "takeaway": "Ohne Referenzmuster sollte genau diese Prozessnaehe trotzdem der Standard bleiben."
+        }
+      ]
+    }
+  ],
+  "style_profiles": [
+    {
+      "id": "balanced_dossier",
+      "label": "Ausgewogenes Unternehmensdossier",
+      "use_when": [
+        "allgemeine Standardfälle",
+        "wenn kein klarer Spezialfall dominiert"
+      ],
+      "directives": [
+        "schreibe engagiert und fundiert, aber nie aufdringlich",
+        "verbinde sachliche Belastbarkeit mit einer spürbar interessierten Perspektive auf das Unternehmen",
+        "jeder Absatz soll konkrete Anker und eine kurze Einordnung enthalten"
+      ]
+    },
+    {
+      "id": "tradition_production_dossier",
+      "label": "Tradition / Produktion / Mittelstand",
+      "use_when": [
+        "etablierte Familienunternehmen",
+        "Produktion, Standort, Qualität, Verfahren, Handwerk"
+      ],
+      "directives": [
+        "arbeite Erfahrung, Kontinuität, Qualitätsverständnis und operative Tiefe heraus",
+        "zeige Stolz über Können, Entwicklung und Verlässlichkeit, nicht über Superlative",
+        "historische oder technische Details dürfen Profil geben, sofern sie die heutige Unternehmensrealität stützen"
+      ]
+    },
+    {
+      "id": "operative_digitalisierung_dossier",
+      "label": "Digitale Prozesse / Daten / Mittelstand",
+      "use_when": [
+        "Digitalisierungsfälle im Mittelstand",
+        "Daten-, KI- oder Systemvorhaben mit klarer Prozesswirkung"
+      ],
+      "directives": [
+        "klinge technologisch versiert, aber nie pitchdeck-artig oder buzzwordlastig",
+        "stelle Prozesslogik, Datenfluesse, Rollen, Nachweisfuehrung und Umsetzungstiefe vor Toolnamen und Architekturfloskeln",
+        "zeige Digitalisierung ueber konkrete betriebliche Hebel, z. B. Disposition, Abrechnung, Freigaben, Reporting, Dokumentation oder Qualitaetsnachweise"
+      ]
+    },
+    {
+      "id": "venue_service_dossier",
+      "label": "Arena / Immobilie / Serviceerlebnis",
+      "use_when": [
+        "Arena-, Hospitality-, Parkhaus- oder immobiliennahe Servicevorhaben"
+      ],
+      "directives": [
+        "mache Nutzungsprofil, Attraktivität und Betriebsrealität anschaulich, ohne eventwerblich zu werden",
+        "verbinde Erlebnisqualität immer mit belastbarer Flächen-, Besucher- oder Serviceprozesslogik",
+        "zeige, warum der Standort bzw. die Infrastruktur unternehmerisch relevant ist"
+      ]
+    },
+    {
+      "id": "multi_project_dossier",
+      "label": "Mehrprojekt / technische Tiefe",
+      "use_when": [
+        "mehrere Teilvorhaben",
+        "umfangreiche technische Argumentation"
+      ],
+      "directives": [
+        "halte die Navigation klar und die Sprache lebendig, damit die Unterlage trotz Umfang interessant bleibt",
+        "jedes Teilprojekt braucht ein eigenes Profil und eine eigene Problem-Ziel-Mechanik",
+        "vermeide Wiederholungen, die nach Copy-Paste zwischen Projekten klingen"
+      ]
+    }
+  ],
+  "style_guidance": {
+    "reader_effect": [
+      "Der Leser soll merken, dass Unternehmen und Vorhaben wirklich verstanden wurden.",
+      "Die Unterlage soll sich interessant lesen, ohne Showeffekte zu brauchen.",
+      "Inhaber oder Geschäftsführung sollen denken: Das trifft unser Unternehmen gut und zeigt Substanz."
+    ],
+    "preferred_moves": [
+      "Absätze möglichst mit einem konkreten Anker eröffnen, z. B. Standort, Produktgruppe, Prozessgrenze, Führungsstruktur, Marktrolle oder Systemlogik.",
+      "Auf den Anker eine kurze Einordnung folgen lassen: warum dieser Punkt für Unternehmen oder Vorhaben relevant ist.",
+      "Stärken indirekt zeigen, indem operative Realität, Erfahrung, Qualitätsanspruch und Entwicklungskraft sichtbar werden.",
+      "Problemdruck als Folge von Wachstum, Komplexität, Marktanforderung oder Qualitätsanspruch erklären, nicht als bloßes Defizit.",
+      "Wo Material vorhanden ist, Sätze so bauen, dass ein plastisches Bild des Unternehmens entsteht statt eines abstrakten Branchenporträts.",
+      "Jeder wichtige Absatz soll mindestens einen unternehmens- oder projektspezifischen Anker enthalten, sofern die Faktenlage das trägt.",
+      "Digitalisierungsprojekte ueber konkrete Ablauf-, Daten-, Freigabe- oder Nachweislogik beschreiben statt ueber bloße Toollisten."
+    ],
+    "document_arc": [
+      "Dokumentlogik: erst ein belastbares Bild des Unternehmens aufbauen, daraus den realen Entwicklungsdruck ableiten und erst dann das Vorhaben als naechsten folgerichtigen Schritt entfalten.",
+      "Jeder Abschnitt soll auf etwas aufbauen, das vorher schon angelegt wurde: Unternehmen, Markt, Standort, Prozess, Technologie oder Zielbild.",
+      "Projektkosten und Zeitraum sind das ruhige Landing des Dossiers, nicht ein abrupter Bruch nach den Projektabschnitten."
+    ],
+    "section_bridging": [
+      "Blockanfänge nicht wie harte Neustarts formulieren; wo passend kurz an den vorigen Gedanken anschließen.",
+      "Wiederkehrende Leitbegriffe aus dem Unternehmen oder Vorhaben bewusst erneut aufgreifen, damit ein roter Faden entsteht.",
+      "Vermeide, dass mehrere Abschnitte jeweils wieder bei null erklären, was das Unternehmen macht.",
+      "Wenn ein neuer Begriff oder ein neues Thema wie Marketing, Homeoffice oder Plattformlogik auftaucht, muss der Bezug zum bisherigen Gedanken sofort klar werden."
+    ],
+    "reference_handling": [
+      "Eingebettete Referenz-Resources sind Kalibrierung für Ton, Absatzmechanik, Verdichtung und Übergänge; sie dürfen nicht als branchenfremde Textbausteine kopiert werden.",
+      "Nutze aus guten Referenzen vor allem, wie konkrete Fakten eingeordnet, Stärken verdient sichtbar gemacht und Abschnitte weich ineinander geführt werden.",
+      "Wenn eine Referenz inhaltlich nicht passt, ist ihre Dramaturgie und Formulierungsmechanik wichtiger als ihr Vokabular."
+    ],
+    "dossier_story_model": [
+      "Identität: Das Dokument zeigt zuerst, wer das Unternehmen konkret ist, wie es arbeitet und worin seine gewachsene Substanz liegt.",
+      "Kompetenz: Historie, Portfolio, Standort, Systeme oder Führungsstruktur vertiefen nur das, was für die heutige Leistungsfähigkeit relevant ist.",
+      "Entwicklungsdruck: Probleme entstehen aus Wachstum, Komplexität, Qualitätsanspruch, Marktveränderung oder Infrastrukturgrenzen und werden daraus hergeleitet.",
+      "Folgerichtiger Schritt: Das Vorhaben erscheint als logische nächste Ausbaustufe des bereits beschriebenen Unternehmens.",
+      "Umsetzungsfähigkeit: Herausforderungen und Maßnahmen belegen, dass das Unternehmen das Vorhaben ernsthaft durchdrungen hat.",
+      "Ruhige Landung: Kosten, Zeitraum und Fazit wirken wie ein nachvollziehbarer Abschluss und nicht wie ein harter Dokumentbruch."
+    ],
+    "section_role_guidance": [
+      "Unternehmensprofil schafft Vertrauen und Profil; es soll Identität, Entwicklung, bisherige Projekte und operative Realität aufrufen, nicht bloß Stammdaten oder Umsatzzahlen wiederholen.",
+      "Historie und Portfolio bekommen nur dann Raum, wenn sie heutige Kompetenz, Marktstellung oder Qualitätsanspruch sichtbar machen.",
+      "Die Einleitung baut die Brücke vom Unternehmen zum Vorhaben; sie darf das Unternehmen nicht noch einmal bei null vorstellen.",
+      "Der Problembereich erklärt den Druck aus dem bereits aufgebauten Unternehmensbild heraus und nimmt Abgrenzungspunkte dort auf, wo sie den Ist-Zustand verständlicher machen.",
+      "Das Entwicklungsziel beantwortet den beschriebenen Druck mit einer Zielarchitektur statt mit abstrakter Optimierungsrhetorik.",
+      "Herausforderungen und Maßnahmen sollen zeigen, dass das Vorhaben substanziell vorbereitet ist und nicht nur auf Schlagwortniveau existiert.",
+      "Arbeitspakete und Umsetzungsschritte sollen nach Möglichkeit als Fließtext mit Phasenlogik funktionieren, nicht als isolierte Schrittfolge."
+    ],
+    "no_reference_strategy": [
+      "Wenn Referenzen deaktiviert sind, fuehre die Leserwirkung ueber konkrete Fakten, Dokumentlogik und Abschnittsuebergaenge herbei, nicht ueber stilistische Lautstaerke.",
+      "Nutze Unternehmenskontext, bestehende Bloecke und document_flow aktiv, um Wiederholungen und harte Umbrueche zu vermeiden.",
+      "Arbeite mit wiederkehrenden Kernankern des Falls, z. B. Standort, Technologie, Kundenlogik, Qualitaetsanspruch oder Materialfluss, damit die Unterlage wie aus einem Guss wirkt.",
+      "Lieber wenige starke, spezifische Aussagen sauber verbinden als viele mittelgute Aussagen blockweise abarbeiten."
+    ],
+    "internal_perspective_rules": [
+      "Schreibe als interne Feststellung oder in ruhiger Wir-Perspektive, wenn der Fall es trägt.",
+      "Niemals aus Gutachter-, Beobachter- oder Aktenperspektive formulieren.",
+      "Keine Saetze, die Unsicherheit ueber das eigene Unternehmen signalisieren.",
+      "Eine einmal gewaehlte Perspektive im gesamten Paket konsequent durchhalten; nicht zwischen dritter Person und Wir-Form springen."
+    ],
+    "evidence_gap_policy": [
+      "Fehlende Unterlagen, Zahlen oder Vergleichspunkte nie im finalen Dossier kommentieren.",
+      "Wenn ein Punkt nicht sauber belegt ist, lasse ihn weg oder loese eine Rueckfrage aus.",
+      "Keine Formulierungen wie 'liegt nicht vor', 'nicht gesondert belegt', 'soweit beigefuegt' oder 'nach dem vorliegenden Kontext'."
+    ],
+    "digital_case_rules": [
+      "Bei Digitalisierungsfaellen mindestens zwei, besser drei konkrete betriebliche Hebel oder Anwendungsfaelle nennen.",
+      "Toolnamen nur dann nennen, wenn klar wird, welcher reale Ablauf damit veraendert wird.",
+      "KI, Power BI, SharePoint, Dashboards oder Automatisierung nie als Selbstzweck darstellen."
+    ],
+    "numbers_freshness_rules": [
+      "Bei Umsatz-, Mitarbeiter-, Standort- oder anderen Unternehmenskennzahlen das Bezugsjahr nennen, wenn die Zahl nicht offenkundig aktuell ist.",
+      "Wenn Dokumentdatum und Kennzahlenjahr merklich auseinanderliegen, bevorzuge aktuelle intern freigegebene Werte oder loese eine Rueckfrage aus.",
+      "Aeltere Zahlen duerfen nur stehenbleiben, wenn ihr Zeitbezug klar und fuer die Aussage vertretbar ist."
+    ],
+    "timeline_logic_rules": [
+      "Wenn Projektlaufzeiten vor dem Dokumentstichtag beginnen, die Datumslogik bewusst pruefen und bei Bedarf erklaeren oder intern absichern.",
+      "Projektzeitraeume sollen fuer Geschaeftsfuehrung und Dritte auf den ersten Blick plausibel wirken.",
+      "Keine stillschweigende Vorverlagerung von Vorhaben ohne erkennbaren Kontext."
+    ],
+    "terminology_consistency_rules": [
+      "Produkt-, Tool-, Programm- und Zertifikatsnamen innerhalb des Dokuments in genau einer Schreibweise fuehren.",
+      "Bindestriche, Gross-/Kleinschreibung und Sprachmischungen konsequent vereinheitlichen, z. B. bei Power BI oder OEKOPROFIT.",
+      "Interne Lieblingsbegriffe des Hauses gegenueber importierter Beratersprache bevorzugen."
+    ],
+    "culture_fit_rules": [
+      "Kulturell sensible oder importierte Begriffe wie 'Mental Health' nur verwenden, wenn das Unternehmen sie selbst so nutzt.",
+      "KI-Begriffe nur dann einsetzen, wenn 2-3 konkrete Anwendungsfaelle oder Einsatzmechaniken unmittelbar klar werden.",
+      "Bei technisch-operativen Mittelstandsfaellen lieber arbeitsnahe, bodenstaendige Formulierungen als HR- oder Tech-Modeworte."
+    ],
+    "consultant_phrases_to_soften": [
+      "belastbare operative Groesse",
+      "unternehmerisch folgerichtig",
+      "gewachsene operative Tiefe",
+      "naechster Entwicklungsschritt",
+      "Hebel",
+      "Logik",
+      "durchgaengig"
+    ],
+    "dead_phrases_to_avoid": [
+      "vor diesem Hintergrund",
+      "im Rahmen des Vorhabens",
+      "weist eine hohe Relevanz auf",
+      "konnte festgestellt werden",
+      "sollte ermöglicht werden",
+      "stellt einen wesentlichen Baustein dar",
+      "zielt darauf ab",
+      "um den Anforderungen der Zukunft gerecht zu werden"
+    ],
+    "forbidden_meta_phrases": [
+      "nach dem vorliegenden Kontext",
+      "oeffentlich belastbare Hinweise",
+      "öffentlich belastbare Hinweise",
+      "soweit beigefuegt",
+      "soweit beigefügt",
+      "nicht gesondert belegt",
+      "liegt derzeit nicht vor",
+      "falls vorhanden",
+      "sofern beigefuegt",
+      "sofern beigefügt"
+    ],
+    "revision_checklist": [
+      "Könnte dieser Absatz fast genauso bei einem anderen Unternehmen stehen? Wenn ja, konkreter machen.",
+      "Klingt der Absatz eher nach Förderformular als nach ernsthaft geschriebenem Unternehmensdossier? Dann entschlacken und beleben.",
+      "Ist der Absatz schwer zu lesen, weil Sätze zu lang, zu verschachtelt oder zu fachwortlastig sind?",
+      "Tauchen Begriffe doppelt oder unvermittelt auf, z. B. Homeoffice und Zuhause oder Marketing ohne vorherigen Bezug?",
+      "Sind Problembereich, Entwicklungsziel und Herausforderungen erkennbar miteinander verschränkt?",
+      "Ist die positive Wirkung des Textes aus Fakten verdient oder nur sprachlich behauptet?",
+      "Werden Probleme klar benannt, ohne das Unternehmen unnötig klein, passiv oder schwach erscheinen zu lassen?",
+      "Ist mindestens ein echter Anker aus Geschäft, Markt, Prozess, Standort, Technologie oder Führung sichtbar?",
+      "Würde ein Geschäftsführer sagen: Ja, das beschreibt unser Unternehmen mit Ernsthaftigkeit und erkennbarem Engagement?",
+      "Klingt der Absatz nach einer internen Unternehmensdarstellung statt nach externer Akten- oder Gutachtersprache?",
+      "Sind Zahlen, Jahre und Begriffe release-fähig konsistent und ausreichend aktuell?",
+      "Ist die Perspektive im gesamten Paket einheitlich?",
+      "Wuerde der Absatz auch ohne Beraterwoerter noch praezise und souveraen wirken?"
+    ],
+    "micro_examples": [
+      {
+        "id": "example_profile_anchor",
+        "label": "Unternehmensprofil mit verdient positiver Wirkung",
+        "prefer": "Das Unternehmen entwickelt und produziert am Stammsitz seit Jahren spezialisierte Lösungen fuer einen klar umrissenen Markt und hat daraus eine belastbare operative Tiefe aufgebaut.",
+        "avoid": "Das Unternehmen ist innovativ, kundenorientiert und hervorragend am Markt positioniert.",
+        "why": "Der gute Eindruck entsteht aus Tätigkeit, Markt und Entwicklung, nicht aus Selbstlob."
+      },
+      {
+        "id": "example_problem_pressure",
+        "label": "Problemdruck ohne Defizitton",
+        "prefer": "Die bestehenden Abläufe stoßen vor allem dort an Grenzen, wo wachsende Variantenvielfalt, manuelle Schnittstellen und enge Taktung zusammenkommen.",
+        "avoid": "Die bisherigen Prozesse sind unzureichend und nicht mehr zeitgemaess.",
+        "why": "Der Druck wird konkret erklärt, ohne das Unternehmen pauschal abzuwerten."
+      },
+      {
+        "id": "example_goal_mechanics",
+        "label": "Entwicklungsziel mit Haltung",
+        "prefer": "Ziel ist eine Ausbaustufe, in der Produktion, Datenfluss und Materialbereitstellung so verzahnt werden, dass das Unternehmen den naechsten Wachstumsschritt belastbar tragen kann.",
+        "avoid": "Ziel ist die Optimierung und Zukunftssicherung des Unternehmens.",
+        "why": "Das Zielbild zeigt Richtung, Mechanik und unternehmerischen Anspruch."
+      },
+      {
+        "id": "example_dead_language",
+        "label": "Totes Foerderdeutsch vermeiden",
+        "prefer": "Die neue Loesung verkuerzt Rueckkopplungen zwischen Lager, Fertigung und Disposition erheblich und macht Engpaesse frueher sichtbar.",
+        "avoid": "Im Rahmen des Vorhabens soll eine signifikante Verbesserung der Prozesslandschaft erzielt werden.",
+        "why": "Konkrete Wirkung ist interessanter und glaubwuerdiger als abstrakte Verwaltungssprache."
+      },
+      {
+        "id": "example_internal_voice",
+        "label": "Binnenperspektive statt Gutachterton",
+        "prefer": "Die Gesellschaft fuehrt die Schwer- und Spezialtransportlogik, die Kranleistungen und die Industriemontage am Standort in einer durchgaengigen Leistungskette zusammen.",
+        "avoid": "Nach dem vorliegenden Kontext wird das Unternehmen als Spezialdienstleister beschrieben.",
+        "why": "Interne Feststellungssprache wirkt freigabefaehig; Beobachterton wirkt distanziert und unsicher."
+      },
+      {
+        "id": "example_digital_operating_levers",
+        "label": "Digitalisierung ueber reale Hebel",
+        "prefer": "Zukünftig greifen Disposition, Einsatzfreigabe und Abrechnung auf dieselbe Datenbasis zu, sodass Rueckmeldungen aus dem Einsatz ohne Medienbruch in Nachweisfuehrung und Faktura einfliessen.",
+        "avoid": "Geplant ist eine KI-gestuetzte Prozessautomatisierung mit SharePoint, Power BI und modernen Dashboards.",
+        "why": "Der Nutzen wird ueber reale betriebliche Mechanik sichtbar, nicht ueber Toolnamen."
+      }
+    ]
+  },
+  "style_rules": {
+    "global": [
+      "Deutsch, konkret, unternehmerisch-professionell und souverän; nicht nüchtern-behördlich.",
+      "Unterlagen sollen wie ein starkes, seriöses Unternehmensdossier klingen, das Inhaber oder Geschäftsführung gerne über das eigene Unternehmen lesen und freigeben würden.",
+      "Positive Wirkung über belastbare Substanz erzeugen: Erfahrung, Marktstellung, Qualitätsanspruch, Prozesskompetenz, Entwicklungskraft und operative Realität sichtbar machen, sofern belegt.",
+      "Kein Werbeton, keine leeren Superlative und keine Hochglanz-Broschürensprache.",
+      "Keine erfundenen Fakten, Zahlen oder Namen.",
+      "Keine Platzhalterklammern und keine Textbaustein-Floskeln.",
+      "Bestehende konkrete Details nie zu Sammelbegriffen entkonkretisieren.",
+      "Probleme und Engpässe klar benennen, ohne das Unternehmen unnötig defizitär erscheinen zu lassen.",
+      "Bevorzuge interne Feststellungssprache oder eine ruhige Wir-Perspektive; nie Gutachter-, Beobachter- oder Aktenperspektive.",
+      "Wenn Fakten nicht sauber belegbar sind, entweder Rückfrage auslösen oder den Punkt weglassen, statt die Unsicherheit auszuschreiben.",
+      "Unterlagen müssen wie reale Kundenunterlagen klingen, nicht wie eine AI-Zusammenfassung."
+    ],
+    "revision_focus": [
+      "Bei Revisionen zuerst Lücken in Pflichtblöcken schließen, dann schwache Blöcke schärfen.",
+      "Revisionen sollen vorhandene Blöcke verbessern statt alles neu zu formulieren.",
+      "Zu sterile, generische oder überformalistische Passagen in ruhig-wertschätzende, unternehmerische Dossier-Sprache überführen.",
+      "Verbotene Meta-Formeln, Platzhalter, inkonsistente Begriffe und zu alte Kennzahlen konsequent bereinigen oder zur Rueckfrage markieren.",
+      "Wenn Nutzerantworten neue Informationen liefern, zuerst betroffene Bestandsblöcke anpassen, danach offene Blöcke ergänzen."
+    ]
+  }
+}

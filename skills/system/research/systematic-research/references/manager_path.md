@@ -14,10 +14,10 @@ tool are in `check_contracts.md`. The lint catalogue used by
 Every run starts with a known `report_type_id` — exactly one of
 `feasibility_study`, `market_research`, `competitive_analysis`,
 `technology_screening`, `whitepaper`, `literature_review`,
-`decision_brief`. The manager reads it from
+`decision_brief`, `project_description`, `source_review`. The manager reads it from
 `workspace_snapshot.report_type_id` (and the resolved object from
 `workspace_snapshot.report_type`). It never guesses; if both fields are
-missing or the id is not one of the seven, the manager emits
+missing or the id is not one of the supported report types, the manager emits
 `decision: "blocked"` with `summary: "missing report_type_id"` and stops.
 
 The first call after `workspace_snapshot` is `asset_lookup` with

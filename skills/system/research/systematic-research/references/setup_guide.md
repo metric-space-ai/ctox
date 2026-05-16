@@ -312,7 +312,7 @@ layout-polish pass with an ad-hoc DOCX script for production output.
 After rendering, run the visual review:
 
 ```bash
-python3 /Users/michaelwelsch/Documents/ctox/skills/system/research/deep-research/scripts/render_check.py \
+python3 /Users/michaelwelsch/Documents/ctox/skills/system/research/systematic-research/scripts/render_check.py \
     --docx report.docx \
     --out-dir /tmp/render_check
 # -> prints one PNG path per page on stdout

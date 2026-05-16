@@ -17,7 +17,7 @@ cluster: research
 
 ## When to use this skill
 
-Trigger this skill when the operator asks to recherchier one or more companies (and optionally their Ansprechpartner) and wants the Sellify-/Master-AT-typical field set populated. This is **not** the right skill for free-form market studies, decision briefs, or feasibility reports — those go to [`deep-research`](../deep-research/SKILL.md). This skill is for the structured *prospect record*: a typed bundle of fields per company that another system (Sellify, Business OS Sales pipeline, CSV export) can consume.
+Trigger this skill when the operator asks to recherchier one or more companies (and optionally their Ansprechpartner) and wants the Sellify-/Master-AT-typical field set populated. This is **not** the right skill for free-form market studies, decision briefs, or feasibility reports — those go to [`systematic-research`](../systematic-research/SKILL.md). This skill is for the structured *prospect record*: a typed bundle of fields per company that another system (Sellify, Business OS Sales pipeline, CSV export) can consume.
 
 ## Field vocabulary
 
@@ -204,7 +204,7 @@ surfaced to the operator as an opt-in suggestion, not a failure.
 ## What this skill does NOT do
 
 - Free-form market research, competitor analyses, feasibility reports → use
-  [`deep-research`](../deep-research/SKILL.md).
+  [`systematic-research`](../systematic-research/SKILL.md).
 - Sellify or Business-OS writeback — this skill produces the typed
   prospect record; persistence to Postgres / Sellify is the calling
   module's responsibility.

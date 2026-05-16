@@ -1142,113 +1142,6 @@ def topic_evidence_terms(topic: str) -> list[str]:
     return terms
 
 
-def source_acceptance(record: dict[str, Any], topic: str, query: str = "") -> tuple[bool, str]:
-    """Gate a screened source before it enters the usable candidate catalog.
-
-    Query text is intentionally excluded. A hit is accepted only when the
-    returned source metadata itself contains topic evidence and technical-data
-    evidence. This keeps benchmark-specific source names out of the gate.
-    """
-
-    text = source_text(record)
-    if not text:
-        return False, "empty_source_metadata"
-
-    prompt_terms = topic_evidence_terms(topic)
-    query_terms = query_core_terms(query, limit=12)
-    topic_hits = matching_terms(text, list(dict.fromkeys([*prompt_terms, *query_terms])))
-    evidence_hits = matching_terms(text, SOURCE_EVIDENCE_TERMS)
-    url = extract_url(record).lower()
-    source_kind = str(record.get("source_kind") or "").lower()
-    authority_hit = any(host in url for host in SOURCE_AUTHORITY_HOSTS)
-    title = str(record.get("title") or record.get("name") or "").lower()
-    strong_title_hit = bool(topic_hits and any(contains_term(title, hit) for hit in topic_hits[:6]))
-
-    if not topic_hits:
-        return False, "missing_topic_context_in_source"
-    if not evidence_hits and not authority_hit and source_kind not in {"openalex", "crossref"}:
-        return False, "missing_source_evidence_context"
-
-    reason_bits = [f"topic={topic_hits[0]}"]
-    if evidence_hits:
-        reason_bits.append(f"evidence={evidence_hits[0]}")
-    if authority_hit:
-        reason_bits.append("authority_host")
-    if strong_title_hit:
-        reason_bits.append("title_match")
-    return True, "accepted:" + ";".join(reason_bits)
-
-
-def source_relevance_score(record: dict[str, Any], topic: str = "") -> int:
-    """Return a deterministic 0-100 score for accepted source triage."""
-
-    text = source_text(record)
-    if not text:
-        return 0
-    topic_terms = topic_evidence_terms(topic) if topic else []
-    source_record_terms = (
-        "dataset",
-        "database",
-        "repository",
-        "github",
-        "zenodo",
-        "figshare",
-        "dataverse",
-        "download",
-        "csv",
-        "xlsx",
-        "api",
-        "portal",
-    )
-    primary_source_terms = (
-        "official",
-        "standard",
-        "manual",
-        "datasheet",
-        "specification",
-        "technical report",
-        "government",
-        "agency",
-        "manufacturer",
-        "documentation",
-    )
-    evidence_detail_terms = (
-        "measurement",
-        "measurements",
-        "measured",
-        "experimental",
-        "experiment",
-        "benchmark",
-        "table",
-        "method",
-        "results",
-        "validation",
-        "case study",
-    )
-    weak_context_terms = (
-        "review",
-        "survey",
-        "overview",
-        "introduction",
-        "news",
-        "press release",
-    )
-    url = extract_url(record).lower()
-
-    score = 0
-    score += min(35, 7 * len(matching_terms(text, topic_terms)))
-    score += min(25, 5 * len(matching_terms(text, source_record_terms)))
-    score += min(20, 4 * len(matching_terms(text, primary_source_terms)))
-    score += min(15, 3 * len(matching_terms(text, evidence_detail_terms)))
-    if extract_doi(record):
-        score += 5
-    if any(host in url for host in SOURCE_AUTHORITY_HOSTS):
-        score += 10
-    if matching_terms(text, weak_context_terms) and not matching_terms(text, source_record_terms + primary_source_terms + evidence_detail_terms):
-        score -= 15
-    return max(0, min(100, score))
-
-
 def write_summary(path: Path, spec: QuerySpec, records: list[dict[str, Any]]) -> None:
     lines = [f"Query: {spec.query}", f"Focus: {spec.focus}", f"Sources returned: {len(records)}", ""]
     for idx, record in enumerate(records[:25], start=1):
@@ -1292,8 +1185,7 @@ def register_research_log(
 
 def build_snowball_queries(topic: str, candidates: list[dict[str, str]], limit: int) -> list[QuerySpec]:
     out: list[QuerySpec] = []
-    ranked = sorted(candidates, key=lambda row: int(row.get("relevance_score") or 0), reverse=True)
-    for row in ranked:
+    for row in candidates:
         title = row.get("title", "")
         doi = row.get("doi", "")
         openalex_id = row.get("openalex_id", "")
@@ -1325,9 +1217,8 @@ def build_source_graph_queries(topic: str, candidates: list[dict[str, str]], lim
     out: list[QuerySpec] = []
     topic_terms = query_core_terms(topic, limit=5)
     topic_prefix = " ".join(topic_terms[:3])
-    ranked = sorted(candidates, key=lambda row: int(row.get("relevance_score") or 0), reverse=True)
     source_hints = ("dataset", "database", "documentation", "technical report", "github", "csv", "pdf")
-    for row in ranked[: max(3, limit)]:
+    for row in candidates[: max(3, limit)]:
         title = re.sub(r"\s+", " ", row.get("title", "")).strip()
         url = row.get("url", "")
         if title:
@@ -1359,7 +1250,6 @@ def write_outputs(
     query_plan: list[QuerySpec],
     research_ids: list[str],
 ) -> None:
-    candidates = sorted(candidates, key=lambda row: int(row.get("relevance_score") or 0), reverse=True)
     save_query_plan(out_dir / "query_plan.csv", query_plan)
     with (out_dir / "search_protocol.csv").open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(
@@ -1387,8 +1277,7 @@ def write_outputs(
                 "doi",
                 "openalex_id",
                 "snippet",
-                "relevance_score",
-                "acceptance_reason",
+                "review_status",
             ],
         )
         writer.writeheader()
@@ -1435,7 +1324,7 @@ def write_discovery_graph(
     protocol_rows: list[dict[str, Any]],
     candidates: list[dict[str, str]],
 ) -> None:
-    accepted_keys = {source_key(row) for row in candidates}
+    candidate_keys = {source_key(row) for row in candidates}
     candidate_by_key = {source_key(row): row for row in candidates}
     nodes: dict[str, dict[str, Any]] = {}
     edges: list[dict[str, Any]] = []
@@ -1464,23 +1353,21 @@ def write_discovery_graph(
                 payload = {}
             for record in source_records(payload):
                 key = source_key(record)
-                if key not in accepted_keys:
+                if key not in candidate_keys:
                     continue
-                accepted_row = candidate_by_key.get(key, {})
                 child_id = graph_id(str(record.get("openalex_id") or "")) or key
                 nodes.setdefault(
                     child_id,
                     {
                         "id": child_id,
-                        "kind": "accepted_source",
+                        "kind": "candidate_source",
                         "label": str(record.get("title") or record.get("name") or child_id).strip(),
-                        "accepted": True,
-                        "score": accepted_row.get("relevance_score") if accepted_row else None,
+                        "reviewed": False,
                         "doi": extract_doi(record),
                         "url": extract_url(record),
                     },
                 )
-                edges.append({"from": query_id, "to": child_id, "relation": "search_result", "accepted": True})
+                edges.append({"from": query_id, "to": child_id, "relation": "search_result", "reviewed": False})
         if not focus.startswith("snowball_openalex_") or ":" not in query or not raw_payload:
             continue
         relation = focus.replace("snowball_openalex_", "")
@@ -1490,7 +1377,7 @@ def write_discovery_graph(
             continue
         nodes.setdefault(
             seed_id,
-            {"id": seed_id, "kind": "seed", "label": node_label_for_openalex_id(seed_id), "accepted": True},
+            {"id": seed_id, "kind": "seed", "label": node_label_for_openalex_id(seed_id), "reviewed": False},
         )
         raw_path = Path(raw_payload)
         if not raw_path.exists():
@@ -1504,109 +1391,40 @@ def write_discovery_graph(
             if not child_id:
                 continue
             key = source_key(record)
-            accepted = key in accepted_keys
-            accepted_row = candidate_by_key.get(key, {})
+            is_candidate = key in candidate_keys
             nodes.setdefault(
                 child_id,
                 {
                     "id": child_id,
-                    "kind": "accepted_child" if accepted else "screened_child",
+                    "kind": "candidate_child" if is_candidate else "screened_child",
                     "label": str(record.get("title") or record.get("name") or child_id).strip(),
-                    "accepted": accepted,
-                    "score": accepted_row.get("relevance_score") if accepted_row else None,
+                    "reviewed": False,
                     "doi": extract_doi(record),
                     "url": extract_url(record),
                 },
             )
-            if accepted:
-                nodes[child_id]["kind"] = "accepted_child"
-                nodes[child_id]["accepted"] = True
-                nodes[child_id]["score"] = accepted_row.get("relevance_score")
-            edges.append({"from": seed_id, "to": child_id, "relation": relation, "accepted": accepted})
+            if is_candidate:
+                nodes[child_id]["kind"] = "candidate_child"
+            edges.append({"from": seed_id, "to": child_id, "relation": relation, "reviewed": False})
 
     relation_counts: dict[str, int] = {}
-    accepted_relation_counts: dict[str, int] = {}
     for edge in edges:
         relation = str(edge["relation"])
         relation_counts[relation] = relation_counts.get(relation, 0) + 1
-        if edge["accepted"]:
-            accepted_relation_counts[relation] = accepted_relation_counts.get(relation, 0) + 1
 
     graph = {
         "summary": {
             "seed_papers": len([node for node in nodes.values() if node["kind"] == "seed"]),
             "nodes": len(nodes),
             "edges": len(edges),
-            "accepted_child_nodes": len([node for node in nodes.values() if node["kind"] == "accepted_child"]),
-            "accepted_edges": len([edge for edge in edges if edge["accepted"]]),
+            "candidate_child_nodes": len([node for node in nodes.values() if node["kind"] == "candidate_child"]),
             "relations": relation_counts,
-            "accepted_relations": accepted_relation_counts,
             "limitation": "metadata/abstract-level citation graph; full-text/PDF/table reading is a separate follow-up stage",
         },
         "nodes": list(nodes.values()),
         "edges": edges,
     }
     (out_dir / "discovery_graph.json").write_text(json.dumps(graph, indent=2) + "\n", encoding="utf-8")
-
-
-def score_letter(score: int) -> str:
-    if score >= 78:
-        return "A"
-    if score >= 58:
-        return "B"
-    if score >= 40:
-        return "C"
-    return "D"
-
-
-def infer_source_type(row: dict[str, str]) -> str:
-    text = " ".join(str(row.get(key) or "") for key in ("title", "url", "snippet")).lower()
-    if "dataset" in text or "zenodo" in text or "figshare" in text or "dataverse" in text:
-        return "dataset"
-    if "github" in text or "gitlab" in text or "repository" in text:
-        return "repository"
-    if "standard" in text:
-        return "standard"
-    if "manual" in text or "documentation" in text or "docs" in text:
-        return "documentation"
-    if "report" in text or "pdf" in text:
-        return "technical report"
-    if "database" in text:
-        return "database"
-    return "source"
-
-
-def source_group_label(row: dict[str, str]) -> str:
-    focus = str(row.get("focus") or "").replace("_", " ").strip()
-    if focus:
-        return focus[:1].upper() + focus[1:]
-    return infer_source_type(row).title()
-
-
-def candidate_to_business_source(row: dict[str, str]) -> dict[str, Any]:
-    title = str(row.get("title") or "Untitled source").strip()
-    url = str(row.get("url") or "").strip()
-    score = int(str(row.get("relevance_score") or "0") or 0)
-    source_type = infer_source_type(row)
-    publisher = urllib.parse.urlparse(url).netloc.removeprefix("www.") if url else "unknown"
-    return {
-        "id": slugify(url or title),
-        "title": title,
-        "group": source_group_label(row),
-        "type": source_type,
-        "publisher": publisher or "unknown",
-        "year": "current",
-        "score": score_letter(score),
-        "scoreValue": score,
-        "contribution": str(row.get("snippet") or row.get("acceptance_reason") or "Source candidate from discovery.").strip(),
-        "access": "public" if url else "metadata",
-        "url": url,
-        "tags": [source_type, source_group_label(row).lower()],
-        "fields": str(row.get("snippet") or "").strip(),
-        "use": str(row.get("acceptance_reason") or "Candidate for review.").strip(),
-        "missing": "Needs reading/extraction pass.",
-        "links": [{"label": "Quelle öffnen", "url": url}] if url else [],
-    }
 
 
 def psql_json(database_url: str, sql_text: str) -> str:
@@ -1699,88 +1517,6 @@ def upsert_business_progress(
     run["status"] = "collecting" if progress.get("status") != "done" else "synthesized"
     run["updated"] = now_date
     run["researchProgress"] = progress
-    save_business_runs(database_url, store_key, runs)
-
-
-def sync_business_research_run(
-    database_url: str,
-    store_key: str,
-    run_id: str,
-    title: str,
-    topic: str,
-    protocol_rows: list[dict[str, Any]],
-    candidates: list[dict[str, str]],
-    screened_sources: list[dict[str, str]],
-) -> None:
-    runs = load_business_runs(database_url, store_key)
-    now_date = time.strftime("%Y-%m-%d")
-    run = next((item for item in runs if item.get("id") == run_id), None)
-    if not run:
-        run = {
-            "id": run_id,
-            "title": title or topic[:80] or run_id,
-            "status": "collecting",
-            "updated": now_date,
-            "prompt": topic,
-            "criteria": "",
-            "queryCount": 0,
-            "screenedCount": 0,
-            "acceptedCount": 0,
-            "summary": {"en": topic, "de": topic},
-            "sources": [],
-            "graph": {"nodes": [], "edges": []},
-            "expansionRequests": [],
-        }
-        runs.insert(0, run)
-
-    existing_sources = run.get("sources") if isinstance(run.get("sources"), list) else []
-    source_by_key = {source_key({"url": item.get("url"), "title": item.get("title")}): item for item in existing_sources if isinstance(item, dict)}
-    for row in candidates:
-        item = candidate_to_business_source(row)
-        key = source_key({"url": item.get("url"), "title": item.get("title")})
-        source_by_key[key] = {**source_by_key.get(key, {}), **item}
-    sources = sorted(source_by_key.values(), key=lambda item: int(item.get("scoreValue") or 0), reverse=True)
-
-    graph_nodes: dict[str, dict[str, Any]] = {}
-    graph_edges: dict[str, dict[str, str]] = {}
-    for row in protocol_rows:
-        query = str(row.get("query") or "")
-        qid = "q-" + slugify(query)[:60]
-        graph_nodes[qid] = {"id": qid, "label": query, "kind": "query"}
-    for source in sources:
-        sid = str(source.get("id") or slugify(source.get("title", "")))
-        group = str(source.get("group") or "Sources")
-        gid = "g-" + slugify(group)[:60]
-        graph_nodes[sid] = {"id": sid, "label": source.get("title", sid), "kind": "source", "score": source.get("score")}
-        graph_nodes[gid] = {"id": gid, "label": group, "kind": "group"}
-        graph_edges[f"{sid}:{gid}:group"] = {"source": sid, "target": gid, "relation": "group"}
-    for row in candidates:
-        query = str(row.get("query") or "")
-        if not query:
-            continue
-        qid = "q-" + slugify(query)[:60]
-        sid = slugify(str(row.get("url") or row.get("title") or "source"))
-        graph_edges[f"{qid}:{sid}:found"] = {"source": qid, "target": sid, "relation": "found"}
-
-    run.update({
-        "status": "synthesized",
-        "updated": now_date,
-        "queryCount": len(protocol_rows),
-        "screenedCount": len(screened_sources),
-        "acceptedCount": len(candidates),
-        "sources": sources,
-        "graph": {"nodes": list(graph_nodes.values()), "edges": list(graph_edges.values())},
-        "researchProgress": {
-            "status": "done",
-            "currentStep": "Recherche abgeschlossen",
-            "currentQuery": "",
-            "targetAdditionalSources": 0,
-            "identifiedDelta": len(screened_sources),
-            "readDelta": len(candidates),
-            "usedDelta": len(sources),
-            "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        },
-    })
     save_business_runs(database_url, store_key, runs)
 
 
@@ -1941,16 +1677,14 @@ def main() -> int:
                 "openalex_id": str(record.get("openalex_id") or "").strip(),
                 "snippet": str(record.get("snippet") or record.get("summary") or "").strip()[:500],
             }
-            accepted, reason = source_acceptance(record, args.topic, spec.query)
-            relevance_score = source_relevance_score(record, args.topic)
             screened_row = {
                 **row,
-                "screening_status": "accepted" if accepted else "rejected",
-                "screening_reason": reason,
+                "screening_status": "unreviewed",
+                "screening_reason": "agent_review_required",
             }
             screened_sources.append(screened_row)
-            if accepted:
-                candidates.append({**row, "relevance_score": str(relevance_score), "acceptance_reason": reason})
+            if row["title"] or row["url"] or row["doi"] or row["openalex_id"]:
+                candidates.append({**row, "review_status": "agent_review_required"})
             else:
                 rejected_sources.append(screened_row)
 
@@ -1990,8 +1724,8 @@ def main() -> int:
                         "currentQuery": spec.query,
                         "targetAdditionalSources": args.target_additional_candidates or 0,
                         "identifiedDelta": len(screened_sources),
-                        "readDelta": len(candidates) - initial_candidate_count,
-                        "usedDelta": len(candidates),
+                        "readDelta": 0,
+                        "usedDelta": len(existing_candidates),
                         "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                     },
                 )
@@ -2003,12 +1737,6 @@ def main() -> int:
             break
         if reviewed_total >= args.target_reviewed:
             break
-
-        if not queue and rounds_remaining > 0:
-            rounds_remaining -= 1
-            expanded = build_source_graph_queries(args.topic, candidates, args.snowball_limit)
-            expanded.extend(build_snowball_queries(args.topic, candidates, args.snowball_limit))
-            queue.extend(dedupe_query_plan(expanded))
 
     write_outputs(out_dir, protocol_rows, candidates, screened_sources, rejected_sources, query_plan, research_ids)
     write_discovery_graph(out_dir, protocol_rows, candidates)

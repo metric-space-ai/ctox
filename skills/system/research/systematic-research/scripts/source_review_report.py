@@ -129,6 +129,147 @@ def measurement_scope(row: dict[str, str], mass_limit_kg: float | None) -> str:
     return "inside_mass_scope"
 
 
+def category_for_source(row: dict[str, str]) -> str:
+    text = " ".join(
+        [
+            row.get("focus", ""),
+            row.get("query", ""),
+            row.get("title", ""),
+            row.get("snippet", ""),
+            row.get("acceptance_reason", ""),
+        ]
+    ).lower()
+    if any(term in text for term in ["propeller", "rotor", "thrust", "torque", "rpm", "propulsion", "motor"]):
+        return "Propulsion / propeller load data"
+    if any(term in text for term in ["wind tunnel", "aerodynamic", "force and moment", "airflow", "airspeed"]):
+        return "Aerodynamic / wind-tunnel data"
+    if any(term in text for term in ["payload", "mtow", "gross weight", "takeoff weight", "take-off weight", "all-up weight"]):
+        return "Payload / MTOW evidence"
+    if any(term in text for term in ["flight log", "telemetry", "px4", "ardupilot", "csv", "repository", "dataset"]):
+        return "Flight logs / datasets"
+    if any(term in text for term in ["dod", "group 1", "group 2", "faa", "easa", "stanag", "classification", "standard"]):
+        return "Regulatory / classification"
+    if any(term in text for term in ["structural", "load cell", "balance", "strain", "fatigue", "vibration"]):
+        return "Structural / test instrumentation"
+    return "General UAV load-related literature"
+
+
+def source_identifier(row: dict[str, str]) -> str:
+    doi = normalize_doi(row.get("doi") or row.get("url", ""))
+    if doi:
+        return f"https://doi.org/{doi}"
+    return row.get("url", "")
+
+
+def plain_status(status: str) -> str:
+    return {
+        "extracted": "read and extracted",
+        "readable_no_measurements": "readable, no numeric extraction yet",
+        "metadata_only": "metadata only",
+        "blocked": "blocked",
+        "not_read_in_pass": "not read in current pass",
+    }.get(status or "", status or "not read in current pass")
+
+
+def evidence_grade(status: str) -> str:
+    return {
+        "extracted": "A - direct evidence extracted",
+        "readable_no_measurements": "B - readable follow-up source",
+        "metadata_only": "C - metadata only",
+        "blocked": "D - access blocked",
+    }.get(status or "", "C - not read in pass")
+
+
+def why_source_matters(row: dict[str, str], status: dict[str, str] | None = None) -> str:
+    category = category_for_source(row)
+    snippet = clean(row.get("snippet"), 220)
+    if "Propulsion" in category:
+        lead = "Useful for thrust, torque, RPM, current, voltage or propeller-load evidence."
+    elif "Aerodynamic" in category:
+        lead = "Useful for force/moment or wind-tunnel conditions around small UAV configurations."
+    elif "Payload" in category:
+        lead = "Useful for payload, MTOW, mass class or application-level vehicle limits."
+    elif "Flight logs" in category:
+        lead = "Useful as a path toward raw operational data or reproducible datasets."
+    elif "Regulatory" in category:
+        lead = "Useful for scoping Class 1/2 and mass-category definitions, not usually for measured load data."
+    elif "Structural" in category:
+        lead = "Useful for load-cell, balance, structural or test-instrumentation context."
+    else:
+        lead = "Useful as supporting UAV load-data literature."
+    if status and status.get("status") == "metadata_only":
+        lead += " Full-text access still needs follow-up."
+    if status and status.get("status") == "blocked":
+        lead += " Access was blocked in this run."
+    return f"{lead} {snippet}".strip()
+
+
+def indexed_reading_status(reading_rows: list[dict[str, str]], row: dict[str, str]) -> dict[str, str]:
+    index = status_index(reading_rows)
+    return (
+        index.get(row.get("openalex_id", ""))
+        or index.get(normalize_doi(row.get("doi") or row.get("url", "")))
+        or index.get(row.get("title", ""))
+        or {}
+    )
+
+
+def recommended_sources(candidates: list[dict[str, str]], reading_rows: list[dict[str, str]], limit: int = 24) -> list[dict[str, str]]:
+    def rank(row: dict[str, str]) -> tuple[int, int]:
+        status = indexed_reading_status(reading_rows, row).get("status", "")
+        status_weight = {"extracted": 40, "readable_no_measurements": 25, "metadata_only": 5, "blocked": -15}.get(status, 0)
+        return (status_weight + int_or_zero(row.get("relevance_score")), int_or_zero(row.get("relevance_score")))
+
+    rows = sorted(candidates, key=rank, reverse=True)
+    out: list[dict[str, str]] = []
+    seen_categories: Counter[str] = Counter()
+    for row in rows:
+        status = indexed_reading_status(reading_rows, row)
+        category = category_for_source(row)
+        if len(out) >= limit and seen_categories[category] >= 2:
+            continue
+        out.append(
+            {
+                "category": category,
+                "grade": evidence_grade(status.get("status", "")),
+                "status": plain_status(status.get("status", "not_read_in_pass")),
+                "score": clean(row.get("relevance_score")),
+                "title": clean(row.get("title"), 110),
+                "why_it_matters": clean(why_source_matters(row, status), 260),
+                "source": clean(source_identifier(row), 100),
+            }
+        )
+        seen_categories[category] += 1
+        if len(out) >= limit and len(seen_categories) >= 4:
+            break
+    return out[:limit]
+
+
+def plain_family(family: str) -> str:
+    return {
+        "mass_payload": "Mass / payload / MTOW",
+        "propulsion_power": "Propulsion / RPM / power",
+        "flight_environment": "Flight or test environment",
+        "thrust_force": "Thrust / force",
+        "torque_moment": "Torque / moment",
+        "dataset_table": "Dataset / table",
+    }.get(family, clean(family).replace("_", " ").title())
+
+
+def measurement_interpretation(row: dict[str, str]) -> str:
+    family = row.get("family", "")
+    value = clean(f"{row.get('value', '')} {row.get('unit', '')}")
+    if family == "mass_payload":
+        return f"In-scope mass/payload datapoint ({value}) for the requested <=25 kg range."
+    if family == "propulsion_power":
+        return f"Propulsion operating point ({value}); useful for thrust/propeller load studies."
+    if family == "flight_environment":
+        return f"Test or flight condition ({value}) that frames aerodynamic/load measurements."
+    if family == "thrust_force":
+        return f"Force datapoint ({value}); useful for load/thrust evidence, but should be checked against table context."
+    return f"Extracted numeric datapoint ({value}) requiring source-context review."
+
+
 def set_doc_style(document: Any) -> None:
     from docx.shared import Pt
 

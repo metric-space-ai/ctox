@@ -1,6 +1,10 @@
 # Project Description / Fördervorhaben Style Contract
 
 This reference is mandatory for `report_type_id=project_description`.
+It must be read together with
+`project_description_reference_archetype.md`, which captures the real
+Fördervorhabenbeschreibung corpus. The style contract below governs the
+process; the archetype governs the target shape.
 
 ## What the deliverable is
 
@@ -20,6 +24,13 @@ The reader should understand:
 5. how the project will be implemented;
 6. what budget, timeline and status apply;
 7. why the project creates economic benefit and is plausible.
+
+The reference corpus shows that this understanding is normally built in this
+order: company/legal profile -> company development -> products/services and
+customers -> project introduction -> current state/problem area ->
+development goal -> innovation/market delimitation -> challenges/measures ->
+project costs and implementation period -> economic benefit. Do not compress
+this into abstract headings only.
 
 ## Silent research ledger
 
@@ -63,6 +74,11 @@ Before drafting blocks, create short synthesis notes in the workspace:
 7. `style-review.md`: self-review against this contract before rendering.
 8. `fact-transfer-ledger.md`: table with `Fact cluster | Source/evidence |
    Required target chapter | Visible wording | Status`.
+9. `reference-fit-plan.md`: short checklist mapping the planned document to
+   the Fördervorhaben archetype: legal profile, company profile, history,
+   products/customers, project introduction, current state/problem,
+   development goal, market/state-of-art delimitation, measures, project
+   costs, implementation period and benefit.
 
 These notes are internal. They do not belong in the final Word file.
 
@@ -95,21 +111,36 @@ Every major chapter should contain at least one concrete fact that did not come
 only from generic prompt wording. Facts must be integrated into smooth
 applicant-side prose; do not cite them visibly, do not list source IDs, and do
 not expose the fact-transfer ledger. If a category cannot be substantiated,
-write conservatively and keep the limitation in internal notes.
+write conservatively and keep the limitation in internal notes. For
+company-rich topics, twelve facts is only a floor; the document should absorb
+the available legal, history, product, customer and project facts at the same
+density as the references.
 
-For the budget/timeline/status section, create one compact native Word table
-whenever the operator provides Laufzeit, Status, Budget or Kostenblöcke. Prefer
-the deterministic helper:
+For the company profile and budget/timeline/status section, create compact
+native Word tables whenever the facts are available. Prefer the deterministic
+helper:
 
 ```bash
 ctox report project-description-sync --run-id RUN_ID
 ```
 
 It extracts the project-scope facts from the run topic and committed
-project-scope prose, then creates a native table bound to
-`project_scope_budget_timeline`. Use manual `ctox report table-add` only if
-the helper cannot parse a supplied framing. This table is part of the client
-document. The research/source ledger is not.
+project-scope prose, and company/legal facts from committed company prose and
+the evidence register. It creates native tables bound to
+`doc_company__company_legal` and `doc_project__project_1_costs_timeline`.
+Use manual `ctox report table-add` only if the helper cannot parse a supplied
+framing. These tables are part of the client document. The research/source
+ledger is not, and visible tables must not contain source or evidence columns.
+
+At standard depth, include at least one client-facing image or schematic.
+The references use product, site, organisation, process or system visuals as
+orientation devices. If no legally usable original image is available, create
+an own clean schematic with `ctox report figure-add` that explains the project
+architecture, workflow, service model or target operating model. The figure
+must be embedded, captioned and briefly interpreted in the prose; it must not
+be a decorative placeholder. When referencing the figure, write `Wie in
+{{fig:...}} gezeigt...` instead of duplicating the label as `Abbildung
+{{fig:...}}`.
 
 ## Drafting workflow
 
@@ -125,11 +156,14 @@ sequence:
 2. Build the internal fact-transfer ledger and mark each fact as one of:
    company, product/service, customer/market, technical baseline, project
    scope, economic mechanism.
-3. Draft only the company/outcome spine first: company capability -> present
+3. Build the reference-fit plan and confirm where the legal profile, history,
+   products/customers, current state/problem, development goal, measures,
+   project costs and implementation period will appear.
+4. Draft only the company/outcome spine first: company capability -> present
    bottleneck -> innovation jump -> target operating model.
-4. Draft implementation and scope only after the problem/target chain is clear.
-5. Run `project-description-sync` after the scope block exists.
-6. Revise for client voice: remove analysis scaffolding, source language,
+5. Draft implementation and scope only after the problem/target chain is clear.
+6. Run `project-description-sync` after the company and scope blocks exist.
+7. Revise for client voice: remove analysis scaffolding, source language,
    evidence wording, and duplicated claims.
 
 If a chapter cannot be made specific, do not fill it with generic funding
@@ -140,23 +174,26 @@ the internal notes, then write only the client-relevant consequence.
 
 When no user structure is prescribed, use this spine:
 
-1. Title page / metadata
-2. Gesellschaft & Unternehmensprofil
-3. Unternehmensentwicklung / Historie
-4. Produkte, Leistungen und Kundensegmente
-5. Projektbeschreibung Innovation
-6. Derzeitiger Stand / Problembereich
-7. Entwicklungsziel / Zielbild
-8. Abgrenzung zum Stand der Technik oder Markt
-9. Herausforderungen und Maßnahmen
-10. Arbeitspakete / Umsetzungsschritte
-11. Projektkosten & Zeitraum
-12. Wirtschaftlicher Nutzen / Verwertung
+1. Title page / programme context
+2. Gesellschaftsrechtliche Verhältnisse
+3. Unternehmensprofil
+4. Unternehmensentwicklung / Historie
+5. Produkte, Leistungen und Kundensegmente
+6. Vorstellung des Innovations- oder Digitalisierungsprojektes
+7. Derzeitiger Stand / Problembereich
+8. Entwicklungsziel / Zielbild
+9. Abgrenzung zum Stand der Technik oder Markt
+10. Herausforderungen und geplante Maßnahmen
+11. Projektkosten
+12. Umsetzungszeitraum
+13. Wirtschaftlicher Nutzen / Verwertung
 
 When the operator provides a chapter list, respect it, but still make sure the
 substance above is covered. For example, an eight-chapter prompt can still
 include company history and products under "Unternehmensausgangslage", and
-challenges/measures under "Umsetzungsschwerpunkte".
+challenges/measures under "Umsetzungsschwerpunkte". It is not enough that the
+eight headings exist; the internal content must still look like the reference
+documents.
 
 ## Storytelling and comments
 
@@ -198,8 +235,11 @@ Before rendering, the document must answer yes to all:
 - Are company profile, development history, products/customers and operating
   context specific enough?
 - Is the bottleneck stated before the target picture?
+- Are legal/company profile, history and products/customer segments present
+  when such facts are available?
 - Do the implementation measures solve the stated challenges?
-- Are budget, timeline and project status present without invented numbers?
+- Are project costs, implementation period and project status present without
+  invented numbers?
 - Is the economic benefit a mechanism, not a vague promise?
 - Are visible citations, source appendix and internal tooling language absent?
 - Would the document still make sense if printed without any source appendix

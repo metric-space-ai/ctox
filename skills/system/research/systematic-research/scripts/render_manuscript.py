@@ -548,9 +548,12 @@ def _resolve_xref_tokens(markdown: str, fig_tokens: dict, tbl_tokens: dict, lang
         n = (fig_tokens if kind == "fig" else tbl_tokens).get(ref_id)
         if n is None:
             return m.group(0)
-            return f"{_label('figure', language)} {n}" if kind == "fig" else f"{_label('table', language)} {n}"
+        return f"{_label('figure', language)} {n}" if kind == "fig" else f"{_label('table', language)} {n}"
 
-    return _TOKEN_RE.sub(_sub, markdown)
+    resolved = _TOKEN_RE.sub(_sub, markdown)
+    resolved = re.sub(r"\b(Abbildung|Figure)\s+\1\s+(\d+)\b", r"\1 \2", resolved, flags=re.I)
+    resolved = re.sub(r"\b(Tabelle|Table)\s+\1\s+(\d+)\b", r"\1 \2", resolved, flags=re.I)
+    return resolved
 
 
 def _render_structured_figure(document, fig: dict, deps, references: list | None = None, language: str = "de") -> None:

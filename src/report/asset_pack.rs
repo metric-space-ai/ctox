@@ -1,12 +1,12 @@
-//! Compiled-in deep-research asset pack.
+//! Compiled-in research asset pack.
 //!
 //! The asset pack is the single source of truth for report-type catalogue,
 //! domain profiles, depth profiles, document blueprints, block-library
 //! rubrics, reference resources, verdict patterns and style guidance. It
 //! lives at
-//! `skills/system/research/deep-research/references/asset_pack.json` and is
-//! embedded into the binary via `include_str!` so the deep-research
-//! backend cannot ship without it.
+//! `skills/system/research/systematic-research/references/asset_pack.json`
+//! and is embedded into the binary via `include_str!` so the
+//! decision-report-mode backend cannot ship without it.
 //!
 //! The structs are deliberately permissive:
 //! - every named field carries `#[serde(default)]` so an asset-pack
@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 const ASSET_PACK_JSON: &str =
-    include_str!("../../skills/system/research/deep-research/references/asset_pack.json");
+    include_str!("../../skills/system/research/systematic-research/references/asset_pack.json");
 
 static ASSET_PACK: OnceLock<AssetPack> = OnceLock::new();
 
@@ -398,7 +398,7 @@ impl AssetPack {
             return Ok(pack);
         }
         let parsed: AssetPack = serde_json::from_str(ASSET_PACK_JSON)
-            .context("failed to parse embedded deep-research asset_pack.json")?;
+            .context("failed to parse embedded research asset_pack.json")?;
         // Best-effort store: if another thread won the race, return that.
         let _ = ASSET_PACK.set(parsed);
         Ok(ASSET_PACK

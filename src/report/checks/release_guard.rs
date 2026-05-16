@@ -1,7 +1,7 @@
 //! Deterministic release-guard check.
 //!
 //! Implementation of the 34-lint catalogue defined in
-//! `skills/system/research/deep-research/references/release_guard_lints.md`.
+//! `skills/system/research/systematic-research/references/release_guard_lints.md`.
 //! Each lint is a small zero-sized struct implementing the [`Lint`]
 //! trait; the dispatcher consults the applicability matrix encoded in
 //! [`Lint::applies`] before running each lint.

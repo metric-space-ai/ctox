@@ -1,7 +1,7 @@
-//! Thin subprocess wrapper around the deep-research DOCX helpers.
+//! Thin subprocess wrapper around the systematic-research DOCX helpers.
 //!
 //! The bundled Python helper at
-//! `skills/system/research/deep-research/scripts/render_manuscript.py`
+//! `skills/system/research/systematic-research/scripts/render_manuscript.py`
 //! reads a manuscript JSON on stdin and writes a DOCX. This module
 //! shells out to it. No timeout in this layer — the manager handles
 //! overall timeouts.
@@ -72,7 +72,7 @@ impl From<std::io::Error> for DocxRenderError {
 
 /// Render a [`Manuscript`] to a DOCX file at `output_path` by invoking
 /// the bundled Python helpers. `skill_root` must point at the directory
-/// `skills/system/research/deep-research`; the semantic renderer is
+/// `skills/system/research/systematic-research`; the semantic renderer is
 /// located at `<skill_root>/scripts/render_manuscript.py`. When present,
 /// `<skill_root>/scripts/polish_docx_layout.py` is applied as a second pass
 /// so normal CTOX renders produce a client-facing layout by default.

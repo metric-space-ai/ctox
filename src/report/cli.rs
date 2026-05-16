@@ -1,9 +1,10 @@
 //! `ctox report …` command surface.
 //!
 //! Deterministic CLI subcommands the harness LLM (loaded with the
-//! `skills/system/research/deep-research/` skill) calls via Bash to drive
-//! a deep-research run. There is no LLM loop in this module — every
-//! command is a pure transform on the SQLite report store.
+//! `skills/system/research/systematic-research/` skill in decision-report
+//! mode) calls via Bash to drive a research run. There is no LLM loop in
+//! this module — every command is a pure transform on the SQLite report
+//! store.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -3038,7 +3039,7 @@ fn cmd_render(root: &Path, args: &[String]) -> Result<()> {
                 .join("skills")
                 .join("system")
                 .join("research")
-                .join("deep-research");
+                .join("systematic-research");
             match render_docx(&manuscript, &path, &skill_root, None) {
                 Ok(outcome) => {
                     println!(
@@ -3166,11 +3167,12 @@ fn cmd_blueprints(_root: &Path, _args: &[String]) -> Result<()> {
 
 fn cmd_help() {
     println!(
-        "ctox report — deep research report runs
+        "ctox report — decision-grade research report runs
 
 The intelligence lives in the harness LLM driven by the
-`research/deep-research` skill. These commands are the deterministic
-building blocks the LLM calls to drive the run.
+`research/systematic-research` skill in decision-report mode. These
+commands are the deterministic building blocks the LLM calls to drive
+the run.
 
 USAGE
   ctox report new <report_type> --domain <id> --depth <id> [--language en|de] --topic \"...\"
@@ -3233,7 +3235,7 @@ USAGE
   ctox report blueprints
   ctox report help
 
-Skill: skills/system/research/deep-research/SKILL.md"
+Skill: skills/system/research/systematic-research/SKILL.md (decision-report mode)"
     );
 }
 

@@ -1,11 +1,12 @@
-//! `ctox report …` — deep research report runs.
+//! `ctox report …` — decision-grade research report runs.
 //!
 //! This module is the deterministic Rust backend behind the
-//! `skills/system/research/deep-research/` skill. The skill itself is the
-//! prompt that drives the harness LLM; this backend exposes a set of
-//! `ctox report …` CLI subcommands the harness LLM calls (via Bash) to
-//! create runs, register evidence, stage and commit block markdown,
-//! run the four deterministic checks, and render the final manuscript.
+//! `skills/system/research/systematic-research/` skill's decision-report
+//! mode. The skill itself is the prompt that drives the harness LLM;
+//! this backend exposes a set of `ctox report …` CLI subcommands the
+//! harness LLM calls (via Bash) to create runs, register evidence, stage
+//! and commit block markdown, run the four deterministic checks, and
+//! render the final manuscript.
 //!
 //! There is no LLM loop in this backend — every command is a deterministic
 //! transform on the SQLite report store. The intelligence lives in the

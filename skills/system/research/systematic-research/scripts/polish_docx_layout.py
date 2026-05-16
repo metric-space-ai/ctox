@@ -189,10 +189,14 @@ def first_report_title(doc) -> str:
 def short_header_title(title: str) -> str:
     title = title.strip()
     if not title:
-        return "Machbarkeitsstudie"
+        return "Projektbeschreibung"
     lowered = title.lower()
     prefix = "Machbarkeitsstudie"
-    if "machbarkeitsstudie" not in lowered and "feasibility" not in lowered:
+    if "fördervorhabenbeschreibung" in lowered or "foerdervorhabenbeschreibung" in lowered:
+        prefix = "Projektbeschreibung"
+    elif "projektbeschreibung" in lowered or "innovationsprojekt" in lowered:
+        prefix = "Projektbeschreibung"
+    elif "machbarkeitsstudie" not in lowered and "feasibility" not in lowered:
         prefix = "Report"
     cleaned = title
     if cleaned.lower().startswith(prefix.lower()):

@@ -214,18 +214,23 @@
     {
       "id": "project_description",
       "label": "Projektbeschreibung / Fördervorhabenbeschreibung",
-      "purpose": "Beschreibung eines Innovations-, Digitalisierungs-, Produktions- oder Investitionsvorhabens für Förderung, Finanzierung oder interne Freigabe: Unternehmen, Ausgangslage, Problem, Innovation, Umsetzung, Budget, Zeitplan und wirtschaftlicher Nutzen.",
+      "purpose": "Applicant-side Foerdervorhaben-/Projektbeschreibung package for funding, financing or approval. It follows the Foerdervorhaben-Agent app workflow: legal/company profile, company development, products/customers, project introduction, current state/problem, development goal, innovation/market delimitation, measures/work packages, project costs, implementation period, figures/tables and economic benefit. Research is internal and must not surface as source-review apparatus.",
       "block_library_keys": [
-        "project_company_context",
-        "project_problem_statement",
-        "project_innovation_project",
-        "project_target_picture",
-        "project_market_delimitation",
-        "project_implementation_focus",
-        "project_scope_budget_timeline",
+        "company_legal",
+        "company_profile",
+        "company_history",
+        "company_portfolio",
+        "project_intro",
+        "project_1_title_scope",
+        "project_1_current_state",
+        "project_1_development_goal",
+        "project_1_state_of_art",
+        "project_1_challenges_measures",
+        "project_1_workpackages",
+        "project_1_costs_timeline",
         "project_economic_benefit"
       ],
-      "document_blueprint_id": "project_description_single",
+      "document_blueprint_id": "project_description_foerdervorhaben_package",
       "default_modules": [],
       "verdict_vocabulary": [
         "plausibel",
@@ -233,8 +238,8 @@
         "kritisch"
       ],
       "verdict_line_pattern": "Projektplausibilität (qualitativ): <level>; Förderlogik: <condition>.",
-      "min_sections": 8,
-      "typical_chars": 28000,
+      "min_sections": 11,
+      "typical_chars": 22000,
       "reference_archetype_ids": []
     },
     {
@@ -1311,6 +1316,98 @@
           "doc_id": "doc_source_review",
           "required": true,
           "order": 100
+        }
+      ]
+    },
+    "project_description_foerdervorhaben_package": {
+      "base_docs": [
+        {
+          "id": "doc_company",
+          "title": "Gesellschaftsrechtliche Verhältnisse"
+        },
+        {
+          "id": "doc_project",
+          "title": "Vorstellung des Innovationsprojektes"
+        }
+      ],
+      "sequence": [
+        {
+          "block_id": "company_legal",
+          "doc_id": "doc_company",
+          "required": true,
+          "order": 10
+        },
+        {
+          "block_id": "company_profile",
+          "doc_id": "doc_company",
+          "required": true,
+          "order": 20
+        },
+        {
+          "block_id": "company_history",
+          "doc_id": "doc_company",
+          "required": true,
+          "order": 30
+        },
+        {
+          "block_id": "company_portfolio",
+          "doc_id": "doc_company",
+          "required": true,
+          "order": 40
+        },
+        {
+          "block_id": "project_intro",
+          "doc_id": "doc_project",
+          "required": true,
+          "order": 100
+        },
+        {
+          "block_id": "project_1_title_scope",
+          "doc_id": "doc_project",
+          "required": true,
+          "order": 110
+        },
+        {
+          "block_id": "project_1_current_state",
+          "doc_id": "doc_project",
+          "required": true,
+          "order": 120
+        },
+        {
+          "block_id": "project_1_development_goal",
+          "doc_id": "doc_project",
+          "required": true,
+          "order": 130
+        },
+        {
+          "block_id": "project_1_state_of_art",
+          "doc_id": "doc_project",
+          "required": true,
+          "order": 140
+        },
+        {
+          "block_id": "project_1_challenges_measures",
+          "doc_id": "doc_project",
+          "required": true,
+          "order": 150
+        },
+        {
+          "block_id": "project_1_workpackages",
+          "doc_id": "doc_project",
+          "required": true,
+          "order": 160
+        },
+        {
+          "block_id": "project_1_costs_timeline",
+          "doc_id": "doc_project",
+          "required": true,
+          "order": 170
+        },
+        {
+          "block_id": "project_economic_benefit",
+          "doc_id": "doc_project",
+          "required": true,
+          "order": 180
         }
       ]
     }
@@ -2422,25 +2519,27 @@
       "reference_ids": []
     },
     "project_company_context": {
-      "title": "Unternehmensausgangslage",
-      "goal": "Beschreibt Unternehmen, Geschäftsmodell, Standort, Leistungsportfolio, Marktrolle und Ausgangssituation so, dass das Vorhaben aus dem Unternehmen heraus plausibel wird.",
+      "title": "Gesellschaftsrechtliche Verhältnisse und Unternehmensprofil",
+      "goal": "Beschreibt Antragstellerin, gesellschaftsrechtliche Eckdaten, Unternehmensprofil, Entwicklung, Standort, Leistungsportfolio, Produkte, Kunden-/Marktsegmente und Ausgangssituation so, dass das Vorhaben aus dem Unternehmen heraus plausibel wird.",
       "must_have": [
         "Name, Rechtsform und Rolle der Antragstellerin bzw. Projektträgerin, soweit aus Prompt oder Recherche belegbar",
-        "konkrete recherchierte Anker zu Standort, Historie, Register-/Rechtskontext, Management, Produktlinien, Kunden- oder Leistungssegmenten, sofern verfügbar",
-        "Geschäftsmodell, Produkte/Services, Zielkunden und Wertschöpfungslogik",
+        "gesellschaftsrechtliche Eckdaten wie Sitz/Anschrift, Register, Stammkapital, Geschäftsführung, Gesellschafter oder Gründungsdatum, sofern verfügbar",
+        "Unternehmensprofil mit Historie, Wachstumspfad, Standorten, Gruppe/verbundenen Unternehmen oder prior innovations, sofern verfügbar",
+        "konkrete Produktlinien, Leistungen, Service-/Betriebsmodell, Zielkunden und Wertschöpfungslogik",
         "heutige technische, organisatorische oder marktliche Ausgangssituation",
         "keine reine Imagebroschüre: jedes Unternehmensdetail muss die spätere Projektlogik vorbereiten"
       ],
       "style_rules": [
-        "Beginne mit einem präzisen Einordnungssatz zum Unternehmen, nicht mit Werbeadjektiven.",
+        "Beginne mit einem präzisen Einordnungssatz zum Unternehmen und baue danach den Referenzbogen Gesellschaft -> Unternehmensprofil -> Historie -> Produkte/Kunden auf.",
         "Nutze öffentliche Unternehmens- und Branchenquellen; kennzeichne Annahmen zurückhaltend.",
-        "Historie nur aufnehmen, wenn sie für Innovationsfähigkeit, Marktposition oder Projektbedarf relevant ist."
+        "Historie nur aufnehmen, wenn sie für Innovationsfähigkeit, Marktposition oder Projektbedarf relevant ist.",
+        "Wenn gesellschaftsrechtliche Fakten verfügbar sind, muss dieser Block genug strukturierte Angaben enthalten, damit project-description-sync eine native Unternehmenstabelle erzeugen kann."
       ],
-      "min_chars": 1400,
+      "min_chars": 3200,
       "reference_ids": []
     },
     "project_problem_statement": {
-      "title": "Problemstellung",
+      "title": "Derzeitiger Stand / Problembereich",
       "goal": "Leitet konkrete betriebliche, technische, digitale, marktliche oder kapazitive Engpässe her, die das Vorhaben notwendig machen.",
       "must_have": [
         "Ist-Zustand und konkrete Begrenzung des heutigen Systems/Prozesses/Produkts",
@@ -2453,14 +2552,14 @@
         "Keine pauschalen Digitalisierungsfloskeln; jede Aussage muss zeigen, wodurch der Engpass entsteht.",
         "Trenne Symptom, Ursache und betriebliche Wirkung."
       ],
-      "min_chars": 1700,
+      "min_chars": 2400,
       "reference_ids": []
     },
     "project_innovation_project": {
-      "title": "Innovationsvorhaben",
-      "goal": "Beschreibt den Innovationskern des Projekts und macht klar, warum das Vorhaben mehr ist als Ersatzbeschaffung, Standard-IT oder bloße Kapazitätserweiterung.",
+      "title": "Vorstellung des Innovationsprojektes",
+      "goal": "Fuehrt das Innovations- oder Digitalisierungsprojekt aus der Unternehmenssituation heraus ein und beschreibt den Innovationskern so, dass klar wird, warum das Vorhaben mehr ist als Ersatzbeschaffung, Standard-IT oder bloße Kapazitätserweiterung.",
       "must_have": [
-        "Kurzname und präziser Gegenstand des Vorhabens",
+        "Kurzname und präziser Gegenstand des Vorhabens als tragfähiger Projekt-Einleitungssatz",
         "Innovationssprung gegenüber dem bisherigen Zustand",
         "benannte Module, Komponenten, Systeme, Partner, Datenflüsse oder Prozessbausteine, sofern aus Prompt oder Recherche verfügbar",
         "technische, digitale, prozessuale oder dienstleistungsbezogene Neuheitselemente",
@@ -2471,11 +2570,11 @@
         "Innovation als Wirklogik formulieren: was wird neu kombiniert, automatisiert, vernetzt, messbar oder skalierbar?",
         "Keine Patent-/Weltneuheitsbehauptung ohne Quelle."
       ],
-      "min_chars": 2200,
+      "min_chars": 2800,
       "reference_ids": []
     },
     "project_target_picture": {
-      "title": "Zielbild",
+      "title": "Entwicklungsziel",
       "goal": "Verdichtet den angestrebten Soll-Zustand nach Projektabschluss mit Zielzuständen, Fähigkeiten und messbaren Nutzenachsen.",
       "must_have": [
         "Soll-Prozess bzw. Soll-Produkt nach Projektabschluss",
@@ -2488,11 +2587,11 @@
         "Zielbild nicht als Wunschliste, sondern als zukünftiges Betriebsmodell schreiben.",
         "Wenn Kennzahlen fehlen, qualitative Zielgrößen mit klarer Richtung nennen."
       ],
-      "min_chars": 1600,
+      "min_chars": 2200,
       "reference_ids": []
     },
     "project_market_delimitation": {
-      "title": "Abgrenzung zum Markt",
+      "title": "Abgrenzung zum Stand der Technik und Markt",
       "goal": "Ordnet das Vorhaben gegenüber marktüblichen Lösungen, Wettbewerbern, Standardprodukten oder bestehenden Prozessen ein.",
       "must_have": [
         "relevantes Markt-/Wettbewerbsumfeld oder verfügbare Standardlösungen",
@@ -2505,11 +2604,11 @@
         "Recherche hier breit und praxisnah: Anbieterwebsites, Produktdaten, Branchenartikel, Standards, Kundenanforderungen.",
         "Abgrenzung nicht als aggressive Wettbewerbswerbung schreiben."
       ],
-      "min_chars": 1800,
+      "min_chars": 2200,
       "reference_ids": []
     },
     "project_implementation_focus": {
-      "title": "Umsetzungsschwerpunkte",
+      "title": "Herausforderungen und geplante Maßnahmen",
       "goal": "Beschreibt Arbeitspakete, Entwicklungsstränge und organisatorische Maßnahmen, mit denen das Zielbild realisiert wird.",
       "must_have": [
         "drei bis sechs Umsetzungsschwerpunkte oder Arbeitspakete",
@@ -2522,30 +2621,31 @@
         "Arbeitspakete als Entwicklungslogik formulieren, nicht als Einkaufsliste.",
         "Wenn der Prompt Kostenblöcke nennt, müssen diese hier fachlich wieder auftauchen."
       ],
-      "min_chars": 2600,
+      "min_chars": 3200,
       "reference_ids": []
     },
     "project_scope_budget_timeline": {
-      "title": "Projektumfang",
-      "goal": "Fasst Laufzeit, Status, Budget, Kostenblöcke, Projektgrenzen und organisatorischen Umfang belastbar zusammen.",
+      "title": "Projektkosten und Umsetzungszeitraum",
+      "goal": "Fasst Projektkosten, Laufzeit bzw. Umsetzungszeitraum, Status, Kostenblöcke, Projektgrenzen und organisatorischen Umfang belastbar zusammen.",
       "must_have": [
         "Laufzeit oder geplanter Zeitraum",
         "Projektstatus, insbesondere ob begonnen oder noch nicht begonnen",
-        "Gesamtbudget mit Einheit und, falls gegeben, Kostenblöcke",
+        "Gesamtbudget bzw. Projektkosten mit Einheit und, falls gegeben, Kostenblöcke",
         "Kostenblöcke fachlich erläutern und an konkrete Projektbestandteile, Systeme, Produkte, Software, Organisation oder Umfinanzierung koppeln",
         "Abgrenzung, was im Projektumfang enthalten ist und was nicht",
-        "eine kompakte native Tabelle zu Laufzeit/Status/Budget/Kostenblöcken per ctox report table-add, wenn die Informationen verfügbar sind"
+        "eine kompakte native Tabelle zu Laufzeit/Status/Budget bzw. Projektkosten/Kostenblöcken per ctox report project-description-sync, wenn die Informationen verfügbar sind"
       ],
       "style_rules": [
         "Zahlen aus dem Prompt unverändert übernehmen; nicht umrechnen, runden oder neue Budgets erfinden.",
         "Wenn Laufzeit, Status, Budget oder Kostenblöcke bekannt sind, muss der Block eine echte Projektumfang-Tabelle bekommen, nicht nur Fließtext.",
+        "Nutze in der Fließtextführung die Referenzbegriffe Projektkosten und Umsetzungszeitraum.",
         "Kostenblöcke nicht nur listen, sondern ihrer Projektfunktion zuordnen."
       ],
-      "min_chars": 900,
+      "min_chars": 1200,
       "reference_ids": []
     },
     "project_economic_benefit": {
-      "title": "Wirtschaftlicher Nutzen",
+      "title": "Wirtschaftlicher Nutzen und Verwertung",
       "goal": "Leitet aus Projektwirkung und Umsetzungsschwerpunkten den betriebswirtschaftlichen Nutzen und die Förderwürdigkeit ab.",
       "must_have": [
         "Nutzen für Umsatz, Kosten, Marge, Skalierung, Servicequalität, Kundenbindung, Resilienz oder Marktzugang",
@@ -2558,7 +2658,7 @@
         "Keine garantierten Umsatzzuwächse ohne belastbare Quelle; mit Potenzialen, Hebeln und Voraussetzungen arbeiten.",
         "Der Schluss muss die Förderlogik konsolidieren: Problem, Innovation, Umsetzung, Nutzen, Budget/Zeitraum."
       ],
-      "min_chars": 1600,
+      "min_chars": 1400,
       "reference_ids": []
     },
     "appendix_sources_project": {
@@ -2739,6 +2839,282 @@
       ],
       "min_chars": 700,
       "reference_ids": []
+    },
+    "company_legal": {
+      "title": "Gesellschaftsrechtliche Verhältnisse",
+      "goal": "Prüffähiger Stammdatenblock zum Antragsteller bzw. zur relevanten Gesellschaft.",
+      "must_have": [
+        "Firma / Gesellschaft",
+        "Anschrift / Sitz",
+        "Registergericht und HRB/HRA oder vergleichbare Registerdaten",
+        "Stammkapital bzw. Beteiligungsverhältnisse, wenn sie vorliegen",
+        "Geschäftsführung / Gesellschafterkern, sofern im Kontext vorhanden"
+      ],
+      "style_rules": [
+        "Sehr kompakt und prüffähig schreiben; dieser Block ist Stammdatenbasis, nicht Unternehmensgeschichte.",
+        "Nur wirklich relevante gesellschaftsrechtliche Hardfacts nennen und keine langen Umsatz-, Gesellschafter- oder Registerauflistungen ausweiten.",
+        "Keine Lücken mit Platzhaltern füllen; fehlende Felder eher sauber auslassen und per Rückfrage anstoßen.",
+        "Bei Gruppenkonstellationen klar markieren, welche Gesellschaft Antragstellerin ist."
+      ],
+      "min_chars": 450,
+      "reference_ids": [
+        "ref_new_innovation_site_building",
+        "ref_new_event_service_building",
+        "ref_old_multi_project_compact"
+      ]
+    },
+    "company_profile": {
+      "title": "Unternehmensprofil",
+      "goal": "Kompakter Unternehmensblock mit belastbaren Ankern zu Entwicklung, Geschäft, Markt, Produkten, Leistungen und bisheriger Innovationsfähigkeit.",
+      "must_have": [
+        "Unternehmenszweck / Geschäftsmodell",
+        "Sitz / Standorte / regionale Einordnung",
+        "Gründungs- oder Entwicklungshintergrund",
+        "bisherige Projekte, Entwicklungsschritte oder Innovationsleistungen, soweit belegt",
+        "konkrete Leistungs- bzw. Produktfelder",
+        "qualitative oder quantitative Anker aus dem bereitgestellten Kontext",
+        "mindestens ein sinnvoll eingebundenes Bild oder eine eigene Abbildung im Unternehmens-/Projektpaket, wenn kein Originalbild verfügbar ist"
+      ],
+      "style_rules": [
+        "Maximal so lang schreiben, dass Gesellschafts- und Unternehmensprofil zusammen auf etwa eine Seite passen; lieber verdichten als Hardfacts ausbreiten.",
+        "Aus Wir-Perspektive oder enger interner Feststellungsperspektive formulieren, wenn das Dokument diese Perspektive trägt.",
+        "Weniger Gewicht auf Umsatz- und Stammdaten legen; stärker die Entwicklung des Unternehmens, bisher umgesetzte Projekte und bereits erreichte Innovationen herausarbeiten.",
+        "Unternehmen als kompetenten, gewachsenen und handlungsfähigen Antragsteller zeichnen; positive Wirkung aus belastbaren Fakten statt aus Claims.",
+        "Nicht wie eine Imagebroschüre schreiben; konkrete Anker, keine Leerformeln.",
+        "Behalte branchenspezifische Details, z. B. Produktionsverfahren, Plattformlogik oder Nutzungsprofil.",
+        "Schreibe aus interner Feststellungsperspektive oder in ruhiger Wir-Perspektive; nie aus externer Gutachter- oder Beobachterperspektive.",
+        "Keine Distanzformeln wie 'nach dem vorliegenden Kontext', 'öffentlich belastbare Hinweise' oder 'soweit beigefügt'.",
+        "Wenn Gruppenkontext relevant ist, die Rolle des Antragstellers innerhalb der Gruppe klar einordnen."
+      ],
+      "min_chars": 1500,
+      "reference_ids": [
+        "ref_new_innovation_site_building",
+        "ref_new_platform_ai",
+        "ref_new_event_service_building",
+        "ref_old_multi_project_compact"
+      ]
+    },
+    "company_history": {
+      "title": "Historie",
+      "goal": "Historienblock für Traditionsunternehmen, Standortentwicklungen oder Entwicklungslinien, die für das Vorhaben relevant sind.",
+      "must_have": [
+        "Gründungs- oder Meilensteinhintergrund",
+        "wichtige Entwicklungsschritte",
+        "mindestens ein prägender Meilenstein oder markanter betrieblicher Unterschied",
+        "Bezug zur heutigen Problemstellung oder Standortlogik"
+      ],
+      "style_rules": [
+        "Keine reine Chronik schreiben; auf die heutige Ausgangslage zuspitzen.",
+        "Historie als Entwicklungserzählung nutzen, die Erfahrung, Kontinuität oder unternehmerische Leistung sichtbar macht.",
+        "Wenn ein Gründungsjahr genannt wird, mindestens einen echten Meilenstein oder eine prägende Eigenheit anschließen.",
+        "Nur Historie aufnehmen, wenn sie für Glaubwürdigkeit oder Problemlogik einen Mehrwert hat."
+      ],
+      "min_chars": 700,
+      "reference_ids": [
+        "ref_new_innovation_site_building",
+        "ref_old_multi_project_compact"
+      ]
+    },
+    "company_portfolio": {
+      "title": "Produkte / Leistungen / Kundensegmente",
+      "goal": "Block mit konkreten Produkt-, Leistungs- oder Kundensegmentbezügen.",
+      "must_have": [
+        "konkrete Produkt- oder Leistungsgruppen",
+        "typische Kunden- oder Einsatzsegmente",
+        "branchenspezifische Besonderheiten oder Prozessbezug"
+      ],
+      "style_rules": [
+        "Fachbegriffe und konkrete Gegenstände erhalten, nicht zu abstrakten Sammelbegriffen verdichten.",
+        "Portfolio so beschreiben, dass Fachlichkeit, Marktnähe und operative Tiefe spürbar werden.",
+        "Nur aufnehmen, wenn das Portfolio die spätere Projektlogik trägt."
+      ],
+      "min_chars": 900,
+      "reference_ids": [
+        "ref_new_innovation_site_building",
+        "ref_new_platform_ai",
+        "ref_old_multi_project_compact"
+      ]
+    },
+    "project_intro": {
+      "title": "Allgemeine Einleitung",
+      "goal": "Brücke zwischen Unternehmenskontext und dem konkreten Vorhaben bzw. den Teilprojekten.",
+      "must_have": [
+        "strategischer Anlass oder Entwicklungspfad",
+        "warum das Vorhaben jetzt relevant ist",
+        "klare Überleitung in die konkrete Projektbeschreibung"
+      ],
+      "style_rules": [
+        "Die Einleitung darf breiter sein, muss aber auf das konkrete Vorhaben zulaufen.",
+        "Die ersten Absätze der Projektbeschreibung müssen Status quo, zentrale Herausforderung und Zielrichtung bereits zusammenführen; wichtige integrierte Projektlogik nicht erst spät im Dokument einführen.",
+        "Keine reine Förderlogik; immer vom realen Vorhaben aus argumentieren.",
+        "Der unternehmerische Anlass soll spürbar werden: Wachstum, Qualitätsanspruch, Marktveränderung, Kapazitätsdruck oder strategische Weiterentwicklung.",
+        "Keine distanzierende Außenperspektive und keine Hinweise auf fehlende Unterlagen oder fehlende Beleglage.",
+        "LevelUp-Fälle dürfen die Mehr-Ebenen-Logik betonen, müssen aber in konkrete Projektblöcke überführbar bleiben.",
+        "Wenn eine Abbildung vorhanden ist, im Text kurz einordnen, warum sie das Vorhaben oder die Ausgangslage erklärt."
+      ],
+      "min_chars": 750,
+      "reference_ids": [
+        "ref_new_innovation_site_building",
+        "ref_new_platform_ai",
+        "ref_new_event_service_building"
+      ]
+    },
+    "project_1_title_scope": {
+      "title": "Vorstellung des Innovations- oder Digitalisierungsprojektes",
+      "goal": "Klarer Titel und kurze Scope-Einordnung des Teilprojekts.",
+      "must_have": [
+        "konkrete Vorhabenbezeichnung",
+        "knappe Scope-/Abgrenzungsaussage",
+        "Bezug zu Standort, System, Prozess oder Dienstleistung"
+      ],
+      "style_rules": [
+        "Titellinie und kurze Einordnung so formulieren, dass das Vorhaben eindeutig wird.",
+        "Keine generischen Überschriften wie 'Digitalisierungsvorhaben'."
+      ],
+      "min_chars": 950,
+      "reference_ids": [
+        "ref_new_innovation_site_building",
+        "ref_new_platform_ai",
+        "ref_new_event_service_building",
+        "ref_old_multi_project_compact"
+      ]
+    },
+    "project_1_current_state": {
+      "title": "Derzeitiger Stand / Problembereich",
+      "goal": "Konkrete Ausgangslage, Engpässe und Problemmechanik.",
+      "must_have": [
+        "heutiger Ist-Zustand",
+        "konkrete Engpässe / Probleme",
+        "Auswirkungen oder Grenzen",
+        "branchen- und vorhabenspezifische Anker"
+      ],
+      "style_rules": [
+        "Status quo, Herausforderung und Projektanlass so verbinden, dass der spätere Zielblock logisch vorbereitet ist.",
+        "Probleme mechanisch erklären: was blockiert, wo und mit welcher Wirkung.",
+        "Abgrenzungen zum Bestand oder zum Stand der Technik hier verankern, wenn sie vor allem die Problemstellung erklären; nicht als isolierte Nebenargumentation behandeln.",
+        "Keine austauschbaren Branchenfloskeln.",
+        "Keine unvermittelten Themen einführen, die im bisherigen Kontext nicht angelegt sind, z. B. Marketingbezüge ohne klaren Projektbezug.",
+        "Dopplungen für denselben Sachverhalt vermeiden, z. B. Homeoffice und Zuhause nicht als zwei getrennte Probleme darstellen.",
+        "Problemdruck klar zeigen, ohne das Unternehmen klein oder defizitär wirken zu lassen; die Ausgangslage als Folge realer Grenzen, Wachstums- oder Marktanforderungen einordnen, wenn belegt.",
+        "Bei Digitalisierungsfällen mindestens zwei konkrete Prozess-, Daten-, Freigabe- oder Nachweisbrüche benennen statt nur Tool- oder Dashboardsprache zu verwenden.",
+        "Bei Standort- oder Gebäudevorhaben den Bezug zwischen Bestand, Flächen- oder Prozessgrenze deutlich machen."
+      ],
+      "min_chars": 1700,
+      "reference_ids": [
+        "ref_new_innovation_site_building",
+        "ref_new_platform_ai",
+        "ref_new_event_service_building",
+        "ref_old_multi_project_compact"
+      ]
+    },
+    "project_1_development_goal": {
+      "title": "Entwicklungsziel",
+      "goal": "Zielbild und geplante Entwicklungslogik des Vorhabens.",
+      "must_have": [
+        "konkretes Zielbild / Soll-Zustand",
+        "wesentliche Bausteine oder Entwicklungsachsen",
+        "Bezug zur Problemlage",
+        "bei Bedarf geplante Maßnahmen oder Module"
+      ],
+      "style_rules": [
+        "Nicht in Marketingziele kippen; konkrete Vorhabenlogik und Zielmechanik zeigen.",
+        "Die im Problembereich genannten Herausforderungen sichtbar wieder aufnehmen und als Zielzustand beantworten, damit ein roter Faden entsteht.",
+        "Zielbild als ambitionierte, aber belastbare Weiterentwicklung formulieren, sodass Gestaltungswille und Kompetenz des Unternehmens sichtbar werden.",
+        "Bei Digitalisierungsfällen das Zielbild ueber 2-3 konkrete betriebliche Hebel oder Anwendungsfaelle schreiben, nicht nur ueber Systemnamen, Power BI, SharePoint, KI oder Automatisierung als Selbstzweck.",
+        "Bei LevelUp-Fällen darf die Zielbeschreibung mehr Systemverbund enthalten, aber mit überprüfbaren Bestandteilen."
+      ],
+      "min_chars": 1500,
+      "reference_ids": [
+        "ref_new_innovation_site_building",
+        "ref_new_platform_ai",
+        "ref_new_event_service_building",
+        "ref_old_multi_project_compact"
+      ]
+    },
+    "project_1_state_of_art": {
+      "title": "Abgrenzung zum Stand der Technik und Markt",
+      "goal": "Knappe, konkrete Abgrenzung zu heutigen Lösungen, Standards oder etablierten Vorgehensweisen.",
+      "must_have": [
+        "Vergleich zu etablierten Lösungen / Bestand",
+        "konkrete Grenze / Unzulänglichkeit",
+        "Bezug zum eigenen Vorhaben"
+      ],
+      "style_rules": [
+        "Kurz und eng an die Problemstellung schreiben; die Abgrenzung soll den Ist-Zustand erklären und nicht wie ein abgetrennter Exkurs wirken.",
+        "Nur dann einsetzen, wenn belastbare Vergleichspunkte vorliegen oder per öffentlicher Recherche sauber gestützt werden können.",
+        "Wenn Vergleichspunkte fehlen, den Block weglassen oder Rückfrage auslösen; nie die fehlende Beleglage ausformulieren.",
+        "Keine 'einzigartig'-Behauptungen ohne Vergleich."
+      ],
+      "min_chars": 900,
+      "reference_ids": [
+        "ref_new_platform_ai",
+        "ref_new_event_service_building",
+        "ref_old_multi_project_compact"
+      ]
+    },
+    "project_1_challenges_measures": {
+      "title": "Herausforderungen bei der Implementierung und geplante Maßnahmen",
+      "goal": "Darstellung der zentralen Hürden, Umsetzungslogik und Gegenmaßnahmen / Lösungsschritte.",
+      "must_have": [
+        "wesentliche Herausforderungen",
+        "technische / organisatorische Maßnahmen oder Reaktionslogik",
+        "Verknüpfung zum Zielbild",
+        "bei geeigneter Faktenlage eine kompakte Umsetzungs- oder Systemabbildung als eigene Darstellung"
+      ],
+      "style_rules": [
+        "Keine Risikobullet-Wolke; lieber wenige klare Hürden mit konkreten Maßnahmen.",
+        "Die Herausforderungen müssen an Problembereich und Entwicklungsziel anschließen; keine neue Liste eröffnen, die im Zielbild nicht vorbereitet wurde.",
+        "Herausforderungen als anspruchsvolle, beherrschbare Entwicklungsaufgabe darstellen, nicht als Krisenprosa.",
+        "Wenn bauliche, prozessuale und digitale Ebenen zusammenspielen, diese sauber verzahnen."
+      ],
+      "min_chars": 1400,
+      "reference_ids": [
+        "ref_new_innovation_site_building",
+        "ref_new_platform_ai",
+        "ref_new_event_service_building",
+        "ref_old_multi_project_compact"
+      ]
+    },
+    "project_1_workpackages": {
+      "title": "Arbeitspakete / Umsetzungsschritte",
+      "goal": "Optionaler Block für dichte, nachvollziehbare Arbeitsschritte oder Transformationsphasen.",
+      "must_have": [
+        "klare Arbeitsschritte oder Phasen",
+        "sichtbarer Output / Ergebnis je Schritt"
+      ],
+      "style_rules": [
+        "Nur einsetzen, wenn der Kontext genug Material für konkrete Schritte liefert.",
+        "Bevorzugt als zusammenhängenden Fließtext mit Phasenlogik schreiben; keine harte Schritt-für-Schritt-Liste, wenn sie den Lesefluss schwächt.",
+        "Keine leeren AP-Labels; jeder Schritt braucht Handlung plus Ergebnis."
+      ],
+      "min_chars": 900,
+      "reference_ids": [
+        "ref_old_multi_project_compact",
+        "ref_new_platform_ai"
+      ]
+    },
+    "project_1_costs_timeline": {
+      "title": "Projektkosten und Umsetzungszeitraum",
+      "goal": "Kompakter Kosten-/Zeitraumblock pro Projekt.",
+      "must_have": [
+        "Gesamtkosten",
+        "Zeitraum / Dauer",
+        "bei Personalkostenfokus: Rollen- oder Personalkostenbezug, sofern belegt"
+      ],
+      "style_rules": [
+        "Nur belegte Zahlen nennen.",
+        "Bei Kennzahlen und Kostenwerten Jahresbezug oder Zeitraum klar nennen, wenn die Zahlen nicht offenkundig aktuell sind.",
+        "Wenn Kosten grob siebenstellig sind und der Kontext es traegt, 2-3 grobe Kostentreiber oder Nutzenkriterien benennen.",
+        "Wenn Projektlaufzeiten vor dem Dokumentstichtag beginnen, die zeitliche Einordnung nicht stillschweigend stehenlassen, sondern intern absichern oder im Text plausibel machen.",
+        "Falls mehrere Kostenlogiken vorliegen, knapp gliedern statt zu schätzen."
+      ],
+      "min_chars": 650,
+      "reference_ids": [
+        "ref_new_innovation_site_building",
+        "ref_new_platform_ai",
+        "ref_new_event_service_building",
+        "ref_old_multi_project_compact"
+      ]
     }
   },
   "reference_resources": [

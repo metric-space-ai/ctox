@@ -1,6 +1,6 @@
-//! Mission-queue hook for deep-research runs.
+//! Mission-queue hook for decision-report (systematic-research) runs.
 //!
-//! Lets `ctox chat`-style flows or scheduled tasks enqueue a deep-research
+//! Lets `ctox chat`-style flows or scheduled tasks enqueue a decision-report
 //! manager run as a queue task. The pattern in CTOX is to insert a row into
 //! `communication_messages` with `channel = 'queue'`; the daemon's worker
 //! pool then leases and processes those rows.
@@ -63,7 +63,7 @@ fn priority_rank(label: &str) -> i64 {
 pub fn enqueue_run(root: &Path, run_id: &str, priority: i64) -> Result<String> {
     let priority_str = priority_label(priority).to_string();
     let thread_key = format!("report:{run_id}");
-    let title = format!("deep-research run {run_id}");
+    let title = format!("decision-report run {run_id}");
     let body = json!({
         "kind": "report.run",
         "run_id": run_id,
@@ -75,7 +75,7 @@ pub fn enqueue_run(root: &Path, run_id: &str, priority: i64) -> Result<String> {
         thread_key,
         workspace_root: None,
         priority: priority_str,
-        suggested_skill: Some("deep-research".to_string()),
+        suggested_skill: Some("systematic-research".to_string()),
         parent_message_key: None,
         extra_metadata: Some(json!({
             "report_run_id": run_id,
@@ -83,7 +83,7 @@ pub fn enqueue_run(root: &Path, run_id: &str, priority: i64) -> Result<String> {
         })),
     };
     let view = create_queue_task(root, request)
-        .with_context(|| format!("failed to enqueue deep-research run {run_id}"))?;
+        .with_context(|| format!("failed to enqueue decision-report run {run_id}"))?;
     Ok(view.message_key)
 }
 

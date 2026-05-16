@@ -21,7 +21,7 @@ prints a `run_id`. The four common causes:
 
   ```bash
   jq '.report_types[].id' \
-    /Users/michaelwelsch/Documents/ctox/skills/system/research/deep-research/references/asset_pack.json
+    /Users/michaelwelsch/Documents/ctox/skills/system/research/systematic-research/references/asset_pack.json
   ```
 
 - **Unknown `domain_profile_id`.** `--domain` accepts only the ids in
@@ -33,7 +33,7 @@ prints a `run_id`. The four common causes:
 
   ```bash
   jq '.domain_profiles[].id' \
-    /Users/michaelwelsch/Documents/ctox/skills/system/research/deep-research/references/asset_pack.json
+    /Users/michaelwelsch/Documents/ctox/skills/system/research/systematic-research/references/asset_pack.json
   ```
 
 - **Unknown `depth_profile_id`.** Only `orienting`, `standard`,
@@ -57,7 +57,7 @@ prints a `run_id`. The four common causes:
   bundle did not install or was deleted. Re-pull the bundle. Verify:
 
   ```bash
-  ls /Users/michaelwelsch/Documents/ctox/skills/system/research/deep-research/references/asset_pack.json
+  ls /Users/michaelwelsch/Documents/ctox/skills/system/research/systematic-research/references/asset_pack.json
   ```
 
   If the file is missing, the rest of the skill's references is
@@ -73,7 +73,7 @@ order of likelihood:
 1. **Crossref / OpenAlex / arXiv unreachable.** Quick test:
 
    ```bash
-   python3 /Users/michaelwelsch/Documents/ctox/skills/system/research/deep-research/scripts/doi_resolve.py \
+   python3 /Users/michaelwelsch/Documents/ctox/skills/system/research/systematic-research/scripts/doi_resolve.py \
        10.3390/coatings9110727
    ```
 
@@ -470,7 +470,7 @@ operator level — do not let the manager keep retrying.
 ## Diagnostic helpers that ship with the skill
 
 These three scripts live in
-`/Users/michaelwelsch/Documents/ctox/skills/system/research/deep-research/scripts/`
+`/Users/michaelwelsch/Documents/ctox/skills/system/research/systematic-research/scripts/`
 and are intended to be run by the operator from the command line:
 
 - **`doi_resolve.py`** — resolves one or more DOIs through Crossref
