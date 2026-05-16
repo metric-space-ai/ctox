@@ -179,6 +179,7 @@ pub fn run_browser_automation(root: &Path, request: &BrowserAutomationRequest) -
         )
     })?;
     let _ = ensure_reference_package_json(&reference_dir)?;
+    ensure_humanlike_module(&reference_dir)?;
     let doctor = build_doctor_report(&reference_dir)?;
     if !doctor.automation_ready {
         anyhow::bail!(
@@ -257,6 +258,7 @@ pub fn capture_browser_transport(root: &Path, request: &BrowserCaptureRequest) -
         )
     })?;
     let _ = ensure_reference_package_json(&reference_dir)?;
+    ensure_humanlike_module(&reference_dir)?;
     let doctor = build_doctor_report(&reference_dir)?;
     if !doctor.automation_ready {
         anyhow::bail!(
@@ -613,6 +615,7 @@ fn install_reference(
         )
     })?;
     let package_json_created = ensure_reference_package_json(reference_dir)?;
+    ensure_humanlike_module(reference_dir)?;
     if run_npm_install {
         run_command(
             reference_dir,
@@ -638,6 +641,20 @@ fn install_reference(
         npm_install_ran: run_npm_install,
         browser_install_ran: install_browser,
     })
+}
+
+fn ensure_humanlike_module(reference_dir: &Path) -> Result<()> {
+    let target = reference_dir.join("humanlike.mjs");
+    let source = include_str!("../assets/humanlike.mjs");
+    let needs_write = match fs::read_to_string(&target) {
+        Ok(existing) => existing != source,
+        Err(_) => true,
+    };
+    if needs_write {
+        fs::write(&target, source)
+            .with_context(|| format!("failed to write {}", target.display()))?;
+    }
+    Ok(())
 }
 
 fn ensure_reference_package_json(reference_dir: &Path) -> Result<bool> {
@@ -1059,24 +1076,27 @@ const emit = async (payload) => {{
 const {{ chromium, firefox, webkit }} = await import("playwright");
 const launchOptions = {{
   headless: true,
+  ignoreDefaultArgs: ["--enable-automation", "--enable-unsafe-swiftshader"],
 }};
 if (fallbackExecutable) {{
   launchOptions.executablePath = fallbackExecutable;
 }}
 const contextOptions = {{
-  viewport: {{ width: 1600, height: 900 }},
+  viewport: {{ width: 1920, height: 947 }},
 }};
 
 const profileDir = path.join(process.cwd(), ".ctox-browser-profile");
 const browser = await chromium.launch(launchOptions);
 const context = await browser.newContext(contextOptions);
 const page = await context.newPage();
+const humanlike = await import("./humanlike.mjs").catch(() => null);
 globalThis.chromium = chromium;
 globalThis.firefox = firefox;
 globalThis.webkit = webkit;
 globalThis.context = context;
 globalThis.page = page;
 globalThis.browser = browser;
+globalThis.humanlike = humanlike;
 	const ctoxBrowserApi = {{
 	  logs,
 	  profileDir,

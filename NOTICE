@@ -20,5 +20,13 @@ Primary integrated source trees:
 The previously-carried Candle-based `tools/model-runtime/` subtree has
 been retired.
 
+- tools/web-stack/assets/humanlike.mjs
+  Behavioral primitives (mouse Bezier curves, typing latency model with
+  nearby-key mistypes, three-phase burst-wheel scrolling, actionability
+  gating) are reimplemented in JavaScript from the open-source Python
+  wrapper of https://github.com/CloakHQ/CloakBrowser (MIT, Copyright
+  CloakHQ). Only the wrapper algorithms are ported; the patched-Chromium
+  binary is not used and not redistributed.
+
 The root LICENSE applies to first-party CTOX repository code unless an
 integrated source subtree or file states otherwise.

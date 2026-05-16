@@ -13,6 +13,9 @@
 //
 // Stealth measures and consent dismissal are distilled from the publicly
 // documented web-agent-master/google-search project (ISC, MIT-compatible).
+// Launch-arg hygiene (ignoreDefaultArgs, viewport, platform-aware UA) is
+// adopted from CloakHQ/CloakBrowser (MIT) — only the open-source wrapper
+// rules, not the patched binary.
 
 import { chromium } from 'playwright';
 import fs from 'node:fs';
@@ -136,6 +139,17 @@ async function readStdinJson() {
   return JSON.parse(Buffer.concat(chunks).toString('utf8'));
 }
 
+function defaultUserAgent() {
+  switch (process.platform) {
+    case 'darwin':
+      return 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36';
+    case 'win32':
+      return 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36';
+    default:
+      return 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36';
+  }
+}
+
 (async () => {
   const cfg = await readStdinJson();
   const log = [];
@@ -152,14 +166,12 @@ async function readStdinJson() {
   const ctx = await chromium.launchPersistentContext(cfg.stateDir, {
     headless: cfg.headless !== false,
     args: STEALTH_LAUNCH_ARGS,
-    ignoreDefaultArgs: ['--enable-automation'],
+    ignoreDefaultArgs: ['--enable-automation', '--enable-unsafe-swiftshader'],
     locale: language,
     timezoneId: cfg.timezoneId || 'Europe/Berlin',
     colorScheme: 'dark',
-    viewport: { width: 1440, height: 900 },
-    userAgent:
-      cfg.userAgent ||
-      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36',
+    viewport: { width: 1920, height: 947 },
+    userAgent: cfg.userAgent || defaultUserAgent(),
     permissions: ['geolocation', 'notifications'],
     isMobile: false,
     hasTouch: false,
