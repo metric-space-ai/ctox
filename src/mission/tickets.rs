@@ -1857,7 +1857,7 @@ pub(crate) fn export_ticket_history_dataset(
     }))
 }
 
-fn refresh_observed_ticket_knowledge(
+pub(crate) fn refresh_observed_ticket_knowledge(
     root: &Path,
     system: &str,
 ) -> Result<Vec<TicketKnowledgeEntryView>> {
@@ -2179,7 +2179,7 @@ fn refresh_observed_ticket_knowledge(
     ])
 }
 
-fn list_ticket_knowledge_entries(
+pub(crate) fn list_ticket_knowledge_entries(
     root: &Path,
     system: Option<&str>,
     domain: Option<&str>,
@@ -2206,7 +2206,7 @@ fn list_ticket_knowledge_entries(
         .map_err(anyhow::Error::from)
 }
 
-fn load_ticket_knowledge_entry(
+pub(crate) fn load_ticket_knowledge_entry(
     root: &Path,
     system: &str,
     domain: &str,
@@ -2254,7 +2254,7 @@ fn load_preferred_ticket_knowledge_entry(
     .map_err(anyhow::Error::from)
 }
 
-fn create_ticket_knowledge_load(
+pub(crate) fn create_ticket_knowledge_load(
     root: &Path,
     ticket_key: &str,
     domains: Option<&[String]>,
@@ -4202,7 +4202,7 @@ pub(crate) fn query_ticket_source_skill(
     }
 }
 
-fn import_ticket_source_skill_bundle(
+pub(crate) fn import_ticket_source_skill_bundle(
     root: &Path,
     system: &str,
     bundle_dir: &str,
@@ -4297,7 +4297,7 @@ fn import_ticket_source_skill_bundle(
     }))
 }
 
-fn resolve_ticket_source_skill_for_target(
+pub(crate) fn resolve_ticket_source_skill_for_target(
     root: &Path,
     ticket_key: Option<&str>,
     case_id: Option<&str>,
@@ -4315,7 +4315,7 @@ fn resolve_ticket_source_skill_for_target(
     }))
 }
 
-fn compose_ticket_source_skill_reply(
+pub(crate) fn compose_ticket_source_skill_reply(
     root: &Path,
     ticket_key: Option<&str>,
     case_id: Option<&str>,
@@ -5135,7 +5135,7 @@ fn normalized_text(text: &str) -> String {
         .to_lowercase()
 }
 
-fn review_ticket_note_with_source_skill(
+pub(crate) fn review_ticket_note_with_source_skill(
     root: &Path,
     ticket_key: &str,
     body: &str,

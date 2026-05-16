@@ -1,28 +1,46 @@
 // Origin: CTOX
 // License: Apache-2.0
 //
-// `ctox knowledge` namespace. Record-shape knowledge is a first-class peer
-// to skillbooks, runbooks, and ticket knowledge entries. The catalog table
-// `knowledge_data_tables` is created in `mission::tickets::ensure_schema`
-// and defensively re-created in `data::ensure_local_schema` so the
-// knowledge module works without first opening the ticket subsystem.
+// `ctox knowledge` namespace — single entry point for the four durable
+// knowledge forms CTOX carries across turns. Each form has its own catalog
+// in SQLite and its own curator skill; this module exposes them under a
+// consistent CLI surface so an agent can discover, query, and (where the
+// form supports it) write durable knowledge without having to know which
+// historical subsystem each form's tables happen to live in.
 //
-// - Level 1: scaffold + CLI namespace.
-// - Level 2: management verbs on the catalog (this module's `data` submodule).
-// - Level 3: operational primitives for Python-script-driven content work.
+// Forms:
+//   - `data` — record-shape knowledge (tables in `knowledge_data_tables` +
+//     Parquet content). Full lifecycle + operational verbs in `data` /
+//     `ops`. The original — and only fully self-contained — form.
+//   - `skill` — procedural knowledge: main-skill + skillbooks + runbooks +
+//     labeled runbook items, with embeddings. Backed by
+//     `knowledge_main_skills` / `knowledge_skillbooks` / `knowledge_runbooks`
+//     / `knowledge_runbook_items` / `knowledge_embeddings`. Delegates to
+//     `mission::tickets` handlers (the same ones reachable as
+//     `ctox ticket source-skill-*` for backward compatibility).
+//   - `facts` — ticket-scoped single-fact entries
+//     (`ticket_knowledge_entries`). Delegates to the same `mission::tickets`
+//     handlers reachable as `ctox ticket knowledge-*`.
+//   - `search` — union discovery across all four forms plus skill bundles
+//     (`ctox_skill_bundles`). Use this when you ask "does CTOX already know
+//     anything about <topic>?" before opening a new knowledge entry.
 //
-// All write-side operations (`create`, `append`, `update`, …) must run in
-// the **daemon process** so SQLite writes are not lost when the CLI is
-// invoked from a sandboxed agent subshell (macOS Seatbelt isolates writes
-// from sandboxed children). The CLI entry point in `main.rs` therefore
-// routes `ctox knowledge data …` through the service IPC channel when the
-// daemon is running, and the daemon dispatches via `dispatch_capturing()`.
-// A direct-dispatch fallback (`handle_knowledge_command`) is preserved for
-// the no-daemon path so the CLI remains usable for offline debugging.
+// All write-side operations (`create`, `append`, `update`, `import-bundle`,
+// `bootstrap`, …) must run in the **daemon process** so SQLite writes are
+// not lost when the CLI is invoked from a sandboxed agent subshell (macOS
+// Seatbelt isolates writes from sandboxed children). The CLI entry point in
+// `main.rs` therefore routes the entire `ctox knowledge …` family through
+// the service IPC channel when the daemon is running, and the daemon
+// dispatches via `dispatch_capturing()`. A direct-dispatch fallback
+// (`handle_knowledge_command`) is preserved for the no-daemon path so the
+// CLI remains usable for offline debugging.
 
 mod data;
+mod facts;
 mod ops;
 mod parquet_io;
+mod search;
+mod skill;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -48,11 +66,14 @@ pub fn handle_knowledge_command(root: &Path, args: &[String]) -> Result<()> {
     match form {
         None | Some("--help") | Some("-h") | Some("help") => print_json(&top_level_help()),
         Some("data") => data::handle_data_command(root, rest),
+        Some("skill") | Some("skills") => skill::handle_command(root, rest),
+        Some("facts") | Some("fact") => facts::handle_command(root, rest),
+        Some("search") => search::handle_command(root, rest),
         Some(unknown) => {
             print_json(&json!({
                 "ok": false,
                 "error": format!("unknown knowledge form: {unknown}"),
-                "available_forms": ["data"],
+                "available_forms": available_forms(),
             }))?;
             anyhow::bail!("unknown knowledge form: {unknown}");
         }
@@ -87,10 +108,17 @@ fn top_level_help() -> Value {
     json!({
         "ok": true,
         "namespace": "knowledge",
-        "forms": {
-            "data": "record-shape knowledge tables — peer to skillbooks, runbooks, and ticket knowledge entries",
-        },
-        "note": "Level 2 surfaces catalog lifecycle verbs under `ctox knowledge data`. Level 3 (operational primitives for Python-script content work) lands later.",
+        "forms": available_forms(),
+        "discovery": "Use `ctox knowledge search --query \"<topic>\"` first to see what CTOX already knows on a topic across all four forms before opening a new entry.",
+    })
+}
+
+fn available_forms() -> Value {
+    json!({
+        "data":   "record-shape knowledge tables (rows sharing a schema, Parquet-backed). CLI: ctox knowledge data <verb>",
+        "skill":  "procedural knowledge — main-skill + skillbooks + runbooks + labeled runbook items. CLI: ctox knowledge skill <verb>",
+        "facts":  "ticket-scoped single-fact entries. CLI: ctox knowledge facts <verb>",
+        "search": "union discovery across data tables, procedural skills, ticket facts, and skill bundles. CLI: ctox knowledge search --query <text>",
     })
 }
 
@@ -99,9 +127,7 @@ pub(crate) fn print_json(value: &Value) -> Result<()> {
     CAPTURE.with(|cell| -> Result<()> {
         let mut sink = cell.borrow_mut();
         match sink.as_mut() {
-            Some(buf) => {
-                writeln!(buf, "{serialized}").context("write to knowledge capture buffer")
-            }
+            Some(buf) => writeln!(buf, "{serialized}").context("write to knowledge capture buffer"),
             None => {
                 println!("{serialized}");
                 Ok(())
