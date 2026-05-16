@@ -47,6 +47,23 @@ python3 skills/system/product_engineering/business-stack/scripts/test_install_bu
 All modules share the same shell, login entry, design system, bug reporting,
 audit model, and CTOX bridge.
 
+Packed skills are not enabled by default. The first generated Business OS starts
+with the core business modules only; optional skill-app modules are activated
+through CTOX so the UI and the Codex skill discovery state stay aligned:
+
+```sh
+ctox business-os modules list
+ctox business-os modules enable content
+ctox business-os skills enable openai-docs
+ctox business-os modules disable content
+```
+
+Activation is persisted in the CTOX SQLite runtime store. Enabling a packed
+skill copies the managed pack into `$CODEX_HOME/skills`, which makes it visible
+to the Codex skill loader and therefore to the system prompt on the next skill
+reload. Disabling removes only CTOX-managed pack copies; unmanaged user-authored
+skills are left on disk.
+
 ## Public Website Boundary
 
 The Business OS is an internal application. Its pages and internal module APIs
@@ -196,6 +213,32 @@ Run the full route/API/queue smoke test against a running dev server:
 
 ```sh
 pnpm test:business-stack
+```
+
+Run the Word document smoke test against the synthetic fixture and the default
+real-document corpus sample:
+
+```sh
+pnpm test:word-documents
+```
+
+The local real DOCX corpus lives outside git at
+`/Users/michaelwelsch/Downloads/OneDrive_1_9`. Visual gate aliases and required
+mode environment flags are documented in
+`docs/word-document-corpus-ci-gates.md`.
+
+Check whether this machine or CI image can render native selected body-page
+references without starting the dev server:
+
+```sh
+pnpm test:word-documents:native-preflight
+```
+
+After LibreOffice and Poppler are installed and the dev server is running on
+port 3000, run the native selected body-page audit:
+
+```sh
+pnpm test:word-documents:native-body-pages
 ```
 
 Run the Accounting package unit suite without a database:

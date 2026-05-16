@@ -3,8 +3,9 @@ import { WorkspaceShell, type BusinessModuleId } from "@ctox-business/ui";
 import { BugReportWidget } from "./bug-report-widget";
 import { ClientNavigationBridge } from "./client-navigation-bridge";
 import { ContextMenuBridge } from "./context-menu-bridge";
+import { readBusinessOsNavigationState } from "../lib/ctox-core-bridge";
 
-export function AppShell({
+export async function AppShell({
   children,
   currentHref,
   brandName,
@@ -21,6 +22,8 @@ export function AppShell({
   locale?: string;
   theme?: string;
 }) {
+  const navigation = await readBusinessOsNavigationState();
+
   return (
     <WorkspaceShell
       currentHref={currentHref}
@@ -29,6 +32,7 @@ export function AppShell({
       submoduleId={submoduleId}
       locale={locale}
       theme={theme}
+      moduleIds={navigation.enabledModules}
       LinkComponent={({ href, className, children }) => (
         <Link className={className} href={href}>{children}</Link>
       )}

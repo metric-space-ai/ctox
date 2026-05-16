@@ -1,0 +1,7 @@
+{
+  "id": "security",
+  "name": "Security",
+  "defaultRoute": "/app/security/overview",
+  "records": ["security_reviews", "ownership_maps", "threat_models", "mitigations"],
+  "ctoxSync": ["security_findings", "ownership_exports", "threat_model_reviews", "risk_register_updates"]
+}

@@ -1,0 +1,7 @@
+{
+  "id": "content",
+  "name": "Content Studio",
+  "defaultRoute": "/app/content/assets",
+  "records": ["assets", "images", "videos", "voiceovers", "figma_files", "web_prototypes"],
+  "ctoxSync": ["asset_generation", "image_variants", "video_jobs", "voiceover_jobs", "design_implementation_reviews"]
+}

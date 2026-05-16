@@ -1,0 +1,7 @@
+{
+  "id": "support",
+  "name": "Support Desk",
+  "defaultRoute": "/app/support/tickets",
+  "records": ["tickets", "incidents", "monitoring_signals", "zammad_records"],
+  "ctoxSync": ["ticket_reviews", "incident_triage", "monitoring_summaries", "vendor_api_checks"]
+}

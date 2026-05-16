@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { findBusinessModule, findBusinessSubmodule, WorkSurface, type BusinessModuleId, type WorkSurfacePanelState } from "@ctox-business/ui";
 import { AppShell } from "../../../../components/app-shell";
 import { businessOsName, companyNameCookieName, normalizeCompanyName } from "../../../../lib/company-settings";
+import { readBusinessOsNavigationState } from "../../../../lib/ctox-core-bridge";
 
 export default async function SubmodulePage({
   params,
@@ -32,16 +33,18 @@ export default async function SubmodulePage({
   const cookieStore = await cookies();
   const companyName = normalizeCompanyName(cookieStore.get(companyNameCookieName)?.value);
   const brandName = businessOsName(companyName);
+  const activation = await readBusinessOsNavigationState();
   const module = findBusinessModule(moduleId);
   const submodule = findBusinessSubmodule(moduleId, submoduleId);
 
-  if (!module || !submodule) notFound();
+  if (!module || !submodule || !activation.enabledModules.includes(module.id)) notFound();
   const isBusiness = module.id === "business";
   const isCompetitiveAnalysis = module.id === "marketing" && submodule.id === "competitive-analysis";
   const isCtox = module.id === "ctox";
   const isMarketing = module.id === "marketing" && !isCompetitiveAnalysis;
   const isOperations = module.id === "operations";
   const isSales = module.id === "sales";
+  const isSkillAppModule = !isSales && !isMarketing && !isCompetitiveAnalysis && !isOperations && !isBusiness && !isCtox;
   const drawer: WorkSurfacePanelState["drawer"] =
     query.drawer === "left-bottom" || query.drawer === "bottom" || query.drawer === "right"
       ? query.drawer
@@ -94,6 +97,10 @@ export default async function SubmodulePage({
     const { CtoxPanel, CtoxWorkspace } = await import("../../../../components/ctox-workspace");
     panelContent = <CtoxPanel panelState={panelState} query={viewQuery} submoduleId={submodule.id} />;
     workspaceContent = <CtoxWorkspace companyName={companyName} query={viewQuery} submoduleId={submodule.id} />;
+  } else if (isSkillAppModule) {
+    const { SkillAppPanel, SkillAppWorkspace } = await import("../../../../components/skill-app-workspace");
+    panelContent = <SkillAppPanel moduleId={module.id} panelState={panelState} query={viewQuery} submoduleId={submodule.id} />;
+    workspaceContent = <SkillAppWorkspace moduleId={module.id} query={viewQuery} submoduleId={submodule.id} />;
   }
 
   return (
@@ -109,10 +116,10 @@ export default async function SubmodulePage({
         moduleId={module.id}
         submoduleId={submodule.id}
         title={submodule.label}
-        description={isCompetitiveAnalysis ? "Market monitor workspace" : isOperations ? "Operations workspace" : `${module.label} workspace`}
+        description={isCompetitiveAnalysis ? "Market monitor workspace" : isOperations ? "Operations workspace" : isSkillAppModule ? module.summary : `${module.label} workspace`}
         panelState={panelState}
         panelContent={panelContent}
-        hideHeader={isSales || isCompetitiveAnalysis || isMarketing || isOperations || isBusiness || isCtox}
+        hideHeader={isSales || isCompetitiveAnalysis || isMarketing || isOperations || isBusiness || isCtox || isSkillAppModule}
       >
         <div
           className="context-menu-scope"

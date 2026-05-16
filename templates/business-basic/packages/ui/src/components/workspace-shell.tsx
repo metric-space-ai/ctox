@@ -18,6 +18,7 @@ export function WorkspaceShell({
   submoduleId,
   locale,
   theme,
+  moduleIds,
   LinkComponent
 }: {
   children: ReactNode;
@@ -27,8 +28,12 @@ export function WorkspaceShell({
   submoduleId?: string;
   locale?: string;
   theme?: string;
+  moduleIds?: string[];
   LinkComponent: WorkspaceShellLinkComponent;
 }) {
+  const visibleModules = moduleIds?.length
+    ? businessModules.filter((module) => moduleIds.includes(module.id))
+    : businessModules;
   const activeModule = businessModules.find((module) => module.id === moduleId);
   const activeSubmodule = activeModule?.submodules.find((submodule) => submodule.id === submoduleId);
   const Link = LinkComponent;
@@ -37,6 +42,7 @@ export function WorkspaceShell({
   const activeHref = currentHref ?? activeSubmodule?.href ?? activeModule?.href ?? "/app";
   const moduleLabel = (id: string, fallback: string) => navLabels[activeLocale]?.modules[id] ?? fallback;
   const submoduleLabel = (id: string, fallback: string) => navLabels[activeLocale]?.submodules[id] ?? fallback;
+  const showSubmoduleNav = moduleId !== "ctox" && (activeModule?.submodules.length ?? 0) > 1;
 
   return (
     <div className="app-shell" data-module={moduleId ?? "workspace"} data-theme={activeTheme}>
@@ -46,7 +52,7 @@ export function WorkspaceShell({
             {brandName ?? translateShell(activeLocale, "brand")}
           </Link>
           <nav className="module-nav" aria-label="Business modules">
-            {businessModules.map((module) => (
+            {visibleModules.map((module) => (
               <Link
                 className={module.id === moduleId ? "active" : ""}
                 href={withThemeMode(withLocale(module.href, activeLocale), activeTheme)}
@@ -79,17 +85,19 @@ export function WorkspaceShell({
             ))}
           </div>
         </div>
-        <nav className="submodule-nav" aria-label="Module sections">
-          {(activeModule?.submodules ?? []).map((submodule) => (
-            <Link
-              className={submodule.id === submoduleId ? "active" : ""}
-              href={withThemeMode(withLocale(submodule.href, activeLocale), activeTheme)}
-              key={submodule.id}
-            >
-              {submoduleLabel(submodule.id, submodule.label)}
-            </Link>
-          ))}
-        </nav>
+        {showSubmoduleNav ? (
+          <nav className="submodule-nav" aria-label="Module sections">
+            {(activeModule?.submodules ?? []).map((submodule) => (
+              <Link
+                className={submodule.id === submoduleId ? "active" : ""}
+                href={withThemeMode(withLocale(submodule.href, activeLocale), activeTheme)}
+                key={submodule.id}
+              >
+                {submoduleLabel(submodule.id, submodule.label)}
+              </Link>
+            ))}
+          </nav>
+        ) : null}
       </header>
       <main className="main">{children}</main>
     </div>
@@ -111,9 +119,48 @@ const navLabels: Record<string, {
       marketing: "Marketing",
       operations: "Betrieb",
       business: "Geschäft",
+      documents: "Dokumente",
+      content: "Content Studio",
+      developer: "Developer Studio",
+      deployment: "Deployment",
+      security: "Security",
+      integrations: "Integrationen",
+      research: "Research Desk",
+      support: "Support Desk",
       ctox: "CTOX"
     },
     submodules: {
+      library: "Bibliothek",
+      spreadsheets: "Tabellen",
+      slides: "Slides",
+      drawings: "Zeichnungen",
+      transcripts: "Transkripte",
+      images: "Bilder",
+      video: "Video",
+      voice: "Voice",
+      design: "Design",
+      web: "Web UI",
+      apps: "Apps",
+      frameworks: "Frameworks",
+      notebooks: "Notebooks",
+      "source-control": "Source Control",
+      quality: "Qualität",
+      overview: "Übersicht",
+      vercel: "Vercel",
+      cloudflare: "Cloudflare",
+      netlify: "Netlify",
+      render: "Render",
+      "best-practices": "Best Practices",
+      ownership: "Ownership",
+      "threat-models": "Threat Models",
+      linear: "Linear",
+      notion: "Notion",
+      desk: "Desk",
+      "openai-docs": "OpenAI Docs",
+      "notion-research": "Notion Research",
+      tickets: "Tickets",
+      monitoring: "Monitoring",
+      zammad: "Zammad",
       pipeline: "Pipeline",
       accounts: "Konten",
       contacts: "Kontakte",

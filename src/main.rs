@@ -123,6 +123,10 @@ INSTALL / UPGRADE
   ctox business-os status        show bundled Business OS template/install state
   ctox business-os install --target <empty-dir> [--init-git]
                                  create a separate customer-owned Business OS repo
+  ctox business-os modules list|enable|disable
+                                 manage optional Business OS skill-app modules
+  ctox business-os skills list|enable|disable
+                                 manage optional packed skills for Business OS
 
 ENGINE / GPU
   ctox doctor                    health check — update available? hints

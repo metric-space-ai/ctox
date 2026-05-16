@@ -920,18 +920,43 @@ pub fn run_tui(root: &Path) -> Result<()> {
         .context("failed to draw initial TUI frame")?;
 
     let mut last_refresh = Instant::now();
+    let mut last_spinner_tick = Instant::now();
     loop {
+        // Wait up to 125ms for the *first* event, then drain everything else
+        // that is already buffered without blocking. This keeps the loop
+        // responsive even when refresh+draw of the previous iteration was
+        // slow: a backlog of key strokes is consumed in one pass instead of
+        // one-per-iteration.
+        let mut had_event = false;
+        let mut should_quit = false;
         if event::poll(Duration::from_millis(125)).context("failed to poll terminal events")? {
-            match event::read().context("failed to read terminal event")? {
-                TerminalEvent::Key(key_event) => {
-                    if app.handle_key_event(key_event)? {
-                        break;
+            loop {
+                match event::read().context("failed to read terminal event")? {
+                    TerminalEvent::Key(key_event) => {
+                        had_event = true;
+                        if app.handle_key_event(key_event)? {
+                            should_quit = true;
+                            break;
+                        }
                     }
+                    TerminalEvent::Resize(_, _) => {
+                        had_event = true;
+                    }
+                    TerminalEvent::Paste(text) => {
+                        had_event = true;
+                        app.handle_paste(&text);
+                    }
+                    _ => {}
                 }
-                TerminalEvent::Resize(_, _) => {}
-                TerminalEvent::Paste(text) => app.handle_paste(&text),
-                _ => {}
+                if !event::poll(Duration::ZERO)
+                    .context("failed to poll buffered terminal events")?
+                {
+                    break;
+                }
             }
+        }
+        if should_quit {
+            break;
         }
 
         let refresh_interval = if app.page == Page::Settings {
@@ -939,16 +964,29 @@ pub fn run_tui(root: &Path) -> Result<()> {
         } else {
             UI_REFRESH_INTERVAL_ACTIVE
         };
-        if last_refresh.elapsed() >= refresh_interval {
+        let refresh_due = last_refresh.elapsed() >= refresh_interval;
+        if refresh_due {
             app.refresh()?;
             last_refresh = Instant::now();
         }
 
         app.poll_worker()?;
-        app.spinner_phase = (app.spinner_phase + 1) % 4;
-        terminal
-            .draw(|frame| render::draw(frame, &app))
-            .context("failed to draw TUI frame")?;
+
+        // Spinner ticks on its own ~125ms cadence so we don't have to redraw
+        // every loop iteration purely to animate it.
+        let spinner_advanced = if last_spinner_tick.elapsed() >= Duration::from_millis(125) {
+            app.spinner_phase = (app.spinner_phase + 1) % 4;
+            last_spinner_tick = Instant::now();
+            true
+        } else {
+            false
+        };
+
+        if had_event || refresh_due || spinner_advanced {
+            terminal
+                .draw(|frame| render::draw(frame, &app))
+                .context("failed to draw TUI frame")?;
+        }
     }
 
     Ok(())
@@ -2664,6 +2702,7 @@ impl App {
         let mission_state = engine.mission_state(turn_loop::CHAT_CONVERSATION_ID)?;
         let mission_assurance =
             engine.mission_assurance_snapshot(turn_loop::CHAT_CONVERSATION_ID)?;
+        let strategy = engine.active_strategy_snapshot(turn_loop::CHAT_CONVERSATION_ID, None)?;
         self.prompt_context_breakdown = live_context::prompt_context_breakdown_for_runtime(
             &self.root,
             &settings,
@@ -2671,6 +2710,7 @@ impl App {
             &continuity,
             &mission_state,
             &mission_assurance,
+            &strategy,
             &governance_snapshot,
             &health,
         )
@@ -5719,8 +5759,8 @@ fn auxiliary_backend_ready(
 
 fn runtime_health_state(root: &Path, telemetry: Option<&RuntimeTelemetry>) -> RuntimeHealthState {
     let resolved_runtime = runtime_kernel::InferenceRuntimeKernel::resolve(root).ok();
-    let chat_source_is_api = runtime_kernel::InferenceRuntimeKernel::resolve(root)
-        .ok()
+    let chat_source_is_api = resolved_runtime
+        .as_ref()
         .map(|k| {
             matches!(
                 k.state.source,

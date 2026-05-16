@@ -428,6 +428,7 @@ where
     let mut continuity = engine.continuity_show_all(conversation_id)?;
     let mut mission_state = engine.mission_state(conversation_id)?;
     let mut mission_assurance = engine.mission_assurance_snapshot(conversation_id)?;
+    let mut strategy = engine.active_strategy_snapshot(conversation_id, None)?;
     let mut forgotten_entries = engine.continuity_forgotten(conversation_id, None, None)?;
     let mut health = context_health::assess_with_forgotten(
         &snapshot,
@@ -450,6 +451,7 @@ where
         &continuity,
         &mission_state,
         &mission_assurance,
+        &strategy,
         &governance_snapshot,
         &health,
         suggested_skill,
@@ -509,6 +511,7 @@ where
         continuity = engine.continuity_show_all(conversation_id)?;
         mission_state = engine.mission_state(conversation_id)?;
         mission_assurance = engine.mission_assurance_snapshot(conversation_id)?;
+        strategy = engine.active_strategy_snapshot(conversation_id, None)?;
         forgotten_entries = engine.continuity_forgotten(conversation_id, None, None)?;
         health = context_health::assess_with_forgotten(
             &snapshot,
@@ -525,6 +528,7 @@ where
             &continuity,
             &mission_state,
             &mission_assurance,
+            &strategy,
             &governance_snapshot,
             &health,
             suggested_skill,

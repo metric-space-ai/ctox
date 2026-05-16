@@ -102,6 +102,129 @@ export type CtoxHarnessFlowResult = {
   error?: string;
 };
 
+export type CtoxChatRequest = {
+  instruction: string;
+  threadKey?: string;
+  workspaceRoot?: string;
+  wait?: boolean;
+  timeoutSecs?: number;
+};
+
+export type CtoxRuntimeSwitchRequest = {
+  model: string;
+  preset: "quality" | "performance";
+  context?: "128k" | "256k";
+  timeoutSecs?: number;
+};
+
+export type CtoxBusinessOsNavigationState = {
+  ok: boolean;
+  mode: "ctox_cli" | "fallback";
+  enabledModules: string[];
+  enabledSkills: string[];
+  error?: string;
+};
+
+export async function sendCtoxChat(request: CtoxChatRequest) {
+  if (!shouldExecuteCoreQueue()) throw new Error("ctox_live_mode_disabled");
+
+  const command = [resolveCtoxBinary(), "chat", request.instruction];
+  if (request.threadKey) command.push("--thread-key", request.threadKey);
+  if (request.workspaceRoot) command.push("--workspace", request.workspaceRoot);
+  if (request.wait) {
+    command.push("--wait");
+    if (request.timeoutSecs) command.push("--timeout-secs", String(request.timeoutSecs));
+  }
+
+  const [binary, ...args] = command;
+  const { stdout, stderr } = await execFileAsync(binary, args, {
+    cwd: process.env.CTOX_ROOT,
+    maxBuffer: 8 * 1024 * 1024
+  });
+  return {
+    ok: true,
+    mode: "ctox_chat",
+    command: printableCommand(command),
+    stdout: stdout.trim(),
+    stderr: stderr.trim()
+  };
+}
+
+export async function switchCtoxRuntime(request: CtoxRuntimeSwitchRequest) {
+  if (!shouldExecuteCoreQueue()) throw new Error("ctox_live_mode_disabled");
+
+  const command = [resolveCtoxBinary(), "runtime", "switch", request.model, request.preset];
+  if (request.context) command.push("--context", request.context);
+  if (request.timeoutSecs) command.push("--timeout", String(request.timeoutSecs));
+  const [binary, ...args] = command;
+  const { stdout, stderr } = await execFileAsync(binary, args, {
+    cwd: process.env.CTOX_ROOT,
+    maxBuffer: 8 * 1024 * 1024
+  });
+  return {
+    ok: true,
+    mode: "ctox_runtime_switch",
+    command: printableCommand(command),
+    stdout: stdout.trim(),
+    stderr: stderr.trim()
+  };
+}
+
+export async function readCtoxStatus() {
+  if (!shouldExecuteCoreQueue()) {
+    return { ok: true, mode: "planned", status: null };
+  }
+  const command = [resolveCtoxBinary(), "status"];
+  const [binary, ...args] = command;
+  const { stdout, stderr } = await execFileAsync(binary, args, {
+    cwd: process.env.CTOX_ROOT,
+    maxBuffer: 2 * 1024 * 1024
+  });
+  return {
+    ok: true,
+    mode: "ctox_status",
+    command: printableCommand(command),
+    status: JSON.parse(stdout),
+    stderr: stderr.trim()
+  };
+}
+
+export async function readBusinessOsNavigationState(): Promise<CtoxBusinessOsNavigationState> {
+  const fallback = {
+    ok: true,
+    mode: "fallback" as const,
+    enabledModules: ["sales", "marketing", "operations", "business", "ctox"],
+    enabledSkills: []
+  };
+
+  if (!shouldExecuteCoreQueue()) return fallback;
+
+  const command = [resolveCtoxBinary(), "business-os", "modules", "list"];
+  const [binary, ...args] = command;
+  try {
+    const { stdout } = await execFileAsync(binary, args, {
+      cwd: process.env.CTOX_ROOT,
+      maxBuffer: 4 * 1024 * 1024
+    });
+    const payload = JSON.parse(stdout) as {
+      enabled_modules?: string[];
+      enabled_skills?: string[];
+    };
+    return {
+      ok: true,
+      mode: "ctox_cli",
+      enabledModules: payload.enabled_modules ?? fallback.enabledModules,
+      enabledSkills: payload.enabled_skills ?? []
+    };
+  } catch (error) {
+    return {
+      ...fallback,
+      ok: false,
+      error: error instanceof Error ? error.message : String(error)
+    };
+  }
+}
+
 export async function createCtoxCoreTask(request: CtoxCoreTaskRequest) {
   const bridgeUrl = process.env.CTOX_BRIDGE_URL?.replace(/\/$/, "");
   const token = process.env.CTOX_BRIDGE_TOKEN;
@@ -415,6 +538,10 @@ function resolveCtoxBinary() {
 
 function shouldExecuteCoreQueue() {
   return process.env.CTOX_BUSINESS_QUEUE_MODE !== "planned";
+}
+
+function printableCommand(command: string[]) {
+  return command.map((part) => part.includes(" ") ? `"${part.replaceAll("\"", "\\\"")}"` : part).join(" ");
 }
 
 function plannedTask(request: CtoxCoreTaskRequest, command: string[], error?: string) {

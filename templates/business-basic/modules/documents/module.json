@@ -1,0 +1,7 @@
+{
+  "id": "documents",
+  "name": "Documents",
+  "defaultRoute": "/app/documents/library",
+  "records": ["documents", "pdfs", "spreadsheets", "presentations", "technical_drawings", "transcripts"],
+  "ctoxSync": ["document_reviews", "spreadsheet_analysis", "deck_reviews", "drawing_reviews", "transcription_jobs"]
+}

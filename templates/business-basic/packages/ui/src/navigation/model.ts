@@ -1,7 +1,9 @@
 import { resolveLocale } from "../i18n/locales";
 import { resolveThemeMode } from "../theme/modes";
+import { skillAppModuleDefinitions, type SkillAppModuleId } from "./skill-apps";
 
-export type BusinessModuleId = "sales" | "marketing" | "operations" | "business" | "ctox";
+export type CoreBusinessModuleId = "sales" | "marketing" | "operations" | "business" | "ctox";
+export type BusinessModuleId = CoreBusinessModuleId | SkillAppModuleId;
 
 export type BusinessSubmodule = {
   id: string;
@@ -18,7 +20,7 @@ export type BusinessModule = {
   submodules: BusinessSubmodule[];
 };
 
-export const businessModules: BusinessModule[] = [
+const coreBusinessModules: BusinessModule[] = [
   {
     id: "marketing",
     label: "Marketing",
@@ -57,6 +59,7 @@ export const businessModules: BusinessModule[] = [
       { id: "planning", label: "Planning", href: "/app/operations/planning", resourceTypes: ["timeline", "calendar_event"] },
       { id: "workforce", label: "Einsatzplanung", href: "/app/operations/workforce", resourceTypes: ["workforce_person", "workforce_shift_type", "workforce_assignment", "workforce_time_entry", "workforce_handoff"] },
       { id: "payroll", label: "Lohnabrechnung", href: "/app/operations/payroll", resourceTypes: ["payroll_period", "payroll_component", "payroll_structure", "payroll_structure_assignment", "payroll_run", "payroll_payslip", "payroll_payslip_line", "payroll_additional"] },
+      { id: "documents", label: "Documents", href: "/app/operations/documents", resourceTypes: ["word_document", "docx"] },
       { id: "knowledge", label: "Knowledge", href: "/app/operations/knowledge", resourceTypes: ["wiki_page", "document", "runbook"] },
       { id: "meetings", label: "Meetings", href: "/app/operations/meetings", resourceTypes: ["meeting"] }
     ]
@@ -84,17 +87,16 @@ export const businessModules: BusinessModule[] = [
     id: "ctox",
     label: "CTOX",
     href: "/app/ctox",
-    summary: "Agent runs, sync health, bug reports, knowledge links, and bridge status.",
+    summary: "Live harness state, active work, queue, review gates, and forensic proof.",
     submodules: [
-      { id: "runs", label: "Runs", href: "/app/ctox/runs", resourceTypes: ["agent_run"] },
-      { id: "harness", label: "Harness", href: "/app/ctox/harness", resourceTypes: ["harness_flow", "state_machine", "process_proof"] },
-      { id: "queue", label: "Queue", href: "/app/ctox/queue", resourceTypes: ["queue_item"] },
-      { id: "knowledge", label: "Knowledge", href: "/app/ctox/knowledge", resourceTypes: ["knowledge_record"] },
-      { id: "bugs", label: "Bugs", href: "/app/ctox/bugs", resourceTypes: ["bug_report"] },
-      { id: "sync", label: "Sync", href: "/app/ctox/sync", resourceTypes: ["sync_event"] },
-      { id: "settings", label: "Settings", href: "/app/ctox/settings", resourceTypes: ["setting"] }
+      { id: "harness", label: "Harness", href: "/app/ctox/harness", resourceTypes: ["harness_flow", "state_machine", "queue_item", "agent_run", "tool_call", "ticket"] }
     ]
   }
+];
+
+export const businessModules: BusinessModule[] = [
+  ...coreBusinessModules,
+  ...skillAppModuleDefinitions
 ];
 
 export const shellRoutes = businessModules.map(({ id, label, href }) => ({ id, label, href }));
@@ -104,8 +106,14 @@ export function findBusinessModule(moduleId: string) {
 }
 
 export function findBusinessSubmodule(moduleId: string, submoduleId: string) {
-  const normalizedSubmoduleId = moduleId === "operations" && submoduleId === "wiki" ? "knowledge" : submoduleId;
+  const normalizedSubmoduleId = normalizeBusinessSubmoduleId(moduleId, submoduleId);
   return findBusinessModule(moduleId)?.submodules.find((submodule) => submodule.id === normalizedSubmoduleId);
+}
+
+function normalizeBusinessSubmoduleId(moduleId: string, submoduleId: string) {
+  if (moduleId === "operations" && submoduleId === "wiki") return "knowledge";
+  if (moduleId !== "ctox") return submoduleId;
+  return "harness";
 }
 
 export function businessDeepLink(input: {

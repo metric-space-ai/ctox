@@ -1,0 +1,7 @@
+{
+  "id": "deployment",
+  "name": "Deployment",
+  "defaultRoute": "/app/deployment/overview",
+  "records": ["deployments", "providers", "previews", "releases", "blueprints"],
+  "ctoxSync": ["deployment_jobs", "release_reviews", "provider_checks", "preview_links"]
+}

@@ -5,5 +5,6 @@ export * from "./components/workspace-shell";
 export * from "./i18n/locales";
 export * from "./i18n/messages";
 export * from "./navigation/model";
+export * from "./navigation/skill-apps";
 export * from "./theme/modes";
 export * from "./theme/tokens";

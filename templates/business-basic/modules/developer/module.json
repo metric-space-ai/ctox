@@ -1,0 +1,7 @@
+{
+  "id": "developer",
+  "name": "Developer Studio",
+  "defaultRoute": "/app/developer/apps",
+  "records": ["applications", "framework_templates", "notebooks", "pull_requests", "quality_checks"],
+  "ctoxSync": ["implementation_tasks", "review_comments", "ci_failures", "browser_smoke_tests", "notebook_experiments"]
+}

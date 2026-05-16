@@ -1,0 +1,7 @@
+{
+  "id": "research",
+  "name": "Research Desk",
+  "defaultRoute": "/app/research/desk",
+  "records": ["research_items", "reference_docs", "briefs", "documentation_summaries"],
+  "ctoxSync": ["research_briefs", "reference_checks", "documentation_updates"]
+}

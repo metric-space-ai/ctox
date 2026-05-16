@@ -19,6 +19,8 @@ pub(crate) const MAX_RENDERED_MESSAGE_ITEMS: usize = 8;
 pub(crate) const MAX_RENDERED_CONTEXT_CHARS: usize = 8_000;
 const MAX_CONTINUITY_BLOCK_LINES: usize = 10;
 const MAX_CONTINUITY_BLOCK_CHARS: usize = 900;
+const MAX_STRATEGY_BODY_CHARS: usize = 320;
+const MAX_STRATEGY_EXTRA_DIRECTIVES: usize = 6;
 const CTOX_CHAT_SYSTEM_PROMPT: &str =
     include_str!("../../assets/prompts/ctox_chat_system_prompt.md");
 const CTOX_DEFAULT_CTO_OPERATING_MODE: &str =
@@ -33,6 +35,7 @@ pub struct PromptContextBreakdown {
     pub workflow_state_chars: usize,
     pub anchors_chars: usize,
     pub narrative_chars: usize,
+    pub strategy_chars: usize,
     pub governance_chars: usize,
     pub context_health_chars: usize,
     pub conversation_chars: usize,
@@ -62,12 +65,13 @@ pub struct LivePromptArtifact {
 impl LivePromptArtifact {
     pub fn to_review_markdown(&self) -> String {
         format!(
-            "# CTOX Live Prompt Review Artifact\n\nconversation_id: {}\nmodel: {}\n\n## Breakdown\n- system_prompt_chars: {}\n- latest_user_turn_chars: {}\n- verified_evidence_chars: {}\n- anchors_chars: {}\n- focus_chars: {}\n- workflow_state_chars: {}\n- narrative_chars: {}\n- governance_chars: {}\n- context_health_chars: {}\n- conversation_chars: {}\n- prompt_scaffold_chars: {}\n- rendered_context_items: {}\n- omitted_context_items: {}\n- total_ctox_prompt_chars: {}\n\n## System Prompt\n```md\n{}\n```\n\n## Runtime Prompt\n```md\n{}\n```\n\n## Combined Review View\n```md\n{}\n```\n",
+            "# CTOX Live Prompt Review Artifact\n\nconversation_id: {}\nmodel: {}\n\n## Breakdown\n- system_prompt_chars: {}\n- latest_user_turn_chars: {}\n- verified_evidence_chars: {}\n- strategy_chars: {}\n- anchors_chars: {}\n- focus_chars: {}\n- workflow_state_chars: {}\n- narrative_chars: {}\n- governance_chars: {}\n- context_health_chars: {}\n- conversation_chars: {}\n- prompt_scaffold_chars: {}\n- rendered_context_items: {}\n- omitted_context_items: {}\n- total_ctox_prompt_chars: {}\n\n## System Prompt\n```md\n{}\n```\n\n## Runtime Prompt\n```md\n{}\n```\n\n## Combined Review View\n```md\n{}\n```\n",
             self.conversation_id,
             self.model,
             self.breakdown.system_prompt_chars,
             self.breakdown.latest_user_turn_chars,
             self.breakdown.verified_evidence_chars,
+            self.breakdown.strategy_chars,
             self.breakdown.anchors_chars,
             self.breakdown.focus_chars,
             self.breakdown.workflow_state_chars,
@@ -159,6 +163,7 @@ pub fn render_runtime_prompt(
     continuity: &lcm::ContinuityShowAll,
     mission_state: &lcm::MissionStateRecord,
     mission_assurance: &lcm::MissionAssuranceSnapshot,
+    strategy: &lcm::StrategySnapshot,
     governance_snapshot: &governance::GovernancePromptSnapshot,
     health: &context_health::ContextHealthSnapshot,
     suggested_skill: Option<&str>,
@@ -171,6 +176,7 @@ pub fn render_runtime_prompt(
         continuity,
         mission_state,
         mission_assurance,
+        strategy,
         &latest_user_prompt,
     )?;
     let rendered_context = select_rendered_context(
@@ -202,6 +208,7 @@ pub fn prompt_context_breakdown(
     continuity: &lcm::ContinuityShowAll,
     mission_state: &lcm::MissionStateRecord,
     mission_assurance: &lcm::MissionAssuranceSnapshot,
+    strategy: &lcm::StrategySnapshot,
     governance_snapshot: &governance::GovernancePromptSnapshot,
     health: &context_health::ContextHealthSnapshot,
 ) -> Result<PromptContextBreakdown> {
@@ -213,6 +220,7 @@ pub fn prompt_context_breakdown(
         continuity,
         mission_state,
         mission_assurance,
+        strategy,
         latest_user_prompt,
     )?;
     let rendered_context = select_rendered_context(
@@ -225,6 +233,7 @@ pub fn prompt_context_breakdown(
     let narrative_block = runtime_blocks.narrative.clone();
     let verified_evidence_block = runtime_blocks.verified_evidence.clone();
     let workflow_state_block = runtime_blocks.workflow_state.clone();
+    let strategy_block = runtime_blocks.strategy.clone();
     let governance_block = governance::render_prompt_block(governance_snapshot);
     let health_block = context_health::render_prompt_block(health);
     let latest_user_turn = format!(
@@ -255,6 +264,7 @@ pub fn prompt_context_breakdown(
         + focus_block.len()
         + verified_evidence_block.len()
         + workflow_state_block.len()
+        + strategy_block.len()
         + governance_block.len()
         + health_block.len()
         + rendered_context_chars
@@ -266,6 +276,7 @@ pub fn prompt_context_breakdown(
         workflow_state_chars: workflow_state_block.len(),
         anchors_chars: anchors_block.len(),
         narrative_chars: narrative_block.len(),
+        strategy_chars: strategy_block.len(),
         governance_chars: governance_block.len(),
         context_health_chars: health_block.len(),
         conversation_chars: rendered_context_chars,
@@ -284,6 +295,7 @@ pub fn prompt_context_breakdown_for_runtime(
     continuity: &lcm::ContinuityShowAll,
     mission_state: &lcm::MissionStateRecord,
     mission_assurance: &lcm::MissionAssuranceSnapshot,
+    strategy: &lcm::StrategySnapshot,
     governance_snapshot: &governance::GovernancePromptSnapshot,
     health: &context_health::ContextHealthSnapshot,
 ) -> Result<PromptContextBreakdown> {
@@ -295,6 +307,7 @@ pub fn prompt_context_breakdown_for_runtime(
         continuity,
         mission_state,
         mission_assurance,
+        strategy,
         governance_snapshot,
         health,
     )
@@ -308,6 +321,7 @@ pub fn build_live_prompt_artifact(
     continuity: &lcm::ContinuityShowAll,
     mission_state: &lcm::MissionStateRecord,
     mission_assurance: &lcm::MissionAssuranceSnapshot,
+    strategy: &lcm::StrategySnapshot,
     governance_snapshot: &governance::GovernancePromptSnapshot,
     health: &context_health::ContextHealthSnapshot,
 ) -> Result<LivePromptArtifact> {
@@ -317,6 +331,7 @@ pub fn build_live_prompt_artifact(
         continuity,
         mission_state,
         mission_assurance,
+        strategy,
         governance_snapshot,
         health,
         None,
@@ -328,6 +343,7 @@ pub fn build_live_prompt_artifact(
         continuity,
         mission_state,
         mission_assurance,
+        strategy,
         governance_snapshot,
         health,
     )?;
@@ -358,6 +374,7 @@ pub fn render_live_prompt_artifact(
     let continuity = engine.continuity_show_all(conversation_id)?;
     let mission_state = engine.mission_state(conversation_id)?;
     let mission_assurance = engine.mission_assurance_snapshot(conversation_id)?;
+    let strategy = engine.active_strategy_snapshot(conversation_id, None)?;
     let forgotten_entries = engine.continuity_forgotten(conversation_id, None, None)?;
     let prompt_view = build_prompt_snapshot_view(&snapshot);
     let latest_user_prompt = prompt_view.latest_user_prompt;
@@ -382,6 +399,7 @@ pub fn render_live_prompt_artifact(
         &continuity,
         &mission_state,
         &mission_assurance,
+        &strategy,
         &governance_snapshot,
         &health,
     )
@@ -404,6 +422,8 @@ pub(crate) fn render_chat_prompt(
         ),
         String::new(),
         runtime_blocks.verified_evidence.clone(),
+        String::new(),
+        runtime_blocks.strategy.clone(),
         String::new(),
         runtime_blocks.anchors.clone(),
         String::new(),
@@ -664,6 +684,7 @@ pub(crate) struct PromptRuntimeBlocks {
     pub(crate) narrative: String,
     pub(crate) verified_evidence: String,
     pub(crate) workflow_state: String,
+    pub(crate) strategy: String,
 }
 
 #[derive(Debug, Clone)]
@@ -885,6 +906,7 @@ fn derive_prompt_runtime_blocks(
     continuity: &lcm::ContinuityShowAll,
     mission_state: &lcm::MissionStateRecord,
     mission_assurance: &lcm::MissionAssuranceSnapshot,
+    strategy: &lcm::StrategySnapshot,
     latest_user_prompt: &str,
 ) -> Result<PromptRuntimeBlocks> {
     let mut mission_context = derive_mission_context(&snapshot.messages, latest_user_prompt);
@@ -912,6 +934,7 @@ fn derive_prompt_runtime_blocks(
     };
     let verified_evidence = render_verified_evidence_block(mission_assurance, override_continuity);
     let workflow_state = render_workflow_state_block(root, &mission_context)?;
+    let strategy_block = render_strategy_block(strategy);
 
     Ok(PromptRuntimeBlocks {
         focus,
@@ -919,7 +942,83 @@ fn derive_prompt_runtime_blocks(
         narrative,
         verified_evidence,
         workflow_state,
+        strategy: strategy_block,
     })
+}
+
+/// Render the Strategy runtime block.
+///
+/// The Strategy block carries the canonical vision / mission / strategic
+/// directives that scope every CTOX turn. It is the discriminator that
+/// distinguishes durable knowledge work (when the request touches the active
+/// mission/vision or a registered core competency) from ad-hoc work (when it
+/// does not). The block is read by the model directly through the
+/// `Knowledge work vs. ad-hoc work` policy in the system prompt.
+///
+/// When no vision/mission/directives are configured the block stays explicit
+/// ("none") so the model can treat the absence as a signal — "no canonical
+/// strategy was set yet; default to ad-hoc unless the operator is explicitly
+/// asking for durable knowledge work".
+pub(crate) fn render_strategy_block(snapshot: &lcm::StrategySnapshot) -> String {
+    let mut lines = vec!["Strategy:".to_string()];
+    match &snapshot.active_vision {
+        Some(directive) => lines.push(format!(
+            "- vision: {} — {}",
+            collapse_spaces(directive.title.trim()),
+            sanitize_strategy_body(&directive.body_text)
+        )),
+        None => lines.push("- vision: not set".to_string()),
+    }
+    match &snapshot.active_mission {
+        Some(directive) => lines.push(format!(
+            "- mission: {} — {}",
+            collapse_spaces(directive.title.trim()),
+            sanitize_strategy_body(&directive.body_text)
+        )),
+        None => lines.push("- mission: not set".to_string()),
+    }
+    let extra_directives: Vec<&lcm::StrategicDirectiveRecord> = snapshot
+        .directives
+        .iter()
+        .filter(|directive| {
+            directive.status.eq_ignore_ascii_case("active")
+                && !directive.directive_kind.eq_ignore_ascii_case("vision")
+                && !directive.directive_kind.eq_ignore_ascii_case("mission")
+        })
+        .take(MAX_STRATEGY_EXTRA_DIRECTIVES)
+        .collect();
+    if extra_directives.is_empty() {
+        lines.push("- directives: none".to_string());
+    } else {
+        for directive in extra_directives {
+            lines.push(format!(
+                "- directive ({}): {} — {}",
+                directive.directive_kind.trim(),
+                collapse_spaces(directive.title.trim()),
+                sanitize_strategy_body(&directive.body_text)
+            ));
+        }
+    }
+    lines.join("\n")
+}
+
+fn sanitize_strategy_body(raw: &str) -> String {
+    let collapsed = collapse_spaces(raw.trim());
+    if collapsed.is_empty() {
+        return "(no body)".to_string();
+    }
+    if collapsed.chars().count() <= MAX_STRATEGY_BODY_CHARS {
+        return collapsed;
+    }
+    let mut out = String::new();
+    for (idx, ch) in collapsed.chars().enumerate() {
+        if idx >= MAX_STRATEGY_BODY_CHARS {
+            break;
+        }
+        out.push(ch);
+    }
+    out.push('…');
+    out
 }
 
 fn render_focus_block_from_sources(
@@ -1227,28 +1326,28 @@ fn render_workflow_state_block(root: &Path, context: &MissionContext) -> Result<
         .collect::<Vec<_>>();
 
     lines.push(format!(
-        "Current queue item id: {}",
+        "current_queue_item_id: {}",
         counting_queue_tasks
             .first()
             .map(|task| task.message_key.as_str())
             .unwrap_or("null")
     ));
     lines.push(format!(
-        "Current plan item id: {}",
+        "current_plan_item_id: {}",
         matched_plans
             .first()
             .map(|goal| goal.goal_id.as_str())
             .unwrap_or("null")
     ));
     lines.push(format!(
-        "Current schedule item id: {}",
+        "current_schedule_item_id: {}",
         matched_schedules
             .first()
             .map(|task| task.task_id.as_str())
             .unwrap_or("null")
     ));
     lines.push(format!(
-        "Current ticket case id: {}",
+        "current_ticket_case_id: {}",
         matched_ticket_cases
             .first()
             .map(|case| case.case_id.as_str())
@@ -1682,6 +1781,8 @@ mod tests {
             narrative: "Narrative:\n- none".to_string(),
             verified_evidence: "Verified evidence:\nitems: []".to_string(),
             workflow_state: "Open CTOX work that counts right now:\nqueue_items: []".to_string(),
+            strategy: "Strategy:\n- vision: not set\n- mission: not set\n- directives: none"
+                .to_string(),
         };
         let prompt = render_chat_prompt(
             Path::new("/tmp/ctox"),

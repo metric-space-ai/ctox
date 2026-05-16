@@ -16,6 +16,7 @@ use crate::persistence;
 
 const SKILL_BUNDLES_TABLE: &str = "ctox_skill_bundles";
 const SKILL_FILES_TABLE: &str = "ctox_skill_files";
+const PACK_ORIGIN_MARKER: &str = ".ctox-pack-origin";
 
 /// System skills are embedded into the ctox binary at compile time and
 /// imported into SQLite at service start. The repo-root `skills/system/`
@@ -648,7 +649,86 @@ pub fn install_source_pack(root: &Path, name: &str) -> Result<PathBuf> {
         .with_context(|| format!("source pack not found: {name}"))?;
     let target = codex_home_skills_root().join(name);
     copy_skill_dir(&source, &target)?;
+    fs::write(
+        target.join(PACK_ORIGIN_MARKER),
+        format!(
+            "managed_by=ctox\npack_name={name}\nsource_path={}\n",
+            source.display()
+        ),
+    )
+    .with_context(|| format!("failed to write pack origin marker for {}", target.display()))?;
     Ok(target)
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SourcePackInstallState {
+    pub name: String,
+    pub installed: bool,
+    pub managed: bool,
+    pub path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SourcePackDisableResult {
+    pub name: String,
+    pub path: PathBuf,
+    pub removed: bool,
+    pub managed: bool,
+    pub reason: String,
+}
+
+pub fn source_pack_install_state(_root: &Path, name: &str) -> Result<SourcePackInstallState> {
+    validate_skill_name(name)?;
+    let path = codex_home_skills_root().join(name);
+    let installed = path.join("SKILL.md").is_file();
+    let managed = path.join(PACK_ORIGIN_MARKER).is_file();
+    Ok(SourcePackInstallState {
+        name: name.to_string(),
+        installed,
+        managed,
+        path: installed.then_some(path),
+    })
+}
+
+pub fn remove_installed_source_pack(
+    _root: &Path,
+    name: &str,
+    force: bool,
+) -> Result<SourcePackDisableResult> {
+    validate_skill_name(name)?;
+    let path = codex_home_skills_root().join(name);
+    if !path.exists() {
+        return Ok(SourcePackDisableResult {
+            name: name.to_string(),
+            path,
+            removed: false,
+            managed: false,
+            reason: "not_installed".to_string(),
+        });
+    }
+    let managed = path.join(PACK_ORIGIN_MARKER).is_file();
+    if !managed && !force {
+        return Ok(SourcePackDisableResult {
+            name: name.to_string(),
+            path,
+            removed: false,
+            managed,
+            reason: "kept_unmanaged_user_skill".to_string(),
+        });
+    }
+    fs::remove_dir_all(&path)
+        .with_context(|| format!("failed to remove installed pack {}", path.display()))?;
+    Ok(SourcePackDisableResult {
+        name: name.to_string(),
+        path,
+        removed: true,
+        managed,
+        reason: if managed {
+            "removed_managed_pack".to_string()
+        } else {
+            "removed_forced".to_string()
+        },
+    })
 }
 
 pub fn create_or_update_user_skill(

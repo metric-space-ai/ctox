@@ -1,0 +1,7 @@
+{
+  "id": "integrations",
+  "name": "Integration Hub",
+  "defaultRoute": "/app/integrations/overview",
+  "records": ["connectors", "linear_issues", "notion_pages", "notion_specs", "sync_runs"],
+  "ctoxSync": ["connector_reviews", "linear_updates", "notion_capture_jobs", "spec_implementation_plans"]
+}
