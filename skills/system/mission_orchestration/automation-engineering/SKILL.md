@@ -30,15 +30,7 @@ This skill uses the shared CTOX knowledge store via `skill_key=automation_engine
 
 ## Operating Model
 
-Preferred helper scripts under `scripts/`:
-
-- `automation_collect.py`
-- `automation_capture_run.py`
-- `automation_store.py`
-- `automation_query.py`
-- `automation_bootstrap.py`
-
-These are open helper resources.
+Use CTOX queue, schedule, plan, and harness-mining commands as the execution boundary. Do not execute embedded `scripts/` helpers from this system skill; if an automation operation lacks a CTOX command, add that command before relying on it.
 
 ## Tool Contracts
 
@@ -96,6 +88,5 @@ Do not finish the reply until all of the following are true:
 
 ## Resources
 
-- [references/helper-scripts.md](references/helper-scripts.md)
 - [references/automation-patterns.md](references/automation-patterns.md)
 - [references/automation-rules.md](references/automation-rules.md)

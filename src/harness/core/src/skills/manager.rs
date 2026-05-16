@@ -25,6 +25,7 @@ use crate::skills::loader::SkillRoot;
 use crate::skills::loader::load_skills_from_roots;
 use crate::skills::loader::skill_roots;
 use crate::skills::system::install_system_skills;
+use crate::skills::system::load_system_skills_from_store;
 use crate::skills::system::uninstall_system_skills;
 
 pub struct SkillsManager {
@@ -47,11 +48,12 @@ impl SkillsManager {
             cache_by_config: RwLock::new(HashMap::new()),
         };
         if !bundled_skills_enabled {
-            // The loader caches bundled skills under `skills/.system`. Clearing that directory is
-            // best-effort cleanup; root selection still enforces the config even if removal fails.
+            // Older CTOX builds materialized bundled system skills under `skills/.system`.
+            // Clearing that directory is best-effort cleanup; config still controls whether
+            // SQLite-backed system skills are loaded.
             uninstall_system_skills(&manager.codex_home);
-        } else if let Err(err) = install_system_skills(&manager.codex_home) {
-            tracing::error!("failed to install system skills: {err}");
+        } else {
+            install_system_skills(&manager.codex_home);
         }
         manager
     }
@@ -65,12 +67,28 @@ impl SkillsManager {
     pub fn skills_for_config(&self, config: &Config) -> SkillLoadOutcome {
         let roots = self.skill_roots_for_config(config);
         let skill_config_rules = skill_config_rules_from_stack(&config.config_layer_stack);
-        let cache_key = config_skills_cache_key(&roots, &skill_config_rules);
+        let cache_key = config_skills_cache_key(
+            &config.cwd,
+            config.skills_enabled(),
+            config.bundled_skills_enabled(),
+            &roots,
+            &skill_config_rules,
+        );
         if let Some(outcome) = self.cached_outcome_for_config(&cache_key) {
             return outcome;
         }
 
-        let outcome = finalize_skill_outcome(load_skills_from_roots(roots), &skill_config_rules);
+        let mut outcome = load_skills_from_roots(roots);
+        if config.bundled_skills_enabled() {
+            match load_system_skills_from_store(&config.cwd) {
+                Ok(mut system_skills) => outcome.skills.append(&mut system_skills),
+                Err(err) => outcome.errors.push(crate::skills::model::SkillError {
+                    path: config.cwd.join("runtime/ctox.sqlite3"),
+                    message: format!("failed to load CTOX system skills: {err:#}"),
+                }),
+            }
+        }
+        let outcome = finalize_skill_outcome(outcome, &skill_config_rules);
         let mut cache = self
             .cache_by_config
             .write()
@@ -84,14 +102,11 @@ impl SkillsManager {
             return Vec::new();
         }
         let loaded_plugins = self.plugins_manager.plugins_for_config(config);
-        let mut roots = skill_roots(
+        let roots = skill_roots(
             &config.config_layer_stack,
             &config.cwd,
             loaded_plugins.effective_skill_roots(),
         );
-        if !config.bundled_skills_enabled() {
-            roots.retain(|root| root.scope != SkillScope::System);
-        }
         roots
     }
 
@@ -174,7 +189,16 @@ impl SkillsManager {
                 }),
         );
         let skill_config_rules = skill_config_rules_from_stack(&config_layer_stack);
-        let outcome = load_skills_from_roots(roots);
+        let mut outcome = load_skills_from_roots(roots);
+        if bundled_skills_enabled_from_stack(&config_layer_stack) {
+            match load_system_skills_from_store(cwd) {
+                Ok(mut system_skills) => outcome.skills.append(&mut system_skills),
+                Err(err) => outcome.errors.push(crate::skills::model::SkillError {
+                    path: cwd.join("runtime/ctox.sqlite3"),
+                    message: format!("failed to load CTOX system skills: {err:#}"),
+                }),
+            }
+        }
         let outcome = finalize_skill_outcome(outcome, &skill_config_rules);
         let mut cache = self
             .cache_by_cwd
@@ -227,6 +251,9 @@ impl SkillsManager {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ConfigSkillsCacheKey {
+    cwd: PathBuf,
+    skills_enabled: bool,
+    bundled_skills_enabled: bool,
     roots: Vec<(PathBuf, u8)>,
     skill_config_rules: SkillConfigRules,
 }
@@ -269,10 +296,16 @@ pub(crate) fn bundled_skills_enabled_from_stack(
 }
 
 fn config_skills_cache_key(
+    cwd: &Path,
+    skills_enabled: bool,
+    bundled_skills_enabled: bool,
     roots: &[SkillRoot],
     skill_config_rules: &SkillConfigRules,
 ) -> ConfigSkillsCacheKey {
     ConfigSkillsCacheKey {
+        cwd: cwd.to_path_buf(),
+        skills_enabled,
+        bundled_skills_enabled,
         roots: roots
             .iter()
             .map(|root| {

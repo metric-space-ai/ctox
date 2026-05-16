@@ -64,70 +64,23 @@ Read the supplement contract in [references/execution-supplement-contract.md](re
 
 ## Commands
 
-Build a bundle from one skillbook-like file plus one runbook-like file:
+Use CTOX ticket and skill commands as the execution boundary:
 
 ```sh
-python3 skills/system/knowledge_bootstrap/skillbook-runbook-bootstrap/scripts/build_skillbook_runbook_bundle.py \
-  --skillbook "<path-to-skillbook.md>" \
-  --runbook "<path-to-runbook.md>" \
-  --main-skill-id "<main-skill-id>" \
-  --skillbook-id "<skillbook-id>" \
-  --runbook-id "<runbook-id>" \
-  --output-dir "<output-dir>"
+ctox ticket history-export --system "<source-system>" --output "<ticket-history.jsonl>"
+ctox ticket knowledge-bootstrap --system "<source-system>"
+ctox ticket source-skill-import-bundle --system "<source-system>" --bundle-dir "<bundle-dir>"
+ctox ticket source-skill-set --system "<source-system>" --skill "<main-skill-id>" --status active
 ```
 
-Extract builder-oriented evidence and candidate gaps from ticket history:
+Review and publish only through durable CTOX ticket/self-work records:
 
 ```sh
-python3 skills/system/knowledge_bootstrap/skillbook-runbook-bootstrap/scripts/extract_ticket_history_builder_inputs.py \
-  --input "<ticket-history.jsonl>" \
-  --system "<source-system>" \
-  --output-dir "<output-dir>"
+ctox ticket self-work-put --system "<source-system>" --kind "knowledge-review" --title "<title>" --body "<review body>" --publish
+ctox ticket source-skill-query --system "<source-system>" --query "<ticket text>" --top-k 8
 ```
 
-Build a desk-only candidate bundle from extracted ticket history:
-
-```sh
-python3 skills/system/knowledge_bootstrap/skillbook-runbook-bootstrap/scripts/build_ticket_history_desk_bundle.py \
-  --system "<source-system>" \
-  --history-report "<history_build_report.json>" \
-  --history-gaps "<history_build_gaps.json>" \
-  --main-skill-id "<main-skill-id>" \
-  --skillbook-id "<skillbook-id>" \
-  --runbook-id "<runbook-id>" \
-  --output-dir "<output-dir>"
-```
-
-Render a builder result for internal review only:
-
-```sh
-python3 skills/system/knowledge_bootstrap/skillbook-runbook-bootstrap/scripts/report_builder_self_work.py \
-  --system "<source-system>" \
-  --history-report "<history_build_report.json>" \
-  --history-gaps "<history_build_gaps.json>" \
-  --bundle-report "<bundle-build_report.json>" \
-  --runbook-items "<runbook_items.jsonl>"
-```
-
-Publish a real knowledge event after a runbook or skillbook state change:
-
-```sh
-python3 skills/system/knowledge_bootstrap/skillbook-runbook-bootstrap/scripts/publish_knowledge_event.py \
-  --ctox-bin "<path-to-ctox>" \
-  --system "<source-system>" \
-  --events-json "<knowledge_events.json>" \
-  --env-file "<runtime.env>" \
-  --publish
-```
-
-Enrich a history-derived candidate bundle with explicit execution supplements:
-
-```sh
-python3 skills/system/knowledge_bootstrap/skillbook-runbook-bootstrap/scripts/enrich_ticket_history_bundle.py \
-  --bundle-dir "<candidate-bundle-dir>" \
-  --supplements "<execution-supplements.jsonl>" \
-  --output-dir "<output-dir>"
-```
+Do not execute embedded Python helpers from this system skill. If a builder operation lacks a CTOX CLI/API command, add that command first.
 
 ## Important Boundaries
 

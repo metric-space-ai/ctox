@@ -25,23 +25,28 @@ Use this skill when the task is to change an already installed skill rather than
 ## Scope
 
 - Installed user skills usually live in `$CODEX_HOME/skills/<skill-name>`.
-- Installed bundled system skills usually live in `$CODEX_HOME/skills/.system/<skill-name>`.
-- Prefer editing the installed copy that Codex actually loads, not a random source checkout.
+- CTOX system skills are managed in the core SQLite skill store and must not be edited through `$CODEX_HOME/skills/.system`.
+- Prefer editing user skills as files and system skills through CTOX CLI/store migration paths.
 
 ## Workflow
 
 1. Resolve the installed skill directory first.
 2. Create a timestamped backup before making non-trivial changes.
-3. Edit `SKILL.md` and only the resource folders that are actually needed.
-4. Validate the skill structure after the edit.
-5. Regenerate `agents/openai.yaml` if the UI metadata is stale or should change.
+3. For user skills, edit `SKILL.md` and only the resource folders that are actually needed.
+4. For system skills, use `ctox skills system show`, `ctox skills system diff`, and `ctox skills system migrate`; do not patch a materialized `.system` copy.
+5. Validate the skill structure after the edit.
+6. Regenerate `agents/openai.yaml` for file-backed user skills if the UI metadata is stale or should change.
 
-## Scripts
+## Commands
 
-- `scripts/backup_skill.py <skill_dir>`
-- `scripts/quick_validate.py <skill_dir>`
-- `scripts/generate_openai_yaml.py <skill_dir> --interface key=value`
-- `scripts/refresh_skill_metadata.py <skill_dir> [--interface key=value]`
+- `ctox skills user path`
+- `ctox skills user list`
+- `ctox skills user create --name <name> --description <text> --body <text>`
+- `ctox skills user update --name <name> --description <text> --body <text>`
+- `ctox skills system list`
+- `ctox skills system show <name> --body`
+- `ctox skills system diff`
+- `ctox skills system migrate`
 
 ## Notes
 

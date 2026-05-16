@@ -44,14 +44,7 @@ This skill is responsible for getting the service into a deployable state.
 It is not allowed to declare a deployment successful based only on process or port presence.
 Use `acceptance-verification` for the final proof that the service is actually usable.
 
-Preferred helper scripts under `scripts/`:
-
-- `deployment_collect.py`
-- `deployment_capture_run.py`
-- `deployment_store.py`
-- `deployment_bootstrap.py`
-
-They are inspectable helpers, not hidden authority. Read or patch them when the deployment shape is unusual.
+Use CTOX CLI/API commands as the execution boundary. Do not execute embedded `scripts/` helpers from this system skill; if deployment evidence capture or persistence lacks a CTOX command, add that command before relying on it.
 
 ## Tool Contracts
 

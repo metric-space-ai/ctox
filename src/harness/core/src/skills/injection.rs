@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::path::Path;
 use std::path::PathBuf;
 
 use crate::analytics_client::AnalyticsEventsClient;
@@ -10,8 +11,11 @@ use crate::instructions::SkillInstructions;
 use crate::mention_syntax::TOOL_MENTION_SIGIL;
 use crate::mentions::build_skill_name_counts;
 use crate::skills::SkillMetadata;
+use crate::skills::system::is_system_skill_virtual_path;
+use crate::skills::system::read_system_skill_body;
 use ctox_otel::SessionTelemetry;
 use ctox_protocol::models::ResponseItem;
+use ctox_protocol::protocol::SkillScope;
 use ctox_protocol::user_input::UserInput;
 use tokio::fs;
 
@@ -22,6 +26,7 @@ pub(crate) struct SkillInjections {
 }
 
 pub(crate) async fn build_skill_injections(
+    cwd: &Path,
     mentioned_skills: &[SkillMetadata],
     otel: Option<&SessionTelemetry>,
     analytics_client: &AnalyticsEventsClient,
@@ -38,7 +43,7 @@ pub(crate) async fn build_skill_injections(
     let mut invocations = Vec::new();
 
     for skill in mentioned_skills {
-        match fs::read_to_string(&skill.path_to_skills_md).await {
+        match read_skill_instructions(cwd, skill).await {
             Ok(contents) => {
                 emit_skill_injected_metric(otel, skill, "ok");
                 invocations.push(SkillInvocation {
@@ -68,6 +73,19 @@ pub(crate) async fn build_skill_injections(
     analytics_client.track_skill_invocations(tracking, invocations);
 
     result
+}
+
+async fn read_skill_instructions(cwd: &Path, skill: &SkillMetadata) -> anyhow::Result<String> {
+    if skill.scope == SkillScope::System && is_system_skill_virtual_path(&skill.path_to_skills_md) {
+        let body = read_system_skill_body(cwd, &skill.path_to_skills_md)?
+            .ok_or_else(|| anyhow::anyhow!("system skill body not found in CTOX sqlite store"))?;
+        return Ok(format!(
+            "CTOX system skill policy: this skill is loaded from the managed SQLite skill store. Do not assume relative scripts, references, assets, or templates are available on disk. Use CTOX CLI commands or internal APIs referenced by the skill for execution.\n\n{body}"
+        ));
+    }
+    fs::read_to_string(&skill.path_to_skills_md)
+        .await
+        .map_err(anyhow::Error::from)
 }
 
 fn emit_skill_injected_metric(

@@ -82,39 +82,24 @@ If the host or batch runner cannot sustain long mixed embedding-plus-LLM jobs, r
 6. extract glossary candidates and clean them
 7. write the final knowledge artifacts
 
-## Script
+## Commands
 
-Run the bundled script:
-
-```bash
-python3 skills/system/knowledge_bootstrap/ticket-dataset-knowledge-bootstrap/scripts/build_ticket_dataset_knowledgebase.py \
-  --input-xlsx <path> \
-  --output-dir <dir> \
-  --embedding-provider sentence-transformers \
-  --embedding-model Qwen/Qwen3-Embedding-0.6B \
-  --openai-model gpt-5.4-nano \
-  --openai-api-key-env OPENAI_API_KEY
-```
-
-If the dataset is too large for one semantic pass, limit semantic clustering through:
+Use CTOX ticket commands as the execution boundary:
 
 ```bash
-  --max-semantic-rows 4000
+ctox ticket history-export --system <system> --output <path>
+ctox ticket knowledge-bootstrap --system <system>
+ctox ticket source-skill-import-bundle --system <system> --bundle-dir <dir>
 ```
 
-Host-constrained staged exemplar:
+Inspect and query the resulting knowledge:
 
 ```bash
-python3 skills/system/knowledge_bootstrap/ticket-dataset-knowledge-bootstrap/scripts/build_ticket_dataset_knowledgebase.py \
-  --input-xlsx <path> \
-  --output-dir <dir> \
-  --embedding-provider sentence-transformers \
-  --embedding-model Qwen/Qwen3-Embedding-0.6B \
-  --openai-model gpt-5.4-nano \
-  --max-semantic-rows 120 \
-  --semantic-naming-mode deterministic \
-  --glossary-mode deterministic
+ctox ticket knowledge-list --system <system>
+ctox ticket source-skill-query --system <system> --query "<ticket text>" --top-k 8
 ```
+
+Do not execute embedded Python helpers from `skills/system`. If a required dataset-to-bundle transform is not yet exposed by `ctox ticket`, implement or request that CLI/API path first.
 
 ## Guardrails
 

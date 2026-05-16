@@ -33,18 +33,10 @@ This skill uses the shared CTOX knowledge store via `skill_key=change_lifecycle`
 Treat this skill as:
 
 1. raw change evidence capture
-2. open helper resources
+2. CTOX CLI/API-backed evidence capture
 3. agent-authored plan, rollback, and result interpretation
 
-Preferred helper scripts under `scripts/`:
-
-- `change_collect.py`
-- `change_capture_run.py`
-- `change_store.py`
-- `change_query.py`
-- `change_bootstrap.py`
-
-They are inspectable helpers, not hidden authority. Read or patch them when the change is nontrivial.
+Do not execute embedded `scripts/` helpers from this system skill. Use CTOX commands such as `ctox harness-mining`, `ctox queue`, `ctox plan`, `ctox schedule`, and the relevant domain CLI. If a change operation lacks a CTOX command, add that command before relying on it.
 
 ## Tool Contracts
 
@@ -85,7 +77,7 @@ the change's behaviour-stability evidence.
 2. Capture current state first.
    This includes a pre-change baseline `harness-mining drift` snapshot.
 3. Read the helper scripts if the change shape is unusual.
-4. Gather dry-run evidence with `change_collect.py` or `change_capture_run.py`.
+4. Gather dry-run evidence with CTOX CLI/API commands.
 5. Read the raw output, especially diffs, service state, and verification output.
 6. Persist captures first, then persist a `change_request`, `config_snapshot`, `change_plan`, `rollback_bundle`, and only an executed `change_result` if a change really happened.
 7. Keep the change work step narrow.

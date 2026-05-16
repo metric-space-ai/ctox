@@ -30,15 +30,7 @@ This skill uses the shared CTOX knowledge store via `skill_key=recovery_assuranc
 
 ## Operating Model
 
-Preferred helper scripts under `scripts/`:
-
-- `recovery_collect.py`
-- `recovery_capture_run.py`
-- `recovery_store.py`
-- `recovery_query.py`
-- `recovery_bootstrap.py`
-
-They are open helper resources.
+Use CTOX CLI/API commands as the execution boundary. Do not execute embedded `scripts/` helpers from this system skill; if recovery evidence capture or persistence lacks a CTOX command, add that command before relying on it.
 
 ## Tool Contracts
 

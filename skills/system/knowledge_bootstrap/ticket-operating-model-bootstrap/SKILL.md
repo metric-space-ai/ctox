@@ -75,50 +75,33 @@ The output must answer, for repeated ticket families:
 - what good historical examples look like
 - what internal note style or action wording is common
 
-## Scripts
+## Commands
 
-Build the operating model:
+Bootstrap or refresh the ticket operating model through CTOX:
 
 ```bash
-python3 skills/system/knowledge_bootstrap/ticket-operating-model-bootstrap/scripts/build_ticket_operating_model.py \
-  --input-xlsx <path> \
-  --output-dir <dir> \
-  --top-families 20 \
-  --min-family-size 20
+ctox ticket knowledge-bootstrap --system <system>
 ```
 
-Refine the strongest families into operator-facing decision support with `gpt-5.4-nano`:
+Import a prepared source-skill bundle when the dataset analysis has already produced one:
 
 ```bash
-OPENAI_API_KEY=... python3 skills/system/knowledge_bootstrap/ticket-operating-model-bootstrap/scripts/build_ticket_operating_model.py \
-  --input-xlsx <path> \
-  --output-dir <dir> \
-  --top-families 20 \
-  --min-family-size 20 \
-  --openai-model gpt-5.4-nano \
-  --openai-refine-limit 6
-```
-
-Add retrieval vectors when the host can sustain local embeddings:
-
-```bash
-python3 skills/system/knowledge_bootstrap/ticket-operating-model-bootstrap/scripts/build_ticket_operating_model.py \
-  --input-xlsx <path> \
-  --output-dir <dir> \
-  --top-families 20 \
-  --min-family-size 20 \
-  --embedding-provider sentence-transformers \
-  --embedding-model Qwen/Qwen3-Embedding-0.6B
+ctox ticket source-skill-import-bundle --system <system> --bundle-dir <dir>
 ```
 
 Query the resulting operating model for a new ticket:
 
 ```bash
-python3 skills/system/knowledge_bootstrap/ticket-operating-model-bootstrap/scripts/query_ticket_operating_model.py \
-  --model-dir <dir> \
-  --query "<new ticket text>" \
-  --top-k 8
+ctox ticket source-skill-query --system <system> --query "<new ticket text>" --top-k 8
 ```
+
+Resolve matching skill context for a concrete ticket:
+
+```bash
+ctox ticket source-skill-resolve --ticket-key <key> --top-k 8
+```
+
+Do not execute embedded Python helpers from `skills/system`. If a needed import path is missing from `ctox ticket`, stop and add the missing CTOX CLI/API command rather than materializing this system skill as files.
 
 ## Guardrails
 

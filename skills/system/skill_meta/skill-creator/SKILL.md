@@ -89,7 +89,7 @@ Every SKILL.md consists of:
 - UI-facing metadata for skill lists and chips
 - Read references/openai_yaml.md before generating values and follow its descriptions and constraints
 - Create: human-facing `display_name`, `short_description`, and `default_prompt` by reading the skill
-- Generate deterministically by passing the values as `--interface key=value` to `scripts/generate_openai_yaml.py` or `scripts/init_skill.py`
+- Generate deterministically in the created user-skill files; do not rely on embedded system-skill helper scripts.
 - On updates: validate `agents/openai.yaml` still matches SKILL.md; regenerate if stale
 - Only include other optional interface fields (icons, brand color) if explicitly provided
 - See references/openai_yaml.md for field definitions and examples
@@ -293,37 +293,30 @@ At this point, it is time to actually create the skill.
 
 Skip this step only if the skill being developed already exists. In this case, continue to the next step.
 
-When creating a new skill from scratch, always run the `init_skill.py` script. The script conveniently generates a new template skill directory that automatically includes everything a skill requires, making the skill creation process much more efficient and reliable.
+When creating a new skill from scratch, use the CTOX user-skill CLI. It creates the file-backed skill in the user skill root that the harness can load.
 
 Usage:
 
 ```bash
-scripts/init_skill.py <skill-name> --path <output-directory> [--resources scripts,references,assets] [--examples]
+ctox skills user create --name <skill-name> --description "<when to use this skill>" --body "<initial instructions>"
 ```
 
 Examples:
 
 ```bash
-scripts/init_skill.py my-skill --path skills/public
-scripts/init_skill.py my-skill --path skills/public --resources scripts,references
-scripts/init_skill.py my-skill --path skills/public --resources scripts --examples
+ctox skills user create --name my-skill --description "Use for ..." --body "# Instructions ..."
+ctox skills user update --name my-skill --description "Use for ..." --body "# Revised instructions ..."
 ```
 
-The script:
+The command:
 
-- Creates the skill directory at the specified path
-- Generates a SKILL.md template with proper frontmatter and TODO placeholders
-- Creates `agents/openai.yaml` using agent-generated `display_name`, `short_description`, and `default_prompt` passed via `--interface key=value`
-- Optionally creates resource directories based on `--resources`
-- Optionally adds example files when `--examples` is set
+- Creates the skill directory under `$CODEX_HOME/skills/<skill-name>`
+- Generates `SKILL.md` with required frontmatter
+- Leaves optional resources (`scripts/`, `references/`, `assets/`) to be added explicitly when needed
 
-After initialization, customize the SKILL.md and add resources as needed. If you used `--examples`, replace or delete placeholder files.
+After initialization, customize the SKILL.md and add resources as needed.
 
-Generate `display_name`, `short_description`, and `default_prompt` by reading the skill, then pass them as `--interface key=value` to `init_skill.py` or regenerate with:
-
-```bash
-scripts/generate_openai_yaml.py <path/to/skill-folder> --interface key=value
-```
+Do not execute embedded helper scripts from this system skill. If richer scaffolding is required, add it to `ctox skills user create` first.
 
 Only include other optional interface fields when the user explicitly provides them. For full field descriptions and examples, see references/openai_yaml.md.
 
@@ -364,10 +357,10 @@ Write instructions for using the skill and its bundled resources.
 Once development of the skill is complete, validate the skill folder to catch basic issues early:
 
 ```bash
-scripts/quick_validate.py <path/to/skill-folder>
+ctox skills user list
 ```
 
-The validation script checks YAML frontmatter format, required fields, and naming rules. If validation fails, fix the reported issues and run the command again.
+Then inspect the created `SKILL.md` directly. It must have valid YAML frontmatter with `name` and `description`, plus a body that explains when and how to use the skill.
 
 ### Step 6: Iterate
 

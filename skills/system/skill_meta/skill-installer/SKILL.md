@@ -22,12 +22,14 @@ Installed skill files are not durable mission knowledge by themselves. For CTOX 
 
 Helps install skills. By default these are from https://github.com/openai/skills/tree/main/skills/.curated, but users can also provide other locations.
 
-Use the helper scripts based on the task:
-- List skills when the user asks what is available, or if the user uses this skill without specifying what to do. Default listing is `.curated`, but you can pass `--path skills/.experimental` when they ask about experimental skills.
-- Install from the curated list when the user provides a skill name.
-- Install from another repo when the user provides a GitHub repo/path (including private repos).
+Use CTOX CLI commands for packaged and local skills:
 
-Install skills with the helper scripts.
+- List built-in packs with `ctox skills packs list`.
+- Install a built-in pack with `ctox skills packs install <name>`.
+- Inspect user skill roots with `ctox skills user path`.
+- Create or update local user skills with `ctox skills user create` and `ctox skills user update`.
+
+Do not install CTOX system skills by copying files. System skills are managed by the CTOX core SQLite store and migration path.
 
 ## Communication
 
@@ -42,30 +44,26 @@ Which ones would you like installed?
 
 After installing a skill, tell the user: "Restart Codex to pick up new skills."
 
-## Scripts
+## Commands
 
-All of these scripts use network, so when running in the sandbox, request escalation when running them.
-
-- `scripts/list-skills.py` (prints skills list with installed annotations)
-- `scripts/list-skills.py --format json`
-- Example (experimental list): `scripts/list-skills.py --path skills/.experimental`
-- `scripts/install-skill-from-github.py --repo <owner>/<repo> --path <path/to/skill> [<path/to/skill> ...]`
-- `scripts/install-skill-from-github.py --url https://github.com/<owner>/<repo>/tree/<ref>/<path>`
-- Example (experimental skill): `scripts/install-skill-from-github.py --repo openai/skills --path skills/.experimental/<skill-name>`
+- `ctox skills packs list`
+- `ctox skills packs install <name>`
+- `ctox skills user path`
+- `ctox skills user list`
+- `ctox skills user create --name <name> --description <text> --body <text>`
+- `ctox skills user update --name <name> --description <text> --body <text>`
+- `ctox skills system list`
+- `ctox skills system diff`
+- `ctox skills system migrate`
 
 ## Behavior and Options
 
-- Defaults to direct download for public GitHub repos.
-- If download fails with auth/permission errors, falls back to git sparse checkout.
 - Aborts if the destination skill directory already exists.
 - Installs into `$CODEX_HOME/skills/<skill-name>` (defaults to `~/.codex/skills`).
-- Multiple `--path` values install multiple skills in one run, each named from the path basename unless `--name` is supplied.
-- Options: `--ref <ref>` (default `main`), `--dest <path>`, `--method auto|download|git`.
 
 ## Notes
 
-- Curated listing is fetched from `https://github.com/openai/skills/tree/main/skills/.curated` via the GitHub API. If it is unavailable, explain the error and exit.
-- Private GitHub repos can be accessed via existing git credentials or optional `GITHUB_TOKEN`/`GH_TOKEN` for download.
-- Git fallback tries HTTPS first, then SSH.
-- The skills at https://github.com/openai/skills/tree/main/skills/.system are generally preinstalled, and CTOX also bundles `skill-updater` as a system skill. If they ask for one of those, explain that it should already be present before suggesting an overwrite.
+- Source packs are the file-backed starter skills shipped under CTOX `skills/packs`.
+- GitHub skill installation is not a CTOX system-skill update path. Use normal user-skill file workflows for externally sourced skills.
+- CTOX system skills are present through `ctox skills system list`; update them with `ctox skills system migrate`.
 - Installed annotations come from `$CODEX_HOME/skills`.

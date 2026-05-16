@@ -173,12 +173,10 @@ ctox ticket monitoring-ingest --system "<system>" --snapshot-json '<json>'
 Build and activate a desk-specific operating skill when the source has enough history:
 
 ```sh
-python3 skills/system/knowledge_bootstrap/system-onboarding/scripts/bootstrap_ticket_source_skill.py \
-  --system "<system>" \
-  --skill-name "<system>-desk-operator" \
-  --dataset-label "<human dataset label>" \
-  --goal "<handle tickets in the historically observed desk style>" \
-  --analysis-dir "runtime/output/<system>_desk_skill"
+ctox ticket history-export --system "<system>" --output "runtime/output/<system>_history.jsonl"
+ctox ticket knowledge-bootstrap --system "<system>"
+ctox ticket source-skill-import-bundle --system "<system>" --bundle-dir "runtime/generated-skills/<system>-desk-operator"
+ctox ticket source-skill-set --system "<system>" --skill "<system>-desk-operator" --status active
 ```
 
 This tool will:
@@ -206,17 +204,15 @@ Create only the items that are supported by observed evidence.
 
 ## Operating Pattern
 
-The default execution path is the deterministic runner:
+The default execution path is the native CTOX ticket and self-work CLI:
 
 ```sh
-python3 skills/system/knowledge_bootstrap/system-onboarding/scripts/run_onboarding_plan.py \
-  --ctox-bin "<path-to-ctox>" \
-  --system "<system>" \
-  --env-file "<runtime.env>" \
-  --publish
+ctox ticket knowledge-bootstrap --system "<system>"
+ctox ticket self-work-list --system "<system>" --state open
+ctox ticket source-skills --system "<system>"
 ```
 
-This runner must work the stages in order and only stop at explicit blockers.
+Do not execute embedded onboarding scripts from this system skill. If a stage cannot be completed through `ctox ticket`, `ctox secret`, or `ctox skills`, stop and add the missing CLI/API path first.
 
 Manual building blocks remain available when the operator asks for an adjustment:
 

@@ -30,15 +30,7 @@ This skill uses the shared CTOX knowledge store via `skill_key=incident_response
 
 ## Operating Model
 
-Preferred helper scripts under `scripts/`:
-
-- `incident_collect.py`
-- `incident_capture_run.py`
-- `incident_store.py`
-- `incident_query.py`
-- `incident_bootstrap.py`
-
-They are open helper resources. Read them, patch them, or bypass them when the incident shape requires it.
+Use CTOX CLI/API commands as the execution boundary. Do not execute embedded `scripts/` helpers from this system skill; if incident capture or persistence lacks a CTOX command, add that command before relying on it.
 
 ## Tool Contracts
 

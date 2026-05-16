@@ -1,6 +1,6 @@
 ---
 name: systematic-research
-description: Systematic research that produces durable, persistent outputs. Two output modes share a common discovery phase. Library mode (record-shape `ctox knowledge data` table) for tasks framed as "build a library of X / catalog of Y / dataset / comparison matrix / lookup of A by B", typical of CRM entities, vendor matrices, paper or patent libraries, parts catalogs, load-case tables, measurement datasets, structured interviews, scraping outputs. Decision-report mode (Word document via `ctox report`) for feasibility study (Machbarkeitsstudie), market research (Marktanalyse), competitive analysis (Wettbewerbsanalyse), technology screening (Technologie-Screening), whitepaper, source review (Quellenreview), literature review (Stand der Technik), decision brief (Entscheidungsvorlage), project description (Fördervorhabenbeschreibung). Run both modes in the same session when the answer needs both data and synthesis. Trigger whenever the research result is meant to outlast the turn.
+description: Systematic research with a common discovery phase and two output modes. Library mode (record-shape `ctox knowledge data` table) is for tasks framed as "build a library of X / catalog / dataset / matrix / lookup", spanning research-data libraries (papers, standards, measurement data, load cases, parameter tables), engineering reference libraries, and operational record sets (CRM entities, vendor comparisons, parts catalogs, scraping outputs). For technical, engineering, scientific, or regulatory topics the discovery phase prioritizes primary research data (NASA NTRS, scholar, arXiv, IEEE, agency reports, dataset repositories) and standards before OEM datasheets — generic `web search` ranks marketing pages above measurement data and must not be the first move. Decision-report mode (Word document via `ctox report`) is for feasibility study (Machbarkeitsstudie), market research (Marktanalyse), competitive analysis (Wettbewerbsanalyse), technology screening, whitepaper, source review (Quellenreview), literature review (Stand der Technik), decision brief (Entscheidungsvorlage), project description (Fördervorhabenbeschreibung). Run both modes in the same session when the answer needs both data and synthesis. Trigger whenever the research result is meant to outlast the turn.
 class: system
 state: active
 cluster: research
@@ -73,27 +73,111 @@ mode for "evaluate" / "decide" / "study" wording.
 
 ## Phase 1 — Discovery (shared by all modes)
 
-Before producing anything, find out what CTOX already knows on the topic.
-The discovery phase is the same regardless of which output mode you pick.
+Before producing anything, find out what CTOX already knows on the topic
+and what the **best-quality external sources** are. The discovery phase is
+the same regardless of which output mode you pick.
 
-1. `ctox skill list` and `ctox knowledge data list` to inventory existing
-   research artifacts on this topic. Extend instead of duplicating.
-2. `ctox web search` and `ctox web read` to discover external sources; for
-   recurring scraping use the scrape stack.
-3. Open a source-catalog table in `ctox knowledge data` (a `source_catalog`
-   row per candidate source) when the source set is larger than a handful
-   and worth reusing. Library and decision-report mode both can read from
-   it.
-4. Decide what columns the eventual library row needs, or what report-type
-   blueprint the eventual report needs. This is shaped by what the sources
-   actually carry, not by what you think a priori.
+1. **Inventory CTOX**: `ctox skill list` and `ctox knowledge data list` to
+   find existing research artifacts on this topic. Extend instead of
+   duplicating.
+2. **External source mining**: do NOT default to plain `ctox web search`.
+   That ranks SEO-optimized consumer/marketing pages above primary research
+   data. Use the source-class priority below.
+3. **Source-catalog table**: open a `source_catalog` table in
+   `ctox knowledge data` (one row per candidate source, with provenance,
+   source-class tag, and a one-line note on what it contributes). Library
+   and decision-report mode both read from it. Build it up before drafting
+   the actual library schema or report blueprint.
+4. **Schema/blueprint inference**: only after the source set is solid,
+   decide what columns the library row needs (or which report-type
+   blueprint fits). The schema is shaped by what the sources actually
+   carry, not by what you think a priori.
 
-Going straight to `cat > workspace_file.md`, `web_search`, or external
-research before this discovery pass is a discipline failure — you may be
-re-inventing knowledge CTOX already owns, and you bypass the curator
-disciplines that would have set schema and provenance rules for you.
+### Source-class priority
+
+For any technical, engineering, scientific, regulatory, or research
+topic, work through these classes in order. Each lower class is a fallback
+for what the higher classes did not cover, not a starting point.
+
+**Tier 1 — Primary measurements and research data** (start here):
+
+- government technical-report repositories: NASA NTRS (ntrs.nasa.gov),
+  DoD Defense Technical Information Center (apps.dtic.mil), DOE OSTI
+  (osti.gov), national lab repositories, agency-hosted PDFs
+- scholarly literature: Google Scholar (scholar.google.com), Semantic
+  Scholar, OpenAlex, arXiv, ResearchGate, IEEE Xplore, SAE Mobilus, ACM
+  Digital Library, Elsevier/Springer/Wiley DOIs
+- public dataset repositories: Zenodo, Figshare, Dataverse, HuggingFace
+  Datasets, Open Science Framework (OSF), Kaggle
+- domain-specific reference databases (examples — adapt per topic):
+  - aerospace/UAV: UIUC Propeller Database (m-selig.ae.illinois.edu),
+    NASA MTB2 (rotorcraft.arc.nasa.gov), DARPA briefings, AIAA papers
+  - mechanical/bearings: SKF, Schaeffler, NSK whitepapers + ISO 281
+  - electronics: arxiv, IEEE TPEL, ASME
+  - biomedical: PubMed/PMC, ClinicalTrials.gov, FDA databases
+  - climate/earth: NOAA, NASA EOSDIS, Copernicus, ECMWF
+  - economic/market: OECD, Eurostat, BLS, Destatis, Census APIs
+  - flight logs/UAV telemetry: ardupilot.org logs, PX4-flight-review,
+    open flight-data archives
+
+**Tier 2 — Standards and regulatory**:
+
+- ISO, ASTM, IEEE, DIN, EN, VDE standards (often paywalled but titled
+  and abstracted on the standard body's site)
+- regulatory: FAA AC/TSO, EASA CS/AMC, FDA guidance, FCC/ITU, BSI
+
+**Tier 3 — Industry/OEM material** (use only as context, not as primary
+data):
+
+- vendor datasheets (DJI, Skydio, ABB, Siemens, ...) — useful for
+  product overview, **not** for measurement data
+- application notes, product manuals
+- white papers from vendors (always read as marketing-plus-engineering)
+
+Going straight to Tier 3 because the answer "looks like a product
+comparison" is a discovery failure when the topic is engineering/research.
+Industry datasheets give you MTOW and headline specs; they do not give
+you measured rotor loads, fatigue curves, vibration spectra, or
+qualification-test reports.
+
+### Discovery tools
+
+The following CTOX surfaces map onto the tiers above; use the most
+specific one available:
+
+- `ctox web scholarly search --query "<topic>" [--ext pdf] [--with-oa-pdf]`
+  — for Tier 1 scholarly literature with open-access PDFs and DOI
+  filters. Strongly preferred over plain web search for engineering and
+  scientific topics.
+- `ctox web deep-research --query "<topic>" --depth standard --max-sources <N>`
+  — for multi-profile source mining (combines scholarly + agency +
+  standards + dataset + industry buckets in one call). Use `--depth
+  exhaustive` when the source-catalog needs to be near-complete.
+- `ctox web deep-research --query "<topic>" --depth exhaustive --max-sources <N>`
+  plus `ctox knowledge data` recording — for fully systematic source review
+  with explicit query plan and auditable source catalog. Do not execute embedded
+  research scripts from this system skill; if a source-review operation lacks a
+  CTOX CLI/API command, add that command first.
+- `ctox web search` and `ctox web read` — generic fallback when the
+  scholarly/deep-research surfaces returned nothing useful for an
+  obviously non-technical topic (a CRM-style entity list, a vendor
+  matrix where vendor pages ARE the primary source, …).
+
+Skipping the scholarly/deep-research surfaces and going straight to
+`ctox web search` on a technical topic is a discovery failure — the
+ranking will skew the source catalog toward Tier 3 and you will miss
+the Tier 1 measurement data that the deliverable actually needs.
+
+Going straight to `cat > workspace_file.md` before this discovery pass
+is a discipline failure of a different kind — you bypass durable
+persistence entirely.
 
 ## Phase 2A — Library mode
+
+Run order: **source-catalog first, then the actual library**. The
+source-catalog from Phase 1 is what gives you the schema for the library
+— do not invert the order. A library row that cannot be traced back to a
+source-catalog row by `source_id` is hearsay.
 
 Drive the work through `ctox knowledge data create / add-column / append /
 import / export`. CTOX is the system of record:
@@ -104,6 +188,22 @@ import / export`. CTOX is the system of record:
   runtime DB and the schema can evolve.
 - You decide the domains, table keys, columns, and enrichment passes —
   CTOX is not a framework prescribing schemas.
+
+For technical/research libraries, the typical row pattern is:
+
+- one row per primary measurement record (e.g. a single propeller test
+  point from UIUC, a single NASA MTB2 test point, a single instrumented
+  flight log segment, one published material-property datapoint)
+- include `source_id` linking back to the source-catalog
+- include `record_type` distinguishing empirical / derived /
+  manufacturer-spec / standard
+- include `derivation_method` and `assumption_text` for any
+  non-trivial computation done on top of the source value
+
+When the sources include both primary measurements **and** OEM/vendor
+specs, keep them in the **same** table with different `record_type`
+values rather than splitting into two tables — the curation discipline
+is the same, the source-class field just makes it queryable.
 
 Curation discipline (non-negotiable):
 

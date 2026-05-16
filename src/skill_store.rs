@@ -4,6 +4,7 @@ use include_dir::Dir;
 use rusqlite::params;
 use rusqlite::Connection;
 use rusqlite::OptionalExtension;
+use serde::Serialize;
 use sha2::Digest;
 use sha2::Sha256;
 use std::collections::{BTreeMap, HashSet};
@@ -19,13 +20,13 @@ const SKILL_FILES_TABLE: &str = "ctox_skill_files";
 /// System skills are embedded into the ctox binary at compile time and
 /// imported into SQLite at service start. The repo-root `skills/system/`
 /// directory uses cluster subfolders (e.g. `host_ops/`, `mission_orchestration/`)
-/// to organize the 39 skills; those subfolders become the `cluster` field on
-/// each bundle. This is the canonical store for system skills — `.system/`
-/// on disk is materialized from here for the Codex skill manager to consume.
+/// to organize the bundled skills; those subfolders become the `cluster` field
+/// on each bundle. This is the canonical store for system skills; the Codex
+/// skill manager consumes them from SQLite rather than from `.system/` files.
 const EMBEDDED_SYSTEM_SKILLS: Dir<'static> =
     include_dir::include_dir!("$CARGO_MANIFEST_DIR/skills/system");
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct SkillBundleView {
     pub skill_id: String,
     pub skill_name: String,
@@ -36,10 +37,27 @@ pub struct SkillBundleView {
     pub cluster: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct SkillFileView {
     pub relative_path: String,
     pub content: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SkillStoreMigrationReport {
+    pub system_skills: usize,
+    pub user_or_pack_skills: usize,
+    pub removed_legacy_disk_system_rows: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SystemSkillDiff {
+    pub skill_id: String,
+    pub skill_name: String,
+    pub status: String,
+    pub stored_hash: Option<String>,
+    pub embedded_hash: Option<String>,
+    pub source_path: Option<String>,
 }
 
 pub fn bootstrap_from_roots(root: &Path) -> Result<()> {
@@ -56,8 +74,35 @@ pub fn bootstrap_from_roots(root: &Path) -> Result<()> {
 /// missing, it falls back to the first path segment under `skills/system/`.
 pub fn bootstrap_embedded_system_skills(root: &Path) -> Result<()> {
     ensure_schema(root)?;
-    walk_embedded_for_skills(root, &EMBEDDED_SYSTEM_SKILLS, "")?;
+    let mut active_skill_ids = HashSet::new();
+    walk_embedded_for_skills(root, &EMBEDDED_SYSTEM_SKILLS, "", &mut active_skill_ids)?;
+    prune_stale_embedded_system_skills(root, &active_skill_ids)?;
     Ok(())
+}
+
+pub fn migrate_skill_store(root: &Path) -> Result<SkillStoreMigrationReport> {
+    ensure_schema(root)?;
+    bootstrap_embedded_system_skills(root)?;
+    bootstrap_from_roots(root)?;
+    let removed_legacy_disk_system_rows = prune_legacy_disk_system_skills(root)?;
+    let bundles = list_skill_bundles(root)?;
+    let system_skills = bundles
+        .iter()
+        .filter(|bundle| {
+            bundle.class == "ctox_core"
+                && bundle
+                    .source_path
+                    .as_deref()
+                    .unwrap_or_default()
+                    .starts_with("embedded:skills/system/")
+        })
+        .count();
+    let user_or_pack_skills = bundles.len().saturating_sub(system_skills);
+    Ok(SkillStoreMigrationReport {
+        system_skills,
+        user_or_pack_skills,
+        removed_legacy_disk_system_rows,
+    })
 }
 
 pub fn list_skill_bundles(root: &Path) -> Result<Vec<SkillBundleView>> {
@@ -81,6 +126,38 @@ pub fn list_skill_bundles(root: &Path) -> Result<Vec<SkillBundleView>> {
     })?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(anyhow::Error::from)
+}
+
+pub fn list_system_skill_bundles(root: &Path) -> Result<Vec<SkillBundleView>> {
+    bootstrap_embedded_system_skills(root)?;
+    let bundles = list_skill_bundles(root)?;
+    Ok(bundles
+        .into_iter()
+        .filter(|bundle| {
+            bundle.class == "ctox_core"
+                && bundle
+                    .source_path
+                    .as_deref()
+                    .unwrap_or_default()
+                    .starts_with("embedded:skills/system/")
+        })
+        .collect())
+}
+
+pub fn list_user_skill_bundles(root: &Path) -> Result<Vec<SkillBundleView>> {
+    bootstrap_from_roots(root)?;
+    let bundles = list_skill_bundles(root)?;
+    Ok(bundles
+        .into_iter()
+        .filter(|bundle| {
+            !(bundle.class == "ctox_core"
+                && bundle
+                    .source_path
+                    .as_deref()
+                    .unwrap_or_default()
+                    .starts_with("embedded:skills/system/"))
+        })
+        .collect())
 }
 
 pub fn list_skill_files(root: &Path, skill_id: &str) -> Result<Vec<SkillFileView>> {
@@ -112,14 +189,18 @@ pub fn upsert_skill_bundle_from_dir(root: &Path, dir: &Path) -> Result<Option<Sk
         return Ok(None);
     }
     let files = collect_bundle_files(dir)?;
-    let skill_name = dir
-        .file_name()
-        .map(|value| value.to_string_lossy().to_string())
-        .context("skill dir has no name")?;
     let skill_body = files
         .get("SKILL.md")
         .map(|bytes| String::from_utf8_lossy(bytes).to_string())
         .unwrap_or_default();
+    let skill_name = parse_skill_name(&skill_body).unwrap_or_else(|| {
+        dir.file_name()
+            .map(|value| value.to_string_lossy().to_string())
+            .unwrap_or_default()
+    });
+    if skill_name.trim().is_empty() {
+        anyhow::bail!("skill dir has no name");
+    }
     let metadata = parse_skill_catalog_metadata(&skill_body);
     let source_path = Some(dir.display().to_string());
     let (class, state) = classify_skill(root, dir, &skill_md, &metadata);
@@ -212,7 +293,12 @@ fn upsert_bundle_records(
 
 /// Walk the embedded skills/system tree (clustered by subfolder) and import
 /// each SKILL.md-bearing directory into SQLite.
-fn walk_embedded_for_skills(root: &Path, dir: &Dir<'_>, path_prefix: &str) -> Result<()> {
+fn walk_embedded_for_skills(
+    root: &Path,
+    dir: &Dir<'_>,
+    path_prefix: &str,
+    active_skill_ids: &mut HashSet<String>,
+) -> Result<()> {
     let has_skill_md = dir.files().any(|f| {
         f.path()
             .file_name()
@@ -221,7 +307,9 @@ fn walk_embedded_for_skills(root: &Path, dir: &Dir<'_>, path_prefix: &str) -> Re
             .unwrap_or(false)
     });
     if has_skill_md {
-        upsert_embedded_skill(root, dir, path_prefix)?;
+        if let Some(skill_id) = upsert_embedded_skill(root, dir, path_prefix)? {
+            active_skill_ids.insert(skill_id);
+        }
         return Ok(());
     }
     for entry in dir.entries() {
@@ -236,29 +324,35 @@ fn walk_embedded_for_skills(root: &Path, dir: &Dir<'_>, path_prefix: &str) -> Re
             } else {
                 format!("{path_prefix}/{segment}")
             };
-            walk_embedded_for_skills(root, subdir, &new_prefix)?;
+            walk_embedded_for_skills(root, subdir, &new_prefix, active_skill_ids)?;
         }
     }
     Ok(())
 }
 
-fn upsert_embedded_skill(root: &Path, skill_dir: &Dir<'_>, path_in_system: &str) -> Result<()> {
+fn upsert_embedded_skill(
+    root: &Path,
+    skill_dir: &Dir<'_>,
+    path_in_system: &str,
+) -> Result<Option<String>> {
     let mut files: BTreeMap<String, Vec<u8>> = BTreeMap::new();
     let dir_path_len = skill_dir.path().to_string_lossy().len();
     collect_embedded_files(skill_dir, dir_path_len, &mut files);
 
-    let skill_name = skill_dir
-        .path()
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_default();
-    if skill_name.is_empty() {
-        return Ok(());
-    }
     let skill_body = files
         .get("SKILL.md")
         .map(|bytes| String::from_utf8_lossy(bytes).to_string())
         .unwrap_or_default();
+    let skill_name = parse_skill_name(&skill_body).unwrap_or_else(|| {
+        skill_dir
+            .path()
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default()
+    });
+    if skill_name.trim().is_empty() {
+        return Ok(None);
+    }
     let metadata = parse_skill_catalog_metadata(&skill_body);
     let description = parse_skill_description(&skill_body);
     let class = metadata
@@ -280,7 +374,7 @@ fn upsert_embedded_skill(root: &Path, skill_dir: &Dir<'_>, path_in_system: &str)
     });
     let source_path = Some(format!("embedded:skills/system/{path_in_system}"));
 
-    upsert_bundle_records(
+    let bundle = upsert_bundle_records(
         root,
         &skill_name,
         &class,
@@ -290,6 +384,40 @@ fn upsert_embedded_skill(root: &Path, skill_dir: &Dir<'_>, path_in_system: &str)
         &cluster,
         &files,
     )?;
+    Ok(bundle.map(|bundle| bundle.skill_id))
+}
+
+fn prune_stale_embedded_system_skills(
+    root: &Path,
+    active_skill_ids: &HashSet<String>,
+) -> Result<()> {
+    let mut conn = open_db(root)?;
+    let tx = conn
+        .transaction()
+        .context("failed to open stale system skill prune transaction")?;
+    let mut statement = tx.prepare(&format!(
+        "SELECT skill_id
+         FROM {SKILL_BUNDLES_TABLE}
+         WHERE class = 'ctox_core' AND source_path LIKE 'embedded:skills/system/%'"
+    ))?;
+    let stale_candidates = statement
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(statement);
+    for skill_id in stale_candidates {
+        if !active_skill_ids.contains(&skill_id) {
+            tx.execute(
+                &format!("DELETE FROM {SKILL_FILES_TABLE} WHERE skill_id = ?1"),
+                params![skill_id],
+            )?;
+            tx.execute(
+                &format!("DELETE FROM {SKILL_BUNDLES_TABLE} WHERE skill_id = ?1"),
+                params![skill_id],
+            )?;
+        }
+    }
+    tx.commit()
+        .context("failed to commit stale system skill prune transaction")?;
     Ok(())
 }
 
@@ -361,6 +489,197 @@ pub fn resolve_materialized_skill_dir(root: &Path, skill_name: &str) -> Result<O
     Ok(None)
 }
 
+pub fn load_skill_body_by_name(root: &Path, skill_name: &str) -> Result<Option<String>> {
+    let Some(bundle) = load_skill_bundle_by_name(root, skill_name)? else {
+        return Ok(None);
+    };
+    let files = list_skill_files(root, &bundle.skill_id)?;
+    files
+        .into_iter()
+        .find(|file| file.relative_path == "SKILL.md")
+        .map(|file| {
+            String::from_utf8(file.content)
+                .with_context(|| format!("skill {skill_name} SKILL.md is not valid UTF-8"))
+        })
+        .transpose()
+}
+
+pub fn diff_embedded_system_skills(root: &Path) -> Result<Vec<SystemSkillDiff>> {
+    ensure_schema(root)?;
+    let embedded = collect_embedded_system_records();
+    let conn = open_db(root)?;
+    let mut diffs = Vec::new();
+    let mut seen = HashSet::new();
+    for record in embedded {
+        seen.insert(record.skill_id.clone());
+        let stored: Option<(Option<String>, Vec<(String, Vec<u8>)>)> = conn
+            .query_row(
+                &format!(
+                    "SELECT source_path FROM {SKILL_BUNDLES_TABLE}
+                     WHERE skill_id = ?1"
+                ),
+                params![record.skill_id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .map(|source_path| {
+                let files = load_skill_files_on_conn(&conn, &record.skill_id)?;
+                Ok::<_, anyhow::Error>((source_path, files))
+            })
+            .transpose()?;
+        let embedded_hash = hash_skill_files(&record.files);
+        match stored {
+            None => diffs.push(SystemSkillDiff {
+                skill_id: record.skill_id,
+                skill_name: record.skill_name,
+                status: "missing".to_string(),
+                stored_hash: None,
+                embedded_hash: Some(embedded_hash),
+                source_path: Some(record.source_path),
+            }),
+            Some((source_path, files)) => {
+                let stored_hash = hash_file_pairs(&files);
+                let status = if stored_hash == embedded_hash {
+                    "unchanged"
+                } else {
+                    "changed"
+                };
+                diffs.push(SystemSkillDiff {
+                    skill_id: record.skill_id,
+                    skill_name: record.skill_name,
+                    status: status.to_string(),
+                    stored_hash: Some(stored_hash),
+                    embedded_hash: Some(embedded_hash),
+                    source_path,
+                });
+            }
+        }
+    }
+
+    let mut statement = conn.prepare(&format!(
+        "SELECT skill_id, skill_name, source_path FROM {SKILL_BUNDLES_TABLE}
+         WHERE class = 'ctox_core' AND source_path LIKE 'embedded:skills/system/%'"
+    ))?;
+    let stale = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(statement);
+    for (skill_id, skill_name, source_path) in stale {
+        if !seen.contains(&skill_id) {
+            let files = load_skill_files_on_conn(&conn, &skill_id)?;
+            diffs.push(SystemSkillDiff {
+                skill_id,
+                skill_name,
+                status: "stale".to_string(),
+                stored_hash: Some(hash_file_pairs(&files)),
+                embedded_hash: None,
+                source_path,
+            });
+        }
+    }
+    diffs.sort_by(|a, b| {
+        a.status
+            .cmp(&b.status)
+            .then_with(|| a.skill_name.cmp(&b.skill_name))
+    });
+    Ok(diffs)
+}
+
+pub fn export_system_skill(root: &Path, skill_name: &str, target_dir: &Path) -> Result<PathBuf> {
+    bootstrap_embedded_system_skills(root)?;
+    let bundle = load_skill_bundle_by_name(root, skill_name)?
+        .with_context(|| format!("system skill not found: {skill_name}"))?;
+    if bundle.class != "ctox_core"
+        || !bundle
+            .source_path
+            .as_deref()
+            .unwrap_or_default()
+            .starts_with("embedded:skills/system/")
+    {
+        anyhow::bail!("{skill_name} is not a CTOX system skill");
+    }
+    let files = list_skill_files(root, &bundle.skill_id)?;
+    let base_dir = target_dir.join(&bundle.skill_name);
+    if base_dir.exists() {
+        fs::remove_dir_all(&base_dir)
+            .with_context(|| format!("failed to reset export dir {}", base_dir.display()))?;
+    }
+    for file in files {
+        let path = base_dir.join(&file.relative_path);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create export dir {}", parent.display()))?;
+        }
+        fs::write(&path, &file.content)
+            .with_context(|| format!("failed to write exported skill file {}", path.display()))?;
+    }
+    Ok(base_dir)
+}
+
+pub fn codex_home_skills_root() -> PathBuf {
+    std::env::var_os("CODEX_HOME")
+        .map(PathBuf::from)
+        .filter(|path| !path.as_os_str().is_empty())
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".codex")))
+        .unwrap_or_else(|| PathBuf::from(".codex"))
+        .join("skills")
+}
+
+pub fn runtime_user_skill_root(root: &Path) -> PathBuf {
+    configured_skill_root(root)
+}
+
+pub fn source_pack_names(root: &Path) -> Result<Vec<String>> {
+    let mut names = Vec::new();
+    collect_skill_dir_names(&root.join("skills/packs"), &mut names)?;
+    names.sort();
+    names.dedup();
+    Ok(names)
+}
+
+pub fn install_source_pack(root: &Path, name: &str) -> Result<PathBuf> {
+    let source = find_source_pack_dir(root, name)?
+        .with_context(|| format!("source pack not found: {name}"))?;
+    let target = codex_home_skills_root().join(name);
+    copy_skill_dir(&source, &target)?;
+    Ok(target)
+}
+
+pub fn create_or_update_user_skill(
+    name: &str,
+    description: &str,
+    body: &str,
+    overwrite: bool,
+) -> Result<PathBuf> {
+    validate_skill_name(name)?;
+    let skill_dir = codex_home_skills_root().join(name);
+    let skill_md = skill_dir.join("SKILL.md");
+    if skill_md.exists() && !overwrite {
+        anyhow::bail!(
+            "user skill already exists: {} (pass --overwrite to replace SKILL.md)",
+            skill_md.display()
+        );
+    }
+    fs::create_dir_all(&skill_dir)
+        .with_context(|| format!("failed to create user skill dir {}", skill_dir.display()))?;
+    let yaml_name = serde_json::to_string(name).context("failed to encode skill name")?;
+    let yaml_description =
+        serde_json::to_string(description).context("failed to encode skill description")?;
+    let content = format!(
+        "---\nname: {yaml_name}\ndescription: {yaml_description}\n---\n\n{}\n",
+        body.trim()
+    );
+    fs::write(&skill_md, content)
+        .with_context(|| format!("failed to write user skill {}", skill_md.display()))?;
+    Ok(skill_dir)
+}
+
 fn load_skill_bundle_by_name(root: &Path, skill_name: &str) -> Result<Option<SkillBundleView>> {
     let conn = open_db(root)?;
     conn.query_row(
@@ -391,7 +710,8 @@ fn skill_roots(root: &Path) -> Vec<PathBuf> {
     let mut roots = Vec::new();
     let mut seen = HashSet::new();
     for candidate in [
-        root.join("skills"),
+        root.join("skills/packs"),
+        codex_home_skills_root(),
         configured_skill_root(root),
         configured_generated_skill_root(root),
     ] {
@@ -411,6 +731,18 @@ fn import_skill_tree(root: &Path, base: &Path) -> Result<()> {
     };
     let mut queue = vec![base_canon];
     while let Some(dir) = queue.pop() {
+        if dir
+            .file_name()
+            .map(|name| name.to_string_lossy() == ".system")
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        if path_matches_prefix(&dir, &root.join("skills/system"))
+            || path_matches_prefix(&dir, &root.join("skills/.system"))
+        {
+            continue;
+        }
         let skill_md = dir.join("SKILL.md");
         if skill_md.is_file() {
             let _ = upsert_skill_bundle_from_dir(root, &dir)?;
@@ -429,6 +761,7 @@ fn import_skill_tree(root: &Path, base: &Path) -> Result<()> {
                     .file_name()
                     .to_string_lossy()
                     .starts_with(".materialized")
+                    || child.file_name().to_string_lossy() == ".system"
                 {
                     continue;
                 }
@@ -526,6 +859,18 @@ fn ensure_schema_on_conn(conn: &Connection) -> Result<()> {
         )
         .context("failed to add cluster column to skill bundles")?;
     }
+    let has_source_path: bool = conn
+        .prepare(&format!("PRAGMA table_info({SKILL_BUNDLES_TABLE})"))?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(|r| r.ok())
+        .any(|name| name == "source_path");
+    if !has_source_path {
+        conn.execute(
+            &format!("ALTER TABLE {SKILL_BUNDLES_TABLE} ADD COLUMN source_path TEXT"),
+            [],
+        )
+        .context("failed to add source_path column to skill bundles")?;
+    }
     Ok(())
 }
 
@@ -535,6 +880,9 @@ fn stable_skill_id(skill_name: &str) -> String {
 }
 
 fn parse_skill_description(body: &str) -> String {
+    if let Some(description) = parse_frontmatter_value(body, "description") {
+        return description;
+    }
     let body = if let Some(frontmatter) = extract_frontmatter(body) {
         body.strip_prefix("---\n")
             .and_then(|rest| rest.strip_prefix(frontmatter))
@@ -563,6 +911,28 @@ fn parse_skill_description(body: &str) -> String {
         return trimmed.to_string();
     }
     "No inline summary available.".to_string()
+}
+
+fn parse_skill_name(body: &str) -> Option<String> {
+    parse_frontmatter_value(body, "name")
+}
+
+fn parse_frontmatter_value(body: &str, wanted_key: &str) -> Option<String> {
+    let frontmatter = extract_frontmatter(body)?;
+    for raw_line in frontmatter.lines() {
+        let line = raw_line.trim();
+        let Some((key, raw_value)) = line.split_once(':') else {
+            continue;
+        };
+        if key.trim() != wanted_key {
+            continue;
+        }
+        let value = raw_value.trim().trim_matches('"').trim_matches('\'').trim();
+        if !value.is_empty() {
+            return Some(value.to_string());
+        }
+    }
+    None
 }
 
 #[derive(Debug, Clone, Default)]
@@ -624,18 +994,21 @@ fn classify_skill(
 
 fn infer_skill_class(root: &Path, base_dir: &Path, skill_md: &Path) -> String {
     let repo_skills_root = root.join("skills");
-    if path_matches_prefix(skill_md, &repo_skills_root.join(".curated")) {
+    if path_matches_prefix(skill_md, &codex_home_skills_root())
+        || path_matches_prefix(skill_md, &configured_generated_skill_root(root))
+        || path_matches_prefix(skill_md, &configured_skill_root(root))
+    {
+        return "personal".to_string();
+    }
+    if path_matches_prefix(skill_md, &repo_skills_root.join("packs"))
+        || path_matches_prefix(skill_md, &repo_skills_root.join(".curated"))
+    {
         return "installed_packs".to_string();
     }
     if path_matches_prefix(skill_md, &repo_skills_root.join(".system"))
         || path_matches_prefix(skill_md, &repo_skills_root)
     {
         return "ctox_core".to_string();
-    }
-    if path_matches_prefix(skill_md, &configured_generated_skill_root(root))
-        || path_matches_prefix(skill_md, &configured_skill_root(root))
-    {
-        return "personal".to_string();
     }
     let base_text = base_dir.to_string_lossy();
     if base_text.contains(".codex/skills") || base_text.contains(".agents/skills") {
@@ -702,6 +1075,267 @@ fn configured_generated_skill_root(root: &Path) -> PathBuf {
 
 fn managed_materialized_skills_root(root: &Path) -> PathBuf {
     configured_generated_skill_root(root).join(".materialized")
+}
+
+#[derive(Debug)]
+struct EmbeddedSystemSkillRecord {
+    skill_id: String,
+    skill_name: String,
+    source_path: String,
+    files: BTreeMap<String, Vec<u8>>,
+}
+
+fn collect_embedded_system_records() -> Vec<EmbeddedSystemSkillRecord> {
+    let mut records = Vec::new();
+    collect_embedded_system_records_inner(&EMBEDDED_SYSTEM_SKILLS, "", &mut records);
+    records
+}
+
+fn collect_embedded_system_records_inner(
+    dir: &Dir<'_>,
+    path_prefix: &str,
+    records: &mut Vec<EmbeddedSystemSkillRecord>,
+) {
+    let has_skill_md = dir.files().any(|file| {
+        file.path()
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(|name| name == "SKILL.md")
+            .unwrap_or(false)
+    });
+    if has_skill_md {
+        let mut files = BTreeMap::new();
+        let dir_path_len = dir.path().to_string_lossy().len();
+        collect_embedded_files(dir, dir_path_len, &mut files);
+        let skill_body = files
+            .get("SKILL.md")
+            .map(|bytes| String::from_utf8_lossy(bytes).to_string())
+            .unwrap_or_default();
+        let skill_name = parse_skill_name(&skill_body).unwrap_or_else(|| {
+            dir.path()
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_default()
+        });
+        if !skill_name.trim().is_empty() {
+            records.push(EmbeddedSystemSkillRecord {
+                skill_id: stable_skill_id(&skill_name),
+                skill_name,
+                source_path: format!("embedded:skills/system/{path_prefix}"),
+                files,
+            });
+        }
+        return;
+    }
+
+    for entry in dir.entries() {
+        if let include_dir::DirEntry::Dir(subdir) = entry {
+            let segment = subdir
+                .path()
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let next_prefix = if path_prefix.is_empty() {
+                segment
+            } else {
+                format!("{path_prefix}/{segment}")
+            };
+            collect_embedded_system_records_inner(subdir, &next_prefix, records);
+        }
+    }
+}
+
+fn load_skill_files_on_conn(conn: &Connection, skill_id: &str) -> Result<Vec<(String, Vec<u8>)>> {
+    let mut statement = conn.prepare(&format!(
+        "SELECT relative_path, content_blob
+         FROM {SKILL_FILES_TABLE}
+         WHERE skill_id = ?1
+         ORDER BY relative_path ASC"
+    ))?;
+    let rows = statement.query_map(params![skill_id], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+    })?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(anyhow::Error::from)
+}
+
+fn hash_skill_files(files: &BTreeMap<String, Vec<u8>>) -> String {
+    let pairs = files
+        .iter()
+        .map(|(path, content)| (path.as_str(), content.as_slice()));
+    hash_file_iter(pairs)
+}
+
+fn hash_file_pairs(files: &[(String, Vec<u8>)]) -> String {
+    let pairs = files
+        .iter()
+        .map(|(path, content)| (path.as_str(), content.as_slice()));
+    hash_file_iter(pairs)
+}
+
+fn hash_file_iter<'a>(pairs: impl IntoIterator<Item = (&'a str, &'a [u8])>) -> String {
+    let mut hasher = Sha256::new();
+    for (relative_path, content) in pairs {
+        hasher.update(relative_path.as_bytes());
+        hasher.update([0]);
+        hasher.update(content);
+        hasher.update([0]);
+    }
+    format!("{:x}", hasher.finalize())
+}
+
+fn prune_legacy_disk_system_skills(root: &Path) -> Result<usize> {
+    let mut conn = open_db(root)?;
+    let tx = conn
+        .transaction()
+        .context("failed to open legacy system skill prune transaction")?;
+    let system_root = root.join("skills/system");
+    let stale_system_root = root.join("skills/.system");
+    let mut statement = tx.prepare(&format!(
+        "SELECT skill_id, source_path
+         FROM {SKILL_BUNDLES_TABLE}
+         WHERE class = 'ctox_core'
+           AND source_path IS NOT NULL
+           AND source_path NOT LIKE 'embedded:skills/system/%'"
+    ))?;
+    let candidates = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(statement);
+
+    let mut removed = 0usize;
+    for (skill_id, source_path) in candidates {
+        let Some(source_path) = source_path else {
+            continue;
+        };
+        let path = PathBuf::from(source_path);
+        if path_matches_prefix(&path, &system_root)
+            || path_matches_prefix(&path, &stale_system_root)
+        {
+            tx.execute(
+                &format!("DELETE FROM {SKILL_FILES_TABLE} WHERE skill_id = ?1"),
+                params![skill_id],
+            )?;
+            tx.execute(
+                &format!("DELETE FROM {SKILL_BUNDLES_TABLE} WHERE skill_id = ?1"),
+                params![skill_id],
+            )?;
+            removed += 1;
+        }
+    }
+    tx.commit()
+        .context("failed to commit legacy system skill prune")?;
+    Ok(removed)
+}
+
+fn collect_skill_dir_names(base: &Path, names: &mut Vec<String>) -> Result<()> {
+    if !base.exists() {
+        return Ok(());
+    }
+    let Ok(read_dir) = fs::read_dir(base) else {
+        return Ok(());
+    };
+    for child in read_dir.flatten() {
+        let path = child.path();
+        if !child
+            .file_type()
+            .map(|value| value.is_dir())
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        if path.join("SKILL.md").is_file() {
+            if let Some(name) = path
+                .file_name()
+                .map(|value| value.to_string_lossy().to_string())
+            {
+                names.push(name);
+            }
+        } else {
+            collect_skill_dir_names(&path, names)?;
+        }
+    }
+    Ok(())
+}
+
+fn find_source_pack_dir(root: &Path, name: &str) -> Result<Option<PathBuf>> {
+    let mut queue = vec![root.join("skills/packs")];
+    while let Some(dir) = queue.pop() {
+        if !dir.exists() {
+            continue;
+        }
+        let Ok(read_dir) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for child in read_dir.flatten() {
+            let path = child.path();
+            if !child
+                .file_type()
+                .map(|value| value.is_dir())
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            if path.join("SKILL.md").is_file()
+                && path
+                    .file_name()
+                    .map(|value| value.to_string_lossy() == name)
+                    .unwrap_or(false)
+            {
+                return Ok(Some(path));
+            }
+            queue.push(path);
+        }
+    }
+    Ok(None)
+}
+
+fn copy_skill_dir(source: &Path, target: &Path) -> Result<()> {
+    if !source.join("SKILL.md").is_file() {
+        anyhow::bail!("source is not a skill directory: {}", source.display());
+    }
+    if target.exists() {
+        fs::remove_dir_all(target)
+            .with_context(|| format!("failed to remove existing skill {}", target.display()))?;
+    }
+    copy_dir_recursive(source, target)
+}
+
+fn copy_dir_recursive(source: &Path, target: &Path) -> Result<()> {
+    fs::create_dir_all(target)
+        .with_context(|| format!("failed to create dir {}", target.display()))?;
+    for entry in
+        fs::read_dir(source).with_context(|| format!("failed to read dir {}", source.display()))?
+    {
+        let entry = entry?;
+        let source_path = entry.path();
+        let target_path = target.join(entry.file_name());
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            copy_dir_recursive(&source_path, &target_path)?;
+        } else if file_type.is_file() {
+            fs::copy(&source_path, &target_path).with_context(|| {
+                format!(
+                    "failed to copy {} to {}",
+                    source_path.display(),
+                    target_path.display()
+                )
+            })?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_skill_name(name: &str) -> Result<()> {
+    if name.trim().is_empty() {
+        anyhow::bail!("skill name must not be empty");
+    }
+    if name.contains('/') || name.contains('\\') || name == "." || name == ".." {
+        anyhow::bail!("invalid skill name: {name}");
+    }
+    Ok(())
 }
 
 fn path_matches_prefix(path: &Path, prefix: &Path) -> bool {

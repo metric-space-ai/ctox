@@ -31,15 +31,7 @@ This skill uses the shared CTOX knowledge store via `skill_key=ops_insight`.
 
 ## Operating Model
 
-Preferred helper scripts under `scripts/`:
-
-- `ops_collect.py`
-- `ops_capture_run.py`
-- `ops_store.py`
-- `ops_query.py`
-- `ops_bootstrap.py`
-
-These are open helper resources.
+Use CTOX CLI/API commands as the execution boundary. Do not execute embedded `scripts/` helpers from this system skill; if an ops-insight operation lacks a CTOX command, add that command before relying on it.
 
 ## Tool Contracts
 
@@ -96,6 +88,5 @@ Do not finish the reply until all of the following are true:
 
 ## Resources
 
-- [references/helper-scripts.md](references/helper-scripts.md)
 - [references/ops-reporting.md](references/ops-reporting.md)
 - [references/insight-rules.md](references/insight-rules.md)

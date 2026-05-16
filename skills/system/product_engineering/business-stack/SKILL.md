@@ -121,12 +121,10 @@ synthetic.
 
 ## Installation Pattern
 
-Create the business stack as a separate Git repo with the bundled installer:
+Create the business stack as a separate Git repo with the CTOX CLI:
 
 ```sh
-python3 skills/system/product_engineering/business-stack/scripts/install_business_stack.py \
-  --target <target-dir> \
-  --init-git
+ctox business-os install --target <target-dir> --init-git
 ```
 
 Use `--dry-run` first when the target is unclear. The installer refuses to
@@ -150,14 +148,13 @@ Those commands may suggest installing or updating the business stack, but the
 business repository is created and changed only through an explicit business
 stack action.
 
-Verify the installer itself from the CTOX core repo with:
+Verify install state with:
 
 ```sh
-python3 skills/system/product_engineering/business-stack/scripts/test_install_business_stack.py
+ctox business-os status
 ```
 
-The smoke test covers dry-run behavior, non-empty target rejection, excluded
-build artifacts, manifest ownership, `.env` creation, and `--init-git`.
+Do not execute embedded installer scripts from this system skill. If installation behavior needs to change, patch the CTOX `business-os` CLI path and verify through the normal Rust checks.
 
 ## Public Entry Contract
 

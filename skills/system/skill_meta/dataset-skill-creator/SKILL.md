@@ -75,36 +75,24 @@ The generated skill must tell CTOX:
 5. Validate the generated skill.
    Run the validator and inspect whether the generated skill would actually help another CTOX instance perform the job.
 
-## Scripts
+## Commands
 
-Generate a new dataset-backed skill from an analysis bundle:
-
-```bash
-python3 skills/system/skill_meta/dataset-skill-creator/scripts/create_dataset_skill.py \
-  --skill-name <skill-name> \
-  --skill-path <output-root> \
-  --archetype <operating-model|lookup-reference|workflow|policy-gate> \
-  --dataset-label "<human dataset label>" \
-  --goal "<what the generated skill should help CTOX do>" \
-  --analysis-dir <path> \
-  --query-command "<optional query or helper command>"
-```
-
-Run the full raw-dataset pipeline when CTOX should first analyze the dataset and then synthesize the skill:
+Create or update the file-backed user skill through CTOX:
 
 ```bash
-python3 skills/system/skill_meta/dataset-skill-creator/scripts/bootstrap_dataset_skill.py \
-  --input <dataset.xlsx|csv|json> \
-  --source-kind <ticket-history> \
-  --skill-name <skill-name> \
-  --skill-path <output-root> \
-  --archetype <operating-model|lookup-reference|workflow|policy-gate> \
-  --dataset-label "<human dataset label>" \
-  --goal "<what the generated skill should help CTOX do>" \
-  --analysis-dir <path>
+ctox skills user create --name <skill-name> --description "<short purpose>" --body "<skill instructions>"
+ctox skills user update --name <skill-name> --description "<short purpose>" --body "<skill instructions>"
 ```
 
-For operating-model ticket datasets, `--openai-model gpt-5.4-nano` may be added to refine the strongest family playbooks before promotion.
+For ticket-history operating models, build and import the durable knowledge through the ticket CLI:
+
+```bash
+ctox ticket history-export --system <system> --output <path>
+ctox ticket knowledge-bootstrap --system <system>
+ctox ticket source-skill-import-bundle --system <system> --bundle-dir <dir>
+```
+
+Do not execute embedded dataset-skill helper scripts from this system skill. If the dataset-to-skill transform needs automation beyond these commands, add a CTOX CLI/API command first.
 
 ## Guardrails
 

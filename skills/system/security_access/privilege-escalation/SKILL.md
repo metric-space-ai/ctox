@@ -30,11 +30,7 @@ Treat this skill as:
 2. local sudo secret reference lookup
 3. visible privileged execution through an inspectable helper
 
-Preferred helper script under `scripts/`:
-
-- `ctox_sudo.py`
-
-The helper is open and inspectable. Read or patch it when the host shape is unusual.
+Use explicit CTOX CLI/API paths for privileged execution. Do not execute embedded `scripts/` helpers from this system skill; if a privileged operation lacks an audited CTOX command, leave the task blocked and add that command first.
 
 ## Workflow
 
@@ -47,7 +43,7 @@ The helper is open and inspectable. Read or patch it when the host shape is unus
 3. Prefer non-privileged execution paths first.
 4. If privilege is required, check the local secret reference:
    - `runtime/secrets/ctox-sudo.env`
-5. Use the helper instead of ad-hoc hidden `sudo -S` calls.
+5. Use an audited CTOX command instead of ad-hoc hidden `sudo -S` calls.
 6. Persist the blocker if no valid non-interactive sudo path exists or the requester lacks sudo authority.
 
 ## Guardrails
@@ -56,9 +52,8 @@ The helper is open and inspectable. Read or patch it when the host shape is unus
 - Do not print the sudo password in operator-facing output.
 - Do not ask the owner for a sudo password repeatedly if a local secret reference already exists.
 - Do not treat a mail sender without sudo authority as sufficient approval for privileged work.
-- If the helper or secret reference is missing, say that exactly and leave the task `blocked`.
+- If the audited command path or secret reference is missing, say that exactly and leave the task `blocked`.
 
 ## Resources
 
 - [references/sudo-rules.md](references/sudo-rules.md)
-- [scripts/ctox_sudo.py](scripts/ctox_sudo.py)

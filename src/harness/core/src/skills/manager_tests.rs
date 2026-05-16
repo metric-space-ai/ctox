@@ -197,6 +197,59 @@ async fn skills_for_config_excludes_bundled_skills_when_disabled_in_config() {
 }
 
 #[tokio::test]
+async fn skills_for_config_cache_distinguishes_bundled_skill_setting() {
+    let codex_home = tempfile::tempdir().expect("tempdir");
+    let cwd = tempfile::tempdir().expect("tempdir");
+
+    let config_enabled = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .harness_overrides(ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        })
+        .build()
+        .await
+        .expect("load default config");
+
+    let plugins_manager = Arc::new(PluginsManager::new(codex_home.path().to_path_buf()));
+    let skills_manager = SkillsManager::new(codex_home.path().to_path_buf(), plugins_manager, true);
+
+    let enabled_outcome = skills_manager.skills_for_config(&config_enabled);
+    assert!(
+        enabled_outcome
+            .skills
+            .iter()
+            .any(|skill| skill.scope == SkillScope::System),
+        "expected default config to load SQLite-backed system skills"
+    );
+
+    fs::write(
+        codex_home.path().join(crate::config::CONFIG_TOML_FILE),
+        "[skills.bundled]\nenabled = false\n",
+    )
+    .expect("write disabled bundled config");
+
+    let config_disabled = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .harness_overrides(ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        })
+        .build()
+        .await
+        .expect("load disabled config");
+
+    let disabled_outcome = skills_manager.skills_for_config(&config_disabled);
+    assert!(
+        disabled_outcome
+            .skills
+            .iter()
+            .all(|skill| skill.scope != SkillScope::System),
+        "disabled bundled config must not reuse a cached system-skill outcome"
+    );
+}
+
+#[tokio::test]
 async fn skills_for_config_excludes_all_skills_when_disabled_in_config() {
     let codex_home = tempfile::tempdir().expect("tempdir");
     let cwd = tempfile::tempdir().expect("tempdir");

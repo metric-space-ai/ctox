@@ -12,7 +12,6 @@ use crate::skills::model::SkillManagedNetworkOverride;
 use crate::skills::model::SkillMetadata;
 use crate::skills::model::SkillPolicy;
 use crate::skills::model::SkillToolDependency;
-use crate::skills::system::system_cache_root_dir;
 use ctox_app_server_protocol::ConfigLayerSource;
 use ctox_protocol::models::FileSystemPermissions;
 use ctox_protocol::models::MacOsSeatbeltProfileExtensions;
@@ -278,12 +277,8 @@ fn skill_roots_from_layer_stack_inner(
                     });
                 }
 
-                // Embedded system skills are cached under `$CODEX_HOME/skills/.system` and are a
-                // special case (not a config layer).
-                roots.push(SkillRoot {
-                    path: system_cache_root_dir(config_folder.as_path()),
-                    scope: SkillScope::System,
-                });
+                // CTOX system skills are loaded from the managed SQLite skill
+                // store, not from `$CODEX_HOME/skills/.system`.
             }
             ConfigLayerSource::System { .. } => {
                 // The system config layer lives under `/etc/codex/` on Unix, so treat

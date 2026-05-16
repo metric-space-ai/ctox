@@ -145,6 +145,7 @@ CAPABILITIES / WEB STACK
   ctox scrape <subcmd>           scraping and extraction helpers
   ctox doc <subcmd>              document stack helpers
   ctox verification <subcmd>     verification records and evidence checks
+  ctox skills <subcmd>           system/user skill catalog and pack management
 
 GOVERNANCE / MISSION
   ctox service --foreground      run the daemon loop in the foreground
@@ -499,6 +500,7 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
         Some("report") => report::cli::handle_command(&root, &args[1..]),
         Some("scrape") => scrape::handle_scrape_command(&root, &args[1..]),
         Some("secret") => secrets::handle_secret_command(&root, &args[1..]),
+        Some("skills") => handle_skills_command(&root, &args[1..]),
         Some("schedule") => schedule::handle_schedule_command(&root, &args[1..]),
         Some("strategy") => strategy::handle_strategy_command(&root, &args[1..]),
         Some("ticket") => tickets::handle_ticket_command(&root, &args[1..]),
@@ -1004,6 +1006,232 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
 }
 
 const CHAT_USAGE: &str = "usage: ctox chat \"<instruction>\" [--thread-key <key>] [--workspace <path>] [--wait] [--timeout-secs <n>] [--atif-out <path>] [--to <addr> ...] [--cc <addr> ...] [--subject <text>] [--attach-file <path> ...]";
+
+const SKILLS_USAGE: &str = "usage:
+  ctox skills system list
+  ctox skills system show <name> [--body]
+  ctox skills system diff
+  ctox skills system migrate
+  ctox skills system export <name> --target <dir>
+  ctox skills packs list
+  ctox skills packs install <name>
+  ctox skills user list
+  ctox skills user path
+  ctox skills user create --name <name> --description <text> [--body <text>] [--overwrite]
+  ctox skills user update --name <name> --description <text> [--body <text>] [--overwrite]";
+
+fn handle_skills_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
+    match args.first().map(String::as_str) {
+        Some("system") => handle_system_skills_command(root, &args[1..]),
+        Some("packs") => handle_skill_packs_command(root, &args[1..]),
+        Some("user") => handle_user_skills_command(root, &args[1..]),
+        Some("list") => {
+            let system = skill_store::list_system_skill_bundles(root)?;
+            let user = skill_store::list_user_skill_bundles(root)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "ok": true,
+                    "system_count": system.len(),
+                    "user_count": user.len(),
+                    "system": system,
+                    "user": user
+                }))?
+            );
+            Ok(())
+        }
+        Some("--help") | Some("-h") | None => {
+            println!("{SKILLS_USAGE}");
+            Ok(())
+        }
+        Some(other) => anyhow::bail!("unknown skills subcommand `{other}`\n{SKILLS_USAGE}"),
+    }
+}
+
+fn handle_system_skills_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
+    match args.first().map(String::as_str) {
+        Some("list") => {
+            let skills = skill_store::list_system_skill_bundles(root)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "ok": true,
+                    "count": skills.len(),
+                    "skills": skills
+                }))?
+            );
+            Ok(())
+        }
+        Some("show") => {
+            let name = args
+                .get(1)
+                .context("usage: ctox skills system show <name> [--body]")?;
+            skill_store::bootstrap_embedded_system_skills(root)?;
+            let skills = skill_store::list_system_skill_bundles(root)?;
+            let skill = skills
+                .into_iter()
+                .find(|skill| skill.skill_name == *name || skill.skill_id == *name)
+                .with_context(|| format!("system skill not found: {name}"))?;
+            let include_body = args.iter().any(|arg| arg == "--body");
+            let body = if include_body {
+                skill_store::load_skill_body_by_name(root, &skill.skill_name)?
+            } else {
+                None
+            };
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "ok": true,
+                    "skill": skill,
+                    "body": body
+                }))?
+            );
+            Ok(())
+        }
+        Some("diff") => {
+            let diff = skill_store::diff_embedded_system_skills(root)?;
+            let changed = diff
+                .iter()
+                .filter(|item| item.status != "unchanged")
+                .count();
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "ok": changed == 0,
+                    "changed_count": changed,
+                    "count": diff.len(),
+                    "diff": diff
+                }))?
+            );
+            Ok(())
+        }
+        Some("migrate") => {
+            let report = skill_store::migrate_skill_store(root)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "ok": true,
+                    "migration": report
+                }))?
+            );
+            Ok(())
+        }
+        Some("export") => {
+            let name = args
+                .get(1)
+                .context("usage: ctox skills system export <name> --target <dir>")?;
+            let target = find_flag_value(args, "--target")
+                .map(PathBuf::from)
+                .context("usage: ctox skills system export <name> --target <dir>")?;
+            let path = skill_store::export_system_skill(root, name, &target)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "ok": true,
+                    "path": path
+                }))?
+            );
+            Ok(())
+        }
+        Some("--help") | Some("-h") | None => {
+            println!("{SKILLS_USAGE}");
+            Ok(())
+        }
+        Some(other) => anyhow::bail!("unknown skills system subcommand `{other}`\n{SKILLS_USAGE}"),
+    }
+}
+
+fn handle_skill_packs_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
+    match args.first().map(String::as_str) {
+        Some("list") => {
+            let packs = skill_store::source_pack_names(root)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "ok": true,
+                    "count": packs.len(),
+                    "packs": packs
+                }))?
+            );
+            Ok(())
+        }
+        Some("install") => {
+            let name = args
+                .get(1)
+                .context("usage: ctox skills packs install <name>")?;
+            let path = skill_store::install_source_pack(root, name)?;
+            skill_store::bootstrap_from_roots(root)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "ok": true,
+                    "name": name,
+                    "path": path
+                }))?
+            );
+            Ok(())
+        }
+        Some("--help") | Some("-h") | None => {
+            println!("{SKILLS_USAGE}");
+            Ok(())
+        }
+        Some(other) => anyhow::bail!("unknown skills packs subcommand `{other}`\n{SKILLS_USAGE}"),
+    }
+}
+
+fn handle_user_skills_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
+    match args.first().map(String::as_str) {
+        Some("list") => {
+            let skills = skill_store::list_user_skill_bundles(root)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "ok": true,
+                    "count": skills.len(),
+                    "skills": skills
+                }))?
+            );
+            Ok(())
+        }
+        Some("path") => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "ok": true,
+                    "codex_home_skills": skill_store::codex_home_skills_root(),
+                    "runtime_skills": skill_store::runtime_user_skill_root(root)
+                }))?
+            );
+            Ok(())
+        }
+        Some("create") | Some("update") => {
+            let name = find_flag_value(args, "--name")
+                .context("usage: ctox skills user create --name <name> --description <text> [--body <text>] [--overwrite]")?;
+            let description = find_flag_value(args, "--description").unwrap_or("User skill");
+            let body = find_flag_value(args, "--body")
+                .unwrap_or("# Instructions\n\nAdd workflow-specific instructions here.");
+            let overwrite = args.iter().any(|arg| arg == "--overwrite")
+                || args.first().map(String::as_str) == Some("update");
+            let path =
+                skill_store::create_or_update_user_skill(name, description, body, overwrite)?;
+            skill_store::bootstrap_from_roots(root)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "ok": true,
+                    "name": name,
+                    "path": path
+                }))?
+            );
+            Ok(())
+        }
+        Some("--help") | Some("-h") | None => {
+            println!("{SKILLS_USAGE}");
+            Ok(())
+        }
+        Some(other) => anyhow::bail!("unknown skills user subcommand `{other}`\n{SKILLS_USAGE}"),
+    }
+}
 
 fn handle_chat(root: &Path, args: &[String]) -> anyhow::Result<()> {
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {

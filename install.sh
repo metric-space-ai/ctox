@@ -837,9 +837,9 @@ sync_skills_to_codex_home() {
   mkdir -p "$target"
 
   # System skills are embedded into the ctox binary via include_dir! and
-  # registered into SQLite + materialized to $CODEX_HOME/skills/.system/ at
-  # service start by install_system_skills() in src/harness/core/. We do
-  # not copy them here — the Rust path is the source of truth.
+  # registered into SQLite at runtime. They are intentionally not copied or
+  # materialized under $CODEX_HOME/skills/.system; the Rust/SQLite path is the
+  # source of truth.
 
   # Packs in the repo are organized into category subfolders (deploy/,
   # development/, content/, etc.) for clarity; in CODEX_HOME they remain

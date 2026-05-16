@@ -30,15 +30,7 @@ This skill uses the shared CTOX knowledge store via `skill_key=security_posture`
 
 ## Operating Model
 
-Preferred helper scripts under `scripts/`:
-
-- `security_collect.py`
-- `security_capture_run.py`
-- `security_store.py`
-- `security_query.py`
-- `security_bootstrap.py`
-
-These scripts are open helper resources. Read them before relying on them in a tricky case.
+Use CTOX CLI/API commands as the execution boundary. Do not execute embedded `scripts/` helpers from this system skill; if posture capture or persistence lacks a CTOX command, add that command before relying on it.
 
 ## Tool Contracts
 

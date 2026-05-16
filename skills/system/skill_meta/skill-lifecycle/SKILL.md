@@ -58,19 +58,9 @@ This skill exists so that skill growth does not become "some folder changed on d
 4. Append the transition to `contracts/history/skill-lifecycle-ledger.md`.
 5. If the state is `promoted`, ensure the owner-facing report is aligned with `self-improving-review`.
 
-## Helper
+## Recording Path
 
-Prefer the open helper:
-
-```sh
-python3 skills/system/skill_meta/skill-lifecycle/scripts/record_skill_lifecycle.py \
-  --ledger contracts/history/skill-lifecycle-ledger.md \
-  --skill "<skill-name>" \
-  --from-state "<old-state>" \
-  --to-state "<new-state>" \
-  --reason "<why this changed>" \
-  --evidence "<what validation supports it>"
-```
+Update `contracts/history/skill-lifecycle-ledger.md` directly in the same structured format. Do not execute embedded helper scripts from this system skill; if lifecycle recording needs automation, add an explicit `ctox skills ...` command first.
 
 ## References
 

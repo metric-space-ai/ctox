@@ -74,21 +74,9 @@ Gather these before concluding the review:
    - what concrete evidence says it now works better
    - what is now safer, clearer, or more capable than before
 
-## Documentation Helper
+## Documentation Path
 
-Prefer the open helper:
-
-```sh
-python3 skills/system/skill_meta/self-improving-review/scripts/record_skill_review.py \
-  --ledger contracts/history/skill-improvement-ledger.md \
-  --status successful \
-  --summary "<what changed>" \
-  --goal "<why the refinement existed>" \
-  --evidence "<validation evidence>" \
-  --skills "<comma-separated skills>"
-```
-
-If the helper does not fit, update the ledger manually in the same structured format.
+Update `contracts/history/skill-improvement-ledger.md` directly in the same structured format. Do not execute embedded helper scripts from this system skill; if this needs to become an automated mutation, add an explicit `ctox skills ...` command first.
 
 ## Owner Report Contract
 
