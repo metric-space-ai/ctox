@@ -11,6 +11,7 @@ pub(crate) mod runtime_config;
 pub mod scholarly_search;
 pub mod sources;
 pub mod surface;
+pub mod unlock;
 pub mod web_search;
 
 pub use browser::handle_browser_command;
@@ -35,6 +36,7 @@ pub use scholarly_search::ANNAS_ARCHIVE_SORT_VALUES;
 pub use scholarly_search::UNPAYWALL_DEFAULT_BASE_URL;
 pub use surface::handle_web_command;
 pub use surface::WebScrapeRequest;
+pub use unlock::handle_unlock_command;
 pub use web_search::augment_responses_request;
 pub use web_search::execute_canonical_web_search;
 pub use web_search::run_ctox_web_read_tool;

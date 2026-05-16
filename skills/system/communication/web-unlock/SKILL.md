@@ -43,20 +43,52 @@ Plus a behavioral layer for `humanlike.mjs` (mouse/keyboard/scroll) available as
 
 See `references/patch-locations.md` for line-level pointers.
 
+## Central registry — SQLite-backed `ctox web unlock` CLI
+
+All probe configuration, vector knowledge, and test-run history is persisted in the consolidated runtime database (`runtime/ctox.sqlite3`) under four tables:
+
+| Table | Purpose |
+|---|---|
+| `web_unlock_probes` | Registered detection-site probes (id, url, script path, parser, timeout, enabled) |
+| `web_unlock_vectors` | Known detection vectors with their fix-strategy, status (working/broken/untested), and last-verified timestamp |
+| `web_unlock_test_runs` | Append-only history of every recorded run (probe_id, executed_at, duration, pass/fail, failed tests) |
+| `web_unlock_repairs` | Recorded repair attempts (reserved for future auto-repair workflow) |
+
+Schema and seed are written on first use. The seed lives at `tools/web-stack/assets/web_unlock_seed.json` and is embedded into the `ctox` binary via `include_str!`. To extend or override the seed, edit that JSON file and rebuild.
+
+### CLI surface
+
+```sh
+ctox web unlock list-probes
+ctox web unlock list-vectors [<probe_id>]
+ctox web unlock baseline [<probe_id>] [--record]
+ctox web unlock history [<probe_id>] [--limit N]
+ctox web unlock add-vector --id <vid> --probe <pid> --test <name> \
+    --desc <text> --fix <text> [--predicate <js>] [--patch-files <a,b>]
+ctox web unlock set-vector-status --id <vid> --status <working|broken|untested>
+```
+
+`baseline` returns structured JSON with one entry per probe (`passed_baseline`, `failed_tests`, `duration_ms`, `notes`). Exit code is non-zero if any probe regressed — directly usable in maintenance loops and pre-commit checks. `--record` persists each run to `web_unlock_test_runs` for trend analysis.
+
+`add-vector` and `set-vector-status` let the agent grow the knowledge base from inside its own loop: when a new probe-failure is diagnosed, the fix path includes registering the vector so future regressions can be looked up.
+
 ## Diagnostic workflow
 
 ### Step 1 — Baseline probe
 
-Before changing anything, run the four canonical probes and compare against the recorded baseline. They live in `agents/probe-scripts/`. Run each:
+Run the full suite and compare against the registered baseline:
 
 ```sh
-ctox web browser-automation --script-file skills/system/communication/web-unlock/agents/probe-scripts/sannysoft.js --timeout-ms 60000
-ctox web browser-automation --script-file skills/system/communication/web-unlock/agents/probe-scripts/areyouheadless.js --timeout-ms 60000
-ctox web browser-automation --script-file skills/system/communication/web-unlock/agents/probe-scripts/incolumitas.js --timeout-ms 120000
-ctox web browser-automation --script-file skills/system/communication/web-unlock/agents/probe-scripts/creepjs.js --timeout-ms 90000
+ctox web unlock baseline --record
 ```
 
-Compare against `references/test-baseline.md`. Any test that flipped from OK to FAIL is the unlock target.
+Non-zero exit means at least one probe regressed. The JSON output names the failing probe(s) and the specific test names that flipped. Persisted to `web_unlock_test_runs` for the history view.
+
+For a faster targeted run (one probe only):
+
+```sh
+ctox web unlock baseline sannysoft --record
+```
 
 ### Step 2 — Locate the failing detection in the site's source
 
@@ -134,16 +166,31 @@ Then push to main:
 git push origin main
 ```
 
-### Step 8 — Update knowledge artifacts
+### Step 8 — Update knowledge artifacts (CLI-first, markdown as commentary)
 
-If the vector is **new** (not already in `references/detection-vectors.md`):
-- Append a new entry to `references/detection-vectors.md` with: site, test name, what it probes, the fix recipe, file/line of the patch
-- Update `references/test-baseline.md` with the new score-row including this fix
+If the vector is **new** (not yet in the SQLite registry):
 
-If the vector is **known** but the recipe needed adjustment:
-- Update the entry in `references/detection-vectors.md` with the new recipe
+```sh
+ctox web unlock add-vector \
+  --id <slug-new-vector> \
+  --probe <probe_id> \
+  --test "<exact test name as the site reports it>" \
+  --desc "<one sentence: what the site probes>" \
+  --predicate "<js expression, optional>" \
+  --fix "<one-line recipe>" \
+  --patch-files "tools/web-stack/assets/stealth_init.js,..."
+ctox web unlock set-vector-status --id <slug-new-vector> --status working
+```
 
-This is what makes the next regression easier — the skill accumulates working knowledge over time.
+If the vector is **known** but the recipe needed adjustment, edit the seed JSON at `tools/web-stack/assets/web_unlock_seed.json` and rebuild — or update via `add-vector` (it does INSERT OR REPLACE) and adjust the seed in a follow-up.
+
+The `references/detection-vectors.md` markdown stays as human-readable commentary and onboarding aid, but the SQLite registry is the **authoritative** source going forward. Use `ctox web unlock list-vectors` to query the live state. After verifying that the fix sticks, run:
+
+```sh
+ctox web unlock baseline --record
+```
+
+so the green run is logged in `web_unlock_test_runs` and `list-probes` shows the updated `last_run` block.
 
 ## Hard guardrails
 
@@ -194,11 +241,22 @@ This pattern — read the source, find the exact predicate, patch precisely — 
 
 ## Files and references
 
-- `references/detection-vectors.md` — vector lookup table (site, test, probe, fix recipe, patch location)
+**Source-of-truth (SQLite + seed):**
+
+- `runtime/ctox.sqlite3` tables `web_unlock_probes`, `web_unlock_vectors`, `web_unlock_test_runs`, `web_unlock_repairs` — runtime state, queryable via `ctox web unlock`
+- `tools/web-stack/assets/web_unlock_seed.json` — embedded into the binary, populates an empty registry on first use; edit + rebuild to extend defaults
+- `tools/web-stack/src/unlock.rs` — Rust module implementing schema, seed, queries, baseline runner, history
+
+**Markdown (commentary and onboarding):**
+
+- `references/detection-vectors.md` — human-readable vector commentary mirroring the SQLite contents
 - `references/patch-locations.md` — CTOX code-location map for each stealth layer
 - `references/test-baseline.md` — current known-good test pass/fail matrix
+
+**Probe scripts (used by `ctox web unlock baseline`):**
+
 - `agents/probe-scripts/sannysoft.js` — extracts the two test tables
 - `agents/probe-scripts/areyouheadless.js` — extracts the "You are…" verdict
 - `agents/probe-scripts/creepjs.js` — extracts headless score and trust hash
 - `agents/probe-scripts/incolumitas.js` — extracts all `<pre>` test result blocks
-- `agents/probe-scripts/dump_external_scripts.js` — lists external `<script src=>` URLs of a detection page
+- `agents/probe-scripts/dump_external_scripts.js` — lists external `<script src=>` URLs of a detection page (used in Step 2 to find the failing predicate)

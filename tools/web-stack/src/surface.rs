@@ -16,12 +16,12 @@ use crate::deep_research::DeepResearchDepth;
 use crate::deep_research::DeepResearchRequest;
 use crate::person_research::run_ctox_person_research_tool;
 use crate::person_research::PersonResearchRequest;
-use crate::sources::Country as SourceCountry;
-use crate::sources::FieldKey as SourceFieldKey;
-use crate::sources::ResearchMode as SourceResearchMode;
 use crate::scholarly_search::run_ctox_scholarly_search_tool;
 use crate::scholarly_search::ScholarlySearchProvider;
 use crate::scholarly_search::ScholarlySearchRequest;
+use crate::sources::Country as SourceCountry;
+use crate::sources::FieldKey as SourceFieldKey;
+use crate::sources::ResearchMode as SourceResearchMode;
 use crate::web_search::run_ctox_web_read_tool;
 use crate::web_search::run_ctox_web_search_tool;
 use crate::web_search::CanonicalWebSearchRequest;
@@ -311,6 +311,7 @@ pub fn handle_web_command(
             )?;
             print_json(&payload)
         }
+        "unlock" => crate::unlock::handle_unlock_command(root, &args[1..]),
         _ => anyhow::bail!("{}", web_usage()),
     }
 }
@@ -319,14 +320,14 @@ fn handle_sources_command(args: &[String]) -> Result<()> {
     use crate::sources;
     let action = args.first().map(String::as_str).unwrap_or("");
     if matches!(action, "" | "help" | "-h" | "--help" | "list") {
-        let country_filter = find_flag_value(args, "--country")
-            .and_then(|raw| sources::Country::from_iso(raw));
+        let country_filter =
+            find_flag_value(args, "--country").and_then(|raw| sources::Country::from_iso(raw));
         let tier_filter: Vec<String> = find_flag_values(args, "--tier")
             .into_iter()
             .map(|s| s.trim().to_ascii_uppercase())
             .collect();
-        let field_filter = find_flag_value(args, "--field")
-            .and_then(|raw| sources::FieldKey::from_str(raw));
+        let field_filter =
+            find_flag_value(args, "--field").and_then(|raw| sources::FieldKey::from_str(raw));
         let mut entries: Vec<Value> = Vec::new();
         for module in sources::list() {
             if let Some(c) = country_filter {
@@ -380,8 +381,7 @@ fn source_manifest_json(module: &'static dyn crate::sources::SourceModule) -> Va
         Tier::S => "S",
         Tier::C => "C",
     };
-    let countries: Vec<&'static str> =
-        module.countries().iter().map(|c| c.as_iso()).collect();
+    let countries: Vec<&'static str> = module.countries().iter().map(|c| c.as_iso()).collect();
     let fields: Vec<&'static str> = module
         .authoritative_for()
         .iter()
@@ -466,7 +466,7 @@ fn handle_scholarly_command(root: &Path, args: &[String]) -> Result<()> {
 }
 
 fn web_usage() -> &'static str {
-    "usage:\n  ctox web search --query <text> [--domain <host>]... [--source <id>]... [--country <DE|AT|CH>] [--context-size <low|medium|high>] [--cached] [--include-sources]\n  ctox web read --url <url> [--query <text>] [--find <text>]... [--country <DE|AT|CH>]\n  ctox web sources list [--country <DE|AT|CH>] [--tier <P|S|C>]... [--field <field-key>]\n  ctox web sources info --id <source-id>\n  ctox web person-research --company <name> --country <DE|AT|CH> --mode <new_record|update_firm|update_person|update_inventory_general|have_data> [--field <field-key>]... [--include-private <source-id>]... [--workspace <path>] [--no-workspace]\n  ctox web scholarly search --query <text> [--provider <annas_archive>] [--content-type <type>]... [--language <code>]... [--ext <pdf|epub|...>]... [--sort <newest|oldest|largest|smallest|newest_added|oldest_added|random>] [--max-results <n>] [--page <n>] [--with-oa-pdf] [--only-doi]\n  ctox web deep-research --query <text> [--focus <text>] [--depth <quick|standard|exhaustive>] [--max-sources <n>] [--workspace <path>] [--include-annas-archive] [--no-papers] [--no-workspace]\n  ctox web scrape --target-key <key> --mode <latest|semantic> [--query <text>] [--limit <n>]\n  ctox web browser-prepare [--dir <path>] [--install-reference] [--install-browser] [--skip-npm-install]\n  ctox web browser-automation [--dir <path>] [--timeout-ms <n>] [--script-file <path>] < script.js\n  ctox web browser-capture --url <url> [--dir <path>] [--out-dir <path>] [--timeout-ms <n>]"
+    "usage:\n  ctox web search --query <text> [--domain <host>]... [--source <id>]... [--country <DE|AT|CH>] [--context-size <low|medium|high>] [--cached] [--include-sources]\n  ctox web read --url <url> [--query <text>] [--find <text>]... [--country <DE|AT|CH>]\n  ctox web sources list [--country <DE|AT|CH>] [--tier <P|S|C>]... [--field <field-key>]\n  ctox web sources info --id <source-id>\n  ctox web person-research --company <name> --country <DE|AT|CH> --mode <new_record|update_firm|update_person|update_inventory_general|have_data> [--field <field-key>]... [--include-private <source-id>]... [--workspace <path>] [--no-workspace]\n  ctox web scholarly search --query <text> [--provider <annas_archive>] [--content-type <type>]... [--language <code>]... [--ext <pdf|epub|...>]... [--sort <newest|oldest|largest|smallest|newest_added|oldest_added|random>] [--max-results <n>] [--page <n>] [--with-oa-pdf] [--only-doi]\n  ctox web deep-research --query <text> [--focus <text>] [--depth <quick|standard|exhaustive>] [--max-sources <n>] [--workspace <path>] [--include-annas-archive] [--no-papers] [--no-workspace]\n  ctox web scrape --target-key <key> --mode <latest|semantic> [--query <text>] [--limit <n>]\n  ctox web browser-prepare [--dir <path>] [--install-reference] [--install-browser] [--skip-npm-install]\n  ctox web browser-automation [--dir <path>] [--timeout-ms <n>] [--script-file <path>] < script.js\n  ctox web browser-capture --url <url> [--dir <path>] [--out-dir <path>] [--timeout-ms <n>]\n  ctox web unlock <list-probes|list-vectors|baseline|history|add-vector|set-vector-status> [...]"
 }
 
 fn scholarly_usage() -> &'static str {

@@ -1,0 +1,200 @@
+{
+  "schema_version": 1,
+  "probes": [
+    {
+      "probe_id": "sannysoft",
+      "site_name": "bot.sannysoft.com",
+      "probe_url": "https://bot.sannysoft.com/",
+      "script_path": "skills/system/communication/web-unlock/agents/probe-scripts/sannysoft.js",
+      "parser_kind": "sannysoft",
+      "expected_baseline_json": "{\"failed_max\":0}",
+      "timeout_ms": 60000,
+      "enabled": 1
+    },
+    {
+      "probe_id": "areyouheadless",
+      "site_name": "arh.antoinevastel.com",
+      "probe_url": "https://arh.antoinevastel.com/bots/areyouheadless",
+      "script_path": "skills/system/communication/web-unlock/agents/probe-scripts/areyouheadless.js",
+      "parser_kind": "areyouheadless",
+      "expected_baseline_json": "{\"isHeadless\":false}",
+      "timeout_ms": 60000,
+      "enabled": 1
+    },
+    {
+      "probe_id": "incolumitas",
+      "site_name": "bot.incolumitas.com",
+      "probe_url": "https://bot.incolumitas.com/",
+      "script_path": "skills/system/communication/web-unlock/agents/probe-scripts/incolumitas.js",
+      "parser_kind": "incolumitas",
+      "expected_baseline_json": "{\"fails_max\":0,\"worker_warnings_max\":0}",
+      "timeout_ms": 120000,
+      "enabled": 1
+    },
+    {
+      "probe_id": "creepjs",
+      "site_name": "abrahamjuliot.github.io/creepjs",
+      "probe_url": "https://abrahamjuliot.github.io/creepjs/",
+      "script_path": "skills/system/communication/web-unlock/agents/probe-scripts/creepjs.js",
+      "parser_kind": "creepjs",
+      "expected_baseline_json": "{\"ua_leak_forbidden\":true}",
+      "timeout_ms": 90000,
+      "enabled": 1
+    }
+  ],
+  "vectors": [
+    {
+      "vector_id": "headlesschrome-in-ua",
+      "probe_id": "sannysoft",
+      "test_name": "User Agent (Old)",
+      "description": "Default headless Chromium emits UA containing HeadlessChrome/<ver>",
+      "probe_predicate": "/HeadlessChrome/.test(navigator.userAgent)",
+      "fix_strategy": "Set explicit userAgent context option AND --user-agent= Chromium launch arg in both runners (Page+Worker coverage).",
+      "patch_files": ["tools/web-stack/src/browser.rs", "tools/web-stack/assets/google_browser_runner.mjs"]
+    },
+    {
+      "vector_id": "navigator-webdriver-exists",
+      "probe_id": "incolumitas",
+      "test_name": "fpscanner.WEBDRIVER",
+      "description": "fpScanner checks property existence via `'webdriver' in navigator`, not its value",
+      "probe_predicate": "'webdriver' in navigator",
+      "fix_strategy": "delete Navigator.prototype.webdriver and delete navigator.webdriver; fallback to undefined-getter only if delete fails",
+      "patch_files": ["tools/web-stack/assets/stealth_init.js"]
+    },
+    {
+      "vector_id": "plugins-empty-or-fake-shaped",
+      "probe_id": "sannysoft",
+      "test_name": "Plugins Length (Old) / Plugins is of type PluginArray",
+      "description": "Headless reports zero plugins; naive mocks use [1,2,3,4,5] which is itself a tell",
+      "probe_predicate": "navigator.plugins instanceof PluginArray && navigator.plugins.length === 5",
+      "fix_strategy": "Build realistic PluginArray with 5 PDF Viewer plugin family, each Object.create(Plugin.prototype)",
+      "patch_files": ["tools/web-stack/assets/stealth_init.js"]
+    },
+    {
+      "vector_id": "plugins-uint32-overflow",
+      "probe_id": "incolumitas",
+      "test_name": "new-tests.overflowTest",
+      "description": "Probe: navigator.plugins.item(2**32) === navigator.plugins[0]. Real Chrome truncates index to uint32",
+      "probe_predicate": "navigator.plugins.item(4294967296) === navigator.plugins[0]",
+      "fix_strategy": "pluginArray.item = (i) => fakePlugins[i >>> 0] || null (uint32-truncate)",
+      "patch_files": ["tools/web-stack/assets/stealth_init.js"]
+    },
+    {
+      "vector_id": "plugins-refmatch",
+      "probe_id": "incolumitas",
+      "test_name": "new-tests.refMatch",
+      "description": "Probe: navigator.plugins[0][0].enabledPlugin === navigator.plugins[0]",
+      "probe_predicate": "navigator.plugins[0][0].enabledPlugin === navigator.plugins[0]",
+      "fix_strategy": "Each fake MimeType's enabledPlugin getter returns its parent fakePlugin reference",
+      "patch_files": ["tools/web-stack/assets/stealth_init.js"]
+    },
+    {
+      "vector_id": "window-chrome-missing-or-shallow",
+      "probe_id": "sannysoft",
+      "test_name": "Chrome (New) / fpscanner.HEADCHR_CHROME_OBJ",
+      "description": "Real Chrome has chrome.app, chrome.csi, chrome.loadTimes, full chrome.runtime with PlatformOs enums",
+      "probe_predicate": "typeof window.chrome === 'object' && typeof chrome.runtime.PlatformOs === 'object'",
+      "fix_strategy": "Construct full chrome global with all four sub-objects and runtime enums; chrome.runtime.id returns undefined",
+      "patch_files": ["tools/web-stack/assets/stealth_init.js"]
+    },
+    {
+      "vector_id": "permissions-notification-mismatch",
+      "probe_id": "sannysoft",
+      "test_name": "Permissions (New) / fpscanner.HEADCHR_PERMISSIONS",
+      "description": "permissions.query notifications returning denied while Notification.permission is default is a known headless inconsistency",
+      "probe_predicate": "(await navigator.permissions.query({name:'notifications'})).state === 'denied' && Notification.permission === 'default'",
+      "fix_strategy": "Override permissions.query for notifications: return state matching Notification.permission; force Notification.permission to 'default' when denied",
+      "patch_files": ["tools/web-stack/assets/stealth_init.js"]
+    },
+    {
+      "vector_id": "sec-ch-ua-headless-leak",
+      "probe_id": "creepjs",
+      "test_name": "Sec-CH-UA brand list",
+      "description": "Sec-CH-UA HTTP headers and navigator.userAgentData.brands leak HeadlessChrome",
+      "probe_predicate": "navigator.userAgentData.brands[*].brand === 'HeadlessChrome'",
+      "fix_strategy": "Set extraHTTPHeaders for Sec-CH-UA/Mobile/Platform AND mock navigator.userAgentData with Chrome 146 brand triple and getHighEntropyValues",
+      "patch_files": ["tools/web-stack/src/browser.rs", "tools/web-stack/assets/google_browser_runner.mjs", "tools/web-stack/assets/stealth_init.js"]
+    },
+    {
+      "vector_id": "service-worker-ua-leak",
+      "probe_id": "incolumitas",
+      "test_name": "new-tests.inconsistentServiceWorkerNavigatorPropery",
+      "description": "Page-level CDP setUserAgentOverride does NOT reach Service Worker contexts; SW reports HeadlessChrome",
+      "probe_predicate": "serviceWorkerNavigator.userAgent !== pageNavigator.userAgent",
+      "fix_strategy": "Pass --user-agent=<UA> as Chromium launch arg (browser-process-global, covers Workers)",
+      "patch_files": ["tools/web-stack/src/browser.rs", "tools/web-stack/assets/google_browser_runner.mjs"]
+    },
+    {
+      "vector_id": "worker-locale-mismatch",
+      "probe_id": "incolumitas",
+      "test_name": "new-tests.inconsistentWebWorkerNavigatorPropery (locale arm)",
+      "description": "Page locale via CDP override diverges from Worker locale read from OS env",
+      "probe_predicate": "page.language !== worker.language",
+      "fix_strategy": "Derive locale from process.env.LC_ALL || LC_MESSAGES || LANG; set context.locale AND --lang= launch arg; if empty, leave both unset",
+      "patch_files": ["tools/web-stack/src/browser.rs"]
+    },
+    {
+      "vector_id": "connection-rtt-zero",
+      "probe_id": "incolumitas",
+      "test_name": "new-tests.connectionRTT",
+      "description": "Headless reports rtt=0; real Chrome rounds to nearest 25ms with privacy budget",
+      "probe_predicate": "navigator.connection.rtt === 0",
+      "fix_strategy": "Unconditionally mock navigator.connection with rtt=50, downlink=10, effectiveType='4g', type='wifi'",
+      "patch_files": ["tools/web-stack/assets/stealth_init.js"]
+    },
+    {
+      "vector_id": "webgl-swiftshader-leak",
+      "probe_id": "sannysoft",
+      "test_name": "WebGL Vendor / WebGL Renderer",
+      "description": "Headless reports Google SwiftShader as renderer; real Chrome uses platform-mapped ANGLE strings",
+      "probe_predicate": "WebGLRenderingContext.getParameter(37446).includes('SwiftShader')",
+      "fix_strategy": "Patch WebGLRenderingContext.prototype.getParameter (and WebGL2) for UNMASKED_VENDOR_WEBGL (37445) and UNMASKED_RENDERER_WEBGL (37446); map from navigator.platform",
+      "patch_files": ["tools/web-stack/assets/stealth_init.js"]
+    },
+    {
+      "vector_id": "function-tostring-patches-visible",
+      "probe_id": "incolumitas",
+      "test_name": "puppeteerExtraStealthUsed (negative case = OK)",
+      "description": "Anti-bots call Function.prototype.toString on overridden getters and detect non-native bodies",
+      "probe_predicate": "Object.getOwnPropertyDescriptor(Navigator.prototype,'webdriver').get.toString() !== 'function get webdriver() { [native code] }'",
+      "fix_strategy": "Proxy Function.prototype.toString with apply trap; maintain WeakMap of patched fns -> fake native-code strings; asNative(name, fn) helper for every override",
+      "patch_files": ["tools/web-stack/assets/stealth_init.js"]
+    },
+    {
+      "vector_id": "scroll-left-not-clamped",
+      "probe_id": "sannysoft",
+      "test_name": "PHANTOM_OVERFLOW (fpscanner)",
+      "description": "Real Chrome clamps Element.scrollLeft setter to int>=0",
+      "probe_predicate": "(el.scrollLeft = -5, el.scrollLeft) !== 0",
+      "fix_strategy": "Override Element.prototype.scrollLeft setter to Math.max(0, Math.floor(value))",
+      "patch_files": ["tools/web-stack/assets/stealth_init.js"]
+    },
+    {
+      "vector_id": "hardware-concurrency-too-low",
+      "probe_id": "sannysoft",
+      "test_name": "fpscanner.CHR_MEMORY",
+      "description": "Headless containers often report hardwareConcurrency=1; real devices have 4+",
+      "probe_predicate": "navigator.hardwareConcurrency < 4",
+      "fix_strategy": "Override Navigator.prototype.hardwareConcurrency getter to 8 when value < 4",
+      "patch_files": ["tools/web-stack/assets/stealth_init.js"]
+    },
+    {
+      "vector_id": "outer-dims-zero",
+      "probe_id": "sannysoft",
+      "test_name": "fpscanner.PHANTOM_WINDOW_HEIGHT",
+      "description": "Headless reports outerHeight=outerWidth=0; real Chrome reports inner + browser-chrome",
+      "probe_predicate": "window.outerHeight === 0 || window.outerWidth === 0",
+      "fix_strategy": "When 0, override window.outerHeight to innerHeight+85, outerWidth to innerWidth",
+      "patch_files": ["tools/web-stack/assets/stealth_init.js"]
+    },
+    {
+      "vector_id": "iframe-chrome-missing",
+      "probe_id": "sannysoft",
+      "test_name": "fpscanner.HEADCHR_IFRAME",
+      "description": "about:blank iframe.contentWindow.chrome is missing when only top-level was patched",
+      "probe_predicate": "iframe.contentWindow.chrome === undefined",
+      "fix_strategy": "Override HTMLIFrameElement.prototype.contentWindow getter to propagate window.chrome",
+      "patch_files": ["tools/web-stack/assets/stealth_init.js"]
+    }
+  ]
+}
