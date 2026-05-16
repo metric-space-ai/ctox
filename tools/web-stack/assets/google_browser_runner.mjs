@@ -22,6 +22,7 @@
 
 import { chromium } from 'patchright';
 import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 const STEALTH_LAUNCH_ARGS = [
   '--disable-blink-features=AutomationControlled',
@@ -41,21 +42,10 @@ const STEALTH_LAUNCH_ARGS = [
   '--mute-audio',
 ];
 
-const STEALTH_INIT_SCRIPT = () => {
-  Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-  Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
-  Object.defineProperty(navigator, 'languages', { get: () => ['de-DE', 'de', 'en-US', 'en'] });
-  // @ts-ignore
-  window.chrome = { runtime: {}, loadTimes: () => {}, csi: () => {}, app: {} };
-  if (typeof WebGLRenderingContext !== 'undefined') {
-    const orig = WebGLRenderingContext.prototype.getParameter;
-    WebGLRenderingContext.prototype.getParameter = function (p) {
-      if (p === 37445) return 'Intel Inc.';
-      if (p === 37446) return 'Intel Iris OpenGL Engine';
-      return orig.call(this, p);
-    };
-  }
-};
+// JS-property evasions live in a sibling stealth_init.js, loaded below via
+// addInitScript({ path }). Patchright handles the structural CDP leaks;
+// stealth_init.js handles the userland navigator/window/WebGL surface.
+const STEALTH_INIT_PATH = new URL('./stealth_init.js', import.meta.url);
 
 async function dismissConsent(page, log) {
   const selectors = [
@@ -181,7 +171,7 @@ function defaultUserAgent() {
     javaScriptEnabled: true,
   });
 
-  await ctx.addInitScript(`(${STEALTH_INIT_SCRIPT.toString()})()`);
+  await ctx.addInitScript({ path: fileURLToPath(STEALTH_INIT_PATH) });
 
   const page = await ctx.newPage();
   const outcome = {

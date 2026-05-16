@@ -28,6 +28,17 @@ been retired.
   CloakHQ). Only the wrapper algorithms are ported; the patched-Chromium
   binary is not used and not redistributed.
 
+- tools/web-stack/assets/stealth_init.js
+  JS-property evasions (navigator.webdriver proxy, realistic plugins/
+  mimeTypes shaped like real Chrome 2024+, window.chrome runtime/csi/
+  loadTimes, permissions.query notification consistency, WebGL
+  UNMASKED_VENDOR/RENDERER platform mapping, iframe.contentWindow
+  propagation, hardware concurrency, languages, outer dimensions, plus
+  Function.prototype.toString patching) are ported from the open-source
+  evasions in
+  https://github.com/berstend/puppeteer-extra/tree/master/packages/puppeteer-extra-plugin-stealth
+  (MIT, Copyright berstend and contributors).
+
 - runtime/browser/interactive-reference/ (operator workspace)
   CTOX drives Chromium through Patchright
   (https://github.com/Kaliiiiiiiiii-Vinyzu/patchright-nodejs, Apache 2.0),
