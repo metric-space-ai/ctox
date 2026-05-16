@@ -43,15 +43,27 @@
   }
 
   // ──────────────────────────────────────────────────────────────────────
-  // navigator.webdriver — proxy delete
+  // navigator.webdriver — fpscanner WEBDRIVER probes `'webdriver' in
+  // navigator`, not the value. Real Chrome (no --enable-automation) has
+  // no webdriver property at all; just returning undefined keeps the
+  // property in place. Delete it entirely; fall back to undefined getter
+  // if the descriptor turns out to be non-configurable.
   // ──────────────────────────────────────────────────────────────────────
   try {
-    Object.defineProperty(Navigator.prototype, 'webdriver', {
-      get: asNative('get webdriver', () => undefined),
-      set: () => {},
-      configurable: true,
-    });
+    delete Navigator.prototype.webdriver;
   } catch {}
+  try {
+    delete navigator.webdriver;
+  } catch {}
+  if ('webdriver' in navigator) {
+    try {
+      Object.defineProperty(Navigator.prototype, 'webdriver', {
+        get: asNative('get webdriver', () => undefined),
+        set: () => {},
+        configurable: true,
+      });
+    } catch {}
+  }
 
   // ──────────────────────────────────────────────────────────────────────
   // window.chrome — runtime/csi/loadTimes/app shaped like real Chrome
