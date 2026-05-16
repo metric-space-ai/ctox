@@ -1784,17 +1784,17 @@ fn google_search(
     query: &SearchQuery,
 ) -> Result<SearchResponse> {
     let reference_dir = root.join(crate::browser::DEFAULT_REFERENCE_RELATIVE_DIR);
-    if !reference_dir.join("node_modules/playwright").is_dir() {
+    if !reference_dir.join("node_modules/patchright").is_dir() {
         bail!(
-            "playwright_google requires Playwright in {}. Run `ctox web browser-prepare --install-reference --install-browser` first.",
+            "google browser provider requires Patchright in {}. Run `ctox web browser-prepare --install-reference --install-browser` first.",
             reference_dir.display()
         );
     }
     let node_path = crate::browser::find_command_on_path("node")
-        .context("playwright_google requires node on PATH")?;
+        .context("google browser provider requires node on PATH")?;
     let runner_source = include_str!("../assets/google_browser_runner.mjs");
-    // ESM resolves 'playwright' relative to the script file, so the runner must
-    // live inside the reference dir where node_modules sits.
+    // ESM resolves 'patchright' relative to the script file, so the runner
+    // must live inside the reference dir where node_modules sits.
     let runner_path = reference_dir.join(format!(
         ".ctox-google-runner-{}-{}.mjs",
         std::process::id(),
@@ -1815,7 +1815,7 @@ fn google_search(
         "userAgent": config.user_agent,
     });
     let payload_bytes = serde_json::to_vec(&payload)
-        .context("failed to encode playwright_google runner payload")?;
+        .context("failed to encode google browser runner payload")?;
 
     let mut command = Command::new(&node_path);
     command
@@ -1831,13 +1831,13 @@ fn google_search(
 
     let mut child = command
         .spawn()
-        .context("failed to spawn playwright_google runner")?;
+        .context("failed to spawn google browser runner")?;
     child
         .stdin
         .as_mut()
-        .context("playwright_google runner stdin was not piped")?
+        .context("google browser runner stdin was not piped")?
         .write_all(&payload_bytes)
-        .context("failed to write playwright_google runner payload")?;
+        .context("failed to write google browser runner payload")?;
     drop(child.stdin.take());
 
     let deadline =
@@ -1845,19 +1845,19 @@ fn google_search(
     let output = loop {
         if child
             .try_wait()
-            .context("failed to poll playwright_google runner")?
+            .context("failed to poll google browser runner")?
             .is_some()
         {
             break child
                 .wait_with_output()
-                .context("failed to collect playwright_google runner output")?;
+                .context("failed to collect google browser runner output")?;
         }
         if SystemTime::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
             let _ = fs::remove_file(&runner_path);
             bail!(
-                "playwright_google runner timed out after {}ms",
+                "google browser runner timed out after {}ms",
                 config.timeout_ms.saturating_add(15_000)
             );
         }
@@ -1869,7 +1869,7 @@ fn google_search(
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
         let detail = if !stderr.is_empty() { stderr } else { stdout };
-        bail!("playwright_google runner failed: {detail}");
+        bail!("google browser runner failed: {detail}");
     }
 
     #[derive(Deserialize)]
@@ -1891,7 +1891,7 @@ fn google_search(
 
     let outcome: RunnerOutcome = serde_json::from_slice(&output.stdout).with_context(|| {
         format!(
-            "playwright_google runner produced invalid JSON: {}",
+            "google browser runner produced invalid JSON: {}",
             String::from_utf8_lossy(&output.stdout)
                 .chars()
                 .take(400)
@@ -1900,7 +1900,7 @@ fn google_search(
     })?;
     if !outcome.ok {
         bail!(
-            "playwright_google runner did not return results: {}",
+            "google browser runner did not return results: {}",
             outcome.error.unwrap_or_else(|| "unknown error".to_string())
         );
     }

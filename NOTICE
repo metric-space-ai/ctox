@@ -28,5 +28,13 @@ been retired.
   CloakHQ). Only the wrapper algorithms are ported; the patched-Chromium
   binary is not used and not redistributed.
 
+- runtime/browser/interactive-reference/ (operator workspace)
+  CTOX drives Chromium through Patchright
+  (https://github.com/Kaliiiiiiiiii-Vinyzu/patchright-nodejs, Apache 2.0),
+  a drop-in Playwright fork that patches Runtime.enable, Console.enable,
+  and source-URL CDP leaks. The package is installed at runtime into the
+  operator workspace via `npx patchright install chromium` and not
+  bundled into the CTOX distribution.
+
 The root LICENSE applies to first-party CTOX repository code unless an
 integrated source subtree or file states otherwise.

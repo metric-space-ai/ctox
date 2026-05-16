@@ -879,15 +879,15 @@ prepare_speaches_runtime() {
   tui_module_done "TTS/STT runtime" "$started"
 }
 
-# ── Browser / Playwright ─────────────────────────────────────────────────────
-# Installs the Playwright workspace at the INSTALLED ctox's runtime reference
+# ── Browser / Patchright ─────────────────────────────────────────────────────
+# Installs the Patchright workspace at the INSTALLED ctox's runtime reference
 # dir (not the source tree), which is where ctox looks at runtime. Also
 # triggers the browser-binary install so `ctox web search` works without
 # requiring the user to run `ctox web browser-prepare` afterwards.
 setup_browser_runtime() {
   local source_root="$1"
   local started; started="$(date +%s)"
-  tui_module_start "Preparing browser / Playwright runtime"
+  tui_module_start "Preparing browser / Patchright runtime"
   ensure_linux_browser_prereqs
   command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1 && command -v npx >/dev/null 2>&1 || return 0
   # Prefer the managed-install binary so its runtime-root resolution lands at
@@ -905,7 +905,7 @@ setup_browser_runtime() {
   fi
   # `web browser-prepare --install-reference --install-browser` is the
   # documented one-shot: it installs package.json, runs npm install, and
-  # fetches the Chromium browser binary that Playwright drives.
+  # fetches the Chromium browser binary that Patchright drives.
   printf '  %bctox:%b %s\n' "$C_GREY" "$C_RESET" "$ctox_bin" >&2
   "$ctox_bin" web browser-prepare --install-reference --install-browser || \
     "$ctox_bin" browser install-reference || true
@@ -918,14 +918,14 @@ setup_browser_runtime() {
     (cd "$browser_ref" && npm run doctor >/dev/null 2>&1) || true
     if "$ctox_bin" browser doctor 2>/dev/null | grep -q '"chromium_fallback_executable": null'; then
       if [[ "$PLATFORM" == "linux" ]]; then
-        tui_note "Installing Chromium browser binary via Playwright"
-        (cd "$browser_ref" && npx playwright install --with-deps chromium) || true
+        tui_note "Installing Chromium browser binary via Patchright"
+        (cd "$browser_ref" && npx patchright install --with-deps chromium) || true
       else
         "$ctox_bin" browser install-reference --skip-npm-install --install-browser || true
       fi
     fi
   fi
-  tui_module_done "browser / Playwright runtime" "$started"
+  tui_module_done "browser / Patchright runtime" "$started"
 }
 
 build_google_fetch_helper() {

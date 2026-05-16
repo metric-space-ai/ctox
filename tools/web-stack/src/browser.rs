@@ -38,10 +38,10 @@ struct BrowserDoctorReport {
     minimum_node_major: u64,
     node_major: Option<u64>,
     node_version_compatible: bool,
-    playwright_dependency_declared: bool,
-    playwright_dependency_installed: bool,
-    playwright_browser_cache_dir: PathBuf,
-    playwright_browser_installed: bool,
+    runner_dependency_declared: bool,
+    runner_dependency_installed: bool,
+    runner_browser_cache_dir: PathBuf,
+    runner_browser_installed: bool,
     chromium_fallback_executable: Option<String>,
     toolchain: serde_json::Value,
     smoke: BrowserSmokeReport,
@@ -452,16 +452,16 @@ fn capture_chrome_extra_args(headless_without_gui: bool, linux: bool) -> Vec<&'s
 fn build_doctor_report(reference_dir: &Path) -> Result<BrowserDoctorReport> {
     let package_json_exists = reference_dir.join("package.json").exists();
     let node_modules_exists = reference_dir.join("node_modules").is_dir();
-    let playwright_dependency_declared = read_playwright_dependency_declared(reference_dir)?;
-    let playwright_dependency_installed = reference_dir
+    let runner_dependency_declared = read_runner_dependency_declared(reference_dir)?;
+    let runner_dependency_installed = reference_dir
         .join("node_modules")
-        .join("playwright")
+        .join("patchright")
         .join("package.json")
         .is_file();
-    let playwright_browser_cache_dir = playwright_browser_cache_dir(reference_dir);
+    let runner_browser_cache_dir = playwright_browser_cache_dir(reference_dir);
     let chromium_fallback_executable =
         find_browser_executable(reference_dir).map(|value| value.display().to_string());
-    let playwright_browser_installed = chromium_fallback_executable.is_some();
+    let runner_browser_installed = chromium_fallback_executable.is_some();
     let node = detect_tool("node", &["--version"]);
     let npm = detect_tool("npm", &["--version"]);
     let npx = detect_tool("npx", &["--version"]);
@@ -472,8 +472,8 @@ fn build_doctor_report(reference_dir: &Path) -> Result<BrowserDoctorReport> {
     let ok = node.available && npm.available && npx.available;
     let smoke = if ok
         && node_version_compatible
-        && playwright_dependency_installed
-        && playwright_browser_installed
+        && runner_dependency_installed
+        && runner_browser_installed
     {
         run_browser_smoke(reference_dir, chromium_fallback_executable.as_deref())
     } else {
@@ -488,8 +488,8 @@ fn build_doctor_report(reference_dir: &Path) -> Result<BrowserDoctorReport> {
     };
     let automation_ready = ok
         && node_version_compatible
-        && playwright_dependency_installed
-        && playwright_browser_installed
+        && runner_dependency_installed
+        && runner_browser_installed
         && smoke.ok;
     Ok(BrowserDoctorReport {
         ok,
@@ -499,10 +499,10 @@ fn build_doctor_report(reference_dir: &Path) -> Result<BrowserDoctorReport> {
         minimum_node_major: MINIMUM_NODE_MAJOR,
         node_major,
         node_version_compatible,
-        playwright_dependency_declared,
-        playwright_dependency_installed,
-        playwright_browser_cache_dir,
-        playwright_browser_installed,
+        runner_dependency_declared,
+        runner_dependency_installed,
+        runner_browser_cache_dir,
+        runner_browser_installed,
         chromium_fallback_executable,
         toolchain: json!({
             "node": node,
@@ -545,7 +545,7 @@ fn run_browser_smoke(
     let smoke_source = format!(
         r#"
 const fallbackExecutable = {encoded_executable};
-const {{ chromium }} = await import("playwright");
+const {{ chromium }} = await import("patchright");
 const launchOptions = {{ headless: true }};
 if (fallbackExecutable) {{
   launchOptions.executablePath = fallbackExecutable;
@@ -620,8 +620,8 @@ fn install_reference(
         run_command(
             reference_dir,
             "npm",
-            &["install", "playwright"],
-            "failed to install playwright reference",
+            &["install", "patchright"],
+            "failed to install patchright reference",
         )?;
     }
     if install_browser {
@@ -629,9 +629,9 @@ fn install_reference(
         run_command_with_env(
             reference_dir,
             "npx",
-            &["playwright", "install", "chromium"],
+            &["patchright", "install", "chromium"],
             &[("PLAYWRIGHT_BROWSERS_PATH", browser_cache_dir.as_path())],
-            "failed to install Playwright chromium browser",
+            "failed to install Patchright chromium browser",
         )?;
     }
     Ok(BrowserInstallReport {
@@ -666,13 +666,13 @@ fn ensure_reference_package_json(reference_dir: &Path) -> Result<bool> {
         "name": "ctox-interactive-browser-reference",
         "private": true,
         "type": "module",
-        "description": "CTOX-owned Playwright runtime workspace for browser automation.",
+        "description": "CTOX-owned Patchright runtime workspace for browser automation.",
         "scripts": {
-            "doctor": "node -e \"import('playwright').then(() => console.log('playwright import ok')).catch((error) => { console.error(error); process.exit(1); })\"",
-            "install:chromium": "playwright install chromium"
+            "doctor": "node -e \"import('patchright').then(() => console.log('patchright import ok')).catch((error) => { console.error(error); process.exit(1); })\"",
+            "install:chromium": "patchright install chromium"
         },
         "dependencies": {
-            "playwright": "^1.53.0"
+            "patchright": "^1.55.0"
         }
     });
     fs::write(
@@ -683,7 +683,7 @@ fn ensure_reference_package_json(reference_dir: &Path) -> Result<bool> {
     Ok(true)
 }
 
-fn read_playwright_dependency_declared(reference_dir: &Path) -> Result<bool> {
+fn read_runner_dependency_declared(reference_dir: &Path) -> Result<bool> {
     let package_json_path = reference_dir.join("package.json");
     if !package_json_path.exists() {
         return Ok(false);
@@ -694,7 +694,7 @@ fn read_playwright_dependency_declared(reference_dir: &Path) -> Result<bool> {
         serde_json::from_slice(&raw).context("failed to parse browser reference package.json")?;
     Ok(value
         .get("dependencies")
-        .and_then(|value| value.get("playwright"))
+        .and_then(|value| value.get("patchright"))
         .and_then(serde_json::Value::as_str)
         .is_some())
 }
@@ -863,7 +863,7 @@ fn bootstrap_snippet(chromium_fallback_executable: Option<&str>) -> String {
         "{ headless: true }".to_string()
     };
     format!(
-        "const {{ chromium }} = await import(\"playwright\");\nconst browser = await chromium.launch({launch_options});\nconst context = await browser.newContext();\nconst page = await context.newPage();\nawait page.goto(\"http://127.0.0.1:3000\", {{ waitUntil: \"domcontentloaded\" }});\nconsole.log(await page.title());\nawait browser.close();"
+        "const {{ chromium }} = await import(\"patchright\");\nconst browser = await chromium.launch({launch_options});\nconst context = await browser.newContext();\nconst page = await context.newPage();\nawait page.goto(\"http://127.0.0.1:3000\", {{ waitUntil: \"domcontentloaded\" }});\nconsole.log(await page.title());\nawait browser.close();"
     )
 }
 
@@ -1073,7 +1073,7 @@ const emit = async (payload) => {{
   process.stdout.write(JSON.stringify(payload));
 }};
 
-const {{ chromium, firefox, webkit }} = await import("playwright");
+const {{ chromium, firefox, webkit }} = await import("patchright");
 const launchOptions = {{
   headless: true,
   ignoreDefaultArgs: ["--enable-automation", "--enable-unsafe-swiftshader"],
@@ -1329,7 +1329,7 @@ fn build_browser_capture_runner_script(
         r#"import fs from "node:fs/promises";
 import process from "node:process";
 
-const {{ chromium }} = await import("playwright");
+const {{ chromium }} = await import("patchright");
 
 const cdpUrl = {encoded_cdp_url};
 const targetUrl = {encoded_target_url};
@@ -1574,7 +1574,7 @@ mod tests {
     }
 
     #[test]
-    fn ensure_reference_package_json_writes_playwright_dependency() {
+    fn ensure_reference_package_json_writes_patchright_dependency() {
         let dir = temp_path("package-json");
         fs::create_dir_all(&dir).unwrap();
         let created = ensure_reference_package_json(&dir).unwrap();
@@ -1582,8 +1582,8 @@ mod tests {
         let value: serde_json::Value = serde_json::from_slice(&raw).unwrap();
         assert!(created);
         assert_eq!(
-            value["dependencies"]["playwright"].as_str(),
-            Some("^1.53.0")
+            value["dependencies"]["patchright"].as_str(),
+            Some("^1.55.0")
         );
         let _ = fs::remove_dir_all(&dir);
     }

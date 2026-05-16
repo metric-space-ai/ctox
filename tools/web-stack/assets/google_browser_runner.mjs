@@ -1,4 +1,5 @@
-// CTOX Google search runner via Playwright.
+// CTOX Google search runner via Patchright (drop-in Playwright fork with
+// CDP-leak patches: Runtime.enable, Console.enable, source-URL markers).
 //
 // Reads a single line of JSON from stdin:
 //   { "query": "...", "language": "de-DE", "region": "DE",
@@ -11,13 +12,15 @@
 //     "finalUrl": "...", "title": "...", "elapsedMs": n,
 //     "error": null|string, "log": [string, ...] }
 //
+// The "playwright_google" provider name is kept as a stable identifier for
+// the cascade router; the underlying runtime is Patchright (Apache 2.0).
 // Stealth measures and consent dismissal are distilled from the publicly
 // documented web-agent-master/google-search project (ISC, MIT-compatible).
 // Launch-arg hygiene (ignoreDefaultArgs, viewport, platform-aware UA) is
 // adopted from CloakHQ/CloakBrowser (MIT) — only the open-source wrapper
 // rules, not the patched binary.
 
-import { chromium } from 'playwright';
+import { chromium } from 'patchright';
 import fs from 'node:fs';
 
 const STEALTH_LAUNCH_ARGS = [
