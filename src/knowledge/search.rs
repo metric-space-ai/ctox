@@ -54,6 +54,7 @@ pub(super) fn handle_command(root: &Path, args: &[String]) -> Result<()> {
         .map(|value| value.min(HARD_PER_FORM_CEILING))
         .unwrap_or(DEFAULT_PER_FORM_LIMIT);
     let form_filter = find_flag(args, "--form").map(|raw| raw.trim().to_ascii_lowercase());
+    let with_references = args.iter().any(|a| a == "--with-references");
 
     let needle = format!("%{}%", query_raw.to_lowercase());
 
@@ -61,13 +62,44 @@ pub(super) fn handle_command(root: &Path, args: &[String]) -> Result<()> {
     payload.insert("ok".to_string(), Value::Bool(true));
     payload.insert("query".to_string(), Value::String(query_raw.to_string()));
     payload.insert("limit_per_form".to_string(), Value::from(limit as u64));
+    payload.insert("with_references".to_string(), Value::Bool(with_references));
 
     let conn = open_db(root)?;
 
-    let skills = search_skill_bundles(root, query_raw, limit, form_filter.as_deref())?;
-    let procedural = search_procedural_main_skills(&conn, &needle, limit, form_filter.as_deref())?;
-    let data_tables = search_data_tables(&conn, &needle, limit, form_filter.as_deref())?;
-    let facts = search_ticket_facts(&conn, &needle, limit, form_filter.as_deref())?;
+    let mut skills = search_skill_bundles(root, query_raw, limit, form_filter.as_deref())?;
+    let mut procedural =
+        search_procedural_main_skills(&conn, &needle, limit, form_filter.as_deref())?;
+    let mut data_tables = search_data_tables(&conn, &needle, limit, form_filter.as_deref())?;
+    let mut facts = search_ticket_facts(&conn, &needle, limit, form_filter.as_deref())?;
+
+    if with_references {
+        annotate_with_references(&conn, &mut skills, |hit| {
+            let id = hit
+                .get("skill_name")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned);
+            id.map(|id| ("skill_bundle".to_string(), id))
+        })?;
+        annotate_with_references(&conn, &mut procedural, |hit| {
+            hit.get("main_skill_id")
+                .and_then(Value::as_str)
+                .map(|id| ("main_skill".to_string(), id.to_string()))
+        })?;
+        annotate_with_references(&conn, &mut data_tables, |hit| {
+            let domain = hit.get("domain").and_then(Value::as_str)?;
+            let table_key = hit.get("table_key").and_then(Value::as_str)?;
+            Some(("data_table".to_string(), format!("{domain}/{table_key}")))
+        })?;
+        annotate_with_references(&conn, &mut facts, |hit| {
+            let source_system = hit.get("source_system").and_then(Value::as_str)?;
+            let domain = hit.get("domain").and_then(Value::as_str)?;
+            let knowledge_key = hit.get("knowledge_key").and_then(Value::as_str)?;
+            Some((
+                "ticket_fact".to_string(),
+                format!("{source_system}:{domain}:{knowledge_key}"),
+            ))
+        })?;
+    }
 
     let total = skills.len() + procedural.len() + data_tables.len() + facts.len();
     payload.insert("total_hits".to_string(), Value::from(total as u64));
@@ -82,6 +114,28 @@ pub(super) fn handle_command(root: &Path, args: &[String]) -> Result<()> {
     );
 
     super::print_json(&Value::Object(payload))
+}
+
+/// For each hit, derive its `(kind, id)`, look up outgoing cross-references
+/// via `cross_refs::fetch_for_search`, and attach the result list as a
+/// `cross_references` field on the hit. Hits whose `(kind, id)` cannot be
+/// derived from the available fields are left untouched.
+fn annotate_with_references<F>(
+    conn: &Connection,
+    hits: &mut [Value],
+    derive_ref: F,
+) -> Result<()>
+where
+    F: Fn(&Value) -> Option<(String, String)>,
+{
+    for hit in hits.iter_mut() {
+        let Some((kind, id)) = derive_ref(hit) else { continue };
+        let edges = super::cross_refs::fetch_for_search(conn, &kind, &id, 16)?;
+        if let Value::Object(ref mut map) = hit {
+            map.insert("cross_references".to_string(), Value::Array(edges));
+        }
+    }
+    Ok(())
 }
 
 fn search_skill_bundles(
@@ -294,5 +348,4 @@ fn find_flag<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
     args.get(idx + 1).map(String::as_str)
 }
 
-const USAGE: &str =
-    "ctox knowledge search --query <text> [--limit <n>] [--form <skills|procedural|data|facts>]";
+const USAGE: &str = "ctox knowledge search --query <text> [--limit <n>] [--form <skills|procedural|data|facts>] [--with-references]";

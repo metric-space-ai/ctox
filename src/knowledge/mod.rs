@@ -35,6 +35,7 @@
 // (`handle_knowledge_command`) is preserved for the no-daemon path so the
 // CLI remains usable for offline debugging.
 
+mod cross_refs;
 mod data;
 mod facts;
 mod ops;
@@ -69,6 +70,13 @@ pub fn handle_knowledge_command(root: &Path, args: &[String]) -> Result<()> {
         Some("skill") | Some("skills") => skill::handle_command(root, rest),
         Some("facts") | Some("fact") => facts::handle_command(root, rest),
         Some("search") => search::handle_command(root, rest),
+        // Cross-references are top-level verbs (not a sub-form) because they
+        // link items across forms — the form-aware dispatchers above would be
+        // the wrong scope.
+        Some("link") => cross_refs::handle_command(root, Some("link"), rest),
+        Some("unlink") => cross_refs::handle_command(root, Some("unlink"), rest),
+        Some("references") => cross_refs::handle_command(root, Some("references"), rest),
+        Some("kinds") => cross_refs::handle_command(root, Some("kinds"), rest),
         Some(unknown) => {
             print_json(&json!({
                 "ok": false,
@@ -119,6 +127,10 @@ fn available_forms() -> Value {
         "skill":  "procedural knowledge — main-skill + skillbooks + runbooks + labeled runbook items. CLI: ctox knowledge skill <verb>",
         "facts":  "ticket-scoped single-fact entries. CLI: ctox knowledge facts <verb>",
         "search": "union discovery across data tables, procedural skills, ticket facts, and skill bundles. CLI: ctox knowledge search --query <text>",
+        "link":      "create a structural cross-reference between two durable items. CLI: ctox knowledge link --from <kind>:<id> --to <kind>:<id> --relation <name> [--note <text>]",
+        "unlink":    "remove a structural cross-reference. CLI: ctox knowledge unlink --from <kind>:<id> --to <kind>:<id> --relation <name>",
+        "references":"list cross-references touching one item. CLI: ctox knowledge references --of <kind>:<id> [--direction <out|in|both>] [--relation <name>] [--limit <n>]",
+        "kinds":     "list the canonical cross-reference kinds and relations. CLI: ctox knowledge kinds",
     })
 }
 
