@@ -40,6 +40,16 @@
       "expected_baseline_json": "{\"ua_leak_forbidden\":true}",
       "timeout_ms": 90000,
       "enabled": 1
+    },
+    {
+      "probe_id": "humanlike",
+      "site_name": "humanlike-internal",
+      "probe_url": "data:text/html (humanlike test page)",
+      "script_path": "skills/system/communication/web-unlock/agents/probe-scripts/humanlike.js",
+      "parser_kind": "sannysoft",
+      "expected_baseline_json": "{\"failed_max\":0}",
+      "timeout_ms": 45000,
+      "enabled": 1
     }
   ],
   "vectors": [

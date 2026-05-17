@@ -75,7 +75,7 @@ pub fn open_db(root: &Path) -> Result<Connection> {
     let conn = Connection::open(&path)
         .with_context(|| format!("failed to open {}", path.display()))?;
     ensure_schema(&conn)?;
-    seed_if_empty(&conn)?;
+    seed_merge_missing(&conn)?;
     Ok(conn)
 }
 
@@ -156,13 +156,11 @@ fn ensure_schema(conn: &Connection) -> Result<()> {
     .context("failed to create web_unlock_* schema")
 }
 
-fn seed_if_empty(conn: &Connection) -> Result<()> {
-    let probe_count: i64 = conn
-        .query_row("SELECT count(*) FROM web_unlock_probes", [], |r| r.get(0))
-        .context("failed to count web_unlock_probes")?;
-    if probe_count > 0 {
-        return Ok(());
-    }
+/// Adds rows from the embedded seed JSON to the registry if their primary
+/// keys (probe_id / vector_id) are not already present. Operator edits to
+/// existing rows are preserved — this uses `INSERT OR IGNORE`, not
+/// `OR REPLACE`. Safe to call on every open; cheap when nothing's new.
+fn seed_merge_missing(conn: &Connection) -> Result<()> {
     let seed: Value = serde_json::from_str(SEED_JSON)
         .context("failed to parse embedded web_unlock_seed.json")?;
     let now = Utc::now().to_rfc3339();
@@ -173,7 +171,7 @@ fn seed_if_empty(conn: &Connection) -> Result<()> {
         .context("seed.probes missing")?;
     for p in probes {
         conn.execute(
-            "INSERT OR REPLACE INTO web_unlock_probes
+            "INSERT OR IGNORE INTO web_unlock_probes
              (probe_id, site_name, probe_url, script_path, parser_kind,
               expected_baseline_json, timeout_ms, enabled, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
@@ -202,7 +200,7 @@ fn seed_if_empty(conn: &Connection) -> Result<()> {
             .map(|p| p.to_string())
             .unwrap_or_else(|| "[]".to_string());
         conn.execute(
-            "INSERT OR REPLACE INTO web_unlock_vectors
+            "INSERT OR IGNORE INTO web_unlock_vectors
              (vector_id, probe_id, test_name, description, probe_predicate,
               fix_strategy, patch_files_json, status, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
@@ -1379,7 +1377,7 @@ mod tests {
     fn seeded_in_memory_db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         ensure_schema(&conn).unwrap();
-        seed_if_empty(&conn).unwrap();
+        seed_merge_missing(&conn).unwrap();
         conn
     }
 
@@ -1554,14 +1552,14 @@ mod tests {
     fn seed_populates_probes_and_vectors() {
         let conn = Connection::open_in_memory().unwrap();
         ensure_schema(&conn).unwrap();
-        seed_if_empty(&conn).unwrap();
+        seed_merge_missing(&conn).unwrap();
         let p: i64 = conn
             .query_row("SELECT count(*) FROM web_unlock_probes", [], |r| r.get(0))
             .unwrap();
         let v: i64 = conn
             .query_row("SELECT count(*) FROM web_unlock_vectors", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(p, 4, "expected 4 probes seeded");
+        assert_eq!(p, 5, "expected 5 probes seeded (4 detection sites + humanlike)");
         assert!(v >= 15, "expected at least 15 vectors seeded, got {v}");
     }
 }
