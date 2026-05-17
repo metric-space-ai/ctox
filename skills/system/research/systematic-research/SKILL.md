@@ -140,37 +140,85 @@ Industry datasheets give you MTOW and headline specs; they do not give
 you measured rotor loads, fatigue curves, vibration spectra, or
 qualification-test reports.
 
-### Discovery tools
+### Discovery tools — strict ordering
 
-The following CTOX surfaces map onto the tiers above; use the most
-specific one available:
+For technical/engineering/scientific topics, use the CTOX web stack in
+this **exact order**. The first move is always `ctox web deep-research`;
+the lower-level surfaces are only for follow-up extraction once the
+catalog has its first entries.
 
-- `ctox web scholarly search --query "<topic>" [--ext pdf] [--with-oa-pdf]`
-  — for Tier 1 scholarly literature with open-access PDFs and DOI
-  filters. Strongly preferred over plain web search for engineering and
-  scientific topics.
-- `ctox web deep-research --query "<topic>" --depth standard --max-sources <N>`
-  — for multi-profile source mining (combines scholarly + agency +
-  standards + dataset + industry buckets in one call). Use `--depth
-  exhaustive` when the source-catalog needs to be near-complete.
-- `ctox web deep-research --query "<topic>" --depth exhaustive --max-sources <N>`
-  plus `ctox knowledge data` recording — for fully systematic source review
-  with explicit query plan and auditable source catalog. Do not execute embedded
-  research scripts from this system skill; if a source-review operation lacks a
-  CTOX CLI/API command, add that command first.
-- `ctox web search` and `ctox web read` — generic fallback when the
-  scholarly/deep-research surfaces returned nothing useful for an
-  obviously non-technical topic (a CRM-style entity list, a vendor
-  matrix where vendor pages ARE the primary source, …).
+1. **`ctox web deep-research`** — mandatory first move for any technical
+   library construction:
 
-Skipping the scholarly/deep-research surfaces and going straight to
-`ctox web search` on a technical topic is a discovery failure — the
-ranking will skew the source catalog toward Tier 3 and you will miss
-the Tier 1 measurement data that the deliverable actually needs.
+   ```
+   ctox web deep-research --query "<topic>" --depth standard --max-sources 24
+   ```
 
-Going straight to `cat > workspace_file.md` before this discovery pass
-is a discipline failure of a different kind — you bypass durable
-persistence entirely.
+   This call internally combines scholarly + agency + standards +
+   dataset + industry buckets into one ranked envelope. Use `--depth
+   exhaustive --max-sources 40` when the catalog needs to be
+   near-complete. The output JSON carries one entry per source with
+   `url`, `title`, `bucket`, `summary` — feed those directly into the
+   source-catalog. Do not invent URLs from training-data memory; only
+   record what this call (or the follow-up reads) returned.
+
+2. **`ctox web scholarly search`** — for second-pass DOI / open-access
+   PDF enrichment of specific entries that `deep-research` flagged but
+   did not resolve:
+
+   ```
+   ctox web scholarly search --query "<refined topic>" [--with-oa-pdf] [--only-doi]
+   ```
+
+3. **`ctox web read`** — for fetching the body of a specific landing
+   page when you need to extract the actual dataset / file URLs hosted
+   on it (e.g. an agency programme page that lists XLSX downloads).
+
+4. **`ctox web search` and `ctox web sources info`** — only as fallback
+   for obviously non-technical lookups (CRM entity, vendor matrix,
+   regulatory page lookup) where the upper layers returned nothing.
+
+**Forbidden during source discovery:**
+
+- The OpenAI-native `web_search` tool. Its result envelopes are large
+  and noisy; multiple calls overflow the context window and the
+  payloads get compacted out before synthesis. CTOX provides
+  `ctox web deep-research` and `ctox web scholarly search` precisely to
+  return compact, structured source lists you can persist row-by-row.
+- Piping any `ctox web …` output through `head`, `tail`, `head -N`,
+  `tail -N`, or any byte-truncator. The result envelope must reach the
+  agent intact; truncate via the command's own `--max-sources` /
+  `--max-results` / `--limit` flag instead. Self-truncated discovery
+  output loses Tier-1 candidates that ranked just below the cutoff.
+- The legacy `ctox ticket source-skill-import-bundle` path during
+  fresh discovery — use it only when a real bundle directory already
+  exists. For incremental procedural-knowledge writes, use
+  `ctox knowledge skill new / add-skillbook / add-runbook / add-item`.
+
+Skipping the deep-research/scholarly surfaces and going straight to
+`ctox web search`, the OpenAI native `web_search` tool, or a plain
+`cat > workspace_file.md` is a discovery failure: the source ranking
+will skew toward Tier 3, the catalog will miss the Tier 1 measurement
+data the deliverable actually needs, and the result will not be
+durable.
+
+### Append as you discover — never batch at the end
+
+Write each `ctox web deep-research` / `ctox web scholarly search`
+result batch into `ctox knowledge data append --domain <d> --key
+source_catalog --rows '[…]'` **before** issuing the next discovery
+call. Reasons:
+
+- Native API-tool responses are large; without incremental persistence
+  the agent's per-turn context fills with raw search envelopes, those
+  get compacted out, and the final synthesis falls back to training-data
+  memory of canonical references instead of the actual fresh results.
+- The catalog row is the durable record. If the turn times out
+  mid-discovery, the rows you have already appended survive and the
+  next turn (or queue worker) can resume from where you left off.
+- Provenance is preserved at row level: each row records `source_url`,
+  `extracted_at`, the discovery query that found it, and the bucket
+  the upstream tool assigned (`scholarly`, `agency`, `dataset`, …).
 
 ## Phase 2A — Library mode
 
