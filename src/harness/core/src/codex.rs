@@ -5472,6 +5472,7 @@ pub(crate) async fn run_turn(
         items: skill_items,
         warnings: skill_warnings,
     } = build_skill_injections(
+        &turn_context.config.cwd,
         &mentioned_skills,
         Some(&session_telemetry),
         &sess.services.analytics_events_client,
@@ -7231,7 +7232,10 @@ async fn try_run_sampling_request(
                             .await;
                     }
                 } else {
-                    error_or_panic("OutputTextDelta without active item".to_string());
+                    warn!(
+                        turn_id = %turn_context.sub_id,
+                        "dropping OutputTextDelta without active item"
+                    );
                 }
             }
             ResponseEvent::ReasoningSummaryDelta {
@@ -7249,7 +7253,10 @@ async fn try_run_sampling_request(
                     sess.send_event(&turn_context, EventMsg::ReasoningContentDelta(event))
                         .await;
                 } else {
-                    error_or_panic("ReasoningSummaryDelta without active item".to_string());
+                    warn!(
+                        turn_id = %turn_context.sub_id,
+                        "dropping ReasoningSummaryDelta without active item"
+                    );
                 }
             }
             ResponseEvent::ReasoningSummaryPartAdded { summary_index } => {
@@ -7261,7 +7268,10 @@ async fn try_run_sampling_request(
                         });
                     sess.send_event(&turn_context, event).await;
                 } else {
-                    error_or_panic("ReasoningSummaryPartAdded without active item".to_string());
+                    warn!(
+                        turn_id = %turn_context.sub_id,
+                        "dropping ReasoningSummaryPartAdded without active item"
+                    );
                 }
             }
             ResponseEvent::ReasoningContentDelta {
@@ -7279,7 +7289,10 @@ async fn try_run_sampling_request(
                     sess.send_event(&turn_context, EventMsg::ReasoningRawContentDelta(event))
                         .await;
                 } else {
-                    error_or_panic("ReasoningRawContentDelta without active item".to_string());
+                    warn!(
+                        turn_id = %turn_context.sub_id,
+                        "dropping ReasoningRawContentDelta without active item"
+                    );
                 }
             }
         }
