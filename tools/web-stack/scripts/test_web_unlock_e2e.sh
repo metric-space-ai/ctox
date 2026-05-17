@@ -27,7 +27,19 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
-CTOX="$ROOT/target.nosync/debug/ctox"
+# Local dev keeps build artifacts under target.nosync/ to avoid iCloud sync;
+# CI uses the standard target/. Prefer .nosync if present, else fall back.
+if [[ -x "$ROOT/target.nosync/debug/ctox" ]]; then
+  CTOX="$ROOT/target.nosync/debug/ctox"
+elif [[ -x "$ROOT/target/debug/ctox" ]]; then
+  CTOX="$ROOT/target/debug/ctox"
+elif [[ -x "$ROOT/target.nosync/release/ctox" ]]; then
+  CTOX="$ROOT/target.nosync/release/ctox"
+elif [[ -x "$ROOT/target/release/ctox" ]]; then
+  CTOX="$ROOT/target/release/ctox"
+else
+  CTOX="$ROOT/target/debug/ctox" # will fail precondition below with a clear msg
+fi
 SQLITE_DB="$ROOT/runtime/ctox.sqlite3"
 STEALTH_FILE="$ROOT/tools/web-stack/assets/stealth_init.js"
 
@@ -59,9 +71,15 @@ assert_eq() {
 # ── Preconditions ───────────────────────────────────────────────────────────
 
 [[ -x "$CTOX" ]] || die "ctox binary missing at $CTOX — run 'cargo build -p ctox' first"
-[[ -f "$SQLITE_DB" ]] || die "runtime DB missing at $SQLITE_DB — run any 'ctox web unlock list-probes' once to seed it"
 command -v jq >/dev/null 2>&1 || die "jq is required"
 command -v sqlite3 >/dev/null 2>&1 || die "sqlite3 is required"
+
+# The runtime DB is created automatically on first `ctox web unlock` call.
+# Seed it explicitly so the assertions below have schema + probe rows.
+if [[ ! -f "$SQLITE_DB" ]]; then
+  log "Seeding runtime DB via 'ctox web unlock list-probes'"
+  "$CTOX" web unlock list-probes >/dev/null 2>&1 || die "failed to seed runtime DB"
+fi
 
 cd "$ROOT"
 

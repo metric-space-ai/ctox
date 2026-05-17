@@ -520,7 +520,10 @@ fn run_browser_smoke(
     reference_dir: &Path,
     chromium_fallback_executable: Option<&str>,
 ) -> BrowserSmokeReport {
-    const TIMEOUT_MS: u64 = 8_000;
+    // Cold-start of Patchright/Chromium on macOS can exceed 10s the first
+    // time after a Gatekeeper quarantine refresh. 20s leaves headroom while
+    // still failing fast on a real install regression.
+    const TIMEOUT_MS: u64 = 20_000;
     let Some(node_path) = find_command_on_path("node") else {
         return BrowserSmokeReport {
             ran: true,

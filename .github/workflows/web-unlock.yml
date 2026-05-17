@@ -1,0 +1,112 @@
+name: web-unlock
+
+# E2E coverage for the web-unlock skill: SQLite registry, repair flow,
+# signal lifecycle, and (on demand) the real stealth-regression cycle.
+#
+# Stage 1 runs on every push to main and every PR touching the
+# web-stack crate or the skill — fast (~30s including build cache),
+# no network beyond crate fetches, no patchright/chromium install.
+#
+# Stage 2 (real stealth regression with patchright + chromium) is
+# heavy and brittle. It runs only on manual workflow_dispatch with
+# stage=stage2 or stage=full.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/web-stack/**'
+      - 'skills/system/communication/web-unlock/**'
+      - '.github/workflows/web-unlock.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'tools/web-stack/**'
+      - 'skills/system/communication/web-unlock/**'
+      - '.github/workflows/web-unlock.yml'
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: 'Which stage(s) to run'
+        required: false
+        default: 'stage1'
+        type: choice
+        options:
+          - stage1
+          - stage2
+          - full
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  e2e-stage1:
+    runs-on: ubuntu-22.04
+    name: Stage 1 — synthetic regression lifecycle
+    if: github.event_name != 'workflow_dispatch' || github.event.inputs.stage != 'stage2'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.93.0"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: web-unlock-stage1
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libssl-dev libfontconfig1-dev pkg-config libdbus-1-dev \
+            jq sqlite3
+
+      - name: Build ctox
+        run: cargo build --locked -p ctox
+
+      - name: Unlock unit tests
+        run: cargo test --locked -p ctox-web-stack --lib unlock:: --quiet
+
+      - name: Stage 1 E2E
+        run: tools/web-stack/scripts/test_web_unlock_e2e.sh --stage1
+
+  e2e-stage2:
+    runs-on: ubuntu-22.04
+    name: Stage 2 — real stealth regression
+    if: github.event_name == 'workflow_dispatch' && (github.event.inputs.stage == 'stage2' || github.event.inputs.stage == 'full')
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.93.0"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: web-unlock-stage2
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libssl-dev libfontconfig1-dev pkg-config libdbus-1-dev \
+            jq sqlite3
+
+      - name: Build ctox
+        run: cargo build --locked -p ctox
+
+      - name: Install patchright + chromium
+        run: |
+          mkdir -p runtime/browser/interactive-reference
+          ./target/debug/ctox web browser-prepare \
+            --install-reference --install-browser
+
+      - name: Stage 2 E2E
+        run: tools/web-stack/scripts/test_web_unlock_e2e.sh --stage2

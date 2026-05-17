@@ -330,6 +330,18 @@ Use this whenever:
 - you change the auto-repair matching heuristic in `cmd_baseline`
 - you suspect cargo's incremental build is missing an `include_str!` change to `stealth_init.js` (Stage 2 will catch the mtime trap)
 
+### CI integration
+
+`.github/workflows/web-unlock.yml` runs Stage 1 automatically on:
+- every push to `main` touching `tools/web-stack/**`, `skills/system/communication/web-unlock/**`, or the workflow itself
+- every PR against `main` with the same path filters
+
+Stage 1 (~30s including build cache) is the gating signal — if the unlock infrastructure regresses, the PR check fails before review.
+
+Stage 2 (real stealth regression via Patchright + Chromium install) is heavier (~5 min including chromium download). It only runs on manual `workflow_dispatch` with `stage=stage2` or `stage=full`. Trigger it when:
+- a PR materially changes `stealth_init.js`, `humanlike.mjs`, or the runners in `browser.rs` / `google_browser_runner.mjs`
+- you want a periodic confidence check that the stealth still holds on Linux
+
 The script is idempotent — failed runs may leave a `.e2e-bak` backup of `stealth_init.js`; the script refuses to start when one exists and tells you to remove it.
 
 ## Files and references
