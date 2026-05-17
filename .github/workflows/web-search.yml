@@ -1,0 +1,78 @@
+name: web-search
+
+# E2E coverage for the `ctox web search` provider cascade.
+#
+# Quick mode (push/PR, ~30s with build cache): shape-check via mock plus
+# one auto-cascade probe against the live web. Validates that the
+# canonical search envelope still serializes correctly and that the
+# router returns usable hits without an explicit provider pin.
+#
+# Full mode (workflow_dispatch): also probes each HTTP-only provider
+# individually (brave, duckduckgo, bing). Use when changing
+# tools/web-stack/src/web_search.rs near the provider cascade,
+# quality gate, or per-provider scrape logic.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/web-stack/src/web_search.rs'
+      - 'tools/web-stack/src/surface.rs'
+      - 'tools/web-stack/src/sources/**'
+      - 'tools/web-stack/scripts/test_web_search_e2e.sh'
+      - '.github/workflows/web-search.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'tools/web-stack/src/web_search.rs'
+      - 'tools/web-stack/src/surface.rs'
+      - 'tools/web-stack/src/sources/**'
+      - 'tools/web-stack/scripts/test_web_search_e2e.sh'
+      - '.github/workflows/web-search.yml'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Which mode to run'
+        required: false
+        default: 'quick'
+        type: choice
+        options:
+          - quick
+          - full
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  search-e2e:
+    runs-on: ubuntu-22.04
+    name: ctox web search E2E (${{ github.event.inputs.mode || 'quick' }})
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.93.0"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: web-search
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libssl-dev libfontconfig1-dev pkg-config libdbus-1-dev \
+            jq sqlite3
+
+      - name: Build ctox
+        run: cargo build --locked -p ctox
+
+      - name: Run search E2E
+        run: |
+          if [[ "${{ github.event.inputs.mode || 'quick' }}" == "full" ]]; then
+            tools/web-stack/scripts/test_web_search_e2e.sh
+          else
+            tools/web-stack/scripts/test_web_search_e2e.sh --quick
+          fi
