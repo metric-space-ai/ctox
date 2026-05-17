@@ -305,6 +305,33 @@ Re-test: incolumitas overflowTest OK.
 
 This pattern — read the source, find the exact predicate, patch precisely — is what makes the skill robust against future detection-site updates.
 
+## End-to-end test
+
+`tools/web-stack/scripts/test_web_unlock_e2e.sh` exercises the full loop without touching any production data:
+
+- **Stage 1** (~12 s, no network) — registers a synthetic always-failing probe, runs `baseline --auto-repair`, verifies that the regression is detected (`failed_count=2`), a pending repair is opened, the vector flips to `broken`, `repair complete --succeeded` flips it back to `working`, a manual signal is recorded and resolved with a `--repair` link, and all test rows are cleaned out of the DB at the end.
+
+- **Stage 2** (~2:50, requires network + Patchright + Chromium installed) — sabotages `tools/web-stack/assets/stealth_init.js` by short-circuiting the entire IIFE with an early `return`, rebuilds `ctox`, runs `baseline incolumitas --record` and asserts the regression appears (typically `fpscanner.WEBDRIVER`), restores the file from backup, rebuilds again, runs the same baseline and asserts it passes again. Cleans up the regression run from history at the end.
+
+```sh
+# Stage 1 only (fast, safe to run anywhere)
+tools/web-stack/scripts/test_web_unlock_e2e.sh
+
+# Both stages — real regression simulation
+tools/web-stack/scripts/test_web_unlock_e2e.sh --full
+
+# Stage 2 only — useful when iterating on the stealth layer
+tools/web-stack/scripts/test_web_unlock_e2e.sh --stage2
+```
+
+Use this whenever:
+- you change the schema in `tools/web-stack/src/unlock.rs`
+- you add a new vector to the seed JSON
+- you change the auto-repair matching heuristic in `cmd_baseline`
+- you suspect cargo's incremental build is missing an `include_str!` change to `stealth_init.js` (Stage 2 will catch the mtime trap)
+
+The script is idempotent — failed runs may leave a `.e2e-bak` backup of `stealth_init.js`; the script refuses to start when one exists and tells you to remove it.
+
 ## Files and references
 
 **Source-of-truth (SQLite + seed):**
