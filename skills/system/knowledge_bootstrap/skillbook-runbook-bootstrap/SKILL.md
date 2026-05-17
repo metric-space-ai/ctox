@@ -64,23 +64,56 @@ Read the supplement contract in [references/execution-supplement-contract.md](re
 
 ## Commands
 
-Use CTOX ticket and skill commands as the execution boundary:
+Two equally valid write paths, depending on whether the source material is
+ready to land as a full bundle or whether procedural knowledge will grow
+turn-by-turn:
+
+**Bundle import** — use when the source has been normalized into the four
+JSON artifacts (`main_skill.json` / `skillbook.json` / `runbook.json` /
+`runbook_items.jsonl`) on disk first. One call imports everything and
+indexes embeddings:
 
 ```sh
 ctox ticket history-export --system "<source-system>" --output "<ticket-history.jsonl>"
 ctox ticket knowledge-bootstrap --system "<source-system>"
-ctox ticket source-skill-import-bundle --system "<source-system>" --bundle-dir "<bundle-dir>"
-ctox ticket source-skill-set --system "<source-system>" --skill "<main-skill-id>" --status active
+ctox knowledge skill import-bundle --system "<source-system>" --bundle-dir "<bundle-dir>"
+ctox knowledge skill set --system "<source-system>" --skill "<main-skill-id>" --status active
 ```
 
-Review and publish only through durable CTOX ticket/self-work records:
+**Incremental writes** — use when you just learned one new procedural
+fact and want to make it durable without preparing a bundle directory.
+Each call writes one row (the embedding for `add-item` is refreshed
+automatically through the standard auxiliary backend):
 
 ```sh
-ctox ticket self-work-put --system "<source-system>" --kind "knowledge-review" --title "<title>" --body "<review body>" --publish
-ctox ticket source-skill-query --system "<source-system>" --query "<ticket text>" --top-k 8
+ctox knowledge skill new --id "<main_skill_id>" --title "<text>" --primary-channel "<email|chat|...>" --entry-action "<text>"
+ctox knowledge skill add-skillbook --id "<skillbook_id>" --title "<text>" --version "v1" --mission "<text>" --runtime-policy "<text>" --answer-contract "<text>"
+ctox knowledge skill add-runbook --id "<runbook_id>" --skillbook "<skillbook_id>" --title "<text>" --version "v1" --problem-domain "<text>"
+ctox knowledge skill add-item --id "<item_id>" --runbook "<runbook_id>" --skillbook "<skillbook_id>" --label "<REG-XX>" --title "<text>" --problem-class "<text>" --chunk-text "<labeled chunk>"
+ctox knowledge skill refresh-item-embedding --id "<item_id>"   # only if the original add-item couldn't reach the embedding backend
 ```
 
-Do not execute embedded Python helpers from this system skill. If a builder operation lacks a CTOX CLI/API command, add that command first.
+When a runbook item should reference a record-shape data table (or vice
+versa), record the edge so later turns find both sides:
+
+```sh
+ctox knowledge link --from runbook_item:"<item_id>" --to data_table:"<domain>/<table_key>" --relation consult --note "<one-line reason>"
+ctox knowledge references --of runbook_item:"<item_id>"
+```
+
+Discovery and review:
+
+```sh
+ctox knowledge search --query "<topic>" --with-references
+ctox knowledge skill query --system "<source-system>" --query "<ticket text>" --top-k 8
+ctox ticket self-work-put --system "<source-system>" --kind "knowledge-review" --title "<title>" --body "<review body>" --publish
+```
+
+The legacy `ctox ticket source-skill-*` and `ctox ticket knowledge-*` verbs
+still work — they write to the same SQLite tables — but `ctox knowledge …`
+is the canonical surface; prefer it in new work. Do not execute embedded
+Python helpers from this system skill. If a builder operation lacks a CTOX
+CLI/API command, add that command first.
 
 ## Important Boundaries
 

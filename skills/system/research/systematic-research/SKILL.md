@@ -227,6 +227,26 @@ statistics), use the `clone` → describe → Python via `shell` against the
 `parquet_path` → `import --mode replace` pattern. Reusable Python belongs
 in `scripts/` here, not as ad-hoc inline code.
 
+### Cross-linking the library to procedural knowledge
+
+When the library is itself the output of a documented procedure (a runbook
+item / skillbook in `ctox knowledge skill`), or when later steps will need
+to consult a specific runbook item for derivation rules, record the edge
+explicitly so future turns find both sides:
+
+```sh
+# the library was produced by following this runbook item
+ctox knowledge link --from data_table:<domain>/<table_key> --to runbook_item:<item_id> --relation produced_by --note "<one-line reason>"
+
+# a runbook item should pull values from this library
+ctox knowledge link --from runbook_item:<item_id> --to data_table:<domain>/<table_key> --relation consult --note "<one-line reason>"
+```
+
+Then `ctox knowledge search --query "<topic>" --with-references` reveals
+the procedure ↔ data relationship for any hit, instead of leaving it
+buried in free-text comments. Use `ctox knowledge kinds` to see the
+canonical relation labels.
+
 ## Phase 2B — Decision-report mode
 
 Drive the work through `ctox report …` CLI subcommands. The full mode
@@ -292,6 +312,28 @@ this skill via Bash.
 
 `--where` operators: `=`, `!=`, `<`, `<=`, `>`, `>=`, `~` (regex). Repeat
 `--where` for AND-chained predicates.
+
+**`ctox knowledge` (discovery + cross-form linkage)**, peer of the data
+form — used regardless of whether the run produces a library, a report,
+or both:
+
+- `ctox knowledge search --query <text> [--limit <n>] [--form <skills|procedural|data|facts>] [--with-references]`
+  — single-call discovery across skill bundles, procedural main skills,
+  data tables, and ticket-scoped facts. Always the first move when you
+  start work on a topic; tells you what CTOX already owns before you
+  open new tables.
+- `ctox knowledge link --from <kind>:<id> --to <kind>:<id> --relation <name> [--note <text>]`
+  — record a structural cross-reference. Canonical kinds and relations:
+  `ctox knowledge kinds`.
+- `ctox knowledge references --of <kind>:<id> [--direction <out|in|both>] [--relation <name>] [--limit <n>]`
+  — list the edges touching a specific item.
+- `ctox knowledge skill <verb>` — procedural-knowledge surface
+  (main-skill + skillbooks + runbooks + labeled items). Use this when
+  the research deliverable includes a process you want CTOX to remember,
+  not only data. See `ctox knowledge skill --help` for the full verb
+  list (`new`, `add-skillbook`, `add-runbook`, `add-item`, `query`,
+  `import-bundle`, etc.).
+- `ctox knowledge facts <verb>` — single ticket-scoped fact entries.
 
 **`ctox report`** (decision-report mode):
 
