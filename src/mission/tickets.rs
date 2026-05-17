@@ -4953,6 +4953,280 @@ fn upsert_ticket_source_embedding(
     Ok(())
 }
 
+// ----- Incremental procedural-knowledge writers ---------------------------
+//
+// Builder-style entry points exposed for `ctox knowledge skill new /
+// add-skillbook / add-runbook / add-item` (Tier 4). They construct the
+// canonical `TicketSource*Record` shapes from primitive parameters and call
+// the same upsert helpers used by `import_ticket_source_skill_bundle`. This
+// is the only way to grow a skillbook / runbook turn-by-turn without
+// preparing a full bundle directory on disk first.
+
+/// Create or upsert a `knowledge_main_skills` row. Returns the
+/// `TicketSourceMainSkillRecord` JSON view including the stored fields.
+///
+/// Optional contract fields default to empty / null when the caller cannot
+/// fill them yet. The agent fills them progressively over later turns by
+/// calling this same function again with the same `main_skill_id`.
+pub(crate) fn create_or_update_main_skill(
+    root: &Path,
+    main_skill_id: &str,
+    title: &str,
+    primary_channel: &str,
+    entry_action: &str,
+    resolver_contract: Option<Value>,
+    execution_contract: Option<Value>,
+    resolve_flow: Vec<String>,
+    writeback_flow: Vec<String>,
+    linked_skillbooks: Vec<String>,
+    linked_runbooks: Vec<String>,
+) -> Result<Value> {
+    anyhow::ensure!(!main_skill_id.trim().is_empty(), "main_skill_id required");
+    anyhow::ensure!(!title.trim().is_empty(), "title required");
+    anyhow::ensure!(!primary_channel.trim().is_empty(), "primary_channel required");
+    anyhow::ensure!(!entry_action.trim().is_empty(), "entry_action required");
+    let record = TicketSourceMainSkillRecord {
+        main_skill_id: main_skill_id.to_string(),
+        title: title.to_string(),
+        primary_channel: primary_channel.to_string(),
+        entry_action: entry_action.to_string(),
+        resolver_contract: resolver_contract.unwrap_or_else(|| Value::Object(Default::default())),
+        execution_contract: execution_contract.unwrap_or_else(|| Value::Object(Default::default())),
+        resolve_flow,
+        writeback_flow,
+        linked_skillbooks,
+        linked_runbooks,
+    };
+    let now = now_iso_string();
+    let conn = open_ticket_db(root)?;
+    upsert_ticket_source_main_skill(&conn, &record, &now)?;
+    Ok(serde_json::to_value(&record)?)
+}
+
+/// Create or upsert a `knowledge_skillbooks` row. The summary column is
+/// auto-derived from `mission` via `summarize_text`; callers don't have to
+/// supply it. Status is always `active` (matching the bundle-import path).
+pub(crate) fn create_or_update_skillbook(
+    root: &Path,
+    skillbook_id: &str,
+    title: &str,
+    version: &str,
+    mission: &str,
+    runtime_policy: &str,
+    answer_contract: &str,
+    non_negotiable_rules: Vec<String>,
+    workflow_backbone: Vec<String>,
+    routing_taxonomy: Vec<String>,
+    linked_runbooks: Vec<String>,
+) -> Result<Value> {
+    anyhow::ensure!(!skillbook_id.trim().is_empty(), "skillbook_id required");
+    anyhow::ensure!(!title.trim().is_empty(), "title required");
+    anyhow::ensure!(!version.trim().is_empty(), "version required");
+    anyhow::ensure!(!mission.trim().is_empty(), "mission required");
+    let record = TicketSourceSkillbookRecord {
+        skillbook_id: skillbook_id.to_string(),
+        title: title.to_string(),
+        version: version.to_string(),
+        mission: mission.to_string(),
+        non_negotiable_rules,
+        runtime_policy: runtime_policy.to_string(),
+        answer_contract: answer_contract.to_string(),
+        workflow_backbone,
+        routing_taxonomy,
+        linked_runbooks,
+    };
+    let now = now_iso_string();
+    let conn = open_ticket_db(root)?;
+    upsert_ticket_source_skillbook(&conn, &record, &now)?;
+    Ok(serde_json::to_value(&record)?)
+}
+
+/// Create or upsert a `knowledge_runbooks` row.
+pub(crate) fn create_or_update_runbook(
+    root: &Path,
+    runbook_id: &str,
+    skillbook_id: &str,
+    title: &str,
+    version: &str,
+    status: &str,
+    problem_domain: &str,
+    item_labels: Vec<String>,
+) -> Result<Value> {
+    anyhow::ensure!(!runbook_id.trim().is_empty(), "runbook_id required");
+    anyhow::ensure!(!skillbook_id.trim().is_empty(), "skillbook_id required");
+    anyhow::ensure!(!title.trim().is_empty(), "title required");
+    anyhow::ensure!(!version.trim().is_empty(), "version required");
+    anyhow::ensure!(!status.trim().is_empty(), "status required");
+    let record = TicketSourceRunbookRecord {
+        runbook_id: runbook_id.to_string(),
+        skillbook_id: skillbook_id.to_string(),
+        title: title.to_string(),
+        version: version.to_string(),
+        status: status.to_string(),
+        problem_domain: problem_domain.to_string(),
+        item_labels,
+    };
+    let now = now_iso_string();
+    let conn = open_ticket_db(root)?;
+    upsert_ticket_source_runbook(&conn, &record, &now)?;
+    Ok(serde_json::to_value(&record)?)
+}
+
+/// Add (or update) a single labeled runbook item, and — unless
+/// `skip_embedding` — refresh its embedding row through the standard
+/// auxiliary embedding backend. The runbook's `item_labels` list is also
+/// refreshed defensively so listing the runbook surfaces the new label.
+pub(crate) fn add_or_update_runbook_item(
+    root: &Path,
+    item_id: &str,
+    runbook_id: &str,
+    skillbook_id: &str,
+    label: &str,
+    title: &str,
+    problem_class: &str,
+    chunk_text: &str,
+    version: &str,
+    status: &str,
+    embedding_model_override: Option<&str>,
+    skip_embedding: bool,
+) -> Result<Value> {
+    anyhow::ensure!(!item_id.trim().is_empty(), "item_id required");
+    anyhow::ensure!(!runbook_id.trim().is_empty(), "runbook_id required");
+    anyhow::ensure!(!skillbook_id.trim().is_empty(), "skillbook_id required");
+    anyhow::ensure!(!label.trim().is_empty(), "label required");
+    anyhow::ensure!(!title.trim().is_empty(), "title required");
+    anyhow::ensure!(!problem_class.trim().is_empty(), "problem_class required");
+    anyhow::ensure!(!chunk_text.trim().is_empty(), "chunk_text required");
+    anyhow::ensure!(!version.trim().is_empty(), "version required");
+    anyhow::ensure!(!status.trim().is_empty(), "status required");
+
+    let record = TicketSourceRunbookItemRecord {
+        item_id: item_id.to_string(),
+        runbook_id: runbook_id.to_string(),
+        skillbook_id: skillbook_id.to_string(),
+        label: label.to_string(),
+        title: title.to_string(),
+        problem_class: problem_class.to_string(),
+        trigger_phrases: Vec::new(),
+        entry_conditions: Vec::new(),
+        earliest_blocker: String::new(),
+        expected_guidance: String::new(),
+        tool_actions: Value::Object(Default::default()),
+        verification: Vec::new(),
+        writeback_policy: Value::Object(Default::default()),
+        escalate_when: Vec::new(),
+        sources: Value::Object(Default::default()),
+        pages: Vec::new(),
+        chunk_text: chunk_text.to_string(),
+    };
+
+    let now = now_iso_string();
+    let conn = open_ticket_db(root)?;
+    upsert_ticket_source_runbook_item(&conn, &record, version, status, &now)?;
+    let labels = refresh_runbook_item_labels(&conn, runbook_id, &now)?;
+
+    let (embedding_status, embedding_model_used) = if skip_embedding {
+        ("skipped", None)
+    } else {
+        let model = embedding_model_override
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(default_ticket_skill_embedding_model);
+        let inputs = vec![chunk_text.to_string()];
+        match embed_texts_for_ticket_skills(root, &inputs, &model) {
+            Ok(vectors) => {
+                if let Some(vector) = vectors.first() {
+                    upsert_ticket_source_embedding(&conn, item_id, &model, vector, &now)?;
+                }
+                ("indexed", Some(model))
+            }
+            Err(err) => {
+                // Surface the error to the caller without rolling back the
+                // item write — the row is durable, only the embedding is
+                // missing. The agent can rerun `refresh-item-embedding` once
+                // the backend is back.
+                eprintln!(
+                    "warning: embedding refresh for runbook item {item_id} failed: {err:#}"
+                );
+                ("error", None)
+            }
+        }
+    };
+
+    Ok(json!({
+        "item": record,
+        "embedding": {
+            "status": embedding_status,
+            "model": embedding_model_used,
+        },
+        "runbook": {
+            "runbook_id": runbook_id,
+            "item_labels": labels,
+        },
+    }))
+}
+
+/// Recompute the embedding for an existing runbook item. Idempotent.
+pub(crate) fn refresh_runbook_item_embedding(
+    root: &Path,
+    item_id: &str,
+    embedding_model_override: Option<&str>,
+) -> Result<Value> {
+    anyhow::ensure!(!item_id.trim().is_empty(), "item_id required");
+    let conn = open_ticket_db(root)?;
+    let chunk_text: String = conn
+        .query_row(
+            "SELECT chunk_text FROM knowledge_runbook_items WHERE item_id = ?1",
+            params![item_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .context("query chunk_text for runbook item")?
+        .with_context(|| format!("runbook item not found: {item_id}"))?;
+    let model = embedding_model_override
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(default_ticket_skill_embedding_model);
+    let inputs = vec![chunk_text];
+    let vectors = embed_texts_for_ticket_skills(root, &inputs, &model)?;
+    let now = now_iso_string();
+    if let Some(vector) = vectors.first() {
+        upsert_ticket_source_embedding(&conn, item_id, &model, vector, &now)?;
+    } else {
+        anyhow::bail!("embedding backend returned no vector for item {item_id}");
+    }
+    Ok(json!({
+        "ok": true,
+        "item_id": item_id,
+        "embedding_model": model,
+        "updated_at": now,
+    }))
+}
+
+/// Pull the current set of labels for the runbook from
+/// `knowledge_runbook_items` and write the deduplicated, label-sorted list
+/// back into `knowledge_runbooks.item_labels_json`. Returns the new list.
+fn refresh_runbook_item_labels(
+    conn: &Connection,
+    runbook_id: &str,
+    now: &str,
+) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT label FROM knowledge_runbook_items WHERE runbook_id = ?1 ORDER BY label ASC",
+    )?;
+    let labels: Vec<String> = stmt
+        .query_map(params![runbook_id], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(stmt);
+    conn.execute(
+        "UPDATE knowledge_runbooks SET item_labels_json = ?1, updated_at = ?2 WHERE runbook_id = ?3",
+        params![serde_json::to_string(&labels)?, now, runbook_id],
+    )?;
+    Ok(labels)
+}
+
 fn load_ticket_source_main_skill_from_conn(
     conn: &Connection,
     main_skill_id: &str,
