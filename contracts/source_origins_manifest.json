@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "goal": "CTOX source tree layout for build and update orchestration",
+  "sourceTrees": [
+    {
+      "name": "agent-harness",
+      "sourceOriginUrl": "https://github.com/metric-space-ai/ctox",
+      "integrationMode": "hard_fork",
+      "requiredPaths": [
+        "src/core/harness/Cargo.toml",
+        "src/core/harness/core/Cargo.toml"
+      ],
+      "targetDir": "src/core/harness",
+      "purpose": "Codex execution engine for bounded agent turns",
+      "lineageNotes": [
+        "The agent harness is vendored as source-owned CTOX code under src/core/harness."
+      ]
+    }
+  ]
+}
