@@ -1,6 +1,6 @@
 export const collections = {
   business_commands: {
-    version: 0,
+    version: 1,
     primaryKey: 'id',
     type: 'object',
     properties: {
@@ -129,5 +129,14 @@ export const collections = {
     },
     required: ['id', 'module_id', 'kind', 'title', 'status', 'updated_at_ms'],
     additionalProperties: true
+  }
+};
+
+export const migrationStrategies = {
+  business_commands: {
+    1: (oldDoc) => ({
+      ...oldDoc,
+      inbound_channel: oldDoc.inbound_channel || oldDoc.module || ''
+    })
   }
 };

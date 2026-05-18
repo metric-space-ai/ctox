@@ -13,6 +13,7 @@
     "business_module_reports"
   ],
   "layout": {
+    "shell": "full-workspace",
     "left": "runtime scopes",
     "center": "active workbench",
     "right": "agent context"

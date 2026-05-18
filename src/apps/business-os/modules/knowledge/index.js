@@ -48,7 +48,7 @@ const state = {
   tableOffset: 0,
   tableLimit: 120,
   editing: false,
-  sourceScope: 'user',
+  sourceScope: 'all',
   messages: null,
   openGroups: new Set(['research/drone-design/drone-bearing-loads']),
   contextMenu: null,
@@ -111,9 +111,9 @@ function documentTemplate() {
           </div>
         </header>
         <div class="knowledge-scope-switch" role="tablist" aria-label="Knowledge Quelle">
-          <button type="button" data-scope="user" aria-pressed="true">User</button>
+          <button type="button" data-scope="user" aria-pressed="false">User</button>
           <button type="button" data-scope="system" aria-pressed="false">System</button>
-          <button type="button" data-scope="all" aria-pressed="false">Alle</button>
+          <button type="button" data-scope="all" aria-pressed="true">Alle</button>
         </div>
         <div class="knowledge-tools">
           <input data-search placeholder="Suchen..." />
@@ -1988,9 +1988,10 @@ function handleShellMessage(event) {
 async function fetchJson(url) {
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), KNOWLEDGE_REFRESH_TIMEOUT_MS);
+  const headers = state.ctx?.authHeaders?.() || {};
   let response;
   try {
-    response = await fetch(url, { cache: 'no-store', signal: controller.signal });
+    response = await fetch(url, { cache: 'no-store', headers, signal: controller.signal });
   } finally {
     window.clearTimeout(timer);
   }

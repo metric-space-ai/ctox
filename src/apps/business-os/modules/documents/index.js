@@ -31,9 +31,12 @@ export async function mount(ctx) {
     sortBy: 'updated_desc',
     docxToolbarVisible: localStorage.getItem(DOCX_TOOLBAR_VISIBILITY_KEY) !== 'false',
     localSubscriptionCleanup: null,
+    contextMenu: null,
+    contextMenuCleanup: null,
   };
 
   wireModule(state);
+  state.contextMenuCleanup = initDocumentsContextMenu(state);
   state.localSubscriptionCleanup = wireLocalRealtime(state);
   await ensureSeedRunbooks(ctx);
   await refreshRunbooks(state);
@@ -43,6 +46,9 @@ export async function mount(ctx) {
   renderCenter(state);
   return () => {
     if (state.superdocSaveTimer) clearTimeout(state.superdocSaveTimer);
+    state.contextMenuCleanup?.();
+    state.contextMenu?.remove();
+    state.contextMenu = null;
     state.localSubscriptionCleanup?.();
     flushActiveSuperDocDraft(state).catch((error) => console.error('[documents] final SuperDoc draft save failed', error));
     state.editorHandle?.destroy?.();
@@ -73,6 +79,189 @@ async function loadSuperDocModule(state) {
 
 function wireModule(state) {
   state.ctx.host.addEventListener('documents:refresh-left', () => renderLeft(state));
+}
+
+function initDocumentsContextMenu(state) {
+  state.contextMenu?.remove();
+  const menu = document.createElement('div');
+  menu.className = 'ctox-context-menu documents-context-menu';
+  menu.hidden = true;
+  document.body.append(menu);
+  state.contextMenu = menu;
+
+  const handleContextMenu = (event) => {
+    if (state.ctx.module?.id !== 'documents') return;
+    const context = documentCommandContextFromElement(state, event.target);
+    event.preventDefault();
+    event.stopPropagation();
+    renderDocumentsContextMenu(state, context, event.clientX, event.clientY);
+  };
+  const handleOutsideClick = (event) => {
+    if (state.contextMenu?.contains(event.target)) return;
+    hideDocumentsContextMenu(state);
+  };
+  const handleEscape = (event) => {
+    if (event.key === 'Escape') hideDocumentsContextMenu(state);
+  };
+
+  state.ctx.host.addEventListener('contextmenu', handleContextMenu);
+  state.ctx.left?.addEventListener?.('contextmenu', handleContextMenu);
+  state.ctx.right?.addEventListener?.('contextmenu', handleContextMenu);
+  window.addEventListener('click', handleOutsideClick, { capture: true });
+  window.addEventListener('keydown', handleEscape);
+
+  return () => {
+    state.ctx.host.removeEventListener('contextmenu', handleContextMenu);
+    state.ctx.left?.removeEventListener?.('contextmenu', handleContextMenu);
+    state.ctx.right?.removeEventListener?.('contextmenu', handleContextMenu);
+    window.removeEventListener('click', handleOutsideClick, { capture: true });
+    window.removeEventListener('keydown', handleEscape);
+    hideDocumentsContextMenu(state);
+  };
+}
+
+function hideDocumentsContextMenu(state) {
+  if (state.contextMenu) state.contextMenu.hidden = true;
+}
+
+function documentCommandContextFromElement(state, target) {
+  const element = target?.nodeType === Node.ELEMENT_NODE ? target : target?.parentElement;
+  const recordElement = element?.closest?.('[data-context-record-id], [data-document-id], [data-document-manage]');
+  const recordId = recordElement?.dataset.contextRecordId
+    || recordElement?.dataset.documentId
+    || recordElement?.dataset.documentManage
+    || state.selectedId
+    || '';
+  const record = state.documents.find((item) => item.id === recordId) || selectedRecord(state);
+  const field = element?.closest?.('input, textarea, select, button');
+  const column = recordElement?.dataset.documentsColumn
+    || (state.ctx.left?.contains?.(element) ? 'documents' : state.ctx.right?.contains?.(element) ? 'runbooks' : 'editor');
+
+  return {
+    module: 'documents',
+    column,
+    field: field?.name || field?.dataset.documentsRunbook || field?.dataset.action || '',
+    record_type: record ? 'document' : 'module',
+    record_id: record?.id || '',
+    label: record?.title || record?.filename || '',
+    filename: record?.filename || '',
+    document_type: record?.document_type || '',
+    selected_text: String(window.getSelection?.()?.toString?.() || '').trim().slice(0, 1000),
+    clicked_text: String(element?.innerText || element?.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 500),
+  };
+}
+
+function renderDocumentsContextMenu(state, context, x, y) {
+  const canModifyApp = canModifyDocumentsApp(state);
+  state.contextMenu.innerHTML = `
+    <form class="documents-context-chat" data-documents-context-chat-form>
+      <header>
+        <div>
+          <strong>Chat to CTOX</strong>
+          <span>${escapeHtml(documentContextSummary(context))}</span>
+        </div>
+        <button type="button" data-documents-context-close aria-label="Schließen">×</button>
+      </header>
+      ${canModifyApp ? `
+        <div class="documents-context-mode" role="radiogroup" aria-label="CTOX Aufgabe">
+          <label><input type="radio" name="contextMode" value="data" checked /> Mit Daten arbeiten</label>
+          <label><input type="radio" name="contextMode" value="app" /> App modifizieren</label>
+        </div>
+      ` : ''}
+      <textarea data-documents-context-message placeholder="Was soll CTOX hier tun oder prüfen?"></textarea>
+      <footer>
+        <span data-documents-context-status></span>
+        <button type="submit">Senden</button>
+      </footer>
+    </form>
+  `;
+  state.contextMenu.hidden = false;
+  state.contextMenu.style.left = '0px';
+  state.contextMenu.style.top = '0px';
+  const rect = state.contextMenu.getBoundingClientRect();
+  const maxLeft = Math.max(8, window.innerWidth - rect.width - 8);
+  const maxTop = Math.max(8, window.innerHeight - rect.height - 8);
+  state.contextMenu.style.left = `${clampNumber(x, 8, maxLeft)}px`;
+  state.contextMenu.style.top = `${clampNumber(y, 8, maxTop)}px`;
+
+  const form = state.contextMenu.querySelector('[data-documents-context-chat-form]');
+  const textarea = state.contextMenu.querySelector('[data-documents-context-message]');
+  state.contextMenu.querySelector('[data-documents-context-close]')?.addEventListener('click', () => hideDocumentsContextMenu(state));
+  form?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const mode = canModifyApp ? (new FormData(form).get('contextMode') || 'data') : 'data';
+    await dispatchDocumentsContextChat(state, context, textarea?.value || '', mode);
+  });
+  requestAnimationFrame(() => textarea?.focus());
+}
+
+function canModifyDocumentsApp(state) {
+  if (typeof state.ctx.canModifyModule === 'function' && state.ctx.canModifyModule()) return true;
+  const user = state.ctx.session?.user || {};
+  const role = String(user.role || (user.is_admin ? 'admin' : 'user')).trim().toLowerCase().replace(/^business_os_/, '');
+  return ['admin', 'chef'].includes(role);
+}
+
+function documentContextSummary(context) {
+  return [context.column || 'module', context.record_type || '', context.label || context.filename || context.record_id || '']
+    .filter(Boolean)
+    .join(' · ') || 'Documents';
+}
+
+async function dispatchDocumentsContextChat(state, context, message, mode = 'data') {
+  const trimmed = String(message || '').trim();
+  const status = state.contextMenu?.querySelector('[data-documents-context-status]');
+  if (!trimmed) {
+    if (status) status.textContent = 'Nachricht fehlt.';
+    return;
+  }
+
+  const safeMode = mode === 'app' && canModifyDocumentsApp(state) ? 'app' : 'data';
+  const record = state.documents.find((item) => item.id === context.record_id) || selectedRecord(state);
+  const runbookId = defaultRunbookId(state);
+  const runbook = state.runbooks.find((item) => item.id === runbookId || item.command_type === runbookId) || null;
+  if (!document.querySelector('[data-ctox-chat-root]')) {
+    if (status) status.textContent = 'Chat ist noch nicht bereit.';
+    return;
+  }
+  if (status) status.textContent = 'Oeffne Chat...';
+  const title = `${safeMode === 'app' ? 'Documents App modifizieren' : 'Documents bearbeiten'} · ${context.label || record?.title || context.column || 'Documents'}`;
+  const instruction = safeMode === 'app'
+    ? `Modifiziere die Documents-App anhand dieser Admin-Anweisung. Kontext nur als UI-Bezug verwenden, Dokumentdaten selbst nicht als primäres Ziel verändern.\n\n${trimmed}`
+    : trimmed;
+  window.dispatchEvent(new CustomEvent('ctox-business-os-chat-submit', {
+    detail: {
+      text: trimmed,
+      module: 'documents',
+      source_title: 'Documents',
+      command_type: safeMode === 'app' ? 'ctox.business_os.app.modify' : 'business_os.chat.task',
+      record_id: safeMode === 'app' ? 'documents' : (record?.id || context.record_id || 'documents'),
+      title,
+      instruction,
+      payload: {
+        title,
+        instruction,
+        prompt: trimmed,
+        user_message: trimmed,
+        mode: safeMode,
+        target: safeMode === 'app' ? 'app' : 'data',
+        selected_document: record || null,
+        selected_version_id: record?.current_version_id || '',
+        selected_runbook: runbook,
+        context,
+        thread_key: 'business-os/documents',
+      },
+      client_context: {
+        action: 'context-chat',
+        mode: safeMode,
+        column: context.column,
+        record_type: context.record_type,
+        document_id: record?.id || '',
+        filename: record?.filename || context.filename || '',
+      },
+    },
+  }));
+  hideDocumentsContextMenu(state);
 }
 
 function wireLocalRealtime(state) {
@@ -330,6 +519,11 @@ function populateDocumentList(state, list, records = visibleDocuments(state)) {
   for (const record of records) {
     const card = document.createElement('article');
     card.className = 'documents-card';
+    card.dataset.contextModule = 'documents';
+    card.dataset.contextRecordType = 'document';
+    card.dataset.contextRecordId = record.id;
+    card.dataset.contextLabel = record.title || record.filename || record.id;
+    card.dataset.documentsColumn = 'documents';
     card.setAttribute('aria-current', String(record.id === state.selectedId));
     const button = document.createElement('button');
     button.type = 'button';
@@ -1426,6 +1620,10 @@ function withTimeout(promise, ms, message) {
     Promise.resolve(promise).finally(() => clearTimeout(timer)),
     timeout,
   ]);
+}
+
+function clampNumber(value, min, max) {
+  return Math.max(min, Math.min(max, value));
 }
 
 function renderError(state, message) {

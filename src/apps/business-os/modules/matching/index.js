@@ -1,12 +1,7 @@
-const MATCHING_BUILD = '20260518-direct-rxdb-hydrate3';
+const MATCHING_BUILD = '20260518-module-contract2';
 
 export async function mount(ctx) {
   await ensureStyles();
-  window.__BUSINESS_OS_MODULES__ = window.__BUSINESS_OS_MODULES__ || {};
-  window.__BUSINESS_OS_MODULES__.matching = {
-    db: ctx.db?.raw || null,
-    module: ctx.module || null,
-  };
   const dataSource = await import('./ui/businessOsDataSource.js');
   dataSource.setBusinessOsRawDatabase?.(ctx.db?.raw || null);
   ctx.host.innerHTML = await loadModuleMarkup();
@@ -15,14 +10,11 @@ export async function mount(ctx) {
   ctx.right?.replaceChildren?.();
   await import(`./ui/businessOsControls.js?v=${MATCHING_BUILD}`);
   const matchingUi = await import(`./ui/index.js?v=${MATCHING_BUILD}`);
-  await matchingUi.mountMatchingDashboard?.();
+  await matchingUi.mountMatchingDashboard?.(ctx);
   return () => {
     try { window.teardownRxdbLiveUiSync?.(); } catch {}
     ctx.host.replaceChildren();
     delete ctx.host.dataset.matchingModule;
-    if (window.__BUSINESS_OS_MODULES__?.matching?.module?.id === ctx.module?.id) {
-      delete window.__BUSINESS_OS_MODULES__.matching;
-    }
   };
 }
 

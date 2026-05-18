@@ -7876,7 +7876,7 @@ export async function mountMatchingDashboard(){
   }
 }
 
-if (!window.__BUSINESS_OS_MODULES__?.matching) {
+if (!document.querySelector('[data-matching-module="native"]')) {
   mountMatchingDashboard();
 }
 

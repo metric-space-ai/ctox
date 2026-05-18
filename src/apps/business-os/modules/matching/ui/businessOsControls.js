@@ -1205,12 +1205,13 @@ function openCtoxHarnessForTask(taskId, commandId) {
 }
 
 function initContextMenu() {
+  const root = document.querySelector('[data-matching-module="native"] .app') || document.querySelector('.app') || document.body;
   const menu = document.createElement('div');
   menu.className = 'ctox-context-menu';
   menu.hidden = true;
-  document.body.append(menu);
+  root.append(menu);
 
-  document.addEventListener('contextmenu', (event) => {
+  root.addEventListener('contextmenu', (event) => {
     const target = event.target;
     if (!target || target.closest?.('.ctox-context-menu')) return;
     event.preventDefault();
@@ -1227,32 +1228,27 @@ function initContextMenu() {
 }
 
 function renderContextMenu(menu, context, x, y) {
-  const items = buildContextActions(context);
-  menu.replaceChildren();
-  for (const item of items) {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.textContent = item.label;
-    button.addEventListener('click', async () => {
-      menu.hidden = true;
-      await dispatchCtoxCommand({
-        module: 'matching',
-        type: item.type,
-        record_id: context.fieldId || context.column || 'matching',
-        payload: {
-          action: item.action,
-          context,
-          requested_change: item.requested_change || ''
-        },
-        client_context: {
-          action: 'context-menu',
-          column: context.column,
-          entity_type: context.entityType
-        }
-      });
-    });
-    menu.append(button);
-  }
+  const label = context.column ? getColumnMeta(context.column).label : 'Matching';
+  menu.innerHTML = `
+    <form class="matching-context-chat" data-matching-context-form>
+      <header>
+        <div>
+          <strong>Chat to CTOX</strong>
+          <span>${escapeDrawerHtml(label)} · ${escapeDrawerHtml(context.entityType || 'workspace')}</span>
+        </div>
+        <button type="button" data-context-close aria-label="Schließen">×</button>
+      </header>
+      <div class="matching-context-mode" role="radiogroup" aria-label="CTOX Aufgabe">
+        <label><input type="radio" name="contextMode" value="data" checked /> Mit Daten arbeiten</label>
+        <label><input type="radio" name="contextMode" value="app" /> App modifizieren</label>
+      </div>
+      <textarea data-context-message placeholder="Was soll CTOX hier tun oder prüfen?"></textarea>
+      <footer>
+        <span data-context-status></span>
+        <button type="submit">Senden</button>
+      </footer>
+    </form>
+  `;
 
   menu.hidden = false;
   const rect = menu.getBoundingClientRect();
@@ -1260,6 +1256,42 @@ function renderContextMenu(menu, context, x, y) {
   const top = Math.min(y, window.innerHeight - rect.height - 8);
   menu.style.left = `${Math.max(8, left)}px`;
   menu.style.top = `${Math.max(8, top)}px`;
+  const form = menu.querySelector('[data-matching-context-form]');
+  const textarea = menu.querySelector('[data-context-message]');
+  const status = menu.querySelector('[data-context-status]');
+  menu.querySelector('[data-context-close]')?.addEventListener('click', () => {
+    menu.hidden = true;
+  });
+  form?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const instruction = String(textarea?.value || '').trim();
+    if (!instruction) {
+      textarea?.focus();
+      return;
+    }
+    const mode = new FormData(form).get('contextMode') || 'data';
+    status.textContent = 'Sende...';
+    const result = await dispatchCtoxCommand({
+      module: 'matching',
+      type: mode === 'app' ? 'business_os.app.modify' : 'matching.ctox.chat',
+      record_id: context.fieldId || context.column || 'matching',
+      payload: {
+        instruction,
+        mode,
+        context
+      },
+      client_context: {
+        action: 'context-chat',
+        column: context.column,
+        entity_type: context.entityType
+      }
+    });
+    status.textContent = result?.ok === false ? 'Nicht angenommen.' : 'Gesendet.';
+    if (result?.ok !== false) {
+      setTimeout(() => { menu.hidden = true; }, 650);
+    }
+  });
+  requestAnimationFrame(() => textarea?.focus());
 }
 
 function buildContextActions(context) {

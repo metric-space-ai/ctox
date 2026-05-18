@@ -13,7 +13,7 @@ const HARNESS_FLOW_CACHE_KEY = 'ctox.businessOs.ctox.lastHarnessFlow';
 const HARNESS_REFRESH_MS = 4000;
 const LOCAL_RENDER_DEBOUNCE_MS = 80;
 const CTOX_FETCH_TIMEOUT_MS = 1500;
-const CTOX_STYLE_BUILD = '20260518-communications1';
+const CTOX_STYLE_BUILD = '20260518-context-menu-light2';
 
 const labels = {
   de: {
@@ -87,9 +87,13 @@ const labels = {
     verifyRule: 'Regel prüfen',
     queueAction: 'CTOX Live Flow weiterführen',
     addTask: 'Aufgabe anlegen',
+    chatToCtox: 'Chat to CTOX',
+    workWithData: 'Mit Daten arbeiten',
     modifyApp: 'App modifizieren',
-    inspectContext: 'Kontext inspizieren',
-    refreshHarness: 'Harness aktualisieren',
+    contextPrompt: 'Was soll CTOX hier tun oder prüfen?',
+    missingMessage: 'Nachricht fehlt.',
+    chatNotReady: 'Chat ist noch nicht bereit.',
+    openChat: 'Öffne Chat...',
     noWorkHere: 'Hier liegt gerade keine Arbeit.',
     noRecentWork: 'Noch keine aktuelle Arbeit erfasst.',
     noMetrics: 'keine Live-Tokenmetriken',
@@ -171,9 +175,13 @@ const labels = {
     verifyRule: 'Verify rule',
     queueAction: 'Continue CTOX live flow',
     addTask: 'Add task',
+    chatToCtox: 'Chat to CTOX',
+    workWithData: 'Work with data',
     modifyApp: 'Modify app',
-    inspectContext: 'Inspect context',
-    refreshHarness: 'Refresh harness',
+    contextPrompt: 'What should CTOX do or check here?',
+    missingMessage: 'Message is missing.',
+    chatNotReady: 'Chat is not ready yet.',
+    openChat: 'Opening chat...',
     noWorkHere: 'No work here right now.',
     noRecentWork: 'No recent work recorded yet.',
     noMetrics: 'no live token metrics',
@@ -301,6 +309,7 @@ export async function mount(ctx) {
     localSubscriptionCleanup: null,
     refreshInFlight: false,
     layoutResizeCleanup: null,
+    contextMenuCleanup: null,
     flowViewport: { left: 0, top: 0 },
   };
 
@@ -308,6 +317,7 @@ export async function mount(ctx) {
   const harness = ctx.host.querySelector('[data-ctox-harness]');
   if (harness) harness.__ctoxState = state;
   state.layoutResizeCleanup = wireColumnResize(state);
+  state.contextMenuCleanup = initCtoxContextMenu(state);
   await loadCtoxMessages(state.lang);
   await renderFromLocalCache(state);
   startLiveTicker(state);
@@ -320,6 +330,7 @@ export async function mount(ctx) {
     window.clearInterval(state.refreshTimer);
     state.localSubscriptionCleanup?.();
     state.layoutResizeCleanup?.();
+    state.contextMenuCleanup?.();
     if (harness) delete harness.__ctoxState;
     teardownShellMessages();
   };
@@ -434,7 +445,6 @@ async function renderLoading(state) {
 function render(state) {
   renderLeft(state);
   renderMain(state);
-  wireContextMenu(state);
   updateLiveIndicators(state);
 }
 
@@ -1864,44 +1874,202 @@ function fallbackHarnessFlow(error = '') {
   };
 }
 
-function wireContextMenu(state) {
-  state.ctx.host.querySelector('[data-ctox-harness]')?.addEventListener('contextmenu', (event) => {
+function initCtoxContextMenu(state) {
+  state.contextMenu?.remove?.();
+  const menu = document.createElement('div');
+  menu.className = 'ctox-context-menu ctox-harness-context-menu';
+  menu.hidden = true;
+  const menuHost = state.ctx.host.querySelector('[data-ctox-harness]') || state.ctx.host;
+  menuHost.append(menu);
+  state.contextMenu = menu;
+
+  const handleContextMenu = (event) => {
+    if (state.ctx.module?.id !== 'ctox') return;
+    if (state.contextMenu?.contains(event.target)) return;
+    const context = ctoxCommandContextFromElement(state, event.target);
     event.preventDefault();
-    const item = event.target.closest('.ctox-context-item,[data-node-id]') || event.currentTarget;
-    const label = item.dataset.contextLabel || item.dataset.nodeId || 'CTOX Harness';
-    const recordId = item.dataset.contextRecordId || item.dataset.nodeId || 'ctox-harness';
-    state.ctx.openRightDrawer(contextDrawer(state, { label, recordId }));
-  }, { once: true });
+    event.stopPropagation();
+    renderCtoxContextMenu(state, context, event.clientX, event.clientY);
+  };
+  const handleOutsideClick = (event) => {
+    if (state.contextMenu?.contains(event.target)) return;
+    hideCtoxContextMenu(state);
+  };
+  const handleEscape = (event) => {
+    if (event.key === 'Escape') hideCtoxContextMenu(state);
+  };
+
+  state.ctx.host.addEventListener('contextmenu', handleContextMenu);
+  window.addEventListener('click', handleOutsideClick, { capture: true });
+  window.addEventListener('keydown', handleEscape);
+
+  return () => {
+    state.ctx.host.removeEventListener('contextmenu', handleContextMenu);
+    window.removeEventListener('click', handleOutsideClick, { capture: true });
+    window.removeEventListener('keydown', handleEscape);
+    state.contextMenu?.remove?.();
+    state.contextMenu = null;
+  };
 }
 
-function contextDrawer(state, context) {
+function hideCtoxContextMenu(state) {
+  if (state.contextMenu) state.contextMenu.hidden = true;
+}
+
+function ctoxCommandContextFromElement(state, target) {
+  const element = target?.nodeType === Node.ELEMENT_NODE ? target : target?.parentElement;
+  const recordElement = element?.closest?.('.ctox-context-item,[data-node-id],[data-task-id],[data-ctox-inbound-channel]');
+  const selectedTask = getSelectedTask(state);
+  const nodeId = recordElement?.dataset.nodeId || '';
+  const node = nodeId ? state.model?.nodeMap?.get(nodeId) : null;
+  const taskId = recordElement?.dataset.taskId || recordElement?.dataset.ctoxTaskId || selectedTask?.id || '';
+  const task = state.model?.tasks?.find((item) => item.id === taskId || item.taskId === taskId) || selectedTask || null;
+  const field = element?.closest?.('input, textarea, select, button');
+  const panel = element?.closest?.('[data-ctox-left], [data-flow-canvas], .ctox-timeline-panel, .ctox-flow-header, .ctox-metric-grid');
+  const column = recordElement?.dataset.ctoxInboundChannel
+    ? 'inbound'
+    : panel?.hasAttribute?.('data-flow-canvas') || panel?.classList?.contains('ctox-flow-header') || panel?.classList?.contains('ctox-metric-grid')
+      ? 'flow'
+      : panel?.classList?.contains('ctox-timeline-panel')
+        ? 'timeline'
+        : panel?.hasAttribute?.('data-ctox-left')
+          ? 'tasks'
+          : 'module';
+  const timelineStep = state.model?.timeline?.[clampIndex(state.selectedStepIndex, state.model?.timeline?.length || 1)] || null;
+  const label = recordElement?.dataset.contextLabel
+    || node?.label
+    || task?.title
+    || timelineStep?.label
+    || 'CTOX Harness';
+  return {
+    module: 'ctox',
+    column,
+    field: field?.name || field?.dataset.zoom || field?.dataset.timelineStep || '',
+    record_type: node ? 'flow_node' : task ? 'task' : recordElement?.dataset.ctoxInboundChannel ? 'inbound_channel' : 'module',
+    record_id: recordElement?.dataset.contextRecordId || nodeId || task?.id || 'ctox-harness',
+    label,
+    selected_task_id: task?.id || '',
+    selected_command_id: task?.commandId || '',
+    selected_node_id: node?.id || timelineStep?.id || '',
+    selected_step_index: clampIndex(state.selectedStepIndex, state.model?.timeline?.length || 1),
+    selected_text: String(window.getSelection?.()?.toString?.() || '').trim().slice(0, 1000),
+    clicked_text: String(element?.innerText || element?.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 500),
+  };
+}
+
+function renderCtoxContextMenu(state, context, x, y) {
   const t = labels[state.lang];
-  const body = document.createElement('div');
-  body.className = 'drawer-body ctox-context-drawer';
-  body.innerHTML = `
-    <h2>${escapeHtml(context.label)}</h2>
-    <button type="button" data-modify-app>${escapeHtml(t.modifyApp)}</button>
-    <button type="button" data-inspect-context>${escapeHtml(t.inspectContext)}</button>
-    <button type="button" data-refresh-harness>${escapeHtml(t.refreshHarness)}</button>
-    <small>module=ctox · record=${escapeHtml(context.recordId)}</small>
+  const canModifyApp = canModifyCtoxApp(state);
+  state.contextMenu.innerHTML = `
+    <form class="ctox-context-chat" data-ctox-context-chat-form>
+      <header>
+        <div>
+          <strong>${escapeHtml(t.chatToCtox)}</strong>
+          <span>${escapeHtml(ctoxContextSummary(context))}</span>
+        </div>
+        <button type="button" data-ctox-context-close aria-label="Schließen">×</button>
+      </header>
+      ${canModifyApp ? `
+        <div class="ctox-context-mode" role="radiogroup" aria-label="CTOX Aufgabe">
+          <label><input type="radio" name="contextMode" value="data" checked /> ${escapeHtml(t.workWithData)}</label>
+          <label><input type="radio" name="contextMode" value="app" /> ${escapeHtml(t.modifyApp)}</label>
+        </div>
+      ` : ''}
+      <textarea data-ctox-context-message placeholder="${escapeAttr(t.contextPrompt)}"></textarea>
+      <footer>
+        <span data-ctox-context-status></span>
+        <button type="submit">${escapeHtml(t.send)}</button>
+      </footer>
+    </form>
   `;
-  body.querySelector('[data-modify-app]')?.addEventListener('click', async () => {
-    await state.ctx.commandBus.dispatch({
+  state.contextMenu.hidden = false;
+  state.contextMenu.style.left = '0px';
+  state.contextMenu.style.top = '0px';
+  const rect = state.contextMenu.getBoundingClientRect();
+  const maxLeft = Math.max(8, window.innerWidth - rect.width - 8);
+  const maxTop = Math.max(8, window.innerHeight - rect.height - 8);
+  state.contextMenu.style.left = `${clampMetric(x, 8, maxLeft)}px`;
+  state.contextMenu.style.top = `${clampMetric(y, 8, maxTop)}px`;
+
+  const form = state.contextMenu.querySelector('[data-ctox-context-chat-form]');
+  const textarea = state.contextMenu.querySelector('[data-ctox-context-message]');
+  state.contextMenu.querySelector('[data-ctox-context-close]')?.addEventListener('click', () => hideCtoxContextMenu(state));
+  form?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const mode = canModifyApp ? (new FormData(form).get('contextMode') || 'data') : 'data';
+    await dispatchCtoxContextChat(state, context, textarea?.value || '', mode);
+  });
+  requestAnimationFrame(() => textarea?.focus());
+}
+
+function canModifyCtoxApp(state) {
+  if (typeof state.ctx.canModifyModule === 'function' && state.ctx.canModifyModule()) return true;
+  const user = state.ctx.session?.user || {};
+  const role = String(user.role || (user.is_admin ? 'admin' : 'user')).trim().toLowerCase().replace(/^business_os_/, '');
+  return ['admin', 'chef'].includes(role);
+}
+
+function ctoxContextSummary(context) {
+  return [context.column || 'module', context.record_type || '', context.label || context.record_id || '']
+    .filter(Boolean)
+    .join(' · ') || 'CTOX';
+}
+
+async function dispatchCtoxContextChat(state, context, message, mode = 'data') {
+  const t = labels[state.lang];
+  const trimmed = String(message || '').trim();
+  const status = state.contextMenu?.querySelector('[data-ctox-context-status]');
+  if (!trimmed) {
+    if (status) status.textContent = t.missingMessage;
+    return;
+  }
+  if (!document.querySelector('[data-ctox-chat-root]')) {
+    if (status) status.textContent = t.chatNotReady;
+    return;
+  }
+  const safeMode = mode === 'app' && canModifyCtoxApp(state) ? 'app' : 'data';
+  const selectedTask = getSelectedTask(state);
+  const selectedStep = state.model?.timeline?.[clampIndex(state.selectedStepIndex, state.model?.timeline?.length || 1)] || null;
+  const title = `${safeMode === 'app' ? 'CTOX App modifizieren' : 'CTOX prüfen'} · ${context.label || context.column || 'CTOX'}`;
+  const instruction = safeMode === 'app'
+    ? `Modifiziere das CTOX Business-OS-Modul anhand dieser Admin-Anweisung. Kontext nur als UI-Bezug verwenden, CTOX-Laufdaten selbst nicht als primäres Ziel verändern.\n\n${trimmed}`
+    : trimmed;
+  if (status) status.textContent = t.openChat;
+  window.dispatchEvent(new CustomEvent('ctox-business-os-chat-submit', {
+    detail: {
+      text: trimmed,
       module: 'ctox',
-      type: 'business_os.app.modify',
-      payload: { instruction: `Modify the CTOX Business OS app around context ${context.label}.`, context },
-      client_context: { module: 'ctox', surface: 'context-menu', record_id: context.recordId },
-    });
-    state.ctx.closeDrawers();
-  });
-  body.querySelector('[data-inspect-context]')?.addEventListener('click', () => {
-    body.querySelector('small').textContent = `module=ctox · record=${context.recordId} · sync=${state.ctx.syncConfig?.sync_room || 'unknown'}`;
-  });
-  body.querySelector('[data-refresh-harness]')?.addEventListener('click', async () => {
-    state.ctx.closeDrawers();
-    await refresh(state);
-  });
-  return body;
+      source_title: 'CTOX',
+      command_type: safeMode === 'app' ? 'ctox.business_os.app.modify' : 'business_os.chat.task',
+      record_id: safeMode === 'app' ? 'ctox' : (context.record_id || selectedTask?.id || 'ctox'),
+      title,
+      instruction,
+      payload: {
+        title,
+        instruction,
+        prompt: trimmed,
+        user_message: trimmed,
+        mode: safeMode,
+        target: safeMode === 'app' ? 'app' : 'data',
+        selected_task: selectedTask || null,
+        selected_step: selectedStep || null,
+        context,
+        thread_key: 'business-os/ctox',
+      },
+      client_context: {
+        action: 'context-chat',
+        mode: safeMode,
+        module: 'ctox',
+        column: context.column,
+        record_type: context.record_type,
+        record_id: context.record_id,
+        selected_task_id: context.selected_task_id || selectedTask?.id || '',
+        selected_command_id: context.selected_command_id || selectedTask?.commandId || '',
+        selected_node_id: context.selected_node_id || selectedStep?.id || '',
+      },
+    },
+  }));
+  hideCtoxContextMenu(state);
 }
 
 function wireShellMessages(state) {
@@ -1921,11 +2089,26 @@ function wireShellMessages(state) {
   const preferenceHandler = (event) => {
     applyLanguage(event.detail?.language);
   };
+  const focusHandler = (event) => {
+    const detail = event.detail || {};
+    if (!detail.taskId && !detail.commandId) return;
+    state.focusTask = {
+      taskId: detail.taskId || '',
+      commandId: detail.commandId || '',
+      taskStatus: detail.taskStatus || '',
+      sourceModule: detail.sourceModule || 'business-os',
+    };
+    reconcileSelection(state);
+    render(state);
+    syncDetailDrawer(state);
+  };
   window.addEventListener('message', messageHandler);
   window.addEventListener('ctox-business-os-preferences', preferenceHandler);
+  window.addEventListener('ctox-business-os-focus-task', focusHandler);
   return () => {
     window.removeEventListener('message', messageHandler);
     window.removeEventListener('ctox-business-os-preferences', preferenceHandler);
+    window.removeEventListener('ctox-business-os-focus-task', focusHandler);
   };
 }
 

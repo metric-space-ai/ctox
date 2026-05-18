@@ -1015,6 +1015,7 @@ pub fn process_source_parse_command(
                     "command_type": command.command_type.clone(),
                     "record_id": command.record_id.clone().unwrap_or_default(),
                     "status": "completed",
+                    "inbound_channel": command_inbound_channel(&command),
                     "task_id": queue_task.as_ref().map(|task| task.message_key.clone()),
                     "task_status": "completed",
                     "payload": command.payload.clone(),
@@ -1075,6 +1076,7 @@ pub fn process_source_parse_command(
                     "command_type": command.command_type.clone(),
                     "record_id": command.record_id.clone().unwrap_or_default(),
                     "status": "failed",
+                    "inbound_channel": command_inbound_channel(&command),
                     "task_id": queue_task.as_ref().map(|task| task.message_key.clone()),
                     "task_status": "failed",
                     "error": err.to_string(),
@@ -1303,13 +1305,13 @@ fn suggested_skill_for_command(command: &BusinessCommand) -> Option<String> {
     }
 }
 
-fn is_source_parse_command(command_type: &str) -> bool {
+pub fn is_source_parse_command(command_type: &str) -> bool {
     command_type.contains("source.parse")
         || command_type.contains("parse_requirement")
         || command_type.contains("parse_object")
 }
 
-fn is_match_command(command_type: &str) -> bool {
+pub fn is_match_command(command_type: &str) -> bool {
     command_type.contains("match.compute") || command_type == "matching.match"
 }
 

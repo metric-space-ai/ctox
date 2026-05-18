@@ -1,8 +1,10 @@
 import { createBusinessDb } from './shared/db.js';
 import { createSyncRuntime } from './shared/sync.js?v=20260518-localfirst2';
-import { createCommandBus } from './shared/command-bus.js';
+import { createCommandBus } from './shared/command-bus.js?v=20260518-real-queue-chat2';
 import { openReactSettings } from './shared/react-settings.js?v=20260517-auth3';
 import { initBusinessReporter } from './shared/business-reporter.js?v=20260517-roles1';
+import { initBusinessChat } from './shared/business-chat.js?v=20260518-real-queue-chat2';
+import { collections as ctoxCollections, migrationStrategies as ctoxMigrationStrategies } from './modules/ctox/schema.js';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -10,7 +12,7 @@ const LOGGED_OUT_KEY = 'ctox.businessOs.loggedOut';
 const ACCOUNT_PREFS_KEY = 'ctox.businessOs.accountPreferences';
 const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
-const APP_BUILD = '20260518-ctox-communications1';
+const APP_BUILD = '20260518-ctox-context-menu1';
 const FETCH_TIMEOUT_MS = 1500;
 let moduleLayoutSaveTimer = null;
 let shellColumnResizeSync = null;
@@ -120,6 +122,7 @@ async function bootstrap() {
     return;
   }
   state.db = await createBusinessDb({ name: 'ctox_business_os_v3' });
+  await registerCoreCollections();
   setStatus(shellText('syncConnecting'));
   const [modules, syncConfig] = await Promise.all([
     loadModules(),
@@ -148,11 +151,21 @@ async function bootstrap() {
     endpoint: '/api/business-os/reports',
   });
   await openModule(currentHashModuleId() || state.modules[0]?.id || 'ctox');
+  initBusinessChat({
+    session: state.session,
+    commandBus: state.commandBus,
+    db: state.db,
+    getActiveModule: () => state.activeModule,
+  });
   scheduleBackgroundModuleWork();
   if (state.sync?.config?.http_bridge_available !== false) {
     refreshRemoteShellStateInBackground();
     loadStatus().catch(() => null);
   }
+}
+
+async function registerCoreCollections() {
+  await state.db.addCollections(withMigrationStrategies(ctoxCollections, ctoxMigrationStrategies));
 }
 
 function wireShellActions() {
@@ -765,9 +778,7 @@ async function openModule(moduleId, options = {}) {
 }
 
 function moduleUsesFullWorkspace(mod) {
-  return mod.id === 'ctox'
-    || mod.id === 'matching'
-    || mod.layout?.shell === 'full-workspace'
+  return mod.layout?.shell === 'full-workspace'
     || mod.layout?.full_workspace === true
     || mod.layout?.fullFrame === true;
 }
@@ -784,9 +795,13 @@ async function registerModuleSchemas(mod) {
   const registration = (async () => {
     const schemaModule = await import(`./${moduleBasePath(mod)}/schema.js?v=${APP_BUILD}`);
     if (schemaModule.collections) {
+      const collections = withMigrationStrategies(
+        schemaModule.collections,
+        schemaModule.migrationStrategies
+      );
       const nextRegistration = state.schemaRegistrationQueue
         .catch(() => {})
-        .then(() => state.db.addCollections(schemaModule.collections));
+        .then(() => state.db.addCollections(collections));
       state.schemaRegistrationQueue = nextRegistration.catch(() => {});
       await nextRegistration;
     }
@@ -796,6 +811,24 @@ async function registerModuleSchemas(mod) {
   });
   state.schemaRegistrations.set(mod.id, registration);
   return registration;
+}
+
+function withMigrationStrategies(collections, migrationStrategies = {}) {
+  if (!collections || !migrationStrategies || !Object.keys(migrationStrategies).length) {
+    return collections;
+  }
+  const next = {};
+  for (const [name, definition] of Object.entries(collections)) {
+    const strategies = migrationStrategies[name];
+    if (!strategies) {
+      next[name] = definition;
+    } else if (definition?.schema) {
+      next[name] = { ...definition, migrationStrategies: strategies };
+    } else {
+      next[name] = { schema: definition, migrationStrategies: strategies };
+    }
+  }
+  return next;
 }
 
 function startAllModuleSync() {
@@ -868,6 +901,7 @@ function createModuleContext(mod) {
     syncConfig: state.sync.config,
     session: state.session,
     governance: state.governance,
+    authHeaders: businessOsAuthHeaders,
     canModifyModule: () => canModifyModule(mod),
     reportIssue: (details = {}) => reportCurrentModule({ module: mod, ...details }),
     openLeftDrawer: (content) => openDrawer('left', content),
@@ -1754,9 +1788,9 @@ function localDesktopSession() {
 
 async function loadModules() {
   try {
-    return await fetchJson('modules/registry.json', { timeoutMs: 600 });
+    return await fetchJson('/api/business-os/modules', { headers: businessOsAuthHeaders(), timeoutMs: 800 });
   } catch {
-    return fetchJson('/api/business-os/modules', { headers: businessOsAuthHeaders(), timeoutMs: 800 });
+    return fetchJson('modules/registry.json', { timeoutMs: 600 });
   }
 }
 
@@ -1800,9 +1834,9 @@ async function loadSyncConfig() {
   const injected = globalThis.CTOX_BUSINESS_OS_CONFIG || globalThis.ctoxBusinessOsLaunch;
   if (injected && typeof injected === 'object') return injected;
   try {
-    return await fetchJson('config.default.json', { timeoutMs: 600 });
+    return await fetchJson('/api/business-os/sync/config', { timeoutMs: 800 });
   } catch {
-    return fetchJson('/api/business-os/sync/config', { timeoutMs: 800 });
+    return fetchJson('config.default.json', { timeoutMs: 600 });
   }
 }
 

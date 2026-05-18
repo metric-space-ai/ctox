@@ -49,6 +49,19 @@ daemon that keeps technical work organized over time.
 curl -fsSL https://raw.githubusercontent.com/metric-space-ai/ctox/main/install.sh | bash
 ```
 
+If you want a coding agent to run the install for you, copy this prompt into
+your coding agent:
+
+```text
+Install CTOX on this machine by running the official installer:
+
+curl -fsSL https://raw.githubusercontent.com/metric-space-ai/ctox/main/install.sh | bash
+
+After installation, run `ctox doctor` and report whether CTOX is available on
+PATH and whether the installation looks healthy. Do not pass installer flags
+unless this machine needs an explicit backend override.
+```
+
 The installer creates a managed layout by default:
 
 - install root: `~/.local/lib/ctox`

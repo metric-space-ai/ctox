@@ -2997,8 +2997,8 @@ strong,
 .ctox-context-menu {
   position: fixed;
   z-index: 2000;
-  min-width: 240px;
-  max-width: min(320px, calc(100vw - 16px));
+  min-width: 440px;
+  max-width: min(620px, calc(100vw - 16px));
   border: 1px solid var(--bo-border);
   border-radius: var(--radius-panel);
   background: var(--bo-surface);
@@ -3006,7 +3006,87 @@ strong,
   padding: 6px;
 }
 
-.ctox-context-menu button {
+.matching-context-chat {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+}
+
+.matching-context-chat header,
+.matching-context-chat footer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.matching-context-chat header div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.matching-context-chat strong {
+  color: var(--bo-text);
+  font-size: 13px;
+  font-weight: 820;
+}
+
+.matching-context-chat span {
+  color: var(--bo-muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.matching-context-mode {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.matching-context-mode label,
+.matching-context-chat button {
+  min-height: 34px;
+  border: 1px solid var(--bo-border);
+  border-radius: var(--radius-control);
+  background: var(--bo-surface-muted);
+  color: var(--bo-text);
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.matching-context-mode label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+}
+
+.matching-context-chat textarea {
+  min-height: 120px;
+  resize: vertical;
+  border: 1px solid var(--bo-border);
+  border-radius: var(--radius-control);
+  background: var(--bo-surface-muted);
+  color: var(--bo-text);
+  font: inherit;
+  padding: 10px;
+}
+
+.matching-context-chat footer > span {
+  flex: 1;
+}
+
+.matching-context-chat button {
+  padding: 0 12px;
+}
+
+.matching-context-chat button[type="submit"] {
+  width: 100%;
+  background: color-mix(in srgb, var(--bo-accent) 18%, var(--bo-surface-muted));
+  color: var(--bo-text);
+}
+
+.ctox-context-menu > button {
   display: block;
   width: 100%;
   min-height: 30px;
@@ -3020,7 +3100,7 @@ strong,
   text-align: left;
 }
 
-.ctox-context-menu button:first-child {
+.ctox-context-menu > button:first-child {
   color: var(--bo-accent);
   font-weight: 820;
 }

@@ -348,9 +348,17 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
         }
         (Method::Post, "/api/business-os/commands") => {
             let body = read_json(&mut request)?;
-            let command = serde_json::from_value(body)?;
+            let command: store::BusinessCommand = serde_json::from_value(body)?;
+            let should_process = store::is_source_parse_command(&command.command_type)
+                || store::is_match_command(&command.command_type);
             let accepted = store::record_command(root, command)?;
-            respond_json_value(request, serde_json::to_value(accepted)?)?;
+            if should_process {
+                let processed = store::process_source_parse_command(root, &accepted.command_id)
+                    .unwrap_or(accepted);
+                respond_json_value(request, serde_json::to_value(processed)?)?;
+            } else {
+                respond_json_value(request, serde_json::to_value(accepted)?)?;
+            }
         }
         _ if method == Method::Post && path.starts_with("/api/business-os/rxdb/") => {
             let collection = path
@@ -428,16 +436,14 @@ fn load_module_manifests(app_root: &Path) -> anyhow::Result<Vec<ModuleManifest>>
             .with_context(|| format!("failed to read module manifest {}", path.display()))?;
         let mut manifest: ModuleManifest = serde_json::from_str(&text)
             .with_context(|| format!("failed to parse module manifest {}", path.display()))?;
-        if !is_core_module(&manifest.id) {
-            continue;
-        }
         if manifest.entry.is_empty() {
             manifest.entry = format!("modules/{}/index.html", manifest.id);
         }
-        manifest.source = "core".to_owned();
-        manifest.core = true;
+        let core = is_core_module(&manifest.id);
+        manifest.source = if core { "core" } else { "local" }.to_owned();
+        manifest.core = core;
         manifest.editable = true;
-        manifest.deletable = false;
+        manifest.deletable = !core;
         manifests.push(manifest);
     }
     manifests.extend(load_installed_module_manifests(app_root)?);

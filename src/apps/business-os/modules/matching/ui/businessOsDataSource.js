@@ -51,8 +51,6 @@ async function getRawDatabase() {
 
 async function createRawDatabase() {
   if (injectedRawDatabase) return injectedRawDatabase;
-  const shellDb = parentBusinessOsDatabase();
-  if (shellDb) return shellDb;
   const rxdb = await loadRxdb();
   const { createRxDatabase, getRxStorageDexie } = rxdb;
   const raw = await createRxDatabase({
@@ -62,21 +60,16 @@ async function createRawDatabase() {
     closeDuplicates: true,
   });
   const missing = {};
-  for (const [collectionName, schema] of Object.entries(matchingSchemas || {})) {
-    if (!raw[collectionName]) missing[collectionName] = { schema };
+  for (const [collectionName, definition] of Object.entries(matchingSchemas || {})) {
+    if (!raw[collectionName]) missing[collectionName] = normalizeCollectionDefinition(definition);
   }
   if (Object.keys(missing).length) await raw.addCollections(missing);
   return raw;
 }
 
-function parentBusinessOsDatabase() {
-  try {
-    const raw = window.__BUSINESS_OS_MODULES__?.matching?.db
-      || window.parent?.__BUSINESS_OS_MODULES__?.matching?.db;
-    return raw && typeof raw === 'object' ? raw : null;
-  } catch {
-    return null;
-  }
+function normalizeCollectionDefinition(definition) {
+  if (definition?.schema) return definition;
+  return { schema: definition };
 }
 
 function createCollection(name, rxCollection) {
@@ -184,6 +177,10 @@ function normalizeRemoteDocument(remote, input) {
     updated_at_ms: Number(doc.updated_at_ms || now),
     _deleted: !!doc._deleted
   };
+}
+
+function safeText(value) {
+  return typeof value === 'string' ? value.trim() : '';
 }
 
 function inferRemoteKind(remote) {
@@ -357,7 +354,21 @@ function makeId(prefix) {
 
 async function loadRxdb() {
   const mod = await import('../../../vendor/rxdb-bundle.mjs');
-  if (typeof mod.rxdbCore === 'function') return mod.rxdbCore();
-  if (globalThis.rxdbCore) return globalThis.rxdbCore();
-  return mod;
+  registerRxdbPlugin(mod, mod.RxDBMigrationSchemaPlugin || mod.RxDBMigrationPlugin);
+  const rxdb = typeof mod.rxdbCore === 'function'
+    ? mod.rxdbCore()
+    : (globalThis.rxdbCore || mod);
+  registerRxdbPlugin(rxdb, rxdb.RxDBMigrationSchemaPlugin || mod.RxDBMigrationSchemaPlugin || mod.RxDBMigrationPlugin);
+  return rxdb;
+}
+
+function registerRxdbPlugin(target, plugin) {
+  const add = target?.addRxPlugin;
+  if (typeof add !== 'function' || !plugin) return;
+  try {
+    add(plugin);
+  } catch (error) {
+    const message = String(error?.message || error || '');
+    if (!message.toLowerCase().includes('already')) throw error;
+  }
 }

@@ -1452,7 +1452,23 @@ body[data-auth-state="locked"] .topbar {
   --hairline: color-mix(in srgb, var(--line) 62%, transparent);
   --panel-radius: 16px;
   --control-radius: 12px;
-  --panel-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  --panel-shadow: 0 8px 24px oklch(0.22 0.015 235 / 0.1);
+  --shell-topbar-bg: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--surface) 92%, var(--surface-2)) 0%,
+    var(--surface) 100%
+  );
+  --shell-app-bg: linear-gradient(
+    180deg,
+    var(--bg) 0%,
+    color-mix(in srgb, var(--bg) 92%, var(--surface-2)) 100%
+  );
+  --shell-control-bg: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--surface) 88%, var(--surface-2)) 0%,
+    color-mix(in srgb, var(--surface) 74%, var(--surface-2)) 100%
+  );
+  --shell-topbar-shadow: 0 6px 16px oklch(0.22 0.015 235 / 0.08);
 }
 
 :root[data-theme="dark"] {
@@ -1464,18 +1480,23 @@ body[data-auth-state="locked"] .topbar {
   --text: #e7ecf2;
   --accent: #6cb8aa;
   --accent-soft: rgba(108, 184, 170, 0.16);
+  --panel-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  --shell-topbar-bg: linear-gradient(180deg, #12181e 0%, #0f1419 100%);
+  --shell-app-bg: radial-gradient(1000px 900px at 18% -18%, #151c23 0%, var(--bg) 58%);
+  --shell-control-bg: linear-gradient(180deg, #161c22 0%, #12171d 100%);
+  --shell-topbar-shadow: 0 6px 16px rgba(0, 0, 0, 0.24);
 }
 
 .topbar {
   min-height: 56px;
   border-bottom-color: var(--hairline);
-  background: linear-gradient(180deg, #12181e 0%, #0f1419 100%);
-  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.24);
+  background: var(--shell-topbar-bg);
+  box-shadow: var(--shell-topbar-shadow);
 }
 
 .app-shell {
   grid-template-rows: 56px minmax(0, 1fr);
-  background: radial-gradient(1000px 900px at 18% -18%, #151c23 0%, var(--bg) 58%);
+  background: var(--shell-app-bg);
 }
 
 .brand-mark,
@@ -1508,7 +1529,7 @@ body[data-auth-state="locked"] .topbar {
 .template-store-card input,
 .list button {
   border-radius: var(--control-radius);
-  background: linear-gradient(180deg, #161c22 0%, #12171d 100%);
+  background: var(--shell-control-bg);
 }
 
 .module-tab[aria-current="page"],

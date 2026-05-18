@@ -10,13 +10,17 @@
         "business_commands",
         "ctox_queue_tasks",
         "ctox_runs",
-        "ctox_bug_reports"
+        "ctox_bug_reports",
+        "business_module_acl",
+        "business_module_releases",
+        "business_module_reports"
       ],
       "source": "core",
       "core": true,
       "editable": true,
       "deletable": false,
       "layout": {
+        "shell": "full-workspace",
         "left": "runtime scopes",
         "center": "active workbench",
         "right": "agent context"

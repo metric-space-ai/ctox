@@ -1,5 +1,5 @@
 const commandSchema = {
-  version: 0,
+  version: 1,
   primaryKey: 'id',
   type: 'object',
   properties: {
@@ -9,6 +9,7 @@ const commandSchema = {
     command_type: { type: 'string' },
     record_id: { type: 'string' },
     status: { type: 'string' },
+    inbound_channel: { type: 'string' },
     payload: { type: 'object', additionalProperties: true },
     client_context: { type: 'object', additionalProperties: true },
     updated_at_ms: { type: 'number' }
@@ -41,4 +42,13 @@ export const collections = {
   knowledge_items: knowledgeRecordSchema,
   knowledge_runbooks: knowledgeRecordSchema,
   knowledge_tables: knowledgeRecordSchema
+};
+
+export const migrationStrategies = {
+  business_commands: {
+    1: (oldDoc) => ({
+      ...oldDoc,
+      inbound_channel: oldDoc.inbound_channel || oldDoc.module || ''
+    })
+  }
 };
