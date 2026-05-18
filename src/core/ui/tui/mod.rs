@@ -40,7 +40,6 @@ use crate::channels;
 use crate::communication::adapters as communication_adapters;
 use crate::context_health;
 use crate::execution::models::vision_preprocessor;
-use crate::governance;
 use crate::inference::engine;
 use crate::inference::gateway::LoadObservation;
 use crate::inference::gateway::RuntimeTelemetry;
@@ -127,20 +126,6 @@ fn default_bin_dir() -> PathBuf {
         .join(".local/bin")
 }
 
-fn resolved_install_root_for_settings(root: &Path) -> Option<PathBuf> {
-    runtime_env::env_or_config(root, "CTOX_INSTALL_ROOT")
-        .filter(|value| !value.trim().is_empty())
-        .map(PathBuf::from)
-        .or_else(|| Some(root.to_path_buf()))
-}
-
-fn resolved_state_root_for_settings(root: &Path) -> PathBuf {
-    runtime_env::env_or_config(root, "CTOX_STATE_ROOT")
-        .filter(|value| !value.trim().is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| root.join("runtime"))
-}
-
 fn resolved_cache_root_for_settings(root: &Path) -> PathBuf {
     runtime_env::env_or_config(root, "CTOX_CACHE_ROOT")
         .filter(|value| !value.trim().is_empty())
@@ -151,12 +136,6 @@ fn resolved_cache_root_for_settings(root: &Path) -> PathBuf {
                 .unwrap_or_else(|| PathBuf::from("."))
                 .join(".cache/ctox")
         })
-}
-
-fn persisted_path_setting(root: &Path, key: &str, fallback: PathBuf) -> String {
-    runtime_env::env_or_config(root, key)
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| fallback.display().to_string())
 }
 
 fn persisted_path_setting_from_env(
@@ -922,25 +901,17 @@ impl SkillState {
 }
 
 pub fn run_tui(root: &Path) -> Result<()> {
-    trace_tui_start("start");
     let db_path = crate::persistence::sqlite_path(root);
-    trace_tui_start("opening lcm");
     let _ = lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default())?;
-    trace_tui_start("lcm opened");
 
     let mut app = App::new(root.to_path_buf(), db_path);
-    trace_tui_start("app created");
     let mut stdout = io::stdout();
-    trace_tui_start("enter terminal");
     let _guard = TerminalGuard::enter(&mut stdout)?;
-    trace_tui_start("terminal entered");
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend).context("failed to initialize TUI terminal")?;
-    trace_tui_start("terminal initialized");
     terminal
         .draw(|frame| render::draw(frame, &app))
         .context("failed to draw initial TUI frame")?;
-    trace_tui_start("initial frame drawn");
 
     let mut last_refresh = Instant::now();
     let mut last_spinner_tick = Instant::now();
@@ -989,9 +960,7 @@ pub fn run_tui(root: &Path) -> Result<()> {
         };
         let refresh_due = last_refresh.elapsed() >= refresh_interval;
         if refresh_due {
-            trace_tui_start("loop refresh start");
             app.refresh()?;
-            trace_tui_start("loop refresh done");
             last_refresh = Instant::now();
         }
 
@@ -1015,20 +984,6 @@ pub fn run_tui(root: &Path) -> Result<()> {
     }
 
     Ok(())
-}
-
-fn trace_tui_start(message: &str) {
-    let Ok(path) = std::env::var("CTOX_TUI_TRACE") else {
-        return;
-    };
-    let _ = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .and_then(|mut file| {
-            use std::io::Write;
-            writeln!(file, "{message}")
-        });
 }
 
 /// Headless smoke-test renderer: creates a `TestBackend`, renders one frame,
@@ -1142,7 +1097,6 @@ pub fn run_tui_inject(
 
 impl App {
     fn new(root: PathBuf, db_path: PathBuf) -> Self {
-        trace_tui_start("app new: service status");
         let service_status =
             service::service_status_snapshot(&root).unwrap_or_else(|_| service::ServiceStatus {
                 running: false,
@@ -1167,15 +1121,10 @@ impl App {
                 last_agent_outcome: None,
                 work_hours: service::working_hours::snapshot(&root),
             });
-        trace_tui_start("app new: settings");
         let settings_items = load_settings_items(&root);
-        trace_tui_start("app new: secrets");
         let secret_items = load_secret_items(&root);
-        trace_tui_start("app new: model stats");
         let model_perf_stats = load_model_perf_stats(&root);
-        trace_tui_start("app new: skills");
         let skill_catalog = Vec::new();
-        trace_tui_start("app new: build struct");
         let mut app = Self {
             root: root.clone(),
             db_path,
@@ -1229,14 +1178,12 @@ impl App {
             last_harness_flow_refresh_at: None,
             pending_images: Vec::new(),
         };
-        trace_tui_start("app new: normalize selection");
         if let Some(first) = app.visible_setting_indices().first().copied() {
             app.settings_selected = first;
         }
         if !app.secret_items.is_empty() {
             app.secrets_selected = 0;
         }
-        trace_tui_start("app new: done");
         app
     }
 
@@ -2573,21 +2520,18 @@ impl App {
     }
 
     fn refresh(&mut self) -> Result<()> {
-        trace_tui_start("refresh: start");
         if self.page == Page::Settings {
-            trace_tui_start("refresh: dynamic settings");
             self.refresh_dynamic_setting_choices();
         }
-        trace_tui_start("refresh: visible settings");
         let visible = self.visible_setting_indices();
         if let Some(first) = visible.first().copied() {
             if !visible.contains(&self.settings_selected) {
                 self.settings_selected = first;
             }
         }
-        trace_tui_start("refresh: service");
-        self.refresh_service_status_if_due();
-        trace_tui_start("refresh: chat");
+        if self.page == Page::Settings {
+            self.refresh_service_status_if_due();
+        }
         let chat_refresh_interval = self.chat_refresh_interval();
         if self.should_refresh_chat_messages()
             && refresh_due(&mut self.last_chat_refresh_at, chat_refresh_interval)
@@ -2599,7 +2543,6 @@ impl App {
                 );
             }
         }
-        trace_tui_start("refresh: communication");
         let communication_refresh_interval = self.communication_refresh_interval();
         if self.should_refresh_communication_feed()
             && refresh_due(
@@ -2609,7 +2552,6 @@ impl App {
         {
             self.refresh_communication_feed();
         }
-        trace_tui_start("refresh: skills");
         if self.page == Page::Skills
             && refresh_due(
                 &mut self.last_skill_catalog_refresh_at,
@@ -2618,19 +2560,13 @@ impl App {
         {
             self.refresh_skill_catalog();
         }
-        trace_tui_start("refresh: harness");
         self.refresh_harness_flow_if_due();
         if self.page == Page::Settings {
-            trace_tui_start("refresh: gpu");
             self.refresh_gpu_cards();
-            trace_tui_start("refresh: runtime");
             self.refresh_runtime_telemetry_if_due();
-            trace_tui_start("refresh: header");
             self.refresh_header();
-            trace_tui_start("refresh: jami");
             self.refresh_jami_qr();
         }
-        trace_tui_start("refresh: done");
         Ok(())
     }
 
@@ -2747,58 +2683,13 @@ impl App {
     }
 
     fn refresh_chat_messages(&mut self) -> Result<()> {
-        trace_tui_start("refresh chat: settings");
-        let settings = self.saved_settings_env_map();
-        trace_tui_start("refresh chat: context");
-        let max_context = settings
-            .get("CTOX_CHAT_MODEL_MAX_CONTEXT")
-            .and_then(|value| runtime_plan::parse_chat_context_tokens(value))
-            .map(|value| value as usize)
-            .unwrap_or(DEFAULT_MAX_CONTEXT);
-        trace_tui_start("refresh chat: open lcm");
         let engine = lcm::LcmEngine::open(&self.db_path, lcm::LcmConfig::default())?;
-        trace_tui_start("refresh chat: snapshot");
         let snapshot = engine.snapshot(turn_loop::CHAT_CONVERSATION_ID)?;
-        trace_tui_start("refresh chat: continuity");
-        let continuity = engine.continuity_show_all(turn_loop::CHAT_CONVERSATION_ID)?;
-        trace_tui_start("refresh chat: forgotten");
-        let forgotten = engine.continuity_forgotten(turn_loop::CHAT_CONVERSATION_ID, None, None)?;
-        trace_tui_start("refresh chat: health");
-        let health = context_health::assess_with_forgotten(
-            &snapshot,
-            &continuity,
-            &forgotten,
-            "",
-            max_context as i64,
-        );
-        trace_tui_start("refresh chat: governance");
-        let governance_snapshot =
-            governance::prompt_snapshot(&self.root, turn_loop::CHAT_CONVERSATION_ID)
-                .unwrap_or_default();
-        trace_tui_start("refresh chat: mission");
         let mission_state = engine.mission_state(turn_loop::CHAT_CONVERSATION_ID)?;
-        trace_tui_start("refresh chat: assurance");
-        let mission_assurance =
-            engine.mission_assurance_snapshot(turn_loop::CHAT_CONVERSATION_ID)?;
-        trace_tui_start("refresh chat: strategy");
-        let strategy = engine.active_strategy_snapshot(turn_loop::CHAT_CONVERSATION_ID, None)?;
-        trace_tui_start("refresh chat: breakdown");
-        self.prompt_context_breakdown = live_context::prompt_context_breakdown_for_runtime(
-            &self.root,
-            &settings,
-            &snapshot,
-            &continuity,
-            &mission_state,
-            &mission_assurance,
-            &strategy,
-            &governance_snapshot,
-            &health,
-        )
-        .ok();
-        self.context_health = Some(health);
+        self.prompt_context_breakdown = None;
+        self.context_health = None;
         self.chat_messages = snapshot.messages;
         self.mission_state = Some(mission_state);
-        trace_tui_start("refresh chat: done");
         Ok(())
     }
 
@@ -3915,11 +3806,8 @@ fn apply_runtime_model_selection(
 }
 
 fn load_settings_items(root: &Path) -> Vec<SettingItem> {
-    trace_tui_start("settings: env map");
     let env_map = BTreeMap::new();
-    trace_tui_start("settings: runtime state");
     let current_runtime_state: Option<runtime_state::InferenceRuntimeState> = None;
-    trace_tui_start("settings: infer");
     let inferred_chat_source = current_runtime_state
         .as_ref()
         .map(|state| state.source.as_env_value().to_string())
@@ -3939,11 +3827,8 @@ fn load_settings_items(root: &Path) -> Vec<SettingItem> {
         "CTOX_API_PROVIDER".to_string(),
         inferred_api_provider.clone(),
     );
-    trace_tui_start("settings: chat model choices");
     let chat_model_choices: Vec<&'static str> = Vec::new();
-    trace_tui_start("settings: chat family choices");
     let chat_family_choices: Vec<&'static str> = Vec::new();
-    trace_tui_start("settings: active family");
     let active_family = selected_local_chat_family(&env_map)
         .or_else(|| {
             current_runtime_state
@@ -3959,7 +3844,6 @@ fn load_settings_items(root: &Path) -> Vec<SettingItem> {
                 .map(|value| (*value).to_string())
         })
         .unwrap_or_else(|| default_local_chat_family_label().to_string());
-    trace_tui_start("settings: active model");
     let active_model = current_runtime_state
         .as_ref()
         .and_then(|state| state.base_or_selected_model().map(ToOwned::to_owned))
@@ -3971,9 +3855,7 @@ fn load_settings_items(root: &Path) -> Vec<SettingItem> {
         })
         .or_else(|| chat_model_choices.first().map(|value| (*value).to_string()))
         .unwrap_or_else(|| default_active_model().to_string());
-    trace_tui_start("settings: boost choices");
     let boost_choices: Vec<&'static str> = Vec::new();
-    trace_tui_start("settings: paths");
     let boost_model = current_runtime_state
         .as_ref()
         .and_then(|state| state.boost.model.clone())
@@ -4010,53 +3892,44 @@ fn load_settings_items(root: &Path) -> Vec<SettingItem> {
         .filter(|value| !value.trim().is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| root.join("runtime"));
-    trace_tui_start("settings: install root");
     let resolved_install_root = env_map
         .get("CTOX_INSTALL_ROOT")
         .filter(|value| !value.trim().is_empty())
         .cloned()
         .or_else(|| Some(root.display().to_string()))
         .unwrap_or_default();
-    trace_tui_start("settings: state root");
     let resolved_state_root = persisted_path_setting_from_env(
         &env_map,
         "CTOX_STATE_ROOT",
         default_state_root_path.clone(),
     );
-    trace_tui_start("settings: cache root");
     let resolved_cache_root = persisted_path_setting_from_env(
         &env_map,
         "CTOX_CACHE_ROOT",
         resolved_cache_root_for_settings(root),
     );
-    trace_tui_start("settings: bin dir");
     let resolved_bin_dir =
         persisted_path_setting_from_env(&env_map, "CTOX_BIN_DIR", default_bin_dir());
-    trace_tui_start("settings: skills root");
     let resolved_skills_root = persisted_path_setting_from_env(
         &env_map,
         "CTOX_SKILLS_ROOT",
         default_state_root_path.join("skills"),
     );
-    trace_tui_start("settings: generated skills root");
     let resolved_generated_skills_root = persisted_path_setting_from_env(
         &env_map,
         "CTOX_GENERATED_SKILLS_ROOT",
         default_state_root_path.join("generated-skills"),
     );
-    trace_tui_start("settings: tools root");
     let resolved_tools_root = persisted_path_setting_from_env(
         &env_map,
         "CTOX_TOOLS_ROOT",
         default_state_root_path.join("tools"),
     );
-    trace_tui_start("settings: dependencies root");
     let resolved_dependencies_root = persisted_path_setting_from_env(
         &env_map,
         "CTOX_DEPENDENCIES_ROOT",
         default_state_root_path.join("dependencies"),
     );
-    trace_tui_start("settings: vec");
     vec![
         SettingItem {
             key: "CTOX_SERVICE_TOGGLE",

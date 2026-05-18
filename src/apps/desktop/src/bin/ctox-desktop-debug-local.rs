@@ -2,9 +2,7 @@ use std::{collections::BTreeMap, path::PathBuf, thread, time::Duration};
 
 use anyhow::Result;
 use ctox_desktop::{
-    installations::LaunchTarget,
-    terminal_backend::TerminalSession,
-    connector::SessionSpec,
+    connector::SessionSpec, installations::LaunchTarget, terminal_backend::TerminalSession,
 };
 
 fn main() -> Result<()> {
