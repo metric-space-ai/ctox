@@ -1118,7 +1118,6 @@ impl App {
             last_agent_outcome: None,
             work_hours: service::working_hours::WorkHoursSnapshot::default(),
         };
-        let settings_items = load_settings_items(&root);
         let model_perf_stats = load_model_perf_stats(&root);
         let skill_catalog = Vec::new();
         let mut app = Self {
@@ -1136,7 +1135,7 @@ impl App {
             prompt_context_breakdown: None,
             context_health: None,
             mission_state: None,
-            settings_items,
+            settings_items: Vec::new(),
             settings_selected: 0,
             settings_view: SettingsView::Model,
             secret_items: Vec::new(),
@@ -2228,6 +2227,7 @@ impl App {
     }
 
     fn switch_settings_view(&mut self, view: SettingsView) {
+        self.ensure_settings_items_loaded();
         if self.settings_view == view {
             return;
         }
@@ -2242,6 +2242,16 @@ impl App {
         } else if view == SettingsView::HarnessFlow {
             self.harness_flow_scroll = 0;
             self.refresh_harness_flow();
+        }
+    }
+
+    fn ensure_settings_items_loaded(&mut self) {
+        if !self.settings_items.is_empty() {
+            return;
+        }
+        self.settings_items = load_settings_items(&self.root);
+        if let Some(first) = self.visible_setting_indices().first().copied() {
+            self.settings_selected = first;
         }
     }
 
@@ -2514,6 +2524,7 @@ impl App {
 
     fn refresh(&mut self) -> Result<()> {
         if self.page == Page::Settings {
+            self.ensure_settings_items_loaded();
             self.refresh_dynamic_setting_choices();
         }
         let visible = self.visible_setting_indices();
