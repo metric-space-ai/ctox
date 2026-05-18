@@ -209,6 +209,11 @@ fn main() -> anyhow::Result<()> {
     if args.first().map(String::as_str) == Some("__native-voxtral-tts-service") {
         return handle_native_voxtral_tts_service(&args[1..], &root);
     }
+
+    if skips_cli_startup_db(&args) {
+        return dispatch_command(&root, &args);
+    }
+
     service::db_migration::run_if_needed(&root)
         .context("failed to consolidate legacy databases into runtime/ctox.sqlite3")?;
 
@@ -223,6 +228,19 @@ fn main() -> anyhow::Result<()> {
         .finish(&result)
         .context("failed to finish CTOX CLI turn ledger")?;
     result
+}
+
+fn skips_cli_startup_db(args: &[String]) -> bool {
+    if args.is_empty() {
+        return true;
+    }
+    if let Some(first) = args.first().map(String::as_str) {
+        match first {
+            "tui" | "tui-smoke" => return true,
+            _ => {}
+        }
+    }
+    skips_cli_turn_ledger(args)
 }
 
 fn skips_cli_turn_ledger(args: &[String]) -> bool {
