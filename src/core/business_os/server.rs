@@ -8,6 +8,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 use sha2::Digest;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -93,6 +94,22 @@ struct DeleteModuleRequest {
     module_id: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct RuntimeSettingsRequest {
+    #[serde(default)]
+    provider: String,
+    #[serde(default)]
+    auth_mode: String,
+    #[serde(default)]
+    chat_model: String,
+    #[serde(default)]
+    context: String,
+    #[serde(default)]
+    max_run_secs: Option<u64>,
+    #[serde(default)]
+    api_key: String,
+}
+
 pub fn serve_business_os(root: &Path, options: BusinessOsServeOptions) -> anyhow::Result<()> {
     let app_root = resolve_business_os_app_root(root);
     if !app_root.join("index.html").is_file() {
@@ -132,6 +149,27 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
     match (method.clone(), path) {
         (Method::Get, "/api/business-os/status") => {
             respond_json(request, &store::status(root)?)?;
+        }
+        (Method::Get, "/api/business-os/ctox/runtime-settings") => {
+            let session = request_session(&request);
+            if !session.authenticated {
+                respond_status(request, 401, "login required")?;
+            } else {
+                respond_json_value(request, runtime_settings_payload(root, &session)?)?;
+            }
+        }
+        (Method::Post, "/api/business-os/ctox/runtime-settings") => {
+            let session = request_session(&request);
+            if !session.authenticated {
+                respond_status(request, 401, "login required")?;
+            } else if !store::session_can_manage_all(&session) {
+                respond_status(request, 403, "chef or admin role required")?;
+            } else {
+                let body = read_json(&mut request)?;
+                let mutation: RuntimeSettingsRequest = serde_json::from_value(body)?;
+                save_runtime_settings(root, mutation)?;
+                respond_json_value(request, runtime_settings_payload(root, &session)?)?;
+            }
         }
         (Method::Get, "/api/business-os/session") => {
             let auth_header = header_value(&request, "Authorization");
@@ -387,6 +425,149 @@ fn request_session(request: &Request) -> store::BusinessOsSession {
     let auth_header = header_value(request, "Authorization");
     let session_header = header_value(request, "X-CTOX-Business-OS-Session");
     store::session(auth_header.as_deref(), session_header.as_deref())
+}
+
+fn runtime_settings_payload(root: &Path, session: &store::BusinessOsSession) -> anyhow::Result<Value> {
+    let env_map = crate::inference::runtime_env::effective_operator_env_map(root)
+        .unwrap_or_else(|_| BTreeMap::new());
+    let runtime_state = crate::inference::runtime_state::load_or_resolve_runtime_state(root).ok();
+    let provider = runtime_state
+        .as_ref()
+        .map(crate::inference::runtime_state::api_provider_for_runtime_state)
+        .map(str::to_owned)
+        .unwrap_or_else(|| crate::inference::runtime_state::infer_api_provider_from_env_map(&env_map));
+    let source = runtime_state
+        .as_ref()
+        .map(|state| state.source.as_env_value().to_owned())
+        .unwrap_or_else(|| {
+            env_map
+                .get("CTOX_CHAT_SOURCE")
+                .cloned()
+                .unwrap_or_else(|| "local".to_owned())
+        });
+    let key_name = crate::inference::runtime_state::api_key_env_var_for_provider(&provider);
+    let key_configured = crate::secrets::get_credential(root, key_name).is_some();
+    let auth_mode = env_map
+        .get("OPENAI_AUTH_MODE")
+        .cloned()
+        .unwrap_or_else(|| "api_key".to_owned());
+    let service = crate::service::service_status_snapshot(root).ok();
+    let service_running = service
+        .as_ref()
+        .map(|status| status.running)
+        .unwrap_or(false);
+    let service_last_error = service
+        .as_ref()
+        .and_then(|status| status.last_error.clone())
+        .unwrap_or_default();
+    let subscription_selected = provider.eq_ignore_ascii_case("openai")
+        && matches!(
+            auth_mode.trim().to_ascii_lowercase().as_str(),
+            "chatgpt_subscription" | "subscription" | "codex_subscription" | "chatgpt"
+        );
+    let auth_configured = provider.eq_ignore_ascii_case("local")
+        || subscription_selected
+        || key_configured;
+    let needs_attention = !service_running || !service_last_error.trim().is_empty() || !auth_configured;
+    Ok(serde_json::json!({
+        "ok": true,
+        "can_manage": store::session_can_manage_all(session),
+        "runtime": {
+            "source": source,
+            "provider": provider,
+            "chat_model": env_map.get("CTOX_CHAT_MODEL")
+                .or_else(|| env_map.get("CTOX_CHAT_MODEL_BASE"))
+                .cloned()
+                .or_else(|| runtime_state.as_ref().and_then(|state| state.requested_model.clone()))
+                .or_else(|| runtime_state.as_ref().and_then(|state| state.active_model.clone()))
+                .unwrap_or_else(|| "gpt-5.5".to_owned()),
+            "context": env_map.get("CTOX_CHAT_MODEL_MAX_CONTEXT")
+                .cloned()
+                .or_else(|| runtime_state.as_ref().and_then(|state| state.configured_context_tokens.map(|value| value.to_string())))
+                .unwrap_or_else(|| "256k".to_owned()),
+            "max_run_secs": env_map.get("CTOX_CHAT_TURN_TIMEOUT_SECS")
+                .and_then(|value| value.parse::<u64>().ok())
+                .unwrap_or(1800),
+            "upstream_base_url": runtime_state.as_ref()
+                .filter(|state| !state.source.is_local())
+                .map(|state| state.upstream_base_url.clone())
+                .unwrap_or_default()
+        },
+        "auth": {
+            "mode": auth_mode,
+            "api_key_name": key_name,
+            "api_key_configured": key_configured,
+            "subscription_selected": subscription_selected,
+            "configured": auth_configured
+        },
+        "service": service,
+        "diagnostics": {
+            "needs_attention": needs_attention,
+            "last_error": service_last_error,
+            "message": if needs_attention {
+                if !service_running {
+                    "CTOX Service läuft nicht.".to_owned()
+                } else if !service_last_error.trim().is_empty() {
+                    format!("CTOX kann Aufgaben nicht ausführen: {service_last_error}")
+                } else {
+                    format!("{} ist nicht konfiguriert.", key_name)
+                }
+            } else {
+                "Runtime/Auth wirkt konfiguriert.".to_owned()
+            }
+        }
+    }))
+}
+
+fn save_runtime_settings(root: &Path, request: RuntimeSettingsRequest) -> anyhow::Result<()> {
+    let provider = crate::inference::runtime_state::normalize_api_provider(&request.provider);
+    let mut env_map = crate::inference::runtime_env::effective_operator_env_map(root)
+        .unwrap_or_else(|_| BTreeMap::new());
+    let chat_model = request.chat_model.trim();
+    let context = request.context.trim();
+    if provider.eq_ignore_ascii_case("local") {
+        env_map.insert("CTOX_CHAT_SOURCE".to_owned(), "local".to_owned());
+        env_map.remove("CTOX_API_PROVIDER");
+        env_map.remove("CTOX_UPSTREAM_BASE_URL");
+    } else {
+        env_map.insert("CTOX_CHAT_SOURCE".to_owned(), "api".to_owned());
+        env_map.insert("CTOX_API_PROVIDER".to_owned(), provider.to_owned());
+        env_map.insert(
+            "CTOX_UPSTREAM_BASE_URL".to_owned(),
+            crate::inference::runtime_state::default_api_upstream_base_url_for_provider(provider)
+                .to_owned(),
+        );
+    }
+    if !chat_model.is_empty() {
+        env_map.insert("CTOX_CHAT_MODEL".to_owned(), chat_model.to_owned());
+        env_map.insert("CTOX_CHAT_MODEL_BASE".to_owned(), chat_model.to_owned());
+    }
+    if !context.is_empty() {
+        env_map.insert("CTOX_CHAT_MODEL_MAX_CONTEXT".to_owned(), context.to_owned());
+    }
+    if let Some(max_run_secs) = request.max_run_secs.filter(|value| *value > 0) {
+        env_map.insert(
+            "CTOX_CHAT_TURN_TIMEOUT_SECS".to_owned(),
+            max_run_secs.to_string(),
+        );
+    }
+    let auth_mode = request.auth_mode.trim().to_ascii_lowercase();
+    if provider.eq_ignore_ascii_case("openai")
+        && matches!(
+            auth_mode.as_str(),
+            "chatgpt_subscription" | "subscription" | "codex_subscription" | "chatgpt"
+        )
+    {
+        env_map.insert("OPENAI_AUTH_MODE".to_owned(), "chatgpt_subscription".to_owned());
+    } else {
+        env_map.insert("OPENAI_AUTH_MODE".to_owned(), "api_key".to_owned());
+    }
+    let api_key = request.api_key.trim();
+    if !api_key.is_empty() {
+        let key_name = crate::inference::runtime_state::api_key_env_var_for_provider(provider);
+        env_map.insert(key_name.to_owned(), api_key.to_owned());
+    }
+    crate::inference::runtime_env::save_runtime_env_map(root, &env_map)
 }
 
 fn latest_harness_flow_payload(root: &Path) -> Value {

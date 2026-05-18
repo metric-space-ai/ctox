@@ -202,19 +202,12 @@ function wireShellActions() {
     if (id) openModule(id);
   });
   document.querySelector('[data-open-settings]')?.addEventListener('click', () => {
-    els.rightDrawer.classList.remove('account-popover');
-    openReactSettings({
-      mount: els.rightDrawer,
-      modules: state.modules,
-      session: state.session,
-      governance: state.governance,
-      syncConfig: state.sync?.config,
-      commandBus: state.commandBus,
-      onAccount: openAccountDrawer,
-      onClose: closeDrawers,
-      onModulesChanged: refreshModules,
-    });
-    showBackdrop();
+    openSettingsDrawer();
+  });
+  els.ctoxWarning?.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    openSettingsDrawer({ initialTab: 'runtime' });
   });
   els.accountButton?.addEventListener('click', openAccountDrawer);
   els.languageSelect?.addEventListener('change', () => {
@@ -249,6 +242,23 @@ function wireShellActions() {
     state.db?.close?.();
   });
   shellColumnResizeSync = setupShellColumnResizing();
+}
+
+function openSettingsDrawer(options = {}) {
+  els.rightDrawer.classList.remove('account-popover');
+  openReactSettings({
+    mount: els.rightDrawer,
+    modules: state.modules,
+    session: state.session,
+    governance: state.governance,
+    syncConfig: state.sync?.config,
+    commandBus: state.commandBus,
+    initialTab: options.initialTab || 'runtime',
+    onAccount: openAccountDrawer,
+    onClose: closeDrawers,
+    onModulesChanged: refreshModules,
+  });
+  showBackdrop();
 }
 
 function isVolatileSyncTransportError(error) {

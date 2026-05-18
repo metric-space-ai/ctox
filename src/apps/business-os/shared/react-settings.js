@@ -5,6 +5,7 @@ export async function openReactSettings({
   governance = null,
   syncConfig = null,
   commandBus = null,
+  initialTab = 'runtime',
   onAccount,
   onClose,
   onModulesChanged,
@@ -21,8 +22,10 @@ export async function openReactSettings({
   const isAdmin = roleCanManage(role);
   const canOpenAdmin = isAdmin || role === 'founder';
   const settingsState = {
-    tab: 'runtime',
+    tab: initialTab || 'runtime',
     commandStatus: '',
+    runtimeSettings: null,
+    runtimeLoading: false,
     users: null,
     canManageUsers: false,
     modules: Array.isArray(modules) ? modules : [],
@@ -48,6 +51,19 @@ export async function openReactSettings({
     render();
   };
 
+  const refreshRuntimeSettings = async () => {
+    settingsState.runtimeLoading = true;
+    render();
+    try {
+      settingsState.runtimeSettings = await loadRuntimeSettings();
+      settingsState.commandStatus = '';
+    } catch (error) {
+      settingsState.commandStatus = `Runtime-Status konnte nicht geladen werden: ${error.message || error}`;
+    }
+    settingsState.runtimeLoading = false;
+    render();
+  };
+
   const render = () => {
     body.innerHTML = settingsTemplate({
       modules,
@@ -61,6 +77,8 @@ export async function openReactSettings({
       canOpenAdmin,
       tab: settingsState.tab,
       commandStatus: settingsState.commandStatus,
+      runtimeSettings: settingsState.runtimeSettings,
+      runtimeLoading: settingsState.runtimeLoading,
       users: settingsState.users,
       canManageUsers: settingsState.canManageUsers,
       editingModuleId: settingsState.editingModuleId,
@@ -73,6 +91,9 @@ export async function openReactSettings({
         settingsState.tab = button.dataset.settingsTab;
         settingsState.commandStatus = '';
         render();
+        if (settingsState.tab === 'runtime' && !settingsState.runtimeSettings) {
+          refreshRuntimeSettings();
+        }
         if (settingsState.tab === 'admin' && settingsState.templates === null) {
           refreshManagedModules();
         }
@@ -99,6 +120,17 @@ export async function openReactSettings({
         }
         render();
       });
+    });
+    body.querySelector('[data-runtime-save]')?.addEventListener('click', async () => {
+      settingsState.commandStatus = 'Runtime/Auth wird gespeichert...';
+      render();
+      try {
+        settingsState.runtimeSettings = await saveRuntimeSettings(runtimePayloadFromForm(body));
+        settingsState.commandStatus = 'Runtime/Auth gespeichert.';
+      } catch (error) {
+        settingsState.commandStatus = String(error?.message || error);
+      }
+      render();
     });
     body.querySelector('[data-user-save]')?.addEventListener('click', async () => {
       const id = body.querySelector('[data-user-id]')?.value?.trim();
@@ -249,6 +281,7 @@ export async function openReactSettings({
   };
 
   render();
+  refreshRuntimeSettings();
   loadUsers().then((payload) => {
     settingsState.users = payload.users || [];
     settingsState.canManageUsers = payload.can_manage === true;
@@ -271,6 +304,8 @@ function settingsTemplate({
   canOpenAdmin,
   tab,
   commandStatus,
+  runtimeSettings,
+  runtimeLoading,
   users,
   canManageUsers,
   editingModuleId,
@@ -302,7 +337,7 @@ function settingsTemplate({
     </nav>
 
     <div class="settings-scroll">
-      ${tab === 'runtime' ? runtimePanel(isAdmin) : ''}
+      ${tab === 'runtime' ? runtimePanel(isAdmin, runtimeSettings, runtimeLoading) : ''}
       ${tab === 'sync' ? syncPanel(syncConfig, isAdmin) : ''}
       ${tab === 'users' ? usersPanel(user, role, isAdmin, users, canManageUsers) : ''}
       ${tab === 'admin' && canOpenAdmin ? adminPanel(managedModules || modules, templates, editingModuleId, { isAdmin, role, user, governance }) : ''}
@@ -316,20 +351,63 @@ function settingsTemplate({
   `;
 }
 
-function runtimePanel(isAdmin) {
+function runtimePanel(isAdmin, runtimeSettings, runtimeLoading) {
+  const runtime = runtimeSettings?.runtime || {};
+  const auth = runtimeSettings?.auth || {};
+  const diagnostics = runtimeSettings?.diagnostics || {};
+  const provider = runtime.provider || 'local';
+  const authMode = auth.mode || 'api_key';
+  const needsAttention = Boolean(diagnostics.needs_attention);
+  const canManage = Boolean(isAdmin && runtimeSettings?.can_manage !== false);
   return `
+    <section class="settings-section ${needsAttention ? 'is-danger' : 'is-ok'}">
+      <header>
+        <h3>CTOX Status</h3>
+        <span>${escapeHtml(runtimeLoading ? 'Prüfe Runtime...' : needsAttention ? 'Eingriff erforderlich' : 'Konfiguriert')}</span>
+      </header>
+      <div class="settings-alert ${needsAttention ? 'is-danger' : 'is-ok'}">
+        <strong>${escapeHtml(needsAttention ? 'CTOX arbeitet gerade nicht korrekt.' : 'CTOX Runtime/Auth wirkt konfiguriert.')}</strong>
+        <span>${escapeHtml(diagnostics.message || 'Runtime-Status wird geladen.')}</span>
+      </div>
+      <dl class="settings-kv">
+        ${kv('Quelle', runtime.source || '-')}
+        ${kv('Provider', provider)}
+        ${kv('Auth', auth.subscription_selected ? 'ChatGPT Subscription' : auth.api_key_configured ? `${auth.api_key_name} gesetzt` : `${auth.api_key_name || 'API Key'} fehlt`)}
+        ${kv('Letzter Fehler', diagnostics.last_error || '-')}
+      </dl>
+    </section>
     <section class="settings-section">
       <header>
         <h3>Model Runtime</h3>
-        <span>${escapeHtml(isAdmin ? 'Admin kann Änderungen als CTOX Task einreichen.' : 'Nur lesbar für normale Nutzer.')}</span>
+        <span>${escapeHtml(canManage ? 'Chef/Admin kann Runtime direkt ändern.' : 'Nur Chef und Admin dürfen ändern.')}</span>
       </header>
       <div class="settings-grid">
-        <label><span>Chat Modell</span><select data-runtime-model ${isAdmin ? '' : 'disabled'}><option>gpt-5.5</option><option>gpt-5.4</option><option>gpt-5.3-codex</option><option>openrouter/minimax/m2.7</option></select></label>
-        <label><span>Preset</span><select data-runtime-preset ${isAdmin ? '' : 'disabled'}><option value="quality">Quality</option><option value="performance">Performance</option></select></label>
-        <label><span>Context</span><select data-runtime-context ${isAdmin ? '' : 'disabled'}><option>128k</option><option selected>256k</option></select></label>
-        <label><span>Max Run</span><input data-runtime-timeout inputmode="numeric" value="1800" ${isAdmin ? '' : 'disabled'} /></label>
+        <label><span>Provider</span><select data-runtime-provider ${canManage ? '' : 'disabled'}>
+          ${option('local', 'Local CTOX', provider)}
+          ${option('openai', 'OpenAI', provider)}
+          ${option('openrouter', 'OpenRouter', provider)}
+          ${option('anthropic', 'Anthropic', provider)}
+          ${option('minimax', 'MiniMax', provider)}
+        </select></label>
+        <label><span>Auth</span><select data-runtime-auth-mode ${canManage ? '' : 'disabled'}>
+          ${option('api_key', 'API Key', authMode)}
+          ${option('chatgpt_subscription', 'ChatGPT Subscription', authMode)}
+        </select></label>
+        <label><span>Chat Modell</span><select data-runtime-model ${canManage ? '' : 'disabled'}>
+          ${option('gpt-5.5', 'gpt-5.5', runtime.chat_model)}
+          ${option('gpt-5.4', 'gpt-5.4', runtime.chat_model)}
+          ${option('gpt-5.3-codex', 'gpt-5.3-codex', runtime.chat_model)}
+          ${option('claude-opus-4-6', 'claude-opus-4-6', runtime.chat_model)}
+          ${option('openrouter/minimax/m2.7', 'openrouter/minimax/m2.7', runtime.chat_model)}
+        </select></label>
+        <label><span>Context</span><select data-runtime-context ${canManage ? '' : 'disabled'}>
+          ${option('128k', '128k', runtime.context)}
+          ${option('256k', '256k', runtime.context)}
+        </select></label>
+        <label><span>Max Run</span><input data-runtime-timeout inputmode="numeric" value="${escapeAttr(runtime.max_run_secs || 1800)}" ${canManage ? '' : 'disabled'} /></label>
+        <label><span>${escapeHtml(auth.api_key_name || 'API Key')}</span><input data-runtime-api-key type="password" autocomplete="off" placeholder="${escapeAttr(auth.api_key_configured ? 'gespeichert - leer lassen' : 'API Key eingeben')}" ${canManage ? '' : 'disabled'} /></label>
       </div>
-      ${isAdmin ? `<button class="text-button settings-primary" type="button" data-settings-command="runtime">Änderung an CTOX geben</button>` : ''}
+      ${canManage ? `<button class="text-button settings-primary" type="button" data-runtime-save>Runtime/Auth speichern</button>` : ''}
     </section>
     <section class="settings-section">
       <header><h3>Queue Policy</h3><span>Operative Arbeit läuft über CTOX Tasks.</span></header>
@@ -572,8 +650,23 @@ function tabButton(id, label, active) {
   return `<button type="button" data-settings-tab="${escapeAttr(id)}" ${id === active ? 'aria-current="page"' : ''}>${escapeHtml(label)}</button>`;
 }
 
+function option(value, label, selected) {
+  return `<option value="${escapeAttr(value)}" ${String(selected || '').toLowerCase() === String(value).toLowerCase() ? 'selected' : ''}>${escapeHtml(label)}</option>`;
+}
+
 function kv(key, value) {
   return `<div><dt>${escapeHtml(key)}</dt><dd>${escapeHtml(String(value || '-'))}</dd></div>`;
+}
+
+function runtimePayloadFromForm(root) {
+  return {
+    provider: root.querySelector('[data-runtime-provider]')?.value || 'local',
+    auth_mode: root.querySelector('[data-runtime-auth-mode]')?.value || 'api_key',
+    chat_model: root.querySelector('[data-runtime-model]')?.value || 'gpt-5.5',
+    context: root.querySelector('[data-runtime-context]')?.value || '256k',
+    max_run_secs: Number(root.querySelector('[data-runtime-timeout]')?.value || 1800),
+    api_key: root.querySelector('[data-runtime-api-key]')?.value || '',
+  };
 }
 
 function resolveRole(session) {
@@ -674,6 +767,18 @@ function escapeAttr(value) {
 
 async function loadUsers() {
   return fetchJson('/api/business-os/users', { headers: authHeaders() });
+}
+
+async function loadRuntimeSettings() {
+  return fetchJson('/api/business-os/ctox/runtime-settings', { headers: authHeaders() });
+}
+
+async function saveRuntimeSettings(payload) {
+  return fetchJson('/api/business-os/ctox/runtime-settings', {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify(payload),
+  });
 }
 
 async function loadModules() {

@@ -1146,6 +1146,11 @@ body[data-auth-state="locked"] .topbar {
   background: color-mix(in srgb, var(--surface) 88%, var(--surface-2));
 }
 
+.settings-section.is-danger {
+  border-color: color-mix(in srgb, #ff3b30 62%, var(--line));
+  box-shadow: 0 0 0 1px color-mix(in srgb, #ff3b30 14%, transparent);
+}
+
 .settings-section header {
   display: flex;
   align-items: baseline;
@@ -1199,6 +1204,42 @@ body[data-auth-state="locked"] .topbar {
   min-height: 74px;
   padding: 8px 9px;
   resize: vertical;
+}
+
+.settings-alert {
+  display: grid;
+  gap: 3px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 9px 10px;
+  background: var(--surface-2);
+}
+
+.settings-alert strong {
+  font-size: 13px;
+}
+
+.settings-alert span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.settings-alert.is-danger {
+  border-color: color-mix(in srgb, #ff3b30 64%, var(--line));
+  background: color-mix(in srgb, #ff3b30 11%, var(--surface));
+}
+
+.settings-alert.is-danger strong {
+  color: #ff9a91;
+}
+
+:root[data-theme="light"] .settings-alert.is-danger strong {
+  color: #b42318;
+}
+
+.settings-alert.is-ok strong {
+  color: var(--accent);
 }
 
 .settings-kv {
