@@ -1100,30 +1100,29 @@ pub fn run_tui_inject(
 
 impl App {
     fn new(root: PathBuf, db_path: PathBuf) -> Self {
-        let service_status =
-            service::service_status_snapshot(&root).unwrap_or_else(|_| service::ServiceStatus {
-                running: false,
-                busy: false,
-                pid: None,
-                listen_addr: "127.0.0.1:12435".to_string(),
-                autostart_enabled: false,
-                manager: "process".to_string(),
-                pending_count: 0,
-                pending_previews: Vec::new(),
-                blocked_count: 0,
-                blocked_previews: Vec::new(),
-                current_goal_preview: None,
-                active_source_label: None,
-                recent_events: Vec::new(),
-                last_error: None,
-                last_completed_at: None,
-                last_reply_chars: None,
-                monitor_last_check_at: None,
-                monitor_alerts: Vec::new(),
-                monitor_last_error: None,
-                last_agent_outcome: None,
-                work_hours: service::working_hours::snapshot(&root),
-            });
+        let service_status = service::ServiceStatus {
+            running: false,
+            busy: false,
+            pid: None,
+            listen_addr: "127.0.0.1:12435".to_string(),
+            autostart_enabled: false,
+            manager: "process".to_string(),
+            pending_count: 0,
+            pending_previews: Vec::new(),
+            blocked_count: 0,
+            blocked_previews: Vec::new(),
+            current_goal_preview: None,
+            active_source_label: None,
+            recent_events: Vec::new(),
+            last_error: None,
+            last_completed_at: None,
+            last_reply_chars: None,
+            monitor_last_check_at: None,
+            monitor_alerts: Vec::new(),
+            monitor_last_error: None,
+            last_agent_outcome: None,
+            work_hours: service::working_hours::snapshot(&root),
+        };
         let settings_items = load_settings_items(&root);
         let secret_items = load_secret_items(&root);
         let model_perf_stats = load_model_perf_stats(&root);
