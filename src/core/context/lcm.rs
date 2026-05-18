@@ -3157,6 +3157,33 @@ impl LcmEngine {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
+    pub fn recent_messages_for_conversation(
+        &self,
+        conversation_id: i64,
+        limit: usize,
+    ) -> Result<Vec<MessageRecord>> {
+        let limit = limit.max(1).min(500) as i64;
+        let mut stmt = self.conn.prepare(
+            "SELECT message_id, conversation_id, seq, role, content, token_count, created_at, agent_outcome
+             FROM messages WHERE conversation_id = ?1 ORDER BY seq DESC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map((conversation_id, limit), |row| {
+            Ok(MessageRecord {
+                message_id: row.get(0)?,
+                conversation_id: row.get(1)?,
+                seq: row.get(2)?,
+                role: row.get(3)?,
+                content: row.get(4)?,
+                token_count: row.get(5)?,
+                created_at: row.get(6)?,
+                agent_outcome: row.get(7)?,
+            })
+        })?;
+        let mut messages = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        messages.reverse();
+        Ok(messages)
+    }
+
     fn get_summary(&self, summary_id: &str) -> Result<Option<SummaryRecord>> {
         self.conn
             .query_row(

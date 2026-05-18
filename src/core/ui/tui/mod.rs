@@ -24,6 +24,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::io;
+use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
@@ -912,6 +913,10 @@ pub fn run_tui(root: &Path) -> Result<()> {
     terminal
         .draw(|frame| render::draw(frame, &app))
         .context("failed to draw initial TUI frame")?;
+    terminal
+        .backend_mut()
+        .flush()
+        .context("failed to flush initial TUI frame")?;
 
     let mut last_refresh = Instant::now();
     let mut last_spinner_tick = Instant::now();
@@ -980,6 +985,10 @@ pub fn run_tui(root: &Path) -> Result<()> {
             terminal
                 .draw(|frame| render::draw(frame, &app))
                 .context("failed to draw TUI frame")?;
+            terminal
+                .backend_mut()
+                .flush()
+                .context("failed to flush TUI frame")?;
         }
     }
 
@@ -2684,12 +2693,13 @@ impl App {
 
     fn refresh_chat_messages(&mut self) -> Result<()> {
         let engine = lcm::LcmEngine::open(&self.db_path, lcm::LcmConfig::default())?;
-        let snapshot = engine.snapshot(turn_loop::CHAT_CONVERSATION_ID)?;
-        let mission_state = engine.mission_state(turn_loop::CHAT_CONVERSATION_ID)?;
+        let messages =
+            engine.recent_messages_for_conversation(turn_loop::CHAT_CONVERSATION_ID, 80)?;
+        let mission_state = engine.stored_mission_state(turn_loop::CHAT_CONVERSATION_ID)?;
         self.prompt_context_breakdown = None;
         self.context_health = None;
-        self.chat_messages = snapshot.messages;
-        self.mission_state = Some(mission_state);
+        self.chat_messages = messages;
+        self.mission_state = mission_state;
         Ok(())
     }
 
