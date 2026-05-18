@@ -1648,6 +1648,94 @@ body.ctox-column-resizing {
   white-space: nowrap;
 }
 
+.ctox-task-edit {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--ctox-hair);
+  border-radius: var(--ctox-radius-panel);
+  background: var(--ctox-control-bg);
+  padding: 12px;
+}
+
+.ctox-task-edit header,
+.ctox-task-edit footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.ctox-task-edit h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 780;
+}
+
+.ctox-task-edit label {
+  display: grid;
+  gap: 5px;
+  color: var(--ctox-muted);
+  font-size: 11px;
+  font-weight: 740;
+}
+
+.ctox-task-edit input,
+.ctox-task-edit textarea,
+.ctox-task-edit select {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--ctox-hair);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  padding: 9px 10px;
+}
+
+.ctox-task-edit textarea {
+  resize: vertical;
+  line-height: 1.35;
+}
+
+.ctox-task-edit input:disabled,
+.ctox-task-edit textarea:disabled,
+.ctox-task-edit select:disabled {
+  opacity: 0.62;
+}
+
+.ctox-task-save,
+.ctox-task-delete {
+  border: 1px solid var(--ctox-accent-line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--ctox-accent) 12%, transparent);
+  color: color-mix(in srgb, var(--ctox-accent) 78%, var(--text));
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 780;
+  padding: 8px 10px;
+}
+
+.ctox-task-delete {
+  border-color: color-mix(in srgb, #e4574f 58%, var(--ctox-hair));
+  background: color-mix(in srgb, #e4574f 10%, transparent);
+  color: color-mix(in srgb, #e4574f 72%, var(--text));
+}
+
+.ctox-task-save:disabled,
+.ctox-task-delete:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.ctox-task-edit footer small,
+.ctox-task-edit header small {
+  color: var(--ctox-muted);
+  font-size: 11px;
+  line-height: 1.25;
+}
+
 .ctox-detail-summary {
   display: grid;
   gap: 5px;

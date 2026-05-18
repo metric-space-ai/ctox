@@ -34,6 +34,28 @@ export const collections = {
     required: ['id', 'title', 'status', 'module'],
     additionalProperties: true
   },
+  business_chats: {
+    version: 0,
+    primaryKey: 'id',
+    type: 'object',
+    properties: {
+      id: { type: 'string', maxLength: 128 },
+      title: { type: 'string' },
+      open: { type: 'boolean' },
+      minimized: { type: 'boolean' },
+      owner_user_id: { type: 'string' },
+      lastTrackingId: { type: 'string' },
+      messages: {
+        type: 'array',
+        items: { type: 'object', additionalProperties: true }
+      },
+      draft: { type: 'string' },
+      createdAt: { type: 'number' },
+      updated_at_ms: { type: 'number' }
+    },
+    required: ['id', 'title', 'updated_at_ms'],
+    additionalProperties: true
+  },
   ctox_runs: {
     version: 0,
     primaryKey: 'id',

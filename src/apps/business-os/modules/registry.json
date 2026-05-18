@@ -8,6 +8,7 @@
       "entry": "modules/ctox/index.html",
       "collections": [
         "business_commands",
+        "business_chats",
         "ctox_queue_tasks",
         "ctox_runs",
         "ctox_bug_reports",

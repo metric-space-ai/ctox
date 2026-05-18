@@ -13,7 +13,7 @@ const HARNESS_FLOW_CACHE_KEY = 'ctox.businessOs.ctox.lastHarnessFlow';
 const HARNESS_REFRESH_MS = 4000;
 const LOCAL_RENDER_DEBOUNCE_MS = 80;
 const CTOX_FETCH_TIMEOUT_MS = 1500;
-const CTOX_STYLE_BUILD = '20260518-context-menu1';
+const CTOX_STYLE_BUILD = '20260518-idle-flow1';
 
 const labels = {
   de: {
@@ -41,6 +41,16 @@ const labels = {
     openOutcome: 'Abschluss offen',
     unprovenOutcome: 'Abschluss nicht belegt',
     taskDetail: 'Task-Details',
+    editTask: 'Task bearbeiten',
+    taskTitle: 'Titel',
+    taskPrompt: 'Prompt',
+    saveTask: 'Speichern',
+    deleteTask: 'Löschen',
+    deleteTaskConfirm: 'Diesen CTOX Task wirklich löschen?',
+    taskSaved: 'Task gespeichert.',
+    taskDeleted: 'Task gelöscht.',
+    taskActionFailed: 'Aktion fehlgeschlagen.',
+    chefAdminOnly: 'Nur Chef oder Admin dürfen Tasks ändern.',
     currentStep: 'Aktuelle Station',
     source: 'Quelle',
     status: 'Status',
@@ -129,6 +139,16 @@ const labels = {
     openOutcome: 'Outcome open',
     unprovenOutcome: 'Outcome not proven',
     taskDetail: 'Task details',
+    editTask: 'Edit task',
+    taskTitle: 'Title',
+    taskPrompt: 'Prompt',
+    saveTask: 'Save',
+    deleteTask: 'Delete',
+    deleteTaskConfirm: 'Delete this CTOX task?',
+    taskSaved: 'Task saved.',
+    taskDeleted: 'Task deleted.',
+    taskActionFailed: 'Action failed.',
+    chefAdminOnly: 'Only chef or admin can change tasks.',
     currentStep: 'Current station',
     source: 'Source',
     status: 'Status',
@@ -844,7 +864,8 @@ function flowSvg(model, selectedNode, visibleTrace, selectedTask, state) {
         const to = model.nodeMap.get(edge.to);
         if (!from || !to) return '';
         const strength = visibleTrace.edgeStrength.get(edgeKey(edge.from, edge.to)) || 0;
-        return `<path class="ctox-flow-edge ${strength > 0 ? 'is-observed' : ''} ${edge.to === selectedNode?.id && strength > 0 ? 'is-active-edge' : ''}" d="${edgePath(from, to, edge.route)}" style="--edge-strength:${strength}"></path>`;
+        const activeEdge = model.liveWork && edge.to === selectedNode?.id && strength > 0;
+        return `<path class="ctox-flow-edge ${strength > 0 ? 'is-observed' : ''} ${activeEdge ? 'is-active-edge' : ''}" d="${edgePath(from, to, edge.route)}" style="--edge-strength:${strength}"></path>`;
       }).join('')}
       ${model.nodes.map((node) => flowNodeSvg(node, selectedNode, visibleTrace.nodeStrength.get(node.id) || 0)).join('')}
     </svg>
@@ -861,6 +882,7 @@ function taskEndpointFlowSvg(model, selectedTask, selectedNode, visibleTrace, st
 function communicationFlowSvg(selectedTask, state) {
   if (!isCommunicationFlow(selectedTask, state)) return '';
   const trace = communicationTraceFromFlow(state.flow, selectedTask);
+  const live = isHarnessLive(state);
   const observed = new Set(trace);
   const edgeObserved = new Set();
   trace.forEach((id, index) => {
@@ -876,7 +898,7 @@ function communicationFlowSvg(selectedTask, state) {
         const active = edgeObserved.has(edgeKey(edge.from, edge.to));
         return `<path class="ctox-flow-edge ctox-communication-edge ${active ? 'is-observed' : ''}" d="${edgePath(from, to, edge.route)}" style="--edge-strength:${active ? 0.92 : 0}"></path>`;
       }).join('')}
-      ${COMMUNICATION_NODES.map((node) => communicationNodeSvg(node, observed.has(node.id), trace.at(-1) === node.id)).join('')}
+      ${COMMUNICATION_NODES.map((node) => communicationNodeSvg(node, observed.has(node.id), live && trace.at(-1) === node.id)).join('')}
     </g>
   `;
 }
@@ -1074,7 +1096,8 @@ function outboundDetailForTask(task, state) {
 function flowNodeSvg(node, selectedNode, traceStrength) {
   const isVisibleTrace = traceStrength > 0;
   const isSelected = node.id === selectedNode?.id;
-  const ring = !isSelected ? '' : node.shape === 'diamond'
+  const hasLiveRing = isSelected && node.status === 'active';
+  const ring = !hasLiveRing ? '' : node.shape === 'diamond'
     ? `<path class="ctox-flow-node-live-ring" d="M 0 ${-NODE_HEIGHT / 2 - 8} L ${NODE_WIDTH / 2 + 10} 0 L 0 ${NODE_HEIGHT / 2 + 8} L ${-NODE_WIDTH / 2 - 10} 0 Z"></path>`
     : `<rect class="ctox-flow-node-live-ring" x="${-NODE_WIDTH / 2 - 9}" y="${-NODE_HEIGHT / 2 - 9}" width="${NODE_WIDTH + 18}" height="${NODE_HEIGHT + 18}" rx="16"></rect>`;
   const shape = node.shape === 'diamond'
@@ -1341,6 +1364,31 @@ function taskDrawer(task, state) {
       </div>
       ${taskLiveStatusMarkup(task, state)}
     </section>
+    <form class="ctox-task-edit" data-ctox-task-edit>
+      <header>
+        <h3>${escapeHtml(t.editTask)}</h3>
+        ${canModifyCtoxApp(state) ? '' : `<small>${escapeHtml(t.chefAdminOnly)}</small>`}
+      </header>
+      <label>
+        <span>${escapeHtml(t.taskTitle)}</span>
+        <input type="text" name="title" value="${escapeAttr(task.title || '')}" ${canModifyCtoxApp(state) ? '' : 'disabled'}>
+      </label>
+      <label>
+        <span>${escapeHtml(t.taskPrompt)}</span>
+        <textarea name="prompt" rows="4" ${canModifyCtoxApp(state) ? '' : 'disabled'}>${escapeHtml(task.prompt || task.summary || '')}</textarea>
+      </label>
+      <label>
+        <span>${escapeHtml(t.priority)}</span>
+        <select name="priority" ${canModifyCtoxApp(state) ? '' : 'disabled'}>
+          ${['urgent', 'high', 'normal', 'low'].map((priority) => `<option value="${priority}" ${String(task.priority || 'normal') === priority ? 'selected' : ''}>${escapeHtml(displayPriority(priority))}</option>`).join('')}
+        </select>
+      </label>
+      <footer>
+        <button type="submit" class="ctox-task-save" ${canModifyCtoxApp(state) ? '' : 'disabled'}>${escapeHtml(t.saveTask)}</button>
+        <button type="button" class="ctox-task-delete" data-ctox-task-delete ${canModifyCtoxApp(state) ? '' : 'disabled'}>${escapeHtml(t.deleteTask)}</button>
+        <small data-ctox-task-action-status></small>
+      </footer>
+    </form>
     ${showSummary ? `
       <section class="ctox-detail-summary">
         <p>${escapeHtml(summary)}</p>
@@ -1370,12 +1418,125 @@ function taskDrawer(task, state) {
     </section>
   `;
   body.querySelector('[data-close-ctox-drawer]')?.addEventListener('click', () => closeDetailDrawer(state));
+  body.querySelector('[data-ctox-task-edit]')?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    await saveCtoxTaskFromDrawer(state, task, event.currentTarget);
+  });
+  body.querySelector('[data-ctox-task-delete]')?.addEventListener('click', async () => {
+    await deleteCtoxTaskFromDrawer(state, task, body);
+  });
   body.querySelectorAll('[data-drawer-step]').forEach((button) => {
     button.addEventListener('click', () => {
       setTimelineStep(state, Number(button.dataset.drawerStep), { center: true });
     });
   });
   return body;
+}
+
+async function saveCtoxTaskFromDrawer(state, task, form) {
+  const t = labels[state.lang];
+  const status = form.querySelector('[data-ctox-task-action-status]');
+  const submit = form.querySelector('button[type="submit"]');
+  const formData = new FormData(form);
+  const payload = {
+    task_id: nativeTaskId(task),
+    title: String(formData.get('title') || '').trim(),
+    prompt: String(formData.get('prompt') || '').trim(),
+    priority: String(formData.get('priority') || 'normal').trim(),
+  };
+  if (!payload.task_id) {
+    if (status) status.textContent = t.taskActionFailed;
+    return;
+  }
+  submit?.setAttribute('disabled', 'disabled');
+  if (status) status.textContent = '';
+  try {
+    const res = await fetchWithTimeout('/api/business-os/ctox/tasks/update', {
+      method: 'POST',
+      headers: authHeaders(state, { 'Content-Type': 'application/json' }),
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const result = await res.json();
+    applyTaskMutationToModel(state, task.id, result.task || payload);
+    if (status) status.textContent = t.taskSaved;
+    render(state);
+    syncDetailDrawer(state);
+  } catch (error) {
+    if (status) status.textContent = humanTaskActionError(error, t);
+  } finally {
+    submit?.removeAttribute('disabled');
+  }
+}
+
+async function deleteCtoxTaskFromDrawer(state, task, body) {
+  const t = labels[state.lang];
+  if (!window.confirm(t.deleteTaskConfirm)) return;
+  const status = body.querySelector('[data-ctox-task-action-status]');
+  const button = body.querySelector('[data-ctox-task-delete]');
+  const payload = {
+    task_id: nativeTaskId(task),
+    command_id: task.commandId || '',
+  };
+  if (!payload.task_id) {
+    if (status) status.textContent = t.taskActionFailed;
+    return;
+  }
+  button?.setAttribute('disabled', 'disabled');
+  if (status) status.textContent = '';
+  try {
+    const res = await fetchWithTimeout('/api/business-os/ctox/tasks/delete', {
+      method: 'POST',
+      headers: authHeaders(state, { 'Content-Type': 'application/json' }),
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    removeTaskFromModel(state, task.id);
+    state.detailDrawer = null;
+    state.selectedTaskId = null;
+    state.ctx.closeDrawers?.();
+    render(state);
+    refresh(state).catch(() => {});
+  } catch (error) {
+    if (status) status.textContent = humanTaskActionError(error, t);
+  } finally {
+    button?.removeAttribute('disabled');
+  }
+}
+
+function nativeTaskId(task) {
+  return String(task?.taskId || task?.id || '').replace(/^queue-/, '').trim();
+}
+
+function authHeaders(state, extra = {}) {
+  if (typeof state.ctx.authHeaders === 'function') return state.ctx.authHeaders(extra);
+  return extra;
+}
+
+function applyTaskMutationToModel(state, taskId, patch) {
+  const tasks = state.model?.tasks || [];
+  const index = tasks.findIndex((item) => item.id === taskId);
+  if (index < 0) return;
+  const next = {
+    ...tasks[index],
+    title: patch.title || tasks[index].title,
+    prompt: patch.prompt ?? tasks[index].prompt,
+    priority: patch.priority || tasks[index].priority,
+    status: patch.status || tasks[index].status,
+    routeStatus: patch.route_status || tasks[index].routeStatus,
+  };
+  tasks.splice(index, 1, next);
+}
+
+function removeTaskFromModel(state, taskId) {
+  if (!state.model?.tasks) return;
+  state.model.tasks = state.model.tasks.filter((item) => item.id !== taskId);
+}
+
+function humanTaskActionError(error, t) {
+  const message = String(error?.message || error || '');
+  if (message.includes('403') || /chef|admin/i.test(message)) return t.chefAdminOnly;
+  return message ? `${t.taskActionFailed} ${message}` : t.taskActionFailed;
 }
 
 function flowNodeDrawer(node, task, state) {
@@ -1633,8 +1794,10 @@ function edgePath(from, to, route = 'normal') {
 function mergeBundleWithCommands(bundle, commands, queueTasks = [], bugReports = []) {
   const runtimeQueue = queueTasks.map((doc) => ({
     id: doc.id || doc.task_id || doc.command_id,
+    taskId: doc.task_id || doc.id || '',
     commandId: doc.command_id || '',
     title: doc.title || doc.command_type || doc.id || 'CTOX queue task',
+    prompt: doc.prompt || doc.payload?.prompt || doc.payload?.instruction || '',
     source: doc.source_module || doc.module || 'ctox',
     channel: inferInboundChannel(doc),
     priority: doc.priority || 'normal',
@@ -1647,8 +1810,10 @@ function mergeBundleWithCommands(bundle, commands, queueTasks = [], bugReports =
   })).filter((item) => item.id);
   const commandQueue = commands.map((doc) => ({
     id: doc.task_id || doc.command_id || doc.id,
+    taskId: doc.task_id || '',
     commandId: doc.command_id || doc.id,
     title: displayCommandTitle(doc),
+    prompt: doc.payload?.prompt || doc.payload?.instruction || doc.payload?.user_message || '',
     source: doc.module || 'business-os',
     channel: inferInboundChannel(doc),
     priority: doc.command_type?.includes('runtime') ? 'high' : 'normal',

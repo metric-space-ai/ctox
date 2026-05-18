@@ -1,9 +1,9 @@
 import { createBusinessDb } from './shared/db.js';
 import { createSyncRuntime } from './shared/sync.js?v=20260518-authoritative-queue1';
 import { createCommandBus } from './shared/command-bus.js?v=20260518-real-queue-chat2';
-import { openReactSettings } from './shared/react-settings.js?v=20260518-module-delete1';
+import { openReactSettings } from './shared/react-settings.js?v=20260518-runtime-auth1';
 import { initBusinessReporter } from './shared/business-reporter.js?v=20260517-roles1';
-import { initBusinessChat } from './shared/business-chat.js?v=20260518-failed-queue-chat1';
+import { initBusinessChat } from './shared/business-chat.js?v=20260518-user-chat-sync1';
 import { collections as ctoxCollections, migrationStrategies as ctoxMigrationStrategies } from './modules/ctox/schema.js';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
@@ -12,7 +12,7 @@ const LOGGED_OUT_KEY = 'ctox.businessOs.loggedOut';
 const ACCOUNT_PREFS_KEY = 'ctox.businessOs.accountPreferences';
 const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
-const APP_BUILD = '20260518-ctox-health-warning1';
+const APP_BUILD = '20260518-user-chat-sync1';
 const FETCH_TIMEOUT_MS = 1500;
 const CTOX_HEALTH_POLL_MS = 10000;
 let moduleLayoutSaveTimer = null;

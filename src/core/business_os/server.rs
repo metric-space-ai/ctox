@@ -171,6 +171,30 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
                 respond_json_value(request, runtime_settings_payload(root, &session)?)?;
             }
         }
+        (Method::Post, "/api/business-os/ctox/tasks/update") => {
+            let session = request_session(&request);
+            if !session.authenticated {
+                respond_status(request, 401, "login required")?;
+            } else if !store::session_can_manage_all(&session) {
+                respond_status(request, 403, "chef or admin role required")?;
+            } else {
+                let body = read_json(&mut request)?;
+                let mutation = serde_json::from_value(body)?;
+                respond_json_value(request, store::update_ctox_task(root, &session, mutation)?)?;
+            }
+        }
+        (Method::Post, "/api/business-os/ctox/tasks/delete") => {
+            let session = request_session(&request);
+            if !session.authenticated {
+                respond_status(request, 401, "login required")?;
+            } else if !store::session_can_manage_all(&session) {
+                respond_status(request, 403, "chef or admin role required")?;
+            } else {
+                let body = read_json(&mut request)?;
+                let mutation = serde_json::from_value(body)?;
+                respond_json_value(request, store::delete_ctox_task(root, &session, mutation)?)?;
+            }
+        }
         (Method::Get, "/api/business-os/session") => {
             let auth_header = header_value(&request, "Authorization");
             let session_header = header_value(&request, "X-CTOX-Business-OS-Session");

@@ -1,6 +1,7 @@
 const CHAT_STYLE_ID = 'ctox-business-chat-style';
 const CHAT_STATE_KEY = 'ctox.businessOs.chat.v1';
 const CHAT_CHANNEL = 'business_os.llm.chat';
+const CHAT_COLLECTION = 'business_chats';
 
 export function initBusinessChat({
   session,
@@ -10,7 +11,7 @@ export function initBusinessChat({
 }) {
   if (!session?.authenticated || document.querySelector('[data-ctox-chat-root]')) return;
   installChatStyles();
-  const state = readChatState();
+  const state = readChatState(session);
   const root = document.createElement('div');
   root.className = 'ctox-chat-root';
   root.dataset.ctoxChatRoot = 'true';
@@ -19,7 +20,13 @@ export function initBusinessChat({
   const sync = () => {
     captureDrafts(root, state);
     syncTrackedMessages({ state, db }).then((changed) => {
-      if (changed) writeChatState(state);
+      if (changed) persistChatState({ state, db });
+      if (changed) renderChatRoot({ root, state, commandBus, db, getActiveModule });
+    }).catch(() => {});
+  };
+  const syncChats = () => {
+    captureDrafts(root, state);
+    hydrateChatsFromRxDb({ state, db, session }).then((changed) => {
       if (changed) renderChatRoot({ root, state, commandBus, db, getActiveModule });
     }).catch(() => {});
   };
@@ -27,26 +34,30 @@ export function initBusinessChat({
     const detail = event.detail || {};
     const text = String(detail.text || detail.message || '').trim();
     if (!text) return;
-    const chat = ensureChat(state);
+    const chat = ensureChat(state, session);
     chat.open = true;
     chat.minimized = false;
     chat.draft = '';
     await submitChatMessage({ state, chat, text, commandBus, getActiveModule, meta: detail });
-    writeChatState(state);
+    await persistChatState({ state, db });
     renderChatRoot({ root, state, commandBus, db, getActiveModule });
     syncTrackedMessages({ state, db }).then((changed) => {
-      if (changed) writeChatState(state);
+      if (changed) persistChatState({ state, db });
       if (changed) renderChatRoot({ root, state, commandBus, db, getActiveModule });
     }).catch(() => {});
   };
 
-  renderChatRoot({ root, state, commandBus, db, getActiveModule });
+  hydrateChatsFromRxDb({ state, db, session })
+    .then(() => renderChatRoot({ root, state, commandBus, db, getActiveModule }))
+    .catch(() => renderChatRoot({ root, state, commandBus, db, getActiveModule }));
   window.addEventListener('ctox-business-os-chat-submit', handleExternalSubmit);
+  const businessChatsSub = db?.raw?.[CHAT_COLLECTION]?.$?.subscribe?.(syncChats) || null;
   const businessCommandsSub = db?.raw?.business_commands?.$?.subscribe?.(sync) || null;
   const queueTasksSub = db?.raw?.ctox_queue_tasks?.$?.subscribe?.(sync) || null;
   const timer = window.setInterval(sync, 4000);
   root.__ctoxChatCleanup = () => {
     window.removeEventListener('ctox-business-os-chat-submit', handleExternalSubmit);
+    businessChatsSub?.unsubscribe?.();
     businessCommandsSub?.unsubscribe?.();
     queueTasksSub?.unsubscribe?.();
     window.clearInterval(timer);
@@ -64,7 +75,7 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
     const chat = ensureChat(state);
     chat.open = true;
     chat.minimized = false;
-    writeChatState(state);
+    persistChatState({ state, db });
     renderChatRoot({ root, state, commandBus, db, getActiveModule });
   });
   root.querySelectorAll('[data-chat-id]').forEach((node) => {
@@ -72,18 +83,23 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
     if (!chat) return;
     node.querySelector('[data-chat-minimize]')?.addEventListener('click', () => {
       chat.minimized = !chat.minimized;
-      writeChatState(state);
+      persistChatState({ state, db });
       renderChatRoot({ root, state, commandBus, db, getActiveModule });
     });
     node.querySelector('[data-chat-close]')?.addEventListener('click', () => {
       chat.open = false;
-      writeChatState(state);
+      persistChatState({ state, db });
+      renderChatRoot({ root, state, commandBus, db, getActiveModule });
+    });
+    node.querySelector('[data-chat-delete]')?.addEventListener('click', async () => {
+      if (!window.confirm('Diesen Chat wirklich löschen?')) return;
+      await deleteChat({ state, chat, db });
       renderChatRoot({ root, state, commandBus, db, getActiveModule });
     });
     node.querySelector('[data-chat-new]')?.addEventListener('click', () => {
       const next = createChat();
       state.chats.push(next);
-      writeChatState(state);
+      persistChatState({ state, db });
       renderChatRoot({ root, state, commandBus, db, getActiveModule });
     });
     node.querySelectorAll('[data-track-task]').forEach((button) => {
@@ -104,10 +120,10 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
       chat.draft = '';
       input.value = '';
       await submitChatMessage({ state, chat, text, commandBus, getActiveModule });
-      writeChatState(state);
+      await persistChatState({ state, db });
       renderChatRoot({ root, state, commandBus, db, getActiveModule });
       syncTrackedMessages({ state, db }).then((changed) => {
-        if (changed) writeChatState(state);
+        if (changed) persistChatState({ state, db });
         if (changed) renderChatRoot({ root, state, commandBus, db, getActiveModule });
       }).catch(() => {});
     });
@@ -133,6 +149,7 @@ function chatWindow(chat) {
         </button>
         <div>
           <button type="button" data-chat-new aria-label="Neuer Chat">+</button>
+          <button type="button" data-chat-delete aria-label="Chat löschen">Löschen</button>
           <button type="button" data-chat-close aria-label="Schliessen">x</button>
         </div>
       </header>
@@ -349,56 +366,170 @@ function openCtoxTask(taskId, commandId, taskStatus) {
   location.hash = `#ctox?${params.toString()}`;
 }
 
-function ensureChat(state) {
+function ensureChat(state, session = null) {
   let chat = state.chats.find((item) => item.open !== false) || state.chats[0];
   if (!chat) {
-    chat = createChat();
+    chat = createChat(ownerUserId(session) || state.ownerUserId);
     state.chats.push(chat);
   }
   return chat;
 }
 
-function createChat() {
+function createChat(owner = '') {
   return {
     id: `chat_${crypto.randomUUID()}`,
     title: 'CTOX',
     open: true,
     minimized: false,
+    owner_user_id: owner || '',
     messages: [],
     draft: '',
     createdAt: Date.now(),
+    updated_at_ms: Date.now(),
   };
 }
 
-function readChatState() {
+function readChatState(session) {
+  const owner = ownerUserId(session);
   try {
     const parsed = JSON.parse(localStorage.getItem(CHAT_STATE_KEY) || '{}') || {};
     const chats = Array.isArray(parsed.chats) ? parsed.chats : [];
     return {
-      chats: chats.slice(-4).map((chat) => ({
+      ownerUserId: owner,
+      chats: chats
+        .filter((chat) => !chat.owner_user_id || chat.owner_user_id === owner)
+        .slice(-4)
+        .map((chat) => ({
         id: chat.id || `chat_${crypto.randomUUID()}`,
         title: chat.title || 'CTOX',
         open: chat.open !== false,
         minimized: Boolean(chat.minimized),
+        owner_user_id: chat.owner_user_id || owner,
         lastTrackingId: chat.lastTrackingId || '',
         messages: Array.isArray(chat.messages) ? chat.messages.slice(-40) : [],
         draft: chat.draft || '',
         createdAt: chat.createdAt || Date.now(),
+        updated_at_ms: chat.updated_at_ms || Date.now(),
       })),
     };
   } catch {
-    return { chats: [] };
+    return { ownerUserId: owner, chats: [] };
   }
 }
 
 function writeChatState(state) {
   localStorage.setItem(CHAT_STATE_KEY, JSON.stringify({
-    chats: state.chats.slice(-4).map((chat) => ({
+    chats: state.chats.filter((chat) => isOwnedChat(chat, state.ownerUserId)).slice(-4).map((chat) => ({
       ...chat,
       messages: chat.messages.slice(-40),
       draft: chat.draft || '',
+      owner_user_id: chat.owner_user_id || state.ownerUserId || '',
+      updated_at_ms: chat.updated_at_ms || Date.now(),
     })),
   }));
+}
+
+async function persistChatState({ state, db }) {
+  writeChatState(state);
+  const collection = db?.raw?.[CHAT_COLLECTION];
+  if (!collection) return;
+  const now = Date.now();
+  for (const chat of state.chats.filter((item) => isOwnedChat(item, state.ownerUserId))) {
+    chat.owner_user_id = chat.owner_user_id || state.ownerUserId || '';
+    chat.updated_at_ms = now;
+    const doc = {
+      ...chat,
+      messages: Array.isArray(chat.messages) ? chat.messages.slice(-40) : [],
+      draft: chat.draft || '',
+      updated_at_ms: chat.updated_at_ms,
+    };
+    const existing = await collection.findOne(chat.id).exec();
+    if (existing) await existing.incrementalPatch(doc);
+    else await collection.insert(doc);
+  }
+}
+
+async function hydrateChatsFromRxDb({ state, db, session }) {
+  const collection = db?.raw?.[CHAT_COLLECTION];
+  if (!collection) return false;
+  const owner = ownerUserId(session) || state.ownerUserId || '';
+  state.ownerUserId = owner;
+  const docs = await collection.find().exec();
+  const remoteChats = docs
+    .map((doc) => doc.toJSON())
+    .filter((chat) => isOwnedChat(chat, owner))
+    .map(normalizeChat)
+    .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0))
+    .slice(-4);
+  if (!remoteChats.length) {
+    if (state.chats.length) await persistChatState({ state, db });
+    return false;
+  }
+  const merged = mergeChats(state.chats, remoteChats, owner);
+  const changed = JSON.stringify(stripDraftsForCompare(state.chats)) !== JSON.stringify(stripDraftsForCompare(merged));
+  state.chats = merged;
+  writeChatState(state);
+  return changed;
+}
+
+async function deleteChat({ state, chat, db }) {
+  state.chats = state.chats.filter((item) => item.id !== chat.id);
+  writeChatState(state);
+  const collection = db?.raw?.[CHAT_COLLECTION];
+  if (!collection) return;
+  const existing = await collection.findOne(chat.id).exec();
+  if (existing) {
+    await existing.remove();
+  } else {
+    await collection.insert({
+      ...normalizeChat(chat),
+      owner_user_id: chat.owner_user_id || state.ownerUserId || '',
+      _deleted: true,
+      updated_at_ms: Date.now(),
+    }).catch(() => {});
+  }
+}
+
+function mergeChats(localChats, remoteChats, owner) {
+  const byId = new Map();
+  for (const chat of [...remoteChats, ...localChats]) {
+    const normalized = normalizeChat({ ...chat, owner_user_id: chat.owner_user_id || owner });
+    if (!isOwnedChat(normalized, owner)) continue;
+    const previous = byId.get(normalized.id);
+    if (!previous || (normalized.updated_at_ms || 0) >= (previous.updated_at_ms || 0)) {
+      byId.set(normalized.id, normalized);
+    }
+  }
+  return Array.from(byId.values())
+    .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0))
+    .slice(-4);
+}
+
+function normalizeChat(chat) {
+  return {
+    id: chat.id || `chat_${crypto.randomUUID()}`,
+    title: chat.title || 'CTOX',
+    open: chat.open !== false,
+    minimized: Boolean(chat.minimized),
+    owner_user_id: chat.owner_user_id || '',
+    lastTrackingId: chat.lastTrackingId || '',
+    messages: Array.isArray(chat.messages) ? chat.messages.slice(-40) : [],
+    draft: chat.draft || '',
+    createdAt: chat.createdAt || Date.now(),
+    updated_at_ms: chat.updated_at_ms || Date.now(),
+  };
+}
+
+function stripDraftsForCompare(chats) {
+  return chats.map((chat) => ({ ...chat, draft: '' }));
+}
+
+function ownerUserId(session) {
+  return String(session?.user?.id || 'local-dev').trim() || 'local-dev';
+}
+
+function isOwnedChat(chat, owner) {
+  return !owner || !chat?.owner_user_id || chat.owner_user_id === owner;
 }
 
 function compactConversation(messages) {

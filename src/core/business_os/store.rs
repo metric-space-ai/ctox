@@ -6,6 +6,7 @@ use anyhow::Context;
 use base64::Engine;
 use rusqlite::params;
 use rusqlite::Connection;
+use rusqlite::OptionalExtension;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -98,6 +99,24 @@ pub struct BusinessCommand {
     pub payload: Value,
     #[serde(default)]
     pub client_context: Value,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CtoxTaskUpdateMutation {
+    pub task_id: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub prompt: Option<String>,
+    #[serde(default)]
+    pub priority: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CtoxTaskDeleteMutation {
+    pub task_id: String,
+    #[serde(default)]
+    pub command_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1110,6 +1129,101 @@ pub fn process_source_parse_command(
     }
 }
 
+pub fn update_ctox_task(
+    root: &Path,
+    session: &BusinessOsSession,
+    mutation: CtoxTaskUpdateMutation,
+) -> anyhow::Result<Value> {
+    anyhow::ensure!(
+        session_can_manage_all(session),
+        "chef or admin role required"
+    );
+    let task_id = resolve_ctox_task_id(root, &mutation.task_id)?;
+    anyhow::ensure!(!task_id.is_empty(), "task_id is required");
+    let title = mutation.title.and_then(non_empty_trimmed);
+    let prompt = mutation.prompt.and_then(non_empty_trimmed);
+    let priority = mutation.priority.and_then(non_empty_trimmed);
+    anyhow::ensure!(
+        title.is_some() || prompt.is_some() || priority.is_some(),
+        "nothing to update"
+    );
+
+    let conn = open_store(root)?;
+    seed_session_user(&conn, session)?;
+    let updated = channels::update_queue_task(
+        root,
+        channels::QueueTaskUpdateRequest {
+            message_key: task_id.clone(),
+            title,
+            prompt,
+            priority,
+            status_note: Some(format!(
+                "business-os: edited by {}",
+                session_user_label(session)
+            )),
+            ..Default::default()
+        },
+    )?;
+    let now = now_ms() as i64;
+    let command_id = queue_projection_command_id(&conn, &task_id)?;
+    write_queue_task_projection(&conn, command_id.as_deref(), &updated, now)?;
+    Ok(serde_json::json!({
+        "ok": true,
+        "task": queue_task_payload(command_id.as_deref(), &updated, now)
+    }))
+}
+
+pub fn delete_ctox_task(
+    root: &Path,
+    session: &BusinessOsSession,
+    mutation: CtoxTaskDeleteMutation,
+) -> anyhow::Result<Value> {
+    anyhow::ensure!(
+        session_can_manage_all(session),
+        "chef or admin role required"
+    );
+    let task_id = resolve_ctox_task_id(root, &mutation.task_id)?;
+    anyhow::ensure!(!task_id.is_empty(), "task_id is required");
+
+    let conn = open_store(root)?;
+    seed_session_user(&conn, session)?;
+    let now = now_ms() as i64;
+    if let Some(current) = channels::load_queue_task(root, &task_id)? {
+        if !channels::route_status_is_terminal(&current.route_status) {
+            let _ = channels::update_queue_task(
+                root,
+                channels::QueueTaskUpdateRequest {
+                    message_key: task_id.clone(),
+                    route_status: Some("cancelled".to_string()),
+                    status_note: Some(format!(
+                        "business-os: deleted by {}",
+                        session_user_label(session)
+                    )),
+                    ..Default::default()
+                },
+            )?;
+        }
+    }
+    let command_id = mutation
+        .command_id
+        .and_then(non_empty_trimmed)
+        .or(queue_projection_command_id(&conn, &task_id)?);
+    mark_business_record_deleted(&conn, "ctox_queue_tasks", &task_id, now)?;
+    if let Some(command_id) = command_id.as_deref() {
+        conn.execute(
+            "UPDATE business_commands SET status = 'cancelled', observed_at_ms = ?2 WHERE command_id = ?1",
+            params![command_id, now],
+        )?;
+        mark_business_record_deleted(&conn, "business_commands", command_id, now)?;
+    }
+    Ok(serde_json::json!({
+        "ok": true,
+        "task_id": task_id,
+        "command_id": command_id,
+        "status": "cancelled"
+    }))
+}
+
 fn load_business_command(conn: &Connection, command_id: &str) -> anyhow::Result<BusinessCommand> {
     conn.query_row(
         "SELECT module, command_type, record_id, payload_json, client_context_json
@@ -1172,6 +1286,129 @@ fn refresh_queue_task_projection(
             "updated_at_ms": updated_at_ms
         }),
     )
+}
+
+fn write_queue_task_projection(
+    conn: &Connection,
+    command_id: Option<&str>,
+    task: &channels::QueueTaskView,
+    updated_at_ms: i64,
+) -> anyhow::Result<()> {
+    upsert_business_record(
+        conn,
+        "ctox_queue_tasks",
+        &task.message_key,
+        updated_at_ms,
+        queue_task_payload(command_id, task, updated_at_ms),
+    )
+}
+
+fn queue_task_payload(
+    command_id: Option<&str>,
+    task: &channels::QueueTaskView,
+    updated_at_ms: i64,
+) -> Value {
+    serde_json::json!({
+        "id": task.message_key,
+        "command_id": command_id.unwrap_or_default(),
+        "title": task.title,
+        "status": normalize_queue_status(&task.route_status),
+        "route_status": task.route_status,
+        "module": "ctox",
+        "source_module": "ctox",
+        "inbound_channel": "business_os.llm.chat",
+        "command_type": "business_os.chat.task",
+        "priority": task.priority,
+        "thread_key": task.thread_key,
+        "prompt": task.prompt,
+        "workspace_root": task.workspace_root,
+        "updated_at_ms": updated_at_ms
+    })
+}
+
+fn queue_projection_command_id(conn: &Connection, task_id: &str) -> anyhow::Result<Option<String>> {
+    let value = conn
+        .query_row(
+            "SELECT payload_json FROM business_records WHERE collection = 'ctox_queue_tasks' AND record_id = ?1",
+            params![task_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    Ok(value
+        .and_then(|payload| serde_json::from_str::<Value>(&payload).ok())
+        .and_then(|payload| {
+            payload
+                .get("command_id")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        }))
+}
+
+fn mark_business_record_deleted(
+    conn: &Connection,
+    collection: &str,
+    record_id: &str,
+    updated_at_ms: i64,
+) -> anyhow::Result<()> {
+    let rev = format!("rev_{}", Uuid::new_v4());
+    let payload = serde_json::json!({
+        "id": record_id,
+        "_rev": rev,
+        "_deleted": true,
+        "updated_at_ms": updated_at_ms
+    });
+    conn.execute(
+        "INSERT INTO business_records
+            (collection, record_id, rev, deleted, updated_at_ms, payload_json)
+         VALUES (?1, ?2, ?3, 1, ?4, ?5)
+         ON CONFLICT(collection, record_id) DO UPDATE SET
+            rev = excluded.rev,
+            deleted = excluded.deleted,
+            updated_at_ms = excluded.updated_at_ms,
+            payload_json = excluded.payload_json",
+        params![
+            collection,
+            record_id,
+            rev,
+            updated_at_ms,
+            serde_json::to_string(&payload)?
+        ],
+    )?;
+    Ok(())
+}
+
+fn normalize_task_id(value: &str) -> String {
+    let trimmed = value.trim();
+    trimmed
+        .strip_prefix("queue-")
+        .unwrap_or(trimmed)
+        .to_string()
+}
+
+fn resolve_ctox_task_id(root: &Path, value: &str) -> anyhow::Result<String> {
+    let task_id = normalize_task_id(value);
+    if task_id.is_empty() {
+        return Ok(task_id);
+    }
+    if channels::load_queue_task(root, &task_id)?.is_some() {
+        return Ok(task_id);
+    }
+    Ok(find_queue_task_for_command(root, &task_id).unwrap_or(task_id))
+}
+
+fn non_empty_trimmed(value: String) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+fn session_user_label(session: &BusinessOsSession) -> String {
+    session
+        .user
+        .as_ref()
+        .map(|user| format!("{} ({})", user.display_name, user.role))
+        .unwrap_or_else(|| "unknown user".to_string())
 }
 
 fn create_ctox_queue_task(
