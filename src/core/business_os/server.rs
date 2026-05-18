@@ -1443,6 +1443,11 @@ fn serve_static(app_root: &Path, request: Request, path: &str) -> anyhow::Result
     } else {
         file
     };
+    let target = if !target.is_file() && should_serve_app_shell(rel) {
+        app_root.join("index.html")
+    } else {
+        target
+    };
     if !target.is_file() {
         return respond_status(request, 404, "not found");
     }
@@ -1453,6 +1458,13 @@ fn serve_static(app_root: &Path, request: Request, path: &str) -> anyhow::Result
     response.add_header(Header::from_bytes("Cache-Control", "no-store").unwrap());
     request.respond(response)?;
     Ok(())
+}
+
+fn should_serve_app_shell(rel: &str) -> bool {
+    if rel.starts_with("api/") || rel.contains('.') {
+        return false;
+    }
+    matches!(rel, "app" | "login" | "settings") || rel.starts_with("app/")
 }
 
 fn read_json(request: &mut Request) -> anyhow::Result<Value> {
