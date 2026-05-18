@@ -12,7 +12,7 @@
 #   * cleanup removes test rows so the registry returns to its prior state
 #
 # Stage 2 (--full, ~3m): real stealth regression. Sabotages a known patch
-# in tools/web-stack/assets/stealth_init.js, rebuilds ctox, runs a real
+# in src/tools/web-stack/assets/stealth_init.js, rebuilds ctox, runs a real
 # probe against bot.sannysoft.com expecting FAIL, restores the file,
 # rebuilds, runs the same probe again expecting PASS. Requires network
 # access and an installed patchright + chromium runtime.
@@ -26,10 +26,14 @@
 
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/../../../.." && pwd)"
 # Local dev keeps build artifacts under target.nosync/ to avoid iCloud sync;
 # CI uses the standard target/. Prefer .nosync if present, else fall back.
-if [[ -x "$ROOT/target.nosync/debug/ctox" ]]; then
+if [[ -x "$ROOT/runtime/build/cargo-target/debug/ctox" ]]; then
+  CTOX="$ROOT/runtime/build/cargo-target/debug/ctox"
+elif [[ -x "$ROOT/runtime/build/cargo-target/release/ctox" ]]; then
+  CTOX="$ROOT/runtime/build/cargo-target/release/ctox"
+elif [[ -x "$ROOT/target.nosync/debug/ctox" ]]; then
   CTOX="$ROOT/target.nosync/debug/ctox"
 elif [[ -x "$ROOT/target/debug/ctox" ]]; then
   CTOX="$ROOT/target/debug/ctox"
@@ -41,7 +45,7 @@ else
   CTOX="$ROOT/target/debug/ctox" # will fail precondition below with a clear msg
 fi
 SQLITE_DB="$ROOT/runtime/ctox.sqlite3"
-STEALTH_FILE="$ROOT/tools/web-stack/assets/stealth_init.js"
+STEALTH_FILE="$ROOT/src/tools/web-stack/assets/stealth_init.js"
 
 STAGE1=1
 STAGE2=0

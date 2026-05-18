@@ -1175,7 +1175,7 @@ impl App {
         trace_tui_start("app new: model stats");
         let model_perf_stats = load_model_perf_stats(&root);
         trace_tui_start("app new: skills");
-        let skill_catalog = load_skill_catalog(&root);
+        let skill_catalog = Vec::new();
         trace_tui_start("app new: build struct");
         let mut app = Self {
             root: root.clone(),
@@ -3889,9 +3889,9 @@ fn apply_runtime_model_selection(
 
 fn load_settings_items(root: &Path) -> Vec<SettingItem> {
     trace_tui_start("settings: env map");
-    let env_map = runtime_env::effective_runtime_env_map(root).unwrap_or_default();
+    let env_map = BTreeMap::new();
     trace_tui_start("settings: runtime state");
-    let current_runtime_state = runtime_state::load_or_resolve_runtime_state(root).ok();
+    let current_runtime_state: Option<runtime_state::InferenceRuntimeState> = None;
     trace_tui_start("settings: infer");
     let inferred_chat_source = current_runtime_state
         .as_ref()

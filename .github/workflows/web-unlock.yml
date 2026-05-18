@@ -15,14 +15,14 @@ on:
   push:
     branches: [main]
     paths:
-      - 'tools/web-stack/**'
-      - 'skills/system/communication/web-unlock/**'
+      - 'src/tools/web-stack/**'
+      - 'src/skills/system/communication/web-unlock/**'
       - '.github/workflows/web-unlock.yml'
   pull_request:
     branches: [main]
     paths:
-      - 'tools/web-stack/**'
-      - 'skills/system/communication/web-unlock/**'
+      - 'src/tools/web-stack/**'
+      - 'src/skills/system/communication/web-unlock/**'
       - '.github/workflows/web-unlock.yml'
   workflow_dispatch:
     inputs:
@@ -38,6 +38,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_TARGET_DIR: target
 
 jobs:
   e2e-stage1:
@@ -67,10 +68,10 @@ jobs:
         run: cargo build --locked -p ctox
 
       - name: Unlock unit tests
-        run: cargo test --locked -p ctox-web-stack --lib unlock:: --quiet
+        run: "cargo test --locked --manifest-path src/tools/web-stack/Cargo.toml --lib unlock:: --quiet"
 
       - name: Stage 1 E2E
-        run: tools/web-stack/scripts/test_web_unlock_e2e.sh --stage1
+        run: src/tools/web-stack/scripts/test_web_unlock_e2e.sh --stage1
 
   e2e-stage2:
     runs-on: ubuntu-22.04
@@ -109,4 +110,4 @@ jobs:
             --install-reference --install-browser
 
       - name: Stage 2 E2E
-        run: tools/web-stack/scripts/test_web_unlock_e2e.sh --stage2
+        run: src/tools/web-stack/scripts/test_web_unlock_e2e.sh --stage2

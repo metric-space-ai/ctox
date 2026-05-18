@@ -6374,7 +6374,7 @@ fn ensure_remote_tui_host_started(installation: &Installation) -> Result<()> {
         .iter()
         .find(|value| !value.trim().is_empty())
         .map(String::as_str)
-        .unwrap_or("wss://api.metricspace.org/signal");
+        .unwrap_or("wss://ctox-signaling.metricspace-ai.workers.dev/signal");
     if remote.room_id.trim().is_empty() || remote.password.trim().is_empty() {
         anyhow::bail!("Remote TUI needs a room and admin/WebRTC password.");
     }

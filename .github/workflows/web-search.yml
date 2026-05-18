@@ -9,25 +9,25 @@ name: web-search
 #
 # Full mode (workflow_dispatch): also probes each HTTP-only provider
 # individually (brave, duckduckgo, bing). Use when changing
-# tools/web-stack/src/web_search.rs near the provider cascade,
+# src/tools/web-stack/src/web_search.rs near the provider cascade,
 # quality gate, or per-provider scrape logic.
 
 on:
   push:
     branches: [main]
     paths:
-      - 'tools/web-stack/src/web_search.rs'
-      - 'tools/web-stack/src/surface.rs'
-      - 'tools/web-stack/src/sources/**'
-      - 'tools/web-stack/scripts/test_web_search_e2e.sh'
+      - 'src/tools/web-stack/src/web_search.rs'
+      - 'src/tools/web-stack/src/surface.rs'
+      - 'src/tools/web-stack/src/sources/**'
+      - 'src/tools/web-stack/scripts/test_web_search_e2e.sh'
       - '.github/workflows/web-search.yml'
   pull_request:
     branches: [main]
     paths:
-      - 'tools/web-stack/src/web_search.rs'
-      - 'tools/web-stack/src/surface.rs'
-      - 'tools/web-stack/src/sources/**'
-      - 'tools/web-stack/scripts/test_web_search_e2e.sh'
+      - 'src/tools/web-stack/src/web_search.rs'
+      - 'src/tools/web-stack/src/surface.rs'
+      - 'src/tools/web-stack/src/sources/**'
+      - 'src/tools/web-stack/scripts/test_web_search_e2e.sh'
       - '.github/workflows/web-search.yml'
   workflow_dispatch:
     inputs:
@@ -42,6 +42,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_TARGET_DIR: target
 
 jobs:
   search-e2e:
@@ -70,9 +71,11 @@ jobs:
         run: cargo build --locked -p ctox
 
       - name: Run search E2E
+        env:
+          CTOX_SKIP_NETWORK: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'full' && '0' || '1' }}
         run: |
           if [[ "${{ github.event.inputs.mode || 'quick' }}" == "full" ]]; then
-            tools/web-stack/scripts/test_web_search_e2e.sh
+            src/tools/web-stack/scripts/test_web_search_e2e.sh
           else
-            tools/web-stack/scripts/test_web_search_e2e.sh --quick
+            src/tools/web-stack/scripts/test_web_search_e2e.sh --quick
           fi

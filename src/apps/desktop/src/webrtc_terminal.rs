@@ -92,7 +92,7 @@ struct HostedTerminal {
     killer: Arc<Mutex<Option<Box<dyn ChildKiller + Send + Sync>>>>,
 }
 
-const TURN_CONFIG_URL: &str = "https://api.metricspace.org/turn-ice";
+const TURN_CONFIG_URL: &str = "https://ctox.dev/turn-ice";
 const TURN_EDGE_KEY: &str = "DeepDataEngineering";
 const TURN_FETCH_TIMEOUT_MS: u64 = 3500;
 

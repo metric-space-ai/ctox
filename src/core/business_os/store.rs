@@ -18,7 +18,7 @@ use std::time::UNIX_EPOCH;
 use uuid::Uuid;
 
 const STORE_FILE: &str = "business-os.sqlite3";
-const DEFAULT_SIGNALING_URL: &str = "wss://api.metricspace.org/signal";
+const DEFAULT_SIGNALING_URL: &str = "wss://ctox-signaling.metricspace-ai.workers.dev/signal";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct BusinessOsStatus {

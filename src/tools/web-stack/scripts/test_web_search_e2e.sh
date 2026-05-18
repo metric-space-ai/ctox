@@ -15,8 +15,8 @@
 # probes (sannysoft / incolumitas) which already validate the runner.
 #
 # Usage:
-#   tools/web-stack/scripts/test_web_search_e2e.sh           # all providers + auto
-#   tools/web-stack/scripts/test_web_search_e2e.sh --quick   # auto-cascade only
+#   src/tools/web-stack/scripts/test_web_search_e2e.sh           # all providers + auto
+#   src/tools/web-stack/scripts/test_web_search_e2e.sh --quick   # auto-cascade only
 #
 # Exit codes: 0 = all passed, non-zero = at least one provider failed.
 # When run in CI without network, set CTOX_SKIP_NETWORK=1 to skip the
@@ -24,8 +24,12 @@
 
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
-if [[ -x "$ROOT/target.nosync/debug/ctox" ]]; then
+ROOT="$(cd "$(dirname "$0")/../../../.." && pwd)"
+if [[ -x "$ROOT/runtime/build/cargo-target/debug/ctox" ]]; then
+  CTOX="$ROOT/runtime/build/cargo-target/debug/ctox"
+elif [[ -x "$ROOT/runtime/build/cargo-target/release/ctox" ]]; then
+  CTOX="$ROOT/runtime/build/cargo-target/release/ctox"
+elif [[ -x "$ROOT/target.nosync/debug/ctox" ]]; then
   CTOX="$ROOT/target.nosync/debug/ctox"
 elif [[ -x "$ROOT/target/debug/ctox" ]]; then
   CTOX="$ROOT/target/debug/ctox"

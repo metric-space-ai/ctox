@@ -57,7 +57,9 @@ pub struct RemoteAccessSettings {
 impl Default for RemoteAccessSettings {
     fn default() -> Self {
         Self {
-            signaling_urls: vec!["wss://api.metricspace.org/signal".to_owned()],
+            signaling_urls: vec![
+                "wss://ctox-signaling.metricspace-ai.workers.dev/signal".to_owned()
+            ],
             auth_token: String::new(),
             password: String::new(),
             room_id: default_room_id(),
