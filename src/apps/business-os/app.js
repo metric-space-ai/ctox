@@ -1655,13 +1655,13 @@ async function loadSession() {
   if (injected) return injected;
   const token = localStorage.getItem(SESSION_TOKEN_KEY)?.trim();
   const authHeader = localStorage.getItem(AUTH_HEADER_KEY)?.trim();
-  if (authHeader) return localBasicAuthSession(authHeader);
-  if (token) return localTokenSession();
   const headers = token ? { 'X-CTOX-Business-OS-Session': token } : authHeader ? { Authorization: authHeader } : undefined;
   try {
     const session = await fetchJson('/api/business-os/session', headers ? { headers, timeoutMs: 600 } : { timeoutMs: 600 });
     return session;
   } catch (error) {
+    if (authHeader) return localBasicAuthSession(authHeader);
+    if (token) return localTokenSession();
     return {
       ok: false,
       authenticated: false,
