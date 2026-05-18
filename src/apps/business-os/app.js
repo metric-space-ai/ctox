@@ -12,8 +12,9 @@ const LOGGED_OUT_KEY = 'ctox.businessOs.loggedOut';
 const ACCOUNT_PREFS_KEY = 'ctox.businessOs.accountPreferences';
 const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
-const APP_BUILD = '20260518-ctox-full-workspace1';
+const APP_BUILD = '20260518-ctox-health-warning1';
 const FETCH_TIMEOUT_MS = 1500;
+const CTOX_HEALTH_POLL_MS = 10000;
 let moduleLayoutSaveTimer = null;
 let shellColumnResizeSync = null;
 
@@ -39,6 +40,8 @@ const state = {
   schemaRegistrationQueue: Promise.resolve(),
   syncStartedModules: new Set(),
   backgroundModuleWorkScheduled: false,
+  ctoxHealth: null,
+  ctoxHealthTimer: null,
 };
 
 const moduleAliases = {};
@@ -57,6 +60,10 @@ const shellMessages = {
     activity: 'Aktivität',
     agentContext: 'Agent-Kontext',
     webrtcSync: 'WebRTC-Sync',
+    ctoxNotWorking: 'CTOX ARBEITET NICHT',
+    ctoxStopped: 'CTOX Service läuft nicht.',
+    ctoxStatusUnavailable: 'CTOX Status nicht erreichbar.',
+    ctoxLastError: 'Letzter Fehler',
     moduleTitles: {
       ctox: 'CTOX',
       documents: 'Dokumente',
@@ -77,6 +84,10 @@ const shellMessages = {
     activity: 'Activity',
     agentContext: 'Agent context',
     webrtcSync: 'WebRTC sync',
+    ctoxNotWorking: 'CTOX NOT WORKING',
+    ctoxStopped: 'CTOX service is not running.',
+    ctoxStatusUnavailable: 'CTOX status is unavailable.',
+    ctoxLastError: 'Last error',
     moduleTitles: {
       ctox: 'CTOX',
       documents: 'Documents',
@@ -88,6 +99,7 @@ const shellMessages = {
 
 const els = {
   status: document.querySelector('[data-status-text]'),
+  ctoxWarning: document.querySelector('[data-ctox-shell-warning]'),
   tabs: document.querySelector('[data-module-tabs]'),
   host: document.querySelector('[data-module-host]'),
   leftContent: document.querySelector('[data-left-content]'),
@@ -116,6 +128,7 @@ async function bootstrap() {
   const session = await loadSession();
   state.session = session;
   renderAccountButton(session);
+  startShellCtoxHealthMonitor();
   if (!session.authenticated) {
     renderLoginGate(session);
     setStatus(shellText('loginRequired'));
@@ -207,6 +220,7 @@ function wireShellActions() {
   els.languageSelect?.addEventListener('change', () => {
     applyShellLanguage(els.languageSelect.value);
     syncHeaderControls();
+    renderShellCtoxWarning(state.ctoxHealth);
     postCurrentPreferencesToModule();
   });
   els.themeSelect?.addEventListener('change', () => {
@@ -231,6 +245,7 @@ function wireShellActions() {
     moveModuleToUngrouped(moduleId);
   });
   window.addEventListener('beforeunload', () => {
+    if (state.ctoxHealthTimer) window.clearInterval(state.ctoxHealthTimer);
     state.db?.close?.();
   });
   shellColumnResizeSync = setupShellColumnResizing();
@@ -1674,6 +1689,51 @@ async function loadStatus() {
   } catch {
     return { ok: true, runtime: 'electron-static', now_ms: Date.now() };
   }
+}
+
+function startShellCtoxHealthMonitor() {
+  if (state.ctoxHealthTimer) window.clearInterval(state.ctoxHealthTimer);
+  refreshShellCtoxHealth();
+  state.ctoxHealthTimer = window.setInterval(refreshShellCtoxHealth, CTOX_HEALTH_POLL_MS);
+}
+
+async function refreshShellCtoxHealth() {
+  try {
+    const status = await fetchJson('/api/business-os/status', { timeoutMs: 8000 });
+    state.ctoxHealth = status;
+    renderShellCtoxWarning(status);
+  } catch (error) {
+    const status = { ok: false, error: error?.message || String(error) };
+    state.ctoxHealth = status;
+    renderShellCtoxWarning(status);
+  }
+}
+
+function renderShellCtoxWarning(status) {
+  if (!els.ctoxWarning) return;
+  const problem = shellCtoxHealthProblem(status);
+  if (!problem) {
+    els.ctoxWarning.hidden = true;
+    els.ctoxWarning.removeAttribute('title');
+    document.body.dataset.ctoxOperational = 'ok';
+    return;
+  }
+  els.ctoxWarning.hidden = false;
+  els.ctoxWarning.textContent = shellText('ctoxNotWorking');
+  els.ctoxWarning.title = problem;
+  document.body.dataset.ctoxOperational = 'blocked';
+}
+
+function shellCtoxHealthProblem(status) {
+  if (!status || status.ok === false) {
+    return [shellText('ctoxStatusUnavailable'), status?.error].filter(Boolean).join(' ');
+  }
+  const service = status.ctox_service;
+  if (!service) return shellText('ctoxStatusUnavailable');
+  if (service.running === false) return shellText('ctoxStopped');
+  const lastError = String(service.last_error || '').trim();
+  if (lastError) return `${shellText('ctoxLastError')}: ${lastError}`;
+  return '';
 }
 
 async function loadSession() {

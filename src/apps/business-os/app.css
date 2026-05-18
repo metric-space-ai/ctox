@@ -65,7 +65,7 @@ button {
 
 .topbar {
   display: grid;
-  grid-template-columns: minmax(190px, 260px) minmax(0, 1fr) auto;
+  grid-template-columns: minmax(280px, 440px) minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
   min-width: 0;
@@ -89,6 +89,13 @@ button {
   min-width: 0;
 }
 
+.brand-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
 .brand-mark {
   display: grid;
   place-items: center;
@@ -108,7 +115,7 @@ button {
 }
 
 .brand strong,
-.brand-copy span {
+.brand-status {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -120,9 +127,34 @@ button {
   line-height: 1.05;
 }
 
-.brand-copy span {
+.brand-status {
   color: var(--muted);
   font-size: 12px;
+}
+
+.ctox-shell-warning {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: min(34vw, 360px);
+  border: 2px solid #ff3b30;
+  border-radius: 999px;
+  padding: 3px 9px 2px;
+  background: color-mix(in srgb, #ff3b30 18%, var(--surface));
+  color: #ffebe9;
+  box-shadow: 0 0 0 2px color-mix(in srgb, #ff3b30 18%, transparent);
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1;
+  letter-spacing: 0;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+:root[data-theme="light"] .ctox-shell-warning {
+  background: #fff1ef;
+  color: #981b14;
+  box-shadow: 0 0 0 2px rgba(255, 59, 48, 0.18);
 }
 
 .module-nav {

@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>CTOX Business OS</title>
-    <link rel="stylesheet" href="app.css?v=20260518-ctox-full-workspace1" />
+    <link rel="stylesheet" href="app.css?v=20260518-ctox-health-warning1" />
   </head>
   <body>
     <div class="app-shell" data-shell>
@@ -12,8 +12,11 @@
         <a class="brand" href="#ctox" aria-label="CTOX Business OS">
           <span class="brand-mark"><img src="assets/ctox-app-icon.png" alt="" /></span>
           <span class="brand-copy">
-            <strong>Business OS</strong>
-            <span data-status-text>Starting native runtime</span>
+            <span class="brand-title-row">
+              <strong>Business OS</strong>
+              <span class="ctox-shell-warning" data-ctox-shell-warning hidden>CTOX ARBEITET NICHT</span>
+            </span>
+            <span class="brand-status" data-status-text>Starting native runtime</span>
           </span>
         </a>
         <div class="module-nav">
@@ -68,6 +71,6 @@
     <aside class="drawer drawer-right" data-drawer-right hidden></aside>
     <section class="drawer drawer-bottom" data-drawer-bottom hidden></section>
 
-    <script type="module" src="app.js?v=20260518-ctox-full-workspace1"></script>
+    <script type="module" src="app.js?v=20260518-ctox-health-warning1"></script>
   </body>
 </html>
