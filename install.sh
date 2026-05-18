@@ -833,7 +833,7 @@ sync_skills_to_codex_home() {
   local source_root="$1"
   local codex_home="${CODEX_HOME:-$HOME/.codex}"
   local target="$codex_home/skills"
-  local src_packs="$source_root/skills/packs"
+  local src_packs="$source_root/src/skills/packs"
   mkdir -p "$target"
 
   # System skills are embedded into the ctox binary via include_dir! and
@@ -1316,10 +1316,10 @@ build_ctox() {
   mkdir -p "$source_root/bin"
   cp "$source_root/target/release/ctox" "$source_root/bin/" 2>/dev/null || true
 
-  if [[ -f "$source_root/desktop/Cargo.toml" ]]; then
-    prepare_cargo_target_cache "$source_root/desktop/target" "ctox-desktop"
-    run_build_module "ctox desktop host" "$source_root" "$cargo" build --release --manifest-path desktop/Cargo.toml --bin ctox-desktop-host
-    cp "$source_root/desktop/target/release/ctox-desktop-host" "$source_root/bin/" 2>/dev/null || true
+  if [[ -f "$source_root/src/apps/desktop/Cargo.toml" ]]; then
+    prepare_cargo_target_cache "$source_root/src/apps/desktop/target" "ctox-desktop"
+    run_build_module "ctox desktop host" "$source_root" "$cargo" build --release --manifest-path src/apps/desktop/Cargo.toml --bin ctox-desktop-host
+    cp "$source_root/src/apps/desktop/target/release/ctox-desktop-host" "$source_root/bin/" 2>/dev/null || true
   fi
 
   # Qwen3.6 uses a dedicated Rust Unix-socket adapter over the local
@@ -1410,7 +1410,7 @@ build_ctox() {
 
   # 4. Do not build or publish a secondary agent-runtime CLI. CTOX consumes
   # the integrated agent-runtime source tree in-process via direct session.
-  if [[ -f "$source_root/src/harness/Cargo.toml" ]]; then
+  if [[ -f "$source_root/src/core/harness/Cargo.toml" ]]; then
     printf '  %b%bintegrated agent-runtime kept in-process; no standalone runtime CLI built%b\n' \
       "$C_BOLD" "$C_GREY" "$C_RESET" >&2
   fi
@@ -1434,8 +1434,8 @@ resolve_ctox_desktop_host_binary_path() {
   local source_root="$1"
   local candidate
   for candidate in \
-    "$source_root/desktop/target/release/ctox-desktop-host" \
-    "$source_root/desktop/target/debug/ctox-desktop-host" \
+    "$source_root/src/apps/desktop/target/release/ctox-desktop-host" \
+    "$source_root/src/apps/desktop/target/debug/ctox-desktop-host" \
     "$source_root/bin/ctox-desktop-host"
   do
     [[ -x "$candidate" ]] && { printf '%s\n' "$candidate"; return 0; }
@@ -1458,6 +1458,7 @@ resolve_source_version() {
   if [[ -n "$binary" && -x "$binary" ]]; then
     local embedded
     embedded="$("$binary" version 2>/dev/null | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+    embedded="${embedded#v}"
     [[ -n "$embedded" ]] && { printf '%s\n' "$embedded"; return 0; }
   fi
 
@@ -1470,6 +1471,7 @@ setup_managed_install() {
   mkdir -p "$INSTALL_ROOT" "$STATE_ROOT" "$CACHE_ROOT" "$BIN_DIR" "$TOOLS_ROOT" "$DEPENDENCIES_ROOT"
 
   local version; version="$(resolve_source_version "$source_root")"
+  version="${version#v}"
   local release_name="v${version}"
   local release_dir="$INSTALL_ROOT/releases/$release_name"
 

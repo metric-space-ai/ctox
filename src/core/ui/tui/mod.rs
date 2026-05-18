@@ -913,6 +913,11 @@ pub fn run_tui(root: &Path) -> Result<()> {
     let _ = lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default())?;
     trace_tui_start("lcm opened");
 
+    let mut app = App::new(root.to_path_buf(), db_path);
+    trace_tui_start("app created");
+    app.refresh()?;
+    trace_tui_start("app refreshed");
+
     let mut stdout = io::stdout();
     trace_tui_start("enter terminal");
     let _guard = TerminalGuard::enter(&mut stdout)?;
@@ -920,10 +925,6 @@ pub fn run_tui(root: &Path) -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend).context("failed to initialize TUI terminal")?;
     trace_tui_start("terminal initialized");
-    let mut app = App::new(root.to_path_buf(), db_path);
-    trace_tui_start("app created");
-    app.refresh()?;
-    trace_tui_start("app refreshed");
     terminal
         .draw(|frame| render::draw(frame, &app))
         .context("failed to draw initial TUI frame")?;

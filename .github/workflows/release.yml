@@ -11,6 +11,8 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  CARGO_TARGET_DIR: target
+  CTOX_BUILD_VERSION: ${{ github.ref_name }}
 
 jobs:
   build-desktop-macos:
@@ -40,11 +42,11 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: desktop -> target
+          workspaces: src/apps/desktop -> target
           key: desktop-${{ matrix.target }}
 
       - name: Build desktop app
-        working-directory: desktop
+        working-directory: src/apps/desktop
         run: cargo build --locked --release --target ${{ matrix.target }}
 
       - name: Create .app bundle and .dmg
@@ -55,25 +57,25 @@ jobs:
           mkdir -p "$APP/Contents/Resources"
 
           # Copy binary
-          cp desktop/target/${{ matrix.target }}/release/ctox-desktop "$APP/Contents/MacOS/"
+          cp src/apps/desktop/target/${{ matrix.target }}/release/ctox-desktop "$APP/Contents/MacOS/"
 
           # Copy Info.plist
-          cp desktop/packaging/macos/Info.plist "$APP/Contents/"
+          cp src/apps/desktop/packaging/macos/Info.plist "$APP/Contents/"
           /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" "$APP/Contents/Info.plist"
           /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP/Contents/Info.plist"
 
           # Create .icns from PNG
           ICONSET="AppIcon.iconset"
           mkdir -p "$ICONSET"
-          sips -z 16 16     desktop/CTOX_app_icon.png --out "$ICONSET/icon_16x16.png"
-          sips -z 32 32     desktop/CTOX_app_icon.png --out "$ICONSET/icon_16x16@2x.png"
-          sips -z 32 32     desktop/CTOX_app_icon.png --out "$ICONSET/icon_32x32.png"
-          sips -z 64 64     desktop/CTOX_app_icon.png --out "$ICONSET/icon_32x32@2x.png"
-          sips -z 128 128   desktop/CTOX_app_icon.png --out "$ICONSET/icon_128x128.png"
-          sips -z 256 256   desktop/CTOX_app_icon.png --out "$ICONSET/icon_128x128@2x.png"
-          sips -z 256 256   desktop/CTOX_app_icon.png --out "$ICONSET/icon_256x256.png"
-          sips -z 512 512   desktop/CTOX_app_icon.png --out "$ICONSET/icon_256x256@2x.png"
-          sips -z 512 512   desktop/CTOX_app_icon.png --out "$ICONSET/icon_512x512.png"
+          sips -z 16 16     src/apps/desktop/CTOX_app_icon.png --out "$ICONSET/icon_16x16.png"
+          sips -z 32 32     src/apps/desktop/CTOX_app_icon.png --out "$ICONSET/icon_16x16@2x.png"
+          sips -z 32 32     src/apps/desktop/CTOX_app_icon.png --out "$ICONSET/icon_32x32.png"
+          sips -z 64 64     src/apps/desktop/CTOX_app_icon.png --out "$ICONSET/icon_32x32@2x.png"
+          sips -z 128 128   src/apps/desktop/CTOX_app_icon.png --out "$ICONSET/icon_128x128.png"
+          sips -z 256 256   src/apps/desktop/CTOX_app_icon.png --out "$ICONSET/icon_128x128@2x.png"
+          sips -z 256 256   src/apps/desktop/CTOX_app_icon.png --out "$ICONSET/icon_256x256.png"
+          sips -z 512 512   src/apps/desktop/CTOX_app_icon.png --out "$ICONSET/icon_256x256@2x.png"
+          sips -z 512 512   src/apps/desktop/CTOX_app_icon.png --out "$ICONSET/icon_512x512.png"
           iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
 
           # Create .dmg
@@ -103,7 +105,7 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: desktop -> target
+          workspaces: src/apps/desktop -> target
           key: desktop-x86_64-unknown-linux-gnu
 
       - name: Install dependencies
@@ -115,7 +117,7 @@ jobs:
             fuse libfuse2 imagemagick
 
       - name: Build desktop app
-        working-directory: desktop
+        working-directory: src/apps/desktop
         run: cargo build --locked --release
 
       - name: Create AppImage
@@ -129,16 +131,16 @@ jobs:
           mkdir -p AppDir/usr/share/applications
           mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
 
-          cp desktop/target/release/ctox-desktop AppDir/usr/bin/
-          cp desktop/packaging/linux/ctox-desktop.desktop AppDir/usr/share/applications/
-          convert desktop/CTOX_app_icon.png -resize 256x256 ctox-desktop.png
+          cp src/apps/desktop/target/release/ctox-desktop AppDir/usr/bin/
+          cp src/apps/desktop/packaging/linux/ctox-desktop.desktop AppDir/usr/share/applications/
+          convert src/apps/desktop/CTOX_app_icon.png -resize 256x256 ctox-desktop.png
           cp ctox-desktop.png AppDir/usr/share/icons/hicolor/256x256/apps/ctox-desktop.png
 
           # Create AppImage
           export OUTPUT="ctox-desktop-linux-x64.AppImage"
           ./linuxdeploy-x86_64.AppImage \
             --appdir AppDir \
-            --desktop-file desktop/packaging/linux/ctox-desktop.desktop \
+            --desktop-file src/apps/desktop/packaging/linux/ctox-desktop.desktop \
             --icon-file ctox-desktop.png \
             --output appimage
 
@@ -164,17 +166,17 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: desktop -> target
+          workspaces: src/apps/desktop -> target
           key: desktop-x86_64-pc-windows-msvc
 
       - name: Build desktop app
-        working-directory: desktop
+        working-directory: src/apps/desktop
         run: cargo build --locked --release --target x86_64-pc-windows-msvc
 
       - name: Create .ico from PNG
         shell: pwsh
         run: |
-          magick desktop/CTOX_app_icon.png -define icon:auto-resize=256,128,64,48,32,16 desktop/packaging/windows/ctox-desktop.ico
+          magick src/apps/desktop/CTOX_app_icon.png -define icon:auto-resize=256,128,64,48,32,16 src/apps/desktop/packaging/windows/ctox-desktop.ico
 
       - name: Build .msi with WiX
         shell: pwsh
@@ -182,22 +184,22 @@ jobs:
           $version = $env:GITHUB_REF_NAME.TrimStart('v')
 
           # Copy binary and icon to WiX source directory
-          Copy-Item "desktop\target\x86_64-pc-windows-msvc\release\ctox-desktop.exe" "desktop\packaging\windows\"
-          (Get-Content "desktop\packaging\windows\main.wxs" -Raw) `
+          Copy-Item "src\apps\desktop\target\x86_64-pc-windows-msvc\release\ctox-desktop.exe" "src\apps\desktop\packaging\windows\"
+          (Get-Content "src\apps\desktop\packaging\windows\main.wxs" -Raw) `
             -creplace '(?m)^        Version="[^"]+">$', "        Version=""$version"">" `
-            | Set-Content "desktop\packaging\windows\main.release.wxs" -Encoding ascii
+            | Set-Content "src\apps\desktop\packaging\windows\main.release.wxs" -Encoding ascii
 
           # WiX v3 is pre-installed on windows-latest runners
           & "C:\Program Files (x86)\WiX Toolset v3.14\bin\candle.exe" `
             -arch x64 `
             -ext WixUIExtension `
-            -out desktop\packaging\windows\main.wixobj `
-            desktop\packaging\windows\main.release.wxs
+            -out src\apps\desktop\packaging\windows\main.wixobj `
+            src\apps\desktop\packaging\windows\main.release.wxs
 
           & "C:\Program Files (x86)\WiX Toolset v3.14\bin\light.exe" `
             -ext WixUIExtension `
             -out ctox-desktop-windows-x64.msi `
-            desktop\packaging\windows\main.wixobj
+            src\apps\desktop\packaging\windows\main.wixobj
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -267,9 +269,10 @@ jobs:
         run: |
           mkdir -p bundle/target/release
           cp target/${{ matrix.target }}/release/ctox bundle/target/release/
-          cp -r skills bundle/
+          cp -r src/skills bundle/skills
           cp install.sh bundle/
-          cp LICENSE NOTICE bundle/
+          cp LICENSE bundle/
+          cp docs/legal/NOTICE bundle/NOTICE
           cd bundle && tar czf ../${{ matrix.artifact }}.tar.gz .
           cd .. && shasum -a 256 ${{ matrix.artifact }}.tar.gz > ${{ matrix.artifact }}.tar.gz.sha256
 
@@ -279,8 +282,9 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force bundle\target\release | Out-Null
           Copy-Item "target\${{ matrix.target }}\release\ctox.exe" "bundle\target\release\"
-          Copy-Item -Path "skills" -Destination "bundle\skills" -Recurse
-          Copy-Item -Path "install.sh", "LICENSE", "NOTICE" -Destination "bundle\"
+          Copy-Item -Path "src\skills" -Destination "bundle\skills" -Recurse
+          Copy-Item -Path "install.sh", "LICENSE" -Destination "bundle\"
+          Copy-Item -Path "docs\legal\NOTICE" -Destination "bundle\NOTICE"
           Compress-Archive -Path "bundle\*" -DestinationPath "${{ matrix.artifact }}.zip" -Force
           $hash = (Get-FileHash "${{ matrix.artifact }}.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  ${{ matrix.artifact }}.zip" | Set-Content "${{ matrix.artifact }}.zip.sha256" -NoNewline

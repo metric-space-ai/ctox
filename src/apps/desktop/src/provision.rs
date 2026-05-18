@@ -90,7 +90,7 @@ fn provision_localhost(request: &ProvisionRequest, tx: &Sender<ProvisionEvent>) 
             .arg("build")
             .arg("--release")
             .arg("--manifest-path")
-            .arg("desktop/Cargo.toml")
+            .arg("src/apps/desktop/Cargo.toml")
             .arg("--bin")
             .arg("ctox-desktop-host")
             .current_dir(&request.source_root),
@@ -99,7 +99,7 @@ fn provision_localhost(request: &ProvisionRequest, tx: &Sender<ProvisionEvent>) 
     )?;
     let desktop_host_source = request
         .source_root
-        .join("desktop/target/release/ctox-desktop-host");
+        .join("src/apps/desktop/target/release/ctox-desktop-host");
     let desktop_host_target = request.source_root.join("bin/ctox-desktop-host");
     if let Some(parent) = desktop_host_target.parent() {
         std::fs::create_dir_all(parent)
@@ -255,11 +255,11 @@ fn provision_ssh(request: &ProvisionRequest, tx: &Sender<ProvisionEvent>) -> Res
              mkdir -p bin && \
              cp target/release/ctox bin/ctox ; \
            fi && \
-           if [ -f desktop/Cargo.toml ]; then \
+           if [ -f src/apps/desktop/Cargo.toml ]; then \
              export PATH=$HOME/.cargo/bin:$PATH && \
-             cargo build --release --manifest-path desktop/Cargo.toml --bin ctox-desktop-host && \
+             cargo build --release --manifest-path src/apps/desktop/Cargo.toml --bin ctox-desktop-host && \
              mkdir -p bin && \
-             cp desktop/target/release/ctox-desktop-host bin/ctox-desktop-host ; \
+             cp src/apps/desktop/target/release/ctox-desktop-host bin/ctox-desktop-host ; \
            fi && \
            echo CTOX_BUILD_SUCCESS || echo CTOX_BUILD_FAILED \
          ) > {build_log} 2>&1 &",
