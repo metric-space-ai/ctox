@@ -128,21 +128,24 @@ fn default_bin_dir() -> PathBuf {
 }
 
 fn resolved_install_root_for_settings(root: &Path) -> Option<PathBuf> {
-    crate::install::version_info(root)
-        .ok()
-        .and_then(|info| info.install_root)
+    runtime_env::env_or_config(root, "CTOX_INSTALL_ROOT")
+        .filter(|value| !value.trim().is_empty())
+        .map(PathBuf::from)
+        .or_else(|| Some(root.to_path_buf()))
 }
 
 fn resolved_state_root_for_settings(root: &Path) -> PathBuf {
-    crate::install::version_info(root)
-        .map(|info| info.state_root)
-        .unwrap_or_else(|_| root.join("runtime"))
+    runtime_env::env_or_config(root, "CTOX_STATE_ROOT")
+        .filter(|value| !value.trim().is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| root.join("runtime"))
 }
 
 fn resolved_cache_root_for_settings(root: &Path) -> PathBuf {
-    crate::install::version_info(root)
-        .map(|info| info.cache_root)
-        .unwrap_or_else(|_| {
+    runtime_env::env_or_config(root, "CTOX_CACHE_ROOT")
+        .filter(|value| !value.trim().is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
             std::env::var_os("HOME")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("."))
@@ -153,6 +156,18 @@ fn resolved_cache_root_for_settings(root: &Path) -> PathBuf {
 fn persisted_path_setting(root: &Path, key: &str, fallback: PathBuf) -> String {
     runtime_env::env_or_config(root, key)
         .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| fallback.display().to_string())
+}
+
+fn persisted_path_setting_from_env(
+    env_map: &BTreeMap<String, String>,
+    key: &str,
+    fallback: PathBuf,
+) -> String {
+    env_map
+        .get(key)
+        .filter(|value| !value.trim().is_empty())
+        .cloned()
         .unwrap_or_else(|| fallback.display().to_string())
 }
 
@@ -1128,6 +1143,7 @@ pub fn run_tui_inject(
 
 impl App {
     fn new(root: PathBuf, db_path: PathBuf) -> Self {
+        trace_tui_start("app new: service status");
         let service_status =
             service::service_status_snapshot(&root).unwrap_or_else(|_| service::ServiceStatus {
                 running: false,
@@ -1152,6 +1168,15 @@ impl App {
                 last_agent_outcome: None,
                 work_hours: service::working_hours::snapshot(&root),
             });
+        trace_tui_start("app new: settings");
+        let settings_items = load_settings_items(&root);
+        trace_tui_start("app new: secrets");
+        let secret_items = load_secret_items(&root);
+        trace_tui_start("app new: model stats");
+        let model_perf_stats = load_model_perf_stats(&root);
+        trace_tui_start("app new: skills");
+        let skill_catalog = load_skill_catalog(&root);
+        trace_tui_start("app new: build struct");
         let mut app = Self {
             root: root.clone(),
             db_path,
@@ -1167,10 +1192,10 @@ impl App {
             prompt_context_breakdown: None,
             context_health: None,
             mission_state: None,
-            settings_items: load_settings_items(&root),
+            settings_items,
             settings_selected: 0,
             settings_view: SettingsView::Model,
-            secret_items: load_secret_items(&root),
+            secret_items,
             secrets_selected: 0,
             update_view: UpdateViewState::default(),
             settings_text_editor: None,
@@ -1187,7 +1212,7 @@ impl App {
             runtime_switch_in_flight: false,
             runtime_switch_rx: None,
             pending_runtime_transition_cards: None,
-            model_perf_stats: load_model_perf_stats(&root),
+            model_perf_stats,
             last_recorded_response_at: None,
             gpu_cards: Vec::new(),
             last_gpu_refresh_at: None,
@@ -1195,7 +1220,7 @@ impl App {
             last_runtime_refresh_at: None,
             runtime_health: RuntimeHealthState::default(),
             chat_preset_bundle: None,
-            skill_catalog: load_skill_catalog(&root),
+            skill_catalog,
             skills_selected: 0,
             last_chat_refresh_at: None,
             last_communication_refresh_at: None,
@@ -1205,12 +1230,14 @@ impl App {
             last_harness_flow_refresh_at: None,
             pending_images: Vec::new(),
         };
+        trace_tui_start("app new: normalize selection");
         if let Some(first) = app.visible_setting_indices().first().copied() {
             app.settings_selected = first;
         }
         if !app.secret_items.is_empty() {
             app.secrets_selected = 0;
         }
+        trace_tui_start("app new: done");
         app
     }
 
@@ -2547,7 +2574,9 @@ impl App {
     }
 
     fn refresh(&mut self) -> Result<()> {
-        self.refresh_dynamic_setting_choices();
+        if self.page == Page::Settings {
+            self.refresh_dynamic_setting_choices();
+        }
         let visible = self.visible_setting_indices();
         if let Some(first) = visible.first().copied() {
             if !visible.contains(&self.settings_selected) {
@@ -3859,8 +3888,11 @@ fn apply_runtime_model_selection(
 }
 
 fn load_settings_items(root: &Path) -> Vec<SettingItem> {
+    trace_tui_start("settings: env map");
     let env_map = runtime_env::effective_runtime_env_map(root).unwrap_or_default();
+    trace_tui_start("settings: runtime state");
     let current_runtime_state = runtime_state::load_or_resolve_runtime_state(root).ok();
+    trace_tui_start("settings: infer");
     let inferred_chat_source = current_runtime_state
         .as_ref()
         .map(|state| state.source.as_env_value().to_string())
@@ -3880,8 +3912,11 @@ fn load_settings_items(root: &Path) -> Vec<SettingItem> {
         "CTOX_API_PROVIDER".to_string(),
         inferred_api_provider.clone(),
     );
-    let chat_model_choices = supported_chat_model_choices(root, &choices_env_map);
-    let chat_family_choices = supported_local_chat_family_choices(root, &choices_env_map);
+    trace_tui_start("settings: chat model choices");
+    let chat_model_choices: Vec<&'static str> = Vec::new();
+    trace_tui_start("settings: chat family choices");
+    let chat_family_choices: Vec<&'static str> = Vec::new();
+    trace_tui_start("settings: active family");
     let active_family = selected_local_chat_family(&env_map)
         .or_else(|| {
             current_runtime_state
@@ -3897,6 +3932,7 @@ fn load_settings_items(root: &Path) -> Vec<SettingItem> {
                 .map(|value| (*value).to_string())
         })
         .unwrap_or_else(|| default_local_chat_family_label().to_string());
+    trace_tui_start("settings: active model");
     let active_model = current_runtime_state
         .as_ref()
         .and_then(|state| state.base_or_selected_model().map(ToOwned::to_owned))
@@ -3908,7 +3944,9 @@ fn load_settings_items(root: &Path) -> Vec<SettingItem> {
         })
         .or_else(|| chat_model_choices.first().map(|value| (*value).to_string()))
         .unwrap_or_else(|| default_active_model().to_string());
-    let boost_choices = supported_boost_model_choices(root, &choices_env_map);
+    trace_tui_start("settings: boost choices");
+    let boost_choices: Vec<&'static str> = Vec::new();
+    trace_tui_start("settings: paths");
     let boost_model = current_runtime_state
         .as_ref()
         .and_then(|state| state.boost.model.clone())
@@ -3940,41 +3978,58 @@ fn load_settings_items(root: &Path) -> Vec<SettingItem> {
         .get("CTOX_BOOST_DEFAULT_MINUTES")
         .cloned()
         .unwrap_or_else(|| "20".to_string());
-    let resolved_install_root = runtime_env::env_or_config(root, "CTOX_INSTALL_ROOT")
+    let default_state_root_path = env_map
+        .get("CTOX_STATE_ROOT")
         .filter(|value| !value.trim().is_empty())
-        .or_else(|| resolved_install_root_for_settings(root).map(|path| path.display().to_string()))
+        .map(PathBuf::from)
+        .unwrap_or_else(|| root.join("runtime"));
+    trace_tui_start("settings: install root");
+    let resolved_install_root = env_map
+        .get("CTOX_INSTALL_ROOT")
+        .filter(|value| !value.trim().is_empty())
+        .cloned()
+        .or_else(|| Some(root.display().to_string()))
         .unwrap_or_default();
-    let resolved_state_root = persisted_path_setting(
-        root,
+    trace_tui_start("settings: state root");
+    let resolved_state_root = persisted_path_setting_from_env(
+        &env_map,
         "CTOX_STATE_ROOT",
-        resolved_state_root_for_settings(root),
+        default_state_root_path.clone(),
     );
-    let resolved_cache_root = persisted_path_setting(
-        root,
+    trace_tui_start("settings: cache root");
+    let resolved_cache_root = persisted_path_setting_from_env(
+        &env_map,
         "CTOX_CACHE_ROOT",
         resolved_cache_root_for_settings(root),
     );
-    let resolved_bin_dir = persisted_path_setting(root, "CTOX_BIN_DIR", default_bin_dir());
-    let resolved_skills_root = persisted_path_setting(
-        root,
+    trace_tui_start("settings: bin dir");
+    let resolved_bin_dir =
+        persisted_path_setting_from_env(&env_map, "CTOX_BIN_DIR", default_bin_dir());
+    trace_tui_start("settings: skills root");
+    let resolved_skills_root = persisted_path_setting_from_env(
+        &env_map,
         "CTOX_SKILLS_ROOT",
-        resolved_state_root_for_settings(root).join("skills"),
+        default_state_root_path.join("skills"),
     );
-    let resolved_generated_skills_root = persisted_path_setting(
-        root,
+    trace_tui_start("settings: generated skills root");
+    let resolved_generated_skills_root = persisted_path_setting_from_env(
+        &env_map,
         "CTOX_GENERATED_SKILLS_ROOT",
-        resolved_state_root_for_settings(root).join("generated-skills"),
+        default_state_root_path.join("generated-skills"),
     );
-    let resolved_tools_root = persisted_path_setting(
-        root,
+    trace_tui_start("settings: tools root");
+    let resolved_tools_root = persisted_path_setting_from_env(
+        &env_map,
         "CTOX_TOOLS_ROOT",
-        resolved_state_root_for_settings(root).join("tools"),
+        default_state_root_path.join("tools"),
     );
-    let resolved_dependencies_root = persisted_path_setting(
-        root,
+    trace_tui_start("settings: dependencies root");
+    let resolved_dependencies_root = persisted_path_setting_from_env(
+        &env_map,
         "CTOX_DEPENDENCIES_ROOT",
-        resolved_state_root_for_settings(root).join("dependencies"),
+        default_state_root_path.join("dependencies"),
     );
+    trace_tui_start("settings: vec");
     vec![
         SettingItem {
             key: "CTOX_SERVICE_TOGGLE",
