@@ -861,156 +861,171 @@ fn knowledge_index_payload(root: &Path) -> anyhow::Result<Value> {
             format!("failed to open CTOX knowledge DB {}", sqlite_path.display())
         })?;
 
-        let mut stmt = conn.prepare(
-            "SELECT b.skill_id, b.skill_name, b.class, b.state, b.description, b.source_path,
-                    b.cluster, b.updated_at, COALESCE(f.file_count, 0) AS file_count
-               FROM ctox_skill_bundles b
-               LEFT JOIN (
-                 SELECT skill_id, COUNT(*) AS file_count FROM ctox_skill_files GROUP BY skill_id
-               ) f ON f.skill_id = b.skill_id
-              ORDER BY b.updated_at DESC, b.skill_name
-              LIMIT 240",
-        )?;
-        let mut rows = stmt.query([])?;
-        while let Some(row) = rows.next()? {
-            let skill_id: String = row.get(0)?;
-            let title: String = row.get(1)?;
-            let class_name: String = row.get(2)?;
-            let state: String = row.get(3)?;
-            let summary: String = row.get(4)?;
-            let source_path: Option<String> = row.get(5)?;
-            let cluster: String = row.get(6)?;
-            let updated_at: String = row.get(7)?;
-            let file_count: i64 = row.get(8)?;
-            items.push(serde_json::json!({
-                "id": format!("skill:{skill_id}"),
-                "kind": "skill",
-                "title": title,
-                "subtitle": format!("{class_name} · {state} · {cluster}"),
-                "summary": summary,
-                "source_path": source_path,
-                "updated_at": updated_at,
-                "file_count": file_count,
-                "has_table": false
-            }));
+        if sqlite_table_exists(&conn, "ctox_skill_bundles")? {
+            let skill_sql = if sqlite_table_exists(&conn, "ctox_skill_files")? {
+                "SELECT b.skill_id, b.skill_name, b.class, b.state, b.description, b.source_path,
+                        b.cluster, b.updated_at, COALESCE(f.file_count, 0) AS file_count
+                   FROM ctox_skill_bundles b
+                   LEFT JOIN (
+                     SELECT skill_id, COUNT(*) AS file_count FROM ctox_skill_files GROUP BY skill_id
+                   ) f ON f.skill_id = b.skill_id
+                  ORDER BY b.updated_at DESC, b.skill_name
+                  LIMIT 240"
+            } else {
+                "SELECT b.skill_id, b.skill_name, b.class, b.state, b.description, b.source_path,
+                        b.cluster, b.updated_at, 0 AS file_count
+                   FROM ctox_skill_bundles b
+                  ORDER BY b.updated_at DESC, b.skill_name
+                  LIMIT 240"
+            };
+            let mut stmt = conn.prepare(skill_sql)?;
+            let mut rows = stmt.query([])?;
+            while let Some(row) = rows.next()? {
+                let skill_id: String = row.get(0)?;
+                let title: String = row.get(1)?;
+                let class_name: String = row.get(2)?;
+                let state: String = row.get(3)?;
+                let summary: String = row.get(4)?;
+                let source_path: Option<String> = row.get(5)?;
+                let cluster: String = row.get(6)?;
+                let updated_at: String = row.get(7)?;
+                let file_count: i64 = row.get(8)?;
+                items.push(serde_json::json!({
+                    "id": format!("skill:{skill_id}"),
+                    "kind": "skill",
+                    "title": title,
+                    "subtitle": format!("{class_name} · {state} · {cluster}"),
+                    "summary": summary,
+                    "source_path": source_path,
+                    "updated_at": updated_at,
+                    "file_count": file_count,
+                    "has_table": false
+                }));
+            }
         }
 
-        let mut stmt = conn.prepare(
-            "SELECT skillbook_id, title, status, summary, linked_runbooks_json, updated_at
-               FROM knowledge_skillbooks
-              ORDER BY updated_at DESC, title
-              LIMIT 160",
-        )?;
-        let mut rows = stmt.query([])?;
-        while let Some(row) = rows.next()? {
-            let id: String = row.get(0)?;
-            let title: String = row.get(1)?;
-            let status: String = row.get(2)?;
-            let summary: String = row.get(3)?;
-            let linked_runbooks_json: String = row.get(4)?;
-            let updated_at: String = row.get(5)?;
-            let linked_runbook_ids = serde_json::from_str::<Value>(&linked_runbooks_json)
-                .unwrap_or_else(|_| serde_json::json!([]));
-            items.push(serde_json::json!({
-                "id": format!("skillbook:{id}"),
-                "kind": "skillbook",
-                "title": title,
-                "subtitle": format!("Skillbook · {status}"),
-                "summary": summary,
-                "linked_runbook_ids": linked_runbook_ids,
-                "linked_runbooks_json": linked_runbooks_json,
-                "updated_at": updated_at,
-                "file_count": 1,
-                "has_table": false
-            }));
+        if sqlite_table_exists(&conn, "knowledge_skillbooks")? {
+            let mut stmt = conn.prepare(
+                "SELECT skillbook_id, title, status, summary, linked_runbooks_json, updated_at
+                   FROM knowledge_skillbooks
+                  ORDER BY updated_at DESC, title
+                  LIMIT 160",
+            )?;
+            let mut rows = stmt.query([])?;
+            while let Some(row) = rows.next()? {
+                let id: String = row.get(0)?;
+                let title: String = row.get(1)?;
+                let status: String = row.get(2)?;
+                let summary: String = row.get(3)?;
+                let linked_runbooks_json: String = row.get(4)?;
+                let updated_at: String = row.get(5)?;
+                let linked_runbook_ids = serde_json::from_str::<Value>(&linked_runbooks_json)
+                    .unwrap_or_else(|_| serde_json::json!([]));
+                items.push(serde_json::json!({
+                    "id": format!("skillbook:{id}"),
+                    "kind": "skillbook",
+                    "title": title,
+                    "subtitle": format!("Skillbook · {status}"),
+                    "summary": summary,
+                    "linked_runbook_ids": linked_runbook_ids,
+                    "linked_runbooks_json": linked_runbooks_json,
+                    "updated_at": updated_at,
+                    "file_count": 1,
+                    "has_table": false
+                }));
+            }
         }
 
-        let mut stmt = conn.prepare(
-            "SELECT runbook_id, skillbook_id, title, status, summary, problem_domain, updated_at
-               FROM knowledge_runbooks
-              ORDER BY updated_at DESC, title
-              LIMIT 220",
-        )?;
-        let mut rows = stmt.query([])?;
-        while let Some(row) = rows.next()? {
-            let id: String = row.get(0)?;
-            let skillbook_id: String = row.get(1)?;
-            let title: String = row.get(2)?;
-            let status: String = row.get(3)?;
-            let summary: String = row.get(4)?;
-            let domain: String = row.get(5)?;
-            let updated_at: String = row.get(6)?;
-            let runbook = serde_json::json!({
-                "id": format!("runbook:{id}"),
-                "runbook_id": id,
-                "skillbook_id": skillbook_id,
-                "title": title,
-                "status": status,
-                "summary": summary,
-                "problem_domain": domain,
-                "updated_at": updated_at
-            });
-            items.push(serde_json::json!({
-                "id": runbook["id"],
-                "kind": "runbook",
-                "runbook_id": runbook["runbook_id"],
-                "skillbook_id": runbook["skillbook_id"],
-                "title": runbook["title"],
-                "subtitle": format!("Runbook · {} · {}", runbook["status"].as_str().unwrap_or(""), runbook["problem_domain"].as_str().unwrap_or("")),
-                "summary": runbook["summary"],
-                "problem_domain": runbook["problem_domain"],
-                "updated_at": runbook["updated_at"],
-                "file_count": 1,
-                "has_table": false
-            }));
-            runbooks.push(runbook);
+        if sqlite_table_exists(&conn, "knowledge_runbooks")? {
+            let mut stmt = conn.prepare(
+                "SELECT runbook_id, skillbook_id, title, status, summary, problem_domain, updated_at
+                   FROM knowledge_runbooks
+                  ORDER BY updated_at DESC, title
+                  LIMIT 220",
+            )?;
+            let mut rows = stmt.query([])?;
+            while let Some(row) = rows.next()? {
+                let id: String = row.get(0)?;
+                let skillbook_id: String = row.get(1)?;
+                let title: String = row.get(2)?;
+                let status: String = row.get(3)?;
+                let summary: String = row.get(4)?;
+                let domain: String = row.get(5)?;
+                let updated_at: String = row.get(6)?;
+                let runbook = serde_json::json!({
+                    "id": format!("runbook:{id}"),
+                    "runbook_id": id,
+                    "skillbook_id": skillbook_id,
+                    "title": title,
+                    "status": status,
+                    "summary": summary,
+                    "problem_domain": domain,
+                    "updated_at": updated_at
+                });
+                items.push(serde_json::json!({
+                    "id": runbook["id"],
+                    "kind": "runbook",
+                    "runbook_id": runbook["runbook_id"],
+                    "skillbook_id": runbook["skillbook_id"],
+                    "title": runbook["title"],
+                    "subtitle": format!("Runbook · {} · {}", runbook["status"].as_str().unwrap_or(""), runbook["problem_domain"].as_str().unwrap_or("")),
+                    "summary": runbook["summary"],
+                    "problem_domain": runbook["problem_domain"],
+                    "updated_at": runbook["updated_at"],
+                    "file_count": 1,
+                    "has_table": false
+                }));
+                runbooks.push(runbook);
+            }
         }
 
-        let mut stmt = conn.prepare(
-            "SELECT table_id, domain, table_key, source_system, title, description, parquet_path,
-                    row_count, bytes, updated_at
-               FROM knowledge_data_tables
-              WHERE archived_at IS NULL
-              ORDER BY updated_at DESC, title
-              LIMIT 160",
-        )?;
-        let mut rows = stmt.query([])?;
-        while let Some(row) = rows.next()? {
-            let table_id: String = row.get(0)?;
-            let domain: String = row.get(1)?;
-            let table_key: String = row.get(2)?;
-            let source_system: String = row.get(3)?;
-            let title: String = row.get(4)?;
-            let description: String = row.get(5)?;
-            let parquet_path: String = row.get(6)?;
-            let row_count: i64 = row.get(7)?;
-            let bytes: i64 = row.get(8)?;
-            let updated_at: String = row.get(9)?;
-            let id = format!("table:{table_id}");
-            let table = serde_json::json!({
-                "id": id,
-                "kind": "dataframe",
-                "title": title,
-                "domain": domain,
-                "table_key": table_key,
-                "source_system": source_system,
-                "description": description,
-                "parquet_path": parquet_path,
-                "row_count": row_count,
-                "bytes": bytes,
-                "updated_at": updated_at
-            });
-            items.push(serde_json::json!({
-                "id": table["id"],
-                "kind": "dataframe",
-                "title": table["title"],
-                "subtitle": format!("{} · {} rows", table["domain"].as_str().unwrap_or("data"), row_count),
-                "summary": table["description"],
-                "updated_at": table["updated_at"],
-                "file_count": 1,
-                "has_table": true
-            }));
-            tables.push(table);
+        if sqlite_table_exists(&conn, "knowledge_data_tables")? {
+            let mut stmt = conn.prepare(
+                "SELECT table_id, domain, table_key, source_system, title, description, parquet_path,
+                        row_count, bytes, updated_at
+                   FROM knowledge_data_tables
+                  WHERE archived_at IS NULL
+                  ORDER BY updated_at DESC, title
+                  LIMIT 160",
+            )?;
+            let mut rows = stmt.query([])?;
+            while let Some(row) = rows.next()? {
+                let table_id: String = row.get(0)?;
+                let domain: String = row.get(1)?;
+                let table_key: String = row.get(2)?;
+                let source_system: String = row.get(3)?;
+                let title: String = row.get(4)?;
+                let description: String = row.get(5)?;
+                let parquet_path: String = row.get(6)?;
+                let row_count: i64 = row.get(7)?;
+                let bytes: i64 = row.get(8)?;
+                let updated_at: String = row.get(9)?;
+                let id = format!("table:{table_id}");
+                let table = serde_json::json!({
+                    "id": id,
+                    "kind": "dataframe",
+                    "title": title,
+                    "domain": domain,
+                    "table_key": table_key,
+                    "source_system": source_system,
+                    "description": description,
+                    "parquet_path": parquet_path,
+                    "row_count": row_count,
+                    "bytes": bytes,
+                    "updated_at": updated_at
+                });
+                items.push(serde_json::json!({
+                    "id": table["id"],
+                    "kind": "dataframe",
+                    "title": table["title"],
+                    "subtitle": format!("{} · {} rows", table["domain"].as_str().unwrap_or("data"), row_count),
+                    "summary": table["description"],
+                    "updated_at": table["updated_at"],
+                    "file_count": 1,
+                    "has_table": true
+                }));
+                tables.push(table);
+            }
         }
     }
 
@@ -1390,6 +1405,15 @@ fn scan_parquet(path: &Path) -> PolarsResult<LazyFrame> {
 fn open_ctox_sqlite(root: &Path) -> anyhow::Result<Connection> {
     let path = ctox_sqlite_path(root);
     Connection::open(&path).with_context(|| format!("failed to open {}", path.display()))
+}
+
+fn sqlite_table_exists(conn: &Connection, table_name: &str) -> anyhow::Result<bool> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+        [table_name],
+        |row| row.get(0),
+    )?;
+    Ok(count > 0)
 }
 
 fn ctox_sqlite_path(root: &Path) -> PathBuf {
