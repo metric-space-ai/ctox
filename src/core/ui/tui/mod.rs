@@ -1121,10 +1121,9 @@ impl App {
             monitor_alerts: Vec::new(),
             monitor_last_error: None,
             last_agent_outcome: None,
-            work_hours: service::working_hours::snapshot(&root),
+            work_hours: service::working_hours::WorkHoursSnapshot::default(),
         };
         let settings_items = load_settings_items(&root);
-        let secret_items = load_secret_items(&root);
         let model_perf_stats = load_model_perf_stats(&root);
         let skill_catalog = Vec::new();
         let mut app = Self {
@@ -1145,7 +1144,7 @@ impl App {
             settings_items,
             settings_selected: 0,
             settings_view: SettingsView::Model,
-            secret_items,
+            secret_items: Vec::new(),
             secrets_selected: 0,
             update_view: UpdateViewState::default(),
             settings_text_editor: None,
@@ -1182,9 +1181,6 @@ impl App {
         };
         if let Some(first) = app.visible_setting_indices().first().copied() {
             app.settings_selected = first;
-        }
-        if !app.secret_items.is_empty() {
-            app.secrets_selected = 0;
         }
         app
     }
