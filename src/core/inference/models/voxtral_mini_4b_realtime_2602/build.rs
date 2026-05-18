@@ -1,4 +1,4 @@
-use std::env;
+use std::{env, fs};
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -41,6 +41,9 @@ fn build_vendored_ggml() {
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
     let src = manifest_dir.join("vendor/ggml");
     let build = out_dir.join("ggml-build");
+    if build.join("CMakeCache.txt").is_file() {
+        let _ = fs::remove_dir_all(&build);
+    }
 
     let mut configure = Command::new("cmake");
     configure
