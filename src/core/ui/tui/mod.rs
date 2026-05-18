@@ -930,9 +930,6 @@ pub fn run_tui(root: &Path) -> Result<()> {
 
     let mut app = App::new(root.to_path_buf(), db_path);
     trace_tui_start("app created");
-    app.refresh()?;
-    trace_tui_start("app refreshed");
-
     let mut stdout = io::stdout();
     trace_tui_start("enter terminal");
     let _guard = TerminalGuard::enter(&mut stdout)?;
@@ -992,7 +989,9 @@ pub fn run_tui(root: &Path) -> Result<()> {
         };
         let refresh_due = last_refresh.elapsed() >= refresh_interval;
         if refresh_due {
+            trace_tui_start("loop refresh start");
             app.refresh()?;
+            trace_tui_start("loop refresh done");
             last_refresh = Instant::now();
         }
 
@@ -2574,16 +2573,21 @@ impl App {
     }
 
     fn refresh(&mut self) -> Result<()> {
+        trace_tui_start("refresh: start");
         if self.page == Page::Settings {
+            trace_tui_start("refresh: dynamic settings");
             self.refresh_dynamic_setting_choices();
         }
+        trace_tui_start("refresh: visible settings");
         let visible = self.visible_setting_indices();
         if let Some(first) = visible.first().copied() {
             if !visible.contains(&self.settings_selected) {
                 self.settings_selected = first;
             }
         }
+        trace_tui_start("refresh: service");
         self.refresh_service_status_if_due();
+        trace_tui_start("refresh: chat");
         let chat_refresh_interval = self.chat_refresh_interval();
         if self.should_refresh_chat_messages()
             && refresh_due(&mut self.last_chat_refresh_at, chat_refresh_interval)
@@ -2595,6 +2599,7 @@ impl App {
                 );
             }
         }
+        trace_tui_start("refresh: communication");
         let communication_refresh_interval = self.communication_refresh_interval();
         if self.should_refresh_communication_feed()
             && refresh_due(
@@ -2604,6 +2609,7 @@ impl App {
         {
             self.refresh_communication_feed();
         }
+        trace_tui_start("refresh: skills");
         if self.page == Page::Skills
             && refresh_due(
                 &mut self.last_skill_catalog_refresh_at,
@@ -2612,11 +2618,17 @@ impl App {
         {
             self.refresh_skill_catalog();
         }
+        trace_tui_start("refresh: harness");
         self.refresh_harness_flow_if_due();
+        trace_tui_start("refresh: gpu");
         self.refresh_gpu_cards();
+        trace_tui_start("refresh: runtime");
         self.refresh_runtime_telemetry_if_due();
+        trace_tui_start("refresh: header");
         self.refresh_header();
+        trace_tui_start("refresh: jami");
         self.refresh_jami_qr();
+        trace_tui_start("refresh: done");
         Ok(())
     }
 
