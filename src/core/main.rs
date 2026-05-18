@@ -1913,8 +1913,10 @@ fn resolve_runtime_ctox_root(current_exe: &Path, home_dir: Option<&Path>) -> Opt
 }
 
 fn looks_like_ctox_root(candidate: &Path) -> bool {
+    let has_entrypoint =
+        candidate.join("src/main.rs").is_file() || candidate.join("src/core/main.rs").is_file();
     candidate.join("Cargo.toml").is_file()
-        && candidate.join("src/main.rs").is_file()
+        && has_entrypoint
         && candidate
             .join("contracts/history/creation-ledger.md")
             .is_file()
