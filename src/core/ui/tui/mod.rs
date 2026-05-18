@@ -4529,11 +4529,11 @@ fn load_settings_items(root: &Path) -> Vec<SettingItem> {
             value: env_map
                 .get("CTOX_WEBRTC_SIGNALING_URL")
                 .cloned()
-                .unwrap_or_else(|| "wss://api.metricspace.org/signal".to_string()),
+                .unwrap_or_else(|| "wss://signaling.ctox.dev".to_string()),
             saved_value: env_map
                 .get("CTOX_WEBRTC_SIGNALING_URL")
                 .cloned()
-                .unwrap_or_else(|| "wss://api.metricspace.org/signal".to_string()),
+                .unwrap_or_else(|| "wss://signaling.ctox.dev".to_string()),
             secret: false,
             choices: Vec::new(),
             help: "WebRTC signaling endpoint used by the CTOX desktop bridge.",
