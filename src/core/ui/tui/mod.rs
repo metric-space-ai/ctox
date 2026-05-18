@@ -127,16 +127,11 @@ fn default_bin_dir() -> PathBuf {
         .join(".local/bin")
 }
 
-fn resolved_cache_root_for_settings(root: &Path) -> PathBuf {
-    runtime_env::env_or_config(root, "CTOX_CACHE_ROOT")
-        .filter(|value| !value.trim().is_empty())
+fn default_cache_root_for_settings() -> PathBuf {
+    std::env::var_os("HOME")
         .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            std::env::var_os("HOME")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join(".cache/ctox")
-        })
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".cache/ctox")
 }
 
 fn persisted_path_setting_from_env(
@@ -3905,7 +3900,7 @@ fn load_settings_items(root: &Path) -> Vec<SettingItem> {
     let resolved_cache_root = persisted_path_setting_from_env(
         &env_map,
         "CTOX_CACHE_ROOT",
-        resolved_cache_root_for_settings(root),
+        default_cache_root_for_settings(),
     );
     let resolved_bin_dir =
         persisted_path_setting_from_env(&env_map, "CTOX_BIN_DIR", default_bin_dir());
