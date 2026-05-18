@@ -903,8 +903,6 @@ impl SkillState {
 
 pub fn run_tui(root: &Path) -> Result<()> {
     let db_path = crate::persistence::sqlite_path(root);
-    let _ = lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default())?;
-
     let mut app = App::new(root.to_path_buf(), db_path);
     let mut stdout = io::stdout();
     let _guard = TerminalGuard::enter(&mut stdout)?;
@@ -1001,10 +999,8 @@ pub fn run_tui_smoke(root: &Path, page_name: &str, width: u16, height: u16) -> R
     use ratatui::backend::TestBackend;
 
     let db_path = crate::persistence::sqlite_path(root);
-    let _ = lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default())?;
-
     let mut app = App::new(root.to_path_buf(), db_path);
-    let mut skip_initial_refresh = false;
+    let mut skip_initial_refresh = true;
     match page_name {
         "chat" => app.page = Page::Chat,
         "skills" => app.page = Page::Skills,
@@ -1065,8 +1061,6 @@ pub fn run_tui_inject(
     use ratatui::backend::TestBackend;
 
     let db_path = crate::persistence::sqlite_path(root);
-    let _ = lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default())?;
-
     let mut app = App::new(root.to_path_buf(), db_path);
     match page_name {
         "chat" => app.page = Page::Chat,
