@@ -1,0 +1,23 @@
+{
+  "id": "knowledge",
+  "title": "Knowledge",
+  "description": "Native CTOX Knowledge workspace for skillbooks, runbooks, markdown assets, and Polars-backed dataframes.",
+  "entry": "modules/knowledge/index.html",
+  "collections": [
+    "business_commands",
+    "knowledge_items",
+    "knowledge_runbooks",
+    "knowledge_tables"
+  ],
+  "layout": {
+    "shell": "full-workspace",
+    "left": "Knowledge selection and source groups",
+    "center": "Markdown reader/editor and dataframe table tabs",
+    "right": "Runbooks as operational knowledge layer",
+    "drawers": {
+      "left": "Knowledge source and import configuration",
+      "right": "Runbook configuration, modification, and execution",
+      "bottom": "Selected rows, dataframe diagnostics, and CTOX task evidence"
+    }
+  }
+}

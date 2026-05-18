@@ -1,271 +1,351 @@
 # CTOX Harness
 
-CTOX uses an integrated, in-process agent harness to execute bounded work slices
-inside the long-running daemon. The harness is responsible for assembling
-runtime context, running an agent turn, recording evidence, refreshing continuity
-state when needed, and returning control to the durable mission loop.
+This document describes how the harness works in the current source tree.
+There are three related layers:
 
-The important design rule is that prompts may describe work, but progress,
-spawns, review gates, retries, and completion must remain explainable through
-durable state transitions and process-mining evidence.
+1. The CTOX service harness in `src/core/service/service.rs` leases durable work,
+   runs one bounded worker slice, reviews the result, records state, and then
+   releases or requeues the durable item.
+2. The forked Codex runtime under `src/core/harness/` provides the in-process agent
+   runtime, tools, thread control, subagents, state store, hooks, policy checks,
+   and API/client crates.
+3. The harness-flow feature in `src/core/service/harness_flow.rs` is an
+   observability renderer. It does not execute work. It reads runtime evidence
+   and renders the current work path as JSON or ASCII for CLI, TUI, desktop, and
+   web surfaces.
 
-## Runtime Flow
+The core design rule is still durable-state first: prompts may describe work,
+but completion, review, retries, subagent activity, spawn edges, and outcome
+evidence must be explainable from persisted state, not from assistant prose.
 
-```text
-ctox start
-  -> daemon/service loop
-  -> runtime/ctox.sqlite3
-  -> queue, channels, tickets, plans, schedules, governance, LCM state
+## Runtime State
 
-Producers:
-  - TUI and ctox chat input
-  - native email routing
-  - schedules
-  - plan steps
-  - ticket synchronization, including Zammad
-  - runtime guards such as queue pressure and mission idle watchdog
+Core runtime state lives in `runtime/ctox.sqlite3`. The central path helper is
+`paths::core_db(root)`. `mission_db(root)` and `lcm_db(root)` are aliases for the
+same file, used for call-site clarity.
 
-For each leased work item:
-  1. Build the context package.
-  2. Run one bounded ctox-core turn slice.
-  3. Optionally refresh continuity documents.
-  4. Record verification, governance, process, and queue state.
-  5. Complete, block, defer, requeue, or lease the next item.
-```
+That single database contains mission-side and LCM-side tables: queue,
+channels, tickets, governance, schedules, plans, approval nag state, knowledge,
+messages, summaries, continuity documents, mission state, verification, claims,
+process-mining tables, core transition proofs, spawn edges, and harness-flow
+events.
 
-The service stores core runtime state in `runtime/ctox.sqlite3`. The central
-path helper is `paths::core_db(root)`, and `mission_db(root)` and `lcm_db(root)`
-are aliases for the same file. Historical `runtime/cto_agent.db` and
-`runtime/ctox_lcm.db` paths are legacy migration inputs only.
+Historical `runtime/cto_agent.db` and `runtime/ctox_lcm.db` paths are migration
+inputs only. Tool-owned stores stay separate when the tool owns the lifecycle,
+for example `runtime/ticket_local.db` and `runtime/ctox_scraping.db`.
 
-Tool-owned stores stay separate when their tool owns the lifecycle, for example
-`runtime/ticket_local.db`, `runtime/ctox_scraping.db`, and
-`runtime/documents/ctox_doc.db`.
+## Service Boot
 
-## Context Assembly
+`run_service` initializes the durable stores, opens the LCM engine on
+`runtime/ctox.sqlite3`, runs boot invariants, releases stale communication
+leases, and starts the long-lived service loops:
 
-Each worker slice receives a bounded context package:
+- channel router
+- channel syncer
+- mission maintenance loop
+- harness audit watcher
+- working-hours dispatcher
+- optional backend supervisor prewarm
 
-- System prompt: the CTOX runtime contract, tool descriptions, and governance
-  rules.
-- Focus: the current task, status, next step, blockers, and done gate.
-- Anchors: durable facts, paths, decisions, constraints, and external state.
-- Narrative: compressed history of prior turns.
-- Task prompt: the newly leased work item or continuation instruction.
+The service listens on its IPC socket/HTTP endpoint and keeps the control plane
+cheap while idle. Local model runtimes are usually started on demand by agent
+turns, unless prewarm is explicitly enabled.
 
-The continuity documents are persisted in the consolidated runtime database.
-The agent's normal reply text does not update them by itself.
+## Work Sources
 
-## Turn Execution
+The harness does not rely on an in-memory work queue as the source of truth.
+Workers are derived from durable sources such as:
 
-The inner harness turn is the ctox-core loop:
+- communication messages and `communication_routing_state`
+- queue tasks created by plans, schedules, channels, or maintenance paths
+- ticket events and `ticket_self_work_items`
+- founder/owner communication review and resend work
+- guard or repair paths such as queue pressure, state invariant repair, timeout
+  retry, and outcome-witness recovery
 
-```text
-think -> tool call -> tool result -> think -> tool call -> ... -> turn complete
-```
+The channel router does not lease new external work while a worker is active.
+It first reconciles ticket state, runs dispatch preflights, emits due schedules,
+syncs configured ticket sources, routes assigned self-work, and only then leases
+bounded inbound work into `QueuedPrompt` slices.
 
-The current service path starts a worker with `start_prompt_worker(...)`. A
-single `run_chat_turn_with_events_extended(...)` call owns the main turn and,
-when triggered, the continuity refresh calls that reuse the same client for that
-slice.
+## Worker Slice Flow
 
-The direct session writes turn and token forensics to
-`runtime/context-log.jsonl`. Operator settings and LCM state live in
-`runtime/ctox.sqlite3`.
+`start_prompt_worker(...)` is the outer harness entry point for a leased slice.
+It runs in a thread and performs the following gate sequence before model
+execution:
 
-## Compaction And Continuity
+1. Suppress known fatal harness-loop prompts.
+2. Hold work outside configured working hours.
+3. Skip superseded self-work prompts.
+4. Redirect owner-visible work that needs strategic setup.
+5. Redirect platform work that needs expertise passes.
+6. Build the execution prompt, root, workspace, and conversation id.
+7. Call `turn_loop::run_chat_turn_with_events_extended_guarded(...)`.
 
-CTOX uses two layers of context protection:
+Plan-step messages force continuity refresh because they are task boundaries.
+The service passes `None` for the per-turn session today, so the turn loop
+creates a local `PersistentSession` for that slice. The main turn and any
+continuity refresh calls in that slice still share the same in-process runtime.
 
-- Emergency compaction: `DEFAULT_CONTEXT_THRESHOLD = 0.75`, so compaction starts
-  when the call input reaches 75 percent of the configured context window.
-- Adaptive continuity refresh: `CTOX_REFRESH_OUTPUT_BUDGET_PCT` defaults to 15,
-  so continuity refresh is considered when model output consumes enough of the
-  per-call context budget or when a durable state transition is detected.
+## Inner Agent Turn
 
-The default context window seed is `CTOX_CHAT_MODEL_MAX_CONTEXT=131072`, which
-is 128K tokens. The value is configurable, and thresholds are computed relative
-to the configured window.
+`run_chat_turn_with_events_extended_guarded(...)` owns the inner turn:
 
-Continuity refresh builds prompts for Narrative, Anchors, and Focus. The model
-must call:
+1. Resolve runtime settings and ensure a local backend is ready when needed.
+2. Start or reuse a `PersistentSession`.
+3. Open `LcmEngine` on `runtime/ctox.sqlite3`.
+4. Persist the user turn.
+5. Build a turn plan and run pre-turn LCM compaction if the LCM snapshot is over
+   threshold.
+6. Render live context from messages, continuity, mission state, assurance,
+   governance, and context-health evidence.
+7. Invoke the model through the persistent session.
+8. Persist the assistant turn.
+9. Detect durable state transitions caused by tool calls.
+10. Refresh continuity if forced by a task boundary/state transition or by the
+    configured legacy interval.
+
+Direct-session model events write token and timing forensics to
+`runtime/context-log.jsonl`. Worker failures are persisted as structured
+`messages.agent_outcome` values rather than by scraping assistant text.
+
+## Context Protection
+
+There are two context-protection mechanisms in the current code:
+
+- LCM pre-turn compaction, controlled by `src/core/context/lcm.rs`, compacts stored
+  conversation history before rendering a prompt when the LCM snapshot crosses
+  the configured threshold. The default threshold is 0.75.
+- Direct-session compaction, controlled by `src/core/context/compact.rs`, watches
+  model token events during the live turn. Emergency compaction fires when
+  per-call input reaches 75 percent of the context window. Adaptive compaction
+  defaults to a 15 percent visible-output/read-input drift threshold, with a
+  minimum of 4096 visible output tokens.
+
+The default context window is 131072 tokens when no runtime/model value
+overrides it. The installer seeds model-specific `max_seq` values, commonly
+131072 and sometimes 65536 for smaller local models.
+
+## Continuity Refresh
+
+Continuity documents live in the consolidated runtime database. The model's
+normal reply text does not update them.
+
+Refresh builds prompts for:
+
+- `narrative`
+- `anchors`
+- `focus`
+
+The model is expected to call:
 
 ```bash
 ctox continuity-update --kind <narrative|anchors|focus> --mode <full|replace|diff>
 ```
 
-No update is recorded unless the CLI call changes the persisted document.
+The refresh driver verifies the head commit id before and after the model call.
+If the CLI tool did not advance the persisted document, no refresh is counted.
+Anchor refresh also preserves recent anchor literals after the tool-driven
+update path.
 
-## Completion And Continuation
+## Review And Outcome Gates
 
-After a turn, the service decides what happens next from durable state:
+A successful model turn does not automatically close work. The service starts a
+completion review unless the source is internal queue-guard maintenance. The
+reviewer runs as a separate skeptical pass over the worker result and returns a
+typed disposition:
 
-- completed work is closed only after the relevant state and evidence gates pass
-- blocked work is acknowledged or deferred with the blocker recorded
-- queued work is leased into another worker slice
-- mission-idle watchdog and queue-pressure guard paths can enqueue bounded
-  follow-up slices
-- legacy timeout continuation jobs are suppressed before model execution because
-  recursive timeout continuations can restart timed-out harness turns indefinitely
+- `Approved`
+- `Hold`
+- `NoSend`
+- `RequeueSelfWork`
+- `FeedbackRetry`
+- `TerminalQueueFailure`
+- `None`
 
-The timeout path records a `turn_timeout_continuation` governance event and
-returns control to the original queue scope instead of blindly spawning another
-same-prompt continuation.
+Only approved work can move into terminal handling. For communication and other
+artifact-producing work, the outcome witness checks that required durable
+artifacts exist. The service then enforces reviewed terminal success through
+the core state machine. If that proof is missing or rejected, the slice is not
+closed merely because the assistant said it was done.
 
-## Review Gate, Spawner, And Subagent Liveness
+Rejected or incomplete work is fed back into the same durable queue/self-work
+item where possible. The review path has finite retry budgets and eventually
+fails terminally instead of creating unbounded review/rework cascades.
 
-The harness is modeled as a controlled state machine. Review, rework, task
-spawns, subagents, and completion must remain bounded and visible in the durable
-process graph.
+## Core State Machine
 
-### Roles
+`src/core/service/core_state_machine.rs` defines the static review-harness model.
+The success path is:
 
-- Main Agent: owns the user-visible task, final conclusion, visible claims, and
-  completion decision. Review feedback is input to the same parent task.
-- Reviewer: acts as a quality gate. It classifies the current result but must
-  not own an independent self-work cascade.
-- Spawner: creates durable child work and must register a parent-child edge in
-  the core process graph.
-- Subagent: runs as a parallel leaf worker. Subagents must not become their own
-  review and rework orchestrators.
+```text
+Queued -> Leased -> Running -> AwaitingReview -> ReviewQueued -> Reviewing
+  -> ReviewPassed -> AwaitingValidation -> Validating -> Passed
+```
 
-### Review As A Checkpoint
+Failure or non-terminal paths include model failure, infra failure, reviewer
+unavailable retry, review rejection into rework, validator failure into rework,
+and exhausted retry budgets.
 
-The reviewer can return three finding classes:
+The analyzer proves:
 
-- `wording`: the substance is correct, but language or presentation needs
-  revision.
-- `substantive`: content, evidence, implementation, or reasoning is incomplete.
-- `stale`: world state or queue state changed and needs refresh, obsoletion, or
-  consolidation.
+- `Passed` is the only terminal success state.
+- Every path to `Passed` crosses both review pass and validator pass.
+- reviewer unavailable cannot advance success.
+- rejected review can only enter rework.
+- rework can only requeue the same main work or end as model failure.
+- every cycle consumes a finite budget.
 
-After review, the Main Agent continues the parent task. The process must not
-model review as an unbounded `review -> self-work -> review -> self-work` loop.
+## Durable Spawns
 
-Every repeated review pass needs a witness of progress:
+Durable internal spawns are checked by `src/core/service/core_transition_guard.rs`.
+Accepted and rejected attempts are persisted in `ctox_core_spawn_edges`.
 
-- wording rework: a new `body_hash`
-- substantive rework: a new substance, evidence, or implementation pointer
-- stale rework: a new world pointer, queue consolidation, or terminal no-send /
-  no-action decision
-
-Without a witness, the path is a loop candidate, not progress.
-
-### Core Spawner Contract
-
-Every durable internal spawn requires a registered core spawner contract:
-
-- stable `spawn_kind`
-- allowed parent entity types
-- allowed child entity type
-- finite budget requirement
-- maximum budget
-- intervention skill
-- finite, non-spawning intervention effects
-
-Accepted and rejected spawn attempts are persisted in `ctox_core_spawn_edges`.
-The kernel rejects unregistered, unstable, cyclic, budgetless, over-budget, and
-budget-exhausted spawns.
+Every accepted spawn requires a registered contract, stable parent and child
+entity ids, the registered parent/child type pair, and a finite budget when the
+contract requires one. Cycles and review-named spawn kinds also require finite
+budget evidence.
 
 Current contract families:
 
 | Pattern | Parent | Child | Bound |
 | --- | --- | --- | --- |
-| `self-work:*` | ControlPlane, Message, QueueTask, Thread, WorkItem | WorkItem | <= 64 |
-| `self-work-queue-task` | WorkItem | QueueTask | <= 64 |
-| `queue-task` | ControlPlane, Message, Thread, WorkItem | QueueTask | <= 64 |
-| `plan-step-message` | PlanStep | Message | <= 8 |
-| `schedule-run-message` | ScheduleTask | Message | <= 64 |
+| `self-work:*` | `ControlPlane`, `Message`, `QueueTask`, `Thread`, `WorkItem` | `WorkItem` | <= 64 |
+| `self-work-queue-task` | `WorkItem` | `QueueTask` | <= 64 |
+| `queue-task` | `ControlPlane`, `Message`, `Thread`, `WorkItem` | `QueueTask` | <= 64 |
+| `plan-step-message` | `PlanStep` | `Message` | <= 8 |
+| `schedule-run-message` | `ScheduleTask` | `Message` | <= 64 |
 
-Any spawn kind whose name contains `review` also requires a finite budget.
+Unregistered, unstable, cyclic-without-budget, over-budget, and exhausted-budget
+spawns are rejected and recorded as evidence.
 
-### Subagents
+## Subagents
 
-Subagents are leaf-only:
+Subagents are implemented in the forked Codex runtime under `src/core/harness/core`.
+The CTOX fork record is `src/core/harness/FORK.md`.
 
-- `SessionSource::SubAgent(_)` sessions lose recursive collaboration and spawn
-  tools.
-- Subagents do not receive `spawn_agents_on_csv`.
+Subagents are leaf workers:
+
+- The parent owns the user-visible task, review, rework, completion, and
+  owner-visible claims.
+- Subagent sessions do not get recursive collaboration/spawn tools.
+- `spawn_agents_on_csv` is removed from subagent sessions.
 - Agent-job workers keep only `report_agent_job_result`.
-- The parent agent owns review, rework, completion, and owner-visible claims.
-- The review state machine sees one parent result, not a separate review gate
-  per subagent.
+- Thread-spawn subagents are bounded by `agents.max_depth` and
+  `agents.max_threads`.
+- Local model providers serialize subagent work; API-backed providers may run
+  parallel work.
 
-Thread-spawn subagents are bounded by `agents.max_depth` and
-`agents.max_threads`. Their rank is:
+The static liveness analyzer in
+`src/core/harness/core/src/harness_spawn_liveness.rs` checks thread-spawn,
+agent-job-worker, and internal-subagent contracts. Its ranking functions are
+`max_depth - child_depth`, `pending_agent_job_items`, and single internal task
+invocation respectively.
 
-```text
-depth_remaining = agents.max_depth - child_depth
-```
+## Harness Flow Renderer
 
-Agent-job workers are bounded by a finite persisted item table and the
-concurrency limit. Their rank is:
+`ctox harness-flow` is an evidence renderer, not the executor.
 
-```text
-pending_agent_job_items
-```
-
-## Executable Liveness Proof
-
-Run:
+CLI shape:
 
 ```bash
-ctox process-mining spawn-liveness
+ctox harness-flow [--latest] [--message-key <key>] [--work-id <id>] [--width <n>] [--json]
+ctox harness-flow init
+ctox harness-flow events [--message-key <key>] [--work-id <id>] [--ticket-key <key>] [--limit <n>]
 ```
 
-The command emits a JSON report with:
+The renderer opens `runtime/ctox.sqlite3` read-only for normal rendering. It
+selects a seed message or self-work item, loads related queue routing,
+self-work, review approvals, core proofs, process-mining violations, continuity
+counts, knowledge counts, verification counts, and recent harness-flow ledger
+events. It also reads the latest token usage event from
+`runtime/context-log.jsonl`.
 
-- `core_spawn_liveness`: registered durable spawners, budgets, intervention
-  skills, and graph-cycle checks
-- `harness_subagent_liveness`: depth and count bounds plus leaf-only tool
-  surfaces
+The ASCII flow keeps the main work on the left spine:
 
-The command returns `ok: true` only when both layers are provably bounded.
+```text
+TASK
+  -> QUEUE PICKUP
+  -> CONTEXT
+  -> KNOWLEDGE
+  -> HARNESS LEDGER
+ATTEMPT 1
+  -> REVIEW
+  -> TICKET BACKLOG
+ATTEMPT 2 / REWORK
+  -> SOURCE FROM TICKET BACKLOG
+  -> QUEUE RELOAD
+FINISH / CURRENT STATE
+  -> HARNESS STATE MACHINE
+  -> SEND / CLOSE GUARD
+  -> VERIFICATION
+  -> PROCESS MINING
+```
 
-This proof intentionally does not run in every `rustc` compilation through
-`build.rs`. It is a repository conformance and release-safety check, not a type
-check. The intended gates are:
+The flow ledger table is `ctox_harness_flow_events`. It is written from queue,
+ticket, knowledge, and communication review paths through
+`record_harness_flow_event_lossy(...)`. Current event families include review
+approval/no-send, queue cleanup, queue spill/restore, knowledge load,
+self-work create/publish/transition/state-set. The renderer also appends a
+synthetic token-usage event from the context log when one is available.
 
-- unit tests for normal test runs
-- CI gate for pull and main changes
-- release gate with a built binary before packaging
+Desktop reads the flow by executing the local `ctox harness-flow` CLI and falls
+back to a reduced SQL renderer when the binary is unavailable. Business OS
+serves the same evidence through `/api/business-os/ctox/harness-flow` and its
+CTOX module renders that payload inside the app shell.
 
-If `ctox process-mining spawn-liveness` fails, do not paper over it with prompt
-text. Fix the process graph, transition guard, budget contract, or tool surface.
+## Process Mining And Harness Mining
 
-## Verified Code References
+Process mining records compact command and state evidence in
+`ctox_process_events` and related views. SQLite read events are off by default;
+write and transition evidence remains active. The harness-flow process-mining
+branch reports total process events and sqlite-access debug events.
 
-These references were checked against the current repository layout.
+The service also starts a harness audit watcher. It periodically builds a
+harness-mining brief and writes confirmed findings to `ctox_hm_findings` through
+a two-tick gate. The audit watcher is read-only against domain tables and writes
+only harness-mining findings and audit-run records.
 
-| Element | File |
+Useful commands:
+
+```bash
+ctox process-mining core-liveness
+ctox process-mining spawn-liveness
+ctox process-mining spawn-edges --limit 50
+ctox process-mining guidance --limit 50
+ctox process-mining prune --sqlite-access-window 200000
+```
+
+`spawn-liveness` combines the core durable-spawn analyzer with the forked
+Codex subagent analyzer and exits non-zero when either layer is not provably
+bounded.
+
+## Source References
+
+These are the main implementation files for the current harness behavior:
+
+| Area | File |
 | --- | --- |
-| CLI dispatch for `process-mining` | [src/main.rs](src/main.rs#L436) |
-| CLI dispatch for `continuity-update` | [src/main.rs](src/main.rs#L737) |
-| `ctox continuity-update` usage and modes | [src/main.rs](src/main.rs#L1221) |
-| Service boot and loop setup | [src/service/service.rs](src/service/service.rs#L626) |
-| Channel router and mission maintenance startup | [src/service/service.rs](src/service/service.rs#L635) |
-| Worker dispatch function | [src/service/service.rs](src/service/service.rs#L2632) |
-| Queue task creation | [src/mission/channels.rs](src/mission/channels.rs#L1661) |
-| Inbound message leasing | [src/mission/channels.rs](src/mission/channels.rs#L1455) |
-| Ticket-event leasing | [src/mission/tickets.rs](src/mission/tickets.rs#L3400) |
-| Consolidated runtime DB path | [src/paths.rs](src/paths.rs#L34) |
-| Core spawn-edge table | [src/service/core_transition_guard.rs](src/service/core_transition_guard.rs#L104) |
-| Core spawner contracts | [src/service/core_transition_guard.rs](src/service/core_transition_guard.rs#L654) |
-| Spawn-liveness report assembly | [src/service/process_mining.rs](src/service/process_mining.rs#L943) |
-| Harness subagent liveness analyzer | [src/harness/core/src/harness_spawn_liveness.rs](src/harness/core/src/harness_spawn_liveness.rs#L20) |
-| Emergency compaction threshold | [src/context/lcm.rs](src/context/lcm.rs#L18) |
-| Default context window fallback | [src/context/compact.rs](src/context/compact.rs#L174) |
-| Installer seed for `CTOX_CHAT_MODEL_MAX_CONTEXT` | [install.sh](install.sh#L1600) |
-| Continuity refresh driver | [src/execution/agent/turn_loop.rs](src/execution/agent/turn_loop.rs#L634) |
-| Direct-session context log | [src/execution/agent/direct_session.rs](src/execution/agent/direct_session.rs#L1189) |
-| Timeout-continuation suppression path | [src/service/service.rs](src/service/service.rs#L9599) |
+| Runtime DB paths | `src/core/paths.rs` |
+| Service boot and worker dispatch | `src/core/service/service.rs` |
+| Inner turn loop and continuity refresh | `src/core/execution/agent/turn_loop.rs` |
+| LCM history compaction | `src/core/context/lcm.rs` |
+| Direct-session compaction policy | `src/core/context/compact.rs` |
+| Core transition and spawn guard | `src/core/service/core_transition_guard.rs` |
+| Review-harness state model | `src/core/service/core_state_machine.rs` |
+| Process-mining CLI | `src/core/service/process_mining.rs` |
+| Harness-flow CLI and renderer | `src/core/service/harness_flow.rs` |
+| Desktop harness-flow view | `src/apps/desktop/src/views/harness_flow.rs` |
+| Desktop CLI/fallback flow reader | `src/apps/desktop/src/db_reader.rs` |
+| Business OS app shell | `src/apps/business-os/` |
+| Business OS harness-flow endpoint | `src/core/business_os/server.rs` |
+| Forked Codex runtime record | `src/core/harness/FORK.md` |
+| Subagent liveness analyzer | `src/core/harness/core/src/harness_spawn_liveness.rs` |
+| Subagent thread control | `src/core/harness/core/src/agent/control.rs` |
+| Subagent spawn guards | `src/core/harness/core/src/agent/guards.rs` |
+| Tool surface selection | `src/core/harness/core/src/tools/spec.rs` |
+| Agent-job workers | `src/core/harness/core/src/tools/handlers/agent_jobs.rs` |
+| Harness-flow event writers | `src/core/mission/channels.rs`, `src/core/mission/queue.rs`, `src/core/mission/tickets.rs` |
 
-## Consistency Notes
-
-The previous German draft mixed `runtime/ctox.sqlite3` and `runtime/ctox.db`.
-The current path helper and active call sites use `runtime/ctox.sqlite3`.
-
-The previous draft also described timeout continuation as if the harness always
-created another queue task. The current code suppresses legacy timeout
-continuation jobs before model execution and records the guard decision in
-governance state.
+If this document drifts, update it from these files first. Do not paper over
+missing liveness, review, outcome, or spawn evidence with prompt text.

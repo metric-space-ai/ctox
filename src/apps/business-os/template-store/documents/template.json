@@ -1,0 +1,9 @@
+{
+  "id": "documents",
+  "title": "Documents",
+  "description": "Document workspace template for DOCX and Markdown handling with runbooks and CTOX automation hooks.",
+  "category": "Knowledge",
+  "source_module": "documents",
+  "default_title": "Documents",
+  "tags": ["documents", "docx", "markdown", "runbooks"]
+}

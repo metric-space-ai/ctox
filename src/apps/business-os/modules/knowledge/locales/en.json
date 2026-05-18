@@ -1,0 +1,13 @@
+{
+  "sources": "Sources",
+  "runbooks": "Runbooks",
+  "selected": "Selected",
+  "loading": "Loading knowledge",
+  "noItems": "No knowledge entries found.",
+  "noRunbooks": "No runbooks available.",
+  "tableUnavailable": "This item has no table.",
+  "queued": "Command queued",
+  "queueFailed": "Could not queue command",
+  "edit": "Edit",
+  "closeEditor": "Close editor"
+}

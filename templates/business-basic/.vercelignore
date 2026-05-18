@@ -1,9 +1,0 @@
-node_modules
-.next
-.turbo
-.vercel
-.ctox-business
-output
-pnpm-lock 3.yaml
-*.local
-*.log

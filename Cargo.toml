@@ -2,6 +2,11 @@
 name = "ctox"
 version = "0.1.0"
 edition = "2021"
+build = "src/build.rs"
+
+[[bin]]
+name = "ctox"
+path = "src/core/main.rs"
 
 [dependencies]
 anyhow = "1"
@@ -10,12 +15,12 @@ chrono = { version = "0.4", default-features = false, features = ["std"] }
 csv = "1"
 image = { version = "0.25", default-features = false, features = ["png"] }
 tempfile = "3"
-ctox-doc-stack = { path = "tools/doc-stack" }
-ctox-pdf-parse = { path = "tools/pdf-parse" }
-ctox-qwen3-embedding-0-6b = { path = "src/inference/models/qwen3_embedding_0_6b" }
-ctox-voxtral-mini-4b-realtime-2602 = { path = "src/inference/models/voxtral_mini_4b_realtime_2602" }
-ctox-voxtral-4b-tts-2603 = { path = "src/inference/models/voxtral_4b_tts_2603" }
-ctox-web-stack = { path = "tools/web-stack" }
+ctox-doc-stack = { path = "src/tools/doc-stack" }
+ctox-pdf-parse = { path = "src/tools/pdf-parse" }
+ctox-qwen3-embedding-0-6b = { path = "src/core/inference/models/qwen3_embedding_0_6b" }
+ctox-voxtral-mini-4b-realtime-2602 = { path = "src/core/inference/models/voxtral_mini_4b_realtime_2602" }
+ctox-voxtral-4b-tts-2603 = { path = "src/core/inference/models/voxtral_4b_tts_2603" }
+ctox-web-stack = { path = "src/tools/web-stack" }
 crossterm = "0.28"
 git2 = "0.20"
 include_dir = "0.7"
@@ -46,21 +51,19 @@ zeroize = "1.8"
 zbus = "5.14"
 zip = { version = "2.4.2", default-features = false, features = ["deflate"] }
 
-# CTOX agent harness (OpenAI-Codex fork). Moved from src/inference/ to
-# src/harness/ so that src/inference/ is reserved for per-model
-# inference crates (src/inference/models/<model>/…).
-ctox-core                = { path = "src/harness/core" }
-ctox-app-server-client   = { path = "src/harness/app-server-client" }
-ctox-app-server-protocol = { path = "src/harness/app-server-protocol" }
-ctox-protocol            = { path = "src/harness/protocol" }
-ctox-arg0                = { path = "src/harness/arg0" }
-ctox-feedback            = { path = "src/harness/feedback" }
-ctox-cloud-requirements  = { path = "src/harness/cloud-requirements" }
-ctox-utils-absolute-path = { path = "src/harness/utils/absolute-path" }
+# CTOX agent harness (OpenAI-Codex fork).
+ctox-core                = { path = "src/core/harness/core" }
+ctox-app-server-client   = { path = "src/core/harness/app-server-client" }
+ctox-app-server-protocol = { path = "src/core/harness/app-server-protocol" }
+ctox-protocol            = { path = "src/core/harness/protocol" }
+ctox-arg0                = { path = "src/core/harness/arg0" }
+ctox-feedback            = { path = "src/core/harness/feedback" }
+ctox-cloud-requirements  = { path = "src/core/harness/cloud-requirements" }
+ctox-utils-absolute-path = { path = "src/core/harness/utils/absolute-path" }
 toml = "0.9"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 rustls = { version = "0.23", features = ["ring"] }
-whatsapp = { path = "src/communication/whatsapp_rust/crates/whatsapp" }
+whatsapp = { path = "src/core/communication/whatsapp_rust/crates/whatsapp" }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [
@@ -75,7 +78,7 @@ windows-sys = { version = "0.59", features = [
 tempfile = "3"
 
 [patch.crates-io]
-# Mirror of src/harness/Cargo.toml patch.crates-io so that codex-* path
+# Mirror of src/core/harness/Cargo.toml patch.crates-io so that codex-* path
 # dependencies resolve against the same forks agent-runtime uses.
 crossterm = { git = "https://github.com/nornagon/crossterm", branch = "nornagon/color-query" }
 ratatui = { git = "https://github.com/nornagon/ratatui", branch = "nornagon-v0.29.0-patch" }

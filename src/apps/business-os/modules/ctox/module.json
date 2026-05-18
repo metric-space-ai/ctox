@@ -1,0 +1,20 @@
+{
+  "id": "ctox",
+  "title": "CTOX",
+  "description": "Native control surface for queues, runs, sync state, and agent context.",
+  "entry": "modules/ctox/index.html",
+  "collections": [
+    "business_commands",
+    "ctox_queue_tasks",
+    "ctox_runs",
+    "ctox_bug_reports",
+    "business_module_acl",
+    "business_module_releases",
+    "business_module_reports"
+  ],
+  "layout": {
+    "left": "runtime scopes",
+    "center": "active workbench",
+    "right": "agent context"
+  }
+}

@@ -1,0 +1,12 @@
+# Local verification artifacts
+.DS_Store
+*.sqlite
+*.sqlite3
+*.db
+/*.png
+/*.docx
+/*results.json
+/corpus-render-check/
+/tmp-artifacts/
+/playwright-report/
+/test-results/

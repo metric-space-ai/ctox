@@ -1,0 +1,91 @@
+{
+  "ok": true,
+  "modules": [
+    {
+      "id": "ctox",
+      "title": "CTOX",
+      "description": "Native control surface for queues, runs, sync state, and agent context.",
+      "entry": "modules/ctox/index.html",
+      "collections": [
+        "business_commands",
+        "ctox_queue_tasks",
+        "ctox_runs",
+        "ctox_bug_reports"
+      ],
+      "source": "core",
+      "core": true,
+      "editable": true,
+      "deletable": false,
+      "layout": {
+        "left": "runtime scopes",
+        "center": "active workbench",
+        "right": "agent context"
+      }
+    },
+    {
+      "id": "documents",
+      "title": "Documents",
+      "description": "Native DOCX document workspace with document explorer, editor surface, and CTOX runbooks.",
+      "entry": "modules/documents/index.html",
+      "collections": [
+        "business_commands",
+        "documents",
+        "document_versions",
+        "document_blob_chunks",
+        "document_runbooks"
+      ],
+      "source": "core",
+      "core": true,
+      "editable": true,
+      "deletable": false,
+      "layout": {
+        "left": "document navigation and explorer",
+        "center": "DOCX viewer/editor workbench",
+        "right": "document runbooks and automation prompts"
+      }
+    },
+    {
+      "id": "knowledge",
+      "title": "Knowledge",
+      "description": "Native CTOX Knowledge workspace for skillbooks, runbooks, markdown assets, and Polars-backed dataframes.",
+      "entry": "modules/knowledge/index.html",
+      "collections": [
+        "business_commands",
+        "knowledge_items",
+        "knowledge_runbooks",
+        "knowledge_tables"
+      ],
+      "source": "core",
+      "core": true,
+      "editable": true,
+      "deletable": false,
+      "layout": {
+        "shell": "full-workspace",
+        "left": "Knowledge selection and source groups",
+        "center": "Markdown reader/editor and dataframe table tabs",
+        "right": "Runbooks as operational knowledge layer"
+      }
+    },
+    {
+      "id": "matching",
+      "title": "Matching",
+      "description": "Generic matching workspace with configurable source parsing, object parsing, and CTOX match tasks.",
+      "entry": "modules/matching/index.html",
+      "collections": [
+        "matching_requirements",
+        "matching_objects",
+        "matching_results"
+      ],
+      "source": "core",
+      "core": true,
+      "editable": true,
+      "deletable": false,
+      "layout": {
+        "shell": "full-workspace",
+        "left": "Requirement/source records and import task prompts",
+        "center": "Configured matching task, queue state, and match results",
+        "right": "Object pool records and import task prompts"
+      }
+    }
+  ]
+}

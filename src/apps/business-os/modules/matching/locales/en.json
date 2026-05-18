@@ -1,0 +1,12 @@
+{
+  "sourcesEyebrow": "Sources",
+  "sourcesTitle": "Requirements",
+  "matchesEyebrow": "Evaluation",
+  "matchesTitle": "Matches",
+  "objectsEyebrow": "Pool",
+  "objectsTitle": "Objects",
+  "compute": "Compute match",
+  "emptySources": "No sources or import tasks yet.",
+  "emptyMatches": "No match results or tasks yet.",
+  "emptyObjects": "No objects or import tasks yet."
+}

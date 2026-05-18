@@ -1,0 +1,2 @@
+[build]
+target-dir = "runtime/build/cargo-target"

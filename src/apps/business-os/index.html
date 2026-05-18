@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CTOX Business OS</title>
+    <link rel="stylesheet" href="app.css?v=20260518-soft-shell1" />
+  </head>
+  <body>
+    <div class="app-shell" data-shell>
+      <header class="topbar">
+        <a class="brand" href="#ctox" aria-label="CTOX Business OS">
+          <span class="brand-mark"><img src="assets/ctox-app-icon.png" alt="" /></span>
+          <span class="brand-copy">
+            <strong>Business OS</strong>
+            <span data-status-text>Starting native runtime</span>
+          </span>
+        </a>
+        <div class="module-nav">
+          <nav class="module-tabs" data-module-tabs aria-label="Business OS modules"></nav>
+        </div>
+        <div class="topbar-actions">
+          <select class="header-select" data-language-select aria-label="Sprache">
+            <option value="de">DE</option>
+            <option value="en">EN</option>
+          </select>
+          <select class="header-select" data-theme-select aria-label="Design Theme">
+            <option value="dark">Dark</option>
+            <option value="light">Light</option>
+          </select>
+          <button class="account-button" type="button" data-open-account aria-label="Login öffnen">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 12.5a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z"></path>
+              <path d="M4.75 20.25a7.25 7.25 0 0 1 14.5 0"></path>
+            </svg>
+            <span data-account-label>Login</span>
+          </button>
+          <button class="icon-button app-menu-button" type="button" data-open-settings aria-label="App-Menü öffnen">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M5 7h14M5 12h14M5 17h14"></path>
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <main class="workspace-frame">
+        <aside class="workspace-pane workspace-pane-left" data-left-pane>
+          <div class="pane-title">Context</div>
+          <div data-left-content></div>
+        </aside>
+
+        <section class="workspace-pane workspace-pane-center" data-module-host>
+          <div class="empty-state">
+            <strong>Loading workspace</strong>
+            <span>The native Business OS shell is waiting for module manifests.</span>
+          </div>
+        </section>
+
+        <aside class="workspace-pane workspace-pane-right" data-right-pane>
+          <div class="pane-title">Topics</div>
+          <div data-right-content></div>
+        </aside>
+      </main>
+    </div>
+
+    <div class="drawer-backdrop" data-backdrop hidden></div>
+    <aside class="drawer drawer-left" data-drawer-left hidden></aside>
+    <aside class="drawer drawer-right" data-drawer-right hidden></aside>
+    <section class="drawer drawer-bottom" data-drawer-bottom hidden></section>
+
+    <script type="module" src="app.js?v=20260518-ctox-communications1"></script>
+  </body>
+</html>

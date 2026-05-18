@@ -1,0 +1,213 @@
+[package]
+name = "ctox-qwen36-35b-a3b-q4km-metal"
+version = "0.0.1"
+edition = "2021"
+rust-version = "1.93"
+license = "Apache-2.0"
+description = "Self-contained Qwen3.6-35B-A3B Q4_K_M Metal-only Apple-Silicon inference engine for CTOX. Bare-metal Rust + vendored MSL kernels per the local-llm-inference-optimization skill. No code shared with other model crates."
+
+# Same rule as the other model crates: this tree sits under src/inference/
+# physically, but src/inference/ is the OpenAI-Codex-fork workspace
+# (edition 2024, strict lints) which this port cannot live in. Declaring
+# an empty [workspace] makes this a self-contained crate.
+[workspace]
+
+[lib]
+name = "ctox_qwen36_35b_a3b_q4km_metal"
+path = "src/lib.rs"
+
+[[bin]]
+# Hardware-fact probe for the Apple-Silicon host. Stage 1: prints chip,
+# unified-memory size, OS, GPU core count, Metal feature-set support
+# from system_profiler / sysctl. Stage 2 (deferred): MSL stream-bandwidth
+# and SIMDgroup-matrix throughput microbenchmarks.
+name = "qwen36-35b-a3b-q4km-metal-probe"
+path = "src/bin/probe_m5_metal.rs"
+
+[[bin]]
+# Local-inference Unix-domain-socket IPC server. Speaks CTOX's
+# line-delimited JSON Responses contract (matches
+# src/harness/core/src/client.rs::LocalIpcRequest). Returns
+# `runtime_health.healthy = false` until the engine is wired up; this
+# crate is a deliberate skeleton in stage 1.
+name = "qwen36-35b-a3b-q4km-metal-server"
+path = "src/bin/server.rs"
+
+[[bin]]
+# Bench harness skeleton. Currently a stub that exits non-zero with a
+# clear "not implemented" message until the reference baseline and the
+# native engine path land in stage 2/3.
+name = "qwen36-35b-a3b-q4km-metal-bench"
+path = "src/bin/bench.rs"
+
+[[bin]]
+# Per-op verifier for the rms_norm MSL port. Builds a synthetic f32
+# tensor, runs `kernel_rms_norm_f32` from the vendored MSL via the
+# Rust dispatcher in src/metal_port/ops/rms_norm.rs, and byte-compares
+# against an f32 CPU reference. Requires `--features metal`.
+name = "qwen36-35b-a3b-q4km-metal-rms-norm-verify"
+path = "src/bin/rms_norm_verify.rs"
+required-features = ["metal"]
+
+[[bin]]
+# Measured roofline probe for this M5: sustained unified-memory stream
+# bandwidth via an MSL memcpy kernel, plus f16 simdgroup-matrix matmul
+# throughput via a tiny GEMM kernel. Run BEFORE choosing tile sizes /
+# backend strategies for stage 3+ kernels (skill: "Capture hardware
+# facts before choosing quantization, SIMD/matrix APIs, storage modes,
+# or kernel layouts"). Requires `--features metal`.
+name = "qwen36-35b-a3b-q4km-metal-roofline"
+path = "src/bin/roofline_m5_metal.rs"
+required-features = ["metal"]
+
+[[bin]]
+# Per-op verifier for the Q4_K_M matvec kernel — the dominant decode
+# kernel in Qwen3.6-35B-A3B. Builds synthetic Q4_K weight blocks +
+# f32 input, runs `kernel_mul_mv_q4_K_f32` from the vendored MSL via
+# the Rust dispatcher in src/metal_port/ops/mul_mv_q4_k.rs, and
+# byte-compares against an f32 CPU dequant + matmul reference at the
+# canonical Qwen3.6 shapes (Q-proj, K-proj, V-proj, O-proj, FFN).
+name = "qwen36-35b-a3b-q4km-metal-mul-mv-q4k-verify"
+path = "src/bin/mul_mv_q4_k_verify.rs"
+required-features = ["metal"]
+
+[[bin]]
+# Isolated microbench for `kernel_mul_mv_q4_K_f32`. Pre-allocates GPU
+# buffers, then runs the dispatch in a tight commit/wait loop. Sweeps
+# nsg ∈ {1, 2, 4, 8} for each canonical Qwen3.6 shape so we get the
+# autotuned per-shape best — input to the stage-5 accepted profile.
+name = "qwen36-35b-a3b-q4km-metal-mul-mv-q4k-bench"
+path = "src/bin/mul_mv_q4_k_bench.rs"
+required-features = ["metal"]
+
+[[bin]]
+# Verifier + N-sweep bench for the vendored `kernel_mul_mm_q4_K_f32`
+# (the Apple10 tensor-API matmat path used by upstream llama.cpp for
+# prefill). Stage 3.3 wiring of an already-vendored kernel — the
+# expected high-impact win for prefill throughput.
+name = "qwen36-35b-a3b-q4km-metal-mul-mm-q4k-verify"
+path = "src/bin/mul_mm_q4_k_verify.rs"
+required-features = ["metal"]
+
+[[bin]]
+# Verifier + autotune for the vendored row-batched matvec ext family
+# `kernel_mul_mv_ext_q4_K_f32_r1_{2,3,4,5}`. Fills the N=8..31 gap
+# between mul_mv (best at N=1) and mul_mm (best at N≥32). Stage 3.4.
+name = "qwen36-35b-a3b-q4km-metal-mul-mv-ext-q4k-verify"
+path = "src/bin/mul_mv_ext_q4_k_verify.rs"
+required-features = ["metal"]
+
+[[bin]]
+# Verifier + bench for the MoE indexed Q4_K matvec
+# (kernel_mul_mv_id_q4_K_f32) plus the Rust top-k router. Drives the
+# decode-time per-token MoE FFN path: 8 of 256 experts active, weighted
+# sum back to residual. Stage 3.6.
+name = "qwen36-35b-a3b-q4km-metal-mul-mv-id-q4k-verify"
+path = "src/bin/mul_mv_id_q4_k_verify.rs"
+required-features = ["metal"]
+
+[[bin]]
+# Verifier + bench for the linear-attention "dflash" block
+# (kernel_gated_delta_net_f32_*). The Stage-4 unblocker — we thought
+# this was deferred-because-no-public-kernel, but upstream actually
+# ships it; this binary wires it and checks correctness against an
+# in-Rust recurrent scan reference for non-KDA (G=1, Qwen3.6 case).
+name = "qwen36-35b-a3b-q4km-metal-gated-delta-net-verify"
+path = "src/bin/gated_delta_net_verify.rs"
+required-features = ["metal"]
+
+[[bin]]
+# Persistent-buffer harness demo: per-dispatch alloc vs reused
+# buffers on the Q4_K matvec hot path. Quantifies the Stage-4
+# layer-block driver's expected dispatch-cost win.
+name = "qwen36-35b-a3b-q4km-metal-persistent-buffer-demo"
+path = "src/bin/persistent_buffer_demo.rs"
+required-features = ["metal"]
+
+[[bin]]
+# Chained-command-buffer demo: rms_norm + Q-proj in ONE MTLCommandBuffer
+# vs two. Foundational proof for the Stage-4 layer-block driver pattern
+# (one command buffer per layer, all kernels recorded into it).
+name = "qwen36-35b-a3b-q4km-metal-chain-demo"
+path = "src/bin/chain_demo.rs"
+required-features = ["metal"]
+
+[[bin]]
+# Full-attention block end-to-end smoke test: 10 dispatches in one
+# chained MTLCommandBuffer (rms_norm + Q/K/V proj + RoPE×2 + gate proj
+# + sigmoid + bin_mul + O proj + bin_add). Reports per-block latency
+# and projected per-token decode contribution from full-attn layers.
+# Stage 4 wakeup #4.
+name = "qwen36-35b-a3b-q4km-metal-attn-block-demo"
+path = "src/bin/attn_block_demo.rs"
+required-features = ["metal"]
+
+[[bin]]
+# MoE indexed-matmul re-bench with persistent BufferPool. Corrects
+# the buffer-alloc-dominated 10.2 ms / dispatch number from Stage 3.6
+# to its real production-path value. Critical input for the per-token
+# decode tg128 projection. Stage 4 wakeup #5.
+name = "qwen36-35b-a3b-q4km-metal-moe-indexed-bench"
+path = "src/bin/moe_indexed_bench.rs"
+required-features = ["metal"]
+
+[[bin]]
+# ARCHITECTURE VALIDATION: chain ALL 40 layer-blocks + MoE FFN per
+# layer + final LM head into ONE MTLCommandBuffer per token. Tests
+# whether the token-scoped cmd buffer architecture (decided in W#5
+# pivot) actually delivers ≥36 t/s. Stage 4 wakeup #6.
+name = "qwen36-35b-a3b-q4km-metal-token-cmd-buffer-demo"
+path = "src/bin/token_cmd_buffer_demo.rs"
+required-features = ["metal"]
+
+[features]
+default = []
+# Metal is the only target. With `--features metal`, build.rs compiles
+# the vendored .metal source into a default.metallib and the objc2/
+# objc2-metal optional deps below get pulled in. Without it
+# (`cargo check` on a non-Apple host or the no-feature default)
+# the Rust surface still compiles cleanly.
+metal = ["dep:objc2", "dep:objc2-foundation", "dep:objc2-metal"]
+
+[dependencies]
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive"] }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "signal", "time"] }
+uuid = { version = "1", features = ["v4"] }
+half = { version = "2", features = ["bytemuck"] }
+bytemuck = "1"
+memmap2 = "0.9"
+
+# objc2 stack matches qwen35_35b_a3b_dflash and qwen35_08b_metal_probe
+# already in this repo so the patterns transfer cleanly. Pinned at the
+# same minor versions for the same reason. Optional + activated by the
+# `metal` feature; on non-Apple hosts the feature stays off and these
+# crates never enter the build graph.
+objc2 = { version = "0.5", optional = true }
+objc2-foundation = { version = "0.2", optional = true, features = ["NSString", "NSURL", "NSArray", "NSData"] }
+objc2-metal = { version = "0.2", optional = true, features = [
+    "MTLDevice",
+    "MTLCommandQueue",
+    "MTLCommandBuffer",
+    "MTLCommandEncoder",
+    "MTLBlitCommandEncoder",
+    "MTLComputeCommandEncoder",
+    "MTLComputePipeline",
+    "MTLBuffer",
+    "MTLLibrary",
+    "MTLResource",
+    "MTLTypes",
+    "MTLCounters",
+    "MTLFunctionConstantValues",
+    "MTLArgument",
+] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

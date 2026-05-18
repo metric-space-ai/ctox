@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Knowledge</title>
+    <link rel="stylesheet" href="./index.css" />
+  </head>
+  <body>
+    <main class="knowledge-module" data-knowledge-root>
+      <section class="knowledge-pane knowledge-left" aria-label="Knowledge">
+        <header class="knowledge-pane-head">
+          <div>
+            <span data-i18n="leftEyebrow">Research</span>
+            <h2 data-i18n="leftTitle">Knowledge</h2>
+          </div>
+          <div class="knowledge-pane-actions">
+            <button class="icon-button" type="button" data-icon="plus" data-action="create-knowledge-book" aria-label="Knowledge Book erstellen" title="Knowledge Book erstellen"></button>
+            <button class="icon-button" type="button" data-icon="import" data-action="import-knowledge-book" aria-label="Knowledge Book importieren" title="Knowledge Book importieren"></button>
+            <button class="icon-button" type="button" data-icon="export" data-action="export-knowledge-book" aria-label="Knowledge Books exportieren" title="Knowledge Books exportieren"></button>
+            <button class="icon-button" type="button" data-icon="settings" data-action="configure-knowledge" aria-label="Knowledge konfigurieren" title="Knowledge konfigurieren"></button>
+          </div>
+        </header>
+        <div class="knowledge-scope-switch" role="tablist" aria-label="Knowledge Quelle">
+          <button type="button" data-scope="user" aria-pressed="true">User</button>
+          <button type="button" data-scope="system" aria-pressed="false">System</button>
+          <button type="button" data-scope="all" aria-pressed="false">Alle</button>
+        </div>
+        <div class="knowledge-tools">
+          <input data-search placeholder="Suchen..." />
+        </div>
+        <div class="knowledge-scroll" data-knowledge-list></div>
+      </section>
+
+      <section class="knowledge-pane knowledge-center" aria-label="Knowledge Dokument">
+        <header class="knowledge-pane-head knowledge-center-head">
+          <div>
+            <span data-selected-kind>Knowledge</span>
+            <h2 data-selected-title>Knowledge</h2>
+          </div>
+          <div class="segmented" role="tablist" aria-label="Knowledge Ansicht">
+            <button type="button" data-tab="skill" aria-pressed="true">Skill</button>
+            <button type="button" data-tab="runbooks" aria-pressed="false">Runbooks</button>
+            <button type="button" data-tab="data" aria-pressed="false">Data</button>
+          </div>
+        </header>
+        <div class="knowledge-tab-panel" data-panel="skill">
+          <div class="knowledge-edit-bar" data-skill-toolbar>
+            <div class="knowledge-edit-actions">
+              <button type="button" data-action="edit-markdown">Bearbeiten</button>
+              <button type="button" data-action="save-markdown" hidden>An CTOX geben</button>
+              <button type="button" data-action="cancel-markdown" hidden>Abbrechen</button>
+            </div>
+            <span class="knowledge-edit-status" data-skill-status></span>
+          </div>
+          <article class="markdown-document" data-markdown-view></article>
+          <textarea class="markdown-editor" data-markdown-editor hidden></textarea>
+        </div>
+        <div class="knowledge-tab-panel" data-panel="runbooks" hidden>
+          <div class="knowledge-secondary-switcher" data-runbook-switcher></div>
+          <div class="knowledge-edit-bar" data-runbook-toolbar>
+            <div class="knowledge-edit-actions">
+              <button type="button" data-action="edit-runbook">Bearbeiten</button>
+              <button type="button" data-action="save-runbook" hidden>An CTOX geben</button>
+              <button type="button" data-action="cancel-runbook" hidden>Abbrechen</button>
+              <button type="button" data-action="execute-runbook">Ausführen</button>
+            </div>
+            <span class="knowledge-edit-status" data-runbook-status></span>
+          </div>
+          <article class="runbook-document" data-runbook-view></article>
+          <form class="runbook-editor" data-runbook-form hidden>
+            <input data-runbook-title placeholder="Runbook-Titel" />
+            <textarea data-runbook-prompt placeholder="Runbook-Anweisung"></textarea>
+          </form>
+        </div>
+        <div class="knowledge-tab-panel" data-panel="data" hidden>
+          <div class="table-switcher" data-table-switcher></div>
+          <div class="dataframe-bar">
+            <div>
+              <strong data-table-title>DataFrame</strong>
+              <span data-table-meta></span>
+            </div>
+            <div class="table-pager">
+              <button type="button" data-action="prev-rows">Zurück</button>
+              <button type="button" data-action="next-rows">Weiter</button>
+            </div>
+          </div>
+          <div class="dataframe-host" data-dataframe-host>
+            <div class="empty-state">
+              <strong>Keine Tabelle ausgewählt</strong>
+              <span>Wähle links eine Knowledge-Tabelle.</span>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+    <script type="module" src="./index.js"></script>
+  </body>
+</html>

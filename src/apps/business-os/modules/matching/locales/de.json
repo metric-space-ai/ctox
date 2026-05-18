@@ -1,0 +1,12 @@
+{
+  "sourcesEyebrow": "Quellen",
+  "sourcesTitle": "Anforderungen",
+  "matchesEyebrow": "Auswertung",
+  "matchesTitle": "Matches",
+  "objectsEyebrow": "Pool",
+  "objectsTitle": "Objekte",
+  "compute": "Match berechnen",
+  "emptySources": "Noch keine Quellen oder Import-Tasks.",
+  "emptyMatches": "Noch keine Matching-Ergebnisse oder Tasks.",
+  "emptyObjects": "Noch keine Objekte oder Import-Tasks."
+}

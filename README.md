@@ -77,6 +77,7 @@ First-install overrides:
 | `--api-provider=<provider>` | Seeds a remote provider for first boot. Most users should configure this in the TUI; currently useful for scripted Azure Foundry installs. |
 | `--azure-foundry-endpoint=<url>` | Seeds the Azure Foundry resource endpoint. CTOX appends `/openai/v1` when needed. |
 | `--azure-foundry-deployment-id=<id>` | Seeds the Azure Foundry deployment ID and uses it as the chat model. |
+| `--features=<features>` | Overrides detected local engine features for controlled builds. Normal installs should let CTOX detect hardware. |
 
 ### Example: API model with key
 
@@ -152,7 +153,6 @@ In the TUI settings, select:
 
 ```text
 Chat Source: local
-Local Runtime: candle
 Chat Model: Qwen/Qwen3.5-27B
 ```
 
@@ -174,6 +174,8 @@ Advanced installer options:
 | `--state-root=<path>` | Where runtime state is stored, including the SQLite database. Use this when state must live on a specific volume or service account path. |
 | `--cache-root=<path>` | Where downloaded models and cache files are stored. Use this when the default home cache does not have enough disk space. |
 | `--bin-dir=<path>` | Where the `ctox` command symlink is placed. Use this if `~/.local/bin` is not on `PATH` or your system uses a different user-local binary directory. |
+| `--tools-root=<path>` | Where CTOX-managed helper tools are installed. Defaults to `<state-root>/tools`. |
+| `--dependencies-root=<path>` | Where downloaded dependencies and assets are installed. Defaults to `<state-root>/dependencies`. |
 | `--repo=<url>` | Installs from a fork or custom repository. Normal users should keep the default repository. |
 | `--branch=<branch>` | Installs from a non-default branch. This is mainly for development, testing, or controlled rollout of a fork. |
 
@@ -229,13 +231,20 @@ through the TUI, `ctox chat`, configured channels, tickets, and schedules.
 CTOX can run with API-backed models or with the integrated local inference path,
 depending on the configured runtime.
 
+The supported local chat surface is intentionally narrow: CTOX promotes one
+local Qwen chat model at a time. The current promoted local chat model is
+`Qwen/Qwen3.5-27B` on CUDA/NVIDIA hosts. Metal Qwen crates in
+`src/core/inference/models/` are active bring-up work and must not be documented
+as production-supported local chat until the root runtime is wired to that exact
+backend and verified.
+
 Typical configuration is done in the TUI. Important runtime settings include:
 
 - chat source: `api` or `local`
-- API provider: `openai`, `anthropic`, `openrouter`, or `minimax`
+- API provider: `local`, `openai`, `anthropic`, `openrouter`, `minimax`, or `azure_foundry`
 - OpenAI auth mode: `api_key` or `chatgpt_subscription`
 - provider credentials, stored through the TUI or CTOX secret store
-- local runtime
+- local runtime, currently `candle`
 - active chat model
 - context window
 - autonomy level
@@ -244,7 +253,7 @@ See the technical documentation for the current model/runtime details:
 <https://metric-space-ai.github.io/ctox/docs.html#configuration>
 
 The harness review, task-spawn, subagent, and liveness-proof model is documented
-in [HARNESS.md](HARNESS.md#review-gate-spawner-and-subagent-liveness).
+in [HARNESS.md](HARNESS.md).
 
 ## Desktop App
 
@@ -271,13 +280,19 @@ ctox update rollback
 
 ## Repository Layout
 
-- `src/` - CTOX daemon, runtime, mission systems, TUI, model control, and tools.
-- `src/harness/` - integrated in-process agent harness.
-- `src/inference/` - local inference work.
-- `skills/` - system skills used by CTOX workers.
-- `tools/` - supporting tool packages.
-- `site/` - GitHub Pages project site and documentation.
+- `install.sh` - public installer entry point used by the raw GitHub install command.
+- `src/core/` - CTOX daemon, runtime, mission systems, TUI, model control, harness, and local inference source.
+- `src/apps/` - application surfaces, currently Desktop, Business OS, and the web app area.
+- `src/tools/` - supporting source packages used by CTOX, such as web, PDF, document, and speech tooling.
+- `src/scripts/` - source-side build helpers only; old benchmark, qualification, remote, and model-recovery scripts are archived.
+- `docs/` - technical documentation, RFCs, legal notices, and the GitHub Pages site under `docs/site/`.
+- `tests/` - integration, harness, fixture, and behavior tests.
+- `runtime/` - ignored local runtime state, database, model/cache/build output, and generated state.
+- `archive/` - ignored review area for obsolete or uncertain project material before deletion or reintegration.
 - `.github/workflows/` - CI, release, and Pages workflows.
+
+`src/` is source code only. Runtime state, caches, generated data, test outputs,
+and archived material stay out of `src/`.
 
 ## Development
 
@@ -297,4 +312,4 @@ checks both runtime task-spawn contracts and harness subagent liveness.
 
 [Apache License 2.0](LICENSE)
 
-See [NOTICE](NOTICE) for attribution of integrated source trees.
+See [docs/legal/NOTICE](docs/legal/NOTICE) for attribution of integrated source trees.

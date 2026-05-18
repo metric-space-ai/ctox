@@ -1090,6 +1090,10 @@ write_wrapper_script() {
 #!/usr/bin/env bash
 set -euo pipefail
 unset DYLD_LIBRARY_PATH DYLD_FALLBACK_LIBRARY_PATH DYLD_FRAMEWORK_PATH
+unset NO_COLOR
+if [[ "\${TERM:-}" == "dumb" || -z "\${TERM:-}" ]]; then
+  export TERM=xterm-256color
+fi
 export CTOX_ROOT="$wrapper_root"
 export CTOX_STATE_ROOT="$STATE_ROOT"
 export CTOX_INSTALL_ROOT="$INSTALL_ROOT"
@@ -1112,6 +1116,10 @@ write_managed_launch_wrapper() {
 #!/usr/bin/env bash
 set -euo pipefail
 unset DYLD_LIBRARY_PATH DYLD_FALLBACK_LIBRARY_PATH DYLD_FRAMEWORK_PATH
+unset NO_COLOR
+if [[ "\${TERM:-}" == "dumb" || -z "\${TERM:-}" ]]; then
+  export TERM=xterm-256color
+fi
 export CTOX_ROOT="$wrapper_root"
 export CTOX_STATE_ROOT="$STATE_ROOT"
 export CTOX_INSTALL_ROOT="$INSTALL_ROOT"

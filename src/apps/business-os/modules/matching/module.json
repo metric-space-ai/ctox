@@ -1,0 +1,22 @@
+{
+  "id": "matching",
+  "title": "Matching",
+  "description": "Generic CTOX matching workspace for configurable source, match, and object columns.",
+  "entry": "modules/matching/index.html",
+  "collections": [
+    "matching_requirements",
+    "matching_objects",
+    "matching_results"
+  ],
+  "layout": {
+    "shell": "full-workspace",
+    "left": "Requirement/source records and import task prompts",
+    "center": "Configured matching tasks, queue state, and match results",
+    "right": "Object pool records and import task prompts",
+    "drawers": {
+      "left": "Column import and source configuration",
+      "right": "Object pool configuration and selected record detail",
+      "bottom": "Matching prompt, schema, task status, and evidence"
+    }
+  }
+}

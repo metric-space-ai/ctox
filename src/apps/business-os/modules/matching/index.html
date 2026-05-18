@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CTOX Business OS · Matching</title>
+  <link rel="stylesheet" href="./index.css">
+</head>
+<body>
+  <div class="app">
+    <!-- LEFT: Anforderungen -->
+    <section class="panel" id="left">
+      <div class="column-head">
+        <div class="column-title">Anforderungen</div>
+        <div class="column-actions">
+          <button class="column-icon" type="button" aria-label="Anforderungen konfigurieren" title="Anforderungen konfigurieren" data-column="requirements" data-column-action="configure" data-drawer-side="left">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.4 13.5a7.8 7.8 0 0 0 .1-1.5 7.8 7.8 0 0 0-.1-1.5l2-1.5-2-3.4-2.4 1a8 8 0 0 0-2.5-1.5L14.2 2h-4.4l-.4 2.6A8 8 0 0 0 7 6.1l-2.4-1-2 3.4 2 1.5a7.8 7.8 0 0 0-.1 1.5 7.8 7.8 0 0 0 .1 1.5l-2 1.5 2 3.4 2.4-1a8 8 0 0 0 2.5 1.5l.4 2.6h4.4l.4-2.6a8 8 0 0 0 2.5-1.5l2.4 1 2-3.4-2.2-1.5ZM12 15.2a3.2 3.2 0 1 1 0-6.4 3.2 3.2 0 0 1 0 6.4Z"/></svg>
+          </button>
+          <button class="column-icon" type="button" aria-label="Anforderungen importieren" title="Anforderungen importieren" data-column="requirements" data-column-action="import" data-drawer-side="left">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 4h2v8.2l2.9-2.9 1.4 1.4L12 16l-5.3-5.3 1.4-1.4 2.9 2.9V4Zm-5 13h2v1h8v-1h2v3H6v-3Z"/></svg>
+          </button>
+          <button class="column-icon" type="button" aria-label="Anforderungen exportieren" title="Anforderungen exportieren" data-column="requirements" data-column-action="export" data-drawer-side="left">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 20h2v-8.2l2.9 2.9 1.4-1.4L12 8l-5.3 5.3 1.4 1.4 2.9-2.9V20ZM6 4v3h2V6h8v1h2V4H6Z"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="column-tools source-tools">
+        <input id="sourceSearch" type="search" placeholder="Anforderung, Quellen oder Bereich suchen…" aria-label="Anforderungen suchen" />
+        <div class="column-sort">
+          <select aria-label="Anforderungen sortieren">
+            <option value="source">Gruppieren: Quellen</option>
+            <option value="area">Gruppieren: Bereiche</option>
+            <option value="recent">Neueste zuerst</option>
+          </select>
+          <button class="column-icon" type="button" aria-label="Anforderungen Suche und Sortierung konfigurieren" title="Suche und Sortierung konfigurieren" data-column="requirements" data-column-action="search-sort" data-drawer-side="left">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.4 13.5a7.8 7.8 0 0 0 .1-1.5 7.8 7.8 0 0 0-.1-1.5l2-1.5-2-3.4-2.4 1a8 8 0 0 0-2.5-1.5L14.2 2h-4.4l-.4 2.6A8 8 0 0 0 7 6.1l-2.4-1-2 3.4 2 1.5a7.8 7.8 0 0 0-.1 1.5 7.8 7.8 0 0 0 .1 1.5l-2 1.5 2 3.4 2.4-1a8 8 0 0 0 2.5 1.5l.4 2.6h4.4l.4-2.6a8 8 0 0 0 2.5-1.5l2.4 1 2-3.4-2.2-1.5ZM12 15.2a3.2 3.2 0 1 1 0-6.4 3.2 3.2 0 0 1 0 6.4Z"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="sources">
+        <div class="source-grid" id="sourceGrid"></div>
+      </div>
+    </section>
+
+
+    <!-- MIDDLE: Matches -->
+    <section class="panel requirements-wrap" id="center">
+      <div class="column-head">
+        <div class="column-title">Matches</div>
+        <div class="column-actions">
+          <div class="tabs">
+            <button class="tab active" id="tabList">Liste</button>
+            <button class="tab" id="tabMap">Tabelle</button>
+          </div>
+          <button class="column-icon" type="button" aria-label="Matches konfigurieren" title="Matches konfigurieren" data-column="matches" data-column-action="configure" data-drawer-side="bottom">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.4 13.5a7.8 7.8 0 0 0 .1-1.5 7.8 7.8 0 0 0-.1-1.5l2-1.5-2-3.4-2.4 1a8 8 0 0 0-2.5-1.5L14.2 2h-4.4l-.4 2.6A8 8 0 0 0 7 6.1l-2.4-1-2 3.4 2 1.5a7.8 7.8 0 0 0-.1 1.5 7.8 7.8 0 0 0 .1 1.5l-2 1.5 2 3.4 2.4-1a8 8 0 0 0 2.5 1.5l.4 2.6h4.4l.4-2.6a8 8 0 0 0 2.5-1.5l2.4 1 2-3.4-2.2-1.5ZM12 15.2a3.2 3.2 0 1 1 0-6.4 3.2 3.2 0 0 1 0 6.4Z"/></svg>
+          </button>
+          <button class="column-icon" type="button" aria-label="Matches importieren" title="Matches importieren" data-column="matches" data-column-action="import" data-drawer-side="bottom">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 4h2v8.2l2.9-2.9 1.4 1.4L12 16l-5.3-5.3 1.4-1.4 2.9 2.9V4Zm-5 13h2v1h8v-1h2v3H6v-3Z"/></svg>
+          </button>
+          <button class="column-icon" type="button" aria-label="Matches exportieren" title="Matches exportieren" data-column="matches" data-column-action="export" data-drawer-side="bottom">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 20h2v-8.2l2.9 2.9 1.4-1.4L12 8l-5.3 5.3 1.4 1.4 2.9-2.9V20ZM6 4v3h2V6h8v1h2V4H6Z"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="column-tools toolbar" id="listTools">
+        <input id="requirementSearch" type="search" placeholder="Match, Kriterium oder Quelle suchen…" />
+        <div class="column-sort">
+          <select id="requirementFilter">
+            <option value="all">Alle Matches</option>
+          </select>
+          <button class="column-icon" type="button" aria-label="Matches Suche und Sortierung konfigurieren" title="Suche und Sortierung konfigurieren" data-column="matches" data-column-action="search-sort" data-drawer-side="bottom">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.4 13.5a7.8 7.8 0 0 0 .1-1.5 7.8 7.8 0 0 0-.1-1.5l2-1.5-2-3.4-2.4 1a8 8 0 0 0-2.5-1.5L14.2 2h-4.4l-.4 2.6A8 8 0 0 0 7 6.1l-2.4-1-2 3.4 2 1.5a7.8 7.8 0 0 0-.1 1.5 7.8 7.8 0 0 0 .1 1.5l-2 1.5 2 3.4 2.4-1a8 8 0 0 0 2.5 1.5l.4 2.6h4.4l.4-2.6a8 8 0 0 0 2.5-1.5l2.4 1 2-3.4-2.2-1.5ZM12 15.2a3.2 3.2 0 1 1 0-6.4 3.2 3.2 0 0 1 0 6.4Z"/></svg>
+          </button>
+        </div>
+        <div class="space"></div>
+        <span class="muted" id="sourceName">—</span>
+      </div>
+      <div class="requirement-list" id="requirementList"></div>
+
+      <!-- Map Tab Content -->
+      <div class="map-wrap" id="mapWrap">
+        <div class="map" id="map"></div>
+      </div>
+    </section>
+
+    <!-- RIGHT: Objekte -->
+    <section class="panel object-panel" id="right">
+      <div class="column-head">
+        <div class="column-title">Objekte</div>
+        <div class="column-actions">
+          <button class="column-icon" type="button" aria-label="Objekte konfigurieren" title="Objekte konfigurieren" data-column="objects" data-column-action="configure" data-drawer-side="right">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.4 13.5a7.8 7.8 0 0 0 .1-1.5 7.8 7.8 0 0 0-.1-1.5l2-1.5-2-3.4-2.4 1a8 8 0 0 0-2.5-1.5L14.2 2h-4.4l-.4 2.6A8 8 0 0 0 7 6.1l-2.4-1-2 3.4 2 1.5a7.8 7.8 0 0 0-.1 1.5 7.8 7.8 0 0 0 .1 1.5l-2 1.5 2 3.4 2.4-1a8 8 0 0 0 2.5 1.5l.4 2.6h4.4l.4-2.6a8 8 0 0 0 2.5-1.5l2.4 1 2-3.4-2.2-1.5ZM12 15.2a3.2 3.2 0 1 1 0-6.4 3.2 3.2 0 0 1 0 6.4Z"/></svg>
+          </button>
+          <button class="column-icon" type="button" id="objectImportPdfBtn" aria-label="Objekte importieren" title="Objekte importieren" data-column="objects" data-column-action="import" data-drawer-side="right">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 4h2v8.2l2.9-2.9 1.4 1.4L12 16l-5.3-5.3 1.4-1.4 2.9 2.9V4Zm-5 13h2v1h8v-1h2v3H6v-3Z"/></svg>
+          </button>
+          <button class="column-icon" type="button" aria-label="Objekte exportieren" title="Objekte exportieren" data-column="objects" data-column-action="export" data-drawer-side="right">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 20h2v-8.2l2.9 2.9 1.4-1.4L12 8l-5.3 5.3 1.4 1.4 2.9-2.9V20ZM6 4v3h2V6h8v1h2V4H6Z"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="column-tools object-tools">
+        <input id="objectSearch" type="search" placeholder="Objekt, Skill, Ort oder Stichwort suchen…" />
+        <div class="column-sort">
+          <select id="objectSort">
+            <option value="best">Sortieren: Bester Match</option>
+            <option value="created_desc">Sortieren: Neueste zuerst</option>
+            <option value="created_asc">Sortieren: Älteste zuerst</option>
+            <option value="name">Sortieren: Name</option>
+            <option value="tax">Sortieren: Taxonomie</option>
+          </select>
+          <button class="column-icon" type="button" aria-label="Objekte Suche und Sortierung konfigurieren" title="Suche und Sortierung konfigurieren" data-column="objects" data-column-action="search-sort" data-drawer-side="right">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.4 13.5a7.8 7.8 0 0 0 .1-1.5 7.8 7.8 0 0 0-.1-1.5l2-1.5-2-3.4-2.4 1a8 8 0 0 0-2.5-1.5L14.2 2h-4.4l-.4 2.6A8 8 0 0 0 7 6.1l-2.4-1-2 3.4 2 1.5a7.8 7.8 0 0 0-.1 1.5 7.8 7.8 0 0 0 .1 1.5l-2 1.5 2 3.4 2.4-1a8 8 0 0 0 2.5 1.5l.4 2.6h4.4l.4-2.6a8 8 0 0 0 2.5-1.5l2.4 1 2-3.4-2.2-1.5ZM12 15.2a3.2 3.2 0 1 1 0-6.4 3.2 3.2 0 0 1 0 6.4Z"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <input type="file" id="objectImportPdfInput" accept="application/pdf" style="display:none" />
+
+      <div class="object-list" id="objectList"></div>
+
+    </section>
+
+  </div>
+
+  <div class="column-drawer-backdrop" data-column-drawer-backdrop hidden></div>
+  <aside class="column-drawer column-drawer-left" data-column-drawer="left" aria-hidden="true"></aside>
+  <section class="column-drawer column-drawer-bottom" data-column-drawer="bottom" aria-hidden="true"></section>
+  <aside class="column-drawer column-drawer-right" data-column-drawer="right" aria-hidden="true"></aside>
+
+  <!-- Modal: Notizen & Fortschritt (pro Objekt & Anforderung) -->
+  <div class="modal" id="noteModal" aria-hidden="true">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title" id="noteTitle">Notizen</div>
+        <div class="modal-close">
+          <button class="icon-btn" data-close-modal>
+            <svg viewBox="0 0 24 24">
+              <path d="M18.3 5.71 12 12l6.3 6.29-1.41 1.42L10.59 13.4 4.3 19.71 2.89 18.3 9.18 12 2.89 5.71 4.3 4.29l6.29 6.3 6.29-6.3z"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div class="modal-body">
+        <div class="modal-row">
+          <label class="muted" style="min-width:110px">Fortschritt</label>
+          <input id="noteProgress" class="range" type="range" min="0" max="100" step="5" />
+          <span id="noteProgressVal">0%</span>
+        </div>
+        <textarea id="noteText" placeholder="Notizen zum Matchingprozess…"></textarea>
+        <div class="row" style="margin-top:10px">
+          <div class="space"></div>
+          <button class="icon-btn" id="saveNote" title="Speichern">
+            <svg viewBox="0 0 24 24">
+              <path d="M17 3H5a2 2 0 0 0-2 2v14l4-4h10a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2z"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Objekt Slide-over (rechts) -->
+  <aside class="object" id="objectPanel" aria-hidden="true">
+    <div class="object-header">
+      <strong id="objectTitle">Objekt</strong>
+      <div class="space"></div>
+      <button class="icon-btn" id="objectClose" title="Schließen">
+        <svg viewBox="0 0 24 24">
+          <path d="M18.3 5.71 12 12l6.3 6.29-1.41 1.42L10.59 13.4 4.3 19.71 2.89 18.3 9.18 12 2.89 5.71 4.3 4.29l6.29 6.3 6.29-6.3z"/>
+        </svg>
+      </button>
+    </div>
+    <div class="object-body" id="objectBody"></div>
+  </aside>
+
+  <!-- Anforderung Slide-over (links) -->
+  <aside class="jp" id="requirementPanel" aria-hidden="true">
+    <div class="jp-header">
+      <button class="icon-btn" id="jpClose" title="Schließen">
+        <svg viewBox="0 0 24 24" style="transform:rotate(180deg)">
+          <path d="M18.3 5.71 12 12l6.3 6.29-1.41 1.42L10.59 13.4 4.3 19.71 2.89 18.3 9.18 12 2.89 5.71 4.3 4.29l6.29 6.3 6.29-6.3z"/>
+        </svg>
+      </button>
+      <strong id="jpTitle" style="margin-left:6px">Anforderung</strong>
+      <div class="space"></div>
+      <span class="hdr-badge" id="jpMeta"></span>
+    </div>
+    <div class="jp-body" id="jpBody"></div>
+  </aside>
+
+    <!-- Modal: Kontaktstatus (Quelle/Objekt) -->
+  <div class="modal" id="relModal" aria-hidden="true">
+    <div class="modal-card rel-modal-card">
+      <div class="modal-header">
+        <div class="modal-title" id="relTitle">Kontaktstatus</div>
+        <div class="modal-close">
+          <button class="icon-btn" data-close-rel-modal>
+            <svg viewBox="0 0 24 24">
+              <path d="M18.3 5.71 12 12l6.3 6.29-1.41 1.42L10.59 13.4 4.3 19.71 2.89 18.3 9.18 12 2.89 5.71 4.3 4.29l6.29 6.3 6.29-6.3z"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div class="modal-body">
+
+        <!-- NEU: großer Portrait-Platzhalter -->
+        <div id="relPhoto" class="rel-photo"></div>
+
+        <p class="muted" style="font-size:12px;margin:0 0 8px">
+          Hier kannst du markieren, ob bereits ein persönlicher Kontakt besteht.
+        </p>
+        <div class="rel-options" id="relOptions">
+          <label class="rel-option">
+            <input type="radio" name="relState" value="1" />
+            <span>
+              <span class="lg-dot requirement" style="margin-right:6px"></span>
+              Kontakt besteht
+            </span>
+          </label>
+          <label class="rel-option">
+            <input type="radio" name="relState" value="0" />
+            <span>
+              <span class="lg-dot" style="margin-right:6px; background:var(--none)"></span>
+              Noch kein Kontakt
+            </span>
+          </label>
+        </div>
+        <div class="row" style="margin-top:12px">
+          <div class="space"></div>
+          <button class="icon-btn" id="relSave" title="Kontaktstatus speichern">
+            <svg viewBox="0 0 24 24">
+              <path d="M9 16.17 4.83 12 3.41 13.41 9 19l12-12-1.41-1.41z"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="image-lightbox" id="imageLightbox" aria-hidden="true">
+    <button class="icon-btn image-lightbox-close" id="imageLightboxClose" title="Schließen">
+      <svg viewBox="0 0 24 24">
+        <path d="M18.3 5.71 12 12l6.3 6.29-1.41 1.42L10.59 13.4 4.3 19.71 2.89 18.3 9.18 12 2.89 5.71 4.3 4.29l6.29 6.3 6.29-6.3z"/>
+      </svg>
+    </button>
+    <img id="imageLightboxImg" alt="Bildvorschau" />
+  </div>
+
+
+    <!-- Match-Details Bottom Bar -->
+  <aside class="match-bar" id="matchDetailBar" aria-hidden="true">
+    <div class="match-bar-inner">
+      <header class="match-bar-header">
+        <div class="match-bar-titles">
+          <div class="match-bar-label">Match-Details</div>
+          <div class="match-bar-main">
+            <span id="matchBarAnforderungLabel">–</span>
+            <span class="dot-sep">·</span>
+            <span id="matchBarObjectLabel">–</span>
+          </div>
+        </div>
+        <div class="match-bar-score" id="matchBarScore">–</div>
+        <button class="icon-btn" id="matchBarClose" title="Details schließen">
+          <svg viewBox="0 0 24 24">
+            <path d="M18.3 5.71 12 12l6.3 6.29-1.41 1.42L10.59 13.4 4.3 19.71 2.89 18.3 9.18 12 2.89 5.71 4.3 4.29l6.29 6.3 6.29-6.3z"/>
+          </svg>
+        </button>
+      </header>
+
+      <div class="match-bar-tags" id="matchBarTags"></div>
+
+      <div class="match-bar-content" id="matchBarContent">
+        <!-- wird per JS mit einzelnen Match-Items (Nachweisen) gefüllt -->
+      </div>
+    </div>
+  </aside>
+
+
+<script type="module" src="./ui/businessOsControls.js"></script>
+<script type="module" src="./ui/index.js"></script>
+  </body>
+</html>

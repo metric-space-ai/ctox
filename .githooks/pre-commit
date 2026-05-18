@@ -1,0 +1,15 @@
+#!/bin/sh
+set -eu
+
+blocked="$(
+  git diff --cached --name-only |
+    grep -E '(^runtime($|/)|^archive($|/)|(^|/)target(\.nosync)?($|/)|(^|/)node_modules($|/)|(^|/)__pycache__($|/)|(^|/)\.venv($|/)|(^|/)\.DS_Store$|\.(db|sqlite|sqlite3|log)$|\.sqlite3-(shm|wal)$)' || true
+)"
+
+if [ -n "$blocked" ]; then
+  echo "Refusing to commit generated/runtime artifacts:" >&2
+  echo "$blocked" >&2
+  echo >&2
+  echo "Move these files under runtime/ or the external ctox.workspace.nosync area, and keep them untracked." >&2
+  exit 1
+fi

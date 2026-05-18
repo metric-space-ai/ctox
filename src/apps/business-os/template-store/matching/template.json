@@ -1,0 +1,9 @@
+{
+  "id": "matching",
+  "title": "Matching",
+  "description": "Three-column matching module template with configurable source parsing, scoring, imports, exports, and CTOX task integration.",
+  "category": "Operations",
+  "source_module": "matching",
+  "default_title": "Matching",
+  "tags": ["matching", "scoring", "imports", "ctox-tasks"]
+}

@@ -1,0 +1,13 @@
+{
+  "sources": "Quellen",
+  "runbooks": "Runbooks",
+  "selected": "Ausgewählt",
+  "loading": "Knowledge wird geladen",
+  "noItems": "Keine Knowledge-Einträge gefunden.",
+  "noRunbooks": "Keine Runbooks vorhanden.",
+  "tableUnavailable": "Für diesen Eintrag ist keine Tabelle verfügbar.",
+  "queued": "Command angelegt",
+  "queueFailed": "Command konnte nicht angelegt werden",
+  "edit": "Bearbeiten",
+  "closeEditor": "Editor schließen"
+}
