@@ -10,9 +10,7 @@ fn main() -> Result<()> {
     let terminal = WebRtcRemoteTerminal::connect(
         &RemoteSessionRequest {
             kind: SessionKind::Tui,
-            signaling_urls: vec![
-                "wss://ctox-signaling.metricspace-ai.workers.dev/signal".to_owned()
-            ],
+            signaling_urls: vec!["wss://signaling.ctox.dev".to_owned()],
             auth_token: String::new(),
             password: "SuperDuper3GPU".to_owned(),
             room_id: "ctox-metricspace-3gpu".to_owned(),

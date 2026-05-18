@@ -121,7 +121,7 @@ initialize, and passes launch/sync metadata to the browser/WebView:
   "peer_id": "client_...",
   "peer_role": "business_os_client",
   "sync_room": "ctox-business-os:biz_...",
-  "signaling_urls": ["wss://ctox-signaling.metricspace-ai.workers.dev/signal"],
+  "signaling_urls": ["wss://signaling.ctox.dev"],
   "transport": "webrtc",
   "app_hosting": "ctox_instance_webserver",
   "ctox_instance_required": true

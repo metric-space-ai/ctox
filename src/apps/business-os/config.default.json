@@ -6,7 +6,7 @@
   "peer_id": "business-os-client",
   "peer_role": "business_os_client",
   "sync_room": "ctox-business-os:biz_local_unbound",
-  "signaling_urls": ["wss://ctox-signaling.metricspace-ai.workers.dev/signal"],
+  "signaling_urls": ["wss://signaling.ctox.dev"],
   "transport": "webrtc",
   "http_bridge_available": false,
   "ctox_instance_required": true

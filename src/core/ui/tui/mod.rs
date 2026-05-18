@@ -2620,14 +2620,16 @@ impl App {
         }
         trace_tui_start("refresh: harness");
         self.refresh_harness_flow_if_due();
-        trace_tui_start("refresh: gpu");
-        self.refresh_gpu_cards();
-        trace_tui_start("refresh: runtime");
-        self.refresh_runtime_telemetry_if_due();
-        trace_tui_start("refresh: header");
-        self.refresh_header();
-        trace_tui_start("refresh: jami");
-        self.refresh_jami_qr();
+        if self.page == Page::Settings {
+            trace_tui_start("refresh: gpu");
+            self.refresh_gpu_cards();
+            trace_tui_start("refresh: runtime");
+            self.refresh_runtime_telemetry_if_due();
+            trace_tui_start("refresh: header");
+            self.refresh_header();
+            trace_tui_start("refresh: jami");
+            self.refresh_jami_qr();
+        }
         trace_tui_start("refresh: done");
         Ok(())
     }
@@ -2745,16 +2747,23 @@ impl App {
     }
 
     fn refresh_chat_messages(&mut self) -> Result<()> {
+        trace_tui_start("refresh chat: settings");
         let settings = self.saved_settings_env_map();
+        trace_tui_start("refresh chat: context");
         let max_context = settings
             .get("CTOX_CHAT_MODEL_MAX_CONTEXT")
             .and_then(|value| runtime_plan::parse_chat_context_tokens(value))
             .map(|value| value as usize)
             .unwrap_or(DEFAULT_MAX_CONTEXT);
+        trace_tui_start("refresh chat: open lcm");
         let engine = lcm::LcmEngine::open(&self.db_path, lcm::LcmConfig::default())?;
+        trace_tui_start("refresh chat: snapshot");
         let snapshot = engine.snapshot(turn_loop::CHAT_CONVERSATION_ID)?;
+        trace_tui_start("refresh chat: continuity");
         let continuity = engine.continuity_show_all(turn_loop::CHAT_CONVERSATION_ID)?;
+        trace_tui_start("refresh chat: forgotten");
         let forgotten = engine.continuity_forgotten(turn_loop::CHAT_CONVERSATION_ID, None, None)?;
+        trace_tui_start("refresh chat: health");
         let health = context_health::assess_with_forgotten(
             &snapshot,
             &continuity,
@@ -2762,13 +2771,18 @@ impl App {
             "",
             max_context as i64,
         );
+        trace_tui_start("refresh chat: governance");
         let governance_snapshot =
             governance::prompt_snapshot(&self.root, turn_loop::CHAT_CONVERSATION_ID)
                 .unwrap_or_default();
+        trace_tui_start("refresh chat: mission");
         let mission_state = engine.mission_state(turn_loop::CHAT_CONVERSATION_ID)?;
+        trace_tui_start("refresh chat: assurance");
         let mission_assurance =
             engine.mission_assurance_snapshot(turn_loop::CHAT_CONVERSATION_ID)?;
+        trace_tui_start("refresh chat: strategy");
         let strategy = engine.active_strategy_snapshot(turn_loop::CHAT_CONVERSATION_ID, None)?;
+        trace_tui_start("refresh chat: breakdown");
         self.prompt_context_breakdown = live_context::prompt_context_breakdown_for_runtime(
             &self.root,
             &settings,
@@ -2784,6 +2798,7 @@ impl App {
         self.context_health = Some(health);
         self.chat_messages = snapshot.messages;
         self.mission_state = Some(mission_state);
+        trace_tui_start("refresh chat: done");
         Ok(())
     }
 

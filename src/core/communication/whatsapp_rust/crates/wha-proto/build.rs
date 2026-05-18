@@ -5,18 +5,28 @@
 use std::path::PathBuf;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    println!("cargo:rerun-if-env-changed=WHA_PROTO_ROOT");
+
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let workspace_root = manifest_dir
         .parent()
         .unwrap()
         .parent()
         .unwrap()
         .to_path_buf();
-    let proto_root = workspace_root.join("_upstream/whatsmeow/proto");
+    let upstream_proto_root = workspace_root.join("_upstream/whatsmeow/proto");
+    let vendored_proto_root = manifest_dir.join("proto");
+    let proto_root = std::env::var_os("WHA_PROTO_ROOT")
+        .map(PathBuf::from)
+        .filter(|path| path.exists())
+        .or_else(|| upstream_proto_root.exists().then_some(upstream_proto_root.clone()))
+        .unwrap_or(vendored_proto_root.clone());
 
     if !proto_root.exists() {
         println!(
-            "cargo:warning=upstream proto tree not found at {} — wha-proto will be empty",
-            proto_root.display()
+            "cargo:warning=proto tree not found at {} or {} — wha-proto will be empty",
+            upstream_proto_root.display(),
+            vendored_proto_root.display()
         );
         // Emit empty stubs so `include!(OUT_DIR)` still works.
         let out = std::env::var("OUT_DIR")?;
