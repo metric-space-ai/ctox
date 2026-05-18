@@ -20,7 +20,7 @@ use tiny_http::Server;
 
 use super::store;
 
-const CORE_MODULE_IDS: &[&str] = &["ctox", "documents", "knowledge", "matching"];
+const CORE_MODULE_IDS: &[&str] = &["ctox", "knowledge"];
 
 #[derive(Debug, Clone)]
 pub struct BusinessOsServeOptions {

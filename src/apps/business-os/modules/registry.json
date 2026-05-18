@@ -38,10 +38,10 @@
         "document_blob_chunks",
         "document_runbooks"
       ],
-      "source": "core",
-      "core": true,
+      "source": "local",
+      "core": false,
       "editable": true,
-      "deletable": false,
+      "deletable": true,
       "layout": {
         "left": "document navigation and explorer",
         "center": "DOCX viewer/editor workbench",
@@ -80,10 +80,10 @@
         "matching_objects",
         "matching_results"
       ],
-      "source": "core",
-      "core": true,
+      "source": "local",
+      "core": false,
       "editable": true,
-      "deletable": false,
+      "deletable": true,
       "layout": {
         "shell": "full-workspace",
         "left": "Requirement/source records and import task prompts",

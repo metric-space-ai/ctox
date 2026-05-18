@@ -490,15 +490,33 @@ body.is-workspace-col-resizing * {
 }
 
 body[data-module-shell="full"] .workspace-frame {
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) !important;
 }
 
 body[data-module-shell="full"] .workspace-pane-left,
 body[data-module-shell="full"] .workspace-pane-right {
-  display: none;
+  display: none !important;
 }
 
 body[data-module-shell="full"] .workspace-pane-center {
+  overflow: hidden;
+}
+
+body[data-module-shell="full"] .workspace-col-resizer,
+body[data-active-module="ctox"] .workspace-col-resizer {
+  display: none !important;
+}
+
+body[data-active-module="ctox"] .workspace-frame {
+  grid-template-columns: minmax(0, 1fr) !important;
+}
+
+body[data-active-module="ctox"] .workspace-pane-left,
+body[data-active-module="ctox"] .workspace-pane-right {
+  display: none !important;
+}
+
+body[data-active-module="ctox"] .workspace-pane-center {
   overflow: hidden;
 }
 

@@ -602,13 +602,14 @@ function moduleKind(mod) {
   return moduleIsCore(mod) ? 'Core' : 'Installiert';
 }
 
+const SYSTEM_MODULE_IDS = new Set(['ctox', 'knowledge']);
+
 function moduleIsCore(mod) {
-  const source = String(mod?.source || '').toLowerCase();
-  return mod?.core === true || source === 'core' || ['ctox', 'documents', 'knowledge', 'matching'].includes(mod?.id);
+  return SYSTEM_MODULE_IDS.has(mod?.id);
 }
 
 function moduleCanDelete(mod) {
-  return mod?.deletable === true || (!moduleIsCore(mod) && mod?.id);
+  return Boolean(mod?.id) && !moduleIsCore(mod);
 }
 
 function canModifyModuleInSettings(mod, { isAdmin, role, user, governance }) {

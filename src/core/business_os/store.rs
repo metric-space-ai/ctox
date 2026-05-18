@@ -26,6 +26,8 @@ pub struct BusinessOsStatus {
     pub runtime: &'static str,
     pub store_path: String,
     pub now_ms: u128,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ctox_service: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -159,11 +161,15 @@ pub fn open_store(root: &Path) -> anyhow::Result<Connection> {
 
 pub fn status(root: &Path) -> anyhow::Result<BusinessOsStatus> {
     let path = root.join("runtime").join(STORE_FILE);
+    let ctox_service = crate::service::service_status_snapshot(root)
+        .ok()
+        .and_then(|status| serde_json::to_value(status).ok());
     Ok(BusinessOsStatus {
         ok: true,
         runtime: "native-rust",
         store_path: path.display().to_string(),
         now_ms: now_ms(),
+        ctox_service,
     })
 }
 
@@ -1478,6 +1484,7 @@ fn refresh_live_business_payload(root: &Path, collection: &str, payload: &mut Va
         return;
     };
     let Ok(Some(task)) = channels::load_queue_task(root, &task_id) else {
+        mark_missing_queue_task_payload(collection, obj);
         return;
     };
     let normalized = normalize_queue_status(&task.route_status);
@@ -1513,6 +1520,36 @@ fn refresh_live_business_payload(root: &Path, collection: &str, payload: &mut Va
         obj.insert(
             "task_status".to_string(),
             Value::String(effective_status.to_string()),
+        );
+    }
+}
+
+fn mark_missing_queue_task_payload(collection: &str, obj: &mut serde_json::Map<String, Value>) {
+    let stored_status = obj
+        .get("status")
+        .and_then(Value::as_str)
+        .or_else(|| obj.get("task_status").and_then(Value::as_str))
+        .unwrap_or_default();
+    if is_terminal_status(stored_status) {
+        return;
+    }
+    if collection == "ctox_queue_tasks" {
+        obj.insert(
+            "status".to_string(),
+            Value::String("stale_missing_native".to_string()),
+        );
+        obj.insert(
+            "route_status".to_string(),
+            Value::String("stale_missing_native".to_string()),
+        );
+    } else if collection == "business_commands" {
+        obj.insert(
+            "task_status".to_string(),
+            Value::String("stale_missing_native".to_string()),
+        );
+        obj.insert(
+            "status".to_string(),
+            Value::String("stale_missing_native".to_string()),
         );
     }
 }

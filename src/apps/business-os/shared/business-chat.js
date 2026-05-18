@@ -277,6 +277,19 @@ async function syncTrackedMessages({ state, db }) {
         });
         changed = true;
       }
+      if (isFailureStatus(nextStatus) && !chat.messages.some((item) => item.failureFor === (message.taskId || message.commandId))) {
+        chat.messages.push({
+          id: `failure_${crypto.randomUUID()}`,
+          role: 'ctox',
+          text: failureText(commandDoc, taskDoc),
+          failureFor: message.taskId || message.commandId,
+          commandId: message.commandId || '',
+          taskId: message.taskId || '',
+          status: nextStatus || 'failed',
+          createdAt: Date.now(),
+        });
+        changed = true;
+      }
     }
   }
   return changed;
@@ -306,6 +319,20 @@ function extractOutboundText(doc) {
     doc.payload?.answer,
   ];
   return String(candidates.find((value) => String(value || '').trim()) || '').trim();
+}
+
+function isFailureStatus(status) {
+  return ['failed', 'blocked', 'blocked_no_ctox_api', 'stale_missing_native'].includes(String(status || '').toLowerCase());
+}
+
+function failureText(commandDoc, taskDoc) {
+  const error = taskDoc?.status_note
+    || taskDoc?.error
+    || commandDoc?.error
+    || commandDoc?.client_context?.dispatch_error
+    || '';
+  if (error) return `CTOX konnte die Aufgabe nicht ausführen: ${error}`;
+  return 'CTOX konnte die Aufgabe nicht ausführen. Der Task ist in der CTOX Queue fehlgeschlagen.';
 }
 
 function openCtoxTask(taskId, commandId, taskStatus) {

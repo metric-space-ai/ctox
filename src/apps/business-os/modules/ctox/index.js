@@ -13,7 +13,7 @@ const HARNESS_FLOW_CACHE_KEY = 'ctox.businessOs.ctox.lastHarnessFlow';
 const HARNESS_REFRESH_MS = 4000;
 const LOCAL_RENDER_DEBOUNCE_MS = 80;
 const CTOX_FETCH_TIMEOUT_MS = 1500;
-const CTOX_STYLE_BUILD = '20260518-context-menu-light2';
+const CTOX_STYLE_BUILD = '20260518-context-menu1';
 
 const labels = {
   de: {
@@ -1782,8 +1782,8 @@ function normalizeCommandStatus(status) {
   if (value === 'leased' || value === 'working') return 'running';
   if (value === 'done') return 'completed';
   if (value === 'handled') return 'handled';
-  if (value === 'cancelled') return 'cancelled';
-  if (value === 'blocked') return 'blocked';
+  if (value === 'cancelled' || value === 'canceled') return 'cancelled';
+  if (value === 'blocked' || value === 'blocked_no_ctox_api' || value === 'stale_missing_native') return 'blocked';
   if (value === 'failed') return 'failed';
   return value || 'queued';
 }
@@ -2439,6 +2439,7 @@ function formatShortTimestamp(value) {
 }
 
 function statusClass(status) {
+  status = normalizeCommandStatus(status);
   if (['done', 'completed', 'sent', 'approved', 'healthy'].includes(status)) return 'tone-ok';
   if (['running', 'review', 'drafting', 'leased', 'queued'].includes(status)) return 'tone-running';
   if (['blocked', 'failed', 'fail'].includes(status)) return 'tone-blocked';
@@ -2465,6 +2466,7 @@ function displayPriority(priority) {
 }
 
 function displayStatus(status, lang = 'de') {
+  status = normalizeCommandStatus(status);
   const de = { approved: 'Freigegeben', blocked: 'Blockiert', completed: 'Erledigt', done: 'Erledigt', drafting: 'Entwurf', fail: 'Fehler', failed: 'Fehler', handled: 'Ohne Review-Beleg', healthy: 'OK', idle: 'Idle', leased: 'Übernommen', open: 'Offen', queued: 'Wartet', review: 'Review', running: 'Arbeitet', sent: 'Gesendet', unknown: 'Unbekannt' };
   const en = { approved: 'Approved', blocked: 'Blocked', completed: 'Done', done: 'Done', drafting: 'Drafting', fail: 'Failed', failed: 'Failed', handled: 'No review proof', healthy: 'Healthy', idle: 'Idle', leased: 'Picked up', open: 'Open', queued: 'Waiting', review: 'In review', running: 'Working', sent: 'Sent', unknown: 'Unknown' };
   const table = lang === 'en' ? en : de;

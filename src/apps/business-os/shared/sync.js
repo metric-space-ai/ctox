@@ -81,6 +81,7 @@ export function createSyncRuntime({ db, baseUrl, config }) {
 function startInstanceBridge({ db, collection, runtime }) {
   const rxCollection = db?.raw?.[collection];
   if (!rxCollection) return { mode: 'pending', reason: 'collection-not-registered' };
+  const serverAuthoritative = isServerAuthoritativeCollection(collection);
 
   const queue = new Map();
   let flushTimer = null;
@@ -118,9 +119,11 @@ function startInstanceBridge({ db, collection, runtime }) {
     }
   };
 
-  const initialPush = rxCollection.find().exec()
-    .then((docs) => schedule(docs, 0))
-    .catch((error) => console.error(`[business-os] initial CTOX instance push failed for ${collection}`, error));
+  const initialPush = serverAuthoritative
+    ? Promise.resolve()
+    : rxCollection.find().exec()
+      .then((docs) => schedule(docs, 0))
+      .catch((error) => console.error(`[business-os] initial CTOX instance push failed for ${collection}`, error));
 
   const hydrateFromInstance = async () => {
     if (stopped || hydrating) return;
@@ -136,7 +139,7 @@ function startInstanceBridge({ db, collection, runtime }) {
 
   pollTimer = setInterval(hydrateFromInstance, pollDelayFor(collection));
 
-  const sub = rxCollection.$?.subscribe?.((event) => {
+  const sub = serverAuthoritative ? null : rxCollection.$?.subscribe?.((event) => {
     const document = event?.documentData
       || (event?.previousDocumentData ? { ...event.previousDocumentData, _deleted: true } : null);
     if (document) schedule([document]);
@@ -165,15 +168,64 @@ async function hydrateCollectionFromInstance({ db, collection, runtime }) {
     ? await runtime.pullAll(collection)
     : await runtime.pull(collection);
   const documents = Array.isArray(payload?.documents) ? payload.documents : [];
-  if (!documents.length) return;
-  if (typeof rxCollection.bulkUpsert === 'function') {
+  if (documents.length && typeof rxCollection.bulkUpsert === 'function') {
     const result = await rxCollection.bulkUpsert(documents);
     const errors = Array.isArray(result?.error) ? result.error : [];
-    if (!errors.length) return;
+    if (!errors.length) {
+      await markMissingServerDocsStale({ rxCollection, collection, documents });
+      return;
+    }
   }
   for (const doc of documents) {
     await rxCollection.upsert(doc);
   }
+  await markMissingServerDocsStale({ rxCollection, collection, documents });
+}
+
+async function markMissingServerDocsStale({ rxCollection, collection, documents }) {
+  if (!isServerAuthoritativeCollection(collection)) return;
+  const remoteIds = new Set(documents.map((doc) => doc?.id).filter(Boolean));
+  const localDocs = await rxCollection.find().exec();
+  const now = Date.now();
+  for (const localDoc of localDocs) {
+    const json = toPlainDocument(localDoc);
+    const id = json?.id;
+    if (!id || remoteIds.has(id) || json?._deleted) continue;
+    if (!isActiveProjection(json)) continue;
+    const patch = collection === 'business_commands'
+      ? {
+          status: 'stale_missing_native',
+          task_status: 'stale_missing_native',
+          updated_at_ms: now,
+          client_context: {
+            ...(json.client_context || {}),
+            stale_reason: 'not present in native Business OS store or CTOX queue',
+          },
+        }
+      : {
+          status: 'stale_missing_native',
+          route_status: 'stale_missing_native',
+          updated_at_ms: now,
+        };
+    await localDoc.incrementalPatch(patch);
+  }
+}
+
+function isServerAuthoritativeCollection(collection) {
+  return collection === 'business_commands' || collection === 'ctox_queue_tasks';
+}
+
+function isActiveProjection(doc) {
+  const status = String(doc?.status || doc?.route_status || doc?.task_status || '').toLowerCase();
+  return [
+    'accepted',
+    'queued',
+    'queued_local',
+    'pending',
+    'leased',
+    'working',
+    'running',
+  ].includes(status);
 }
 
 async function tryStartP2PCollectionSync({ db, collection, config }) {
