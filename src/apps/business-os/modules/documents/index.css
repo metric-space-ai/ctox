@@ -39,6 +39,15 @@
 
 .documents-loading-shell {
   min-height: 100%;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.documents-loading-shell .module-loading-panel:not(.module-loading-panel-main) {
+  display: none;
+}
+
+.documents-loading-shell .module-loading-panel-main {
+  min-height: 100%;
 }
 
 .documents-explorer,

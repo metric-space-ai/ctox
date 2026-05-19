@@ -2,6 +2,29 @@
   "ok": true,
   "modules": [
     {
+      "id": "desktop",
+      "title": "Desktop",
+      "description": "Workspace landing surface with switchable Windows/macOS chrome, draggable icons, taskbar/dock, and live CTOX activity notifications.",
+      "entry": "modules/desktop/index.html",
+      "collections": [
+        "business_commands",
+        "desktop_icons",
+        "desktop_layout",
+        "desktop_notifications",
+        "desktop_windows"
+      ],
+      "source": "core",
+      "core": true,
+      "editable": true,
+      "deletable": false,
+      "layout": {
+        "shell": "full-workspace",
+        "left": "desktop scopes",
+        "center": "desktop surface",
+        "right": "agent context"
+      }
+    },
+    {
       "id": "ctox",
       "title": "CTOX",
       "description": "Native control surface for queues, runs, sync state, and agent context.",
@@ -25,6 +48,28 @@
         "left": "runtime scopes",
         "center": "active workbench",
         "right": "agent context"
+      }
+    },
+    {
+      "id": "reports",
+      "title": "Bugs & Features",
+      "description": "Historical bug and feature request tracker with CTOX acceptance, change evidence, screenshots, and module rollback actions.",
+      "entry": "modules/reports/index.html",
+      "collections": [
+        "business_module_reports",
+        "ctox_bug_reports",
+        "business_module_releases",
+        "business_commands",
+        "ctox_queue_tasks"
+      ],
+      "source": "core",
+      "core": true,
+      "editable": true,
+      "deletable": false,
+      "layout": {
+        "shell": "full-workspace",
+        "left": "bug and feature filters and history",
+        "center": "report evidence, CTOX change log, and rollback"
       }
     },
     {
@@ -72,6 +117,30 @@
       }
     },
     {
+      "id": "research",
+      "title": "Research",
+      "description": "Knowledge-backed research dashboards with source scoring, portfolio maps, and CTOX systematic-research handoff.",
+      "entry": "modules/research/index.html",
+      "collections": [
+        "business_commands",
+        "business_chats",
+        "ctox_queue_tasks",
+        "research_tasks",
+        "research_runs",
+        "research_notes"
+      ],
+      "source": "local",
+      "core": false,
+      "editable": true,
+      "deletable": true,
+      "layout": {
+        "shell": "full-workspace",
+        "left": "research tasks and scored source ranking",
+        "center": "portfolio map and source evidence workbench",
+        "right": "research task context, decisions, and CTOX handoff"
+      }
+    },
+    {
       "id": "matching",
       "title": "Matching",
       "description": "Generic matching workspace with configurable source parsing, object parsing, and CTOX match tasks.",
@@ -90,6 +159,51 @@
         "left": "Requirement/source records and import task prompts",
         "center": "Configured matching task, queue state, and match results",
         "right": "Object pool records and import task prompts"
+      }
+    },
+    {
+      "id": "conversations",
+      "title": "Conversations",
+      "description": "Read-only audit surface for all CTOX communication across WhatsApp, Jami, Email, and MS Teams. Contact-centric timeline with channel-aware rendering and cross-links into Outbound, Matching, and Reports.",
+      "entry": "modules/conversations/index.html",
+      "collections": [
+        "business_commands",
+        "communication_accounts",
+        "communication_threads",
+        "communication_messages"
+      ],
+      "source": "local",
+      "core": false,
+      "editable": true,
+      "deletable": true,
+      "layout": {
+        "shell": "full-workspace",
+        "left": "Conversation list filtered by channel and search",
+        "center": "Selected conversation timeline with channel-aware messages",
+        "right": "Contact card, related business records, and CTOX agent attribution"
+      }
+    },
+    {
+      "id": "outbound",
+      "title": "Outbound",
+      "description": "Campaign source import, company qualification, and pipeline handoff for outbound sales workflows.",
+      "entry": "modules/outbound/index.html",
+      "collections": [
+        "business_commands",
+        "outbound_campaigns",
+        "outbound_sources",
+        "outbound_companies",
+        "outbound_pipeline_items",
+        "outbound_research_runs"
+      ],
+      "source": "local",
+      "core": false,
+      "editable": true,
+      "deletable": true,
+      "layout": {
+        "shell": "full-workspace",
+        "left": "campaign selection and source import",
+        "center": "company qualification and pipeline workbench"
       }
     }
   ]

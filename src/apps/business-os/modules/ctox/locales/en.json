@@ -37,7 +37,7 @@
   "elapsed": "Time",
   "notCaptured": "not captured",
   "connected": "connected",
-  "fallback": "fallback data",
+  "notLive": "not live",
   "notLogged": "time not logged",
   "timeline": "Timeline",
   "queue": "Pipeline",

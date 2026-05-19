@@ -1,0 +1,23 @@
+{
+  "id": "outbound",
+  "title": "Outbound",
+  "description": "Campaign source import, company qualification, and pipeline handoff for outbound sales workflows.",
+  "entry": "modules/outbound/index.html",
+  "collections": [
+    "business_commands",
+    "outbound_campaigns",
+    "outbound_sources",
+    "outbound_companies",
+    "outbound_pipeline_items",
+    "outbound_research_runs"
+  ],
+  "source": "local",
+  "core": false,
+  "editable": true,
+  "deletable": true,
+  "layout": {
+    "shell": "full-workspace",
+    "left": "campaign selection and source import",
+    "center": "company qualification and pipeline workbench"
+  }
+}

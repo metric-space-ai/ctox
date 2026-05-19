@@ -151,6 +151,27 @@ export const collections = {
     },
     required: ['id', 'module_id', 'kind', 'title', 'status', 'updated_at_ms'],
     additionalProperties: true
+  },
+  business_module_source_files: {
+    version: 0,
+    primaryKey: 'id',
+    type: 'object',
+    properties: {
+      id: { type: 'string', maxLength: 512 },
+      module_id: { type: 'string' },
+      path: { type: 'string' },
+      language: { type: 'string' },
+      sha256: { type: 'string' },
+      previous_sha256: { type: 'string' },
+      snapshot_id: { type: 'string' },
+      size_bytes: { type: 'number' },
+      content: { type: 'string' },
+      source_kind: { type: 'string' },
+      synced_at_ms: { type: 'number' },
+      updated_at_ms: { type: 'number' }
+    },
+    required: ['id', 'module_id', 'path', 'sha256', 'updated_at_ms'],
+    additionalProperties: true
   }
 };
 

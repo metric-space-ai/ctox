@@ -1,0 +1,18 @@
+{
+  "id": "reports",
+  "title": "Bugs & Features",
+  "description": "Historical bug and feature request tracker with CTOX acceptance, change evidence, screenshots, and module rollback actions.",
+  "entry": "modules/reports/index.html",
+  "collections": [
+    "business_module_reports",
+    "ctox_bug_reports",
+    "business_module_releases",
+    "business_commands",
+    "ctox_queue_tasks"
+  ],
+  "layout": {
+    "shell": "full-workspace",
+    "left": "Bug and feature filters and history",
+    "center": "Selected report evidence, CTOX change log, and rollback"
+  }
+}

@@ -1,0 +1,128 @@
+.universal-importer-drawer {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  justify-content: flex-end;
+  background: color-mix(in srgb, var(--bg, oklch(0.22 0.015 235)) 52%, transparent);
+}
+
+.universal-importer-drawer[data-side="left"] {
+  justify-content: flex-start;
+}
+
+.universal-importer-panel {
+  width: min(520px, 100vw);
+  height: 100%;
+  max-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 24px;
+  overflow-y: auto;
+  border-left: 1px solid var(--line, oklch(0.84 0.012 235));
+  background: var(--surface, oklch(0.987 0.005 235));
+  color: var(--text, oklch(0.22 0.015 235));
+  box-shadow: var(--shadow, -18px 0 48px color-mix(in srgb, var(--text, #17202b) 18%, transparent));
+}
+
+.universal-importer-drawer[data-side="left"] .universal-importer-panel {
+  border-right: 1px solid var(--line, oklch(0.84 0.012 235));
+  border-left: 0;
+  box-shadow: var(--shadow, 18px 0 48px color-mix(in srgb, var(--text, #17202b) 18%, transparent));
+}
+
+.universal-importer-panel header,
+.universal-importer-panel footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.universal-importer-panel header span,
+.universal-importer-panel label span {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--muted, oklch(0.48 0.015 235));
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.universal-importer-panel h2 {
+  margin: 0;
+  font-size: 20px;
+  letter-spacing: 0;
+}
+
+.universal-importer-panel label {
+  display: block;
+}
+
+.universal-importer-panel input,
+.universal-importer-panel select,
+.universal-importer-panel textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--line, oklch(0.84 0.012 235));
+  border-radius: var(--radius-control, 6px);
+  background: var(--surface, oklch(0.987 0.005 235));
+  color: var(--text, oklch(0.22 0.015 235));
+  font: inherit;
+}
+
+.universal-importer-panel input,
+.universal-importer-panel select {
+  height: 40px;
+  padding: 0 12px;
+}
+
+.universal-importer-panel textarea {
+  min-height: 220px;
+  padding: 12px;
+  resize: vertical;
+}
+
+.universal-importer-icon {
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--line, oklch(0.84 0.012 235));
+  border-radius: var(--radius-control, 6px);
+  background: var(--surface-2, oklch(0.944 0.008 235));
+  color: var(--text, oklch(0.22 0.015 235));
+  font-size: 22px;
+  line-height: 1;
+}
+
+.universal-importer-panel footer {
+  position: sticky;
+  bottom: -24px;
+  margin-top: auto;
+  padding-top: 16px;
+  padding-bottom: 24px;
+  border-top: 1px solid var(--line, oklch(0.84 0.012 235));
+  background: var(--surface, oklch(0.987 0.005 235));
+}
+
+.universal-importer-panel footer button {
+  height: 40px;
+  padding: 0 16px;
+  border: 1px solid var(--accent, oklch(0.48 0.115 215));
+  border-radius: var(--radius-control, 6px);
+  background: color-mix(in srgb, var(--accent, oklch(0.48 0.115 215)) 16%, var(--surface, oklch(0.987 0.005 235)));
+  color: var(--accent, oklch(0.48 0.115 215));
+  font-weight: 700;
+}
+
+.universal-importer-help,
+.universal-importer-panel [data-import-status] {
+  margin: 0;
+  color: var(--muted, oklch(0.48 0.015 235));
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.universal-importer-field-help {
+  margin-top: -10px;
+}

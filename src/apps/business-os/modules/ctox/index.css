@@ -762,11 +762,11 @@ body.ctox-column-resizing {
   font-size: 10.5px;
 }
 
-.ctox-live-chip.is-fallback {
+.ctox-live-chip.is-unavailable {
   color: var(--ctox-muted);
 }
 
-.ctox-live-chip.is-fallback i {
+.ctox-live-chip.is-unavailable i {
   animation: none;
   border-color: color-mix(in srgb, var(--ctox-muted) 42%, transparent);
 }

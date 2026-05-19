@@ -1,0 +1,20 @@
+{
+  "id": "desktop",
+  "title": "Desktop",
+  "description": "Workspace landing surface with switchable Windows/macOS chrome, draggable icons, taskbar/dock, and live CTOX activity notifications.",
+  "entry": "modules/desktop/index.html",
+  "collections": [
+    "business_commands",
+    "desktop_icons",
+    "desktop_files",
+    "desktop_file_chunks",
+    "desktop_layout",
+    "desktop_notifications"
+  ],
+  "layout": {
+    "shell": "full-workspace",
+    "left": "desktop scopes",
+    "center": "desktop surface",
+    "right": "agent context"
+  }
+}

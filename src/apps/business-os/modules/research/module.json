@@ -1,0 +1,24 @@
+{
+  "id": "research",
+  "title": "Research",
+  "description": "Knowledge-backed research dashboards with source scoring, portfolio maps, and CTOX systematic-research handoff.",
+  "entry": "modules/research/index.html",
+  "collections": [
+    "business_commands",
+    "business_chats",
+    "ctox_queue_tasks",
+    "research_tasks",
+    "research_runs",
+    "research_notes"
+  ],
+  "layout": {
+    "shell": "full-workspace",
+    "left": "research tasks and scored source ranking",
+    "center": "portfolio map and source evidence workbench",
+    "right": "research task context, decisions, and CTOX handoff",
+    "drawers": {
+      "right": "task setup, scoring model, and selected source detail",
+      "bottom": "Knowledge table diagnostics and raw row evidence"
+    }
+  }
+}

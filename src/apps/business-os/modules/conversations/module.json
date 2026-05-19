@@ -1,0 +1,18 @@
+{
+  "id": "conversations",
+  "title": "Conversations",
+  "description": "Read-only audit surface for all CTOX communication across WhatsApp, Jami, Email, and MS Teams. Contact-centric timeline with channel-aware rendering and cross-links into Outbound, Matching, and Reports.",
+  "entry": "modules/conversations/index.html",
+  "collections": [
+    "business_commands",
+    "communication_accounts",
+    "communication_threads",
+    "communication_messages"
+  ],
+  "layout": {
+    "shell": "full-workspace",
+    "left": "Conversation list filtered by channel and search",
+    "center": "Selected conversation timeline with channel-aware messages",
+    "right": "Contact card, related business records, and CTOX agent attribution"
+  }
+}

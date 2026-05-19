@@ -1,76 +1,46 @@
-export function createSyncRuntime({ db, baseUrl, config }) {
-  const p2pPools = new Map();
-  const instanceBridges = new Map();
+import { batchSizeFor } from './sync-contract.js';
+
+export function createSyncRuntime({ db, baseUrl = '/api/business-os', config }) {
+  const bridges = new Map();
   return {
     db,
     baseUrl,
     config,
-    mode: config?.sync_mode || 'p2p-first',
+    mode: config?.http_bridge_available === false ? 'local-only' : 'native-http',
     async startModule(moduleManifest) {
       if (config?.http_bridge_available === false) {
-        return { mode: 'static-preview', reason: 'http-bridge-disabled' };
+        return { mode: 'local-only', reason: 'http-bridge-disabled' };
       }
       const collections = moduleManifest?.collections || [];
       const started = collections.map((collection) => this.startCollection(collection));
       return Promise.allSettled(started);
     },
     async startCollection(collection) {
-      if (p2pPools.has(collection)) return p2pPools.get(collection);
-      const bridge = startInstanceBridge({
-        db,
-        collection,
-        runtime: this,
+      if (bridges.has(collection)) return bridges.get(collection);
+      const bridge = startNativeBridge({ db, baseUrl, collection });
+      bridges.set(collection, bridge);
+      bridge.pullNow().catch((error) => {
+        console.error(`[business-os] native pull failed for ${collection}`, error);
       });
-      instanceBridges.set(collection, bridge);
-      hydrateCollectionFromInstance({ db, collection, runtime: this })
-        .catch((error) => console.error(`[business-os] background CTOX instance pull failed for ${collection}`, error));
-      let p2p = null;
-      try {
-        p2p = await tryStartP2PCollectionSync({
-          db,
-          collection,
-          config,
-        });
-      } catch (error) {
-        console.warn(`[business-os] WebRTC sync unavailable for ${collection}`, error);
-        p2p = { mode: 'unavailable', collection, reason: error?.message || String(error) };
-      }
-      const pool = { mode: 'ctox-instance+p2p', collection, instanceBridge: bridge, p2p };
-      p2pPools.set(collection, pool);
-      return pool;
+      return bridge;
     },
-    async pull(collection) {
-      const res = await fetch(`${baseUrl}/rxdb/${encodeURIComponent(collection)}/pull`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ checkpoint: null, batch_size: 200 }),
-      });
+    async pull(collection, sinceMs = 0) {
+      const url = new URL(`${baseUrl}/rxdb/pull`, window.location.origin);
+      url.searchParams.set('collection', collection);
+      url.searchParams.set('since_ms', String(Math.max(0, Number(sinceMs) || 0)));
+      url.searchParams.set('limit', String(Math.max(1, batchSizeFor(collection) * 50)));
+      const res = await fetch(url);
       if (!res.ok) throw new Error(`Pull failed for ${collection}: ${res.status}`);
       return res.json();
     },
-    async pullAll(collection) {
-      const documents = [];
-      let checkpoint = null;
-      for (;;) {
-        const res = await fetch(`${baseUrl}/rxdb/${encodeURIComponent(collection)}/pull`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ checkpoint, batch_size: batchSizeFor(collection) }),
-        });
-        if (!res.ok) throw new Error(`Pull failed for ${collection}: ${res.status}`);
-        const page = await res.json();
-        const pageDocuments = Array.isArray(page?.documents) ? page.documents : [];
-        documents.push(...pageDocuments);
-        checkpoint = page?.checkpoint || checkpoint;
-        if (!page?.has_more || !pageDocuments.length) break;
-      }
-      return { ok: true, documents, checkpoint };
-    },
     async push(collection, documents) {
-      const res = await fetch(`${baseUrl}/rxdb/${encodeURIComponent(collection)}/push`, {
+      const res = await fetch(`${baseUrl}/rxdb/push`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ documents }),
+        body: JSON.stringify({
+          collection,
+          documents: documents.map(stripRxdbInternals),
+        }),
       });
       if (!res.ok) throw new Error(`Push failed for ${collection}: ${res.status}`);
       return res.json();
@@ -78,215 +48,182 @@ export function createSyncRuntime({ db, baseUrl, config }) {
   };
 }
 
-function startInstanceBridge({ db, collection, runtime }) {
+function startNativeBridge({ db, baseUrl, collection }) {
   const rxCollection = db?.raw?.[collection];
-  if (!rxCollection) return { mode: 'pending', reason: 'collection-not-registered' };
-  const serverAuthoritative = isServerAuthoritativeCollection(collection);
+  if (!rxCollection) return { mode: 'pending', collection, reason: 'collection-not-registered' };
 
-  const queue = new Map();
-  let flushTimer = null;
-  let pollTimer = null;
-  let flushPromise = Promise.resolve();
-  let hydrating = false;
   let stopped = false;
+  let hydrating = false;
+  const bridgeStartedAt = Date.now();
+  let lastPullMs = 0;
+  let flushTimer = null;
+  let flushPromise = Promise.resolve();
+  const queued = new Map();
 
-  const schedule = (documents, delayMs = 150) => {
-    if (stopped || hydrating) return;
-    for (const document of documents) {
-      const json = toPlainDocument(document);
-      const id = json?.id;
-      if (!id) continue;
-      queue.set(id, json);
-    }
-    if (!queue.size || flushTimer) return;
-    flushTimer = setTimeout(() => {
-      flushTimer = null;
-      flushPromise = flushPromise
-        .then(() => flushQueuedDocuments())
-        .catch((error) => {
-          console.error(`[business-os] CTOX instance push failed for ${collection}`, error);
-          if (!stopped) schedule(Array.from(queue.values()), retryDelayFor(collection));
-        });
-    }, delayMs);
+  const runtime = {
+    async pull() {
+      const url = new URL(`${baseUrl}/rxdb/pull`, window.location.origin);
+      url.searchParams.set('collection', collection);
+      url.searchParams.set('since_ms', String(Math.max(0, lastPullMs - 1)));
+      url.searchParams.set('limit', String(Math.max(1, batchSizeFor(collection) * 50)));
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`Pull failed for ${collection}: ${res.status}`);
+      return res.json();
+    },
+    async push(documents) {
+      const res = await fetch(`${baseUrl}/rxdb/push`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          collection,
+          documents: documents.map(stripRxdbInternals),
+        }),
+      });
+      if (!res.ok) throw new Error(`Push failed for ${collection}: ${res.status}`);
+      return res.json();
+    },
   };
 
-  const flushQueuedDocuments = async () => {
-    if (stopped || !queue.size) return;
-    const documents = Array.from(queue.values());
-    queue.clear();
-    for (const batch of chunkArray(documents, batchSizeFor(collection))) {
-      await runtime.push(collection, batch);
-    }
-  };
-
-  const initialPush = serverAuthoritative
-    ? Promise.resolve()
-    : rxCollection.find().exec()
-      .then((docs) => schedule(docs, 0))
-      .catch((error) => console.error(`[business-os] initial CTOX instance push failed for ${collection}`, error));
-
-  const hydrateFromInstance = async () => {
+  async function pullNow() {
     if (stopped || hydrating) return;
     hydrating = true;
     try {
-      await hydrateCollectionFromInstance({ db, collection, runtime });
-    } catch (error) {
-      console.error(`[business-os] CTOX instance pull failed for ${collection}`, error);
+      const payload = await runtime.pull();
+      const documents = Array.isArray(payload?.documents) ? payload.documents : [];
+      for (const document of documents) {
+        try {
+          const plain = normalizePulledDocument(document, collection);
+          const id = plain?.id;
+          if (!id) continue;
+          const updatedAt = Number(plain.updated_at_ms || 0);
+          if (updatedAt > lastPullMs) lastPullMs = updatedAt;
+          const existing = await rxCollection.findOne(id).exec();
+          if (existing) {
+            await existing.incrementalPatch(plain);
+          } else {
+            try {
+              await rxCollection.insert(plain);
+            } catch (insertError) {
+              const lateExisting = await rxCollection.findOne(id).exec();
+              if (!lateExisting) throw insertError;
+              await lateExisting.incrementalPatch(plain);
+            }
+          }
+        } catch (error) {
+          console.error(`[business-os] native pull skipped invalid ${collection} record`, document?.id || document?.record_id || document, error);
+        }
+      }
     } finally {
       hydrating = false;
     }
-  };
+  }
 
-  pollTimer = setInterval(hydrateFromInstance, pollDelayFor(collection));
+  function schedulePush(document) {
+    if (stopped || hydrating || isReadOnlyProjectionCollection(collection)) return;
+    const plain = stripRxdbInternals(document);
+    const id = plain?.id;
+    if (!id) return;
+    if (collection === 'business_commands') {
+      if (plain.status !== 'pending_sync') return;
+      if (Number(plain.updated_at_ms || 0) < bridgeStartedAt - 15000) return;
+    }
+    queued.set(id, plain);
+    if (flushTimer) return;
+    flushTimer = window.setTimeout(() => {
+      flushTimer = null;
+      flushPromise = flushPromise
+        .then(flushQueued)
+        .catch((error) => {
+          console.error(`[business-os] native push failed for ${collection}`, error);
+        });
+    }, 150);
+  }
 
-  const sub = serverAuthoritative ? null : rxCollection.$?.subscribe?.((event) => {
+  async function flushQueued() {
+    if (stopped || !queued.size) return;
+    const documents = Array.from(queued.values());
+    queued.clear();
+    for (const batch of chunkArray(documents, batchSizeFor(collection))) {
+      await runtime.push(batch);
+    }
+  }
+
+  const subscription = rxCollection.$?.subscribe?.((event) => {
     const document = event?.documentData
       || (event?.previousDocumentData ? { ...event.previousDocumentData, _deleted: true } : null);
-    if (document) schedule([document]);
+    if (document) schedulePush(document);
   });
+  const pollTimer = window.setInterval(() => {
+    pullNow().catch((error) => console.error(`[business-os] native pull failed for ${collection}`, error));
+  }, pollDelayFor(collection));
 
   return {
-    mode: 'ctox-instance',
+    mode: 'native-http',
     collection,
-    initialPush,
-    flush: () => flushPromise.then(() => flushQueuedDocuments()),
+    pullNow,
+    flush: () => flushPromise.then(flushQueued),
     stop() {
       stopped = true;
-      if (flushTimer) clearTimeout(flushTimer);
-      if (pollTimer) clearInterval(pollTimer);
-      flushTimer = null;
-      pollTimer = null;
-      try { sub?.unsubscribe?.(); } catch {}
+      if (flushTimer) window.clearTimeout(flushTimer);
+      window.clearInterval(pollTimer);
+      try { subscription?.unsubscribe?.(); } catch {}
     },
   };
 }
 
-async function hydrateCollectionFromInstance({ db, collection, runtime }) {
-  const rxCollection = db?.raw?.[collection];
-  if (!rxCollection) return;
-  const payload = typeof runtime.pullAll === 'function'
-    ? await runtime.pullAll(collection)
-    : await runtime.pull(collection);
-  const documents = Array.isArray(payload?.documents) ? payload.documents : [];
-  if (documents.length && typeof rxCollection.bulkUpsert === 'function') {
-    const result = await rxCollection.bulkUpsert(documents);
-    const errors = Array.isArray(result?.error) ? result.error : [];
-    if (!errors.length) {
-      await markMissingServerDocsStale({ rxCollection, collection, documents });
-      return;
-    }
+function normalizePulledDocument(document, collection) {
+  const plain = stripRxdbInternals(document);
+  if (plain._deleted) {
+    plain.is_deleted = true;
+    delete plain._deleted;
   }
-  for (const doc of documents) {
-    await rxCollection.upsert(doc);
+  if (collection === 'documents') {
+    plain.is_deleted = Boolean(plain.is_deleted);
+    plain.linked_records = Array.isArray(plain.linked_records) ? plain.linked_records : [];
+    plain.display_cache = plain.display_cache && typeof plain.display_cache === 'object' ? plain.display_cache : {};
+    plain.owner_id = String(plain.owner_id || '');
+    if (plain.status === 'Generated') plain.status = 'Draft';
   }
-  await markMissingServerDocsStale({ rxCollection, collection, documents });
-}
-
-async function markMissingServerDocsStale({ rxCollection, collection, documents }) {
-  if (!isServerAuthoritativeCollection(collection)) return;
-  const remoteIds = new Set(documents.map((doc) => doc?.id).filter(Boolean));
-  const localDocs = await rxCollection.find().exec();
-  const now = Date.now();
-  for (const localDoc of localDocs) {
-    const json = toPlainDocument(localDoc);
-    const id = json?.id;
-    if (!id || remoteIds.has(id) || json?._deleted) continue;
-    if (!isActiveProjection(json)) continue;
-    const patch = collection === 'business_commands'
-      ? {
-          status: 'stale_missing_native',
-          task_status: 'stale_missing_native',
-          updated_at_ms: now,
-          client_context: {
-            ...(json.client_context || {}),
-            stale_reason: 'not present in native Business OS store or CTOX queue',
-          },
-        }
-      : {
-          status: 'stale_missing_native',
-          route_status: 'stale_missing_native',
-          updated_at_ms: now,
-        };
-    await localDoc.incrementalPatch(patch);
+  if (collection === 'document_versions') {
+    plain.model_json = plain.model_json && typeof plain.model_json === 'object' && !Array.isArray(plain.model_json)
+      ? plain.model_json
+      : {};
+    plain.diagnostics = Array.isArray(plain.diagnostics) ? plain.diagnostics : [];
   }
-}
-
-function isServerAuthoritativeCollection(collection) {
-  return collection === 'business_commands' || collection === 'ctox_queue_tasks';
-}
-
-function isActiveProjection(doc) {
-  const status = String(doc?.status || doc?.route_status || doc?.task_status || '').toLowerCase();
-  return [
-    'accepted',
-    'queued',
-    'queued_local',
-    'pending',
-    'leased',
-    'working',
-    'running',
-  ].includes(status);
-}
-
-async function tryStartP2PCollectionSync({ db, collection, config }) {
-  if (!db?.raw) return { mode: 'pending', reason: 'rxdb-not-ready' };
-  const rxCollection = db.raw[collection];
-  if (!rxCollection) return { mode: 'pending', reason: 'collection-not-registered' };
-  const webrtc = await loadRxdbWebRTC();
-  const replicateWebRTC = webrtc?.replicateWebRTC;
-  const getConnectionHandlerSimplePeer = webrtc?.getConnectionHandlerSimplePeer;
-  if (!replicateWebRTC || !getConnectionHandlerSimplePeer) {
-    throw new Error('RxDB WebRTC runtime is missing from vendor/rxdb-bundle.mjs');
+  if (collection === 'document_blob_chunks') {
+    delete plain.chunk_id;
   }
-
-  const signalingServerUrl = config?.signaling_urls?.[0];
-  if (!signalingServerUrl) {
-    throw new Error('Business OS P2P sync requires at least one signaling URL');
-  }
-
-  const pool = replicateWebRTC({
-    collection: rxCollection,
-    topic: `${config.sync_room}:${collection}`,
-    connectionHandlerCreator: getConnectionHandlerSimplePeer({
-      signalingServerUrl,
-    }),
-    pull: { batchSize: batchSizeFor(collection) },
-    push: { batchSize: batchSizeFor(collection) },
-  });
-  return { mode: 'p2p', pool, collection, signalingServerUrl };
+  return plain;
 }
 
-function batchSizeFor(collection) {
-  return collection.includes('attachment') || collection.includes('chunk') ? 1 : 10;
+function stripRxdbInternals(document) {
+  const {
+    _attachments,
+    _deleted,
+    _meta,
+    _rev,
+    ...plain
+  } = document || {};
+  if (_deleted) plain._deleted = true;
+  return plain;
 }
 
-function retryDelayFor(collection) {
-  return collection.includes('chunk') ? 1500 : 750;
+function isReadOnlyProjectionCollection(collection) {
+  return collection === 'ctox_queue_tasks'
+    || collection === 'business_chats';
 }
 
 function pollDelayFor(collection) {
-  return collection.includes('chunk') ? 30000 : 10000;
-}
-
-function toPlainDocument(document) {
-  if (!document) return null;
-  if (typeof document.toJSON === 'function') return document.toJSON();
-  if (typeof document === 'object') return { ...document };
-  return null;
+  if (collection === 'ctox_queue_tasks' || collection === 'business_commands' || collection === 'business_chats') return 2000;
+  if (collection === 'documents' || collection === 'document_versions') return 3000;
+  return 5000;
 }
 
 function chunkArray(items, size) {
-  const out = [];
-  const chunkSize = Math.max(1, Number(size) || 1);
-  for (let i = 0; i < items.length; i += chunkSize) {
-    out.push(items.slice(i, i + chunkSize));
+  const chunks = [];
+  const chunkSize = Math.max(1, size || 50);
+  for (let index = 0; index < items.length; index += chunkSize) {
+    chunks.push(items.slice(index, index + chunkSize));
   }
-  return out;
-}
-
-async function loadRxdbWebRTC() {
-  const mod = await import('../vendor/rxdb-bundle.mjs');
-  if (typeof mod.rxdbWebRTC === 'function') return mod.rxdbWebRTC();
-  if (globalThis.rxdbWebRTC) return globalThis.rxdbWebRTC();
-  return mod;
+  return chunks;
 }

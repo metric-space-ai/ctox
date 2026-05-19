@@ -1,6 +1,6 @@
-import { collections as matchingSchemas } from '../schema.js';
+import { collections as matchingSchemas, migrationStrategies as matchingMigrationStrategies } from '../schema.js';
 
-const DB_NAME = 'ctox_business_os_v3';
+const DB_NAME = 'ctox_business_os_v4';
 
 const COLLECTION_MAP = {
   sources: 'matching_requirements',
@@ -50,26 +50,41 @@ async function getRawDatabase() {
 }
 
 async function createRawDatabase() {
-  if (injectedRawDatabase) return injectedRawDatabase;
+  if (injectedRawDatabase) {
+    await ensureMatchingCollections(injectedRawDatabase);
+    return injectedRawDatabase;
+  }
   const rxdb = await loadRxdb();
   const { createRxDatabase, getRxStorageDexie } = rxdb;
   const raw = await createRxDatabase({
     name: DB_NAME,
     storage: getRxStorageDexie(),
-    multiInstance: true,
+    multiInstance: false,
     closeDuplicates: true,
   });
+  await ensureMatchingCollections(raw);
+  return raw;
+}
+
+async function ensureMatchingCollections(raw) {
+  if (!raw || typeof raw !== 'object') return;
   const missing = {};
   for (const [collectionName, definition] of Object.entries(matchingSchemas || {})) {
-    if (!raw[collectionName]) missing[collectionName] = normalizeCollectionDefinition(definition);
+    if (!raw[collectionName]) {
+      missing[collectionName] = withMigrationStrategies(collectionName, normalizeCollectionDefinition(definition));
+    }
   }
   if (Object.keys(missing).length) await raw.addCollections(missing);
-  return raw;
 }
 
 function normalizeCollectionDefinition(definition) {
   if (definition?.schema) return definition;
   return { schema: definition };
+}
+
+function withMigrationStrategies(collectionName, definition) {
+  const strategies = matchingMigrationStrategies?.[collectionName];
+  return strategies ? { ...definition, migrationStrategies: strategies } : definition;
 }
 
 function createCollection(name, rxCollection) {
@@ -123,76 +138,7 @@ async function loadCollection(name, { force = false } = {}) {
 async function hydrateRemoteCollection(remote, rxCollection) {
   if (!remote || !rxCollection || hydratedRemoteCollections.has(remote)) return;
   hydratedRemoteCollections.add(remote);
-  try {
-    let checkpoint = null;
-    for (;;) {
-      const response = await fetch(`/api/business-os/rxdb/${encodeURIComponent(remote)}/pull`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ checkpoint, batch_size: 200 })
-      });
-      if (!response.ok) throw new Error(`Pull failed for ${remote}: ${response.status}`);
-      const page = await response.json();
-      const documents = Array.isArray(page?.documents)
-        ? page.documents.map((doc) => normalizeRemoteDocument(remote, doc))
-        : [];
-      if (documents.length) {
-        if (typeof rxCollection.bulkUpsert === 'function') {
-          const result = await rxCollection.bulkUpsert(documents);
-          const errors = Array.isArray(result?.error) ? result.error : [];
-          if (errors.length) {
-            for (const doc of documents) await rxCollection.upsert(doc);
-          }
-        } else {
-          for (const doc of documents) await rxCollection.upsert(doc);
-        }
-      }
-      checkpoint = page?.checkpoint || checkpoint;
-      if (!page?.has_more || !documents.length) break;
-    }
-  } catch (error) {
-    hydratedRemoteCollections.delete(remote);
-    console.warn(`[matching] Initial CTOX pull failed for ${remote}`, error);
-  }
-}
-
-function normalizeRemoteDocument(remote, input) {
-  const doc = toPlain(input);
-  const now = Date.now();
-  const id = String(doc.id || doc.record_id || makeId(remote));
-  const kind = safeText(doc.kind) || inferRemoteKind(remote);
-  const data = doc.data && typeof doc.data === 'object'
-    ? { ...doc.data, __ctox_kind: doc.data.__ctox_kind || kind }
-    : { ...doc, id, kind, __ctox_kind: kind };
-  return {
-    ...doc,
-    id,
-    kind,
-    title: safeText(doc.title) || safeText(doc.name) || safeText(doc.legalName) || safeText(doc.sourceName) || id,
-    source_type: safeText(doc.source_type) || sourceTypeForRemote(remote),
-    source_ref: safeText(doc.source_ref) || safeText(doc.sourceUrl) || id,
-    status: safeText(doc.status) || (doc._deleted ? 'deleted' : 'active'),
-    data,
-    created_at_ms: Number(doc.created_at_ms || doc.createdAtMs || doc.updated_at_ms || now),
-    updated_at_ms: Number(doc.updated_at_ms || now),
-    _deleted: !!doc._deleted
-  };
-}
-
-function safeText(value) {
-  return typeof value === 'string' ? value.trim() : '';
-}
-
-function inferRemoteKind(remote) {
-  if (remote === 'matching_objects') return 'object';
-  if (remote === 'matching_results') return 'match';
-  return 'requirement';
-}
-
-function sourceTypeForRemote(remote) {
-  if (remote === 'matching_objects') return 'object';
-  if (remote === 'matching_results') return 'match';
-  return 'requirement';
+  void rxCollection;
 }
 
 async function saveDocument(name, input) {
@@ -281,7 +227,12 @@ function compareBySort(a, b, sortSpec) {
 
 function fromPersistedDocument(name, row) {
   const data = row?.data && typeof row.data === 'object' ? row.data : row;
-  return { ...data, __ctox_kind: row?.kind || data?.__ctox_kind || inferKind(name) };
+  return {
+    ...data,
+    definitionId: data?.definitionId || row?.definition_id || '',
+    schemaVersion: data?.schemaVersion || row?.schema_version || '',
+    __ctox_kind: row?.kind || data?.__ctox_kind || inferKind(name)
+  };
 }
 
 function toPersistedDocument(name, doc) {
@@ -292,6 +243,8 @@ function toPersistedDocument(name, doc) {
     title: titleFor(name, doc),
     source_type: sourceTypeFor(name),
     source_ref: doc.sourceUrl || doc.source_ref || doc.id,
+    definition_id: doc.definitionId || '',
+    schema_version: doc.schemaVersion || '',
     data: {
       ...doc,
       __ctox_kind: inferKind(name)

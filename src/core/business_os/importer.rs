@@ -3,11 +3,15 @@ use crate::mission::channels;
 use anyhow::{anyhow, Context};
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
+use ctox_web_stack::sources::{Country, FieldKey, ResearchMode};
+use ctox_web_stack::PersonResearchRequest;
 use regex::Regex;
 use rusqlite::Connection;
 use scraper::{Html, Selector};
+use serde_json::Map;
 use serde_json::Value;
 use sha2::Digest;
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -26,6 +30,9 @@ pub(super) fn handle_source_parse(
     command: &BusinessCommand,
     queue_task: Option<&channels::QueueTaskView>,
 ) -> anyhow::Result<ImportOutcome> {
+    if command.module == "outbound" && command.command_type == "outbound.source.import" {
+        return import_outbound_companies(root, conn, command_id, command, queue_task);
+    }
     anyhow::ensure!(
         command.module == "matching",
         "source.parse is only implemented for matching"
@@ -203,6 +210,388 @@ pub(super) fn handle_match_compute(
         definition_id: "matching.matches.v1".to_string(),
         record_ids: vec![match_id],
         records_count: 1,
+    })
+}
+
+pub(super) fn handle_outbound_research(
+    root: &Path,
+    _conn: &Connection,
+    command_id: &str,
+    command: &BusinessCommand,
+    _queue_task: Option<&channels::QueueTaskView>,
+) -> anyhow::Result<ImportOutcome> {
+    anyhow::ensure!(
+        command.module == "outbound",
+        "outbound research is only implemented for outbound"
+    );
+    match command.command_type.as_str() {
+        "outbound.company.research" => outbound_company_research(root, command_id, command),
+        "outbound.pipeline.contact_research" => {
+            outbound_contact_research(root, command_id, command)
+        }
+        "outbound.pipeline.lead_qualification" => {
+            outbound_lead_qualification(root, command_id, command)
+        }
+        other => Err(anyhow!("unsupported outbound research command: {other}")),
+    }
+}
+
+#[derive(Debug, Clone)]
+struct OutboundKnowledgeRefs {
+    domain: String,
+    companies_key: String,
+    contacts_key: String,
+    runs_key: String,
+    runbook_id: String,
+    campaign_id: String,
+    campaign_name: String,
+}
+
+fn outbound_refs(command: &BusinessCommand) -> OutboundKnowledgeRefs {
+    let campaign_id = first_nonempty(&[
+        str_path(&command.payload, &["writeback_contract", "campaign_id"]),
+        str_path(&command.payload, &["campaign", "id"]),
+        str_path(&command.client_context, &["campaign_id"]),
+    ]);
+    let campaign_name = first_nonempty(&[
+        str_path(&command.payload, &["writeback_contract", "campaign_name"]),
+        str_path(&command.payload, &["campaign", "name"]),
+        str_path(&command.payload, &["title"]),
+    ]);
+    let domain = first_nonempty(&[
+        str_path(&command.payload, &["writeback_contract", "domain"]),
+        str_path(&command.payload, &["knowledge", "domain"]),
+        str_path(&command.client_context, &["knowledge_domain"]),
+        "outbound".to_string(),
+    ]);
+    let companies_key = first_nonempty(&[
+        str_path(&command.payload, &["knowledge", "companies_table_key"]),
+        if !campaign_id.is_empty() {
+            format!("campaign_{}_companies", slug_for_key(&campaign_id))
+        } else {
+            String::new()
+        },
+    ]);
+    let contacts_key = first_nonempty(&[
+        str_path(&command.payload, &["knowledge", "contacts_table_key"]),
+        str_path(&command.payload, &["writeback_contract", "table_key"]),
+        if !campaign_id.is_empty() {
+            format!("campaign_{}_contacts", slug_for_key(&campaign_id))
+        } else {
+            String::new()
+        },
+    ]);
+    let runs_key = first_nonempty(&[
+        str_path(&command.payload, &["knowledge", "runs_table_key"]),
+        if !campaign_id.is_empty() {
+            format!("campaign_{}_research_runs", slug_for_key(&campaign_id))
+        } else {
+            String::new()
+        },
+    ]);
+    let runbook_id = first_nonempty(&[
+        str_path(&command.payload, &["writeback_contract", "runbook_id"]),
+        str_path(&command.payload, &["knowledge", "runbook_id"]),
+        if !campaign_id.is_empty() {
+            format!(
+                "business-os.outbound.{}.runbook.v1",
+                slug_for_key(&campaign_id)
+            )
+        } else {
+            String::new()
+        },
+    ]);
+    OutboundKnowledgeRefs {
+        domain,
+        companies_key,
+        contacts_key,
+        runs_key,
+        runbook_id,
+        campaign_id,
+        campaign_name,
+    }
+}
+
+fn outbound_company_research(
+    root: &Path,
+    command_id: &str,
+    command: &BusinessCommand,
+) -> anyhow::Result<ImportOutcome> {
+    let refs = outbound_refs(command);
+    anyhow::ensure!(
+        !refs.domain.is_empty() && !refs.companies_key.is_empty(),
+        "outbound company research requires Knowledge companies table"
+    );
+    let company = command.payload.get("company").unwrap_or(&Value::Null);
+    let company_id = first_nonempty(&[
+        str_path(&command.payload, &["writeback_contract", "stable_id_value"]),
+        str_path(company, &["id"]),
+        str_path(&command.client_context, &["company_id"]),
+        command.record_id.clone().unwrap_or_default(),
+    ]);
+    let title_name = str_path(&command.payload, &["title"])
+        .trim_start_matches("Unternehmensdaten recherchieren:")
+        .trim()
+        .to_string();
+    let company_name = first_nonempty(&[
+        str_path(company, &["name"]),
+        str_path(&command.payload, &["research_request", "company"]),
+        title_name,
+    ]);
+    anyhow::ensure!(
+        !company_id.is_empty(),
+        "outbound company research requires company_id"
+    );
+    anyhow::ensure!(
+        !company_name.is_empty(),
+        "outbound company research requires company name"
+    );
+    let country = first_nonempty(&[
+        str_path(company, &["country"]),
+        str_path(&command.payload, &["research_request", "country"]),
+        "DE".to_string(),
+    ]);
+    let website = str_path(company, &["website"]);
+    let existing_domain =
+        first_nonempty(&[str_path(company, &["domain"]), domain_from_url(&website)]);
+    let requested_fields = requested_research_fields(command);
+    let research = run_person_research(
+        root,
+        &company_name,
+        &country,
+        ResearchMode::NewRecord,
+        company_field_keys(&requested_fields),
+    )?;
+    let mut company_data = merge_json_objects(
+        command
+            .payload
+            .get("company")
+            .and_then(|value| value.get("company_data")),
+        Some(&research),
+    );
+    apply_company_research_fields(&mut company_data, &research);
+    let city = first_nonempty(&[
+        string_from_map(&company_data, "city"),
+        string_from_map(&company_data, "firma_ort"),
+        str_path(company, &["city"]),
+    ]);
+    let domain = first_nonempty(&[
+        string_from_map(&company_data, "domain"),
+        string_from_map(&company_data, "firma_domain"),
+        existing_domain,
+    ]);
+    let fit_score = if country_is_germany(&country) {
+        80
+    } else if !domain.is_empty() {
+        65
+    } else {
+        50
+    };
+    let now = now_ms() as i64;
+    let evidence = evidence_from_research(&research);
+    let row = serde_json::json!({
+        "company_id": company_id,
+        "campaign_id": refs.campaign_id,
+        "campaign_name": refs.campaign_name,
+        "company_name": company_name,
+        "website": website,
+        "domain": domain,
+        "city": city,
+        "country": country,
+        "qualification_status": "qualified",
+        "research_status": "researched",
+        "pipeline_status": first_nonempty(&[str_path(company, &["pipeline_status"]), "not_started".to_string()]),
+        "fit_score": fit_score,
+        "fit_status": "fit",
+        "requested_fields_json": serde_json::to_string(command.payload.pointer("/research_request/fields").unwrap_or(&Value::Array(Vec::new()))).unwrap_or_else(|_| "[]".to_string()),
+        "custom_instruction": str_path(&command.payload, &["research_request", "custom_instruction"]),
+        "company_data_json": serde_json::to_string(&Value::Object(company_data))?,
+        "evidence_json": serde_json::to_string(&evidence)?,
+        "updated_at_ms": now,
+    });
+    append_knowledge_rows(root, &refs.domain, &refs.companies_key, &[row])?;
+    append_run_status(
+        root,
+        &refs,
+        command_id,
+        command,
+        "company_research",
+        "completed",
+        now,
+    )?;
+    Ok(ImportOutcome {
+        collection: "knowledge_data_rows".to_string(),
+        definition_id: "outbound.company.research.v1".to_string(),
+        record_ids: vec![company_id],
+        records_count: 1,
+    })
+}
+
+fn outbound_contact_research(
+    root: &Path,
+    command_id: &str,
+    command: &BusinessCommand,
+) -> anyhow::Result<ImportOutcome> {
+    let refs = outbound_refs(command);
+    anyhow::ensure!(
+        !refs.domain.is_empty() && !refs.contacts_key.is_empty(),
+        "outbound contact research requires Knowledge contacts table"
+    );
+    let pipeline_id = first_nonempty(&[
+        str_path(&command.payload, &["pipeline_id"]),
+        str_path(&command.client_context, &["pipeline_id"]),
+        str_path(&command.payload, &["writeback_contract", "stable_id_value"]),
+        command.record_id.clone().unwrap_or_default(),
+    ]);
+    let company_id = first_nonempty(&[
+        str_path(&command.payload, &["company_id"]),
+        str_path(&command.client_context, &["company_id"]),
+        str_path(&command.payload, &["writeback_contract", "company_id"]),
+    ]);
+    let title_name = str_path(&command.payload, &["title"])
+        .trim_start_matches("Ansprechpartner recherchieren:")
+        .trim()
+        .to_string();
+    let company_name = first_nonempty(&[str_path(&command.payload, &["company_name"]), title_name]);
+    anyhow::ensure!(
+        !pipeline_id.is_empty(),
+        "outbound contact research requires pipeline_id"
+    );
+    anyhow::ensure!(
+        !company_name.is_empty(),
+        "outbound contact research requires company name"
+    );
+    let contact_fields = requested_contact_fields(command);
+    let research = run_person_research(
+        root,
+        &company_name,
+        "DE",
+        ResearchMode::UpdatePerson,
+        contact_field_keys(&contact_fields),
+    )?;
+    let contacts = contacts_from_research(&pipeline_id, &company_id, &company_name, &research);
+    anyhow::ensure!(
+        !contacts.is_empty(),
+        "ctox contact research found no public contacts for {company_name}"
+    );
+    let now = now_ms() as i64;
+    let rows = contacts
+        .iter()
+        .map(|contact| {
+            serde_json::json!({
+                "pipeline_id": pipeline_id,
+                "company_id": company_id,
+                "campaign_id": refs.campaign_id,
+                "campaign_name": refs.campaign_name,
+                "company_name": company_name,
+                "contact_id": contact.get("contact_id").and_then(Value::as_str).unwrap_or_default(),
+                "contact_name": contact.get("contact_name").and_then(Value::as_str).unwrap_or_default(),
+                "role": contact.get("role").and_then(Value::as_str).unwrap_or_default(),
+                "email": contact.get("email").and_then(Value::as_str).unwrap_or_default(),
+                "linkedin_url": contact.get("linkedin_url").and_then(Value::as_str).unwrap_or_default(),
+                "contact_research_status": "qualified",
+                "lead_status": "open",
+                "stage": "contact_qualified",
+                "contact_fields_json": serde_json::to_string(command.payload.get("contact_fields").unwrap_or(&Value::Array(Vec::new()))).unwrap_or_else(|_| "[]".to_string()),
+                "custom_instruction": str_path(&command.payload, &["custom_instruction"]),
+                "evidence_json": serde_json::to_string(contact.get("evidence").unwrap_or(&Value::Array(Vec::new()))).unwrap_or_else(|_| "[]".to_string()),
+                "updated_at_ms": now,
+            })
+        })
+        .collect::<Vec<_>>();
+    append_knowledge_rows(root, &refs.domain, &refs.contacts_key, &rows)?;
+    append_run_status(
+        root,
+        &refs,
+        command_id,
+        command,
+        "contact_research",
+        "completed",
+        now,
+    )?;
+    let record_ids = rows
+        .iter()
+        .filter_map(|row| str_or_none(row, &["contact_id"]))
+        .collect::<Vec<_>>();
+    Ok(ImportOutcome {
+        collection: "knowledge_data_rows".to_string(),
+        definition_id: "outbound.pipeline.contact_research.v1".to_string(),
+        records_count: rows.len(),
+        record_ids,
+    })
+}
+
+fn outbound_lead_qualification(
+    root: &Path,
+    command_id: &str,
+    command: &BusinessCommand,
+) -> anyhow::Result<ImportOutcome> {
+    let refs = outbound_refs(command);
+    let pipeline_id = first_nonempty(&[
+        str_path(&command.payload, &["pipeline_id"]),
+        str_path(&command.client_context, &["pipeline_id"]),
+        str_path(&command.payload, &["writeback_contract", "stable_id_value"]),
+        command.record_id.clone().unwrap_or_default(),
+    ]);
+    anyhow::ensure!(
+        !pipeline_id.is_empty(),
+        "outbound lead qualification requires pipeline_id"
+    );
+    let contact_rows = load_contact_rows_for_pipeline(root, &refs, &pipeline_id)?;
+    anyhow::ensure!(
+        !contact_rows.is_empty(),
+        "lead qualification requires contact rows in Knowledge for pipeline_id={pipeline_id}"
+    );
+    let now = now_ms() as i64;
+    let rows = contact_rows
+        .iter()
+        .filter(|row| contact_row_is_qualifiable(row))
+        .map(|row| {
+            let mut next = row.as_object().cloned().unwrap_or_default();
+            next.insert("lead_status".to_string(), Value::String("qualified".to_string()));
+            next.insert("outreach_status".to_string(), Value::String("qualified".to_string()));
+            next.insert("stage".to_string(), Value::String("lead_qualified".to_string()));
+            next.insert(
+                "lead_score".to_string(),
+                Value::Number(serde_json::Number::from(80)),
+            );
+            next.insert(
+                "lead_reason".to_string(),
+                Value::String(
+                    "Öffentlich belegbarer Ansprechpartner mit Rolle/Profil für den Campaign Scope vorhanden."
+                        .to_string(),
+                ),
+            );
+            next.insert(
+                "updated_at_ms".to_string(),
+                Value::Number(serde_json::Number::from(now)),
+            );
+            Value::Object(next)
+        })
+        .collect::<Vec<_>>();
+    anyhow::ensure!(
+        !rows.is_empty(),
+        "lead qualification found contacts, but none were qualifiable"
+    );
+    append_knowledge_rows(root, &refs.domain, &refs.contacts_key, &rows)?;
+    append_run_status(
+        root,
+        &refs,
+        command_id,
+        command,
+        "lead_qualification",
+        "completed",
+        now,
+    )?;
+    let record_ids = rows
+        .iter()
+        .filter_map(|row| str_or_none(row, &["contact_id"]))
+        .collect::<Vec<_>>();
+    Ok(ImportOutcome {
+        collection: "knowledge_data_rows".to_string(),
+        definition_id: "outbound.pipeline.lead_qualification.v1".to_string(),
+        records_count: rows.len(),
+        record_ids,
     })
 }
 
@@ -1153,6 +1542,487 @@ fn import_candidate_documents(
     })
 }
 
+fn import_outbound_companies(
+    root: &Path,
+    _conn: &Connection,
+    command_id: &str,
+    command: &BusinessCommand,
+    queue_task: Option<&channels::QueueTaskView>,
+) -> anyhow::Result<ImportOutcome> {
+    let url = str_path(&command.payload, &["source", "url"]);
+    anyhow::ensure!(
+        !url.trim().is_empty(),
+        "outbound import requires source.url"
+    );
+    let source_id = first_nonempty(&[
+        str_path(&command.payload, &["source_id"]),
+        str_path(&command.client_context, &["source_id"]),
+        command
+            .record_id
+            .clone()
+            .unwrap_or_else(|| command_id.to_string()),
+    ]);
+    let campaign_id = first_nonempty(&[
+        str_path(&command.payload, &["writeback_contract", "campaign_id"]),
+        str_path(&command.client_context, &["campaign_id"]),
+    ]);
+    let campaign_name = first_nonempty(&[
+        str_path(&command.payload, &["writeback_contract", "campaign_name"]),
+        str_path(&command.payload, &["title"]),
+    ]);
+    let domain = first_nonempty(&[
+        str_path(&command.payload, &["writeback_contract", "domain"]),
+        str_path(&command.payload, &["knowledge", "domain"]),
+        str_path(&command.client_context, &["knowledge_domain"]),
+    ]);
+    let table_key = first_nonempty(&[
+        str_path(&command.payload, &["writeback_contract", "table_key"]),
+        str_path(&command.payload, &["knowledge", "companies_table_key"]),
+        str_path(&command.client_context, &["knowledge_table_key"]),
+    ]);
+    anyhow::ensure!(
+        !domain.is_empty() && !table_key.is_empty(),
+        "outbound import requires a knowledge data writeback_contract"
+    );
+    ensure_outbound_knowledge_contract(
+        root,
+        command,
+        &domain,
+        &table_key,
+        &campaign_id,
+        &campaign_name,
+    )?;
+
+    let germany_only = outbound_import_germany_only(command);
+    let mut source = OUTBOUND_COMPANY_BROWSER_SCRIPT
+        .replace("__IMPORT_URL__", &serde_json::to_string(&url)?)
+        .replace(
+            "__GERMANY_ONLY__",
+            if germany_only { "true" } else { "false" },
+        );
+    source = source.replace("__MAX_ROWS__", "100");
+    let automation = crate::web_stack::run_browser_automation(
+        root,
+        &crate::web_stack::BrowserAutomationRequest {
+            dir: None,
+            timeout_ms: Some(180_000),
+            source,
+        },
+    )?;
+    anyhow::ensure!(
+        automation.get("ok").and_then(Value::as_bool) == Some(true),
+        "ctox browser automation failed: {}",
+        automation
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown browser automation error")
+    );
+    let rows_json = str_path(&automation, &["result", "rows_json"]);
+    let parsed_rows: Vec<Value> = serde_json::from_str(&rows_json)
+        .with_context(|| "browser automation returned invalid outbound rows_json")?;
+    anyhow::ensure!(
+        !parsed_rows.is_empty(),
+        "outbound importer did not extract any companies from {url}"
+    );
+
+    let now_ms = now_ms() as i64;
+    let mut knowledge_rows = Vec::new();
+    let mut record_ids = Vec::new();
+    for item in parsed_rows.into_iter().take(100) {
+        let name = first_nonempty(&[
+            str_path(&item, &["name"]),
+            str_path(&item, &["company_name"]),
+        ]);
+        if name.is_empty() {
+            continue;
+        }
+        let website = first_nonempty(&[str_path(&item, &["website"]), str_path(&item, &["href"])]);
+        let detail_url = str_path(&item, &["href"]);
+        let company_id = format!(
+            "co_{}",
+            &hex_sha256(format!("{campaign_id}:{name}:{website}:{detail_url}").as_bytes())[..16]
+        );
+        let country = first_nonempty(&[
+            str_path(&item, &["country"]),
+            if germany_only {
+                "Deutschland".to_string()
+            } else {
+                String::new()
+            },
+        ]);
+        let row = serde_json::json!({
+            "company_id": company_id,
+            "campaign_id": campaign_id,
+            "campaign_name": campaign_name,
+            "source_id": source_id,
+            "source_url": url,
+            "company_name": name,
+            "website": website,
+            "domain": domain_from_url(&website),
+            "detail_url": detail_url,
+            "booth": str_path(&item, &["booth"]),
+            "event": str_path(&item, &["event"]),
+            "city": str_path(&item, &["city"]),
+            "country": country,
+            "description": str_path(&item, &["description"]),
+            "qualification_status": "input",
+            "research_status": "",
+            "pipeline_status": "",
+            "imported_at_ms": now_ms,
+            "updated_at_ms": now_ms,
+            "raw_json": serde_json::to_string(&item).unwrap_or_else(|_| "{}".to_string()),
+        });
+        record_ids.push(company_id);
+        knowledge_rows.push(row);
+    }
+    anyhow::ensure!(
+        !knowledge_rows.is_empty(),
+        "outbound importer extracted rows but none had a company name"
+    );
+
+    let append_args = vec![
+        "data".to_string(),
+        "append".to_string(),
+        "--domain".to_string(),
+        domain.clone(),
+        "--key".to_string(),
+        table_key.clone(),
+        "--rows".to_string(),
+        serde_json::to_string(&knowledge_rows)?,
+    ];
+    let append_result = crate::knowledge::dispatch_capturing(root, &append_args)?;
+    anyhow::ensure!(
+        append_result.get("ok").and_then(Value::as_bool) == Some(true),
+        "knowledge data append failed: {}",
+        append_result
+    );
+
+    write_import_artifact(
+        root,
+        command_id,
+        "outbound_companies.json",
+        &serde_json::json!({
+            "command_id": command_id,
+            "queue_task_id": queue_task.map(|task| task.message_key.clone()),
+            "source_id": source_id,
+            "source_url": url,
+            "campaign_id": campaign_id,
+            "knowledge_domain": domain,
+            "knowledge_table_key": table_key,
+            "records_count": knowledge_rows.len(),
+            "records": knowledge_rows,
+            "automation": automation,
+        }),
+    )?;
+
+    Ok(ImportOutcome {
+        collection: "knowledge_data_rows".to_string(),
+        definition_id: "outbound.companies.v1".to_string(),
+        records_count: record_ids.len(),
+        record_ids,
+    })
+}
+
+fn ensure_outbound_knowledge_contract(
+    root: &Path,
+    command: &BusinessCommand,
+    domain: &str,
+    companies_key: &str,
+    campaign_id: &str,
+    campaign_name: &str,
+) -> anyhow::Result<()> {
+    let contacts_key = first_nonempty(&[
+        str_path(&command.payload, &["knowledge", "contacts_table_key"]),
+        format!("campaign_{}_contacts", slug_for_key(campaign_id)),
+    ]);
+    let runs_key = first_nonempty(&[
+        str_path(&command.payload, &["knowledge", "runs_table_key"]),
+        format!("campaign_{}_research_runs", slug_for_key(campaign_id)),
+    ]);
+    let runbook_id = first_nonempty(&[
+        str_path(&command.payload, &["writeback_contract", "runbook_id"]),
+        str_path(&command.payload, &["knowledge", "runbook_id"]),
+        format!(
+            "business-os.outbound.{}.runbook.v1",
+            slug_for_key(campaign_id)
+        ),
+    ]);
+    let skillbook_id = first_nonempty(&[
+        str_path(&command.payload, &["knowledge", "skillbook_id"]),
+        "business-os.outbound.skillbook.v1".to_string(),
+    ]);
+
+    ensure_knowledge_data_table(
+        root,
+        domain,
+        companies_key,
+        &format!("{campaign_name} · Unternehmen"),
+        "Outbound Campaign Firmen, Importjobs, Qualifikation und Unternehmens-Research.",
+    )?;
+    ensure_knowledge_data_table(
+        root,
+        domain,
+        &contacts_key,
+        &format!("{campaign_name} · Ansprechpartner"),
+        "Outbound Campaign Ansprechpartner- und Lead-Qualifikation.",
+    )?;
+    ensure_knowledge_data_table(
+        root,
+        domain,
+        &runs_key,
+        &format!("{campaign_name} · Research Runs"),
+        "Outbound Campaign Research-Auftraege, Status und CTOX Command-Referenzen.",
+    )?;
+
+    let _ = crate::knowledge::dispatch_capturing(
+        root,
+        &[
+            "skill".to_string(),
+            "add-skillbook".to_string(),
+            "--id".to_string(),
+            skillbook_id.clone(),
+            "--title".to_string(),
+            "Business OS Outbound Campaigns".to_string(),
+            "--version".to_string(),
+            "v1".to_string(),
+            "--mission".to_string(),
+            "Outbound Campaigns fuehren Firmenquellen ueber Unternehmensqualifikation, Ansprechpartner-Recherche und Lead-Qualifikation.".to_string(),
+            "--runtime-policy".to_string(),
+            "Nutze Knowledge DataFrames als einzige record-shaped Wissensquelle. Outbound speichert nur Workflow-State und Referenzen.".to_string(),
+            "--workflow-backbone".to_string(),
+            "source-import,company-research,pipeline-contact-research,lead-qualification".to_string(),
+            "--linked-runbooks".to_string(),
+            runbook_id.clone(),
+        ],
+    );
+    let _ = crate::knowledge::dispatch_capturing(
+        root,
+        &[
+            "skill".to_string(),
+            "add-runbook".to_string(),
+            "--id".to_string(),
+            runbook_id.clone(),
+            "--skillbook".to_string(),
+            skillbook_id.clone(),
+            "--title".to_string(),
+            format!("{campaign_name} Campaign Runbook"),
+            "--version".to_string(),
+            "v1".to_string(),
+            "--problem-domain".to_string(),
+            "outbound-campaign".to_string(),
+            "--status".to_string(),
+            "active".to_string(),
+            "--item-labels".to_string(),
+            "CAMPAIGN-SCOPE,DATAFRAMES,FUNNEL-RUNS".to_string(),
+        ],
+    );
+    let runbook_chunk = format!(
+        "Campaign: {campaign_name}\nCampaign ID: {campaign_id}\n\nRecord-shaped Knowledge:\n- Companies DataFrame: ctox knowledge data describe --domain {domain} --key {companies_key}\n- Contacts DataFrame: ctox knowledge data describe --domain {domain} --key {contacts_key}\n- Research Runs DataFrame: ctox knowledge data describe --domain {domain} --key {runs_key}\n\nFunnel:\n1. Importjobs anlegen, daraus Unternehmen extrahieren und nur Unternehmen in den Companies DataFrame schreiben.\n2. Unternehmensdaten recherchieren, belegen und Firmen qualifizieren.\n3. Erst nach Unternehmensqualifikation Ansprechpartner im Contacts DataFrame recherchieren.\n4. Ansprechpartner gegen Scope/ICP qualifizieren und erst dann als Lead markieren.\n\nGrenze: Vor Pipeline-Stufe keine Personen recherchieren und keine Outreach-Nachrichten erzeugen."
+    );
+    let _ = crate::knowledge::dispatch_capturing(
+        root,
+        &[
+            "skill".to_string(),
+            "add-item".to_string(),
+            "--id".to_string(),
+            format!("{runbook_id}.scope"),
+            "--runbook".to_string(),
+            runbook_id,
+            "--skillbook".to_string(),
+            skillbook_id,
+            "--label".to_string(),
+            "CAMPAIGN-SCOPE".to_string(),
+            "--title".to_string(),
+            "Campaign Scope und Datenvertrag".to_string(),
+            "--problem-class".to_string(),
+            "outbound-campaign-scope".to_string(),
+            "--chunk-text".to_string(),
+            runbook_chunk,
+            "--version".to_string(),
+            "v1".to_string(),
+            "--status".to_string(),
+            "active".to_string(),
+            "--skip-embedding".to_string(),
+        ],
+    );
+    Ok(())
+}
+
+fn ensure_knowledge_data_table(
+    root: &Path,
+    domain: &str,
+    key: &str,
+    title: &str,
+    description: &str,
+) -> anyhow::Result<()> {
+    let describe = crate::knowledge::dispatch_capturing(
+        root,
+        &[
+            "data".to_string(),
+            "describe".to_string(),
+            "--domain".to_string(),
+            domain.to_string(),
+            "--key".to_string(),
+            key.to_string(),
+        ],
+    );
+    if describe
+        .as_ref()
+        .ok()
+        .and_then(|payload| payload.get("ok"))
+        .and_then(Value::as_bool)
+        == Some(true)
+    {
+        return Ok(());
+    }
+    let create = crate::knowledge::dispatch_capturing(
+        root,
+        &[
+            "data".to_string(),
+            "create".to_string(),
+            "--domain".to_string(),
+            domain.to_string(),
+            "--key".to_string(),
+            key.to_string(),
+            "--source-system".to_string(),
+            "business-os.outbound".to_string(),
+            "--title".to_string(),
+            title.to_string(),
+            "--description".to_string(),
+            description.to_string(),
+        ],
+    )?;
+    anyhow::ensure!(
+        create.get("ok").and_then(Value::as_bool) == Some(true),
+        "knowledge data table create failed: {}",
+        create
+    );
+    Ok(())
+}
+
+fn slug_for_key(value: &str) -> String {
+    let mut out = String::new();
+    for ch in value.chars().flat_map(|ch| ch.to_lowercase()) {
+        if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' || ch == '.' {
+            out.push(ch);
+        } else if !out.ends_with('_') {
+            out.push('_');
+        }
+        if out.len() >= 80 {
+            break;
+        }
+    }
+    let trimmed = out.trim_matches('_').to_string();
+    if trimmed.is_empty() {
+        "campaign".to_string()
+    } else {
+        trimmed
+    }
+}
+
+fn outbound_import_germany_only(command: &BusinessCommand) -> bool {
+    let haystack = serde_json::to_string(&serde_json::json!({
+        "filter_prompt": command.payload.get("filter_prompt"),
+        "source_filter_prompt": command.payload.get("source").and_then(|source| source.get("filter_prompt")),
+        "definition": command.payload.get("definition"),
+    }))
+    .unwrap_or_default()
+    .to_ascii_lowercase();
+    haystack.contains("deutschland")
+        || haystack.contains("germany")
+        || haystack.contains("\"de\"")
+        || haystack.contains("sitz in deutschland")
+        || haystack.contains("deutsche unternehmen")
+}
+
+fn domain_from_url(url: &str) -> String {
+    let value = url.trim();
+    let without_scheme = value
+        .strip_prefix("https://")
+        .or_else(|| value.strip_prefix("http://"))
+        .unwrap_or(value);
+    let host = without_scheme.split('/').next().unwrap_or("").trim();
+    host.trim_start_matches("www.").to_ascii_lowercase()
+}
+
+const OUTBOUND_COMPANY_BROWSER_SCRIPT: &str = r#"
+const importUrl = __IMPORT_URL__;
+const germanyOnly = __GERMANY_ONLY__;
+const maxRows = __MAX_ROWS__;
+
+await page.goto(importUrl, { waitUntil: "networkidle", timeout: 45000 });
+await page.waitForTimeout(1800);
+
+async function clickGermanyFilter() {
+  if (!germanyOnly) return;
+  await page.evaluate(() => {
+    const link = Array.from(document.querySelectorAll(".search-filters-countries a[data-value]"))
+      .find((item) => /Deutschland|Germany/i.test(item.textContent || ""));
+    if (link) link.click();
+  });
+  await page.waitForTimeout(2600);
+}
+
+function normalize(text) {
+  return String(text || "").replace(/\s+/g, " ").trim();
+}
+
+async function collectVisible() {
+  return await page.evaluate((onlyGermany) => {
+    const normalize = (text) => String(text || "").replace(/\s+/g, " ").trim();
+    return Array.from(document.querySelectorAll("a.teaser")).map((el) => {
+      const lines = String(el.innerText || "")
+        .split(/\n+/)
+        .map((line) => normalize(line))
+        .filter(Boolean);
+      const countryIndex = lines.findIndex((line) => /^(Deutschland|Germany)$/i.test(line));
+      const event = countryIndex >= 2 ? lines[countryIndex - 1] : "";
+      const name = countryIndex >= 2 ? lines[countryIndex - 2] : (lines[1] || lines[0] || "");
+      const booth = countryIndex >= 2 ? lines.slice(0, countryIndex - 2).join(", ") : "";
+      const country = countryIndex >= 0 ? lines[countryIndex] : (onlyGermany ? "Deutschland" : "");
+      const description = countryIndex >= 0 ? lines.slice(countryIndex + 1).join(" ") : lines.slice(2).join(" ");
+      const href = el.href || el.getAttribute("href") || "";
+      return { name, company_name: name, booth, event, country, description, href, website: href };
+    }).filter((row) => row.name && (!onlyGermany || /^(Deutschland|Germany)$/i.test(row.country)));
+  }, germanyOnly);
+}
+
+async function clickSortCharacter(letter) {
+  return await page.evaluate((value) => {
+    const link = Array.from(document.querySelectorAll(".search-filters-sorting-characters a[data-value]"))
+      .find((item) => String(item.dataset.value || "") === value);
+    if (!link) return false;
+    link.click();
+    return true;
+  }, letter);
+}
+
+await clickGermanyFilter();
+
+const seen = new Map();
+async function addVisibleRows() {
+  const rows = await collectVisible();
+  for (const row of rows) {
+    const key = `${row.name}|${row.href}`;
+    if (!seen.has(key)) seen.set(key, row);
+    if (seen.size >= maxRows) break;
+  }
+}
+
+await addVisibleRows();
+const letters = ["B","C","D","E","F","G","H","I","J","K","L","M","N","O","P","Q","R","S","T","U","V","W","X","Y","Z"];
+for (const letter of letters) {
+  if (seen.size >= maxRows) break;
+  const clicked = await clickSortCharacter(letter);
+  if (!clicked) continue;
+  await page.waitForTimeout(1800);
+  await addVisibleRows();
+}
+
+const rows = Array.from(seen.values()).slice(0, maxRows);
+return { count: rows.length, rows_json: JSON.stringify(rows) };
+"#;
+
 #[derive(Default)]
 struct ParsedJob {
     source_name: String,
@@ -1981,6 +2851,510 @@ fn micro_meta(document: &Html, itemprop: &str) -> Option<String> {
                 (!text.is_empty()).then_some(text)
             })
     })
+}
+
+fn requested_research_fields(command: &BusinessCommand) -> Vec<String> {
+    command
+        .payload
+        .get("research_request")
+        .and_then(|value| value.get("fields"))
+        .and_then(Value::as_array)
+        .map(|fields| {
+            fields
+                .iter()
+                .filter_map(|field| {
+                    field
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .or_else(|| field.as_str())
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(ToOwned::to_owned)
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn requested_contact_fields(command: &BusinessCommand) -> Vec<String> {
+    command
+        .payload
+        .get("contact_fields")
+        .and_then(Value::as_array)
+        .map(|fields| {
+            fields
+                .iter()
+                .filter_map(|field| {
+                    field
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .or_else(|| field.as_str())
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(ToOwned::to_owned)
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn company_field_keys(fields: &[String]) -> Vec<FieldKey> {
+    let mut out = Vec::new();
+    for field in fields {
+        let mapped = match field.as_str() {
+            "city" => Some(FieldKey::FirmaOrt),
+            "postal_code" => Some(FieldKey::FirmaPlz),
+            "street" => Some(FieldKey::FirmaAnschrift),
+            "email" => Some(FieldKey::FirmaEmail),
+            "domain" => Some(FieldKey::FirmaDomain),
+            "industry_wz" => Some(FieldKey::WzCode),
+            "revenue_eur" => Some(FieldKey::Umsatz),
+            "employee_count" => Some(FieldKey::Mitarbeiter),
+            _ => None,
+        };
+        if let Some(key) = mapped {
+            if !out.contains(&key) {
+                out.push(key);
+            }
+        }
+    }
+    if out.is_empty() {
+        out.extend([
+            FieldKey::FirmaAnschrift,
+            FieldKey::FirmaPlz,
+            FieldKey::FirmaOrt,
+            FieldKey::FirmaEmail,
+            FieldKey::FirmaDomain,
+            FieldKey::WzCode,
+            FieldKey::Umsatz,
+            FieldKey::Mitarbeiter,
+        ]);
+    }
+    out
+}
+
+fn contact_field_keys(fields: &[String]) -> Vec<FieldKey> {
+    let mut out = Vec::new();
+    let mut push = |key: FieldKey| {
+        if !out.contains(&key) {
+            out.push(key);
+        }
+    };
+    for field in fields {
+        match field.as_str() {
+            "contact.people" => {
+                push(FieldKey::PersonVorname);
+                push(FieldKey::PersonNachname);
+                push(FieldKey::PersonFunktion);
+                push(FieldKey::PersonLinkedin);
+                push(FieldKey::PersonXing);
+            }
+            "contact.role" | "contact.fit" => {
+                push(FieldKey::PersonFunktion);
+                push(FieldKey::PersonPosition);
+            }
+            "contact.email" => push(FieldKey::PersonEmail),
+            "contact.linkedin" => {
+                push(FieldKey::PersonLinkedin);
+                push(FieldKey::PersonXing);
+            }
+            "contact.phone" => push(FieldKey::PersonTelefon),
+            value if value.starts_with("contact_custom_") => {
+                push(FieldKey::PersonVorname);
+                push(FieldKey::PersonNachname);
+                push(FieldKey::PersonFunktion);
+                push(FieldKey::PersonPosition);
+                push(FieldKey::PersonLinkedin);
+                push(FieldKey::PersonXing);
+            }
+            _ => {}
+        }
+    }
+    if out.is_empty() {
+        out.extend([
+            FieldKey::PersonVorname,
+            FieldKey::PersonNachname,
+            FieldKey::PersonFunktion,
+            FieldKey::PersonPosition,
+            FieldKey::PersonEmail,
+            FieldKey::PersonTelefon,
+            FieldKey::PersonLinkedin,
+            FieldKey::PersonXing,
+        ]);
+    }
+    out
+}
+
+fn run_person_research(
+    root: &Path,
+    company: &str,
+    country: &str,
+    mode: ResearchMode,
+    fields: Vec<FieldKey>,
+) -> anyhow::Result<Value> {
+    let country = Country::from_iso(country).unwrap_or(Country::De);
+    ctox_web_stack::run_ctox_person_research_tool(
+        root,
+        &PersonResearchRequest {
+            company: company.to_string(),
+            country,
+            mode,
+            fields,
+            include_private: Vec::new(),
+            workspace: None,
+            persist_workspace: false,
+        },
+    )
+}
+
+fn merge_json_objects(a: Option<&Value>, b: Option<&Value>) -> Map<String, Value> {
+    let mut out = Map::new();
+    if let Some(obj) = a.and_then(Value::as_object) {
+        for (key, value) in obj {
+            out.insert(key.clone(), value.clone());
+        }
+    }
+    if let Some(obj) = b.and_then(Value::as_object) {
+        for (key, value) in obj {
+            out.insert(key.clone(), value.clone());
+        }
+    }
+    out
+}
+
+fn apply_company_research_fields(data: &mut Map<String, Value>, research: &Value) {
+    for (web_key, outbound_key) in [
+        ("firma_anschrift", "street"),
+        ("firma_plz", "postal_code"),
+        ("firma_ort", "city"),
+        ("firma_email", "email"),
+        ("firma_domain", "domain"),
+        ("wz_code", "industry_wz"),
+        ("umsatz", "revenue_eur"),
+        ("mitarbeiter", "employee_count"),
+    ] {
+        if let Some(value) = research_field_value(research, web_key) {
+            data.insert(outbound_key.to_string(), Value::String(value.clone()));
+            data.insert(web_key.to_string(), Value::String(value));
+        }
+    }
+}
+
+fn research_field_value(research: &Value, field: &str) -> Option<String> {
+    research
+        .get("fields")
+        .and_then(|fields| fields.get(field))
+        .and_then(|entry| entry.get("value"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn evidence_from_research(research: &Value) -> Value {
+    let mut evidence = Vec::new();
+    if let Some(fields) = research.get("fields").and_then(Value::as_object) {
+        for (field, entry) in fields {
+            if let Some(candidates) = entry.get("candidates").and_then(Value::as_array) {
+                for candidate in candidates.iter().take(6) {
+                    let mut item = candidate.as_object().cloned().unwrap_or_default();
+                    item.insert("field".to_string(), Value::String(field.clone()));
+                    evidence.push(Value::Object(item));
+                }
+            } else if entry.get("value").is_some() {
+                let mut item = Map::new();
+                item.insert("field".to_string(), Value::String(field.clone()));
+                item.insert(
+                    "value".to_string(),
+                    entry.get("value").cloned().unwrap_or(Value::Null),
+                );
+                if let Some(url) = entry.get("source_url").cloned() {
+                    item.insert("source_url".to_string(), url);
+                }
+                evidence.push(Value::Object(item));
+            }
+        }
+    }
+    Value::Array(evidence)
+}
+
+fn contacts_from_research(
+    pipeline_id: &str,
+    company_id: &str,
+    company_name: &str,
+    research: &Value,
+) -> Vec<Value> {
+    let mut grouped: BTreeMap<String, Map<String, Value>> = BTreeMap::new();
+    for (field, target) in [
+        ("person_vorname", "first_name"),
+        ("person_nachname", "last_name"),
+        ("person_funktion", "role"),
+        ("person_position", "role"),
+        ("person_email", "email"),
+        ("person_telefon", "phone"),
+        ("person_linkedin", "linkedin_url"),
+        ("person_xing", "xing_url"),
+    ] {
+        let Some(candidates) = research
+            .get("fields")
+            .and_then(|fields| fields.get(field))
+            .and_then(|entry| entry.get("candidates"))
+            .and_then(Value::as_array)
+        else {
+            continue;
+        };
+        for candidate in candidates.iter().take(8) {
+            let value = candidate
+                .get("value")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .unwrap_or("");
+            if value.is_empty() {
+                continue;
+            }
+            let source_url = candidate
+                .get("source_url")
+                .and_then(Value::as_str)
+                .or_else(|| candidate.get("hit_url").and_then(Value::as_str))
+                .unwrap_or(value);
+            let key = source_url.to_string();
+            let entry = grouped.entry(key).or_default();
+            entry
+                .entry(target.to_string())
+                .or_insert_with(|| Value::String(value.to_string()));
+            let evidence = entry
+                .entry("evidence".to_string())
+                .or_insert_with(|| Value::Array(Vec::new()));
+            if let Value::Array(items) = evidence {
+                let mut ev = candidate.as_object().cloned().unwrap_or_default();
+                ev.insert("field".to_string(), Value::String(field.to_string()));
+                items.push(Value::Object(ev));
+            }
+        }
+    }
+    let mut contacts = Vec::new();
+    let mut by_identity: BTreeMap<String, Map<String, Value>> = BTreeMap::new();
+    for (_, mut item) in grouped {
+        let first = item
+            .get("first_name")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        let last = item
+            .get("last_name")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        let inferred_name = infer_name_from_profile_url(
+            item.get("linkedin_url")
+                .and_then(Value::as_str)
+                .or_else(|| item.get("xing_url").and_then(Value::as_str))
+                .unwrap_or(""),
+        );
+        let contact_name = first_nonempty(&[
+            [first, last]
+                .iter()
+                .copied()
+                .filter(|part| !part.is_empty())
+                .collect::<Vec<_>>()
+                .join(" "),
+            inferred_name,
+        ]);
+        let role = item
+            .get("role")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let linkedin = item
+            .get("linkedin_url")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if contact_name.is_empty() && role.is_empty() && linkedin.is_empty() {
+            continue;
+        }
+        let contact_id = format!(
+            "contact_{}",
+            &hex_sha256(
+                format!("{pipeline_id}:{company_id}:{contact_name}:{role}:{linkedin}").as_bytes()
+            )[..16]
+        );
+        item.insert("contact_id".to_string(), Value::String(contact_id));
+        item.insert(
+            "company_name".to_string(),
+            Value::String(company_name.to_string()),
+        );
+        item.insert(
+            "contact_name".to_string(),
+            Value::String(contact_name.clone()),
+        );
+        let identity = first_nonempty(&[
+            linkedin.clone(),
+            item.get("xing_url")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            normalize_whitespace(&format!("{contact_name} {role}")),
+        ]);
+        by_identity.entry(identity).or_insert(item);
+    }
+    for (_, item) in by_identity {
+        contacts.push(Value::Object(item));
+    }
+    contacts
+}
+
+fn infer_name_from_profile_url(url: &str) -> String {
+    let Ok(parsed) = url::Url::parse(url) else {
+        return String::new();
+    };
+    let Some(segment) = parsed
+        .path_segments()
+        .and_then(|segments| segments.filter(|segment| !segment.is_empty()).last())
+    else {
+        return String::new();
+    };
+    segment
+        .trim_matches('/')
+        .split('-')
+        .filter(|part| !part.chars().all(|ch| ch.is_ascii_digit()))
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => format!("{}{}", first.to_uppercase(), chars.as_str()),
+                None => String::new(),
+            }
+        })
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn normalize_whitespace(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn load_contact_rows_for_pipeline(
+    root: &Path,
+    refs: &OutboundKnowledgeRefs,
+    pipeline_id: &str,
+) -> anyhow::Result<Vec<Value>> {
+    let payload = crate::knowledge::dispatch_capturing(
+        root,
+        &[
+            "data".to_string(),
+            "select".to_string(),
+            "--domain".to_string(),
+            refs.domain.clone(),
+            "--key".to_string(),
+            refs.contacts_key.clone(),
+            "--where".to_string(),
+            format!("pipeline_id={pipeline_id}"),
+            "--limit".to_string(),
+            "200".to_string(),
+        ],
+    )?;
+    Ok(payload
+        .get("rows")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default())
+}
+
+fn contact_row_is_qualifiable(row: &Value) -> bool {
+    !first_nonempty(&[
+        str_path(row, &["contact_name"]),
+        str_path(row, &["role"]),
+        str_path(row, &["linkedin_url"]),
+        str_path(row, &["email"]),
+    ])
+    .is_empty()
+}
+
+fn append_knowledge_rows(
+    root: &Path,
+    domain: &str,
+    key: &str,
+    rows: &[Value],
+) -> anyhow::Result<()> {
+    let payload = crate::knowledge::dispatch_capturing(
+        root,
+        &[
+            "data".to_string(),
+            "append".to_string(),
+            "--domain".to_string(),
+            domain.to_string(),
+            "--key".to_string(),
+            key.to_string(),
+            "--rows".to_string(),
+            serde_json::to_string(rows)?,
+        ],
+    )?;
+    anyhow::ensure!(
+        payload.get("ok").and_then(Value::as_bool) == Some(true),
+        "knowledge data append failed: {}",
+        payload
+    );
+    Ok(())
+}
+
+fn append_run_status(
+    root: &Path,
+    refs: &OutboundKnowledgeRefs,
+    command_id: &str,
+    command: &BusinessCommand,
+    run_type: &str,
+    status: &str,
+    now_ms: i64,
+) -> anyhow::Result<()> {
+    if refs.runs_key.is_empty() {
+        return Ok(());
+    }
+    let run_id = first_nonempty(&[
+        str_path(&command.payload, &["run_id"]),
+        command_id.to_string(),
+    ]);
+    append_knowledge_rows(
+        root,
+        &refs.domain,
+        &refs.runs_key,
+        &[serde_json::json!({
+            "run_id": run_id,
+            "command_id": command_id,
+            "campaign_id": refs.campaign_id,
+            "runbook_id": refs.runbook_id,
+            "record_id": command.record_id.clone().unwrap_or_default(),
+            "company_id": str_path(&command.client_context, &["company_id"]),
+            "pipeline_id": str_path(&command.client_context, &["pipeline_id"]),
+            "run_type": run_type,
+            "status": status,
+            "ctox_status": status,
+            "updated_at_ms": now_ms,
+            "created_at_ms": now_ms,
+        })],
+    )
+}
+
+fn string_from_map(map: &Map<String, Value>, key: &str) -> String {
+    map.get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or("")
+        .to_string()
+}
+
+fn str_or_none(value: &Value, path: &[&str]) -> Option<String> {
+    let value = str_path(value, path);
+    (!value.is_empty()).then_some(value)
+}
+
+fn country_is_germany(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "de" | "deu" | "germany" | "deutschland" | "bundesrepublik deutschland"
+    )
 }
 
 fn str_path(value: &Value, path: &[&str]) -> String {

@@ -1,5 +1,6 @@
 import { getDatabase } from './businessOsDataSource.js';
 import { tool, z } from './ctoxCommandAdapter.js';
+import { getActiveMatchingDefinition } from './matchingDefinition.js';
 
 function clamp01(value) {
   const num = Number(value);
@@ -96,16 +97,23 @@ export async function computeRequirementMatch({
   if (!objectText) throw new Error('Object content is empty');
 
   const matchId = `${sourceId || requirement.sourceId || 'requirement'}|${requirementId}|${objectId}`;
+  const definition = getActiveMatchingDefinition();
+  const definitionId = definition?.id || 'generic_matching.v1';
+  const schemaVersion = definition?.engine?.version || 'generic_matching.v1';
   const rawResponse = await llmChat({
-    agent: 'matcher',
+    agent: 'planner',
     messages: [
       {
         role: 'system',
-        content: 'You are a deterministic requirement matching engine. Return only valid JSON.'
+        content: [
+          definition.prompts?.system,
+          definition.prompts?.domainSystem,
+          `Active matching definition: ${definitionId}`
+        ].filter(Boolean).join('\n')
       },
       {
         role: 'user',
-        content: buildMatchPrompt(requirementText, objectText)
+        content: buildMatchPrompt(requirementText, objectText, definition)
       }
     ]
   }, {
@@ -117,6 +125,8 @@ export async function computeRequirementMatch({
       action: 'match',
       requirementId: requirementId,
       objectId: objectId,
+      definitionId,
+      schemaVersion,
       output_collection: 'matching_results'
     }
   });
@@ -131,6 +141,8 @@ export async function computeRequirementMatch({
     if (!db.matches) throw new Error('matching results collection not available');
     await db.matches.atomicUpsert({
       id: matchId,
+      definitionId,
+      schemaVersion,
       sourceId: sourceId || requirement.sourceId || '',
       requirementId,
       objectId,
@@ -144,22 +156,28 @@ export async function computeRequirementMatch({
       interview: { attendees: [], reminders: [] },
       events: [{
         type: 'match.created',
-        payload: { requirementId: requirementId, objectId: objectId, itemsCount: items.length },
+        payload: { requirementId: requirementId, objectId: objectId, definitionId, schemaVersion, itemsCount: items.length },
         at: nowIso
       }],
-      items: items.map((item, index) => ({
-        ...item,
-        id: `${matchId}|${item.requirementId || `REQ-${index + 1}`}`,
-        sourceId: sourceId || requirement.sourceId || '',
-        requirementId,
-        objectId,
-        requirementId: item.requirementId || `REQ-${index + 1}`,
-        createdAt: nowIso,
-        updatedAt: nowIso,
-        priorityKey: prioritySortKey(item.priority),
-        matchLevelKey: matchLevelSortKey(item.matchLevel),
-        matchScoreKey: Math.round(clamp01(item.matchScore) * 100)
-      })),
+      items: items.map((item, index) => {
+        const itemRequirementId = item.requirementId || `REQ-${index + 1}`;
+        return {
+          ...item,
+          id: `${matchId}|${itemRequirementId}`,
+          definitionId,
+          schemaVersion,
+          sourceId: sourceId || requirement.sourceId || '',
+          matchRequirementId: requirementId,
+          matchObjectId: objectId,
+          objectId,
+          requirementId: itemRequirementId,
+          createdAt: nowIso,
+          updatedAt: nowIso,
+          priorityKey: prioritySortKey(item.priority),
+          matchLevelKey: matchLevelSortKey(item.matchLevel),
+          matchScoreKey: Math.round(clamp01(item.matchScore) * 100)
+        };
+      }),
       createdAt: nowIso,
       updatedAt: nowIso,
       activeKey: 1
@@ -262,7 +280,9 @@ function buildRequirementText(requirement, requirementSource) {
     fieldBlock('Zusammenfassung', requirement?.summary),
     fieldBlock('Über die Organisation', parsed.aboutSource || requirement?.aboutSource),
     fieldBlock('Anforderung / Rolle', parsed.aboutRole || requirement?.aboutRole || requirementSource?.rawText),
+    fieldBlock('Aufgaben', parsed.responsibilities || requirement?.responsibilities),
     fieldBlock('Muss-Kriterien', parsed.objectRequirements || requirement?.objectRequirements),
+    fieldBlock('Anforderungen Liste', parsed.requirements || requirement?.requirements),
     fieldBlock('Kann-Kriterien', arrayText(parsed.benefits || requirement?.benefits)),
     fieldBlock('Rohtext', requirementSource?.rawText)
   ];
@@ -271,6 +291,8 @@ function buildRequirementText(requirement, requirementSource) {
 
 function buildObjectText(object) {
   const additional = Array.isArray(object?.additional) ? object.additional : [];
+  const topLevelEducation = Array.isArray(object?.education) ? object.education : [];
+  const topLevelExperience = Array.isArray(object?.experience) ? object.experience : [];
   const additionalText = additional
     .map((entry) => {
       const value = typeof entry?.value === 'string' ? entry.value : JSON.stringify(entry?.value || '');
@@ -285,6 +307,22 @@ function buildObjectText(object) {
     fieldBlock('Ziel / Wunsch', object?.desiredPosition),
     fieldBlock('Region', object?.region || object?.location),
     fieldBlock('Abschluss', object?.highestDegree || object?.degree),
+    fieldBlock('Ausbildung', topLevelEducation.map((entry) => [
+      entry?.degree,
+      entry?.major,
+      entry?.institution,
+      entry?.location,
+      [entry?.start_date, entry?.end_date].filter(Boolean).join(' - '),
+      ...(Array.isArray(entry?.details) ? entry.details : [])
+    ].filter(Boolean).join(' - '))),
+    fieldBlock('Berufserfahrung', topLevelExperience.map((entry) => [
+      entry?.job_title || entry?.requirement_title,
+      entry?.employer,
+      entry?.location,
+      [entry?.start_date, entry?.end_date].filter(Boolean).join(' - '),
+      ...(Array.isArray(entry?.job_description) ? entry.job_description : []),
+      ...(Array.isArray(entry?.requirement_description) ? entry.requirement_description : [])
+    ].filter(Boolean).join(' - '))),
     fieldBlock('Skills', arrayText(object?.skills)),
     fieldBlock('Sprachen', arrayText(object?.languages?.map((lang) => [lang.code, lang.level].filter(Boolean).join(' ')))),
     fieldBlock('Zusammenfassung', object?.summary || object?.objectText || object?.rawText),
@@ -293,60 +331,203 @@ function buildObjectText(object) {
   return parts.filter(Boolean).join('\n\n').trim();
 }
 
-function buildMatchPrompt(requirementText, objectText) {
+function buildMatchPrompt(requirementText, objectText, definition = getActiveMatchingDefinition()) {
+  const promptDef = definition?.prompts || {};
+  const sourceTextLabel = promptDef.sourceTextLabel || 'Source';
+  const objectTextLabel = promptDef.objectTextLabel || 'Object';
+  const task = promptDef.task || 'Compare the source record with the object record and produce structured match items.';
   return `
-Vergleiche eine strukturierte Anforderung mit einem strukturierten Objekt.
+Active matching definition:
+- id: ${definition?.id || 'generic_matching.v1'}
+- title: ${definition?.title || 'Generic Matching'}
+- engine: ${definition?.engine?.version || 'generic_matching.v1'}
 
-Antworte nur mit einem JSON-Objekt:
+Domain setup:
+${promptDef.domainSystem || 'You are a generic matching engine.'}
+
+Your task:
+${task}
+
+Output format:
+You MUST respond with a single valid JSON object with the following structure:
 {
   "items": [
     {
-      "requirementId": "REQ-1",
+      "requirementId": "string",
       "title": "string",
       "dimension": "education | experience | skill | language | other",
       "priority": "base | performance | enthusiasm",
       "matchLevel": "full | partial | none",
-      "matchScore": 0.0,
-      "requirementSnippet": "string",
-      "objectSnippet": "string",
+      "matchScore": number,
+      "jobSnippet": "string",
+      "cvSnippet": "string",
       "explanation": "string"
     }
   ]
 }
 
-Regeln:
-- Keine weiteren JSON-Keys.
-- Leite Anforderungen nur aus der Anforderung ab.
-- Nutze Evidenz aus beiden Seiten.
-- matchScore ist 0.0 bis 1.0.
-- Schreibe explanation in der Sprache der Anforderung.
+IMPORTANT RULE (NO SCHEMA CHANGES):
+Do NOT add any new JSON keys. The output format must remain EXACTLY as defined above.
 
-ANFORDERUNG:
-<<<REQUIREMENT_START>>>
+Core scoring principles (IMPORTANT):
+1) Studentische Tätigkeiten vs. echte Berufserfahrung (ANTI-OVER-SCORING):
+- Treat student roles ("Werkstudent", "Praktikum", "Hiwi", "studentische Hilfskraft", "Abschlussarbeit", "Trainee/Intern") as valuable but NOT equivalent to full professional experience.
+- If the requirement is explicitly "Berufserfahrung X Jahre" or "mehrjährige Berufserfahrung":
+  - Student work can support PARTIAL fulfillment, but must be capped.
+  - Default cap for student-only evidence: matchScore max 0.55 for that requirement, unless there is also clear non-student professional experience of Thesis Works that exactly match the topic.
+  - If student work is very long and very relevant (e.g., >18–24 months highly relevant, clear responsibilities, tools, outcomes), allow up to 0.65 — still not "full" unless there is actual post-study professional employment in similar scope.
+- If the requirement explicitly accepts student background (e.g., "erste praktische Erfahrung", "Praktika/Werkstudententätigkeit willkommen", "Einsteiger"):
+  - Student work may score higher and can become "full" if it matches the described expectations.
+- Do NOT harshly penalize missing professional years if the role is junior/entry: keep matchScore in a fair partial range (e.g., 0.45–0.70) depending on relevance and recency.
+
+2) Abgeschlossenes Studium vs. kurz vor Abschluss (NEAR-COMPLETION RULE):
+- If a base requirement is "abgeschlossenes Studium" (or equivalent) and the CV clearly indicates the candidate is close to completion (e.g., "in den letzten Zügen", "Abschluss in MM/YYYY", "Masterarbeit/Bachelorarbeit läuft", "alle Module abgeschlossen", "Graduation expected"):
+  - Treat it as largely fulfilled: matchScore should be 0.80–0.90 by default.
+  - Use "partial" (not "none") unless the job explicitly requires the degree already in hand by start date AND the CV timing clearly conflicts.
+- If the job requires degree "zwingend bei Eintritt/Start" or "Urkunde erforderlich" and the candidate finishes later than the stated start:
+  - Score lower and consider adding an "availability" conflict item only if the timing conflict is CLEAR.
+
+3) Overqualification / Level & Scope sanity (NO MASTER-FOR-FACHARBEITER):
+- Never implicitly assume that a higher degree automatically improves fit for roles that are clearly non-academic or shopfloor/clerical unless the job explicitly welcomes it.
+- If the job is clearly a Facharbeiter/Sachbearbeiter/Assistant/Techniker role with no study requirement and the CV shows a clear high-academic/high-seniority profile:
+  - Do NOT inflate matchScore on education items just because the candidate has a Master.
+  - Instead, consider a "level_scope" conflict item ONLY if the incompatibility is CLEAR (see conflict rules), otherwise keep scoring neutral.
+- If candidate qualifies on skills but is likely over-scoped, reflect this via:
+  - lower matchScore on "role-level fit" related items (dimension "other" via normal requirement items if the job states level expectations),
+  - and/or a conflict item when clearly inferable (see section A: level_scope).
+
+4) Automotive leadership reality check (PROJECT LEADERSHIP ≠ PEOPLE MANAGEMENT):
+- In Automotive contexts, do NOT treat "Projektleitung/Teilprojektleitung/Project Lead" as "Führungskraft" unless people management is explicitly stated.
+- For leadership requirements:
+  - If the job asks for "Führungskraft", "disziplinarische Führung", "Personalverantwortung", "Teamleitung", "Line Manager":
+    - Only score "full" if the CV shows explicit people management (team size, direct reports, hiring, disciplinary leadership, performance reviews, budget responsibility).
+    - Project leadership without disciplinary leadership should be "partial" (often 0.45–0.70 depending on strength).
+  - If the job asks for "Projektleitung" (without explicit disciplinary leadership):
+    - Strong project leadership evidence can be "full".
+- Also apply seniority plausibility:
+  - If the job expects true leadership experience and the CV indicates clear Berufseinsteiger/junior profile, do NOT score high; keep it partial/none as appropriate.
+
+5) Verfügbarkeit ambiguity (START DATE vs TRAVEL FLEXIBILITY):
+- Distinguish two different meanings:
+  A) "kurzfristige Verfügbarkeit" meaning: candidate can START quickly (notice period, start date).
+  B) "kurzfristig verfügbar" meaning: candidate can be sent on short-notice travel/assignments, flexibility for deployment.
+- When extracting requirements from the job:
+  - Create separate items if both meanings appear or are strongly implied (e.g., "Start ASAP" AND "Reisebereitschaft kurzfristig").
+- Scoring:
+  - If job focuses on start date and CV provides notice period/start date: score based on that.
+  - If job focuses on travel flexibility and CV provides travel willingness/constraints: score based on that.
+  - If the job wording is ambiguous and CV does not clarify, avoid over-penalizing: keep a moderate partial score (e.g., 0.50–0.70) and explain the ambiguity positively.
+
+Base-factor conflict ITEMS (titles are used as keys by the UI):
+In addition to normal requirement items, you MUST run the following 8 base-factor conflict checks.
+If (and only if) a CLEAR conflict is inferable from job description + CV, you MUST add an extra item with:
+- priority: "base"
+- dimension: "other"
+- title: EXACTLY one of these strings (must match character-by-character):
+  1) "level_scope"
+  2) "compensation_band"
+  3) "location_work_model"
+  4) "career_path"
+  5) "domain_industry"
+  6) "role_definition"
+  7) "availability"
+  8) "eligibility_restriction"
+
+These special conflict items MUST ONLY appear when there is a conflict. If no conflict is clearly inferable, OMIT them completely.
+They are metadata items for UI rendering; they still must use the normal fields.
+
+How to score these conflict items:
+- matchScore MUST remain a normal 0.0..1.0 score like any other item.
+- Set matchScore to reflect the SEVERITY/LIKELIHOOD of the conflict:
+  - 1.0 = very strong / very likely conflict (clearly blocking)
+  - 0.7 = strong conflict
+  - 0.5 = moderate conflict
+  - 0.3 = weak but present conflict
+- matchLevel:
+  - "full" = strong conflict clearly present
+  - "partial" = some conflict signals, but not totally conclusive
+  - "none" = do NOT use for these items (if no conflict, omit the item instead)
+
+Evidence requirement:
+- For every conflict item you add, jobSnippet MUST contain the job-side evidence and cvSnippet MUST contain the CV-side evidence (as connected substrings where possible).
+
+Conflict detection rules (only when CLEAR):
+
+A) level_scope
+Flag when job is clearly clerical/IC level (e.g., "Sachbearbeiter", "Assistant", "Mitarbeiter", "Facharbeiter", "Specialist", "Operator", "Montage", "Produktion")
+AND the CV shows strong long-term leadership/executive scope (e.g., titles "Leiter", "Head of", "Director", "Manager" with people management OR explicit "disziplinarische Führung" with team size/budget/overall responsibility).
+Important nuance:
+- Do NOT flag solely because of a Master/PhD. Degree alone is not a level_scope conflict.
+- Do NOT flag solely because of project leadership. Project lead ≠ line leadership.
+
+B) compensation_band
+Flag only if job strongly implies a lower/tight band (e.g., tariff group, explicitly junior/clerical role)
+AND CV strongly implies much higher seniority/comp expectations (e.g., executive compensation signals, very senior titles with long tenure).
+
+C) location_work_model
+Flag if job requires on-site/shift/travel/relocation AND CV/cover letter explicitly restricts this.
+
+D) career_path
+Flag if job is clearly leadership track (line management) but CV/cover letter clearly indicates specialist/IC preference, or vice versa.
+
+E) domain_industry
+Flag if job is strongly domain/regulatory-specific AND CV shows different domain with no transferable evidence.
+
+F) role_definition
+Flag if job expects hands-on operational execution but CV is almost entirely management-only (or the reverse), clearly incompatible.
+
+G) availability
+Flag if job needs immediate start/full-time/fixed schedule and CV clearly states conflicting notice period/start/part-time.
+Important nuance:
+- Do NOT use availability for travel-flexibility unless the job clearly demands travel/shift and CV clearly blocks it (that can also be location_work_model if appropriate).
+- If job says "kurzfristig verfügbar" but meaning is ambiguous, only flag conflict when the CV clearly contradicts BOTH reasonable interpretations.
+
+H) eligibility_restriction
+Flag when the job clearly includes lawful access, citizenship, nationality, gender-for-duty, security clearance, export-control, defence-sector, or comparable eligibility restrictions
+AND the CV clearly conflicts with that restriction or clearly lacks the required lawful eligibility signal.
+Important nuance:
+- Use this ONLY for explicit, job-relevant restrictions that are stated in the job text.
+- Do NOT invent this conflict from vague culture fit or language preferences.
+
+All other existing rules still apply:
+- Identify requirements and create items.
+- Use dimension/priority as specified.
+- explanation must be in the job description language and positively phrased.
+- Root must be exactly { "items": [...] } and nothing else.
+- No markdown, no extra text.
+
+${sourceTextLabel}:
+<<<SOURCE_RECORD_START>>>
 ${requirementText}
-<<<REQUIREMENT_END>>>
+<<<SOURCE_RECORD_END>>>
 
-OBJEKT:
-<<<OBJECT_START>>>
+${objectTextLabel}:
+<<<OBJECT_RECORD_START>>>
 ${objectText}
-<<<OBJECT_END>>>
+<<<OBJECT_RECORD_END>>>
 `.trim();
 }
 
 function normalizeMatchItems(items) {
   const allowedDimensions = new Set(['education', 'experience', 'skill', 'language', 'other']);
   const allowedLevels = new Set(['full', 'partial', 'none']);
-  return (Array.isArray(items) ? items : []).map((item, index) => ({
-    requirementId: String(item?.requirementId || `REQ-${index + 1}`),
-    title: String(item?.title || `Anforderung ${index + 1}`),
-    dimension: allowedDimensions.has(item?.dimension) ? item.dimension : 'other',
-    priority: normalizePriority(item?.priority),
-    matchLevel: allowedLevels.has(item?.matchLevel) ? item.matchLevel : 'none',
-    matchScore: clamp01(item?.matchScore),
-    requirementSnippet: String(item?.requirementSnippet || ''),
-    objectSnippet: String(item?.objectSnippet || ''),
-    explanation: String(item?.explanation || '')
-  }));
+  return (Array.isArray(items) ? items : []).map((item, index) => {
+    const jobSnippet = String(item?.jobSnippet || item?.requirementSnippet || '');
+    const cvSnippet = String(item?.cvSnippet || item?.objectSnippet || '');
+    return {
+      requirementId: String(item?.requirementId || `REQ-${index + 1}`),
+      title: String(item?.title || `Anforderung ${index + 1}`),
+      dimension: allowedDimensions.has(item?.dimension) ? item.dimension : 'other',
+      priority: normalizePriority(item?.priority),
+      matchLevel: allowedLevels.has(item?.matchLevel) ? item.matchLevel : 'none',
+      matchScore: clamp01(item?.matchScore),
+      jobSnippet,
+      cvSnippet,
+      requirementSnippet: jobSnippet,
+      objectSnippet: cvSnippet,
+      explanation: String(item?.explanation || '')
+    };
+  });
 }
 
 function parseJsonObject(raw) {

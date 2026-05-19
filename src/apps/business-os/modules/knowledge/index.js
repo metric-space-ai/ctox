@@ -1,7 +1,7 @@
 import { loadModuleMessages } from '../../shared/i18n.js';
 
-const KNOWLEDGE_REFRESH_TIMEOUT_MS = 1500;
 const KNOWLEDGE_RENDER_DEBOUNCE_MS = 80;
+const KNOWLEDGE_OPEN_TARGET_KEY = 'ctox.businessOs.knowledge.openId';
 
 const labels = {
   de: {
@@ -72,7 +72,6 @@ export async function mount(ctx) {
   state.resizeCleanup = setupKnowledgeColumnResizing();
   await loadKnowledgeFromLocal();
   state.localSubscriptionCleanup = wireLocalRealtime();
-  refreshKnowledgeFromInstance();
   window.addEventListener('message', handleShellMessage);
   return () => {
     window.removeEventListener('message', handleShellMessage);
@@ -228,10 +227,6 @@ function wireEvents() {
   initKnowledgeContextMenu();
 }
 
-async function loadKnowledge() {
-  await refreshKnowledgeFromInstance();
-}
-
 async function loadKnowledgeFromLocal() {
   const [items, runbooks, tables] = await Promise.all([
     loadLocalKnowledgeRecords('knowledge_items'),
@@ -245,37 +240,22 @@ async function loadKnowledgeFromLocal() {
   else renderEmptyKnowledgeSelection();
 }
 
-async function refreshKnowledgeFromInstance() {
-  if (state.ctx?.sync?.config?.http_bridge_available === false) return;
-  if (state.refreshInFlight) return;
-  state.refreshInFlight = true;
-  try {
-    const payload = await fetchJson('/api/business-os/knowledge');
-    applyKnowledgeRecords({
-      items: payload.items || [],
-      runbooks: payload.runbooks || [],
-      tables: payload.tables || [],
-    });
-    await mirrorKnowledgeRecords();
-    renderKnowledgeList();
-    renderRunbooks();
-    if (state.selectedId) await selectKnowledge(state.selectedId);
-    else renderEmptyKnowledgeSelection();
-  } catch (error) {
-    if (!state.items.length && !state.runbooks.length && !state.tables.length) {
-      renderKnowledgeList();
-      renderEmptyKnowledgeSelection(error);
-    }
-  } finally {
-    state.refreshInFlight = false;
-  }
-}
-
 function applyKnowledgeRecords({ items = [], runbooks = [], tables = [] }) {
   state.items = Array.isArray(items) ? items : [];
   state.runbooks = Array.isArray(runbooks) ? runbooks : [];
   state.tables = Array.isArray(tables) ? tables : [];
   state.groups = buildKnowledgeBundles(state.items, state.runbooks, state.tables);
+  const requestedId = sessionStorage.getItem(KNOWLEDGE_OPEN_TARGET_KEY) || '';
+  if (requestedId && state.items.some((item) => item.id === requestedId)) {
+    sessionStorage.removeItem(KNOWLEDGE_OPEN_TARGET_KEY);
+    state.selectedId = requestedId;
+    state.activeTab = requestedId.startsWith('runbook:') ? 'runbooks' : state.activeTab;
+    const group = findGroupForItem(requestedId);
+    if (group) {
+      state.selectedGroupId = group.id;
+      state.openGroups.add(group.id);
+    }
+  }
   const selectedStillExists = state.items.some((item) => item.id === state.selectedId);
   if (selectedStillExists) return;
   const firstGroup = state.groups[0];
@@ -341,42 +321,10 @@ async function loadKnowledgeDocument(id) {
   const item = state.items.find((entry) => entry.id === id);
   const localMarkdown = localMarkdownForItem(item);
   if (localMarkdown) return { markdown: localMarkdown, source: 'local' };
-  try {
-    return await fetchJson(`/api/business-os/knowledge/document?id=${encodeURIComponent(id)}`);
-  } catch {
-    return {
-      markdown: `# ${item?.title || 'Knowledge'}\n\n${item?.summary || item?.description || item?.subtitle || ''}`,
-      source: 'local-summary',
-    };
-  }
-}
-
-async function mirrorKnowledgeRecords() {
-  const now = Date.now();
-  await mirrorCollection('knowledge_items', state.items, now);
-  await mirrorCollection('knowledge_runbooks', state.runbooks, now);
-  await mirrorCollection('knowledge_tables', state.tables, now);
-}
-
-async function mirrorCollection(collectionName, records, now) {
-  const collection = state.ctx.db?.raw?.[collectionName];
-  if (!collection) return;
-  for (const record of records.slice(0, 500)) {
-    const doc = {
-      id: record.id,
-      kind: record.kind || collectionName,
-      title: record.title || record.id,
-      subtitle: record.subtitle || record.problem_domain || '',
-      summary: record.summary || record.description || '',
-      source_path: record.source_path || record.parquet_path || '',
-      updated_at: record.updated_at || '',
-      payload: record,
-      updated_at_ms: now,
-    };
-    const existing = await collection.findOne(doc.id).exec().catch(() => null);
-    if (existing) await existing.incrementalPatch(doc);
-    else await collection.insert(doc).catch(() => {});
-  }
+  return {
+    markdown: `# ${item?.title || 'Knowledge'}\n\n${item?.summary || item?.description || item?.subtitle || ''}`,
+    source: 'local-summary',
+  };
 }
 
 function buildKnowledgeBundles(items, runbooks, tables) {
@@ -1243,12 +1191,8 @@ async function renderRunbookWorkspace() {
   const runbookItem = context.runbookItems.find((entry) => runbookIdMatches(entry.id || entry.runbook_id, runbook.id || runbook.runbook_id));
   let markdown = '';
   if (runbookItem?.id) {
-    try {
-      const doc = await fetchJson(`/api/business-os/knowledge/document?id=${encodeURIComponent(runbookItem.id)}`);
-      markdown = doc.markdown || '';
-    } catch (_) {
-      markdown = '';
-    }
+    const doc = await loadKnowledgeDocument(runbookItem.id);
+    markdown = doc.markdown || '';
   }
   els.runbookView.innerHTML = markdown
     ? markdownToHtml(markdown)
@@ -1311,12 +1255,15 @@ async function renderTable() {
     return;
   }
   try {
-    const [schema, rows] = await Promise.all([
-      fetchJson(`/api/business-os/knowledge/dataframe/schema?id=${encodeURIComponent(tableId)}`),
-      fetchJson(`/api/business-os/knowledge/dataframe/rows?id=${encodeURIComponent(tableId)}&offset=${state.tableOffset}&limit=${state.tableLimit}`),
-    ]);
+    const schema = localDataFrameSchema(item);
+    const allRows = localDataFrameRows(item);
+    const rows = {
+      returned: allRows.slice(state.tableOffset, state.tableOffset + state.tableLimit).length,
+      rows: allRows.slice(state.tableOffset, state.tableOffset + state.tableLimit),
+    };
     els.tableTitle.textContent = schema.title || item.title || 'DataFrame';
-    const total = Number.isFinite(Number(schema.row_count)) ? `${Number(schema.row_count).toLocaleString('de-DE')} Zeilen` : `${rows.returned || 0} geladen`;
+    const totalRows = Number.isFinite(Number(schema.row_count)) ? Number(schema.row_count) : allRows.length;
+    const total = `${totalRows.toLocaleString('de-DE')} Zeilen`;
     els.tableMeta.textContent = `${schema.columns?.length || 0} Spalten · ${total}`;
     renderDataFrameTable(schema.columns || [], rows.rows || []);
   } catch (error) {
@@ -1478,12 +1425,7 @@ async function dispatchKnowledgeCommand(command) {
       client_context: clientContext,
     });
   }
-  window.parent?.postMessage({
-    type: 'ctox-business-os-command',
-    requestId: `knowledge_${crypto.randomUUID()}`,
-    command: { module: 'knowledge', ...command, client_context: clientContext },
-  }, '*');
-  return { ok: true, command_id: 'posted_to_shell', status: 'queued' };
+  throw new Error('RxDB command bus is not available');
 }
 
 function showCommandStatus(result) {
@@ -1659,12 +1601,8 @@ function knowledgeActionDrawer({ title, subtitle, fields, actionLabel, commandTy
 async function openKnowledgeConfig() {
   const item = state.items.find((entry) => entry.id === state.selectedId);
   let markdown = els.markdownEditor.value || els.markdownView.textContent || '';
-  try {
-    const doc = item ? await fetchJson(`/api/business-os/knowledge/document?id=${encodeURIComponent(item.id)}`) : null;
-    markdown = doc?.markdown || markdown;
-  } catch (_) {
-    // Keep current rendered content if the document endpoint is unavailable.
-  }
+  const doc = item ? await loadKnowledgeDocument(item.id) : null;
+  markdown = doc?.markdown || markdown;
   const body = document.createElement('div');
   body.className = 'drawer-body knowledge-edit-drawer';
   body.innerHTML = `
@@ -1699,7 +1637,7 @@ function openRunbookConfig() {
   const runbook = state.runbooks.find((entry) => runbookIdMatches(entry.id || entry.runbook_id, state.selectedRunbookId));
   state.ctx.openRightDrawer(drawerContent('Runbook Runtime', [
     ['Ausführung', 'CTOX Task Queue'],
-    ['API', '/api/business-os/commands'],
+    ['Command Store', 'RxDB business_commands'],
     ['Ausgewählt', runbook?.title || state.selectedRunbookId || 'kein Runbook'],
     ['Status', runbook?.status || 'unbekannt'],
   ]));
@@ -1985,18 +1923,48 @@ function handleShellMessage(event) {
   }
 }
 
-async function fetchJson(url) {
-  const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), KNOWLEDGE_REFRESH_TIMEOUT_MS);
-  const headers = state.ctx?.authHeaders?.() || {};
-  let response;
-  try {
-    response = await fetch(url, { cache: 'no-store', headers, signal: controller.signal });
-  } finally {
-    window.clearTimeout(timer);
-  }
-  if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
-  return response.json();
+function localDataFrameSchema(item) {
+  const rows = localDataFrameRows(item);
+  const rawColumns = firstArray(
+    item?.columns,
+    item?.schema?.columns,
+    item?.payload?.columns,
+    item?.payload?.schema?.columns,
+    item?.dataframe?.columns,
+    item?.payload?.dataframe?.columns,
+  );
+  const columns = normalizeColumns(rawColumns?.length ? rawColumns : Object.keys(rows[0] || {}));
+  return {
+    title: item?.title || item?.payload?.title || 'DataFrame',
+    columns,
+    row_count: Number(item?.row_count ?? item?.payload?.row_count ?? rows.length),
+  };
+}
+
+function localDataFrameRows(item) {
+  const rows = firstArray(
+    item?.rows,
+    item?.records,
+    item?.data,
+    item?.payload?.rows,
+    item?.payload?.records,
+    item?.payload?.data,
+    item?.dataframe?.rows,
+    item?.payload?.dataframe?.rows,
+  );
+  return rows.map((row) => row && typeof row === 'object' ? row : { value: row });
+}
+
+function firstArray(...values) {
+  return values.find(Array.isArray) || [];
+}
+
+function normalizeColumns(columns) {
+  return (columns || []).map((column) => {
+    if (typeof column === 'string') return { key: column, name: column, label: column };
+    const key = column?.key || column?.id || column?.name || column?.field || '';
+    return { ...column, key, name: column?.name || key, label: column?.label || column?.title || key };
+  }).filter((column) => column.key);
 }
 
 function localMarkdownForItem(item) {

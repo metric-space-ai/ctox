@@ -1,4 +1,5 @@
 import { collections } from './schema.js';
+import { showBusinessConfirm } from '../../shared/dialogs.js';
 import { loadModuleMessages } from '../../shared/i18n.js';
 
 const FLOW_WIDTH = 1760;
@@ -9,11 +10,10 @@ const DEFAULT_ZOOM = 1;
 const LEFT_COLUMN_WIDTH_KEY = 'ctox.businessOs.ctox.leftColumnWidth';
 const LEFT_COLUMN_MIN = 220;
 const LEFT_COLUMN_MAX = 560;
-const HARNESS_FLOW_CACHE_KEY = 'ctox.businessOs.ctox.lastHarnessFlow';
 const HARNESS_REFRESH_MS = 4000;
 const LOCAL_RENDER_DEBOUNCE_MS = 80;
 const CTOX_FETCH_TIMEOUT_MS = 1500;
-const CTOX_STYLE_BUILD = '20260518-idle-flow1';
+const CTOX_STYLE_BUILD = '20260519-rxdb-only1';
 
 const labels = {
   de: {
@@ -71,7 +71,7 @@ const labels = {
     elapsed: 'Zeit',
     notCaptured: 'nicht erfasst',
     connected: 'verbunden',
-    fallback: 'Fallback-Daten',
+    notLive: 'nicht live',
     notLogged: 'Zeit nicht geloggt',
     timeline: 'Timeline',
     queue: 'Pipeline',
@@ -169,7 +169,7 @@ const labels = {
     elapsed: 'Time',
     notCaptured: 'not captured',
     connected: 'connected',
-    fallback: 'fallback data',
+    notLive: 'not live',
     notLogged: 'time not logged',
     timeline: 'Timeline',
     queue: 'Pipeline',
@@ -311,9 +311,10 @@ export async function mount(ctx) {
   const state = {
     ctx,
     lang: ctx.locale === 'en' ? 'en' : 'de',
-    flow: fallbackHarnessFlow(),
+    flow: emptyHarnessFlow(),
     model: null,
     selectedStepIndex: 0,
+    selectedTaskStepIndex: 0,
     selectedTaskId: null,
     zoom: DEFAULT_ZOOM,
     statusMessage: '',
@@ -367,7 +368,7 @@ async function renderFromLocalCache(state) {
     loadLocalQueueTasks(state.ctx).catch(() => []),
     loadLocalBugReports(state.ctx).catch(() => []),
   ]);
-  state.flow = loadCachedHarnessFlow() || state.flow || fallbackHarnessFlow();
+  state.flow = state.flow || emptyHarnessFlow();
   const bundle = mergeBundleWithCommands(ctoxSeed, commands, queueTasks, bugReports);
   const metrics = aggregateFlowMetrics(state.flow);
   state.liveBaseSeconds = Number.isFinite(metrics.seconds) ? metrics.seconds : 0;
@@ -413,16 +414,20 @@ async function refresh(state) {
     const [flow, commands, queueTasks, bugReports, status] = await Promise.all([
       useHttpBridge
         ? loadHarnessFlow()
-        : Promise.resolve(loadCachedHarnessFlow() || fallbackHarnessFlow('http_bridge_disabled')),
+        : Promise.resolve(emptyHarnessFlow('http_bridge_disabled')),
       loadLocalCommands(state.ctx).catch(() => []),
       loadLocalQueueTasks(state.ctx).catch(() => []),
       loadLocalBugReports(state.ctx).catch(() => []),
       useHttpBridge
         ? loadStatus().catch((error) => ({ ok: false, error: String(error?.message || error) }))
-        : Promise.resolve({ ok: true, runtime: 'local-first', now_ms: Date.now() }),
+        : Promise.resolve({
+            ok: false,
+            runtime: 'rxdb',
+            error: state.ctx?.sync?.config?.native_rxdb_peer_reason || 'native CTOX RxDB peer is not available',
+            now_ms: Date.now(),
+          }),
     ]);
-    if (flow?.ok) saveCachedHarnessFlow(flow);
-    const nextFlow = flow?.ok ? flow : (state.flow || loadCachedHarnessFlow() || fallbackHarnessFlow(flow?.error || ''));
+    const nextFlow = flow?.ok ? flow : emptyHarnessFlow(flow?.error || '');
     const bundle = mergeBundleWithCommands(ctoxSeed, commands, queueTasks, bugReports);
     state.flow = nextFlow;
     const metrics = aggregateFlowMetrics(nextFlow);
@@ -524,6 +529,7 @@ function renderLeft(state) {
   const t = labels[state.lang];
   const model = state.model;
   const left = state.ctx.host.querySelector('[data-ctox-left]');
+  if (!left) return;
   const groups = taskGroups(model.tasks);
   const activeCount = groups.current.length;
   syncOpenTaskSections(state, groups);
@@ -548,7 +554,7 @@ function renderLeft(state) {
   });
   left.querySelectorAll('[data-task-id]').forEach((button) => {
     button.addEventListener('click', () => {
-      selectTask(state, button.dataset.taskId, { drawer: true, center: false });
+      selectTask(state, button.dataset.taskId, { drawer: true, center: true });
     });
   });
 }
@@ -621,9 +627,10 @@ function inboundChannelPanel(channels, state) {
 }
 
 function taskSteps(task, state) {
+  if (isExactCommunicationFlow(task, state)) return communicationTaskSteps(task, state);
   const timeline = state.model?.timeline || [];
   if (timeline.length && taskMatchesHarnessFlow(task, state)) {
-    return timeline.map((node, index) => ({
+    const steps = timeline.map((node, index) => ({
       id: node.id,
       label: node.label,
       detail: clip(cleanUiCopy(node.lines?.[0] || node.phase || itemSummary(task) || ''), 180),
@@ -632,39 +639,78 @@ function taskSteps(task, state) {
       active: node.status === 'active' || index === timeline.length - 1,
       timelineIndex: index,
     }));
+    return withRouteStatusStep(steps, task, state);
   }
   return taskStatusSteps(task, state);
 }
 
+function communicationTaskSteps(task, state) {
+  const trace = communicationTraceFromFlow(state.flow, task);
+  const activeId = trace.at(-1) || 'comm-inbound-observed';
+  return trace.map((id) => {
+    const node = COMMUNICATION_NODE_MAP.get(id);
+    return {
+      id,
+      label: node?.label || displayStatus(task?.routeStatus || task?.status, state.lang),
+      detail: cleanUiCopy(node?.lines?.[0] || task?.summary || task?.target || ''),
+      timestamp: task?.updatedAt || task?.createdAt || '',
+      metrics: '',
+      active: id === activeId,
+      timelineIndex: -1,
+      flowKind: 'communication',
+    };
+  });
+}
+
+function withRouteStatusStep(steps, task, state) {
+  const routeNode = routeStatusNodeId(task?.routeStatus || task?.status);
+  if (!routeNode || steps.some((step) => step.id === routeNode)) return steps;
+  return steps
+    .map((step) => ({ ...step, active: false }))
+    .concat({
+      id: routeNode,
+      label: displayStatus(task?.routeStatus || task?.status, state.lang),
+      detail: task?.resultSummary || task?.summary || task?.target || task?.source || '',
+      timestamp: task?.updatedAt || task?.createdAt || '',
+      metrics: '',
+      active: true,
+      timelineIndex: -1,
+    });
+}
+
 function taskMatchesHarnessFlow(task, state) {
   if (!task || !state) return false;
-  if (isFocusedTask(task, state.focusTask)) return true;
   const source = state.flow?.flow?.source || {};
   const ids = new Set([source.message_key, source.work_id].filter(Boolean));
   if (ids.has(task.id) || ids.has(task.taskId) || ids.has(task.commandId) || ids.has(task.runId)) return true;
-  const currentTask = state.model?.tasks?.find((item) => normalizeCommandStatus(item.status) === 'running');
-  return Boolean(currentTask && task.id === currentTask.id);
+  return false;
 }
 
 function taskStatusSteps(task, state) {
-  const status = normalizeCommandStatus(task.status);
+  const status = normalizeCommandStatus(task.routeStatus || task.status);
   const timeline = state.model?.timeline || [];
   const findIndex = (id) => {
+    if (!id) return -1;
     const index = timeline.findIndex((node) => node.id === id);
-    return index >= 0 ? index : clampIndex(state.selectedStepIndex, timeline.length);
+    return index >= 0 ? index : -1;
   };
   const steps = [];
-  if (status === 'queued') {
-    steps.push({ id: 'queued', label: displayStatus('queued', state.lang), detail: task.target || task.summary || task.source || '', active: true });
-  } else if (status === 'running') {
-    steps.push({ id: 'queued', label: displayStatus('queued', state.lang), detail: task.target || task.summary || task.source || '', active: false });
-    steps.push({ id: 'running', label: displayStatus('running', state.lang), detail: task.summary || task.target || task.commandId || task.taskId || task.id, active: status === 'running' });
-  } else if (status === 'failed' || status === 'blocked') {
-    steps.push({ id: 'model-failed', label: state.lang === 'en' ? 'Needs attention' : 'Braucht Klärung', detail: task.resultSummary || task.summary || status, active: true });
-  } else {
-    steps.push({ id: 'queued', label: displayStatus(status, state.lang), detail: task.resultSummary || task.summary || task.target || task.source || '', active: true });
-  }
-  if (isFocusedTask(task, state.focusTask) || task.taskId === state.flow?.flow?.source?.message_key) {
+  const routeNode = routeStatusNodeId(task.routeStatus || task.status);
+  steps.push(routeNode
+    ? {
+        id: routeNode,
+        label: displayStatus(status, state.lang),
+        detail: task.resultSummary || task.summary || task.target || task.source || '',
+        active: true,
+      }
+    : {
+        id: 'queued',
+        label: displayStatus(status, state.lang),
+        detail: task.resultSummary || task.summary || task.target || task.source || labels[state.lang].unprovenOutcome,
+        active: true,
+        unverified: true,
+      });
+  if (taskMatchesHarnessFlow(task, state)) {
     for (const block of state.flow?.flow?.blocks || []) {
       if (block.kind === 'task') {
         steps.push({
@@ -703,15 +749,19 @@ function renderMain(state) {
   const timelineIndex = clampIndex(state.selectedStepIndex, model.timeline.length);
   const selectedTask = getSelectedTask(state);
   const taskStepView = selectedTask ? selectedTaskStepView(selectedTask, state) : null;
-  const selectedNode = taskStepView?.node || model.timeline[timelineIndex] || model.nodes.find((node) => node.id === model.activeNodeId) || model.nodes[0];
+  const selectedNode = taskStepView
+    ? taskStepView.node
+    : model.timeline[timelineIndex] || model.nodes.find((node) => node.id === model.activeNodeId) || model.nodes[0];
   const visibleTrace = taskStepView
     ? buildVisibleTraceFromSteps(model, taskStepView.steps, taskStepView.index)
     : buildVisibleTrace(model.timeline, timelineIndex);
-  const metrics = aggregateFlowMetrics(state.flow);
-  const live = isHarnessLive(state);
+  const metricSubject = metricSubjectTask(state, selectedTask);
+  const live = isLiveMetricSubject(metricSubject, state);
+  const metrics = metricSubject ? aggregateFlowMetrics(state.flow) : emptyMetrics();
   const elapsedSeconds = live ? liveElapsedSeconds(state) : metrics.seconds;
   const main = state.ctx.host.querySelector('[data-ctox-main]');
   const previousViewport = readFlowViewport(state);
+  const viewBox = flowViewBox(selectedTask, state);
   main.innerHTML = `
     <header class="ctox-flow-head">
       <div>
@@ -720,7 +770,7 @@ function renderMain(state) {
       </div>
       <div class="ctox-flow-source">
         <strong>${escapeHtml(displayFlowMode(state.flow.mode || 'ctox_core'))}</strong>
-        <span>${escapeHtml(state.flow.ok ? t.connected : t.fallback)}</span>
+        <span>${escapeHtml(state.flow.ok ? t.connected : t.notLive)}</span>
         ${live ? liveStatusMarkup(state) : ''}
       </div>
     </header>
@@ -737,8 +787,8 @@ function renderMain(state) {
         <button type="button" data-zoom="+">+</button>
         <button type="button" data-zoom="reset">Reset</button>
       </div>
-      <div class="ctox-flow-canvas-inner" style="width:${FLOW_WIDTH * state.zoom}px;height:${FLOW_HEIGHT * state.zoom}px">
-        ${flowSvg(model, selectedNode, visibleTrace, selectedTask, state)}
+      <div class="ctox-flow-canvas-inner" style="width:${FLOW_WIDTH * state.zoom}px;height:${viewBox.height * state.zoom}px;min-height:${viewBox.height * state.zoom}px">
+        ${flowSvg(model, selectedNode, visibleTrace, selectedTask, state, taskStepView, viewBox)}
       </div>
     </div>
     ${timelinePanel(state, selectedTask, selectedNode, metrics)}
@@ -747,7 +797,7 @@ function renderMain(state) {
   main.querySelectorAll('[data-zoom]').forEach((button) => {
     button.addEventListener('click', () => {
       const action = button.dataset.zoom;
-      state.zoom = action === 'reset' ? DEFAULT_ZOOM : clampMetric(Math.round((state.zoom + (action === '+' ? 0.12 : -0.12)) * 100) / 100, 0.72, 1.8);
+      setFlowZoom(state, action === 'reset' ? DEFAULT_ZOOM : state.zoom + (action === '+' ? 0.12 : -0.12));
       renderMain(state);
     });
   });
@@ -756,7 +806,16 @@ function renderMain(state) {
       setTimelineStep(state, Number(button.dataset.timelineStep), { center: true });
     });
   });
+  main.querySelectorAll('[data-task-step-index]').forEach((button) => {
+    button.addEventListener('click', () => {
+      setTaskTimelineStep(state, Number(button.dataset.taskStepIndex), { center: true });
+    });
+  });
   main.querySelector('[data-timeline-range]')?.addEventListener('input', (event) => {
+    if (event.target.dataset.taskTimelineRange === 'true') {
+      setTaskTimelineStep(state, Number(event.target.value), { center: true });
+      return;
+    }
     const mappedSteps = event.target.dataset.timelineRangeSteps
       ? event.target.dataset.timelineRangeSteps.split(',').map((value) => Number(value))
       : null;
@@ -771,6 +830,10 @@ function renderMain(state) {
   });
   wireCanvasDrag(main.querySelector('[data-flow-canvas]'));
   updateLiveIndicators(state);
+}
+
+function emptyMetrics() {
+  return { inputTokens: null, outputTokens: null, toolCalls: null, seconds: null };
 }
 
 function timelinePanel(state, selectedTask, selectedNode, metrics) {
@@ -799,10 +862,9 @@ function timelinePanel(state, selectedTask, selectedNode, metrics) {
     `;
   }
   const steps = taskSteps(selectedTask, state);
-  const selectedTimelineIndex = clampIndex(state.selectedStepIndex, state.model.timeline.length);
-  const selectedStepIndex = steps.findIndex((step) => step.timelineIndex === selectedTimelineIndex);
-  const activeStepIndex = state.userNavigatedTimeline && selectedStepIndex >= 0
-    ? selectedStepIndex
+  const selectedTaskStepIndex = clampMetric(state.selectedTaskStepIndex || 0, 0, Math.max(steps.length - 1, 0));
+  const activeStepIndex = state.userNavigatedTimeline
+    ? selectedTaskStepIndex
     : Math.max(0, steps.findIndex((step) => step.active));
   const current = steps[activeStepIndex] || steps.find((step) => step.active) || steps.at(-1);
   const max = Math.max(steps.length - 1, 0);
@@ -816,10 +878,10 @@ function timelinePanel(state, selectedTask, selectedNode, metrics) {
         <strong>${escapeHtml(selectedTask.title)}</strong>
       </div>
       <div class="ctox-timeline-scrub">
-        <input aria-label="${escapeAttr(t.taskSteps)}" max="${max}" min="0" step="1" type="range" value="${activeStepIndex}" data-timeline-range data-timeline-range-steps="${escapeAttr(steps.map((step) => step.timelineIndex).join(','))}" />
+        <input aria-label="${escapeAttr(t.taskSteps)}" max="${max}" min="0" step="1" type="range" value="${activeStepIndex}" data-timeline-range data-task-timeline-range="true" />
         <div class="ctox-timeline-scale" role="list">
           ${steps.map((step, index) => `
-            <button type="button" role="listitem" class="${index < activeStepIndex ? 'is-done' : ''} ${index === activeStepIndex ? 'is-current' : ''}" data-timeline-step="${step.timelineIndex}">
+            <button type="button" role="listitem" class="${index < activeStepIndex ? 'is-done' : ''} ${index === activeStepIndex ? 'is-current' : ''}" data-task-step-index="${index}">
               <span>${String(index + 1).padStart(2, '0')}</span>
               <strong>${escapeHtml(step.label)}</strong>
               <small>${escapeHtml(stepMetaLabel(step, state))}</small>
@@ -841,25 +903,33 @@ function progressPercent(value, max) {
   return Math.round((clampMetric(value, 0, max) / max) * 100);
 }
 
-function flowSvg(model, selectedNode, visibleTrace, selectedTask, state) {
+function flowSvg(model, selectedNode, visibleTrace, selectedTask, state, taskStepView = null, viewBox = flowViewBox(selectedTask, state)) {
+  const communicationOnly = isCommunicationFlow(selectedTask, state);
+  const harnessOffsetY = reviewHarnessOffsetY(selectedTask, state);
   return `
-    <svg class="ctox-flow-diagram" viewBox="0 0 ${FLOW_WIDTH} ${FLOW_HEIGHT}" preserveAspectRatio="xMidYMin meet" role="img" aria-label="CTOX work flow diagram">
+    <svg class="ctox-flow-diagram" viewBox="0 ${viewBox.y} ${FLOW_WIDTH} ${viewBox.height}" preserveAspectRatio="xMidYMin meet" role="img" aria-label="CTOX work flow diagram">
       <defs>
         <marker id="ctox-flow-arrow" markerHeight="8" markerWidth="8" orient="auto" refX="7" refY="4">
           <path d="M0,0 L8,4 L0,8 Z"></path>
         </marker>
       </defs>
       <g class="ctox-flow-lanes" aria-hidden="true">
-        <rect x="18" y="18" width="${FLOW_WIDTH - 36}" height="340" rx="16"></rect>
-        <rect x="18" y="388" width="${FLOW_WIDTH - 36}" height="260" rx="16"></rect>
-        <rect x="18" y="688" width="${FLOW_WIDTH - 36}" height="340" rx="16"></rect>
-        <text x="34" y="44">Founder communication state machine</text>
-        <text x="34" y="414">Review harness queue and execution</text>
-        <text x="34" y="714">Review harness evidence check</text>
+        ${communicationOnly ? `
+          <rect x="18" y="18" width="${FLOW_WIDTH - 36}" height="340" rx="16"></rect>
+          <text x="34" y="44">Founder communication state machine</text>
+        ` : `
+          <g transform="translate(0 ${harnessOffsetY})">
+          <rect x="18" y="388" width="${FLOW_WIDTH - 36}" height="260" rx="16"></rect>
+          <rect x="18" y="688" width="${FLOW_WIDTH - 36}" height="340" rx="16"></rect>
+          <text x="34" y="414">Review harness queue and execution</text>
+          <text x="34" y="714">Review harness evidence check</text>
+          </g>
+        `}
       </g>
-      ${communicationFlowSvg(selectedTask, state)}
-      ${taskEndpointFlowSvg(model, selectedTask, selectedNode, visibleTrace, state)}
-      ${model.edges.map((edge) => {
+      ${communicationFlowSvg(selectedTask, state, taskStepView)}
+      ${communicationOnly ? '' : `<g class="ctox-review-harness-flow" transform="translate(0 ${harnessOffsetY})">`}
+      ${communicationOnly ? '' : taskEndpointFlowSvg(model, selectedTask, selectedNode, visibleTrace, state)}
+      ${communicationOnly ? '' : model.edges.map((edge) => {
         const from = model.nodeMap.get(edge.from);
         const to = model.nodeMap.get(edge.to);
         if (!from || !to) return '';
@@ -867,9 +937,23 @@ function flowSvg(model, selectedNode, visibleTrace, selectedTask, state) {
         const activeEdge = model.liveWork && edge.to === selectedNode?.id && strength > 0;
         return `<path class="ctox-flow-edge ${strength > 0 ? 'is-observed' : ''} ${activeEdge ? 'is-active-edge' : ''}" d="${edgePath(from, to, edge.route)}" style="--edge-strength:${strength}"></path>`;
       }).join('')}
-      ${model.nodes.map((node) => flowNodeSvg(node, selectedNode, visibleTrace.nodeStrength.get(node.id) || 0)).join('')}
+      ${communicationOnly ? '' : model.nodes.map((node) => flowNodeSvg(node, selectedNode, visibleTrace.nodeStrength.get(node.id) || 0, state.lang)).join('')}
+      ${communicationOnly ? '' : '</g>'}
     </svg>
   `;
+}
+
+function flowViewBox(selectedTask, state) {
+  if (isCommunicationFlow(selectedTask, state)) return { y: 0, height: 380 };
+  return { y: 54, height: 740 };
+}
+
+function reviewHarnessOffsetY(selectedTask, state) {
+  return isCommunicationFlow(selectedTask, state) ? 0 : -300;
+}
+
+function selectedNodeVisualY(node, selectedTask, state) {
+  return (node?.y || 0) + reviewHarnessOffsetY(selectedTask, state);
 }
 
 function taskEndpointFlowSvg(model, selectedTask, selectedNode, visibleTrace, state) {
@@ -879,10 +963,11 @@ function taskEndpointFlowSvg(model, selectedTask, selectedNode, visibleTrace, st
   `;
 }
 
-function communicationFlowSvg(selectedTask, state) {
+function communicationFlowSvg(selectedTask, state, taskStepView = null) {
   if (!isCommunicationFlow(selectedTask, state)) return '';
   const trace = communicationTraceFromFlow(state.flow, selectedTask);
   const live = isHarnessLive(state);
+  const selectedCommunicationNodeId = taskStepView?.step?.flowKind === 'communication' ? taskStepView.step.id : '';
   const observed = new Set(trace);
   const edgeObserved = new Set();
   trace.forEach((id, index) => {
@@ -898,7 +983,11 @@ function communicationFlowSvg(selectedTask, state) {
         const active = edgeObserved.has(edgeKey(edge.from, edge.to));
         return `<path class="ctox-flow-edge ctox-communication-edge ${active ? 'is-observed' : ''}" d="${edgePath(from, to, edge.route)}" style="--edge-strength:${active ? 0.92 : 0}"></path>`;
       }).join('')}
-      ${COMMUNICATION_NODES.map((node) => communicationNodeSvg(node, observed.has(node.id), live && trace.at(-1) === node.id)).join('')}
+      ${COMMUNICATION_NODES.map((node) => communicationNodeSvg(
+        node,
+        observed.has(node.id),
+        selectedCommunicationNodeId ? selectedCommunicationNodeId === node.id : live && trace.at(-1) === node.id
+      )).join('')}
     </g>
   `;
 }
@@ -918,10 +1007,32 @@ function communicationNodeSvg(node, observed, current) {
 }
 
 function isCommunicationFlow(task, state) {
-  const sourceKind = String(state.flow?.flow?.source?.source_kind || '').toLowerCase();
-  if (sourceKind === 'message' || sourceKind === 'communication') return true;
-  const channel = normalizeInboundChannel(task?.channel || task?.source || '');
-  return channel === 'business_os.llm.chat' || channel.includes('communication') || channel.includes('email') || channel.includes('chat');
+  if (isExactCommunicationFlow(task, state)) return true;
+  if (task) return false;
+  return flowHasFounderCommunicationEvidence(state?.flow);
+}
+
+function isExactCommunicationFlow(task, state) {
+  return Boolean(taskMatchesHarnessFlow(task, state) && flowHasFounderCommunicationEvidence(state?.flow));
+}
+
+function flowHasFounderCommunicationEvidence(flowResult) {
+  const flow = flowResult?.flow || {};
+  const sourceKind = String(flow.source?.source_kind || '').toLowerCase();
+  if (sourceKind === 'communication' || sourceKind === 'founder_communication') return true;
+  for (const block of flow.blocks || []) {
+    for (const branch of block.branches || []) {
+      const text = [branch.title, ...(branch.lines || [])].join(' ');
+      if (/\bFounderCommunication\b/.test(text)) return true;
+      const matches = text.matchAll(/Accepted:\s*([A-Za-z]+)\s*->\s*([A-Za-z]+)\s*\(([^)]+)\)/g);
+      for (const match of matches) {
+        const from = COMMUNICATION_STATE_TO_NODE.get(normalizeCoreStateKey(match[1]));
+        const to = COMMUNICATION_STATE_TO_NODE.get(normalizeCoreStateKey(match[2]));
+        if (from && to) return true;
+      }
+    }
+  }
+  return false;
 }
 
 function communicationTraceFromFlow(flowResult, selectedTask) {
@@ -1048,7 +1159,7 @@ function outboundEndpointForTask(task, selectedNode, state) {
     };
   }
   const looksClosed = ['completed', 'done', 'sent', 'approved', 'handled'].includes(status);
-  const fallbackNode = selectedNode?.id || state.model?.activeNodeId || 'queued';
+  const fallbackNode = selectedNode?.id || routeStatusNodeId(task?.routeStatus || task?.status);
   return {
     fromNodeId: fallbackNode,
     label: looksClosed ? t.unprovenOutcome : t.openOutcome,
@@ -1060,8 +1171,10 @@ function outboundEndpointForTask(task, selectedNode, state) {
 function terminalNodeForTask(task, selectedNode, state) {
   const status = normalizeCommandStatus(task?.status || '');
   if (selectedNode && ['passed', 'model-failed', 'infra-failed'].includes(selectedNode.id) && selectedNode.status === 'done') return selectedNode.id;
-  const last = state.model?.timeline?.at?.(-1);
-  if (last && ['passed', 'model-failed', 'infra-failed'].includes(last.id) && last.status === 'done') return last.id;
+  if (taskMatchesHarnessFlow(task, state)) {
+    const last = state.model?.timeline?.at?.(-1);
+    if (last && ['passed', 'model-failed', 'infra-failed'].includes(last.id) && last.status === 'done') return last.id;
+  }
   if (['failed', 'cancelled'].includes(status)) return 'model-failed';
   return null;
 }
@@ -1093,7 +1206,7 @@ function outboundDetailForTask(task, state) {
   return task.channelLabel || inboundChannelLabel(task.channel || inferInboundChannel(task));
 }
 
-function flowNodeSvg(node, selectedNode, traceStrength) {
+function flowNodeSvg(node, selectedNode, traceStrength, lang = 'de') {
   const isVisibleTrace = traceStrength > 0;
   const isSelected = node.id === selectedNode?.id;
   const hasLiveRing = isSelected && node.status === 'active';
@@ -1106,20 +1219,20 @@ function flowNodeSvg(node, selectedNode, traceStrength) {
   return `
     <g class="ctox-flow-node-g is-${escapeAttr(node.status)} ${isVisibleTrace ? 'is-observed is-trace' : 'is-possible'} ${isSelected ? 'is-current is-selected' : ''}"
        data-node-id="${escapeAttr(node.id)}" role="button" style="--trace-strength:${traceStrength}" tabindex="0" transform="translate(${node.x} ${node.y})">
-      <title>${escapeHtml(`${node.phase}: ${node.label}\n${metricsLabel(node, 'en')}\n${node.lines.join('\n')}`)}</title>
+      <title>${escapeHtml(`${node.phase}: ${node.label}\n${metricsLabel(node, lang)}\n${node.lines.join('\n')}`)}</title>
       ${ring}
       ${shape}
       <text class="ctox-flow-node-phase" x="${-NODE_WIDTH / 2 + 10}" y="${-NODE_HEIGHT / 2 + 16}">${escapeHtml(node.phase)}</text>
       <text class="ctox-flow-node-title" x="${-NODE_WIDTH / 2 + 10}" y="${-NODE_HEIGHT / 2 + 34}">
         ${wrapSvgText(node.label).map((line, index) => `<tspan x="${-NODE_WIDTH / 2 + 10}" dy="${index === 0 ? 0 : 15}">${escapeHtml(line)}</tspan>`).join('')}
       </text>
-      <text class="ctox-flow-node-metrics" x="${-NODE_WIDTH / 2 + 10}" y="${NODE_HEIGHT / 2 - 8}">${escapeHtml(metricsLabel(node, 'en'))}</text>
+      <text class="ctox-flow-node-metrics" x="${-NODE_WIDTH / 2 + 10}" y="${NODE_HEIGHT / 2 - 8}">${escapeHtml(metricsLabel(node, lang))}</text>
     </g>
   `;
 }
 
 function buildHarnessModel(data, flow) {
-  const tasks = buildTaskList(data);
+  const tasks = applyHarnessFlowStatus(buildTaskList(data), flow);
   const activeTask = tasks.find((task) => normalizeCommandStatus(task.status) === 'running') || null;
   const activeRun = data.runs.find((run) => run.status === 'running') || null;
   const liveWork = Boolean(activeTask || activeRun);
@@ -1167,6 +1280,41 @@ function buildHarnessModel(data, flow) {
     blockedTickets: data.tickets.filter((ticket) => ticket.status === 'blocked' || ticket.status === 'review' || ticket.status === 'running'),
     openTickets: data.tickets.filter((ticket) => ticket.status !== 'done'),
   };
+}
+
+function applyHarnessFlowStatus(tasks, flowResult) {
+  const source = flowResult?.flow?.source || {};
+  const ids = new Set([source.message_key, source.work_id].filter(Boolean));
+  if (!ids.size) return tasks;
+  const observedIds = observedPathFromFlow(flowResult);
+  const terminalNode = observedIds.findLast?.((id) => ['passed', 'model-failed', 'infra-failed'].includes(id))
+    || [...observedIds].reverse().find((id) => ['passed', 'model-failed', 'infra-failed'].includes(id));
+  if (!terminalNode) return tasks;
+  const status = terminalNode === 'passed' ? 'completed' : 'failed';
+  const summary = terminalSummaryFromFlow(flowResult) || (terminalNode === 'passed' ? 'Completed by CTOX harness' : 'CTOX harness marked this queue item failed');
+  return tasks.map((task) => {
+    if (!ids.has(task.id) && !ids.has(task.taskId) && !ids.has(task.commandId) && !ids.has(task.runId)) return task;
+    return {
+      ...task,
+      status,
+      routeStatus: status,
+      resultSummary: task.resultSummary || summary,
+      summary: task.summary || summary,
+    };
+  });
+}
+
+function terminalSummaryFromFlow(flowResult) {
+  const lines = [];
+  for (const block of flowResult?.flow?.blocks || []) {
+    for (const branch of block.branches || []) {
+      const id = branchToNodeId(branch.kind, branch.title || '', branch.lines || []);
+      if (['passed', 'model-failed', 'infra-failed'].includes(id)) {
+        lines.push(...(branch.lines || []));
+      }
+    }
+  }
+  return cleanUiCopy(lines.join(' · ')).slice(0, 280);
 }
 
 function buildRecentTasks(data) {
@@ -1276,9 +1424,13 @@ function reconcileSelection(state) {
   const selectedTaskChanged = previousTaskId !== state.selectedTaskId;
   if (state.userNavigatedTimeline && !selectedTaskChanged && Number.isFinite(previousStepIndex)) {
     state.selectedStepIndex = clampIndex(previousStepIndex, state.model?.timeline?.length || 1);
+    const task = getSelectedTask(state);
+    const steps = taskSteps(task, state);
+    state.selectedTaskStepIndex = clampMetric(state.selectedTaskStepIndex || 0, 0, Math.max(steps.length - 1, 0));
     return;
   }
   state.selectedStepIndex = timelineIndexForSelectedTask(state) ?? focusedTimelineIndex(state.model, state.focusTask);
+  state.selectedTaskStepIndex = activeTaskStepIndex(getSelectedTask(state), state);
 }
 
 function getSelectedTask(state) {
@@ -1293,6 +1445,12 @@ function timelineIndexForSelectedTask(state) {
   return current ? current.timelineIndex : null;
 }
 
+function activeTaskStepIndex(task, state) {
+  if (!task) return 0;
+  const steps = taskSteps(task, state);
+  return Math.max(0, steps.findIndex((step) => step.active));
+}
+
 function selectTask(state, taskId, options = {}) {
   if (!taskId) return;
   state.selectedTaskId = taskId;
@@ -1302,6 +1460,7 @@ function selectTask(state, taskId, options = {}) {
   if (groupKey) state.openTaskSections.add(groupKey);
   const nextIndex = timelineIndexForSelectedTask(state);
   if (nextIndex !== null) state.selectedStepIndex = nextIndex;
+  state.selectedTaskStepIndex = activeTaskStepIndex(task, state);
   if (options.drawer) state.detailDrawer = { type: 'task', taskId };
   render(state);
   if (options.center !== false) centerSelectedNode(state);
@@ -1310,6 +1469,17 @@ function selectTask(state, taskId, options = {}) {
 
 function setTimelineStep(state, nextIndex, options = {}) {
   state.selectedStepIndex = clampIndex(nextIndex, state.model?.timeline?.length || 1);
+  state.userNavigatedTimeline = true;
+  render(state);
+  if (options.center) centerSelectedNode(state);
+  syncDetailDrawer(state);
+}
+
+function setTaskTimelineStep(state, nextIndex, options = {}) {
+  const task = getSelectedTask(state);
+  if (!task) return;
+  const steps = taskSteps(task, state);
+  state.selectedTaskStepIndex = clampMetric(nextIndex, 0, Math.max(steps.length - 1, 0));
   state.userNavigatedTimeline = true;
   render(state);
   if (options.center) centerSelectedNode(state);
@@ -1338,7 +1508,7 @@ function closeDetailDrawer(state) {
 function taskDrawer(task, state) {
   const t = labels[state.lang];
   const steps = taskSteps(task, state);
-  const selectedTimelineIndex = clampIndex(state.selectedStepIndex, state.model?.timeline?.length || 1);
+  const selectedTaskStepIndex = clampMetric(state.selectedTaskStepIndex || 0, 0, Math.max(steps.length - 1, 0));
   const summary = cleanUiCopy(itemSummary(task) || '');
   const target = displayPathLike(task.target || task.commandId || task.taskId || '');
   const sourceLine = [
@@ -1407,7 +1577,7 @@ function taskDrawer(task, state) {
       </header>
       <div class="ctox-drawer-steps">
         ${steps.map((step, index) => `
-          <button type="button" class="${step.timelineIndex === selectedTimelineIndex ? 'is-current' : ''}" data-drawer-step="${step.timelineIndex}">
+          <button type="button" class="${index === selectedTaskStepIndex ? 'is-current' : ''}" data-drawer-task-step="${index}">
             <span>${String(index + 1).padStart(2, '0')}</span>
             <strong>${escapeHtml(step.label)}</strong>
             <small>${escapeHtml(stepMetaLabel(step, state))}</small>
@@ -1425,9 +1595,9 @@ function taskDrawer(task, state) {
   body.querySelector('[data-ctox-task-delete]')?.addEventListener('click', async () => {
     await deleteCtoxTaskFromDrawer(state, task, body);
   });
-  body.querySelectorAll('[data-drawer-step]').forEach((button) => {
+  body.querySelectorAll('[data-drawer-task-step]').forEach((button) => {
     button.addEventListener('click', () => {
-      setTimelineStep(state, Number(button.dataset.drawerStep), { center: true });
+      setTaskTimelineStep(state, Number(button.dataset.drawerTaskStep), { center: true });
     });
   });
   return body;
@@ -1471,7 +1641,11 @@ async function saveCtoxTaskFromDrawer(state, task, form) {
 
 async function deleteCtoxTaskFromDrawer(state, task, body) {
   const t = labels[state.lang];
-  if (!window.confirm(t.deleteTaskConfirm)) return;
+  const confirmed = await showBusinessConfirm(t.deleteTaskConfirm, {
+    title: 'Task löschen',
+    confirmLabel: 'Löschen',
+  });
+  if (!confirmed) return;
   const status = body.querySelector('[data-ctox-task-action-status]');
   const button = body.querySelector('[data-ctox-task-delete]');
   const payload = {
@@ -1607,7 +1781,8 @@ function selectedTaskStepView(task, state) {
   const selectedTimelineIndex = clampIndex(state.selectedStepIndex, state.model.timeline.length);
   const byTimeline = steps.findIndex((step) => step.timelineIndex === selectedTimelineIndex);
   const activeIndex = steps.findIndex((step) => step.active);
-  const index = state.userNavigatedTimeline && byTimeline >= 0 ? byTimeline : Math.max(0, activeIndex);
+  const taskIndex = clampMetric(state.selectedTaskStepIndex || 0, 0, Math.max(steps.length - 1, 0));
+  const index = state.userNavigatedTimeline ? taskIndex : (byTimeline >= 0 ? byTimeline : Math.max(0, activeIndex));
   const step = steps[index] || steps[0];
   return { steps, index, step, node: state.model.nodeMap.get(step.id) || null };
 }
@@ -1622,7 +1797,7 @@ function nodeStatus(id, observedIds, activeIndex, liveWork) {
 
 function observedPathFromFlow(flowResult) {
   if (flowResult?.ok === false) return [];
-  const flow = flowResult?.flow || fallbackHarnessFlow().flow;
+  const flow = flowResult?.flow || emptyHarnessFlow().flow;
   const ids = [];
   const seen = new Set();
   const push = (id) => {
@@ -1672,7 +1847,7 @@ function observedPathFromFlow(flowResult) {
 }
 
 function observedDetailsFromFlow(flowResult) {
-  const flow = flowResult?.flow || fallbackHarnessFlow().flow;
+  const flow = flowResult?.flow || emptyHarnessFlow().flow;
   const map = new Map();
   const add = (id, lines, tools, rawSources = []) => {
     const metrics = firstExplicitMetrics(rawSources);
@@ -1801,28 +1976,14 @@ function mergeBundleWithCommands(bundle, commands, queueTasks = [], bugReports =
     source: doc.source_module || doc.module || 'ctox',
     channel: inferInboundChannel(doc),
     priority: doc.priority || 'normal',
-    status: normalizeCommandStatus(doc.status || doc.route_status),
+    status: normalizeCommandStatus(doc.route_status || doc.status),
     routeStatus: doc.route_status || '',
     target: doc.command_type || doc.thread_key || 'ctox queue',
     result: doc.result || null,
     resultSummary: resultSummary(doc.result),
     createdAt: new Date(doc.updated_at_ms || Date.now()).toISOString(),
+    updatedAt: new Date(doc.updated_at_ms || Date.now()).toISOString(),
   })).filter((item) => item.id);
-  const commandQueue = commands.map((doc) => ({
-    id: doc.task_id || doc.command_id || doc.id,
-    taskId: doc.task_id || '',
-    commandId: doc.command_id || doc.id,
-    title: displayCommandTitle(doc),
-    prompt: doc.payload?.prompt || doc.payload?.instruction || doc.payload?.user_message || '',
-    source: doc.module || 'business-os',
-    channel: inferInboundChannel(doc),
-    priority: doc.command_type?.includes('runtime') ? 'high' : 'normal',
-    status: normalizeCommandStatus(doc.task_status || doc.status),
-    target: doc.command_type || 'ctox command',
-    result: doc.result || null,
-    resultSummary: resultSummary(doc.result),
-    createdAt: new Date(doc.updated_at_ms || Date.now()).toISOString(),
-  }));
   const tickets = bugReports.map((doc) => ({
     id: doc.id || doc.report_id,
     title: doc.title || doc.surface || doc.id || 'CTOX ticket',
@@ -1839,7 +2000,7 @@ function mergeBundleWithCommands(bundle, commands, queueTasks = [], bugReports =
   })).filter((item) => item.id);
   return {
     ...bundle,
-    queue: mergeById(commandQueue, mergeById(runtimeQueue, bundle.queue)),
+    queue: mergeById(runtimeQueue, bundle.queue),
     tickets: mergeById(tickets, bundle.tickets),
   };
 }
@@ -1943,14 +2104,23 @@ function isFocusedTask(item, focusTask) {
 
 function normalizeCommandStatus(status) {
   const value = String(status || '').toLowerCase();
-  if (value === 'accepted' || value === 'pending' || value === 'queued_local') return 'queued';
+  if (value === 'accepted' || value === 'pending') return 'queued';
   if (value === 'leased' || value === 'working') return 'running';
   if (value === 'done') return 'completed';
   if (value === 'handled') return 'handled';
   if (value === 'cancelled' || value === 'canceled') return 'cancelled';
-  if (value === 'blocked' || value === 'blocked_no_ctox_api' || value === 'stale_missing_native') return 'blocked';
+  if (value === 'blocked' || value === 'stale_missing_native') return 'blocked';
   if (value === 'failed') return 'failed';
   return value || 'queued';
+}
+
+function routeStatusNodeId(status) {
+  const value = String(status || '').toLowerCase();
+  if (value === 'accepted' || value === 'pending' || value === 'queued') return 'queued';
+  if (value === 'leased') return 'leased';
+  if (value === 'running' || value === 'working') return 'running';
+  if (value === 'failed' || value === 'cancelled' || value === 'canceled' || value === 'blocked' || value === 'stale_missing_native') return 'model-failed';
+  return '';
 }
 
 async function loadLocalCommands(ctx) {
@@ -1981,9 +2151,9 @@ async function loadHarnessFlow() {
     if (!res.ok) throw new Error(`harness_flow_${res.status}`);
     const payload = await res.json();
     if (payload?.flow?.blocks?.length) return payload;
-    return fallbackHarnessFlow(payload?.error);
+    return emptyHarnessFlow(payload?.error);
   } catch (error) {
-    return fallbackHarnessFlow(error?.message || String(error));
+    return emptyHarnessFlow(error?.message || String(error));
   }
 }
 
@@ -2001,38 +2171,21 @@ async function fetchWithTimeout(url, options = {}) {
   }
 }
 
-function loadCachedHarnessFlow() {
-  try {
-    const cached = JSON.parse(localStorage.getItem(HARNESS_FLOW_CACHE_KEY) || 'null');
-    return cached?.flow ? cached : null;
-  } catch {
-    return null;
-  }
-}
-
-function saveCachedHarnessFlow(flow) {
-  try {
-    if (flow?.flow?.blocks?.length) {
-      localStorage.setItem(HARNESS_FLOW_CACHE_KEY, JSON.stringify(flow));
-    }
-  } catch {}
-}
-
 async function loadStatus() {
   const res = await fetchWithTimeout('/api/business-os/status');
   if (!res.ok) throw new Error(`status_${res.status}`);
   return res.json();
 }
 
-function fallbackHarnessFlow(error = '') {
+function emptyHarnessFlow(error = '') {
   return {
     ok: false,
-    mode: 'fallback',
+    mode: 'unavailable',
     error,
     ascii: '',
     flow: {
       schema_version: 1,
-      source: { message_key: null, work_id: null, source_kind: 'fallback' },
+      source: { message_key: null, work_id: null, source_kind: 'unavailable' },
       ledger_events: [],
       blocks: [],
     },
@@ -2301,7 +2454,22 @@ function wireCanvasDrag(scroller) {
   scroller.addEventListener('wheel', (event) => {
     if (!event.ctrlKey && !event.metaKey) return;
     event.preventDefault();
+    const state = scroller.closest('[data-ctox-harness]')?.__ctoxState;
+    if (!state) return;
+    const previousZoom = state.zoom;
+    const nextZoom = state.zoom + (event.deltaY < 0 ? 0.12 : -0.12);
+    setFlowZoom(state, nextZoom);
+    if (state.zoom === previousZoom) return;
+    state.flowViewport = {
+      left: Math.max(0, (scroller.scrollLeft + event.offsetX) * (state.zoom / previousZoom) - event.offsetX),
+      top: Math.max(0, (scroller.scrollTop + event.offsetY) * (state.zoom / previousZoom) - event.offsetY),
+    };
+    renderMain(state);
   }, { passive: false });
+}
+
+function setFlowZoom(state, value) {
+  state.zoom = clampMetric(Math.round(value * 100) / 100, 0.72, 1.8);
 }
 
 function readFlowViewport(state) {
@@ -2325,13 +2493,14 @@ function restoreFlowViewport(state, viewport) {
 }
 
 function centerSelectedNode(state) {
-  const node = selectedTaskStepView(getSelectedTask(state), state)?.node
+  const selectedTask = getSelectedTask(state);
+  const node = selectedTaskStepView(selectedTask, state)?.node
     || state.model.timeline[clampIndex(state.selectedStepIndex, state.model.timeline.length)];
   const scroller = state.ctx.host.querySelector('[data-flow-canvas]');
   if (!node || !scroller) return;
   requestAnimationFrame(() => {
     const left = Math.max(0, node.x * state.zoom - scroller.clientWidth / 2);
-    const top = Math.max(0, node.y * state.zoom - scroller.clientHeight / 2);
+    const top = Math.max(0, selectedNodeVisualY(node, selectedTask, state) * state.zoom - scroller.clientHeight / 2);
     state.flowViewport = { left, top };
     scroller.scrollTo({
       left,
@@ -2381,20 +2550,39 @@ function liveElapsedSeconds(state) {
   return base + Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
 }
 
+function metricSubjectTask(state) {
+  const activeTask = state?.model?.activeTask;
+  if (taskOwnsCurrentHarnessMetrics(activeTask, state)) return activeTask;
+  return null;
+}
+
+function taskOwnsCurrentHarnessMetrics(task, state) {
+  if (!task || !taskMatchesHarnessFlow(task, state)) return false;
+  const status = normalizeCommandStatus(task.routeStatus || task.status);
+  return status === 'running';
+}
+
+function isLiveMetricSubject(task, state) {
+  if (!task || !state?.model?.activeTask) return false;
+  return task.id === state.model.activeTask.id
+    && taskMatchesHarnessFlow(task, state)
+    && normalizeCommandStatus(task.status) === 'running';
+}
+
 function isHarnessLive(state) {
   const activeTask = state?.model?.activeTask;
-  return Boolean(state?.flow?.ok && activeTask && normalizeCommandStatus(activeTask.status) === 'running');
+  return Boolean(state?.flow?.ok && isLiveMetricSubject(activeTask, state));
 }
 
 function liveStatusMarkup(state, options = {}) {
   const t = labels[state.lang];
   const classes = ['ctox-live-chip'];
   if (options.compact) classes.push('is-compact');
-  if (state.flow?.ok === false) classes.push('is-fallback');
+  if (state.flow?.ok === false) classes.push('is-unavailable');
   return `
     <span class="${classes.join(' ')}">
       <i aria-hidden="true"></i>
-      <span>${escapeHtml(state.flow?.ok === false ? t.fallback : t.live)}</span>
+      <span>${escapeHtml(state.flow?.ok === false ? t.notLive : t.live)}</span>
       <strong data-live-elapsed>${escapeHtml(formatMetricValue(liveElapsedSeconds(state), 'seconds', state.lang))}</strong>
     </span>
   `;
@@ -2403,6 +2591,7 @@ function liveStatusMarkup(state, options = {}) {
 function taskLiveStatusMarkup(task, state) {
   const status = normalizeCommandStatus(task?.status);
   if (status !== 'running' || task?.id !== state.model?.activeTask?.id) return '';
+  if (!isHarnessLive(state)) return '';
   return liveStatusMarkup(state, { compact: true });
 }
 
@@ -2466,7 +2655,7 @@ function formatTokenCount(value) {
 
 function displayFlowMode(mode) {
   if (mode === 'ctox_cli' || mode === 'ctox_core') return 'CTOX core';
-  return String(mode || 'fallback').replace(/[_-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+  return String(mode || 'unavailable').replace(/[_-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 function wrapSvgText(label) {
@@ -2489,6 +2678,7 @@ function wrapSvgText(label) {
 
 function branchToNodeId(kind, title, lines = []) {
   if (kind === 'queue_pickup') return queuePickupNode({ title, lines });
+  if (kind === 'guard') return guardBranchNode({ title, lines });
   if (kind === 'review') {
     const outcome = reviewBranchOutcome({ title, lines });
     if (outcome === 'passed') return 'review-passed';
@@ -2501,7 +2691,17 @@ function branchToNodeId(kind, title, lines = []) {
 
 function queuePickupNode(branch) {
   const text = branchText(branch);
+  if (/\b(current queue state|reload status):\s*(failed|cancelled|canceled|blocked)\b/.test(text) || /\b(direct session timeout|queue error|failed)\b/.test(text)) return 'model-failed';
+  if (/\b(current queue state|reload status):\s*(handled|completed|done|passed)\b/.test(text)) return 'passed';
   if (/\b(current queue state|reload status):\s*(leased|working|running)\b/.test(text) || /\b(leased by|lease time)\b/.test(text)) return 'leased';
+  return null;
+}
+
+function guardBranchNode(branch) {
+  const text = branchText(branch);
+  if (/\baccepted:\s*(leased|running|pending|queued)\s*->\s*failed\b/.test(text)) return 'model-failed';
+  if (/\baccepted:\s*(leased|running|pending|queued)\s*->\s*(handled|completed|passed|done)\b/.test(text)) return 'passed';
+  if (/\baccepted:\s*.*->\s*(infrafailed|infra failed)\b/.test(text)) return 'infra-failed';
   return null;
 }
 

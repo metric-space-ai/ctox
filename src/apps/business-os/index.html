@@ -1,15 +1,47 @@
 <!doctype html>
-<html lang="de">
+<html lang="de" data-theme="dark">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>CTOX Business OS</title>
-    <link rel="stylesheet" href="app.css?v=20260518-runtime-auth1" />
+    <script>
+      (() => {
+        try {
+          const prefs = JSON.parse(localStorage.getItem('ctox.businessOs.accountPreferences') || '{}') || {};
+          const theme = prefs.theme === 'light' ? 'light' : 'dark';
+          const language = prefs.language === 'en' ? 'en' : 'de';
+          const shellStyle = prefs.shellStyle === 'macos' ? 'macos' : 'windows';
+          document.documentElement.dataset.theme = theme;
+          document.documentElement.lang = language;
+          document.documentElement.dataset.shellStyle = shellStyle;
+        } catch {
+          document.documentElement.dataset.theme = 'dark';
+          document.documentElement.dataset.shellStyle = 'windows';
+        }
+      })();
+    </script>
+    <style>
+      html[data-theme="dark"] {
+        background: #0e1417;
+        color: #eef3f5;
+      }
+      body[data-module-shell="full"] .workspace-frame,
+      body[data-module-loading] .workspace-frame {
+        grid-template-columns: minmax(0, 1fr) !important;
+      }
+      body[data-module-shell="full"] .workspace-pane-left,
+      body[data-module-shell="full"] .workspace-pane-right,
+      body[data-module-loading] .workspace-pane-left,
+      body[data-module-loading] .workspace-pane-right {
+        display: none !important;
+      }
+    </style>
+    <link rel="stylesheet" href="app.css?v=20260520-taskbar-pins1" />
   </head>
-  <body>
+  <body data-module-shell="full" data-module-loading="startup">
     <div class="app-shell" data-shell>
       <header class="topbar">
-        <a class="brand" href="#ctox" aria-label="CTOX Business OS">
+        <a class="brand" href="#desktop" aria-label="Start" data-shell-start>
           <span class="brand-mark"><img src="assets/ctox-app-icon.png" alt="" /></span>
           <span class="brand-copy">
             <span class="brand-title-row">
@@ -20,17 +52,30 @@
           </span>
         </a>
         <div class="module-nav">
-          <nav class="module-tabs" data-module-tabs aria-label="Business OS modules"></nav>
+          <nav class="module-tabs" data-module-tabs aria-label="Geöffnete Apps"></nav>
         </div>
         <div class="topbar-actions">
-          <select class="header-select" data-language-select aria-label="Sprache">
-            <option value="de">DE</option>
-            <option value="en">EN</option>
-          </select>
-          <select class="header-select" data-theme-select aria-label="Design Theme">
-            <option value="dark">Dark</option>
-            <option value="light">Light</option>
-          </select>
+          <button class="icon-button show-desktop-button" type="button" data-show-desktop aria-label="Desktop anzeigen" title="Desktop anzeigen">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 5.5h16v13H4z"></path>
+              <path d="M8 9h8M8 12h8M8 15h5"></path>
+            </svg>
+          </button>
+          <span class="topbar-tray-group">
+            <select class="header-select" data-shell-style-select aria-label="Stil">
+              <option value="windows">Windows</option>
+              <option value="macos">macOS</option>
+            </select>
+            <select class="header-select" data-language-select aria-label="Sprache">
+              <option value="de">DE</option>
+              <option value="en">EN</option>
+            </select>
+            <select class="header-select" data-theme-select aria-label="Design Theme">
+              <option value="dark">Dark</option>
+              <option value="light">Light</option>
+            </select>
+          </span>
+          <span class="topbar-tray-separator" aria-hidden="true"></span>
           <button class="account-button" type="button" data-open-account aria-label="Login öffnen">
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M12 12.5a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z"></path>
@@ -71,6 +116,13 @@
     <aside class="drawer drawer-right" data-drawer-right hidden></aside>
     <section class="drawer drawer-bottom" data-drawer-bottom hidden></section>
 
-    <script type="module" src="app.js?v=20260518-runtime-auth1"></script>
+    <div class="shell-window-layer" data-shell-window-layer></div>
+    <nav class="shell-taskbar" data-shell-taskbar aria-label="Offene Fenster"></nav>
+    <div class="shell-window-switcher" data-shell-window-switcher hidden aria-hidden="true">
+      <div class="shell-window-switcher-panel" data-shell-window-switcher-panel role="listbox"></div>
+    </div>
+    <aside class="shell-notifications" data-shell-notifications aria-live="polite" aria-label="Benachrichtigungen"></aside>
+
+    <script type="module" src="app.js?v=20260520-chat-optimistic-submit1"></script>
   </body>
 </html>

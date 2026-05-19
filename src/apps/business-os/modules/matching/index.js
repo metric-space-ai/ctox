@@ -1,4 +1,4 @@
-const MATCHING_BUILD = '20260518-module-contract2';
+const MATCHING_BUILD = '20260518-generic-definition1';
 
 export async function mount(ctx) {
   await ensureStyles();
@@ -8,6 +8,10 @@ export async function mount(ctx) {
   ctx.host.dataset.matchingModule = 'native';
   ctx.left?.replaceChildren?.();
   ctx.right?.replaceChildren?.();
+  if (ctx.matchingDefinition || globalThis.CTOX_MATCHING_DEFINITION) {
+    const definitionModule = await import('./ui/matchingDefinition.js');
+    definitionModule.setActiveMatchingDefinition?.(ctx.matchingDefinition || globalThis.CTOX_MATCHING_DEFINITION);
+  }
   await import(`./ui/businessOsControls.js?v=${MATCHING_BUILD}`);
   const matchingUi = await import(`./ui/index.js?v=${MATCHING_BUILD}`);
   await matchingUi.mountMatchingDashboard?.(ctx);

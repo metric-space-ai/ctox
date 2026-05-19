@@ -1,8 +1,102 @@
+import { showBusinessConfirm } from '../../shared/dialogs.js';
+
 const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 const MARKDOWN_MIME = 'text/markdown';
 const CHUNK_SIZE = 256000;
 const DOCX_TOOLBAR_VISIBILITY_KEY = 'ctox.businessOs.documents.docxToolbarVisible';
 const DOCUMENT_RENDER_DEBOUNCE_MS = 80;
+const SYSTEMATIC_REPORT_RUNBOOKS = [
+  {
+    id: 'research.report.auto',
+    document_type: 'word_document',
+    title: 'Deep Research Word-Bericht',
+    description: 'CTOX waehlt den passenden Report-Typ und erstellt ein belastbares Word-Dokument.',
+    command_type: 'research.systematic.report.create',
+    report_type: 'auto',
+    prompt_template: 'Nutze den systematic-research Skill. Erstelle ein hochwertiges Word-Dokument (.docx), nicht Markdown. Fuehre Deep Research aus, nutze belastbare Quellen, baue sinnvolle Tabellen und Abbildungen ein und rendere das Ergebnis als DOCX.',
+  },
+  {
+    id: 'research.report.feasibility_study',
+    document_type: 'word_document',
+    title: 'Machbarkeitsstudie',
+    description: 'Decision-grade Machbarkeitsstudie mit Evidenz, Bewertung und DOCX-Render.',
+    command_type: 'research.systematic.report.create',
+    report_type: 'feasibility_study',
+    prompt_template: 'Erstelle eine Machbarkeitsstudie als Word-Dokument via ctox report report_type=feasibility_study.',
+  },
+  {
+    id: 'research.report.market_research',
+    document_type: 'word_document',
+    title: 'Marktanalyse',
+    description: 'Marktgroesse, Segmente, Treiber, Wettbewerb, Barrieren und Empfehlung.',
+    command_type: 'research.systematic.report.create',
+    report_type: 'market_research',
+    prompt_template: 'Erstelle eine Marktanalyse als Word-Dokument via ctox report report_type=market_research.',
+  },
+  {
+    id: 'research.report.competitive_analysis',
+    document_type: 'word_document',
+    title: 'Wettbewerbsanalyse',
+    description: 'Wettbewerber-Set, Bewertungsachsen, Matrix, Positionierung, Luecken und Empfehlung.',
+    command_type: 'research.systematic.report.create',
+    report_type: 'competitive_analysis',
+    prompt_template: 'Erstelle eine Wettbewerbsanalyse als Word-Dokument via ctox report report_type=competitive_analysis.',
+  },
+  {
+    id: 'research.report.technology_screening',
+    document_type: 'word_document',
+    title: 'Technologie-Screening',
+    description: 'Optioneninventar, Kriterien, Shortlist und naechste Schritte.',
+    command_type: 'research.systematic.report.create',
+    report_type: 'technology_screening',
+    prompt_template: 'Erstelle ein Technologie-Screening als Word-Dokument via ctox report report_type=technology_screening.',
+  },
+  {
+    id: 'research.report.whitepaper',
+    document_type: 'word_document',
+    title: 'Whitepaper',
+    description: 'These, Kontext, Argumente, Gegenargumente, Implikationen und Position.',
+    command_type: 'research.systematic.report.create',
+    report_type: 'whitepaper',
+    prompt_template: 'Erstelle ein Whitepaper als Word-Dokument via ctox report report_type=whitepaper.',
+  },
+  {
+    id: 'research.report.literature_review',
+    document_type: 'word_document',
+    title: 'Stand der Technik',
+    description: 'Literature Review mit Themen, Synthese, Luecken und offenen Fragen.',
+    command_type: 'research.systematic.report.create',
+    report_type: 'literature_review',
+    prompt_template: 'Erstelle eine Literature Review als Word-Dokument via ctox report report_type=literature_review.',
+  },
+  {
+    id: 'research.report.decision_brief',
+    document_type: 'word_document',
+    title: 'Entscheidungsvorlage',
+    description: 'Kurzes empfehlungsorientiertes Memo mit Optionen, Kriterien und Bewertung.',
+    command_type: 'research.systematic.report.create',
+    report_type: 'decision_brief',
+    prompt_template: 'Erstelle eine Entscheidungsvorlage als Word-Dokument via ctox report report_type=decision_brief.',
+  },
+  {
+    id: 'research.report.project_description',
+    document_type: 'word_document',
+    title: 'Projektbeschreibung / Fördervorhaben',
+    description: 'Unternehmens- und Projektbeschreibung fuer Innovations- und Foerdervorhaben.',
+    command_type: 'research.systematic.report.create',
+    report_type: 'project_description',
+    prompt_template: 'Erstelle eine Projektbeschreibung/Foerdervorhabenbeschreibung als Word-Dokument via ctox report report_type=project_description.',
+  },
+  {
+    id: 'research.report.source_review',
+    document_type: 'word_document',
+    title: 'Quellenreview',
+    description: 'Systematische Quellen- und Datenquellenrecherche mit Taxonomie und Priorisierung.',
+    command_type: 'research.systematic.report.create',
+    report_type: 'source_review',
+    prompt_template: 'Erstelle ein Quellenreview als Word-Dokument via ctox report report_type=source_review.',
+  },
+];
 
 export async function mount(ctx) {
   await ensureStyles();
@@ -311,9 +405,10 @@ async function refreshDocuments(state) {
 
 async function refreshRunbooks(state) {
   const collection = state.ctx.db?.raw?.document_runbooks;
-  state.runbooks = collection
+  const storedRunbooks = collection
     ? (await collection.find({ sort: [{ title: 'asc' }] }).exec()).map((doc) => doc.toJSON())
     : [];
+  state.runbooks = mergeDocumentRunbooks(storedRunbooks);
 }
 
 async function createMarkdownDocument(state, input = {}) {
@@ -478,7 +573,7 @@ function renderLeft(state) {
     <div class="documents-column-head">
       <div class="documents-column-title">Documents</div>
       <div class="documents-column-actions">
-        <button class="documents-column-icon" type="button" aria-label="Markdown-Dokument erstellen" title="Markdown-Dokument erstellen" data-documents-new-markdown>${iconSvg('new')}</button>
+        <button class="documents-column-icon" type="button" aria-label="Word-Dokument erstellen" title="Word-Dokument erstellen" data-documents-new-markdown>${iconSvg('new')}</button>
         <button class="documents-column-icon" type="button" aria-label="Dokument importieren" title="Dokument importieren" data-documents-import-open>${iconSvg('import')}</button>
         <button class="documents-column-icon" type="button" aria-label="Ausgewähltes Dokument exportieren" title="Ausgewähltes Dokument exportieren" data-documents-export ${selected ? '' : 'disabled'}>${iconSvg('export')}</button>
       </div>
@@ -670,7 +765,10 @@ function openManageDocumentDrawer(state, record) {
   `;
   wireDrawerClose(state, body);
   body.querySelector('[data-documents-delete]')?.addEventListener('click', async () => {
-    const confirmed = window.confirm(`Dokument "${record.title}" löschen?`);
+    const confirmed = await showBusinessConfirm(`Dokument "${record.title}" löschen?`, {
+      title: 'Dokument löschen',
+      confirmLabel: 'Löschen',
+    });
     if (!confirmed) return;
     await deleteDocument(state, record.id);
     state.ctx.closeDrawers();
@@ -752,18 +850,18 @@ function openNewDocumentDrawer(state) {
     <header class="drawer-header-row">
       <div>
         <h2>Neues Dokument</h2>
-        <p>Markdown-Dokument anlegen und optional direkt ein CTOX Runbook mit Prompt starten.</p>
+        <p>CTOX erstellt ein Word-Dokument per Research-/Report-Runbook.</p>
       </div>
       <button class="icon-button" type="button" data-documents-drawer-close aria-label="Schließen">×</button>
     </header>
     <form class="documents-drawer-form" data-documents-new-form>
       <label>
         <span>Titel</span>
-        <input name="title" value="markdown-${new Date().toISOString().slice(0, 10)}" placeholder="Dokumenttitel">
+        <input name="title" value="Research-${new Date().toISOString().slice(0, 10)}" placeholder="Dokumenttitel">
       </label>
       <label>
-        <span>Runbook</span>
-        <select name="runbook">${runbookOptions(state, '', { includeNone: true })}</select>
+        <span>Dokumenttyp</span>
+        <select name="runbook">${runbookOptions(state, 'research.report.auto')}</select>
       </label>
       <label>
         <span>Tags</span>
@@ -771,12 +869,12 @@ function openNewDocumentDrawer(state) {
       </label>
       <label>
         <span>Prompt</span>
-        <textarea name="prompt" placeholder="Optionaler Startprompt für das neue Dokument oder Runbook"></textarea>
+        <textarea name="prompt" placeholder="Was soll CTOX recherchieren und als Word-Dokument ausarbeiten?"></textarea>
       </label>
       <button class="documents-knowledge-link" type="button" data-documents-open-knowledge>${iconSvg('knowledge')} CTOX Knowledge öffnen</button>
       <div class="documents-drawer-actions">
         <button type="button" data-documents-drawer-cancel>Abbrechen</button>
-        <button type="submit">Dokument erstellen</button>
+        <button type="submit">Word-Dokument erstellen</button>
       </div>
     </form>
   `;
@@ -784,14 +882,28 @@ function openNewDocumentDrawer(state) {
   body.querySelector('[data-documents-open-knowledge]')?.addEventListener('click', () => openKnowledgeRunbooks(state));
   body.querySelector('[data-documents-new-form]')?.addEventListener('submit', async (event) => {
     event.preventDefault();
+    const formElement = event.currentTarget;
+    const submit = formElement.querySelector('button[type="submit"]');
     const form = new FormData(event.currentTarget);
-    await createMarkdownDocument(state, {
-      title: form.get('title')?.toString() || '',
-      runbookId: form.get('runbook')?.toString() || '',
-      prompt: form.get('prompt')?.toString() || '',
-      tags: form.get('tags')?.toString() || '',
-    });
-    state.ctx.closeDrawers();
+    try {
+      if (submit) {
+        submit.disabled = true;
+        submit.textContent = 'Task wird angelegt...';
+      }
+      await dispatchNewDocumentReport(state, {
+        title: form.get('title')?.toString() || '',
+        runbookId: form.get('runbook')?.toString() || '',
+        prompt: form.get('prompt')?.toString() || '',
+        tags: form.get('tags')?.toString() || '',
+      });
+      state.ctx.closeDrawers();
+    } catch (error) {
+      renderError(state, `CTOX konnte den Dokument-Task nicht anlegen: ${error?.message || error}`);
+      if (submit) {
+        submit.disabled = false;
+        submit.textContent = 'Word-Dokument erstellen';
+      }
+    }
   });
   state.ctx.openLeftDrawer(body);
 }
@@ -918,7 +1030,7 @@ function renderWorkflowPanel(state) {
   const importMode = flow.importMode || 'direct';
   panel.innerHTML = `
     <div class="documents-workflow-head">
-      <strong>${isImport ? 'Dokument importieren' : 'Neues Markdown-Dokument'}</strong>
+      <strong>${isImport ? 'Dokument importieren' : 'Neues Word-Dokument'}</strong>
       <button class="documents-column-icon" type="button" aria-label="Schließen" title="Schließen" data-documents-workflow-close>${iconSvg('close')}</button>
     </div>
     ${isImport ? `
@@ -940,7 +1052,7 @@ function renderWorkflowPanel(state) {
       </label>
     `}
     <label class="documents-workflow-field" data-documents-runbook-field>
-      <span>Runbook</span>
+      <span>${isImport ? 'Runbook' : 'Dokumenttyp'}</span>
       <select data-documents-workflow-runbook ${isImport && importMode === 'direct' ? 'disabled' : ''}>
         ${runbookOptions(state, flow.runbookId)}
       </select>
@@ -951,12 +1063,12 @@ function renderWorkflowPanel(state) {
     </label>
     <label class="documents-workflow-field">
       <span>Prompt</span>
-      <textarea data-documents-workflow-prompt ${isImport && importMode === 'direct' ? 'disabled' : ''} placeholder="${isImport ? 'Optionaler Prompt für das Runbook beim Import' : 'Optionaler Startprompt für Dokument und Runbook'}">${escapeHtml(flow.prompt || '')}</textarea>
+      <textarea data-documents-workflow-prompt ${isImport && importMode === 'direct' ? 'disabled' : ''} placeholder="${isImport ? 'Optionaler Prompt für das Runbook beim Import' : 'Was soll CTOX recherchieren und als Word-Dokument ausarbeiten?'}">${escapeHtml(flow.prompt || '')}</textarea>
     </label>
     <button class="documents-knowledge-link" type="button" data-documents-open-knowledge>${iconSvg('knowledge')} Runbooks verwalten</button>
     <div class="documents-workflow-actions">
       <button type="button" data-documents-workflow-cancel>Abbrechen</button>
-      <button type="submit">${isImport ? 'Importieren' : 'Erstellen'}</button>
+      <button type="submit">${isImport ? 'Importieren' : 'Word-Dokument erstellen'}</button>
     </div>
   `;
   return panel;
@@ -990,29 +1102,33 @@ function bindWorkflowControls(state, wrap) {
     const prompt = workflow.querySelector('[data-documents-workflow-prompt]')?.value || '';
     const runbookId = workflow.querySelector('[data-documents-workflow-runbook]')?.value || defaultRunbookId(state);
     const tags = workflow.querySelector('[data-documents-workflow-tags]')?.value || '';
-    if (flow.mode === 'import') {
-      const file = flow.file || workflow.querySelector('[data-documents-workflow-file]')?.files?.[0];
-      if (!file) {
-        renderError(state, 'Bitte zuerst eine DOCX- oder Markdown-Datei auswählen.');
-        return;
+    try {
+      if (flow.mode === 'import') {
+        const file = flow.file || workflow.querySelector('[data-documents-workflow-file]')?.files?.[0];
+        if (!file) {
+          renderError(state, 'Bitte zuerst eine DOCX- oder Markdown-Datei auswählen.');
+          return;
+        }
+        await importDocumentFile(state, file, {
+          applyRunbook: flow.importMode === 'runbook',
+          runbookId,
+          prompt,
+          tags,
+          sourceAction: flow.importMode === 'runbook' ? 'import_with_runbook' : 'direct_import',
+        });
+      } else {
+        await dispatchNewDocumentReport(state, {
+          title: workflow.querySelector('[data-documents-new-title]')?.value || flow.title,
+          runbookId,
+          prompt,
+          tags,
+        });
       }
-      await importDocumentFile(state, file, {
-        applyRunbook: flow.importMode === 'runbook',
-        runbookId,
-        prompt,
-        tags,
-        sourceAction: flow.importMode === 'runbook' ? 'import_with_runbook' : 'direct_import',
-      });
-    } else {
-      await createMarkdownDocument(state, {
-        title: workflow.querySelector('[data-documents-new-title]')?.value || flow.title,
-        runbookId,
-        prompt,
-        tags,
-      });
+      state.workflowPanel = null;
+      renderLeft(state);
+    } catch (error) {
+      renderError(state, `CTOX konnte den Dokument-Task nicht anlegen: ${error?.message || error}`);
     }
-    state.workflowPanel = null;
-    renderLeft(state);
   });
 }
 
@@ -1152,14 +1268,166 @@ async function dispatchDocumentRunbook(state, input) {
   });
 }
 
+async function dispatchNewDocumentReport(state, input = {}) {
+  const prompt = String(input.prompt || '').trim();
+  if (!prompt) {
+    throw new Error('Prompt fehlt. CTOX braucht einen Auftrag fuer das Word-Dokument.');
+  }
+  const title = sanitizeDocumentTitle(input.title || 'Research Document');
+  const runbookId = input.runbookId || 'research.report.auto';
+  const runbook = state.runbooks.find((item) => item.id === runbookId || item.command_type === runbookId)
+    || SYSTEMATIC_REPORT_RUNBOOKS[0];
+  const reportType = runbook.report_type || (runbook.id || '').replace(/^research\.report\./, '') || 'auto';
+  const filename = ensureExtension(slugFilename(title), '.docx');
+  const outputPath = `runtime/business-os/documents/generated/${filename}`;
+  const commandId = `cmd_${crypto.randomUUID()}`;
+  const startedAtMs = Date.now();
+  const instruction = [
+    `Erstelle das Word-Dokument "${title}".`,
+    `Nutzerauftrag: ${prompt}`,
+    '',
+    'Nutze den systematic-research Skill, die CTOX Report-Pipeline und den doc/Documents Word-Produktionsskill.',
+    'Halte die Knowledge-Lookup-Pflicht aus dem systematic-research Skill ein.',
+    reportType && reportType !== 'auto'
+      ? `Verwende report_type_id=${reportType}.`
+      : 'Waehle den passenden report_type_id aus den CTOX Report-Blueprints.',
+    'Erzeuge ein solides .docx-Dokument mit sauberer Struktur, Quellen/Evidenz, Tabellen und sinnvollen Abbildungen/Diagrammen, wo sie fachlich tragen.',
+    'Wende den Documents-Skill-Workflow an: Design-Preset, echte Word-Styles, echte Listen/Tabellengeometrie, DOCX-Render/QA soweit die lokale Runtime es erlaubt.',
+    'Erzeuge kein Markdown als Endartefakt. Das finale Artefakt muss ein Word-Dokument sein.',
+    `Speichere das finale DOCX im Workspace unter ${outputPath}.`,
+    'Der Business-OS Writeback registriert genau diese DOCX-Datei danach automatisch im Documents-Modul.',
+  ].join('\n');
+  const command = {
+    id: commandId,
+    module: 'documents',
+    type: runbook.command_type || 'research.systematic.report.create',
+    record_id: '',
+    inbound_channel: 'business_os.documents',
+    payload: {
+      title,
+      instruction,
+      prompt,
+      report_type_id: reportType,
+      selected_runbook_id: runbook.id || runbookId,
+      selected_runbook: runbook,
+      desired_format: 'docx',
+      output_filename: filename,
+      output_path: outputPath,
+      required_skills: ['systematic-research', 'doc'],
+      tags: normalizeTags(input.tags),
+      thread_key: 'business-os/documents',
+      required_artifacts: [outputPath],
+      document_quality_contract: {
+        use_documents_skill: true,
+        final_artifact_format: 'docx',
+        require_real_word_styles: true,
+        require_tables_and_figures_when_useful: true,
+        require_render_or_structural_qa: true,
+      },
+      writeback_contract: {
+        module: 'documents',
+        collection: 'documents',
+        desired_format: 'docx',
+        document_type: 'word_document',
+        title,
+        filename,
+        output_path: outputPath,
+      },
+    },
+    client_context: {
+      module: 'documents',
+      surface: 'documents-new-document',
+      action: 'create_word_document',
+      source_module: 'documents',
+      inbound_channel: 'business_os.documents',
+      selected_runbook_id: runbook.id || runbookId,
+      report_type_id: reportType,
+      document_type: 'word_document',
+      filename,
+      output_path: outputPath,
+    },
+  };
+  const result = await dispatchDocumentCommandWithBackendFallback(state, command, commandId, startedAtMs);
+  rememberDocumentTask(result, {
+    title,
+    filename,
+    runbookId: runbook.id || runbookId,
+    reportType,
+  });
+  return result;
+}
+
+async function dispatchDocumentCommandWithBackendFallback(state, command, commandId, startedAtMs) {
+  const dispatchPromise = state.ctx.commandBus.dispatch(command);
+  const firstResult = await Promise.race([
+    dispatchPromise,
+    delay(8000).then(() => ({ timedOut: true })),
+  ]);
+  if (!firstResult?.timedOut) return firstResult;
+
+  const projection = await waitForBusinessCommandProjection(commandId, startedAtMs);
+  if (projection) {
+    return {
+      ok: projection.status !== 'failed',
+      command_id: commandId,
+      status: projection.status || 'accepted',
+      task_id: projection.task_id || '',
+      task_status: projection.task_status || projection.status || 'accepted',
+      transport: 'native-rxdb-http-projection',
+    };
+  }
+  throw new Error('CTOX hat den Dokument-Command nicht bestaetigt. Bitte erneut versuchen.');
+}
+
+async function waitForBusinessCommandProjection(commandId, startedAtMs) {
+  const sinceMs = Math.max(0, Number(startedAtMs || Date.now()) - 1000);
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    const url = new URL('/api/business-os/rxdb/pull', window.location.origin);
+    url.searchParams.set('collection', 'business_commands');
+    url.searchParams.set('since_ms', String(sinceMs));
+    url.searchParams.set('limit', '2000');
+    try {
+      const res = await fetch(url);
+      if (res.ok) {
+        const payload = await res.json();
+        const documents = Array.isArray(payload?.documents) ? payload.documents : [];
+        const match = documents.find((item) => item?.command_id === commandId || item?.id === commandId);
+        if (match) return match;
+      }
+    } catch (_) {
+      // Retry below; the submit path should not stay visually stuck on a transient pull failure.
+    }
+    await delay(1000);
+  }
+  return null;
+}
+
+function delay(ms) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function rememberDocumentTask(result, meta = {}) {
+  const trackingId = result?.task_id || result?.command_id || '';
+  if (!trackingId) return;
+  try {
+    sessionStorage.setItem('ctox.businessOs.focusTask', JSON.stringify({
+      taskId: result.task_id || trackingId,
+      commandId: result.command_id || '',
+      module: 'documents',
+      source: 'documents-new-document',
+      title: meta.title || '',
+      filename: meta.filename || '',
+      runbookId: meta.runbookId || '',
+      reportType: meta.reportType || '',
+      createdAt: new Date().toISOString(),
+    }));
+  } catch (_) {
+    // Ignore unavailable session storage.
+  }
+}
+
 function runbookOptions(state, selectedId = '', options = {}) {
-  const runbooks = state.runbooks.length
-    ? state.runbooks
-    : [
-        { id: 'document.summarize', command_type: 'document.summarize', title: 'Zusammenfassen' },
-        { id: 'document.extract-requirements', command_type: 'document.extract-requirements', title: 'Requirements extrahieren' },
-        { id: 'document.review-risks', command_type: 'document.review-risks', title: 'Risiken prüfen' },
-      ];
+  const runbooks = state.runbooks.length ? state.runbooks : mergeDocumentRunbooks([]);
   const optionHtml = runbooks.map((runbook) => {
     const value = runbook.id || runbook.command_type;
     const label = runbook.title || runbook.command_type || value;
@@ -1169,7 +1437,7 @@ function runbookOptions(state, selectedId = '', options = {}) {
 }
 
 function defaultRunbookId(state) {
-  return state.runbooks[0]?.id || state.runbooks[0]?.command_type || 'document.summarize';
+  return state.runbooks[0]?.id || state.runbooks[0]?.command_type || 'research.report.auto';
 }
 
 async function openKnowledgeRunbooks(state) {
@@ -1586,25 +1854,46 @@ async function ensureSeedRunbooks(ctx) {
   const collection = ctx.db?.raw?.document_runbooks;
   if (!collection) return;
   const existing = await collection.find().exec();
-  if (existing.length) return;
   const now = Date.now();
-  const runbooks = [
-    ['document.summarize', 'Zusammenfassen', 'Fasse das ausgewählte DOCX strukturiert zusammen.'],
-    ['document.extract-requirements', 'Requirements extrahieren', 'Extrahiere Anforderungen, offene Punkte und Nachweise.'],
-    ['document.review-risks', 'Risiken prüfen', 'Prüfe fachliche, rechtliche und Umsetzungsrisiken im Dokument.'],
-  ];
-  for (const [id, title, prompt] of runbooks) {
+  const existingIds = new Set(existing.map((doc) => doc.toJSON().id));
+  const runbooks = mergeDocumentRunbooks([
+    { id: 'document.summarize', document_type: 'word_document', title: 'Zusammenfassen', command_type: 'document.summarize', prompt_template: 'Fasse das ausgewählte DOCX strukturiert zusammen.' },
+    { id: 'document.extract-requirements', document_type: 'word_document', title: 'Requirements extrahieren', command_type: 'document.extract-requirements', prompt_template: 'Extrahiere Anforderungen, offene Punkte und Nachweise.' },
+    { id: 'document.review-risks', document_type: 'word_document', title: 'Risiken prüfen', command_type: 'document.review-risks', prompt_template: 'Prüfe fachliche, rechtliche und Umsetzungsrisiken im Dokument.' },
+  ]);
+  for (const runbook of runbooks) {
+    if (existingIds.has(runbook.id)) continue;
     await collection.insert({
-      id,
-      document_type: 'word_document',
-      title,
-      description: prompt,
-      command_type: id,
-      prompt_template: prompt,
+      ...runbook,
+      description: runbook.description || runbook.prompt_template || '',
       created_at_ms: now,
       updated_at_ms: now,
     });
   }
+}
+
+function mergeDocumentRunbooks(runbooks = []) {
+  const byId = new Map();
+  [...SYSTEMATIC_REPORT_RUNBOOKS, ...runbooks].forEach((runbook) => {
+    const id = runbook.id || runbook.command_type;
+    if (!id) return;
+    byId.set(id, {
+      ...runbook,
+      id,
+      document_type: runbook.document_type || 'word_document',
+      title: runbook.title || id,
+      command_type: runbook.command_type || id,
+      prompt_template: runbook.prompt_template || runbook.description || '',
+    });
+  });
+  return Array.from(byId.values()).sort((left, right) => {
+    const leftReport = String(left.id || '').startsWith('research.report.');
+    const rightReport = String(right.id || '').startsWith('research.report.');
+    if (left.id === 'research.report.auto') return -1;
+    if (right.id === 'research.report.auto') return 1;
+    if (leftReport !== rightReport) return leftReport ? -1 : 1;
+    return String(left.title || '').localeCompare(String(right.title || ''), 'de');
+  });
 }
 
 function selectedRecord(state) {

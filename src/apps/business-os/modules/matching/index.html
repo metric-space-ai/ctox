@@ -107,7 +107,7 @@
         </div>
       </div>
 
-      <input type="file" id="objectImportPdfInput" accept="application/pdf" style="display:none" />
+      <input type="file" id="objectImportPdfInput" accept="application/pdf,.pdf,image/*,.png,.jpg,.jpeg,.webp,.gif,.bmp,.avif" style="display:none" />
 
       <div class="object-list" id="objectList"></div>
 
@@ -206,14 +206,14 @@
             <input type="radio" name="relState" value="1" />
             <span>
               <span class="lg-dot requirement" style="margin-right:6px"></span>
-              Kontakt besteht
+              <span data-rel-label="exists">Kontakt besteht</span>
             </span>
           </label>
           <label class="rel-option">
             <input type="radio" name="relState" value="0" />
             <span>
               <span class="lg-dot" style="margin-right:6px; background:var(--none)"></span>
-              Noch kein Kontakt
+              <span data-rel-label="missing">Noch kein Kontakt</span>
             </span>
           </label>
         </div>
@@ -246,7 +246,7 @@
         <div class="match-bar-titles">
           <div class="match-bar-label">Match-Details</div>
           <div class="match-bar-main">
-            <span id="matchBarAnforderungLabel">–</span>
+            <span id="matchBarRequirementLabel">–</span>
             <span class="dot-sep">·</span>
             <span id="matchBarObjectLabel">–</span>
           </div>

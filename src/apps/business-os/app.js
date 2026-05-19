@@ -1,21 +1,32 @@
-import { createBusinessDb } from './shared/db.js';
-import { createSyncRuntime } from './shared/sync.js?v=20260518-authoritative-queue1';
-import { createCommandBus } from './shared/command-bus.js?v=20260518-real-queue-chat2';
-import { openReactSettings } from './shared/react-settings.js?v=20260518-runtime-auth1';
-import { initBusinessReporter } from './shared/business-reporter.js?v=20260517-roles1';
-import { initBusinessChat } from './shared/business-chat.js?v=20260518-user-chat-sync1';
+import { createBusinessDb } from './shared/db.js?v=20260519-rxdb-contract1';
+import { createSyncRuntime } from './shared/sync.js?v=20260519-source-upsert1';
+import { createCommandBus } from './shared/command-bus.js?v=20260519-native-commandbus1';
+import { openReactSettings } from './shared/react-settings.js?v=20260518-runtime-auth-oauth3';
+import { initBusinessReporter } from './shared/business-reporter.js?v=20260519-bugs-features1';
+import { initBusinessChat } from './shared/business-chat.js?v=20260520-chat-optimistic-submit1';
+import { createEventBus } from './shared/event-bus.js?v=20260519-shell-os1';
+import { createNotifications } from './shared/notifications.js?v=20260519-shell-os1';
+import { createContextMenu } from './shared/context-menu.js?v=20260519-shell-os1';
+import { createWindowManager } from './shared/window-manager.js?v=20260519-shell-os1';
+import { createTaskbar } from './shared/taskbar.js?v=20260519-shell-os1';
+import { createWindowSwitcher } from './shared/window-switcher.js?v=20260519-shell-os1';
+import { installBusinessDialogFallbacks } from './shared/dialogs.js?v=20260519-dialogs1';
 import { collections as ctoxCollections, migrationStrategies as ctoxMigrationStrategies } from './modules/ctox/schema.js';
+import { collections as desktopCollections, migrationStrategies as desktopMigrationStrategies } from './modules/desktop/schema.js';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
 const LOGGED_OUT_KEY = 'ctox.businessOs.loggedOut';
 const ACCOUNT_PREFS_KEY = 'ctox.businessOs.accountPreferences';
 const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
+const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
-const APP_BUILD = '20260518-user-chat-sync1';
-const FETCH_TIMEOUT_MS = 1500;
+const APP_BUILD = '20260520-chat-optimistic-submit1';
+const FETCH_TIMEOUT_MS = 10000;
 const CTOX_HEALTH_POLL_MS = 10000;
+const DEFAULT_TASKBAR_PIN_IDS = ['ctox', 'documents', 'explorer', 'knowledge', 'research'];
 let moduleLayoutSaveTimer = null;
+let taskbarPinSaveTimer = null;
 let shellColumnResizeSync = null;
 
 const SHELL_COL_MIN = {
@@ -36,12 +47,21 @@ const state = {
   session: null,
   governance: null,
   moduleLayout: null,
+  taskbarPins: [],
   schemaRegistrations: new Map(),
   schemaRegistrationQueue: Promise.resolve(),
   syncStartedModules: new Set(),
   backgroundModuleWorkScheduled: false,
   ctoxHealth: null,
   ctoxHealthTimer: null,
+  eventBus: null,
+  contextMenu: null,
+  notifications: null,
+  windowManager: null,
+  taskbar: null,
+  windowSwitcher: null,
+  windowGeometryCache: new Map(),
+  windowGeometrySaveTimers: new Map(),
 };
 
 const moduleAliases = {};
@@ -64,11 +84,35 @@ const shellMessages = {
     ctoxStopped: 'CTOX Service läuft nicht.',
     ctoxStatusUnavailable: 'CTOX Status nicht erreichbar.',
     ctoxLastError: 'Letzter Fehler',
+    desktop: 'Desktop',
+    showDesktop: 'Desktop anzeigen',
+    closeModule: 'Schließen',
+    windowDefaultTitle: 'Fenster',
+    windowMaximize: 'Maximieren',
+    windowRestore: 'Wiederherstellen',
+    windowMinimize: 'Minimieren',
+    windowClose: 'Schließen',
+    windowSnapLeft: 'Links anheften',
+    windowSnapRight: 'Rechts anheften',
+    windowSnapTop: 'Oben anheften',
+    windowSnapBottom: 'Unten anheften',
+    windowAlwaysOnTop: 'Immer im Vordergrund',
+    windowAlwaysOnTopOff: 'Immer im Vordergrund: aus',
+    windowCloseOthers: 'Andere Fenster schließen',
+    pinToTaskbar: 'An Bar anheften',
+    unpinFromTaskbar: 'Von Bar lösen',
+    pinned: 'Gepinnt',
+    running: 'Läuft',
+    openApp: 'Öffnen',
     moduleTitles: {
+      desktop: 'Desktop',
       ctox: 'CTOX',
       documents: 'Dokumente',
       knowledge: 'Knowledge',
       'matching': 'Matching',
+      reports: 'Bugs & Features',
+      research: 'Research',
+      conversations: 'Conversations',
     },
   },
   en: {
@@ -88,11 +132,35 @@ const shellMessages = {
     ctoxStopped: 'CTOX service is not running.',
     ctoxStatusUnavailable: 'CTOX status is unavailable.',
     ctoxLastError: 'Last error',
+    desktop: 'Desktop',
+    showDesktop: 'Show desktop',
+    closeModule: 'Close',
+    windowDefaultTitle: 'Window',
+    windowMaximize: 'Maximize',
+    windowRestore: 'Restore',
+    windowMinimize: 'Minimize',
+    windowClose: 'Close',
+    windowSnapLeft: 'Snap left',
+    windowSnapRight: 'Snap right',
+    windowSnapTop: 'Snap top',
+    windowSnapBottom: 'Snap bottom',
+    windowAlwaysOnTop: 'Always on top',
+    windowAlwaysOnTopOff: 'Always on top: off',
+    windowCloseOthers: 'Close other windows',
+    pinToTaskbar: 'Pin to bar',
+    unpinFromTaskbar: 'Unpin from bar',
+    pinned: 'Pinned',
+    running: 'Running',
+    openApp: 'Open',
     moduleTitles: {
+      desktop: 'Desktop',
       ctox: 'CTOX',
       documents: 'Documents',
       knowledge: 'Knowledge',
       'matching': 'Matching',
+      reports: 'Bugs & Features',
+      research: 'Research',
+      conversations: 'Conversations',
     },
   },
 };
@@ -111,6 +179,13 @@ const els = {
   accountButton: document.querySelector('[data-open-account]'),
   languageSelect: document.querySelector('[data-language-select]'),
   themeSelect: document.querySelector('[data-theme-select]'),
+  shellStyleSelect: document.querySelector('[data-shell-style-select]'),
+  shellWindowLayer: document.querySelector('[data-shell-window-layer]'),
+  shellNotifications: document.querySelector('[data-shell-notifications]'),
+  shellTaskbar: document.querySelector('[data-shell-taskbar]'),
+  shellSwitcherOverlay: document.querySelector('[data-shell-window-switcher]'),
+  shellSwitcherPanel: document.querySelector('[data-shell-window-switcher-panel]'),
+  showDesktop: document.querySelector('[data-show-desktop]'),
 };
 
 bootstrap().catch((error) => {
@@ -119,9 +194,11 @@ bootstrap().catch((error) => {
 });
 
 async function bootstrap() {
+  installBusinessDialogFallbacks();
   const prefs = readAccountPrefs();
   applyShellTheme(prefs.theme || 'dark', { persist: false });
   applyShellLanguage(prefs.language || 'de', { persist: false });
+  applyShellStyle(prefs.shellStyle || 'windows', { persist: false });
   syncHeaderControls();
   wireShellActions();
   setStatus(shellText('startupChecking'));
@@ -134,13 +211,22 @@ async function bootstrap() {
     setStatus(shellText('loginRequired'));
     return;
   }
-  state.db = await createBusinessDb({ name: 'ctox_business_os_v3' });
-  await registerCoreCollections();
   setStatus(shellText('syncConnecting'));
   const [modules, syncConfig] = await Promise.all([
     loadModules(),
     loadSyncConfig(),
   ]);
+  state.modules = modules.modules || [];
+  state.governance = modules.governance || null;
+  state.moduleLayout = normalizeModuleLayout(await loadModuleLayout(), state.modules);
+  state.taskbarPins = normalizeTaskbarPins(readTaskbarPins(), state.modules);
+  persistModuleLayout();
+  renderTabs();
+  setStatus('Lokale Datenbank initialisieren');
+  state.db = await createBusinessDb({ name: 'ctox_business_os_v4' });
+  await registerCoreCollections();
+  await hydrateTaskbarPinsFromDesktopLayout();
+  renderTabs();
   state.sync = createSyncRuntime({
     db: state.db,
     baseUrl: '/api/business-os',
@@ -151,25 +237,72 @@ async function bootstrap() {
     db: state.db,
     config: syncConfig,
   });
-  state.modules = modules.modules || [];
-  state.governance = modules.governance || null;
-  state.moduleLayout = normalizeModuleLayout(await loadModuleLayout(), state.modules);
-  persistModuleLayout();
-  renderTabs();
+  state.eventBus = createEventBus();
+  state.contextMenu = createContextMenu({
+    host: document.body,
+    viewportEl: document.documentElement,
+  });
+  state.notifications = createNotifications({
+    container: els.shellNotifications,
+    t: (key, fallback) => shellText(key) || fallback || key,
+  });
+  const snapPreviewEl = document.createElement('div');
+  snapPreviewEl.className = 'shell-snap-preview';
+  snapPreviewEl.hidden = true;
+  els.shellWindowLayer.appendChild(snapPreviewEl);
+  state.windowManager = createWindowManager({
+    windowLayer: els.shellWindowLayer,
+    surfaceEl: document.querySelector('.workspace-frame') || document.body,
+    rootEl: document.documentElement,
+    snapPreviewEl,
+    eventBus: state.eventBus,
+    t: (key, fallback) => shellText(key) || fallback || key,
+    persistence: createWindowGeometryPersistence(),
+  });
+  state.windowManager.setChromeLayout(
+    document.documentElement.dataset.shellStyle === 'macos' ? 'macos' : 'windows'
+  );
+  state.windowManager.setInsets({ top: 0, bottom: els.shellTaskbar ? 54 : 0 });
+  if (els.shellTaskbar) {
+    state.taskbar = createTaskbar({
+      container: els.shellTaskbar,
+      windowManager: state.windowManager,
+      eventBus: state.eventBus,
+      t: (key, fallback) => shellText(key) || fallback || key,
+      ownerLabelFor: deriveOwnerLabel,
+    });
+  }
+  if (els.shellSwitcherOverlay && els.shellSwitcherPanel) {
+    state.windowSwitcher = createWindowSwitcher({
+      overlay: els.shellSwitcherOverlay,
+      panel: els.shellSwitcherPanel,
+      windowManager: state.windowManager,
+      ownerLabelFor: deriveOwnerLabel,
+      t: (key, fallback) => shellText(key) || fallback || key,
+    });
+  }
+  wireShellWindowGestures();
   setStatus(shellText('localWorkspace'));
   initBusinessReporter({
     session: state.session,
     getActiveModule: () => state.activeModule,
     authHeaders: businessOsAuthHeaders,
     endpoint: '/api/business-os/reports',
+    db: state.db,
   });
-  await openModule(currentHashModuleId() || state.modules[0]?.id || 'ctox');
   initBusinessChat({
     session: state.session,
     commandBus: state.commandBus,
     db: state.db,
     getActiveModule: () => state.activeModule,
   });
+  try {
+    await openModule(currentHashModuleId() || state.modules[0]?.id || 'ctox');
+    setStatus(shellText('localWorkspace'));
+  } catch (error) {
+    console.error('[business-os] module startup failed', error);
+    setStatus(`Module startup failed: ${error.message || error}`);
+  }
   scheduleBackgroundModuleWork();
   if (state.sync?.config?.http_bridge_available !== false) {
     refreshRemoteShellStateInBackground();
@@ -179,6 +312,265 @@ async function bootstrap() {
 
 async function registerCoreCollections() {
   await state.db.addCollections(withMigrationStrategies(ctoxCollections, ctoxMigrationStrategies));
+  await state.db.addCollections(withMigrationStrategies(desktopCollections, desktopMigrationStrategies));
+  await primeWindowGeometryCache();
+}
+
+async function primeWindowGeometryCache() {
+  const coll = state.db?.collections?.desktop_windows;
+  if (!coll) return;
+  try {
+    const docs = await coll.find().exec();
+    state.windowGeometryCache.clear();
+    for (const doc of docs) {
+      const payload = doc.toJSON();
+      if (!payload?.owner_id) continue;
+      state.windowGeometryCache.set(payload.owner_id, payload);
+    }
+  } catch (error) {
+    console.error('[business-os] primeWindowGeometryCache failed:', error);
+  }
+}
+
+function createWindowGeometryPersistence() {
+  return {
+    load(ownerId) {
+      if (!ownerId) return null;
+      const cached = state.windowGeometryCache.get(ownerId);
+      if (!cached) return null;
+      return {
+        x: numberOrNull(cached.x),
+        y: numberOrNull(cached.y),
+        width: numberOrNull(cached.width),
+        height: numberOrNull(cached.height),
+        state: cached.state || 'normal',
+        snapZone: cached.snap_zone || '',
+        alwaysOnTop: !!cached.always_on_top,
+        stored: cached.stored_x != null || cached.stored_y != null || cached.stored_width != null || cached.stored_height != null
+          ? {
+              left: cached.stored_x != null ? `${cached.stored_x}px` : '',
+              top: cached.stored_y != null ? `${cached.stored_y}px` : '',
+              width: cached.stored_width != null ? `${cached.stored_width}px` : '',
+              height: cached.stored_height != null ? `${cached.stored_height}px` : '',
+            }
+          : null,
+      };
+    },
+    save(ownerId, snapshot) {
+      if (!ownerId) return;
+      const cached = state.windowGeometryCache.get(ownerId) || {};
+      const next = {
+        id: ownerId,
+        owner_id: ownerId,
+        title: snapshot.title || cached.title || '',
+        icon: snapshot.icon || cached.icon || '',
+        x: numberOrNull(snapshot.x),
+        y: numberOrNull(snapshot.y),
+        width: numberOrNull(snapshot.width),
+        height: numberOrNull(snapshot.height),
+        state: snapshot.state || 'normal',
+        snap_zone: snapshot.snapZone || '',
+        always_on_top: !!snapshot.alwaysOnTop,
+        stored_x: parsePxOrNull(snapshot.stored?.left),
+        stored_y: parsePxOrNull(snapshot.stored?.top),
+        stored_width: parsePxOrNull(snapshot.stored?.width),
+        stored_height: parsePxOrNull(snapshot.stored?.height),
+        updated_at_ms: Date.now(),
+      };
+      state.windowGeometryCache.set(ownerId, next);
+      scheduleGeometryPersist(ownerId, next);
+    },
+  };
+}
+
+function scheduleGeometryPersist(ownerId, payload) {
+  const existing = state.windowGeometrySaveTimers.get(ownerId);
+  if (existing) clearTimeout(existing);
+  const handle = window.setTimeout(() => {
+    state.windowGeometrySaveTimers.delete(ownerId);
+    flushGeometryPersist(ownerId, payload).catch((error) => {
+      console.error('[business-os] geometry persist failed:', error);
+    });
+  }, 250);
+  state.windowGeometrySaveTimers.set(ownerId, handle);
+}
+
+async function flushGeometryPersist(ownerId, payload) {
+  const coll = state.db?.collections?.desktop_windows;
+  if (!coll) return;
+  const existing = await coll.findOne(ownerId).exec();
+  if (existing) {
+    await existing.incrementalPatch({ ...payload, updated_at_ms: Date.now() });
+  } else {
+    try {
+      await coll.insert(payload);
+    } catch (error) {
+      if (!String(error?.message || '').toLowerCase().includes('already')) throw error;
+    }
+  }
+}
+
+function deriveOwnerLabel(ownerId) {
+  if (!ownerId) return '';
+  if (ownerId.startsWith('desktop-app:')) {
+    const id = ownerId.slice('desktop-app:'.length);
+    const entry = DESKTOP_APPS.find((app) => app.id === id);
+    return entry?.title || id;
+  }
+  if (ownerId.startsWith('module:')) {
+    const id = ownerId.slice('module:'.length);
+    return shellText('moduleTitles')?.[id] || moduleDisplayTitleFor(id) || id;
+  }
+  return ownerId;
+}
+
+function moduleDisplayTitleFor(moduleId) {
+  if (!moduleId) return '';
+  const mod = state.modules?.find((entry) => entry.id === moduleId);
+  return mod?.title || '';
+}
+
+const SNAP_KEY_MAP = {
+  ArrowLeft: 'left',
+  ArrowRight: 'right',
+  ArrowUp: 'top',
+  ArrowDown: 'bottom',
+};
+
+function wireShellWindowGestures() {
+  document.addEventListener('keydown', onShellKeyboardShortcut, true);
+  if (state.eventBus) {
+    state.eventBus.on('window:context_request', handleWindowContextRequest);
+    state.eventBus.on('taskbar:item_context', handleTaskbarItemContext);
+    [
+      'window:opened',
+      'window:closed',
+      'window:focused',
+      'window:minimized',
+      'window:restored',
+      'window:title_changed',
+    ].forEach((eventName) => state.eventBus.on(eventName, renderTabs));
+  }
+}
+
+function onShellKeyboardShortcut(event) {
+  if (!state.windowManager) return;
+  if (event.defaultPrevented) return;
+  if (!(event.ctrlKey || event.metaKey)) return;
+  if (!event.altKey) return;
+  if (event.key === 'Tab') return;
+  const zone = SNAP_KEY_MAP[event.key];
+  if (!zone) return;
+  const focused = state.windowManager.listWindows().find((w) => w.isFocused);
+  if (!focused) return;
+  event.preventDefault();
+  event.stopPropagation();
+  state.windowManager.snapTo(focused.id, zone);
+}
+
+function handleWindowContextRequest(data) {
+  if (!state.contextMenu || !state.windowManager) return;
+  const desc = state.windowManager.describe(data.id);
+  if (!desc) return;
+  const fakeEvent = {
+    preventDefault() {},
+    stopPropagation() {},
+    clientX: data.clientX,
+    clientY: data.clientY,
+  };
+  state.contextMenu.show(fakeEvent, buildWindowContextItems(desc));
+}
+
+function handleTaskbarItemContext(data) {
+  if (!state.contextMenu || !state.windowManager) return;
+  const desc = state.windowManager.describe(data.windowId);
+  if (!desc) return;
+  const fakeEvent = {
+    preventDefault() {},
+    stopPropagation() {},
+    clientX: data.clientX,
+    clientY: data.clientY,
+  };
+  state.contextMenu.show(fakeEvent, buildWindowContextItems(desc));
+}
+
+function buildWindowContextItems(desc) {
+  const wm = state.windowManager;
+  const isMax = desc.state === 'maximized';
+  const ownerLabel = deriveOwnerLabel(desc.ownerId);
+  const sameOwnerCount = desc.ownerId
+    ? wm.listWindows().filter((w) => w.ownerId === desc.ownerId).length
+    : 0;
+  const items = [
+    {
+      label: isMax ? (shellText('windowRestore') || 'Wiederherstellen') : (shellText('windowMaximize') || 'Maximieren'),
+      icon: isMax ? '❐' : '□',
+      action: () => wm.toggleMaximize(desc.id),
+    },
+    {
+      label: shellText('windowMinimize') || 'Minimieren',
+      icon: '−',
+      action: () => wm.minimize(desc.id),
+    },
+    { type: 'separator' },
+    {
+      label: shellText('windowSnapLeft') || 'Links anheften',
+      icon: '◧',
+      action: () => wm.snapTo(desc.id, 'left'),
+    },
+    {
+      label: shellText('windowSnapRight') || 'Rechts anheften',
+      icon: '◨',
+      action: () => wm.snapTo(desc.id, 'right'),
+    },
+    {
+      label: shellText('windowSnapTop') || 'Oben anheften',
+      icon: '⬒',
+      action: () => wm.snapTo(desc.id, 'top'),
+    },
+    {
+      label: shellText('windowSnapBottom') || 'Unten anheften',
+      icon: '⬓',
+      action: () => wm.snapTo(desc.id, 'bottom'),
+    },
+    { type: 'separator' },
+    {
+      label: desc.alwaysOnTop
+        ? (shellText('windowAlwaysOnTopOff') || 'Immer im Vordergrund: aus')
+        : (shellText('windowAlwaysOnTop') || 'Immer im Vordergrund'),
+      icon: desc.alwaysOnTop ? '✓' : '↑',
+      action: () => wm.setAlwaysOnTop(desc.id, !desc.alwaysOnTop),
+    },
+    { type: 'separator' },
+  ];
+  if (sameOwnerCount > 1) {
+    items.push({
+      label: ownerLabel
+        ? `${shellText('windowCloseOthers') || 'Andere Fenster schließen'} (${ownerLabel})`
+        : (shellText('windowCloseOthers') || 'Andere Fenster schließen'),
+      icon: '⊠',
+      action: () => wm.closeOthersOfOwner(desc.id),
+    });
+  }
+  items.push({
+    label: shellText('windowClose') || 'Schließen',
+    icon: '×',
+    action: () => wm.destroy(desc.id),
+  });
+  return items;
+}
+
+function numberOrNull(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function parsePxOrNull(value) {
+  if (typeof value !== 'string') return null;
+  const m = value.match(/^(-?\d+(?:\.\d+)?)px$/);
+  if (!m) return null;
+  const n = Number(m[1]);
+  return Number.isFinite(n) ? n : null;
 }
 
 function wireShellActions() {
@@ -204,6 +596,39 @@ function wireShellActions() {
   document.querySelector('[data-open-settings]')?.addEventListener('click', () => {
     openSettingsDrawer();
   });
+  document.querySelector('[data-shell-start]')?.addEventListener('click', (event) => {
+    if (!state.contextMenu || !state.modules?.length) {
+      location.hash = '#desktop';
+      return;
+    }
+    event.preventDefault();
+    const moduleItems = listLaunchTargets('module').map((target) => startMenuItemForTarget(target));
+    const appItems = listLaunchTargets('app').map((target) => startMenuItemForTarget(target));
+    const items = [...moduleItems];
+    if (appItems.length) items.push({ type: 'separator' }, ...appItems);
+    items.push({ type: 'separator' });
+    items.push({
+      label: shellText('settings') || 'Einstellungen',
+      icon: '⚙',
+      action: () => openSettingsDrawer(),
+    });
+    state.contextMenu.show(event, items);
+  });
+  els.showDesktop?.addEventListener('click', () => openDesktop());
+  els.host?.addEventListener('click', (event) => {
+    const homeButton = event.target.closest('[data-module-home]');
+    if (homeButton) {
+      event.preventDefault();
+      openDesktop();
+      return;
+    }
+    const sourceButton = event.target.closest('[data-module-source]');
+    if (sourceButton) {
+      event.preventDefault();
+      const moduleId = sourceButton.dataset.moduleSource || state.activeModule?.id;
+      if (moduleId) openModuleSourceEditor(moduleId);
+    }
+  });
   els.ctoxWarning?.addEventListener('click', (event) => {
     event.preventDefault();
     event.stopPropagation();
@@ -218,6 +643,11 @@ function wireShellActions() {
   });
   els.themeSelect?.addEventListener('change', () => {
     applyShellTheme(els.themeSelect.value);
+    syncHeaderControls();
+    postCurrentPreferencesToModule();
+  });
+  els.shellStyleSelect?.addEventListener('change', () => {
+    applyShellStyle(els.shellStyleSelect.value);
     syncHeaderControls();
     postCurrentPreferencesToModule();
   });
@@ -244,6 +674,20 @@ function wireShellActions() {
   shellColumnResizeSync = setupShellColumnResizing();
 }
 
+function openModuleSourceEditor(moduleId) {
+  const mod = state.modules.find((entry) => entry.id === moduleId) || state.activeModule;
+  if (!mod?.id) return;
+  openDesktopApp('code-editor', {
+    title: `${moduleDisplayTitle(mod)} Source`,
+    width: 1040,
+    height: 680,
+    args: {
+      moduleId: mod.id,
+      moduleTitle: moduleDisplayTitle(mod),
+    },
+  });
+}
+
 function openSettingsDrawer(options = {}) {
   els.rightDrawer.classList.remove('account-popover');
   openReactSettings({
@@ -253,6 +697,7 @@ function openSettingsDrawer(options = {}) {
     governance: state.governance,
     syncConfig: state.sync?.config,
     commandBus: state.commandBus,
+    db: state.db,
     initialTab: options.initialTab || 'runtime',
     onAccount: openAccountDrawer,
     onClose: closeDrawers,
@@ -568,11 +1013,137 @@ function shellText(key) {
   return shellMessages[shellLang()]?.[key] || shellMessages.en[key] || key;
 }
 
+const MODULE_GLYPHS = {
+  desktop: '🖥',
+  ctox: '◆',
+  documents: '📄',
+  knowledge: '📚',
+  matching: '🔗',
+  outbound: '📣',
+  reports: '🐞',
+  research: '🔬',
+  conversations: '💬',
+};
+
+function glyphForModule(moduleId) {
+  return MODULE_GLYPHS[moduleId] || '◻︎';
+}
+
+const DESKTOP_APPS = [
+  {
+    id: 'explorer',
+    title: 'Files',
+    glyph: '📁',
+    defaultWidth: 720,
+    defaultHeight: 460,
+    loader: () => import('./desktop-apps/explorer/app.js?v=20260519-shell-os1'),
+  },
+  {
+    id: 'notes',
+    title: 'Notes',
+    glyph: '📝',
+    defaultWidth: 520,
+    defaultHeight: 400,
+    loader: () => import('./desktop-apps/notes/app.js?v=20260519-shell-os1'),
+  },
+  {
+    id: 'code-editor',
+    title: 'Source Editor',
+    glyph: '⌘',
+    defaultWidth: 980,
+    defaultHeight: 640,
+    loader: () => import('./desktop-apps/code-editor/app.js?v=20260519-monaco2'),
+  },
+  {
+    id: 'file-viewer',
+    title: 'File Viewer',
+    glyph: '◫',
+    defaultWidth: 760,
+    defaultHeight: 560,
+    loader: () => import('./desktop-apps/file-viewer/app.js?v=20260519-file-viewer1'),
+  },
+];
+
+function listDesktopApps() {
+  return DESKTOP_APPS.map(({ id, title, glyph, defaultWidth, defaultHeight }) => ({
+    id,
+    title,
+    glyph,
+    defaultWidth,
+    defaultHeight,
+  }));
+}
+
+async function openDesktopApp(appId, options = {}) {
+  if (!state.windowManager) return null;
+  const entry = DESKTOP_APPS.find((app) => app.id === appId);
+  if (!entry) {
+    console.warn(`[desktop-app] unknown app: ${appId}`);
+    return null;
+  }
+  const win = state.windowManager.create({
+    title: options.title || entry.title,
+    icon: entry.glyph,
+    width: options.width || entry.defaultWidth,
+    height: options.height || entry.defaultHeight,
+    ownerId: `desktop-app:${entry.id}`,
+  });
+  let teardown = null;
+  try {
+    const mod = await entry.loader();
+    teardown = await mod.mount(win.container, {
+      db: state.db,
+      commandBus: state.commandBus,
+      contextMenu: state.contextMenu,
+      notifications: state.notifications,
+      locale: shellLang(),
+      args: options.args || {},
+      authHeaders: businessOsAuthHeaders,
+      openDesktopApp,
+      openBusinessChat,
+      isTaskbarPinned,
+      pinToTaskbar: pinTaskbarTarget,
+      unpinFromTaskbar: unpinTaskbarTarget,
+      toggleTaskbarPin,
+      onClose: () => win.close(),
+      setTitle: win.setTitle,
+    });
+  } catch (error) {
+    console.error(`[desktop-app:${appId}] mount failed:`, error);
+    win.container.innerHTML = `<p style="padding:16px;color:var(--danger);font-size:12px;">App-Start fehlgeschlagen: ${escapeHtml(String(error?.message || error))}</p>`;
+  }
+  if (teardown && state.eventBus) {
+    const token = state.eventBus.on('window:closed', (data) => {
+      if (data?.id !== win.id) return;
+      state.eventBus.off('window:closed', token);
+      try {
+        teardown();
+      } catch (error) {
+        console.error(`[desktop-app:${appId}] teardown failed:`, error);
+      }
+    });
+  }
+  return win.id;
+}
+
+function openBusinessChat(detail = {}) {
+  window.dispatchEvent(new CustomEvent('ctox-business-os-chat-open', { detail }));
+}
+
 function applyShellTheme(theme, options = {}) {
   const value = theme === 'light' ? 'light' : 'dark';
   document.documentElement.dataset.theme = value;
   if (options.persist !== false) {
     writeAccountPrefs({ theme: value });
+  }
+}
+
+function applyShellStyle(style, options = {}) {
+  const value = style === 'macos' ? 'macos' : 'windows';
+  document.documentElement.dataset.shellStyle = value;
+  state.windowManager?.setChromeLayout(value);
+  if (options.persist !== false) {
+    writeAccountPrefs({ shellStyle: value });
   }
 }
 
@@ -582,6 +1153,9 @@ function syncHeaderControls() {
   }
   if (els.themeSelect) {
     els.themeSelect.value = document.documentElement.dataset.theme === 'light' ? 'light' : 'dark';
+  }
+  if (els.shellStyleSelect) {
+    els.shellStyleSelect.value = document.documentElement.dataset.shellStyle === 'macos' ? 'macos' : 'windows';
   }
 }
 
@@ -642,44 +1216,99 @@ function postCurrentPreferencesToModule() {
 function renderTabs() {
   els.tabs.replaceChildren();
   state.moduleLayout = normalizeModuleLayout(state.moduleLayout || readModuleLayout(), state.modules);
-  const modulesById = new Map(state.modules.map((mod) => [mod.id, mod]));
-  const ctox = modulesById.get('ctox');
-  if (ctox) {
-    els.tabs.append(renderModuleTab(ctox, { locked: true }));
+  state.taskbarPins = normalizeTaskbarPins(state.taskbarPins, state.modules);
+  const rendered = new Set();
+  for (const id of state.taskbarPins) {
+    const target = launchTargetForId(id);
+    if (!target) continue;
+    els.tabs.append(renderModuleTab(target, { pinned: true }));
+    rendered.add(target.id);
   }
-
-  for (const moduleId of state.moduleLayout.ungrouped) {
-    const mod = modulesById.get(moduleId);
-    if (mod) els.tabs.append(renderModuleTab(mod));
+  const active = state.activeModule && moduleAppearsInSwitcher(state.activeModule)
+    ? launchTargetForId(state.activeModule.id)
+    : null;
+  if (active && !rendered.has(active.id)) {
+    els.tabs.append(renderModuleTab(active, { temporary: true }));
+    rendered.add(active.id);
   }
-  for (const group of state.moduleLayout.groups) {
-    const visibleItems = group.items.filter((moduleId) => modulesById.has(moduleId));
-    if (visibleItems.length) {
-      els.tabs.append(renderModuleGroup({ ...group, items: visibleItems }, modulesById));
-    }
+  for (const target of runningDesktopAppTargets()) {
+    if (rendered.has(target.id)) continue;
+    els.tabs.append(renderModuleTab(target, { temporary: true, running: true }));
+    rendered.add(target.id);
   }
 }
 
-function renderModuleTab(mod, options = {}) {
+function renderModuleTab(target, options = {}) {
   const button = document.createElement('button');
   button.className = 'module-tab';
   button.type = 'button';
-  button.textContent = moduleDisplayTitle(mod);
-  button.dataset.module = mod.id;
-  if (options.locked) {
-    button.dataset.locked = 'true';
-    button.draggable = false;
-  } else {
+  button.dataset.module = target.kind === 'module' ? target.id : '';
+  button.dataset.target = target.id;
+  button.dataset.targetKind = target.kind;
+  if (options.pinned) button.dataset.pinned = 'true';
+  if (options.temporary) button.dataset.temporary = 'true';
+  if (target.kind === 'app' && desktopAppIsFocused(target.id)) button.dataset.running = 'focused';
+  else if (target.kind === 'app' && desktopAppIsRunning(target.id)) button.dataset.running = 'true';
+  else if (target.kind === 'module' && state.activeModule?.id === target.id) button.dataset.running = 'focused';
+  const status = options.pinned
+    ? shellText('pinned')
+    : (button.dataset.running ? shellText('running') : '');
+  button.innerHTML = `
+    <span class="module-tab-icon" aria-hidden="true">${escapeHtml(target.glyph || '◻︎')}</span>
+    <span class="module-tab-label">${escapeHtml(target.title || target.id)}</span>
+    ${status ? `<span class="module-tab-state">${escapeHtml(status)}</span>` : ''}
+  `;
+  button.setAttribute('aria-current', state.activeModule?.id === target.id ? 'page' : 'false');
+  button.title = target.title || target.id;
+  if (options.pinned) {
     button.draggable = true;
     button.addEventListener('dragstart', (event) => {
       event.dataTransfer.effectAllowed = 'move';
-      event.dataTransfer.setData('application/x-ctox-module', mod.id);
-      event.dataTransfer.setData('text/plain', mod.id);
+      event.dataTransfer.setData('application/x-ctox-taskbar-pin', target.id);
+      event.dataTransfer.setData('text/plain', target.id);
       button.classList.add('is-dragging');
     });
     button.addEventListener('dragend', () => {
       button.classList.remove('is-dragging');
     });
+  } else {
+    button.draggable = false;
+  }
+  button.addEventListener('dragover', (event) => {
+    if (!draggedTaskbarPinId(event)) return;
+    event.preventDefault();
+    button.classList.add('is-drop-before');
+  });
+  button.addEventListener('dragleave', () => button.classList.remove('is-drop-before'));
+  button.addEventListener('drop', (event) => {
+    const pinId = draggedTaskbarPinId(event);
+    if (!pinId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    button.classList.remove('is-drop-before');
+    moveTaskbarPinBefore(pinId, target.id);
+  });
+  button.addEventListener('contextmenu', (event) => {
+    event.preventDefault();
+    showTargetContextMenu(event, target);
+  });
+  button.addEventListener('dblclick', () => {
+    if (target.kind === 'module') openModuleSourceEditor(target.id);
+  });
+  button.addEventListener('click', () => openLaunchTarget(target));
+  return button;
+}
+
+function renderLegacyModuleTab(mod, options = {}) {
+  const button = document.createElement('button');
+  button.className = 'module-tab';
+  button.type = 'button';
+  button.dataset.module = mod.id;
+  button.innerHTML = `
+    <span class="module-tab-icon" aria-hidden="true">${escapeHtml(taskbarMarkForModule(mod))}</span>
+    <span class="module-tab-label">${escapeHtml(moduleDisplayTitle(mod))}</span>
+  `;
+  if (!options.locked) {
     button.addEventListener('dragover', (event) => {
       if (!draggedModuleId(event)) return;
       event.preventDefault();
@@ -707,6 +1336,230 @@ function renderModuleTab(mod, options = {}) {
     openModule(mod.id);
   });
   return button;
+}
+
+function moduleAppearsInSwitcher(mod) {
+  return mod?.id && mod.id !== 'desktop';
+}
+
+function listLaunchTargets(kind = '') {
+  const moduleTargets = state.modules
+    .filter(moduleAppearsInSwitcher)
+    .map((mod) => ({
+      id: mod.id,
+      kind: 'module',
+      title: moduleDisplayTitle(mod),
+      glyph: taskbarMarkForModule(mod),
+      module: mod,
+    }));
+  const appTargets = DESKTOP_APPS.map((app) => ({
+    id: app.id,
+    kind: 'app',
+    title: app.title,
+    glyph: app.glyph,
+    app,
+  }));
+  const all = [...moduleTargets, ...appTargets];
+  return kind ? all.filter((target) => target.kind === kind) : all;
+}
+
+function launchTargetForId(id) {
+  return listLaunchTargets().find((target) => target.id === id) || null;
+}
+
+function startMenuItemForTarget(target) {
+  const pinned = isTaskbarPinned(target.id);
+  return {
+    label: target.title || target.id,
+    icon: target.glyph,
+    trailingIcon: pinned ? '−' : '+',
+    trailingLabel: pinned ? shellText('unpinFromTaskbar') : shellText('pinToTaskbar'),
+    trailingAction: () => toggleTaskbarPin(target.id, !pinned),
+    action: () => openLaunchTarget(target),
+  };
+}
+
+function showTargetContextMenu(event, target) {
+  if (!state.contextMenu) return;
+  const pinned = isTaskbarPinned(target.id);
+  const items = [
+    {
+      label: shellText('openApp') || 'Öffnen',
+      icon: target.glyph || '↗',
+      action: () => openLaunchTarget(target),
+    },
+    {
+      label: pinned ? shellText('unpinFromTaskbar') : shellText('pinToTaskbar'),
+      icon: pinned ? '−' : '+',
+      action: () => toggleTaskbarPin(target.id, !pinned),
+    },
+  ];
+  if (target.kind === 'module') {
+    items.push({ type: 'separator' });
+    items.push({
+      label: 'Source öffnen',
+      icon: '⌘',
+      action: () => openModuleSourceEditor(target.id),
+    });
+    if (canModifyModule(target.module)) {
+      items.push({
+        label: 'Modul bearbeiten',
+        icon: '✎',
+        action: () => openModuleEditDrawer(target.module),
+      });
+    }
+  }
+  state.contextMenu.show(event, items);
+}
+
+function openLaunchTarget(targetOrId) {
+  const target = typeof targetOrId === 'string' ? launchTargetForId(targetOrId) : targetOrId;
+  if (!target) return;
+  if (target.kind === 'app') {
+    const existing = state.windowManager?.listWindows?.()
+      .find((win) => win.ownerId === `desktop-app:${target.id}`);
+    if (existing) {
+      if (existing.state === 'minimized') state.windowManager.restore(existing.id);
+      state.windowManager.focus(existing.id);
+      return;
+    }
+    openDesktopApp(target.id);
+    return;
+  }
+  location.hash = target.id;
+  openModule(target.id);
+}
+
+function runningDesktopAppTargets() {
+  const ownerIds = new Set(
+    (state.windowManager?.listWindows?.() || [])
+      .map((win) => win.ownerId || '')
+      .filter((ownerId) => ownerId.startsWith('desktop-app:'))
+      .map((ownerId) => ownerId.slice('desktop-app:'.length))
+  );
+  return Array.from(ownerIds)
+    .map((id) => launchTargetForId(id))
+    .filter(Boolean);
+}
+
+function desktopAppIsRunning(appId) {
+  return (state.windowManager?.listWindows?.() || [])
+    .some((win) => win.ownerId === `desktop-app:${appId}`);
+}
+
+function desktopAppIsFocused(appId) {
+  return (state.windowManager?.listWindows?.() || [])
+    .some((win) => win.ownerId === `desktop-app:${appId}` && win.isFocused);
+}
+
+function isTaskbarPinned(targetId) {
+  return state.taskbarPins.includes(targetId);
+}
+
+function pinTaskbarTarget(targetId) {
+  return toggleTaskbarPin(targetId, true);
+}
+
+function unpinTaskbarTarget(targetId) {
+  return toggleTaskbarPin(targetId, false);
+}
+
+function toggleTaskbarPin(targetId, shouldPin = !isTaskbarPinned(targetId)) {
+  if (!launchTargetForId(targetId)) return;
+  const pins = state.taskbarPins.filter((id) => id !== targetId);
+  if (shouldPin) pins.push(targetId);
+  state.taskbarPins = normalizeTaskbarPins(pins, state.modules);
+  persistTaskbarPins();
+  renderTabs();
+}
+
+function moveTaskbarPinBefore(targetId, beforeTargetId) {
+  if (!targetId || targetId === beforeTargetId || !isTaskbarPinned(targetId)) return;
+  const pins = state.taskbarPins.filter((id) => id !== targetId);
+  const index = pins.indexOf(beforeTargetId);
+  if (index >= 0) pins.splice(index, 0, targetId);
+  else pins.push(targetId);
+  state.taskbarPins = normalizeTaskbarPins(pins, state.modules);
+  persistTaskbarPins();
+  renderTabs();
+}
+
+function draggedTaskbarPinId(event) {
+  return event.dataTransfer?.getData('application/x-ctox-taskbar-pin')
+    || event.dataTransfer?.getData('text/plain')
+    || '';
+}
+
+function readTaskbarPins() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(TASKBAR_PINS_KEY) || 'null');
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function persistTaskbarPins() {
+  localStorage.setItem(TASKBAR_PINS_KEY, JSON.stringify(state.taskbarPins));
+  clearTimeout(taskbarPinSaveTimer);
+  taskbarPinSaveTimer = window.setTimeout(() => {
+    taskbarPinSaveTimer = null;
+    syncTaskbarPinsToDesktopLayout().catch((error) => {
+      console.error('[business-os] taskbar pin sync failed:', error);
+    });
+  }, 180);
+}
+
+function normalizeTaskbarPins(rawPins, modules, options = {}) {
+  const valid = new Set(listLaunchTargets().map((target) => target.id));
+  const raw = Array.isArray(rawPins) ? rawPins : [];
+  let pins = raw
+    .map((id) => String(id || '').trim())
+    .filter((id, index, arr) => id && valid.has(id) && arr.indexOf(id) === index);
+  if (options.compactLegacyAllPins && looksLikeLegacyAllPins(pins, valid)) pins = [];
+  if (!pins.length) {
+    pins = DEFAULT_TASKBAR_PIN_IDS.filter((id) => valid.has(id));
+    if (!pins.length) pins = listLaunchTargets('module').slice(0, 4).map((target) => target.id);
+  }
+  return pins;
+}
+
+function looksLikeLegacyAllPins(pins, valid) {
+  if (pins.length <= DEFAULT_TASKBAR_PIN_IDS.length + 2) return false;
+  const coverage = pins.filter((id) => valid.has(id)).length / Math.max(1, valid.size);
+  return coverage >= 0.75;
+}
+
+async function hydrateTaskbarPinsFromDesktopLayout() {
+  const collection = state.db?.collection?.('desktop_layout');
+  if (!collection) {
+    state.taskbarPins = normalizeTaskbarPins(state.taskbarPins, state.modules);
+    return;
+  }
+  const doc = await collection.findOne('layout').exec();
+  const layout = doc?.toJSON?.() || null;
+  if (Array.isArray(layout?.taskbar_pins)) {
+    state.taskbarPins = normalizeTaskbarPins(layout.taskbar_pins, state.modules, { compactLegacyAllPins: true });
+  } else {
+    state.taskbarPins = normalizeTaskbarPins(state.taskbarPins, state.modules);
+  }
+  localStorage.setItem(TASKBAR_PINS_KEY, JSON.stringify(state.taskbarPins));
+  await syncTaskbarPinsToDesktopLayout();
+}
+
+async function syncTaskbarPinsToDesktopLayout() {
+  const collection = state.db?.collection?.('desktop_layout');
+  if (!collection) return;
+  const existing = await collection.findOne('layout').exec();
+  const patch = {
+    taskbar_pins: state.taskbarPins,
+    updated_at_ms: Date.now(),
+  };
+  if (existing) {
+    await existing.incrementalPatch(patch);
+  } else {
+    await collection.insert({ id: 'layout', ...patch });
+  }
 }
 
 function renderModuleGroup(group, modulesById) {
@@ -776,6 +1629,8 @@ async function openModule(moduleId, options = {}) {
   document.body.dataset.activeModule = mod.id;
   document.body.dataset.moduleShell = moduleUsesFullWorkspace(mod) ? 'full' : 'pane';
   document.body.dataset.moduleLoading = mod.id;
+  updateActiveAppChrome(mod);
+  renderTabs();
   shellColumnResizeSync?.();
   for (const button of els.tabs.querySelectorAll('[data-module]')) {
     button.setAttribute('aria-current', button.dataset.module === mod.id ? 'page' : 'false');
@@ -800,6 +1655,11 @@ async function openModule(moduleId, options = {}) {
   }
   postCurrentPreferencesToModule();
   startModuleSync(mod);
+}
+
+function openDesktop() {
+  location.hash = '#desktop';
+  return openModule('desktop');
 }
 
 function moduleUsesFullWorkspace(mod) {
@@ -918,7 +1778,8 @@ function createModuleContext(mod) {
   return {
     module: mod,
     locale: document.documentElement.lang === 'en' ? 'en' : 'de',
-    host: els.host.querySelector('[data-module-root]'),
+    shellStyle: document.documentElement.dataset.shellStyle === 'macos' ? 'macos' : 'windows',
+    host: els.host.querySelector('[data-module-content]') || els.host.querySelector('[data-module-root]'),
     left: els.leftContent,
     right: els.rightContent,
     db: state.db,
@@ -927,6 +1788,17 @@ function createModuleContext(mod) {
     syncConfig: state.sync.config,
     session: state.session,
     governance: state.governance,
+    eventBus: state.eventBus,
+    contextMenu: state.contextMenu,
+    notifications: state.notifications,
+    windowManager: state.windowManager,
+    desktopApps: listDesktopApps(),
+    openDesktopApp,
+    openBusinessChat,
+    isTaskbarPinned,
+    pinToTaskbar: pinTaskbarTarget,
+    unpinFromTaskbar: unpinTaskbarTarget,
+    toggleTaskbarPin,
     authHeaders: businessOsAuthHeaders,
     canModifyModule: () => canModifyModule(mod),
     reportIssue: (details = {}) => reportCurrentModule({ module: mod, ...details }),
@@ -941,41 +1813,160 @@ function renderModuleFrame(mod) {
   const root = document.createElement('div');
   root.className = 'module-root';
   root.dataset.moduleRoot = mod.id;
-  if (mod.id === 'documents') {
-    root.innerHTML = renderDocumentsLoadingShell(moduleDisplayTitle(mod), shellText('loadingModule'));
-    return root;
-  }
   root.innerHTML = `
-    <div class="empty-state module-loading-state" aria-busy="true">
-      <strong>${escapeHtml(moduleDisplayTitle(mod))}</strong>
-      <span>${escapeHtml(shellText('loadingModule'))}</span>
+    ${renderModuleAppBar(mod)}
+    <div class="module-content" data-module-content>
+      ${renderModuleLoadingShell(mod, moduleDisplayTitle(mod), shellText('loadingModule'))}
     </div>
   `;
   return root;
 }
 
-function renderDocumentsLoadingShell(title, subtitle) {
+function renderModuleAppBar(mod) {
+  if (mod?.id === 'desktop') return '';
+  const title = escapeHtml(moduleDisplayTitle(mod));
+  return `
+    <header class="module-appbar" data-module-appbar>
+      <div class="module-appbar-title">
+        <span class="module-appbar-icon" aria-hidden="true">${escapeHtml(glyphForModule(mod.id))}</span>
+        <span>${title}</span>
+      </div>
+      <div class="module-appbar-actions">
+        <button class="module-appbar-button" type="button" data-module-source="${escapeHtml(mod.id)}" aria-label="Source von ${title} öffnen" title="Source öffnen">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 8l-4 4 4 4"></path><path d="M16 8l4 4-4 4"></path><path d="M14 5l-4 14"></path></svg>
+        </button>
+        <button class="module-appbar-button" type="button" data-module-home aria-label="${escapeHtml(shellText('showDesktop'))}" title="${escapeHtml(shellText('showDesktop'))}">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5h16v13H4z"></path><path d="M8 9h8M8 12h8M8 15h5"></path></svg>
+        </button>
+      </div>
+    </header>
+  `;
+}
+
+function updateActiveAppChrome(mod) {
+  document.title = `${moduleDisplayTitle(mod)} · CTOX Business OS`;
+}
+
+function taskbarMarkForModule(mod) {
+  const marks = {
+    ctox: '◆',
+    desktop: '⌂',
+    documents: 'D',
+    knowledge: 'K',
+    matching: 'M',
+    outbound: 'O',
+    reports: '🐞',
+    research: 'R',
+  };
+  return marks[mod?.id] || String(mod?.title || mod?.id || 'A').trim().slice(0, 1).toUpperCase();
+}
+
+function renderModuleLoadingShell(mod, title, subtitle) {
+  const moduleId = String(mod?.id || 'generic').replace(/[^a-z0-9_-]/gi, '').toLowerCase() || 'generic';
   const safeTitle = escapeHtml(title || 'Documents');
   const safeSubtitle = escapeHtml(subtitle || shellText('loadingModule'));
+  const panels = moduleLoadingPanels(moduleId, safeTitle, safeSubtitle);
   return `
-    <div class="module-loading-shell module-loading-shell-documents" aria-busy="true">
-      <section class="module-loading-panel" aria-hidden="true">
-        <div class="module-loading-panel-head"><span></span><i></i></div>
-        <div class="module-loading-tools"><b></b><b></b></div>
-        <div class="module-loading-list"><b></b><b></b><b></b></div>
+    <div class="module-loading-shell module-loading-shell-${moduleId}" aria-busy="true">
+      ${panels}
+    </div>
+  `;
+}
+
+function moduleLoadingPanels(moduleId, title, subtitle) {
+  if (moduleId === 'matching') {
+    return `
+      <section class="module-loading-pane module-loading-matching-source" aria-hidden="true">
+        ${loadingHead()}
+        <div class="module-loading-control-stack"><b></b><b></b></div>
+        <div class="module-loading-source-list"><b></b><b></b><b></b></div>
       </section>
-      <section class="module-loading-panel module-loading-panel-main">
-        <div class="module-loading-panel-head"><span></span><i></i></div>
-        <div class="module-loading-copy">
-          <strong>${safeTitle}</strong>
-          <span>${safeSubtitle}</span>
+      <section class="module-loading-pane module-loading-matching-center">
+        ${loadingHead()}
+        ${loadingCopy(title, subtitle)}
+        <div class="module-loading-match-workbench" aria-hidden="true">
+          <div class="module-loading-match-toolbar"><b></b><b></b><b></b></div>
+          <div class="module-loading-match-grid"><b></b><b></b><b></b><b></b><b></b><b></b></div>
         </div>
-        <div class="module-loading-document" aria-hidden="true"><b></b><b></b><b></b><b></b></div>
       </section>
-      <section class="module-loading-panel" aria-hidden="true">
-        <div class="module-loading-panel-head"><span></span><i></i></div>
-        <div class="module-loading-list is-compact"><b></b><b></b><b></b></div>
+      <section class="module-loading-pane module-loading-matching-object" aria-hidden="true">
+        ${loadingHead()}
+        <div class="module-loading-control-stack"><b></b><b></b></div>
+        <div class="module-loading-object-list"><b></b><b></b><b></b><b></b></div>
       </section>
+    `;
+  }
+  if (moduleId === 'knowledge') {
+    return `
+      <section class="module-loading-pane module-loading-knowledge-left" aria-hidden="true">
+        ${loadingHead()}
+        <div class="module-loading-segments"><b></b><b></b><b></b></div>
+        <div class="module-loading-search"></div>
+        <div class="module-loading-tree"><b></b><b></b><b></b><b></b><b></b></div>
+      </section>
+      <section class="module-loading-pane module-loading-knowledge-reader">
+        ${loadingHead()}
+        ${loadingCopy(title, subtitle)}
+        <div class="module-loading-article" aria-hidden="true"><b></b><b></b><b></b><b></b><b></b><b></b></div>
+      </section>
+    `;
+  }
+  if (moduleId === 'ctox') {
+    return `
+      <section class="module-loading-pane module-loading-ctox-left" aria-hidden="true">
+        <div class="module-loading-kpi"><b></b><b></b></div>
+        <div class="module-loading-channel"><b></b><b></b></div>
+        <div class="module-loading-task-card"><b></b><b></b><b></b></div>
+      </section>
+      <section class="module-loading-pane module-loading-ctox-flow">
+        ${loadingHead()}
+        ${loadingCopy(title, subtitle)}
+        <div class="module-loading-stats" aria-hidden="true"><b></b><b></b><b></b><b></b></div>
+        <div class="module-loading-flow-canvas" aria-hidden="true"><b></b><b></b><b></b><b></b><i></i><i></i><i></i></div>
+        <div class="module-loading-timeline" aria-hidden="true"><b></b><b></b></div>
+      </section>
+    `;
+  }
+  if (moduleId === 'outbound') {
+    return `
+      <section class="module-loading-pane module-loading-outbound-left" aria-hidden="true">
+        ${loadingHead()}
+        <div class="module-loading-campaign-list"><b></b><b></b><b></b><b></b></div>
+      </section>
+      <section class="module-loading-pane module-loading-outbound-center">
+        ${loadingHead()}
+        ${loadingCopy(title, subtitle)}
+        <div class="module-loading-pipeline" aria-hidden="true"><b></b><b></b><b></b><b></b><b></b><b></b></div>
+      </section>
+    `;
+  }
+  return `
+    <section class="module-loading-pane module-loading-doc-list" aria-hidden="true">
+      ${loadingHead()}
+      <div class="module-loading-control-stack"><b></b><b></b></div>
+      <div class="module-loading-document-list"><b></b><b></b><b></b></div>
+    </section>
+    <section class="module-loading-pane module-loading-doc-editor">
+      ${loadingHead()}
+      ${loadingCopy(title, subtitle)}
+      <div class="module-loading-document" aria-hidden="true"><b></b><b></b><b></b><b></b></div>
+    </section>
+    <section class="module-loading-pane module-loading-doc-runbooks" aria-hidden="true">
+      ${loadingHead()}
+      <div class="module-loading-runbook-list"><b></b><b></b><b></b></div>
+    </section>
+  `;
+}
+
+function loadingHead() {
+  return '<div class="module-loading-panel-head"><span></span><i></i></div>';
+}
+
+function loadingCopy(title, subtitle) {
+  return `
+    <div class="module-loading-copy">
+      <strong>${title}</strong>
+      <span>${subtitle}</span>
     </div>
   `;
 }
@@ -1266,7 +2257,7 @@ function renderAccountButton(session = state.session) {
     const prefs = readAccountPrefs();
     const label = prefs.displayName || user.display_name || user.id || 'Account';
     const role = roleDisplayName(user.role || (user.is_admin ? 'admin' : 'user'));
-    if (labelNode) labelNode.textContent = `${label} · ${role}`;
+    if (labelNode) labelNode.textContent = role;
     els.accountButton.setAttribute('aria-label', `Account: ${label}, Rolle: ${role}`);
     els.accountButton.title = `Account: ${label} · Rolle: ${role}`;
     els.accountButton.dataset.authenticated = 'true';
@@ -1419,15 +2410,6 @@ function encodeBasicAuth(user, password) {
   return btoa(unescape(encodeURIComponent(`${user}:${password}`)));
 }
 
-function decodeBasicAuthUser(authHeader) {
-  const encoded = String(authHeader || '').replace(/^Basic\s+/i, '');
-  try {
-    return decodeURIComponent(escape(atob(encoded))).split(':')[0] || '';
-  } catch {
-    return '';
-  }
-}
-
 function roleDisplayName(role) {
   const value = normalizeRole(role);
   return { chef: 'Chef', admin: 'Admin', founder: 'Founder', user: 'User' }[value] || value;
@@ -1447,14 +2429,6 @@ function normalizeRole(role) {
   const value = String(role || '').trim().toLowerCase().replace(/^business_os_/, '');
   if (value === 'owner') return 'chef';
   if (['chef', 'admin', 'founder', 'user'].includes(value)) return value;
-  return 'user';
-}
-
-function inferLocalRoleFromUser(user) {
-  const value = String(user || '').trim().toLowerCase();
-  if (value === 'chef' || value === 'owner') return 'chef';
-  if (value === 'founder') return 'founder';
-  if (value === 'admin') return 'admin';
   return 'user';
 }
 
@@ -1674,12 +2648,17 @@ function closeDrawers() {
   els.bottomDrawer.replaceChildren();
 }
 
-async function fetchJson(url, options) {
+async function fetchJson(url, options = {}) {
+  return fetchJsonOnce(url, options);
+}
+
+async function fetchJsonOnce(url, options) {
   const timeoutMs = options?.timeoutMs ?? FETCH_TIMEOUT_MS;
   const controller = new AbortController();
   const timer = timeoutMs > 0 ? window.setTimeout(() => controller.abort(), timeoutMs) : null;
   const fetchOptions = { ...(options || {}) };
   delete fetchOptions.timeoutMs;
+  delete fetchOptions.retry;
   try {
     const res = await fetch(url, {
       cache: 'no-store',
@@ -1696,8 +2675,8 @@ async function fetchJson(url, options) {
 async function loadStatus() {
   try {
     return await fetchJson('/api/business-os/status');
-  } catch {
-    return { ok: true, runtime: 'electron-static', now_ms: Date.now() };
+  } catch (error) {
+    return { ok: false, runtime: 'unavailable', error: error?.message || String(error), now_ms: Date.now() };
   }
 }
 
@@ -1762,51 +2741,15 @@ async function loadSession() {
   const authHeader = localStorage.getItem(AUTH_HEADER_KEY)?.trim();
   const headers = token ? { 'X-CTOX-Business-OS-Session': token } : authHeader ? { Authorization: authHeader } : undefined;
   try {
-    const session = await fetchJson('/api/business-os/session', headers ? { headers, timeoutMs: 600 } : { timeoutMs: 600 });
+    const session = await fetchJson('/api/business-os/session', headers ? { headers, timeoutMs: 5000 } : { timeoutMs: 5000 });
     return session;
   } catch (error) {
-    if (authHeader) return localBasicAuthSession(authHeader);
-    if (token) return localTokenSession();
     return {
       ok: false,
       authenticated: false,
       reason: `session_endpoint_unavailable: ${error.message || error}`,
     };
   }
-}
-
-function localBasicAuthSession(authHeader) {
-  const user = decodeBasicAuthUser(authHeader) || 'local-user';
-  const role = inferLocalRoleFromUser(user);
-  return {
-    ok: true,
-    authenticated: true,
-    auth_required: true,
-    source: 'stored-basic-auth',
-    user: {
-      id: user,
-      display_name: user,
-      role,
-      is_admin: roleCanAdmin(role),
-    },
-    reason: null,
-  };
-}
-
-function localTokenSession() {
-  return {
-    ok: true,
-    authenticated: true,
-    auth_required: true,
-    source: 'stored-session-token',
-    user: {
-      id: 'ctox-user',
-      display_name: 'CTOX User',
-      role: 'user',
-      is_admin: false,
-    },
-    reason: null,
-  };
 }
 
 function readInjectedDesktopSession() {
@@ -1841,28 +2784,8 @@ function isLocalBusinessOsSurface() {
   return ['127.0.0.1', 'localhost', '::1'].includes(location.hostname);
 }
 
-function localDesktopSession() {
-  return {
-    ok: true,
-    authenticated: false,
-    auth_required: true,
-    login_url: null,
-    user: {
-      id: '',
-      display_name: '',
-      role: 'user',
-      is_admin: false,
-    },
-    reason: 'login_required',
-  };
-}
-
 async function loadModules() {
-  try {
-    return await fetchJson('/api/business-os/modules', { headers: businessOsAuthHeaders(), timeoutMs: 800 });
-  } catch {
-    return fetchJson('modules/registry.json', { timeoutMs: 600 });
-  }
+  return fetchJson('/api/business-os/modules', { headers: businessOsAuthHeaders(), timeoutMs: 10000 });
 }
 
 async function loadModuleLayout() {
@@ -1904,18 +2827,14 @@ function businessOsAuthHeaders(extra = {}) {
 async function loadSyncConfig() {
   const injected = globalThis.CTOX_BUSINESS_OS_CONFIG || globalThis.ctoxBusinessOsLaunch;
   if (injected && typeof injected === 'object') return injected;
-  try {
-    return await fetchJson('/api/business-os/sync/config', { timeoutMs: 800 });
-  } catch {
-    return fetchJson('config.default.json', { timeoutMs: 600 });
-  }
+  return fetchJson('/api/business-os/sync/config', { timeoutMs: 5000 });
 }
 
 function refreshRemoteShellStateInBackground() {
   if (!state.session?.authenticated) return;
   if (state.sync?.config?.http_bridge_available === false) return;
   window.setTimeout(() => {
-    fetchJson('/api/business-os/modules', { headers: businessOsAuthHeaders(), timeoutMs: 800 })
+    fetchJson('/api/business-os/modules', { headers: businessOsAuthHeaders(), timeoutMs: 10000 })
       .then((modules) => {
         if (!Array.isArray(modules?.modules) || !modules.modules.length) return;
         const currentIds = state.modules.map((mod) => mod.id).join('\n');

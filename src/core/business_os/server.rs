@@ -2,26 +2,50 @@
 // License: Apache-2.0
 
 use anyhow::Context;
+use base64::Engine;
+use ctox_app_server_protocol::AuthMode as ApiAuthMode;
 use polars::prelude::*;
 use rusqlite::Connection;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 use sha2::Digest;
+use sha2::Sha256;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fs;
+use std::io;
 use std::path::Path;
 use std::path::PathBuf;
+use std::thread;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 use tiny_http::Header;
 use tiny_http::Method;
 use tiny_http::Request;
 use tiny_http::Response;
 use tiny_http::Server;
+use url::Url;
+use uuid::Uuid;
 
 use super::store;
 
 const CORE_MODULE_IDS: &[&str] = &["ctox", "knowledge"];
+const CHATGPT_AUTH_ISSUER: &str = "https://auth.openai.com";
+const CHATGPT_AUTH_CALLBACK_PORT: u16 = 1455;
+const CHATGPT_AUTH_CALLBACK_FALLBACK_PORT: u16 = 1457;
+const CHATGPT_AUTH_SCOPE: &str =
+    "openid profile email offline_access api.connectors.read api.connectors.invoke";
+const CHATGPT_AUTH_SECRET_SCOPE: &str = "ctox-auth";
+const CHATGPT_AUTH_SECRET_NAME: &str = "chatgpt_subscription_auth_json";
+
+#[derive(Debug, Default)]
+struct ChatgptSubscriptionAuthStatus {
+    configured: bool,
+    account_email: Option<String>,
+    plan: Option<String>,
+}
 
 #[derive(Debug, Clone)]
 pub struct BusinessOsServeOptions {
@@ -67,6 +91,11 @@ struct TemplateManifest {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+struct KnowledgeCommandRequest {
+    args: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 struct InstallTemplateRequest {
     template_id: String,
     #[serde(default)]
@@ -92,6 +121,13 @@ struct UpsertModuleRequest {
 #[derive(Debug, Clone, Deserialize)]
 struct DeleteModuleRequest {
     module_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct SaveModuleSourceRequest {
+    module_id: String,
+    path: String,
+    content: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -124,9 +160,13 @@ pub fn serve_business_os(root: &Path, options: BusinessOsServeOptions) -> anyhow
     println!("CTOX Business OS listening on http://{}", options.addr);
     println!("Serving {}", app_root.display());
     for request in server.incoming_requests() {
-        if let Err(err) = handle_request(root, &app_root, request) {
-            eprintln!("[business-os] request failed: {err:#}");
-        }
+        let root = root.to_path_buf();
+        let app_root = app_root.clone();
+        std::thread::spawn(move || {
+            if let Err(err) = handle_request(&root, &app_root, request) {
+                eprintln!("[business-os] request failed: {err:#}");
+            }
+        });
     }
     Ok(())
 }
@@ -146,6 +186,10 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
     let method = request.method().clone();
     let url = request.url().to_string();
     let path = url.split('?').next().unwrap_or("/");
+    if method == Method::Options {
+        respond_options(request)?;
+        return Ok(());
+    }
     match (method.clone(), path) {
         (Method::Get, "/api/business-os/status") => {
             respond_json(request, &store::status(root)?)?;
@@ -169,6 +213,16 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
                 let mutation: RuntimeSettingsRequest = serde_json::from_value(body)?;
                 save_runtime_settings(root, mutation)?;
                 respond_json_value(request, runtime_settings_payload(root, &session)?)?;
+            }
+        }
+        (Method::Post, "/api/business-os/ctox/subscription-auth/start") => {
+            let session = request_session(&request);
+            if !session.authenticated {
+                respond_status(request, 401, "login required")?;
+            } else if !store::session_can_manage_all(&session) {
+                respond_status(request, 403, "chef or admin role required")?;
+            } else {
+                respond_json_value(request, subscription_auth_start_payload(root)?)?;
             }
         }
         (Method::Post, "/api/business-os/ctox/tasks/update") => {
@@ -239,6 +293,30 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
                 }),
             )?;
         }
+        (Method::Get, "/api/business-os/modules/source") => {
+            let module_id = query_param(&url, "module_id").unwrap_or_default();
+            match load_module_source_bundle(app_root, &module_id) {
+                Ok(bundle) => respond_json_value(request, bundle)?,
+                Err(error) => respond_status(request, 400, &error.to_string())?,
+            }
+        }
+        (Method::Post, "/api/business-os/modules/source") => {
+            let session = request_session(&request);
+            if !session.authenticated {
+                respond_status(request, 401, "login required")?;
+            } else {
+                let body = read_json(&mut request)?;
+                let save: SaveModuleSourceRequest = serde_json::from_value(body)?;
+                if !store::session_can_modify_module(root, &session, &save.module_id)? {
+                    respond_status(request, 403, "module modification rights required")?;
+                    return Ok(());
+                }
+                match save_module_source_file(root, app_root, save) {
+                    Ok(result) => respond_json_value(request, result)?,
+                    Err(error) => respond_status(request, 400, &error.to_string())?,
+                }
+            }
+        }
         (Method::Get, "/api/business-os/module-governance") => {
             let session = request_session(&request);
             if !session.authenticated {
@@ -291,27 +369,11 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
                 }),
             )?;
         }
-        (Method::Get, "/api/business-os/knowledge") => {
-            respond_json_value(request, knowledge_index_payload(root)?)?;
-        }
-        (Method::Get, "/api/business-os/knowledge/document") => {
-            let query = parse_query(&url);
-            let id = query.get("id").map(String::as_str).unwrap_or("");
-            respond_json_value(request, knowledge_document_payload(root, id)?)?;
-        }
-        (Method::Get, "/api/business-os/knowledge/dataframe/schema") => {
-            let query = parse_query(&url);
-            let id = query.get("id").map(String::as_str).unwrap_or("");
-            respond_json_value(request, knowledge_dataframe_schema_payload(root, id)?)?;
-        }
-        (Method::Get, "/api/business-os/knowledge/dataframe/rows") => {
-            let query = parse_query(&url);
-            let id = query.get("id").map(String::as_str).unwrap_or("");
-            let offset = parse_usize_query(&query, "offset", 0);
-            let limit = parse_usize_query(&query, "limit", 120).clamp(1, 500);
-            respond_json_value(
+        _ if path.starts_with("/api/business-os/knowledge") => {
+            respond_status(
                 request,
-                knowledge_dataframe_rows_payload(root, id, offset, limit)?,
+                410,
+                "Business OS knowledge data must sync through RxDB",
             )?;
         }
         (Method::Post, "/api/business-os/modules/install-template") => {
@@ -405,39 +467,39 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
         (Method::Get, "/api/business-os/sync/config") => {
             respond_json(request, &store::sync_config(root)?)?;
         }
+        (Method::Get, "/api/business-os/rxdb/pull") => {
+            let query = parse_query(&url);
+            let collection = query
+                .get("collection")
+                .map(String::as_str)
+                .unwrap_or("business_commands");
+            let since_ms = query
+                .get("since_ms")
+                .and_then(|value| value.parse::<i64>().ok());
+            let limit = query
+                .get("limit")
+                .and_then(|value| value.parse::<usize>().ok());
+            respond_json_value(
+                request,
+                store::pull_collection_records(root, collection, since_ms, limit)?,
+            )?;
+        }
+        (Method::Post, "/api/business-os/rxdb/push") => {
+            let body = read_json(&mut request)?;
+            respond_json_value(request, store::push_collection_records(root, body)?)?;
+        }
         (Method::Get, "/api/business-os/ctox/harness-flow") => {
             respond_json_value(request, latest_harness_flow_payload(root))?;
         }
         (Method::Post, "/api/business-os/commands") => {
-            let body = read_json(&mut request)?;
-            let command: store::BusinessCommand = serde_json::from_value(body)?;
-            let should_process = store::is_source_parse_command(&command.command_type)
-                || store::is_match_command(&command.command_type);
-            let accepted = store::record_command(root, command)?;
-            if should_process {
-                let processed = store::process_source_parse_command(root, &accepted.command_id)
-                    .unwrap_or(accepted);
-                respond_json_value(request, serde_json::to_value(processed)?)?;
-            } else {
-                respond_json_value(request, serde_json::to_value(accepted)?)?;
-            }
+            respond_status(
+                request,
+                410,
+                "Business OS commands must be written through RxDB",
+            )?;
         }
-        _ if method == Method::Post && path.starts_with("/api/business-os/rxdb/") => {
-            let collection = path
-                .trim_start_matches("/api/business-os/rxdb/")
-                .trim_end_matches("/pull")
-                .trim_end_matches("/push");
-            if collection.is_empty() || collection.contains('/') {
-                respond_status(request, 400, "invalid collection")?;
-            } else if path.ends_with("/pull") {
-                let body = read_json(&mut request).unwrap_or_else(|_| serde_json::json!({}));
-                respond_json_value(request, store::pull_collection(root, collection, body)?)?;
-            } else if path.ends_with("/push") {
-                let body = read_json(&mut request)?;
-                respond_json_value(request, store::push_collection(root, collection, body)?)?;
-            } else {
-                respond_status(request, 404, "not found")?;
-            }
+        _ if path.starts_with("/api/business-os/rxdb/") => {
+            respond_status(request, 404, "RxDB HTTP bridge endpoint not found")?;
         }
         _ if method == Method::Get => serve_static(app_root, request, path)?,
         _ => respond_status(request, 405, "method not allowed")?,
@@ -451,15 +513,30 @@ fn request_session(request: &Request) -> store::BusinessOsSession {
     store::session(auth_header.as_deref(), session_header.as_deref())
 }
 
-fn runtime_settings_payload(root: &Path, session: &store::BusinessOsSession) -> anyhow::Result<Value> {
+fn query_param(url_raw: &str, key: &str) -> Option<String> {
+    Url::parse(&format!("http://localhost{url_raw}"))
+        .ok()?
+        .query_pairs()
+        .find(|(name, _)| name == key)
+        .map(|(_, value)| value.into_owned())
+}
+
+fn runtime_settings_payload(
+    root: &Path,
+    session: &store::BusinessOsSession,
+) -> anyhow::Result<Value> {
     let env_map = crate::inference::runtime_env::effective_operator_env_map(root)
         .unwrap_or_else(|_| BTreeMap::new());
-    let runtime_state = crate::inference::runtime_state::load_or_resolve_runtime_state(root).ok();
+    let runtime_state = crate::inference::runtime_state::load_runtime_state(root)
+        .ok()
+        .flatten();
     let provider = runtime_state
         .as_ref()
         .map(crate::inference::runtime_state::api_provider_for_runtime_state)
         .map(str::to_owned)
-        .unwrap_or_else(|| crate::inference::runtime_state::infer_api_provider_from_env_map(&env_map));
+        .unwrap_or_else(|| {
+            crate::inference::runtime_state::infer_api_provider_from_env_map(&env_map)
+        });
     let source = runtime_state
         .as_ref()
         .map(|state| state.source.as_env_value().to_owned())
@@ -471,28 +548,49 @@ fn runtime_settings_payload(root: &Path, session: &store::BusinessOsSession) -> 
         });
     let key_name = crate::inference::runtime_state::api_key_env_var_for_provider(&provider);
     let key_configured = crate::secrets::get_credential(root, key_name).is_some();
-    let auth_mode = env_map
-        .get("OPENAI_AUTH_MODE")
+    let configured_auth_mode = env_map
+        .get("CTOX_OPENAI_AUTH_MODE")
+        .or_else(|| env_map.get("OPENAI_AUTH_MODE"))
         .cloned()
         .unwrap_or_else(|| "api_key".to_owned());
-    let service = crate::service::service_status_snapshot(root).ok();
+    let auth_mode = if provider.eq_ignore_ascii_case("local") {
+        "local".to_owned()
+    } else {
+        configured_auth_mode
+    };
+    let service = store::cheap_ctox_service_status(root);
     let service_running = service
-        .as_ref()
-        .map(|status| status.running)
+        .get("running")
+        .and_then(Value::as_bool)
         .unwrap_or(false);
     let service_last_error = service
-        .as_ref()
-        .and_then(|status| status.last_error.clone())
+        .get("last_error")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
         .unwrap_or_default();
     let subscription_selected = provider.eq_ignore_ascii_case("openai")
         && matches!(
             auth_mode.trim().to_ascii_lowercase().as_str(),
             "chatgpt_subscription" | "subscription" | "codex_subscription" | "chatgpt"
         );
+    let subscription_auth = if subscription_selected {
+        chatgpt_subscription_auth_status(root)
+    } else {
+        ChatgptSubscriptionAuthStatus::default()
+    };
     let auth_configured = provider.eq_ignore_ascii_case("local")
-        || subscription_selected
-        || key_configured;
-    let needs_attention = !service_running || !service_last_error.trim().is_empty() || !auth_configured;
+        || key_configured
+        || (subscription_selected && subscription_auth.configured);
+    let service_needs_attention = !service_running || !service_last_error.trim().is_empty();
+    let auth_needs_attention = !auth_configured;
+    let needs_attention = service_needs_attention || auth_needs_attention;
+    let auth_message = runtime_auth_message(
+        provider.as_str(),
+        key_name,
+        key_configured,
+        subscription_selected,
+        &subscription_auth,
+    );
     Ok(serde_json::json!({
         "ok": true,
         "can_manage": store::session_can_manage_all(session),
@@ -504,7 +602,7 @@ fn runtime_settings_payload(root: &Path, session: &store::BusinessOsSession) -> 
                 .cloned()
                 .or_else(|| runtime_state.as_ref().and_then(|state| state.requested_model.clone()))
                 .or_else(|| runtime_state.as_ref().and_then(|state| state.active_model.clone()))
-                .unwrap_or_else(|| "gpt-5.5".to_owned()),
+                .unwrap_or_default(),
             "context": env_map.get("CTOX_CHAT_MODEL_MAX_CONTEXT")
                 .cloned()
                 .or_else(|| runtime_state.as_ref().and_then(|state| state.configured_context_tokens.map(|value| value.to_string())))
@@ -522,11 +620,26 @@ fn runtime_settings_payload(root: &Path, session: &store::BusinessOsSession) -> 
             "api_key_name": key_name,
             "api_key_configured": key_configured,
             "subscription_selected": subscription_selected,
+            "subscription_session_configured": subscription_auth.configured,
+            "subscription_account_email": subscription_auth.account_email,
+            "subscription_plan": subscription_auth.plan,
             "configured": auth_configured
         },
         "service": service,
         "diagnostics": {
             "needs_attention": needs_attention,
+            "service_needs_attention": service_needs_attention,
+            "auth_needs_attention": auth_needs_attention,
+            "service_message": if service_needs_attention {
+                if !service_running {
+                    "CTOX Service läuft nicht.".to_owned()
+                } else {
+                    format!("CTOX kann Aufgaben nicht ausführen: {service_last_error}")
+                }
+            } else {
+                "CTOX Service läuft.".to_owned()
+            },
+            "auth_message": auth_message,
             "last_error": service_last_error,
             "message": if needs_attention {
                 if !service_running {
@@ -534,13 +647,396 @@ fn runtime_settings_payload(root: &Path, session: &store::BusinessOsSession) -> 
                 } else if !service_last_error.trim().is_empty() {
                     format!("CTOX kann Aufgaben nicht ausführen: {service_last_error}")
                 } else {
-                    format!("{} ist nicht konfiguriert.", key_name)
+                    auth_message
                 }
             } else {
-                "Runtime/Auth wirkt konfiguriert.".to_owned()
+                auth_message
             }
         }
     }))
+}
+
+fn chatgpt_subscription_auth_status(root: &Path) -> ChatgptSubscriptionAuthStatus {
+    let Ok(codex_home) = ctox_core::config::find_codex_home() else {
+        return ChatgptSubscriptionAuthStatus::default();
+    };
+    let _ = restore_chatgpt_subscription_auth_from_instance(root, &codex_home);
+    let auth_manager = ctox_core::AuthManager::new(
+        codex_home.clone(),
+        false,
+        ctox_core::auth::AuthCredentialsStoreMode::default(),
+    );
+    let Some(auth) = auth_manager.auth_cached() else {
+        return ChatgptSubscriptionAuthStatus::default();
+    };
+    if !auth.is_chatgpt_auth() {
+        return ChatgptSubscriptionAuthStatus::default();
+    }
+    ChatgptSubscriptionAuthStatus {
+        configured: true,
+        account_email: auth.get_account_email(),
+        plan: auth.account_plan_type().map(|plan| format!("{plan:?}")),
+    }
+}
+
+fn runtime_auth_message(
+    provider: &str,
+    key_name: &str,
+    key_configured: bool,
+    subscription_selected: bool,
+    subscription_auth: &ChatgptSubscriptionAuthStatus,
+) -> String {
+    if provider.eq_ignore_ascii_case("local") {
+        return "Lokale CTOX Runtime ausgewählt; keine API-Autorisierung nötig.".to_owned();
+    }
+    if subscription_selected {
+        return if subscription_auth.configured {
+            match (
+                subscription_auth.account_email.as_deref(),
+                subscription_auth.plan.as_deref(),
+            ) {
+                (Some(email), Some(plan)) => {
+                    format!("ChatGPT Subscription autorisiert: {email} ({plan}).")
+                }
+                (Some(email), None) => format!("ChatGPT Subscription autorisiert: {email}."),
+                _ => "ChatGPT Subscription autorisiert.".to_owned(),
+            }
+        } else {
+            "ChatGPT Subscription ausgewählt, aber keine ChatGPT-Session im Codex/CTOX Auth-Store gefunden.".to_owned()
+        };
+    }
+    if key_configured {
+        format!("{key_name} ist im CTOX Secret Store vorhanden.")
+    } else {
+        format!("{key_name} fehlt im CTOX Secret Store.")
+    }
+}
+
+fn subscription_auth_start_payload(root: &Path) -> anyhow::Result<Value> {
+    let login = start_chatgpt_subscription_login(root)?;
+    Ok(serde_json::json!({
+        "ok": true,
+        "status": "auth_url",
+        "login_id": login.login_id,
+        "auth_url": login.auth_url,
+        "message": "ChatGPT Subscription Autorisierung gestartet."
+    }))
+}
+
+struct StartedChatgptSubscriptionLogin {
+    login_id: String,
+    auth_url: String,
+}
+
+#[derive(Clone)]
+struct ChatgptLoginPkce {
+    verifier: String,
+    challenge: String,
+}
+
+fn start_chatgpt_subscription_login(
+    root: &Path,
+) -> anyhow::Result<StartedChatgptSubscriptionLogin> {
+    let codex_home = ctox_core::config::find_codex_home()
+        .context("Codex/CTOX Auth-Store konnte nicht aufgelöst werden")?;
+    let pkce = chatgpt_login_pkce();
+    let state = chatgpt_login_state();
+    let (server, port) = bind_chatgpt_login_server()
+        .context("Lokaler ChatGPT-Login-Callback konnte nicht gestartet werden")?;
+    let redirect_uri = format!("http://localhost:{port}/auth/callback");
+    let auth_url = build_chatgpt_authorize_url(&redirect_uri, &pkce.challenge, &state);
+    let login_id = Uuid::new_v4().to_string();
+    let worker_login_id = login_id.clone();
+    let root = root.to_path_buf();
+    thread::spawn(move || {
+        if let Err(err) =
+            run_chatgpt_login_callback_server(server, root, codex_home, redirect_uri, pkce, state)
+        {
+            eprintln!("CTOX ChatGPT subscription login {worker_login_id} failed: {err}");
+        }
+    });
+    Ok(StartedChatgptSubscriptionLogin { login_id, auth_url })
+}
+
+fn chatgpt_login_pkce() -> ChatgptLoginPkce {
+    let verifier = format!(
+        "{}{}{}",
+        Uuid::new_v4().simple(),
+        Uuid::new_v4().simple(),
+        Uuid::new_v4().simple()
+    );
+    let digest = Sha256::digest(verifier.as_bytes());
+    let challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest);
+    ChatgptLoginPkce {
+        verifier,
+        challenge,
+    }
+}
+
+fn chatgpt_login_state() -> String {
+    let seed = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+    let digest = Sha256::digest(seed.as_bytes());
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest)
+}
+
+fn bind_chatgpt_login_server() -> anyhow::Result<(Server, u16)> {
+    for port in [
+        CHATGPT_AUTH_CALLBACK_PORT,
+        CHATGPT_AUTH_CALLBACK_FALLBACK_PORT,
+    ] {
+        match Server::http(format!("127.0.0.1:{port}")) {
+            Ok(server) => return Ok((server, port)),
+            Err(_) => continue,
+        }
+    }
+    anyhow::bail!(
+        "Ports {CHATGPT_AUTH_CALLBACK_PORT} und {CHATGPT_AUTH_CALLBACK_FALLBACK_PORT} sind belegt"
+    )
+}
+
+fn build_chatgpt_authorize_url(redirect_uri: &str, code_challenge: &str, state: &str) -> String {
+    let query = [
+        ("response_type", "code"),
+        ("client_id", ctox_core::auth::CLIENT_ID),
+        ("redirect_uri", redirect_uri),
+        ("scope", CHATGPT_AUTH_SCOPE),
+        ("code_challenge", code_challenge),
+        ("code_challenge_method", "S256"),
+        ("id_token_add_organizations", "true"),
+        ("codex_cli_simplified_flow", "true"),
+        ("state", state),
+        ("originator", "ctox_business_os"),
+    ];
+    let qs = query
+        .into_iter()
+        .map(|(key, value)| format!("{key}={}", urlencoding_encode(value)))
+        .collect::<Vec<_>>()
+        .join("&");
+    format!("{CHATGPT_AUTH_ISSUER}/oauth/authorize?{qs}")
+}
+
+fn run_chatgpt_login_callback_server(
+    server: Server,
+    root: PathBuf,
+    codex_home: PathBuf,
+    redirect_uri: String,
+    pkce: ChatgptLoginPkce,
+    state: String,
+) -> anyhow::Result<()> {
+    for request in server.incoming_requests() {
+        let url_raw = request.url().to_owned();
+        let handled = handle_chatgpt_login_callback_request(
+            request,
+            &url_raw,
+            &root,
+            &codex_home,
+            &redirect_uri,
+            &pkce,
+            &state,
+        )?;
+        if handled {
+            break;
+        }
+    }
+    server.unblock();
+    Ok(())
+}
+
+fn handle_chatgpt_login_callback_request(
+    request: Request,
+    url_raw: &str,
+    root: &Path,
+    codex_home: &Path,
+    redirect_uri: &str,
+    pkce: &ChatgptLoginPkce,
+    expected_state: &str,
+) -> anyhow::Result<bool> {
+    let parsed = Url::parse(&format!("http://localhost{url_raw}"))?;
+    if parsed.path() != "/auth/callback" {
+        respond_html(request, 404, "Not Found")?;
+        return Ok(false);
+    }
+    let params: HashMap<String, String> = parsed.query_pairs().into_owned().collect();
+    if params.get("state").map(String::as_str) != Some(expected_state) {
+        respond_html(
+            request,
+            400,
+            "CTOX Login konnte nicht abgeschlossen werden: state mismatch.",
+        )?;
+        return Ok(true);
+    }
+    if let Some(error) = params.get("error") {
+        let description = params
+            .get("error_description")
+            .map(String::as_str)
+            .unwrap_or(error);
+        respond_html(
+            request,
+            400,
+            &format!("CTOX Login wurde von ChatGPT abgelehnt: {description}"),
+        )?;
+        return Ok(true);
+    }
+    let Some(code) = params.get("code").filter(|value| !value.trim().is_empty()) else {
+        respond_html(
+            request,
+            400,
+            "CTOX Login konnte nicht abgeschlossen werden: code fehlt.",
+        )?;
+        return Ok(true);
+    };
+    match exchange_chatgpt_authorization_code(code, redirect_uri, &pkce.verifier)
+        .and_then(|tokens| persist_chatgpt_subscription_auth(root, codex_home, tokens))
+    {
+        Ok(()) => {
+            respond_html(
+                request,
+                200,
+                "CTOX ChatGPT Subscription ist autorisiert. Dieses Fenster kann geschlossen werden.",
+            )?;
+            Ok(true)
+        }
+        Err(err) => {
+            respond_html(
+                request,
+                500,
+                &format!("CTOX konnte die ChatGPT Subscription nicht speichern: {err}"),
+            )?;
+            Ok(true)
+        }
+    }
+}
+
+fn respond_html(request: Request, status: u16, body: &str) -> anyhow::Result<()> {
+    let mut response = Response::from_string(format!(
+        "<!doctype html><meta charset=\"utf-8\"><title>CTOX Login</title><body style=\"font:16px system-ui;padding:32px;background:#10181b;color:#eef5f3\"><h1>CTOX Login</h1><p>{}</p></body>",
+        html_escape(body)
+    ))
+    .with_status_code(status)
+    .with_header(Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..]).unwrap());
+    add_common_response_headers(&mut response);
+    request.respond(response).map_err(io::Error::other)?;
+    Ok(())
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatgptTokenExchangeResponse {
+    id_token: String,
+    access_token: String,
+    refresh_token: String,
+}
+
+fn exchange_chatgpt_authorization_code(
+    code: &str,
+    redirect_uri: &str,
+    code_verifier: &str,
+) -> anyhow::Result<ChatgptTokenExchangeResponse> {
+    let body = format!(
+        "grant_type=authorization_code&code={}&redirect_uri={}&client_id={}&code_verifier={}",
+        urlencoding_encode(code),
+        urlencoding_encode(redirect_uri),
+        urlencoding_encode(ctox_core::auth::CLIENT_ID),
+        urlencoding_encode(code_verifier)
+    );
+    let response = ureq::post(&format!("{CHATGPT_AUTH_ISSUER}/oauth/token"))
+        .set("Content-Type", "application/x-www-form-urlencoded")
+        .send_string(&body);
+    match response {
+        Ok(response) => response.into_json().map_err(anyhow::Error::from),
+        Err(ureq::Error::Status(status, response)) => {
+            let body = response.into_string().unwrap_or_default();
+            anyhow::bail!("OAuth Token-Exchange fehlgeschlagen ({status}): {body}")
+        }
+        Err(err) => Err(anyhow::Error::from(err)),
+    }
+}
+
+fn persist_chatgpt_subscription_auth(
+    root: &Path,
+    codex_home: &Path,
+    tokens: ChatgptTokenExchangeResponse,
+) -> anyhow::Result<()> {
+    let token_data = ctox_core::token_data::TokenData {
+        id_token: ctox_core::token_data::parse_chatgpt_jwt_claims(&tokens.id_token)
+            .map_err(anyhow::Error::msg)?,
+        access_token: tokens.access_token,
+        refresh_token: tokens.refresh_token,
+        account_id: chatgpt_account_id_from_jwt(&tokens.id_token),
+    };
+    let auth = ctox_core::auth::AuthDotJson {
+        auth_mode: Some(ApiAuthMode::Chatgpt),
+        openai_api_key: None,
+        tokens: Some(token_data),
+        last_refresh: Some(chrono::Utc::now()),
+    };
+    ctox_core::auth::save_auth(
+        codex_home,
+        &auth,
+        ctox_core::auth::AuthCredentialsStoreMode::File,
+    )?;
+    crate::secrets::write_secret_record(
+        root,
+        CHATGPT_AUTH_SECRET_SCOPE,
+        CHATGPT_AUTH_SECRET_NAME,
+        &serde_json::to_string(&auth)?,
+        Some("ChatGPT Subscription OAuth state for this CTOX instance".to_owned()),
+        serde_json::json!({"source": "business_os_subscription_login", "auth_mode": "chatgpt_subscription"}),
+    )?;
+    Ok(())
+}
+
+fn restore_chatgpt_subscription_auth_from_instance(
+    root: &Path,
+    codex_home: &Path,
+) -> anyhow::Result<bool> {
+    let auth_manager = ctox_core::AuthManager::new(
+        codex_home.to_path_buf(),
+        false,
+        ctox_core::auth::AuthCredentialsStoreMode::default(),
+    );
+    if auth_manager
+        .auth_cached()
+        .as_ref()
+        .is_some_and(|auth| auth.is_chatgpt_auth())
+    {
+        return Ok(false);
+    }
+    let serialized = crate::secrets::read_secret_value(
+        root,
+        CHATGPT_AUTH_SECRET_SCOPE,
+        CHATGPT_AUTH_SECRET_NAME,
+    )
+    .context("no instance ChatGPT auth backup")?;
+    let auth: ctox_core::auth::AuthDotJson =
+        serde_json::from_str(&serialized).context("instance ChatGPT auth backup is invalid")?;
+    if auth.tokens.is_none() {
+        anyhow::bail!("instance ChatGPT auth backup has no tokens");
+    }
+    ctox_core::auth::save_auth(
+        codex_home,
+        &auth,
+        ctox_core::auth::AuthCredentialsStoreMode::File,
+    )?;
+    Ok(true)
+}
+
+fn chatgpt_account_id_from_jwt(jwt: &str) -> Option<String> {
+    let mut parts = jwt.split('.');
+    let (_header, payload, _signature) = (parts.next()?, parts.next()?, parts.next()?);
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload)
+        .ok()?;
+    let value = serde_json::from_slice::<Value>(&bytes).ok()?;
+    value
+        .get("https://api.openai.com/auth")
+        .and_then(Value::as_object)
+        .and_then(|claims| claims.get("chatgpt_account_id"))
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+}
+
+fn urlencoding_encode(value: &str) -> String {
+    url::form_urlencoded::byte_serialize(value.as_bytes()).collect()
 }
 
 fn save_runtime_settings(root: &Path, request: RuntimeSettingsRequest) -> anyhow::Result<()> {
@@ -553,6 +1049,8 @@ fn save_runtime_settings(root: &Path, request: RuntimeSettingsRequest) -> anyhow
         env_map.insert("CTOX_CHAT_SOURCE".to_owned(), "local".to_owned());
         env_map.remove("CTOX_API_PROVIDER");
         env_map.remove("CTOX_UPSTREAM_BASE_URL");
+        env_map.remove("OPENAI_AUTH_MODE");
+        env_map.remove("CTOX_OPENAI_AUTH_MODE");
     } else {
         env_map.insert("CTOX_CHAT_SOURCE".to_owned(), "api".to_owned());
         env_map.insert("CTOX_API_PROVIDER".to_owned(), provider.to_owned());
@@ -582,9 +1080,17 @@ fn save_runtime_settings(root: &Path, request: RuntimeSettingsRequest) -> anyhow
             "chatgpt_subscription" | "subscription" | "codex_subscription" | "chatgpt"
         )
     {
-        env_map.insert("OPENAI_AUTH_MODE".to_owned(), "chatgpt_subscription".to_owned());
+        env_map.insert(
+            "OPENAI_AUTH_MODE".to_owned(),
+            "chatgpt_subscription".to_owned(),
+        );
+        env_map.insert(
+            "CTOX_OPENAI_AUTH_MODE".to_owned(),
+            "chatgpt_subscription".to_owned(),
+        );
     } else {
         env_map.insert("OPENAI_AUTH_MODE".to_owned(), "api_key".to_owned());
+        env_map.insert("CTOX_OPENAI_AUTH_MODE".to_owned(), "api_key".to_owned());
     }
     let api_key = request.api_key.trim();
     if !api_key.is_empty() {
@@ -596,16 +1102,11 @@ fn save_runtime_settings(root: &Path, request: RuntimeSettingsRequest) -> anyhow
 
 fn latest_harness_flow_payload(root: &Path) -> Value {
     match crate::service::harness_flow::load_latest_flow(root) {
-        Ok(flow) => {
-            let ascii = crate::service::harness_flow::render_latest_ascii(root, 132)
-                .unwrap_or_else(|err| format!("failed to render harness flow: {err}"));
-            serde_json::json!({
-                "ok": true,
-                "mode": "ctox_core",
-                "flow": flow,
-                "ascii": ascii
-            })
-        }
+        Ok(flow) => serde_json::json!({
+            "ok": true,
+            "mode": "ctox_core",
+            "flow": flow
+        }),
         Err(err) => serde_json::json!({
             "ok": false,
             "mode": "ctox_core",
@@ -651,7 +1152,12 @@ fn load_module_manifests(app_root: &Path) -> anyhow::Result<Vec<ModuleManifest>>
         manifest.deletable = !core;
         manifests.push(manifest);
     }
-    manifests.extend(load_installed_module_manifests(app_root)?);
+    for manifest in load_installed_module_manifests(app_root)? {
+        if manifests.iter().any(|existing| existing.id == manifest.id) {
+            continue;
+        }
+        manifests.push(manifest);
+    }
     manifests.sort_by(|a, b| match (a.id.as_str(), b.id.as_str()) {
         ("ctox", "ctox") => std::cmp::Ordering::Equal,
         ("ctox", _) => std::cmp::Ordering::Less,
@@ -693,6 +1199,277 @@ fn load_installed_module_manifests(app_root: &Path) -> anyhow::Result<Vec<Module
         manifests.push(manifest);
     }
     Ok(manifests)
+}
+
+fn load_module_source_bundle(app_root: &Path, module_id_raw: &str) -> anyhow::Result<Value> {
+    let module_id = sanitize_slug(module_id_raw);
+    if module_id.is_empty() {
+        anyhow::bail!("module_id is required");
+    }
+    let module_root = resolve_module_source_root(app_root, &module_id)?;
+    let mut files = Vec::new();
+    collect_module_source_files(&module_root, &module_root, &mut files)?;
+    files.sort_by(|a, b| {
+        let a_path = a.get("path").and_then(Value::as_str).unwrap_or_default();
+        let b_path = b.get("path").and_then(Value::as_str).unwrap_or_default();
+        a_path.cmp(b_path)
+    });
+    respondable_source_bundle(&module_id, &module_root, files)
+}
+
+fn respondable_source_bundle(
+    module_id: &str,
+    module_root: &Path,
+    files: Vec<Value>,
+) -> anyhow::Result<Value> {
+    Ok(serde_json::json!({
+        "ok": true,
+        "module_id": module_id,
+        "root": module_root.display().to_string(),
+        "files": files
+    }))
+}
+
+fn save_module_source_file(
+    root: &Path,
+    app_root: &Path,
+    request: SaveModuleSourceRequest,
+) -> anyhow::Result<Value> {
+    let module_id = sanitize_slug(&request.module_id);
+    if module_id.is_empty() {
+        anyhow::bail!("module_id is required");
+    }
+    let module_root = resolve_module_source_root(app_root, &module_id)?;
+    let rel = normalize_source_relative_path(&request.path)?;
+    if !is_allowed_source_path(&rel) {
+        anyhow::bail!("source file type is not editable: {}", rel.display());
+    }
+    let target = module_root.join(&rel);
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create source directory {}", parent.display()))?;
+    }
+    let previous_content = fs::read_to_string(&target).ok();
+    let previous_sha256 = previous_content
+        .as_deref()
+        .map(|content| sha256_hex(content.as_bytes()));
+    let next_sha256 = sha256_hex(request.content.as_bytes());
+    let changed = previous_sha256.as_deref() != Some(next_sha256.as_str());
+    let snapshot_id = if changed {
+        previous_content
+            .as_deref()
+            .map(|content| {
+                write_module_source_snapshot(
+                    root,
+                    &module_id,
+                    &rel,
+                    content,
+                    previous_sha256.as_deref(),
+                )
+            })
+            .transpose()?
+    } else {
+        None
+    };
+    fs::write(&target, request.content.as_bytes())
+        .with_context(|| format!("failed to write module source {}", target.display()))?;
+    let metadata = fs::metadata(&target)?;
+    Ok(serde_json::json!({
+        "ok": true,
+        "module_id": module_id,
+        "path": rel.to_string_lossy(),
+        "size_bytes": metadata.len(),
+        "modified_at_ms": modified_at_ms(&metadata),
+        "sha256": next_sha256,
+        "previous_sha256": previous_sha256,
+        "snapshot_id": snapshot_id,
+        "changed": changed
+    }))
+}
+
+fn write_module_source_snapshot(
+    root: &Path,
+    module_id: &str,
+    rel: &Path,
+    content: &str,
+    previous_sha256: Option<&str>,
+) -> anyhow::Result<String> {
+    let created_at_ms = now_ms();
+    let rel_display = rel.to_string_lossy().replace('\\', "/");
+    let safe_path = rel_display
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    let snapshot_id = format!("{created_at_ms}_{safe_path}");
+    let snapshot_root = root
+        .join("runtime")
+        .join("business-os-source-snapshots")
+        .join(module_id);
+    fs::create_dir_all(&snapshot_root).with_context(|| {
+        format!(
+            "failed to create source snapshot directory {}",
+            snapshot_root.display()
+        )
+    })?;
+    let source_path = snapshot_root.join(format!("{snapshot_id}.source"));
+    fs::write(&source_path, content.as_bytes())
+        .with_context(|| format!("failed to write source snapshot {}", source_path.display()))?;
+    let metadata_path = snapshot_root.join(format!("{snapshot_id}.json"));
+    let metadata = serde_json::json!({
+        "snapshot_id": snapshot_id,
+        "module_id": module_id,
+        "path": rel_display,
+        "previous_sha256": previous_sha256,
+        "created_at_ms": created_at_ms,
+        "source_path": source_path.display().to_string()
+    });
+    fs::write(&metadata_path, serde_json::to_vec_pretty(&metadata)?).with_context(|| {
+        format!(
+            "failed to write source snapshot metadata {}",
+            metadata_path.display()
+        )
+    })?;
+    Ok(snapshot_id)
+}
+
+fn collect_module_source_files(
+    module_root: &Path,
+    current: &Path,
+    files: &mut Vec<Value>,
+) -> anyhow::Result<()> {
+    for entry in fs::read_dir(current)? {
+        let entry = entry?;
+        let path = entry.path();
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with('.')
+            || matches!(name.as_ref(), "node_modules" | "dist" | "build" | "target")
+        {
+            continue;
+        }
+        if entry.file_type()?.is_dir() {
+            collect_module_source_files(module_root, &path, files)?;
+            continue;
+        }
+        let rel = path.strip_prefix(module_root).unwrap_or(&path);
+        if !is_allowed_source_path(rel) {
+            continue;
+        }
+        let metadata = fs::metadata(&path)?;
+        if metadata.len() > 1024 * 1024 {
+            continue;
+        }
+        let content = fs::read_to_string(&path)
+            .with_context(|| format!("failed to read module source {}", path.display()))?;
+        let rel_display = rel.to_string_lossy().replace('\\', "/");
+        files.push(serde_json::json!({
+            "path": rel_display,
+            "language": source_language_for_path(rel),
+            "size_bytes": metadata.len(),
+            "modified_at_ms": modified_at_ms(&metadata),
+            "sha256": sha256_hex(content.as_bytes()),
+            "content": content
+        }));
+    }
+    Ok(())
+}
+
+fn resolve_module_source_root(app_root: &Path, module_id: &str) -> anyhow::Result<PathBuf> {
+    let core = app_root.join("modules").join(module_id);
+    if core.join("module.json").is_file() {
+        return Ok(core);
+    }
+    let installed = app_root.join("installed-modules").join(module_id);
+    if installed.join("module.json").is_file() {
+        return Ok(installed);
+    }
+    anyhow::bail!("module `{module_id}` was not found")
+}
+
+fn normalize_source_relative_path(path: &str) -> anyhow::Result<PathBuf> {
+    let rel = Path::new(path);
+    if rel.is_absolute() {
+        anyhow::bail!("absolute source paths are not allowed");
+    }
+    let mut out = PathBuf::new();
+    for part in rel.components() {
+        match part {
+            std::path::Component::Normal(segment) => {
+                let segment = segment.to_string_lossy();
+                if segment.starts_with('.') {
+                    anyhow::bail!("hidden source paths are not allowed");
+                }
+                out.push(segment.as_ref());
+            }
+            std::path::Component::CurDir => {}
+            _ => anyhow::bail!("unsafe source path"),
+        }
+    }
+    if out.as_os_str().is_empty() {
+        anyhow::bail!("source path is required");
+    }
+    Ok(out)
+}
+
+fn is_allowed_source_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| {
+            matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "css" | "html" | "js" | "json" | "md" | "mjs" | "ts"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn source_language_for_path(path: &Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "css" => "css",
+        "html" => "html",
+        "json" => "json",
+        "md" => "markdown",
+        "mjs" | "js" => "javascript",
+        "ts" => "typescript",
+        _ => "text",
+    }
+}
+
+fn modified_at_ms(metadata: &fs::Metadata) -> u64 {
+    metadata
+        .modified()
+        .unwrap_or(SystemTime::UNIX_EPOCH)
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX)
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX)
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn load_template_manifests(app_root: &Path) -> anyhow::Result<Vec<TemplateManifest>> {
@@ -1065,6 +1842,7 @@ fn knowledge_index_payload(root: &Path) -> anyhow::Result<Value> {
     let mut items = Vec::new();
     let mut runbooks = Vec::new();
     let mut tables = Vec::new();
+    let mut catalog_parquet_paths = HashSet::new();
     let sqlite_path = ctox_sqlite_path(root);
 
     if sqlite_path.is_file() {
@@ -1119,6 +1897,7 @@ fn knowledge_index_payload(root: &Path) -> anyhow::Result<Value> {
             let mut stmt = conn.prepare(
                 "SELECT skillbook_id, title, status, summary, linked_runbooks_json, updated_at
                    FROM knowledge_skillbooks
+                  WHERE status = 'active'
                   ORDER BY updated_at DESC, title
                   LIMIT 160",
             )?;
@@ -1151,6 +1930,7 @@ fn knowledge_index_payload(root: &Path) -> anyhow::Result<Value> {
             let mut stmt = conn.prepare(
                 "SELECT runbook_id, skillbook_id, title, status, summary, problem_domain, updated_at
                    FROM knowledge_runbooks
+                  WHERE status = 'active'
                   ORDER BY updated_at DESC, title
                   LIMIT 220",
             )?;
@@ -1191,6 +1971,13 @@ fn knowledge_index_payload(root: &Path) -> anyhow::Result<Value> {
         }
 
         if sqlite_table_exists(&conn, "knowledge_data_tables")? {
+            let mut catalog_paths =
+                conn.prepare("SELECT parquet_path FROM knowledge_data_tables")?;
+            let mut path_rows = catalog_paths.query([])?;
+            while let Some(row) = path_rows.next()? {
+                let parquet_path: String = row.get(0)?;
+                catalog_parquet_paths.insert(parquet_path);
+            }
             let mut stmt = conn.prepare(
                 "SELECT table_id, domain, table_key, source_system, title, description, parquet_path,
                         row_count, bytes, updated_at
@@ -1246,6 +2033,9 @@ fn knowledge_index_payload(root: &Path) -> anyhow::Result<Value> {
             .as_str()
             .unwrap_or_default()
             .to_owned();
+        if catalog_parquet_paths.contains(&parquet_path) {
+            continue;
+        }
         if tables.iter().any(|existing| {
             existing["id"].as_str() == Some(id.as_str())
                 || existing["parquet_path"].as_str() == Some(parquet_path.as_str())
@@ -1691,6 +2481,7 @@ fn serve_static(app_root: &Path, request: Request, path: &str) -> anyhow::Result
     let mut response = Response::from_data(bytes);
     response.add_header(Header::from_bytes("Content-Type", mime.as_bytes()).unwrap());
     response.add_header(Header::from_bytes("Cache-Control", "no-store").unwrap());
+    add_common_response_headers(&mut response);
     request.respond(response)?;
     Ok(())
 }
@@ -1719,14 +2510,46 @@ fn respond_json_value(request: Request, value: Value) -> anyhow::Result<()> {
     let body = serde_json::to_string_pretty(&value)?;
     let mut response = Response::from_string(body);
     response.add_header(Header::from_bytes("Content-Type", "application/json").unwrap());
+    add_cors_headers(&mut response);
+    add_common_response_headers(&mut response);
     request.respond(response)?;
     Ok(())
 }
 
 fn respond_status(request: Request, status: u16, body: &str) -> anyhow::Result<()> {
-    let response = Response::from_string(body.to_string()).with_status_code(status);
+    let mut response = Response::from_string(body.to_string()).with_status_code(status);
+    add_cors_headers(&mut response);
+    add_common_response_headers(&mut response);
     request.respond(response)?;
     Ok(())
+}
+
+fn respond_options(request: Request) -> anyhow::Result<()> {
+    let mut response = Response::empty(204);
+    add_cors_headers(&mut response);
+    response.add_header(
+        Header::from_bytes("Access-Control-Allow-Methods", "GET, POST, OPTIONS").unwrap(),
+    );
+    response.add_header(
+        Header::from_bytes(
+            "Access-Control-Allow-Headers",
+            "Content-Type, Authorization, X-CTOX-Business-OS-Session",
+        )
+        .unwrap(),
+    );
+    response.add_header(Header::from_bytes("Access-Control-Max-Age", "600").unwrap());
+    add_common_response_headers(&mut response);
+    request.respond(response)?;
+    Ok(())
+}
+
+fn add_cors_headers<R: io::Read>(response: &mut Response<R>) {
+    response.add_header(Header::from_bytes("Access-Control-Allow-Origin", "*").unwrap());
+    response.add_header(Header::from_bytes("Vary", "Origin").unwrap());
+}
+
+fn add_common_response_headers<R: io::Read>(response: &mut Response<R>) {
+    response.add_header(Header::from_bytes("Connection", "close").unwrap());
 }
 
 fn mime_for(path: &PathBuf) -> &'static str {

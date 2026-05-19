@@ -71,10 +71,18 @@ export function createSyncFeedback({ scope = 'default' } = {}) {
   const scopeSafe = safeText(scope) || 'default';
   const hostId = `sync-feedback-host-${scopeSafe}`;
   let host = null;
+  let hostRoot = null;
   let lastDataSyncAt = 0;
   const dedupeMap = new Map();
   const persistentNotes = new Map();
   const dismissedProgressIds = new Set();
+
+  function setHostRoot(root) {
+    hostRoot = root && typeof root.appendChild === 'function' ? root : null;
+    if (host && hostRoot && host.parentNode !== hostRoot) {
+      hostRoot.appendChild(host);
+    }
+  }
 
   function ensureHost() {
     if (host && host.isConnected) return host;
@@ -84,7 +92,7 @@ export function createSyncFeedback({ scope = 'default' } = {}) {
     host = document.createElement('div');
     host.id = hostId;
     host.className = 'sync-feedback-host';
-    document.body.appendChild(host);
+    (hostRoot?.isConnected ? hostRoot : document.body).appendChild(host);
     return host;
   }
 
@@ -343,6 +351,7 @@ export function createSyncFeedback({ scope = 'default' } = {}) {
   }
 
   return {
+    setHostRoot,
     ensureHost,
     show,
     upsertProgress,

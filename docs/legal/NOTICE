@@ -47,5 +47,11 @@ been retired.
   operator workspace via `npx patchright install chromium` and not
   bundled into the CTOX distribution.
 
+- src/apps/business-os/modules/desktop/ and src/apps/business-os/shared/
+  Portions of these directories derive from OSKO
+  (https://github.com/cmdkolab/osko, MIT) at commit
+  475cddd5539d8eeb6ec1b86dbe1e57db8d1c03b7. The OSKO-derived code has been
+  refactored into its CTOX-native form and is owned and maintained by CTOX.
+
 The root LICENSE applies to first-party CTOX repository code unless an
 integrated source subtree or file states otherwise.

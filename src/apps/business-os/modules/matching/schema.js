@@ -4,6 +4,8 @@ const baseRecordFields = {
   title: { type: 'string' },
   source_type: { type: 'string' },
   source_ref: { type: 'string' },
+  definition_id: { type: 'string' },
+  schema_version: { type: 'string' },
   status: { type: 'string' },
   data: { type: 'object', additionalProperties: true },
   created_at_ms: { type: 'number' },
@@ -12,7 +14,7 @@ const baseRecordFields = {
 };
 
 const matchingRequirementsSchema = {
-  version: 0,
+  version: 1,
   primaryKey: 'id',
   type: 'object',
   properties: {
@@ -25,7 +27,7 @@ const matchingRequirementsSchema = {
 };
 
 const matchingObjectsSchema = {
-  version: 0,
+  version: 1,
   primaryKey: 'id',
   type: 'object',
   properties: {
@@ -38,7 +40,7 @@ const matchingObjectsSchema = {
 };
 
 const matchingResultsSchema = {
-  version: 0,
+  version: 1,
   primaryKey: 'id',
   type: 'object',
   properties: {
@@ -57,4 +59,12 @@ export const collections = {
   matching_requirements: matchingRequirementsSchema,
   matching_objects: matchingObjectsSchema,
   matching_results: matchingResultsSchema
+};
+
+const preserveDocument = (doc) => doc;
+
+export const migrationStrategies = {
+  matching_requirements: { 1: preserveDocument },
+  matching_objects: { 1: preserveDocument },
+  matching_results: { 1: preserveDocument }
 };

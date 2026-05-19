@@ -3,19 +3,37 @@
 // Datenquellen & Zustand
 // ---------------------------
 
-import { computeRequirementMatch, shortlistObjectsForRequirement, shortlistRequirementsForObject } from './matchingTools.js';
-import { recomputeAllMatchScoresOnce } from './matchingTools.js';
+import {
+  computeRequirementMatch,
+  computeTotalMatchScoreFromItems,
+  recomputeAllMatchScoresOnce,
+  shortlistObjectsForRequirement,
+  shortlistRequirementsForObject
+} from './matchingTools.js';
 import { readViewState, patchViewState } from './viewState.js';
 window.recomputeAllMatchScoresOnce = recomputeAllMatchScoresOnce;
 
 import { CtoxQueuedCommandError, llmChat, queueObjectParseTask, queueRequirementParseTask } from './ctoxCommandAdapter.js';
 import { getContactsCollection } from './businessOsDataSource.js';
 import { createSyncFeedback } from './syncFeedback.js';
+import { getActiveMatchingDefinition, matchingText, setActiveMatchingDefinition } from './matchingDefinition.js';
+import { showBusinessAlert, showBusinessConfirm, showBusinessPrompt } from '../../../shared/dialogs.js';
 
 const EMBEDDING_REQUEST_TIMEOUT_MS = 12_000;
 const MATCH_SCORE_FORMULA_VERSION = 3;
 const MATCH_SCORE_FORMULA_VERSION_KEY = 'requirementMatching.scoreFormulaVersion';
 let activeObjectId = null;
+function defText(path, fallback = '') {
+  return matchingText(path, fallback);
+}
+
+function activeDefinitionId() {
+  return getActiveMatchingDefinition()?.id || 'generic_matching.v1';
+}
+
+function activeSchemaVersion() {
+  return getActiveMatchingDefinition()?.engine?.version || 'generic_matching.v1';
+}
 
 const MATCHING_VIEW_STATE_KEY = 'requirementMatchingView';
 const MATCHING_VIEW_STATE_DEFAULTS = {
@@ -44,6 +62,17 @@ let matchingViewState = readViewState(
 
 const syncFeedback = createSyncFeedback({ scope: 'matching-view' });
 syncFeedback.wireWebRTCStatus();
+let matchingModuleHost = null;
+
+function getMatchingModuleHost() {
+  return matchingModuleHost?.isConnected
+    ? matchingModuleHost
+    : document.querySelector('[data-matching-module="native"]') || document.body;
+}
+
+function appendMatchingLayer(element) {
+  getMatchingModuleHost().appendChild(element);
+}
 
 export async function importObjectFromPdfFile(file) {
   const info = await importObjectsFromPdfFiles([file]);
@@ -77,6 +106,145 @@ export async function importObjectsFromPdfFiles(files) {
     filenames: list.map(f => f?.name || 'resume.pdf'),
     queued: true
   };
+}
+
+function isImageFile(file) {
+  if (!file) return false;
+  const type = String(file.type || '').toLowerCase();
+  const name = String(file.name || '').toLowerCase();
+  return type.startsWith('image/') || /\.(png|jpe?g|webp|gif|bmp|avif)$/i.test(name);
+}
+
+function resizeImageFileToDataUrl(file, size = 256) {
+  return new Promise((resolve, reject) => {
+    if (!file || !isImageFile(file)) {
+      reject(new Error('Keine Bilddatei ausgewählt.'));
+      return;
+    }
+
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) throw new Error('Canvas konnte nicht initialisiert werden.');
+
+        const sourceWidth = img.naturalWidth || img.width || size;
+        const sourceHeight = img.naturalHeight || img.height || size;
+        const side = Math.min(sourceWidth, sourceHeight);
+        const sx = Math.max(0, Math.floor((sourceWidth - side) / 2));
+        const sy = Math.max(0, Math.floor((sourceHeight - side) / 2));
+
+        ctx.clearRect(0, 0, size, size);
+        ctx.drawImage(img, sx, sy, side, side, 0, 0, size, size);
+        URL.revokeObjectURL(url);
+        resolve(canvas.toDataURL('image/jpeg', 0.86));
+      } catch (error) {
+        URL.revokeObjectURL(url);
+        reject(error);
+      }
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('Bild konnte nicht gelesen werden.'));
+    };
+    img.src = url;
+  });
+}
+
+async function importObjectImageFile(file, targetObjectId = '') {
+  if (!rxdb || !rxdb.objects) await loadFromRxdb();
+  if (!rxdb || !rxdb.objects) throw new Error('Objekt-Datenbank ist nicht bereit.');
+
+  const photo = await resizeImageFileToDataUrl(file, 256);
+  const now = new Date().toISOString();
+  const cleanFilename = String(file?.name || 'Bild').trim() || 'Bild';
+  const nameFromFile = cleanFilename.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').trim() || cleanFilename;
+  const selectedId = String(targetObjectId || '').trim();
+
+  if (selectedId) {
+    const existing = await rxdb.objects.findOne({ selector: { id: selectedId } }).exec();
+    if (existing) {
+      await existing.incrementalModify((prev) => ({
+        ...prev,
+        definitionId: prev.definitionId || activeDefinitionId(),
+        schemaVersion: prev.schemaVersion || activeSchemaVersion(),
+        photo,
+        profilePhotoBase64: photo,
+        updatedAt: now,
+        documents: [
+          ...(Array.isArray(prev.documents) ? prev.documents : []),
+          {
+            kind: 'Foto',
+            filename: cleanFilename,
+            parsed: true,
+            meta: { width: 256, height: 256, resized: true, importedAt: now }
+          }
+        ]
+      }));
+      objectPhotoDataUrlCache.set(selectedId, photo);
+      const uiObject = (objects || []).find((item) => item?.id === selectedId);
+      if (uiObject) {
+        uiObject.photo = photo;
+        uiObject.updatedAt = now;
+      }
+      __markObjectsDirty();
+      await loadFromRxdb();
+      renderObjects({ reason: 'image-upload' });
+      return { objectId: selectedId, updated: true, photo };
+    }
+  }
+
+  const idSeed = (typeof crypto !== 'undefined' && crypto.randomUUID)
+    ? crypto.randomUUID()
+    : `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  const id = `image_object_${String(idSeed).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80)}`;
+  const doc = {
+    id,
+    definitionId: activeDefinitionId(),
+    schemaVersion: activeSchemaVersion(),
+    name: nameFromFile,
+    firstName: null,
+    lastName: null,
+    taxonomy: `importiertes ${defText('labels.objectRecord', 'Objekt')}`,
+    photo,
+    profilePhotoBase64: photo,
+    active: true,
+    hasRelation: false,
+    skills: [],
+    languages: [],
+    education: [],
+    experience: [],
+    executiveInfo: {
+      fachlicheQualifikation: '',
+      methodenKompetenz: '',
+      leadershipFaehigkeit: '',
+      gehaltswunschUndOrt: ''
+    },
+    documents: [{
+      kind: 'Foto',
+      filename: cleanFilename,
+      parsed: true,
+      meta: { width: 256, height: 256, resized: true, importedAt: now }
+    }],
+    additional: [{
+      key: 'system.import',
+      value: { state: 'done', mode: 'image', filename: cleanFilename, importedAt: now }
+    }],
+    createdAt: now,
+    updatedAt: now,
+    status: 'active'
+  };
+
+  await rxdb.objects.upsert(doc);
+  objectPhotoDataUrlCache.set(id, photo);
+  __markObjectsDirty();
+  await loadFromRxdb();
+  renderObjects({ reason: 'image-upload' });
+  return { objectId: id, updated: false, photo };
 }
 
 /**
@@ -560,6 +728,7 @@ function syncObjectDetailForms() {
 }
 
 function createUiPlaceholderObject({ placeholderId, displayName, sourceLabel }) {
+  const pendingObjectName = `${defText('labels.objectRecord', 'Objekt')} wird importiert …`;
   const id = String(
     placeholderId ||
     `pending_${Date.now()}_${Math.random().toString(16).slice(2)}`
@@ -568,7 +737,7 @@ function createUiPlaceholderObject({ placeholderId, displayName, sourceLabel }) 
   const existing = (objects || []).find(c => c && c.id === id);
   if (existing) {
     existing.isPlaceholder = true;
-    existing.name = String(displayName || existing.name || 'Objekt wird importiert …').slice(0, 256);
+    existing.name = String(displayName || existing.name || pendingObjectName).slice(0, 256);
     existing.importError = null;
     existing.importStatus = existing.importStatus || 'queued';
     existing.updatedAt = new Date().toISOString();
@@ -576,9 +745,11 @@ function createUiPlaceholderObject({ placeholderId, displayName, sourceLabel }) 
     return id;
   }
 
-  const name = String(displayName || 'Objekt wird importiert …').slice(0, 256);
+  const name = String(displayName || pendingObjectName).slice(0, 256);
   const uiObject = {
     id,
+    definitionId: activeDefinitionId(),
+    schemaVersion: activeSchemaVersion(),
     name,
     tax: 'Import läuft …',
     skills: '',
@@ -1022,7 +1193,104 @@ function getObjectFallbackAvatarUrl(seed, name = '') {
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 }
 
+function normalizeMatchPriority(priority) {
+  const value = String(priority || '').toLowerCase();
+  if (value === 'base' || value === 'performance' || value === 'enthusiasm') return value;
+  return 'performance';
+}
 
+function normalizeMatchLevel(level, score) {
+  const value = String(level || '').toLowerCase();
+  if (value === 'full' || value === 'partial' || value === 'none') return value;
+  if (typeof score === 'number' && Number.isFinite(score)) {
+    if (score >= 0.8) return 'full';
+    if (score >= 0.35) return 'partial';
+  }
+  return 'none';
+}
+
+function readItemScore(item) {
+  const rawScore = Number(item?.matchScore ?? item?.score ?? item?.confidence ?? item?.match_score);
+  if (Number.isFinite(rawScore)) {
+    return rawScore > 1 ? Math.max(0, Math.min(1, rawScore / 100)) : Math.max(0, Math.min(1, rawScore));
+  }
+  const rawKey = Number(item?.matchScoreKey ?? item?.scoreKey ?? item?.score_key);
+  if (Number.isFinite(rawKey)) return Math.max(0, Math.min(1, rawKey / 100));
+  return null;
+}
+
+function normalizeLegacyEvidenceItem(item, index) {
+  const score = readItemScore(item);
+  const requirementId = String(
+    item?.requirementId ||
+    item?.requirement_id ||
+    item?.criterionId ||
+    item?.criterion_id ||
+    item?.id ||
+    `REQ-${index + 1}`
+  );
+  const title = String(
+    item?.title ||
+    item?.requirement ||
+    item?.criterion ||
+    item?.label ||
+    item?.name ||
+    `Nachweis ${index + 1}`
+  );
+
+  return {
+    ...item,
+    requirementId,
+    title,
+    dimension: ['education', 'experience', 'skill', 'language', 'other'].includes(item?.dimension) ? item.dimension : 'other',
+    priority: normalizeMatchPriority(item?.priority),
+    matchLevel: normalizeMatchLevel(item?.matchLevel || item?.match_level || item?.level, score),
+    ...(score == null ? {} : {
+      matchScore: score,
+      matchScoreKey: Math.round(score * 100)
+    }),
+    jobSnippet: String(item?.jobSnippet || item?.requirementSnippet || item?.job_snippet || item?.requirement_snippet || item?.requirementText || item?.requirement_text || item?.source || ''),
+    cvSnippet: String(item?.cvSnippet || item?.objectSnippet || item?.cv_snippet || item?.object_snippet || item?.objectText || item?.object_text || item?.evidence || item?.text || ''),
+    requirementSnippet: String(item?.requirementSnippet || item?.jobSnippet || item?.requirement_snippet || item?.job_snippet || item?.requirementText || item?.requirement_text || item?.source || ''),
+    objectSnippet: String(item?.objectSnippet || item?.cvSnippet || item?.object_snippet || item?.cv_snippet || item?.objectText || item?.object_text || item?.evidence || item?.text || ''),
+    explanation: String(item?.explanation || item?.reason || item?.rationale || item?.summary || '')
+  };
+}
+
+function normalizeMatchItemsFromRecord(record) {
+  const parsed = record?.parsed_match || record?.parsedMatch || null;
+  const data = record?.data && typeof record.data === 'object' ? record.data : null;
+  const dataMatch = data?.match && typeof data.match === 'object' ? data.match : null;
+  const candidates = [
+    record?.items,
+    record?.match?.items,
+    parsed?.items,
+    dataMatch?.items,
+    data?.items,
+    record?.evidence,
+    parsed?.evidence,
+    dataMatch?.evidence,
+    data?.evidence
+  ];
+  const rawItems = candidates.find(Array.isArray) || [];
+  return rawItems
+    .filter(item => item && typeof item === 'object')
+    .map(normalizeLegacyEvidenceItem);
+}
+
+function hasScoredMatchItems(items) {
+  return Array.isArray(items) && items.some(item =>
+    readItemScore(item) != null ||
+    item?.matchLevel === 'full' ||
+    item?.matchLevel === 'partial' ||
+    item?.matchLevel === 'none'
+  );
+}
+
+function scoreFromMatchItems(items) {
+  if (!hasScoredMatchItems(items)) return null;
+  return computeTotalMatchScoreFromItems(items);
+}
 
 async function loadFromRxdb(){
   try {
@@ -1106,12 +1374,27 @@ async function loadFromRxdb(){
         (p && (p.closingNotes || p.closing_notes)) ||
         requirementDoc.closingNotes || '';
 
+      const responsibilities = normalizeTextList(
+        (p && (p.responsibilities || p.tasks || p.aboutRoleBullets || p.about_role_bullets)) ||
+        requirementDoc.responsibilities ||
+        []
+      );
+
+      const requirements = normalizeTextList(
+        (p && (p.requirements || p.objectRequirementsList || p.object_requirements_list)) ||
+        requirementDoc.requirements ||
+        []
+      );
+
       return {
         aboutSource: aboutSource.trim(),
         aboutRole: aboutRole.trim(),
         objectRequirements: objectRequirements.trim(),
+        responsibilities,
+        requirements,
         benefits,
-        closingNotes: closingNotes.trim()
+        closingNotes: closingNotes.trim(),
+        rawText: String(requirementSource?.rawText || requirementDoc.rawText || '').trim()
       };
     }
 
@@ -1210,11 +1493,16 @@ async function loadFromRxdb(){
         const experienceEntry = add.find(a => a.key === 'object.experience');
         const skillsEntry = add.find(a => a.key === 'object.skills');
 
-        const education = Array.isArray(educationEntry?.value) ? educationEntry.value : [];
-        const experience = Array.isArray(experienceEntry?.value) ? experienceEntry.value : [];
+        const education = Array.isArray(c.education)
+          ? c.education
+          : (Array.isArray(educationEntry?.value) ? educationEntry.value : []);
+        const experience = Array.isArray(c.experience)
+          ? c.experience
+          : (Array.isArray(experienceEntry?.value) ? experienceEntry.value : []);
         const objectSkills = skillsEntry?.value || {};
 
-        const languages = Array.isArray(c.languages) ? c.languages : [];
+	        const languages = Array.isArray(c.languages) ? c.languages : [];
+	        const rawText = getImportedObjectRawText(c);
 
         // Executive-Summaries direkt aus dem Objekte-Dokument
         const execRaw = (c.executiveInfo && typeof c.executiveInfo === 'object') ? c.executiveInfo : {};
@@ -1230,7 +1518,11 @@ async function loadFromRxdb(){
         const attachmentPhoto =
           await getObjectPhotoDataUrl(c.id).catch(() => null);
 
-        const photo = attachmentPhoto || getObjectFallbackAvatarUrl(c.id || fullname, fullname);
+        const inlinePhoto =
+          normalizeImageSrc(c.photo) ||
+          normalizeImageSrc(c.profilePhotoBase64) ||
+          normalizeImageSrc(c.object?.photo);
+        const photo = attachmentPhoto || inlinePhoto || getObjectFallbackAvatarUrl(c.id || fullname, fullname);
 
 
         // createdAt/updatedAt in UI übernehmen
@@ -1250,9 +1542,11 @@ async function loadFromRxdb(){
           importError: importMeta ? importMeta.error : null,
           _hasRelation: !!c.hasRelation,
           active: isPlaceholder ? false : (c.active !== false),
-          createdAt,
-          updatedAt,
-          object: {
+	          createdAt,
+	          updatedAt,
+	          rawText,
+	          documents: Array.isArray(c.documents) ? c.documents : [],
+	          object: {
             meta: {
               birthDate: c.birthDate || null,
               nationality: c.nationality || null,
@@ -1279,11 +1573,18 @@ async function loadFromRxdb(){
       normalizeParsedFromRequirementSource
     });
 
+    const sourceIdByRequirementId = new Map(
+      requirementsJson.map((requirement) => [String(requirement.id), requirement.sourceId || ''])
+    );
+
     // Matches aus RxDB auf UI-Struktur mappen
     matches = matchesJson.map(m => {
-      const score = (typeof m.score === 'number' && !Number.isNaN(m.score))
-        ? m.score
-        : null;
+      const items = normalizeMatchItemsFromRecord(m);
+      const score = scoreFromMatchItems(items);
+      const idParts = String(m.id || '').split('|');
+      const requirementId = m.requirementId || m.requirement_id || m.data?.requirementId || m.data?.requirement_id || (idParts.length >= 3 ? idParts[1] : '');
+      const objectId = m.objectId || m.object_id || m.data?.objectId || m.data?.object_id || (idParts.length >= 3 ? idParts[2] : '');
+      const sourceId = m.sourceId || m.source_id || m.data?.sourceId || m.data?.source_id || (idParts.length >= 3 ? idParts[0] : '') || sourceIdByRequirementId.get(String(requirementId)) || '';
 
       const progress = typeof m.progress === 'number'
         ? m.progress
@@ -1291,18 +1592,18 @@ async function loadFromRxdb(){
 
       return {
         id: m.id,
-        sourceId: m.sourceId,
-        requirementId: m.requirementId,
-        objectId: m.objectId,
+        sourceId,
+        requirementId,
+        objectId,
         active: m.active !== false,
         removed: !!m.removed,
         progress,
         status: m.status || 'prospecting',
         score,
         notes: m.notes || '',
-        items: Array.isArray(m.items) ? m.items : []
+        items
       };
-    }).filter(m => !m.removed);
+    }).filter(m => !m.removed && m.requirementId && m.objectId);
 
     // Prozesse-Cache initialisieren
     processes.clear();
@@ -1534,11 +1835,16 @@ async function loadObjectUiFromRxdbById(objectId){
   const experienceEntry = add.find(a => a.key === 'object.experience');
   const skillsEntry = add.find(a => a.key === 'object.skills');
 
-  const education = Array.isArray(educationEntry?.value) ? educationEntry.value : [];
-  const experience = Array.isArray(experienceEntry?.value) ? experienceEntry.value : [];
+  const education = Array.isArray(c.education)
+    ? c.education
+    : (Array.isArray(educationEntry?.value) ? educationEntry.value : []);
+  const experience = Array.isArray(c.experience)
+    ? c.experience
+    : (Array.isArray(experienceEntry?.value) ? experienceEntry.value : []);
   const objectSkills = skillsEntry?.value || {};
 
-  const languages = Array.isArray(c.languages) ? c.languages : [];
+	  const languages = Array.isArray(c.languages) ? c.languages : [];
+	  const rawText = getImportedObjectRawText(c);
 
   const execRaw = (c.executiveInfo && typeof c.executiveInfo === 'object') ? c.executiveInfo : {};
   const executiveInfo = {
@@ -1550,7 +1856,11 @@ async function loadObjectUiFromRxdbById(objectId){
 
   // Foto: Attachment -> dataUrl, sonst Fallback
   const attachmentPhoto = await getObjectPhotoDataUrl(c.id, { bustCache: false }).catch(()=> null);
-  const photo = attachmentPhoto || getObjectFallbackAvatarUrl(c.id || fullname, fullname);
+  const inlinePhoto =
+    normalizeImageSrc(c.photo) ||
+    normalizeImageSrc(c.profilePhotoBase64) ||
+    normalizeImageSrc(c.object?.photo);
+  const photo = attachmentPhoto || inlinePhoto || getObjectFallbackAvatarUrl(c.id || fullname, fullname);
 
   const createdAt = (typeof c.createdAt === 'string' && c.createdAt.trim()) ? c.createdAt : null;
   const updatedAt = (typeof c.updatedAt === 'string' && c.updatedAt.trim()) ? c.updatedAt : null;
@@ -1568,9 +1878,11 @@ async function loadObjectUiFromRxdbById(objectId){
     importError: importMeta ? importMeta.error : null,
     _hasRelation: !!c.hasRelation,
     active: isPlaceholder ? false : (c.active !== false),
-    createdAt,
-    updatedAt,
-    object: {
+	    createdAt,
+	    updatedAt,
+	    rawText,
+	    documents: Array.isArray(c.documents) ? c.documents : [],
+	    object: {
       meta: {
         birthDate: c.birthDate || null,
         nationality: c.nationality || null,
@@ -1945,11 +2257,9 @@ function preMatchScore(requirementId, objectId) {
   const existingMatch = matches.find(m =>
     m.requirementId === requirementId &&
     m.objectId === objectId &&
-    !m.removed &&
-    typeof m.score === 'number' &&
-    !Number.isNaN(m.score)
+    !m.removed
   );
-  return existingMatch ? existingMatch.score : null;
+  return existingMatch ? scoreFromMatchItems(existingMatch.items) : null;
 }
 
 
@@ -1984,9 +2294,9 @@ const processes = new Map();
 const removedByRequirement = new Map(); // requirementId -> Set(objectId)
 const seededRequirements = new Set();
 
-// NEU: Requirements, bei denen gerade ein +5/+10/+20 Bulk-Matching läuft
+// Requirements, bei denen gerade ein Bulk-Matching läuft
 const bulkMatchingRequirements = new Set();
-const bulkMatchingObjects = new Set(); // objectId, bei denen gerade ein +5/+10/+20 Requirement-Matching läuft
+const bulkMatchingObjects = new Set(); // objectId, bei denen gerade ein Requirement-Matching läuft
 
 
 /* --------- Helpers --------- */
@@ -2379,7 +2689,7 @@ function _isDesktopThreeColumnLayout(appEl) {
 }
 
 function setupMatchingColumnResizing() {
-  const appEl = document.querySelector('.app');
+  const appEl = getMatchingModuleHost().querySelector('.app');
   if (!appEl) return;
 
   const leftHandle = document.createElement('div');
@@ -2623,9 +2933,228 @@ function formatDateRange(start, end){
   return `${s} – ${e || 'heute'}`;
 }
 
+function getImportedObjectRawText(record = {}) {
+  const documents = [
+    ...(Array.isArray(record.documents) ? record.documents : []),
+    ...(Array.isArray(record.data?.documents) ? record.data.documents : [])
+  ];
+  const candidates = [
+    record.rawText,
+    record.raw_text,
+    record.data?.rawText,
+    record.data?.raw_text,
+    ...documents.map(doc => doc?.meta?.rawText),
+    ...documents.map(doc => doc?.rawText),
+    ...documents.map(doc => doc?.text)
+  ];
+  return String(candidates.find(value => typeof value === 'string' && value.trim()) || '').trim();
+}
+
+function normalizeCvHeading(line) {
+  return String(line || '')
+    .trim()
+    .replace(/[:：]+$/g, '')
+    .replace(/\s+/g, ' ')
+    .toUpperCase();
+}
+
+function isLikelyCvHeading(line) {
+  const normalized = normalizeCvHeading(line);
+  if (!normalized || normalized.length > 48) return false;
+  if (/^\d/.test(normalized)) return false;
+  if (/^[-*•·]/.test(normalized)) return false;
+  return /^[A-ZÄÖÜẞ&/ -]+$/.test(normalized);
+}
+
+function cvHeadingMatches(heading, target) {
+  if (!heading || !target) return false;
+  return heading === target ||
+    heading.startsWith(`${target} `) ||
+    heading.startsWith(`${target} &`) ||
+    heading.startsWith(`${target}/`);
+}
+
+function extractCvRawSection(rawText, startHeadings, stopHeadings) {
+  const lines = String(rawText || '').replace(/\r/g, '').split('\n');
+  const starts = startHeadings.map(normalizeCvHeading);
+  const stops = stopHeadings.map(normalizeCvHeading);
+  let startIndex = -1;
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const heading = normalizeCvHeading(lines[i]);
+    if (starts.some(start => cvHeadingMatches(heading, start) || heading.includes(start))) {
+      startIndex = i + 1;
+      break;
+    }
+  }
+  if (startIndex < 0) return [];
+
+  const section = [];
+  for (let i = startIndex; i < lines.length; i += 1) {
+    const line = lines[i];
+    const heading = normalizeCvHeading(line);
+    if (section.length && isLikelyCvHeading(line) && stops.some(stop => cvHeadingMatches(heading, stop))) {
+      break;
+    }
+    section.push(line);
+  }
+
+  return section
+    .map(line => String(line || '').trim())
+    .filter(Boolean);
+}
+
+function looksLikeDateEntry(line) {
+  const text = String(line || '').trim();
+  return /^(\d{1,2}[./]\d{1,2}[./]\d{2,4}|\d{1,2}[./]\d{4}|\d{4}|[A-Za-zÄÖÜäöüß]+ \d{4})\s*([–-]|bis|to)\s*/i.test(text) ||
+    /^(\d{1,2}[./]\d{4}|\d{4})\s+\S/.test(text);
+}
+
+function stripBulletPrefix(line) {
+  return String(line || '').trim().replace(/^[-–•*]\s*/, '').trim();
+}
+
+function groupTimelineEntries(lines) {
+  const entries = [];
+  let current = null;
+  for (const rawLine of Array.isArray(lines) ? lines : []) {
+    const line = String(rawLine || '').trim();
+    if (!line) continue;
+    if (!current || looksLikeDateEntry(line)) {
+      current = { title: line, details: [] };
+      entries.push(current);
+      continue;
+    }
+    current.details.push(stripBulletPrefix(line));
+  }
+  return entries;
+}
+
+function renderCvRawLines(lines, matchItems, kind = 'plain') {
+  const visible = Array.isArray(lines) ? lines.filter(Boolean).slice(0, 80) : [];
+  if (!visible.length) return '';
+  if (kind === 'experience' || kind === 'education') {
+    const entries = groupTimelineEntries(visible);
+    if (entries.length) {
+      return `
+        <div class="drawer-timeline">
+          ${entries.map(entry => `
+            <article class="drawer-timeline-item">
+              <div class="drawer-timeline-title">${highlightTextWithMatchItems(entry.title, matchItems)}</div>
+              ${entry.details.length ? `
+                <ul class="drawer-compact-list">
+                  ${entry.details.slice(0, 12).map(line => `<li>${highlightTextWithMatchItems(line, matchItems)}</li>`).join('')}
+                </ul>
+              ` : ''}
+            </article>
+          `).join('')}
+        </div>
+      `;
+    }
+  }
+  return `
+    <div class="drawer-text-stack">
+      ${visible.map(line => `<div>${highlightTextWithMatchItems(line, matchItems)}</div>`).join('')}
+    </div>
+  `;
+}
+
+function renderDrawerChips(items, matchItems) {
+  const values = (Array.isArray(items) ? items : [])
+    .map(value => String(value || '').trim())
+    .filter(Boolean);
+  if (!values.length) return '';
+  return `
+    <div class="drawer-chip-row">
+      ${values.map(value => `<span class="drawer-chip">${highlightTextWithMatchItems(value, matchItems)}</span>`).join('')}
+    </div>
+  `;
+}
+
+function renderDrawerList(items, matchItems) {
+  const values = (Array.isArray(items) ? items : [])
+    .map(value => String(value || '').trim())
+    .filter(Boolean);
+  if (!values.length) return '';
+  return `
+    <ul class="drawer-compact-list">
+      ${values.map(value => `<li>${highlightTextWithMatchItems(value, matchItems)}</li>`).join('')}
+    </ul>
+  `;
+}
+
+function renderDrawerProse(text, matchItems) {
+  const source = String(text || '').trim();
+  if (!source) return '';
+  const chunks = source
+    .split(/\n{2,}|(?<=[.!?])\s+(?=[A-ZÄÖÜ])/)
+    .map(part => part.trim())
+    .filter(Boolean);
+  const parts = chunks.length > 1 ? chunks : [source];
+  return `
+    <div class="drawer-prose">
+      ${parts.map(part => `<p>${highlightTextWithMatchItems(part, matchItems)}</p>`).join('')}
+    </div>
+  `;
+}
+
+function normalizeTextList(value) {
+  if (Array.isArray(value)) return value.map(item => String(item || '').trim()).filter(Boolean);
+  if (typeof value !== 'string') return [];
+  return value
+    .split(/\r?\n|[•]/)
+    .map(item => item.replace(/^[-–]\s*/, '').trim())
+    .filter(Boolean);
+}
+
+function normalizeSkillList(value) {
+  if (Array.isArray(value)) return value.map(item => String(item || '').trim()).filter(Boolean);
+  if (typeof value === 'string') {
+    return value
+      .split(/[,;\n]/)
+      .map(item => item.trim())
+      .filter(Boolean);
+  }
+  return [];
+}
+
+function fallbackCvSectionLines(rawText, kind) {
+  if (kind === 'experience') {
+    return extractCvRawSection(
+      rawText,
+      ['BERUFSERFAHRUNG', 'BERUFLICHER WERDEGANG', 'PRAKTISCHE ERFAHRUNG', 'PROFESSIONAL EXPERIENCE', 'WORK EXPERIENCE', 'EXPERIENCE', 'EMPLOYMENT HISTORY'],
+      ['AUSBILDUNG', 'EDUCATION', 'FORTBILDUNG', 'WEITERBILDUNG', 'QUALIFIKATIONEN', 'SKILLS', 'FACHKENNTNISSE', 'SPRACHEN', 'LANGUAGES', 'HOBBIES', 'INTERESSEN', 'DATUM']
+    );
+  }
+  if (kind === 'education') {
+    return extractCvRawSection(
+      rawText,
+      ['AUSBILDUNG', 'AUSBILDUNGSWEG', 'BILDUNGSWEG', 'EDUCATION', 'STUDIUM', 'SCHULE', 'ACADEMIC BACKGROUND'],
+      ['BERUFSERFAHRUNG', 'PROFESSIONAL EXPERIENCE', 'WORK EXPERIENCE', 'EXPERIENCE', 'FORTBILDUNG', 'WEITERBILDUNG', 'QUALIFIKATIONEN', 'SKILLS', 'FACHKENNTNISSE', 'SPRACHEN', 'LANGUAGES', 'HOBBIES', 'INTERESSEN', 'DATUM']
+    );
+  }
+  if (kind === 'skills') {
+    return extractCvRawSection(
+      rawText,
+      ['FACHKENNTNISSE', 'KENNTNISSE', 'QUALIFIKATIONEN', 'QUALIFICATIONS', 'SKILLS', 'TECHNICAL SKILLS', 'CORE SKILLS', 'KOMPETENZEN'],
+      ['SPRACHEN', 'LANGUAGES', 'AUSBILDUNG', 'EDUCATION', 'BERUFSERFAHRUNG', 'PROFESSIONAL EXPERIENCE', 'WORK EXPERIENCE', 'FORTBILDUNG', 'HOBBIES', 'INTERESSEN', 'DATUM']
+    );
+  }
+  return [];
+}
+
 
 function escapeRegExp(str){
   return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function escapeHtmlText(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 /**
@@ -2636,49 +3165,143 @@ function escapeRegExp(str){
  * Gibt HTML-String mit <span class="match-highlight" ...>wrap</span> zurück.
  */
 function highlightTextWithMatchItems(text, items){
-  if (!text || !items || !items.length) return text;
-  let result = String(text);
+  const sourceText = String(text || '');
+  if (!sourceText) return '';
+  if (!items || !items.length) return escapeHtmlText(sourceText);
 
-  // längere Snippets zuerst, um Verschachtelungen etwas zu minimieren
-  const sorted = items
-    .filter(it => it && it.snippet && it.snippet.trim().length >= 3)
-    .slice()
-    .sort((a,b)=> b.snippet.length - a.snippet.length);
+  const intervals = [];
+  for (const item of items) {
+    const snippets = Array.isArray(item?.snippets) && item.snippets.length
+      ? item.snippets
+      : [item?.snippet];
+    const color = item?.color || '#6c8cff';
+    const reqId = item?.requirementId || '';
+    for (const snippet of snippets) {
+      const candidates = buildHighlightCandidates(snippet);
+      for (const candidate of candidates) {
+        collectHighlightIntervals(sourceText, candidate, { color, reqId, intervals });
+      }
+    }
+  }
 
-  sorted.forEach(it => {
-    const pattern = escapeRegExp(it.snippet.trim());
-    if (!pattern) return;
-    const re = new RegExp(pattern, 'gi');
-    const color = it.color || '#6c8cff';
-    const reqId = it.requirementId || '';
+  const merged = mergeHighlightIntervals(intervals, sourceText.length);
+  if (!merged.length) return escapeHtmlText(sourceText);
 
-    result = result.replace(
-      re,
-      match => `<span class="match-highlight" data-match-req="${reqId}" style="--matchColor:${color}">${match}</span>`
-    );
+  let html = '';
+  let cursor = 0;
+  for (const interval of merged) {
+    if (interval.start > cursor) html += escapeHtmlText(sourceText.slice(cursor, interval.start));
+    const match = sourceText.slice(interval.start, interval.end);
+    html += `<span class="match-highlight" data-match-req="${escapeHtmlText(interval.reqId)}" style="--matchColor:${escapeHtmlText(interval.color)}">${escapeHtmlText(match)}</span>`;
+    cursor = interval.end;
+  }
+  if (cursor < sourceText.length) html += escapeHtmlText(sourceText.slice(cursor));
+  return html;
+}
+
+function buildHighlightCandidates(snippet) {
+  const raw = String(snippet || '').replace(/\s+/g, ' ').trim();
+  if (!raw) return [];
+
+  const withoutEllipsis = raw.replace(/[.…]{2,}/g, ' ').replace(/\s+/g, ' ').trim();
+  const withoutLabel = withoutEllipsis
+    .replace(/^(titel|rolle|anforderungen|skills|skill|aktuelle rolle|abschluss|rohtext|cv|lebenslauf|stellenausschreibung|berufserfahrung|ausbildung)\s*:\s*/i, '')
+    .trim();
+  const labelStripped = withoutEllipsis
+    .replace(/\b(titel|rolle|anforderungen|skills|skill|aktuelle rolle|abschluss|rohtext|cv|lebenslauf|stellenausschreibung|berufserfahrung|ausbildung)\s*:\s*/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const candidates = new Set();
+  [withoutLabel, labelStripped, withoutEllipsis, raw].forEach((value) => {
+    const trimmed = value.trim();
+    if (trimmed.length >= 8) candidates.add(trimmed);
   });
 
-  return result;
+  const fragments = [withoutLabel, labelStripped]
+    .join(' · ')
+    .split(/\s*[;,|•]\s*|\s+-\s+|\s+·\s+|\s+\/\s+/)
+    .map((part) => part.trim())
+    .filter((part) => part.length >= 8);
+  fragments.forEach((part) => candidates.add(part));
+
+  const words = labelStripped.split(/\s+/).filter(Boolean);
+  for (let size = Math.min(8, words.length); size >= 3; size -= 1) {
+    for (let i = 0; i <= words.length - size; i += 1) {
+      const phrase = words.slice(i, i + size).join(' ');
+      if (phrase.length >= 14) candidates.add(phrase);
+    }
+    if (candidates.size >= 12) break;
+  }
+
+  return Array.from(candidates)
+    .sort((a, b) => b.length - a.length)
+    .slice(0, 18);
+}
+
+function collectHighlightIntervals(text, candidate, { color, reqId, intervals }) {
+  const term = String(candidate || '').trim();
+  if (term.length < 3) return;
+  const pattern = escapeRegExp(term).replace(/\s+/g, '\\s+');
+  let re;
+  try {
+    re = new RegExp(pattern, 'gi');
+  } catch {
+    return;
+  }
+  let match;
+  while ((match = re.exec(text))) {
+    const start = match.index;
+    const end = start + match[0].length;
+    if (end > start) intervals.push({ start, end, color, reqId });
+    if (re.lastIndex === match.index) re.lastIndex += 1;
+  }
+}
+
+function mergeHighlightIntervals(intervals, maxLength) {
+  const sorted = intervals
+    .filter((item) => Number.isFinite(item.start) && Number.isFinite(item.end) && item.end > item.start)
+    .map((item) => ({
+      ...item,
+      start: Math.max(0, Math.min(maxLength, item.start)),
+      end: Math.max(0, Math.min(maxLength, item.end)),
+    }))
+    .sort((a, b) => (a.start - b.start) || ((b.end - b.start) - (a.end - a.start)));
+
+  const accepted = [];
+  for (const item of sorted) {
+    const overlaps = accepted.some((existing) => item.start < existing.end && item.end > existing.start);
+    if (!overlaps) accepted.push(item);
+  }
+  return accepted.sort((a, b) => a.start - b.start);
 }
 
 /**
  * Liefert alle Match-Items aus currentMatchDetail für eine bestimmte Seite
- * side: 'requirement' | 'object'  → nutzt requirementSnippet bzw. objectSnippet
+ * side: 'requirement' | 'object'  → nutzt jobSnippet bzw. cvSnippet
  */
 function getSideMatchItemsForCurrent(requirementId, objectId, side){
   if (!currentMatchDetail) return [];
   if (currentMatchDetail.requirementId !== requirementId || currentMatchDetail.objectId !== objectId) return [];
   const items = currentMatchDetail.items || [];
   const colorByReq = currentMatchDetail.colorByRequirement || {};
-  const field = side === 'object' ? 'objectSnippet' : 'requirementSnippet';
+  const fields = side === 'object'
+    ? ['cvSnippet', 'objectSnippet']
+    : ['jobSnippet', 'requirementSnippet'];
 
   return items
-    .filter(it => (it[field] || '').trim())
-    .map(it => ({
-      requirementId: it.requirementId,
-      snippet: String(it[field] || ''),
-      color: colorByReq[it.requirementId] || MATCH_COLORS[0]
-    }));
+    .filter(it => fields.some(field => (it[field] || '').trim()))
+    .map(it => {
+      const snippets = fields
+        .map(field => String(it[field] || '').trim())
+        .filter(Boolean);
+      return {
+        requirementId: it.requirementId,
+        snippet: snippets[0] || '',
+        snippets,
+        color: colorByReq[it.requirementId] || MATCH_COLORS[0]
+      };
+    });
 }
 
 function setActiveRequirement(reqId){
@@ -2698,7 +3321,7 @@ function setActiveRequirement(reqId){
   }
 
   // Text-Highlights in Requirement/Object
-  document.querySelectorAll('.match-highlight').forEach(span=>{
+  getMatchingModuleHost().querySelectorAll('.match-highlight').forEach(span=>{
     const sid = span.getAttribute('data-match-req');
     span.classList.toggle('is-active', !!reqId && sid === reqId);
   });
@@ -3056,8 +3679,8 @@ function renderMatchItemPreviewInBar(reqId){
     ? renderScoreWithConflictsHtml(`${pct}%`, conflictInfo)
     : '';
 
-  const requirementSnip = item.requirementSnippet || '';
-  const objectSnip  = item.objectSnippet || '';
+  const requirementSnip = item.jobSnippet || item.requirementSnippet || '';
+  const objectSnip  = item.cvSnippet || item.objectSnippet || '';
   const expl    = item.explanation || '';
 
   // Bereich im Modal sichtbar machen
@@ -3083,7 +3706,7 @@ function renderMatchItemPreviewInBar(reqId){
       ${expl ? `<div class="match-item-expl" style="font-size:11px;margin-top:4px">${expl}</div>` : ''}
       <div class="match-item-snips" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;margin-top:6px">
         <div class="match-snippet-block">
-          <div class="match-snippet-label" style="font-size:10px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:2px">Anforderung</div>
+          <div class="match-snippet-label" style="font-size:10px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:2px">Stellenausschreibung</div>
           <div style="font-size:11px">
             ${requirementSnip
               ? `<span class="match-highlight" data-match-req="${item.requirementId}" style="--matchColor:${color}">${requirementSnip}</span>`
@@ -3091,7 +3714,7 @@ function renderMatchItemPreviewInBar(reqId){
           </div>
         </div>
         <div class="match-snippet-block">
-          <div class="match-snippet-label" style="font-size:10px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:2px">Object</div>
+          <div class="match-snippet-label" style="font-size:10px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:2px">CV</div>
           <div style="font-size:11px">
             ${objectSnip
               ? `<span class="match-highlight" data-match-req="${item.requirementId}" style="--matchColor:${color}">${objectSnip}</span>`
@@ -3335,7 +3958,11 @@ async function confirmDeletionWithCount({ subject, dependencyLines = [], totalIt
     `Zum Fortfahren gib bitte genau diese Zahl ein: ${totalItemsToDelete}`
   ].filter(line => line !== '');
 
-  const confirmInput = prompt(lines.join('\n'));
+  const confirmInput = await showBusinessPrompt(lines.join('\n'), {
+    title: 'Löschung bestätigen',
+    confirmLabel: 'Löschen',
+    kind: 'danger',
+  });
   return String(confirmInput || '').trim() === String(totalItemsToDelete);
 }
 
@@ -3463,7 +4090,7 @@ async function persistPendingMatchForCtox(match, queuedCommand) {
     progress: typeof match.progress === 'number' ? match.progress : INITIAL_PROGRESS,
     status: match.status || 'prematch',
     statuses: Array.isArray(match.statuses) ? match.statuses : [],
-    score: typeof match.score === 'number' ? match.score : 0,
+    score: scoreFromMatchItems(match.items) ?? 0,
     notes: match.notes || '',
     interview: match.interview || { attendees: [], reminders: [] },
     events: [...(Array.isArray(match.events) ? match.events : []), event],
@@ -3471,7 +4098,7 @@ async function persistPendingMatchForCtox(match, queuedCommand) {
     createdAt: match.createdAt || now,
     updatedAt: now,
     activeKey: match.active === true ? 1 : 0,
-    scoreKey: typeof match.score === 'number' ? match.score : 0
+    scoreKey: scoreFromMatchItems(match.items) ?? 0
   };
 
   if (typeof rxdb.matches.atomicUpsert === 'function') {
@@ -3505,7 +4132,7 @@ function isCtoxQueuedCommandError(error) {
 // Hilfsfunktion: beliebiges gerade offenes "normales" Modal schließen
 function closeOpenTransientModal() {
   // Wir schließen nur Modale, die nicht Note/Rel sind
-  const openModal = document.querySelector('.modal.open');
+  const openModal = getMatchingModuleHost().querySelector('.modal.open');
   if (!openModal) return;
 
   if (openModal.id === 'noteModal' || openModal.id === 'relModal') {
@@ -3522,7 +4149,7 @@ function setScoreLoading(requirementId, objectId, loading) {
     return;
   }
   const matchKey = key(requirementId, objectId);
-  const scoreEl = document.querySelector(`.score[data-match-key="${matchKey}"]`);
+  const scoreEl = getMatchingModuleHost().querySelector(`.score[data-match-key="${matchKey}"]`);
   if (!scoreEl) return;
 
   if (loading) {
@@ -3564,6 +4191,8 @@ async function createMatch(sourceId, requirementId, objectId) {
   if (!m) {
     m = {
       id: matchId,
+      definitionId: activeDefinitionId(),
+      schemaVersion: activeSchemaVersion(),
       sourceId,
       requirementId,
       objectId,
@@ -3590,6 +4219,9 @@ async function createMatch(sourceId, requirementId, objectId) {
       scoreKey: 0
     };
     matches.push(m);
+  } else {
+    m.definitionId = m.definitionId || activeDefinitionId();
+    m.schemaVersion = m.schemaVersion || activeSchemaVersion();
   }
 
   // Prozesseintrag initialisieren (für Fortschritt/Notizen/Status)
@@ -3619,10 +4251,14 @@ async function createMatch(sourceId, requirementId, objectId) {
       persist: true
     });
 
-    const finalScore = typeof result.score === 'number' ? result.score : 0;
+    const finalItems = Array.isArray(result.match?.items)
+      ? result.match.items.map(normalizeLegacyEvidenceItem)
+      : [];
+    const finalScore = scoreFromMatchItems(finalItems);
 
     m.score = finalScore;
     m.scoreKey = finalScore;
+    m.items = finalItems;
     m.updatedAt = new Date().toISOString();
 
     pendingMatchKeys.delete(procKey);
@@ -3638,7 +4274,7 @@ async function createMatch(sourceId, requirementId, objectId) {
         ...(Array.isArray(m.events) ? m.events : []),
         {
           type: 'match.ctox_queued',
-          payload: { commandId: err.commandId || '', status: err.status || 'queued' },
+          payload: { commandId: err.commandId || '', status: err.status || 'queued', definitionId: activeDefinitionId() },
           at: new Date().toISOString()
         }
       ];
@@ -3648,7 +4284,7 @@ async function createMatch(sourceId, requirementId, objectId) {
     }
     console.error('Fehler beim Anlegen des LLM-basierten Matchings:', err);
     pendingMatchKeys.delete(procKey);
-    alert('Matching konnte nicht berechnet werden: ' + (err?.message || err));
+    showBusinessAlert('Matching konnte nicht berechnet werden: ' + (err?.message || err), { title: 'Matching fehlgeschlagen' });
     renderRequirements();
   }
 }
@@ -3686,7 +4322,7 @@ function ensureBulkMatchFilterModal() {
       </div>
     </div>
   `;
-  document.body.appendChild(modal);
+  appendMatchingLayer(modal);
 
   const close = () => {
     modal.classList.remove('open');
@@ -3777,7 +4413,7 @@ function ensureMatchFilterModal() {
       </div>
     </div>
   `;
-  document.body.appendChild(modal);
+  appendMatchingLayer(modal);
 
   const statusWrap = modal.querySelector('[data-requirement-filter-statuses]');
   if (statusWrap) {
@@ -3870,7 +4506,7 @@ function getVisibleMatchesAfterFilters(requirementId, settings, requirementMatch
   if (typeof applyRequirementGridFilters === 'function') {
     const visiblePairs = applyRequirementGridFilters(requirementId, visible.map((m) => ({
       cid: m.objectId,
-      pct: typeof m.score === 'number' ? m.score : 0,
+      pct: scoreFromMatchItems(m.items) ?? 0,
       match: m
     })));
     const visibleKeys = new Set(
@@ -3890,10 +4526,13 @@ async function removeMatchesHiddenByFilter(requirementId, settings = getMatchFil
   );
   const hidden = requirementMatches.filter((m) => !visibleKeys.has(key(m.requirementId, m.objectId)));
   if (!hidden.length) {
-    alert('Es gibt keine ausgeblendeten Matches zum Entfernen.');
+    await showBusinessAlert('Es gibt keine ausgeblendeten Matches zum Entfernen.');
     return;
   }
-  const ok = confirm(`${hidden.length} ausgeblendete Match(es) für diesen Requirement entfernen?`);
+  const ok = await showBusinessConfirm(`${hidden.length} ausgeblendete Match(es) für diesen Requirement entfernen?`, {
+    title: 'Matches entfernen',
+    confirmLabel: 'Entfernen',
+  });
   if (!ok) return;
 
   try {
@@ -3914,7 +4553,7 @@ async function removeMatchesHiddenByFilter(requirementId, settings = getMatchFil
     renderMap();
   } catch (err) {
     console.error('removeMatchesHiddenByFilter Fehler:', err);
-    alert('Ausgeblendete Matches konnten nicht entfernt werden.');
+    await showBusinessAlert('Ausgeblendete Matches konnten nicht entfernt werden.', { title: 'Aktion fehlgeschlagen' });
   }
 }
 
@@ -3930,15 +4569,15 @@ async function removeMatchesHiddenByFilter(requirementId, settings = getMatchFil
  * Fügt für einen Requirement automatisch N passende Objekte hinzu.
  *
  * UX:
- *  - +5/+10/+20 Buttons werden für diesen Requirement disabled und zeigen einen "Loading"-Status.
+ *  - Die laufende Bulk-Operation wird für diesen Requirement als Loading-Status markiert.
  *  - Alle Shortlist-Objekte werden sofort als Matches angelegt (lokal),
  *    die Scores werden im Hintergrund per LLM nachgezogen.
- *  - Nach Abschluss werden die Buttons wieder freigegeben.
+ *  - Nach Abschluss wird der Loading-Status wieder freigegeben.
  */
 async function handleBulkAutoMatch(requirementId, count) {
   const { requirement, source } = findRequirementAndSource(requirementId);
   if (!requirement || !source) {
-    alert('Anforderung oder Quelle für Matching-Auswahl nicht gefunden.');
+    await showBusinessAlert('Anforderung oder Quelle für Matching-Auswahl nicht gefunden.');
     return;
   }
 
@@ -3964,7 +4603,7 @@ async function handleBulkAutoMatch(requirementId, count) {
       .map(c => c.id);
 
     if (!availableObjectIds.length) {
-      alert('Für diese Anforderung gibt es keine weiteren Objekte ohne bestehendes Match.');
+      await showBusinessAlert('Für diese Anforderung gibt es keine weiteren Objekte ohne bestehendes Match.');
       return;
     }
 
@@ -3982,7 +4621,7 @@ async function handleBulkAutoMatch(requirementId, count) {
     const shortlist = filterShortlistByBulkMatchFilter(shortlistRaw);
     if (!shortlist.length) {
       const settings = getBulkMatchFilterSettings();
-      alert(settings.enabled
+      await showBusinessAlert(settings.enabled
         ? `Keine Objekte erfüllen den Match-Filter ab ${settings.minScore}%.`
         : 'Das Modell hat keine passenden Objekte für diese Anforderung gefunden.');
       return;
@@ -4024,7 +4663,7 @@ async function handleBulkAutoMatch(requirementId, count) {
     renderRequirements();
   } catch (e) {
     console.error('handleBulkAutoMatch Fehler:', e);
-    alert('Matching-Auswahl (+Objekte) ist fehlgeschlagen: ' + (e?.message || e));
+    await showBusinessAlert('Matching-Auswahl (+Objekte) ist fehlgeschlagen: ' + (e?.message || e), { title: 'Matching fehlgeschlagen' });
   } finally {
     // Requirement aus "busy"-Set entfernen und Buttons wieder freigeben
     bulkMatchingRequirements.delete(requirementId);
@@ -4035,11 +4674,11 @@ async function handleBulkAutoMatch(requirementId, count) {
 async function handleBulkAutoMatchForObject(objectId, count) {
   const object = getObject(objectId);
   if (!object) {
-    alert('Objekt nicht gefunden.');
+    await showBusinessAlert('Objekt nicht gefunden.');
     return;
   }
   if (object.isPlaceholder) {
-    alert('Matching-Auswahl ist erst verfügbar, wenn der Objektimport abgeschlossen ist.');
+    await showBusinessAlert('Matching-Auswahl ist erst verfügbar, wenn der Objektimport abgeschlossen ist.');
     return;
   }
 
@@ -4066,7 +4705,7 @@ async function handleBulkAutoMatchForObject(objectId, count) {
     });
 
     if (!allRequirements.length) {
-      alert('Keine Requirements gefunden.');
+      await showBusinessAlert('Keine Requirements gefunden.');
       return;
     }
 
@@ -4080,7 +4719,7 @@ async function handleBulkAutoMatchForObject(objectId, count) {
     const availableRequirements = allRequirements.filter(j => !alreadyMatchedRequirementIds.has(j.requirementId));
 
     if (!availableRequirements.length) {
-      alert('Für diese:n Objekt gibt es keine weiteren Requirements ohne bestehendes Match.');
+      await showBusinessAlert('Für diese:n Objekt gibt es keine weiteren Requirements ohne bestehendes Match.');
       return;
     }
 
@@ -4099,7 +4738,7 @@ async function handleBulkAutoMatchForObject(objectId, count) {
     const shortlist = filterShortlistByBulkMatchFilter(shortlistRaw);
     if (!shortlist.length) {
       const settings = getBulkMatchFilterSettings();
-      alert(settings.enabled
+      await showBusinessAlert(settings.enabled
         ? `Keine Requirements erfüllen den Match-Filter ab ${settings.minScore}%.`
         : 'Das Modell hat keine passenden Requirements für diese:n Objekt gefunden.');
       return;
@@ -4140,7 +4779,7 @@ async function handleBulkAutoMatchForObject(objectId, count) {
     renderObjects();
   } catch (e) {
     console.error('handleBulkAutoMatchForObject Fehler:', e);
-    alert('Matching-Auswahl (+Requirements) ist fehlgeschlagen: ' + (e?.message || e));
+    await showBusinessAlert('Matching-Auswahl (+Requirements) ist fehlgeschlagen: ' + (e?.message || e), { title: 'Matching fehlgeschlagen' });
   } finally {
     bulkMatchingObjects.delete(objectId);
     renderObjects();
@@ -4170,7 +4809,7 @@ async function removeMatch(requirementId, objectId){
     renderMap();
   } catch (e){
     console.error('Fehler beim Entfernen des Matchings', e);
-    alert('Matching konnte nicht entfernt werden.');
+    await showBusinessAlert('Matching konnte nicht entfernt werden.', { title: 'Aktion fehlgeschlagen' });
   }
 }
 
@@ -4217,7 +4856,7 @@ async function handleDeleteObject(objectId){
     renderMap();
   } catch (e){
     console.error('Fehler beim Löschen des Objekte', e);
-    alert('Objekt konnte nicht gelöscht werden (siehe Konsole).');
+    await showBusinessAlert('Objekt konnte nicht gelöscht werden (siehe Konsole).', { title: 'Aktion fehlgeschlagen' });
   }
 }
 
@@ -4264,7 +4903,7 @@ async function handleDeleteRequirement(requirementId){
     renderMap();
   } catch (e){
     console.error('Fehler beim Löschen der Anforderung', e);
-    alert('Anforderung konnte nicht gelöscht werden (siehe Konsole).');
+    await showBusinessAlert('Anforderung konnte nicht gelöscht werden (siehe Konsole).', { title: 'Aktion fehlgeschlagen' });
   }
 }
 
@@ -4312,7 +4951,7 @@ async function handleDeleteSource(sourceId){
     renderMap();
   } catch (e){
     console.error('Fehler beim Löschen des Quellens', e);
-    alert('Quellen konnte nicht gelöscht werden (siehe Konsole).');
+    await showBusinessAlert('Quellen konnte nicht gelöscht werden (siehe Konsole).', { title: 'Aktion fehlgeschlagen' });
   }
 }
 
@@ -4586,8 +5225,6 @@ function renderRequirements(){
 
   visibleRequirementRows.forEach(({ requirement: j, source: rowComp })=>{
       const sourceIsActiveFlag = isSourceActive(rowComp.id);
-      const bulkMatchFilter = getBulkMatchFilterSettings();
-      const matchFilter = getMatchFilterSettings(j.id);
       const wrap = el(
         'div',
         'requirement' +
@@ -4600,7 +5237,6 @@ function renderRequirements(){
 
       const head = el('div','requirement-top');
 
-      // NEW: +5/+10/+20 nutzen .btn-pill
       head.innerHTML = `
         <button class="requirement-link" title="Anforderung öffnen/schließen">
           <svg viewBox="0 0 24 24"><path d="M14 3h7v7h-2V6.41l-9.29 9.3-1.42-1.42 9.3-9.29H14V3z"/></svg>
@@ -4610,48 +5246,11 @@ function renderRequirements(){
           <div class="requirement-meta">${selectedComp ? '' : `${rowComp.name} · `}${j.location} · ${j.level || 'Mid'} · ${j.type || 'Vollzeit'}</div>
         </div>
         <div class="space"></div>
-        <div class="requirement-bulk-add-group">
-          <button class="btn-pill match-filter-btn ${bulkMatchFilter.enabled ? 'is-active' : ''}" data-open-match-filter title="Match-Filter für Matching-Auswahl einstellen">${bulkMatchFilter.enabled ? `Pre ${bulkMatchFilter.minScore}%` : 'Pre aus'}</button>
-          <button class="btn-pill requirement-bulk-add-btn" data-auto-add="5" title="Top 5 Objekte automatisch hinzufügen">+5</button>
-          <button class="btn-pill requirement-bulk-add-btn" data-auto-add="10" title="Top 10 Objekte automatisch hinzufügen">+10</button>
-          <button class="btn-pill requirement-bulk-add-btn" data-auto-add="20" title="Top 20 Objekte automatisch hinzufügen">+20</button>
-          <button class="btn-pill requirement-match-filter-btn ${matchFilter.enabled ? 'is-active' : ''}" data-open-match-filter title="Sichtbare Matches filtern und ausgeblendete entfernen">${matchFilter.enabled ? `Filter ${matchFilter.minScoreEnabled ? matchFilter.minScore + '%' : 'an'}` : 'Filter'}</button>
-        </div>
         <button class="icon-btn" data-del-requirement title="Anforderung löschen">
           <svg viewBox="0 0 24 24">
             <path d="M18.3 5.71 12 12l6.3 6.29-1.41 1.42L10.59 13.4 4.3 19.71 2.89 18.3 9.18 12 2.89 5.71 4.3 4.29l6.29 6.3 6.29-6.3z"/>
           </svg>
         </button>`;
-
-      // Bulk-Buttons im Kontext von bulkMatchingRequirements konfigurieren
-      head.querySelector('[data-open-match-filter]')?.addEventListener('click', (e) => {
-        e.stopPropagation();
-        openBulkMatchFilterModal();
-      });
-
-      head.querySelector('[data-open-match-filter]')?.addEventListener('click', (e) => {
-        e.stopPropagation();
-        openMatchFilterModal(j.id);
-      });
-
-      const autoAddBtns = head.querySelectorAll('[data-auto-add]');
-      autoAddBtns.forEach(btn => {
-        const cnt = parseInt(btn.getAttribute('data-auto-add'), 10) || 5;
-        if (bulkMatchingRequirements.has(j.id)) {
-          btn.disabled = true;
-          btn.classList.add('is-loading'); // passt zu .btn-pill.is-loading
-          btn.textContent = '…';
-        } else {
-          btn.disabled = false;
-          btn.classList.remove('is-loading');
-          btn.textContent = `+${cnt}`;
-        }
-
-        btn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          handleBulkAutoMatch(j.id, cnt);
-        });
-      });
 
       wrap.appendChild(head);
 
@@ -4673,10 +5272,11 @@ function renderRequirements(){
         .filter(m => m.requirementId === j.id && !m.removed)
         .map(m => ({
           cid: m.objectId,
-          pct: typeof m.score === 'number' ? m.score : 0,
+          pct: scoreFromMatchItems(m.items) ?? 0,
           match: m
         }))
         .sort((a,b)=>b.pct-a.pct);
+      const matchFilter = getMatchFilterSettings(j.id);
       let pairs = allPairs.filter(({ cid, match }) => matchPassesRequirementFilter(match, getObject(cid), matchFilter));
 
       if(pairs.length===0){
@@ -4732,10 +5332,9 @@ function renderRequirements(){
           }).join('');
 
           const isPending = pendingMatchKeys.has(procKey);
-          const hasScore = typeof pct === 'number' && pct > 0;
-          const bucket = gradeBucket(pct);
-
           const matchObj = matches.find(m => m.requirementId === j.id && m.objectId === cid && !m.removed) || null;
+          const hasScore = hasScoredMatchItems(matchObj?.items) && typeof pct === 'number';
+          const bucket = gradeBucket(pct);
 
           let scoreInner;
           if (isPending){
@@ -4801,16 +5400,11 @@ function renderRequirements(){
                     ? '<svg viewBox="0 0 24 24"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg>'
                     : '<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>'}
                 </button>
-                <button class="icon-btn" title="Notizen / Fortschritt" data-notes>
-                  <svg viewBox="0 0 24 24"><path d="M3 5a2 2 0 0 1 2-2h10l6 6v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5zm12 0v4h4"/></svg>
+                <button class="icon-btn notes-action-btn" title="Notizen und Fortschritt bearbeiten" aria-label="Notizen und Fortschritt bearbeiten" data-notes>
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h9.5L19 8.5V20a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zm8.5 1.8V10h4.2L13.5 5.8zM7 13h6v2H7v-2zm0 4h8v2H7v-2z"/></svg>
                 </button>
-                <button class="icon-btn" title="Object & Anforderung anzeigen/ schließen" data-object>
-                  <svg viewBox="0 0 24 24"><path d="M6 2h9l5 5v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm8 1v5h5"/></svg>
-                </button>
-                <button class="icon-btn" title="Druckansicht" data-print>
-                  <svg viewBox="0 0 24 24">
-                    <path d="M6 9V3h12v6H6zm10-4H8v2h8V5zM6 17H4a2 2 0 0 1-2-2v-5a3 3 0 0 1 3-3h14a3 3 0 0 1 3 3v5a2 2 0 0 1-2 2h-2v4H6v-4zm2 0v2h8v-2H8z"/>
-                  </svg>
+                <button class="icon-btn match-open-btn" title="Match anzeigen" aria-label="Match anzeigen" data-object>
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5c5.2 0 8.6 4.1 10 7-1.4 2.9-4.8 7-10 7S3.4 14.9 2 12c1.4-2.9 4.8-7 10-7zm0 2C8.3 7 5.6 9.4 4.3 12c1.3 2.6 4 5 7.7 5s6.4-2.4 7.7-5C18.4 9.4 15.7 7 12 7zm0 2.2a2.8 2.8 0 1 1 0 5.6 2.8 2.8 0 0 1 0-5.6z"/></svg>
                 </button>
 
                 <button class="icon-btn danger" title="Matching entfernen" data-remove>
@@ -4832,9 +5426,7 @@ function renderRequirements(){
           if (scoreEl && !isPending){
             scoreEl.addEventListener('click', (e)=>{
               e.stopPropagation();
-              const sourceId = j.sourceId || rowComp.id;
-              if (!sourceId) return;
-              openMatchDetailFor(sourceId, j.id, cid);
+              toggleRequirementAndObject(j, cid);
             });
           }
 
@@ -4867,17 +5459,6 @@ function renderRequirements(){
             updateMatchState(j.id, cid, { active: s.active, progress: s.progress });
             renderRequirements();
           });
-
-          const matchId = matchObj?.id || `${(j.sourceId || rowComp.id)}|${j.id}|${cid}`;
-
-          const printBtn = b.querySelector('[data-print]');
-          if (printBtn){
-            printBtn.addEventListener('click', (e) => {
-              e.stopPropagation();
-              const url = `./printView.html?matchId=${encodeURIComponent(matchId)}`;
-              window.open(url, '_blank', 'noopener');
-            });
-          }
 
           const openNotes = ()=> openNoteModal(j.id, cid);
           b.querySelector('[data-notes]').addEventListener('click', (e)=>{
@@ -5026,8 +5607,8 @@ function renderMatchDetailPanelInNoteModal(){
     const prioLabel  = prioMap[it.priority] || it.priority || '';
     const levelLabel = levelMap[it.matchLevel] || it.matchLevel || '';
 
-    const requirementSnip = it.requirementSnippet || '';
-    const objectSnip  = it.objectSnippet || '';
+  const requirementSnip = it.jobSnippet || it.requirementSnippet || '';
+  const objectSnip  = it.cvSnippet || it.objectSnippet || '';
     const expl    = it.explanation || '';
 
     const pct = (()=>{
@@ -5073,11 +5654,11 @@ function renderMatchDetailPanelInNoteModal(){
         ${expl ? `<div class="match-item-expl">${expl}</div>` : ''}
         <div class="match-item-snips">
           <div class="match-snippet-block">
-            <div class="match-snippet-label">Anforderung</div>
+            <div class="match-snippet-label">Stellenausschreibung</div>
             <div>${requirementSnip ? `<span class="match-highlight" data-match-req="${it.requirementId}" style="--matchColor:${color}">${requirementSnip}</span>` : '<span class="muted">Kein Nachweis.</span>'}</div>
           </div>
           <div class="match-snippet-block">
-            <div class="match-snippet-label">Object</div>
+            <div class="match-snippet-label">CV</div>
             <div>${objectSnip ? `<span class="match-highlight" data-match-req="${it.requirementId}" style="--matchColor:${color}">${objectSnip}</span>` : '<span class="muted">Kein Nachweis.</span>'}</div>
           </div>
         </div>
@@ -5136,7 +5717,7 @@ function commitProgressAutosave(){
     progress: effectiveProgress
   }).catch(console.error);
 
-  const line = document.querySelector(
+  const line = getMatchingModuleHost().querySelector(
     `.object-badge[data-jid="${modalCtx.requirementId}"][data-cid="${modalCtx.objectId}"] .progress-line i`
   );
   if (line) line.style.width = effectiveProgress + '%';
@@ -5176,7 +5757,7 @@ if (saveNoteBtn) {
     noteInitialText = notes;
     setNoteSaveButtonVisible(false);
 
-    const line = document.querySelector(
+    const line = getMatchingModuleHost().querySelector(
       `.object-badge[data-jid="${modalCtx.requirementId}"][data-cid="${modalCtx.objectId}"] .progress-line i`
     );
     if (line) line.style.width = effectiveProgress + '%';
@@ -5284,7 +5865,7 @@ function ensureMatchModal(){
         </div>
       </div>
     </div>`;
-  document.body.appendChild(matchModalEl);
+  appendMatchingLayer(matchModalEl);
 
   matchSourceSelect = matchModalEl.querySelector('#matchSourceSelect');
   matchRequirementSelect = matchModalEl.querySelector('#matchRequirementSelect');
@@ -5306,7 +5887,7 @@ function ensureMatchModal(){
     const requirementId = matchRequirementSelect.value;
 
     if (!currentMatchObjectId || !requirementId || !sourceId){
-      alert('Bitte Quellen und Anforderung wählen.');
+      showBusinessAlert('Bitte Quellen und Anforderung wählen.');
       return;
     }
 
@@ -5314,7 +5895,7 @@ function ensureMatchModal(){
     createMatch(sourceId, requirementId, currentMatchObjectId)
       .catch(err => {
         console.error('Fehler beim Matching:', err);
-        alert('Matching konnte nicht berechnet werden: ' + (err?.message || err));
+        showBusinessAlert('Matching konnte nicht berechnet werden: ' + (err?.message || err), { title: 'Matching fehlgeschlagen' });
       });
 
     // Popup SOFORT schließen
@@ -5350,7 +5931,7 @@ function openMatchModalForObject(objectId){
   const object = getObject(objectId);
   if (!object) return;
   if (object.isPlaceholder) {
-    alert('Matching ist erst verfügbar, wenn der Objektimport abgeschlossen ist.');
+    showBusinessAlert('Matching ist erst verfügbar, wenn der Objektimport abgeschlossen ist.');
     return;
   }
   const titleEl = matchModalEl.querySelector('#matchTitle');
@@ -5431,7 +6012,7 @@ function openRelationModal(kind, id){
   }
 
   if (relTitle){
-    relTitle.textContent = `Kontaktstatus – ${name}`;
+    relTitle.textContent = `${defText('labels.relationTitle', 'Kontaktstatus')} – ${name}`;
   }
 
   // NEU: Portrait / Logo ins Modal setzen
@@ -5539,6 +6120,7 @@ const objectBody = document.getElementById('objectBody');
 
 function closeObject(){
   object.classList.remove('open');
+  object.setAttribute('aria-hidden', 'true');
   delete object.dataset.objectId;
 }
 
@@ -5553,9 +6135,12 @@ function openObject(objectId){
   const education = Array.isArray(objectData.education) ? objectData.education : [];
   const experience = Array.isArray(objectData.experience) ? objectData.experience : [];
   const objectSkills = objectData.skills || {};
-  const fach = Array.isArray(objectSkills.Fachkenntnisse) ? objectSkills.Fachkenntnisse : [];
-  const sprach = Array.isArray(objectSkills.Sprachkenntnisse) ? objectSkills.Sprachkenntnisse : [];
-  const other = Array.isArray(objectSkills.other_skills) ? objectSkills.other_skills : [];
+  const rawCvText = c.rawText || objectData.rawText || '';
+  const fach = normalizeSkillList(objectSkills.Fachkenntnisse).length
+    ? normalizeSkillList(objectSkills.Fachkenntnisse)
+    : normalizeSkillList(c.skills);
+  const sprach = normalizeSkillList(objectSkills.Sprachkenntnisse);
+  const other = normalizeSkillList(objectSkills.other_skills);
   const langStr = (meta.languages || []).map(l => l.code + (l.level ? ` (${l.level})` : '')).join(', ');
 
   const exec = c.executiveInfo || {};
@@ -5564,7 +6149,7 @@ function openObject(objectId){
   const execLeadership = exec.leadershipFaehigkeit || '';
   const execGehaltOrt = exec.gehaltswunschUndOrt || '';
 
-  objectTitle.textContent = `Object – ${c.name}`;
+  objectTitle.textContent = `${defText('labels.objectDrawerTitle', 'Object')} – ${c.name}`;
 
   // Match-Items für Object-Seite (objectSnippet)
   const objectMatchItems = getSideMatchItemsForCurrent(currentMatchDetail?.requirementId, c.id, 'object');
@@ -5579,6 +6164,16 @@ function openObject(objectId){
     ? execLines.join('')
     : '<p class="muted">Keine Executive-Info hinterlegt.</p>';
 
+  const rawExperienceHtml = experience.length
+    ? ''
+    : renderCvRawLines(fallbackCvSectionLines(rawCvText, 'experience'), objectMatchItems, 'experience');
+  const rawEducationHtml = education.length
+    ? ''
+    : renderCvRawLines(fallbackCvSectionLines(rawCvText, 'education'), objectMatchItems, 'education');
+  const rawSkillsHtml = fach.length
+    ? ''
+    : renderCvRawLines(fallbackCvSectionLines(rawCvText, 'skills'), objectMatchItems, 'skills');
+
   const eduHtml = education.map(e => {
     const head = [
       e.degree || '',
@@ -5589,7 +6184,7 @@ function openObject(objectId){
     const instLocHl = highlightTextWithMatchItems(instLoc, objectMatchItems);
 
     const detailsList = Array.isArray(e.details) && e.details.length
-      ? `<ul style="margin:6px 0 0 18px;font-size:12px">${
+      ? `<ul class="drawer-compact-list">${
           e.details.map(d=>{
             const dh = highlightTextWithMatchItems(String(d), objectMatchItems);
             return `<li>${dh}</li>`;
@@ -5598,23 +6193,26 @@ function openObject(objectId){
       : '';
 
     return `
-      <div style="margin-bottom:10px">
-        <div style="font-weight:600">${headHl}</div>
-        <div class="muted">${instLocHl}</div>
-        <div class="muted" style="font-size:11px">${formatDateRange(e.start_date, e.end_date)}</div>
+      <article class="drawer-timeline-item">
+        <div class="drawer-timeline-title">${headHl}</div>
+        <div class="drawer-timeline-meta">${instLocHl}</div>
+        <div class="drawer-timeline-date">${formatDateRange(e.start_date, e.end_date)}</div>
         ${detailsList}
-      </div>
+      </article>
     `;
   }).join('');
 
   const expHtml = experience.map(e => {
-    const titleHl = highlightTextWithMatchItems(e.requirement_title || '', objectMatchItems);
+    const titleHl = highlightTextWithMatchItems(e.job_title || e.requirement_title || '', objectMatchItems);
     const empLoc = [e.employer || '', e.location || ''].filter(Boolean).join(' · ');
     const empLocHl = highlightTextWithMatchItems(empLoc, objectMatchItems);
 
-    const descList = Array.isArray(e.requirement_description) && e.requirement_description.length
-      ? `<ul style="margin:6px 0 0 18px;font-size:12px">${
-          e.requirement_description.map(d=>{
+    const descriptionItems = Array.isArray(e.job_description) && e.job_description.length
+      ? e.job_description
+      : (Array.isArray(e.requirement_description) ? e.requirement_description : []);
+    const descList = descriptionItems.length
+      ? `<ul class="drawer-compact-list">${
+          descriptionItems.map(d=>{
             const dh = highlightTextWithMatchItems(String(d), objectMatchItems);
             return `<li>${dh}</li>`;
           }).join('')
@@ -5622,27 +6220,27 @@ function openObject(objectId){
       : '';
 
     return `
-      <div style="margin-bottom:12px">
-        <div style="font-weight:600">${titleHl}</div>
-        <div class="muted">${empLocHl}</div>
-        <div class="muted" style="font-size:11px">${formatDateRange(e.start_date, e.end_date)}</div>
+      <article class="drawer-timeline-item">
+        <div class="drawer-timeline-title">${titleHl}</div>
+        <div class="drawer-timeline-meta">${empLocHl}</div>
+        <div class="drawer-timeline-date">${formatDateRange(e.start_date, e.end_date)}</div>
         ${descList}
-      </div>
+      </article>
     `;
   }).join('');
 
   const fachHtml = fach.length
-    ? `<ul>${fach.map(s=>`<li>${highlightTextWithMatchItems(String(s), objectMatchItems)}</li>`).join('')}</ul>`
-    : '<p class="muted">Keine fachlichen Skills hinterlegt.</p>';
+    ? renderDrawerChips(fach, objectMatchItems)
+    : (rawSkillsHtml || '<p class="muted">Keine fachlichen Skills hinterlegt.</p>');
 
   const sprachHtml = sprach.length
-    ? `<ul>${sprach.map(s=>`<li>${highlightTextWithMatchItems(String(s), objectMatchItems)}</li>`).join('')}</ul>`
+    ? renderDrawerChips(sprach, objectMatchItems)
     : (langStr
         ? `<p>${highlightTextWithMatchItems(langStr, objectMatchItems)}</p>`
         : '<p class="muted">Keine Sprachkenntnisse hinterlegt.</p>');
 
   const otherHtml = other.length
-    ? `<ul>${other.map(s=>`<li>${highlightTextWithMatchItems(String(s), objectMatchItems)}</li>`).join('')}</ul>`
+    ? renderDrawerChips(other, objectMatchItems)
     : '<p class="muted">Keine weiteren Angaben.</p>';
 
   const profilDegreeLines = [];
@@ -5666,14 +6264,14 @@ function openObject(objectId){
 
     <div style="display:grid; grid-template-columns: 1.3fr 1fr; gap:12px; margin-bottom:14px">
       <div>
-        <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Profil</div>
+        <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">${defText('drawers.objectSections.profile', 'Profil')}</div>
         <div style="font-size:13px">
           ${profilDegreeLines.join('')}
           ${meta.birthDate ? `<div><strong>Geburtsdatum:</strong> ${formatDate(meta.birthDate)}</div>` : ''}
         </div>
       </div>
       <div>
-        <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Stammdaten</div>
+        <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">${defText('drawers.objectSections.masterData', 'Stammdaten')}</div>
         <div style="font-size:13px">
           ${meta.nationality ? `<div><strong>Nationalität:</strong> ${highlightTextWithMatchItems(meta.nationality, objectMatchItems)}</div>` : ''}
           ${langStr ? `<div><strong>Sprachen:</strong> ${highlightTextWithMatchItems(langStr, objectMatchItems)}</div>` : ''}
@@ -5682,7 +6280,7 @@ function openObject(objectId){
     </div>
 
     <section style="margin-bottom:14px">
-      <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Executive Info</div>
+      <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">${defText('drawers.objectSections.executiveInfo', 'Executive Info')}</div>
       <div style="font-size:13px">
         ${execHtml}
       </div>
@@ -5691,27 +6289,27 @@ function openObject(objectId){
     <hr style="border:none;border-top:1px solid var(--stroke);margin:6px 0 12px"/>
 
     <section style="margin-bottom:14px">
-      <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Berufserfahrung</div>
-      ${expHtml || '<p class="muted">Keine Berufserfahrung eingetragen.</p>'}
+      <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">${defText('drawers.objectSections.experience', 'Berufserfahrung')}</div>
+      ${expHtml ? `<div class="drawer-timeline">${expHtml}</div>` : (rawExperienceHtml || '<p class="muted">Keine Berufserfahrung eingetragen.</p>')}
     </section>
 
     <section style="margin-bottom:14px">
-      <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Ausbildung</div>
-      ${eduHtml || '<p class="muted">Keine Ausbildungsstationen eingetragen.</p>'}
+      <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">${defText('drawers.objectSections.education', 'Ausbildung')}</div>
+      ${eduHtml ? `<div class="drawer-timeline">${eduHtml}</div>` : (rawEducationHtml || '<p class="muted">Keine Ausbildungsstationen eingetragen.</p>')}
     </section>
 
     <section style="margin-bottom:14px">
-      <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Fachkenntnisse</div>
+      <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">${defText('drawers.objectSections.skills', 'Fachkenntnisse')}</div>
       ${fachHtml}
     </section>
 
     <section style="margin-bottom:14px">
-      <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Sprachkenntnisse</div>
+      <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">${defText('drawers.objectSections.languages', 'Sprachkenntnisse')}</div>
       ${sprachHtml}
     </section>
 
     <section style="margin-bottom:4px">
-      <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Weitere Fähigkeiten</div>
+      <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">${defText('drawers.objectSections.other', 'Weitere Fähigkeiten')}</div>
       ${otherHtml}
     </section>
   `;
@@ -5730,6 +6328,7 @@ function openObject(objectId){
 
   object.dataset.objectId = objectId;
   object.classList.add('open');
+  object.setAttribute('aria-hidden', 'false');
 }
 
 
@@ -5742,6 +6341,7 @@ const jpBody = document.getElementById('jpBody');
 
 function closeRequirementPanel(){
   jp.classList.remove('open');
+  jp.setAttribute('aria-hidden', 'true');
   delete jp.dataset.requirementId;
 }
 
@@ -5756,10 +6356,13 @@ function openRequirement(requirement){
   const aboutSource = details.aboutSource || '';
   const aboutRole = details.aboutRole || '';
   const objectReq = details.objectRequirements || '';
+  const responsibilitiesArr = Array.isArray(details.responsibilities) ? details.responsibilities : [];
+  const requirementsArr = Array.isArray(details.requirements) ? details.requirements : [];
   const benefitsArr = Array.isArray(details.benefits) ? details.benefits : [];
   const closingNotes = details.closingNotes || '';
+  const rawRequirementText = details.rawText || requirement.rawText || '';
 
-  jpTitle.textContent = `Anforderung – ${requirement.title}`;
+  jpTitle.textContent = `${defText('labels.sourceDrawerTitle', 'Source')} – ${requirement.title}`;
   jpMeta.textContent = [
     requirement.location,
     requirement.level || 'Mid',
@@ -5772,9 +6375,16 @@ function openRequirement(requirement){
   // Match-Items für Requirement-Seite (requirementSnippet)
   const requirementMatchItems = getSideMatchItemsForCurrent(requirement.id, currentMatchDetail?.objectId, 'requirement');
 
-  const aboutSourceHtml = highlightTextWithMatchItems(aboutSource, requirementMatchItems);
-  const aboutRoleHtml     = highlightTextWithMatchItems(aboutRole, requirementMatchItems);
-  const objectReqHtml  = highlightTextWithMatchItems(objectReq, requirementMatchItems);
+  const aboutSourceHtml = renderDrawerProse(aboutSource, requirementMatchItems);
+  const aboutRoleHtml = aboutRole
+    ? renderDrawerProse(aboutRole, requirementMatchItems)
+    : renderDrawerList(responsibilitiesArr, requirementMatchItems);
+  const objectReqHtml = objectReq
+    ? renderDrawerProse(objectReq, requirementMatchItems)
+    : renderDrawerList(requirementsArr, requirementMatchItems);
+  const rawRequirementHtml = rawRequirementText
+    ? renderCvRawLines(String(rawRequirementText).split(/\r?\n/), requirementMatchItems, 'plain')
+    : '';
 
   const benefitsHtml = (benefitsArr.length
     ? `<ul>${
@@ -5785,7 +6395,7 @@ function openRequirement(requirement){
       }</ul>`
     : '<p class="muted">Keine Benefits explizit genannt.</p>');
 
-  const closingHtml = highlightTextWithMatchItems(closingNotes, requirementMatchItems);
+  const closingHtml = renderDrawerProse(closingNotes, requirementMatchItems);
 
   jpBody.innerHTML = `
     <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px" class="${compRelClass}${compActive ? '' : ' inactive-entity'}">
@@ -5811,33 +6421,34 @@ function openRequirement(requirement){
     </div>
 
     <section style="margin-bottom:12px">
-      <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Über das Quellen</div>
-      <p style="font-size:13px;line-height:1.4">${aboutSourceHtml || '<span class="muted">Kein Beschreibungstext vorhanden.</span>'}</p>
+      <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">${defText('drawers.sourceSections.aboutSource', 'Source')}</div>
+      <div class="drawer-copy">${aboutSourceHtml || '<span class="muted">Kein Beschreibungstext vorhanden.</span>'}</div>
     </section>
 
     <section style="margin-bottom:12px">
-      <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Rolle & Aufgaben</div>
-      <p style="font-size:13px;line-height:1.4">${aboutRoleHtml || '<span class="muted">Keine Rollenbeschreibung hinterlegt.</span>'}</p>
+      <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">${defText('drawers.sourceSections.role', 'Beschreibung')}</div>
+      <div class="drawer-copy">${aboutRoleHtml || rawRequirementHtml || '<span class="muted">Keine Rollenbeschreibung hinterlegt.</span>'}</div>
     </section>
 
     <section style="margin-bottom:12px">
-      <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Anforderungen</div>
-      <p style="font-size:13px;line-height:1.4">${objectReqHtml || '<span class="muted">Keine Anforderungen hinterlegt.</span>'}</p>
+      <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">${defText('drawers.sourceSections.requirements', 'Kriterien')}</div>
+      <div class="drawer-copy">${objectReqHtml || '<span class="muted">Keine Anforderungen hinterlegt.</span>'}</div>
     </section>
 
     <section style="margin-bottom:12px">
-      <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Benefits</div>
+      <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">${defText('drawers.sourceSections.benefits', 'Weitere Informationen')}</div>
       ${benefitsHtml}
     </section>
 
     <section>
-      <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Hinweise zur Einreichung</div>
-      <p style="font-size:13px;line-height:1.4">${closingHtml || '<span class="muted">Keine zusätzlichen Hinweise vorhanden.</span>'}</p>
+      <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">${defText('drawers.sourceSections.closing', 'Hinweise')}</div>
+      <div class="drawer-copy">${closingHtml || '<span class="muted">Keine zusätzlichen Hinweise vorhanden.</span>'}</div>
     </section>
   `;
 
   jp.dataset.requirementId = requirement.id;
   jp.classList.add('open');
+  jp.setAttribute('aria-hidden', 'false');
 
   const compToggle = jpBody.querySelector('.switch[data-source-toggle]');
   if (compToggle){
@@ -6143,16 +6754,12 @@ function createObjectCard(objectUi){
       </div>
 
       <div class="object-actions" style="margin-left:auto;display:flex;align-items:center;gap:8px;flex:0 0 auto;">
-        <button type="button" class="btn-pill requirement-bulk-add-btn" data-role="auto-requirements-10"
-                title="Objekt automatisch auf die Top 10 Requirements matchen"
-                aria-label="Top 10 Requirements automatisch matchen">+10</button>
-
-        <button type="button" class="icon-btn" data-role="match-btn"
-                title="Objekt auf Anforderung matchen" aria-label="Matchen"
-                style="height:30px;width:30px;display:inline-flex;align-items:center;justify-content:center;">
+        <button type="button" class="icon-btn match-action-btn" data-role="match-btn"
+                title="${__objectEscapeAttr(defText('labels.matchActionTitle', 'Objekt matchen'))}" aria-label="${__objectEscapeAttr(defText('labels.matchActionAria', 'Objekt matchen'))}">
           <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M11 5h2v14h-2zM5 11h14v2H5z"/>
+            <path d="M12 3a9 9 0 0 1 8.95 8H23v2h-2.05A9 9 0 0 1 13 20.95V23h-2v-2.05A9 9 0 0 1 3.05 13H1v-2h2.05A9 9 0 0 1 11 3.05V1h2v2.05A9 9 0 0 1 12 3Zm0 2a7 7 0 1 0 0 14 7 7 0 0 0 0-14Zm0 3.5a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7Z"/>
           </svg>
+          <span>${__objectEscapeHtml(defText('labels.matchAction', 'Matchen'))}</span>
         </button>
 
         <button type="button" class="icon-btn" data-role="del-btn"
@@ -6164,7 +6771,7 @@ function createObjectCard(objectUi){
         </button>
 
         <button type="button" class="view-object btn-pill" data-role="object-btn"
-                title="Objektansicht öffnen" aria-label="Objekt öffnen">Object</button>
+                title="${__objectEscapeAttr(defText('labels.objectRecord', 'Objekt'))} öffnen" aria-label="${__objectEscapeAttr(defText('labels.objectRecord', 'Objekt'))} öffnen">${__objectEscapeHtml(defText('labels.objectViewButton', 'Object'))}</button>
       </div>
     </div>
 
@@ -6210,15 +6817,6 @@ function createObjectCard(objectUi){
     });
   }
 
-  // Bulk match
-  const bulkBtn = card.querySelector('[data-role="auto-requirements-10"]');
-  if (bulkBtn){
-    bulkBtn.addEventListener('click', (e)=>{
-      e.stopPropagation();
-      handleBulkAutoMatchForObject(objectId, 10);
-    });
-  }
-
   // Match button
   const matchBtn = card.querySelector('[data-role="match-btn"]');
   if (matchBtn){
@@ -6233,7 +6831,7 @@ function createObjectCard(objectUi){
         createMatch(sourceId, requirementId, objectId)
           .catch(err => {
             console.error('Fehler beim direkten Matching:', err);
-            alert('Matching konnte nicht berechnet werden: ' + (err?.message || err));
+            showBusinessAlert('Matching konnte nicht berechnet werden: ' + (err?.message || err), { title: 'Matching fehlgeschlagen' });
           });
         return;
       }
@@ -6322,24 +6920,12 @@ function patchObjectCard(objectId, objectUi){
     sw.style.pointerEvents = isPlaceholder ? 'none' : '';
   }
 
-  // Bulk loading state
-  const isBulk = !!(bulkMatchingObjects && bulkMatchingObjects.has(objectId));
-  const bulkBtn = card.querySelector('[data-role="auto-requirements-10"]');
-  if (bulkBtn){
-    bulkBtn.disabled = isBulk || isPlaceholder;
-    bulkBtn.classList.toggle('is-loading', isBulk);
-    bulkBtn.textContent = isBulk ? '…' : '+10';
-    bulkBtn.title = isPlaceholder
-      ? 'Während des Objektimports deaktiviert'
-      : 'Objekt automatisch auf die Top 10 Requirements matchen';
-  }
-
   const matchBtn = card.querySelector('[data-role="match-btn"]');
   if (matchBtn){
     matchBtn.disabled = isPlaceholder;
     matchBtn.title = isPlaceholder
       ? 'Während des Objektimports deaktiviert'
-      : 'Objekt auf Anforderung matchen';
+      : defText('labels.matchActionTitle', 'Objekt matchen');
   }
 
   // Avatar: nur setzen wenn wirklich anders
@@ -6397,19 +6983,34 @@ function reconcileObjectList(listEl, listData){
 
   // Add/Patch + order
   for (const objectUi of listData){
-    const id = objectUi.id;
-    let card = objectDomById.get(id);
+    try {
+      const id = objectUi.id;
+      let card = objectDomById.get(id);
 
-    if (!card){
-      card = createObjectCard(objectUi);
-      objectDomById.set(id, card);
+      if (!card){
+        card = createObjectCard(objectUi);
+        objectDomById.set(id, card);
+      }
+
+      // In richtige Reihenfolge bringen, bevor der Detail-Patch läuft.
+      // So bleibt wenigstens die Card sichtbar, falls ein einzelnes Feld kaputt ist.
+      listEl.appendChild(card);
+      patchObjectCard(id, objectUi);
+    } catch (error) {
+      console.error('[matching] Objektkarte konnte nicht gerendert werden', objectUi, error);
+      const fallbackCard = el('div', 'object-card');
+      fallbackCard.dataset.objectId = String(objectUi?.id || '');
+      fallbackCard.innerHTML = `
+        <div class="object-head">
+          <div class="avatar">${_escapeHtml(getInitials(objectUi?.name || 'Objekt'))}</div>
+          <div>
+            <div class="object-name" style="font-weight:700">${_escapeHtml(objectUi?.name || 'Unbekanntes Objekt')}</div>
+            <div class="c-tax">${_escapeHtml(objectUi?.tax || objectUi?.taxonomy || objectUi?.currentRole || 'Objekt')}</div>
+          </div>
+        </div>
+      `;
+      listEl.appendChild(fallbackCard);
     }
-
-    // Patch (inkl. exec + avatar etc.)
-    patchObjectCard(id, objectUi);
-
-    // In richtige Reihenfolge bringen (move, kein rebuild)
-    listEl.appendChild(card);
   }
 }
 
@@ -6539,7 +7140,11 @@ async function loadMatchItems(sourceId, requirementId, objectId){
       .exec();
 
     const json = doc ? doc.toJSON() : null;
-    const items = Array.isArray(json?.items) ? json.items.slice() : [];
+    const matchFromMemory = findMatch(requirementId, objectId);
+    const dbItems = normalizeMatchItemsFromRecord(json);
+    const items = dbItems.length
+      ? dbItems
+      : (Array.isArray(matchFromMemory?.items) ? matchFromMemory.items.slice() : []);
 
     items.sort((a,b)=>{
       const ak = (a.matchLevelKey ?? 0) * 100 + (a.matchScoreKey ?? 0);
@@ -6577,7 +7182,7 @@ function ensureMatchOverlay(){
   s.border = '1px solid var(--stroke, #374151)';
   s.display = 'none';
 
-  document.body.appendChild(matchOverlayEl);
+  appendMatchingLayer(matchOverlayEl);
   return matchOverlayEl;
 }
 
@@ -6642,8 +7247,8 @@ function showMatchOverlayFor(reqId, evt){
     return null;
   })();
 
-  const requirementSnip = item.requirementSnippet || '';
-  const objectSnip  = item.objectSnippet || '';
+  const requirementSnip = item.jobSnippet || item.requirementSnippet || '';
+  const objectSnip  = item.cvSnippet || item.objectSnippet || '';
   const expl    = item.explanation || '';
 
   const hasConflict = hasConflictOnItem(item);
@@ -6674,7 +7279,7 @@ function showMatchOverlayFor(reqId, evt){
       ${expl ? `<div class="match-item-expl" style="font-size:11px;margin-top:4px">${expl}</div>` : ''}
       <div class="match-item-snips" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;margin-top:6px">
         <div class="match-snippet-block">
-          <div class="match-snippet-label" style="font-size:10px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:2px">Anforderung</div>
+          <div class="match-snippet-label" style="font-size:10px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:2px">Stellenausschreibung</div>
           <div style="font-size:11px">
             ${requirementSnip
               ? `<span class="match-highlight" data-match-req="${item.requirementId}" style="--matchColor:${color}">${requirementSnip}</span>`
@@ -6682,7 +7287,7 @@ function showMatchOverlayFor(reqId, evt){
           </div>
         </div>
         <div class="match-snippet-block">
-          <div class="match-snippet-label" style="font-size:10px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:2px">Object</div>
+          <div class="match-snippet-label" style="font-size:10px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:2px">CV</div>
           <div style="font-size:11px">
             ${objectSnip
               ? `<span class="match-highlight" data-match-req="${item.requirementId}" style="--matchColor:${color}">${objectSnip}</span>`
@@ -6719,7 +7324,7 @@ function showMatchOverlayFor(reqId, evt){
 
 
 function renderMatchDetailBar(){
-  if (!matchDetailBar || !currentMatchDetail) return;
+  if (!matchDetailBar || !matchBarRequirementLabel || !matchBarObjectLabel || !matchBarScore || !matchBarTags || !currentMatchDetail) return;
 
   const escapeHtml = (str) => String(str || '')
     .replace(/&/g, '&amp;')
@@ -6736,7 +7341,7 @@ function renderMatchDetailBar(){
   const requirementName  = requirement ? `${requirement.title} (${requirement.location})` : `Requirement ${requirementId}`;
   const compName = source ? source.name : '';
   const objectName = object ? object.name : `Objekt ${objectId}`;
-  const score    = typeof m?.score === 'number' ? m.score : null;
+  const score    = scoreFromMatchItems(items);
 
   matchBarRequirementLabel.textContent  = compName ? `${compName} – ${requirementName}` : requirementName;
   matchBarObjectLabel.textContent = objectName;
@@ -6855,11 +7460,11 @@ function renderMatchDetailBar(){
                 class="match-pill match-pill-row"
                 data-req="${reqId}"
                 type="button"
-                style="--matchColor:${color};display:flex;align-items:center;justify-content:space-between;width:100%;gap:6px;margin-bottom:4px;font-size:11px;padding:4px 6px"
+                style="--matchColor:${color}"
               >
                 <span style="display:flex;align-items:center;gap:6px;min-width:0">
                   <span class="match-pill-dot"></span>
-                  <span class="match-pill-title" style="white-space:normal;overflow:hidden;text-overflow:ellipsis">
+                  <span class="match-pill-title">
                     ${escapeHtml(title)}
                   </span>
                 </span>
@@ -6875,7 +7480,7 @@ function renderMatchDetailBar(){
 
       return `
         <section class="match-col">
-          <header style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">
+          <header>
             ${cfg.label}
           </header>
           <div class="match-col-list">
@@ -6886,8 +7491,7 @@ function renderMatchDetailBar(){
     }).join('');
 
     matchBarTags.innerHTML = `
-      <div class="match-columns"
-           style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;align-items:flex-start;width:100%">
+      <div class="match-columns">
         ${columnsHtml}
       </div>
     `;
@@ -7026,7 +7630,7 @@ async function openMatchDetailFor(sourceId, requirementId, objectId){
 
 /* --------- Match-Detail-Bar DOM --------- */
 const matchDetailBar      = document.getElementById('matchDetailBar');
-const matchBarRequirementLabel    = document.getElementById('matchBarRequirementLabel');
+const matchBarRequirementLabel    = document.getElementById('matchBarRequirementLabel') || document.getElementById('matchBarAnforderungLabel');
 const matchBarObjectLabel   = document.getElementById('matchBarObjectLabel');
 const matchBarScore       = document.getElementById('matchBarScore');
 const matchBarTags        = document.getElementById('matchBarTags');
@@ -7529,9 +8133,7 @@ function renderMap() {
         }
 
         const isPending = pendingMatchKeys.has(procKey);
-        const pct = (typeof match.score === 'number' && !Number.isNaN(match.score))
-          ? match.score
-          : null;
+        const pct = scoreFromMatchItems(match.items);
 
         const bucket = pct != null ? gradeBucket(pct) : 'low';
 
@@ -7595,7 +8197,12 @@ function renderMap() {
 
       if (!requirementId || !objectId || !compId) return;
 
-      openMatchDetailFor(compId, requirementId, objectId);
+      const { requirement } = findRequirementAndSource(requirementId);
+      if (requirement) {
+        toggleRequirementAndObject(requirement, objectId);
+      } else {
+        openMatchDetailFor(compId, requirementId, objectId);
+      }
     });
   });
 
@@ -7691,6 +8298,10 @@ function _fileListToPdfArray(fileList) {
   return Array.from(fileList || []).filter(_isPdfFile);
 }
 
+function _fileListToImageArray(fileList) {
+  return Array.from(fileList || []).filter(isImageFile);
+}
+
 /**
  * Importiert mehrere PDFs mit optionalem Concurrency-Limit.
  * Nutzt DEIN startPdfObjectImport(file) unverändert.
@@ -7755,13 +8366,13 @@ async function startPdfObjectImportMulti(files, opts = {}) {
 
 
 
-function bindPdfMultiSelectUpload(btnEl, inputEl) {
+function bindObjectFileUpload(btnEl, inputEl) {
   if (!btnEl || !inputEl) return;
 
-  // zur Sicherheit: Multi-Select & PDF-Filter aktivieren (auch wenn HTML es nicht setzt)
+  // zur Sicherheit: Multi-Select & Dateifilter aktivieren (auch wenn HTML es nicht setzt)
   inputEl.multiple = true;
   inputEl.setAttribute('multiple', '');
-  inputEl.accept = 'application/pdf,.pdf';
+  inputEl.accept = 'application/pdf,.pdf,image/*,.png,.jpg,.jpeg,.webp,.gif,.bmp,.avif';
 
   // In Business OS öffnet der Header-Button zuerst den Spalten-Drawer.
   if (!btnEl.dataset.columnAction) {
@@ -7773,28 +8384,51 @@ function bindPdfMultiSelectUpload(btnEl, inputEl) {
 
   // Multi-Select Import
   inputEl.addEventListener('change', async (event) => {
-    const files = _fileListToPdfArray(event?.target?.files);
-    if (!files.length) return;
+    const selectedFiles = Array.from(event?.target?.files || []);
+    const files = _fileListToPdfArray(selectedFiles);
+    const images = _fileListToImageArray(selectedFiles);
+    if (!files.length && !images.length) return;
 
     try {
-      const { ok, failed } = await startPdfObjectImportMulti(files, { concurrency: 2 });
+      const imageResults = [];
+      const imageFailures = [];
+      if (images.length) {
+        const selectedTarget =
+          images.length === 1 && selectedObject && (objects || []).some((item) => item?.id === selectedObject)
+            ? selectedObject
+            : '';
+        for (const image of images) {
+          try {
+            imageResults.push(await importObjectImageFile(image, selectedTarget));
+          } catch (error) {
+            imageFailures.push({ file: image, error });
+          }
+        }
+      }
 
-      console.log('PDF-Multi-Import gestartet:', {
+      const { ok, failed } = files.length
+        ? await startPdfObjectImportMulti(files, { concurrency: 2 })
+        : { ok: [], failed: [] };
+
+      console.log('Objekt-Dateiimport gestartet:', {
+        images: imageResults.map(x => ({ objectId: x.objectId, updated: x.updated })),
         imported: ok.map(x => ({ name: x.file?.name, placeholderId: x.placeholderId, requirementId: x.requirementId })),
-        failed: failed.map(x => ({ name: x.file?.name, error: x.error?.message || String(x.error) }))
+        failed: [...failed, ...imageFailures].map(x => ({ name: x.file?.name, error: x.error?.message || String(x.error) }))
       });
 
       // Optional: kurze UX-Info (kannst du entfernen)
-      if (failed.length) {
-        alert(
-          `Import gestartet.\n\nErfolgreich: ${ok.length}\nFehlgeschlagen: ${failed.length}\n\n` +
-          failed.slice(0, 5).map(f => `- ${f.file?.name}: ${f.error?.message || f.error}`).join('\n') +
-          (failed.length > 5 ? `\n… (+${failed.length - 5} weitere)` : '')
+      const allFailed = [...failed, ...imageFailures];
+      if (allFailed.length) {
+        showBusinessAlert(
+          `Import gestartet.\n\nErfolgreich: ${ok.length + imageResults.length}\nFehlgeschlagen: ${allFailed.length}\n\n` +
+          allFailed.slice(0, 5).map(f => `- ${f.file?.name}: ${f.error?.message || f.error}`).join('\n') +
+          (allFailed.length > 5 ? `\n… (+${allFailed.length - 5} weitere)` : ''),
+          { title: 'Import gestartet' }
         );
       }
     } catch (e) {
-      console.error('PDF-Multi-Import Gesamtfehler', e);
-      alert('PDF-Multi-Import fehlgeschlagen: ' + (e?.message || e));
+      console.error('Objekt-Dateiimport Gesamtfehler', e);
+      showBusinessAlert('Objekt-Dateiimport fehlgeschlagen: ' + (e?.message || e), { title: 'Import fehlgeschlagen' });
     } finally {
       inputEl.value = '';
     }
@@ -7803,7 +8437,7 @@ function bindPdfMultiSelectUpload(btnEl, inputEl) {
 
 // Aktivieren (Drop-in)
 if (objectImportPdfBtn && objectImportPdfInput) {
-  bindPdfMultiSelectUpload(objectImportPdfBtn, objectImportPdfInput);
+  bindObjectFileUpload(objectImportPdfBtn, objectImportPdfInput);
 }
 
 
@@ -7828,7 +8462,7 @@ if (objectImportText && objectImportTextBtn) {
       objectImportText.value = '';
     } catch (e) {
       console.error('Objekte-Import Fehler', e);
-      alert('Objekte-Import fehlgeschlagen: ' + (e?.message || e));
+      showBusinessAlert('Objekte-Import fehlgeschlagen: ' + (e?.message || e), { title: 'Import fehlgeschlagen' });
     }
   }
 
@@ -7848,16 +8482,73 @@ if (objectImportText && objectImportTextBtn) {
 
 
 document.body.addEventListener('click', (e)=>{
+  if (!getMatchingModuleHost().contains(e.target)) return;
   const sBtn = e.target.closest('[data-search]');
   if(sBtn){
     const requirementId = sBtn.getAttribute('data-search');
-    alert('Objektesuche starten für '+ requirementId +' …');
+    showBusinessAlert('Objektesuche starten für '+ requirementId +' …');
   }
 });
 
+function applyMatchingDefinitionUi(root = getMatchingModuleHost()) {
+  if (!root) return;
+  const titles = root.querySelectorAll('.column-title');
+  if (titles[0]) titles[0].textContent = defText('labels.requirementsColumn', 'Sources');
+  if (titles[1]) titles[1].textContent = defText('labels.matchesColumn', 'Matches');
+  if (titles[2]) titles[2].textContent = defText('labels.objectsColumn', 'Objects');
+
+  const sourceSearch = root.querySelector('#sourceSearch');
+  if (sourceSearch) {
+    sourceSearch.placeholder = defText('placeholders.sourceSearch', sourceSearch.placeholder);
+    sourceSearch.setAttribute('aria-label', `${defText('labels.sourceRecordPlural', 'Sources')} suchen`);
+  }
+
+  const requirementSearch = root.querySelector('#requirementSearch');
+  if (requirementSearch) requirementSearch.placeholder = defText('placeholders.matchSearch', requirementSearch.placeholder);
+
+  const objectSearch = root.querySelector('#objectSearch');
+  if (objectSearch) objectSearch.placeholder = defText('placeholders.objectSearch', objectSearch.placeholder);
+
+  const objectTitleEl = root.querySelector('#objectTitle');
+  if (objectTitleEl) objectTitleEl.textContent = defText('labels.objectRecord', 'Object');
+
+  const requirementTitleEl = root.querySelector('#jpTitle');
+  if (requirementTitleEl) requirementTitleEl.textContent = defText('labels.sourceRecord', 'Source');
+
+  const relTitleEl = root.querySelector('#relTitle');
+  if (relTitleEl) relTitleEl.textContent = defText('labels.relationTitle', 'Relation');
+
+  const relExists = root.querySelector('[data-rel-label="exists"]');
+  const relMissing = root.querySelector('[data-rel-label="missing"]');
+  if (relExists) relExists.textContent = defText('labels.relationExists', relExists.textContent);
+  if (relMissing) relMissing.textContent = defText('labels.relationMissing', relMissing.textContent);
+
+  root.querySelectorAll('[data-column="requirements"]').forEach((button) => {
+    const action = button.getAttribute('data-column-action') || '';
+    const plural = defText('labels.sourceRecordPlural', 'Sources');
+    if (action === 'configure') button.title = `${plural} konfigurieren`;
+    if (action === 'import') button.title = `${plural} importieren`;
+    if (action === 'export') button.title = `${plural} exportieren`;
+  });
+
+  root.querySelectorAll('[data-column="objects"]').forEach((button) => {
+    const action = button.getAttribute('data-column-action') || '';
+    const plural = defText('labels.objectRecordPlural', 'Objects');
+    if (action === 'configure') button.title = `${plural} konfigurieren`;
+    if (action === 'import') button.title = `${plural} importieren`;
+    if (action === 'export') button.title = `${plural} exportieren`;
+  });
+}
+
 // Initial: erst RxDB laden, dann rendern
 // Initial: erst RxDB laden, dann rendern, dann Live-Sync aktivieren
-export async function mountMatchingDashboard(){
+export async function mountMatchingDashboard(ctx = {}){
+  matchingModuleHost = ctx.host || document.querySelector('[data-matching-module="native"]') || null;
+  if (ctx.matchingDefinition || globalThis.CTOX_MATCHING_DEFINITION) {
+    setActiveMatchingDefinition(ctx.matchingDefinition || globalThis.CTOX_MATCHING_DEFINITION);
+  }
+  applyMatchingDefinitionUi();
+  syncFeedback.setHostRoot?.(matchingModuleHost);
   syncFeedback.ensureHost();
   await ensureMatchScoreFormulaUpdate();
   await loadFromRxdb();

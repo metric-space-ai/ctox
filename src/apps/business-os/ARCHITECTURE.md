@@ -38,7 +38,10 @@ instance. A separate Electron wrapper is not the default runtime.
    validation, and authoritative writes.
 3. CTOX Desktop forwards or opens the selected instance URL after the user is
    connected/authenticated.
-4. HTTP pull/push bridge only for local development and diagnostics.
+
+There is no HTTP pull/push or command bridge for Business OS module data. If
+the native Rust RxDB peer is not complete, the app must show that sync is not
+ready instead of loading fallback data through HTTP.
 
 This keeps the app useful when:
 
@@ -132,6 +135,11 @@ The Business OS web app opens RxDB locally, joins the P2P room through the
 signaling server, and communicates with the CTOX instance peer without requiring
 that instance to expose a public inbound address.
 
+The concrete sync contract is documented in `RXDB_SYNC_CONTRACT.md`. That
+contract is intentionally strict: browser data lives in RxDB/Dexie, CTOX data
+lives in RxDB/SQLite, and both sides exchange records through RxDB WebRTC
+replication only.
+
 The Desktop app must not own this webserver. It may open the URL for a local
 instance, or forward an authenticated remote session through WebRTC/signaling,
 but the served app files and API contract remain owned by the CTOX instance so
@@ -144,3 +152,40 @@ An Electron wrapper may still be useful later for distribution scenarios where a
 client should run Business OS without the CTOX Desktop app. It must remain a
 thin optional adapter around the same static `business-os/` files and must not
 become the primary architecture.
+
+## Desktop Module
+
+The `modules/desktop/` module is the Business OS home screen: icon
+surface, wallpaper, drag-drop, and a launcher that resolves icon clicks to
+either a CTOX-module tab switch (heavyweight modules like Documents,
+Knowledge) or a shell-level desktop-app window (lightweight tools under
+`src/apps/business-os/desktop-apps/` such as the file viewer or notes
+editor).
+
+Cross-cutting OS-style infrastructure — window manager, notifications,
+event bus, context menu — lives at the shell level under
+`src/apps/business-os/shared/` so any Business OS module can consume it:
+
+- `shared/window-manager.js`
+- `shared/notifications.js`
+- `shared/event-bus.js`
+- `shared/context-menu.js`
+
+Desktop state persists through RxDB collections (`desktop_icons`,
+`desktop_layout`, `desktop_notifications`); no code under `modules/desktop/`
+or `shared/` reads or writes IndexedDB directly. Live events surface from
+the `business_commands` stream into the notifications layer — the desktop
+is the visible "CTOX is working" surface. The desktop module runs at
+`module.json: { "shell": "full-workspace" }` so it takes over the whole
+pane area rather than sitting inside the 3-pane module shell.
+
+The OS chrome is switchable Windows-style vs macOS-style at the **shell**
+level via `[data-shell-style="windows" | "macos"]` on `<body>` — not on
+the desktop module root. The desktop module follows that attribute; it
+does not own its own taskbar, dock, or menubar (those are the shell
+topbar). All colors and dimensions resolve through the shell tokens
+defined in `src/apps/business-os/app.css` (`--bg`, `--surface`,
+`--surface-2`, `--line`, `--text`, `--muted`, `--accent`, `--accent-soft`,
+`--danger`, `--panel-radius`, `--control-radius`, `--panel-shadow`,
+`--shadow`, `--shell-*`); neither the module nor the shared helpers
+introduce their own theme variables.

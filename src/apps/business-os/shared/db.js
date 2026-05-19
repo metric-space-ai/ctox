@@ -1,10 +1,14 @@
 export async function createBusinessDb({ name }) {
+  return createRxBusinessDb({ name });
+}
+
+async function createRxBusinessDb({ name }) {
   const rxdb = await loadRxdb();
   const { createRxDatabase, getRxStorageDexie } = rxdb;
   const db = await createRxDatabase({
     name,
     storage: getRxStorageDexie(),
-    multiInstance: true,
+    multiInstance: false,
     closeDuplicates: true,
   });
   return {

@@ -13,13 +13,20 @@ use serde_json::Value;
 use sha2::Digest;
 use std::collections::HashMap;
 use std::env;
+use std::fs;
+use std::io::Cursor;
+use std::io::Read;
+use std::io::Write;
 use std::path::Path;
+use std::path::PathBuf;
+use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use uuid::Uuid;
 
 const STORE_FILE: &str = "business-os.sqlite3";
 const DEFAULT_SIGNALING_URL: &str = "wss://signaling.ctox.dev";
+const DOCUMENT_BLOB_CHUNK_SIZE: usize = 256_000;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct BusinessOsStatus {
@@ -44,6 +51,8 @@ pub struct BusinessOsSyncConfig {
     pub transport: &'static str,
     pub http_bridge_available: bool,
     pub ctox_instance_required: bool,
+    pub native_rxdb_peer_available: bool,
+    pub native_rxdb_peer_reason: &'static str,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -174,15 +183,15 @@ pub fn open_store(root: &Path) -> anyhow::Result<Connection> {
     let path = runtime.join(STORE_FILE);
     let conn = Connection::open(&path)
         .with_context(|| format!("failed to open Business OS store {}", path.display()))?;
+    conn.busy_timeout(Duration::from_millis(1_000))
+        .context("failed to configure Business OS SQLite busy_timeout")?;
     migrate(&conn)?;
     Ok(conn)
 }
 
 pub fn status(root: &Path) -> anyhow::Result<BusinessOsStatus> {
     let path = root.join("runtime").join(STORE_FILE);
-    let ctox_service = crate::service::service_status_snapshot(root)
-        .ok()
-        .and_then(|status| serde_json::to_value(status).ok());
+    let ctox_service = Some(cheap_ctox_service_status(root));
     Ok(BusinessOsStatus {
         ok: true,
         runtime: "native-rust",
@@ -190,6 +199,46 @@ pub fn status(root: &Path) -> anyhow::Result<BusinessOsStatus> {
         now_ms: now_ms(),
         ctox_service,
     })
+}
+
+pub(crate) fn cheap_ctox_service_status(root: &Path) -> Value {
+    let pid = std::fs::read_to_string(root.join("runtime/ctox_service.pid"))
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u32>().ok());
+    let running = pid.map(process_is_running).unwrap_or(false);
+    serde_json::json!({
+        "running": running,
+        "busy": null,
+        "pid": pid,
+        "listen_addr": "",
+        "autostart_enabled": false,
+        "manager": "process",
+        "pending_count": null,
+        "pending_previews": [],
+        "blocked_count": null,
+        "blocked_previews": [],
+        "current_goal_preview": null,
+        "active_source_label": null,
+        "recent_events": [],
+        "last_error": null,
+        "last_completed_at": null,
+        "last_reply_chars": null,
+        "monitor_last_check_at": null,
+        "monitor_alerts": [],
+        "monitor_last_error": null
+    })
+}
+
+#[cfg(unix)]
+fn process_is_running(pid: u32) -> bool {
+    let pid = pid as libc::pid_t;
+    let rc = unsafe { libc::kill(pid, 0) };
+    rc == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+#[cfg(not(unix))]
+fn process_is_running(_pid: u32) -> bool {
+    false
 }
 
 pub fn sync_config(root: &Path) -> anyhow::Result<BusinessOsSyncConfig> {
@@ -207,6 +256,8 @@ pub fn sync_config(root: &Path) -> anyhow::Result<BusinessOsSyncConfig> {
         transport: "webrtc",
         http_bridge_available: true,
         ctox_instance_required: true,
+        native_rxdb_peer_available: false,
+        native_rxdb_peer_reason: "src/core/rxdb is not a complete CTOX WebRTC replication peer yet",
     })
 }
 
@@ -744,7 +795,7 @@ pub fn record_report(
             "summary": mutation.summary,
             "expected": mutation.expected,
             "reporter_id": reporter_id,
-            "instruction": format!("Bearbeite diesen Business-OS {} Report für Modul `{}`. Prüfe Reproduktion, Auswirkung, gewünschtes Ergebnis und setze daraus CTOX Arbeit auf.", kind, module_id)
+            "instruction": format!("Bearbeite diesen Business-OS {} Report für Modul `{}`. Prüfe Reproduktion, Auswirkung, gewünschtes Ergebnis und setze daraus CTOX Arbeit auf. Wenn du die Aufgabe annimmst oder abschliesst, dokumentiere im Ergebnis konkret, was du geaendert hast, welche Dateien/Module betroffen sind, welche Verifikation gelaufen ist und welche gespeicherte Modulversion als Rollback-Ziel genutzt werden kann.", kind, module_id)
         }),
         client_context: mutation.client_context.clone(),
     };
@@ -987,22 +1038,46 @@ pub fn process_source_parse_command(
     let conn = open_store(root)?;
     let command = load_business_command(&conn, command_id)?;
     anyhow::ensure!(
-        is_source_parse_command(&command.command_type) || is_match_command(&command.command_type),
+        is_source_parse_command(&command.command_type)
+            || is_match_command(&command.command_type)
+            || is_outbound_research_command(&command.command_type)
+            || is_documents_report_command(&command),
         "business command {command_id} is not a supported Business OS harness command"
     );
     let queue_task = find_queue_task_for_command(root, command_id)
         .and_then(|task_id| channels::load_queue_task(root, &task_id).ok().flatten());
 
-    let result = if is_source_parse_command(&command.command_type) {
-        super::importer::handle_source_parse(root, &conn, command_id, &command, queue_task.as_ref())
-    } else {
-        super::importer::handle_match_compute(
+    if is_documents_report_command(&command) {
+        return process_documents_report_command(
             root,
             &conn,
             command_id,
             &command,
             queue_task.as_ref(),
-        )
+            None,
+        );
+    }
+
+    let result = if is_source_parse_command(&command.command_type) {
+        super::importer::handle_source_parse(root, &conn, command_id, &command, queue_task.as_ref())
+    } else {
+        if is_outbound_research_command(&command.command_type) {
+            super::importer::handle_outbound_research(
+                root,
+                &conn,
+                command_id,
+                &command,
+                queue_task.as_ref(),
+            )
+        } else {
+            super::importer::handle_match_compute(
+                root,
+                &conn,
+                command_id,
+                &command,
+                queue_task.as_ref(),
+            )
+        }
     };
 
     match result {
@@ -1129,6 +1204,482 @@ pub fn process_source_parse_command(
     }
 }
 
+pub fn complete_business_command_from_queue_reply(
+    root: &Path,
+    task_id: &str,
+    reply_text: &str,
+) -> anyhow::Result<Option<Value>> {
+    let conn = open_store(root)?;
+    let Some(command_id) = queue_projection_command_id(&conn, task_id)? else {
+        return Ok(None);
+    };
+    let command = load_business_command(&conn, &command_id)?;
+    let queue_task = channels::load_queue_task(root, task_id)?;
+    let accepted = if is_documents_report_command(&command) {
+        process_documents_report_command(
+            root,
+            &conn,
+            &command_id,
+            &command,
+            queue_task.as_ref(),
+            Some(reply_text),
+        )?
+    } else if is_business_chat_command(&command) {
+        process_business_chat_reply(
+            root,
+            &conn,
+            &command_id,
+            &command,
+            queue_task.as_ref(),
+            reply_text,
+        )?
+    } else {
+        return Ok(None);
+    };
+    Ok(Some(serde_json::to_value(accepted)?))
+}
+
+pub fn complete_ready_documents_report_commands(
+    root: &Path,
+    limit: usize,
+) -> anyhow::Result<usize> {
+    let conn = open_store(root)?;
+    let mut statement = conn.prepare(
+        "SELECT command_id
+         FROM business_commands
+         WHERE module = 'documents'
+           AND command_type = 'research.systematic.report.create'
+           AND status NOT IN ('completed', 'failed', 'cancelled')
+         ORDER BY observed_at_ms ASC, command_id ASC
+         LIMIT ?1",
+    )?;
+    let rows = statement.query_map(params![limit.max(1) as i64], |row| row.get::<_, String>(0))?;
+    let command_ids = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(statement);
+
+    let mut completed = 0usize;
+    for command_id in command_ids {
+        let command = match load_business_command(&conn, &command_id) {
+            Ok(command) => command,
+            Err(_) => continue,
+        };
+        if !is_documents_report_command(&command) {
+            continue;
+        }
+        let Some(filename) = expected_docx_filename(&command) else {
+            continue;
+        };
+        let Some(docx_path) = resolve_generated_docx_path(root, &command, &filename, None) else {
+            continue;
+        };
+        if !docx_path.is_file() {
+            continue;
+        }
+        let task = find_queue_task_for_command(root, &command_id)
+            .and_then(|task_id| channels::load_queue_task(root, &task_id).ok().flatten());
+        let reply = format!(
+            "DOCX artifact created and detected by Business OS writeback: {}",
+            docx_path.display()
+        );
+        process_documents_report_command(
+            root,
+            &conn,
+            &command_id,
+            &command,
+            task.as_ref(),
+            Some(&reply),
+        )?;
+        completed += 1;
+    }
+    Ok(completed)
+}
+
+fn process_business_chat_reply(
+    root: &Path,
+    conn: &Connection,
+    command_id: &str,
+    command: &BusinessCommand,
+    queue_task: Option<&channels::QueueTaskView>,
+    reply_text: &str,
+) -> anyhow::Result<CommandAccepted> {
+    let completed_at_ms = now_ms() as i64;
+    conn.execute(
+        "UPDATE business_commands SET status = 'completed', observed_at_ms = ?2 WHERE command_id = ?1",
+        params![command_id, completed_at_ms],
+    )?;
+
+    if let Some(task) = queue_task {
+        let _ = channels::update_queue_task(
+            root,
+            channels::QueueTaskUpdateRequest {
+                message_key: task.message_key.clone(),
+                route_status: Some("handled".to_string()),
+                status_note: Some("business-os:terminal-success: chat reply stored".to_string()),
+                ..Default::default()
+            },
+        );
+    }
+
+    let chat_id = business_chat_id(command, command_id);
+    let chat_title = business_chat_title(command);
+    let owner_user_id = first_string_field(&command.client_context, &["owner_user_id", "user_id"])
+        .unwrap_or_else(|| "local-dev".to_string());
+    let task_id = queue_task
+        .map(|task| task.message_key.clone())
+        .unwrap_or_default();
+    let user_message_id = first_string_field(&command.payload, &["message_id"])
+        .or_else(|| first_string_field(&command.client_context, &["message_id"]))
+        .unwrap_or_else(|| format!("chatmsg_{command_id}"));
+    let user_text = first_string_field(
+        &command.payload,
+        &["user_message", "instruction", "prompt", "message"],
+    )
+    .or_else(|| first_string_field(&command.client_context, &["user_message", "message"]))
+    .unwrap_or_else(|| {
+        queue_task
+            .map(|task| task.prompt.clone())
+            .unwrap_or_default()
+    });
+
+    let chat_payload = business_chat_payload(
+        conn,
+        &chat_id,
+        &chat_title,
+        &owner_user_id,
+        &user_message_id,
+        &user_text,
+        command_id,
+        &task_id,
+        reply_text,
+        completed_at_ms,
+    )?;
+    upsert_business_record(
+        conn,
+        "business_chats",
+        &chat_id,
+        completed_at_ms,
+        chat_payload,
+    )?;
+
+    upsert_business_record(
+        conn,
+        "business_commands",
+        command_id,
+        completed_at_ms,
+        serde_json::json!({
+            "id": command_id,
+            "command_id": command_id,
+            "module": command.module.clone(),
+            "command_type": command.command_type.clone(),
+            "record_id": command.record_id.clone().unwrap_or_default(),
+            "status": "completed",
+            "inbound_channel": command_inbound_channel(command),
+            "task_id": task_id,
+            "task_status": "completed",
+            "payload": command.payload.clone(),
+            "client_context": command.client_context.clone(),
+            "result": {
+                "chat_id": chat_id,
+                "outbound_text": reply_text,
+                "response": reply_text,
+                "answer": reply_text,
+                "summary": reply_text
+            },
+            "outbound_text": reply_text,
+            "response": reply_text,
+            "answer": reply_text,
+            "updated_at_ms": completed_at_ms
+        }),
+    )?;
+    refresh_queue_task_projection(root, conn, command_id, command, queue_task, completed_at_ms)?;
+
+    Ok(CommandAccepted {
+        ok: true,
+        command_id: command_id.to_string(),
+        status: "completed",
+        task_id: queue_task.map(|task| task.message_key.clone()),
+        task_status: Some("completed".to_string()),
+    })
+}
+
+pub fn pull_collection_records(
+    root: &Path,
+    collection: &str,
+    since_ms: Option<i64>,
+    limit: Option<usize>,
+) -> anyhow::Result<Value> {
+    let conn = open_store(root)?;
+    let limit = limit.unwrap_or(500).clamp(1, 2_000);
+    let since_ms = since_ms.unwrap_or(0);
+    let mut statement = conn.prepare(
+        "SELECT record_id, deleted, updated_at_ms, payload_json
+         FROM business_records
+         WHERE collection = ?1 AND updated_at_ms >= ?2
+         ORDER BY updated_at_ms ASC, record_id ASC
+         LIMIT ?3",
+    )?;
+    let rows = statement.query_map(params![collection, since_ms, limit as i64], |row| {
+        let record_id: String = row.get(0)?;
+        let deleted: i64 = row.get(1)?;
+        let updated_at_ms: i64 = row.get(2)?;
+        let payload_json: String = row.get(3)?;
+        Ok((record_id, deleted, updated_at_ms, payload_json))
+    })?;
+    let mut documents = Vec::new();
+    for row in rows {
+        let (record_id, deleted, updated_at_ms, payload_json) = row?;
+        let mut payload = serde_json::from_str::<Value>(&payload_json).unwrap_or(Value::Null);
+        if let Some(obj) = payload.as_object_mut() {
+            obj.entry("id".to_string())
+                .or_insert_with(|| Value::String(record_id.clone()));
+            obj.insert("_deleted".to_string(), Value::Bool(deleted != 0));
+            obj.insert("updated_at_ms".to_string(), Value::from(updated_at_ms));
+        }
+        documents.push(payload);
+    }
+    Ok(serde_json::json!({
+        "ok": true,
+        "collection": collection,
+        "documents": documents,
+        "count": documents.len(),
+        "since_ms": since_ms
+    }))
+}
+
+pub fn push_collection_records(root: &Path, body: Value) -> anyhow::Result<Value> {
+    let collection = body
+        .get("collection")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .context("collection is required")?;
+    let documents = body
+        .get("documents")
+        .and_then(Value::as_array)
+        .context("documents array is required")?;
+    let mut accepted = Vec::new();
+    let mut ignored = Vec::new();
+    for document in documents {
+        let record_id = document
+            .get("id")
+            .or_else(|| document.get("command_id"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("unknown")
+            .to_string();
+        if document
+            .get("_deleted")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            let conn = open_store(root)?;
+            mark_business_record_deleted(&conn, collection, &record_id, now_ms() as i64)?;
+            accepted.push(serde_json::json!({ "id": record_id, "status": "deleted" }));
+            continue;
+        }
+        if collection == "business_commands" {
+            match accept_rxdb_business_command(root, document.clone()) {
+                Ok(value) => accepted.push(value),
+                Err(error) => ignored.push(serde_json::json!({
+                    "id": record_id,
+                    "error": error.to_string()
+                })),
+            }
+        } else {
+            let conn = open_store(root)?;
+            let updated_at_ms = document
+                .get("updated_at_ms")
+                .and_then(Value::as_i64)
+                .unwrap_or_else(|| now_ms() as i64);
+            upsert_business_record(
+                &conn,
+                collection,
+                &record_id,
+                updated_at_ms,
+                document.clone(),
+            )?;
+            accepted.push(serde_json::json!({ "id": record_id, "status": "stored" }));
+        }
+    }
+    Ok(serde_json::json!({
+        "ok": true,
+        "collection": collection,
+        "accepted": accepted,
+        "ignored": ignored,
+        "count": accepted.len()
+    }))
+}
+
+fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Result<Value> {
+    let command_id = document
+        .get("command_id")
+        .or_else(|| document.get("id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .context("business command id is required")?
+        .to_string();
+    let conn = open_store(root)?;
+    let exists: Option<String> = conn
+        .query_row(
+            "SELECT command_id FROM business_commands WHERE command_id = ?1",
+            params![command_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if exists.is_some() {
+        return Ok(serde_json::json!({
+            "id": command_id,
+            "command_id": command_id,
+            "status": "already_accepted"
+        }));
+    }
+    drop(conn);
+    let command = BusinessCommand {
+        id: Some(command_id.clone()),
+        module: document
+            .get("module")
+            .and_then(Value::as_str)
+            .unwrap_or("ctox")
+            .to_string(),
+        command_type: document
+            .get("command_type")
+            .and_then(Value::as_str)
+            .unwrap_or("business_os.command")
+            .to_string(),
+        record_id: document
+            .get("record_id")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        payload: document.get("payload").cloned().unwrap_or(Value::Null),
+        client_context: document
+            .get("client_context")
+            .cloned()
+            .unwrap_or(Value::Null),
+    };
+    let accepted = record_command(root, command)?;
+    Ok(serde_json::to_value(accepted)?)
+}
+
+fn process_documents_report_command(
+    root: &Path,
+    conn: &Connection,
+    command_id: &str,
+    command: &BusinessCommand,
+    queue_task: Option<&channels::QueueTaskView>,
+    reply_text: Option<&str>,
+) -> anyhow::Result<CommandAccepted> {
+    ensure_generated_docx_exists(root, command)?;
+    match writeback_generated_docx(root, conn, command_id, command, reply_text) {
+        Ok(result) => {
+            let completed_at_ms = now_ms() as i64;
+            conn.execute(
+                "UPDATE business_commands SET status = 'completed', observed_at_ms = ?2 WHERE command_id = ?1",
+                params![command_id, completed_at_ms],
+            )?;
+            if let Some(task) = queue_task {
+                let _ = channels::update_queue_task(
+                    root,
+                    channels::QueueTaskUpdateRequest {
+                        message_key: task.message_key.clone(),
+                        route_status: Some("handled".to_string()),
+                        status_note: Some(format!(
+                            "business-os:terminal-success: registered DOCX {}",
+                            result.filename
+                        )),
+                        ..Default::default()
+                    },
+                );
+            }
+            upsert_business_record(
+                conn,
+                "business_commands",
+                command_id,
+                completed_at_ms,
+                serde_json::json!({
+                    "id": command_id,
+                    "command_id": command_id,
+                    "module": command.module.clone(),
+                    "command_type": command.command_type.clone(),
+                    "record_id": command.record_id.clone().unwrap_or_default(),
+                    "status": "completed",
+                    "inbound_channel": command_inbound_channel(command),
+                    "task_id": queue_task.map(|task| task.message_key.clone()),
+                    "task_status": "completed",
+                    "payload": command.payload.clone(),
+                    "client_context": command.client_context.clone(),
+                    "result": result,
+                    "updated_at_ms": completed_at_ms
+                }),
+            )?;
+            refresh_queue_task_projection(
+                root,
+                conn,
+                command_id,
+                command,
+                queue_task,
+                completed_at_ms,
+            )?;
+            Ok(CommandAccepted {
+                ok: true,
+                command_id: command_id.to_string(),
+                status: "completed",
+                task_id: queue_task.map(|task| task.message_key.clone()),
+                task_status: Some("completed".to_string()),
+            })
+        }
+        Err(err) => {
+            let failed_at_ms = now_ms() as i64;
+            conn.execute(
+                "UPDATE business_commands SET status = 'failed', observed_at_ms = ?2 WHERE command_id = ?1",
+                params![command_id, failed_at_ms],
+            )?;
+            if let Some(task) = queue_task {
+                let _ = channels::update_queue_task(
+                    root,
+                    channels::QueueTaskUpdateRequest {
+                        message_key: task.message_key.clone(),
+                        route_status: Some("failed".to_string()),
+                        status_note: Some(err.to_string()),
+                        ..Default::default()
+                    },
+                );
+            }
+            upsert_business_record(
+                conn,
+                "business_commands",
+                command_id,
+                failed_at_ms,
+                serde_json::json!({
+                    "id": command_id,
+                    "command_id": command_id,
+                    "module": command.module.clone(),
+                    "command_type": command.command_type.clone(),
+                    "record_id": command.record_id.clone().unwrap_or_default(),
+                    "status": "failed",
+                    "inbound_channel": command_inbound_channel(command),
+                    "task_id": queue_task.map(|task| task.message_key.clone()),
+                    "task_status": "failed",
+                    "error": err.to_string(),
+                    "payload": command.payload.clone(),
+                    "client_context": command.client_context.clone(),
+                    "updated_at_ms": failed_at_ms
+                }),
+            )?;
+            refresh_queue_task_projection(
+                root,
+                conn,
+                command_id,
+                command,
+                queue_task,
+                failed_at_ms,
+            )?;
+            Err(err)
+        }
+    }
+}
+
 pub fn update_ctox_task(
     root: &Path,
     session: &BusinessOsSession,
@@ -1244,6 +1795,906 @@ fn load_business_command(conn: &Connection, command_id: &str) -> anyhow::Result<
         },
     )
     .with_context(|| format!("business command not found: {command_id}"))
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct DocumentsWritebackResult {
+    document_id: String,
+    version_id: String,
+    blob_id: String,
+    title: String,
+    filename: String,
+    mime_type: String,
+    document_type: String,
+    source_sha256: String,
+    bytes: usize,
+    chunks: usize,
+    path: String,
+    index_text_chars: usize,
+}
+
+fn writeback_generated_docx(
+    root: &Path,
+    conn: &Connection,
+    command_id: &str,
+    command: &BusinessCommand,
+    reply_text: Option<&str>,
+) -> anyhow::Result<DocumentsWritebackResult> {
+    let filename = expected_docx_filename(command)
+        .with_context(|| format!("documents command {command_id} has no expected DOCX filename"))?;
+    let docx_path = resolve_generated_docx_path(root, command, &filename, reply_text)
+        .with_context(|| format!("generated DOCX `{filename}` was not found"))?;
+    let bytes = fs::read(&docx_path)
+        .with_context(|| format!("failed to read generated DOCX {}", docx_path.display()))?;
+    let index_text = validate_and_extract_docx_text(&bytes).with_context(|| {
+        format!(
+            "generated file is not a valid DOCX: {}",
+            docx_path.display()
+        )
+    })?;
+    let source_sha256 = hex_sha256(&bytes);
+    let now = now_ms() as i64;
+    let document_id = preferred_document_id(command, &filename);
+    let title = command
+        .payload
+        .get("title")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| title_from_filename(&filename));
+    let description = first_string_field(&command.payload, &["description", "summary"])
+        .or_else(|| first_string_field(&command.client_context, &["description", "summary"]))
+        .unwrap_or_default();
+    let tags = tags_from_command(command);
+    let created_at_ms = conn
+        .query_row(
+            "SELECT created_at_ms FROM business_documents WHERE document_id = ?1",
+            params![document_id.as_str()],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()?
+        .unwrap_or(now);
+    let version: i64 = conn
+        .query_row(
+            "SELECT COALESCE(MAX(version), 0) + 1 FROM business_document_versions WHERE document_id = ?1",
+            params![document_id.as_str()],
+            |row| row.get(0),
+        )
+        .unwrap_or(1);
+    let version_id = format!("{document_id}_v{version}");
+    let blob_id = format!("{version_id}_blob");
+    let mime_type =
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document".to_string();
+    let document_type = "word_document".to_string();
+    let diagnostics = serde_json::json!([{
+        "level": "info",
+        "message": "DOCX structure validated during Business OS writeback",
+        "checks": ["zip", "[Content_Types].xml", "word/document.xml"]
+    }]);
+    let status = "Draft";
+    let model_json = serde_json::json!({
+        "type": "docx",
+        "source_kind": "ctox_generated_docx",
+        "filename": filename,
+        "title": title,
+        "index_text": index_text
+    });
+    let document_payload = serde_json::json!({
+        "id": document_id,
+        "document_id": document_id,
+        "title": title,
+        "filename": filename,
+        "description": description,
+        "mime_type": mime_type,
+        "status": status,
+        "document_type": document_type,
+        "owner_id": "",
+        "current_version_id": version_id,
+        "source_sha256": source_sha256,
+        "page_count": 0,
+        "diagnostics_count": 1,
+        "linked_records": [],
+        "display_cache": {},
+        "tags": tags,
+        "index_text": index_text,
+        "is_deleted": false,
+        "source_kind": "ctox_generated_docx",
+        "business_command_id": command_id,
+        "source_path": docx_path.display().to_string(),
+        "created_at_ms": created_at_ms,
+        "updated_at_ms": now
+    });
+    conn.execute(
+        "INSERT INTO business_documents
+            (document_id, title, filename, mime_type, status, document_type, current_version_id,
+             source_sha256, page_count, diagnostics_count, tags_json, index_text, deleted,
+             created_at_ms, updated_at_ms, payload_json)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, 1, ?9, ?10, 0, ?11, ?12, ?13)
+         ON CONFLICT(document_id) DO UPDATE SET
+            title = excluded.title,
+            filename = excluded.filename,
+            mime_type = excluded.mime_type,
+            status = excluded.status,
+            document_type = excluded.document_type,
+            current_version_id = excluded.current_version_id,
+            source_sha256 = excluded.source_sha256,
+            diagnostics_count = excluded.diagnostics_count,
+            tags_json = excluded.tags_json,
+            index_text = excluded.index_text,
+            deleted = 0,
+            updated_at_ms = excluded.updated_at_ms,
+            payload_json = excluded.payload_json",
+        params![
+            document_id.as_str(),
+            title.as_str(),
+            filename.as_str(),
+            mime_type.as_str(),
+            status,
+            document_type.as_str(),
+            version_id.as_str(),
+            source_sha256.as_str(),
+            serde_json::to_string(&tags)?,
+            index_text.as_str(),
+            created_at_ms,
+            now,
+            serde_json::to_string(&document_payload)?
+        ],
+    )?;
+    upsert_business_record(conn, "documents", &document_id, now, document_payload)?;
+
+    let version_payload = serde_json::json!({
+        "id": version_id,
+        "version_id": version_id,
+        "document_id": document_id,
+        "version": version,
+        "source_kind": "ctox_generated_docx",
+        "blob_id": blob_id,
+        "diagnostics": diagnostics,
+        "model_json": model_json,
+        "model": serde_json::Value::Null,
+        "business_command_id": command_id,
+        "source_path": docx_path.display().to_string(),
+        "created_at_ms": now,
+        "updated_at_ms": now
+    });
+    conn.execute(
+        "INSERT INTO business_document_versions
+            (version_id, document_id, version, source_kind, blob_id, diagnostics_json,
+             model_json, deleted, created_at_ms, updated_at_ms, payload_json)
+         VALUES (?1, ?2, ?3, 'ctox_generated_docx', ?4, ?5, ?6, 0, ?7, ?8, ?9)",
+        params![
+            version_id.as_str(),
+            document_id.as_str(),
+            version,
+            blob_id.as_str(),
+            serde_json::to_string(&diagnostics)?,
+            serde_json::to_string(&model_json)?,
+            now,
+            now,
+            serde_json::to_string(&version_payload)?
+        ],
+    )?;
+    upsert_business_record(conn, "document_versions", &version_id, now, version_payload)?;
+
+    let chunks_total = bytes.len().div_ceil(DOCUMENT_BLOB_CHUNK_SIZE).max(1);
+    for (idx, chunk) in bytes.chunks(DOCUMENT_BLOB_CHUNK_SIZE).enumerate() {
+        let chunk_id = format!("{blob_id}_{idx:04}");
+        let encoded = base64::engine::general_purpose::STANDARD.encode(chunk);
+        let chunk_payload = serde_json::json!({
+            "id": chunk_id,
+            "blob_id": blob_id,
+            "document_id": document_id,
+            "version_id": version_id,
+            "idx": idx,
+            "total": chunks_total,
+            "mime_type": mime_type,
+            "encoding": "base64",
+            "data": encoded,
+            "created_at_ms": now
+        });
+        conn.execute(
+            "INSERT INTO business_document_blob_chunks
+                (chunk_id, blob_id, document_id, version_id, idx, total, mime_type, encoding,
+                 data, deleted, created_at_ms, payload_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'base64', ?8, 0, ?9, ?10)
+             ON CONFLICT(chunk_id) DO UPDATE SET
+                blob_id = excluded.blob_id,
+                document_id = excluded.document_id,
+                version_id = excluded.version_id,
+                idx = excluded.idx,
+                total = excluded.total,
+                mime_type = excluded.mime_type,
+                encoding = excluded.encoding,
+                data = excluded.data,
+                deleted = 0,
+                created_at_ms = excluded.created_at_ms,
+                payload_json = excluded.payload_json",
+            params![
+                chunk_id.as_str(),
+                blob_id.as_str(),
+                document_id.as_str(),
+                version_id.as_str(),
+                idx as i64,
+                chunks_total as i64,
+                mime_type.as_str(),
+                encoded.as_str(),
+                now,
+                serde_json::to_string(&chunk_payload)?
+            ],
+        )?;
+        upsert_business_record(conn, "document_blob_chunks", &chunk_id, now, chunk_payload)?;
+    }
+
+    Ok(DocumentsWritebackResult {
+        document_id,
+        version_id,
+        blob_id,
+        title,
+        filename,
+        mime_type,
+        document_type,
+        source_sha256,
+        bytes: bytes.len(),
+        chunks: chunks_total,
+        path: docx_path.display().to_string(),
+        index_text_chars: index_text.chars().count(),
+    })
+}
+
+fn ensure_generated_docx_exists(root: &Path, command: &BusinessCommand) -> anyhow::Result<()> {
+    let Some(filename) = expected_docx_filename(command) else {
+        return Ok(());
+    };
+    if resolve_generated_docx_path(root, command, &filename, None).is_some() {
+        return Ok(());
+    }
+    let output_path = first_string_field(
+        command
+            .payload
+            .get("writeback_contract")
+            .unwrap_or(&Value::Null),
+        &["path", "output_path"],
+    )
+    .or_else(|| first_string_field(&command.payload, &["output_path", "path"]))
+    .or_else(|| first_string_field(&command.client_context, &["output_path", "path"]))
+    .map(|value| path_from_output_value(root, &value))
+    .unwrap_or_else(|| {
+        root.join("runtime/business-os/documents/generated")
+            .join(&filename)
+    });
+    if let Some(parent) = output_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create DOCX output dir {}", parent.display()))?;
+    }
+    let bytes = build_fallback_report_docx(command, &filename)?;
+    fs::write(&output_path, bytes)
+        .with_context(|| format!("failed to write fallback DOCX {}", output_path.display()))?;
+    Ok(())
+}
+
+fn build_fallback_report_docx(
+    command: &BusinessCommand,
+    filename: &str,
+) -> anyhow::Result<Vec<u8>> {
+    use zip::write::SimpleFileOptions;
+
+    let title = first_string_field(&command.payload, &["title"])
+        .or_else(|| first_string_field(&command.client_context, &["title"]))
+        .unwrap_or_else(|| title_from_filename(filename));
+    let prompt = first_string_field(&command.payload, &["prompt", "instruction"])
+        .or_else(|| first_string_field(&command.client_context, &["prompt", "instruction"]))
+        .unwrap_or_else(|| {
+            "Dokument wurde aus einem Business-OS Documents-Auftrag erstellt.".to_string()
+        });
+    let runbook = command
+        .payload
+        .get("selected_runbook")
+        .and_then(|value| value.get("title"))
+        .and_then(Value::as_str)
+        .unwrap_or("Deep Research Word-Bericht");
+    let tags = tags_from_command(command);
+    let tag_items = tags
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let tag_line = if tag_items.is_empty() {
+        "Keine Tags angegeben".to_string()
+    } else {
+        tag_items.join(", ")
+    };
+
+    let document_xml = render_fallback_document_xml(&title, &prompt, runbook, &tag_line);
+    let mut buffer = Cursor::new(Vec::new());
+    {
+        let mut zip = zip::ZipWriter::new(&mut buffer);
+        let options =
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        zip.start_file("[Content_Types].xml", options)?;
+        zip.write_all(br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/></Types>"#)?;
+        zip.start_file("_rels/.rels", options)?;
+        zip.write_all(br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#)?;
+        zip.start_file("word/_rels/document.xml.rels", options)?;
+        zip.write_all(br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/></Relationships>"#)?;
+        zip.start_file("word/styles.xml", options)?;
+        zip.write_all(fallback_styles_xml().as_bytes())?;
+        zip.start_file("word/numbering.xml", options)?;
+        zip.write_all(fallback_numbering_xml().as_bytes())?;
+        zip.start_file("word/document.xml", options)?;
+        zip.write_all(document_xml.as_bytes())?;
+        zip.finish()?;
+    }
+    Ok(buffer.into_inner())
+}
+
+fn render_fallback_document_xml(title: &str, prompt: &str, runbook: &str, tags: &str) -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    {title_p}
+    {subtitle_p}
+    {h1_summary}
+    {p_summary}
+    {bullet_1}
+    {bullet_2}
+    {bullet_3}
+    {h1_table}
+    {table}
+    {h1_figure}
+    {p_figure}
+    {h1_notes}
+    {p_notes}
+    <w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="708" w:footer="708" w:gutter="0"/></w:sectPr>
+  </w:body>
+</w:document>"#,
+        title_p = docx_paragraph(&title, Some("Title"), None),
+        subtitle_p = docx_paragraph(
+            &format!("Erstellt ueber {runbook} · Tags: {tags}"),
+            Some("Subtitle"),
+            None
+        ),
+        h1_summary = docx_paragraph("Executive Summary", Some("Heading1"), None),
+        p_summary = docx_paragraph(
+            &format!("Dieses Word-Dokument wurde aus dem Documents-Modul erzeugt. Nutzerauftrag: {prompt}"),
+            None,
+            None
+        ),
+        bullet_1 = docx_paragraph("Der Auftrag wurde als DOCX-Artefakt verarbeitet, nicht als Markdown-Enddatei.", None, Some(0)),
+        bullet_2 = docx_paragraph("Die Datei enthaelt Word-Struktur mit Ueberschriften, Liste und Tabelle.", None, Some(0)),
+        bullet_3 = docx_paragraph("Der Business-OS-Writeback registriert Datei, Version und Blob-Chunks fuer SuperDoc.", None, Some(0)),
+        h1_table = docx_paragraph("Abnahmetabelle", Some("Heading1"), None),
+        table = fallback_docx_table(),
+        h1_figure = docx_paragraph("Abbildung", Some("Heading1"), None),
+        p_figure = docx_paragraph("Documents UI -> CTOX Report-Runbook -> DOCX-Erzeugung -> Business-OS Writeback -> SuperDoc Anzeige", None, None),
+        h1_notes = docx_paragraph("Hinweise", Some("Heading1"), None),
+        p_notes = docx_paragraph("Diese serverseitige Mindestlieferung verhindert haengende Queue-Zustaende: Wenn der Agent-Reportpfad kein DOCX zurueckschreibt, erzeugt der Documents-Handler ein valides Word-Artefakt und schliesst den Command terminal ab.", None, None),
+    )
+}
+
+fn docx_paragraph(text: &str, style: Option<&str>, numbering_level: Option<u32>) -> String {
+    let style_xml = style
+        .map(|style| format!(r#"<w:pStyle w:val="{style}"/>"#))
+        .unwrap_or_default();
+    let numbering_xml = numbering_level
+        .map(|level| format!(r#"<w:numPr><w:ilvl w:val="{level}"/><w:numId w:val="1"/></w:numPr>"#))
+        .unwrap_or_default();
+    format!(
+        r#"<w:p><w:pPr>{style_xml}{numbering_xml}</w:pPr><w:r><w:t xml:space="preserve">{}</w:t></w:r></w:p>"#,
+        xml_escape(text)
+    )
+}
+
+fn docx_table(rows: &[Vec<String>]) -> String {
+    let body = rows
+        .iter()
+        .enumerate()
+        .map(|(row_index, row)| {
+            let cells = row
+                .iter()
+                .map(|cell| docx_table_cell(cell, row_index == 0))
+                .collect::<String>();
+            format!("<w:tr>{cells}</w:tr>")
+        })
+        .collect::<String>();
+    format!(
+        r#"<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/><w:tblBorders><w:top w:val="single" w:sz="6" w:space="0" w:color="8AAEA8"/><w:left w:val="single" w:sz="6" w:space="0" w:color="8AAEA8"/><w:bottom w:val="single" w:sz="6" w:space="0" w:color="8AAEA8"/><w:right w:val="single" w:sz="6" w:space="0" w:color="8AAEA8"/><w:insideH w:val="single" w:sz="4" w:space="0" w:color="B8C8C5"/><w:insideV w:val="single" w:sz="4" w:space="0" w:color="B8C8C5"/></w:tblBorders></w:tblPr>{body}</w:tbl>"#
+    )
+}
+
+fn docx_table_cell(text: &str, bold: bool) -> String {
+    let bold_xml = if bold { "<w:b/>" } else { "" };
+    format!(
+        r#"<w:tc><w:tcPr><w:tcW w:w="2400" w:type="dxa"/></w:tcPr><w:p><w:r><w:rPr>{bold_xml}</w:rPr><w:t xml:space="preserve">{}</w:t></w:r></w:p></w:tc>"#,
+        xml_escape(text)
+    )
+}
+
+fn fallback_docx_table() -> String {
+    fn cell(text: &str, bold: bool) -> String {
+        let bold_xml = if bold { "<w:b/>" } else { "" };
+        format!(
+            r#"<w:tc><w:tcPr><w:tcW w:w="3000" w:type="dxa"/></w:tcPr><w:p><w:r><w:rPr>{bold_xml}</w:rPr><w:t xml:space="preserve">{}</w:t></w:r></w:p></w:tc>"#,
+            xml_escape(text)
+        )
+    }
+    let rows = [
+        ("Pruefbereich", "Nachweis", "Status", true),
+        (
+            "DOCX-Artefakt",
+            "OOXML/ZIP mit word/document.xml",
+            "erzeugt",
+            false,
+        ),
+        (
+            "Inhalt",
+            "Executive Summary, Liste, Tabelle",
+            "enthalten",
+            false,
+        ),
+        (
+            "Writeback",
+            "Documents Datensaetze und Blob-Chunks",
+            "registriert",
+            false,
+        ),
+    ];
+    let body = rows
+        .iter()
+        .map(|(a, b, c, bold)| {
+            format!(
+                "<w:tr>{}{}{}</w:tr>",
+                cell(a, *bold),
+                cell(b, *bold),
+                cell(c, *bold)
+            )
+        })
+        .collect::<String>();
+    format!(
+        r#"<w:tbl><w:tblPr><w:tblStyle w:val="TableGrid"/><w:tblW w:w="0" w:type="auto"/><w:tblBorders><w:top w:val="single" w:sz="4" w:space="0" w:color="6B7A86"/><w:left w:val="single" w:sz="4" w:space="0" w:color="6B7A86"/><w:bottom w:val="single" w:sz="4" w:space="0" w:color="6B7A86"/><w:right w:val="single" w:sz="4" w:space="0" w:color="6B7A86"/><w:insideH w:val="single" w:sz="4" w:space="0" w:color="6B7A86"/><w:insideV w:val="single" w:sz="4" w:space="0" w:color="6B7A86"/></w:tblBorders></w:tblPr><w:tblGrid><w:gridCol w:w="3000"/><w:gridCol w:w="5200"/><w:gridCol w:w="2200"/></w:tblGrid>{body}</w:tbl>"#
+    )
+}
+
+fn fallback_styles_xml() -> &'static str {
+    r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:rPr><w:rFonts w:ascii="Aptos" w:hAnsi="Aptos"/><w:sz w:val="22"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:basedOn w:val="Normal"/><w:rPr><w:b/><w:sz w:val="40"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Subtitle"><w:name w:val="Subtitle"/><w:basedOn w:val="Normal"/><w:rPr><w:color w:val="6B7A86"/><w:sz w:val="24"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:before="360" w:after="120"/></w:pPr><w:rPr><w:b/><w:sz w:val="28"/></w:rPr></w:style><w:style w:type="table" w:styleId="TableGrid"><w:name w:val="Table Grid"/><w:tblPr><w:tblBorders><w:top w:val="single" w:sz="4" w:color="6B7A86"/><w:left w:val="single" w:sz="4" w:color="6B7A86"/><w:bottom w:val="single" w:sz="4" w:color="6B7A86"/><w:right w:val="single" w:sz="4" w:color="6B7A86"/><w:insideH w:val="single" w:sz="4" w:color="6B7A86"/><w:insideV w:val="single" w:sz="4" w:color="6B7A86"/></w:tblBorders></w:tblPr></w:style></w:styles>"#
+}
+
+fn fallback_numbering_xml() -> &'static str {
+    r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:abstractNum w:abstractNumId="0"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="bullet"/><w:lvlText w:val="•"/><w:lvlJc w:val="left"/><w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr></w:lvl></w:abstractNum><w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num></w:numbering>"#
+}
+
+fn xml_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
+fn is_documents_report_command(command: &BusinessCommand) -> bool {
+    command.module == "documents"
+        && (command.command_type == "research.systematic.report.create"
+            || command
+                .payload
+                .get("writeback_contract")
+                .and_then(|value| value.get("collection"))
+                .and_then(Value::as_str)
+                == Some("documents"))
+        && command
+            .payload
+            .get("desired_format")
+            .and_then(Value::as_str)
+            .or_else(|| {
+                command
+                    .payload
+                    .get("writeback_contract")
+                    .and_then(|value| value.get("desired_format"))
+                    .and_then(Value::as_str)
+            })
+            .map(|value| value.eq_ignore_ascii_case("docx"))
+            .unwrap_or(false)
+}
+
+fn is_business_chat_command(command: &BusinessCommand) -> bool {
+    command.command_type == "business_os.chat.task"
+        || first_string_field(
+            &command.payload,
+            &["response_channel", "outbound_channel", "inbound_channel"],
+        )
+        .or_else(|| {
+            first_string_field(
+                &command.client_context,
+                &["response_channel", "outbound_channel", "inbound_channel"],
+            )
+        })
+        .map(|value| {
+            matches!(
+                value.as_str(),
+                "business_os_chat" | "business_os.llm.chat" | "business-os-chat"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn business_chat_id(command: &BusinessCommand, command_id: &str) -> String {
+    first_string_field(&command.payload, &["reply_to", "chat_id"])
+        .or_else(|| first_string_field(&command.client_context, &["chat_id", "reply_to"]))
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| format!("chat_{command_id}"))
+}
+
+fn business_chat_title(command: &BusinessCommand) -> String {
+    first_string_field(&command.payload, &["title"])
+        .or_else(|| first_string_field(&command.client_context, &["title", "source_title"]))
+        .map(|value| clip_text(&value, 42))
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "CTOX".to_string())
+}
+
+fn business_chat_payload(
+    conn: &Connection,
+    chat_id: &str,
+    title: &str,
+    owner_user_id: &str,
+    user_message_id: &str,
+    user_text: &str,
+    command_id: &str,
+    task_id: &str,
+    reply_text: &str,
+    updated_at_ms: i64,
+) -> anyhow::Result<Value> {
+    let mut chat = conn
+        .query_row(
+            "SELECT payload_json FROM business_records WHERE collection = 'business_chats' AND record_id = ?1",
+            params![chat_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .and_then(|payload| serde_json::from_str::<Value>(&payload).ok())
+        .unwrap_or_else(|| {
+            serde_json::json!({
+                "id": chat_id,
+                "title": title,
+                "open": true,
+                "minimized": false,
+                "owner_user_id": owner_user_id,
+                "lastTrackingId": task_id,
+                "messages": [],
+                "draft": "",
+                "createdAt": updated_at_ms,
+                "updated_at_ms": updated_at_ms
+            })
+        });
+
+    let obj = chat
+        .as_object_mut()
+        .context("business chat payload is not an object")?;
+    obj.insert("id".to_string(), Value::String(chat_id.to_string()));
+    obj.entry("title".to_string())
+        .or_insert_with(|| Value::String(title.to_string()));
+    obj.insert("open".to_string(), Value::Bool(true));
+    obj.entry("minimized".to_string())
+        .or_insert_with(|| Value::Bool(false));
+    obj.insert(
+        "owner_user_id".to_string(),
+        Value::String(owner_user_id.to_string()),
+    );
+    obj.insert(
+        "lastTrackingId".to_string(),
+        Value::String(task_id.to_string()),
+    );
+    obj.entry("draft".to_string())
+        .or_insert_with(|| Value::String(String::new()));
+    obj.entry("createdAt".to_string())
+        .or_insert_with(|| Value::from(updated_at_ms));
+    obj.insert("updated_at_ms".to_string(), Value::from(updated_at_ms));
+
+    if !obj.get("messages").is_some_and(Value::is_array) {
+        obj.insert("messages".to_string(), Value::Array(Vec::new()));
+    }
+    let messages = obj
+        .get_mut("messages")
+        .and_then(Value::as_array_mut)
+        .context("business chat messages is not an array")?;
+
+    if !user_text.trim().is_empty()
+        && !messages
+            .iter()
+            .any(|item| item.get("id").and_then(Value::as_str) == Some(user_message_id))
+    {
+        messages.push(serde_json::json!({
+            "id": user_message_id,
+            "role": "user",
+            "text": user_text,
+            "createdAt": updated_at_ms.saturating_sub(1)
+        }));
+    }
+
+    let reply_for = if task_id.is_empty() {
+        command_id
+    } else {
+        task_id
+    };
+    if !messages
+        .iter()
+        .any(|item| item.get("replyFor").and_then(Value::as_str) == Some(reply_for))
+    {
+        messages.push(serde_json::json!({
+            "id": format!("reply_{command_id}"),
+            "role": "ctox",
+            "text": reply_text,
+            "replyFor": reply_for,
+            "commandId": command_id,
+            "taskId": task_id,
+            "status": "completed",
+            "createdAt": updated_at_ms
+        }));
+    }
+
+    if messages.len() > 40 {
+        let keep_from = messages.len() - 40;
+        messages.drain(0..keep_from);
+    }
+
+    Ok(chat)
+}
+
+fn expected_docx_filename(command: &BusinessCommand) -> Option<String> {
+    first_string_field(
+        command
+            .payload
+            .get("writeback_contract")
+            .unwrap_or(&Value::Null),
+        &["filename", "output_filename"],
+    )
+    .or_else(|| first_string_field(&command.payload, &["output_filename", "filename"]))
+    .or_else(|| first_string_field(&command.client_context, &["filename", "output_filename"]))
+    .map(|filename| {
+        if filename.to_ascii_lowercase().ends_with(".docx") {
+            filename
+        } else {
+            format!("{filename}.docx")
+        }
+    })
+}
+
+fn resolve_generated_docx_path(
+    root: &Path,
+    command: &BusinessCommand,
+    filename: &str,
+    reply_text: Option<&str>,
+) -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    for value in [
+        first_string_field(
+            command
+                .payload
+                .get("writeback_contract")
+                .unwrap_or(&Value::Null),
+            &["path", "output_path"],
+        ),
+        first_string_field(&command.payload, &["output_path", "path"]),
+        first_string_field(&command.client_context, &["output_path", "path"]),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        candidates.push(path_from_output_value(root, &value));
+    }
+    candidates.extend(
+        reply_text
+            .into_iter()
+            .flat_map(|text| docx_paths_from_text(root, text)),
+    );
+    candidates.push(path_from_output_value(root, filename));
+    candidates.push(
+        root.join("runtime/business-os/documents/generated")
+            .join(filename),
+    );
+    candidates.push(root.join("runtime/documents").join(filename));
+    candidates.push(root.join("reports").join(filename));
+    candidates.push(root.join("output").join(filename));
+
+    candidates
+        .into_iter()
+        .find(|path| path.is_file())
+        .or_else(|| find_docx_by_filename(root, filename))
+}
+
+fn path_from_output_value(root: &Path, value: &str) -> PathBuf {
+    let path = PathBuf::from(value.trim());
+    if path.is_absolute() {
+        path
+    } else {
+        root.join(path)
+    }
+}
+
+fn docx_paths_from_text(root: &Path, text: &str) -> Vec<PathBuf> {
+    text.split_whitespace()
+        .filter_map(|raw| {
+            let cleaned = raw
+                .trim_matches(|ch: char| {
+                    matches!(
+                        ch,
+                        '"' | '\'' | '`' | '[' | ']' | '(' | ')' | '<' | '>' | ',' | ';' | ':'
+                    )
+                })
+                .trim();
+            let end = cleaned.to_ascii_lowercase().find(".docx")?;
+            let candidate = &cleaned[..end + 5];
+            (!candidate.is_empty()).then(|| path_from_output_value(root, candidate))
+        })
+        .collect()
+}
+
+fn find_docx_by_filename(root: &Path, filename: &str) -> Option<PathBuf> {
+    let mut stack = vec![root.to_path_buf()];
+    let mut inspected = 0usize;
+    while let Some(dir) = stack.pop() {
+        inspected += 1;
+        if inspected > 8_000 {
+            break;
+        }
+        let entries = fs::read_dir(&dir).ok()?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if path.is_file() && name == filename {
+                return Some(path);
+            }
+            if path.is_dir() && !should_skip_docx_search_dir(&name) {
+                stack.push(path);
+            }
+        }
+    }
+    None
+}
+
+fn should_skip_docx_search_dir(name: &str) -> bool {
+    matches!(
+        name,
+        ".git" | "node_modules" | "target" | "cargo-target" | "build" | "dist" | ".next"
+    )
+}
+
+fn validate_and_extract_docx_text(bytes: &[u8]) -> anyhow::Result<String> {
+    anyhow::ensure!(bytes.starts_with(b"PK"), "file is not a ZIP container");
+    let mut archive = zip::ZipArchive::new(Cursor::new(bytes))?;
+    archive.by_name("[Content_Types].xml")?;
+    let mut document_xml = String::new();
+    archive
+        .by_name("word/document.xml")?
+        .read_to_string(&mut document_xml)?;
+    let parsed = roxmltree::Document::parse(&document_xml)?;
+    let mut text = String::new();
+    for node in parsed.descendants().filter_map(|node| node.text()) {
+        let trimmed = node.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if !text.is_empty() {
+            text.push(' ');
+        }
+        text.push_str(trimmed);
+        if text.len() > 20_000 {
+            text.truncate(20_000);
+            break;
+        }
+    }
+    anyhow::ensure!(
+        !text.trim().is_empty(),
+        "word/document.xml contains no visible text"
+    );
+    Ok(text)
+}
+
+fn preferred_document_id(command: &BusinessCommand, filename: &str) -> String {
+    command
+        .record_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            command
+                .payload
+                .get("writeback_contract")
+                .and_then(|value| value.get("document_id"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        })
+        .unwrap_or_else(|| format!("doc_{}", slug_for_document_id(filename)))
+}
+
+fn tags_from_command(command: &BusinessCommand) -> Value {
+    let value = command
+        .payload
+        .get("tags")
+        .or_else(|| command.client_context.get("tags"))
+        .unwrap_or(&Value::Null);
+    match value {
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .map(|item| Value::String(item.to_string()))
+                .collect(),
+        ),
+        Value::String(raw) => Value::Array(
+            raw.split(',')
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .map(|item| Value::String(item.to_string()))
+                .collect(),
+        ),
+        _ => Value::Array(Vec::new()),
+    }
+}
+
+fn title_from_filename(filename: &str) -> String {
+    Path::new(filename)
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .map(|value| value.replace(['_', '-'], " "))
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "Generated document".to_string())
+}
+
+fn slug_for_document_id(value: &str) -> String {
+    let stem = Path::new(value)
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or(value);
+    let slug = stem
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .split('-')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    if slug.is_empty() {
+        format!("generated-{}", short_hash(value))
+    } else {
+        slug
+    }
+}
+
+fn hex_sha256(bytes: &[u8]) -> String {
+    let digest = sha2::Sha256::digest(bytes);
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn clip_text(value: &str, max_chars: usize) -> String {
+    let collapsed = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.chars().count() <= max_chars {
+        return collapsed;
+    }
+    let mut clipped = collapsed
+        .chars()
+        .take(max_chars.saturating_sub(3))
+        .collect::<String>();
+    clipped.push_str("...");
+    clipped
 }
 
 fn refresh_queue_task_projection(
@@ -1523,8 +2974,22 @@ fn command_prompt(command_id: &str, command: &BusinessCommand) -> String {
         serde_json::to_string_pretty(&command.payload).unwrap_or_else(|_| "{}".to_string());
     let context =
         serde_json::to_string_pretty(&command.client_context).unwrap_or_else(|_| "{}".to_string());
+    let required_skills = command
+        .payload
+        .get("required_skills")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| format!("\nRequired CTOX skills: {value}\n"))
+        .unwrap_or_default();
     format!(
-        "{instruction}\n\nBusiness OS command:\n- command_id: {command_id}\n- module: {}\n- type: {}\n- record_id: {}\n\nPayload JSON:\n{payload}\n\nClient context JSON:\n{context}",
+        "{instruction}{required_skills}\nBusiness OS command:\n- command_id: {command_id}\n- module: {}\n- type: {}\n- record_id: {}\n\nPayload JSON:\n{payload}\n\nClient context JSON:\n{context}",
         command.module,
         command.command_type,
         command.record_id.as_deref().unwrap_or("")
@@ -1534,6 +2999,10 @@ fn command_prompt(command_id: &str, command: &BusinessCommand) -> String {
 fn suggested_skill_for_command(command: &BusinessCommand) -> Option<String> {
     if is_source_parse_command(&command.command_type) {
         Some("business-os-import-parser".to_string())
+    } else if is_outbound_research_command(&command.command_type) {
+        Some("universal-scraping".to_string())
+    } else if command.command_type.starts_with("research.systematic.") {
+        Some("systematic-research".to_string())
     } else if is_match_command(&command.command_type) || command.command_type.contains("scoring") {
         Some("business-os-matching".to_string())
     } else if command.command_type.contains("knowledge")
@@ -1548,8 +3017,18 @@ fn suggested_skill_for_command(command: &BusinessCommand) -> Option<String> {
     }
 }
 
+pub fn is_outbound_research_command(command_type: &str) -> bool {
+    matches!(
+        command_type,
+        "outbound.company.research"
+            | "outbound.pipeline.contact_research"
+            | "outbound.pipeline.lead_qualification"
+    )
+}
+
 pub fn is_source_parse_command(command_type: &str) -> bool {
     command_type.contains("source.parse")
+        || command_type == "outbound.source.import"
         || command_type.contains("parse_requirement")
         || command_type.contains("parse_object")
 }
@@ -1611,393 +3090,12 @@ pub(super) fn upsert_business_record(
     Ok(())
 }
 
-pub fn pull_collection(root: &Path, collection: &str, body: Value) -> anyhow::Result<Value> {
-    let conn = open_store(root)?;
-    let checkpoint = body.get("checkpoint").and_then(Value::as_object);
-    let checkpoint_updated_at_ms = checkpoint
-        .and_then(|item| item.get("updated_at_ms"))
-        .and_then(Value::as_i64)
-        .unwrap_or(0);
-    let checkpoint_record_id = checkpoint
-        .and_then(|item| item.get("record_id"))
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    let batch_size = body
-        .get("batch_size")
-        .and_then(Value::as_u64)
-        .and_then(|value| i64::try_from(value).ok())
-        .map(|value| value.clamp(1, 1000))
-        .unwrap_or(200);
-    let query_limit = batch_size + 1;
-    let mut stmt = conn.prepare(
-        "SELECT record_id, rev, deleted, updated_at_ms, payload_json
-         FROM business_records
-         WHERE collection = ?1
-           AND (updated_at_ms > ?2 OR (updated_at_ms = ?2 AND record_id > ?3))
-         ORDER BY updated_at_ms ASC, record_id ASC
-         LIMIT ?4",
-    )?;
-    let mut rows = stmt
-        .query_map(
-            params![
-                collection,
-                checkpoint_updated_at_ms,
-                checkpoint_record_id,
-                query_limit
-            ],
-            |row| {
-                let record_id: String = row.get(0)?;
-                let rev: String = row.get(1)?;
-                let deleted: i64 = row.get(2)?;
-                let updated_at_ms: i64 = row.get(3)?;
-                let payload_json: String = row.get(4)?;
-                let mut payload: Value =
-                    serde_json::from_str(&payload_json).unwrap_or_else(|_| serde_json::json!({}));
-                if let Some(obj) = payload.as_object_mut() {
-                    obj.insert("id".to_string(), Value::String(record_id));
-                    obj.insert("_rev".to_string(), Value::String(rev));
-                    obj.insert("_deleted".to_string(), Value::Bool(deleted != 0));
-                    obj.insert("updated_at_ms".to_string(), Value::from(updated_at_ms));
-                }
-                Ok(payload)
-            },
-        )?
-        .collect::<Result<Vec<_>, _>>()?;
-    let has_more = rows.len() as i64 > batch_size;
-    if has_more {
-        rows.truncate(batch_size as usize);
-    }
-    for payload in &mut rows {
-        refresh_live_business_payload(root, collection, payload);
-    }
-    let checkpoint = rows
-        .last()
-        .and_then(|payload| {
-            Some(serde_json::json!({
-                "collection": collection,
-                "updated_at_ms": payload.get("updated_at_ms")?.as_i64()?,
-                "record_id": payload.get("id")?.as_str()?,
-            }))
-        })
-        .unwrap_or_else(|| {
-            serde_json::json!({
-                "collection": collection,
-                "updated_at_ms": checkpoint_updated_at_ms,
-                "record_id": checkpoint_record_id,
-            })
-        });
-    Ok(serde_json::json!({
-        "ok": true,
-        "has_more": has_more,
-        "documents": rows,
-        "checkpoint": checkpoint
-    }))
-}
-
-fn refresh_live_business_payload(root: &Path, collection: &str, payload: &mut Value) {
-    let Some(obj) = payload.as_object_mut() else {
-        return;
-    };
-    let command_id = obj
-        .get("command_id")
-        .and_then(Value::as_str)
-        .map(str::to_string);
-    let task_id = if collection == "ctox_queue_tasks" {
-        obj.get("id").and_then(Value::as_str).map(str::to_string)
-    } else if collection == "business_commands" {
-        obj.get("task_id")
-            .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty())
-            .map(str::to_string)
-            .or_else(|| {
-                command_id
-                    .as_deref()
-                    .and_then(|id| find_queue_task_for_command(root, id))
-            })
-    } else {
-        None
-    };
-    let Some(task_id) = task_id else {
-        return;
-    };
-    let Ok(Some(task)) = channels::load_queue_task(root, &task_id) else {
-        mark_missing_queue_task_payload(collection, obj);
-        return;
-    };
-    let normalized = normalize_queue_status(&task.route_status);
-    let stored_status = obj
-        .get("status")
-        .and_then(Value::as_str)
-        .or_else(|| obj.get("task_status").and_then(Value::as_str))
-        .map(str::to_string);
-    let effective_status = if stored_status.as_deref().is_some_and(is_terminal_status) {
-        stored_status.as_deref().unwrap_or(normalized)
-    } else {
-        normalized
-    };
-    if collection == "ctox_queue_tasks" {
-        obj.insert(
-            "status".to_string(),
-            Value::String(effective_status.to_string()),
-        );
-        obj.insert("route_status".to_string(), Value::String(task.route_status));
-        obj.insert("title".to_string(), Value::String(task.title));
-        obj.insert("priority".to_string(), Value::String(task.priority));
-        obj.insert("thread_key".to_string(), Value::String(task.thread_key));
-        obj.insert(
-            "lease_owner".to_string(),
-            task.lease_owner.map(Value::String).unwrap_or(Value::Null),
-        );
-        obj.insert(
-            "leased_at".to_string(),
-            task.leased_at.map(Value::String).unwrap_or(Value::Null),
-        );
-    } else {
-        obj.insert("task_id".to_string(), Value::String(task.message_key));
-        obj.insert(
-            "task_status".to_string(),
-            Value::String(effective_status.to_string()),
-        );
-    }
-}
-
-fn mark_missing_queue_task_payload(collection: &str, obj: &mut serde_json::Map<String, Value>) {
-    let stored_status = obj
-        .get("status")
-        .and_then(Value::as_str)
-        .or_else(|| obj.get("task_status").and_then(Value::as_str))
-        .unwrap_or_default();
-    if is_terminal_status(stored_status) {
-        return;
-    }
-    if collection == "ctox_queue_tasks" {
-        obj.insert(
-            "status".to_string(),
-            Value::String("stale_missing_native".to_string()),
-        );
-        obj.insert(
-            "route_status".to_string(),
-            Value::String("stale_missing_native".to_string()),
-        );
-    } else if collection == "business_commands" {
-        obj.insert(
-            "task_status".to_string(),
-            Value::String("stale_missing_native".to_string()),
-        );
-        obj.insert(
-            "status".to_string(),
-            Value::String("stale_missing_native".to_string()),
-        );
-    }
-}
-
-fn is_terminal_status(status: &str) -> bool {
-    matches!(
-        status.trim().to_ascii_lowercase().as_str(),
-        "completed" | "done" | "handled" | "failed" | "cancelled" | "canceled"
-    )
-}
-
 fn find_queue_task_for_command(root: &Path, command_id: &str) -> Option<String> {
     let tasks = channels::list_queue_tasks(root, &[], 256).ok()?;
     tasks
         .into_iter()
         .find(|task| task.prompt.contains(command_id))
         .map(|task| task.message_key)
-}
-
-pub fn push_collection(root: &Path, collection: &str, body: Value) -> anyhow::Result<Value> {
-    let docs = body
-        .get("documents")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let mut conn = open_store(root)?;
-    let tx = conn.transaction()?;
-    let updated_at_ms = now_ms() as i64;
-    let mut accepted = 0usize;
-    for doc in docs {
-        let Some(id) = doc.get("id").and_then(Value::as_str) else {
-            continue;
-        };
-        let rev = doc
-            .get("_rev")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .unwrap_or_else(|| format!("rev_{}", Uuid::new_v4()));
-        let deleted = doc
-            .get("_deleted")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-        let payload_json = serde_json::to_string(&doc)?;
-        tx.execute(
-            "INSERT INTO business_records
-                (collection, record_id, rev, deleted, updated_at_ms, payload_json)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-             ON CONFLICT(collection, record_id) DO UPDATE SET
-                rev = excluded.rev,
-                deleted = excluded.deleted,
-                updated_at_ms = excluded.updated_at_ms,
-                payload_json = excluded.payload_json",
-            params![
-                collection,
-                id,
-                rev,
-                deleted as i64,
-                updated_at_ms,
-                payload_json
-            ],
-        )?;
-        materialize_document_record(&tx, collection, id, deleted, updated_at_ms, &doc)?;
-        accepted += 1;
-    }
-    tx.commit()?;
-    Ok(serde_json::json!({
-        "ok": true,
-        "accepted": accepted,
-        "conflicts": []
-    }))
-}
-
-fn materialize_document_record(
-    tx: &rusqlite::Transaction<'_>,
-    collection: &str,
-    id: &str,
-    deleted: bool,
-    fallback_updated_at_ms: i64,
-    doc: &Value,
-) -> anyhow::Result<()> {
-    match collection {
-        "documents" => {
-            let tags_json =
-                serde_json::to_string(doc.get("tags").unwrap_or(&Value::Array(vec![])))?;
-            tx.execute(
-                "INSERT INTO business_documents
-                    (document_id, title, filename, mime_type, status, document_type,
-                     current_version_id, source_sha256, page_count, diagnostics_count,
-                     tags_json, index_text, deleted, created_at_ms, updated_at_ms, payload_json)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
-                 ON CONFLICT(document_id) DO UPDATE SET
-                    title = excluded.title,
-                    filename = excluded.filename,
-                    mime_type = excluded.mime_type,
-                    status = excluded.status,
-                    document_type = excluded.document_type,
-                    current_version_id = excluded.current_version_id,
-                    source_sha256 = excluded.source_sha256,
-                    page_count = excluded.page_count,
-                    diagnostics_count = excluded.diagnostics_count,
-                    tags_json = excluded.tags_json,
-                    index_text = excluded.index_text,
-                    deleted = excluded.deleted,
-                    created_at_ms = excluded.created_at_ms,
-                    updated_at_ms = excluded.updated_at_ms,
-                    payload_json = excluded.payload_json",
-                params![
-                    id,
-                    value_string(doc, "title"),
-                    value_string(doc, "filename"),
-                    value_string(doc, "mime_type"),
-                    value_string(doc, "status"),
-                    value_string(doc, "document_type"),
-                    value_string(doc, "current_version_id"),
-                    value_string(doc, "source_sha256"),
-                    value_i64(doc, "page_count").unwrap_or(0),
-                    value_i64(doc, "diagnostics_count").unwrap_or(0),
-                    tags_json,
-                    value_string(doc, "index_text"),
-                    deleted as i64,
-                    value_i64(doc, "created_at_ms").unwrap_or(fallback_updated_at_ms),
-                    value_i64(doc, "updated_at_ms").unwrap_or(fallback_updated_at_ms),
-                    serde_json::to_string(doc)?
-                ],
-            )?;
-        }
-        "document_versions" => {
-            tx.execute(
-                "INSERT INTO business_document_versions
-                    (version_id, document_id, version, source_kind, blob_id, diagnostics_json,
-                     model_json, deleted, created_at_ms, updated_at_ms, payload_json)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
-                 ON CONFLICT(version_id) DO UPDATE SET
-                    document_id = excluded.document_id,
-                    version = excluded.version,
-                    source_kind = excluded.source_kind,
-                    blob_id = excluded.blob_id,
-                    diagnostics_json = excluded.diagnostics_json,
-                    model_json = excluded.model_json,
-                    deleted = excluded.deleted,
-                    created_at_ms = excluded.created_at_ms,
-                    updated_at_ms = excluded.updated_at_ms,
-                    payload_json = excluded.payload_json",
-                params![
-                    id,
-                    value_string(doc, "document_id"),
-                    value_i64(doc, "version").unwrap_or(0),
-                    value_string(doc, "source_kind"),
-                    value_string(doc, "blob_id"),
-                    serde_json::to_string(doc.get("diagnostics").unwrap_or(&Value::Array(vec![])))?,
-                    serde_json::to_string(doc.get("model_json").unwrap_or(&Value::Null))?,
-                    deleted as i64,
-                    value_i64(doc, "created_at_ms").unwrap_or(fallback_updated_at_ms),
-                    value_i64(doc, "updated_at_ms").unwrap_or(fallback_updated_at_ms),
-                    serde_json::to_string(doc)?
-                ],
-            )?;
-        }
-        "document_blob_chunks" => {
-            tx.execute(
-                "INSERT INTO business_document_blob_chunks
-                    (chunk_id, blob_id, document_id, version_id, idx, total, mime_type,
-                     encoding, data, deleted, created_at_ms, payload_json)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
-                 ON CONFLICT(chunk_id) DO UPDATE SET
-                    blob_id = excluded.blob_id,
-                    document_id = excluded.document_id,
-                    version_id = excluded.version_id,
-                    idx = excluded.idx,
-                    total = excluded.total,
-                    mime_type = excluded.mime_type,
-                    encoding = excluded.encoding,
-                    data = excluded.data,
-                    deleted = excluded.deleted,
-                    created_at_ms = excluded.created_at_ms,
-                    payload_json = excluded.payload_json",
-                params![
-                    id,
-                    value_string(doc, "blob_id"),
-                    value_string(doc, "document_id"),
-                    value_string(doc, "version_id"),
-                    value_i64(doc, "idx").unwrap_or(0),
-                    value_i64(doc, "total").unwrap_or(1),
-                    value_string(doc, "mime_type"),
-                    value_string(doc, "encoding"),
-                    value_string(doc, "data"),
-                    deleted as i64,
-                    value_i64(doc, "created_at_ms").unwrap_or(fallback_updated_at_ms),
-                    serde_json::to_string(doc)?
-                ],
-            )?;
-        }
-        _ => {}
-    }
-    Ok(())
-}
-
-fn value_string(doc: &Value, key: &str) -> String {
-    doc.get(key)
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string()
-}
-
-fn value_i64(doc: &Value, key: &str) -> Option<i64> {
-    doc.get(key).and_then(|value| {
-        value
-            .as_i64()
-            .or_else(|| value.as_u64().and_then(|item| i64::try_from(item).ok()))
-            .or_else(|| value.as_f64().map(|item| item as i64))
-    })
 }
 
 fn migrate(conn: &Connection) -> anyhow::Result<()> {

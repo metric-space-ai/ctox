@@ -1,3 +1,10 @@
+import {
+  bindUniversalImportSourceSwitching,
+  buildUniversalImportCommandPayloadFromDrawer,
+  renderUniversalImportDrawerMarkup
+} from '../../../shared/universal-importer.js';
+import { getActiveMatchingDefinition } from './matchingDefinition.js';
+
 const THEME_KEY = 'ctox.businessOs.requirementMatching.theme';
 const LANG_KEY = 'ctox.businessOs.requirementMatching.lang';
 const COLUMN_SETTINGS_KEY = 'ctox.businessOs.requirementMatching.columnSettings';
@@ -7,6 +14,10 @@ const IMPORT_STATUS_KEY = 'ctox.businessOs.matching.importStatus';
 const COMMAND_TIMEOUT_MS = 8000;
 const SUPPORTED_LANGUAGES = ['de', 'en'];
 const pendingTranslationRequests = new Set();
+const MATCHING_DEFINITION = getActiveMatchingDefinition();
+const MATCHING_LABELS = MATCHING_DEFINITION.labels || {};
+const MATCHING_DEFINITION_ID = MATCHING_DEFINITION.id || 'generic_matching.v1';
+const MATCHING_SCHEMA_VERSION = MATCHING_DEFINITION.engine?.version || 'generic_matching.v1';
 
 const dictionary = new Map([
   ['Quellen', 'Sources'],
@@ -55,9 +66,9 @@ const bundledTranslations = {
 
 const COLUMN_DEFAULTS = {
   requirements: {
-    label: 'Anforderungen',
-    singular: 'Anforderung',
-    plural: 'Anforderungen',
+    label: MATCHING_LABELS.requirementsColumn || 'Anforderungen',
+    singular: MATCHING_LABELS.sourceRecord || 'Anforderung',
+    plural: MATCHING_LABELS.sourceRecordPlural || 'Anforderungen',
     entityType: 'requirement'
   },
   matches: {
@@ -67,9 +78,9 @@ const COLUMN_DEFAULTS = {
     entityType: 'match'
   },
   objects: {
-    label: 'Objekte',
-    singular: 'Objekt',
-    plural: 'Objekte',
+    label: MATCHING_LABELS.objectsColumn || 'Objekte',
+    singular: MATCHING_LABELS.objectRecord || 'Objekt',
+    plural: MATCHING_LABELS.objectRecordPlural || 'Objekte',
     entityType: 'object'
   }
 };
@@ -82,10 +93,10 @@ const COLUMN_PROMPTS = {
       collection: 'business_records',
       definitionCollection: 'business_definitions',
       moduleId: 'matching',
-      definitionId: 'matching.requirements.v1',
+      definitionId: `${MATCHING_DEFINITION_ID}.sources`,
       entityType: 'requirement',
       canonicalField: 'data',
-      schemaVersion: 'requirement.v1',
+      schemaVersion: `${MATCHING_SCHEMA_VERSION}.source`,
       recordKey: 'data.requirement.id || data.requirementSource.externalRef || generated',
       indexes: {
         indexText: ['data.requirement.title', 'data.source.name', 'data.requirement.location', 'data.requirement.objectRequirements', 'data.requirementSource.rawText'],
@@ -103,6 +114,7 @@ Regeln:
 - Antworte nur mit einem einzelnen gültigen JSON-Objekt.
 - Keine Markdown-Blöcke, keine Erklärungen außerhalb des JSON.
 - Extrahiere Aufgaben, Anforderungen, Benefits, Standort, Arbeitsmodell, Sprache, Gehalt und Metadaten.
+- Gib Aufgaben und Anforderungen zusätzlich als Arrays aus, damit die Drawer nicht als Fließtextwände gerendert werden.
 - Bewerte Agency Type, Incentives, Urgency, Relax, Vacancy Age und Fachlevel jeweils mit Value 0..3 und Evidence-Array.
 - Wenn Werte nicht sicher ableitbar sind, setze sie auf null oder leere Strings/Arrays, nicht halluzinieren.
 - Sprache: verwende die Sprache der Quelle.`,
@@ -121,6 +133,8 @@ Regeln:
         aboutSource: 'string',
         aboutRole: 'string',
         objectRequirements: 'string',
+        responsibilities: ['string'],
+        requirements: ['string'],
         benefits: ['string'],
         closingNotes: 'string',
         language: 'de | en | other'
@@ -134,6 +148,8 @@ Regeln:
           aboutSource: 'string',
           aboutRole: 'string',
           objectRequirements: 'string',
+          responsibilities: ['string'],
+          requirements: ['string'],
           benefits: ['string'],
           closingNotes: 'string',
           agencyTypeValue: 'integer 0..3',
@@ -212,10 +228,10 @@ Regeln:
       collection: 'business_records',
       definitionCollection: 'business_definitions',
       moduleId: 'matching',
-      definitionId: 'matching.objects.v1',
+      definitionId: `${MATCHING_DEFINITION_ID}.objects`,
       entityType: 'object',
       canonicalField: 'data',
-      schemaVersion: 'object.v1',
+      schemaVersion: `${MATCHING_SCHEMA_VERSION}.object`,
       recordKey: 'data.object.id || data.object.email || generated',
       indexes: {
         indexText: ['data.object.name', 'data.object.currentRole', 'data.object.desiredPosition', 'data.object.skills', 'data.object.region'],
@@ -234,7 +250,7 @@ Regeln:
 - Keine Markdown-Blöcke, keine Erklärungen außerhalb des JSON.
 - Extrahiere Stammdaten, Kontakt, aktuelle Rolle, Zielrolle, Skills, Sprachen, Ausbildung, Berufserfahrung, Wünsche und Verfügbarkeit.
 - Leite executiveInfo aus dem Object ab: fachliche Qualifikation, Methodenkompetenz, Leadership-Fähigkeit, Gehaltswunsch und Ort.
-- Erhalte Object-Struktur unter documents/additional, wenn Details nicht direkt in Top-Level-Felder passen.
+- Gib Ausbildung und Berufserfahrung als strukturierte Arrays aus. Nutze documents/additional nur für Rohdokumente oder zusätzliche Nachweise.
 - Wenn ein Feld nicht sicher belegbar ist, setze null oder leere Arrays. Keine erfundenen Informationen.`,
     schema: {
       object: {
@@ -262,6 +278,23 @@ Regeln:
         workModelWish: 'Vollzeit | Teilzeit | flexibel | null',
         highestDegree: 'string | null',
         degree: 'string | null',
+        education: [{
+          degree: 'string | null',
+          major: 'string | null',
+          institution: 'string | null',
+          location: 'string | null',
+          start_date: 'date|string|null',
+          end_date: 'date|string|null',
+          details: ['string']
+        }],
+        experience: [{
+          job_title: 'string | null',
+          employer: 'string | null',
+          location: 'string | null',
+          start_date: 'date|string|null',
+          end_date: 'date|string|null',
+          job_description: ['string']
+        }],
         languages: [{ code: 'string', level: 'string' }],
         skills: ['string'],
         softSkills: ['string'],
@@ -329,10 +362,10 @@ Regeln:
       collection: 'business_records',
       definitionCollection: 'business_definitions',
       moduleId: 'matching',
-      definitionId: 'matching.matches.v1',
+      definitionId: `${MATCHING_DEFINITION_ID}.matches`,
       entityType: 'match',
       canonicalField: 'data',
-      schemaVersion: 'match.v1',
+      schemaVersion: `${MATCHING_SCHEMA_VERSION}.match`,
       recordKey: 'data.match.sourceId + \"|\" + data.match.requirementId + \"|\" + data.match.objectId',
       indexes: {
         indexText: ['data.source.name', 'data.requirement.title', 'data.object.name', 'data.match.items.title', 'data.match.items.explanation'],
@@ -344,44 +377,157 @@ Regeln:
     },
     prompt: `You are a matching engine for an HR recruiting application.
 
-Compare a requirement description with a object Object and produce structured match items that describe how well the object fits the requirements from the perspective of a recruiter who offers a object to a source.
+Your task:
+Compare a job description with a candidate CV and produce structured "match items" that describe how well the candidate fits the requirements from the perspective of a recruiter who offers a candidate to a company.
 
 Output format:
-Respond with one valid JSON object and exactly this root shape:
+You MUST respond with a single valid JSON object with the following structure:
 {
   "items": [
     {
-      "requirementId": "REQ-1",
+      "requirementId": "string",
       "title": "string",
       "dimension": "education | experience | skill | language | other",
       "priority": "base | performance | enthusiasm",
       "matchLevel": "full | partial | none",
-      "matchScore": 0.0,
-      "requirementSnippet": "string",
-      "objectSnippet": "string",
+      "matchScore": number,
+      "jobSnippet": "string",
+      "cvSnippet": "string",
       "explanation": "string"
     }
   ]
 }
 
-Do not add any new JSON keys.
+IMPORTANT RULE (NO SCHEMA CHANGES):
+Do NOT add any new JSON keys. The output format must remain EXACTLY as defined above.
 
-Core scoring principles:
-- Basis: mandatory/base requirements, missing base items have strong score impact.
-- Leistung: main performance criteria and proven work evidence.
-- Begeisterung: additive upside criteria, nice-to-have strengths and differentiators.
-- Studentische Tätigkeiten are valuable but not equivalent to full professional experience unless the requirement explicitly accepts them.
-- Near-completion degrees can largely satisfy abgeschlossenes Studium unless timing clearly conflicts.
-- Do not over-score high academic/senior profiles for clearly lower-scope requirements.
-- Project leadership is not people management unless disciplinary leadership is explicit.
-- Distinguish start-date availability from travel/assignment flexibility.
+Core scoring principles (IMPORTANT):
+1) Studentische Tätigkeiten vs. echte Berufserfahrung (ANTI-OVER-SCORING):
+- Treat student roles ("Werkstudent", "Praktikum", "Hiwi", "studentische Hilfskraft", "Abschlussarbeit", "Trainee/Intern") as valuable but NOT equivalent to full professional experience.
+- If the requirement is explicitly "Berufserfahrung X Jahre" or "mehrjährige Berufserfahrung":
+  - Student work can support PARTIAL fulfillment, but must be capped.
+  - Default cap for student-only evidence: matchScore max 0.55 for that requirement, unless there is also clear non-student professional experience of Thesis Works that exactly match the topic.
+  - If student work is very long and very relevant (e.g., >18–24 months highly relevant, clear responsibilities, tools, outcomes), allow up to 0.65 — still not "full" unless there is actual post-study professional employment in similar scope.
+- If the requirement explicitly accepts student background (e.g., "erste praktische Erfahrung", "Praktika/Werkstudententätigkeit willkommen", "Einsteiger"):
+  - Student work may score higher and can become "full" if it matches the described expectations.
+- Do NOT harshly penalize missing professional years if the role is junior/entry: keep matchScore in a fair partial range (e.g., 0.45–0.70) depending on relevance and recency.
 
-Conflict items:
-If and only if a clear conflict is inferable, add an extra item with priority "base", dimension "other", and title exactly one of:
-level_scope, compensation_band, location_work_model, career_path, domain_industry, role_definition, availability, eligibility_restriction.
-Conflict items still use matchScore 0.0..1.0 and require requirementSnippet, objectSnippet and explanation.
+2) Abgeschlossenes Studium vs. kurz vor Abschluss (NEAR-COMPLETION RULE):
+- If a base requirement is "abgeschlossenes Studium" (or equivalent) and the CV clearly indicates the candidate is close to completion (e.g., "in den letzten Zügen", "Abschluss in MM/YYYY", "Masterarbeit/Bachelorarbeit läuft", "alle Module abgeschlossen", "Graduation expected"):
+  - Treat it as largely fulfilled: matchScore should be 0.80–0.90 by default.
+  - Use "partial" (not "none") unless the job explicitly requires the degree already in hand by start date AND the CV timing clearly conflicts.
+- If the job requires degree "zwingend bei Eintritt/Start" or "Urkunde erforderlich" and the candidate finishes later than the stated start:
+  - Score lower and consider adding an "availability" conflict item only if the timing conflict is CLEAR.
 
-No markdown, no extra text.`,
+3) Overqualification / Level & Scope sanity (NO MASTER-FOR-FACHARBEITER):
+- Never implicitly assume that a higher degree automatically improves fit for roles that are clearly non-academic or shopfloor/clerical unless the job explicitly welcomes it.
+- If the job is clearly a Facharbeiter/Sachbearbeiter/Assistant/Techniker role with no study requirement and the CV shows a clear high-academic/high-seniority profile:
+  - Do NOT inflate matchScore on education items just because the candidate has a Master.
+  - Instead, consider a "level_scope" conflict item ONLY if the incompatibility is CLEAR (see conflict rules), otherwise keep scoring neutral.
+- If candidate qualifies on skills but is likely over-scoped, reflect this via:
+  - lower matchScore on "role-level fit" related items (dimension "other" via normal requirement items if the job states level expectations),
+  - and/or a conflict item when clearly inferable (see section A: level_scope).
+
+4) Automotive leadership reality check (PROJECT LEADERSHIP ≠ PEOPLE MANAGEMENT):
+- In Automotive contexts, do NOT treat "Projektleitung/Teilprojektleitung/Project Lead" as "Führungskraft" unless people management is explicitly stated.
+- For leadership requirements:
+  - If the job asks for "Führungskraft", "disziplinarische Führung", "Personalverantwortung", "Teamleitung", "Line Manager":
+    - Only score "full" if the CV shows explicit people management (team size, direct reports, hiring, disciplinary leadership, performance reviews, budget responsibility).
+    - Project leadership without disciplinary leadership should be "partial" (often 0.45–0.70 depending on strength).
+  - If the job asks for "Projektleitung" (without explicit disciplinary leadership):
+    - Strong project leadership evidence can be "full".
+- Also apply seniority plausibility:
+  - If the job expects true leadership experience and the CV indicates clear Berufseinsteiger/junior profile, do NOT score high; keep it partial/none as appropriate.
+
+5) Verfügbarkeit ambiguity (START DATE vs TRAVEL FLEXIBILITY):
+- Distinguish two different meanings:
+  A) "kurzfristige Verfügbarkeit" meaning: candidate can START quickly (notice period, start date).
+  B) "kurzfristig verfügbar" meaning: candidate can be sent on short-notice travel/assignments, flexibility for deployment.
+- When extracting requirements from the job:
+  - Create separate items if both meanings appear or are strongly implied (e.g., "Start ASAP" AND "Reisebereitschaft kurzfristig").
+- Scoring:
+  - If job focuses on start date and CV provides notice period/start date: score based on that.
+  - If job focuses on travel flexibility and CV provides travel willingness/constraints: score based on that.
+  - If the job wording is ambiguous and CV does not clarify, avoid over-penalizing: keep a moderate partial score (e.g., 0.50–0.70) and explain the ambiguity positively.
+
+Base-factor conflict ITEMS (titles are used as keys by the UI):
+In addition to normal requirement items, you MUST run the following 8 base-factor conflict checks.
+If (and only if) a CLEAR conflict is inferable from job description + CV, you MUST add an extra item with:
+- priority: "base"
+- dimension: "other"
+- title: EXACTLY one of these strings (must match character-by-character):
+  1) "level_scope"
+  2) "compensation_band"
+  3) "location_work_model"
+  4) "career_path"
+  5) "domain_industry"
+  6) "role_definition"
+  7) "availability"
+  8) "eligibility_restriction"
+
+These special conflict items MUST ONLY appear when there is a conflict. If no conflict is clearly inferable, OMIT them completely.
+They are metadata items for UI rendering; they still must use the normal fields.
+
+How to score these conflict items:
+- matchScore MUST remain a normal 0.0..1.0 score like any other item.
+- Set matchScore to reflect the SEVERITY/LIKELIHOOD of the conflict:
+  - 1.0 = very strong / very likely conflict (clearly blocking)
+  - 0.7 = strong conflict
+  - 0.5 = moderate conflict
+  - 0.3 = weak but present conflict
+- matchLevel:
+  - "full" = strong conflict clearly present
+  - "partial" = some conflict signals, but not totally conclusive
+  - "none" = do NOT use for these items (if no conflict, omit the item instead)
+
+Evidence requirement:
+- For every conflict item you add, jobSnippet MUST contain the job-side evidence and cvSnippet MUST contain the CV-side evidence (as connected substrings where possible).
+
+Conflict detection rules (only when CLEAR):
+
+A) level_scope
+Flag when job is clearly clerical/IC level (e.g., "Sachbearbeiter", "Assistant", "Mitarbeiter", "Facharbeiter", "Specialist", "Operator", "Montage", "Produktion")
+AND the CV shows strong long-term leadership/executive scope (e.g., titles "Leiter", "Head of", "Director", "Manager" with people management OR explicit "disziplinarische Führung" with team size/budget/overall responsibility).
+Important nuance:
+- Do NOT flag solely because of a Master/PhD. Degree alone is not a level_scope conflict.
+- Do NOT flag solely because of project leadership. Project lead ≠ line leadership.
+
+B) compensation_band
+Flag only if job strongly implies a lower/tight band (e.g., tariff group, explicitly junior/clerical role)
+AND CV strongly implies much higher seniority/comp expectations (e.g., executive compensation signals, very senior titles with long tenure).
+
+C) location_work_model
+Flag if job requires on-site/shift/travel/relocation AND CV/cover letter explicitly restricts this.
+
+D) career_path
+Flag if job is clearly leadership track (line management) but CV/cover letter clearly indicates specialist/IC preference, or vice versa.
+
+E) domain_industry
+Flag if job is strongly domain/regulatory-specific AND CV shows different domain with no transferable evidence.
+
+F) role_definition
+Flag if job expects hands-on operational execution but CV is almost entirely management-only (or the reverse), clearly incompatible.
+
+G) availability
+Flag if job needs immediate start/full-time/fixed schedule and CV clearly states conflicting notice period/start/part-time.
+Important nuance:
+- Do NOT use availability for travel-flexibility unless the job clearly demands travel/shift and CV clearly blocks it (that can also be location_work_model if appropriate).
+- If job says "kurzfristig verfügbar" but meaning is ambiguous, only flag conflict when the CV clearly contradicts BOTH reasonable interpretations.
+
+H) eligibility_restriction
+Flag when the job clearly includes lawful access, citizenship, nationality, gender-for-duty, security clearance, export-control, defence-sector, or comparable eligibility restrictions
+AND the CV clearly conflicts with that restriction or clearly lacks the required lawful eligibility signal.
+Important nuance:
+- Use this ONLY for explicit, job-relevant restrictions that are stated in the job text.
+- Do NOT invent this conflict from vague culture fit or language preferences.
+
+All other existing rules still apply:
+- Identify requirements and create items.
+- Use dimension/priority as specified.
+- explanation must be in the job description language and positively phrased.
+- Root must be exactly { "items": [...] } and nothing else.
+
+- No markdown, no extra text.`,
     schema: {
       match: {
         sourceId: 'string',
@@ -397,8 +543,8 @@ No markdown, no extra text.`,
           priority: 'base | performance | enthusiasm',
           matchLevel: 'full | partial | none',
           matchScore: 'number 0..1',
-          requirementSnippet: 'string',
-          objectSnippet: 'string',
+          jobSnippet: 'string',
+          cvSnippet: 'string',
           explanation: 'string'
         }]
       }
@@ -438,8 +584,8 @@ No markdown, no extra text.`,
         score: 'item.matchScore',
         subtitle: 'item.dimension',
         snippets: [
-          { label: 'Anforderung', field: 'item.requirementSnippet' },
-          { label: 'Objekt', field: 'item.objectSnippet' }
+          { label: 'Stellenausschreibung', field: 'item.jobSnippet' },
+          { label: 'CV', field: 'item.cvSnippet' }
         ],
         explanation: 'item.explanation',
         conflictWhen: 'isKnownConflictTitle(item.title)'
@@ -471,14 +617,22 @@ initColumnDrawers();
 initContextMenu();
 renderImportStatuses();
 
+function getMatchingRoot() {
+  return document.querySelector('[data-matching-module="native"]') || document.body;
+}
+
+function queryMatchingAll(selector) {
+  return getMatchingRoot().querySelectorAll(selector);
+}
+
 function initTheme() {
   const params = new URLSearchParams(window.location.search);
   const requested = params.get('theme');
   const saved = requested === 'light' || requested === 'dark'
     ? requested
-    : localStorage.getItem(THEME_KEY) || 'system';
+    : document.documentElement.dataset.theme || localStorage.getItem(THEME_KEY) || 'system';
   applyTheme(saved);
-  for (const button of document.querySelectorAll('[data-theme-choice]')) {
+  for (const button of queryMatchingAll('[data-theme-choice]')) {
     button.addEventListener('click', () => {
       const theme = button.dataset.themeChoice || 'system';
       localStorage.setItem(THEME_KEY, theme);
@@ -493,13 +647,13 @@ function initTheme() {
 
 function applyTheme(theme) {
   const value = theme === 'light' || theme === 'dark' ? theme : 'system';
+  const root = getMatchingRoot();
   if (value === 'system') {
-    document.documentElement.removeAttribute('data-theme');
+    delete root.dataset.theme;
   } else {
-    document.documentElement.dataset.theme = value;
+    root.dataset.theme = value;
   }
-  parent.postMessage({ type: 'ctox-business-os-theme', theme: value }, '*');
-  for (const button of document.querySelectorAll('[data-theme-choice]')) {
+  for (const button of queryMatchingAll('[data-theme-choice]')) {
     button.setAttribute('aria-pressed', String(button.dataset.themeChoice === value));
   }
 }
@@ -509,9 +663,9 @@ function initLanguage() {
   const requestedRaw = String(params.get('lang') || '').toLowerCase();
   const requested = SUPPORTED_LANGUAGES.includes(requestedRaw) ? requestedRaw : '';
   if (requested) localStorage.setItem(LANG_KEY, requested);
-  const saved = requested || localStorage.getItem(LANG_KEY) || 'de';
+  const saved = requested || document.documentElement.lang || localStorage.getItem(LANG_KEY) || 'de';
   applyLanguage(saved, { reloadForGerman: false });
-  for (const button of document.querySelectorAll('[data-lang-choice]')) {
+  for (const button of queryMatchingAll('[data-lang-choice]')) {
     button.addEventListener('click', () => {
       const lang = button.dataset.langChoice || 'de';
       localStorage.setItem(LANG_KEY, lang);
@@ -522,21 +676,16 @@ function initLanguage() {
     if (event.data?.type !== 'ctox-business-os-preferences') return;
     applyLanguage(event.data.language, { reloadForGerman: false });
   });
-  const observer = new MutationObserver(() => {
-    if (normalizeLanguage(localStorage.getItem(LANG_KEY) || 'de') !== 'de') translateDocument();
-  });
-  observer.observe(document.body, { childList: true, subtree: true });
 }
 
 function applyLanguage(lang, { reloadForGerman = false } = {}) {
   const value = normalizeLanguage(lang);
-  document.documentElement.lang = value;
-  document.documentElement.dataset.lang = value;
-  for (const button of document.querySelectorAll('[data-lang-choice]')) {
+  const root = getMatchingRoot();
+  root.dataset.lang = value;
+  for (const button of queryMatchingAll('[data-lang-choice]')) {
     button.setAttribute('aria-pressed', String(button.dataset.langChoice === value));
   }
-  if (value !== 'de') translateDocument();
-  if (value === 'de' && reloadForGerman) location.reload();
+  if (value !== 'de') translateDocument(root);
 }
 
 function normalizeLanguage(lang) {
@@ -544,16 +693,16 @@ function normalizeLanguage(lang) {
   return SUPPORTED_LANGUAGES.includes(value) ? value : value || 'de';
 }
 
-function translateDocument() {
-  translateTextNodes(document.body);
-  for (const option of document.querySelectorAll('option')) {
+function translateDocument(root = getMatchingRoot()) {
+  translateTextNodes(root);
+  for (const option of root.querySelectorAll('option')) {
     translateElementText(option);
   }
-  for (const el of document.querySelectorAll('input[placeholder], textarea[placeholder]')) {
+  for (const el of root.querySelectorAll('input[placeholder], textarea[placeholder]')) {
     const next = translatePhrase(el.getAttribute('placeholder'), 'placeholder');
     if (next) el.setAttribute('placeholder', next);
   }
-  for (const el of document.querySelectorAll('[title]')) {
+  for (const el of root.querySelectorAll('[title]')) {
     const next = translatePhrase(el.getAttribute('title'), 'title');
     if (next) el.setAttribute('title', next);
   }
@@ -765,6 +914,7 @@ function updateColumnMeta(column, patch) {
 }
 
 function initColumnLabels() {
+  const root = getMatchingRoot();
   const selectors = {
     requirements: '#left .column-title',
     matches: '#center .column-title',
@@ -773,10 +923,10 @@ function initColumnLabels() {
 
   Object.entries(selectors).forEach(([column, selector]) => {
     const meta = getColumnMeta(column);
-    const title = document.querySelector(selector);
+    const title = root.querySelector(selector);
     if (title) title.textContent = meta.label;
 
-    document.querySelectorAll(`[data-column="${column}"][data-column-action]`).forEach((button) => {
+    root.querySelectorAll(`[data-column="${column}"][data-column-action]`).forEach((button) => {
       const action = button.dataset.columnAction;
       const suffix = action === 'configure'
         ? 'konfigurieren'
@@ -793,13 +943,15 @@ function initColumnLabels() {
 }
 
 function initColumnDrawers() {
-  const backdrop = document.querySelector('[data-column-drawer-backdrop]');
-  const drawers = Array.from(document.querySelectorAll('[data-column-drawer]'));
+  const root = getMatchingRoot();
+  const backdrop = root.querySelector('[data-column-drawer-backdrop]');
+  const drawers = Array.from(root.querySelectorAll('[data-column-drawer]'));
   if (!backdrop || !drawers.length) return;
 
   document.addEventListener('click', (event) => {
     const actionButton = event.target.closest('[data-column-action]');
     if (!actionButton) return;
+    if (!root.contains(actionButton)) return;
     event.preventDefault();
     event.stopPropagation();
     openColumnDrawer(actionButton);
@@ -813,7 +965,7 @@ function initColumnDrawers() {
   function openColumnDrawer(button) {
     closeColumnDrawers();
     const side = button.dataset.drawerSide || 'right';
-    const drawer = document.querySelector(`[data-column-drawer="${side}"]`);
+    const drawer = root.querySelector(`[data-column-drawer="${side}"]`);
     if (!drawer) return;
     drawer.innerHTML = renderColumnDrawer(button);
     drawer.setAttribute('aria-hidden', 'false');
@@ -824,11 +976,7 @@ function initColumnDrawers() {
     bindColumnConfigInputs(drawer, button.dataset.column || 'matches');
     bindSearchSortInputs(drawer, button.dataset.column || 'matches');
     bindImportCommand(drawer, button.dataset.column || 'matches');
-    drawer.querySelectorAll('[data-import-source]').forEach((sourceButton) => {
-      sourceButton.addEventListener('click', () => {
-        setImportSource(drawer, sourceButton.dataset.importSource || 'document');
-      });
-    });
+    bindUniversalImportSourceSwitching(drawer);
   }
 
   function closeColumnDrawers() {
@@ -838,17 +986,6 @@ function initColumnDrawers() {
       drawer.classList.remove('is-open');
       drawer.setAttribute('aria-hidden', 'true');
     }
-  }
-
-  function setImportSource(drawer, source) {
-    drawer.querySelectorAll('[data-import-source]').forEach((button) => {
-      const active = button.dataset.importSource === source;
-      button.classList.toggle('is-active', active);
-      button.setAttribute('aria-pressed', active ? 'true' : 'false');
-    });
-    drawer.querySelectorAll('[data-import-panel]').forEach((panel) => {
-      panel.hidden = panel.dataset.importPanel !== source;
-    });
   }
 
   function bindColumnConfigInputs(drawer, column) {
@@ -904,7 +1041,7 @@ function initColumnDrawers() {
             source_type: payload.source_type
           }
         };
-        const result = await postBusinessOsCommand(command).catch(() => dispatchCtoxCommand(command));
+        const result = await dispatchCtoxCommand(command);
         recordImportStatus(payload, result);
         renderImportStatuses();
         closeColumnDrawers();
@@ -930,44 +1067,15 @@ function commandTypeForImportColumn(column) {
   return '';
 }
 
-async function postBusinessOsCommand(command) {
-  const response = await fetch('/api/business-os/commands', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(command)
-  });
-  const text = await response.text();
-  let data = {};
-  try {
-    data = text ? JSON.parse(text) : {};
-  } catch {
-    data = { raw: text };
-  }
-  if (!response.ok) {
-    throw new Error(data?.error || data?.message || `Business OS command failed: ${response.status}`);
-  }
-  return data;
-}
-
 async function buildImportCommandPayload(drawer, column) {
   const meta = getColumnMeta(column);
   const config = COLUMN_PROMPTS[column] || COLUMN_PROMPTS.matches;
-  const sourceType =
-    drawer.querySelector('[data-import-source].is-active')?.dataset.importSource ||
-    drawer.querySelector('[data-import-panel]:not([hidden])')?.dataset.importPanel ||
-    'document';
-  const panel = drawer.querySelector(`[data-import-panel="${sourceType}"]`);
-  const readValue = (name) => panel?.querySelector(`[data-import-field="${name}"]`)?.value || '';
-  const files = await readImportFiles(panel);
-  const recordId = `import_${column}_${sourceType}_${Date.now()}`;
-
-  return {
-    record_id: recordId,
-    title: `${meta.singular || meta.label || column} Import`,
-    module_id: 'matching',
+  return buildUniversalImportCommandPayloadFromDrawer(drawer, {
+    moduleId: 'matching',
     column,
-    entity_type: meta.entityType,
-    source_type: sourceType,
+    entityType: meta.entityType,
+    recordLabel: meta.singular || meta.label || column,
+    title: `${meta.singular || meta.label || column} Import`,
     parser: config.parser,
     definition: {
       schema: config.schema,
@@ -982,46 +1090,7 @@ async function buildImportCommandPayload(drawer, column) {
       },
       display: config.display,
       prompt: config.prompt
-    },
-    source: {
-      title: readValue('title'),
-      text: readValue('text'),
-      url: readValue('url'),
-      scope: readValue('scope'),
-      depth: readValue('depth'),
-      sheet: readValue('sheet'),
-      row_logic: readValue('row_logic'),
-      document_type: readValue('document_type'),
-      files
     }
-  };
-}
-
-async function readImportFiles(panel) {
-  const input = panel?.querySelector('input[type="file"][data-import-field="files"]');
-  if (!input?.files?.length) return [];
-  const files = [];
-  for (const file of Array.from(input.files)) {
-    files.push({
-      name: file.name,
-      type: file.type || 'application/octet-stream',
-      size: file.size,
-      lastModified: file.lastModified,
-      base64: await fileToBase64(file)
-    });
-  }
-  return files;
-}
-
-function fileToBase64(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(reader.error || new Error('file read failed'));
-    reader.onload = () => {
-      const raw = String(reader.result || '');
-      resolve(raw.includes(',') ? raw.slice(raw.indexOf(',') + 1) : raw);
-    };
-    reader.readAsDataURL(file);
   });
 }
 
@@ -1113,14 +1182,15 @@ function renderImportStatuses() {
 }
 
 function ensureImportStatusHost(column) {
+  const root = getMatchingRoot();
   const selectors = {
     requirements: '#left .sources',
     matches: '#center #requirementList',
     objects: '#right #objectList'
   };
-  const anchor = document.querySelector(selectors[column]);
+  const anchor = root.querySelector(selectors[column]);
   if (!anchor?.parentElement) return null;
-  let host = document.querySelector(`[data-import-status-host="${column}"]`);
+  let host = root.querySelector(`[data-import-status-host="${column}"]`);
   if (!host) {
     host = document.createElement('div');
     host.className = 'import-status-host';
@@ -1205,7 +1275,8 @@ function openCtoxHarnessForTask(taskId, commandId) {
 }
 
 function initContextMenu() {
-  const root = document.querySelector('[data-matching-module="native"] .app') || document.querySelector('.app') || document.body;
+  const matchingRoot = getMatchingRoot();
+  const root = matchingRoot.querySelector('.app') || matchingRoot;
   const menu = document.createElement('div');
   menu.className = 'ctox-context-menu';
   menu.hidden = true;
@@ -1451,119 +1522,7 @@ function renderImportDrawer(column) {
       ? 'Objekte'
       : 'Matches';
   const defaultSource = column === 'matches' ? 'excel' : 'document';
-  const sourceButton = (id, label) => `
-    <button
-      class="import-source-button${id === defaultSource ? ' is-active' : ''}"
-      type="button"
-      data-import-source="${escapeDrawerHtml(id)}"
-      aria-pressed="${id === defaultSource ? 'true' : 'false'}"
-    >${escapeDrawerHtml(label)}</button>
-  `;
-  return `
-    <div class="import-source-grid" aria-label="Importquelle">
-      ${sourceButton('text', 'Freitext')}
-      ${sourceButton('document', 'Document')}
-      ${sourceButton('url', 'URL')}
-      ${sourceButton('excel', 'Excel')}
-    </div>
-
-    <label class="drawer-field">
-      <span>Importer</span>
-      <select>
-        <option>CTOX Auto Import</option>
-        <option>URL / Scraper</option>
-        <option>Datei / Archiv</option>
-        <option>Excel / Tabellen</option>
-        <option>Freitext Parser</option>
-      </select>
-    </label>
-
-    <section class="import-panel" data-import-panel="text" ${defaultSource === 'text' ? '' : 'hidden'}>
-      <label class="drawer-field">
-        <span>Titel</span>
-        <input type="text" data-import-field="title" placeholder="${escapeDrawerHtml(recordLabel)} benennen" />
-      </label>
-      <label class="drawer-field">
-        <span>Freitext</span>
-        <textarea rows="8" data-import-field="text" placeholder="Text einfügen, der strukturiert werden soll"></textarea>
-      </label>
-      <label class="drawer-field">
-        <span>Quellenumfang</span>
-        <select data-import-field="scope">
-          <option>Eine Quelle</option>
-          <option>Mehrere Abschnitte als getrennte Quellen</option>
-        </select>
-      </label>
-    </section>
-
-    <section class="import-panel" data-import-panel="document" ${defaultSource === 'document' ? '' : 'hidden'}>
-      <label class="drawer-field">
-        <span>Dokumente</span>
-        <input type="file" data-import-field="files" multiple />
-      </label>
-      <label class="drawer-field">
-        <span>Dokumenttyp</span>
-        <select data-import-field="document_type">
-          <option>Automatisch erkennen</option>
-          <option>PDF</option>
-          <option>Word / Text</option>
-          <option>ZIP Archiv</option>
-        </select>
-      </label>
-      <label class="drawer-field">
-        <span>Quellenumfang</span>
-        <select data-import-field="scope">
-          <option>Jede Datei als eigener Datensatz</option>
-          <option>Alle Dateien als eine Quelle zusammenführen</option>
-          <option>Archivinhalt automatisch aufteilen</option>
-        </select>
-      </label>
-    </section>
-
-    <section class="import-panel" data-import-panel="url" ${defaultSource === 'url' ? '' : 'hidden'}>
-      <label class="drawer-field">
-        <span>URL</span>
-        <input type="url" data-import-field="url" placeholder="https://..." />
-      </label>
-      <label class="drawer-field">
-        <span>Quellenumfang</span>
-        <select data-import-field="scope">
-          <option>Nur diese URL lesen</option>
-          <option>Mehrere URLs aus der Seite erkennen</option>
-          <option>Verlinkte Unterseiten mitlesen</option>
-        </select>
-      </label>
-      <label class="drawer-field">
-        <span>Maximale Tiefe</span>
-        <select data-import-field="depth">
-          <option>1 Ebene</option>
-          <option>2 Ebenen</option>
-          <option>3 Ebenen</option>
-        </select>
-      </label>
-    </section>
-
-    <section class="import-panel" data-import-panel="excel" ${defaultSource === 'excel' ? '' : 'hidden'}>
-      <label class="drawer-field">
-        <span>Excel oder CSV</span>
-        <input type="file" data-import-field="files" accept=".xlsx,.xls,.csv,.tsv" />
-      </label>
-      <label class="drawer-field">
-        <span>Tabellenblatt</span>
-        <input type="text" data-import-field="sheet" placeholder="Automatisch oder Name des Sheets" />
-      </label>
-      <label class="drawer-field">
-        <span>Zeilenlogik</span>
-        <select data-import-field="row_logic">
-          <option>Eine Zeile = ein Datensatz</option>
-          <option>Gruppierte Zeilen zusammenführen</option>
-          <option>CTOX erkennt Datensatzgrenzen</option>
-        </select>
-      </label>
-    </section>
-
-    <button class="drawer-primary" type="button" data-import-run>Import an CTOX übergeben</button>
-  `;
+  return renderUniversalImportDrawerMarkup({ recordLabel, defaultSource });
 }
 
 function buildDefaultSearchSortConfig(column) {

@@ -129,39 +129,12 @@ async function queueCommand({ type, recordId, payload, clientContext, timeoutMs 
   };
 
   window.dispatchEvent(new CustomEvent('ctox-business-os:agent-command', { detail: command }));
-  const direct = await postBusinessOsCommand(command).catch((error) => ({ ok: false, error: String(error?.message || error) }));
-  if (direct?.ok) return direct;
-
   const response = await dispatchCtoxCommand(command, { timeoutMs });
   if (response?.ok && response.result) return response.result;
   if (response?.status === 'timeout') {
-    return {
-      id: recordId,
-      command_id: recordId,
-      status: 'queued',
-      queued: true
-    };
+    throw new Error(`CTOX command bus timeout: ${type}`);
   }
   throw new Error(response?.error || `CTOX command failed: ${type}`);
-}
-
-async function postBusinessOsCommand(command) {
-  const response = await fetch('/api/business-os/commands', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(command)
-  });
-  const text = await response.text();
-  let data = {};
-  try {
-    data = text ? JSON.parse(text) : {};
-  } catch {
-    data = { raw: text };
-  }
-  if (!response.ok) {
-    throw new Error(data?.error || data?.message || `Business OS command failed: ${response.status}`);
-  }
-  return data;
 }
 
 function dispatchCtoxCommand(command, { timeoutMs = 12000 } = {}) {
