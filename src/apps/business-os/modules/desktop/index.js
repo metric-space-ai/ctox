@@ -2,10 +2,11 @@ import { loadModuleMessages } from '../../shared/i18n.js';
 import { showBusinessPrompt } from '../../shared/dialogs.js';
 import { createCtoxLauncher } from './ctoxLauncher.js';
 import { makeIconDraggable } from './iconDrag.js';
+import { getSvgIcon } from '../../shared/icons.js?v=20260520-svg-icons2';
 
-const STYLE_BUILD = '20260519-desktop-slim1';
+const STYLE_BUILD = '20260520-triad-style2';
 const LAYOUT_DOC_ID = 'layout';
-const DEFAULT_GRID = { cellW: 96, cellH: 110, offset: 24 };
+const DEFAULT_GRID = { cellW: 104, cellH: 120, offset: 24 };
 
 const FALLBACK_LABELS = {
   de: {
@@ -71,6 +72,35 @@ export async function mount(ctx) {
   });
 
   const cleanups = [];
+
+  // Wire up the live clock and date widget
+  const timeEl = refs.root.querySelector('[data-widget-time]');
+  const dateEl = refs.root.querySelector('[data-widget-date]');
+  if (timeEl && dateEl) {
+    const updateClock = () => {
+      try {
+        const now = new Date();
+        let locale = 'de';
+        if (ctx && typeof ctx.locale === 'string') {
+          locale = ctx.locale;
+        }
+        timeEl.textContent = now.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' });
+        dateEl.textContent = now.toLocaleDateString(locale, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+      } catch (e) {
+        console.error('[desktop] clock update failed with locale:', ctx?.locale, e);
+        try {
+          const now = new Date();
+          timeEl.textContent = now.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+          dateEl.textContent = now.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+        } catch (fallbackErr) {
+          console.error('[desktop] clock absolute fallback failed:', fallbackErr);
+        }
+      }
+    };
+    updateClock();
+    const clockInterval = setInterval(updateClock, 1000);
+    cleanups.push(() => clearInterval(clockInterval));
+  }
   const layoutCollection = ctx.db?.collection?.('desktop_layout');
   const iconsCollection = ctx.db?.collection?.('desktop_icons');
   const commandsCollection = ctx.db?.collection?.('business_commands');
@@ -82,8 +112,32 @@ export async function mount(ctx) {
   cleanups.push(subscribeIcons());
   if (commandsCollection) cleanups.push(subscribeCommandStream());
 
+  const onDragOverSurface = (event) => {
+    const isPin = event.dataTransfer?.types.includes('application/x-ctox-taskbar-pin');
+    if (isPin) {
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'move';
+    }
+  };
+
+  const onDropSurface = (event) => {
+    const pinId = event.dataTransfer?.getData('application/x-ctox-taskbar-pin')
+      || event.dataTransfer?.getData('text/plain')
+      || '';
+    if (pinId) {
+      event.preventDefault();
+      event.stopPropagation();
+      togglePinnedTarget(pinId, false);
+    }
+  };
+
   refs.surface.addEventListener('contextmenu', onSurfaceContextMenu);
   cleanups.push(() => refs.surface.removeEventListener('contextmenu', onSurfaceContextMenu));
+
+  refs.surface.addEventListener('dragover', onDragOverSurface);
+  refs.surface.addEventListener('drop', onDropSurface);
+  cleanups.push(() => refs.surface.removeEventListener('dragover', onDragOverSurface));
+  cleanups.push(() => refs.surface.removeEventListener('drop', onDropSurface));
 
   return () => {
     for (const dispose of cleanups) {
@@ -121,7 +175,16 @@ export async function mount(ctx) {
       <div class="desktop-icon-glyph" aria-hidden="true"></div>
       <div class="desktop-icon-label"></div>
     `;
-    el.querySelector('.desktop-icon-glyph').textContent = doc.glyph || launcher.glyphFor(doc.target_module);
+    
+    const glyphEl = el.querySelector('.desktop-icon-glyph');
+    const targetModule = doc.target_module || '';
+    const svgIcon = getSvgIcon(targetModule, 28);
+    if (svgIcon) {
+      glyphEl.innerHTML = svgIcon;
+    } else {
+      glyphEl.textContent = doc.glyph || launcher.glyphFor(targetModule);
+    }
+    
     el.querySelector('.desktop-icon-label').textContent = doc.label || titleForModule(doc.target_module);
     el.title = doc.label || titleForModule(doc.target_module);
     el.tabIndex = 0;
@@ -138,11 +201,7 @@ export async function mount(ctx) {
     makeIconDraggable(el, {
       surface: refs.surface,
       iconId: doc.id,
-      grid: {
-        cellW: layout.grid_cell_w || DEFAULT_GRID.cellW,
-        cellH: layout.grid_cell_h || DEFAULT_GRID.cellH,
-        offset: layout.grid_offset || DEFAULT_GRID.offset,
-      },
+      grid: currentGrid(),
       onSelect: () => {
         for (const node of refs.icons.querySelectorAll('.desktop-icon.selected')) {
           node.classList.remove('selected');
@@ -157,6 +216,11 @@ export async function mount(ctx) {
             y: position.y,
             updated_at_ms: Date.now(),
           });
+        }
+      },
+      onDragToTopbar: (iconId) => {
+        if (doc.target_module) {
+          togglePinnedTarget(doc.target_module, true);
         }
       },
     });
@@ -420,8 +484,8 @@ export async function mount(ctx) {
 
   function currentGrid() {
     return {
-      cellW: layout?.grid_cell_w || DEFAULT_GRID.cellW,
-      cellH: layout?.grid_cell_h || DEFAULT_GRID.cellH,
+      cellW: Math.max(104, layout?.grid_cell_w || DEFAULT_GRID.cellW),
+      cellH: Math.max(120, layout?.grid_cell_h || DEFAULT_GRID.cellH),
       offset: layout?.grid_offset || DEFAULT_GRID.offset,
     };
   }
@@ -489,7 +553,7 @@ export async function mount(ctx) {
     if (position.y !== doc.y) patch.y = position.y;
     if (!doc.target_type) patch.target_type = seed.target_type;
     if (!doc.target_module) patch.target_module = seed.target_module;
-    if (!doc.label) patch.label = seed.label;
+    if (!doc.label || (doc.id === 'desk_icon_research' && doc.target_module === 'research' && doc.label === 'Research')) patch.label = seed.label;
     if (!doc.glyph) patch.glyph = seed.glyph;
     if (!Number.isFinite(doc.sort_index)) patch.sort_index = seed.sort_index;
     if (shouldUnhide && doc.hidden) patch.hidden = false;

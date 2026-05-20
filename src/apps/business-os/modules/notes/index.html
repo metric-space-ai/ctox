@@ -1,0 +1,106 @@
+<main class="notes-module" data-notes-root>
+  <!-- Linke Spalte: macOS 3-Pane Style (Ordner + Notizliste) -->
+  <section class="notes-pane notes-left" aria-label="Notes Explorer">
+    <div class="notes-sidebar">
+      <header class="notes-pane-head">
+        <div>
+          <span>iCloud</span>
+          <h2 data-t="folders">Ordner</h2>
+        </div>
+        <button class="icon-button" type="button" data-icon="plus" data-action="create-folder" data-t-aria="newFolder" data-t-title="newFolder" aria-label="Neuer Ordner" title="Neuer Ordner"></button>
+      </header>
+      <div class="notes-folder-list" data-folder-list>
+        <!-- Dynamic Folders -->
+      </div>
+    </div>
+    
+    <div class="notes-list-pane">
+      <header class="notes-pane-head">
+        <div>
+          <span data-t="notes">Notizen</span>
+          <h2 data-notes-count-label data-t="allNotes">Alle Notizen</h2>
+        </div>
+        <button class="icon-button" type="button" data-icon="plus" data-action="create-note" data-t-aria="newNote" data-t-title="newNote" aria-label="Neue Notiz" title="Neue Notiz"></button>
+      </header>
+      <div class="notes-search-wrapper">
+        <input class="notes-search" data-search type="search" data-t-placeholder="search" placeholder="Suchen..." />
+      </div>
+      <div class="notes-scroll" data-notes-list>
+        <!-- Dynamic Note Cards -->
+      </div>
+    </div>
+  </section>
+  <div class="notes-resizer" data-resizer="left" data-t-title="adjustColumnWidth" title="Spaltenbreite anpassen" role="separator" aria-orientation="vertical"></div>
+
+  <!-- Mittlere Spalte: macOS Notizen Editor & Live Preview -->
+  <section class="notes-pane notes-center" aria-label="Note Editor">
+    <header class="notes-pane-head notes-center-head">
+      <div class="notes-note-meta">
+        <span data-selected-folder data-t="notes">Notizen</span>
+        <h2 data-selected-title data-t="untitled">Neue Notiz</h2>
+      </div>
+      <div class="segmented" role="tablist" aria-label="Notiz Ansicht">
+        <button type="button" data-tab="edit" data-t="editTab" aria-pressed="true">Bearbeiten</button>
+        <button type="button" data-tab="preview" data-t="previewTab" aria-pressed="false">Vorschau</button>
+        <button type="button" data-tab="split" data-t="splitTab" aria-pressed="false">Split</button>
+      </div>
+      <button class="icon-button notes-delete-btn" type="button" data-action="delete-note" data-t-aria="deleteNote" data-t-title="deleteNote" aria-label="Notiz löschen" title="Notiz löschen" style="margin-left: 10px; font-size: 14px;">🗑️</button>
+    </header>
+    
+    <div class="notes-editor-workspace">
+      <!-- Edit Mode Panel -->
+      <div class="notes-tab-panel" data-panel="edit">
+        <textarea class="notes-textarea" data-notes-editor data-t-placeholder="editorPlaceholder" placeholder="Schreib etwas… Verwende Markdown für Überschriften (#), Listen (-), etc."></textarea>
+      </div>
+      
+      <!-- Preview Mode Panel -->
+      <div class="notes-tab-panel" data-panel="preview" hidden>
+        <article class="markdown-document notes-preview-doc" data-notes-preview></article>
+      </div>
+
+      <!-- Split Mode Panel -->
+      <div class="notes-tab-panel notes-split-panel" data-panel="split" hidden>
+        <textarea class="notes-textarea notes-split-textarea" data-notes-split-editor data-t-placeholder="splitEditorPlaceholder" placeholder="Schreib etwas…"></textarea>
+        <article class="markdown-document notes-split-preview" data-notes-split-preview></article>
+      </div>
+    </div>
+    
+    <footer class="notes-editor-footer">
+      <span class="notes-status" data-notes-status data-t="statusReady">Bereit</span>
+      <span class="notes-word-count" data-notes-words>0 Wörter</span>
+    </footer>
+  </section>
+  <div class="notes-resizer" data-resizer="right" data-t-title="adjustColumnWidth" title="Spaltenbreite anpassen" role="separator" aria-orientation="vertical"></div>
+
+  <!-- Rechte Spalte: Command & Automation Panel -->
+  <section class="notes-pane notes-right" aria-label="Automation & Info">
+    <header class="notes-pane-head">
+      <div>
+        <span data-t="automation">Automatisierung</span>
+        <h2 data-t="skills">CTOX Skills</h2>
+      </div>
+    </header>
+    <div class="notes-right-content">
+      <div class="notes-info-card">
+        <h3 data-t="markdownGuide">Markdown Guide</h3>
+        <ul class="notes-markdown-guide">
+          <li><code data-t="heading1"># Überschrift 1</code></li>
+          <li><code data-t="heading2">## Überschrift 2</code></li>
+          <li><code data-t="boldText">**Fett gedruckt**</code></li>
+          <li><code data-t="codeBlock">`Codeblock`</code></li>
+          <li><code data-t="bulletPoint">- Aufzählungszeichen</code></li>
+        </ul>
+      </div>
+
+      <div class="notes-info-card notes-ai-card">
+        <h3 data-t="localSync">Lokale Synchronisierung</h3>
+        <p data-t="syncDescription">Notizen werden automatisch im Hintergrund als Markdown-Dateien synchronisiert:</p>
+        <div class="notes-path-display">
+          <code>runtime/business-os/notes/</code>
+        </div>
+        <p class="notes-sync-hint" data-t="syncHint">Manuell erstellte .md-Dateien in diesem Ordner werden automatisch importiert.</p>
+      </div>
+    </div>
+  </section>
+</main>
+

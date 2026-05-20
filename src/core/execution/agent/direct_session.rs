@@ -49,6 +49,8 @@ use crate::secrets;
 
 const OPENAI_AUTH_MODE_KEY: &str = "CTOX_OPENAI_AUTH_MODE";
 const OPENAI_AUTH_MODE_CHATGPT_SUBSCRIPTION: &str = "chatgpt_subscription";
+const CHATGPT_AUTH_SECRET_SCOPE: &str = "ctox-auth";
+const CHATGPT_AUTH_SECRET_NAME: &str = "chatgpt_subscription_auth_json";
 const DIRECT_SESSION_CONTROL_REQUEST_TIMEOUT_SECS: u64 = 5;
 const DIRECT_SESSION_MIDTASK_COMPACT_TIMEOUT_SECS: u64 = 90;
 const DIRECT_SESSION_INTERRUPT_TIMEOUT_SECS: u64 = 2;
@@ -186,6 +188,37 @@ fn use_openai_chatgpt_subscription_auth(
 ) -> bool {
     selected_api_provider.is_some_and(|provider| provider.eq_ignore_ascii_case("openai"))
         && openai_chatgpt_subscription_auth_enabled(settings)
+}
+
+fn restore_chatgpt_subscription_auth_from_instance(
+    root: &Path,
+    codex_home: &Path,
+    auth_credentials_store_mode: ctox_core::auth::AuthCredentialsStoreMode,
+) -> Result<bool> {
+    let auth_manager =
+        ctox_core::AuthManager::new(codex_home.to_path_buf(), false, auth_credentials_store_mode);
+    if auth_manager
+        .auth_cached()
+        .as_ref()
+        .is_some_and(|auth| auth.is_chatgpt_auth())
+    {
+        return Ok(false);
+    }
+
+    let serialized =
+        match secrets::read_secret_value(root, CHATGPT_AUTH_SECRET_SCOPE, CHATGPT_AUTH_SECRET_NAME)
+        {
+            Ok(value) => value,
+            Err(_) => return Ok(false),
+        };
+    let auth: ctox_core::auth::AuthDotJson =
+        serde_json::from_str(&serialized).context("instance ChatGPT auth backup is invalid")?;
+    if auth.tokens.is_none() {
+        return Ok(false);
+    }
+    ctox_core::auth::save_auth(codex_home, &auth, auth_credentials_store_mode)
+        .context("failed to restore ChatGPT Subscription auth into Codex auth store")?;
+    Ok(true)
 }
 
 fn direct_session_reasoning_effort(
@@ -612,6 +645,15 @@ impl PersistentSession {
         let config_toml = load_config_as_toml_with_cli_overrides(&codex_home, &config_cwd, vec![])
             .await
             .map_err(|err| anyhow::anyhow!("load config.toml: {err}"))?;
+        let auth_credentials_store_mode =
+            config_toml.cli_auth_credentials_store.unwrap_or_default();
+        if use_chatgpt_subscription_auth {
+            let _ = restore_chatgpt_subscription_auth_from_instance(
+                root,
+                &codex_home,
+                auth_credentials_store_mode,
+            );
+        }
 
         let auth_manager = if let Some(ref key) = api_key {
             AuthManager::from_runtime_auth(
@@ -619,11 +661,7 @@ impl PersistentSession {
                 codex_home.clone(),
             )
         } else {
-            AuthManager::shared(
-                codex_home.clone(),
-                false,
-                config_toml.cli_auth_credentials_store.unwrap_or_default(),
-            )
+            AuthManager::shared(codex_home.clone(), false, auth_credentials_store_mode)
         };
         if use_chatgpt_subscription_auth {
             eprintln!(
@@ -653,7 +691,11 @@ impl PersistentSession {
         );
         let local_provider =
             super::turn_loop::resolve_local_model_provider_spec(resolved_runtime.as_ref());
-        if api_provider.is_some() && local_provider.is_none() && api_key.is_none() {
+        if api_provider.is_some()
+            && local_provider.is_none()
+            && api_key.is_none()
+            && !use_chatgpt_subscription_auth
+        {
             anyhow::bail!(
                 "API runtime requires provider credentials from the CTOX SQLite secret store or runtime settings; auth.json and process env fallbacks are disabled"
             );

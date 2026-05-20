@@ -1,3 +1,5 @@
+import { loadModuleMessages } from '../../shared/i18n.js';
+
 const BUILD = '20260519-research-dynamic-scoring1';
 const DEFAULT_AXIS_X = 'evidence_strength';
 const DEFAULT_AXIS_Y = 'topic_fit';
@@ -39,6 +41,8 @@ const COMPETITIVE_AI_AXES = Object.freeze([
 
 const state = {
   ctx: null,
+  lang: 'de',
+  t: (key, fallback) => fallback ?? key,
   tasks: [],
   runs: [],
   notes: [],
@@ -67,6 +71,20 @@ const state = {
 
 export async function mount(ctx) {
   state.ctx = ctx;
+  state.lang = ctx.locale === 'en' ? 'en' : 'de';
+  
+  // Load dynamic translations
+  const messages = await loadModuleMessages(import.meta.url, ctx.locale, {});
+  state.t = (key, fallback, ...args) => {
+    let val = messages[key] ?? fallback ?? key;
+    if (args.length) {
+      args.forEach((arg, i) => {
+        val = val.replace(`{${i}}`, arg);
+      });
+    }
+    return val;
+  };
+
   await ensureStyles();
   ctx.host.innerHTML = await loadModuleMarkup();
   ctx.left?.replaceChildren?.();
@@ -156,7 +174,7 @@ function bindEvents(root) {
 }
 
 async function refreshAll({ seed = false } = {}) {
-  setStatus('Knowledge wird geladen...');
+  setStatus(state.t('loadingKnowledge', 'Knowledge wird geladen...'));
   state.knowledgeBases = await loadKnowledgeBases();
   await loadLocalState();
   if (seed) await ensureTasksFromKnowledgeBases();
@@ -228,7 +246,7 @@ async function ensureTasksFromKnowledgeBases() {
       id: `research_${slugId(base.domain)}`,
       title: base.title,
       prompt: defaultPromptForKnowledgeBase(base),
-      criteria: 'Nutze die vorhandene Knowledge Base als Ausgangspunkt. Score nur belegte Quellen und trenne Rohkandidaten von kuratierten Dashboard-Ergebnissen.',
+      criteria: state.t('evidenceNoteText', 'Nutze die vorhandene Knowledge Base als Ausgangspunkt. Score nur belegte Quellen und trenne Rohkandidaten von kuratierten Dashboard-Ergebnissen.'),
       status: 'ready',
       knowledge_domain: base.domain,
       source_catalog_key: tableKey(base, ['source_catalog', 'sources', 'curated_sources']),
@@ -470,29 +488,29 @@ function renderLeft() {
   const task = selectedTask();
   root.innerHTML = `
     <header class="research-pane-header">
-      <div><span>Research</span><h2>Knowledge Dashboards</h2></div>
+      <div><span>${escapeHtml(state.t('webResearch', 'Web Research'))}</span><h2>${escapeHtml(state.t('knowledgeDashboards', 'Knowledge Dashboards'))}</h2></div>
       <div class="research-header-actions">
-        <button type="button" class="research-icon-button" data-action="refresh" aria-label="Daten neu laden" title="Daten neu laden">${iconSvg('refresh')}</button>
-        <button type="button" class="research-icon-button" data-action="new-task" aria-label="Research anlegen" title="Research anlegen">${iconSvg('plus')}</button>
+        <button type="button" class="research-icon-button" data-action="refresh" aria-label="${escapeHtml(state.t('refreshData', 'Daten neu laden'))}" title="${escapeHtml(state.t('refreshData', 'Daten neu laden'))}">${iconSvg('refresh')}</button>
+        <button type="button" class="research-icon-button" data-action="new-task" aria-label="${escapeHtml(state.t('createResearch', 'Research anlegen'))}" title="${escapeHtml(state.t('createResearch', 'Research anlegen'))}">${iconSvg('plus')}</button>
       </div>
     </header>
     <div class="research-left-scroll">
       <section class="research-section">
         <div class="research-section-head">
-          <strong>Aufgaben</strong>
-          <span>${state.tasks.length} aktiv</span>
+          <strong>${escapeHtml(state.t('tasks', 'Aufgaben'))}</strong>
+          <span>${state.tasks.length} ${escapeHtml(state.t('active', 'aktiv'))}</span>
         </div>
         <div class="research-task-list">
-          ${state.tasks.map(renderTaskButton).join('') || '<div class="research-empty">Keine Knowledge-basierte Research-Aufgabe gefunden.</div>'}
+          ${state.tasks.map(renderTaskButton).join('') || `<div class="research-empty">${escapeHtml(state.t('noTasksFound', 'Keine Knowledge-basierte Research-Aufgabe gefunden.'))}</div>`}
         </div>
       </section>
       <section class="research-section">
         <div class="research-section-head">
-          <strong>Ranking</strong>
+          <strong>${escapeHtml(state.t('ranking', 'Ranking'))}</strong>
           <span>${escapeHtml(axisLabel('portfolio_priority'))}</span>
         </div>
         <div class="research-ranking-list">
-          ${state.sourceModels.map(renderRankingRow).join('') || '<div class="research-empty">Noch keine Quellen geladen.</div>'}
+          ${state.sourceModels.map(renderRankingRow).join('') || `<div class="research-empty">${escapeHtml(state.t('noSourcesLoaded', 'Noch keine Quellen geladen.'))}</div>`}
         </div>
       </section>
       <section class="research-status-line">${escapeHtml(state.status || task?.knowledge_domain || '')}</section>
@@ -507,7 +525,7 @@ function renderTaskButton(task) {
   return `
     <button type="button" class="research-task-item${isActive ? ' is-active' : ''}" data-action="select-task" data-task-id="${escapeHtml(task.id)}">
       <strong>${escapeHtml(task.title)}</strong>
-      <span>${escapeHtml(task.knowledge_domain)} · ${rows.toLocaleString('de-DE')} rows</span>
+      <span>${escapeHtml(task.knowledge_domain)} · ${rows.toLocaleString(state.lang === 'de' ? 'de-DE' : 'en-US')} ${escapeHtml(state.t('rows', 'rows'))}</span>
     </button>
   `;
 }
@@ -528,7 +546,7 @@ function renderCenter() {
   const root = pane('center');
   const task = selectedTask();
   if (!task) {
-    root.innerHTML = `<div class="research-empty-state"><strong>Keine Research-Aufgabe</strong><span>Lege eine Aufgabe auf Basis einer Knowledge Base an.</span></div>`;
+    root.innerHTML = `<div class="research-empty-state"><strong>${escapeHtml(state.t('noResearchTask', 'Keine Research-Aufgabe'))}</strong><span>${escapeHtml(state.t('createTaskBase', 'Lege eine Aufgabe auf Basis einer Knowledge Base an.'))}</span></div>`;
     return;
   }
   const axisPair = normalizedAxisPair(task);
@@ -543,9 +561,9 @@ function renderCenter() {
     <div class="research-center-body">
       <section class="research-map-panel">
         <div class="research-map-head">
-          <div><strong>${isGraphMode ? 'Discovery Graph' : 'Portfolio Map'}</strong><span>${isGraphMode ? 'Knowledge, Quellen, Messpunkte' : `${escapeHtml(axisLabel(yAxis))} gegen ${escapeHtml(axisLabel(xAxis))}`}</span></div>
+          <div><strong>${isGraphMode ? escapeHtml(state.t('discoveryGraph', 'Discovery Graph')) : escapeHtml(state.t('portfolioMap', 'Portfolio Map'))}</strong><span>${isGraphMode ? escapeHtml(state.t('discoverySub', 'Knowledge, Quellen, Messpunkte')) : `${escapeHtml(axisLabel(yAxis))} ${escapeHtml(state.t('portfolioSub', 'gegen'))} ${escapeHtml(axisLabel(xAxis))}`}</span></div>
           ${mapModeToggle()}
-          <button type="button" class="research-map-reset" data-action="reset-map">Reset</button>
+          <button type="button" class="research-map-reset" data-action="reset-map">${escapeHtml(state.t('reset', 'Reset'))}</button>
         </div>
         <div class="research-portfolio-map${isGraphMode ? ' is-discovery-graph' : ''}">
           <div class="research-map-grid" aria-hidden="true"></div>
@@ -558,9 +576,9 @@ function renderCenter() {
       </section>
       <section class="research-workbench">
         <div class="research-tabs" role="tablist" aria-label="Research views">
-          ${tabButton('sources', 'Sources')}
-          ${tabButton('measurements', 'Measurements')}
-          ${tabButton('knowledge', 'Knowledge')}
+          ${tabButton('sources', state.t('sources', 'Sources'))}
+          ${tabButton('measurements', state.t('measurements', 'Measurements'))}
+          ${tabButton('knowledge', state.t('knowledge', 'Knowledge'))}
         </div>
         <div class="research-table-host">
           ${renderActiveTable(task)}
@@ -573,8 +591,8 @@ function renderCenter() {
 function mapModeToggle() {
   return `
     <div class="research-map-mode" role="group" aria-label="Research map view">
-      <button type="button" data-action="map-mode" data-map-mode="portfolio" aria-pressed="${state.mapMode !== 'discovery'}">Map</button>
-      <button type="button" data-action="map-mode" data-map-mode="discovery" aria-pressed="${state.mapMode === 'discovery'}">Graph</button>
+      <button type="button" data-action="map-mode" data-map-mode="portfolio" aria-pressed="${state.mapMode !== 'discovery'}">${escapeHtml(state.t('map', 'Map'))}</button>
+      <button type="button" data-action="map-mode" data-map-mode="discovery" aria-pressed="${state.mapMode === 'discovery'}">${escapeHtml(state.t('graph', 'Graph'))}</button>
     </div>
   `;
 }
@@ -656,7 +674,7 @@ function discoveryGraph(task) {
       ? groupSources.reduce((sum, source) => sum + (sourceLayout.get(source.id)?.y || 50), 0) / groupSources.length
       : 18 + (index * (64 / Math.max(sourceGroups.length - 1, 1)));
     const id = `class_${slugId(group)}`;
-    pushNode({ id, kind: 'class', label: groupLabel(group), title: group, meta: `${groupSources.length} Quellen`, x: 36, y });
+    pushNode({ id, kind: 'class', label: groupLabel(group), title: group, meta: `${groupSources.length} ${state.t('sourcesLabel', 'Quellen')}`, x: 36, y });
     edges.push({ from: 'knowledge', to: id, kind: 'class' });
   });
   topSources.forEach((source, index) => {
@@ -679,8 +697,8 @@ function discoveryGraph(task) {
       pushNode({
         id: measureId,
         kind: 'measurement',
-        label: `${source.measurements.count} Messpunkte`,
-        title: `${source.title}: ${source.measurements.count} Messpunkte`,
+        label: `${source.measurements.count} ${state.t('measurementsLabel', 'Messpunkte')}`,
+        title: `${source.title}: ${source.measurements.count} ${state.t('measurementsLabel', 'Messpunkte')}`,
         meta: source.measurements.maxAxial ? `${formatNumber(source.measurements.maxAxial)} N axial` : '',
         x: 92,
         y: clampNumber(layout.y + 3, 14, 90),
@@ -776,7 +794,7 @@ function renderSourcesTable() {
   const yAxis = axisPair.y;
   return `
     <table class="research-data-table">
-      <thead><tr><th>Source</th><th>Class</th><th>Score</th><th>${escapeHtml(axisLabel(yAxis, task))}</th><th>${escapeHtml(axisLabel(xAxis, task))}</th><th></th></tr></thead>
+      <thead><tr><th>${escapeHtml(state.t('sourceLabel', 'Source'))}</th><th>${escapeHtml(state.t('classLabel', 'Class'))}</th><th>${escapeHtml(state.t('scoreLabel', 'Score'))}</th><th>${escapeHtml(axisLabel(yAxis, task))}</th><th>${escapeHtml(axisLabel(xAxis, task))}</th><th></th></tr></thead>
       <tbody>
         ${state.sourceModels.map((source) => `
           <tr class="${source.id === state.selectedSourceId ? 'is-selected' : ''}">
@@ -785,9 +803,9 @@ function renderSourcesTable() {
             <td><span class="research-score-pill research-grade-${source.grade.toLowerCase()}">${source.grade} · ${(source.score / 10).toFixed(1)}</span></td>
             <td>${Math.round(source.dimensions[yAxis] ?? 0)}</td>
             <td>${Math.round(source.dimensions[xAxis] ?? 0)}</td>
-            <td>${source.url ? `<a href="${escapeHtml(source.url)}" target="_blank" rel="noreferrer">Open</a>` : ''}</td>
+            <td>${source.url ? `<a href="${escapeHtml(source.url)}" target="_blank" rel="noreferrer">${escapeHtml(state.t('openLabel', 'Open'))}</a>` : ''}</td>
           </tr>
-        `).join('') || '<tr><td colspan="6">Keine Quellen vorhanden.</td></tr>'}
+        `).join('') || `<tr><td colspan="6">${escapeHtml(state.t('noSources', 'Keine Quellen vorhanden.'))}</td></tr>`}
       </tbody>
     </table>
   `;
@@ -796,7 +814,7 @@ function renderSourcesTable() {
 function renderMeasurementsTable() {
   return `
     <table class="research-data-table">
-      <thead><tr><th>Source</th><th>Prop</th><th>RPM</th><th>Axial N</th><th>Radial N</th><th>Method</th></tr></thead>
+      <thead><tr><th>${escapeHtml(state.t('sourceLabel', 'Source'))}</th><th>Prop</th><th>RPM</th><th>Axial N</th><th>Radial N</th><th>Method</th></tr></thead>
       <tbody>
         ${state.measurementRows.slice(0, 120).map((row) => `
           <tr>
@@ -807,7 +825,7 @@ function renderMeasurementsTable() {
             <td>${formatNumber(row.radial_load_N)}</td>
             <td>${escapeHtml(firstString(row, ['confidence', 'derivation_method']).slice(0, 90))}</td>
           </tr>
-        `).join('') || '<tr><td colspan="6">Keine Messpunkte vorhanden.</td></tr>'}
+        `).join('') || `<tr><td colspan="6">${escapeHtml(state.t('noMeasurements', 'Keine Messpunkte vorhanden.'))}</td></tr>`}
       </tbody>
     </table>
   `;
@@ -820,9 +838,9 @@ function renderKnowledgeTables(task) {
       ${(base?.tables || []).map((table) => `
         <button type="button" data-action="open-knowledge" data-table-id="${escapeHtml(table.id)}">
           <strong>${escapeHtml(table.title || table.table_key)}</strong>
-          <span>${escapeHtml(table.table_key)} · ${Number(table.row_count || 0).toLocaleString('de-DE')} rows</span>
+          <span>${escapeHtml(table.table_key)} · ${Number(table.row_count || 0).toLocaleString(state.lang === 'de' ? 'de-DE' : 'en-US')} ${escapeHtml(state.t('rows', 'rows'))}</span>
         </button>
-      `).join('') || '<div class="research-empty">Keine Knowledge-Tabellen verknüpft.</div>'}
+      `).join('') || `<div class="research-empty">${escapeHtml(state.t('noKnowledgeConnected', 'Keine Knowledge-Tabellen verknüpft.'))}</div>`}
     </div>
   `;
 }
@@ -837,41 +855,41 @@ function renderRight() {
   const axisPair = normalizedAxisPair(task);
   root.innerHTML = `
     <header class="research-pane-header">
-      <div><span>Context</span><h2>${escapeHtml(task?.title || 'Research')}</h2></div>
-      <button type="button" class="research-button primary" data-action="run-research" ${task ? '' : 'disabled'} title="Systematic Research fuer dieses Dashboard ${runInfo.hasRun ? 'fortsetzen' : 'starten'}">${runInfo.hasRun ? 'Research fortsetzen' : 'Research starten'}</button>
+      <div><span>${escapeHtml(state.t('context', 'Context'))}</span><h2>${escapeHtml(task?.title || 'Research')}</h2></div>
+      <button type="button" class="research-button primary" data-action="run-research" ${task ? '' : 'disabled'} title="${escapeHtml(state.t('runHint', 'Systematic Research für dieses Dashboard'))} ${runInfo.hasRun ? escapeHtml(state.t('researchFortsetzen', 'fortsetzen')) : escapeHtml(state.t('researchStarten', 'starten'))}">${runInfo.hasRun ? escapeHtml(state.t('researchFortsetzen', 'Research fortsetzen')) : escapeHtml(state.t('researchStarten', 'Research starten'))}</button>
     </header>
     <div class="research-right-scroll">
       <section class="research-context-block">
         <span class="research-kicker">Knowledge Base</span>
-        <strong>${escapeHtml(task?.knowledge_domain || 'Keine Domain')}</strong>
-        <p>${escapeHtml(task?.prompt || 'Research-Dashboard auf Basis einer vorhandenen Knowledge Base.')}</p>
+        <strong>${escapeHtml(task?.knowledge_domain || state.t('noDomain', 'Keine Domain'))}</strong>
+        <p>${escapeHtml(task?.prompt || state.t('defaultTaskDesc', 'Research-Dashboard auf Basis einer vorhandenen Knowledge Base.'))}</p>
         ${task?.criteria ? `<small>${escapeHtml(task.criteria)}</small>` : ''}
-        ${task ? `<button type="button" class="research-button" data-action="edit-task">Scoring bearbeiten</button>` : ''}
+        ${task ? `<button type="button" class="research-button" data-action="edit-task">${escapeHtml(state.t('editScoring', 'Scoring bearbeiten'))}</button>` : ''}
       </section>
       ${renderScoringModel(task)}
       <section class="research-metric-grid">
-        <div><strong>${state.sourceModels.length}</strong><span>Sources</span></div>
-        <div><strong>${state.measurementRows.length}</strong><span>Measurements</span></div>
-        <div><strong>${avgScore()}</strong><span>Avg score</span></div>
-        <div><strong>${runInfo.status || latestRun?.status || task?.status || 'ready'}</strong><span>Status</span></div>
+        <div><strong>${state.sourceModels.length}</strong><span>${escapeHtml(state.t('sources', 'Sources'))}</span></div>
+        <div><strong>${state.measurementRows.length}</strong><span>${escapeHtml(state.t('measurements', 'Measurements'))}</span></div>
+        <div><strong>${avgScore()}</strong><span>${escapeHtml(state.t('avgScore', 'Avg score'))}</span></div>
+        <div><strong>${runInfo.status || latestRun?.status || task?.status || 'ready'}</strong><span>${escapeHtml(state.t('status', 'Status'))}</span></div>
       </section>
       ${renderRunPanel(runInfo)}
       <section class="research-context-block">
-        <span class="research-kicker">Selected Source</span>
+        <span class="research-kicker">${escapeHtml(state.t('selectedSource', 'Selected Source'))}</span>
         ${source ? `
           <strong>${escapeHtml(source.title)}</strong>
-          <p>${escapeHtml(source.note || 'Keine Zusammenfassung vorhanden.')}</p>
+          <p>${escapeHtml(source.note || state.t('noSummaryAvailable', 'Keine Zusammenfassung vorhanden.'))}</p>
           <dl class="research-facts">
-            <div><dt>Grade</dt><dd>${source.grade} · ${(source.score / 10).toFixed(1)}</dd></div>
+            <div><dt>${escapeHtml(state.t('gradeLabel', 'Grade'))}</dt><dd>${source.grade} · ${(source.score / 10).toFixed(1)}</dd></div>
             <div><dt>${escapeHtml(axisLabel(axisPair.y, task))}</dt><dd>${Math.round(source.dimensions[axisPair.y] || 0)}</dd></div>
             <div><dt>${escapeHtml(axisLabel(axisPair.x, task))}</dt><dd>${Math.round(source.dimensions[axisPair.x] || 0)}</dd></div>
-            <div><dt>Evidence</dt><dd>${Math.round(source.dimensions.evidence_strength || 0)}</dd></div>
+            <div><dt>${escapeHtml(state.t('evidenceLabel', 'Evidence'))}</dt><dd>${Math.round(source.dimensions.evidence_strength || 0)}</dd></div>
           </dl>
-          <button type="button" class="research-button" data-action="source-detail" data-source-id="${escapeHtml(source.id)}">Details</button>
-        ` : '<p>Wähle eine Quelle aus.</p>'}
+          <button type="button" class="research-button" data-action="source-detail" data-source-id="${escapeHtml(source.id)}">${escapeHtml(state.t('details', 'Details'))}</button>
+        ` : `<p>${escapeHtml(state.t('selectSourcePrompt', 'Wähle eine Quelle aus.'))}</p>`}
       </section>
       <section class="research-context-block">
-        <div class="research-section-head flush"><strong>Decision notes</strong><span>auto</span></div>
+        <div class="research-section-head flush"><strong>${escapeHtml(state.t('decisionNotes', 'Decision notes'))}</strong><span>${escapeHtml(state.t('auto', 'auto'))}</span></div>
         <div class="research-note-stack">
           ${notes.map((note) => `<div class="research-note research-note-${note.kind}"><strong>${escapeHtml(note.title)}</strong><span>${escapeHtml(note.body)}</span></div>`).join('')}
         </div>
@@ -884,8 +902,8 @@ function renderRunPanel(runInfo) {
   return `
     <section class="research-run-panel">
       <div class="research-section-head flush">
-        <strong>Research Run</strong>
-        <span>${escapeHtml(runInfo.updatedLabel || 'kein Lauf')}</span>
+        <strong>${escapeHtml(state.t('researchRun', 'Research Run'))}</strong>
+        <span>${escapeHtml(runInfo.updatedLabel || state.t('noActiveRun', 'kein Lauf'))}</span>
       </div>
       ${runInfo.run || runInfo.command || runInfo.queueTask ? `
         <div class="research-run-state research-run-${escapeHtml(runInfo.statusKind)}">
@@ -896,15 +914,15 @@ function renderRunPanel(runInfo) {
           </div>
         </div>
         <dl class="research-run-facts">
-          <div><dt>Command</dt><dd>${escapeHtml(shortId(runInfo.commandId))}</dd></div>
-          <div><dt>Queue</dt><dd>${escapeHtml(shortId(runInfo.taskQueueId))}</dd></div>
-          <div><dt>Thread</dt><dd>${escapeHtml(runInfo.threadKey || '-')}</dd></div>
+          <div><dt>${escapeHtml(state.t('command', 'Command'))}</dt><dd>${escapeHtml(shortId(runInfo.commandId))}</dd></div>
+          <div><dt>${escapeHtml(state.t('queue', 'Queue'))}</dt><dd>${escapeHtml(shortId(runInfo.taskQueueId))}</dd></div>
+          <div><dt>${escapeHtml(state.t('thread', 'Thread'))}</dt><dd>${escapeHtml(runInfo.threadKey || '-')}</dd></div>
         </dl>
         <div class="research-run-actions">
-          <button type="button" class="research-button" data-action="focus-ctox-run" data-command-id="${escapeHtml(runInfo.commandId)}" data-task-queue-id="${escapeHtml(runInfo.taskQueueId)}" ${runInfo.taskQueueId || runInfo.commandId ? '' : 'disabled'}>In CTOX ansehen</button>
+          <button type="button" class="research-button" data-action="focus-ctox-run" data-command-id="${escapeHtml(runInfo.commandId)}" data-task-queue-id="${escapeHtml(runInfo.taskQueueId)}" ${runInfo.taskQueueId || runInfo.commandId ? '' : 'disabled'}>${escapeHtml(state.t('viewInCtox', 'In CTOX ansehen'))}</button>
         </div>
       ` : `
-        <p>Kein Research-Lauf für dieses Dashboard gestartet.</p>
+        <p>${escapeHtml(state.t('noRunStarted', 'Kein Research-Lauf für dieses Dashboard gestartet.'))}</p>
       `}
     </section>
   `;
@@ -914,16 +932,16 @@ function computedDecisionNotes(source) {
   const top = state.sourceModels[0];
   const notes = [];
   if (top) {
-    notes.push({ kind: 'opportunity', title: 'Use strongest evidence first', body: `${top.title} ist aktuell der stärkste Dashboard-Anker.` });
+    notes.push({ kind: 'opportunity', title: state.t('decisionNoteEv1', 'Use strongest evidence first'), body: state.t('decisionNoteEv1Body', `${top.title} ist aktuell der stärkste Dashboard-Anker.`, top.title) });
   }
   if (state.measurementRows.length) {
-    notes.push({ kind: 'opportunity', title: 'Quantitative evidence available', body: `${state.measurementRows.length} Messpunkte können in die aktiven Scoring-Kriterien einfließen.` });
+    notes.push({ kind: 'opportunity', title: state.t('decisionNoteQuant', 'Quantitative evidence available'), body: state.t('decisionNoteQuantBody', `${state.measurementRows.length} Messpunkte können in die aktiven Scoring-Kriterien einfließen.`, state.measurementRows.length) });
   }
   if (source && source.dimensions.reuse_readiness < 60) {
-    notes.push({ kind: 'risk', title: 'Reuse gap', body: 'Diese Quelle braucht weitere Extraktion, bevor sie als belastbare Dashboard-Kennzahl dient.' });
+    notes.push({ kind: 'risk', title: state.t('decisionNoteGap', 'Reuse gap'), body: state.t('decisionNoteGapBody', 'Diese Quelle braucht weitere Extraktion, bevor sie als belastbare Dashboard-Kennzahl dient.') });
   }
   if (!notes.some((note) => note.kind === 'risk')) {
-    notes.push({ kind: 'risk', title: 'Scope control', body: 'Dashboard-Scores bleiben nur so belastbar wie die verknüpften Knowledge-Tabellen und deren Provenance.' });
+    notes.push({ kind: 'risk', title: state.t('decisionNoteScope', 'Scope control'), body: state.t('decisionNoteScopeBody', 'Dashboard-Scores bleiben nur so belastbar wie die verknüpften Knowledge-Tabellen und deren Provenance.') });
   }
   return notes;
 }
@@ -934,12 +952,12 @@ function renderScoringModel(task) {
   const pair = normalizedAxisPair(task);
   return `
     <section class="research-context-block">
-      <div class="research-section-head flush"><strong>Scoring model</strong><span>${axes.length} Kriterien</span></div>
+      <div class="research-section-head flush"><strong>${escapeHtml(state.t('scoringModel', 'Scoring model'))}</strong><span>${axes.length} ${escapeHtml(state.t('kriterien', 'Kriterien'))}</span></div>
       <div class="research-scoring-list">
         ${axes.map((axis) => `
           <div class="${axis.id === pair.x || axis.id === pair.y ? 'is-active' : ''}">
             <strong>${escapeHtml(axis.label)}</strong>
-            <span>${axis.id === pair.x ? 'X axis' : axis.id === pair.y ? 'Y axis' : 'score'}</span>
+            <span>${axis.id === pair.x ? escapeHtml(state.t('xAxis', 'X axis')) : axis.id === pair.y ? escapeHtml(state.t('yAxis', 'Y axis')) : escapeHtml(state.t('score', 'score'))}</span>
           </div>
         `).join('')}
       </div>
@@ -960,21 +978,21 @@ function openTaskDialog(editTask = null) {
     <section class="research-modal" role="dialog" aria-modal="true" aria-labelledby="research-create-title">
       <header>
         <div>
-          <span>Research</span>
-          <strong id="research-create-title">${isEdit ? 'Scoring bearbeiten' : 'Dashboard anlegen'}</strong>
+          <span>${escapeHtml(state.t('webResearch', 'Web Research'))}</span>
+          <strong id="research-create-title">${isEdit ? escapeHtml(state.t('editScoring', 'Scoring bearbeiten')) : escapeHtml(state.t('dashboardAnlegen', 'Dashboard anlegen'))}</strong>
         </div>
-        <button type="button" data-close aria-label="Schließen">×</button>
+        <button type="button" data-close aria-label="${escapeHtml(state.t('close', 'Schließen'))}">×</button>
       </header>
       <form data-research-task-form>
         <input type="hidden" name="task_id" value="${escapeHtml(editTask?.id || '')}">
-        <label><span>Titel</span><input name="title" placeholder="Neue Research" value="${escapeHtml(editTask?.title || '')}" required></label>
+        <label><span>${escapeHtml(state.t('titel', 'Titel'))}</span><input name="title" placeholder="${escapeHtml(state.t('neueResearch', 'Neue Research'))}" value="${escapeHtml(editTask?.title || '')}" required></label>
         <label><span>Knowledge Base</span><select name="domain" ${isEdit ? 'disabled' : ''}>${state.knowledgeBases.map((base) => `<option value="${escapeHtml(base.domain)}" ${base.domain === selectedDomain ? 'selected' : ''}>${escapeHtml(base.title)} · ${escapeHtml(base.domain)}</option>`).join('')}</select></label>
-        <label><span>Auftrag</span><textarea name="prompt" placeholder="Was soll das Dashboard auswerten?">${escapeHtml(editTask?.prompt || '')}</textarea></label>
-        <label><span>Kriterien</span><textarea name="criteria" placeholder="Scope, Ausschlüsse, Scoring-Hinweise">${escapeHtml(editTask?.criteria || '')}</textarea></label>
-        <label><span>Scoring Dimensionen</span><textarea name="scoring_dimensions" placeholder="overlap: Overlap&#10;buyer_clarity: Buyer clarity">${escapeHtml(dimensionsText)}</textarea></label>
+        <label><span>${escapeHtml(state.t('auftrag', 'Auftrag'))}</span><textarea name="prompt" placeholder="${escapeHtml(state.t('promptPlaceholder', 'Was soll das Dashboard auswerten?'))}">${escapeHtml(editTask?.prompt || '')}</textarea></label>
+        <label><span>${escapeHtml(state.t('kriterien', 'Kriterien'))}</span><textarea name="criteria" placeholder="${escapeHtml(state.t('criteriaPlaceholder', 'Scope, Ausschlüsse, Scoring-Hinweise'))}">${escapeHtml(editTask?.criteria || '')}</textarea></label>
+        <label><span>${escapeHtml(state.t('scoringDimensions', 'Scoring Dimensionen'))}</span><textarea name="scoring_dimensions" placeholder="${escapeHtml(state.t('scoringPlaceholder', 'overlap: Overlap\nbuyer_clarity: Buyer clarity'))}">${escapeHtml(dimensionsText)}</textarea></label>
         <footer>
-          <button type="button" class="research-button" data-close>Abbrechen</button>
-          <button type="submit" class="research-button primary">${isEdit ? 'Speichern' : 'Anlegen'}</button>
+          <button type="button" class="research-button" data-close>${escapeHtml(state.t('cancel', 'Abbrechen'))}</button>
+          <button type="submit" class="research-button primary">${isEdit ? escapeHtml(state.t('save', 'Speichern')) : escapeHtml(state.t('create', 'Anlegen'))}</button>
         </footer>
       </form>
     </section>
@@ -1045,7 +1063,7 @@ async function runSelectedResearch() {
   const base = knowledgeBaseForTask(task);
   const now = Date.now();
   const instruction = [
-    `Fuehre systematic-research fuer das Business-OS Research Dashboard "${task.title}" fort.`,
+    `Fuehre systematic-research fuer das Business-OS Web Research Dashboard "${task.title}" fort.`,
     `Research Task ID: ${task.id}`,
     `Knowledge domain: ${task.knowledge_domain}`,
     `Source catalog: ctox knowledge data describe --domain ${task.knowledge_domain} --key ${task.source_catalog_key || 'source_catalog'}`,
@@ -1472,19 +1490,19 @@ function renderContextMenu(context, x, y) {
     <form class="research-context-chat" data-research-context-chat-form>
       <header>
         <div>
-          <strong>Chat to CTOX</strong>
+          <strong>${escapeHtml(state.t('chatToCtox', 'Chat to CTOX'))}</strong>
           <span>${escapeHtml(researchContextSummary(context))}</span>
         </div>
-        <button type="button" data-close aria-label="Schließen">×</button>
+        <button type="button" data-close aria-label="${escapeHtml(state.t('close', 'Schließen'))}">×</button>
       </header>
       ${canModifyApp ? `
         <div class="research-context-mode" role="radiogroup" aria-label="CTOX Aufgabe">
-          <label><input type="radio" name="mode" value="data" checked> Mit Research arbeiten</label>
-          <label><input type="radio" name="mode" value="app"> Dashboard modifizieren</label>
+          <label><input type="radio" name="mode" value="data" checked> ${escapeHtml(state.t('workWithResearch', 'Mit Research arbeiten'))}</label>
+          <label><input type="radio" name="mode" value="app"> ${escapeHtml(state.t('modifyDashboard', 'Dashboard modifizieren'))}</label>
         </div>
       ` : ''}
-      <textarea name="message" placeholder="Was soll CTOX hier tun oder prüfen?"></textarea>
-      <footer><span data-status></span><button type="submit">Senden</button></footer>
+      <textarea name="message" placeholder="${escapeHtml(state.t('chatPlaceholder', 'Was soll CTOX hier tun oder prüfen?'))}"></textarea>
+      <footer><span data-status></span><button type="submit">${escapeHtml(state.t('send', 'Senden'))}</button></footer>
     </form>
   `;
   state.contextMenu.hidden = false;
@@ -1528,23 +1546,23 @@ function dispatchResearchContextChat(context, message, mode = 'data') {
   const trimmed = String(message || '').trim();
   const status = state.contextMenu?.querySelector('[data-status]');
   if (!trimmed) {
-    if (status) status.textContent = 'Nachricht fehlt.';
+    if (status) status.textContent = state.t('messageMissing', 'Nachricht fehlt.');
     return;
   }
   if (!document.querySelector('[data-ctox-chat-root]')) {
-    if (status) status.textContent = 'Chat ist noch nicht bereit.';
+    if (status) status.textContent = state.t('chatNotReady', 'Chat ist noch nicht bereit.');
     return;
   }
 
   const safeMode = mode === 'app' && canModifyResearchApp() ? 'app' : 'data';
   const task = selectedTask();
   const source = selectedSource();
-  const title = `${safeMode === 'app' ? 'Research Dashboard modifizieren' : 'Research bearbeiten'} · ${context.label || task?.title || 'Research'}`;
+  const title = `${safeMode === 'app' ? 'Web Research Dashboard modifizieren' : 'Research bearbeiten'} · ${context.label || task?.title || 'Research'}`;
   const instruction = safeMode === 'app'
     ? `Modifiziere das Business-OS Research Modul anhand dieser Admin-Anweisung. Kontext nur als UI-Bezug verwenden, Knowledge-Daten selbst nicht als primäres Ziel verändern.\n\n${trimmed}`
-    : `Arbeite mit dem Research Dashboard und der verknuepften Knowledge Base.\n\n${trimmed}`;
+    : `Arbeite mit dem Web Research Dashboard und der verknuepften Knowledge Base.\n\n${trimmed}`;
 
-  if (status) status.textContent = 'Oeffne Chat...';
+  if (status) status.textContent = state.t('openChatting', 'Öffne Chat...');
   window.dispatchEvent(new CustomEvent('ctox-business-os-chat-submit', {
     detail: {
       text: trimmed,
@@ -1652,16 +1670,8 @@ function statusKindFor(status) {
 
 function statusLabel(status) {
   const kind = statusKindFor(status);
-  const labels = {
-    queued: 'Queued',
-    running: 'Running',
-    completed: 'Completed',
-    blocked: 'Blocked',
-    failed: 'Failed',
-    cancelled: 'Cancelled',
-    idle: 'No active run',
-  };
-  return labels[kind] || status || labels.idle;
+  const key = `status${kind.charAt(0).toUpperCase()}${kind.slice(1)}`;
+  return state.t(key, kind) || status || state.t('statusIdle', 'No active run');
 }
 
 function knowledgeBaseForTask(task) {
@@ -1769,12 +1779,12 @@ function axisSelect(axis, selected, variant = 'toolbar') {
   const task = selectedTask();
   const axes = scoringDimensionsForTask(task);
   const isMapAxis = variant === 'map';
-  const axisName = axis === 'x' ? 'Horizontal' : 'Vertical';
-  const label = isMapAxis ? (axis === 'x' ? 'X axis' : 'Y axis') : axisName;
+  const axisName = axis === 'x' ? state.t('horizontalLabel', 'Horizontal') : state.t('verticalLabel', 'Vertical');
+  const label = isMapAxis ? (axis === 'x' ? state.t('xAxisLabel', 'X Axis') : state.t('yAxisLabel', 'Y Axis')) : axisName;
   return `
     <label class="${isMapAxis ? `research-map-axis research-map-axis-${axis}` : 'research-axis-select'}">
       <span>${escapeHtml(label)}</span>
-      <select data-axis-select="${axis}" aria-label="${axisName} axis">
+      <select data-axis-select="${axis}" aria-label="${escapeHtml(axisName)} axis">
         ${axes.map((item) => `<option value="${item.id}" ${item.id === selected ? 'selected' : ''}>${escapeHtml(item.label)}</option>`).join('')}
       </select>
     </label>
@@ -1810,10 +1820,11 @@ function relativeTime(ms) {
   const minute = 60 * 1000;
   const hour = 60 * minute;
   const day = 24 * hour;
-  if (diff < minute) return 'gerade eben';
-  if (diff < hour) return `vor ${Math.round(diff / minute)} min`;
-  if (diff < day) return `vor ${Math.round(diff / hour)} h`;
-  return new Date(value).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' });
+  if (diff < minute) return state.t('relativeJustNow', 'gerade eben');
+  if (diff < hour) return state.t('relativeMin', `vor ${Math.round(diff / minute)} min`, Math.round(diff / minute));
+  if (diff < day) return state.t('relativeHour', `vor ${Math.round(diff / hour)} h`, Math.round(diff / hour));
+  const localeStr = state.lang === 'en' ? 'en-US' : 'de-DE';
+  return new Date(value).toLocaleDateString(localeStr, { day: '2-digit', month: '2-digit' });
 }
 
 function iconSvg(name) {
@@ -1900,8 +1911,8 @@ function firstString(row, keys) {
 }
 
 function defaultPromptForKnowledgeBase(base) {
-  if (!base) return 'Erstelle ein kompaktes Research Dashboard auf Basis der ausgewaehlten Knowledge Base.';
-  return `Erzeuge ein uebersichtliches Dashboard auf Basis der Knowledge Base ${base.domain}. Nutze source_catalog als Rohquellenbasis, kuratierte Tabellen als Auswertung und Score nur belegte Quellen.`;
+  if (!base) return state.t('defaultPromptGeneric', 'Erstelle ein kompaktes Web Research Dashboard auf Basis der ausgewählten Knowledge Base.');
+  return state.t('defaultPromptText', `Erzeuge ein übersichtliches Dashboard auf Basis der Knowledge Base ${base.domain}. Nutze source_catalog als Rohquellenbasis, kuratierte Tabellen als Auswertung und Score nur belegte Quellen.`, base.domain);
 }
 
 function topicFitScore(task, text, row) {

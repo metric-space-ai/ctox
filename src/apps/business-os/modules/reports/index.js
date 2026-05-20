@@ -1,3 +1,5 @@
+import { loadModuleMessages } from '../../shared/i18n.js';
+
 const REPORTS_REFRESH_DEBOUNCE_MS = 80;
 
 const state = {
@@ -16,13 +18,32 @@ const state = {
   renderKey: '',
   renderedDetailId: '',
   detailScrollByReport: {},
+  t: null,
+  lang: 'de',
 };
 
 export async function mount(ctx) {
   state.ctx = ctx;
   await ensureStyles();
+
+  // Load localizations
+  const messages = await loadModuleMessages(import.meta.url, ctx.locale || 'de', {});
+  state.t = (key, fallback, ...args) => {
+    let val = messages[key] ?? fallback ?? key;
+    if (args.length) {
+      args.forEach((arg, i) => {
+        val = String(val).replace(`{${i}}`, arg);
+      });
+    }
+    return val;
+  };
+  state.lang = ctx.locale === 'en' ? 'en' : 'de';
+
   const html = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());
   ctx.host.innerHTML = html;
+  
+  applyStaticLabels(ctx.host, state.t);
+
   ctx.left.replaceChildren();
   ctx.right.replaceChildren();
   wireUi();
@@ -43,6 +64,41 @@ async function ensureStyles() {
   link.href = new URL('./index.css', import.meta.url).href;
   link.dataset.reportsStyle = 'true';
   document.head.append(link);
+}
+
+function applyStaticLabels(host, t) {
+  const root = host.querySelector('[data-reports-root]');
+  if (!root) return;
+  
+  // Refresh button
+  const refreshBtn = root.querySelector('[data-refresh-reports]');
+  if (refreshBtn) refreshBtn.textContent = t('refresh', 'Aktualisieren');
+  
+  // Search input placeholder
+  const searchInput = root.querySelector('[data-report-search]');
+  if (searchInput) searchInput.placeholder = t('searchPlaceholder', 'Suchen...');
+  
+  // Kind select options
+  const kindSelect = root.querySelector('[data-report-kind]');
+  if (kindSelect) {
+    kindSelect.innerHTML = `
+      <option value="all">${escapeHtml(t('allTypes', 'Alle Typen'))}</option>
+      <option value="bug">${escapeHtml(t('bugs', 'Bugs'))}</option>
+      <option value="feature">${escapeHtml(t('features', 'Features'))}</option>
+    `;
+  }
+  
+  // Status select options
+  const statusSelect = root.querySelector('[data-report-status]');
+  if (statusSelect) {
+    statusSelect.innerHTML = `
+      <option value="all">${escapeHtml(t('allStatus', 'Alle Status'))}</option>
+      <option value="open">${escapeHtml(t('open', 'Offen'))}</option>
+      <option value="running">${escapeHtml(t('running', 'In Arbeit'))}</option>
+      <option value="completed">${escapeHtml(t('completed', 'Erledigt'))}</option>
+      <option value="blocked">${escapeHtml(t('blocked', 'Blockiert'))}</option>
+    `;
+  }
 }
 
 function wireUi() {
@@ -141,7 +197,7 @@ function renderList() {
   const list = state.ctx.host.querySelector('[data-reports-list]');
   const items = filteredReports();
   if (!items.length) {
-    list.innerHTML = '<p class="reports-empty">Keine Reports gefunden.</p>';
+    list.innerHTML = `<p class="reports-empty">${escapeHtml(state.t('noReports', 'Keine Reports gefunden.'))}</p>`;
     return;
   }
   list.innerHTML = items.map((report) => `
@@ -169,7 +225,7 @@ function renderDetail() {
   const report = filteredReports().find((item) => item.id === state.selectedId) || normalizedReports()[0];
   if (!report) {
     state.renderedDetailId = '';
-    detail.innerHTML = '<p class="reports-empty">Waehle links einen Report aus.</p>';
+    detail.innerHTML = `<p class="reports-empty">${escapeHtml(state.t('selectReport', 'Waehle links einen Report aus.'))}</p>`;
     return;
   }
   const previousRenderedId = state.renderedDetailId;
@@ -182,33 +238,33 @@ function renderDetail() {
         <span>${escapeHtml(report.kindLabel)} · ${escapeHtml(displayStatus(report.status))}</span>
         <h1>${escapeHtml(report.title)}</h1>
       </div>
-      <button type="button" data-focus-task>CTOX Task zeigen</button>
+      <button type="button" class="os-btn" data-focus-task>${escapeHtml(state.t('showCtoxTask', 'CTOX Task zeigen'))}</button>
     </header>
-    <div class="reports-detail-scroll" data-reports-detail-scroll>
+    <div class="reports-detail-scroll os-scrollbar" data-reports-detail-scroll>
       <section class="reports-section">
-        <h3>Report</h3>
+        <h3>${escapeHtml(state.t('report', 'Report'))}</h3>
         <div class="reports-facts">
-          ${fact('Modul', report.moduleId)}
-          ${fact('Command', report.commandId || 'nicht angelegt')}
-          ${fact('Task', report.taskId || 'nicht angelegt')}
-          ${fact('Angelegt', formatDate(report.createdAt))}
+          ${fact(state.t('module', 'Modul'), report.moduleId)}
+          ${fact(state.t('command', 'Command'), report.commandId || state.t('notCreated', 'nicht angelegt'))}
+          ${fact(state.t('task', 'Task'), report.taskId || state.t('notCreated', 'nicht angelegt'))}
+          ${fact(state.t('created', 'Angelegt'), formatDate(report.createdAt))}
         </div>
       </section>
       <section class="reports-section">
-        <h3>Beschreibung</h3>
-        <p>${escapeHtml(report.summary || 'Keine Beschreibung hinterlegt.')}</p>
+        <h3>${escapeHtml(state.t('description', 'Beschreibung'))}</h3>
+        <p>${escapeHtml(report.summary || state.t('noDescription', 'Keine Beschreibung hinterlegt.'))}</p>
       </section>
       <section class="reports-section">
-        <h3>Erwartung</h3>
-        <p>${escapeHtml(report.expected || 'Keine Erwartung hinterlegt.')}</p>
+        <h3>${escapeHtml(state.t('expectation', 'Erwartung'))}</h3>
+        <p>${escapeHtml(report.expected || state.t('noExpectation', 'Keine Erwartung hinterlegt.'))}</p>
       </section>
       <section class="reports-section">
-        <h3>Was CTOX geaendert hat</h3>
+        <h3>${escapeHtml(state.t('whatCtoxChanged', 'Was CTOX geaendert hat'))}</h3>
         <p>${escapeHtml(report.changeSummary || changeFallback(report))}</p>
       </section>
       ${attachment ? `
         <section class="reports-section">
-          <h3>Screenshot und Markup</h3>
+          <h3>${escapeHtml(state.t('screenshotAndMarkup', 'Screenshot und Markup'))}</h3>
           <div class="reports-attachment">
             <span class="reports-attachment-meta">${escapeHtml(attachment.capture_mode || 'capture')}</span>
             <img src="${escapeAttr(attachment.data_url)}" alt="Report Screenshot" />
@@ -216,14 +272,14 @@ function renderDetail() {
         </section>
       ` : ''}
       <section class="reports-section">
-        <h3>Rollback</h3>
+        <h3>${escapeHtml(state.t('rollback', 'Rollback'))}</h3>
         <div class="reports-rollback">
-          <p>${escapeHtml(releases.length ? 'Waehle eine gespeicherte Modulversion und rolle das betroffene Modul zurueck.' : 'Fuer dieses Modul gibt es noch keine gespeicherte Version.')}</p>
+          <p>${escapeHtml(releases.length ? state.t('rollbackPrompt', 'Waehle eine gespeicherte Modulversion und rolle das betroffene Modul zurueck.') : state.t('noReleaseFound', 'Fuer dieses Modul gibt es noch keine gespeicherte Version.'))}</p>
           <div class="reports-rollback-actions">
-            <select data-rollback-version ${releases.length ? '' : 'disabled'}>
+            <select class="os-select" data-rollback-version ${releases.length ? '' : 'disabled'}>
               ${releases.map((release) => `<option value="${escapeAttr(release.versionId)}">v${escapeHtml(release.version)} · ${escapeHtml(release.status || '')} · ${escapeHtml(formatDate(release.createdAt))}</option>`).join('')}
             </select>
-            <button type="button" data-rollback-module ${releases.length ? '' : 'disabled'}>Rollback</button>
+            <button type="button" class="os-btn os-btn-primary" data-rollback-module ${releases.length ? '' : 'disabled'}>${escapeHtml(state.t('rollback', 'Rollback'))}</button>
           </div>
           <small data-rollback-status></small>
         </div>
@@ -290,7 +346,7 @@ function normalizedReports() {
     return {
       id,
       kind: normalizeKind(report.kind || payload.kind),
-      kindLabel: normalizeKind(report.kind || payload.kind) === 'bug' ? 'Bug' : 'Feature',
+      kindLabel: normalizeKind(report.kind || payload.kind) === 'bug' ? state.t('bugs', 'Bug') : state.t('features', 'Feature'),
       severity: report.severity || bug.severity || '',
       title: report.title || bug.title || id,
       summary: report.summary || bug.description || '',
@@ -337,19 +393,66 @@ async function rollbackSelectedRelease(report) {
   const status = detail.querySelector('[data-rollback-status]');
   const versionId = detail.querySelector('[data-rollback-version]')?.value || report.rollbackVersionId || '';
   if (!versionId) return;
-  status.textContent = 'Rollback laeuft...';
+  status.textContent = state.t('rollbackRunning', 'Rollback laeuft...');
   try {
-    const res = await fetch('/api/business-os/modules/rollback', {
-      method: 'POST',
-      headers: state.ctx.authHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ module_id: report.moduleId, version_id: versionId }),
+    await dispatchModuleCommand({
+      commandType: 'ctox.module.rollback',
+      moduleId: report.moduleId,
+      recordId: versionId,
+      payload: { module_id: report.moduleId, version_id: versionId },
+      source: 'business-os-reports',
     });
-    if (!res.ok) throw new Error(await res.text());
-    status.textContent = 'Rollback ausgefuehrt.';
+    status.textContent = state.t('rollbackExecuted', 'Rollback ausgefuehrt.');
     await refreshReports();
   } catch (error) {
     status.textContent = error.message || String(error);
   }
+}
+
+async function dispatchModuleCommand({
+  commandType,
+  moduleId,
+  recordId,
+  payload,
+  source,
+}) {
+  if (!state.ctx.commandBus?.dispatch || !state.ctx.db?.collection?.('business_commands')) {
+    throw new Error('business_commands collection is required for module governance commands');
+  }
+  await Promise.all([
+    state.ctx.sync?.startCollection?.('business_commands'),
+    state.ctx.sync?.startCollection?.('business_module_releases'),
+  ]);
+  const commandId = `cmd_${newId()}`;
+  await state.ctx.commandBus.dispatch({
+    id: commandId,
+    module: 'ctox',
+    type: commandType,
+    record_id: recordId || moduleId,
+    inbound_channel: moduleId,
+    payload,
+    client_context: {
+      source,
+      module_id: moduleId,
+      actor: actorContext(state.ctx.session),
+    },
+  });
+  return waitForCommandProjection(commandId);
+}
+
+async function waitForCommandProjection(commandId, timeoutMs = 45000) {
+  const collection = state.ctx.db?.collection?.('business_commands');
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const doc = await collection?.findOne(commandId).exec();
+    const data = doc?.toJSON?.();
+    if (data && data.status && data.status !== 'pending_sync') {
+      if (data.status === 'failed') throw new Error(data.error || `Command ${commandId} failed`);
+      return data;
+    }
+    await delay(300);
+  }
+  throw new Error(state.t('commandNotSynced', 'Command {0} wurde nicht synchronisiert.', commandId));
 }
 
 function fact(label, value) {
@@ -358,9 +461,9 @@ function fact(label, value) {
 
 function changeFallback(report) {
   if (report.commandId || report.taskId) {
-    return `CTOX hat den Report angenommen. Command ${report.commandId || '-'}, Task ${report.taskId || '-'}. Sobald der Lauf eine Change Summary schreibt, erscheint sie hier.`;
+    return state.t('reportAccepted', 'CTOX hat den Report angenommen. Command {0}, Task {1}. Sobald der Lauf eine Change Summary schreibt, erscheint sie hier.', report.commandId || '-', report.taskId || '-');
   }
-  return 'Noch keine CTOX-Annahme oder Change Summary vorhanden.';
+  return state.t('noChangeSummary', 'Noch keine CTOX-Annahme oder Change Summary vorhanden.');
 }
 
 function normalizeKind(value) {
@@ -379,11 +482,11 @@ function normalizeStatus(value) {
 function displayStatus(value) {
   const normalized = normalizeStatus(value);
   return {
-    open: 'Offen',
-    running: 'In Arbeit',
-    completed: 'Erledigt',
-    blocked: 'Blockiert',
-  }[normalized] || value || 'Offen';
+    open: state.t('open', 'Offen'),
+    running: state.t('running', 'In Arbeit'),
+    completed: state.t('completed', 'Erledigt'),
+    blocked: state.t('blocked', 'Blockiert'),
+  }[normalized] || value || state.t('open', 'Offen');
 }
 
 function objectValue(value) {
@@ -393,13 +496,31 @@ function objectValue(value) {
 function formatDate(value) {
   const timestamp = typeof value === 'number' ? value : Date.parse(value || '');
   if (!Number.isFinite(timestamp) || timestamp <= 0) return '-';
-  return new Intl.DateTimeFormat('de-DE', {
+  return new Intl.DateTimeFormat(state.lang === 'en' ? 'en-US' : 'de-DE', {
     day: '2-digit',
     month: '2-digit',
     year: '2-digit',
     hour: '2-digit',
     minute: '2-digit',
   }).format(new Date(timestamp));
+}
+
+function actorContext(session) {
+  const user = session?.user || {};
+  return {
+    id: user.id || '',
+    display_name: user.display_name || user.name || user.id || '',
+    role: user.role || 'user',
+    is_admin: Boolean(user.is_admin),
+  };
+}
+
+function newId() {
+  return globalThis.crypto?.randomUUID?.() || `${Date.now()}_${Math.random().toString(36).slice(2)}`;
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function escapeHtml(value) {

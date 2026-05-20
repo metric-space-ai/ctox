@@ -19,7 +19,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let proto_root = std::env::var_os("WHA_PROTO_ROOT")
         .map(PathBuf::from)
         .filter(|path| path.exists())
-        .or_else(|| upstream_proto_root.exists().then_some(upstream_proto_root.clone()))
+        .or_else(|| {
+            upstream_proto_root
+                .exists()
+                .then_some(upstream_proto_root.clone())
+        })
         .unwrap_or(vendored_proto_root.clone());
 
     if !proto_root.exists() {

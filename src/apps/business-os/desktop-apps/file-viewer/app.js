@@ -33,7 +33,13 @@ export async function mount(container, ctx) {
   const download = container.querySelector('[data-file-download]');
 
   try {
-    const blob = await readStoredFile(ctx.db, fileId, mimeType);
+    const blob = await readStoredOrMaterializeFile(ctx, {
+      fileId,
+      path: args.path || '',
+      name,
+      mimeType,
+      contentState: args.contentState || '',
+    });
     objectUrl = URL.createObjectURL(blob);
     renderBlob(content, objectUrl, blob, name, mimeType);
     download.addEventListener('click', () => {
@@ -51,6 +57,82 @@ export async function mount(container, ctx) {
     if (objectUrl) URL.revokeObjectURL(objectUrl);
     container.replaceChildren();
   };
+}
+
+async function readStoredOrMaterializeFile(ctx, file) {
+  if (file.contentState === 'lazy' || file.contentState === 'missing') {
+    await materializeStoredFile(ctx, file);
+    return waitForStoredFile(ctx.db, file.fileId, file.mimeType);
+  }
+  try {
+    return await readStoredFile(ctx.db, file.fileId, file.mimeType);
+  } catch (error) {
+    if (!isMissingContentError(error) || !file.path) throw error;
+  }
+  await materializeStoredFile(ctx, file);
+  return waitForStoredFile(ctx.db, file.fileId, file.mimeType);
+}
+
+function isMissingContentError(error) {
+  return String(error?.message || error || '').includes('Dateiinhalt fehlt');
+}
+
+async function materializeStoredFile(ctx, file) {
+  if (!ctx.commandBus?.dispatch) {
+    throw new Error('business_commands collection is required for file materialization');
+  }
+  await Promise.all([
+    ctx.sync?.startCollection?.('business_commands'),
+    ctx.sync?.startCollection?.('desktop_files'),
+    ctx.sync?.startCollection?.('desktop_file_chunks'),
+  ]);
+  const commandId = `cmd_${crypto.randomUUID()}`;
+  await ctx.commandBus.dispatch({
+    id: commandId,
+    module: 'desktop',
+    type: 'ctox.file.materialize',
+    record_id: file.fileId,
+    inbound_channel: 'desktop',
+    payload: {
+      file_id: file.fileId,
+      path: file.path,
+      title: `Load ${file.name}`,
+    },
+    client_context: {
+      source: 'business-os-file-viewer',
+      actor: actorContext(ctx.session),
+    },
+  });
+  const projection = await waitForCommandProjection(ctx.db, commandId);
+  if (projection.status === 'failed') {
+    const message = projection?.result?.error || projection?.error || 'Datei konnte nicht materialisiert werden.';
+    throw new Error(message);
+  }
+}
+
+async function waitForCommandProjection(db, commandId, timeoutMs = 45000) {
+  const collection = db?.collection?.('business_commands');
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const doc = await collection?.findOne(commandId).exec();
+    const data = doc?.toJSON?.();
+    if (data && data.status && data.status !== 'pending_sync') return data;
+    await delay(300);
+  }
+  throw new Error(`Command ${commandId} wurde nicht synchronisiert.`);
+}
+
+async function waitForStoredFile(db, fileId, mimeType, timeoutMs = 45000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      return await readStoredFile(db, fileId, mimeType);
+    } catch (error) {
+      if (!isMissingContentError(error)) throw error;
+      await delay(300);
+    }
+  }
+  throw new Error('Dateiinhalt wurde nicht über RxDB repliziert.');
 }
 
 async function renderBlob(container, objectUrl, blob, name, mimeType) {
@@ -88,13 +170,18 @@ async function readStoredFile(db, fileId, mimeType = 'application/octet-stream')
   const chunks = db?.collection?.('desktop_file_chunks');
   if (!chunks) throw new Error('Datei-Chunks sind nicht verfügbar.');
   const docs = await chunks.find().exec();
-  const data = docs
+  const allChunks = docs
     .map((doc) => (typeof doc.toJSON === 'function' ? doc.toJSON() : doc))
-    .filter((chunk) => chunk.file_id === fileId)
+    .filter((chunk) => chunk.file_id === fileId);
+  const latestCreatedAt = Math.max(0, ...allChunks.map((chunk) => Number(chunk.created_at_ms || 0)));
+  const generation = allChunks.filter((chunk) => Number(chunk.created_at_ms || 0) === latestCreatedAt);
+  const total = Number(generation[0]?.total || generation.length || 0);
+  if (!generation.length || total <= 0) throw new Error('Dateiinhalt fehlt.');
+  const data = generation
+    .filter((chunk) => Number(chunk.idx) < total)
     .sort((a, b) => a.idx - b.idx)
     .map((chunk) => chunk.data)
     .join('');
-  if (!data) throw new Error('Dateiinhalt fehlt.');
   const binary = atob(data);
   const bytes = new Uint8Array(binary.length);
   for (let idx = 0; idx < binary.length; idx += 1) bytes[idx] = binary.charCodeAt(idx);
@@ -206,6 +293,19 @@ function formatBytes(value) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function actorContext(session) {
+  const user = session?.user || {};
+  return {
+    id: user.id || 'business-os',
+    display_name: user.display_name || user.name || user.email || 'Business OS',
+    role: user.role || 'user',
+  };
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function escapeHtml(value) {

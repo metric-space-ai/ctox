@@ -1,0 +1,25 @@
+{
+  "id": "shiftflow",
+  "title": "Einsatzplanung",
+  "description": "Agentenunterstützte Einsatzplanung, Arbeitszeiterfassung und Urlaubsverwaltung für Teams mit Echtzeit-Synchronisation.",
+  "entry": "modules/shiftflow/index.html",
+  "collections": [
+    "business_commands",
+    "planning_employees",
+    "planning_projects",
+    "planning_shifts",
+    "planning_time_records",
+    "planning_absences"
+  ],
+  "layout": {
+    "shell": "full-workspace",
+    "left": "team status, absence scopes and department selection",
+    "center": "interactive scheduler timeline and timesheet grid",
+    "right": "AI roster planner, conflict alerts and timesheet inspector",
+    "drawers": {
+      "left": "Arbeitszeitmodelle und Einstellungen",
+      "right": "Dienstplaner und Detail-Inspektor",
+      "bottom": "Schnelleingabe & Massenaktionen"
+    }
+  }
+}

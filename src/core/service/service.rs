@@ -190,7 +190,7 @@ struct ServiceStatusWire {
 impl ServiceStatus {
     fn stopped(root: &Path) -> Self {
         let systemd = systemd_unit_status(root).ok().flatten();
-        Self {
+        let mut status = Self {
             running: false,
             busy: false,
             pid: read_pid_file(root),
@@ -217,6 +217,49 @@ impl ServiceStatus {
             monitor_last_error: None,
             last_agent_outcome: None,
             work_hours: crate::service::working_hours::snapshot(root),
+        };
+        status.apply_durable_queue_snapshot(root);
+        status
+    }
+
+    fn apply_durable_queue_snapshot(&mut self, root: &Path) {
+        if let Ok(tasks) =
+            channels::list_queue_tasks(root, &["pending".to_string(), "leased".to_string()], 6)
+        {
+            for task in &tasks {
+                if self.pending_previews.len() >= 6 {
+                    break;
+                }
+                let preview = format!("queue  {}", clip_text(task.title.trim(), 120));
+                if !self
+                    .pending_previews
+                    .iter()
+                    .any(|existing| existing == &preview)
+                {
+                    self.pending_previews.push(preview);
+                }
+            }
+            self.pending_count = self
+                .pending_count
+                .max(tasks.len().max(self.pending_previews.len()));
+        }
+        if let Ok(tasks) = channels::list_queue_tasks(root, &["blocked".to_string()], 6) {
+            for task in &tasks {
+                if self.blocked_previews.len() >= 6 {
+                    break;
+                }
+                let preview = format!("queue blocked  {}", clip_text(task.title.trim(), 112));
+                if !self
+                    .blocked_previews
+                    .iter()
+                    .any(|existing| existing == &preview)
+                {
+                    self.blocked_previews.push(preview);
+                }
+            }
+            self.blocked_count = self
+                .blocked_count
+                .max(tasks.len().max(self.blocked_previews.len()));
         }
     }
 }
@@ -644,6 +687,9 @@ pub fn run_foreground(root: &Path) -> Result<()> {
     start_mission_maintenance_loop(root.to_path_buf(), state.clone());
     start_harness_audit_watcher(root.to_path_buf(), state.clone());
     start_work_hours_dispatcher(root.to_path_buf(), state.clone());
+    // Start mail/collaboration server (SMTP, IMAP, CalDAV, CardDAV)
+    let mail_db_str = db_path.to_string_lossy().into_owned();
+    ctox_mailserver::start_services_thread(mail_db_str);
     // Keep the service control plane idle-cheap. Managed runtimes are started
     // on demand by agent turns; boot-time prewarm is opt-in because a local
     // model supervisor can consume CPU even when there is no queued work.
@@ -1744,6 +1790,9 @@ pub fn service_status_snapshot(root: &Path) -> Result<ServiceStatus> {
         let mut status = ServiceStatus::stopped(root);
         status.running = systemd.active;
         status.pid = systemd.pid.or(status.pid);
+        if !status.running && status.pid.is_some_and(process_is_running) {
+            status.running = true;
+        }
         status.autostart_enabled = systemd.enabled;
         status.manager = "systemd-user".to_string();
         status.monitor_alerts = runtime_lifecycle_alerts(root, status.pid, status.running)?;
@@ -1751,7 +1800,12 @@ pub fn service_status_snapshot(root: &Path) -> Result<ServiceStatus> {
     }
     #[cfg(unix)]
     {
-        return Ok(ServiceStatus::stopped(root));
+        let mut status = ServiceStatus::stopped(root);
+        if status.pid.is_some_and(process_is_running) {
+            status.running = true;
+            status.monitor_alerts = runtime_lifecycle_alerts(root, status.pid, true)?;
+        }
+        return Ok(status);
     }
     #[cfg(not(unix))]
     {
@@ -2275,10 +2329,25 @@ fn status_from_shared_state(root: &Path, state: &Arc<Mutex<SharedState>>) -> Res
     drop(shared);
 
     let runnable_durable_tasks =
-        channels::list_queue_tasks(root, &["pending".to_string(), "leased".to_string()], 6)
-            .unwrap_or_default();
-    let blocked_durable_tasks =
-        channels::list_queue_tasks(root, &["blocked".to_string()], 6).unwrap_or_default();
+        match channels::list_queue_tasks(root, &["pending".to_string(), "leased".to_string()], 6) {
+            Ok(tasks) => tasks,
+            Err(err) => {
+                eprintln!("ctox service status queue read failed: {err:#}");
+                pending_previews.push(format!(
+                    "queue status unavailable  {}",
+                    clip_text(&err.to_string(), 96)
+                ));
+                Vec::new()
+            }
+        };
+    let blocked_durable_tasks = match channels::list_queue_tasks(root, &["blocked".to_string()], 6)
+    {
+        Ok(tasks) => tasks,
+        Err(err) => {
+            eprintln!("ctox service blocked queue read failed: {err:#}");
+            Vec::new()
+        }
+    };
     let mut blocked_previews = Vec::new();
     let ticket_cases = tickets::list_cases(root, None, 6).unwrap_or_default();
     for task in &runnable_durable_tasks {
@@ -2860,8 +2929,9 @@ fn start_prompt_worker(
             let event_state = state.clone();
             let event_source = job.source_label.clone();
             let workspace_root = job.workspace_root.as_deref().map(std::path::Path::new);
+            let conversation_thread_key = conversation_thread_key_for_queue_job(&root, &job);
             let conversation_id =
-                turn_loop::conversation_id_for_thread_key(job.thread_key.as_deref());
+                turn_loop::conversation_id_for_thread_key(conversation_thread_key.as_deref());
             // Task boundaries — plan-step messages or self-work item
             // closures — must always trigger a continuity refresh, regardless
             // of CTOX_CONTINUITY_REFRESH_EVERY_N_TURNS.
@@ -2869,8 +2939,13 @@ fn start_prompt_worker(
                 .leased_message_keys
                 .iter()
                 .any(|key| key.starts_with("plan:system::"));
+            let base_execution_prompt = if is_business_os_chat_queue_job(&root, &job) {
+                business_os_chat_execution_prompt(&job)
+            } else {
+                artifact_first_execution_prompt(&job)
+            };
             let execution_prompt =
-                outbound_email_first_execution_prompt(&job, artifact_first_execution_prompt(&job));
+                outbound_email_first_execution_prompt(&job, base_execution_prompt);
             let result = turn_loop::run_chat_turn_with_events_extended_guarded(
                 &root,
                 &db_path,
@@ -3015,7 +3090,7 @@ fn start_prompt_worker(
             // CTOX enqueues a rework slice with the reviewer's report as
             // input. Reviewer errors/timeouts hold terminal completion; they
             // must not silently complete the worker slice.
-            let review_disposition = if completion_review_should_skip_feedback_turn(&job) {
+            let review_disposition = if completion_review_should_skip_feedback_turn(&root, &job) {
                 push_event(
                     &state,
                     format!(
@@ -3081,10 +3156,12 @@ fn start_prompt_worker(
                             None
                         };
                         let mut founder_send_error: Option<String> = None;
-                        let mut should_handle_messages = matches!(
-                            &review_disposition,
-                            CompletionReviewDisposition::Approved { .. }
-                        );
+                        let mut should_handle_messages =
+                            matches!(
+                                &review_disposition,
+                                CompletionReviewDisposition::Approved { .. }
+                            ) || (matches!(&review_disposition, CompletionReviewDisposition::None)
+                                && is_business_os_chat_queue_job(&root, &job));
                         let terminal_no_send = matches!(
                             &review_disposition,
                             CompletionReviewDisposition::NoSend { .. }
@@ -3115,6 +3192,12 @@ fn start_prompt_worker(
                                 ),
                             );
                         }
+                        sync_delivered_workspace_files_to_business_os(
+                            &root,
+                            &mut shared,
+                            &delivered_artifact_refs,
+                        );
+                        sync_workspace_root_to_business_os(&root, &mut shared, &job);
                         let mut reviewed_terminal_proof_ids: Vec<String> = Vec::new();
                         let mut outcome_witness_error: Option<String> = None;
                         if let CompletionReviewDisposition::Approved { review_audit_key } =
@@ -3338,6 +3421,38 @@ fn start_prompt_worker(
                                     message_key,
                                     "Founder communication completed after reviewed outbound send.",
                                 );
+                            }
+                        }
+                        if should_handle_messages && !job.leased_message_keys.is_empty() {
+                            for message_key in &job.leased_message_keys {
+                                match crate::business_os::store::complete_business_command_from_queue_reply(
+                                    &root,
+                                    message_key,
+                                    &reply,
+                                ) {
+                                    Ok(Some(result)) => {
+                                        push_event_locked(
+                                            &mut shared,
+                                            format!(
+                                                "Business OS command writeback completed for {}: {}",
+                                                message_key,
+                                                clip_text(&result.to_string(), 180)
+                                            ),
+                                        );
+                                    }
+                                    Ok(None) => {}
+                                    Err(err) => {
+                                        let summary = format!(
+                                            "Business OS command writeback failed for {}: {}",
+                                            message_key,
+                                            clip_text(&err.to_string(), 180)
+                                        );
+                                        push_event_locked(&mut shared, summary.clone());
+                                        founder_send_error = Some(summary);
+                                        should_handle_messages = false;
+                                        break;
+                                    }
+                                }
                             }
                         }
                         if !job.leased_message_keys.is_empty() && should_handle_messages {
@@ -4044,6 +4159,22 @@ fn start_prompt_worker(
             if !queued_outcome_recovery {
                 if let Some(queued) = next_prompt {
                     start_prompt_worker(root.clone(), state.clone(), queued);
+                } else {
+                    match maybe_lease_next_durable_queue_prompt_for_idle_dispatch(&root, &state) {
+                        Ok(Some(queued)) => enqueue_prompt(
+                            &root,
+                            &state,
+                            queued,
+                            "Queued durable queue task after worker completion".to_string(),
+                        ),
+                        Ok(None) => {}
+                        Err(err) => push_event(
+                            &state,
+                            format!(
+                                "Failed to lease next durable queue task after worker completion: {err}"
+                            ),
+                        ),
+                    }
                 }
             }
             match &latest_runtime_error {
@@ -4100,7 +4231,23 @@ fn start_prompt_worker(
                 }
             }
             if let Some(queued) = next_prompt {
-                start_prompt_worker(root, state, queued);
+                start_prompt_worker(root.clone(), state.clone(), queued);
+            } else {
+                match maybe_lease_next_durable_queue_prompt_for_idle_dispatch(&root, &state) {
+                    Ok(Some(queued)) => enqueue_prompt(
+                        &root,
+                        &state,
+                        queued,
+                        "Queued durable queue task after worker panic".to_string(),
+                    ),
+                    Ok(None) => {}
+                    Err(err) => push_event(
+                        &state,
+                        format!(
+                            "Failed to lease next durable queue task after worker panic: {err}"
+                        ),
+                    ),
+                }
             }
             eprintln!("ctox prompt worker end source={} panic", job.source_label);
         }
@@ -4816,8 +4963,65 @@ fn completion_review_is_reviewer_limited_internal_work(
     )
 }
 
-fn completion_review_should_skip_feedback_turn(job: &QueuedPrompt) -> bool {
-    job.source_label == QUEUE_GUARD_SOURCE_LABEL
+fn completion_review_should_skip_feedback_turn(root: &Path, job: &QueuedPrompt) -> bool {
+    job.source_label == QUEUE_GUARD_SOURCE_LABEL || is_business_os_chat_queue_job(root, job)
+}
+
+fn conversation_thread_key_for_queue_job(root: &Path, job: &QueuedPrompt) -> Option<String> {
+    if is_business_os_chat_queue_job(root, job) {
+        let suffix = business_os_command_id_from_prompt(&job.prompt)
+            .or_else(|| job.leased_message_keys.first().cloned())
+            .unwrap_or_else(|| job.preview.clone());
+        let base = job
+            .thread_key
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or("business-os/chat");
+        return Some(format!("{base}/chat/{suffix}"));
+    }
+    job.thread_key.clone()
+}
+
+fn business_os_chat_execution_prompt(job: &QueuedPrompt) -> String {
+    format!(
+        "{}\n\nBusiness OS chat execution rules:\n- Return the answer as your final assistant message.\n- Do not update Business OS SQLite stores, RxDB projections, queue rows, command rows, chat rows, or runtime status tables yourself.\n- Do not call `ctox queue complete`, `ctox queue release`, `ctox queue fail`, or equivalent direct SQL for this Business OS command.\n- You may inspect referenced files or readonly state when needed to answer accurately.\n- The CTOX service will persist your final answer back into the Documents chat and acknowledge the queue item.",
+        job.prompt
+    )
+}
+
+fn is_business_os_chat_queue_job(root: &Path, job: &QueuedPrompt) -> bool {
+    if job.prompt.contains("business_os.chat.task") {
+        return true;
+    }
+    let db_path = crate::paths::core_db(root);
+    let Ok(conn) = Connection::open(db_path) else {
+        return false;
+    };
+    job.leased_message_keys.iter().any(|message_key| {
+        conn.query_row(
+            "SELECT metadata_json FROM communication_messages WHERE message_key = ?1",
+            params![message_key],
+            |row| row.get::<_, String>(0),
+        )
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .and_then(|metadata| {
+            metadata
+                .get("business_os_command_type")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        })
+        .as_deref()
+            == Some("business_os.chat.task")
+    })
+}
+
+fn business_os_command_id_from_prompt(prompt: &str) -> Option<String> {
+    prompt.lines().find_map(|line| {
+        let trimmed = line.trim();
+        let value = trimmed.strip_prefix("- command_id:")?.trim();
+        (!value.is_empty()).then(|| value.to_string())
+    })
 }
 
 /// Background-driven slices (timeout continuation, queue-pressure guard, cron,
@@ -5771,6 +5975,9 @@ fn xlsx_cell_text(cell: roxmltree::Node<'_, '_>, shared_strings: &[String]) -> S
 }
 
 fn expected_outcome_artifacts_for_job(job: &QueuedPrompt) -> Vec<ArtifactRef> {
+    if job.prompt.contains("business_os.chat.task") {
+        return Vec::new();
+    }
     let mut refs = Vec::new();
     let workspace_terminal_state = if workspace_file_artifacts_require_fresh_write(job) {
         "fresh"
@@ -5959,6 +6166,69 @@ fn delivered_outcome_artifacts_for_job(
         }
     }
     Ok(delivered)
+}
+
+fn sync_delivered_workspace_files_to_business_os(
+    root: &Path,
+    shared: &mut SharedState,
+    delivered_artifact_refs: &[ArtifactRef],
+) {
+    for artifact in delivered_artifact_refs {
+        if artifact.kind != ArtifactKind::WorkspaceFile {
+            continue;
+        }
+        let path = Path::new(&artifact.primary_key);
+        match crate::business_os::sync_desktop_file_from_path(root, path) {
+            Ok(()) => push_event_locked(
+                shared,
+                format!(
+                    "Synced workspace file to Business OS desktop via native RxDB: {}",
+                    path.display()
+                ),
+            ),
+            Err(err) => push_event_locked(
+                shared,
+                format!(
+                    "Business OS desktop file sync skipped for {}: {}",
+                    path.display(),
+                    clip_text(&err.to_string(), 180)
+                ),
+            ),
+        }
+    }
+}
+
+fn sync_workspace_root_to_business_os(root: &Path, shared: &mut SharedState, job: &QueuedPrompt) {
+    let Some(workspace_root) = job
+        .workspace_root
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+    let path = Path::new(workspace_root);
+    match crate::business_os::sync_desktop_files_from_workspace_root(root, path) {
+        Ok(indexed) => {
+            if indexed > 0 {
+                push_event_locked(
+                    shared,
+                    format!(
+                        "Synced {indexed} workspace file(s) to Business OS desktop via native RxDB: {}",
+                        path.display()
+                    ),
+                );
+            }
+        }
+        Err(err) => push_event_locked(
+            shared,
+            format!(
+                "Business OS workspace file index skipped for {}: {}",
+                path.display(),
+                clip_text(&err.to_string(), 180)
+            ),
+        ),
+    }
 }
 
 fn workspace_file_artifacts_require_fresh_write(job: &QueuedPrompt) -> bool {
@@ -7664,8 +7934,19 @@ fn looks_like_internal_label(text: &str) -> bool {
 
 fn start_channel_router(root: std::path::PathBuf, state: Arc<Mutex<SharedState>>) {
     thread::spawn(move || loop {
-        if let Err(err) = route_external_messages(&root, &state) {
-            push_event(&state, format!("Channel route failed: {err}"));
+        let routed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            route_external_messages(&root, &state)
+        }));
+        match routed {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => {
+                eprintln!("ctox channel route failed: {err:#}");
+                push_event(&state, format!("Channel route failed: {err}"));
+            }
+            Err(_) => {
+                eprintln!("ctox channel router panic; continuing");
+                push_event(&state, "Channel router panicked; continuing".to_string());
+            }
         }
         thread::sleep(Duration::from_secs(CHANNEL_ROUTER_POLL_SECS));
     });
@@ -7836,13 +8117,40 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
     if let Err(err) = reconcile_ticket_runtime_state(root, state) {
         push_event(state, format!("Ticket reconciliation failed: {err}"));
     }
-    if queue_pressure_active(state) {
-        return Ok(());
+    match crate::business_os::store::complete_ready_documents_report_commands(root, 8) {
+        Ok(completed) if completed > 0 => push_event(
+            state,
+            format!("Completed {completed} ready Business OS document report writeback(s)"),
+        ),
+        Ok(_) => {}
+        Err(err) => push_event(
+            state,
+            format!(
+                "Business OS document report writeback sweep failed: {}",
+                clip_text(&err.to_string(), 180)
+            ),
+        ),
     }
     // The channel router runs on its own timer. It may not repair, lease, or
     // reprioritize external work while a worker is still inside a full
     // reasoning/tool/review loop; arbitration belongs after that loop ends.
     if active_agent_loop_in_progress(state) {
+        return Ok(());
+    }
+    if let Some(prompt) = maybe_take_next_queued_prompt_for_idle_dispatch(root, state) {
+        start_prompt_worker(root.to_path_buf(), state.clone(), prompt);
+        return Ok(());
+    }
+    if queue_pressure_active(state) {
+        return Ok(());
+    }
+    if let Some(prompt) = maybe_lease_next_durable_queue_prompt_for_idle_dispatch(root, state)? {
+        enqueue_prompt(
+            root,
+            state,
+            prompt,
+            "Queued durable queue task for active handling".to_string(),
+        );
         return Ok(());
     }
     route_assigned_ticket_self_work(root, state)?;
@@ -8124,6 +8432,52 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
     Ok(())
 }
 
+fn maybe_take_next_queued_prompt_for_idle_dispatch(
+    root: &Path,
+    state: &Arc<Mutex<SharedState>>,
+) -> Option<QueuedPrompt> {
+    let mut shared = lock_shared_state(state);
+    if shared.busy || shared.pending_prompts.is_empty() {
+        return None;
+    }
+    maybe_start_next_queued_prompt_after_recovery_locked(root, &mut shared, false)
+}
+
+fn maybe_lease_next_durable_queue_prompt_for_idle_dispatch(
+    root: &Path,
+    state: &Arc<Mutex<SharedState>>,
+) -> Result<Option<QueuedPrompt>> {
+    {
+        let shared = lock_shared_state(state);
+        if shared.busy {
+            return Ok(None);
+        }
+    }
+    let tasks = channels::list_queue_tasks(root, &["pending".to_string()], 16)?;
+    for task in tasks {
+        if inflight_leased_message_key(state, &task.message_key) {
+            continue;
+        }
+        let leased =
+            channels::lease_queue_task(root, &task.message_key, CHANNEL_ROUTER_LEASE_OWNER)?;
+        return Ok(Some(QueuedPrompt {
+            preview: preview_text(&leased.prompt),
+            source_label: "queue".to_string(),
+            goal: leased.title.clone(),
+            prompt: leased.prompt.clone(),
+            suggested_skill: leased.suggested_skill.clone(),
+            leased_message_keys: vec![leased.message_key],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some(leased.thread_key.clone()),
+            workspace_root: leased.workspace_root.clone(),
+            ticket_self_work_id: leased.ticket_self_work_id.clone(),
+            outbound_email: None,
+            outbound_anchor: None,
+        }));
+    }
+    Ok(None)
+}
+
 fn run_ticket_dispatch_preflight(
     root: &Path,
     state: &Arc<Mutex<SharedState>>,
@@ -8163,7 +8517,15 @@ fn run_ticket_dispatch_preflight(
 fn reconcile_ticket_runtime_state(root: &Path, state: &Arc<Mutex<SharedState>>) -> Result<()> {
     let active_keys = {
         let shared = lock_shared_state(state);
-        shared.leased_message_keys_inflight.clone()
+        let mut keys = HashSet::new();
+        for prompt in &shared.pending_prompts {
+            keys.extend(prompt.leased_message_keys.iter().cloned());
+            keys.extend(prompt.leased_ticket_event_keys.iter().cloned());
+        }
+        if shared.busy {
+            keys.extend(shared.leased_message_keys_inflight.iter().cloned());
+        }
+        keys
     };
     let released_queue_leases =
         channels::release_stale_queue_task_leases(root, CHANNEL_ROUTER_LEASE_OWNER, &active_keys)?;
@@ -8191,6 +8553,11 @@ fn reconcile_ticket_runtime_state(root: &Path, state: &Arc<Mutex<SharedState>>) 
             state,
             format!("Released {released_count} stale queue task lease(s)"),
         );
+    }
+    let runnable_queue_tasks =
+        channels::list_queue_tasks(root, &["pending".to_string(), "leased".to_string()], 1)?;
+    if !runnable_queue_tasks.is_empty() {
+        return Ok(());
     }
     let released_leases =
         tickets::release_stale_ticket_event_leases(root, CHANNEL_ROUTER_LEASE_OWNER, &active_keys)?;
@@ -15408,7 +15775,7 @@ mod tests {
         );
         assert!(timeout_prompt
             .contains("Work only inside this workspace:\n/tmp/ctox-workspace-contract"));
-        assert!(timeout_prompt.contains("Slice goal:\nShip the next implementation slice."));
+        assert!(timeout_prompt.contains("CURRENT TASK\nShip the next implementation slice."));
     }
 
     #[test]
@@ -21988,7 +22355,10 @@ The previous controller turn is incomplete. Update these files now:\n\
             outbound_anchor: None,
         };
 
-        assert!(!completion_review_should_skip_feedback_turn(&job));
+        assert!(!completion_review_should_skip_feedback_turn(
+            Path::new("."),
+            &job
+        ));
         let prompt = artifact_first_execution_prompt(&job);
         assert!(prompt.starts_with("HARNESS ARTIFACT CONTRACT"));
         assert!(prompt.contains("ORIGINAL TASK"));
@@ -22012,7 +22382,10 @@ The previous controller turn is incomplete. Update these files now:\n\
             outbound_anchor: None,
         };
 
-        assert!(completion_review_should_skip_feedback_turn(&job));
+        assert!(completion_review_should_skip_feedback_turn(
+            Path::new("."),
+            &job
+        ));
     }
 
     #[test]

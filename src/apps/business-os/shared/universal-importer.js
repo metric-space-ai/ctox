@@ -14,6 +14,269 @@ export async function openUniversalImporter(ctx, config = {}) {
   const close = () => drawer.remove();
   drawer.querySelector('[data-action="close-importer"]')?.addEventListener('click', close);
   drawer.querySelector('[data-import-source]')?.addEventListener('change', () => updateImporterFields(drawer));
+
+  // In-memory list of files currently selected (either locally or from Business OS)
+  const stagedFiles = [];
+  drawer.stagedFiles = stagedFiles;
+  
+  // Business OS virtual filesystem navigation state
+  let currentFolderId = 'fs_root';
+  let folderDocs = new Map();
+  let allFileDocs = [];
+
+  function formatBytes(bytes) {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+  }
+
+  const stagedContainer = drawer.querySelector('[data-staged-files-container]');
+  const stagedListEl = drawer.querySelector('[data-staged-files-list]');
+
+  function renderStagedFiles() {
+    if (!stagedListEl) return;
+    if (stagedFiles.length === 0) {
+      stagedContainer.hidden = true;
+      stagedListEl.innerHTML = '';
+      return;
+    }
+    stagedContainer.hidden = false;
+    stagedListEl.innerHTML = stagedFiles.map((file, index) => {
+      const originClass = file.source === 'business-os' ? 'origin-bos' : 'origin-local';
+      const originLabel = file.source === 'business-os' ? 'Business OS' : 'Lokal';
+      return `
+        <div class="staged-file-item">
+          <span class="file-icon-badge">${escapeHtml(file.name.split('.').pop()?.toUpperCase() || 'FILE')}</span>
+          <div class="staged-file-details">
+            <span class="file-name" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</span>
+            <span class="file-meta">${formatBytes(file.size)} • <span class="file-origin-badge ${originClass}">${originLabel}</span></span>
+          </div>
+          <button type="button" class="remove-staged-file-btn" data-index="${index}" title="Datei entfernen">×</button>
+        </div>
+      `;
+    }).join('');
+
+    stagedListEl.querySelectorAll('.remove-staged-file-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const index = parseInt(btn.dataset.index, 10);
+        stagedFiles.splice(index, 1);
+        renderStagedFiles();
+      });
+    });
+  }
+
+  // Local drag & drop
+  const dropZone = drawer.querySelector('[data-drag-drop-zone]');
+  const localFileInput = drawer.querySelector('[data-local-file-input]');
+
+  if (dropZone && localFileInput) {
+    dropZone.addEventListener('click', () => {
+      localFileInput.click();
+    });
+
+    localFileInput.addEventListener('change', async () => {
+      if (localFileInput.files?.length) {
+        await addLocalFiles(localFileInput.files);
+        localFileInput.value = '';
+      }
+    });
+
+    dropZone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      dropZone.classList.add('dragover');
+    });
+
+    dropZone.addEventListener('dragleave', () => {
+      dropZone.classList.remove('dragover');
+    });
+
+    dropZone.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      dropZone.classList.remove('dragover');
+      if (e.dataTransfer?.files?.length) {
+        await addLocalFiles(e.dataTransfer.files);
+      }
+    });
+  }
+
+  async function addLocalFiles(fileList) {
+    for (const file of Array.from(fileList)) {
+      if (stagedFiles.some(f => f.name === file.name && f.size === file.size)) {
+        continue;
+      }
+      try {
+        const base64 = await fileToBase64(file);
+        stagedFiles.push({
+          name: file.name,
+          type: file.type || guessMimeType(file.name),
+          size: file.size,
+          lastModified: file.lastModified,
+          base64: base64,
+          source: 'local'
+        });
+      } catch (err) {
+        console.error('Failed to read local file:', err);
+      }
+    }
+    renderStagedFiles();
+  }
+
+  // Business OS Explorer
+  async function loadExplorerFiles() {
+    const listEl = drawer.querySelector('[data-explorer-file-list]');
+    if (!listEl) return;
+
+    listEl.innerHTML = '<div class="explorer-loading">Lade Dateien...</div>';
+
+    const db = ctx?.db;
+    const collection = db?.collection?.('desktop_files');
+    if (!collection) {
+      listEl.innerHTML = '<div class="explorer-error">Fehler: Keine Verbindung zur OS-Datenbank.</div>';
+      return;
+    }
+
+    try {
+      const docs = await collection.find().exec();
+      const data = docs.map(doc => (typeof doc.toJSON === 'function' ? doc.toJSON() : doc));
+      
+      allFileDocs = data.filter(item => !item.is_deleted);
+      folderDocs = new Map(allFileDocs.filter(item => item.kind === 'folder').map(item => [item.id, item]));
+
+      renderExplorerRows();
+    } catch (err) {
+      console.error('[importer explorer] failed to load files:', err);
+      listEl.innerHTML = '<div class="explorer-error">Ladefehler.</div>';
+    }
+  }
+
+  function renderExplorerRows() {
+    const listEl = drawer.querySelector('[data-explorer-file-list]');
+    const pathEl = drawer.querySelector('[data-explorer-path]');
+    const upBtn = drawer.querySelector('[data-explorer-up]');
+    if (!listEl) return;
+
+    if (upBtn) {
+      upBtn.disabled = currentFolderId === 'fs_root';
+    }
+
+    const currentFolder = folderDocs.get(currentFolderId) || { id: 'fs_root', name: 'Files', path: '/' };
+    if (pathEl) {
+      pathEl.textContent = currentFolder.name;
+      pathEl.title = currentFolder.path;
+    }
+
+    const items = allFileDocs.filter(item => item.parent_id === currentFolderId);
+
+    if (items.length === 0) {
+      listEl.innerHTML = '<div class="explorer-empty">Der Ordner ist leer.</div>';
+      return;
+    }
+
+    items.sort((a, b) => {
+      if (a.kind === b.kind) {
+        return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+      }
+      return a.kind === 'folder' ? -1 : 1;
+    });
+
+    listEl.innerHTML = items.map(item => {
+      const isFolder = item.kind === 'folder';
+      const fileExt = isFolder ? 'DIR' : (item.name.split('.').pop()?.toUpperCase() || 'FILE');
+      const iconClass = isFolder ? 'icon-folder' : 'icon-file';
+      const sizeStr = isFolder ? '' : formatBytes(item.size_bytes || 0);
+
+      return `
+        <button type="button" class="explorer-row-item ${isFolder ? 'is-dir' : 'is-file'}" data-id="${item.id}" data-kind="${item.kind}">
+          <span class="item-icon-indicator ${iconClass}">${fileExt}</span>
+          <div class="item-info">
+            <span class="item-name" title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</span>
+            ${isFolder ? '' : `<span class="item-size">${sizeStr}</span>`}
+          </div>
+        </button>
+      `;
+    }).join('');
+
+    listEl.querySelectorAll('.explorer-row-item').forEach(itemEl => {
+      const id = itemEl.dataset.id;
+      const kind = itemEl.dataset.kind;
+
+      if (kind === 'folder') {
+        itemEl.addEventListener('dblclick', () => {
+          currentFolderId = id;
+          renderExplorerRows();
+        });
+        itemEl.addEventListener('click', () => {
+          listEl.querySelectorAll('.explorer-row-item').forEach(el => el.classList.remove('is-selected'));
+          itemEl.classList.add('is-selected');
+        });
+      } else {
+        itemEl.addEventListener('click', async () => {
+          listEl.querySelectorAll('.explorer-row-item').forEach(el => el.classList.remove('is-selected'));
+          itemEl.classList.add('is-selected');
+          await selectVirtualFile(id);
+        });
+      }
+    });
+  }
+
+  async function selectVirtualFile(fileId) {
+    const fileDoc = allFileDocs.find(item => item.id === fileId);
+    if (!fileDoc) return;
+
+    if (stagedFiles.some(f => f.name === fileDoc.name && f.size === fileDoc.size_bytes)) {
+      return;
+    }
+
+    const listEl = drawer.querySelector('[data-explorer-file-list]');
+    listEl.innerHTML = `<div class="explorer-loading">Lade "${escapeHtml(fileDoc.name)}" ...</div>`;
+
+    try {
+      const db = ctx?.db;
+      const chunksColl = db?.collection?.('desktop_file_chunks');
+      if (!chunksColl) throw new Error('desktop_file_chunks collection not found');
+
+      const docs = await chunksColl.find().exec();
+      const allChunks = docs
+        .map(doc => (typeof doc.toJSON === 'function' ? doc.toJSON() : doc))
+        .filter(chunk => chunk.file_id === fileId);
+
+      if (!allChunks.length) throw new Error('Dateiinhalt fehlt');
+
+      allChunks.sort((a, b) => Number(a.idx) - Number(b.idx));
+      const base64 = allChunks.map(c => c.data).join('');
+
+      stagedFiles.push({
+        name: fileDoc.name,
+        type: fileDoc.mime_type || guessMimeType(fileDoc.name),
+        size: fileDoc.size_bytes || 0,
+        lastModified: fileDoc.updated_at_ms || Date.now(),
+        base64: base64,
+        source: 'business-os',
+        id: fileDoc.id
+      });
+
+      renderStagedFiles();
+    } catch (err) {
+      console.error('Failed to load virtual file chunks:', err);
+      alert(`Fehler beim Laden der Datei: ${err.message}`);
+    } finally {
+      renderExplorerRows();
+    }
+  }
+
+  const upBtn = drawer.querySelector('[data-explorer-up]');
+  if (upBtn) {
+    upBtn.addEventListener('click', () => {
+      if (currentFolderId === 'fs_root') return;
+      const currentFolder = folderDocs.get(currentFolderId);
+      currentFolderId = currentFolder?.parent_id || 'fs_root';
+      renderExplorerRows();
+    });
+  }
+
+  loadExplorerFiles().catch(err => console.warn('Failed to load explorer files', err));
   drawer.querySelector('[data-action="submit-importer"]')?.addEventListener('click', async () => {
     const status = drawer.querySelector('[data-import-status]');
     const submitButton = drawer.querySelector('[data-action="submit-importer"]');
@@ -371,11 +634,16 @@ async function buildImportPayload(drawer, config) {
   const text = drawer.querySelector('[data-import-text]')?.value || '';
   const url = drawer.querySelector('[data-import-url]')?.value?.trim() || '';
   const filterPrompt = drawer.querySelector('[data-import-filter-prompt]')?.value?.trim() || config.defaultFilterPrompt || '';
-  const fileInput = drawer.querySelector('[data-import-files]');
-  const files = await filePayloadFromInput(fileInput);
+  let files = [];
+  if (sourceType === 'document' || sourceType === 'excel') {
+    files = drawer.stagedFiles || [];
+  } else {
+    const fileInput = drawer.querySelector('[data-import-files]');
+    files = await filePayloadFromInput(fileInput);
+  }
   if (sourceType === 'text' && !text.trim()) throw new Error('Bitte Text oder Zeilen einfügen.');
   if (sourceType === 'url' && !url) throw new Error('Bitte eine URL angeben.');
-  if ((sourceType === 'document' || sourceType === 'table') && files.length === 0) throw new Error('Bitte mindestens eine Datei auswählen.');
+  if ((sourceType === 'document' || sourceType === 'table' || sourceType === 'excel') && files.length === 0) throw new Error('Bitte mindestens eine Datei auswählen.');
   return {
     record_id: `import_${Date.now()}_${crypto.randomUUID()}`,
     title,
@@ -430,10 +698,41 @@ function importerTemplate(config) {
         </label>
       </div>
       <div data-source-panel="excel document">
-        <label>
-          <span>Datei</span>
-          <input data-import-files type="file" multiple accept=".csv,.tsv,.txt,.md,.json,.xlsx,.xls,.docx,.pdf" />
-        </label>
+        <span class="importer-field-title" style="display: block; margin-bottom: 6px; color: var(--muted, oklch(0.48 0.015 235)); font-size: 12px; font-weight: 700; text-transform: uppercase;">Dateien auswählen</span>
+        <div class="importer-split-layout">
+          <!-- Left side: Drag & Drop upload -->
+          <div class="importer-drag-drop-zone" data-drag-drop-zone>
+            <input type="file" multiple class="importer-hidden-file-input" data-local-file-input accept=".csv,.tsv,.txt,.md,.json,.xlsx,.xls,.docx,.pdf" />
+            <div class="drag-drop-content">
+              <svg class="upload-icon" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                <polyline points="17 8 12 3 7 8"></polyline>
+                <line x1="12" y1="3" x2="12" y2="15"></line>
+              </svg>
+              <strong>Datei ablegen</strong>
+              <span>oder klicken</span>
+            </div>
+          </div>
+          
+          <!-- Right side: Business OS File Explorer Widget -->
+          <div class="importer-bos-explorer">
+            <header class="explorer-widget-header">
+              <button type="button" class="explorer-up-btn" data-explorer-up title="Eine Ebene höher">⌃</button>
+              <div class="explorer-path-container">
+                <span class="explorer-path-label" data-explorer-path>Files</span>
+              </div>
+            </header>
+            <div class="explorer-file-list" data-explorer-file-list>
+              <div class="explorer-loading">Lade Business OS Dateien...</div>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Staged files display -->
+        <div class="importer-staged-files" data-staged-files-container hidden>
+          <span class="staged-title">Ausgewählte Dateien:</span>
+          <div class="staged-list" data-staged-files-list></div>
+        </div>
       </div>
       <div data-source-panel="url">
         <label>

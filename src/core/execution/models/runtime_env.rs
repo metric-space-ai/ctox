@@ -13,6 +13,7 @@ use crate::inference::runtime_state;
 use crate::secrets;
 
 const RUNTIME_ENV_TABLE: &str = "runtime_env_kv";
+const RUNTIME_ENV_STORE_FILE: &str = "ctox-runtime.sqlite3";
 
 fn initialized_runtime_env_paths() -> &'static Mutex<HashSet<PathBuf>> {
     static INITIALIZED: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
@@ -20,7 +21,7 @@ fn initialized_runtime_env_paths() -> &'static Mutex<HashSet<PathBuf>> {
 }
 
 pub fn runtime_config_path(root: &Path) -> PathBuf {
-    crate::persistence::sqlite_path(root)
+    root.join("runtime").join(RUNTIME_ENV_STORE_FILE)
 }
 
 pub fn load_runtime_env_map(root: &Path) -> Result<BTreeMap<String, String>> {
@@ -240,12 +241,70 @@ fn open_runtime_persistence_db(root: &Path) -> Result<Connection> {
              );"
         ))
         .context("failed to initialize runtime env table")?;
+        migrate_legacy_runtime_env(root, &conn)?;
         initialized_runtime_env_paths()
             .lock()
             .unwrap_or_else(|err| err.into_inner())
             .insert(path);
     }
     Ok(conn)
+}
+
+fn migrate_legacy_runtime_env(root: &Path, target: &Connection) -> Result<()> {
+    let legacy_path = crate::persistence::sqlite_path(root);
+    if legacy_path == runtime_config_path(root) || !legacy_path.is_file() {
+        return Ok(());
+    }
+    let has_rows = target
+        .query_row(
+            &format!("SELECT EXISTS(SELECT 1 FROM {RUNTIME_ENV_TABLE} LIMIT 1)"),
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+        != 0;
+    if has_rows {
+        return Ok(());
+    }
+    let legacy = Connection::open(&legacy_path).with_context(|| {
+        format!(
+            "failed to open legacy runtime env db {}",
+            legacy_path.display()
+        )
+    })?;
+    legacy
+        .busy_timeout(crate::persistence::sqlite_busy_timeout_duration())
+        .context("failed to configure legacy runtime env busy_timeout")?;
+    let table_exists = legacy
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+            [RUNTIME_ENV_TABLE],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+        != 0;
+    if !table_exists {
+        return Ok(());
+    }
+    let mut stmt = legacy
+        .prepare(&format!(
+            "SELECT env_key, env_value FROM {RUNTIME_ENV_TABLE} ORDER BY env_key"
+        ))
+        .context("failed to prepare legacy runtime env migration query")?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    for (key, value) in rows {
+        target.execute(
+            &format!(
+                "INSERT OR IGNORE INTO {RUNTIME_ENV_TABLE} (env_key, env_value) VALUES (?1, ?2)"
+            ),
+            params![key, value],
+        )?;
+    }
+    Ok(())
 }
 
 fn load_runtime_env_map_from_db(conn: &Connection) -> Result<BTreeMap<String, String>> {

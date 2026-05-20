@@ -1,6 +1,6 @@
-use std::{env, fs};
 use std::path::PathBuf;
 use std::process::Command;
+use std::{env, fs};
 
 fn main() {
     println!("cargo:rerun-if-env-changed=GGML_LIB_DIR");

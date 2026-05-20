@@ -7,9 +7,11 @@ use rusqlite::{params, Connection, OpenFlags};
 use serde::Serialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::persistence::{sqlite_busy_timeout_duration, sqlite_busy_timeout_millis};
 
@@ -311,27 +313,30 @@ fn build_flow(
     work_id: Option<&str>,
 ) -> Result<HarnessFlow> {
     let db_path = root.join("runtime").join("ctox.sqlite3");
-    let conn = Connection::open_with_flags(
-        &db_path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )
-    .with_context(|| format!("failed to open {}", db_path.display()))?;
-    conn.busy_timeout(sqlite_busy_timeout_duration())
-        .context("failed to configure SQLite busy_timeout for harness flow")?;
+    with_harness_read_connection(&db_path, |conn| {
+        build_flow_with_connection(root, conn, message_key, work_id)
+    })
+}
 
+fn build_flow_with_connection(
+    root: &Path,
+    conn: &Connection,
+    message_key: Option<&str>,
+    work_id: Option<&str>,
+) -> Result<HarnessFlow> {
     let seed_work = match work_id {
-        Some(id) => load_self_work(&conn, id)?,
+        Some(id) => load_self_work(conn, id)?,
         None => None,
     };
     let seed_message = match message_key {
-        Some(key) => load_message(&conn, key)?,
+        Some(key) => load_message(conn, key)?,
         None => {
             if let Some(work) = seed_work.as_ref() {
                 parent_message_key(&work.metadata_json)
                     .as_deref()
-                    .and_then(|key| load_message(&conn, key).ok().flatten())
+                    .and_then(|key| load_message(conn, key).ok().flatten())
             } else {
-                latest_message(&conn)?
+                latest_message(conn)?
             }
         }
     };
@@ -359,17 +364,17 @@ fn build_flow(
         });
     };
 
-    let routing = load_routing(&conn, &message.message_key)?;
-    let related_work = load_related_self_work(&conn, &message.message_key)?;
+    let routing = load_routing(conn, &message.message_key)?;
+    let related_work = load_related_self_work(conn, &message.message_key)?;
     let work_for_attempt_2 = seed_work.or_else(|| related_work.first().cloned());
     let reload_message = work_for_attempt_2.as_ref().and_then(|work| {
-        load_queue_message_for_work(&conn, &work.work_id)
+        load_queue_message_for_work(conn, &work.work_id)
             .ok()
             .flatten()
     });
-    let review_approval = load_founder_review_approval(&conn, &message.message_key)?;
-    let proofs = load_core_proofs_for_key(&conn, &message.message_key)?;
-    let violations = load_state_violations_for_key(&conn, &message.message_key)?;
+    let review_approval = load_founder_review_approval(conn, &message.message_key)?;
+    let proofs = load_core_proofs_for_key(conn, &message.message_key)?;
+    let violations = load_state_violations_for_key(conn, &message.message_key)?;
     let mut ledger_events = load_flow_events(
         root,
         Some(&message.message_key),
@@ -398,8 +403,8 @@ fn build_flow(
         branches: {
             let mut branches = vec![
                 queue_pickup_branch(routing.as_ref()),
-                context_branch(&conn)?,
-                knowledge_branch(&conn)?,
+                context_branch(conn)?,
+                knowledge_branch(conn)?,
             ];
             if let Some(branch) = ledger_branch(&ledger_events) {
                 branches.push(branch);
@@ -426,7 +431,7 @@ fn build_flow(
         if let Some(reload) = reload_message.as_ref() {
             branches.push(queue_reload_branch(
                 reload,
-                load_routing(&conn, &reload.message_key)?.as_ref(),
+                load_routing(conn, &reload.message_key)?.as_ref(),
             ));
         }
         blocks.push(MainBlock {
@@ -450,10 +455,10 @@ fn build_flow(
             review_approval.as_ref(),
         ),
         branches: vec![
-            state_machine_branch(&conn)?,
+            state_machine_branch(conn)?,
             guard_branch(proofs.as_slice(), violations.as_slice()),
-            verification_branch(&conn, work_for_attempt_2.as_ref())?,
-            process_mining_branch(&conn)?,
+            verification_branch(conn, work_for_attempt_2.as_ref())?,
+            process_mining_branch(conn)?,
         ],
     });
 
@@ -471,6 +476,44 @@ fn build_flow(
         ledger_events,
         blocks,
     })
+}
+
+fn harness_connection_cache() -> &'static Mutex<HashMap<PathBuf, Arc<Mutex<Connection>>>> {
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, Arc<Mutex<Connection>>>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn with_harness_read_connection<T>(
+    db_path: &Path,
+    f: impl FnOnce(&Connection) -> Result<T>,
+) -> Result<T> {
+    let db_path = db_path.to_path_buf();
+    let cached = {
+        let mut cache = harness_connection_cache()
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        if let Some(conn) = cache.get(&db_path) {
+            conn.clone()
+        } else {
+            let conn = open_harness_read_connection(&db_path)?;
+            let conn = Arc::new(Mutex::new(conn));
+            cache.insert(db_path.clone(), conn.clone());
+            conn
+        }
+    };
+    let guard = cached.lock().unwrap_or_else(|err| err.into_inner());
+    f(&guard)
+}
+
+fn open_harness_read_connection(db_path: &Path) -> Result<Connection> {
+    let conn = Connection::open_with_flags(
+        db_path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .with_context(|| format!("failed to open {}", db_path.display()))?;
+    conn.busy_timeout(sqlite_busy_timeout_duration())
+        .context("failed to configure SQLite busy_timeout for harness flow")?;
+    Ok(conn)
 }
 
 fn task_lines(message: &MessageRow) -> Vec<String> {

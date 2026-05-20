@@ -340,7 +340,12 @@ export async function mount(ctx) {
     }
     try {
       const docs = await accountsCollection.find().exec();
-      view.accountsById = new Map(docs.map((doc) => [doc.account_key, doc.toJSON()]));
+      view.accountsById = new Map(
+        docs
+          .map((doc) => doc.toJSON())
+          .filter((account) => account && account._deleted !== true && account.is_deleted !== true)
+          .map((account) => [account.account_key, account]),
+      );
     } catch (error) {
       console.error('[conversations] loadAccounts failed:', error);
       view.accountsById = new Map();

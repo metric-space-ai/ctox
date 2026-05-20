@@ -1,3 +1,5 @@
+import { getSvgIcon } from './icons.js?v=20260520-svg-icons2';
+
 const CONST = {
   CASCADE_STEP: 22,
   SNAP_EDGE: 30,
@@ -104,7 +106,14 @@ export function createWindowManager({
     `;
 
     const titleEl = winEl.querySelector('[data-window-title]');
-    titleEl.textContent = composeTitle(options, translate);
+    const winIconKey = ownerId ? ownerId.replace(/^(desktop-app|module):/, '') : '';
+    const svgHtml = getSvgIcon(winIconKey, 14, 1.8);
+    const escapeHtml = (str) => String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    if (svgHtml) {
+      titleEl.innerHTML = `<span class="shell-window-title-icon" style="display:inline-flex; align-items:center; margin-right:6px; vertical-align:middle; opacity:0.85;">${svgHtml}</span><span class="shell-window-title-text" style="vertical-align:middle;">${escapeHtml(options.title || translate('defaultWindowTitle', 'Fenster'))}</span>`;
+    } else {
+      titleEl.textContent = composeTitle(options, translate);
+    }
     const controlsEl = winEl.querySelector('[data-window-controls]');
     renderControls(controlsEl, chromeLayout, translate);
 
@@ -173,7 +182,14 @@ export function createWindowManager({
       close: () => destroy(id),
       setTitle: (next) => {
         const text = String(next ?? '');
-        titleEl.textContent = text;
+        const winIconKey = ownerId ? ownerId.replace(/^(desktop-app|module):/, '') : '';
+        const svgHtml = getSvgIcon(winIconKey, 14, 1.8);
+        const escapeHtml = (str) => String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        if (svgHtml) {
+          titleEl.innerHTML = `<span class="shell-window-title-icon" style="display:inline-flex; align-items:center; margin-right:6px; vertical-align:middle; opacity:0.85;">${svgHtml}</span><span class="shell-window-title-text" style="vertical-align:middle;">${escapeHtml(text)}</span>`;
+        } else {
+          titleEl.textContent = text;
+        }
         bus.emit('window:title_changed', { id, ownerId: win.ownerId, title: text });
       },
       setAlwaysOnTop: (flag) => setAlwaysOnTop(id, flag),

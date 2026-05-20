@@ -68,12 +68,11 @@ fn core_db_path(root: &Path) -> PathBuf {
 pub fn open_db(root: &Path) -> Result<Connection> {
     let path = core_db_path(root);
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).with_context(|| {
-            format!("failed to create runtime dir {}", parent.display())
-        })?;
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create runtime dir {}", parent.display()))?;
     }
-    let conn = Connection::open(&path)
-        .with_context(|| format!("failed to open {}", path.display()))?;
+    let conn =
+        Connection::open(&path).with_context(|| format!("failed to open {}", path.display()))?;
     ensure_schema(&conn)?;
     seed_merge_missing(&conn)?;
     Ok(conn)
@@ -161,8 +160,8 @@ fn ensure_schema(conn: &Connection) -> Result<()> {
 /// existing rows are preserved — this uses `INSERT OR IGNORE`, not
 /// `OR REPLACE`. Safe to call on every open; cheap when nothing's new.
 fn seed_merge_missing(conn: &Connection) -> Result<()> {
-    let seed: Value = serde_json::from_str(SEED_JSON)
-        .context("failed to parse embedded web_unlock_seed.json")?;
+    let seed: Value =
+        serde_json::from_str(SEED_JSON).context("failed to parse embedded web_unlock_seed.json")?;
     let now = Utc::now().to_rfc3339();
 
     let probes = seed
@@ -385,12 +384,22 @@ fn evaluate_outcome(parser_kind: &str, raw: &Value) -> (bool, usize, Vec<String>
                     .iter()
                     .filter_map(|v| v.as_str().map(String::from))
                     .collect::<Vec<_>>();
-                (false, leaks.len().max(1), leaks, Some("UA LEAK in fingerprint dump".into()))
+                (
+                    false,
+                    leaks.len().max(1),
+                    leaks,
+                    Some("UA LEAK in fingerprint dump".into()),
+                )
             } else {
                 (true, 0, vec![], None)
             }
         }
-        _ => (false, 0, vec![], Some(format!("unknown parser_kind: {parser_kind}"))),
+        _ => (
+            false,
+            0,
+            vec![],
+            Some(format!("unknown parser_kind: {parser_kind}")),
+        ),
     }
 }
 
@@ -512,9 +521,15 @@ fn print_usage() {
     println!("  list-probes                    Print all registered detection-site probes");
     println!("  list-vectors [<probe_id>]      Print known vectors, optionally filtered by probe");
     println!("  baseline [<probe_id>] [--record] [--auto-repair]");
-    println!("                                 Run all enabled probes (or one), compare to baseline,");
-    println!("                                 exit non-zero if any regressed. --record persists run.");
-    println!("                                 --auto-repair opens pending repair rows for vectors");
+    println!(
+        "                                 Run all enabled probes (or one), compare to baseline,"
+    );
+    println!(
+        "                                 exit non-zero if any regressed. --record persists run."
+    );
+    println!(
+        "                                 --auto-repair opens pending repair rows for vectors"
+    );
     println!("                                 matching the failed test names.");
     println!("  history [<probe_id>] [--limit N]");
     println!("                                 Show recent test runs from the run history");
@@ -552,11 +567,15 @@ fn print_repair_usage() {
     println!("  start --vector <vid> [--run-id <n>] [--notes <text>]");
     println!("                                 Open a pending repair for a known vector.");
     println!("                                 Emits a plan with patch_files + fix_strategy and");
-    println!("                                 the new repair_id. Marks the vector status 'broken'.");
+    println!(
+        "                                 the new repair_id. Marks the vector status 'broken'."
+    );
     println!("  complete --id <repair_id> (--succeeded | --failed)");
     println!("           [--commit <sha>] [--notes <text>]");
     println!("                                 Close a repair. On --succeeded, the linked vector");
-    println!("                                 flips back to 'working' with a fresh last_verified_at.");
+    println!(
+        "                                 flips back to 'working' with a fresh last_verified_at."
+    );
     println!("  list [--status <pending|succeeded|failed>] [--limit N]");
     println!("                                 Show recent repair attempts.");
 }
@@ -677,13 +696,7 @@ fn cmd_baseline(
                             "auto-opened from baseline regression in {}: {}",
                             probe.probe_id, failed_test
                         );
-                        let id = open_repair(
-                            &conn,
-                            &vec_match.vector_id,
-                            run_id,
-                            &desc,
-                            None,
-                        )?;
+                        let id = open_repair(&conn, &vec_match.vector_id, run_id, &desc, None)?;
                         opened_repairs.push(id);
                     }
                 }
@@ -794,7 +807,10 @@ fn cmd_add_vector(root: &Path, args: &[String]) -> Result<()> {
             now,
         ],
     )?;
-    println!("{}", serde_json::to_string_pretty(&json!({"ok": true, "vector_id": vector_id}))?);
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({"ok": true, "vector_id": vector_id}))?
+    );
     Ok(())
 }
 
@@ -820,7 +836,12 @@ fn cmd_set_vector_status(root: &Path, args: &[String]) -> Result<()> {
     if updated == 0 {
         anyhow::bail!("no vector with id {vector_id}");
     }
-    println!("{}", serde_json::to_string_pretty(&json!({"ok": true, "vector_id": vector_id, "status": status}))?);
+    println!(
+        "{}",
+        serde_json::to_string_pretty(
+            &json!({"ok": true, "vector_id": vector_id, "status": status})
+        )?
+    );
     Ok(())
 }
 
@@ -949,10 +970,7 @@ fn cmd_signals_list(root: &Path, args: &[String]) -> Result<()> {
             collected
         }
         (false, None) => {
-            let mut stmt = conn.prepare(&format!(
-                "{} ORDER BY signal_id DESC LIMIT ?1",
-                select
-            ))?;
+            let mut stmt = conn.prepare(&format!("{} ORDER BY signal_id DESC LIMIT ?1", select))?;
             let collected = stmt
                 .query_map(params![limit as i64], map)?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -1116,8 +1134,7 @@ fn cmd_repair_start(root: &Path, args: &[String]) -> Result<()> {
         vector.vector_id, vector.probe_id, vector.test_name, vector.fix_strategy
     );
     let repair_id = open_repair(&conn, vector_id, triggered_by_run_id, &description, notes)?;
-    let patch_files: Value =
-        serde_json::from_str(&vector.patch_files_json).unwrap_or(Value::Null);
+    let patch_files: Value = serde_json::from_str(&vector.patch_files_json).unwrap_or(Value::Null);
     let plan = json!({
         "ok": true,
         "repair_id": repair_id,
@@ -1225,14 +1242,11 @@ fn cmd_repair_list(root: &Path, args: &[String]) -> Result<()> {
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             collected
         }
-        Some(other) => anyhow::bail!(
-            "--status must be one of pending|succeeded|failed (got `{other}`)"
-        ),
+        Some(other) => {
+            anyhow::bail!("--status must be one of pending|succeeded|failed (got `{other}`)")
+        }
         None => {
-            let mut stmt = conn.prepare(&format!(
-                "{} ORDER BY repair_id DESC LIMIT ?1",
-                select
-            ))?;
+            let mut stmt = conn.prepare(&format!("{} ORDER BY repair_id DESC LIMIT ?1", select))?;
             let collected = stmt
                 .query_map(params![limit as i64], map)?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -1262,8 +1276,15 @@ fn find_flag_u64(args: &[String], flag: &str) -> Option<u64> {
 /// the value that follows each known value-bearing flag.
 fn first_positional(args: &[String]) -> Option<String> {
     const VALUE_FLAGS: &[&str] = &[
-        "--limit", "--id", "--probe", "--test", "--desc", "--fix",
-        "--predicate", "--patch-files", "--status",
+        "--limit",
+        "--id",
+        "--probe",
+        "--test",
+        "--desc",
+        "--fix",
+        "--predicate",
+        "--patch-files",
+        "--status",
     ];
     let mut i = 1; // skip subcommand
     while i < args.len() {
@@ -1490,8 +1511,14 @@ mod tests {
             json!({"reason": "captcha"}),
         )
         .unwrap();
-        let repair_id =
-            open_repair(&conn, "navigator-webdriver-exists", None, "fix captcha", None).unwrap();
+        let repair_id = open_repair(
+            &conn,
+            "navigator-webdriver-exists",
+            None,
+            "fix captcha",
+            None,
+        )
+        .unwrap();
         resolve_signal(&conn, signal_id, Some(repair_id), Some("captcha addressed")).unwrap();
         let row: (i64, Option<i64>, Option<String>) = conn
             .query_row(
@@ -1517,12 +1544,7 @@ mod tests {
     fn record_signal_lossy_does_not_panic_on_bad_root() {
         // Path under /dev/null shouldn't exist; lossy should swallow the error.
         let bad_root = std::path::Path::new("/dev/null/never");
-        record_signal_lossy(
-            bad_root,
-            "test_source",
-            None,
-            json!({}),
-        );
+        record_signal_lossy(bad_root, "test_source", None, json!({}));
     }
 
     #[test]
@@ -1559,7 +1581,10 @@ mod tests {
         let v: i64 = conn
             .query_row("SELECT count(*) FROM web_unlock_vectors", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(p, 5, "expected 5 probes seeded (4 detection sites + humanlike)");
+        assert_eq!(
+            p, 5,
+            "expected 5 probes seeded (4 detection sites + humanlike)"
+        );
         assert!(v >= 15, "expected at least 15 vectors seeded, got {v}");
     }
 }

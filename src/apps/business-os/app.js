@@ -1,9 +1,9 @@
-import { createBusinessDb } from './shared/db.js?v=20260519-rxdb-contract1';
+import { createBusinessDb } from './shared/db.js?v=20260520-chat-ux-theme1';
 import { createSyncRuntime } from './shared/sync.js?v=20260519-source-upsert1';
 import { createCommandBus } from './shared/command-bus.js?v=20260519-native-commandbus1';
 import { openReactSettings } from './shared/react-settings.js?v=20260518-runtime-auth-oauth3';
-import { initBusinessReporter } from './shared/business-reporter.js?v=20260519-bugs-features1';
-import { initBusinessChat } from './shared/business-chat.js?v=20260520-chat-optimistic-submit1';
+import { dispatchBusinessReport, initBusinessReporter } from './shared/business-reporter.js?v=20260520-rxdb-reports1';
+import { initBusinessChat } from './shared/business-chat.js?v=20260520-chat-ux-theme1';
 import { createEventBus } from './shared/event-bus.js?v=20260519-shell-os1';
 import { createNotifications } from './shared/notifications.js?v=20260519-shell-os1';
 import { createContextMenu } from './shared/context-menu.js?v=20260519-shell-os1';
@@ -11,6 +11,7 @@ import { createWindowManager } from './shared/window-manager.js?v=20260519-shell
 import { createTaskbar } from './shared/taskbar.js?v=20260519-shell-os1';
 import { createWindowSwitcher } from './shared/window-switcher.js?v=20260519-shell-os1';
 import { installBusinessDialogFallbacks } from './shared/dialogs.js?v=20260519-dialogs1';
+import { getSvgIcon } from './shared/icons.js?v=20260520-svg-icons2';
 import { collections as ctoxCollections, migrationStrategies as ctoxMigrationStrategies } from './modules/ctox/schema.js';
 import { collections as desktopCollections, migrationStrategies as desktopMigrationStrategies } from './modules/desktop/schema.js';
 
@@ -21,8 +22,7 @@ const ACCOUNT_PREFS_KEY = 'ctox.businessOs.accountPreferences';
 const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
-const APP_BUILD = '20260520-chat-optimistic-submit1';
-const FETCH_TIMEOUT_MS = 10000;
+const APP_BUILD = '20260520-web-research1';
 const CTOX_HEALTH_POLL_MS = 10000;
 const DEFAULT_TASKBAR_PIN_IDS = ['ctox', 'documents', 'explorer', 'knowledge', 'research'];
 let moduleLayoutSaveTimer = null;
@@ -40,6 +40,9 @@ const SHELL_COL_SIDE_MAX = 620;
 const state = {
   modules: [],
   activeModule: null,
+  navHistory: [],
+  navIndex: -1,
+  navTransitioning: false,
   activeUnmount: null,
   db: null,
   sync: null,
@@ -63,6 +66,10 @@ const state = {
   windowGeometryCache: new Map(),
   windowGeometrySaveTimers: new Map(),
 };
+
+if (new URLSearchParams(window.location.search).has('rxdbSmoke')) {
+  globalThis.ctoxBusinessOsSmoke = { state };
+}
 
 const moduleAliases = {};
 
@@ -111,7 +118,7 @@ const shellMessages = {
       knowledge: 'Knowledge',
       'matching': 'Matching',
       reports: 'Bugs & Features',
-      research: 'Research',
+      research: 'Web Research',
       conversations: 'Conversations',
     },
   },
@@ -159,7 +166,7 @@ const shellMessages = {
       knowledge: 'Knowledge',
       'matching': 'Matching',
       reports: 'Bugs & Features',
-      research: 'Research',
+      research: 'Web Research',
       conversations: 'Conversations',
     },
   },
@@ -186,6 +193,8 @@ const els = {
   shellSwitcherOverlay: document.querySelector('[data-shell-window-switcher]'),
   shellSwitcherPanel: document.querySelector('[data-shell-window-switcher-panel]'),
   showDesktop: document.querySelector('[data-show-desktop]'),
+  backButton: document.querySelector('[data-shell-back]'),
+  forwardButton: document.querySelector('[data-shell-forward]'),
 };
 
 bootstrap().catch((error) => {
@@ -205,38 +214,39 @@ async function bootstrap() {
   const session = await loadSession();
   state.session = session;
   renderAccountButton(session);
-  startShellCtoxHealthMonitor();
   if (!session.authenticated) {
     renderLoginGate(session);
     setStatus(shellText('loginRequired'));
     return;
   }
   setStatus(shellText('syncConnecting'));
-  const [modules, syncConfig] = await Promise.all([
-    loadModules(),
-    loadSyncConfig(),
-  ]);
+  const syncConfig = await loadSyncConfig();
+  setStatus('Lokale Datenbank initialisieren');
+  try {
+    state.db = await createBusinessDb({ name: 'ctox_business_os_v4' });
+    await registerCoreCollections();
+    await hydrateTaskbarPinsFromDesktopLayout();
+  } catch (dbError) {
+    console.error("Database initialization failed, falling back to local-storage database:", dbError);
+    setStatus(`DB-Warnung: ${dbError.message || dbError}`);
+  }
+  renderTabs();
+  state.sync = createSyncRuntime({
+    db: state.db,
+    config: syncConfig,
+  });
+  state.commandBus = createCommandBus({
+    db: state.db,
+    config: syncConfig,
+  });
+  startShellCtoxHealthMonitor();
+  const modules = await loadModules();
   state.modules = modules.modules || [];
   state.governance = modules.governance || null;
   state.moduleLayout = normalizeModuleLayout(await loadModuleLayout(), state.modules);
   state.taskbarPins = normalizeTaskbarPins(readTaskbarPins(), state.modules);
   persistModuleLayout();
   renderTabs();
-  setStatus('Lokale Datenbank initialisieren');
-  state.db = await createBusinessDb({ name: 'ctox_business_os_v4' });
-  await registerCoreCollections();
-  await hydrateTaskbarPinsFromDesktopLayout();
-  renderTabs();
-  state.sync = createSyncRuntime({
-    db: state.db,
-    baseUrl: '/api/business-os',
-    config: syncConfig,
-  });
-  state.commandBus = createCommandBus({
-    baseUrl: '/api/business-os',
-    db: state.db,
-    config: syncConfig,
-  });
   state.eventBus = createEventBus();
   state.contextMenu = createContextMenu({
     host: document.body,
@@ -286,8 +296,7 @@ async function bootstrap() {
   initBusinessReporter({
     session: state.session,
     getActiveModule: () => state.activeModule,
-    authHeaders: businessOsAuthHeaders,
-    endpoint: '/api/business-os/reports',
+    commandBus: state.commandBus,
     db: state.db,
   });
   initBusinessChat({
@@ -304,10 +313,7 @@ async function bootstrap() {
     setStatus(`Module startup failed: ${error.message || error}`);
   }
   scheduleBackgroundModuleWork();
-  if (state.sync?.config?.http_bridge_available !== false) {
-    refreshRemoteShellStateInBackground();
-    loadStatus().catch(() => null);
-  }
+  refreshRemoteShellStateInBackground();
 }
 
 async function registerCoreCollections() {
@@ -590,11 +596,16 @@ function wireShellActions() {
     }
   });
   window.addEventListener('hashchange', () => {
+    if (state.navTransitioning) return;
     const id = currentHashModuleId();
     if (id) openModule(id);
   });
   document.querySelector('[data-open-settings]')?.addEventListener('click', () => {
     openSettingsDrawer();
+  });
+  document.querySelector('[data-shell-ctox]')?.addEventListener('click', (event) => {
+    event.preventDefault();
+    openModule('ctox');
   });
   document.querySelector('[data-shell-start]')?.addEventListener('click', (event) => {
     if (!state.contextMenu || !state.modules?.length) {
@@ -615,6 +626,8 @@ function wireShellActions() {
     state.contextMenu.show(event, items);
   });
   els.showDesktop?.addEventListener('click', () => openDesktop());
+  els.backButton?.addEventListener('click', () => navigateHistory('back'));
+  els.forwardButton?.addEventListener('click', () => navigateHistory('forward'));
   els.host?.addEventListener('click', (event) => {
     const homeButton = event.target.closest('[data-module-home]');
     if (homeButton) {
@@ -653,7 +666,7 @@ function wireShellActions() {
   });
   els.backdrop?.addEventListener('click', closeDrawers);
   els.tabs.addEventListener('dragover', (event) => {
-    if (!draggedModuleId(event)) return;
+    if (!draggedModuleId(event) && !draggedTaskbarPinId(event)) return;
     event.preventDefault();
     els.tabs.classList.add('is-drop-end');
   });
@@ -661,6 +674,13 @@ function wireShellActions() {
     if (!els.tabs.contains(event.relatedTarget)) els.tabs.classList.remove('is-drop-end');
   });
   els.tabs.addEventListener('drop', (event) => {
+    const pinId = draggedTaskbarPinId(event);
+    if (pinId) {
+      event.preventDefault();
+      els.tabs.classList.remove('is-drop-end');
+      moveTaskbarPinBefore(pinId, null);
+      return;
+    }
     const moduleId = draggedModuleId(event);
     if (!moduleId || moduleId === 'ctox') return;
     event.preventDefault();
@@ -696,6 +716,7 @@ function openSettingsDrawer(options = {}) {
     session: state.session,
     governance: state.governance,
     syncConfig: state.sync?.config,
+    sync: state.sync,
     commandBus: state.commandBus,
     db: state.db,
     initialTab: options.initialTab || 'runtime',
@@ -1023,6 +1044,7 @@ const MODULE_GLYPHS = {
   reports: '🐞',
   research: '🔬',
   conversations: '💬',
+  notes: '📝',
 };
 
 function glyphForModule(moduleId) {
@@ -1037,14 +1059,6 @@ const DESKTOP_APPS = [
     defaultWidth: 720,
     defaultHeight: 460,
     loader: () => import('./desktop-apps/explorer/app.js?v=20260519-shell-os1'),
-  },
-  {
-    id: 'notes',
-    title: 'Notes',
-    glyph: '📝',
-    defaultWidth: 520,
-    defaultHeight: 400,
-    loader: () => import('./desktop-apps/notes/app.js?v=20260519-shell-os1'),
   },
   {
     id: 'code-editor',
@@ -1093,7 +1107,9 @@ async function openDesktopApp(appId, options = {}) {
     const mod = await entry.loader();
     teardown = await mod.mount(win.container, {
       db: state.db,
+      sync: state.sync,
       commandBus: state.commandBus,
+      session: state.session,
       contextMenu: state.contextMenu,
       notifications: state.notifications,
       locale: shellLang(),
@@ -1253,8 +1269,9 @@ function renderModuleTab(target, options = {}) {
   const status = options.pinned
     ? shellText('pinned')
     : (button.dataset.running ? shellText('running') : '');
+  const svgHtml = getSvgIcon(target.id, 16, 1.8);
   button.innerHTML = `
-    <span class="module-tab-icon" aria-hidden="true">${escapeHtml(target.glyph || '◻︎')}</span>
+    <span class="module-tab-icon" aria-hidden="true">${svgHtml || escapeHtml(target.glyph || '◻︎')}</span>
     <span class="module-tab-label">${escapeHtml(target.title || target.id)}</span>
     ${status ? `<span class="module-tab-state">${escapeHtml(status)}</span>` : ''}
   `;
@@ -1304,8 +1321,9 @@ function renderLegacyModuleTab(mod, options = {}) {
   button.className = 'module-tab';
   button.type = 'button';
   button.dataset.module = mod.id;
+  const svgHtml = getSvgIcon(mod.id, 16, 1.8);
   button.innerHTML = `
-    <span class="module-tab-icon" aria-hidden="true">${escapeHtml(taskbarMarkForModule(mod))}</span>
+    <span class="module-tab-icon" aria-hidden="true">${svgHtml || escapeHtml(taskbarMarkForModule(mod))}</span>
     <span class="module-tab-label">${escapeHtml(moduleDisplayTitle(mod))}</span>
   `;
   if (!options.locked) {
@@ -1621,6 +1639,18 @@ async function openModule(moduleId, options = {}) {
   const mod = state.modules.find((item) => item.id === requestedId) || state.modules[0];
   if (!mod) return;
   if (state.activeModule?.id === mod.id && !options.force) return;
+
+  // Track history stack
+  if (!options.isNavHistory) {
+    if (state.navIndex < state.navHistory.length - 1) {
+      state.navHistory = state.navHistory.slice(0, state.navIndex + 1);
+    }
+    if (state.navIndex === -1 || state.navHistory[state.navIndex] !== mod.id) {
+      state.navHistory.push(mod.id);
+      state.navIndex = state.navHistory.length - 1;
+    }
+  }
+
   if (typeof state.activeUnmount === 'function') {
     await state.activeUnmount();
   }
@@ -1655,6 +1685,32 @@ async function openModule(moduleId, options = {}) {
   }
   postCurrentPreferencesToModule();
   startModuleSync(mod);
+  updateNavButtons();
+}
+
+function updateNavButtons() {
+  if (els.backButton) {
+    els.backButton.disabled = state.navIndex <= 0;
+  }
+  if (els.forwardButton) {
+    els.forwardButton.disabled = state.navIndex === -1 || state.navIndex >= state.navHistory.length - 1;
+  }
+}
+
+async function navigateHistory(direction) {
+  if (direction === 'back' && state.navIndex > 0) {
+    state.navIndex--;
+  } else if (direction === 'forward' && state.navIndex < state.navHistory.length - 1) {
+    state.navIndex++;
+  } else {
+    return;
+  }
+  const nextModuleId = state.navHistory[state.navIndex];
+  state.navTransitioning = true;
+  location.hash = nextModuleId;
+  await openModule(nextModuleId, { isNavHistory: true });
+  state.navTransitioning = false;
+  updateNavButtons();
 }
 
 function openDesktop() {
@@ -1825,10 +1881,11 @@ function renderModuleFrame(mod) {
 function renderModuleAppBar(mod) {
   if (mod?.id === 'desktop') return '';
   const title = escapeHtml(moduleDisplayTitle(mod));
+  const svgHtml = getSvgIcon(mod.id, 16, 1.8);
   return `
     <header class="module-appbar" data-module-appbar>
       <div class="module-appbar-title">
-        <span class="module-appbar-icon" aria-hidden="true">${escapeHtml(glyphForModule(mod.id))}</span>
+        <span class="module-appbar-icon" aria-hidden="true">${svgHtml || escapeHtml(glyphForModule(mod.id))}</span>
         <span>${title}</span>
       </div>
       <div class="module-appbar-actions">
@@ -2448,25 +2505,27 @@ function canModifyModule(mod) {
 
 async function reportCurrentModule(details = {}) {
   const mod = details.module || state.activeModule;
-  return fetchJson('/api/business-os/reports', {
-    method: 'POST',
-    headers: businessOsAuthHeaders({ 'Content-Type': 'application/json' }),
-    body: JSON.stringify({
-      module_id: mod?.id || 'ctox',
-      kind: details.kind || 'bug',
-      severity: details.severity || 'medium',
-      title: details.title || 'Business OS report',
-      summary: details.summary || '',
-      expected: details.expected || '',
-      client_context: {
-        url: location.href,
-        module_id: mod?.id || '',
-        viewport: { width: innerWidth, height: innerHeight },
-        user_agent: navigator.userAgent,
-        source: 'business-os-shell',
-      },
-    }),
+  const result = await dispatchBusinessReport({
+    commandBus: state.commandBus,
+    session: state.session,
+    module: mod,
+    kind: details.kind || 'bug',
+    severity: details.severity || 'medium',
+    title: details.title || 'Business OS report',
+    summary: details.summary || '',
+    expected: details.expected || '',
+    clientContext: {
+      url: location.href,
+      module_id: mod?.id || '',
+      viewport: { width: innerWidth, height: innerHeight },
+      user_agent: navigator.userAgent,
+      source: 'business-os-shell',
+    },
   });
+  window.dispatchEvent(new CustomEvent('ctox-business-os-reports-updated', {
+    detail: { reportId: result.report_id || '', moduleId: mod?.id || '' },
+  }));
+  return result;
 }
 
 function renderLeftContext(mod) {
@@ -2590,9 +2649,7 @@ async function refreshModules() {
   renderTabs();
   state.backgroundModuleWorkScheduled = false;
   scheduleBackgroundModuleWork();
-  if (state.sync?.config?.http_bridge_available !== false) {
-    refreshRemoteShellStateInBackground();
-  }
+  refreshRemoteShellStateInBackground();
 }
 
 function renderNavigationDrawer() {
@@ -2648,38 +2705,6 @@ function closeDrawers() {
   els.bottomDrawer.replaceChildren();
 }
 
-async function fetchJson(url, options = {}) {
-  return fetchJsonOnce(url, options);
-}
-
-async function fetchJsonOnce(url, options) {
-  const timeoutMs = options?.timeoutMs ?? FETCH_TIMEOUT_MS;
-  const controller = new AbortController();
-  const timer = timeoutMs > 0 ? window.setTimeout(() => controller.abort(), timeoutMs) : null;
-  const fetchOptions = { ...(options || {}) };
-  delete fetchOptions.timeoutMs;
-  delete fetchOptions.retry;
-  try {
-    const res = await fetch(url, {
-      cache: 'no-store',
-      signal: controller.signal,
-      ...fetchOptions,
-    });
-    if (!res.ok) throw new Error(`${url} returned ${res.status}`);
-    return res.json();
-  } finally {
-    if (timer) window.clearTimeout(timer);
-  }
-}
-
-async function loadStatus() {
-  try {
-    return await fetchJson('/api/business-os/status');
-  } catch (error) {
-    return { ok: false, runtime: 'unavailable', error: error?.message || String(error), now_ms: Date.now() };
-  }
-}
-
 function startShellCtoxHealthMonitor() {
   if (state.ctoxHealthTimer) window.clearInterval(state.ctoxHealthTimer);
   refreshShellCtoxHealth();
@@ -2688,7 +2713,7 @@ function startShellCtoxHealthMonitor() {
 
 async function refreshShellCtoxHealth() {
   try {
-    const status = await fetchJson('/api/business-os/status', { timeoutMs: 8000 });
+    const status = await loadShellCtoxHealth();
     state.ctoxHealth = status;
     renderShellCtoxWarning(status);
   } catch (error) {
@@ -2696,6 +2721,22 @@ async function refreshShellCtoxHealth() {
     state.ctoxHealth = status;
     renderShellCtoxWarning(status);
   }
+}
+
+async function loadShellCtoxHealth() {
+  const coll = state.db?.collection?.('ctox_runtime_settings');
+  if (!coll) throw new Error('ctox_runtime_settings collection is required for shell health');
+  await state.sync?.startCollection?.('ctox_runtime_settings');
+  const doc = await coll.findOne('runtime-settings').exec();
+  const runtime = doc?.toJSON?.();
+  if (!runtime || runtime._deleted === true || runtime.is_deleted === true) {
+    throw new Error('Runtime-Status wurde noch nicht synchronisiert.');
+  }
+  return {
+    ok: runtime.ok !== false,
+    ctox_service: runtime.service || null,
+    runtime_settings: runtime,
+  };
 }
 
 function renderShellCtoxWarning(status) {
@@ -2737,19 +2778,12 @@ async function loadSession() {
   }
   const injected = readInjectedDesktopSession();
   if (injected) return injected;
-  const token = localStorage.getItem(SESSION_TOKEN_KEY)?.trim();
-  const authHeader = localStorage.getItem(AUTH_HEADER_KEY)?.trim();
-  const headers = token ? { 'X-CTOX-Business-OS-Session': token } : authHeader ? { Authorization: authHeader } : undefined;
-  try {
-    const session = await fetchJson('/api/business-os/session', headers ? { headers, timeoutMs: 5000 } : { timeoutMs: 5000 });
-    return session;
-  } catch (error) {
-    return {
-      ok: false,
-      authenticated: false,
-      reason: `session_endpoint_unavailable: ${error.message || error}`,
-    };
-  }
+  return {
+    ok: false,
+    authenticated: false,
+    auth_required: true,
+    reason: 'session_launch_context_missing',
+  };
 }
 
 function readInjectedDesktopSession() {
@@ -2780,61 +2814,148 @@ function readInjectedDesktopSession() {
   };
 }
 
+function businessOsAuthHeaders() {
+  const headers = {};
+  const storedHeader = localStorage.getItem(AUTH_HEADER_KEY);
+  const storedToken = localStorage.getItem(SESSION_TOKEN_KEY);
+  const sessionToken = state.session?.token || state.session?.access_token || '';
+  if (storedHeader) {
+    headers.Authorization = storedHeader;
+  } else if (storedToken || sessionToken) {
+    headers.Authorization = `Bearer ${storedToken || sessionToken}`;
+  }
+  return headers;
+}
+
 function isLocalBusinessOsSurface() {
   return ['127.0.0.1', 'localhost', '::1'].includes(location.hostname);
 }
 
 async function loadModules() {
-  return fetchJson('/api/business-os/modules', { headers: businessOsAuthHeaders(), timeoutMs: 10000 });
+  const catalog = await loadModuleCatalog();
+  return {
+    ok: catalog.ok !== false,
+    modules: Array.isArray(catalog.modules) ? catalog.modules : [],
+    governance: catalog.governance || null,
+  };
 }
 
 async function loadModuleLayout() {
   return readModuleLayout();
 }
 
-async function saveModuleLayout(layout) {
-  return fetchJson('/api/business-os/module-layout', {
-    method: 'POST',
-    headers: businessOsAuthHeaders({ 'Content-Type': 'application/json' }),
-    body: JSON.stringify(layout),
-  });
+async function loadTemplates() {
+  const catalog = await loadModuleCatalog();
+  return {
+    ok: catalog.ok !== false,
+    templates: Array.isArray(catalog.templates) ? catalog.templates : [],
+  };
 }
 
-async function loadTemplates() {
-  return fetchJson('/api/business-os/templates', { headers: businessOsAuthHeaders() });
+async function loadModuleCatalog(timeoutMs = 10000) {
+  const coll = state.db?.collection?.('business_module_catalog');
+  if (!coll) throw new Error('business_module_catalog collection is required for shell module metadata');
+  await state.sync?.startCollection?.('business_module_catalog');
+  const deadline = Date.now() + timeoutMs;
+  let lastError = null;
+  while (Date.now() < deadline) {
+    try {
+      const doc = await coll.findOne('module-catalog').exec();
+      const data = doc?.toJSON?.();
+      if (data && data._deleted !== true && data.is_deleted !== true) return data;
+    } catch (error) {
+      lastError = error;
+    }
+    await delay(300);
+  }
+  throw lastError || new Error('Modulkatalog wurde noch nicht synchronisiert.');
 }
 
 async function installTemplate({ templateId, title }) {
-  return fetchJson('/api/business-os/modules/install-template', {
-    method: 'POST',
-    headers: businessOsAuthHeaders({ 'Content-Type': 'application/json' }),
-    body: JSON.stringify({
+  const command = await dispatchShellModuleCommand({
+    commandType: 'ctox.module.install_template',
+    moduleId: templateId,
+    recordId: templateId,
+    payload: {
       template_id: templateId,
       title,
-    }),
+    },
+    source: 'business-os-shell-template-store',
   });
+  return command.result || command;
 }
 
-function businessOsAuthHeaders(extra = {}) {
-  const token = localStorage.getItem(SESSION_TOKEN_KEY)?.trim();
-  const authHeader = localStorage.getItem(AUTH_HEADER_KEY)?.trim();
+async function dispatchShellModuleCommand({
+  commandType,
+  moduleId,
+  recordId,
+  payload,
+  source,
+}) {
+  if (!state.commandBus?.dispatch || !state.db?.collection?.('business_commands')) {
+    throw new Error('business_commands collection is required for module commands');
+  }
+  await state.sync?.startCollection?.('business_commands');
+  const commandId = `cmd_${newId()}`;
+  await state.commandBus.dispatch({
+    id: commandId,
+    module: 'ctox',
+    type: commandType,
+    record_id: recordId || moduleId,
+    inbound_channel: moduleId,
+    payload,
+    client_context: {
+      source,
+      module_id: moduleId,
+      actor: actorContext(state.session),
+    },
+  });
+  return waitForCommandProjection(state.db, commandId);
+}
+
+async function waitForCommandProjection(db, commandId, timeoutMs = 45000) {
+  const collection = db?.collection?.('business_commands');
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const doc = await collection?.findOne(commandId).exec();
+    const data = doc?.toJSON?.();
+    if (data && data.status && data.status !== 'pending_sync') {
+      if (data.status === 'failed') throw new Error(data.error || `Command ${commandId} failed`);
+      return data;
+    }
+    await delay(300);
+  }
+  throw new Error(`Command ${commandId} wurde nicht synchronisiert.`);
+}
+
+function actorContext(session) {
+  const user = session?.user || {};
   return {
-    ...(token ? { 'X-CTOX-Business-OS-Session': token } : authHeader ? { Authorization: authHeader } : {}),
-    ...extra,
+    id: user.id || '',
+    display_name: user.display_name || user.name || user.id || '',
+    role: user.role || 'user',
+    is_admin: Boolean(user.is_admin),
   };
+}
+
+function newId() {
+  return globalThis.crypto?.randomUUID?.() || `${Date.now()}_${Math.random().toString(36).slice(2)}`;
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function loadSyncConfig() {
   const injected = globalThis.CTOX_BUSINESS_OS_CONFIG || globalThis.ctoxBusinessOsLaunch;
   if (injected && typeof injected === 'object') return injected;
-  return fetchJson('/api/business-os/sync/config', { timeoutMs: 5000 });
+  throw new Error('Business OS sync config was not injected by CTOX.');
 }
 
 function refreshRemoteShellStateInBackground() {
   if (!state.session?.authenticated) return;
-  if (state.sync?.config?.http_bridge_available === false) return;
   window.setTimeout(() => {
-    fetchJson('/api/business-os/modules', { headers: businessOsAuthHeaders(), timeoutMs: 10000 })
+    loadModules()
       .then((modules) => {
         if (!Array.isArray(modules?.modules) || !modules.modules.length) return;
         const currentIds = state.modules.map((mod) => mod.id).join('\n');

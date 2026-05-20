@@ -3409,6 +3409,30 @@ fn command_is_managed_runtime_launcher(command: &str) -> bool {
 
 #[cfg(unix)]
 fn process_current_dir_matches_root(pid: u32, root: &Path) -> bool {
+    if pid == std::process::id() {
+        let Ok(process_cwd) = std::env::current_dir() else {
+            return false;
+        };
+        let Ok(root_canon) = root.canonicalize() else {
+            return false;
+        };
+        let process_cwd = process_cwd.canonicalize().unwrap_or(process_cwd);
+        return process_cwd == root_canon;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        return process_current_dir_matches_root_linux(pid, root);
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        false
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn process_current_dir_matches_root_linux(pid: u32, root: &Path) -> bool {
     let Ok(process_cwd) = std::fs::read_link(format!("/proc/{pid}/cwd")) else {
         return false;
     };

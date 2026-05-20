@@ -1202,6 +1202,527 @@ fn load_strategic_directive_authority_events(
     Ok(out)
 }
 
+/// JSON-friendly wrappers for the Business OS HTTP routes. These wrap the
+/// existing internal channel functions without duplicating logic — the routes
+/// in src/core/business_os/server.rs call these directly.
+
+pub fn list_communication_accounts_for_business_os(root: &Path) -> Result<Value> {
+    let db_path = resolve_db_path(root, None);
+    let conn = open_channel_db(&db_path)?;
+    let mut stmt = conn.prepare(
+        r#"
+        SELECT
+            account_key, channel, address, provider, profile_json,
+            created_at, updated_at, last_inbound_ok_at, last_outbound_ok_at
+        FROM communication_accounts
+        ORDER BY channel ASC, address ASC
+        "#,
+    )?;
+    let mut accounts: Vec<Value> = Vec::new();
+    let rows = stmt.query_map([], |row| {
+        let account_key: String = row.get(0)?;
+        let channel: String = row.get(1)?;
+        let address: String = row.get(2)?;
+        let provider: String = row.get(3)?;
+        let profile_raw: String = row.get(4)?;
+        let created_at: String = row.get(5)?;
+        let updated_at: String = row.get(6)?;
+        let last_inbound_ok_at: Option<String> = row.get(7)?;
+        let last_outbound_ok_at: Option<String> = row.get(8)?;
+        Ok(json!({
+            "account_key": account_key,
+            "channel": channel,
+            "address": address,
+            "provider": provider,
+            "profile_json": serde_json::from_str::<Value>(&profile_raw).unwrap_or_else(|_| json!({})),
+            "created_at": created_at,
+            "updated_at": updated_at,
+            "last_inbound_ok_at": last_inbound_ok_at,
+            "last_outbound_ok_at": last_outbound_ok_at,
+        }))
+    })?;
+    for row in rows {
+        accounts.push(row?);
+    }
+    Ok(json!({ "ok": true, "accounts": accounts }))
+}
+
+pub fn disconnect_communication_account_for_business_os(
+    root: &Path,
+    account_key: &str,
+) -> Result<Value> {
+    if account_key.trim().is_empty() {
+        anyhow::bail!("account_key is required");
+    }
+    let db_path = resolve_db_path(root, None);
+    let conn = open_channel_db(&db_path)?;
+    let affected = conn.execute(
+        "DELETE FROM communication_accounts WHERE account_key = ?1",
+        params![account_key],
+    )?;
+    Ok(json!({
+        "ok": true,
+        "account_key": account_key,
+        "removed": affected,
+    }))
+}
+
+pub fn test_channel_for_business_os(
+    root: &Path,
+    channel: &str,
+    account_key: Option<&str>,
+) -> Result<Value> {
+    let db_path = resolve_db_path(root, None);
+    test_channel(root, &db_path, channel, account_key)
+}
+
+pub fn sync_channel_for_business_os(root: &Path, channel: &str) -> Result<Value> {
+    let db_path = resolve_db_path(root, None);
+    sync_channel(root, &db_path, channel, &[])
+}
+
+/// Read the latest pairing artifact (QR-SVG + status JSON) for a channel from
+/// runtime/communication/<channel>/artifacts/. Used by the Business OS UI to
+/// poll the QR while WhatsApp pair_device_until_success runs in the background.
+/// For channels without an artifact file we derive a sensible state from the
+/// communication_accounts table.
+pub fn read_pairing_state_for_business_os(root: &Path, channel: &str) -> Value {
+    if channel.is_empty() {
+        return json!({
+            "ok": false,
+            "error": "channel parameter is required",
+        });
+    }
+    let artifacts =
+        crate::communication::runtime::artifacts_dir_for_business_os(root, channel);
+    let status_path = artifacts.join("pairing-status.json");
+    let svg_path = artifacts.join("pairing-qr.svg");
+    let artifact_json: Option<Value> = std::fs::read_to_string(&status_path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok());
+    let svg = std::fs::read_to_string(&svg_path).ok();
+
+    // Latest account for this channel — drives both account_key and the
+    // fallback status when no artifact JSON has been written.
+    let db_path = resolve_db_path(root, None);
+    let account_row: Option<(String, Option<String>, Option<String>)> = open_channel_db(&db_path)
+        .ok()
+        .and_then(|conn| {
+            conn.query_row(
+                "SELECT account_key, last_inbound_ok_at, last_outbound_ok_at \
+                 FROM communication_accounts \
+                 WHERE channel = ?1 \
+                 ORDER BY updated_at DESC LIMIT 1",
+                params![channel],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
+                },
+            )
+            .ok()
+        });
+
+    let artifact_status = artifact_json
+        .as_ref()
+        .and_then(|v| v.get("status"))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    let derived_status = match (artifact_status.as_deref(), &account_row) {
+        (Some(status), _) => status.to_owned(),
+        (None, Some((_, inbound, outbound))) if inbound.is_some() || outbound.is_some() => {
+            "paired".to_owned()
+        }
+        (None, Some(_)) => "registered".to_owned(),
+        (None, None) => "idle".to_owned(),
+    };
+
+    let qr_payload = artifact_json
+        .as_ref()
+        .and_then(|v| v.get("qr_payload"))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+
+    json!({
+        "ok": true,
+        "channel": channel,
+        "status": derived_status,
+        "qr_svg": svg,
+        "qr_payload": qr_payload,
+        "account_key": account_row.as_ref().map(|(key, _, _)| key.clone()),
+        "last_inbound_ok_at": account_row.as_ref().and_then(|(_, ts, _)| ts.clone()),
+        "last_outbound_ok_at": account_row.as_ref().and_then(|(_, _, ts)| ts.clone()),
+        "artifact": artifact_json,
+    })
+}
+
+/// Spawn a background thread that runs the channel sync (which includes pair_device
+/// for WhatsApp). The thread writes pairing artifacts to disk as it progresses; the
+/// UI polls read_pairing_state_for_business_os to render them.
+pub fn start_pairing_for_business_os(root: &Path, channel: &str) -> Result<Value> {
+    let supported = matches!(channel, "whatsapp" | "jami" | "teams" | "email" | "meeting");
+    if !supported {
+        anyhow::bail!("unsupported channel for pairing: {channel}");
+    }
+    let root_owned = root.to_path_buf();
+    let channel_owned = channel.to_string();
+    std::thread::spawn(move || {
+        let db_path = resolve_db_path(&root_owned, None);
+        if let Err(error) = sync_channel(&root_owned, &db_path, &channel_owned, &[]) {
+            eprintln!(
+                "[business-os] channel {} background pairing failed: {:#}",
+                channel_owned, error
+            );
+        }
+    });
+    Ok(json!({
+        "ok": true,
+        "channel": channel,
+        "started": true,
+    }))
+}
+
+/// Stub for the Jami account-archive export. The Jami daemon supports
+/// `Account.exportToFile(path)` via DBus, but that integration is not yet wired
+/// in CTOX-Core. The route returns a clear `not_implemented` body so the UI
+/// surfaces the gap honestly instead of pretending the export ran.
+pub fn export_jami_archive_for_business_os(root: &Path) -> Value {
+    let archive_dir = crate::communication::runtime::artifacts_dir_for_business_os(root, "jami");
+    json!({
+        "ok": false,
+        "error": "not_implemented",
+        "message": "Jami account-key export needs the Jami daemon DBus call Account.exportToFile, which is not yet wired in CTOX-Core. Message archives live in this directory.",
+        "archive_path": archive_dir.parent().map(|p| p.join("archive").display().to_string()),
+    })
+}
+
+/// Persist channel-specific settings (Email IMAP/SMTP/Graph, Teams tenant/client,
+/// Jami account id, …) into the operator env map and then re-run
+/// sync_prompt_identity so communication_accounts is updated immediately.
+pub fn save_channel_settings_for_business_os(
+    root: &Path,
+    channel: &str,
+    config: &Value,
+) -> Result<Value> {
+    let mut env_map = crate::inference::runtime_env::effective_operator_env_map(root)
+        .unwrap_or_else(|_| BTreeMap::new());
+    let str_field = |key: &str| -> Option<String> {
+        config
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    };
+    let num_field = |key: &str| -> Option<String> {
+        config
+            .get(key)
+            .and_then(Value::as_i64)
+            .map(|value| value.to_string())
+    };
+    match channel {
+        "email" => {
+            if let Some(value) = str_field("address") {
+                env_map.insert("CTO_EMAIL_ADDRESS".to_owned(), value);
+            }
+            if let Some(value) = str_field("provider") {
+                env_map.insert("CTO_EMAIL_PROVIDER".to_owned(), value);
+            }
+            if let Some(value) = str_field("imap_host") {
+                env_map.insert("CTO_EMAIL_IMAP_HOST".to_owned(), value);
+            }
+            if let Some(value) = num_field("imap_port") {
+                env_map.insert("CTO_EMAIL_IMAP_PORT".to_owned(), value);
+            }
+            if let Some(value) = str_field("smtp_host") {
+                env_map.insert("CTO_EMAIL_SMTP_HOST".to_owned(), value);
+            }
+            if let Some(value) = num_field("smtp_port") {
+                env_map.insert("CTO_EMAIL_SMTP_PORT".to_owned(), value);
+            }
+            if let Some(value) = str_field("tenant_id") {
+                env_map.insert("CTO_EMAIL_GRAPH_TENANT_ID".to_owned(), value);
+            }
+            if let Some(value) = str_field("client_id") {
+                env_map.insert("CTO_EMAIL_GRAPH_CLIENT_ID".to_owned(), value);
+            }
+            if let Some(value) = str_field("graph_user") {
+                env_map.insert("CTO_EMAIL_GRAPH_USER".to_owned(), value);
+            }
+        }
+        "teams" => {
+            if let Some(value) = str_field("tenant_id") {
+                env_map.insert("CTO_TEAMS_TENANT_ID".to_owned(), value);
+            }
+            if let Some(value) = str_field("client_id") {
+                env_map.insert("CTO_TEAMS_CLIENT_ID".to_owned(), value);
+            }
+            if let Some(value) = str_field("client_secret") {
+                env_map.insert("CTO_TEAMS_CLIENT_SECRET".to_owned(), value);
+            }
+            if let Some(value) = str_field("username") {
+                env_map.insert("CTO_TEAMS_USERNAME".to_owned(), value);
+            }
+            if let Some(value) = str_field("password") {
+                env_map.insert("CTO_TEAMS_PASSWORD".to_owned(), value);
+            }
+        }
+        "jami" => {
+            if let Some(value) = str_field("account_id") {
+                env_map.insert("CTO_JAMI_ACCOUNT_ID".to_owned(), value);
+            }
+            if let Some(value) = str_field("profile_name") {
+                env_map.insert("CTO_JAMI_PROFILE_NAME".to_owned(), value);
+            }
+        }
+        "whatsapp" => {
+            // WhatsApp has no static credentials; pairing produces a device-bound
+            // session under runtime/communication/whatsapp/. Nothing to persist here.
+        }
+        _ => anyhow::bail!("unsupported channel for settings: {channel}"),
+    }
+    crate::inference::runtime_env::save_runtime_env_map(root, &env_map)?;
+    sync_prompt_identity(root, &env_map)?;
+    Ok(json!({ "ok": true, "channel": channel }))
+}
+
+/// RxDB-shaped projection of communication_accounts for the Business OS pull
+/// bridge. The bridge polls /api/business-os/rxdb/pull?collection=communication_accounts
+/// and feeds results into the browser-side RxDB collection of the Conversations
+/// audit module.
+pub fn pull_communication_accounts_for_business_os(
+    root: &Path,
+    _since_ms: Option<i64>,
+    limit: Option<usize>,
+) -> Result<Value> {
+    let limit = limit.unwrap_or(500).clamp(1, 2_000);
+    let db_path = resolve_db_path(root, None);
+    let conn = open_channel_db(&db_path)?;
+    let mut stmt = conn.prepare(
+        r#"
+        SELECT
+            account_key, channel, address, provider, profile_json,
+            created_at, updated_at, last_inbound_ok_at, last_outbound_ok_at,
+            CAST(strftime('%s', COALESCE(updated_at, created_at)) AS INTEGER) * 1000 AS updated_at_ms
+        FROM communication_accounts
+        ORDER BY updated_at_ms DESC, account_key ASC
+        LIMIT ?1
+        "#,
+    )?;
+    let documents = stmt
+        .query_map(params![limit as i64], |row| {
+            let account_key: String = row.get(0)?;
+            let channel: String = row.get(1)?;
+            let address: String = row.get(2)?;
+            let provider: String = row.get(3)?;
+            let profile_raw: String = row.get(4)?;
+            let created_at: String = row.get(5)?;
+            let updated_at: String = row.get(6)?;
+            let last_inbound_ok_at: Option<String> = row.get(7)?;
+            let last_outbound_ok_at: Option<String> = row.get(8)?;
+            let updated_at_ms: Option<i64> = row.get(9)?;
+            Ok(json!({
+                "id": account_key,
+                "account_key": account_key,
+                "channel": channel,
+                "address": address,
+                "provider": provider,
+                "profile_json": serde_json::from_str::<Value>(&profile_raw).unwrap_or_else(|_| json!({})),
+                "created_at": created_at,
+                "updated_at": updated_at,
+                "last_inbound_ok_at": last_inbound_ok_at,
+                "last_outbound_ok_at": last_outbound_ok_at,
+                "updated_at_ms": updated_at_ms.unwrap_or(0),
+                "_deleted": false,
+            }))
+        })?
+        .collect::<rusqlite::Result<Vec<Value>>>()?;
+    let count = documents.len();
+    Ok(json!({
+        "ok": true,
+        "collection": "communication_accounts",
+        "documents": documents,
+        "count": count,
+        "since_ms": 0,
+    }))
+}
+
+/// RxDB-shaped projection of communication_threads.
+pub fn pull_communication_threads_for_business_os(
+    root: &Path,
+    _since_ms: Option<i64>,
+    limit: Option<usize>,
+) -> Result<Value> {
+    let limit = limit.unwrap_or(500).clamp(1, 2_000);
+    let db_path = resolve_db_path(root, None);
+    let conn = open_channel_db(&db_path)?;
+    let mut stmt = conn.prepare(
+        r#"
+        SELECT
+            thread_key, channel, account_key, subject,
+            participant_keys_json, last_message_key, last_message_at,
+            message_count, unread_count, metadata_json, updated_at,
+            CAST(strftime('%s', COALESCE(updated_at, last_message_at)) AS INTEGER) * 1000 AS updated_at_ms
+        FROM communication_threads
+        ORDER BY updated_at_ms DESC, thread_key ASC
+        LIMIT ?1
+        "#,
+    )?;
+    let documents = stmt
+        .query_map(params![limit as i64], |row| {
+            let thread_key: String = row.get(0)?;
+            let channel: String = row.get(1)?;
+            let account_key: String = row.get(2)?;
+            let subject: String = row.get(3)?;
+            let participants_raw: String = row.get(4)?;
+            let last_message_key: String = row.get(5)?;
+            let last_message_at: String = row.get(6)?;
+            let message_count: i64 = row.get(7)?;
+            let unread_count: i64 = row.get(8)?;
+            let metadata_raw: String = row.get(9)?;
+            let updated_at: String = row.get(10)?;
+            let updated_at_ms: Option<i64> = row.get(11)?;
+            Ok(json!({
+                "id": thread_key,
+                "thread_key": thread_key,
+                "channel": channel,
+                "account_key": account_key,
+                "subject": subject,
+                "participant_keys_json": serde_json::from_str::<Value>(&participants_raw).unwrap_or_else(|_| json!([])),
+                "last_message_key": last_message_key,
+                "last_message_at": last_message_at,
+                "message_count": message_count,
+                "unread_count": unread_count,
+                "metadata_json": serde_json::from_str::<Value>(&metadata_raw).unwrap_or_else(|_| json!({})),
+                "updated_at": updated_at,
+                "updated_at_ms": updated_at_ms.unwrap_or(0),
+                "_deleted": false,
+            }))
+        })?
+        .collect::<rusqlite::Result<Vec<Value>>>()?;
+    let count = documents.len();
+    Ok(json!({
+        "ok": true,
+        "collection": "communication_threads",
+        "documents": documents,
+        "count": count,
+        "since_ms": 0,
+    }))
+}
+
+/// RxDB-shaped projection of communication_messages. Joins routing_state for
+/// `route_status` and extracts `ticket_self_work_id` from metadata_json so the
+/// Conversations audit module can show task/work IDs and link to the harness
+/// flowview without extra round-trips.
+pub fn pull_communication_messages_for_business_os(
+    root: &Path,
+    _since_ms: Option<i64>,
+    limit: Option<usize>,
+) -> Result<Value> {
+    let limit = limit.unwrap_or(500).clamp(1, 2_000);
+    let db_path = resolve_db_path(root, None);
+    let conn = open_channel_db(&db_path)?;
+    let mut stmt = conn.prepare(
+        r#"
+        SELECT
+            m.message_key, m.channel, m.account_key, m.thread_key, m.remote_id,
+            m.direction, m.folder_hint, m.sender_display, m.sender_address,
+            m.recipient_addresses_json, m.cc_addresses_json, m.bcc_addresses_json,
+            m.subject, m.preview, m.body_text, m.body_html, m.raw_payload_ref,
+            m.trust_level, m.status, m.seen, m.has_attachments,
+            m.external_created_at, m.observed_at, m.metadata_json,
+            r.route_status,
+            CAST(strftime('%s', COALESCE(m.observed_at, m.external_created_at)) AS INTEGER) * 1000 AS updated_at_ms
+        FROM communication_messages m
+        LEFT JOIN communication_routing_state r ON r.message_key = m.message_key
+        ORDER BY updated_at_ms DESC, m.message_key ASC
+        LIMIT ?1
+        "#,
+    )?;
+    let documents = stmt
+        .query_map(params![limit as i64], |row| {
+            let message_key: String = row.get(0)?;
+            let channel: String = row.get(1)?;
+            let account_key: String = row.get(2)?;
+            let thread_key: String = row.get(3)?;
+            let remote_id: String = row.get(4)?;
+            let direction: String = row.get(5)?;
+            let folder_hint: String = row.get(6)?;
+            let sender_display: String = row.get(7)?;
+            let sender_address: String = row.get(8)?;
+            let recipients_raw: String = row.get(9)?;
+            let cc_raw: String = row.get(10)?;
+            let bcc_raw: String = row.get(11)?;
+            let subject: String = row.get(12)?;
+            let preview: String = row.get(13)?;
+            let body_text: String = row.get(14)?;
+            let body_html: String = row.get(15)?;
+            let raw_payload_ref: String = row.get(16)?;
+            let trust_level: String = row.get(17)?;
+            let status: String = row.get(18)?;
+            let seen: i64 = row.get(19)?;
+            let has_attachments: i64 = row.get(20)?;
+            let external_created_at: String = row.get(21)?;
+            let observed_at: String = row.get(22)?;
+            let metadata_raw: String = row.get(23)?;
+            let route_status: Option<String> = row.get(24)?;
+            let updated_at_ms: Option<i64> = row.get(25)?;
+            let metadata: Value =
+                serde_json::from_str::<Value>(&metadata_raw).unwrap_or_else(|_| json!({}));
+            let ticket_self_work_id = metadata
+                .get("ticket_self_work_id")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned);
+            let work_id = metadata
+                .get("work_id")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned);
+            Ok(json!({
+                "id": message_key,
+                "message_key": message_key,
+                "channel": channel,
+                "account_key": account_key,
+                "thread_key": thread_key,
+                "remote_id": remote_id,
+                "direction": direction,
+                "folder_hint": folder_hint,
+                "sender_display": sender_display,
+                "sender_address": sender_address,
+                "recipient_addresses_json": serde_json::from_str::<Value>(&recipients_raw).unwrap_or_else(|_| json!([])),
+                "cc_addresses_json": serde_json::from_str::<Value>(&cc_raw).unwrap_or_else(|_| json!([])),
+                "bcc_addresses_json": serde_json::from_str::<Value>(&bcc_raw).unwrap_or_else(|_| json!([])),
+                "subject": subject,
+                "preview": preview,
+                "body_text": body_text,
+                "body_html": body_html,
+                "raw_payload_ref": raw_payload_ref,
+                "trust_level": trust_level,
+                "status": status,
+                "seen": seen,
+                "has_attachments": has_attachments,
+                "external_created_at": external_created_at,
+                "observed_at": observed_at,
+                "metadata_json": metadata,
+                "route_status": route_status,
+                "ticket_self_work_id": ticket_self_work_id,
+                "work_id": work_id,
+                "updated_at_ms": updated_at_ms.unwrap_or(0),
+                "_deleted": false,
+            }))
+        })?
+        .collect::<rusqlite::Result<Vec<Value>>>()?;
+    let count = documents.len();
+    Ok(json!({
+        "ok": true,
+        "collection": "communication_messages",
+        "documents": documents,
+        "count": count,
+        "since_ms": 0,
+    }))
+}
+
 pub fn handle_channel_command(root: &Path, args: &[String]) -> Result<()> {
     let command = args.first().map(String::as_str).unwrap_or("");
     match command {
@@ -5660,8 +6181,10 @@ fn take_messages(
                             WHEN r.route_status = 'leased' THEN 1
                             ELSE 2
                         END ASC,
-                        m.external_created_at DESC,
-                        m.observed_at DESC,
+                        CASE WHEN m.channel = 'queue' THEN m.external_created_at END ASC,
+                        CASE WHEN m.channel <> 'queue' THEN m.external_created_at END DESC,
+                        CASE WHEN m.channel = 'queue' THEN m.observed_at END ASC,
+                        CASE WHEN m.channel <> 'queue' THEN m.observed_at END DESC,
                         m.message_key DESC
                 ) AS thread_rank
             FROM communication_messages m
@@ -5706,7 +6229,17 @@ fn take_messages(
             updated_at
         FROM eligible
         WHERE thread_rank = 1
-        ORDER BY external_created_at DESC, observed_at DESC, message_key DESC
+        ORDER BY
+            CASE
+                WHEN route_status = 'pending' THEN 0
+                WHEN route_status = 'leased' THEN 1
+                ELSE 2
+            END ASC,
+            CASE WHEN channel = 'queue' THEN external_created_at END ASC,
+            CASE WHEN channel <> 'queue' THEN external_created_at END DESC,
+            CASE WHEN channel = 'queue' THEN observed_at END ASC,
+            CASE WHEN channel <> 'queue' THEN observed_at END DESC,
+            message_key DESC
         LIMIT ?3
         "#
     } else {
@@ -5743,8 +6276,10 @@ fn take_messages(
                             WHEN r.route_status = 'leased' THEN 1
                             ELSE 2
                         END ASC,
-                        m.external_created_at DESC,
-                        m.observed_at DESC,
+                        CASE WHEN m.channel = 'queue' THEN m.external_created_at END ASC,
+                        CASE WHEN m.channel <> 'queue' THEN m.external_created_at END DESC,
+                        CASE WHEN m.channel = 'queue' THEN m.observed_at END ASC,
+                        CASE WHEN m.channel <> 'queue' THEN m.observed_at END DESC,
                         m.message_key DESC
                 ) AS thread_rank
             FROM communication_messages m
@@ -5788,7 +6323,17 @@ fn take_messages(
             updated_at
         FROM eligible
         WHERE thread_rank = 1
-        ORDER BY external_created_at DESC, observed_at DESC, message_key DESC
+        ORDER BY
+            CASE
+                WHEN route_status = 'pending' THEN 0
+                WHEN route_status = 'leased' THEN 1
+                ELSE 2
+            END ASC,
+            CASE WHEN channel = 'queue' THEN external_created_at END ASC,
+            CASE WHEN channel <> 'queue' THEN external_created_at END DESC,
+            CASE WHEN channel = 'queue' THEN observed_at END ASC,
+            CASE WHEN channel <> 'queue' THEN observed_at END DESC,
+            message_key DESC
         LIMIT ?2
         "#
     };

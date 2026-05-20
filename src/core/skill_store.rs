@@ -638,7 +638,9 @@ pub fn runtime_user_skill_root(root: &Path) -> PathBuf {
 
 pub fn source_pack_names(root: &Path) -> Result<Vec<String>> {
     let mut names = Vec::new();
-    collect_skill_dir_names(&root.join("skills/packs"), &mut names)?;
+    for base in source_pack_roots(root) {
+        collect_skill_dir_names(&base, &mut names)?;
+    }
     names.sort();
     names.dedup();
     Ok(names)
@@ -794,12 +796,11 @@ fn load_skill_bundle_by_name(root: &Path, skill_name: &str) -> Result<Option<Ski
 fn skill_roots(root: &Path) -> Vec<PathBuf> {
     let mut roots = Vec::new();
     let mut seen = HashSet::new();
-    for candidate in [
-        root.join("skills/packs"),
+    for candidate in source_pack_roots(root).into_iter().chain([
         codex_home_skills_root(),
         configured_skill_root(root),
         configured_generated_skill_root(root),
-    ] {
+    ]) {
         if seen.insert(candidate.clone()) {
             roots.push(candidate);
         }
@@ -1346,7 +1347,7 @@ fn collect_skill_dir_names(base: &Path, names: &mut Vec<String>) -> Result<()> {
 }
 
 fn find_source_pack_dir(root: &Path, name: &str) -> Result<Option<PathBuf>> {
-    let mut queue = vec![root.join("skills/packs")];
+    let mut queue = source_pack_roots(root);
     while let Some(dir) = queue.pop() {
         if !dir.exists() {
             continue;
@@ -1375,6 +1376,10 @@ fn find_source_pack_dir(root: &Path, name: &str) -> Result<Option<PathBuf>> {
         }
     }
     Ok(None)
+}
+
+fn source_pack_roots(root: &Path) -> Vec<PathBuf> {
+    vec![root.join("skills/packs"), root.join("src/skills/packs")]
 }
 
 fn copy_skill_dir(source: &Path, target: &Path) -> Result<()> {

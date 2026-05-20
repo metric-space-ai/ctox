@@ -631,6 +631,10 @@ fn assess_review_requirement(
     let lowered = combined.to_ascii_lowercase();
     let mut score = 0u8;
     let mut reasons = Vec::new();
+    if is_business_os_outbound_background_command(request, &lowered) {
+        push_unique_reason(&mut reasons, "business_os_outbound_background_command");
+        return (false, 0, reasons);
+    }
     let founder_or_owner_email = matches!(
         request.source_label.to_ascii_lowercase().as_str(),
         "email:owner" | "email:founder" | "email:admin"
@@ -1840,6 +1844,29 @@ fn contains_any(haystack: &str, needles: &[&str]) -> bool {
     needles.iter().any(|needle| haystack.contains(needle))
 }
 
+fn is_business_os_outbound_background_command(
+    request: &CompletionReviewRequest,
+    lowered: &str,
+) -> bool {
+    request.source_label.eq_ignore_ascii_case("queue")
+        && contains_any(
+            lowered,
+            &[
+                "business os command:",
+                "\"business_os_command_id\"",
+                "business_os_command_id",
+            ],
+        )
+        && contains_any(
+            lowered,
+            &[
+                "outbound.company.research",
+                "outbound.pipeline.contact_research",
+                "outbound.pipeline.lead_qualification",
+            ],
+        )
+}
+
 fn push_unique_reason(reasons: &mut Vec<String>, candidate: &str) {
     if !reasons.iter().any(|existing| existing == candidate) {
         reasons.push(candidate.to_string());
@@ -1959,6 +1986,28 @@ mod tests {
         assert!(reasons
             .iter()
             .any(|reason| reason == "workspace_backed_queue_task"));
+    }
+
+    #[test]
+    fn skips_review_for_business_os_outbound_research_writeback() {
+        let request = CompletionReviewRequest {
+            task_goal: "Unternehmensdaten recherchieren".to_string(),
+            task_prompt: "Recherchiere nur Unternehmensdaten und schreibe das Ergebnis in Knowledge.\n\nBusiness OS command:\n- command_id: cmd_run_aesolar\n- module: outbound\n- type: outbound.company.research\n- record_id: co_aesolar\n\nPayload JSON:\n{}".to_string(),
+            preview: "Unternehmensdaten recherchieren: AESOLAR Energy GmbH".to_string(),
+            source_label: "queue".to_string(),
+            owner_visible: false,
+            workspace_root: "/Users/michaelwelsch/Documents/ctox.nosync".to_string(),
+            ..CompletionReviewRequest::default()
+        };
+        let (required, score, reasons) = assess_review_requirement(
+            &request,
+            "Company-only research appended to outbound/campaign_default_companies; required Knowledge DataFrame row verified.",
+        );
+        assert!(!required);
+        assert_eq!(score, 0);
+        assert!(reasons
+            .iter()
+            .any(|reason| reason == "business_os_outbound_background_command"));
     }
 
     #[test]

@@ -1,3 +1,5 @@
+import { getSvgIcon } from './icons.js?v=20260520-svg-icons2';
+
 const ICON_FALLBACK = '◳';
 
 export function createTaskbar({ container, windowManager, eventBus, t, ownerLabelFor }) {
@@ -89,7 +91,13 @@ export function createTaskbar({ container, windowManager, eventBus, t, ownerLabe
 
     const icon = document.createElement('span');
     icon.className = 'shell-taskbar-icon';
-    icon.textContent = win.icon || iconForOwner(win.ownerId) || ICON_FALLBACK;
+    const winIconKey = win.ownerId ? win.ownerId.replace(/^(desktop-app|module):/, '') : '';
+    const svgHtml = getSvgIcon(winIconKey, 20, 1.8);
+    if (svgHtml) {
+      icon.innerHTML = svgHtml;
+    } else {
+      icon.textContent = win.icon || iconForOwner(win.ownerId) || ICON_FALLBACK;
+    }
     btn.appendChild(icon);
 
     const label = document.createElement('span');
@@ -126,7 +134,13 @@ export function createTaskbar({ container, windowManager, eventBus, t, ownerLabe
 
       const icon = document.createElement('span');
       icon.className = 'shell-taskbar-icon';
-      icon.textContent = win.icon || iconForOwner(win.ownerId) || ICON_FALLBACK;
+      const winIconKey = win.ownerId ? win.ownerId.replace(/^(desktop-app|module):/, '') : '';
+      const svgHtml = getSvgIcon(winIconKey, 18, 1.8);
+      if (svgHtml) {
+        icon.innerHTML = svgHtml;
+      } else {
+        icon.textContent = win.icon || iconForOwner(win.ownerId) || ICON_FALLBACK;
+      }
       item.appendChild(icon);
 
       const title = document.createElement('span');

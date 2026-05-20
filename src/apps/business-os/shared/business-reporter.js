@@ -1,12 +1,253 @@
 const REPORTER_STYLE_ID = 'ctox-business-reporter-style';
 
 let reporterState = null;
+let fabButton = null;
+let bugActor = null;
+
+let eggState = {
+  state: 'sleeping', // 'sleeping' | 'awakening' | 'crawling' | 'scurrying'
+  x: 0,
+  y: 0,
+  angle: 0,
+  animationFrameId: null,
+  currentTarget: null,
+  pauseUntil: 0,
+  wakeUpStartTime: 0,
+  scurryStartTime: 0,
+  scurryStartPos: null,
+  scurryStartAngle: 0,
+  lastTime: 0,
+};
+let idleTimeout = null;
+const IDLE_TIME = 300000; // 5 minutes of inactivity
+
+function interpolateAngle(current, target, step) {
+  let diff = (target - current) % 360;
+  if (diff < -180) diff += 360;
+  if (diff > 180) diff -= 360;
+  return current + diff * step;
+}
+
+function getNextTarget() {
+  const margin = 60;
+  const tx = margin + Math.random() * (window.innerWidth - 2 * margin - 44);
+  const ty = margin + Math.random() * (window.innerHeight - 2 * margin - 44);
+  return { x: tx, y: ty };
+}
+
+function startEasterEgg() {
+  if (!fabButton) return;
+  if (window.innerWidth < 1024) {
+    idleTimeout = setTimeout(startEasterEgg, IDLE_TIME);
+    return;
+  }
+  if (reporterState && (reporterState.modal || reporterState.markupMode !== 'idle')) {
+    idleTimeout = setTimeout(startEasterEgg, IDLE_TIME);
+    return;
+  }
+
+  if (!bugActor) {
+    bugActor = document.createElement('div');
+    bugActor.className = 'ctox-bug-actor';
+    bugActor.innerHTML = bugIconSvg();
+    bugActor.addEventListener('click', () => {
+      openReporterDialog(reporterState);
+      stopEasterEggInstantly();
+    });
+    document.body.append(bugActor);
+  }
+
+  const rect = fabButton.getBoundingClientRect();
+  eggState.state = 'awakening';
+  eggState.x = rect.left;
+  eggState.y = rect.top;
+  eggState.angle = 0;
+  eggState.wakeUpStartTime = performance.now();
+  eggState.lastTime = performance.now();
+
+  fabButton.classList.add('bug-crawled-away');
+
+  bugActor.style.display = 'inline-flex';
+  bugActor.style.left = `${eggState.x}px`;
+  bugActor.style.top = `${eggState.y}px`;
+  bugActor.style.transform = 'rotate(0deg)';
+
+  if (eggState.animationFrameId) {
+    cancelAnimationFrame(eggState.animationFrameId);
+  }
+  eggState.animationFrameId = requestAnimationFrame(animLoop);
+}
+
+function scurryBack() {
+  if (eggState.state === 'scurrying' || eggState.state === 'sleeping') return;
+  eggState.state = 'scurrying';
+  eggState.scurryStartTime = performance.now();
+  eggState.scurryStartPos = { x: eggState.x, y: eggState.y };
+  eggState.scurryStartAngle = eggState.angle;
+  eggState.lastTime = performance.now();
+}
+
+function stopEasterEggInstantly() {
+  if (eggState.animationFrameId) {
+    cancelAnimationFrame(eggState.animationFrameId);
+    eggState.animationFrameId = null;
+  }
+  if (idleTimeout) {
+    clearTimeout(idleTimeout);
+  }
+
+  eggState.state = 'sleeping';
+
+  if (fabButton) {
+    fabButton.classList.remove('bug-crawled-away');
+  }
+
+  if (bugActor) {
+    bugActor.style.display = 'none';
+    bugActor.style.left = '';
+    bugActor.style.top = '';
+    bugActor.style.transform = '';
+  }
+
+  eggState.currentTarget = null;
+  eggState.angle = 0;
+  eggState.lastTime = 0;
+
+  idleTimeout = setTimeout(startEasterEgg, IDLE_TIME);
+}
+
+function animLoop(timestamp) {
+  if (eggState.state === 'sleeping' || !fabButton || !bugActor) return;
+
+  if (eggState.state === 'awakening') {
+    const elapsed = timestamp - eggState.wakeUpStartTime;
+    if (elapsed < 600) {
+      const wiggleAngle = Math.sin(timestamp * 0.05) * 15;
+      bugActor.style.transform = `rotate(${wiggleAngle}deg)`;
+      eggState.animationFrameId = requestAnimationFrame(animLoop);
+      return;
+    } else {
+      eggState.state = 'crawling';
+      eggState.currentTarget = getNextTarget();
+      eggState.pauseUntil = 0;
+      eggState.lastTime = timestamp;
+    }
+  }
+
+  if (eggState.state === 'crawling') {
+    if (timestamp < eggState.pauseUntil) {
+      const lookAngle = eggState.angle + Math.sin(timestamp * 0.01) * 8;
+      bugActor.style.transform = `rotate(${lookAngle}deg)`;
+      eggState.animationFrameId = requestAnimationFrame(animLoop);
+      return;
+    }
+
+    const target = eggState.currentTarget;
+    if (!target) {
+      eggState.currentTarget = getNextTarget();
+      eggState.animationFrameId = requestAnimationFrame(animLoop);
+      return;
+    }
+
+    const dx = target.x - eggState.x;
+    const dy = target.y - eggState.y;
+    const distance = Math.hypot(dx, dy);
+
+    if (distance < 10) {
+      eggState.x = target.x;
+      eggState.y = target.y;
+      eggState.pauseUntil = timestamp + 1000 + Math.random() * 1500;
+      eggState.currentTarget = getNextTarget();
+      eggState.lastTime = timestamp;
+    } else {
+      const speed = 75; // px per second
+      if (!eggState.lastTime) eggState.lastTime = timestamp;
+      const dt = (timestamp - eggState.lastTime) / 1000;
+      eggState.lastTime = timestamp;
+
+      const step = speed * Math.min(dt, 0.1);
+      const moveX = (dx / distance) * step;
+      const moveY = (dy / distance) * step;
+
+      eggState.x += moveX;
+      eggState.y += moveY;
+
+      bugActor.style.left = `${eggState.x}px`;
+      bugActor.style.top = `${eggState.y}px`;
+
+      const targetAngleRad = Math.atan2(dy, dx);
+      const targetAngleDeg = (targetAngleRad * 180 / Math.PI) + 90;
+
+      eggState.angle = interpolateAngle(eggState.angle, targetAngleDeg, 0.08);
+
+      const walkingWiggle = Math.sin(timestamp * 0.02) * 10;
+      bugActor.style.transform = `rotate(${eggState.angle + walkingWiggle}deg)`;
+    }
+
+    eggState.animationFrameId = requestAnimationFrame(animLoop);
+    return;
+  }
+
+  if (eggState.state === 'scurrying') {
+    const elapsed = timestamp - eggState.scurryStartTime;
+    const duration = 350; // ms
+
+    let homeX = window.innerWidth - 62;
+    let homeY = window.innerHeight - 62;
+    if (fabButton) {
+      const rect = fabButton.getBoundingClientRect();
+      homeX = rect.left;
+      homeY = rect.top;
+    }
+
+    const t = Math.min(elapsed / duration, 1);
+    const easeOutCubic = 1 - Math.pow(1 - t, 3);
+
+    eggState.x = eggState.scurryStartPos.x + (homeX - eggState.scurryStartPos.x) * easeOutCubic;
+    eggState.y = eggState.scurryStartPos.y + (homeY - eggState.scurryStartPos.y) * easeOutCubic;
+
+    bugActor.style.left = `${eggState.x}px`;
+    bugActor.style.top = `${eggState.y}px`;
+
+    const dx = homeX - eggState.scurryStartPos.x;
+    const dy = homeY - eggState.scurryStartPos.y;
+    const homeAngleRad = Math.atan2(dy, dx);
+    const homeAngleDeg = (homeAngleRad * 180 / Math.PI) + 90;
+
+    eggState.angle = interpolateAngle(eggState.scurryStartAngle, homeAngleDeg, t * 2);
+    const panicWiggle = Math.sin(timestamp * 0.08) * 18;
+    bugActor.style.transform = `rotate(${eggState.angle + panicWiggle}deg)`;
+
+    if (t >= 1) {
+      eggState.state = 'sleeping';
+
+      if (fabButton) {
+        fabButton.classList.remove('bug-crawled-away');
+      }
+
+      if (bugActor) {
+        bugActor.style.display = 'none';
+        bugActor.style.left = '';
+        bugActor.style.top = '';
+        bugActor.style.transform = '';
+      }
+
+      eggState.currentTarget = null;
+      eggState.angle = 0;
+      eggState.lastTime = 0;
+
+      idleTimeout = setTimeout(startEasterEgg, IDLE_TIME);
+    } else {
+      eggState.animationFrameId = requestAnimationFrame(animLoop);
+    }
+    return;
+  }
+}
 
 export function initBusinessReporter({
   session,
   getActiveModule,
-  authHeaders,
-  endpoint = '/api/business-os/reports',
+  commandBus,
   db = null,
 }) {
   if (!session?.authenticated || document.querySelector('[data-ctox-reporter]')) return;
@@ -14,8 +255,7 @@ export function initBusinessReporter({
   reporterState = {
     session,
     getActiveModule,
-    authHeaders,
-    endpoint,
+    commandBus,
     db,
     modal: null,
     overlay: null,
@@ -37,6 +277,39 @@ export function initBusinessReporter({
   button.innerHTML = bugIconSvg();
   button.addEventListener('click', () => openReporterDialog(reporterState));
   document.body.append(button);
+
+  fabButton = button;
+
+  const handleActivity = (event) => {
+    if (event.target.closest('.ctox-report-fab') || event.target.closest('.ctox-bug-actor')) {
+      if (eggState.state !== 'sleeping') {
+        stopEasterEggInstantly();
+      }
+      return;
+    }
+    resetIdleTimer();
+  };
+
+  function resetIdleTimer() {
+    if (idleTimeout) {
+      clearTimeout(idleTimeout);
+      idleTimeout = null;
+    }
+    if (eggState.state === 'awakening' || eggState.state === 'crawling') {
+      scurryBack();
+    } else if (eggState.state === 'sleeping') {
+      idleTimeout = setTimeout(startEasterEgg, IDLE_TIME);
+    }
+  }
+
+  window.addEventListener('mousemove', handleActivity, { passive: true });
+  window.addEventListener('mousedown', handleActivity, { passive: true });
+  window.addEventListener('keydown', handleActivity, { passive: true });
+  window.addEventListener('scroll', handleActivity, { passive: true });
+  window.addEventListener('touchstart', handleActivity, { passive: true });
+  window.addEventListener('pointermove', handleActivity, { passive: true });
+
+  idleTimeout = setTimeout(startEasterEgg, IDLE_TIME);
 }
 
 function openReporterDialog(state) {
@@ -163,18 +436,17 @@ async function submitReport(state, module, form) {
   submit.disabled = true;
   status.textContent = 'Sende...';
   try {
-    const result = await fetchJson(state.endpoint, {
-      method: 'POST',
-      headers: state.authHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({
-        module_id: module.id || 'ctox',
-        kind,
-        severity,
-        title,
-        summary,
-        expected,
-        client_context: clientContext,
-      }),
+    const result = await dispatchBusinessReport({
+      commandBus: state.commandBus,
+      session: state.session,
+      module,
+      kind,
+      severity,
+      title,
+      summary,
+      expected,
+      clientContext,
+      now,
     });
     await upsertLocalReport(state, {
       result,
@@ -196,6 +468,63 @@ async function submitReport(state, module, form) {
     submit.disabled = false;
     status.textContent = error.message || String(error);
   }
+}
+
+export async function dispatchBusinessReport({
+  commandBus,
+  session,
+  module,
+  kind = 'bug',
+  severity = 'medium',
+  title = 'Business OS report',
+  summary = '',
+  expected = '',
+  clientContext = {},
+  now = Date.now(),
+}) {
+  if (!commandBus?.dispatch) {
+    throw new Error('business_commands collection is required for reports');
+  }
+  const reportId = `report_${newId()}`;
+  const commandId = `cmd_${newId()}`;
+  const moduleId = module?.id || clientContext?.module_id || 'ctox';
+  const actor = session?.user ? {
+    id: session.user.id || '',
+    display_name: session.user.display_name || session.user.name || session.user.id || '',
+    role: session.user.role || 'user',
+    is_admin: Boolean(session.user.is_admin),
+  } : null;
+  await commandBus.dispatch({
+    id: commandId,
+    module: 'ctox',
+    type: `ctox.report.${kind || 'bug'}`,
+    record_id: reportId,
+    inbound_channel: moduleId,
+    payload: {
+      report_id: reportId,
+      module_id: moduleId,
+      kind,
+      severity,
+      title,
+      summary,
+      expected,
+      reporter_id: actor?.id || '',
+    },
+    client_context: {
+      ...clientContext,
+      actor,
+      created_at: clientContext?.created_at || new Date(now).toISOString(),
+    },
+  });
+  return {
+    ok: true,
+    report_id: reportId,
+    command_id: commandId,
+    task_id: '',
+    task_status: 'pending_sync',
+    status: 'open',
+    transport: 'rxdb-webrtc',
+  };
 }
 
 async function upsertLocalReport(state, report) {
@@ -255,6 +584,10 @@ async function upsertRx(collection, doc) {
   const existing = await collection.findOne(doc.id).exec();
   if (existing) await existing.patch(doc);
   else await collection.insert(doc);
+}
+
+function newId() {
+  return globalThis.crypto?.randomUUID?.() || `${Date.now()}_${Math.random().toString(36).slice(2)}`;
 }
 
 function startMarkup(state) {
@@ -681,12 +1014,6 @@ function waitForVideoFrame(video) {
   return new Promise((resolve) => setTimeout(resolve, 160));
 }
 
-async function fetchJson(url, options = {}) {
-  const res = await fetch(url, { cache: 'no-store', ...options });
-  if (!res.ok) throw new Error(`${url} returned ${res.status}`);
-  return res.json();
-}
-
 function bugIconSvg() {
   return `
     <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false">
@@ -726,6 +1053,25 @@ function installReporterStyles() {
       cursor: pointer;
     }
     .ctox-report-fab svg { color: #ef4444; flex: 0 0 auto; }
+    .ctox-report-fab.bug-crawled-away svg {
+      opacity: 0;
+      visibility: hidden;
+      transition: opacity 0.3s;
+    }
+    .ctox-bug-actor {
+      position: fixed;
+      z-index: 999999;
+      pointer-events: auto;
+      cursor: pointer;
+      width: 44px;
+      height: 44px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: transparent;
+      color: #ef4444;
+      transition: none;
+    }
     .ctox-report-backdrop {
       position: fixed;
       inset: 0;

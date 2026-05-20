@@ -77,7 +77,8 @@ impl From<std::io::Error> for DocxRenderError {
 /// `<skill_root>/scripts/polish_docx_layout.py` is applied as a second pass
 /// so normal CTOX renders produce a client-facing layout by default.
 ///
-/// `python_executable` defaults to `"python3"` when `None`.
+/// `python_executable` defaults to the first available CTOX/Codex bundled
+/// Python runtime, then falls back to `"python3"`.
 pub fn render_docx(
     manuscript: &Manuscript,
     output_path: &Path,
@@ -110,8 +111,8 @@ pub fn render_docx(
         output_path.to_path_buf()
     };
 
-    let executable = python_executable.unwrap_or("python3");
-    let mut command = Command::new(executable);
+    let executable = resolve_python_executable(python_executable);
+    let mut command = Command::new(&executable);
     command
         .arg(&script_path)
         .arg("--out")
@@ -172,7 +173,7 @@ pub fn render_docx(
     let mut stdout_tail = stdout;
     let (byte_count, parsed_path) = if use_layout_polish {
         let polish_output = run_layout_polisher(
-            executable,
+            &executable,
             &polish_script_path,
             &render_output_path,
             output_path,
@@ -234,6 +235,34 @@ fn run_layout_polisher(
     }
 
     Ok(format!("\n{stdout}"))
+}
+
+fn resolve_python_executable(configured: Option<&str>) -> String {
+    if let Some(value) = configured {
+        if !value.trim().is_empty() {
+            return value.to_string();
+        }
+    }
+    if let Ok(value) = std::env::var("CTOX_PYTHON") {
+        let value = value.trim().to_string();
+        if !value.is_empty() {
+            return value;
+        }
+    }
+    if let Ok(value) = std::env::var("CODEX_PYTHON") {
+        let value = value.trim().to_string();
+        if !value.is_empty() {
+            return value;
+        }
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        let bundled = Path::new(&home)
+            .join(".cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3");
+        if bundled.exists() {
+            return bundled.to_string_lossy().into_owned();
+        }
+    }
+    "python3".to_string()
 }
 
 fn sibling_temp_path(output_path: &Path, label: &str) -> PathBuf {

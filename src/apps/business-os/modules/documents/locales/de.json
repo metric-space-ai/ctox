@@ -1,0 +1,150 @@
+{
+  "workspaceLoading": "Workspace wird geladen.",
+  "documentsTitle": "Documents",
+  "searchPlaceholder": "Dokument suchen...",
+  "searchLabel": "Dokumente suchen",
+  "sortLabel": "Dokumente sortieren",
+  "statusFilterLabel": "Dokumentstatus filtern",
+  "tagFilterLabel": "Dokument-Tags filtern",
+  "sortByNewest": "Neueste zuerst",
+  "sortByOldest": "Älteste zuerst",
+  "sortByTitle": "Titel A-Z",
+  "sortByStatus": "Status",
+  "filterAll": "Alle",
+  "exportSelected": "Ausgewähltes Dokument exportieren",
+  "importDocument": "Dokument importieren",
+  "createWordDocument": "Word-Dokument erstellen",
+  "noMatches": "Keine Treffer",
+  "adjustSearchFilter": "Suche oder Filter anpassen.",
+  "noDocuments": "No documents",
+  "importPrompt": "Über das Import-Icon DOCX oder Markdown hinzufügen.",
+  "manageDocument": "verwalten",
+  "loadingDocument": "Lade Dokument",
+  "versionLoading": "Version wird gelesen.",
+  "documentSwitchRunning": "Dokumentwechsel läuft.",
+  "documentSwitchFailed": "Dokumentwechsel fehlgeschlagen:",
+  "draftSaveTimeout": "Automatische Draft-Speicherung beim Dokumentwechsel hat zu lange gedauert.",
+  "loadingDocxEditor": "Lade DOCX Editor",
+  "superdocInitializing": "SuperDoc wird initialisiert.",
+  "docxEditorLoadFailed": "DOCX editor konnte nicht geladen werden:",
+  "loadingEditor": "Lade Editor",
+  "documentPreparing": "Dokument wird vorbereitet.",
+  "editorLoadFailed": "Editor konnte nicht geladen werden:",
+  "noSavedVersionFound": "Zu diesem Dokument wurde keine gespeicherte Version gefunden. Bitte erneut importieren oder den Datensatz verwalten.",
+  "loadVersionFailed": "Dokumentversion konnte nicht geladen werden:",
+  "deleteConfirmTitle": "Dokument löschen",
+  "deleteConfirmMessage": "Dokument \"{title}\" löschen?",
+  "deleteLabel": "Löschen",
+  "manageDocumentTitle": "Dokument verwalten",
+  "newDocumentTitle": "Neues Dokument",
+  "newDocumentDescription": "CTOX erstellt ein Word-Dokument per Research-/Report-Runbook.",
+  "importDocumentTitle": "Dokument importieren",
+  "importDocumentDescription": "Datei auswählen, Importmodus festlegen und optional direkt ein Runbook anwenden.",
+  "exportDocumentTitle": "Dokument exportieren",
+  "noDocumentSelected": "Kein Dokument ausgewählt.",
+  "noDocumentSelectedPrompt": "Links ein DOCX importieren oder auswählen.",
+  "importModeDirect": "1:1 übernehmen",
+  "importModeRunbook": "Runbook direkt anwenden",
+  "docxExportSuperDocRequired": "DOCX Export benötigt den aktiven SuperDoc Editor. Bitte das Dokument erneut öffnen und danach exportieren.",
+  "taskCreating": "Task wird angelegt...",
+  "taskCreationFailed": "CTOX konnte den Dokument-Task nicht anlegen:",
+  "openKnowledge": "CTOX Knowledge öffnen",
+  "manageRunbooks": "Runbooks verwalten",
+  "promptPlaceholder": "Prompt für dieses Dokument",
+  "runbookStart": "Runbook starten",
+  "cancel": "Abbrechen",
+  "save": "Speichern",
+  "delete": "Dokument löschen",
+  "importMode": "Import-Modus",
+  "title": "Titel",
+  "status": "Status",
+  "description": "Beschreibung",
+  "tags": "Tags",
+  "file": "Datei",
+  "format": "Format",
+  "filename": "Dateiname",
+  "runbook": "Runbook",
+  "documentType": "Dokumenttyp",
+  "prompt": "Prompt",
+  "import": "Importieren",
+  "export": "Export starten",
+  "runbookPromptPlaceholder": "Optionaler Prompt für das Runbook beim Import",
+  "newDocumentPromptPlaceholder": "Was soll CTOX recherchieren und als Word-Dokument ausarbeiten?",
+  "chooseFileFirstError": "Bitte zuerst im Import-Dialog eine DOCX- oder Markdown-Datei auswählen.",
+  "chooseFileFirstWorkflowError": "Bitte zuerst eine DOCX- oder Markdown-Datei auswählen.",
+  "chatToCtox": "Chat to CTOX",
+  "chatMissingMessage": "Nachricht fehlt.",
+  "chatNotReady": "Chat ist noch nicht bereit.",
+  "chatOpening": "Oeffne Chat...",
+  "chatModifyAppTitle": "Documents App modifizieren",
+  "chatWorkDataTitle": "Documents bearbeiten",
+  "chatModifyAppLabel": "App modifizieren",
+  "chatWorkDataLabel": "Mit Daten arbeiten",
+  "chatActionLabel": "CTOX Aufgabe",
+  "chatPlaceholder": "Was soll CTOX hier tun oder prüfen?",
+  "send": "Senden",
+  "manageDocumentRunbooksInstruction": "Öffne das CTOX Knowledge-System für die Verwaltung von dokumentbezogenen Skillbooks, Runbooks und Runbook-Items. Fokus: document/docx/markdown Runbooks, die vom Business-OS Documents-Modul beim Erstellen, Importieren und manuellen Ausführen verwendet werden.",
+  "manageDocumentRunbooksTitle": "Document runbooks verwalten",
+  "none": "keine",
+  "noRunbook": "Kein Runbook",
+  "runbooks": {
+    "research.report.auto": {
+      "title": "Deep Research Word-Bericht",
+      "description": "CTOX waehlt den passenden Report-Typ und erstellt ein belastbares Word-Dokument."
+    },
+    "research.report.feasibility_study": {
+      "title": "Machbarkeitsstudie",
+      "description": "Decision-grade Machbarkeitsstudie mit Evidenz, Bewertung und DOCX-Render."
+    },
+    "research.report.market_research": {
+      "title": "Marktanalyse",
+      "description": "Marktgroesse, Segmente, Treiber, Wettbewerb, Barrieren und Empfehlung."
+    },
+    "research.report.competitive_analysis": {
+      "title": "Wettbewerbsanalyse",
+      "description": "Wettbewerber-Set, Bewertungsachsen, Matrix, Positionierung, Luecken und Empfehlung."
+    },
+    "research.report.technology_screening": {
+      "title": "Technologie-Screening",
+      "description": "Optioneninventar, Kriterien, Shortlist und naechste Schritte."
+    },
+    "research.report.whitepaper": {
+      "title": "Whitepaper",
+      "description": "These, Kontext, Argumente, Gegenargumente, Implikationen und Position."
+    },
+    "research.report.literature_review": {
+      "title": "Stand der Technik",
+      "description": "Literature Review mit Themen, Synthese, Luecken und offenen Fragen."
+    },
+    "research.report.decision_brief": {
+      "title": "Entscheidungsvorlage",
+      "description": "Kurzes empfehlungsorientiertes Memo mit Optionen, Kriterien und Bewertung."
+    },
+    "research.report.project_description": {
+      "title": "Projektbeschreibung / Fördervorhaben",
+      "description": "Unternehmens- und Projektbeschreibung fuer Innovations- und Foerdervorhaben."
+    },
+    "research.report.source_review": {
+      "title": "Quellenreview",
+      "description": "Systematische Quellen- und Datenquellenrecherche mit Taxonomie und Priorisierung."
+    },
+    "document.summarize": {
+      "title": "Zusammenfassen",
+      "description": "Fasse das ausgewählte DOCX strukturiert zusammen."
+    },
+    "document.extract-requirements": {
+      "title": "Requirements extrahieren",
+      "description": "Extrahiere Anforderungen, offene Punkte und Nachweise."
+    },
+    "document.review-risks": {
+      "title": "Risiken prüfen",
+      "description": "Prüfe fachliche, rechtliche und Umsetzungsrisiken im Dokument."
+    }
+  },
+  "hideEditorToolbar": "Editorleiste ausblenden",
+  "showEditorToolbar": "Editorleiste einblenden",
+  "documentError": "Dokumentfehler",
+  "allTags": "Alle Tags",
+  "untagged": "Ohne Tags",
+  "documentLoadFailed": "Dokument konnte nicht geladen werden:"
+}

@@ -11,7 +11,8 @@
         "desktop_icons",
         "desktop_layout",
         "desktop_notifications",
-        "desktop_windows"
+        "desktop_windows",
+        "channel_pairing_state"
       ],
       "source": "core",
       "core": true,
@@ -118,7 +119,7 @@
     },
     {
       "id": "research",
-      "title": "Research",
+      "title": "Web Research",
       "description": "Knowledge-backed research dashboards with source scoring, portfolio maps, and CTOX systematic-research handoff.",
       "entry": "modules/research/index.html",
       "collections": [
@@ -204,6 +205,50 @@
         "shell": "full-workspace",
         "left": "campaign selection and source import",
         "center": "company qualification and pipeline workbench"
+      }
+    },
+    {
+      "id": "shiftflow",
+      "title": "Einsatzplanung",
+      "description": "Agentenunterstützte Einsatzplanung, Arbeitszeiterfassung und Urlaubsverwaltung für Teams mit Echtzeit-Synchronisation.",
+      "entry": "modules/shiftflow/index.html",
+      "collections": [
+        "business_commands",
+        "planning_employees",
+        "planning_projects",
+        "planning_shifts",
+        "planning_time_records",
+        "planning_absences"
+      ],
+      "source": "local",
+      "core": false,
+      "editable": true,
+      "deletable": true,
+      "layout": {
+        "shell": "full-workspace",
+        "left": "team status, absence scopes and department selection",
+        "center": "interactive scheduler timeline and timesheet grid",
+        "right": "AI roster planner, conflict alerts and timesheet inspector"
+      }
+    },
+    {
+      "id": "notes",
+      "title": "Notizen",
+      "description": "Premium local-first markdown note workspace matching macOS Notes aesthetic.",
+      "entry": "modules/notes/index.html",
+      "collections": [
+        "business_commands",
+        "notes"
+      ],
+      "source": "local",
+      "core": false,
+      "editable": true,
+      "deletable": true,
+      "layout": {
+        "shell": "full-workspace",
+        "left": "Folders and note list",
+        "center": "Markdown editor and rich text live preview",
+        "right": "Command dashboard and formatting shortcuts"
       }
     }
   ]

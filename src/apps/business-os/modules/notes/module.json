@@ -1,0 +1,16 @@
+{
+  "id": "notes",
+  "title": "Notes",
+  "description": "Premium local-first markdown note workspace matching macOS Notes aesthetic.",
+  "entry": "modules/notes/index.html",
+  "collections": [
+    "business_commands",
+    "notes"
+  ],
+  "layout": {
+    "shell": "full-workspace",
+    "left": "Folders and note list",
+    "center": "Markdown editor and rich text live preview",
+    "right": "Command dashboard and formatting shortcuts"
+  }
+}

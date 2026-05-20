@@ -1,4 +1,5 @@
 import { showBusinessConfirm } from '../../shared/dialogs.js';
+import { loadModuleMessages } from '../../shared/i18n.js';
 
 const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 const MARKDOWN_MIME = 'text/markdown';
@@ -98,10 +99,29 @@ const SYSTEMATIC_REPORT_RUNBOOKS = [
   },
 ];
 
+function applyStaticLabels(host, t) {
+  const loadingText = host.querySelector('.module-loading-copy span');
+  if (loadingText) {
+    loadingText.textContent = t('workspaceLoading', 'Workspace wird geladen.');
+  }
+}
+
 export async function mount(ctx) {
   await ensureStyles();
+  const messages = await loadModuleMessages(import.meta.url, ctx.locale || 'de', {});
+  const t = (key, fallback, ...args) => {
+    let val = key.split('.').reduce((acc, curr) => acc?.[curr], messages) ?? fallback ?? key;
+    if (args.length) {
+      args.forEach((arg, i) => {
+        val = String(val).replace(`{${i}}`, arg);
+      });
+    }
+    return val;
+  };
+
   const html = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());
   ctx.host.innerHTML = html;
+  applyStaticLabels(ctx.host, t);
 
   const state = {
     ctx,
@@ -127,6 +147,8 @@ export async function mount(ctx) {
     localSubscriptionCleanup: null,
     contextMenu: null,
     contextMenuCleanup: null,
+    t,
+    lang: ctx.locale === 'en' ? 'en' : 'de',
   };
 
   wireModule(state);
@@ -251,21 +273,21 @@ function renderDocumentsContextMenu(state, context, x, y) {
     <form class="documents-context-chat" data-documents-context-chat-form>
       <header>
         <div>
-          <strong>Chat to CTOX</strong>
+          <strong>${escapeHtml(state.t('chatToCtox', 'Chat to CTOX'))}</strong>
           <span>${escapeHtml(documentContextSummary(context))}</span>
         </div>
-        <button type="button" data-documents-context-close aria-label="Schließen">×</button>
+        <button type="button" data-documents-context-close aria-label="${escapeHtml(state.t('close', 'Schließen'))}">×</button>
       </header>
       ${canModifyApp ? `
-        <div class="documents-context-mode" role="radiogroup" aria-label="CTOX Aufgabe">
-          <label><input type="radio" name="contextMode" value="data" checked /> Mit Daten arbeiten</label>
-          <label><input type="radio" name="contextMode" value="app" /> App modifizieren</label>
+        <div class="documents-context-mode" role="radiogroup" aria-label="${escapeHtml(state.t('chatActionLabel', 'CTOX Aufgabe'))}">
+          <label><input type="radio" name="contextMode" value="data" checked /> ${escapeHtml(state.t('chatWorkDataLabel', 'Mit Daten arbeiten'))}</label>
+          <label><input type="radio" name="contextMode" value="app" /> ${escapeHtml(state.t('chatModifyAppLabel', 'App modifizieren'))}</label>
         </div>
       ` : ''}
-      <textarea data-documents-context-message placeholder="Was soll CTOX hier tun oder prüfen?"></textarea>
+      <textarea data-documents-context-message placeholder="${escapeHtml(state.t('chatPlaceholder', 'Was soll CTOX hier tun oder prüfen?'))}"></textarea>
       <footer>
         <span data-documents-context-status></span>
-        <button type="submit">Senden</button>
+        <button type="submit">${escapeHtml(state.t('send', 'Senden'))}</button>
       </footer>
     </form>
   `;
@@ -306,7 +328,7 @@ async function dispatchDocumentsContextChat(state, context, message, mode = 'dat
   const trimmed = String(message || '').trim();
   const status = state.contextMenu?.querySelector('[data-documents-context-status]');
   if (!trimmed) {
-    if (status) status.textContent = 'Nachricht fehlt.';
+    if (status) status.textContent = state.t('chatMissingMessage', 'Nachricht fehlt.');
     return;
   }
 
@@ -315,13 +337,13 @@ async function dispatchDocumentsContextChat(state, context, message, mode = 'dat
   const runbookId = defaultRunbookId(state);
   const runbook = state.runbooks.find((item) => item.id === runbookId || item.command_type === runbookId) || null;
   if (!document.querySelector('[data-ctox-chat-root]')) {
-    if (status) status.textContent = 'Chat ist noch nicht bereit.';
+    if (status) status.textContent = state.t('chatNotReady', 'Chat ist noch nicht bereit.');
     return;
   }
-  if (status) status.textContent = 'Oeffne Chat...';
-  const title = `${safeMode === 'app' ? 'Documents App modifizieren' : 'Documents bearbeiten'} · ${context.label || record?.title || context.column || 'Documents'}`;
+  if (status) status.textContent = state.t('chatOpening', 'Oeffne Chat...');
+  const title = `${safeMode === 'app' ? state.t('chatModifyAppTitle', 'Documents App modifizieren') : state.t('chatWorkDataTitle', 'Documents bearbeiten')} · ${context.label || record?.title || context.column || 'Documents'}`;
   const instruction = safeMode === 'app'
-    ? `Modifiziere die Documents-App anhand dieser Admin-Anweisung. Kontext nur als UI-Bezug verwenden, Dokumentdaten selbst nicht als primäres Ziel verändern.\n\n${trimmed}`
+    ? state.t('chatModifyAppInstruction', `Modifiziere die Documents-App anhand dieser Admin-Anweisung. Kontext nur als UI-Bezug verwenden, Dokumentdaten selbst nicht als primäres Ziel verändern.\n\n{0}`, trimmed)
     : trimmed;
   window.dispatchEvent(new CustomEvent('ctox-business-os-chat-submit', {
     detail: {
@@ -408,7 +430,7 @@ async function refreshRunbooks(state) {
   const storedRunbooks = collection
     ? (await collection.find({ sort: [{ title: 'asc' }] }).exec()).map((doc) => doc.toJSON())
     : [];
-  state.runbooks = mergeDocumentRunbooks(storedRunbooks);
+  state.runbooks = mergeDocumentRunbooks(state, storedRunbooks);
 }
 
 async function createMarkdownDocument(state, input = {}) {
@@ -571,31 +593,31 @@ function renderLeft(state) {
   const selected = selectedRecord(state);
   wrap.innerHTML = `
     <div class="documents-column-head">
-      <div class="documents-column-title">Documents</div>
+      <div class="documents-column-title">${escapeHtml(state.t('documentsTitle', 'Documents'))}</div>
       <div class="documents-column-actions">
-        <button class="documents-column-icon" type="button" aria-label="Word-Dokument erstellen" title="Word-Dokument erstellen" data-documents-new-markdown>${iconSvg('new')}</button>
-        <button class="documents-column-icon" type="button" aria-label="Dokument importieren" title="Dokument importieren" data-documents-import-open>${iconSvg('import')}</button>
-        <button class="documents-column-icon" type="button" aria-label="Ausgewähltes Dokument exportieren" title="Ausgewähltes Dokument exportieren" data-documents-export ${selected ? '' : 'disabled'}>${iconSvg('export')}</button>
+        <button class="documents-column-icon" type="button" aria-label="${escapeHtml(state.t('createWordDocument', 'Word-Dokument erstellen'))}" title="${escapeHtml(state.t('createWordDocument', 'Word-Dokument erstellen'))}" data-documents-new-markdown>${iconSvg('new')}</button>
+        <button class="documents-column-icon" type="button" aria-label="${escapeHtml(state.t('importDocument', 'Dokument importieren'))}" title="${escapeHtml(state.t('importDocument', 'Dokument importieren'))}" data-documents-import-open>${iconSvg('import')}</button>
+        <button class="documents-column-icon" type="button" aria-label="${escapeHtml(state.t('exportSelected', 'Ausgewähltes Dokument exportieren'))}" title="${escapeHtml(state.t('exportSelected', 'Ausgewähltes Dokument exportieren'))}" data-documents-export ${selected ? '' : 'disabled'}>${iconSvg('export')}</button>
       </div>
     </div>
     <div class="documents-column-tools">
-      <input type="search" placeholder="Dokument suchen..." aria-label="Dokumente suchen" data-documents-search value="${escapeHtml(state.searchQuery)}">
+      <input type="search" placeholder="${escapeHtml(state.t('searchPlaceholder', 'Dokument suchen...'))}" aria-label="${escapeHtml(state.t('searchLabel', 'Dokumente suchen'))}" data-documents-search value="${escapeHtml(state.searchQuery)}">
       <div class="documents-column-sort">
-        <select aria-label="Dokumente sortieren" data-documents-sort>
-          <option value="updated_desc" ${state.sortBy === 'updated_desc' ? 'selected' : ''}>Neueste zuerst</option>
-          <option value="updated_asc" ${state.sortBy === 'updated_asc' ? 'selected' : ''}>Älteste zuerst</option>
-          <option value="title_asc" ${state.sortBy === 'title_asc' ? 'selected' : ''}>Titel A-Z</option>
-          <option value="status" ${state.sortBy === 'status' ? 'selected' : ''}>Status</option>
+        <select aria-label="${escapeHtml(state.t('sortLabel', 'Dokumente sortieren'))}" data-documents-sort>
+          <option value="updated_desc" ${state.sortBy === 'updated_desc' ? 'selected' : ''}>${escapeHtml(state.t('sortByNewest', 'Neueste zuerst'))}</option>
+          <option value="updated_asc" ${state.sortBy === 'updated_asc' ? 'selected' : ''}>${escapeHtml(state.t('sortByOldest', 'Älteste zuerst'))}</option>
+          <option value="title_asc" ${state.sortBy === 'title_asc' ? 'selected' : ''}>${escapeHtml(state.t('sortByTitle', 'Titel A-Z'))}</option>
+          <option value="status" ${state.sortBy === 'status' ? 'selected' : ''}>${escapeHtml(state.t('sortByStatus', 'Status'))}</option>
         </select>
-        <select aria-label="Dokumentstatus filtern" data-documents-status>
-          <option value="all" ${state.statusFilter === 'all' ? 'selected' : ''}>Alle</option>
+        <select aria-label="${escapeHtml(state.t('statusFilterLabel', 'Dokumentstatus filtern'))}" data-documents-status>
+          <option value="all" ${state.statusFilter === 'all' ? 'selected' : ''}>${escapeHtml(state.t('filterAll', 'Alle'))}</option>
           <option value="Imported" ${state.statusFilter === 'Imported' ? 'selected' : ''}>Imported</option>
           <option value="Draft" ${state.statusFilter === 'Draft' ? 'selected' : ''}>Draft</option>
           <option value="Review" ${state.statusFilter === 'Review' ? 'selected' : ''}>Review</option>
           <option value="Final" ${state.statusFilter === 'Final' ? 'selected' : ''}>Final</option>
         </select>
       </div>
-      <select aria-label="Dokument-Tags filtern" data-documents-tag>
+      <select aria-label="${escapeHtml(state.t('tagFilterLabel', 'Dokument-Tags filtern'))}" data-documents-tag>
         ${tagFilterOptions(state)}
       </select>
     </div>
@@ -634,15 +656,15 @@ function populateDocumentList(state, list, records = visibleDocuments(state)) {
     button.addEventListener('click', () => {
       switchSelectedDocument(state, record.id).catch((error) => {
         console.error('[documents] document switch failed', error);
-        renderError(state, `Dokumentwechsel fehlgeschlagen: ${error?.message || error}`);
+        renderError(state, `${state.t('documentSwitchFailed', 'Dokumentwechsel fehlgeschlagen:')} ${error?.message || error}`);
       });
     });
     const manage = document.createElement('button');
     manage.type = 'button';
     manage.className = 'documents-card-manage';
     manage.dataset.documentManage = record.id;
-    manage.title = `${record.title} verwalten`;
-    manage.setAttribute('aria-label', `${record.title} verwalten`);
+    manage.title = `${escapeHtml(record.title)} ${escapeHtml(state.t('manageDocument', 'verwalten'))}`;
+    manage.setAttribute('aria-label', `${escapeHtml(record.title)} ${escapeHtml(state.t('manageDocument', 'verwalten'))}`);
     manage.innerHTML = iconSvg('settings');
     manage.addEventListener('click', () => openManageDocumentDrawer(state, record));
     card.append(button, manage);
@@ -652,8 +674,8 @@ function populateDocumentList(state, list, records = visibleDocuments(state)) {
     const empty = document.createElement('div');
     empty.className = 'documents-empty';
     empty.innerHTML = state.documents.length
-      ? '<strong>Keine Treffer</strong><span>Suche oder Filter anpassen.</span>'
-      : '<strong>No documents</strong><span>Über das Import-Icon DOCX oder Markdown hinzufügen.</span>';
+      ? `<strong>${escapeHtml(state.t('noMatches', 'Keine Treffer'))}</strong><span>${escapeHtml(state.t('adjustSearchFilter', 'Suche oder Filter anpassen.'))}</span>`
+      : `<strong>${escapeHtml(state.t('noDocuments', 'No documents'))}</strong><span>${escapeHtml(state.t('importPrompt', 'Über das Import-Icon DOCX oder Markdown hinzufügen.'))}</span>`;
     list.append(empty);
   }
 }
@@ -671,7 +693,7 @@ async function switchSelectedDocument(state, documentId) {
     await withTimeout(
       flushActiveSuperDocDraft(state, previousRecord, { allowFailure: true }),
       2500,
-      'Automatische Draft-Speicherung beim Dokumentwechsel hat zu lange gedauert.',
+      state.t('draftSaveTimeout', 'Automatische Draft-Speicherung beim Dokumentwechsel hat zu lange gedauert.'),
     );
   } catch (error) {
     console.warn('[documents] continuing document switch after draft save failed', error);
@@ -682,7 +704,7 @@ async function switchSelectedDocument(state, documentId) {
   renderLeft(state);
   renderRight(state);
   const host = state.ctx.host.querySelector('[data-documents-editor]');
-  if (host) host.innerHTML = '<div class="documents-loading"><strong>Lade Dokument</strong><span>Dokumentwechsel läuft.</span></div>';
+  if (host) host.innerHTML = `<div class="documents-loading"><strong>${escapeHtml(state.t('loadingDocument', 'Lade Dokument'))}</strong><span>${escapeHtml(state.t('documentSwitchRunning', 'Dokumentwechsel läuft.'))}</span></div>`;
   try {
     await loadSelectedVersion(state);
   } catch (error) {
@@ -690,7 +712,7 @@ async function switchSelectedDocument(state, documentId) {
     state.selectedVersion = null;
     renderLeft(state);
     renderRight(state);
-    renderError(state, `Dokument konnte nicht geladen werden: ${error?.message || error}`);
+    renderError(state, `${state.t('documentLoadFailed', 'Dokument konnte nicht geladen werden:')} ${error?.message || error}`);
     return;
   }
   if (state.switchSerial !== switchSerial) return;
@@ -732,42 +754,42 @@ function openManageDocumentDrawer(state, record) {
   body.innerHTML = `
     <header class="drawer-header-row">
       <div>
-        <h2>Dokument verwalten</h2>
+        <h2>${escapeHtml(state.t('manageDocumentTitle', 'Dokument verwalten'))}</h2>
         <p>${escapeHtml(record.filename)} · ${escapeHtml(record.document_type === 'markdown_document' ? 'Markdown' : 'DOCX')}</p>
       </div>
-      <button class="icon-button" type="button" data-documents-drawer-close aria-label="Schließen">×</button>
+      <button class="icon-button" type="button" data-documents-drawer-close aria-label="${escapeHtml(state.t('close', 'Schließen'))}">×</button>
     </header>
     <form class="documents-drawer-form" data-documents-manage-form>
       <label>
-        <span>Titel</span>
-        <input name="title" value="${escapeHtml(record.title)}" placeholder="Dokumenttitel">
+        <span>${escapeHtml(state.t('title', 'Titel'))}</span>
+        <input name="title" value="${escapeHtml(record.title)}" placeholder="${escapeHtml(state.t('title', 'Titel'))}">
       </label>
       <label>
-        <span>Status</span>
+        <span>${escapeHtml(state.t('status', 'Status'))}</span>
         <select name="status">
           ${documentStatusOptions(record.status)}
         </select>
       </label>
       <label>
-        <span>Beschreibung</span>
-        <textarea name="description" placeholder="Kurzbeschreibung für die Dokumentliste">${escapeHtml(documentDescription(record))}</textarea>
+        <span>${escapeHtml(state.t('description', 'Beschreibung'))}</span>
+        <textarea name="description" placeholder="${escapeHtml(state.t('description', 'Beschreibung'))}">${escapeHtml(documentDescription(record))}</textarea>
       </label>
       <label>
-        <span>Tags</span>
+        <span>${escapeHtml(state.t('tags', 'Tags'))}</span>
         <input name="tags" value="${escapeHtml(documentTags(record).join(', '))}" placeholder="angebot, vertrag, kunde-a">
       </label>
       <div class="documents-drawer-actions documents-drawer-actions-three">
-        <button type="button" data-documents-drawer-cancel>Abbrechen</button>
-        <button class="documents-danger-button" type="button" data-documents-delete>Dokument löschen</button>
-        <button type="submit">Speichern</button>
+        <button type="button" data-documents-drawer-cancel>${escapeHtml(state.t('cancel', 'Abbrechen'))}</button>
+        <button class="documents-danger-button" type="button" data-documents-delete>${escapeHtml(state.t('delete', 'Dokument löschen'))}</button>
+        <button type="submit">${escapeHtml(state.t('save', 'Speichern'))}</button>
       </div>
     </form>
   `;
   wireDrawerClose(state, body);
   body.querySelector('[data-documents-delete]')?.addEventListener('click', async () => {
-    const confirmed = await showBusinessConfirm(`Dokument "${record.title}" löschen?`, {
-      title: 'Dokument löschen',
-      confirmLabel: 'Löschen',
+    const confirmed = await showBusinessConfirm(state.t('deleteConfirmMessage', 'Dokument "{0}" löschen?', record.title), {
+      title: state.t('deleteConfirmTitle', 'Dokument löschen'),
+      confirmLabel: state.t('deleteLabel', 'Löschen'),
     });
     if (!confirmed) return;
     await deleteDocument(state, record.id);
@@ -849,32 +871,32 @@ function openNewDocumentDrawer(state) {
   body.innerHTML = `
     <header class="drawer-header-row">
       <div>
-        <h2>Neues Dokument</h2>
-        <p>CTOX erstellt ein Word-Dokument per Research-/Report-Runbook.</p>
+        <h2>${escapeHtml(state.t('newDocumentTitle', 'Neues Dokument'))}</h2>
+        <p>${escapeHtml(state.t('newDocumentDescription', 'CTOX erstellt ein Word-Dokument per Research-/Report-Runbook.'))}</p>
       </div>
-      <button class="icon-button" type="button" data-documents-drawer-close aria-label="Schließen">×</button>
+      <button class="icon-button" type="button" data-documents-drawer-close aria-label="${escapeHtml(state.t('close', 'Schließen'))}">×</button>
     </header>
     <form class="documents-drawer-form" data-documents-new-form>
       <label>
-        <span>Titel</span>
-        <input name="title" value="Research-${new Date().toISOString().slice(0, 10)}" placeholder="Dokumenttitel">
+        <span>${escapeHtml(state.t('title', 'Titel'))}</span>
+        <input name="title" value="Research-${new Date().toISOString().slice(0, 10)}" placeholder="${escapeHtml(state.t('title', 'Titel'))}">
       </label>
       <label>
-        <span>Dokumenttyp</span>
+        <span>${escapeHtml(state.t('documentType', 'Dokumenttyp'))}</span>
         <select name="runbook">${runbookOptions(state, 'research.report.auto')}</select>
       </label>
       <label>
-        <span>Tags</span>
+        <span>${escapeHtml(state.t('tags', 'Tags'))}</span>
         <input name="tags" placeholder="angebot, vertrag, kunde-a">
       </label>
       <label>
-        <span>Prompt</span>
-        <textarea name="prompt" placeholder="Was soll CTOX recherchieren und als Word-Dokument ausarbeiten?"></textarea>
+        <span>${escapeHtml(state.t('prompt', 'Prompt'))}</span>
+        <textarea name="prompt" placeholder="${escapeHtml(state.t('newDocumentPromptPlaceholder', 'Was soll CTOX recherchieren und als Word-Dokument ausarbeiten?'))}"></textarea>
       </label>
-      <button class="documents-knowledge-link" type="button" data-documents-open-knowledge>${iconSvg('knowledge')} CTOX Knowledge öffnen</button>
+      <button class="documents-knowledge-link" type="button" data-documents-open-knowledge>${iconSvg('knowledge')} ${escapeHtml(state.t('openKnowledge', 'CTOX Knowledge öffnen'))}</button>
       <div class="documents-drawer-actions">
-        <button type="button" data-documents-drawer-cancel>Abbrechen</button>
-        <button type="submit">Word-Dokument erstellen</button>
+        <button type="button" data-documents-drawer-cancel>${escapeHtml(state.t('cancel', 'Abbrechen'))}</button>
+        <button type="submit">${escapeHtml(state.t('createWordDocument', 'Word-Dokument erstellen'))}</button>
       </div>
     </form>
   `;
@@ -888,7 +910,7 @@ function openNewDocumentDrawer(state) {
     try {
       if (submit) {
         submit.disabled = true;
-        submit.textContent = 'Task wird angelegt...';
+        submit.textContent = state.t('taskCreating', 'Task wird angelegt...');
       }
       await dispatchNewDocumentReport(state, {
         title: form.get('title')?.toString() || '',
@@ -898,10 +920,10 @@ function openNewDocumentDrawer(state) {
       });
       state.ctx.closeDrawers();
     } catch (error) {
-      renderError(state, `CTOX konnte den Dokument-Task nicht anlegen: ${error?.message || error}`);
+      renderError(state, `${state.t('taskCreationFailed', 'CTOX konnte den Dokument-Task nicht anlegen:')} ${error?.message || error}`);
       if (submit) {
         submit.disabled = false;
-        submit.textContent = 'Word-Dokument erstellen';
+        submit.textContent = state.t('createWordDocument', 'Word-Dokument erstellen');
       }
     }
   });
@@ -914,39 +936,39 @@ function openImportDrawer(state) {
   body.innerHTML = `
     <header class="drawer-header-row">
       <div>
-        <h2>Dokument importieren</h2>
-        <p>Datei auswählen, Importmodus festlegen und optional direkt ein Runbook anwenden.</p>
+        <h2>${escapeHtml(state.t('importDocumentTitle', 'Dokument importieren'))}</h2>
+        <p>${escapeHtml(state.t('importDocumentDescription', 'Datei auswählen, Importmodus festlegen und optional direkt ein Runbook anwenden.'))}</p>
       </div>
-      <button class="icon-button" type="button" data-documents-drawer-close aria-label="Schließen">×</button>
+      <button class="icon-button" type="button" data-documents-drawer-close aria-label="${escapeHtml(state.t('close', 'Schließen'))}">×</button>
     </header>
     <form class="documents-drawer-form" data-documents-import-form>
       <label>
-        <span>Datei</span>
+        <span>${escapeHtml(state.t('file', 'Datei'))}</span>
         <input type="file" name="file" accept=".docx,.md,.markdown,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/markdown,text/plain">
       </label>
       <label>
-        <span>Import-Modus</span>
+        <span>${escapeHtml(state.t('importMode', 'Import-Modus'))}</span>
         <select name="importMode" data-documents-import-mode>
-          <option value="direct">1:1 übernehmen</option>
-          <option value="runbook">Runbook direkt anwenden</option>
+          <option value="direct">${escapeHtml(state.t('importModeDirect', '1:1 übernehmen'))}</option>
+          <option value="runbook">${escapeHtml(state.t('importModeRunbook', 'Runbook direkt anwenden'))}</option>
         </select>
       </label>
       <label>
-        <span>Runbook</span>
+        <span>${escapeHtml(state.t('runbook', 'Runbook'))}</span>
         <select name="runbook" data-documents-runbook-select disabled>${runbookOptions(state, defaultRunbookId(state))}</select>
       </label>
       <label>
-        <span>Tags</span>
+        <span>${escapeHtml(state.t('tags', 'Tags'))}</span>
         <input name="tags" placeholder="angebot, vertrag, kunde-a">
       </label>
       <label>
-        <span>Prompt</span>
-        <textarea name="prompt" data-documents-runbook-prompt disabled placeholder="Optionaler Prompt für das Runbook beim Import"></textarea>
+        <span>${escapeHtml(state.t('prompt', 'Prompt'))}</span>
+        <textarea name="prompt" data-documents-runbook-prompt disabled placeholder="${escapeHtml(state.t('runbookPromptPlaceholder', 'Optionaler Prompt für das Runbook beim Import'))}"></textarea>
       </label>
-      <button class="documents-knowledge-link" type="button" data-documents-open-knowledge>${iconSvg('knowledge')} CTOX Knowledge öffnen</button>
+      <button class="documents-knowledge-link" type="button" data-documents-open-knowledge>${iconSvg('knowledge')} ${escapeHtml(state.t('openKnowledge', 'CTOX Knowledge öffnen'))}</button>
       <div class="documents-drawer-actions">
-        <button type="button" data-documents-drawer-cancel>Abbrechen</button>
-        <button type="submit">Importieren</button>
+        <button type="button" data-documents-drawer-cancel>${escapeHtml(state.t('cancel', 'Abbrechen'))}</button>
+        <button type="submit">${escapeHtml(state.t('import', 'Importieren'))}</button>
       </div>
     </form>
   `;
@@ -962,7 +984,7 @@ function openImportDrawer(state) {
     const form = new FormData(event.currentTarget);
     const file = form.get('file');
     if (!(file instanceof File) || !file.name) {
-      renderError(state, 'Bitte zuerst im Import-Dialog eine DOCX- oder Markdown-Datei auswählen.');
+      renderError(state, state.t('chooseFileFirstError', 'Bitte zuerst im Import-Dialog eine DOCX- oder Markdown-Datei auswählen.'));
       return;
     }
     const importMode = form.get('importMode')?.toString() || 'direct';
@@ -985,25 +1007,25 @@ function openExportDrawer(state) {
   body.innerHTML = `
     <header class="drawer-header-row">
       <div>
-        <h2>Dokument exportieren</h2>
-        <p>${record ? escapeHtml(record.title) : 'Kein Dokument ausgewählt.'}</p>
+        <h2>${escapeHtml(state.t('exportDocumentTitle', 'Dokument exportieren'))}</h2>
+        <p>${record ? escapeHtml(record.title) : escapeHtml(state.t('noDocumentSelected', 'Kein Dokument ausgewählt.'))}</p>
       </div>
-      <button class="icon-button" type="button" data-documents-drawer-close aria-label="Schließen">×</button>
+      <button class="icon-button" type="button" data-documents-drawer-close aria-label="${escapeHtml(state.t('close', 'Schließen'))}">×</button>
     </header>
     <form class="documents-drawer-form" data-documents-export-form>
       <label>
-        <span>Format</span>
+        <span>${escapeHtml(state.t('format', 'Format'))}</span>
         <select name="format" ${record ? '' : 'disabled'}>
-          <option value="native">${record?.document_type === 'markdown_document' ? 'Markdown' : 'DOCX'} bearbeiten/exportieren</option>
+          <option value="native">${record?.document_type === 'markdown_document' ? 'Markdown' : 'DOCX'} ${escapeHtml(state.t('export', 'Export starten'))}</option>
         </select>
       </label>
       <label>
-        <span>Dateiname</span>
+        <span>${escapeHtml(state.t('filename', 'Dateiname'))}</span>
         <input name="filename" value="${escapeHtml(record ? record.filename.replace(/\.(docx|md|markdown)$/i, '') + (record.document_type === 'markdown_document' ? '-edited.md' : '-edited.docx') : '')}" ${record ? '' : 'disabled'}>
       </label>
       <div class="documents-drawer-actions">
-        <button type="button" data-documents-drawer-cancel>Abbrechen</button>
-        <button type="submit" ${record ? '' : 'disabled'}>Export starten</button>
+        <button type="button" data-documents-drawer-cancel>${escapeHtml(state.t('cancel', 'Abbrechen'))}</button>
+        <button type="submit" ${record ? '' : 'disabled'}>${escapeHtml(state.t('export', 'Export starten'))}</button>
       </div>
     </form>
   `;
@@ -1030,45 +1052,45 @@ function renderWorkflowPanel(state) {
   const importMode = flow.importMode || 'direct';
   panel.innerHTML = `
     <div class="documents-workflow-head">
-      <strong>${isImport ? 'Dokument importieren' : 'Neues Word-Dokument'}</strong>
-      <button class="documents-column-icon" type="button" aria-label="Schließen" title="Schließen" data-documents-workflow-close>${iconSvg('close')}</button>
+      <strong>${isImport ? escapeHtml(state.t('importDocumentTitle', 'Dokument importieren')) : escapeHtml(state.t('newDocumentTitle', 'Neues Dokument'))}</strong>
+      <button class="documents-column-icon" type="button" aria-label="${escapeHtml(state.t('close', 'Schließen'))}" title="${escapeHtml(state.t('close', 'Schließen'))}" data-documents-workflow-close>${iconSvg('close')}</button>
     </div>
     ${isImport ? `
       <label class="documents-workflow-field">
-        <span>Datei</span>
+        <span>${escapeHtml(state.t('file', 'Datei'))}</span>
         <input type="file" accept=".docx,.md,.markdown,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/markdown,text/plain" data-documents-workflow-file>
       </label>
       <label class="documents-workflow-field">
-        <span>Import-Modus</span>
+        <span>${escapeHtml(state.t('importMode', 'Import-Modus'))}</span>
         <select data-documents-import-mode>
-          <option value="direct" ${importMode === 'direct' ? 'selected' : ''}>1:1 übernehmen</option>
-          <option value="runbook" ${importMode === 'runbook' ? 'selected' : ''}>Runbook direkt anwenden</option>
+          <option value="direct" ${importMode === 'direct' ? 'selected' : ''}>${escapeHtml(state.t('importModeDirect', '1:1 übernehmen'))}</option>
+          <option value="runbook" ${importMode === 'runbook' ? 'selected' : ''}>${escapeHtml(state.t('importModeRunbook', 'Runbook direkt anwenden'))}</option>
         </select>
       </label>
     ` : `
       <label class="documents-workflow-field">
-        <span>Titel</span>
-        <input type="text" value="${escapeHtml(flow.title || '')}" placeholder="Dokumenttitel" data-documents-new-title>
+        <span>${escapeHtml(state.t('title', 'Titel'))}</span>
+        <input type="text" value="${escapeHtml(flow.title || '')}" placeholder="${escapeHtml(state.t('title', 'Titel'))}" data-documents-new-title>
       </label>
     `}
     <label class="documents-workflow-field" data-documents-runbook-field>
-      <span>${isImport ? 'Runbook' : 'Dokumenttyp'}</span>
+      <span>${isImport ? escapeHtml(state.t('runbook', 'Runbook')) : escapeHtml(state.t('documentType', 'Dokumenttyp'))}</span>
       <select data-documents-workflow-runbook ${isImport && importMode === 'direct' ? 'disabled' : ''}>
         ${runbookOptions(state, flow.runbookId)}
       </select>
     </label>
     <label class="documents-workflow-field">
-      <span>Tags</span>
+      <span>${escapeHtml(state.t('tags', 'Tags'))}</span>
       <input type="text" value="${escapeHtml(flow.tags || '')}" placeholder="angebot, vertrag, kunde-a" data-documents-workflow-tags>
     </label>
     <label class="documents-workflow-field">
-      <span>Prompt</span>
-      <textarea data-documents-workflow-prompt ${isImport && importMode === 'direct' ? 'disabled' : ''} placeholder="${isImport ? 'Optionaler Prompt für das Runbook beim Import' : 'Was soll CTOX recherchieren und als Word-Dokument ausarbeiten?'}">${escapeHtml(flow.prompt || '')}</textarea>
+      <span>${escapeHtml(state.t('prompt', 'Prompt'))}</span>
+      <textarea data-documents-workflow-prompt ${isImport && importMode === 'direct' ? 'disabled' : ''} placeholder="${isImport ? escapeHtml(state.t('runbookPromptPlaceholder', 'Optionaler Prompt für das Runbook beim Import')) : escapeHtml(state.t('newDocumentPromptPlaceholder', 'Was soll CTOX recherchieren und als Word-Dokument ausarbeiten?'))}">${escapeHtml(flow.prompt || '')}</textarea>
     </label>
-    <button class="documents-knowledge-link" type="button" data-documents-open-knowledge>${iconSvg('knowledge')} Runbooks verwalten</button>
+    <button class="documents-knowledge-link" type="button" data-documents-open-knowledge>${iconSvg('knowledge')} ${escapeHtml(state.t('manageRunbooks', 'Runbooks verwalten'))}</button>
     <div class="documents-workflow-actions">
-      <button type="button" data-documents-workflow-cancel>Abbrechen</button>
-      <button type="submit">${isImport ? 'Importieren' : 'Word-Dokument erstellen'}</button>
+      <button type="button" data-documents-workflow-cancel>${escapeHtml(state.t('cancel', 'Abbrechen'))}</button>
+      <button type="submit">${isImport ? escapeHtml(state.t('import', 'Importieren')) : escapeHtml(state.t('createWordDocument', 'Word-Dokument erstellen'))}</button>
     </div>
   `;
   return panel;
@@ -1106,7 +1128,7 @@ function bindWorkflowControls(state, wrap) {
       if (flow.mode === 'import') {
         const file = flow.file || workflow.querySelector('[data-documents-workflow-file]')?.files?.[0];
         if (!file) {
-          renderError(state, 'Bitte zuerst eine DOCX- oder Markdown-Datei auswählen.');
+          renderError(state, state.t('chooseFileFirstWorkflowError', 'Bitte zuerst eine DOCX- oder Markdown-Datei auswählen.'));
           return;
         }
         await importDocumentFile(state, file, {
@@ -1127,7 +1149,7 @@ function bindWorkflowControls(state, wrap) {
       state.workflowPanel = null;
       renderLeft(state);
     } catch (error) {
-      renderError(state, `CTOX konnte den Dokument-Task nicht anlegen: ${error?.message || error}`);
+      renderError(state, `${state.t('taskCreationFailed', 'CTOX konnte den Dokument-Task nicht anlegen:')} ${error?.message || error}`);
     }
   });
 }
@@ -1169,8 +1191,8 @@ function renderTagPills(record) {
 function tagFilterOptions(state) {
   const tags = [...new Set(state.documents.flatMap((record) => documentTags(record)))].sort((a, b) => a.localeCompare(b));
   return [
-    `<option value="all" ${state.tagFilter === 'all' ? 'selected' : ''}>Alle Tags</option>`,
-    `<option value="untagged" ${state.tagFilter === 'untagged' ? 'selected' : ''}>Ohne Tags</option>`,
+    `<option value="all" ${state.tagFilter === 'all' ? 'selected' : ''}>${escapeHtml(state.t('allTags', 'Alle Tags'))}</option>`,
+    `<option value="untagged" ${state.tagFilter === 'untagged' ? 'selected' : ''}>${escapeHtml(state.t('untagged', 'Ohne Tags'))}</option>`,
     ...tags.map((tag) => `<option value="${escapeHtml(tag)}" ${state.tagFilter === tag ? 'selected' : ''}>${escapeHtml(tag)}</option>`),
   ].join('');
 }
@@ -1216,14 +1238,14 @@ function renderRight(state) {
   const wrap = document.createElement('div');
   wrap.className = 'documents-runbooks';
   wrap.innerHTML = `
-    <div class="documents-panel-title"><span>Runbooks</span><strong>${record ? escapeHtml(record.document_type || 'word') : 'none'}</strong></div>
+    <div class="documents-panel-title"><span>Runbooks</span><strong>${record ? escapeHtml(record.document_type || 'word') : escapeHtml(state.t('none', 'none'))}</strong></div>
     <form class="documents-runbook-form" data-documents-runbook-form>
       <select data-documents-runbook>
         ${runbookOptions(state, selectedRunbook)}
       </select>
-      <textarea data-documents-prompt placeholder="Prompt für dieses Dokument"></textarea>
-      <button type="submit" ${record ? '' : 'disabled'}>Runbook starten</button>
-      <button class="documents-knowledge-link" type="button" data-documents-open-knowledge>${iconSvg('knowledge')} Runbooks verwalten</button>
+      <textarea data-documents-prompt placeholder="${escapeHtml(state.t('promptPlaceholder', 'Prompt für dieses Dokument'))}"></textarea>
+      <button type="submit" ${record ? '' : 'disabled'}>${escapeHtml(state.t('runbookStart', 'Runbook starten'))}</button>
+      <button class="documents-knowledge-link" type="button" data-documents-open-knowledge>${iconSvg('knowledge')} ${escapeHtml(state.t('manageRunbooks', 'Runbooks verwalten'))}</button>
     </form>
   `;
   wrap.querySelector('[data-documents-runbook-form]')?.addEventListener('submit', async (event) => {
@@ -1358,14 +1380,10 @@ async function dispatchNewDocumentReport(state, input = {}) {
 }
 
 async function dispatchDocumentCommandWithBackendFallback(state, command, commandId, startedAtMs) {
-  const dispatchPromise = state.ctx.commandBus.dispatch(command);
-  const firstResult = await Promise.race([
-    dispatchPromise,
-    delay(8000).then(() => ({ timedOut: true })),
-  ]);
-  if (!firstResult?.timedOut) return firstResult;
+  const firstResult = await state.ctx.commandBus.dispatch(command);
+  if (firstResult?.status && firstResult.status !== 'pending_sync') return firstResult;
 
-  const projection = await waitForBusinessCommandProjection(commandId, startedAtMs);
+  const projection = await waitForBusinessCommandProjection(state, commandId, startedAtMs);
   if (projection) {
     return {
       ok: projection.status !== 'failed',
@@ -1373,29 +1391,30 @@ async function dispatchDocumentCommandWithBackendFallback(state, command, comman
       status: projection.status || 'accepted',
       task_id: projection.task_id || '',
       task_status: projection.task_status || projection.status || 'accepted',
-      transport: 'native-rxdb-http-projection',
+      transport: 'rxdb-webrtc-projection',
     };
   }
   throw new Error('CTOX hat den Dokument-Command nicht bestaetigt. Bitte erneut versuchen.');
 }
 
-async function waitForBusinessCommandProjection(commandId, startedAtMs) {
-  const sinceMs = Math.max(0, Number(startedAtMs || Date.now()) - 1000);
+async function waitForBusinessCommandProjection(state, commandId, startedAtMs) {
+  const collection = state.ctx.db?.raw?.business_commands;
+  if (!collection) return null;
+  const earliestUpdatedAt = Math.max(0, Number(startedAtMs || Date.now()) - 1000);
   for (let attempt = 0; attempt < 12; attempt += 1) {
-    const url = new URL('/api/business-os/rxdb/pull', window.location.origin);
-    url.searchParams.set('collection', 'business_commands');
-    url.searchParams.set('since_ms', String(sinceMs));
-    url.searchParams.set('limit', '2000');
     try {
-      const res = await fetch(url);
-      if (res.ok) {
-        const payload = await res.json();
-        const documents = Array.isArray(payload?.documents) ? payload.documents : [];
-        const match = documents.find((item) => item?.command_id === commandId || item?.id === commandId);
-        if (match) return match;
+      const doc = await collection.findOne(commandId).exec();
+      const match = typeof doc?.toJSON === 'function' ? doc.toJSON() : doc;
+      if (
+        match
+        && Number(match.updated_at_ms || 0) >= earliestUpdatedAt
+        && match.status
+        && match.status !== 'pending_sync'
+      ) {
+        return match;
       }
     } catch (_) {
-      // Retry below; the submit path should not stay visually stuck on a transient pull failure.
+      // Retry below; the submit path should not stay visually stuck on a transient local read failure.
     }
     await delay(1000);
   }
@@ -1430,10 +1449,10 @@ function runbookOptions(state, selectedId = '', options = {}) {
   const runbooks = state.runbooks.length ? state.runbooks : mergeDocumentRunbooks([]);
   const optionHtml = runbooks.map((runbook) => {
     const value = runbook.id || runbook.command_type;
-    const label = runbook.title || runbook.command_type || value;
+    const label = state.t(`runbooks.${value}.title`, runbook.title || runbook.command_type || value);
     return `<option value="${escapeHtml(value)}" ${value === selectedId || runbook.command_type === selectedId ? 'selected' : ''}>${escapeHtml(label)}</option>`;
   }).join('');
-  return options.includeNone ? `<option value="">Kein Runbook</option>${optionHtml}` : optionHtml;
+  return options.includeNone ? `<option value="">${escapeHtml(state.t('noRunbook', 'Kein Runbook'))}</option>${optionHtml}` : optionHtml;
 }
 
 function defaultRunbookId(state) {
@@ -1445,8 +1464,8 @@ async function openKnowledgeRunbooks(state) {
     module: 'ctox',
     type: 'ctox.knowledge.runbooks.manage',
     payload: {
-      title: 'Document runbooks verwalten',
-      instruction: 'Öffne das CTOX Knowledge-System für die Verwaltung von dokumentbezogenen Skillbooks, Runbooks und Runbook-Items. Fokus: document/docx/markdown Runbooks, die vom Business-OS Documents-Modul beim Erstellen, Importieren und manuellen Ausführen verwendet werden.',
+      title: state.t('manageDocumentRunbooksTitle', 'Document runbooks verwalten'),
+      instruction: state.t('manageDocumentRunbooksInstruction', 'Öffne das CTOX Knowledge-System für die Verwaltung von dokumentbezogenen Skillbooks, Runbooks und Runbook-Items. Fokus: document/docx/markdown Runbooks, die vom Business-OS Documents-Modul beim Erstellen, Importieren und manuellen Ausführen verwendet werden.'),
       knowledge_scope: {
         form: 'procedural',
         cli_namespace: 'ctox knowledge skill',
@@ -1456,7 +1475,7 @@ async function openKnowledgeRunbooks(state) {
       current_document_runbooks: state.runbooks.map((runbook) => ({
         id: runbook.id,
         command_type: runbook.command_type,
-        title: runbook.title,
+        title: state.t(`runbooks.${runbook.id}.title`, runbook.title || runbook.command_type),
         prompt_template: runbook.prompt_template,
       })),
     },
@@ -1492,12 +1511,12 @@ function renderCenter(state) {
   state.editorHandle = null;
 
   if (!record) {
-    host.innerHTML = '<div class="documents-empty"><strong>Kein Dokument ausgewählt</strong><span>Links ein DOCX importieren oder auswählen.</span></div>';
+    host.innerHTML = `<div class="documents-empty"><strong>${escapeHtml(state.t('noDocumentSelected', 'Kein Dokument ausgewählt.'))}</strong><span>${escapeHtml(state.t('noDocumentSelectedPrompt', 'Links ein DOCX importieren oder auswählen.'))}</span></div>`;
     return;
   }
   const version = state.selectedVersion;
   if (!version) {
-    host.innerHTML = '<div class="documents-loading"><strong>Lade Dokument</strong><span>Version wird gelesen.</span></div>';
+    host.innerHTML = `<div class="documents-loading"><strong>${escapeHtml(state.t('loadingDocument', 'Lade Dokument'))}</strong><span>${escapeHtml(state.t('versionLoading', 'Version wird gelesen.'))}</span></div>`;
     loadSelectedVersion(state)
       .then((loadedVersion) => {
         if (state.renderSerial !== renderSerial) return;
@@ -1505,31 +1524,31 @@ function renderCenter(state) {
           renderCenter(state);
           return;
         }
-        renderError(state, 'Zu diesem Dokument wurde keine gespeicherte Version gefunden. Bitte erneut importieren oder den Datensatz verwalten.');
+        renderError(state, state.t('noSavedVersionFound', 'Zu diesem Dokument wurde keine gespeicherte Version gefunden. Bitte erneut importieren oder den Datensatz verwalten.'));
       })
       .catch((error) => {
         if (state.renderSerial !== renderSerial) return;
-        renderError(state, `Dokumentversion konnte nicht geladen werden: ${error?.message || error}`);
+        renderError(state, `${state.t('loadVersionFailed', 'Dokumentversion konnte nicht geladen werden:')} ${error?.message || error}`);
       });
     return;
   }
   if (record.document_type === 'word_document') {
-    host.innerHTML = '<div class="documents-loading"><strong>Lade DOCX Editor</strong><span>SuperDoc wird initialisiert.</span></div>';
+    host.innerHTML = `<div class="documents-loading"><strong>${escapeHtml(state.t('loadingDocxEditor', 'Lade DOCX Editor'))}</strong><span>${escapeHtml(state.t('superdocInitializing', 'SuperDoc wird initialisiert.'))}</span></div>`;
     mountSuperDocDocument(state, host, record, version, renderSerial).catch((error) => {
       if (state.renderSerial !== renderSerial) return;
       console.error('[documents] SuperDoc mount failed', error);
-      renderError(state, `DOCX editor konnte nicht geladen werden: ${error?.message || error}`);
+      renderError(state, `${state.t('docxEditorLoadFailed', 'DOCX editor konnte nicht geladen werden:')} ${error?.message || error}`);
     });
     return;
   }
 
-  host.innerHTML = '<div class="documents-loading"><strong>Lade Editor</strong><span>Dokument wird vorbereitet.</span></div>';
+  host.innerHTML = `<div class="documents-loading"><strong>${escapeHtml(state.t('loadingEditor', 'Lade Editor'))}</strong><span>${escapeHtml(state.t('documentPreparing', 'Dokument wird vorbereitet.'))}</span></div>`;
   ensureDocumentFormatModule(state).then((formatModule) => {
     if (state.renderSerial !== renderSerial) return;
     mountMarkdownDocument(state, host, version, formatModule);
   }).catch((error) => {
     if (state.renderSerial !== renderSerial) return;
-    renderError(state, `Editor konnte nicht geladen werden: ${error?.message || error}`);
+    renderError(state, `${state.t('editorLoadFailed', 'Editor konnte nicht geladen werden:')} ${error?.message || error}`);
   });
 }
 
@@ -1584,14 +1603,14 @@ async function mountSuperDocDocument(state, host, record, version, renderSerial)
   toolbarToggle.type = 'button';
   toolbarToggle.className = 'documents-superdoc-toolbar-toggle';
   toolbarToggle.dataset.documentsToolbarToggle = 'true';
-  toolbarToggle.textContent = state.docxToolbarVisible ? 'Editorleiste ausblenden' : 'Editorleiste einblenden';
+  toolbarToggle.textContent = state.docxToolbarVisible ? state.t('hideEditorToolbar', 'Editorleiste ausblenden') : state.t('showEditorToolbar', 'Editorleiste einblenden');
   toolbarToggle.setAttribute('aria-pressed', String(state.docxToolbarVisible));
   toolbarToggle.setAttribute('aria-label', toolbarToggle.textContent);
   toolbarToggle.addEventListener('click', () => {
     state.docxToolbarVisible = !state.docxToolbarVisible;
     localStorage.setItem(DOCX_TOOLBAR_VISIBILITY_KEY, String(state.docxToolbarVisible));
     frame.dataset.toolbarVisible = String(state.docxToolbarVisible);
-    toolbarToggle.textContent = state.docxToolbarVisible ? 'Editorleiste ausblenden' : 'Editorleiste einblenden';
+    toolbarToggle.textContent = state.docxToolbarVisible ? state.t('hideEditorToolbar', 'Editorleiste ausblenden') : state.t('showEditorToolbar', 'Editorleiste einblenden');
     toolbarToggle.setAttribute('aria-pressed', String(state.docxToolbarVisible));
     toolbarToggle.setAttribute('aria-label', toolbarToggle.textContent);
   });
@@ -1798,7 +1817,7 @@ async function exportSelectedDocument(state, requestedFilename = '') {
   } else if (state.editorHandle?.kind === 'superdoc') {
     data = await state.editorHandle.export();
   } else {
-    renderError(state, 'DOCX Export benötigt den aktiven SuperDoc Editor. Bitte das Dokument erneut öffnen und danach exportieren.');
+    renderError(state, state.t('docxExportSuperDocRequired', 'DOCX Export benötigt den aktiven SuperDoc Editor. Bitte das Dokument erneut öffnen und danach exportieren.'));
     return;
   }
   const blob = data instanceof Blob ? data : new Blob([data], { type: isMarkdown ? MARKDOWN_MIME : DOCX_MIME });
@@ -1918,7 +1937,7 @@ function clampNumber(value, min, max) {
 function renderError(state, message) {
   const host = state.ctx.host.querySelector('[data-documents-editor]');
   if (!host) return;
-  host.innerHTML = `<div class="documents-error"><strong>Dokumentfehler</strong><span>${escapeHtml(message)}</span></div>`;
+  host.innerHTML = `<div class="documents-error"><strong>${escapeHtml(state.t('documentError', 'Dokumentfehler'))}</strong><span>${escapeHtml(message)}</span></div>`;
 }
 
 function isSupportedDocumentFile(file) {

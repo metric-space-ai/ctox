@@ -39,3 +39,5 @@ old-legacy-for-transplation-only/
 # Dev-only files
 *.expect
 bench_compaction_host_run.sh
+tmp_intersolar/
+tmp_intersolar_*.js

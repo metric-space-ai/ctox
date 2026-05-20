@@ -860,3 +860,172 @@
   margin-left: auto;
   margin-right: auto;
 }
+
+/* ==========================================================================
+   CTOX Business OS Modernization overrides for Documents module
+   ========================================================================== */
+
+/* Cohesive scrollbars on scrollable panels */
+.documents-column-list,
+.documents-editor,
+.documents-workflow-scroll,
+.documents-drawer-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--line) 40%, transparent) transparent;
+}
+
+.documents-column-list::-webkit-scrollbar,
+.documents-editor::-webkit-scrollbar,
+.documents-workflow-scroll::-webkit-scrollbar,
+.documents-drawer-scroll::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.documents-column-list::-webkit-scrollbar-thumb,
+.documents-editor::-webkit-scrollbar-thumb,
+.documents-workflow-scroll::-webkit-scrollbar-thumb,
+.documents-drawer-scroll::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--line) 40%, transparent);
+  border-radius: 99px;
+}
+
+.documents-column-list::-webkit-scrollbar-thumb:hover,
+.documents-editor::-webkit-scrollbar-thumb:hover,
+.documents-workflow-scroll::-webkit-scrollbar-thumb:hover,
+.documents-drawer-scroll::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--line) 75%, transparent);
+}
+
+/* Premium micro-animations for card rows */
+.documents-card {
+  transition: transform 0.2s var(--spring-bounce), 
+              background-color 0.2s ease, 
+              border-color 0.2s ease,
+              box-shadow 0.2s ease;
+}
+
+.documents-card:hover {
+  background: color-mix(in srgb, var(--accent) 5%, var(--surface-2, #eef3f7));
+  transform: translateY(-0.5px) scale(1.008);
+  box-shadow: 0 4px 12px oklch(0.22 0.015 235 / 0.03);
+}
+
+.documents-card:active {
+  transform: scale(0.99);
+}
+
+.documents-card[aria-current="true"] {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+/* Modern inputs, selects, and textareas */
+.documents-column-tools input,
+.documents-column-tools select,
+.documents-runbook-form select,
+.documents-runbook-form textarea,
+.documents-workflow textarea,
+.documents-drawer-form textarea,
+.documents-drawer-form select,
+.documents-context-chat textarea,
+.documents-markdown-textarea {
+  border-radius: 8px !important;
+  border: 1px solid var(--line) !important;
+  padding: 8px 12px !important;
+  outline: none !important;
+  transition: border-color 0.2s var(--spring-ease), 
+              box-shadow 0.2s var(--spring-ease), 
+              transform 0.2s var(--spring-ease) !important;
+}
+
+.documents-column-tools input:focus,
+.documents-column-tools select:focus,
+.documents-runbook-form select:focus,
+.documents-runbook-form textarea:focus,
+.documents-workflow textarea:focus,
+.documents-drawer-form textarea:focus,
+.documents-drawer-form select:focus,
+.documents-context-chat textarea:focus,
+.documents-markdown-textarea:focus {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent) !important;
+  transform: translateY(-0.5px) !important;
+}
+
+.documents-column-tools input,
+.documents-column-tools select {
+  height: 34px !important;
+}
+
+/* Modernized form and toolbar buttons */
+.documents-workflow-actions button,
+.documents-drawer-actions button,
+.documents-runbook-form button,
+.documents-knowledge-link {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 8px 14px;
+  border-radius: 8px !important;
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  cursor: pointer;
+  border: 1px solid var(--line) !important;
+  background: var(--surface-2) !important;
+  color: var(--text) !important;
+  transition: transform 0.2s var(--spring-bounce), 
+              background-color 0.2s var(--spring-ease), 
+              border-color 0.2s var(--spring-ease), 
+              box-shadow 0.2s var(--spring-ease);
+}
+
+.documents-workflow-actions button:hover,
+.documents-drawer-actions button:hover,
+.documents-runbook-form button:hover,
+.documents-knowledge-link:hover {
+  transform: translateY(-1.5px) scale(1.02);
+  background: color-mix(in srgb, var(--surface-2) 90%, var(--accent-soft)) !important;
+  border-color: color-mix(in srgb, var(--line) 80%, var(--accent)) !important;
+  box-shadow: 0 4px 12px oklch(0.22 0.015 235 / 0.06);
+}
+
+.documents-workflow-actions button:active,
+.documents-drawer-actions button:active,
+.documents-runbook-form button:active,
+.documents-knowledge-link:active {
+  transform: translateY(0) scale(0.97);
+}
+
+.documents-workflow-actions button[type="submit"],
+.documents-drawer-actions button[type="submit"] {
+  background: var(--accent) !important;
+  color: var(--bg) !important;
+  border-color: transparent !important;
+}
+.documents-workflow-actions button[type="submit"]:hover,
+.documents-drawer-actions button[type="submit"]:hover {
+  background: color-mix(in srgb, var(--accent) 88%, #fff) !important;
+}
+:root[data-theme="dark"] .documents-workflow-actions button[type="submit"]:hover,
+:root[data-theme="dark"] .documents-drawer-actions button[type="submit"]:hover {
+  background: color-mix(in srgb, var(--accent) 88%, #000) !important;
+}
+
+.documents-drawer-actions .documents-danger-button {
+  background: var(--surface-2) !important;
+  border-color: var(--danger) !important;
+  color: var(--danger) !important;
+}
+.documents-drawer-actions .documents-danger-button:hover {
+  background: color-mix(in srgb, var(--danger) 12%, transparent) !important;
+}
+
+/* Elegant transition for sliding right-hand runbook workflow panel */
+.documents-workflow {
+  transition: transform var(--spring-duration) var(--spring-snappy), opacity var(--spring-duration) ease;
+}

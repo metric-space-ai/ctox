@@ -75,6 +75,46 @@ export const collections = {
     required: ['id', 'status', 'updated_at_ms'],
     additionalProperties: true
   },
+  ctox_runtime_settings: {
+    version: 0,
+    primaryKey: 'id',
+    type: 'object',
+    properties: {
+      id: { type: 'string', maxLength: 128 },
+      ok: { type: 'boolean' },
+      can_manage: { type: 'boolean' },
+      runtime: { type: 'object', additionalProperties: true },
+      auth: { type: 'object', additionalProperties: true },
+      service: { type: 'object', additionalProperties: true },
+      diagnostics: { type: 'object', additionalProperties: true },
+      updated_at_ms: { type: 'number' },
+      is_deleted: { type: 'boolean' },
+    },
+    required: ['id', 'runtime', 'auth', 'diagnostics', 'updated_at_ms'],
+    additionalProperties: true
+  },
+  business_module_catalog: {
+    version: 0,
+    primaryKey: 'id',
+    type: 'object',
+    properties: {
+      id: { type: 'string', maxLength: 128 },
+      ok: { type: 'boolean' },
+      modules: {
+        type: 'array',
+        items: { type: 'object', additionalProperties: true }
+      },
+      templates: {
+        type: 'array',
+        items: { type: 'object', additionalProperties: true }
+      },
+      governance: { type: 'object', additionalProperties: true },
+      updated_at_ms: { type: 'number' },
+      is_deleted: { type: 'boolean' },
+    },
+    required: ['id', 'modules', 'templates', 'updated_at_ms'],
+    additionalProperties: true
+  },
   ctox_bug_reports: {
     version: 0,
     primaryKey: 'id',
@@ -108,6 +148,23 @@ export const collections = {
       updated_at_ms: { type: 'number' }
     },
     required: ['id', 'module_id', 'user_id', 'role', 'updated_at_ms'],
+    additionalProperties: true
+  },
+  business_users: {
+    version: 0,
+    primaryKey: 'id',
+    type: 'object',
+    properties: {
+      id: { type: 'string', maxLength: 256 },
+      user_id: { type: 'string', maxLength: 256 },
+      display_name: { type: 'string' },
+      role: { type: 'string' },
+      active: { type: 'boolean' },
+      created_at_ms: { type: 'number' },
+      updated_at_ms: { type: 'number' },
+      is_deleted: { type: 'boolean' }
+    },
+    required: ['id', 'display_name', 'role', 'active', 'updated_at_ms'],
     additionalProperties: true
   },
   business_module_releases: {

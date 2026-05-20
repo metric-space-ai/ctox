@@ -159,16 +159,18 @@ export async function mount(container, ctx) {
     setStatus('Lade Source...');
     refs.save.disabled = true;
     try {
-      const url = `/api/business-os/modules/source?module_id=${encodeURIComponent(state.moduleId)}`;
-      const response = await fetch(url, { headers: authHeaders(ctx) });
-      if (!response.ok) throw new Error(await response.text());
-      const payload = await response.json();
-      state.files = (Array.isArray(payload.files) ? payload.files : []).map((file) => ({
+      await ensureSourceReplication();
+      const projection = await dispatchSourceCommand('ctox.source.load', {
+        module_id: state.moduleId,
+        title: `Load ${state.moduleId} source files`,
+      });
+      const expectedCount = Number(projection?.result?.count || 0);
+      const files = await waitForSourceFiles(expectedCount);
+      state.files = files.map((file) => ({
         ...file,
         draft_content: null,
         dirty: false,
       }));
-      await syncSourceFiles(state.files);
       renderFileList();
       openFile(state.activePath && state.files.some((file) => file.path === state.activePath)
         ? state.activePath
@@ -234,32 +236,26 @@ export async function mount(container, ctx) {
     refs.save.disabled = true;
     setStatus(`Speichere ${file.path}...`);
     try {
-      const response = await fetch('/api/business-os/modules/source', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...authHeaders(ctx),
-        },
-        body: JSON.stringify({
-          module_id: state.moduleId,
-          path: file.path,
-          content,
-        }),
+      await ensureSourceReplication();
+      const projection = await dispatchSourceCommand('ctox.source.save', {
+        module_id: state.moduleId,
+        path: file.path,
+        content,
+        title: `Save ${state.moduleId}/${file.path}`,
       });
-      if (!response.ok) throw new Error(await response.text());
-      const result = await response.json();
+      const result = projection?.result || {};
+      const projected = result.source_file_id ? await waitForSourceFile(result.source_file_id) : null;
       file.content = content;
       file.draft_content = null;
       file.dirty = false;
-      file.size_bytes = result.size_bytes || new Blob([file.content]).size;
-      file.modified_at_ms = result.modified_at_ms || Date.now();
-      file.sha256 = result.sha256 || file.sha256 || '';
-      file.previous_sha256 = result.previous_sha256 || file.previous_sha256 || '';
-      file.snapshot_id = result.snapshot_id || file.snapshot_id || '';
+      file.size_bytes = projected?.size_bytes || result.size_bytes || new Blob([file.content]).size;
+      file.modified_at_ms = projected?.updated_at_ms || result.modified_at_ms || Date.now();
+      file.sha256 = projected?.sha256 || result.sha256 || file.sha256 || '';
+      file.previous_sha256 = projected?.previous_sha256 || result.previous_sha256 || file.previous_sha256 || '';
+      file.snapshot_id = projected?.snapshot_id || result.snapshot_id || file.snapshot_id || '';
       refs.fileDetail.textContent = fileDetail(file);
       renderFileList();
       renderDiff();
-      await syncSourceFile(file);
       setStatus(`${file.path} gespeichert. Snapshot: ${result.snapshot_id || 'nicht nötig'}.`);
     } catch (error) {
       console.error('[source-editor] save failed:', error);
@@ -370,33 +366,79 @@ export async function mount(container, ctx) {
     refs.status.classList.toggle('is-error', Boolean(error));
   }
 
-  async function syncSourceFiles(files) {
-    await Promise.all(files.map((file) => syncSourceFile(file).catch((error) => {
-      console.warn('[source-editor] source sync failed:', file.path, error);
-    })));
+  async function ensureSourceReplication() {
+    await Promise.all([
+      ctx.sync?.startCollection?.('business_module_source_files'),
+      ctx.sync?.startCollection?.('business_commands'),
+    ]);
   }
 
-  async function syncSourceFile(file) {
+  async function loadSourceFilesFromRxdb() {
     const collection = ctx.db?.collection?.('business_module_source_files');
-    if (!collection || !file?.path) return;
-    const now = Date.now();
-    const doc = {
-      id: sourceFileId(state.moduleId, file.path),
-      module_id: state.moduleId,
-      path: file.path,
-      language: file.language || 'text',
-      sha256: file.sha256 || '',
-      previous_sha256: file.previous_sha256 || '',
-      snapshot_id: file.snapshot_id || '',
-      size_bytes: file.size_bytes || 0,
-      content: file.content || '',
-      source_kind: 'module-source',
-      synced_at_ms: now,
-      updated_at_ms: file.modified_at_ms || now,
-    };
-    const existing = await collection.findOne(doc.id).exec();
-    if (existing) await existing.incrementalPatch(doc);
-    else await collection.insert(doc);
+    if (!collection) return [];
+    const docs = await collection.find({
+      selector: { module_id: state.moduleId },
+      sort: [{ path: 'asc' }],
+    }).exec();
+    return docs
+      .map((doc) => doc.toJSON ? doc.toJSON() : doc)
+      .filter((file) => !file._deleted)
+      .sort((left, right) => String(left.path || '').localeCompare(String(right.path || '')));
+  }
+
+  async function dispatchSourceCommand(type, payload) {
+    if (!ctx.commandBus?.dispatch) {
+      throw new Error('business_commands collection is required for source edits');
+    }
+    const commandId = `cmd_${newId()}`;
+    await ctx.commandBus.dispatch({
+      id: commandId,
+      module: 'ctox',
+      type,
+      record_id: `${state.moduleId}:${payload.path || 'source'}`,
+      inbound_channel: state.moduleId,
+      payload,
+      client_context: {
+        source: 'business-os-source-editor',
+        module_id: state.moduleId,
+        actor: actorContext(ctx.session),
+      },
+    });
+    return waitForCommandProjection(commandId);
+  }
+
+  async function waitForCommandProjection(commandId, timeoutMs = 45000) {
+    const collection = ctx.db?.collection?.('business_commands');
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const doc = await collection?.findOne(commandId).exec();
+      const data = doc?.toJSON?.();
+      if (data && data.status && data.status !== 'pending_sync') return data;
+      await delay(300);
+    }
+    throw new Error(`Command ${commandId} wurde nicht synchronisiert.`);
+  }
+
+  async function waitForSourceFiles(expectedCount, timeoutMs = 45000) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const files = await loadSourceFilesFromRxdb();
+      if (expectedCount <= 0 || files.length >= expectedCount) return files;
+      await delay(300);
+    }
+    throw new Error('Source-Dateien wurden nicht über RxDB repliziert.');
+  }
+
+  async function waitForSourceFile(id, timeoutMs = 45000) {
+    const collection = ctx.db?.collection?.('business_module_source_files');
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const doc = await collection?.findOne(id).exec();
+      const data = doc?.toJSON?.();
+      if (data && !data._deleted) return data;
+      await delay(300);
+    }
+    return null;
   }
 
   return () => {
@@ -464,8 +506,22 @@ function defineBusinessTheme(monaco) {
   monaco.__businessOsThemeDefined = true;
 }
 
-function authHeaders(ctx) {
-  return typeof ctx.authHeaders === 'function' ? ctx.authHeaders() : {};
+function actorContext(session) {
+  const user = session?.user || {};
+  return {
+    id: user.id || '',
+    display_name: user.display_name || user.name || user.id || '',
+    role: user.role || 'user',
+    is_admin: Boolean(user.is_admin),
+  };
+}
+
+function newId() {
+  return globalThis.crypto?.randomUUID?.() || `${Date.now()}_${Math.random().toString(36).slice(2)}`;
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function preferredInitialPath(files) {
@@ -501,10 +557,6 @@ function buildLineDiff(beforeRaw, afterRaw) {
     added: Math.max(0, afterEnd - start + 1),
     removed: Math.max(0, beforeEnd - start + 1),
   };
-}
-
-function sourceFileId(moduleId, path) {
-  return `${moduleId}:${String(path || '').replace(/[^a-zA-Z0-9_./:-]/g, '_')}`.slice(0, 512);
 }
 
 function shortName(path) {

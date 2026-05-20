@@ -1,0 +1,150 @@
+{
+  "workspaceLoading": "Loading workspace...",
+  "documentsTitle": "Documents",
+  "searchPlaceholder": "Search documents...",
+  "searchLabel": "Search documents",
+  "sortLabel": "Sort documents",
+  "statusFilterLabel": "Filter document status",
+  "tagFilterLabel": "Filter document tags",
+  "sortByNewest": "Newest first",
+  "sortByOldest": "Oldest first",
+  "sortByTitle": "Title A-Z",
+  "sortByStatus": "Status",
+  "filterAll": "All",
+  "exportSelected": "Export selected document",
+  "importDocument": "Import document",
+  "createWordDocument": "Create Word document",
+  "noMatches": "No matches",
+  "adjustSearchFilter": "Adjust search or filters.",
+  "noDocuments": "No documents",
+  "importPrompt": "Use the import icon to add DOCX or Markdown.",
+  "manageDocument": "manage",
+  "loadingDocument": "Loading document",
+  "versionLoading": "Reading version...",
+  "documentSwitchRunning": "Document transition in progress.",
+  "documentSwitchFailed": "Document transition failed:",
+  "draftSaveTimeout": "Automatic draft save during document transition took too long.",
+  "loadingDocxEditor": "Loading DOCX Editor",
+  "superdocInitializing": "Initializing SuperDoc.",
+  "docxEditorLoadFailed": "Could not load DOCX editor:",
+  "loadingEditor": "Loading Editor",
+  "documentPreparing": "Preparing document.",
+  "editorLoadFailed": "Could not load editor:",
+  "noSavedVersionFound": "No saved version found for this document. Please import again or manage the record.",
+  "loadVersionFailed": "Could not load document version:",
+  "deleteConfirmTitle": "Delete document",
+  "deleteConfirmMessage": "Delete document \"{title}\"?",
+  "deleteLabel": "Delete",
+  "manageDocumentTitle": "Manage Document",
+  "newDocumentTitle": "New Document",
+  "newDocumentDescription": "CTOX creates a Word document via Research/Report Runbook.",
+  "importDocumentTitle": "Import Document",
+  "importDocumentDescription": "Select file, define import mode, and optionally apply a runbook.",
+  "exportDocumentTitle": "Export Document",
+  "noDocumentSelected": "No document selected.",
+  "noDocumentSelectedPrompt": "Import or select a DOCX on the left.",
+  "importModeDirect": "Import 1:1",
+  "importModeRunbook": "Apply Runbook directly",
+  "docxExportSuperDocRequired": "DOCX export requires the active SuperDoc Editor. Please reopen the document and then export.",
+  "taskCreating": "Creating task...",
+  "taskCreationFailed": "CTOX could not create the document task:",
+  "openKnowledge": "Open CTOX Knowledge",
+  "manageRunbooks": "Manage Runbooks",
+  "promptPlaceholder": "Prompt for this document",
+  "runbookStart": "Start Runbook",
+  "cancel": "Cancel",
+  "save": "Save",
+  "delete": "Delete document",
+  "importMode": "Import Mode",
+  "title": "Title",
+  "status": "Status",
+  "description": "Description",
+  "tags": "Tags",
+  "file": "File",
+  "format": "Format",
+  "filename": "Filename",
+  "runbook": "Runbook",
+  "documentType": "Document Type",
+  "prompt": "Prompt",
+  "import": "Import",
+  "export": "Start Export",
+  "runbookPromptPlaceholder": "Optional prompt for the runbook on import",
+  "newDocumentPromptPlaceholder": "What should CTOX research and draft as a Word document?",
+  "chooseFileFirstError": "Please select a DOCX or Markdown file in the import dialog first.",
+  "chooseFileFirstWorkflowError": "Please select a DOCX or Markdown file first.",
+  "chatToCtox": "Chat to CTOX",
+  "chatMissingMessage": "Message missing.",
+  "chatNotReady": "Chat is not ready yet.",
+  "chatOpening": "Opening chat...",
+  "chatModifyAppTitle": "Modify Documents App",
+  "chatWorkDataTitle": "Edit Documents",
+  "chatModifyAppLabel": "Modify App",
+  "chatWorkDataLabel": "Work with data",
+  "chatActionLabel": "CTOX Task",
+  "chatPlaceholder": "What should CTOX do or verify here?",
+  "send": "Send",
+  "manageDocumentRunbooksInstruction": "Open the CTOX Knowledge system for managing document-related Skillbooks, Runbooks, and Runbook items. Focus: document/docx/markdown Runbooks used by the Business OS Documents module during creation, import, and manual execution.",
+  "manageDocumentRunbooksTitle": "Manage document runbooks",
+  "none": "none",
+  "noRunbook": "No Runbook",
+  "runbooks": {
+    "research.report.auto": {
+      "title": "Deep Research Word Report",
+      "description": "CTOX selects the appropriate report type and creates a solid Word document."
+    },
+    "research.report.feasibility_study": {
+      "title": "Feasibility Study",
+      "description": "Decision-grade feasibility study with evidence, evaluation, and DOCX rendering."
+    },
+    "research.report.market_research": {
+      "title": "Market Analysis",
+      "description": "Market size, segments, drivers, competition, barriers, and recommendation."
+    },
+    "research.report.competitive_analysis": {
+      "title": "Competitive Analysis",
+      "description": "Competitor set, evaluation axes, matrix, positioning, gaps, and recommendation."
+    },
+    "research.report.technology_screening": {
+      "title": "Technology Screening",
+      "description": "Inventory of options, criteria, shortlist, and next steps."
+    },
+    "research.report.whitepaper": {
+      "title": "Whitepaper",
+      "description": "Thesis, context, arguments, counter-arguments, implications, and position."
+    },
+    "research.report.literature_review": {
+      "title": "Literature Review",
+      "description": "Literature review with topics, synthesis, gaps, and open questions."
+    },
+    "research.report.decision_brief": {
+      "title": "Decision Memo",
+      "description": "Short recommendation-oriented memo with options, criteria, and evaluation."
+    },
+    "research.report.project_description": {
+      "title": "Project Description / Funding Project",
+      "description": "Company and project description for innovation and funding projects."
+    },
+    "research.report.source_review": {
+      "title": "Source Review",
+      "description": "Systematic source and data source research with taxonomy and priorization."
+    },
+    "document.summarize": {
+      "title": "Summarize",
+      "description": "Summarize the selected DOCX in a structured format."
+    },
+    "document.extract-requirements": {
+      "title": "Extract Requirements",
+      "description": "Extract requirements, open issues, and evidence."
+    },
+    "document.review-risks": {
+      "title": "Review Risks",
+      "description": "Review technical, legal, and implementation risks in the document."
+    }
+  },
+  "hideEditorToolbar": "Hide editor toolbar",
+  "showEditorToolbar": "Show editor toolbar",
+  "documentError": "Document error",
+  "allTags": "All tags",
+  "untagged": "Untagged",
+  "documentLoadFailed": "Could not load document:"
+}

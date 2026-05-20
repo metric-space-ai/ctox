@@ -25,6 +25,8 @@ use crate::lcm;
 use crate::persistence;
 
 const MASTER_KEY_STORAGE_KEY: &str = "secret_master_key_b64";
+const SECRET_STORE_FILE: &str = "ctox-secrets.sqlite3";
+const SECRET_KV_TABLE: &str = "ctox_secret_kv";
 
 type SecretMaterial = Zeroizing<Vec<u8>>;
 
@@ -852,7 +854,7 @@ fn delete_secret(root: &Path, scope: &str, name: &str) -> Result<()> {
 }
 
 fn resolve_db_path(root: &Path) -> PathBuf {
-    persistence::sqlite_path(root)
+    root.join("runtime").join(SECRET_STORE_FILE)
 }
 
 /// Tracks secret-DB paths whose schema has already been verified in this
@@ -877,6 +879,8 @@ fn open_secret_db(root: &Path) -> Result<Connection> {
         .with_context(|| format!("failed to open {}", db_path.display()))?;
     conn.busy_timeout(persistence::sqlite_busy_timeout_duration())
         .context("failed to configure secret DB busy_timeout")?;
+    ensure_secret_schema(&conn)?;
+    migrate_legacy_secret_store(root, &conn)?;
     Ok(conn)
 }
 
@@ -911,6 +915,11 @@ fn ensure_secret_schema(conn: &Connection) -> Result<()> {
 
         CREATE INDEX IF NOT EXISTS idx_ctox_secret_scope
             ON ctox_secret_records(scope, updated_at DESC);
+
+        CREATE TABLE IF NOT EXISTS ctox_secret_kv (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        );
         "#,
     )?;
     if let Some(path) = conn_path {
@@ -923,14 +932,37 @@ fn ensure_secret_schema(conn: &Connection) -> Result<()> {
 }
 
 fn ensure_secret_master_key(root: &Path) -> Result<(SecretMaterial, &'static str)> {
-    if let Some(raw) = persistence::load_text_value(root, MASTER_KEY_STORAGE_KEY)? {
+    let conn = open_secret_db(root)?;
+    if let Some(raw) = conn
+        .query_row(
+            &format!("SELECT value FROM {SECRET_KV_TABLE} WHERE key = ?1"),
+            [MASTER_KEY_STORAGE_KEY],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()?
+        .flatten()
+    {
         let bytes = BASE64_STANDARD
             .decode(raw.trim())
-            .context("failed to decode SQLite-stored secret master key")?;
+            .context("failed to decode stored secret master key")?;
         if bytes.len() != 32 {
             anyhow::bail!("stored secret master key must decode to exactly 32 bytes");
         }
-        return Ok((Zeroizing::new(bytes), "sqlite"));
+        return Ok((Zeroizing::new(bytes), "secret_store"));
+    }
+
+    if let Some(raw) = persistence::load_text_value(root, MASTER_KEY_STORAGE_KEY)? {
+        conn.execute(
+            &format!("INSERT OR REPLACE INTO {SECRET_KV_TABLE} (key, value) VALUES (?1, ?2)"),
+            params![MASTER_KEY_STORAGE_KEY, raw],
+        )?;
+        let bytes = BASE64_STANDARD
+            .decode(raw.trim())
+            .context("failed to decode legacy SQLite-stored secret master key")?;
+        if bytes.len() != 32 {
+            anyhow::bail!("legacy stored secret master key must decode to exactly 32 bytes");
+        }
+        return Ok((Zeroizing::new(bytes), "migrated_secret_store"));
     }
 
     let mut key = Zeroizing::new(vec![0u8; 32]);
@@ -938,8 +970,100 @@ fn ensure_secret_master_key(root: &Path) -> Result<(SecretMaterial, &'static str
         .fill(&mut key)
         .map_err(|_| anyhow::anyhow!("failed to generate secret master key"))?;
     let encoded = BASE64_STANDARD.encode(&key);
-    persistence::store_text_value(root, MASTER_KEY_STORAGE_KEY, Some(&encoded))?;
-    Ok((key, "generated_sqlite"))
+    conn.execute(
+        &format!("INSERT OR REPLACE INTO {SECRET_KV_TABLE} (key, value) VALUES (?1, ?2)"),
+        params![MASTER_KEY_STORAGE_KEY, encoded],
+    )?;
+    Ok((key, "generated_secret_store"))
+}
+
+fn migrate_legacy_secret_store(root: &Path, target: &Connection) -> Result<()> {
+    let legacy_path = persistence::sqlite_path(root);
+    if legacy_path == resolve_db_path(root) || !legacy_path.is_file() {
+        return Ok(());
+    }
+    let has_rows = target
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM ctox_secret_records LIMIT 1)",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+        != 0;
+    if has_rows {
+        return Ok(());
+    }
+    let legacy = Connection::open(&legacy_path)
+        .with_context(|| format!("failed to open legacy secret db {}", legacy_path.display()))?;
+    legacy
+        .busy_timeout(persistence::sqlite_busy_timeout_duration())
+        .context("failed to configure legacy secret DB busy_timeout")?;
+    let table_exists = legacy
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ctox_secret_records')",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+        != 0;
+    if !table_exists {
+        return Ok(());
+    }
+    let mut stmt = legacy.prepare(
+        r#"
+        SELECT secret_id, scope, secret_name, description, metadata_json,
+               nonce_b64, ciphertext_b64, created_at, updated_at
+        FROM ctox_secret_records
+        "#,
+    )?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, String>(7)?,
+                row.get::<_, String>(8)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    for (
+        secret_id,
+        scope,
+        secret_name,
+        description,
+        metadata_json,
+        nonce_b64,
+        ciphertext_b64,
+        created_at,
+        updated_at,
+    ) in rows
+    {
+        target.execute(
+            r#"
+            INSERT OR IGNORE INTO ctox_secret_records (
+                secret_id, scope, secret_name, description, metadata_json,
+                nonce_b64, ciphertext_b64, created_at, updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            "#,
+            params![
+                secret_id,
+                scope,
+                secret_name,
+                description,
+                metadata_json,
+                nonce_b64,
+                ciphertext_b64,
+                created_at,
+                updated_at,
+            ],
+        )?;
+    }
+    Ok(())
 }
 
 struct EncryptedSecretValue {

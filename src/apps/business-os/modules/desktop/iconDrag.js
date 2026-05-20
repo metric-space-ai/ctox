@@ -6,6 +6,7 @@ export function makeIconDraggable(iconEl, {
   grid = { cellW: 96, cellH: 110, offset: 24 },
   onSelect,
   onMoved,
+  onDragToTopbar,
 }) {
   if (!iconEl) throw new Error('makeIconDraggable: iconEl is required');
   const surfaceEl = surface || iconEl.parentElement;
@@ -36,13 +37,32 @@ export function makeIconDraggable(iconEl, {
       }
     }
 
-    function onMouseUp() {
+    function onMouseUp(upEvent) {
       document.removeEventListener('mousemove', onMouseMove);
       document.removeEventListener('mouseup', onMouseUp);
       iconEl.style.zIndex = '';
       if (!dragging) return;
       dragging = false;
       iconEl.classList.remove('dragging');
+
+      // Check if dropped inside the topbar
+      const topbar = document.querySelector('.topbar');
+      if (topbar && upEvent) {
+        const rect = topbar.getBoundingClientRect();
+        if (
+          upEvent.clientX >= rect.left &&
+          upEvent.clientX <= rect.right &&
+          upEvent.clientY >= rect.top &&
+          upEvent.clientY <= rect.bottom
+        ) {
+          // Trigger the pinning callback
+          onDragToTopbar?.(iconId);
+          // Snap back to initial position!
+          iconEl.style.left = `${initialX}px`;
+          iconEl.style.top = `${initialY}px`;
+          return;
+        }
+      }
 
       const surfaceRect = surfaceEl?.getBoundingClientRect();
       const maxX = (surfaceRect?.width ?? globalThis.innerWidth) - iconEl.offsetWidth - 8;

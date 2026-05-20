@@ -200,7 +200,7 @@ impl InferenceRuntimeState {
 }
 
 pub fn runtime_state_path(root: &Path) -> PathBuf {
-    crate::persistence::sqlite_path(root)
+    crate::inference::runtime_env::runtime_config_path(root)
 }
 
 pub fn default_loopback_host() -> &'static str {
@@ -792,7 +792,46 @@ fn open_runtime_state_db(root: &Path) -> Result<Connection> {
          );"
     ))
     .context("failed to initialize runtime state table")?;
+    migrate_legacy_runtime_state_store(root, &conn)?;
     Ok(conn)
+}
+
+fn migrate_legacy_runtime_state_store(root: &Path, conn: &Connection) -> Result<()> {
+    let current_count: i64 = conn
+        .query_row(
+            &format!("SELECT COUNT(*) FROM {RUNTIME_STATE_TABLE}"),
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+    if current_count > 0 {
+        return Ok(());
+    }
+    let legacy_path = crate::persistence::sqlite_path(root);
+    if legacy_path == runtime_state_path(root) || !legacy_path.exists() {
+        return Ok(());
+    }
+    let legacy = Connection::open(&legacy_path)
+        .with_context(|| format!("failed to open legacy runtime db {}", legacy_path.display()))?;
+    let Some(raw) = legacy
+        .query_row(
+            &format!("SELECT state_json FROM {RUNTIME_STATE_TABLE} WHERE state_id = 1"),
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .unwrap_or(None)
+    else {
+        return Ok(());
+    };
+    conn.execute(
+        &format!(
+            "INSERT OR IGNORE INTO {RUNTIME_STATE_TABLE} (state_id, state_json) VALUES (1, ?1)"
+        ),
+        params![raw],
+    )
+    .context("failed to migrate runtime state into dedicated runtime db")?;
+    Ok(())
 }
 
 fn load_runtime_state_json_from_db(conn: &Connection) -> Result<Option<String>> {

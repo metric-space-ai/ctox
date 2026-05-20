@@ -59,24 +59,6 @@
   line-height: 1.15;
 }
 
-.reports-head button,
-.reports-detail button,
-.reports-filters input,
-.reports-filters select,
-.reports-rollback select {
-  border: 1px solid var(--reports-line);
-  border-radius: 7px;
-  background: var(--reports-surface-2);
-  color: var(--text);
-  font: inherit;
-}
-
-.reports-head button,
-.reports-detail button {
-  padding: 8px 10px;
-  cursor: pointer;
-}
-
 .reports-filters {
   display: grid;
   gap: 8px;
@@ -87,8 +69,6 @@
 .reports-filters select,
 .reports-rollback select {
   width: 100%;
-  box-sizing: border-box;
-  padding: 9px 10px;
 }
 
 .reports-list {
@@ -108,11 +88,28 @@
   color: inherit;
   text-align: left;
   cursor: pointer;
+  position: relative;
+  transition: transform 0.2s var(--spring-bounce), 
+              background-color 0.2s ease, 
+              box-shadow 0.2s ease,
+              padding 0.2s var(--spring-bounce);
 }
 
-.report-row:hover,
+.report-row:hover {
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  transform: translateY(-0.5px) scale(1.005);
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.03);
+  z-index: 2;
+}
+
+.report-row:active {
+  transform: scale(0.99);
+}
+
 .report-row.is-selected {
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  box-shadow: inset 3px 0 0 var(--accent);
+  padding-left: 17px;
 }
 
 .report-row strong {

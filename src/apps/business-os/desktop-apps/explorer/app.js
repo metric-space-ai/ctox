@@ -326,6 +326,10 @@ export async function mount(container, ctx) {
       body.innerHTML = '<p class="app-explorer-preview-empty">Keine integrierte Vorschau für diesen Dateityp.</p>';
       return;
     }
+    if (row.contentState === 'lazy' || row.contentState === 'missing') {
+      body.innerHTML = '<p class="app-explorer-preview-empty">Der Inhalt wird beim Öffnen über CTOX geladen.</p>';
+      return;
+    }
     try {
       const blob = await readStoredFile(ctx.db, row.id, row.mimeType);
       if (state.selectedId !== row.id) return;
@@ -359,6 +363,9 @@ export async function mount(container, ctx) {
             name: row.label,
             mimeType: row.mimeType,
             sizeBytes: row.sizeBytes,
+            path: row.localPath || row.path,
+            source: row.source,
+            contentState: row.contentState,
           },
         });
         return;
@@ -538,9 +545,15 @@ async function readStoredFile(db, fileId, mimeType = 'application/octet-stream')
   const chunks = db?.collection?.('desktop_file_chunks');
   if (!chunks) throw new Error('Datei-Chunks sind nicht verfügbar.');
   const docs = await chunks.find().exec();
-  const data = docs
+  const allChunks = docs
     .map((doc) => (typeof doc.toJSON === 'function' ? doc.toJSON() : doc))
-    .filter((chunk) => chunk.file_id === fileId)
+    .filter((chunk) => chunk.file_id === fileId);
+  const latestCreatedAt = Math.max(0, ...allChunks.map((chunk) => Number(chunk.created_at_ms || 0)));
+  const generation = allChunks.filter((chunk) => Number(chunk.created_at_ms || 0) === latestCreatedAt);
+  const total = Number(generation[0]?.total || generation.length || 0);
+  if (!generation.length || total <= 0) throw new Error('Dateiinhalt fehlt.');
+  const data = generation
+    .filter((chunk) => Number(chunk.idx) < total)
     .sort((a, b) => a.idx - b.idx)
     .map((chunk) => chunk.data)
     .join('');
@@ -563,11 +576,15 @@ function normalizeFileRow(data) {
     status: data.source || '',
     modified: formatTimestamp(timestampFor(data)),
     moduleId: null,
-    path: data.path || '',
+    path: data.virtual_path || data.path || '',
+    localPath: data.local_path || data.path || '',
+    virtualPath: data.virtual_path || data.path || '',
     isFolder,
     mimeType: data.mime_type || mimeFromName(data.name || ''),
     sizeBytes: Number(data.size_bytes || 0),
     sizeLabel: isFolder ? '-' : formatBytes(data.size_bytes || 0),
+    source: data.source || '',
+    contentState: data.content_state || '',
   };
 }
 

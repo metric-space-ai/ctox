@@ -1814,8 +1814,8 @@ fn google_search(
         "headless": true,
         "userAgent": config.user_agent,
     });
-    let payload_bytes = serde_json::to_vec(&payload)
-        .context("failed to encode google browser runner payload")?;
+    let payload_bytes =
+        serde_json::to_vec(&payload).context("failed to encode google browser runner payload")?;
 
     let mut command = Command::new(&node_path);
     command

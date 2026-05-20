@@ -27,6 +27,12 @@ durable research — those vanish after the turn.
   ticket/case id, or plan step.
 - Before adding follow-up work, check existing self-work, queue, plan, and
   ticket state and consolidate instead of duplicating.
+- Knowledge lookup is mandatory before every durable research output:
+  run `ctox knowledge search --query "<task/topic>"` first. If the lookup
+  exposes relevant data tables, inspect them with `ctox knowledge data
+  list/describe/select` and use them as evidence; if nothing relevant is
+  found, state that the local CTOX Knowledge lookup returned no applicable
+  prior knowledge.
 
 ## Choosing the output mode
 
@@ -319,6 +325,13 @@ before starting decision-report work. It covers:
 - Manager-path orchestration when the run is large enough to warrant
   multi-stage execution (`references/manager_path.md`).
 - Troubleshooting (`references/troubleshooting.md`).
+
+When the requested deliverable is Word/DOCX, route the final artifact
+through the file-backed `doc` skill after the report content is assembled.
+That skill is CTOX's canonical Word production path: apply a design preset,
+real Word styles, real numbering, explicit table geometry, captions/figures
+where useful, and render-or-structural QA. Do not hand off a Markdown file as
+the final deliverable when a Business OS Documents command requests `.docx`.
 
 Decision-report mode produces exactly one `report_type_id` per run. If
 the operator asked for multiple report types, open separate runs.

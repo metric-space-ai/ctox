@@ -3382,3 +3382,119 @@ body.is-col-resizing .module-root[data-module-root="matching"] *{
 .module-root[data-module-root="matching"] .ctox-context-menu button:hover {
   background: var(--bo-surface-muted);
 }
+
+/* ==========================================================================
+   CTOX Business OS Modernization overrides for Matching module
+   ========================================================================== */
+
+/* Cohesive scrollbars on panel-main and overflow panels */
+.module-root[data-module-root="matching"] .panel-main,
+.module-root[data-module-root="matching"] .chat-log,
+.module-root[data-module-root="matching"] .detail-scroll,
+.module-root[data-module-root="matching"] .scroller-x,
+.module-root[data-module-root="matching"] .scroller-y {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--line) 40%, transparent) transparent;
+}
+
+.module-root[data-module-root="matching"] .panel-main::-webkit-scrollbar,
+.module-root[data-module-root="matching"] .chat-log::-webkit-scrollbar,
+.module-root[data-module-root="matching"] .detail-scroll::-webkit-scrollbar,
+.module-root[data-module-root="matching"] .scroller-x::-webkit-scrollbar,
+.module-root[data-module-root="matching"] .scroller-y::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.module-root[data-module-root="matching"] .panel-main::-webkit-scrollbar-thumb,
+.module-root[data-module-root="matching"] .chat-log::-webkit-scrollbar-thumb,
+.module-root[data-module-root="matching"] .detail-scroll::-webkit-scrollbar-thumb,
+.module-root[data-module-root="matching"] .scroller-x::-webkit-scrollbar-thumb,
+.module-root[data-module-root="matching"] .scroller-y::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--line) 40%, transparent);
+  border-radius: 99px;
+  transition: background-color 0.25s ease;
+}
+
+.module-root[data-module-root="matching"] .panel-main::-webkit-scrollbar-thumb:hover,
+.module-root[data-module-root="matching"] .chat-log::-webkit-scrollbar-thumb:hover,
+.module-root[data-module-root="matching"] .detail-scroll::-webkit-scrollbar-thumb:hover,
+.module-root[data-module-root="matching"] .scroller-x::-webkit-scrollbar-thumb:hover,
+.module-root[data-module-root="matching"] .scroller-y::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--line) 75%, transparent);
+}
+
+/* Premium micro-animations for buttons and elements */
+.module-root[data-module-root="matching"] .btn,
+.module-root[data-module-root="matching"] .btn-pill {
+  transition: transform 0.2s var(--spring-bounce), 
+              background var(--spring-duration-fast) var(--spring-ease), 
+              border-color var(--spring-duration-fast) var(--spring-ease), 
+              box-shadow var(--spring-duration-fast) var(--spring-ease) !important;
+}
+
+.module-root[data-module-root="matching"] .btn:hover,
+.module-root[data-module-root="matching"] .btn-pill:hover {
+  transform: translateY(-1.5px) scale(1.02) !important;
+  border-color: color-mix(in srgb, var(--bd-soft) 80%, var(--accent)) !important;
+}
+
+.module-root[data-module-root="matching"] .btn-primary:hover {
+  box-shadow: 0 12px 30px color-mix(in srgb, var(--accent) 30%, transparent), 0 4px 14px rgba(0,0,0,.35) !important;
+}
+
+.module-root[data-module-root="matching"] .btn:active,
+.module-root[data-module-root="matching"] .btn-pill:active {
+  transform: translateY(0) scale(0.97) !important;
+}
+
+/* Modern inputs focus behaviors */
+.module-root[data-module-root="matching"] select, 
+.module-root[data-module-root="matching"] input, 
+.module-root[data-module-root="matching"] textarea,
+.module-root[data-module-root="matching"] .input-text, 
+.module-root[data-module-root="matching"] .input-select, 
+.module-root[data-module-root="matching"] .input-textarea {
+  transition: border-color 0.2s var(--spring-ease), 
+              box-shadow 0.2s var(--spring-ease), 
+              transform 0.2s var(--spring-ease) !important;
+}
+
+.module-root[data-module-root="matching"] :where(select, input, textarea, .input-text, .input-select, .input-textarea):focus-visible {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent) !important;
+  transform: translateY(-0.5px);
+}
+
+/* Elegant spring card transforms for interactive workbenches */
+.module-root[data-module-root="matching"] .match-item-card,
+.module-root[data-module-root="matching"] .source-card,
+.module-root[data-module-root="matching"] .object-card,
+.module-root[data-module-root="matching"] .import-status-card {
+  transition: transform 0.2s var(--spring-bounce), 
+              background-color 0.2s ease, 
+              border-color 0.2s ease, 
+              box-shadow 0.2s ease;
+}
+
+.module-root[data-module-root="matching"] .match-item-card:hover,
+.module-root[data-module-root="matching"] .source-card:hover,
+.module-root[data-module-root="matching"] .object-card:hover,
+.module-root[data-module-root="matching"] .import-status-card:hover {
+  transform: translateY(-2px) scale(1.01) !important;
+  border-color: color-mix(in srgb, var(--bd-soft) 80%, var(--accent)) !important;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45) !important;
+}
+
+.module-root[data-module-root="matching"] .match-item-card:active,
+.module-root[data-module-root="matching"] .source-card:active,
+.module-root[data-module-root="matching"] .object-card:active,
+.module-root[data-module-root="matching"] .import-status-card:active {
+  transform: translateY(0) scale(0.98) !important;
+}
+
+.module-root[data-module-root="matching"] .match-item-card.is-active,
+.module-root[data-module-root="matching"] .object-card.is-active {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 1px var(--accent), 0 8px 24px rgba(0,0,0,.4) !important;
+}

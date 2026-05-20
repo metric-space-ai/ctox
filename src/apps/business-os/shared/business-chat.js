@@ -19,7 +19,24 @@ export function initBusinessChat({
   root.className = 'ctox-chat-root';
   root.dataset.ctoxChatRoot = 'true';
   document.body.append(root);
+
   const handleRootClick = (event) => {
+    const datePickerTrigger = event.target.closest?.('.ctox-date-picker-trigger');
+    if (datePickerTrigger && root.contains(datePickerTrigger)) {
+      if (event.target.tagName !== 'INPUT') {
+        const picker = datePickerTrigger.querySelector('[data-chat-date-picker]');
+        if (picker) {
+          event.preventDefault();
+          event.stopPropagation();
+          try {
+            picker.showPicker();
+          } catch (error) {
+            picker.click();
+          }
+        }
+      }
+      return;
+    }
     const minimizeButton = event.target.closest?.('[data-chat-minimize]');
     if (minimizeButton && root.contains(minimizeButton)) {
       event.preventDefault();
@@ -50,6 +67,8 @@ export function initBusinessChat({
     });
   };
 
+
+
   const sync = () => {
     captureDrafts(root, state);
     syncTrackedMessages({ state, db }).then((changed) => {
@@ -57,19 +76,20 @@ export function initBusinessChat({
       if (changed) renderChatRoot({ root, state, commandBus, db, getActiveModule });
     }).catch(() => {});
   };
+
   const syncChats = () => {
     captureDrafts(root, state);
     hydrateChatsFromRxDb({ state, db, session }).then((changed) => {
       if (changed) renderChatRoot({ root, state, commandBus, db, getActiveModule });
     }).catch(() => {});
   };
+
   const handleExternalSubmit = async (event) => {
     const detail = event.detail || {};
     const text = String(detail.text || detail.message || '').trim();
     if (!text) return;
     const chat = ensureChat(state, session);
-    chat.open = true;
-    chat.minimized = false;
+    expandChatOnly(state, chat);
     state.dockCollapsed = false;
     chat.draft = '';
     await submitChatMessage({
@@ -91,15 +111,15 @@ export function initBusinessChat({
       if (changed) renderChatRoot({ root, state, commandBus, db, getActiveModule });
     }).catch(() => {});
   };
+
   const handleExternalOpen = async (event) => {
     const detail = event.detail || {};
     const chat = detail.reuseActive === true
       ? ensureChat(state, session)
-      : createChat(state.ownerUserId);
+      : createChat(state.ownerUserId, state.selectedDate);
     if (detail.reuseActive !== true) state.chats.push(chat);
     chat.title = String(detail.title || chat.title || 'CTOX').trim() || 'CTOX';
-    chat.open = true;
-    chat.minimized = false;
+    expandChatOnly(state, chat);
     chat.maximized = Boolean(detail.maximized);
     chat.draft = String(detail.draft || detail.message || '');
     chat.contextMeta = chatContextMetaFromDetail(detail);
@@ -125,17 +145,128 @@ export function initBusinessChat({
   hydrateChatsFromRxDb({ state, db, session })
     .then(() => renderChatRoot({ root, state, commandBus, db, getActiveModule }))
     .catch(() => renderChatRoot({ root, state, commandBus, db, getActiveModule }));
+
+  let scrollTimeout = null;
+  const handleScroll = (event) => {
+    const strip = root.querySelector('[data-chat-strip]');
+    const stageInner = root.querySelector('.ctox-chat-stage-inner');
+    if (strip && stageInner && event.target.closest('[data-chat-strip]')) {
+      root.classList.add('is-scrolling');
+      alignChatWindows(root);
+      
+      if (scrollTimeout) clearTimeout(scrollTimeout);
+      scrollTimeout = setTimeout(() => {
+        root.classList.remove('is-scrolling');
+      }, 150);
+    }
+  };
+
+  const handleWheel = (event) => {
+    const strip = event.target.closest('[data-chat-strip]');
+    const dock = event.target.closest('[data-chat-dock]');
+    const scrollableMessages = event.target.closest('.ctox-chat-messages');
+
+    if ((strip || dock) && !scrollableMessages) {
+      const targetStrip = strip || dock.querySelector('[data-chat-strip]');
+      if (!targetStrip) return;
+
+      // Redirect vertical scrolls (deltaY) to horizontal scrolls if vertical scroll is dominant.
+      // Leave horizontal swipes (deltaX) to native touchpad physics.
+      if (Math.abs(event.deltaY) > Math.abs(event.deltaX) && event.deltaY !== 0) {
+        event.preventDefault();
+        root.classList.add('is-scrolling');
+        targetStrip.scrollLeft += event.deltaY;
+        alignChatWindows(root);
+
+        if (scrollTimeout) clearTimeout(scrollTimeout);
+        scrollTimeout = setTimeout(() => {
+          root.classList.remove('is-scrolling');
+        }, 150);
+      }
+    }
+  };
+
+  let isDragging = false;
+  let startX = 0;
+  let scrollLeft = 0;
+  let dragMoved = false;
+  let dragStrip = null;
+
+  const handleMouseDown = (e) => {
+    // Avoid starting drag-scroll when interacting with buttons, inputs, date navigators, or chips!
+    if (e.target.closest('button, input, textarea, select, a, svg, path')) return;
+    const strip = e.target.closest('[data-chat-strip]');
+    const dock = e.target.closest('[data-chat-dock]');
+    const targetStrip = strip || (dock ? dock.querySelector('[data-chat-strip]') : null);
+    if (!targetStrip) return;
+
+    isDragging = true;
+    dragMoved = false;
+    dragStrip = targetStrip;
+    startX = e.pageX;
+    scrollLeft = targetStrip.scrollLeft;
+    root.classList.add('is-scrolling');
+  };
+
+  const handleMouseMove = (e) => {
+    if (!isDragging || !dragStrip) return;
+    const walk = (e.pageX - startX) * 1.5;
+    if (Math.abs(walk) > 4) {
+      dragMoved = true;
+      e.preventDefault();
+      root.classList.add('is-scrolling');
+      dragStrip.scrollLeft = scrollLeft - walk;
+      alignChatWindows(root);
+    }
+  };
+
+  const handleMouseUp = () => {
+    if (isDragging) {
+      isDragging = false;
+      dragStrip = null;
+      root.classList.remove('is-scrolling');
+    }
+  };
+
+  const handleCaptureClick = (e) => {
+    if (dragMoved && e.target.closest('[data-chat-strip]')) {
+      e.preventDefault();
+      e.stopPropagation();
+      dragMoved = false;
+    }
+  };
+
+  const handleResize = () => {
+    alignChatWindows(root);
+  };
+
   root.addEventListener('click', handleRootClick, true);
   window.addEventListener('ctox-business-os-chat-submit', handleExternalSubmit);
   window.addEventListener(CHAT_OPEN_EVENT, handleExternalOpen);
+  root.addEventListener('scroll', handleScroll, true);
+  window.addEventListener('resize', handleResize);
+  root.addEventListener('wheel', handleWheel, { passive: false });
+  root.addEventListener('mousedown', handleMouseDown);
+  root.addEventListener('mousemove', handleMouseMove);
+  window.addEventListener('mouseup', handleMouseUp);
+  root.addEventListener('click', handleCaptureClick, true);
+
   const businessChatsSub = db?.raw?.[CHAT_COLLECTION]?.$?.subscribe?.(syncChats) || null;
   const businessCommandsSub = db?.raw?.business_commands?.$?.subscribe?.(sync) || null;
   const queueTasksSub = db?.raw?.ctox_queue_tasks?.$?.subscribe?.(sync) || null;
   const timer = window.setInterval(sync, 4000);
+
   root.__ctoxChatCleanup = () => {
     root.removeEventListener('click', handleRootClick, true);
     window.removeEventListener('ctox-business-os-chat-submit', handleExternalSubmit);
     window.removeEventListener(CHAT_OPEN_EVENT, handleExternalOpen);
+    root.removeEventListener('scroll', handleScroll, true);
+    window.removeEventListener('resize', handleResize);
+    root.removeEventListener('wheel', handleWheel, { passive: false });
+    root.removeEventListener('mousedown', handleMouseDown);
+    root.removeEventListener('mousemove', handleMouseMove);
+    window.removeEventListener('mouseup', handleMouseUp);
+    root.removeEventListener('click', handleCaptureClick, true);
     businessChatsSub?.unsubscribe?.();
     businessCommandsSub?.unsubscribe?.();
     queueTasksSub?.unsubscribe?.();
@@ -143,55 +274,268 @@ export function initBusinessChat({
   };
 }
 
+function alignChatWindows(root) {
+  if (!root) return;
+  const strip = root.querySelector('[data-chat-strip]');
+  const stage = root.querySelector('[data-chat-stage]');
+  const stageInner = root.querySelector('.ctox-chat-stage-inner');
+  if (!strip || !stage || !stageInner) return;
+
+  const windows = stageInner.querySelectorAll('.ctox-chat-window');
+  const isNarrow = window.innerWidth <= 780;
+
+  if (isNarrow) {
+    windows.forEach((win) => {
+      win.style.position = '';
+      win.style.left = '';
+    });
+    return;
+  }
+
+  const scrollLeft = strip.scrollLeft || 0;
+  const rootRect = stageInner.getBoundingClientRect();
+
+  windows.forEach((win) => {
+    const chatId = win.dataset.chatId;
+    const chip = strip.querySelector(`[data-chat-focus="${chatId}"]`);
+    if (chip) {
+      const winWidth = win.classList.contains('is-maximized') ? 390 : 264;
+      const chipCenter = chip.offsetLeft + chip.offsetWidth / 2;
+      let targetLeft = chipCenter - winWidth / 2 - scrollLeft;
+      
+      // Clamp targetLeft so the window stays strictly within stageInner column bounds with 8px safe margins
+      const minLeft = 8;
+      const maxLeft = rootRect.width - 8 - winWidth;
+      targetLeft = Math.max(minLeft, Math.min(maxLeft, targetLeft));
+      
+      win.style.position = 'absolute';
+      win.style.left = `${targetLeft}px`;
+    }
+  });
+
+  const spacer = stageInner.querySelector('.ctox-chat-stage-spacer');
+  if (spacer) {
+    spacer.style.position = 'absolute';
+    spacer.style.width = '1px';
+  }
+}
+
 function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
-  const openChats = state.chats.filter((chat) => chat.open !== false);
+  const selectedDate = state.selectedDate || getLocalDateString(Date.now());
+  const chatsOfSelectedDate = state.chats.filter((chat) => getLocalDateString(chat.createdAt) === selectedDate);
+  const openChats = chatsOfSelectedDate.filter((chat) => chat.open !== false);
+  const hasMaximized = openChats.some(chat => chat.maximized && !chat.minimized);
   const activeChat = activeChatFor(state, openChats);
-  const expandedChats = openChats.filter((chat) => !chat.minimized);
   const dockCollapsed = Boolean(state.dockCollapsed);
+  const wasCollapsed = root.classList.contains('is-collapsed');
   root.classList.toggle('is-collapsed', dockCollapsed);
+
+  // --- SMART IN-PLACE DOM UPDATE FAST-PATH ---
+  const existingWindows = Array.from(root.querySelectorAll('.ctox-chat-window'));
+  const currentWindowIds = existingWindows.map(w => w.dataset.chatId);
+  const openChatIds = openChats.map(c => c.id);
+  const canUpdateInPlace = existingWindows.length === openChats.length &&
+                           currentWindowIds.every((id, idx) => id === openChatIds[idx]) &&
+                           root.querySelector('[data-chat-dock]') &&
+                           wasCollapsed === dockCollapsed;
+
+  if (canUpdateInPlace) {
+    // 1. Update dock state / collapse class
+    const dockEl = root.querySelector('[data-chat-dock]');
+    if (dockEl) {
+      dockEl.className = `ctox-chat-dock ${dockCollapsed ? 'is-collapsed' : ''}`;
+    }
+    
+    // Update Chat count badge in FAB
+    const fabBadge = root.querySelector('.ctox-chat-fab b');
+    if (fabBadge) {
+      fabBadge.textContent = openChats.length || '';
+    }
+
+    // 2. Update active states and details on chips in the dock
+    const chips = root.querySelectorAll('.ctox-chat-chip');
+    chips.forEach(chip => {
+      const chatId = chip.dataset.chatFocus;
+      const chat = openChats.find(c => c.id === chatId);
+      if (chat) {
+        const taskState = getTaskState(chat);
+        const count = Array.isArray(chat.messages) ? chat.messages.length : 0;
+        const status = chat.lastTrackingId ? (taskState.toUpperCase()) : count ? `${count} Msg` : 'Leer';
+
+        chip.className = `ctox-chat-chip ${chat.id === activeChat?.id && !chat.minimized ? 'is-active' : ''} ${chat.minimized ? 'is-minimized' : ''} ${!chat.minimized ? 'is-expanded' : ''}`;
+        
+        const smallEl = chip.querySelector('.ctox-chat-chip-copy small');
+        if (smallEl) smallEl.textContent = status;
+        
+        const strongEl = chip.querySelector('.ctox-chat-chip-copy strong');
+        if (strongEl) strongEl.textContent = chat.title || 'CTOX';
+      }
+    });
+
+    // 3. Update active states, 3D relation tags, maximized and minimized classes on windows
+    const activeIndex = openChats.findIndex((c) => c.id === activeChat?.id);
+    existingWindows.forEach((win, idx) => {
+      const chat = openChats[idx];
+      const relation = idx < activeIndex ? 'left' : idx > activeIndex ? 'right' : 'center';
+      const taskState = getTaskState(chat);
+
+      win.className = `ctox-chat-window ${chat.maximized ? 'is-maximized' : ''} ${chat.id === activeChat?.id ? 'is-active' : ''} ${chat.minimized ? 'is-minimized' : ''} is-task-${taskState}`;
+      win.dataset.chatRel = relation;
+
+      // Update title text in header
+      const titleStrong = win.querySelector('.ctox-chat-title strong');
+      if (titleStrong) titleStrong.textContent = chat.title || 'CTOX';
+
+      // Update maximize icon in window header
+      const maxBtn = win.querySelector('[data-chat-maximize]');
+      if (maxBtn) {
+        maxBtn.innerHTML = chat.maximized 
+          ? `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 14 10 14 10 20"></polyline><polyline points="20 10 14 10 14 4"></polyline><line x1="14" y1="10" x2="21" y2="3"></line><line x1="10" y1="14" x2="3" y2="21"></line></svg>` 
+          : `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"></polyline><polyline points="9 21 3 21 3 15"></polyline><line x1="21" y1="3" x2="14" y2="10"></line><line x1="3" y1="21" x2="10" y2="14"></line></svg>`;
+      }
+
+      // Update messages container content if it changed
+      const messagesContainer = win.querySelector('.ctox-chat-messages');
+      if (messagesContainer) {
+        const expectedHtml = (chat.messages.length ? chat.messages.map(messageMarkup).join('') : '<div class="ctox-chat-empty">CTOX Aufgabe eingeben.</div>').trim();
+        if (messagesContainer.innerHTML.trim() !== expectedHtml) {
+          messagesContainer.innerHTML = expectedHtml;
+          messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
+      }
+
+      // Update textarea content or placeholder if needed
+      const textarea = win.querySelector('[name="message"]');
+      if (textarea && textarea.value !== (chat.draft || '')) {
+        textarea.value = chat.draft || '';
+      }
+    });
+
+    // 4. Align position and scroll
+    alignChatWindows(root);
+    scrollActiveChatIntoView(root, state);
+    return; // Exit early without recreating DOM nodes!
+  }
+  // --- END OF IN-PLACE DOM UPDATE FAST-PATH ---
+
+  const maxDateVal = getLocalDateString(Date.now() + 10 * 365 * 24 * 60 * 60 * 1000);
+
   root.innerHTML = `
     <section class="ctox-chat-dock ${dockCollapsed ? 'is-collapsed' : ''}" data-chat-dock>
       <button class="ctox-chat-fab" type="button" data-chat-open aria-label="Chat öffnen">
         <span>Chat</span><b>${openChats.length || ''}</b>
       </button>
+
+      <div class="ctox-chat-date-pill">
+        <button class="ctox-date-nav-btn" type="button" data-chat-date-prev aria-label="Vorheriger Tag">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
+        </button>
+        <div class="ctox-date-picker-trigger">
+          <span class="ctox-date-label">${formatGermanDateLabel(selectedDate)}</span>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+          <input type="date" class="ctox-date-native-picker" data-chat-date-picker value="${selectedDate}" max="${maxDateVal}" />
+        </div>
+        <button class="ctox-date-nav-btn" type="button" data-chat-date-next aria-label="Nächster Tag">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+        </button>
+      </div>
+
       ${dockCollapsed ? '' : `
-        <button class="ctox-chat-nav" type="button" data-chat-prev aria-label="Vorheriger Chat">‹</button>
+        <button class="ctox-chat-nav" type="button" data-chat-prev aria-label="Vorheriger Chat">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
+        </button>
         <div class="ctox-chat-strip" data-chat-strip aria-label="Offene Chats">
           ${openChats.map((chat) => chatDockItem(chat, activeChat?.id)).join('')}
         </div>
-        <button class="ctox-chat-nav" type="button" data-chat-next aria-label="Nächster Chat">›</button>
-        <button class="ctox-chat-new" type="button" data-chat-new aria-label="Neuer Chat">+</button>
+        <button class="ctox-chat-nav" type="button" data-chat-next aria-label="Nächster Chat">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+        </button>
+        <button class="ctox-chat-new" type="button" data-chat-new aria-label="Neuer Chat">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+        </button>
       `}
     </section>
     <div class="ctox-chat-stage" data-chat-stage>
-      <div class="ctox-chat-stage-inner">
-        ${dockCollapsed ? '' : expandedChats.map((chat) => chatWindow(chat, activeChat?.id)).join('')}
+      <div class="ctox-chat-stage-inner ${hasMaximized ? 'has-maximized' : ''}">
+        ${dockCollapsed ? '' : (() => {
+          const activeIndex = openChats.findIndex((c) => c.id === activeChat?.id);
+          return openChats.map((chat, idx) => {
+            const relation = idx < activeIndex ? 'left' : idx > activeIndex ? 'right' : 'center';
+            return chatWindow(chat, activeChat?.id, relation);
+          }).join('');
+        })()}
+        <div class="ctox-chat-stage-spacer" style="position: relative; width: 1px; height: 1px; pointer-events: none; margin-top: -1px;"></div>
       </div>
     </div>
   `;
+
+  root.querySelector('[data-chat-date-prev]')?.addEventListener('click', async () => {
+    shiftSelectedDate(state, -1);
+    const chatsOfDate = state.chats.filter(c => getLocalDateString(c.createdAt) === state.selectedDate);
+    if (chatsOfDate.length > 0) {
+      state.activeChatId = chatsOfDate[0].id;
+    } else {
+      state.activeChatId = '';
+    }
+    await persistChatState({ state, db });
+    renderChatRoot({ root, state, commandBus, db, getActiveModule });
+  });
+
+  root.querySelector('[data-chat-date-next]')?.addEventListener('click', async () => {
+    shiftSelectedDate(state, 1);
+    const chatsOfDate = state.chats.filter(c => getLocalDateString(c.createdAt) === state.selectedDate);
+    if (chatsOfDate.length > 0) {
+      state.activeChatId = chatsOfDate[0].id;
+    } else {
+      state.activeChatId = '';
+    }
+    await persistChatState({ state, db });
+    renderChatRoot({ root, state, commandBus, db, getActiveModule });
+  });
+
+  root.querySelector('[data-chat-date-picker]')?.addEventListener('change', async (event) => {
+    const val = event.currentTarget.value;
+    if (val) {
+      state.selectedDate = val;
+      const chatsOfDate = state.chats.filter(c => getLocalDateString(c.createdAt) === state.selectedDate);
+      if (chatsOfDate.length > 0) {
+        state.activeChatId = chatsOfDate[0].id;
+      } else {
+        state.activeChatId = '';
+      }
+      await persistChatState({ state, db });
+      renderChatRoot({ root, state, commandBus, db, getActiveModule });
+    }
+  });
+
   root.querySelector('[data-chat-new]')?.addEventListener('click', async () => {
-    const next = createChat(state.ownerUserId);
+    const next = createChat(state.ownerUserId, state.selectedDate);
     state.chats.push(next);
-    state.activeChatId = next.id;
+    expandChatOnly(state, next);
     state.dockCollapsed = false;
     touchChats(state, [next]);
     await persistChatState({ state, db });
     renderChatRoot({ root, state, commandBus, db, getActiveModule });
   });
-  root.querySelector('[data-chat-prev]')?.addEventListener('click', async () => {
-    const chat = focusAdjacentChat(state, -1);
-    state.dockCollapsed = false;
-    if (chat) touchChats(state, [chat]);
-    await persistChatState({ state, db });
-    renderChatRoot({ root, state, commandBus, db, getActiveModule });
+
+  root.querySelector('[data-chat-prev]')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const strip = root.querySelector('[data-chat-strip]');
+    if (strip) {
+      strip.scrollBy({ left: -200, behavior: 'smooth' });
+    }
   });
-  root.querySelector('[data-chat-next]')?.addEventListener('click', async () => {
-    const chat = focusAdjacentChat(state, 1);
-    state.dockCollapsed = false;
-    if (chat) touchChats(state, [chat]);
-    await persistChatState({ state, db });
-    renderChatRoot({ root, state, commandBus, db, getActiveModule });
+
+  root.querySelector('[data-chat-next]')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const strip = root.querySelector('[data-chat-strip]');
+    if (strip) {
+      strip.scrollBy({ left: 200, behavior: 'smooth' });
+    }
   });
+
   root.querySelectorAll('[data-chat-focus]').forEach((button) => {
     button.addEventListener('click', async () => {
       const chat = state.chats.find((item) => item.id === button.dataset.chatFocus);
@@ -203,15 +547,39 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
       renderChatRoot({ root, state, commandBus, db, getActiveModule });
     });
   });
+
   root.querySelectorAll('[data-chat-id]').forEach((node) => {
     const chat = state.chats.find((item) => item.id === node.dataset.chatId);
     if (!chat) return;
+
+    node.addEventListener('click', async (e) => {
+      if (node.classList.contains('is-active')) return;
+      if (e.target.closest('button, a, input, textarea, form, svg, path')) return;
+      state.activeChatId = chat.id;
+      chat.minimized = false;
+      touchChats(state, [chat]);
+      await persistChatState({ state, db });
+      renderChatRoot({ root, state, commandBus, db, getActiveModule });
+    });
+
     node.querySelectorAll('[data-chat-minimize]').forEach((button) => button.addEventListener('click', async () => {
       chat.minimized = true;
       touchChats(state, [chat]);
       await persistChatState({ state, db });
       renderChatRoot({ root, state, commandBus, db, getActiveModule });
     }));
+
+    node.querySelectorAll('[data-chat-title]').forEach((titleBtn) => {
+      titleBtn.addEventListener('click', async (e) => {
+        chat.maximized = !chat.maximized;
+        chat.minimized = false;
+        state.activeChatId = chat.id;
+        touchChats(state, [chat]);
+        await persistChatState({ state, db });
+        renderChatRoot({ root, state, commandBus, db, getActiveModule });
+      });
+    });
+
     node.querySelectorAll('[data-chat-maximize]').forEach((button) => button.addEventListener('click', async () => {
       chat.maximized = !chat.maximized;
       chat.minimized = false;
@@ -221,6 +589,7 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
       await persistChatState({ state, db });
       renderChatRoot({ root, state, commandBus, db, getActiveModule });
     }));
+
     node.querySelector('[data-chat-delete]')?.addEventListener('click', async () => {
       const confirmed = await showBusinessConfirm('Diesen Chat wirklich löschen?', {
         title: 'Chat löschen',
@@ -230,23 +599,36 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
       await deleteChat({ state, chat, db });
       renderChatRoot({ root, state, commandBus, db, getActiveModule });
     });
+
     node.querySelector('[data-chat-new]')?.addEventListener('click', async () => {
-      const next = createChat(state.ownerUserId);
+      const next = createChat(state.ownerUserId, state.selectedDate);
       state.chats.push(next);
-      state.activeChatId = next.id;
+      expandChatOnly(state, next);
       state.dockCollapsed = false;
       touchChats(state, [next]);
       await persistChatState({ state, db });
       renderChatRoot({ root, state, commandBus, db, getActiveModule });
     });
+
     node.querySelectorAll('[data-track-task]').forEach((button) => {
       button.addEventListener('click', () => {
         openCtoxTask(button.dataset.taskId || '', button.dataset.commandId || '', button.dataset.taskStatus || '');
       });
     });
-    node.querySelector('[name="message"]')?.addEventListener('input', (event) => {
-      chat.draft = event.currentTarget.value;
-    });
+
+    const textarea = node.querySelector('[name="message"]');
+    if (textarea) {
+      const adjustHeight = () => {
+        textarea.style.height = 'auto';
+        textarea.style.height = `${textarea.scrollHeight}px`;
+      };
+      textarea.addEventListener('input', (event) => {
+        chat.draft = event.currentTarget.value;
+        adjustHeight();
+      });
+      window.requestAnimationFrame(adjustHeight);
+    }
+
     const form = node.querySelector('[data-chat-form]');
     const submitFromForm = async (event) => {
       event.preventDefault();
@@ -256,7 +638,26 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
     form?.addEventListener('submit', submitFromForm);
     form?.querySelector('button[type="submit"]')?.addEventListener('click', submitFromForm);
   });
+
+  root.querySelectorAll('[data-chat-followup-trigger]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const chatId = btn.dataset.chatFollowupTrigger;
+      const chat = state.chats.find((item) => item.id === chatId);
+      if (chat) {
+        chat.showFollowUp = true;
+        await persistChatState({ state, db });
+        renderChatRoot({ root, state, commandBus, db, getActiveModule });
+      }
+    });
+  });
+
+  alignChatWindows(root);
   scrollActiveChatIntoView(root, state);
+  window.requestAnimationFrame(() => {
+    root.querySelectorAll('.ctox-chat-window.no-left-transition').forEach((win) => {
+      win.classList.remove('no-left-transition');
+    });
+  });
 }
 
 async function submitChatForm({ root, state, chat, node, commandBus, db, getActiveModule }) {
@@ -267,6 +668,7 @@ async function submitChatForm({ root, state, chat, node, commandBus, db, getActi
   if (!text) return;
   chat.__submitting = true;
   chat.draft = '';
+  chat.showFollowUp = false; // Reset follow-up container state
   if (input) input.value = '';
   try {
     await submitChatMessage({
@@ -340,15 +742,13 @@ async function toggleChatDock({ root, state, commandBus, db, getActiveModule }) 
 }
 
 function toggleChatFromDock(state, chat) {
-  chat.open = true;
   if (!chat.minimized) {
     chat.minimized = true;
-    const nextActive = state.chats.find((item) => item.open !== false && !item.minimized && item.id !== chat.id);
-    if (nextActive) state.activeChatId = nextActive.id;
-    return;
+  } else {
+    chat.open = true;
+    chat.minimized = false;
+    state.activeChatId = chat.id;
   }
-  chat.minimized = false;
-  state.activeChatId = chat.id;
 }
 
 async function collapseChatWindow({ root, state, commandBus, db, getActiveModule, target }) {
@@ -362,38 +762,192 @@ async function collapseChatWindow({ root, state, commandBus, db, getActiveModule
   await persistChatState({ state, db });
 }
 
-function chatWindow(chat, activeId) {
+function getTaskState(chat) {
+  if (!chat.lastTrackingId) return 'idle';
+  const trackingMsg = [...chat.messages].reverse().find(m => 
+    (m.commandId && m.commandId === chat.lastTrackingId) || 
+    (m.taskId && m.taskId === chat.lastTrackingId)
+  );
+  if (!trackingMsg) return 'idle';
+  const status = String(trackingMsg.status || '').toLowerCase();
+  if (!status) return 'idle';
+  if (status === 'success' || status === 'completed' || status === 'done' || status === 'erledigt') return 'success';
+  if (['failed', 'blocked', 'stale_missing_native', 'error'].includes(status)) return 'failed';
+  if (['queued', 'pending', 'pending_sync', 'waiting'].includes(status)) return 'queued';
+  if (['running', 'processing', 'executing', 'active'].includes(status)) return 'running';
+  return 'idle';
+}
+
+function expandChatOnly(state, activeChat) {
+  state.activeChatId = activeChat.id;
+  activeChat.open = true;
+  activeChat.minimized = false;
+}
+
+
+function chatWindow(chat, activeId, relation = 'center') {
+  const moduleName = chat.contextMeta?.module || 'ctox';
+  const taskState = getTaskState(chat);
+
+  let statusBadgeHtml = '';
+  if (taskState === 'running') {
+    statusBadgeHtml = `
+      <span class="ctox-chat-status-badge is-running" title="CTOX läuft...">
+        <span class="ctox-status-spinner"></span>
+        <span>Aktiv</span>
+      </span>
+    `;
+  } else if (taskState === 'queued') {
+    statusBadgeHtml = `
+      <span class="ctox-chat-status-badge is-queued" title="In Warteschlange...">
+        <span class="ctox-status-dot"></span>
+        <span>Queue</span>
+      </span>
+    `;
+  } else if (taskState === 'success') {
+    statusBadgeHtml = `
+      <span class="ctox-chat-status-badge is-success" title="Erledigt!">
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+        <span>Erledigt</span>
+      </span>
+    `;
+  } else if (taskState === 'failed') {
+    statusBadgeHtml = `
+      <span class="ctox-chat-status-badge is-failed" title="Blocked/Fehlgeschlagen">
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path></svg>
+        <span>Blocked</span>
+      </span>
+    `;
+  }
+
+  // Determine what to show at the bottom
+  let bottomHtml = '';
+  if (taskState === 'queued' || taskState === 'running') {
+    // Hide input, show active progress card
+    const trackingMsg = [...chat.messages].reverse().find(m => 
+      (m.commandId && m.commandId === chat.lastTrackingId) || 
+      (m.taskId && m.taskId === chat.lastTrackingId)
+    );
+    const taskId = trackingMsg?.taskId || '';
+    const commandId = trackingMsg?.commandId || chat.lastTrackingId || '';
+    const taskStatus = trackingMsg?.status || 'queued';
+    
+    bottomHtml = `
+      <div class="ctox-chat-delegation-card">
+        <div class="ctox-delegation-glow"></div>
+        <div class="ctox-delegation-header">
+          <span class="ctox-delegation-spinner"></span>
+          <div class="ctox-delegation-info">
+            <strong>Aufgabe delegiert &amp; aktiv</strong>
+            <span>CTOX verarbeitet deine Anfrage...</span>
+          </div>
+        </div>
+        <button class="ctox-delegation-watch-btn" type="button" data-track-task data-task-id="${escapeAttr(taskId)}" data-command-id="${escapeAttr(commandId)}" data-task-status="${escapeAttr(taskStatus)}">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+          <span>Live-Harness beobachten</span>
+        </button>
+      </div>
+    `;
+  } else if (taskState === 'success' || taskState === 'failed') {
+    if (chat.showFollowUp) {
+      bottomHtml = `
+        <form class="ctox-chat-form" data-chat-form>
+          <textarea name="message" placeholder="Folgeaufgabe eingeben..." required>${escapeHtml(chat.draft || '')}</textarea>
+          <button type="submit" data-chat-send aria-label="Senden">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg>
+          </button>
+        </form>
+      `;
+    } else {
+      bottomHtml = `
+        <div class="ctox-followup-container">
+          <button class="ctox-followup-btn" type="button" data-chat-followup-trigger="${escapeAttr(chat.id)}">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+            <span>Folgeaufgabe eingeben</span>
+          </button>
+        </div>
+      `;
+    }
+  } else {
+    // idle state
+    bottomHtml = `
+      <form class="ctox-chat-form" data-chat-form>
+        <textarea name="message" placeholder="Aufgabe an CTOX..." required>${escapeHtml(chat.draft || '')}</textarea>
+        <button type="submit" data-chat-send aria-label="Senden">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg>
+        </button>
+      </form>
+    `;
+  }
+
+  const isMinimizedClass = chat.minimized ? 'is-minimized' : '';
+  const taskStateClass = `is-task-${taskState}`;
+
   return `
-    <section class="ctox-chat-window ${chat.maximized ? 'is-maximized' : ''} ${chat.id === activeId ? 'is-active' : ''}" data-chat-id="${escapeAttr(chat.id)}">
+    <section class="ctox-chat-window no-left-transition ${chat.maximized ? 'is-maximized' : ''} ${chat.id === activeId ? 'is-active' : ''} ${isMinimizedClass} ${taskStateClass}" data-chat-id="${escapeAttr(chat.id)}" data-chat-module="${escapeAttr(moduleName)}" data-chat-rel="${escapeAttr(relation)}">
       <header>
-        <button class="ctox-chat-title" type="button" data-chat-maximize>
-          <strong>${escapeHtml(chat.title || 'CTOX')}</strong>
+        <button class="ctox-chat-title" type="button" data-chat-title="${escapeAttr(chat.id)}">
+          <div style="display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0;">
+            <strong>${escapeHtml(chat.title || 'CTOX')}</strong>
+            ${statusBadgeHtml}
+          </div>
           ${chat.lastTrackingId ? `<span>${escapeHtml(chat.lastTrackingId)}</span>` : '<span>Business OS</span>'}
         </button>
-        <div>
-          <button type="button" data-chat-new aria-label="Neuer Chat">+</button>
-          <button type="button" data-chat-maximize aria-label="Chat maximieren">${chat.maximized ? '↙' : '↗'}</button>
-          <button type="button" data-chat-minimize aria-label="Chat einklappen">–</button>
-          <button type="button" data-chat-delete aria-label="Chat löschen">Löschen</button>
+        <div class="ctox-chat-header-actions">
+          <button type="button" data-chat-new aria-label="Neuer Chat">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+          </button>
+          <button type="button" data-chat-maximize aria-label="Chat maximieren">
+            ${chat.maximized 
+              ? `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 14 10 14 10 20"></polyline><polyline points="20 10 14 10 14 4"></polyline><line x1="14" y1="10" x2="21" y2="3"></line><line x1="10" y1="14" x2="3" y2="21"></line></svg>` 
+              : `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"></polyline><polyline points="9 21 3 21 3 15"></polyline><line x1="21" y1="3" x2="14" y2="10"></line><line x1="3" y1="21" x2="10" y2="14"></line></svg>`}
+          </button>
+          <button type="button" data-chat-minimize aria-label="Chat einklappen">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+          </button>
+          <button type="button" data-chat-delete aria-label="Chat löschen" class="is-delete">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
+          </button>
         </div>
       </header>
       <div class="ctox-chat-messages">
         ${chat.messages.length ? chat.messages.map(messageMarkup).join('') : '<div class="ctox-chat-empty">CTOX Aufgabe eingeben.</div>'}
       </div>
-      <form class="ctox-chat-form" data-chat-form>
-        <textarea name="message" rows="2" placeholder="Aufgabe an CTOX..." required>${escapeHtml(chat.draft || '')}</textarea>
-        <button type="submit" data-chat-send>Senden</button>
-      </form>
+      ${bottomHtml}
     </section>
   `;
 }
 
 function chatDockItem(chat, activeId) {
+  const taskState = getTaskState(chat);
   const count = Array.isArray(chat.messages) ? chat.messages.length : 0;
-  const status = chat.lastTrackingId ? 'Queue' : count ? `${count} Msg` : 'Leer';
+  const status = chat.lastTrackingId ? (taskState.toUpperCase()) : count ? `${count} Msg` : 'Leer';
+  const moduleName = chat.contextMeta?.module || 'ctox';
+  
+  let markHtml = '';
+  if (taskState === 'running') {
+    markHtml = `<span class="ctox-chat-chip-mark is-running" aria-hidden="true"><span class="ctox-chip-spinner"></span></span>`;
+  } else if (taskState === 'queued') {
+    markHtml = `<span class="ctox-chat-chip-mark is-queued" aria-hidden="true"></span>`;
+  } else if (taskState === 'success') {
+    markHtml = `
+      <span class="ctox-chat-chip-mark is-success" aria-hidden="true">
+        <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+      </span>
+    `;
+  } else if (taskState === 'failed') {
+    markHtml = `
+      <span class="ctox-chat-chip-mark is-failed" aria-hidden="true">
+        <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+      </span>
+    `;
+  } else {
+    markHtml = `<span class="ctox-chat-chip-mark" aria-hidden="true"></span>`;
+  }
+
   return `
-    <button class="ctox-chat-chip ${chat.id === activeId ? 'is-active' : ''} ${chat.minimized ? 'is-minimized' : ''}" type="button" data-chat-focus="${escapeAttr(chat.id)}">
-      <span class="ctox-chat-chip-mark" aria-hidden="true">${chat.minimized ? '–' : '●'}</span>
+    <button class="ctox-chat-chip ${chat.id === activeId && !chat.minimized ? 'is-active' : ''} ${chat.minimized ? 'is-minimized' : ''} ${!chat.minimized ? 'is-expanded' : ''}" type="button" data-chat-focus="${escapeAttr(chat.id)}" data-chat-module="${escapeAttr(moduleName)}">
+      ${markHtml}
       <span class="ctox-chat-chip-copy">
         <strong>${escapeHtml(chat.title || 'CTOX')}</strong>
         <small>${escapeHtml(status)}</small>
@@ -439,13 +993,16 @@ function touchChats(state, chats) {
 }
 
 function scrollActiveChatIntoView(root, state) {
-  window.requestAnimationFrame(() => {
-    const activeChip = Array.from(root.querySelectorAll('[data-chat-focus]'))
-      .find((node) => node.dataset.chatFocus === state.activeChatId);
-    const activeWindow = Array.from(root.querySelectorAll('[data-chat-id]'))
-      .find((node) => node.dataset.chatId === state.activeChatId);
-    activeChip?.scrollIntoView?.({ inline: 'center', block: 'nearest' });
-    activeWindow?.scrollIntoView?.({ inline: 'center', block: 'nearest' });
+  const activeChip = Array.from(root.querySelectorAll('[data-chat-focus]'))
+    .find((node) => node.dataset.chatFocus === state.activeChatId);
+  activeChip?.scrollIntoView?.({ inline: 'center', block: 'nearest', behavior: 'smooth' });
+  
+  // Auto-scroll messages list to bottom for all open/expanded windows
+  root.querySelectorAll('[data-chat-id]:not(.is-minimized)').forEach((node) => {
+    const messagesContainer = node.querySelector('.ctox-chat-messages');
+    if (messagesContainer) {
+      messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    }
   });
 }
 
@@ -662,12 +1219,64 @@ function openCtoxTask(taskId, commandId, taskStatus) {
   location.hash = `#ctox?${params.toString()}`;
 }
 
+// Date and Temporal Utilities for Calendar-Scoped Chats
+function getLocalDateString(timestampOrDate = Date.now()) {
+  const d = new Date(timestampOrDate);
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function formatGermanDateLabel(dateStr) {
+  const todayStr = getLocalDateString(Date.now());
+  
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  const yesterdayStr = getLocalDateString(yesterday);
+  
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const tomorrowStr = getLocalDateString(tomorrow);
+  
+  if (dateStr === todayStr) return 'Heute';
+  if (dateStr === yesterdayStr) return 'Gestern';
+  if (dateStr === tomorrowStr) return 'Morgen';
+  
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const shortMonths = [
+    'Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez'
+  ];
+  return `${d}. ${shortMonths[m - 1]} '${String(y).slice(-2)}`;
+}
+
+function shiftSelectedDate(state, days) {
+  const [y, m, d] = state.selectedDate.split('-').map(Number);
+  const date = new Date(y, m - 1, d);
+  date.setDate(date.getDate() + days);
+  state.selectedDate = getLocalDateString(date);
+}
+
+function createTimestampForDateString(dateStr) {
+  const todayStr = getLocalDateString(Date.now());
+  if (dateStr === todayStr) {
+    return Date.now();
+  }
+  const now = new Date();
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const targetDate = new Date(y, m - 1, d, now.getHours(), now.getMinutes(), now.getSeconds(), now.getMilliseconds());
+  return targetDate.getTime();
+}
+
 function ensureChat(state, session = null) {
-  let chat = state.chats.find((item) => item.id === state.activeChatId)
-    || state.chats.find((item) => item.open !== false)
-    || state.chats[0];
+  const dateStr = state.selectedDate || getLocalDateString(Date.now());
+  const chatsOfDate = state.chats.filter((c) => getLocalDateString(c.createdAt) === dateStr);
+  let chat = chatsOfDate.find((item) => item.id === state.activeChatId)
+    || chatsOfDate.find((item) => item.open !== false)
+    || chatsOfDate[0];
   if (!chat) {
-    chat = createChat(ownerUserId(session) || state.ownerUserId);
+    chat = createChat(ownerUserId(session) || state.ownerUserId, dateStr);
     state.chats.push(chat);
   }
   chat.open = true;
@@ -675,7 +1284,9 @@ function ensureChat(state, session = null) {
   return chat;
 }
 
-function createChat(owner = '') {
+function createChat(owner = '', dateStr = '') {
+  const targetDateStr = dateStr || getLocalDateString(Date.now());
+  const timestamp = createTimestampForDateString(targetDateStr);
   return {
     id: `chat_${crypto.randomUUID()}`,
     title: 'CTOX',
@@ -686,8 +1297,8 @@ function createChat(owner = '') {
     messages: [],
     draft: '',
     contextMeta: {},
-    createdAt: Date.now(),
-    updated_at_ms: Date.now(),
+    createdAt: timestamp,
+    updated_at_ms: timestamp,
   };
 }
 
@@ -725,6 +1336,7 @@ function readChatState(session) {
     const chats = Array.isArray(parsed.chats) ? parsed.chats : [];
     return {
       ownerUserId: owner,
+      selectedDate: parsed.selectedDate || getLocalDateString(Date.now()),
       activeChatId: parsed.activeChatId || '',
       dockCollapsed: Boolean(parsed.dockCollapsed),
       preCollapseExpandedChatIds: Array.isArray(parsed.preCollapseExpandedChatIds)
@@ -733,27 +1345,29 @@ function readChatState(session) {
       chats: chats
         .filter((chat) => !chat.owner_user_id || chat.owner_user_id === owner)
         .map((chat) => ({
-        id: chat.id || `chat_${crypto.randomUUID()}`,
-        title: chat.title || 'CTOX',
-        open: chat.open !== false,
-        minimized: Boolean(chat.minimized),
-        maximized: Boolean(chat.maximized),
-        owner_user_id: chat.owner_user_id || owner,
-        lastTrackingId: chat.lastTrackingId || '',
-        messages: Array.isArray(chat.messages) ? chat.messages.slice(-40) : [],
-        draft: chat.draft || '',
-        contextMeta: chat.contextMeta && typeof chat.contextMeta === 'object' ? chat.contextMeta : {},
-        createdAt: chat.createdAt || Date.now(),
-        updated_at_ms: chat.updated_at_ms || Date.now(),
-      })),
+          id: chat.id || `chat_${crypto.randomUUID()}`,
+          title: chat.title || 'CTOX',
+          open: chat.open !== false,
+          minimized: Boolean(chat.minimized),
+          maximized: Boolean(chat.maximized),
+          owner_user_id: chat.owner_user_id || owner,
+          lastTrackingId: chat.lastTrackingId || '',
+          messages: Array.isArray(chat.messages) ? chat.messages.slice(-40) : [],
+          draft: chat.draft || '',
+          contextMeta: chat.contextMeta && typeof chat.contextMeta === 'object' ? chat.contextMeta : {},
+          createdAt: chat.createdAt || Date.now(),
+          updated_at_ms: chat.updated_at_ms || Date.now(),
+          showFollowUp: Boolean(chat.showFollowUp),
+        })),
     };
   } catch {
-    return { ownerUserId: owner, chats: [] };
+    return { ownerUserId: owner, selectedDate: getLocalDateString(Date.now()), chats: [] };
   }
 }
 
 function writeChatState(state) {
   localStorage.setItem(CHAT_STATE_KEY, JSON.stringify({
+    selectedDate: state.selectedDate || getLocalDateString(Date.now()),
     activeChatId: state.activeChatId || '',
     dockCollapsed: Boolean(state.dockCollapsed),
     preCollapseExpandedChatIds: Array.isArray(state.preCollapseExpandedChatIds)
@@ -766,6 +1380,7 @@ function writeChatState(state) {
       contextMeta: chat.contextMeta && typeof chat.contextMeta === 'object' ? chat.contextMeta : {},
       owner_user_id: chat.owner_user_id || state.ownerUserId || '',
       updated_at_ms: chat.updated_at_ms || Date.now(),
+      showFollowUp: Boolean(chat.showFollowUp),
     })),
   }));
 }
@@ -787,6 +1402,7 @@ async function persistChatState({ state, db }) {
       draft: chat.draft || '',
       contextMeta: chat.contextMeta && typeof chat.contextMeta === 'object' ? chat.contextMeta : {},
       updated_at_ms: chat.updated_at_ms,
+      showFollowUp: Boolean(chat.showFollowUp),
     };
     const existing = await collection.findOne(chat.id).exec();
     if (existing) await existing.incrementalPatch(doc);
@@ -863,6 +1479,7 @@ function normalizeChat(chat) {
     contextMeta: chat.contextMeta && typeof chat.contextMeta === 'object' ? chat.contextMeta : {},
     createdAt: chat.createdAt || Date.now(),
     updated_at_ms: chat.updated_at_ms || Date.now(),
+    showFollowUp: Boolean(chat.showFollowUp),
   };
 }
 
@@ -889,7 +1506,7 @@ function compactConversation(messages) {
 
 function titleFromText(text) {
   const clean = String(text || '').replace(/\s+/g, ' ').trim();
-  return clean.length > 42 ? `${clean.slice(0, 39)}...` : clean || 'CTOX Aufgabe';
+  return clean.length > 42 ? `${clean.slice(0, 39)}...` : clean || 'CTOX';
 }
 
 function installChatStyles() {
@@ -897,19 +1514,54 @@ function installChatStyles() {
   const style = document.createElement('style');
   style.id = CHAT_STYLE_ID;
   style.textContent = `
-	    .ctox-chat-root {
-	      position: fixed;
-	      left: 18px;
-	      right: 96px;
-	      bottom: 18px;
-	      z-index: 60;
-	      display: grid;
-	      grid-template-rows: auto auto;
-	      gap: 8px;
-	      width: auto;
-	      max-width: calc(100vw - 132px);
-	      pointer-events: none;
-	    }
+    @keyframes ctoxChatSlideIn {
+      from {
+        opacity: 0;
+        transform: translateY(40px) scale(0.95);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+      }
+    }
+    @keyframes ctoxChipSlideIn {
+      from {
+        opacity: 0;
+        transform: scale(0.85) translateX(-10px);
+      }
+      to {
+        opacity: 1;
+        transform: scale(1) translateX(0);
+      }
+    }
+    @keyframes ctoxChipActivePulse {
+      0% {
+        transform: translateY(0) scale(1);
+        box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 30%, transparent);
+      }
+      100% {
+        transform: translateY(-1px) scale(1.02);
+        box-shadow: 0 4px 12px color-mix(in srgb, var(--accent) 30%, transparent), 0 0 0 1px var(--accent) inset;
+      }
+    }
+    .ctox-chat-root {
+      --spring-bounce: cubic-bezier(0.34, 1.56, 0.64, 1);
+      --spring-ease: cubic-bezier(0.25, 1, 0.5, 1);
+      position: fixed;
+      left: 18px;
+      right: 96px;
+      bottom: 18px;
+      z-index: 60;
+      display: grid;
+      grid-template-rows: auto auto;
+      gap: 8px;
+      width: auto;
+      max-width: calc(100vw - 132px);
+      pointer-events: none;
+    }
+    .ctox-chat-root.is-scrolling .ctox-chat-window {
+      transition: none !important;
+    }
     .ctox-chat-root button,
     .ctox-chat-root textarea {
       font: inherit;
@@ -918,28 +1570,130 @@ function installChatStyles() {
       pointer-events: auto;
       grid-row: 2;
       display: grid;
-      grid-template-columns: 88px 28px minmax(0, 1fr) 28px 34px;
+      grid-template-columns: 88px 115px 28px minmax(0, 1fr) 28px 34px;
       align-items: center;
-	      gap: 6px;
-	      min-width: 0;
-	      width: 100%;
-	      padding: 5px;
-	      border: 1px solid var(--hairline, var(--line));
-	      border-radius: 12px;
-	      background: color-mix(in srgb, var(--surface) 92%, var(--bg));
-	      box-shadow: 0 14px 34px rgba(0, 0, 0, .26);
-	    }
+      gap: 8px;
+      min-width: 0;
+      width: 100%;
+      padding: 6px;
+      border: 1px solid color-mix(in srgb, var(--line) 35%, transparent);
+      border-radius: 14px;
+      background: color-mix(in srgb, var(--surface) 35%, transparent);
+      backdrop-filter: blur(20px) saturate(180%);
+      -webkit-backdrop-filter: blur(20px) saturate(180%);
+      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.12), 0 1px 0 rgba(255, 255, 255, 0.08) inset;
+      transition: border-color 0.3s var(--spring-bounce), box-shadow 0.3s var(--spring-bounce);
+    }
+    .ctox-chat-dock:hover {
+      border-color: color-mix(in srgb, var(--line) 55%, transparent);
+    }
+    .ctox-chat-date-pill {
+      display: inline-flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 30px;
+      width: 115px;
+      min-width: 115px;
+      border: 1px solid color-mix(in srgb, var(--line) 20%, transparent);
+      border-radius: 15px;
+      background: color-mix(in srgb, var(--surface) 15%, transparent);
+      padding: 0 2px;
+      box-sizing: border-box;
+      gap: 2px;
+      transition: border-color 0.25s ease, background-color 0.25s ease;
+    }
+    .ctox-chat-date-pill:hover {
+      border-color: color-mix(in srgb, var(--line) 55%, transparent);
+      background: color-mix(in srgb, var(--surface) 35%, transparent);
+    }
+    .ctox-date-nav-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 22px;
+      height: 22px;
+      border: none;
+      border-radius: 50%;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      transition: transform 0.2s var(--spring-bounce), background-color 0.2s ease, color 0.2s ease;
+      padding: 0;
+    }
+    .ctox-date-nav-btn:hover {
+      background: color-mix(in srgb, var(--surface-2) 60%, transparent);
+      color: var(--text);
+      transform: scale(1.05);
+    }
+    .ctox-date-nav-btn:active {
+      transform: scale(0.95);
+    }
+    .ctox-date-picker-trigger {
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      flex: 1;
+      height: 22px;
+      border-radius: 11px;
+      color: var(--text);
+      cursor: pointer;
+      min-width: 0;
+      padding: 0 2px;
+      transition: background-color 0.2s ease;
+    }
+    .ctox-date-picker-trigger:hover {
+      background: color-mix(in srgb, var(--surface-2) 40%, transparent);
+    }
+    .ctox-date-label {
+      font-size: 10px;
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      color: var(--text);
+    }
+    .ctox-date-picker-trigger svg {
+      flex-shrink: 0;
+      color: var(--muted);
+      transition: color 0.2s ease;
+    }
+    .ctox-date-picker-trigger:hover svg {
+      color: var(--text);
+    }
+    .ctox-date-native-picker {
+      position: absolute;
+      bottom: 38px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 115px;
+      height: 1px;
+      opacity: 0;
+      pointer-events: none;
+      -webkit-appearance: none;
+      appearance: none;
+      z-index: 10;
+    }
     .ctox-chat-root.is-collapsed {
       right: auto;
       width: auto;
       max-width: none;
     }
     .ctox-chat-dock.is-collapsed {
-      grid-template-columns: 88px;
+      grid-template-columns: 88px 115px;
       width: auto;
+    }
+    .ctox-chat-dock.is-collapsed .ctox-chat-nav,
+    .ctox-chat-dock.is-collapsed .ctox-chat-strip,
+    .ctox-chat-dock.is-collapsed .ctox-chat-new {
+      display: none !important;
     }
     .ctox-chat-root.is-collapsed .ctox-chat-stage {
       display: none;
+    }
+    .ctox-chat-root.is-collapsed .ctox-chat-window {
+      display: none !important;
     }
     .ctox-chat-fab {
       display: inline-flex;
@@ -954,6 +1708,15 @@ function installChatStyles() {
       color: var(--text);
       padding: 0 10px;
       font-weight: 760;
+      cursor: pointer;
+      transition: transform 0.3s var(--spring-bounce), background-color 0.2s ease, border-color 0.2s ease;
+    }
+    .ctox-chat-fab:hover {
+      transform: translateY(-1px) scale(1.02);
+      background: color-mix(in srgb, var(--accent) 15%, var(--surface));
+    }
+    .ctox-chat-fab:active {
+      transform: scale(0.98);
     }
     .ctox-chat-fab b {
       display: grid;
@@ -967,16 +1730,38 @@ function installChatStyles() {
     }
     .ctox-chat-nav,
     .ctox-chat-new {
+      display: flex;
+      align-items: center;
+      justify-content: center;
       height: 30px;
-      border: 1px solid var(--hairline, var(--line));
-      border-radius: 9px;
-      background: color-mix(in srgb, var(--surface) 78%, var(--surface-2));
+      border: 1px solid color-mix(in srgb, var(--line) 30%, transparent);
+      border-radius: 50%;
+      background: color-mix(in srgb, var(--surface) 25%, transparent);
       color: var(--muted);
-      font-weight: 820;
+      cursor: pointer;
+      transition: transform 0.3s var(--spring-bounce), background-color 0.25s ease, color 0.25s ease, border-color 0.25s ease;
+    }
+    .ctox-chat-nav {
+      width: 28px;
     }
     .ctox-chat-new {
-      width: 34px;
+      width: 30px;
+      border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+      background: color-mix(in srgb, var(--accent) 12%, transparent);
       color: var(--accent);
+    }
+    .ctox-chat-nav:hover,
+    .ctox-chat-new:hover {
+      transform: scale(1.1) translateY(-1px);
+      background: color-mix(in srgb, var(--surface-2) 60%, transparent);
+      color: var(--text);
+    }
+    .ctox-chat-new:hover {
+      background: color-mix(in srgb, var(--accent) 20%, transparent);
+    }
+    .ctox-chat-nav:active,
+    .ctox-chat-new:active {
+      transform: scale(0.95);
     }
     .ctox-chat-strip {
       display: flex;
@@ -985,15 +1770,14 @@ function installChatStyles() {
       min-width: 0;
       overflow-x: auto;
       overscroll-behavior-x: contain;
-      scroll-snap-type: x proximity;
       scrollbar-width: none;
+      position: relative;
     }
     .ctox-chat-strip::-webkit-scrollbar {
       display: none;
     }
-	    .ctox-chat-chip {
-	      scroll-snap-align: start;
-	      flex: 0 0 136px;
+    .ctox-chat-chip {
+      flex: 0 0 136px;
       display: grid;
       grid-template-columns: auto minmax(0, 1fr);
       align-items: center;
@@ -1006,25 +1790,152 @@ function installChatStyles() {
       color: var(--muted);
       padding: 0 9px;
       text-align: left;
+      cursor: pointer;
+      animation: ctoxChipSlideIn 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+      transition: transform 0.3s var(--spring-bounce), background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, box-shadow 0.3s var(--spring-bounce);
+      --accent: var(--theme-accent, #10b981);
+      --accent-soft: var(--theme-accent-soft, rgba(16, 185, 129, 0.12));
     }
-    .ctox-chat-chip.is-active {
-      border-color: color-mix(in srgb, var(--accent) 30%, transparent);
-      background: color-mix(in srgb, var(--accent) 12%, var(--surface-2));
+    .ctox-chat-chip[data-chat-module="ctox"] {
+      --accent: #10b981 !important;
+      --accent-soft: rgba(16, 185, 129, 0.12) !important;
+    }
+    .ctox-chat-chip[data-chat-module="documents"] {
+      --accent: #3b82f6 !important;
+      --accent-soft: rgba(59, 130, 246, 0.12) !important;
+    }
+    .ctox-chat-chip[data-chat-module="knowledge"] {
+      --accent: #a855f7 !important;
+      --accent-soft: rgba(168, 85, 247, 0.12) !important;
+    }
+    .ctox-chat-chip[data-chat-module="research"] {
+      --accent: #06b6d4 !important;
+      --accent-soft: rgba(6, 182, 212, 0.12) !important;
+    }
+    .ctox-chat-chip[data-chat-module="matching"] {
+      --accent: #f59e0b !important;
+      --accent-soft: rgba(245, 158, 11, 0.12) !important;
+    }
+    .ctox-chat-chip[data-chat-module="reports"] {
+      --accent: #ef4444 !important;
+      --accent-soft: rgba(239, 68, 68, 0.12) !important;
+    }
+    .ctox-chat-chip[data-chat-module="conversations"] {
+      --accent: #6366f1 !important;
+      --accent-soft: rgba(99, 102, 241, 0.12) !important;
+    }
+    .ctox-chat-chip[data-chat-module="outbound"] {
+      --accent: #f43f5e !important;
+      --accent-soft: rgba(244, 63, 94, 0.12) !important;
+    }
+    .ctox-chat-chip:hover {
+      transform: translateY(-1.5px);
+      background: color-mix(in srgb, var(--surface) 35%, transparent);
       color: var(--text);
     }
+    .ctox-chat-chip.is-minimized {
+      border-color: color-mix(in srgb, var(--line) 30%, transparent) !important;
+      background: color-mix(in srgb, var(--surface) 30%, transparent) !important;
+      color: var(--muted) !important;
+      box-shadow: none !important;
+      opacity: 0.75 !important;
+      transform: none !important;
+    }
+    .ctox-chat-chip.is-minimized:hover {
+      border-color: color-mix(in srgb, var(--line) 45%, transparent) !important;
+      background: color-mix(in srgb, var(--surface-2) 40%, transparent) !important;
+      color: var(--text) !important;
+      opacity: 0.98 !important;
+      transform: translateY(-1px) !important;
+    }
+    .ctox-chat-chip.is-expanded:not(.is-active) {
+      border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+      background: color-mix(in srgb, var(--accent) 26%, var(--surface-2));
+      color: color-mix(in srgb, var(--text) 95%, var(--accent));
+      opacity: 0.96;
+    }
+    .ctox-chat-chip.is-active {
+      border-color: var(--accent);
+      background: color-mix(in srgb, var(--accent) 26%, var(--surface-2));
+      color: var(--text);
+      box-shadow: 0 4px 12px color-mix(in srgb, var(--accent) 30%, transparent), 0 0 0 1px var(--accent) inset;
+      opacity: 1 !important;
+      transform: translateY(-1px) scale(1.02);
+      animation: ctoxChipActivePulse 0.4s var(--spring-ease) both;
+    }
     .ctox-chat-chip-mark {
-      display: grid;
-      place-items: center;
-      width: 18px;
-      height: 18px;
-      border-radius: 999px;
-      background: color-mix(in srgb, var(--surface-2) 82%, transparent);
-      color: var(--accent);
-      font-size: 9px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: var(--accent) !important;
+      box-shadow: 0 0 6px var(--accent);
+      transition: background-color 0.25s ease, transform 0.25s var(--spring-bounce), box-shadow 0.25s ease;
+      color: #fff;
+      flex-shrink: 0;
+    }
+    .ctox-chat-chip-mark svg {
+      display: block;
+      width: 8px;
+      height: 8px;
+    }
+    .ctox-chat-chip.is-active .ctox-chat-chip-mark {
+      transform: scale(1.1);
     }
     .ctox-chat-chip.is-minimized .ctox-chat-chip-mark {
-      color: var(--muted);
+      transform: scale(0.9) !important;
+      background: color-mix(in srgb, var(--muted) 50%, transparent) !important;
+      box-shadow: none !important;
+      animation: none !important;
     }
+    .ctox-chat-chip.is-minimized .ctox-chip-spinner {
+      display: none !important;
+    }
+
+    /* State-colored marks */
+    .ctox-chat-chip-mark.is-running {
+      background: var(--accent) !important;
+      position: relative;
+    }
+    @keyframes ctoxChipSpin {
+      100% { transform: rotate(360deg); }
+    }
+    .ctox-chip-spinner {
+      display: block;
+      width: 8px;
+      height: 8px;
+      border: 1.5px solid rgba(255, 255, 255, 0.3);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: ctoxChipSpin 1s linear infinite;
+    }
+    .ctox-chat-chip-mark.is-queued {
+      background: #f59e0b !important;
+      box-shadow: 0 0 6px #f59e0b;
+      animation: ctoxPulseQueuedDot 1.5s infinite ease-in-out;
+    }
+    @keyframes ctoxPulseQueuedDot {
+      0% { transform: scale(1); opacity: 0.7; }
+      50% { transform: scale(1.25); opacity: 1; }
+      100% { transform: scale(1); opacity: 0.7; }
+    }
+    .ctox-chat-chip-mark.is-success {
+      background: #10b981 !important;
+      box-shadow: 0 0 6px #10b981;
+    }
+    .ctox-chat-chip-mark.is-failed {
+      background: #ef4444 !important;
+      box-shadow: 0 0 6px #ef4444;
+      animation: ctoxPulseFailedDot 1.5s infinite ease-in-out;
+    }
+    @keyframes ctoxPulseFailedDot {
+      0% { transform: scale(1); }
+      50% { transform: scale(1.2); }
+      100% { transform: scale(1); }
+    }
+
     .ctox-chat-chip-copy {
       display: grid;
       gap: 1px;
@@ -1046,150 +1957,396 @@ function installChatStyles() {
       font-size: 10px;
       font-weight: 680;
     }
-	    .ctox-chat-stage {
-	      pointer-events: none;
-	      grid-row: 1;
-	      display: grid;
-	      grid-template-columns: 88px 28px minmax(0, 1fr) 28px 34px;
-	      align-items: end;
-	      gap: 6px;
-	      box-sizing: border-box;
-	      min-width: 0;
-	      overflow: visible;
-	      padding: 0 5px;
-	    }
-	    .ctox-chat-stage-inner {
-	      grid-column: 3;
-	      display: flex;
-	      align-items: flex-end;
-	      gap: 8px;
-	      min-width: 0;
-	      overflow-x: auto;
-	      overscroll-behavior-x: contain;
-	      scroll-snap-type: x proximity;
-	      scrollbar-width: none;
-	    }
-	    .ctox-chat-stage::-webkit-scrollbar {
-	      display: none;
-	    }
-	    .ctox-chat-stage-inner::-webkit-scrollbar {
-	      display: none;
-	    }
-	    .ctox-chat-window {
-	      pointer-events: auto;
-	      scroll-snap-align: end;
-	      flex: 0 0 256px;
-	      display: grid;
-	      grid-template-rows: 34px minmax(0, 1fr) auto;
-	      width: 256px;
-	      height: min(286px, calc(100vh - 132px));
-	      min-width: 256px;
-	      overflow: hidden;
-	      border: 1px solid var(--hairline, var(--line));
-	      border-radius: 10px;
-	      background: color-mix(in srgb, var(--surface) 96%, var(--bg));
-	      color: var(--text);
-	      box-shadow: 0 18px 42px rgba(0, 0, 0, .34);
-	      font: 12px/1.32 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-	    }
-	    .ctox-chat-window.is-active {
-	      border-color: color-mix(in srgb, var(--accent) 36%, var(--line));
-	    }
-	    .ctox-chat-window.is-maximized {
-	      flex-basis: 380px;
-	      width: 380px;
-	      height: min(430px, calc(100vh - 132px));
-	    }
+    .ctox-chat-stage {
+      pointer-events: none;
+      grid-row: 1;
+      display: grid;
+      grid-template-columns: 88px 115px 28px minmax(0, 1fr) 28px 34px;
+      align-items: end;
+      gap: 8px;
+      box-sizing: border-box;
+      min-width: 0;
+      overflow: hidden;
+      padding: 0 6px;
+    }
+    .ctox-chat-stage-inner {
+      grid-column: 4;
+      position: relative;
+      overflow: visible;
+      height: min(340px, calc(100vh - 132px));
+      transition: height 0.3s var(--spring-bounce);
+      min-width: 0;
+      pointer-events: none;
+      padding: 24px 0 10px 0;
+      box-sizing: border-box;
+      perspective: 1200px;
+      transform-style: preserve-3d;
+    }
+    .ctox-chat-stage-inner.has-maximized {
+      height: min(480px, calc(100vh - 132px));
+    }
+    .ctox-chat-stage::-webkit-scrollbar {
+      display: none;
+    }
+    .ctox-chat-stage-inner::-webkit-scrollbar {
+      display: none;
+    }
+    .ctox-chat-window {
+      position: absolute;
+      bottom: 10px;
+      z-index: 61;
+      pointer-events: auto;
+      display: grid;
+      grid-template-rows: 38px minmax(0, 1fr) auto;
+      width: 264px;
+      height: min(320px, calc(100vh - 132px));
+      min-width: 264px;
+      overflow: hidden;
+      border: 1px solid color-mix(in srgb, var(--line) 25%, transparent);
+      border-radius: 16px;
+      background: color-mix(in srgb, var(--surface) 60%, transparent);
+      backdrop-filter: blur(24px) saturate(180%);
+      -webkit-backdrop-filter: blur(24px) saturate(180%);
+      color: var(--text);
+      box-shadow: 0 20px 48px rgba(0, 0, 0, 0.12), 0 1px 0 rgba(255, 255, 255, 0.08) inset;
+      font-family: var(--font-family, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
+      font-size: 12px;
+      line-height: 1.4;
+      animation: ctoxChatSlideIn 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+      flex-shrink: 0;
+      transition: 
+        left 0.28s var(--spring-ease),
+        width 0.3s var(--spring-bounce),
+        height 0.3s var(--spring-bounce),
+        opacity 0.25s ease,
+        transform 0.35s var(--spring-bounce),
+        border-color 0.25s ease,
+        box-shadow 0.25s ease,
+        filter 0.25s ease;
+      --accent: var(--theme-accent, #10b981);
+      --accent-soft: var(--theme-accent-soft, rgba(16, 185, 129, 0.12));
+      transform-style: preserve-3d;
+      backface-visibility: hidden;
+    }
+    .ctox-chat-window[data-chat-module="ctox"] {
+      --accent: #10b981 !important;
+      --accent-soft: rgba(16, 185, 129, 0.12) !important;
+    }
+    .ctox-chat-window[data-chat-module="documents"] {
+      --accent: #3b82f6 !important;
+      --accent-soft: rgba(59, 130, 246, 0.12) !important;
+    }
+    .ctox-chat-window[data-chat-module="knowledge"] {
+      --accent: #a855f7 !important;
+      --accent-soft: rgba(168, 85, 247, 0.12) !important;
+    }
+    .ctox-chat-window[data-chat-module="research"] {
+      --accent: #06b6d4 !important;
+      --accent-soft: rgba(6, 182, 212, 0.12) !important;
+    }
+    .ctox-chat-window[data-chat-module="matching"] {
+      --accent: #f59e0b !important;
+      --accent-soft: rgba(245, 158, 11, 0.12) !important;
+    }
+    .ctox-chat-window[data-chat-module="reports"] {
+      --accent: #ef4444 !important;
+      --accent-soft: rgba(239, 68, 68, 0.12) !important;
+    }
+    .ctox-chat-window[data-chat-module="conversations"] {
+      --accent: #6366f1 !important;
+      --accent-soft: rgba(99, 102, 241, 0.12) !important;
+    }
+    .ctox-chat-window[data-chat-module="outbound"] {
+      --accent: #f43f5e !important;
+      --accent-soft: rgba(244, 63, 94, 0.12) !important;
+    }
+    .ctox-chat-window:not(.is-active) {
+      opacity: 0.6;
+    }
+    .ctox-chat-window:not(.is-active)[data-chat-rel="left"] {
+      transform: rotateY(32deg) scale(0.8) translateZ(-160px) translateY(18px);
+    }
+    .ctox-chat-window:not(.is-active)[data-chat-rel="right"] {
+      transform: rotateY(-32deg) scale(0.8) translateZ(-160px) translateY(18px);
+    }
+    .ctox-chat-window:not(.is-active)[data-chat-rel="center"] {
+      transform: scale(0.8) translateZ(-160px) translateY(18px);
+    }
+    .ctox-chat-window:not(.is-active) * {
+      pointer-events: none !important;
+    }
+    .ctox-chat-window:not(.is-active):hover {
+      opacity: 0.85;
+      filter: none;
+      z-index: 64;
+    }
+    .ctox-chat-window:not(.is-active)[data-chat-rel="left"]:hover {
+      transform: rotateY(12deg) scale(0.9) translateZ(-40px) translateY(6px);
+    }
+    .ctox-chat-window:not(.is-active)[data-chat-rel="right"]:hover {
+      transform: rotateY(-12deg) scale(0.9) translateZ(-40px) translateY(6px);
+    }
+    .ctox-chat-window:not(.is-active)[data-chat-rel="center"]:hover {
+      transform: scale(0.9) translateY(6px);
+    }
+    
+    @keyframes ctoxActiveFocusSpotlight {
+      0% {
+        transform: scale(0.99) translateY(1px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1), 0 0 0 1px var(--accent) inset;
+      }
+      100% {
+        transform: scale(1) translateY(0);
+        box-shadow: 0 16px 36px rgba(0, 0, 0, 0.15), 0 0 0 1px var(--accent) inset, 0 0 12px color-mix(in srgb, var(--accent) 20%, transparent);
+      }
+    }
+    .ctox-chat-window.is-active {
+      border-color: var(--accent);
+      box-shadow: 0 16px 36px rgba(0, 0, 0, 0.15), 0 0 0 1px var(--accent) inset, 0 0 12px color-mix(in srgb, var(--accent) 20%, transparent);
+      z-index: 65;
+      opacity: 1;
+      filter: none;
+      transform: scale(1) translateZ(0px) translateY(0);
+      animation: ctoxActiveFocusSpotlight 0.4s var(--spring-ease) both;
+    }
+    .ctox-chat-window.is-active.is-task-running {
+      animation: ctoxActiveFocusSpotlight 0.4s var(--spring-ease) both, ctoxPulseRunning 2s infinite ease-in-out 0.4s;
+    }
+    .ctox-chat-window.is-active.is-task-queued {
+      animation: ctoxActiveFocusSpotlight 0.4s var(--spring-ease) both, ctoxPulseQueued 2s infinite ease-in-out 0.4s;
+    }
+    .ctox-chat-window.is-active.is-task-failed {
+      animation: ctoxActiveFocusSpotlight 0.4s var(--spring-ease) both, ctoxPulseFailed 2.5s infinite ease-in-out 0.4s;
+    }
+    .ctox-chat-window.is-maximized {
+      width: 390px !important;
+      height: min(460px, calc(100vh - 132px)) !important;
+    }
+    .ctox-chat-window.is-minimized {
+      opacity: 0 !important;
+      pointer-events: none !important;
+      transform: translateY(30px) scale(0.9) !important;
+    }
+    .ctox-chat-window.no-left-transition {
+      transition: 
+        width 0.3s var(--spring-bounce),
+        height 0.3s var(--spring-bounce),
+        opacity 0.25s ease,
+        transform 0.35s var(--spring-bounce),
+        border-color 0.25s ease,
+        box-shadow 0.25s ease !important;
+    }
+
+    /* State-based animations and glows */
+    @keyframes ctoxPulseRunning {
+      0% {
+        border-color: color-mix(in srgb, var(--accent) 50%, var(--line));
+        box-shadow: 0 20px 48px rgba(0, 0, 0, 0.18), 0 0 12px color-mix(in srgb, var(--accent) 20%, transparent);
+      }
+      50% {
+        border-color: var(--accent);
+        box-shadow: 0 20px 48px rgba(0, 0, 0, 0.22), 0 0 24px color-mix(in srgb, var(--accent) 45%, transparent);
+      }
+      100% {
+        border-color: color-mix(in srgb, var(--accent) 50%, var(--line));
+        box-shadow: 0 20px 48px rgba(0, 0, 0, 0.18), 0 0 12px color-mix(in srgb, var(--accent) 20%, transparent);
+      }
+    }
+    @keyframes ctoxPulseQueued {
+      0% {
+        border-color: rgba(245, 158, 11, 0.4);
+        box-shadow: 0 20px 48px rgba(0, 0, 0, 0.18), 0 0 10px rgba(245, 158, 11, 0.15);
+      }
+      50% {
+        border-color: rgba(245, 158, 11, 0.95);
+        box-shadow: 0 20px 48px rgba(0, 0, 0, 0.22), 0 0 20px rgba(245, 158, 11, 0.45);
+      }
+      100% {
+        border-color: rgba(245, 158, 11, 0.4);
+        box-shadow: 0 20px 48px rgba(0, 0, 0, 0.18), 0 0 10px rgba(245, 158, 11, 0.15);
+      }
+    }
+    @keyframes ctoxPulseFailed {
+      0% {
+        border-color: rgba(239, 68, 68, 0.4);
+        box-shadow: 0 20px 48px rgba(0, 0, 0, 0.18), 0 0 10px rgba(239, 68, 68, 0.15);
+      }
+      50% {
+        border-color: rgba(239, 68, 68, 0.95);
+        box-shadow: 0 20px 48px rgba(0, 0, 0, 0.22), 0 0 20px rgba(239, 68, 68, 0.45);
+      }
+      100% {
+        border-color: rgba(239, 68, 68, 0.4);
+        box-shadow: 0 20px 48px rgba(0, 0, 0, 0.18), 0 0 10px rgba(239, 68, 68, 0.15);
+      }
+    }
+
+    .ctox-chat-window.is-task-running {
+      animation: ctoxPulseRunning 2s infinite ease-in-out;
+    }
+    .ctox-chat-window.is-task-queued {
+      animation: ctoxPulseQueued 2s infinite ease-in-out;
+    }
+    .ctox-chat-window.is-task-success {
+      border-color: #10b981 !important;
+      box-shadow: 0 20px 48px rgba(0, 0, 0, 0.2), 0 0 20px rgba(16, 185, 129, 0.35) !important;
+    }
+    .ctox-chat-window.is-task-failed {
+      animation: ctoxPulseFailed 2.5s infinite ease-in-out;
+    }
+
     .ctox-chat-window header {
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 8px;
-      border-bottom: 1px solid var(--hairline, var(--line));
-      background: color-mix(in srgb, var(--surface) 88%, var(--surface-2));
-	      padding: 0 6px 0 10px;
-	    }
-	    .ctox-chat-window header > div {
-	      display: flex;
-	      align-items: center;
-	      gap: 3px;
-	    }
-	    .ctox-chat-window header button {
-	      display: grid;
-	      place-items: center;
-	      border: 1px solid transparent;
-	      border-radius: 6px;
-	      background: transparent;
-	      color: var(--muted);
-	      cursor: pointer;
-	      width: 28px;
-	      min-width: 28px;
-	      height: 28px;
-	      min-height: 28px;
-	      line-height: 1;
-		    }
-	    .ctox-chat-window header button[data-chat-delete] {
-	      width: auto;
-	      min-width: 56px;
-	      padding: 0 7px;
-	    }
-    .ctox-chat-window header button:hover {
-      border-color: var(--line);
+      border-bottom: 1px solid color-mix(in srgb, var(--line) 30%, transparent);
+      background: color-mix(in srgb, var(--surface) 20%, transparent);
+      padding: 0 6px 0 10px;
+      height: 38px;
+    }
+    .ctox-chat-header-actions {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      flex-shrink: 0;
+    }
+    .ctox-chat-window header button {
+      display: grid;
+      place-items: center;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      width: 28px;
+      min-width: 28px;
+      height: 28px;
+      min-height: 28px;
+      line-height: 1;
+      transition: transform 0.2s var(--spring-bounce), background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+    }
+    .ctox-chat-window header button:not(.ctox-chat-title):hover {
+      transform: translateY(-1px) scale(1.05);
+      background: color-mix(in srgb, var(--surface-2) 50%, transparent);
+      border-color: color-mix(in srgb, var(--line) 40%, transparent);
       color: var(--text);
     }
+    .ctox-chat-window header button:not(.ctox-chat-title):active {
+      transform: scale(0.95);
+    }
+    .ctox-chat-window header button.is-delete:hover {
+      background: rgba(239, 68, 68, 0.12) !important;
+      border-color: rgba(239, 68, 68, 0.25) !important;
+      color: #ef4444 !important;
+    }
     .ctox-chat-title {
-      display: grid;
-      min-width: 0;
-      flex: 1;
-      text-align: left;
-      padding: 0;
+      display: flex !important;
+      flex-direction: column !important;
+      justify-content: center !important;
+      align-items: flex-start !important;
+      min-width: 0 !important;
+      flex: 1 1 auto !important;
+      max-width: calc(100% - 136px) !important;
+      text-align: left !important;
+      padding: 0 !important;
+      width: auto !important;
+      height: 100% !important;
+      min-height: 0 !important;
+      background: transparent !important;
+      border: none !important;
+      cursor: pointer !important;
+      color: inherit !important;
+      flex-shrink: 1 !important;
+    }
+    .ctox-chat-title:hover {
+      border-color: transparent !important;
     }
     .ctox-chat-title strong,
     .ctox-chat-title span {
+      display: block;
+      width: 100%;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+      max-width: 100%;
     }
     .ctox-chat-title strong {
-	      color: var(--text);
-	      font-size: 12px;
-	      font-weight: 760;
-	    }
-	    .ctox-chat-title span {
-	      color: var(--muted);
-	      font-size: 10px;
-	    }
-	    .ctox-chat-messages {
-	      display: flex;
-	      flex-direction: column;
-	      gap: 6px;
-	      overflow: auto;
-	      padding: 9px;
-	      background: color-mix(in srgb, var(--bg) 72%, var(--surface));
-	    }
+      color: var(--text);
+      font-size: 12px;
+      font-weight: 760;
+      flex: 1;
+      min-width: 0;
+    }
+    .ctox-chat-title span {
+      color: var(--muted);
+      font-size: 10px;
+    }
+    .ctox-chat-messages {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      overflow: auto;
+      padding: 12px;
+      background: transparent;
+      scrollbar-width: thin;
+    }
+    .ctox-chat-messages::-webkit-scrollbar {
+      width: 4px;
+    }
+    .ctox-chat-messages::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .ctox-chat-messages::-webkit-scrollbar-thumb {
+      background: color-mix(in srgb, var(--line) 40%, transparent);
+      border-radius: 99px;
+    }
+    .ctox-chat-messages::-webkit-scrollbar-thumb:hover {
+      background: color-mix(in srgb, var(--line) 60%, transparent);
+    }
     .ctox-chat-empty {
       margin: auto;
       color: var(--muted);
-      font-weight: 650;
+      font-weight: 550;
+      opacity: 0.6;
+      font-size: 11px;
+      letter-spacing: 0.3px;
     }
     .ctox-chat-message {
-      max-width: 86%;
-	      border: 1px solid var(--line);
-	      border-radius: 8px;
-	      background: var(--surface);
-	      padding: 7px 8px;
-	    }
+      max-width: 88%;
+      word-break: break-word;
+      overflow-wrap: break-word;
+      min-width: 0;
+      display: block;
+      box-sizing: border-box;
+    }
     .ctox-chat-message.is-user {
       align-self: flex-end;
-      background: color-mix(in srgb, var(--accent) 13%, var(--surface));
-      border-color: color-mix(in srgb, var(--accent) 44%, var(--line));
+      background: color-mix(in srgb, var(--accent) 15%, var(--surface-2)) !important;
+      border: none !important;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.03) !important;
+      border-radius: 14px 14px 4px 14px !important;
+      padding: 8px 12px !important;
+      max-width: 88%;
     }
     .ctox-chat-message.is-ctox {
       align-self: flex-start;
+      background: transparent !important;
+      box-shadow: none !important;
+      border: none !important;
+      border-left: 2px solid var(--accent) !important;
+      border-radius: 0 !important;
+      padding: 4px 0 4px 12px !important;
+      margin-left: 4px;
+      margin-right: 12px;
+      max-width: 88%;
     }
     .ctox-chat-message p {
       margin: 0;
       white-space: pre-wrap;
+      word-break: break-word;
+      overflow-wrap: break-word;
+      max-width: 100%;
     }
     .ctox-chat-message footer {
       display: flex;
@@ -1199,6 +2356,15 @@ function installChatStyles() {
       margin-top: 6px;
       color: var(--muted);
       font-size: 11px;
+      max-width: 100%;
+      min-width: 0;
+    }
+    .ctox-chat-message footer span {
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      min-width: 0;
     }
     .ctox-chat-track {
       border: 1px solid color-mix(in srgb, var(--accent) 44%, var(--line));
@@ -1209,59 +2375,292 @@ function installChatStyles() {
       padding: 3px 7px;
       font-size: 11px;
       font-weight: 760;
+      max-width: 100%;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      display: inline-block;
+      vertical-align: middle;
+      box-sizing: border-box;
     }
     .ctox-chat-form {
-	      display: grid;
-	      grid-template-columns: minmax(0, 1fr) auto;
-	      gap: 6px;
-	      border-top: 1px solid var(--hairline, var(--line));
-	      padding: 6px;
-	      background: var(--surface);
-	    }
-    .ctox-chat-form textarea {
-      width: 100%;
+      display: flex;
+      align-items: center;
       min-width: 0;
-	      resize: none;
-	      border: 1px solid var(--line);
-	      border-radius: 7px;
-	      background: color-mix(in srgb, var(--surface) 80%, var(--surface-2));
-	      color: var(--text);
-	      min-height: 36px;
-	      padding: 6px 7px;
-	    }
+      border: none !important;
+      border-top: 1px solid color-mix(in srgb, var(--line) 20%, transparent) !important;
+      border-radius: 0 !important;
+      background: color-mix(in srgb, var(--surface) 25%, transparent) !important;
+      margin: 0 !important;
+      padding: 8px 12px !important;
+      transition: background-color 0.25s ease;
+      box-sizing: border-box;
+    }
+    .ctox-chat-form:focus-within {
+      background: color-mix(in srgb, var(--surface-2) 40%, transparent) !important;
+    }
+    .ctox-chat-form textarea {
+      flex: 1;
+      min-width: 0;
+      resize: none;
+      border: none !important;
+      background: transparent !important;
+      color: var(--text);
+      min-height: 20px;
+      max-height: 120px;
+      padding: 4px 0;
+      outline: none !important;
+      box-shadow: none !important;
+      font-size: 12px;
+      line-height: 1.4;
+      overflow-y: auto;
+    }
     .ctox-chat-form textarea::placeholder {
       color: var(--muted);
-      opacity: 0.72;
+      opacity: 0.55;
     }
     .ctox-chat-form button {
-      align-self: end;
-      border: 1px solid color-mix(in srgb, var(--accent) 44%, var(--line));
-      border-radius: 7px;
-      background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: none;
+      border-radius: 50%;
+      background: var(--accent);
+      color: var(--bg);
+      cursor: pointer;
+      width: 26px;
+      height: 26px;
+      min-width: 26px;
+      min-height: 26px;
+      padding: 0;
+      transition: transform 0.2s var(--spring-bounce), filter 0.15s ease;
+      align-self: flex-end;
+    }
+    .ctox-chat-form button:hover {
+      transform: scale(1.08) translateY(-0.5px);
+      filter: brightness(1.1);
+    }
+    .ctox-chat-form button:active {
+      transform: scale(0.95);
+    }
+
+    /* Active Delegation Card styling */
+    .ctox-chat-delegation-card {
+      position: relative;
+      margin: 0 !important;
+      padding: 10px 12px;
+      border: none !important;
+      border-top: 1px solid color-mix(in srgb, var(--accent) 20%, transparent) !important;
+      border-radius: 0 !important;
+      background: color-mix(in srgb, var(--accent) 5%, var(--surface)) !important;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      overflow: hidden;
+      box-shadow: none !important;
+    }
+    .ctox-delegation-glow {
+      position: absolute;
+      top: -50%;
+      left: -50%;
+      width: 200%;
+      height: 200%;
+      background: radial-gradient(circle, color-mix(in srgb, var(--accent) 8%, transparent) 0%, transparent 60%);
+      pointer-events: none;
+      animation: ctoxGlowRotate 6s linear infinite;
+    }
+    @keyframes ctoxGlowRotate {
+      100% { transform: rotate(360deg); }
+    }
+    .ctox-delegation-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      z-index: 1;
+    }
+    @keyframes ctoxSpin {
+      100% { transform: rotate(360deg); }
+    }
+    .ctox-delegation-spinner {
+      display: block;
+      width: 14px;
+      height: 14px;
+      border: 2px solid color-mix(in srgb, var(--accent) 25%, transparent);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: ctoxSpin 0.8s linear infinite;
+    }
+    .ctox-delegation-info {
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+    }
+    .ctox-delegation-info strong {
+      font-size: 11px;
+      font-weight: 760;
+      color: var(--text);
+    }
+    .ctox-delegation-info span {
+      font-size: 10px;
+      color: var(--muted);
+    }
+    .ctox-delegation-watch-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      height: 28px;
+      border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--accent) 12%, var(--surface));
       color: var(--accent);
-	      cursor: pointer;
-	      min-height: 32px;
-	      padding: 0 9px;
-	      font-weight: 760;
-	    }
-	    @media (max-width: 780px) {
-	      .ctox-chat-root {
-	        right: 18px;
+      font-size: 11px;
+      font-weight: 760;
+      cursor: pointer;
+      z-index: 1;
+      transition: transform 0.2s var(--spring-bounce), background-color 0.2s ease, border-color 0.2s ease;
+    }
+    .ctox-delegation-watch-btn:hover {
+      transform: translateY(-1px);
+      background: color-mix(in srgb, var(--accent) 18%, var(--surface));
+      border-color: var(--accent);
+    }
+    .ctox-delegation-watch-btn:active {
+      transform: scale(0.97);
+    }
+    
+    /* Follow Up Button styling */
+    .ctox-followup-container {
+      margin: 0 !important;
+      padding: 8px 12px !important;
+      border-top: 1px solid color-mix(in srgb, var(--accent) 20%, transparent) !important;
+      background: color-mix(in srgb, var(--accent) 3%, transparent) !important;
+    }
+    .ctox-followup-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      width: 100%;
+      height: 32px;
+      border: none !important;
+      border-radius: 8px !important;
+      background: color-mix(in srgb, var(--accent) 12%, var(--surface-2)) !important;
+      color: var(--accent) !important;
+      font-size: 11px !important;
+      font-weight: 700 !important;
+      cursor: pointer;
+      transition: transform 0.3s var(--spring-bounce), background-color 0.2s ease, box-shadow 0.2s ease;
+    }
+    .ctox-followup-btn:hover {
+      transform: translateY(-1px);
+      background: color-mix(in srgb, var(--accent) 18%, var(--surface-2)) !important;
+      box-shadow: 0 4px 12px color-mix(in srgb, var(--accent) 20%, transparent);
+    }
+    .ctox-followup-btn:active {
+      transform: scale(0.97);
+    }
+    
+    /* Status Badge in Header styling */
+    .ctox-chat-status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 6px;
+      border-radius: 6px;
+      font-size: 9px;
+      font-weight: 760;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+    }
+    .ctox-chat-status-badge.is-running {
+      border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+      background: color-mix(in srgb, var(--accent) 10%, transparent);
+      color: var(--accent);
+    }
+    .ctox-chat-status-badge.is-running .ctox-status-spinner {
+      display: block;
+      width: 7px;
+      height: 7px;
+      border: 1.5px solid color-mix(in srgb, var(--accent) 25%, transparent);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: ctoxSpin 0.8s linear infinite;
+    }
+    .ctox-chat-status-badge.is-queued {
+      border: 1px solid rgba(245, 158, 11, 0.3);
+      background: rgba(245, 158, 11, 0.1);
+      color: #f59e0b;
+    }
+    .ctox-chat-status-badge.is-queued .ctox-status-dot {
+      display: block;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #f59e0b;
+      animation: ctoxPulseQueuedDot 1.5s infinite ease-in-out;
+    }
+    .ctox-chat-status-badge.is-success {
+      border: 1px solid rgba(16, 185, 129, 0.3);
+      background: rgba(16, 185, 129, 0.1);
+      color: #10b981;
+    }
+    .ctox-chat-status-badge.is-failed {
+      border: 1px solid rgba(239, 68, 68, 0.3);
+      background: rgba(239, 68, 68, 0.1);
+      color: #ef4444;
+    }
+
+    @media (max-width: 780px) {
+      .ctox-chat-root {
+        right: 18px;
         width: auto;
         max-width: calc(100vw - 36px);
       }
       .ctox-chat-dock {
-        grid-template-columns: 88px 28px minmax(120px, 1fr) 28px 34px;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: flex-start !important;
+        gap: 6px !important;
+        overflow-x: auto !important;
+        width: 100% !important;
+        scrollbar-width: none !important;
+      }
+      .ctox-chat-dock::-webkit-scrollbar {
+        display: none !important;
+      }
+      .ctox-chat-strip {
+        flex: 1 1 auto !important;
+        min-width: 0 !important;
       }
       .ctox-chat-stage {
-        grid-template-columns: 88px 28px minmax(120px, 1fr) 28px 34px;
+        display: block !important;
+        width: 100% !important;
+        padding: 0 !important;
       }
-	      .ctox-chat-window {
-	        min-width: 0;
-	        flex-basis: 78vw;
-	        width: 78vw;
-	      }
-	    }
+      .ctox-chat-stage-inner {
+        grid-column: auto !important;
+        display: flex !important;
+        flex-direction: row !important;
+        overflow-x: auto !important;
+        scroll-snap-type: x mandatory !important;
+        gap: 12px !important;
+        width: 100% !important;
+        padding: 8px 0 !important;
+      }
+      .ctox-chat-window {
+        position: relative !important;
+        flex: 0 0 100% !important;
+        width: 100% !important;
+        min-width: 100% !important;
+        scroll-snap-align: center !important;
+        left: auto !important;
+        bottom: 0 !important;
+      }
+    }
   `;
   document.head.append(style);
 }

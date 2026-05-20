@@ -21,6 +21,8 @@ ctox-qwen3-embedding-0-6b = { path = "src/core/inference/models/qwen3_embedding_
 ctox-voxtral-mini-4b-realtime-2602 = { path = "src/core/inference/models/voxtral_mini_4b_realtime_2602" }
 ctox-voxtral-4b-tts-2603 = { path = "src/core/inference/models/voxtral_4b_tts_2603" }
 ctox-web-stack = { path = "src/tools/web-stack" }
+rxdb = { package = "ctox-rxdb", path = "src/core/rxdb" }
+ctox-mailserver = { path = "src/core/mailserver" }
 crossterm = "0.28"
 git2 = "0.20"
 include_dir = "0.7"

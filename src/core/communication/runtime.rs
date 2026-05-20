@@ -19,6 +19,12 @@ pub(crate) fn artifacts_dir(root: &Path, channel: &str) -> PathBuf {
     channel_dir(root, channel).join("artifacts")
 }
 
+/// Public re-export of `artifacts_dir` for the Business OS HTTP layer to read
+/// pairing artifacts (QR-SVGs, status JSON) from disk.
+pub fn artifacts_dir_for_business_os(root: &Path, channel: &str) -> PathBuf {
+    artifacts_dir(root, channel)
+}
+
 pub(crate) fn state_file(root: &Path, channel: &str, file_name: &str) -> PathBuf {
     state_dir(root, channel).join(file_name)
 }

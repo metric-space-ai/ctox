@@ -6,6 +6,7 @@ export async function openReactSettings({
   session = null,
   governance = null,
   syncConfig = null,
+  sync = null,
   commandBus = null,
   db = null,
   initialTab = 'runtime',
@@ -46,16 +47,45 @@ export async function openReactSettings({
   };
 
   let channelsAccountsSub = null;
-  const refreshChannelAccounts = async () => {
-    const coll = db?.collection?.('communication_accounts');
-    if (!coll) return;
+  const ensureChannelCollections = async () => {
+    await Promise.allSettled([
+      sync?.startCollection?.('communication_accounts'),
+      sync?.startCollection?.('channel_pairing_state'),
+    ]);
+  };
+  const ensureUserCollections = async () => {
+    await Promise.allSettled([
+      sync?.startCollection?.('business_users'),
+    ]);
+  };
+  const ensureRuntimeCollections = async () => {
+    await Promise.allSettled([
+      sync?.startCollection?.('ctox_runtime_settings'),
+    ]);
+  };
+  const ensureModuleCatalogCollections = async () => {
+    await Promise.allSettled([
+      sync?.startCollection?.('business_module_catalog'),
+    ]);
+  };
+  const refreshUsers = async () => {
     try {
-      const docs = await coll.find().exec();
-      settingsState.channels.accounts = docs
-        .map((doc) => doc.toJSON())
-        .sort((a, b) => (a.channel || '').localeCompare(b.channel || ''));
+      await ensureUserCollections();
+      const payload = await loadUsers({ db, session });
+      settingsState.users = payload.users || [];
+      settingsState.canManageUsers = payload.can_manage === true;
     } catch (error) {
-      console.error('[settings/channels] loadAccounts failed:', error);
+      console.error('[settings/users] rxdb users load failed:', error);
+      settingsState.users = [];
+      settingsState.canManageUsers = false;
+    }
+    render();
+  };
+  const refreshChannelAccounts = async () => {
+    try {
+      settingsState.channels.accounts = await loadChannelAccountsFromRxdb(db);
+    } catch (error) {
+      console.error('[settings/channels] rxdb accounts load failed:', error);
     }
     if (settingsState.tab === 'channels') render();
   };
@@ -68,14 +98,15 @@ export async function openReactSettings({
 
   const refreshManagedModules = async () => {
     try {
-      const payload = await loadModules();
+      await ensureModuleCatalogCollections();
+      const payload = await loadModules({ db });
       settingsState.modules = payload.modules || settingsState.modules;
       settingsState.governance = payload.governance || settingsState.governance;
     } catch (error) {
       settingsState.commandStatus = `Module konnten nicht geladen werden: ${error.message || error}`;
     }
     try {
-      const payload = await loadTemplates();
+      const payload = await loadTemplates({ db });
       settingsState.templates = payload.templates || [];
     } catch {
       settingsState.templates = [];
@@ -87,7 +118,8 @@ export async function openReactSettings({
     settingsState.runtimeLoading = true;
     render();
     try {
-      settingsState.runtimeSettings = await loadRuntimeSettings();
+      await ensureRuntimeCollections();
+      settingsState.runtimeSettings = await loadRuntimeSettings({ db });
       settingsState.commandStatus = '';
     } catch (error) {
       settingsState.commandStatus = `Runtime-Status konnte nicht geladen werden: ${error.message || error}`;
@@ -120,11 +152,22 @@ export async function openReactSettings({
     body.querySelector('[data-close-settings]')?.addEventListener('click', () => {
       try { channelsAccountsSub?.unsubscribe?.(); } catch {}
       channelsAccountsSub = null;
+      if (settingsState.channels?.qrPoll) {
+        clearInterval(settingsState.channels.qrPoll);
+        settingsState.channels.qrPoll = null;
+      }
       onClose?.();
     });
     body.querySelector('[data-open-account-settings]')?.addEventListener('click', onAccount);
     body.querySelectorAll('[data-settings-tab]').forEach((button) => {
       button.addEventListener('click', () => {
+        // Leaving the channels tab? Cancel any in-flight QR polling.
+        if (settingsState.tab === 'channels' && button.dataset.settingsTab !== 'channels') {
+          if (settingsState.channels?.qrPoll) {
+            clearInterval(settingsState.channels.qrPoll);
+            settingsState.channels.qrPoll = null;
+          }
+        }
         settingsState.tab = button.dataset.settingsTab;
         settingsState.commandStatus = '';
         render();
@@ -135,12 +178,18 @@ export async function openReactSettings({
           refreshManagedModules();
         }
         if (settingsState.tab === 'channels') {
-          refreshChannelAccounts();
+          ensureChannelCollections().then(refreshChannelAccounts).catch(refreshChannelAccounts);
           startChannelAccountsSub();
         }
       });
     });
-    wireChannelHandlers(body, settingsState, render);
+    wireChannelHandlers(body, settingsState, render, {
+      commandBus,
+      db,
+      session,
+      refreshChannelAccounts,
+      ensureChannelCollections,
+    });
     body.querySelector('[data-logout-settings]')?.addEventListener('click', () => {
       localStorage.removeItem('ctox.businessOs.sessionToken');
       localStorage.removeItem('ctox.businessOs.authHeader');
@@ -167,7 +216,10 @@ export async function openReactSettings({
       settingsState.commandStatus = 'Runtime/Auth wird gespeichert...';
       render();
       try {
-        settingsState.runtimeSettings = await saveRuntimeSettings(runtimePayloadFromForm(body));
+        settingsState.runtimeSettings = await saveRuntimeSettings(
+          runtimePayloadFromForm(body),
+          { commandBus, db, session },
+        );
         settingsState.commandStatus = 'Runtime/Auth gespeichert.';
       } catch (error) {
         settingsState.commandStatus = String(error?.message || error);
@@ -180,7 +232,7 @@ export async function openReactSettings({
       settingsState.commandStatus = 'ChatGPT Login wird geöffnet...';
       render();
       try {
-        const payload = await startSubscriptionAuth();
+        const payload = await startSubscriptionAuth({ commandBus, db, session });
         if (!payload.auth_url) throw new Error('CTOX hat keine Login-URL geliefert.');
         if (authWindow && !authWindow.closed) {
           authWindow.location.href = payload.auth_url;
@@ -214,13 +266,13 @@ export async function openReactSettings({
       settingsState.commandStatus = 'Nutzer wird gespeichert...';
       render();
       try {
-        const payload = await fetchJson('/api/business-os/users', {
-          method: 'POST',
-          headers: authHeaders(),
-          body: JSON.stringify({ id, display_name: displayName, role: roleValue, active: true }),
-        });
-        settingsState.users = payload.users || [];
-        settingsState.canManageUsers = payload.can_manage ?? true;
+        const payload = await saveUser(
+          { id, display_name: displayName, role: roleValue, active: true },
+          { commandBus, db, session },
+        );
+        settingsState.users = normalizeUsersForSession(payload.users || settingsState.users, session);
+        settingsState.canManageUsers = roleCanManage(resolveRole(session));
+        await refreshUsers();
         settingsState.commandStatus = `Nutzer ${id} gespeichert.`;
       } catch (error) {
         settingsState.commandStatus = String(error?.message || error);
@@ -243,7 +295,7 @@ export async function openReactSettings({
         settingsState.commandStatus = 'Founder-Zuordnung wird gespeichert...';
         render();
         try {
-          settingsState.governance = await assignFounder(moduleId, userId, true);
+          settingsState.governance = await assignFounder(moduleId, userId, true, { commandBus, db, session });
           settingsState.commandStatus = `${userId} ist Founder fuer ${moduleId}.`;
         } catch (error) {
           settingsState.commandStatus = String(error?.message || error);
@@ -257,7 +309,7 @@ export async function openReactSettings({
         settingsState.commandStatus = 'Modul-Version wird gespeichert...';
         render();
         try {
-          settingsState.governance = await releaseModule(moduleId);
+          settingsState.governance = await releaseModule(moduleId, { commandBus, db, session });
           settingsState.commandStatus = `Version fuer ${moduleId} gespeichert.`;
         } catch (error) {
           settingsState.commandStatus = String(error?.message || error);
@@ -273,7 +325,7 @@ export async function openReactSettings({
         settingsState.commandStatus = 'Rollback wird angewendet...';
         render();
         try {
-          settingsState.governance = await rollbackModule(moduleId, versionId);
+          settingsState.governance = await rollbackModule(moduleId, versionId, { commandBus, db, session });
           settingsState.commandStatus = `Rollback fuer ${moduleId} angewendet.`;
           await refreshManagedModules();
           await onModulesChanged?.();
@@ -296,7 +348,7 @@ export async function openReactSettings({
       settingsState.commandStatus = 'Modul wird gespeichert...';
       render();
       try {
-        await saveModule(payload);
+        await saveModule(payload, { commandBus, db, session });
         settingsState.commandStatus = `Modul ${payload.id} gespeichert.`;
         settingsState.editingModuleId = '';
         await refreshManagedModules();
@@ -318,7 +370,7 @@ export async function openReactSettings({
         settingsState.commandStatus = 'Modul wird gelöscht...';
         render();
         try {
-          await deleteModule(moduleId);
+          await deleteModule(moduleId, { commandBus, db, session });
           settingsState.commandStatus = `Modul ${moduleId} gelöscht.`;
           await refreshManagedModules();
           await onModulesChanged?.();
@@ -338,7 +390,7 @@ export async function openReactSettings({
       render();
       try {
         if (templateId) {
-          await installTemplate({ templateId, moduleId: id, title });
+          await installTemplate({ templateId, moduleId: id, title }, { commandBus, db, session });
         } else {
           await saveModule({
             id,
@@ -347,7 +399,7 @@ export async function openReactSettings({
             entry: `installed-modules/${slugify(id)}/index.html`,
             collections: ['business_commands'],
             layout: { shell: 'pane', center: 'module workspace' },
-          });
+          }, { commandBus, db, session });
         }
         settingsState.commandStatus = `Modul ${id} angelegt.`;
         await refreshManagedModules();
@@ -362,14 +414,10 @@ export async function openReactSettings({
   render();
   refreshRuntimeSettings();
   if (settingsState.tab === 'channels') {
-    refreshChannelAccounts();
+    ensureChannelCollections().then(refreshChannelAccounts).catch(refreshChannelAccounts);
     startChannelAccountsSub();
   }
-  loadUsers().then((payload) => {
-    settingsState.users = payload.users || [];
-    settingsState.canManageUsers = payload.can_manage === true;
-    render();
-  }).catch(() => {});
+  refreshUsers();
   if (settingsState.tab === 'admin' && canOpenAdmin) {
     refreshManagedModules();
   }
@@ -892,6 +940,23 @@ function resolveRole(session) {
   return session?.authenticated ? 'user' : 'guest';
 }
 
+function normalizeUsersForSession(users, session) {
+  const rows = Array.isArray(users) ? users : [];
+  const normalized = rows
+    .map((user) => ({
+      id: user.id || user.user_id || '',
+      display_name: user.display_name || user.name || user.id || user.user_id || '',
+      role: normalizeRole(user.role || 'user'),
+      active: user.active !== false,
+      created_at_ms: Number(user.created_at_ms || 0),
+      updated_at_ms: Number(user.updated_at_ms || 0),
+    }))
+    .filter((user) => user.id);
+  if (roleCanManage(resolveRole(session))) return normalized;
+  const currentId = session?.user?.id || '';
+  return normalized.filter((user) => user.id === currentId);
+}
+
 function normalizeRole(role) {
   const value = String(role || '').trim().toLowerCase().replace(/^business_os_/, '');
   if (value === 'owner') return 'chef';
@@ -981,115 +1046,274 @@ function escapeAttr(value) {
   return escapeHtml(value).replace(/`/g, '&#96;');
 }
 
-async function loadUsers() {
-  return fetchJson('/api/business-os/users', { headers: authHeaders() });
+async function loadUsers({ db, session } = {}) {
+  const coll = db?.collection?.('business_users');
+  if (!coll) {
+    return {
+      ok: true,
+      can_manage: roleCanManage(resolveRole(session)),
+      users: [],
+    };
+  }
+  const docs = await coll.find().exec();
+  const users = docs
+    .map((doc) => doc.toJSON())
+    .filter((user) => user && user._deleted !== true && user.is_deleted !== true)
+    .map((user) => ({
+      id: user.id || user.user_id,
+      display_name: user.display_name || user.name || user.id || user.user_id,
+      role: user.role || 'user',
+      active: user.active !== false,
+      created_at_ms: Number(user.created_at_ms || 0),
+      updated_at_ms: Number(user.updated_at_ms || 0),
+    }));
+  return {
+    ok: true,
+    can_manage: roleCanManage(resolveRole(session)),
+    users: normalizeUsersForSession(users, session),
+  };
 }
 
-async function loadRuntimeSettings() {
-  return fetchJson('/api/business-os/ctox/runtime-settings', { headers: authHeaders() });
-}
-
-async function saveRuntimeSettings(payload) {
-  return fetchJson('/api/business-os/ctox/runtime-settings', {
-    method: 'POST',
-    headers: authHeaders(),
-    body: JSON.stringify(payload),
+async function saveUser(payload, { commandBus, db, session } = {}) {
+  const command = await dispatchModuleCommand({
+    commandBus,
+    db,
+    session,
+    commandType: 'ctox.business_os.user.upsert',
+    moduleId: 'ctox',
+    recordId: payload?.id || '',
+    payload,
+    source: 'business-os-settings',
   });
+  return command.result || command;
 }
 
-async function startSubscriptionAuth() {
-  return fetchJson('/api/business-os/ctox/subscription-auth/start', {
-    method: 'POST',
-    headers: authHeaders(),
-    body: JSON.stringify({ provider: 'openai', auth_mode: 'chatgpt_subscription' }),
+async function loadRuntimeSettings({ db } = {}) {
+  const coll = db?.collection?.('ctox_runtime_settings');
+  if (!coll) throw new Error('ctox_runtime_settings collection is required for runtime settings');
+  const doc = await coll.findOne('runtime-settings').exec();
+  const data = doc?.toJSON?.();
+  if (!data) throw new Error('Runtime-Status noch nicht synchronisiert.');
+  return data;
+}
+
+async function saveRuntimeSettings(payload, { commandBus, db, session } = {}) {
+  await dispatchModuleCommand({
+    commandBus,
+    db,
+    session,
+    commandType: 'ctox.runtime_settings.save',
+    moduleId: 'ctox',
+    recordId: 'runtime-settings',
+    payload,
+    source: 'business-os-settings',
   });
+  return waitForRuntimeSettingsProjection(db);
 }
 
-async function loadModules() {
-  return fetchJson('/api/business-os/modules', { headers: authHeaders() });
+async function waitForRuntimeSettingsProjection(db, timeoutMs = 10000) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError = null;
+  while (Date.now() < deadline) {
+    try {
+      return await loadRuntimeSettings({ db });
+    } catch (error) {
+      lastError = error;
+      await delay(300);
+    }
+  }
+  throw lastError || new Error('Runtime-Status wurde nicht synchronisiert.');
 }
 
-async function loadTemplates() {
-  return fetchJson('/api/business-os/templates', { headers: authHeaders() });
-}
-
-async function saveModule(payload) {
-  return fetchJson('/api/business-os/modules', {
-    method: 'POST',
-    headers: authHeaders(),
-    body: JSON.stringify(payload),
+async function startSubscriptionAuth({ commandBus, db, session } = {}) {
+  const command = await dispatchModuleCommand({
+    commandBus,
+    db,
+    session,
+    commandType: 'ctox.subscription_auth.start',
+    moduleId: 'ctox',
+    recordId: 'subscription-auth',
+    payload: { provider: 'openai', auth_mode: 'chatgpt_subscription' },
+    source: 'business-os-settings',
   });
+  return command.result || command;
 }
 
-async function assignFounder(moduleId, userId, active) {
-  return fetchJson('/api/business-os/modules/assign-founder', {
-    method: 'POST',
-    headers: authHeaders(),
-    body: JSON.stringify({ module_id: moduleId, user_id: userId, active }),
+async function loadModuleCatalog({ db } = {}) {
+  const coll = db?.collection?.('business_module_catalog');
+  if (!coll) throw new Error('business_module_catalog collection is required for module metadata');
+  const doc = await coll.findOne('module-catalog').exec();
+  const data = doc?.toJSON?.();
+  if (!data) throw new Error('Modulkatalog noch nicht synchronisiert.');
+  return data;
+}
+
+async function loadModules({ db } = {}) {
+  const catalog = await loadModuleCatalog({ db });
+  return {
+    ok: catalog.ok !== false,
+    modules: Array.isArray(catalog.modules) ? catalog.modules : [],
+    governance: catalog.governance || null,
+  };
+}
+
+async function loadTemplates({ db } = {}) {
+  const catalog = await loadModuleCatalog({ db });
+  return {
+    ok: catalog.ok !== false,
+    templates: Array.isArray(catalog.templates) ? catalog.templates : [],
+  };
+}
+
+async function saveModule(payload, { commandBus, db, session } = {}) {
+  const command = await dispatchModuleCommand({
+    commandBus,
+    db,
+    session,
+    commandType: 'ctox.module.save',
+    moduleId: payload?.id || '',
+    recordId: payload?.id || '',
+    payload,
+    source: 'business-os-settings',
   });
+  return command.result || command;
 }
 
-async function releaseModule(moduleId) {
-  return fetchJson('/api/business-os/modules/release', {
-    method: 'POST',
-    headers: authHeaders(),
-    body: JSON.stringify({ module_id: moduleId, notes: 'Business OS module release' }),
+async function assignFounder(moduleId, userId, active, { commandBus, db, session } = {}) {
+  const command = await dispatchModuleCommand({
+    commandBus,
+    db,
+    session,
+    commandType: 'ctox.module.assign_founder',
+    moduleId,
+    recordId: `${moduleId}:founder:${userId}`,
+    payload: { module_id: moduleId, user_id: userId, active },
+    source: 'business-os-settings',
   });
+  return command.result || command;
 }
 
-async function rollbackModule(moduleId, versionId) {
-  return fetchJson('/api/business-os/modules/rollback', {
-    method: 'POST',
-    headers: authHeaders(),
-    body: JSON.stringify({ module_id: moduleId, version_id: versionId }),
+async function releaseModule(moduleId, { commandBus, db, session } = {}) {
+  const command = await dispatchModuleCommand({
+    commandBus,
+    db,
+    session,
+    commandType: 'ctox.module.release',
+    moduleId,
+    recordId: moduleId,
+    payload: { module_id: moduleId, notes: 'Business OS module release' },
+    source: 'business-os-settings',
   });
+  return command.result || command;
 }
 
-async function deleteModule(moduleId) {
-  return fetchJson('/api/business-os/modules/delete', {
-    method: 'POST',
-    headers: authHeaders(),
-    body: JSON.stringify({ module_id: moduleId }),
+async function rollbackModule(moduleId, versionId, { commandBus, db, session } = {}) {
+  const command = await dispatchModuleCommand({
+    commandBus,
+    db,
+    session,
+    commandType: 'ctox.module.rollback',
+    moduleId,
+    recordId: versionId,
+    payload: { module_id: moduleId, version_id: versionId },
+    source: 'business-os-settings',
   });
+  return command.result || command;
 }
 
-async function installTemplate({ templateId, moduleId, title }) {
-  return fetchJson('/api/business-os/modules/install-template', {
-    method: 'POST',
-    headers: authHeaders(),
-    body: JSON.stringify({
+async function deleteModule(moduleId, { commandBus, db, session } = {}) {
+  const command = await dispatchModuleCommand({
+    commandBus,
+    db,
+    session,
+    commandType: 'ctox.module.delete',
+    moduleId,
+    recordId: moduleId,
+    payload: { module_id: moduleId },
+    source: 'business-os-settings',
+  });
+  return command.result || command;
+}
+
+async function installTemplate({ templateId, moduleId, title }, { commandBus, db, session } = {}) {
+  const command = await dispatchModuleCommand({
+    commandBus,
+    db,
+    session,
+    commandType: 'ctox.module.install_template',
+    moduleId,
+    recordId: moduleId || templateId,
+    payload: {
       template_id: templateId,
       module_id: moduleId,
       title,
-    }),
+    },
+    source: 'business-os-settings',
   });
+  return command.result || command;
 }
 
-async function fetchJson(url, options = {}) {
-  const headers = {
-    ...(options.headers || {}),
+async function dispatchModuleCommand({
+  commandBus,
+  db,
+  session,
+  commandType,
+  moduleId,
+  recordId,
+  payload,
+  source,
+}) {
+  if (!commandBus?.dispatch || !db?.collection?.('business_commands')) {
+    throw new Error('business_commands collection is required for module governance commands');
+  }
+  const commandId = `cmd_${newId()}`;
+  await commandBus.dispatch({
+    id: commandId,
+    module: 'ctox',
+    type: commandType,
+    record_id: recordId || moduleId,
+    inbound_channel: moduleId,
+    payload,
+    client_context: {
+      source,
+      module_id: moduleId,
+      actor: actorContext(session),
+    },
+  });
+  return waitForCommandProjection(db, commandId);
+}
+
+async function waitForCommandProjection(db, commandId, timeoutMs = 45000) {
+  const collection = db?.collection?.('business_commands');
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const doc = await collection?.findOne(commandId).exec();
+    const data = doc?.toJSON?.();
+    if (data && data.status && data.status !== 'pending_sync') {
+      if (data.status === 'failed') throw new Error(data.error || `Command ${commandId} failed`);
+      return data;
+    }
+    await delay(300);
+  }
+  throw new Error(`Command ${commandId} wurde nicht synchronisiert.`);
+}
+
+function actorContext(session) {
+  const user = session?.user || {};
+  return {
+    id: user.id || '',
+    display_name: user.display_name || user.name || user.id || '',
+    role: user.role || 'user',
+    is_admin: Boolean(user.is_admin),
   };
-  if (options.body) headers['Content-Type'] = 'application/json';
-  const requestOptions = {
-    cache: 'no-store',
-    ...options,
-    headers,
-  };
-  return fetchJsonOnce(url, requestOptions);
 }
 
-async function fetchJsonOnce(url, options) {
-  const res = await fetch(url, options);
-  if (!res.ok) throw new Error(`${url} returned ${res.status}`);
-  return res.json();
+function newId() {
+  return globalThis.crypto?.randomUUID?.() || `${Date.now()}_${Math.random().toString(36).slice(2)}`;
 }
 
-function authHeaders() {
-  const token = localStorage.getItem('ctox.businessOs.sessionToken')?.trim();
-  const authHeader = localStorage.getItem('ctox.businessOs.authHeader')?.trim();
-  if (token) return { 'X-CTOX-Business-OS-Session': token };
-  if (authHeader) return { Authorization: authHeader };
-  return {};
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function cssEscape(value) {
@@ -1186,6 +1410,7 @@ function channelsHubPanel(state) {
         ${CHANNEL_DEFINITIONS.map((def) => channelHubRow(def, accountsByChannel.get(def.id) || [])).join('')}
       </div>
     </section>
+    ${state.error ? `<div class="settings-alert is-danger"><strong>Letzter Fehler</strong><span>${escapeHtml(state.error)}</span></div>` : ''}
     ${state.status ? `<div class="settings-alert"><span>${escapeHtml(state.status)}</span></div>` : ''}
   `;
 }
@@ -1273,6 +1498,11 @@ function wizardShell({ title, step, totalSteps, body, backLabel = 'Abbrechen', n
 // ---- WhatsApp wizard ----
 function whatsappWizard(state) {
   const step = state.step || 'intro';
+  const pairing = state.data?.pairingState || null;
+  const errorBlock = state.error
+    ? `<div class="channels-alert channels-alert--err">${escapeHtml(state.error)}</div>`
+    : '';
+
   if (step === 'intro') {
     return wizardShell({
       title: 'WhatsApp einrichten',
@@ -1291,6 +1521,7 @@ function whatsappWizard(state) {
             <li>WhatsApp ist auf dem Gerät installiert und mit der Geschäftsnummer registriert</li>
             <li>Das Handy ist eingeschaltet und online (Strom, WLAN/Mobilfunk) — sonst pausiert WhatsApp die Verbindung nach ca. 14 Tagen</li>
           </ul>
+          ${errorBlock}
         </div>
       `,
       nextLabel: 'Geschäftshandy ist bereit → Weiter',
@@ -1298,29 +1529,25 @@ function whatsappWizard(state) {
     });
   }
   if (step === 'qr') {
-    const scanned = state.data?.whatsappScanned === true;
+    const status = String(pairing?.status || 'idle').toLowerCase();
     return wizardShell({
       title: 'WhatsApp einrichten',
       step: 2, totalSteps: 3,
       body: `
         <div class="channels-qr-wrap">
-          <div class="channels-qr-placeholder">
-            <span>QR-Code</span>
-            <small>Erscheint hier sobald CTOX-Core das Pairing startet</small>
-          </div>
+          ${renderQrBox(pairing, 'CTOX-Core erzeugt den QR über pair_device_until_success.')}
           <p class="channels-qr-instructions">
             Auf dem Geschäftshandy: <b>WhatsApp öffnen → ⋮ Menü → Verlinkte Geräte → Gerät hinzufügen</b> und diesen QR scannen.
           </p>
-          <div class="channels-qr-status ${scanned ? 'is-ok' : 'is-waiting'}">
-            ${scanned ? '✅ Scan erkannt — verbinde…' : '⏳ Warte auf Scan…'}
-          </div>
+          ${renderPairingStatus(status)}
           <button type="button" class="text-button" data-channel-action="whatsapp:refresh-qr">QR erneuern</button>
+          ${errorBlock}
         </div>
       `,
-      nextLabel: scanned ? 'Weiter' : '',
-      nextAction: 'whatsapp:confirm',
     });
   }
+  // step === 'confirm'
+  const accountKey = state.data?.connectedAccountKey || pairing?.account_key || '';
   return wizardShell({
     title: 'WhatsApp einrichten',
     step: 3, totalSteps: 3,
@@ -1329,9 +1556,7 @@ function whatsappWizard(state) {
         <div class="channels-confirm-icon channels-confirm-icon--ok">✓</div>
         <h4>WhatsApp ist verbunden</h4>
         <p>CTOX kann jetzt Nachrichten auf dieser Nummer empfangen und — nach Approval — senden.</p>
-        <div class="channels-confirm-detail">
-          <span>Nummer</span><strong>+49 17… · CTOX-Beispiel</strong>
-        </div>
+        ${accountKey ? `<div class="channels-confirm-detail"><span>Account</span><strong>${escapeHtml(accountKey)}</strong></div>` : ''}
         <small class="channels-confirm-note">Halte das Geschäftshandy online. Wenn es länger als 2 Wochen offline ist, musst du den QR erneut scannen.</small>
       </div>
     `,
@@ -1341,9 +1566,55 @@ function whatsappWizard(state) {
   });
 }
 
+function renderQrBox(pairing, hint) {
+  if (pairing?.qr_svg) {
+    return `<div class="channels-qr-image">${pairing.qr_svg}</div>`;
+  }
+  if (pairing?.qr_payload) {
+    const payload = String(pairing.qr_payload);
+    const src = payload.startsWith('data:')
+      ? payload
+      : `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(payload)}`;
+    // Note: external QR-rendering would violate CTOX privacy; CTOX-Core should
+    // emit the SVG directly via qr_svg. The img fallback is a last resort and
+    // is disabled here to avoid leaking pairing data to a third party.
+    void src;
+    return `
+      <div class="channels-qr-placeholder">
+        <span>QR-Payload empfangen</span>
+        <small>CTOX-Core soll qr_svg setzen, damit das QR-Bild lokal gerendert wird (kein externer Renderer).</small>
+      </div>
+    `;
+  }
+  return `
+    <div class="channels-qr-placeholder">
+      <span>Kein QR-Code</span>
+      <small>${escapeHtml(hint || '')}</small>
+    </div>
+  `;
+}
+
+function renderPairingStatus(status) {
+  if (status === 'paired' || status === 'success') {
+    return `<div class="channels-qr-status is-ok">✅ Scan erkannt — verbinde…</div>`;
+  }
+  if (status === 'failed' || status === 'error') {
+    return `<div class="channels-qr-status is-err">⚠ Pairing fehlgeschlagen.</div>`;
+  }
+  if (status === 'waiting_for_scan' || status === 'idle') {
+    return `<div class="channels-qr-status is-waiting">⏳ Warte auf Scan…</div>`;
+  }
+  return `<div class="channels-qr-status is-waiting">${escapeHtml(status || 'unbekannt')}</div>`;
+}
+
 // ---- Jami wizard ----
 function jamiWizard(state) {
   const step = state.step || 'intro';
+  const pairing = state.data?.pairingState || null;
+  const errorBlock = state.error
+    ? `<div class="channels-alert channels-alert--err">${escapeHtml(state.error)}</div>`
+    : '';
+
   if (step === 'intro') {
     return wizardShell({
       title: 'Jami einrichten',
@@ -1356,12 +1627,28 @@ function jamiWizard(state) {
             <span>Anzeigename für den CTOX-Account</span>
             <input type="text" data-channel-input="jami:displayName" placeholder="CTOX – Acme GmbH" value="${escapeHtml(state.data?.jamiDisplayName || 'CTOX')}" />
           </label>
+          ${errorBlock}
         </div>
       `,
       nextLabel: 'Account erstellen',
       nextAction: 'jami:create',
     });
   }
+  if (step === 'creating') {
+    return wizardShell({
+      title: 'Jami einrichten',
+      step: 2, totalSteps: 2,
+      body: `
+        <div class="channels-testing">
+          <div class="channels-testing-step is-active">⏳ Jami-Account wird erzeugt…</div>
+          <small class="channels-form-note">CTOX-Core ruft den Jami-Daemon. Das dauert wenige Sekunden.</small>
+        </div>
+        ${errorBlock}
+      `,
+    });
+  }
+  // step === 'confirm'
+  const jamiId = pairing?.qr_payload || state.data?.connectedAccountKey || '';
   return wizardShell({
     title: 'Jami einrichten',
     step: 2, totalSteps: 2,
@@ -1369,15 +1656,14 @@ function jamiWizard(state) {
       <div class="channels-confirm">
         <div class="channels-confirm-icon channels-confirm-icon--ok">✓</div>
         <h4>Jami-Account erstellt</h4>
-        <div class="channels-qr-placeholder">
-          <span>QR-Code</span>
-          <small>Jami-ID des CTOX-Accounts</small>
-        </div>
+        ${renderQrBox(pairing, 'CTOX-Core soll qr_svg mit der Jami-ID setzen.')}
         <p>Damit du CTOX in deiner privaten Jami-App siehst, scanne diesen QR mit <b>Jami → Kontakt hinzufügen → QR-Code scannen</b>. Oder kopiere die ID manuell.</p>
-        <div class="channels-confirm-detail">
-          <span>Jami-ID</span>
-          <code>5a1b2c3d4e5f… <button type="button" class="channels-copy" data-channel-copy="5a1b2c3d4e5f">⧉</button></code>
-        </div>
+        ${jamiId ? `
+          <div class="channels-confirm-detail">
+            <span>Jami-ID</span>
+            <code>${escapeHtml(jamiId)} <button type="button" class="channels-copy" data-channel-copy="${escapeHtml(jamiId)}">⧉</button></code>
+          </div>
+        ` : ''}
         <details class="channels-advanced">
           <summary>Erweitert</summary>
           <p>Sichere den Account regelmäßig — sonst ist er bei Datenverlust nicht wiederherstellbar.</p>
@@ -1429,14 +1715,13 @@ function emailWizard(state) {
       step: 2, totalSteps: 3,
       body: `
         <div class="channels-testing">
-          <div class="channels-testing-step is-active">🔄 Verbinde mit IMAP…</div>
-          <div class="channels-testing-step">📬 Postfach abrufen</div>
-          <div class="channels-testing-step">📤 Verbinde mit SMTP…</div>
-          <div class="channels-testing-step">✅ Fertig</div>
+          <div class="channels-testing-step is-active">⏳ CTOX testet IMAP + SMTP …</div>
+          <small class="channels-form-note">Backend ruft <code>email_native::test()</code> via <code>RxDB-Command ctox.channel.test</code>.</small>
         </div>
       `,
     });
   }
+  const testResult = state.data?.testResult || null;
   return wizardShell({
     title: 'E-Mail einrichten',
     step: 3, totalSteps: 3,
@@ -1445,12 +1730,14 @@ function emailWizard(state) {
         <div class="channels-confirm-icon channels-confirm-icon--ok">✓</div>
         <h4>E-Mail ist verbunden</h4>
         <div class="channels-confirm-detail">
-          <span>Adresse</span><strong>${escapeHtml(state.data?.emailAddress || 'name@firma.de')}</strong>
+          <span>Adresse</span><strong>${escapeHtml(state.data?.emailAddress || state.data?.connectedAddress || '—')}</strong>
         </div>
         <div class="channels-confirm-detail">
           <span>Anbieter</span><strong>${escapeHtml(emailProviderLabel(state.data?.emailProvider))}</strong>
         </div>
-        <small class="channels-confirm-note">Letzte 24h: CTOX hat 47 Eingangsnachrichten in diesem Postfach erkannt.</small>
+        ${testResult?.imap_ok !== undefined ? `<div class="channels-confirm-detail"><span>IMAP</span><strong>${testResult.imap_ok ? 'OK' : 'Fehler'}</strong></div>` : ''}
+        ${testResult?.smtp_ok !== undefined ? `<div class="channels-confirm-detail"><span>SMTP</span><strong>${testResult.smtp_ok ? 'OK' : 'Fehler'}</strong></div>` : ''}
+        ${testResult?.message_count !== undefined ? `<small class="channels-confirm-note">CTOX hat ${testResult.message_count} Eingangsnachrichten im Postfach erkannt.</small>` : ''}
       </div>
     `,
     backLabel: '',
@@ -1561,6 +1848,9 @@ function emailProviderForm(state) {
 // ---- Teams wizard ----
 function teamsWizard(state) {
   const step = state.step || 'intro';
+  const errorBlock = state.error
+    ? `<div class="channels-alert channels-alert--err">${escapeHtml(state.error)}</div>`
+    : '';
   if (step === 'intro') {
     const customApp = state.data?.teamsCustomApp === true;
     return wizardShell({
@@ -1568,62 +1858,57 @@ function teamsWizard(state) {
       step: 1, totalSteps: 3,
       body: `
         <div class="channels-explain">
-          <p>CTOX verbindet sich mit Teams über die <strong>Microsoft Graph API</strong>.</p>
-          <p>Du brauchst:</p>
-          <ul class="channels-checklist">
-            <li>Einen Microsoft 365 Business / Enterprise Account</li>
-            <li>Genug Rechte um eine Azure-AD-App zuzustimmen — oder einen Admin, der das macht</li>
+          <p>CTOX verbindet sich mit Teams über die <strong>Microsoft Graph API</strong>. Es gibt zwei unterstützte Modi:</p>
+          <ul class="channels-explain-list">
+            <li><strong>Service-Principal</strong> (empfohlen für Produktion): eine Azure-AD-App mit Tenant-ID, Client-ID und Client-Secret. Dein Admin registriert die App einmalig und du trägst die Werte hier ein.</li>
+            <li><strong>Benutzerkonto (ROPC)</strong>: Microsoft-365-Benutzername + Passwort. Funktioniert nur ohne MFA und nutzt Microsofts öffentlichen Office-Client. Eher für Test-Setups.</li>
           </ul>
           <label class="channels-toggle">
             <input type="checkbox" data-channel-input="teams:customApp" ${customApp ? 'checked' : ''} />
-            <span>Eigene Azure-AD-App registrieren</span>
+            <span>Service-Principal-Modus (Tenant + Client-ID + Secret)</span>
           </label>
           ${customApp ? `
-            <label class="channels-field"><span>Tenant-ID</span><input type="text" data-channel-input="teams:tenantId" placeholder="00000000-0000-0000-0000-000000000000" /></label>
-            <label class="channels-field"><span>Client-ID</span><input type="text" data-channel-input="teams:clientId" /></label>
-            <label class="channels-field"><span>Client-Secret oder Zertifikat-Pfad</span><input type="password" data-channel-input="teams:clientSecret" /></label>
-          ` : `<small class="channels-form-note">Im einfachen Modus nutzt CTOX seine vorregistrierte Multi-Tenant-App. Du klickst dich nur durch den Microsoft-Consent.</small>`}
+            <label class="channels-field"><span>Tenant-ID</span><input type="text" data-channel-input="teams:tenantId" placeholder="00000000-0000-0000-0000-000000000000" value="${escapeHtml(state.data?.teamsTenantId || '')}" /></label>
+            <label class="channels-field"><span>Client-ID</span><input type="text" data-channel-input="teams:clientId" value="${escapeHtml(state.data?.teamsClientId || '')}" /></label>
+            <label class="channels-field"><span>Client-Secret</span><input type="password" data-channel-input="teams:clientSecret" /></label>
+            <small class="channels-form-note">Mit diesen Werten ruft CTOX <code>acquire_app_token</code> (Client-Credentials-Flow) gegen <code>login.microsoftonline.com</code> auf.</small>
+          ` : `
+            <label class="channels-field"><span>Tenant-ID (optional)</span><input type="text" data-channel-input="teams:tenantId" placeholder="leer → organizations" value="${escapeHtml(state.data?.teamsTenantId || '')}" /></label>
+            <label class="channels-field"><span>Microsoft-Account</span><input type="email" data-channel-input="teams:username" placeholder="name@firma.de" value="${escapeHtml(state.data?.teamsUsername || '')}" /></label>
+            <label class="channels-field"><span>Passwort</span><input type="password" data-channel-input="teams:password" /></label>
+            <small class="channels-form-note">ROPC-Flow über Microsofts öffentlichen Office-Client. <strong>Bei aktivierter MFA scheitert dieser Modus</strong> — dann musst du Service-Principal nutzen.</small>
+          `}
+          ${errorBlock}
         </div>
       `,
-      nextLabel: 'Zu Microsoft anmelden →',
-      nextAction: 'teams:oauth',
+      nextLabel: 'Verbinden + testen',
+      nextAction: 'teams:save_test',
     });
   }
-  if (step === 'subscriptions') {
+  if (step === 'testing') {
     return wizardShell({
       title: 'Microsoft Teams einrichten',
-      step: 2, totalSteps: 3,
+      step: 2, totalSteps: 2,
       body: `
-        <div class="channels-explain">
-          <p><strong>Welche Teams-Kanäle soll CTOX überwachen?</strong></p>
-          <div class="channels-sub-list">
-            <label class="channels-sub-item"><input type="checkbox" checked /><span>Acme Sales – #leads</span></label>
-            <label class="channels-sub-item"><input type="checkbox" checked /><span>Acme Sales – #pipeline</span></label>
-            <label class="channels-sub-item"><input type="checkbox" /><span>Acme Internal – #standup</span></label>
-            <label class="channels-sub-item"><input type="checkbox" /><span>Acme Internal – #random</span></label>
-          </div>
-          <p><strong>1:1-Chats?</strong></p>
-          <div class="channels-sub-list">
-            <label class="channels-sub-item"><input type="checkbox" checked /><span>Anna Schulz</span></label>
-            <label class="channels-sub-item"><input type="checkbox" /><span>Michael Berger</span></label>
-            <label class="channels-sub-item"><input type="checkbox" /><span>+ 10 weitere</span></label>
-          </div>
+        <div class="channels-testing">
+          <div class="channels-testing-step is-active">⏳ CTOX testet Graph-API …</div>
+          <small class="channels-form-note">Backend ruft <code>teams_native::test()</code> via <code>RxDB-Command ctox.channel.test</code>.</small>
         </div>
+        ${errorBlock}
       `,
-      nextLabel: 'Auswahl speichern',
-      nextAction: 'teams:confirm',
     });
   }
+  const testResult = state.data?.testResult || null;
+  const tenantLabel = state.data?.connectedAddress || state.data?.connectedAccountKey || state.data?.teamsTenantId || '—';
   return wizardShell({
     title: 'Microsoft Teams einrichten',
-    step: 3, totalSteps: 3,
+    step: 2, totalSteps: 2,
     body: `
       <div class="channels-confirm">
         <div class="channels-confirm-icon channels-confirm-icon--ok">✓</div>
         <h4>Teams ist verbunden</h4>
-        <div class="channels-confirm-detail"><span>Tenant</span><strong>acme.onmicrosoft.com</strong></div>
-        <div class="channels-confirm-detail"><span>Channels</span><strong>2 abonniert</strong></div>
-        <div class="channels-confirm-detail"><span>1:1-Chats</span><strong>1 abonniert</strong></div>
+        <div class="channels-confirm-detail"><span>Tenant</span><strong>${escapeHtml(tenantLabel)}</strong></div>
+        ${testResult?.ok !== undefined ? `<div class="channels-confirm-detail"><span>Graph-API</span><strong>${testResult.ok ? 'OK' : 'Fehler'}</strong></div>` : ''}
       </div>
     `,
     backLabel: '',
@@ -1633,8 +1918,136 @@ function teamsWizard(state) {
 }
 
 // ---- Event wiring for the channels tab ----
-function wireChannelHandlers(body, settingsState, render) {
+const ACCOUNT_WAIT_TIMEOUT_MS = 30 * 1000;
+const QR_POLL_INTERVAL_MS = 1500;
+
+async function loadChannelAccountsFromRxdb(db) {
+  const coll = db?.collection?.('communication_accounts');
+  if (!coll) return [];
+  const docs = await coll.find().exec();
+  return docs
+    .map((doc) => doc.toJSON())
+    .filter((account) => account && account._deleted !== true && account.is_deleted !== true)
+    .sort((a, b) => (a.channel || '').localeCompare(b.channel || ''));
+}
+
+async function loadPairingStateFromRxdb(db, channelId) {
+  const coll = db?.collection?.('channel_pairing_state');
+  if (!coll) return null;
+  const doc = await coll.findOne(channelId).exec();
+  return doc?.toJSON?.() || null;
+}
+
+function wireChannelHandlers(
+  body,
+  settingsState,
+  render,
+  { commandBus, db, session, refreshChannelAccounts, ensureChannelCollections },
+) {
   const channels = settingsState.channels;
+  if (!channels.qrPoll) channels.qrPoll = null;
+
+  function resetWizard() {
+    channels.wizard = null;
+    channels.step = null;
+    channels.provider = null;
+    channels.data = {};
+    channels.error = '';
+    stopQrPolling();
+    render();
+  }
+
+  function stopQrPolling() {
+    if (channels.qrPoll) {
+      clearInterval(channels.qrPoll);
+      channels.qrPoll = null;
+    }
+  }
+
+  function startQrPolling(channelId) {
+    stopQrPolling();
+    refreshPairingState(channelId);
+    channels.qrPoll = setInterval(() => refreshPairingState(channelId), QR_POLL_INTERVAL_MS);
+  }
+
+  async function refreshPairingState(channelId) {
+    try {
+      await ensureChannelCollections?.();
+      const data = await loadPairingStateFromRxdb(db, channelId);
+      if (!data) throw new Error('Pairing-State noch nicht synchronisiert.');
+      channels.data.pairingState = data || null;
+      channels.error = data?.error || '';
+      if (data?.account_key && channels.wizard === channelId) {
+        channels.step = 'confirm';
+        channels.data.connectedAccountKey = data.account_key;
+        stopQrPolling();
+      }
+      render();
+    } catch (error) {
+      // Only surface the error once the wizard is on the QR screen, so the
+      // intro screen doesn't fail loudly before any pairing attempt.
+      if (channels.step === 'qr' || channels.step === 'creating') {
+        channels.error = `Pairing-Status: ${error?.message || error}`;
+        render();
+      }
+    }
+  }
+
+  async function pollAccountAppearance(channelId, expectedAddress = null) {
+    const start = Date.now();
+    const deadline = start + ACCOUNT_WAIT_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      if (channels.wizard !== channelId) return;
+      try {
+        await ensureChannelCollections?.();
+        const accounts = await loadChannelAccountsFromRxdb(db);
+        const match = expectedAddress
+          ? accounts.find((a) => a.channel === channelId && a.address === expectedAddress)
+          : accounts.find((a) => a.channel === channelId && a.created_at && Date.parse(a.created_at) >= start);
+        if (match) {
+          channels.step = 'confirm';
+          channels.data.connectedAccountKey = match.account_key;
+          channels.data.connectedAddress = match.address;
+          channels.accounts = accounts;
+          render();
+          return;
+        }
+      } catch (error) {
+        console.error('[settings/channels] account poll failed:', error);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+    }
+    if (channels.wizard === channelId && channels.step !== 'confirm') {
+      channels.error = `${channelId}-Account wurde nach ${ACCOUNT_WAIT_TIMEOUT_MS / 1000}s nicht erkannt. Prüfe CTOX-Core-Logs.`;
+      render();
+    }
+  }
+
+  async function postChannelEndpoint(path, payload) {
+    try {
+      const command = channelCommandForEndpoint(path, payload || {});
+      const result = await dispatchModuleCommand({
+        commandBus,
+        db,
+        session,
+        ...command,
+        source: 'business-os-settings-channels',
+      });
+      const body = result.result || result;
+      if (body?.ok === false) {
+        const message = body?.error || body?.message || body?.status || 'channel command failed';
+        channels.error = `${command.commandType}: ${message}`;
+        render();
+        return null;
+      }
+      channels.error = '';
+      return body;
+    } catch (error) {
+      channels.error = `${path}: ${error?.message || error}`;
+      render();
+      return null;
+    }
+  }
 
   body.querySelectorAll('[data-channel-setup]').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -1643,7 +2056,9 @@ function wireChannelHandlers(body, settingsState, render) {
       channels.step = channelId === 'email' ? 'provider' : 'intro';
       channels.provider = null;
       channels.data = {};
+      channels.error = '';
       channels.status = '';
+      stopQrPolling();
       render();
     });
   });
@@ -1656,30 +2071,33 @@ function wireChannelHandlers(body, settingsState, render) {
         { title: 'Channel trennen' },
       );
       if (!confirmed) return;
-      channels.status = `Trennen ist noch nicht angebunden (${accountKey}). Erfordert CTOX-Core-Command-Handler.`;
-      render();
+      const result = await postChannelEndpoint('channel.disconnect', { account_key: accountKey });
+      if (result) {
+        channels.status = `${accountKey} getrennt.`;
+        try {
+          await ensureChannelCollections?.();
+          await refreshChannelAccounts?.();
+        } catch {}
+        render();
+      }
     });
   });
 
-  body.querySelector('[data-channel-back], [data-channel-cancel]')?.addEventListener('click', () => {
-    if (channels.wizard === 'email' && channels.step === 'form') {
-      channels.step = 'provider';
-      channels.provider = null;
-      render();
-      return;
-    }
-    channels.wizard = null;
-    channels.step = null;
-    channels.provider = null;
-    channels.data = {};
-    render();
+  body.querySelectorAll('[data-channel-back]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (channels.wizard === 'email' && channels.step === 'form') {
+        channels.step = 'provider';
+        channels.provider = null;
+        channels.error = '';
+        render();
+        return;
+      }
+      resetWizard();
+    });
   });
-  body.querySelector('[data-channel-cancel]')?.addEventListener('click', () => {
-    channels.wizard = null;
-    channels.step = null;
-    channels.provider = null;
-    channels.data = {};
-    render();
+
+  body.querySelectorAll('[data-channel-cancel]').forEach((btn) => {
+    btn.addEventListener('click', () => resetWizard());
   });
 
   body.querySelectorAll('[data-channel-input]').forEach((input) => {
@@ -1688,23 +2106,30 @@ function wireChannelHandlers(body, settingsState, render) {
       const value = input.type === 'checkbox' ? input.checked : input.value;
       const dataKey = channelDataKey(key);
       if (dataKey) channels.data[dataKey] = value;
-      // Re-render only for toggles that change the form (e.g. customApp)
       if (input.type === 'checkbox' && (key === 'email:customApp' || key === 'teams:customApp')) {
         render();
       }
     });
   });
 
+  const actionCtx = {
+    channels,
+    render,
+    postChannelEndpoint,
+    startQrPolling,
+    pollAccountAppearance,
+    resetWizard,
+  };
   body.querySelectorAll('[data-channel-action]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const action = btn.dataset.channelAction;
-      handleChannelAction(action, channels, render);
+    btn.addEventListener('click', async () => {
+      await handleChannelAction(btn.dataset.channelAction, actionCtx);
     });
   });
 
-  body.querySelector('[data-channel-next]')?.addEventListener('click', (event) => {
-    const action = event.currentTarget.dataset.channelNext;
-    handleChannelAction(action, channels, render);
+  body.querySelectorAll('[data-channel-next]').forEach((btn) => {
+    btn.addEventListener('click', async (event) => {
+      await handleChannelAction(event.currentTarget.dataset.channelNext, actionCtx);
+    });
   });
 
   body.querySelectorAll('[data-channel-copy]').forEach((btn) => {
@@ -1717,6 +2142,62 @@ function wireChannelHandlers(body, settingsState, render) {
       setTimeout(() => { btn.textContent = '⧉'; }, 1200);
     });
   });
+}
+
+function channelCommandForEndpoint(path, payload) {
+  switch (path) {
+    case 'channel.test':
+      return {
+        commandType: 'ctox.channel.test',
+        moduleId: 'ctox',
+        recordId: payload.account_key || payload.channel || 'channel-test',
+        payload,
+      };
+    case 'channel.sync':
+      return {
+        commandType: 'ctox.channel.sync',
+        moduleId: 'ctox',
+        recordId: payload.channel || 'channel-sync',
+        payload,
+      };
+    case 'channel.settings.save':
+      return {
+        commandType: 'ctox.channel.settings.save',
+        moduleId: 'ctox',
+        recordId: payload.channel || 'channel-settings',
+        payload,
+      };
+    case 'channel.disconnect':
+      return {
+        commandType: 'ctox.channel.disconnect',
+        moduleId: 'ctox',
+        recordId: payload.account_key || 'channel-disconnect',
+        payload,
+      };
+    case 'channel.pair.start':
+      return {
+        commandType: 'ctox.channel.pair.start',
+        moduleId: 'ctox',
+        recordId: payload.channel || 'channel-pair',
+        payload,
+      };
+    case 'channel.jami.create':
+      return {
+        commandType: 'ctox.channel.jami.create',
+        moduleId: 'ctox',
+        recordId: 'jami-create',
+        payload,
+      };
+    case 'channel.jami.export':
+      return {
+        commandType: 'ctox.channel.jami.export',
+        moduleId: 'ctox',
+        recordId: 'jami-export',
+        payload,
+      };
+    default:
+      throw new Error(`Unsupported channel command endpoint: ${path}`);
+  }
 }
 
 function channelDataKey(inputKey) {
@@ -1736,82 +2217,193 @@ function channelDataKey(inputKey) {
     case 'teams:tenantId': return 'teamsTenantId';
     case 'teams:clientId': return 'teamsClientId';
     case 'teams:clientSecret': return 'teamsClientSecret';
+    case 'teams:username': return 'teamsUsername';
+    case 'teams:password': return 'teamsPassword';
     default: return null;
   }
 }
 
-function handleChannelAction(action, channels, render) {
+async function handleChannelAction(action, ctx) {
+  const { channels, render, postChannelEndpoint, startQrPolling, pollAccountAppearance, resetWizard } = ctx;
+
   if (action === 'wizard:done') {
-    channels.wizard = null;
-    channels.step = null;
-    channels.provider = null;
-    channels.data = {};
-    channels.status = 'Channel-Setup abgeschlossen (Click-Dummy — Backend-Anbindung folgt).';
+    resetWizard();
+    channels.status = 'Setup abgeschlossen.';
     render();
     return;
   }
+
+  // ---- WhatsApp ----
   if (action === 'whatsapp:qr') {
     channels.step = 'qr';
-    // Simulate scan after a few seconds so the UI flow is visible end-to-end.
-    setTimeout(() => {
-      if (channels.wizard === 'whatsapp' && channels.step === 'qr') {
-        channels.data.whatsappScanned = true;
-        render();
-      }
-    }, 4000);
+    channels.error = '';
+    channels.data.pairingState = null;
     render();
+    const result = await postChannelEndpoint('channel.pair.start', { channel: 'whatsapp' });
+    if (result) {
+      startQrPolling('whatsapp');
+      pollAccountAppearance('whatsapp');
+    }
     return;
   }
   if (action === 'whatsapp:refresh-qr') {
-    channels.data.whatsappScanned = false;
-    channels.status = 'QR erneuert (Click-Dummy).';
+    channels.data.pairingState = null;
+    channels.error = '';
     render();
+    const result = await postChannelEndpoint('channel.pair.start', {
+      channel: 'whatsapp',
+      restart: true,
+    });
+    if (result) startQrPolling('whatsapp');
     return;
   }
-  if (action === 'whatsapp:confirm') {
-    channels.step = 'confirm';
-    render();
-    return;
-  }
+
+  // ---- Jami ----
+  // CTOX-Core has jami_native::sync + resolve_account; account creation is
+  // dispatched as a replicated channel command.
   if (action === 'jami:create') {
-    channels.step = 'confirm';
+    channels.step = 'creating';
+    channels.error = '';
     render();
+    const displayName = String(channels.data.jamiDisplayName || 'CTOX').trim() || 'CTOX';
+    const result = await postChannelEndpoint('channel.jami.create', { display_name: displayName });
+    if (!result) {
+      channels.step = 'intro';
+      render();
+      return;
+    }
+    // Account row appears + QR-payload (the Jami-ID) shows up via pair/state.
+    startQrPolling('jami');
+    pollAccountAppearance('jami');
     return;
   }
   if (action === 'jami:export') {
-    channels.status = 'Account-Archiv-Export ist noch nicht angebunden.';
-    render();
+    const result = await postChannelEndpoint('channel.jami.export', {});
+    if (result) {
+      channels.status = `Account-Archiv exportiert nach ${result.archive_path || 'runtime/communication/jami/archive/'}.`;
+      render();
+    }
     return;
   }
+
+  // ---- Email ----
   if (action.startsWith('email:provider:')) {
     const providerId = action.slice('email:provider:'.length);
     channels.provider = providerId;
     channels.data.emailProvider = providerId;
     channels.step = 'form';
+    channels.error = '';
     render();
     return;
   }
   if (action === 'email:test') {
     channels.step = 'testing';
+    channels.error = '';
     render();
-    setTimeout(() => {
-      if (channels.wizard === 'email' && channels.step === 'testing') {
-        channels.step = 'confirm';
-        render();
-      }
-    }, 2500);
+    const payload = emailConfigPayload(channels);
+    // Save settings first, then run the adapter test command.
+    const saveResult = await postChannelEndpoint('channel.settings.save', {
+      channel: 'email',
+      config: payload,
+    });
+    if (!saveResult) {
+      channels.step = 'form';
+      render();
+      return;
+    }
+    const testResult = await postChannelEndpoint('channel.test', {
+      channel: 'email',
+      account_key: payload.address ? `email:${payload.address}` : '',
+    });
+    if (!testResult) {
+      channels.step = 'form';
+      render();
+      return;
+    }
+    channels.data.testResult = testResult;
+    pollAccountAppearance('email', payload.address);
     return;
   }
-  if (action === 'teams:oauth') {
-    channels.step = 'subscriptions';
+
+  // ---- Teams ----
+  if (action === 'teams:save_test') {
+    channels.error = '';
+    channels.step = 'testing';
     render();
+    const payload = teamsConfigPayload(channels);
+    const saveResult = await postChannelEndpoint('channel.settings.save', {
+      channel: 'teams',
+      config: payload,
+    });
+    if (!saveResult) {
+      channels.step = 'intro';
+      render();
+      return;
+    }
+    const testResult = await postChannelEndpoint('channel.test', {
+      channel: 'teams',
+    });
+    if (!testResult) {
+      channels.step = 'intro';
+      render();
+      return;
+    }
+    channels.data.testResult = testResult;
+    pollAccountAppearance('teams');
     return;
   }
   if (action === 'teams:confirm') {
-    channels.step = 'confirm';
-    render();
-    return;
+    // No client-side subscription selection — CTOX-Core syncs all teams/chats
+    // it has Graph access to via the existing channel sync pipeline.
+    const syncResult = await postChannelEndpoint('channel.sync', {
+      channel: 'teams',
+    });
+    if (syncResult) {
+      pollAccountAppearance('teams');
+    }
   }
+}
+
+function emailConfigPayload(channels) {
+  const data = channels.data || {};
+  const provider = channels.provider || data.emailProvider || 'custom';
+  return {
+    provider,
+    address: data.emailAddress || '',
+    password: data.emailPassword || '',
+    imap_host: data.emailImapHost || '',
+    imap_port: parseInt(data.emailImapPort, 10) || 0,
+    smtp_host: data.emailSmtpHost || '',
+    smtp_port: parseInt(data.emailSmtpPort, 10) || 0,
+    custom_app: !!data.emailCustomApp,
+    tenant_id: data.emailTenantId || '',
+    client_id: data.emailClientId || '',
+    client_secret: data.emailClientSecret || '',
+  };
+}
+
+function teamsConfigPayload(channels) {
+  const data = channels.data || {};
+  return {
+    custom_app: !!data.teamsCustomApp,
+    tenant_id: data.teamsTenantId || '',
+    client_id: data.teamsClientId || '',
+    client_secret: data.teamsClientSecret || '',
+    username: data.teamsUsername || '',
+    password: data.teamsPassword || '',
+  };
+}
+
+function collectTeamsSubscriptions() {
+  // Teams subscriptions list comes from CTOX after OAuth completes. We collect
+  // the actual checked checkboxes from the DOM by data-channel-sub identifier.
+  const subs = [];
+  for (const input of document.querySelectorAll('[data-channels-sub]')) {
+    if (input instanceof HTMLInputElement && input.checked) {
+      subs.push(input.dataset.channelsSub);
+    }
+  }
+  return subs;
 }
 
 function parseIso(value) {

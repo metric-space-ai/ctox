@@ -12,7 +12,6 @@ const LEFT_COLUMN_MIN = 220;
 const LEFT_COLUMN_MAX = 560;
 const HARNESS_REFRESH_MS = 4000;
 const LOCAL_RENDER_DEBOUNCE_MS = 80;
-const CTOX_FETCH_TIMEOUT_MS = 1500;
 const CTOX_STYLE_BUILD = '20260519-rxdb-only1';
 
 const labels = {
@@ -409,25 +408,13 @@ function wireLocalRealtime(state) {
 async function refresh(state) {
   if (state.refreshInFlight) return;
   state.refreshInFlight = true;
-  const useHttpBridge = state.ctx?.sync?.config?.http_bridge_available !== false;
   try {
-    const [flow, commands, queueTasks, bugReports, status] = await Promise.all([
-      useHttpBridge
-        ? loadHarnessFlow()
-        : Promise.resolve(emptyHarnessFlow('http_bridge_disabled')),
+    const [commands, queueTasks, bugReports] = await Promise.all([
       loadLocalCommands(state.ctx).catch(() => []),
       loadLocalQueueTasks(state.ctx).catch(() => []),
       loadLocalBugReports(state.ctx).catch(() => []),
-      useHttpBridge
-        ? loadStatus().catch((error) => ({ ok: false, error: String(error?.message || error) }))
-        : Promise.resolve({
-            ok: false,
-            runtime: 'rxdb',
-            error: state.ctx?.sync?.config?.native_rxdb_peer_reason || 'native CTOX RxDB peer is not available',
-            now_ms: Date.now(),
-          }),
     ]);
-    const nextFlow = flow?.ok ? flow : emptyHarnessFlow(flow?.error || '');
+    const nextFlow = emptyHarnessFlow('rxdb_flow_projection_unavailable');
     const bundle = mergeBundleWithCommands(ctoxSeed, commands, queueTasks, bugReports);
     state.flow = nextFlow;
     const metrics = aggregateFlowMetrics(nextFlow);
@@ -436,7 +423,9 @@ async function refresh(state) {
     state.model = buildHarnessModel(bundle, nextFlow);
     state.focusTask = readFocusTask();
     reconcileSelection(state);
-    state.runtimeStatus = status?.ok ? displayFlowMode(status.runtime || 'native-rust') : (status.error || 'Status unavailable');
+    state.runtimeStatus = state.ctx?.sync?.mode === 'webrtc'
+      ? displayFlowMode('rxdb-webrtc')
+      : (state.ctx?.sync?.config?.native_rxdb_peer_reason || 'native CTOX RxDB peer is not available');
     render(state);
   } finally {
     state.refreshInFlight = false;
@@ -530,6 +519,10 @@ function renderLeft(state) {
   const model = state.model;
   const left = state.ctx.host.querySelector('[data-ctox-left]');
   if (!left) return;
+
+  const taskBoard = left.querySelector('.ctox-task-board');
+  const scrollTop = taskBoard ? taskBoard.scrollTop : 0;
+
   const groups = taskGroups(model.tasks);
   const activeCount = groups.current.length;
   syncOpenTaskSections(state, groups);
@@ -546,6 +539,11 @@ function renderLeft(state) {
       ${taskSection('done', t.doneWork, groups.done, state)}
     </div>
   `;
+
+  const newTaskBoard = left.querySelector('.ctox-task-board');
+  if (newTaskBoard) {
+    newTaskBoard.scrollTop = scrollTop;
+  }
   left.querySelectorAll('[data-task-section]').forEach((section) => {
     section.addEventListener('toggle', () => {
       if (section.open) state.openTaskSections.add(section.dataset.taskSection);
@@ -594,9 +592,30 @@ function taskRow(task, state) {
   const focused = isFocusedTask(task, state.focusTask);
   const selected = task.id === state.selectedTaskId;
   const channel = task.channelLabel || displayWorkSource(task.channel || task.source || task.moduleId || 'ctox');
+  const tone = statusClass(task.status);
+
+  let iconHtml = '';
+  if (tone === 'tone-ok') {
+    iconHtml = `<svg class="ctox-status-icon is-ok" viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="10" stroke-width="2" opacity="0.2" fill="currentColor"></circle><path d="M8.5 12.5l2 2 5-5" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"></path></svg>`;
+  } else if (tone === 'tone-running') {
+    const isLeasedOrQueued = ['queued', 'leased', 'pending'].includes(normalizeCommandStatus(task.status));
+    if (isLeasedOrQueued) {
+      iconHtml = `<svg class="ctox-status-icon is-waiting" viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="10" stroke-width="2" opacity="0.2"></circle><path d="M12 6v6l3.5 2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg>`;
+    } else {
+      iconHtml = `<span class="ctox-status-pulse is-running" aria-hidden="true"></span>`;
+    }
+  } else if (tone === 'tone-blocked') {
+    iconHtml = `<svg class="ctox-status-icon is-blocked" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path><path d="M12 9v4M12 17h.01" stroke-width="2.5" stroke-linecap="round"></path></svg>`;
+  } else {
+    iconHtml = `<svg class="ctox-status-icon is-warning" viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="10" stroke-width="2" opacity="0.2"></circle><path d="M12 8v4M12 16h.01" stroke-width="2.5" stroke-linecap="round"></path></svg>`;
+  }
+
   return `
-    <button type="button" class="ctox-task-row ctox-context-item ${focused ? 'is-focused-task' : ''} ${selected ? 'is-selected' : ''} ${statusClass(task.status)}" data-task-id="${escapeAttr(task.id)}" data-context-label="${escapeAttr(task.title)}" data-context-record-id="${escapeAttr(task.id)}" data-ctox-task-id="${escapeAttr(task.taskId || task.id)}" data-ctox-command-id="${escapeAttr(task.commandId || '')}" aria-label="${escapeAttr(`${t.openTaskDetail}: ${task.title}`)}">
-      <span class="ctox-task-status">${escapeHtml(displayStatus(task.status, state.lang))}</span>
+    <button type="button" class="ctox-task-row ctox-context-item ${focused ? 'is-focused-task' : ''} ${selected ? 'is-selected' : ''} ${tone}" data-task-id="${escapeAttr(task.id)}" data-context-label="${escapeAttr(task.title)}" data-context-record-id="${escapeAttr(task.id)}" data-ctox-task-id="${escapeAttr(task.taskId || task.id)}" data-ctox-command-id="${escapeAttr(task.commandId || '')}" aria-label="${escapeAttr(`${t.openTaskDetail}: ${task.title}`)}">
+      <span class="ctox-task-status-wrapper">
+        <span class="ctox-task-icon-container">${iconHtml}</span>
+        <span class="ctox-task-status-text">${escapeHtml(displayStatus(task.status, state.lang))}</span>
+      </span>
       <span class="ctox-task-copy">
         <strong>${escapeHtml(task.title)}</strong>
         <small>${escapeHtml(channel)}</small>
@@ -780,15 +799,17 @@ function renderMain(state) {
       ${metricCard(t.toolCalls, metrics.toolCalls, 'count', state.lang)}
       ${metricCard(t.elapsed, elapsedSeconds, 'seconds', state.lang, { live })}
     </section>
-    <div class="ctox-flow-canvas" data-flow-canvas>
+    <div class="ctox-canvas-container">
       <div class="ctox-flow-toolbar" aria-label="Flow chart controls" data-flow-control>
         <button type="button" data-zoom="-">-</button>
         <span>${Math.round(state.zoom * 100)}%</span>
         <button type="button" data-zoom="+">+</button>
         <button type="button" data-zoom="reset">Reset</button>
       </div>
-      <div class="ctox-flow-canvas-inner" style="width:${FLOW_WIDTH * state.zoom}px;height:${viewBox.height * state.zoom}px;min-height:${viewBox.height * state.zoom}px">
-        ${flowSvg(model, selectedNode, visibleTrace, selectedTask, state, taskStepView, viewBox)}
+      <div class="ctox-flow-canvas" data-flow-canvas>
+        <div class="ctox-flow-canvas-inner" style="width:${FLOW_WIDTH * state.zoom}px;height:${viewBox.height * state.zoom}px;min-height:${viewBox.height * state.zoom}px">
+          ${flowSvg(model, selectedNode, visibleTrace, selectedTask, state, taskStepView, viewBox)}
+        </div>
       </div>
     </div>
     ${timelinePanel(state, selectedTask, selectedNode, metrics)}
@@ -1621,14 +1642,12 @@ async function saveCtoxTaskFromDrawer(state, task, form) {
   submit?.setAttribute('disabled', 'disabled');
   if (status) status.textContent = '';
   try {
-    const res = await fetchWithTimeout('/api/business-os/ctox/tasks/update', {
-      method: 'POST',
-      headers: authHeaders(state, { 'Content-Type': 'application/json' }),
-      body: JSON.stringify(payload),
+    await dispatchCtoxTaskMutation(state, {
+      type: 'ctox.task.update',
+      payload,
+      commandPath: 'ctox_task_update',
     });
-    if (!res.ok) throw new Error(await res.text());
-    const result = await res.json();
-    applyTaskMutationToModel(state, task.id, result.task || payload);
+    applyTaskMutationToModel(state, task.id, payload);
     if (status) status.textContent = t.taskSaved;
     render(state);
     syncDetailDrawer(state);
@@ -1659,12 +1678,11 @@ async function deleteCtoxTaskFromDrawer(state, task, body) {
   button?.setAttribute('disabled', 'disabled');
   if (status) status.textContent = '';
   try {
-    const res = await fetchWithTimeout('/api/business-os/ctox/tasks/delete', {
-      method: 'POST',
-      headers: authHeaders(state, { 'Content-Type': 'application/json' }),
-      body: JSON.stringify(payload),
+    await dispatchCtoxTaskMutation(state, {
+      type: 'ctox.task.delete',
+      payload,
+      commandPath: 'ctox_task_delete',
     });
-    if (!res.ok) throw new Error(await res.text());
     removeTaskFromModel(state, task.id);
     state.detailDrawer = null;
     state.selectedTaskId = null;
@@ -1678,13 +1696,28 @@ async function deleteCtoxTaskFromDrawer(state, task, body) {
   }
 }
 
-function nativeTaskId(task) {
-  return String(task?.taskId || task?.id || '').replace(/^queue-/, '').trim();
+async function dispatchCtoxTaskMutation(state, { type, payload, commandPath }) {
+  if (!state.ctx?.commandBus?.dispatch) {
+    throw new Error('RxDB command bus is not available');
+  }
+  const commandId = `cmd_${type.replace(/[^a-z0-9]+/gi, '_')}_${crypto.randomUUID()}`;
+  return state.ctx.commandBus.dispatch({
+    id: commandId,
+    module: 'ctox',
+    type,
+    record_id: payload.task_id || '',
+    inbound_channel: 'business_os.ctox',
+    payload,
+    client_context: {
+      source_module: 'ctox',
+      command_path: commandPath,
+      actor: state.ctx.session?.user || {},
+    },
+  });
 }
 
-function authHeaders(state, extra = {}) {
-  if (typeof state.ctx.authHeaders === 'function') return state.ctx.authHeaders(extra);
-  return extra;
+function nativeTaskId(task) {
+  return String(task?.taskId || task?.id || '').replace(/^queue-/, '').trim();
 }
 
 function applyTaskMutationToModel(state, taskId, patch) {
@@ -1951,19 +1984,28 @@ function edgePath(from, to, route = 'normal') {
     y1 += to.y >= from.y ? fromHalfH : -fromHalfH;
     y2 -= to.y >= from.y ? toHalfH : -toHalfH;
   }
+
   if (route === 'loop') {
     const offset = to.y >= from.y ? 88 : -88;
     const midY = Math.max(36, Math.min(FLOW_HEIGHT - 36, Math.max(from.y, to.y) + offset));
-    return `M ${x1} ${y1} L ${x1} ${midY} L ${x2} ${midY} L ${x2} ${y2}`;
+    // Curved loop back
+    return `M ${x1} ${y1} C ${x1} ${y1 + offset * 0.7}, ${x2} ${midY + offset * 0.3}, ${x2} ${y2}`;
   }
   if (route === 'up' || route === 'down') {
     const offset = route === 'up' ? -54 : 54;
     const midY = Math.max(36, Math.min(FLOW_HEIGHT - 36, (from.y + to.y) / 2 + offset));
-    return `M ${x1} ${y1} L ${x1} ${midY} L ${x2} ${midY} L ${x2} ${y2}`;
+    return `M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2}`;
   }
   if (Math.abs(x2 - x1) < 1 || Math.abs(y2 - y1) < 1) return `M ${x1} ${y1} L ${x2} ${y2}`;
-  const midX = (x1 + x2) / 2;
-  return `M ${x1} ${y1} L ${midX} ${y1} L ${midX} ${y2} L ${x2} ${y2}`;
+
+  // Normal horizontal / vertical curve
+  const dx = x2 - x1;
+  const controlOffset = Math.max(36, Math.min(120, Math.abs(dx) * 0.5));
+  if (horizontal) {
+    return `M ${x1} ${y1} C ${x1 + (to.x >= from.x ? controlOffset : -controlOffset)} ${y1}, ${x2 - (to.x >= from.x ? controlOffset : -controlOffset)} ${y2}, ${x2} ${y2}`;
+  } else {
+    return `M ${x1} ${y1} C ${x1} ${y1 + (to.y >= from.y ? controlOffset : -controlOffset)}, ${x2} ${y2 - (to.y >= from.y ? controlOffset : -controlOffset)}, ${x2} ${y2}`;
+  }
 }
 
 function mergeBundleWithCommands(bundle, commands, queueTasks = [], bugReports = []) {
@@ -2143,38 +2185,6 @@ async function loadLocalCollection(ctx, collectionName) {
     .map((doc) => doc.toJSON())
     .sort((left, right) => (right.updated_at_ms || 0) - (left.updated_at_ms || 0))
     .slice(0, 20);
-}
-
-async function loadHarnessFlow() {
-  try {
-    const res = await fetchWithTimeout('/api/business-os/ctox/harness-flow');
-    if (!res.ok) throw new Error(`harness_flow_${res.status}`);
-    const payload = await res.json();
-    if (payload?.flow?.blocks?.length) return payload;
-    return emptyHarnessFlow(payload?.error);
-  } catch (error) {
-    return emptyHarnessFlow(error?.message || String(error));
-  }
-}
-
-async function fetchWithTimeout(url, options = {}) {
-  const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), CTOX_FETCH_TIMEOUT_MS);
-  try {
-    return await fetch(url, {
-      cache: 'no-store',
-      ...options,
-      signal: controller.signal,
-    });
-  } finally {
-    window.clearTimeout(timer);
-  }
-}
-
-async function loadStatus() {
-  const res = await fetchWithTimeout('/api/business-os/status');
-  if (!res.ok) throw new Error(`status_${res.status}`);
-  return res.json();
 }
 
 function emptyHarnessFlow(error = '') {

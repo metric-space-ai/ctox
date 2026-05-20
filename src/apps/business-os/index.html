@@ -36,31 +36,62 @@
         display: none !important;
       }
     </style>
-    <link rel="stylesheet" href="app.css?v=20260520-taskbar-pins1" />
+    <link rel="stylesheet" href="app.css?v=20260520-triad-dragdrop2" />
   </head>
   <body data-module-shell="full" data-module-loading="startup">
     <div class="app-shell" data-shell>
       <header class="topbar">
-        <a class="brand" href="#desktop" aria-label="Start" data-shell-start>
-          <span class="brand-mark"><img src="assets/ctox-app-icon.png" alt="" /></span>
-          <span class="brand-copy">
-            <span class="brand-title-row">
-              <strong>Business OS</strong>
-              <span class="ctox-shell-warning" data-ctox-shell-warning hidden>CTOX ARBEITET NICHT</span>
-            </span>
+        <div class="topbar-left-group">
+          <div class="topbar-brand-triad">
+            <button class="topbar-triad-button start-button" type="button" data-shell-start aria-label="Startmenü öffnen" title="Startmenü öffnen">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="3" y="3" width="7" height="7" rx="1.5" />
+                <rect x="14" y="3" width="7" height="7" rx="1.5" />
+                <rect x="3" y="14" width="7" height="7" rx="1.5" />
+                <rect x="14" y="14" width="7" height="7" rx="1.5" />
+              </svg>
+            </button>
+            <button class="topbar-triad-button show-desktop-button" type="button" data-show-desktop aria-label="Desktop anzeigen" title="Desktop anzeigen">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M4 5.5h16v13H4z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" />
+                <path d="M8 9h8M8 12h8M8 15h5" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+              </svg>
+            </button>
+            <button class="topbar-triad-button ctox-button" type="button" data-shell-ctox aria-label="CTOX AI Core öffnen" title="CTOX AI Core öffnen">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <defs>
+                  <linearGradient id="grad-triad-ctox" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" stop-color="#10b981" />
+                    <stop offset="100%" stop-color="#06b6d4" />
+                  </linearGradient>
+                </defs>
+                <polygon points="12,2 2,7 12,12 22,7" fill="url(#grad-triad-ctox)" fill-opacity="0.25" stroke="url(#grad-triad-ctox)" stroke-width="2" stroke-linejoin="round" />
+                <polygon points="2,7 2,17 12,22 12,12" fill="url(#grad-triad-ctox)" fill-opacity="0.15" stroke="url(#grad-triad-ctox)" stroke-width="2" stroke-linejoin="round" />
+                <polygon points="12,12 12,22 22,17 22,7" fill="url(#grad-triad-ctox)" fill-opacity="0.15" stroke="url(#grad-triad-ctox)" stroke-width="2" stroke-linejoin="round" />
+                <circle cx="12" cy="12" r="3" fill="url(#grad-triad-ctox)" />
+              </svg>
+            </button>
+            <span class="triad-separator" aria-hidden="true"></span>
+            <button class="topbar-triad-button back-button" type="button" data-shell-back aria-label="Zurück" title="Zurück" disabled>
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M19 12H5M12 19l-7-7 7-7" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+            <button class="topbar-triad-button forward-button" type="button" data-shell-forward aria-label="Vorwärts" title="Vorwärts" disabled>
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M5 12h14M12 5l7 7-7 7" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+          </div>
+          <div class="topbar-status-bar">
+            <span class="ctox-shell-warning" data-ctox-shell-warning hidden>CTOX OFFLINE</span>
             <span class="brand-status" data-status-text>Starting native runtime</span>
-          </span>
-        </a>
+          </div>
+        </div>
         <div class="module-nav">
           <nav class="module-tabs" data-module-tabs aria-label="Geöffnete Apps"></nav>
         </div>
         <div class="topbar-actions">
-          <button class="icon-button show-desktop-button" type="button" data-show-desktop aria-label="Desktop anzeigen" title="Desktop anzeigen">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M4 5.5h16v13H4z"></path>
-              <path d="M8 9h8M8 12h8M8 15h5"></path>
-            </svg>
-          </button>
           <span class="topbar-tray-group">
             <select class="header-select" data-shell-style-select aria-label="Stil">
               <option value="windows">Windows</option>
@@ -123,6 +154,6 @@
     </div>
     <aside class="shell-notifications" data-shell-notifications aria-live="polite" aria-label="Benachrichtigungen"></aside>
 
-    <script type="module" src="app.js?v=20260520-chat-optimistic-submit1"></script>
+    <script type="module" src="app.js?v=20260520-web-research1"></script>
   </body>
 </html>

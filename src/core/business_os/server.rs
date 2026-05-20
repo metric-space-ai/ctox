@@ -155,6 +155,16 @@ pub fn serve_business_os(root: &Path, options: BusinessOsServeOptions) -> anyhow
         );
     }
     let _conn = store::open_store(root)?;
+    match store::sync_config(root) {
+        Ok(config) => {
+            super::rxdb_peer::spawn_native_peer(
+                root,
+                config.sync_room.clone(),
+                config.signaling_urls.clone(),
+            );
+        }
+        Err(err) => eprintln!("[business-os] native rxdb peer config failed: {err:#}"),
+    }
     let server = Server::http(&options.addr)
         .map_err(|err| anyhow::anyhow!("failed to bind Business OS server: {err}"))?;
     println!("CTOX Business OS listening on http://{}", options.addr);
@@ -498,10 +508,162 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
                 "Business OS commands must be written through RxDB",
             )?;
         }
+        // ---------- Channels tab ----------
+        (Method::Get, "/api/business-os/channels/accounts") => {
+            let session = request_session(&request);
+            if !session.authenticated {
+                respond_status(request, 401, "login required")?;
+            } else {
+                match crate::mission::channels::list_communication_accounts_for_business_os(root) {
+                    Ok(value) => respond_json_value(request, value)?,
+                    Err(error) => respond_status(request, 500, &error.to_string())?,
+                }
+            }
+        }
+        (Method::Post, "/api/business-os/channels/test") => {
+            let session = request_session(&request);
+            if !session.authenticated {
+                respond_status(request, 401, "login required")?;
+            } else if !store::session_can_manage_all(&session) {
+                respond_status(request, 403, "chef or admin role required")?;
+            } else {
+                let body = read_json(&mut request)?;
+                let channel = body.get("channel").and_then(Value::as_str).unwrap_or("");
+                let account_key = body
+                    .get("account_key")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.is_empty());
+                match crate::mission::channels::test_channel_for_business_os(
+                    root,
+                    channel,
+                    account_key,
+                ) {
+                    Ok(value) => respond_json_value(request, value)?,
+                    Err(error) => respond_status(request, 400, &error.to_string())?,
+                }
+            }
+        }
+        (Method::Post, "/api/business-os/channels/sync") => {
+            let session = request_session(&request);
+            if !session.authenticated {
+                respond_status(request, 401, "login required")?;
+            } else if !store::session_can_manage_all(&session) {
+                respond_status(request, 403, "chef or admin role required")?;
+            } else {
+                let body = read_json(&mut request)?;
+                let channel = body.get("channel").and_then(Value::as_str).unwrap_or("");
+                match crate::mission::channels::sync_channel_for_business_os(root, channel) {
+                    Ok(value) => respond_json_value(request, value)?,
+                    Err(error) => respond_status(request, 400, &error.to_string())?,
+                }
+            }
+        }
+        (Method::Post, "/api/business-os/channels/settings") => {
+            let session = request_session(&request);
+            if !session.authenticated {
+                respond_status(request, 401, "login required")?;
+            } else if !store::session_can_manage_all(&session) {
+                respond_status(request, 403, "chef or admin role required")?;
+            } else {
+                let body = read_json(&mut request)?;
+                let channel = body.get("channel").and_then(Value::as_str).unwrap_or("");
+                let config = body.get("config").cloned().unwrap_or_else(|| Value::Null);
+                match crate::mission::channels::save_channel_settings_for_business_os(
+                    root, channel, &config,
+                ) {
+                    Ok(value) => respond_json_value(request, value)?,
+                    Err(error) => respond_status(request, 400, &error.to_string())?,
+                }
+            }
+        }
+        (Method::Post, "/api/business-os/channels/disconnect") => {
+            let session = request_session(&request);
+            if !session.authenticated {
+                respond_status(request, 401, "login required")?;
+            } else if !store::session_can_manage_all(&session) {
+                respond_status(request, 403, "chef or admin role required")?;
+            } else {
+                let body = read_json(&mut request)?;
+                let account_key = body
+                    .get("account_key")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                match crate::mission::channels::disconnect_communication_account_for_business_os(
+                    root,
+                    account_key,
+                ) {
+                    Ok(value) => respond_json_value(request, value)?,
+                    Err(error) => respond_status(request, 400, &error.to_string())?,
+                }
+            }
+        }
+        (Method::Post, "/api/business-os/channels/pair/start") => {
+            let session = request_session(&request);
+            if !session.authenticated {
+                respond_status(request, 401, "login required")?;
+            } else if !store::session_can_manage_all(&session) {
+                respond_status(request, 403, "chef or admin role required")?;
+            } else {
+                let body = read_json(&mut request)?;
+                let channel = body.get("channel").and_then(Value::as_str).unwrap_or("");
+                match crate::mission::channels::start_pairing_for_business_os(root, channel) {
+                    Ok(value) => respond_json_value(request, value)?,
+                    Err(error) => respond_status(request, 400, &error.to_string())?,
+                }
+            }
+        }
+        (Method::Get, "/api/business-os/channels/pair/state") => {
+            let session = request_session(&request);
+            if !session.authenticated {
+                respond_status(request, 401, "login required")?;
+            } else {
+                let channel = query_param(&url, "channel").unwrap_or_default();
+                let payload =
+                    crate::mission::channels::read_pairing_state_for_business_os(root, &channel);
+                respond_json_value(request, payload)?;
+            }
+        }
+        (Method::Post, "/api/business-os/channels/jami/export") => {
+            let session = request_session(&request);
+            if !session.authenticated {
+                respond_status(request, 401, "login required")?;
+            } else if !store::session_can_manage_all(&session) {
+                respond_status(request, 403, "chef or admin role required")?;
+            } else {
+                let payload = crate::mission::channels::export_jami_archive_for_business_os(root);
+                respond_json_value(request, payload)?;
+            }
+        }
+        (Method::Post, "/api/business-os/channels/jami/create") => {
+            let session = request_session(&request);
+            if !session.authenticated {
+                respond_status(request, 401, "login required")?;
+            } else if !store::session_can_manage_all(&session) {
+                respond_status(request, 403, "chef or admin role required")?;
+            } else {
+                let body = read_json(&mut request)?;
+                let display_name = body
+                    .get("display_name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("CTOX");
+                let config = serde_json::json!({ "profile_name": display_name });
+                let save_result = crate::mission::channels::save_channel_settings_for_business_os(
+                    root, "jami", &config,
+                );
+                if let Err(error) = save_result {
+                    respond_status(request, 400, &error.to_string())?;
+                } else {
+                    match crate::mission::channels::start_pairing_for_business_os(root, "jami") {
+                        Ok(value) => respond_json_value(request, value)?,
+                        Err(error) => respond_status(request, 400, &error.to_string())?,
+                    }
+                }
+            }
+        }
         _ if path.starts_with("/api/business-os/rxdb/") => {
             respond_status(request, 404, "RxDB HTTP bridge endpoint not found")?;
         }
-        _ if method == Method::Get => serve_static(app_root, request, path)?,
+        _ if method == Method::Get => serve_static(root, app_root, request, path)?,
         _ => respond_status(request, 405, "method not allowed")?,
     }
     Ok(())
@@ -2450,7 +2612,7 @@ fn file_modified_label(path: &Path) -> String {
         .unwrap_or_default()
 }
 
-fn serve_static(app_root: &Path, request: Request, path: &str) -> anyhow::Result<()> {
+fn serve_static(root: &Path, app_root: &Path, request: Request, path: &str) -> anyhow::Result<()> {
     let rel = if path == "/" {
         "index.html"
     } else {
@@ -2476,14 +2638,45 @@ fn serve_static(app_root: &Path, request: Request, path: &str) -> anyhow::Result
     if !target.is_file() {
         return respond_status(request, 404, "not found");
     }
-    let bytes = fs::read(&target)?;
+    let mut bytes = fs::read(&target)?;
     let mime = mime_for(&target);
+    if target == app_root.join("index.html") {
+        let session = request_session(&request);
+        let sync_config = store::sync_config(root)?;
+        let html = String::from_utf8(bytes).context("Business OS index.html is not UTF-8")?;
+        bytes = inject_launch_context(html, &session, &sync_config)?.into_bytes();
+    }
     let mut response = Response::from_data(bytes);
     response.add_header(Header::from_bytes("Content-Type", mime.as_bytes()).unwrap());
     response.add_header(Header::from_bytes("Cache-Control", "no-store").unwrap());
     add_common_response_headers(&mut response);
     request.respond(response)?;
     Ok(())
+}
+
+fn inject_launch_context(
+    html: String,
+    session: &store::BusinessOsSession,
+    sync_config: &store::BusinessOsSyncConfig,
+) -> anyhow::Result<String> {
+    let script = format!(
+        "<script>window.CTOX_BUSINESS_OS_SESSION={};window.CTOX_BUSINESS_OS_CONFIG={};</script>",
+        script_json(session)?,
+        script_json(sync_config)?
+    );
+    if let Some(idx) = html.find("</head>") {
+        let mut injected = String::with_capacity(html.len() + script.len());
+        injected.push_str(&html[..idx]);
+        injected.push_str(&script);
+        injected.push_str(&html[idx..]);
+        Ok(injected)
+    } else {
+        Ok(format!("{script}{html}"))
+    }
+}
+
+fn script_json<T: Serialize>(value: &T) -> anyhow::Result<String> {
+    Ok(serde_json::to_string(value)?.replace("</", "<\\/"))
 }
 
 fn should_serve_app_shell(rel: &str) -> bool {

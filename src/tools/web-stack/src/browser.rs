@@ -472,22 +472,20 @@ fn build_doctor_report(reference_dir: &Path) -> Result<BrowserDoctorReport> {
         .map(|major| major >= MINIMUM_NODE_MAJOR)
         .unwrap_or(false);
     let ok = node.available && npm.available && npx.available;
-    let smoke = if ok
-        && node_version_compatible
-        && runner_dependency_installed
-        && runner_browser_installed
-    {
-        run_browser_smoke(reference_dir, chromium_fallback_executable.as_deref())
-    } else {
-        BrowserSmokeReport {
-            ran: false,
-            ok: false,
-            timeout_ms: 8_000,
-            stdout: None,
-            stderr: None,
-            error: Some("skipped because browser prerequisites are incomplete".to_string()),
-        }
-    };
+    let smoke =
+        if ok && node_version_compatible && runner_dependency_installed && runner_browser_installed
+        {
+            run_browser_smoke(reference_dir, chromium_fallback_executable.as_deref())
+        } else {
+            BrowserSmokeReport {
+                ran: false,
+                ok: false,
+                timeout_ms: 8_000,
+                stdout: None,
+                stderr: None,
+                error: Some("skipped because browser prerequisites are incomplete".to_string()),
+            }
+        };
     let automation_ready = ok
         && node_version_compatible
         && runner_dependency_installed
